@@ -330,7 +330,7 @@ internal sealed partial class ViewMaintainerGrain
             foreach (var mutation in mutations.OrderBy(static mutation => mutation.Timestamp))
             {
                 var projected = false;
-                foreach (var contribution in registration.AggregationProjection!.Project(mutation))
+                foreach (var contribution in registration.AggregationProjection!.Project(ProjectionInput(registration, mutation)))
                 {
                     projected = true;
                     await capturing.ApplyAsync(contribution, cancellationToken);
@@ -349,7 +349,7 @@ internal sealed partial class ViewMaintainerGrain
         var writes = new List<ViewWrite>();
         foreach (var mutation in mutations)
         {
-            writes.AddRange(registration.Projection!.Project(mutation));
+            writes.AddRange(registration.Projection!.Project(ProjectionInput(registration, mutation)));
         }
 
         var upserts = new List<KeyValuePair<string, byte[]>>();

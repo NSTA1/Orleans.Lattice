@@ -1,0 +1,14 @@
+# Without the exact-membership skip, a replay after a lost flip response
+# recomputes its key set from the already-flipped membership and resubmits it
+# under the original saga identity.
+MODULE: NoIdentityConflictReplaysInstalled
+TARGET: NoIdentityConflict
+CLASS: Invariant
+SUMMARY: a replay resubmits an already-installed membership under the original id with a changed key set
+PERTURBS: Flip
+
+--- FIND
+          /\ IF Superseded(e) \/ old = new
+--- REPLACE
+          /\ IF Superseded(e)
+--- END

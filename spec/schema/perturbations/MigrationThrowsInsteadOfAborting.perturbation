@@ -1,0 +1,14 @@
+# AbortLeavesDataUntouched: a value with no path aborts the migration naming it.
+MODULE: SchemaVersionFamily
+ROW: AbortLeavesDataUntouched
+FILE: src/lattice.schema/LatticeSchemaVersionMigration.cs
+DETECTORS: SchemaVersionMigrationAbortIntegrationTests.AdvanceAndMigrateAsync_with_no_upcast_hop_aborts_naming_the_value_and_releases_the_reservation, LatticeSchemaRemediationGrainTests.StartVersionMigrationAsync_un_upcastable_value_aborts_and_leaves_tree_untouched
+SUMMARY: an un-upcastable value faults the build instead of aborting it
+
+--- FIND
+        var upcast = registry.Upcast(stampedSchemaId, storedVersion, targetVersion, body);
+--- REPLACE
+        var upcast = registry.CanUpcast(stampedSchemaId, storedVersion, targetVersion)
+            ? registry.Upcast(stampedSchemaId, storedVersion, targetVersion, body)
+            : throw new KeyNotFoundException("no upcast path");
+--- END

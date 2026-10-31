@@ -484,7 +484,9 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "logical tree in the same registry write as the alias, and the physical tree the alias leaves "
                 + "redirects routers that still address it. Only a single level of indirection is "
                 + "allowed - the physical target must not itself be aliased. Rejected for a reserved system tree id, "
-                + "and refused when the registered tree-ownership guard denies the alias. "
+                + "refused when the registered tree-ownership guard denies the alias, and refused while another "
+                + "operation (a resize, shadow-cutover restore, restore revert, or schema remediation or migration) "
+                + "holds the tree's alias reservation, with a message naming the holder. "
                 + "Admin-gated and destructive."));
             tools.Add(DestructiveTool(services, TreeAdminLifecycleToolHandlers.SetTreeConfigAsync, "lattice_treeadmin_tree_set_config",
                 "Update a tree's registry configuration",

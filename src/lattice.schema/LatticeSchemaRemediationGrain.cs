@@ -1,4 +1,5 @@
 using System.Runtime.ExceptionServices;
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
@@ -17,7 +18,9 @@ namespace Orleans.Lattice.Schema;
 /// <item><description>builds a fresh destination physical tree by scanning source
 /// entries, transforming each value, revalidating it, and writing it into the
 /// destination - aborting and discarding the partial destination on the first
-/// offending value. The destination is registered with the source's routing map,
+/// offending value. On a versioning-enabled tree each written value is re-enveloped
+/// at the schema version the transform ran on (the tree's target version), so the
+/// remediated tree stays self-describing (issue #5243). The destination is registered with the source's routing map,
 /// split allocation mark, structural pins and runtime configuration overrides
 /// (<see cref="DerivedTreeEntries.InheritingAsync"/>), so it lays keys out exactly
 /// as the source does and only the values change;</description></item>
@@ -66,7 +69,8 @@ internal sealed class LatticeSchemaRemediationGrain(
     ILatticeSchemaPolicyStore? policyStore = null,
     ILatticeSchemaPolicyProvider? policyProvider = null,
     ILatticeSchemaRegistry? schemaRegistry = null,
-    SchemaRuntimeRegistry? runtimeRegistry = null)
+    SchemaRuntimeRegistry? runtimeRegistry = null,
+    ILatticeValueDecoder? valueDecoder = null)
     : IGrainBase, ILatticeSchemaRemediationGrain
 {
     private readonly int _previewMaxBytes = Math.Max(1, options.Value.DeadLetterPreviewMaxBytes);
@@ -102,7 +106,7 @@ internal sealed class LatticeSchemaRemediationGrain(
         catch { state.State.AliasReservationId = id; throw; }
     }
 
-    /// <summary>The number of values one <see cref="RunSliceAsync"/> processes before it persists its progress and returns.</summary>
+    /// <summary>The number of values one <see cref="RunSliceAsync(string)"/> processes before it persists its progress and returns.</summary>
     internal const int DefaultSliceSize = 512;
 
     /// <summary>
@@ -158,6 +162,22 @@ internal sealed class LatticeSchemaRemediationGrain(
     public async Task<SchemaRemediationSlice> RunSliceAsync()
     {
         EnsureControlPlaneOrigin();
+        await RunSliceCoreAsync();
+        return new SchemaRemediationSlice(GetStatus(), state.State.InProgress ? state.State.PhaseTotal : null);
+    }
+
+    /// <inheritdoc />
+    public async Task<SchemaRemediationSlice> RunSliceAsync(string operationId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        EnsureControlPlaneOrigin();
+        if (state.State.InProgress
+            && !string.Equals(state.State.OperationId, operationId, StringComparison.Ordinal))
+        {
+            // Another operation's remediation: the caller does not follow it.
+            return new SchemaRemediationSlice(GetStatus(), null);
+        }
+
         await RunSliceCoreAsync();
         return new SchemaRemediationSlice(GetStatus(), state.State.InProgress ? state.State.PhaseTotal : null);
     }
@@ -276,7 +296,7 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// Runs slices until the remediation is terminal, all within the current turn.
     /// Serves the in-turn <see cref="StartAsync"/>, <see cref="StartVersionMigrationAsync"/>
     /// and <see cref="RunRemediationPassAsync"/> verbs; a caller that must not hold
-    /// one call open for the whole run drives <see cref="RunSliceAsync"/> instead.
+    /// one call open for the whole run drives <see cref="RunSliceAsync(string)"/> instead.
     /// </summary>
     private async Task DriveToTerminalAsync()
     {
@@ -312,8 +332,11 @@ internal sealed class LatticeSchemaRemediationGrain(
                         await RunBuildSliceAsync();
                         break;
                     case LatticeSchemaRemediationPhase.Cutover:
-                        await CutoverAsync();
-                        await CompleteAsync();
+                        if (await CutoverAsync())
+                        {
+                            await CompleteAsync();
+                        }
+
                         break;
                     default:
                         throw new InvalidOperationException(
@@ -513,6 +536,7 @@ internal sealed class LatticeSchemaRemediationGrain(
     {
         var source = grainFactory.GetGrain<ILattice>(TreeId);
         var rewrite = await CreateRewriteAsync();
+        var decode = TransformInputDecoderOrNull();
         var policyView = PolicyViewOrNull();
         var compiled = CompiledPolicyOrNull();
         var sliceSize = Math.Max(1, SliceSize);
@@ -525,10 +549,12 @@ internal sealed class LatticeSchemaRemediationGrain(
         {
             foreach (var entry in slice.Entries)
             {
+                SchemaRestampInput input;
                 byte[] rewritten;
                 try
                 {
-                    rewritten = rewrite(entry.Value);
+                    input = decode is null ? Undecoded(entry.Value) : await decode(entry.Value);
+                    rewritten = rewrite(input.Body);
                 }
                 catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
                 {
@@ -600,6 +626,7 @@ internal sealed class LatticeSchemaRemediationGrain(
         var compiled = CompiledPolicyOrNull();
         var policyView = PolicyViewOrNull();
         var rewrite = await CreateRewriteAsync();
+        var decode = TransformInputDecoderOrNull();
         var sliceSize = Math.Max(1, SliceSize);
         var done = 0;
         string? lastKey = null;
@@ -610,10 +637,12 @@ internal sealed class LatticeSchemaRemediationGrain(
         {
             foreach (var entry in slice.Entries)
             {
+                SchemaRestampInput input;
                 byte[] rewritten;
                 try
                 {
-                    rewritten = rewrite(entry.Value);
+                    input = decode is null ? Undecoded(entry.Value) : await decode(entry.Value);
+                    rewritten = rewrite(input.Body);
                 }
                 catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
                 {
@@ -628,7 +657,11 @@ internal sealed class LatticeSchemaRemediationGrain(
                     break;
                 }
 
-                await destination.SetAsync(entry.Key, rewritten);
+                // On a versioned tree this is one header-prefixed array per value, the
+                // same intrinsic cost the version write interceptor charges every write
+                // to an opted-in tree; an at-target value's body was read as a view past
+                // its header, so its per-value array count is unchanged (#5243).
+                await destination.SetAsync(entry.Key, input.Restamp(rewritten));
                 done++;
                 lastKey = entry.Key;
             }
@@ -675,16 +708,40 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// holds exactly what the original served. A key a point read finds absent is
     /// skipped for the same reason.
     /// </para>
+    /// <para>
+    /// A schema-version migration reads the <b>stored</b> form: it scans keys only
+    /// and point-reads each value with <see cref="ReadStoredManyAsync"/>. The
+    /// client-facing entry scan and multi-get strip the envelope and upcast to the
+    /// tree's target, throwing <see cref="NotSupportedException"/> on a value they
+    /// cannot upcast before the per-value rewrite runs, so the migration threw and
+    /// stayed in flight holding the alias reservation instead of aborting (issue
+    /// #5208). Reading the stored form hands each value to
+    /// <see cref="LatticeSchemaVersionMigration.Migrate"/>, which upcasts it from its
+    /// own stamped version to the migration's target and whose failure the slice
+    /// turns into an abort.
+    /// </para>
+    /// <para>
+    /// A transform remediation over a tree the read-path
+    /// <see cref="ILatticeValueDecoder"/> is active for (a versioning-enabled silo)
+    /// also reads the stored form, then decodes each value itself, per value, through
+    /// that same decoder (<see cref="TransformInputDecoderOrNull"/>): the transform
+    /// sees exactly the body a client read returns, but a value the decoder cannot
+    /// upcast to the tree's target fails on its own key and becomes the abort, rather
+    /// than throwing the whole slice out of the decoding scan or multi-get and
+    /// leaving the remediation in flight holding the alias reservation (issue #5252).
+    /// </para>
     /// </summary>
     private async Task<SourceSlice> ReadSliceAsync(ILattice source, int sliceSize)
     {
         var keys = new List<string>(Math.Min(sliceSize, 1024));
+        var storedForm = state.State.Mode == SchemaRemediationMode.SchemaVersionMigration
+            || TransformDecoderActive;
         ExceptionDispatchInfo? fault = null;
         try
         {
-            await foreach (var entry in source.ScanEntriesAsync(startInclusive: After(state.State.ScanCursor)))
+            await foreach (var key in ScanKeysAfterCursorAsync(source, storedForm))
             {
-                keys.Add(entry.Key);
+                keys.Add(key);
                 if (keys.Count == sliceSize)
                 {
                     break;
@@ -704,7 +761,9 @@ internal sealed class LatticeSchemaRemediationGrain(
             return new SourceSlice([], LastScannedKey: null, exhausted, Fault: null);
         }
 
-        var values = await source.GetManyAsync(keys);
+        var values = storedForm
+            ? await ReadStoredManyAsync(keys)
+            : await source.GetManyAsync(keys);
         var entries = new List<KeyValuePair<string, byte[]>>(values.Count);
         foreach (var key in keys)
         {
@@ -715,6 +774,59 @@ internal sealed class LatticeSchemaRemediationGrain(
         }
 
         return new SourceSlice(entries, keys[^1], exhausted, fault);
+    }
+
+    /// <summary>
+    /// The source's keys after the durable cursor, in key order. A slice that reads
+    /// the stored form (<paramref name="keysOnly"/>) scans keys only: the entry scan
+    /// runs the client-facing decoding read on each value, which throws on a value it
+    /// cannot upcast (issues #5208 and #5252), and the slice never uses the scanned
+    /// values.
+    /// </summary>
+    private async IAsyncEnumerable<string> ScanKeysAfterCursorAsync(ILattice source, bool keysOnly)
+    {
+        var start = After(state.State.ScanCursor);
+        if (keysOnly)
+        {
+            await foreach (var key in source.ScanKeysAsync(startInclusive: start))
+            {
+                yield return key;
+            }
+
+            yield break;
+        }
+
+        await foreach (var entry in source.ScanEntriesAsync(startInclusive: start))
+        {
+            yield return entry.Key;
+        }
+    }
+
+    /// <summary>
+    /// Point-reads the stored form of each of <paramref name="keys"/> - the value
+    /// with its schema-version envelope intact, no upcast - routed to each key's
+    /// owner. Absent and tombstoned keys are omitted.
+    /// </summary>
+    private async Task<Dictionary<string, byte[]>> ReadStoredManyAsync(List<string> keys)
+    {
+        var reader = grainFactory.GetGrain<IReplicationApplyGrain>(TreeId);
+        var reads = new Task<VersionedValue>[keys.Count];
+        for (var i = 0; i < keys.Count; i++)
+        {
+            reads[i] = reader.ReadStoredWithVersionAsync(keys[i]);
+        }
+
+        await Task.WhenAll(reads);
+        var values = new Dictionary<string, byte[]>(keys.Count, StringComparer.Ordinal);
+        for (var i = 0; i < keys.Count; i++)
+        {
+            if (reads[i].Result.Value is { } value)
+            {
+                values[keys[i]] = value;
+            }
+        }
+
+        return values;
     }
 
     /// <summary>
@@ -790,13 +902,15 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// it enumerates the source with <c>ConfigureAwait(false)</c>. The delegate closes
     /// over local snapshots and the thread-safe singleton registry only, never
     /// <c>state</c>, so it never touches activation services.
-    /// <see cref="SchemaRemediationMode.Transform"/> evaluates the static transform;
+    /// <see cref="SchemaRemediationMode.Transform"/> evaluates the static transform
+    /// over the decoded body (a view into the stored array past its envelope header
+    /// when one is present, so the body is never copied out);
     /// <see cref="SchemaRemediationMode.SchemaVersionMigration"/> re-stamps the value to
     /// the target schema version through the registry. The delegate throws
     /// <see cref="InvalidOperationException"/> or <see cref="NotSupportedException"/> on
     /// a per-value failure, which the dry-run / build turns into an abort.
     /// </summary>
-    private async Task<Func<byte[], byte[]>> CreateRewriteAsync()
+    private async Task<Func<ReadOnlyMemory<byte>, byte[]>> CreateRewriteAsync()
     {
         if (state.State.Mode == SchemaRemediationMode.SchemaVersionMigration)
         {
@@ -805,12 +919,84 @@ internal sealed class LatticeSchemaRemediationGrain(
                     $"Schema versioning is not registered on this silo; cannot resume the version migration of tree '{TreeId}'.");
             var schemaId = state.State.MigrationSchemaId;
             var targetVersion = state.State.MigrationTargetVersion;
-            return value => LatticeSchemaVersionMigration.Migrate(value, schemaId, targetVersion, registry);
+            return value => LatticeSchemaVersionMigration.Migrate(WholeArray(value), schemaId, targetVersion, registry);
         }
 
         var transform = state.State.Transform;
-        return value => LatticeValueTransformEvaluation.Evaluate(value, in transform);
+        return value => LatticeValueTransformEvaluator.Evaluate(value, in transform);
     }
+
+    /// <summary>
+    /// The array behind <paramref name="value"/> when it spans a whole array - always
+    /// the case for a migration, which rewrites the stored value undecoded - otherwise
+    /// a copy.
+    /// </summary>
+    private static byte[] WholeArray(ReadOnlyMemory<byte> value) =>
+        MemoryMarshal.TryGetArray(value, out var segment) && segment.Offset == 0 && segment.Count == segment.Array!.Length
+            ? segment.Array
+            : value.ToArray();
+
+    /// <summary>
+    /// A stored value the slice does not decode (the decoder is inactive, or a
+    /// version migration, whose rewrite reads the stored form itself): its bytes are
+    /// the rewrite's input and the rewrite's output is written as-is.
+    /// </summary>
+    private static SchemaRestampInput Undecoded(byte[] value) => new(value, Stamped: false, 0, 0);
+
+    /// <summary>
+    /// <c>true</c> when this is a <see cref="SchemaRemediationMode.Transform"/>
+    /// remediation and the registered read-path <see cref="ILatticeValueDecoder"/> is
+    /// active for the tree, so the slice reads the stored form and decodes each value
+    /// itself (issue #5252).
+    /// </summary>
+    private bool TransformDecoderActive =>
+        state.State.Mode == SchemaRemediationMode.Transform
+        && valueDecoder is { } decoder
+        && decoder.IsActive(TreeId);
+
+    /// <summary>
+    /// The per-value decode a transform remediation applies to each stored value
+    /// before its transform: the same read-path <see cref="ILatticeValueDecoder"/> a
+    /// client read runs (strip the schema-version envelope, upcast to the tree's
+    /// target), so the transform sees exactly the body a client read returns. The
+    /// decoder throws <see cref="NotSupportedException"/> on a value it cannot
+    /// upcast, which the dry-run / build turns into an abort naming that value.
+    /// <para>
+    /// With schema versioning registered the decode also reports the stamp the
+    /// decoded body is at - the tree's target for a value of the tree's schema family
+    /// (see <see cref="LatticeSchemaVersionDecoder.DecodeForRestampAsync"/>) - and
+    /// the build re-envelopes each rewritten value at that stamp, so a remediation of
+    /// a versioned tree never cuts over to un-enveloped values that a later target
+    /// advance would not upcast and an eager migration would stamp without upcasting
+    /// (issue #5243). An unversioned tree reports no stamp and is written plain.
+    /// </para>
+    /// Returns <c>null</c> when the decoder is inactive (the stored form is then the
+    /// decoded form) and in <see cref="SchemaRemediationMode.SchemaVersionMigration"/>,
+    /// whose rewrite upcasts and re-stamps the stored form itself.
+    /// </summary>
+    private Func<byte[], ValueTask<SchemaRestampInput>>? TransformInputDecoderOrNull()
+    {
+        if (!TransformDecoderActive)
+        {
+            return null;
+        }
+
+        var treeId = TreeId;
+        if (valueDecoder is LatticeSchemaVersionDecoder versionDecoder)
+        {
+            return value => versionDecoder.DecodeForRestampAsync(treeId, value, CancellationToken.None);
+        }
+
+        var decoder = valueDecoder!;
+        return value => DecodedPlainAsync(decoder.DecodeAsync(treeId, value, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// A body decoded by a decoder that reports no schema-version stamp; the
+    /// rewrite is written as-is.
+    /// </summary>
+    private static async ValueTask<SchemaRestampInput> DecodedPlainAsync(ValueTask<byte[]> decode) =>
+        new(await decode, Stamped: false, 0, 0);
 
     /// <summary>
     /// Compiles the target policy for build-time revalidation, or returns <c>null</c>
@@ -849,16 +1035,42 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// the alias swap, the remediation remains in Cutover with the target policy
     /// already installed and the alias reservation still held for retry or
     /// operator repair.
+    /// <para>
+    /// The cutover publishes only the copy of the tree it captured (issue #5289):
+    /// while the logical tree still resolves to the persisted
+    /// <see cref="SchemaRemediationState.SourcePhysicalTreeId"/>, or - on a resume
+    /// after the swap - to its own destination. Any other physical tree means an
+    /// alias change superseded the remediation, so it refuses: no policy is left
+    /// installed by it, nothing is swapped, the destination is discarded, and the
+    /// remediation ends aborted with no offending key and a reason naming the
+    /// supersession; the caller's finally releases the reservation. The check runs
+    /// before anything is written, and the swap is fenced on the same identity, so
+    /// a change landing between the two is refused at the registry and handled the
+    /// same way.
+    /// </para>
     /// </summary>
-    private async Task CutoverAsync()
+    /// <returns>
+    /// <see langword="true"/> when the destination is published;
+    /// <see langword="false"/> when the cutover was superseded and refused.
+    /// </returns>
+    private async Task<bool> CutoverAsync()
     {
         var destinationTreeId = state.State.DestinationTreeId!;
         var operationId = state.State.OperationId!;
-        var sourcePhysical = state.State.SourcePhysicalTreeId!;
+
+        // Null only on a remediation persisted before the source was captured, which
+        // has nothing to fence on and keeps the unfenced behaviour.
+        var sourcePhysical = state.State.SourcePhysicalTreeId;
 
         // The destination is a fresh, never-aliased tree, so its physical id equals
         // its logical id.
         var destinationPhysical = destinationTreeId;
+
+        if (await SupersedingCopyAsync(sourcePhysical, destinationPhysical) is { } supersededBeforeCutover)
+        {
+            await RefuseSupersededAsync(sourcePhysical!, supersededBeforeCutover);
+            return false;
+        }
 
         // Arm enforcement BEFORE the alias swap so there is no window in which the
         // remediated destination is live (logical-alias-routed) yet unenforced. The
@@ -867,17 +1079,22 @@ internal sealed class LatticeSchemaRemediationGrain(
         // guards the source's logical id for the brief instant before the swap - it
         // can never reject an existing destination value. Evict the local policy
         // cache eagerly (as the admin does) so the coordinating silo enforces the new
-        // policy on its next write without waiting for the change feed to propagate.
+        // policy on its next write; every other silo follows the cluster-wide policy
+        // epoch within the propagation interval (#5238).
         //
         // Only the enforcement-transform mode installs a policy. A pure version
         // migration validates each value against the tree's EXISTING policy during
         // the build but does not change it: the policy is keyed by the logical tree
         // id, so the alias flip leaves it governing the re-stamped destination
         // unchanged. (Tightening a policy is the separate enforcement path.)
+        LatticeSchemaPolicy? previousPolicy = null;
+        var installedPolicy = false;
         if (state.State.Mode == SchemaRemediationMode.Transform)
         {
-            await policyStore!.SetPolicyAsync(TreeId, state.State.TargetPolicy!);
+            previousPolicy = await policyStore!.GetPolicyAsync(TreeId);
+            await policyStore.SetPolicyAsync(TreeId, state.State.TargetPolicy!);
             policyProvider!.Invalidate(TreeId);
+            installedPolicy = true;
         }
 
         // Carry the destination's map onto the logical entry before the swap (#4250).
@@ -899,16 +1116,39 @@ internal sealed class LatticeSchemaRemediationGrain(
         {
             // Forced (#4206), and pinned to the source so a resume does not follow
             // the installed alias to the destination.
-            var resolvedSource = await grainFactory.GetGrain<ILattice>(sourcePhysical).GetRoutingAsync(forceRefresh: true);
-            retainedRouting = resolvedSource with { PhysicalTreeId = sourcePhysical };
+            var resolvedSource = await grainFactory.GetGrain<ILattice>(sourcePhysical!).GetRoutingAsync(forceRefresh: true);
+            retainedRouting = resolvedSource with { PhysicalTreeId = sourcePhysical! };
         }
 
         // Repoint the logical tree to the remediated destination, moving the
         // destination's map onto the logical entry in the same registry write
         // (#4336), so no reader pairs one copy with the other's map. The map the
-        // swap replaced is the source's final layout.
-        var finalReplacedMap = await AliasCutoverShardMaps.SwapCutoverAsync(grainFactory, TreeId, destinationPhysical);
-        retainedRouting ??= new RoutingInfo(sourcePhysical, finalReplacedMap ?? replacedMap!);
+        // swap replaced is the source's final layout. Fenced on the captured source
+        // (#5289): a swap superseded since the check above is refused, and the
+        // remediation then backs out the policy it installed and refuses.
+        ShardMap? finalReplacedMap;
+        try
+        {
+            finalReplacedMap = await AliasCutoverShardMaps.SwapCutoverAsync(
+                grainFactory, TreeId, destinationPhysical, expectedSourcePhysicalTreeId: sourcePhysical);
+        }
+        catch (InvalidOperationException)
+        {
+            if (await SupersedingCopyAsync(sourcePhysical, destinationPhysical) is not { } superseding)
+            {
+                throw;
+            }
+
+            if (installedPolicy)
+            {
+                await RestorePolicyAsync(previousPolicy);
+            }
+
+            await RefuseSupersededAsync(sourcePhysical!, superseding);
+            return false;
+        }
+
+        retainedRouting ??= new RoutingInfo(sourcePhysical!, finalReplacedMap ?? replacedMap!);
 
         // Arm every source shard to redirect logical-alias-routed traffic onto the
         // destination. Without this, a stale stateless-worker routing activation
@@ -929,6 +1169,67 @@ internal sealed class LatticeSchemaRemediationGrain(
         // Proactively invalidate this activation's cached alias / routing so a
         // caller observes the cutover without waiting for a reactivation.
         await grainFactory.GetGrain<ILattice>(TreeId).GetRoutingAsync(forceRefresh: true);
+        return true;
+    }
+
+    /// <summary>
+    /// The physical tree the logical tree now resolves to when that is neither the
+    /// captured <paramref name="sourcePhysical"/> nor the
+    /// <paramref name="destinationPhysical"/> a resumed cutover already swapped to -
+    /// that is, when another alias change superseded this remediation - otherwise
+    /// <see langword="null"/>. Always <see langword="null"/> without a captured source.
+    /// </summary>
+    private async Task<string?> SupersedingCopyAsync(string? sourcePhysical, string destinationPhysical)
+    {
+        if (sourcePhysical is null)
+        {
+            return null;
+        }
+
+        var current = await grainFactory.GetLatticeRegistry().ResolveAsync(TreeId);
+        return string.Equals(current, sourcePhysical, StringComparison.Ordinal)
+            || string.Equals(current, destinationPhysical, StringComparison.Ordinal)
+                ? null
+                : current;
+    }
+
+    /// <summary>
+    /// Puts back the policy the tree had before this cutover installed its target
+    /// policy, when a swap the cutover was about to make turned out superseded.
+    /// </summary>
+    private async Task RestorePolicyAsync(LatticeSchemaPolicy? previousPolicy)
+    {
+        if (previousPolicy is null)
+        {
+            await policyStore!.ClearPolicyAsync(TreeId);
+        }
+        else
+        {
+            await policyStore!.SetPolicyAsync(TreeId, previousPolicy);
+        }
+
+        policyProvider!.Invalidate(TreeId);
+    }
+
+    /// <summary>
+    /// Refuses a superseded cutover: discards the unpublished destination and ends
+    /// the remediation aborted, with no offending key and a reason naming the
+    /// physical tree that superseded it. The caller releases the reservation once
+    /// the remediation is no longer in progress.
+    /// </summary>
+    private async Task RefuseSupersededAsync(string sourcePhysical, string superseding)
+    {
+        logger.LogWarning(
+            "Schema remediation {OperationId} of tree '{TreeId}' refused its cutover: the tree now resolves to "
+            + "'{Superseding}', not its captured source '{Source}'.",
+            state.State.OperationId, TreeId, superseding, sourcePhysical);
+        await DiscardDestinationAsync(grainFactory.GetGrain<ILattice>(state.State.DestinationTreeId!));
+        await FinishAbortedAsync(LatticeSchemaRemediationReport.Superseded(
+            state.State.ScannedCount,
+            $"Tree '{TreeId}' now resolves to '{superseding}', not the physical tree '{sourcePhysical}' this "
+            + "remediation captured: another alias change superseded its publication. Nothing was cut over, and "
+            + "the remediated copy was discarded.",
+            state.State.OperationId!));
     }
 
     private async Task DiscardDestinationAsync(ILattice destination)
@@ -1033,7 +1334,11 @@ internal sealed class LatticeSchemaRemediationGrain(
         }
     }
 
-    private async Task AbortAsync(int scannedCount, string offendingKey, string reason, byte[] offendingValuePreview)
+    private Task AbortAsync(int scannedCount, string offendingKey, string reason, byte[] offendingValuePreview) =>
+        FinishAbortedAsync(LatticeSchemaRemediationReport.Aborted(
+            scannedCount, offendingKey, reason, offendingValuePreview, state.State.OperationId!));
+
+    private async Task FinishAbortedAsync(LatticeSchemaRemediationReport report)
     {
         var prevInProgress = state.State.InProgress;
         var prevPhase = state.State.Phase;
@@ -1042,9 +1347,8 @@ internal sealed class LatticeSchemaRemediationGrain(
 
         state.State.InProgress = false;
         state.State.Phase = LatticeSchemaRemediationPhase.Aborted;
-        state.State.ScannedCount = scannedCount;
-        state.State.LastReport = LatticeSchemaRemediationReport.Aborted(
-            scannedCount, offendingKey, reason, offendingValuePreview, state.State.OperationId!);
+        state.State.ScannedCount = report.ScannedCount;
+        state.State.LastReport = report;
         try
         {
             await WriteAndPublishStateAsync();

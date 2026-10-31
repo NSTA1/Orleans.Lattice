@@ -1,0 +1,13 @@
+# A runtime registration is written under the bare name as well as the
+# effective tree it authorized.
+MODULE: ActsOnAuthorizedTreeRegistersUnderBothIds
+TARGET: ActsOnAuthorizedTree
+CLASS: Action
+SUMMARY: a registration also lands under the unresolved name
+PERTURBS: Act
+
+--- FIND
+                 /\ catalog' = [catalog EXCEPT ![t] = @ \cup {c}]
+--- REPLACE
+                 /\ catalog' = [catalog EXCEPT ![t] = @ \cup {c}, ![req.n] = @ \cup {c}]
+--- END

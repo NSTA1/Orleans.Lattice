@@ -1,0 +1,12 @@
+# InFlightRemediationKept: a joining start resumes the in-flight remediation.
+MODULE: SchemaDurableOperation
+ROW: InFlightRemediationKept
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.StartAsync_same_parameters_while_in_flight_resumes_idempotently
+SUMMARY: a start with the in-flight parameters cannot resume the in-flight remediation
+
+--- FIND
+            if (IsSameParameters(transform, targetPolicy))
+--- REPLACE
+            if (IsSameParameters(transform, targetPolicy) && !IsSameParameters(transform, targetPolicy))
+--- END

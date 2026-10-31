@@ -116,6 +116,15 @@ internal static class AliasCutoverShardMaps
     /// and it supersedes the recorded one on the destination entry (for a revert)
     /// and on the replaced tree's own entry.
     /// </para>
+    /// <para>
+    /// When <paramref name="expectedSourcePhysicalTreeId"/> is supplied - the
+    /// physical tree the cutover captured when it began - the swap publishes only
+    /// while the logical tree still resolves to it (or, on a resume, already to the
+    /// destination); any other copy means another alias change superseded the
+    /// cutover, and it is refused with <see cref="InvalidOperationException"/>
+    /// before anything is written (issue #5289). The registry swap is fenced on the
+    /// same identity, so a change landing after this read is refused there too.
+    /// </para>
     /// </summary>
     /// <returns>
     /// The final map of the replaced physical tree, for arming or enumerating its
@@ -126,7 +135,8 @@ internal static class AliasCutoverShardMaps
         IGrainFactory grainFactory,
         string logicalTreeId,
         string destinationPhysicalTreeId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? expectedSourcePhysicalTreeId = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(logicalTreeId);
@@ -138,6 +148,14 @@ internal static class AliasCutoverShardMaps
         if (string.Equals(current, destinationPhysicalTreeId, StringComparison.Ordinal))
         {
             return (await registry.GetEntryAsync(destinationPhysicalTreeId))?.ReplacedShardMap;
+        }
+
+        if (expectedSourcePhysicalTreeId is not null
+            && !string.Equals(current, expectedSourcePhysicalTreeId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Cannot cut tree '{logicalTreeId}' over: it now resolves to '{current}', not the captured "
+                + $"source '{expectedSourcePhysicalTreeId}'. Another alias change superseded this cutover.");
         }
 
         // Forced: the destination's stateless routing workers may hold a map from
@@ -306,6 +324,13 @@ internal static class AliasCutoverShardMaps
     /// already describes the target, but still releases the target's redirect, so
     /// retrying an alias that was interrupted after its swap repairs it.
     /// </para>
+    /// <para>
+    /// Refused with <see cref="InvalidOperationException"/> before anything is
+    /// written - the lineage re-stamp included - while an alias operation (an
+    /// in-flight resize, shadow-cutover restore, restore revert, or schema
+    /// remediation or migration) holds the logical tree's alias reservation, as a
+    /// delete is (issue #5289). The registry re-checks it inside its own turn.
+    /// </para>
     /// </summary>
     public static async Task CarryAcrossExplicitAliasAsync(
         IGrainFactory grainFactory,
@@ -318,6 +343,7 @@ internal static class AliasCutoverShardMaps
         ArgumentNullException.ThrowIfNull(targetPhysicalTreeId);
         cancellationToken.ThrowIfCancellationRequested();
 
+        await grainFactory.GetGrain<ITreeDeletionGrain>(logicalTreeId).EnsureAliasUnreservedAsync();
         var registry = grainFactory.GetLatticeRegistry();
         var logicalBefore = await registry.GetEntryAsync(logicalTreeId);
         var current = logicalBefore?.PhysicalTreeId ?? logicalTreeId;

@@ -478,11 +478,20 @@ public sealed class CoordinatedRestoreCopyReceiveFenceTests
                 seam.ApplyTxTerminalAsync(tx, committed: true, shardIndex: 0, Hlc(8), Origin),
             [nameof(IReplicationApplyGrain.FinalizeCrossTreeTerminalAsync)] = () =>
                 seam.FinalizeCrossTreeTerminalAsync(tx, committed: true, [0], Hlc(8), Origin),
+            // Issue #5294: both halves of the full-state fold route as a
+            // replication apply, so the fence refuses each of them.
+            [nameof(IReplicationApplyGrain.ReadStoredForApplyAsync)] = () =>
+                seam.ReadStoredForApplyAsync("seed"),
+            [nameof(IReplicationApplyGrain.ApplySetIfVersionAsync)] = () =>
+                seam.ApplySetIfVersionAsync("k", Bytes("v"), HybridLogicalClock.Zero),
         };
 
-        // A read is not a write path: the applier reads the stored value and
-        // writes the fold back through one of the methods above.
-        var exempt = new HashSet<string>(StringComparer.Ordinal) { nameof(IReplicationApplyGrain.ReadStoredWithVersionAsync) };
+        // The plain stored-form read serves migration, remediation, compliance
+        // and view readers, which are not replicated writes, so it stays unscoped.
+        var exempt = new HashSet<string>(StringComparer.Ordinal)
+        {
+            nameof(IReplicationApplyGrain.ReadStoredWithVersionAsync),
+        };
 
         var declared = typeof(IReplicationApplyGrain)
             .GetMethods(BindingFlags.Public | BindingFlags.Instance)

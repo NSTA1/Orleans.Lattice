@@ -1,0 +1,14 @@
+# The alias is swapped in one write and the map left for another (#4336).
+MODULE: AliasMapCoherentSwapLeavesMap
+TARGET: AliasMapCoherent
+CLASS: Invariant
+SUMMARY: the alias moves without the destination's map
+PERTURBS: CutSwap
+
+--- FIND
+    /\ alias' = dest /\ mapOf' = dest
+    /\ cstep' = 2
+--- REPLACE
+    /\ alias' = dest /\ mapOf' = mapOf
+    /\ cstep' = 2
+--- END

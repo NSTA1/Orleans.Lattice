@@ -5,9 +5,21 @@
 
 @if (Workspace is not null)
 {
-    <aside class="lt-schema-note" aria-label="What a version is here">
-        <p>A version is a stamp, not a shape. New writes are stamped with the tree's family and target version, and older values are upgraded when they are read or migrated. Advancing the target cannot be undone.</p>
-        <p>Registered version names and migration paths are listed below when runtime registration is installed. Descriptors name versions; the Policy tab defines the validation rules.</p>
+    <aside class="lt-schema-note" aria-label="How versioning works">
+        <p>A version is a stamp, not a shape: it records which version a value was written at. These are separate operations:</p>
+        <dl class="lt-schema-explain">
+            <dt>Stamping</dt>
+            <dd>Every new write is stamped with the tree's family and target version.</dd>
+            <dt>Advancing the target</dt>
+            <dd>Changes the stamp on later writes only, and cannot be undone. Stored values are not rewritten, and materialised views over this tree are not refreshed: a view keeps seeing each value at the version it was stamped with.</dd>
+            <dt>Upgrading on read</dt>
+            <dd>A value stamped below the target is upgraded through the registered migration hops each time it is read. A value with no path to the target, or stamped above it, cannot be read.</dd>
+            <dt>Migrating</dt>
+            <dd>Rewrites every stored value at the target once, in the background, so it no longer needs upgrading; views see the rewritten values.</dd>
+            <dt>Enforcing</dt>
+            <dd>The Policy tab's rules check values as they are written. One policy covers every version: rules cannot be scoped to a version.</dd>
+        </dl>
+        <p>A change here applies at once on the silo that serves it; the cluster's other silos pick it up shortly after.</p>
     </aside>
 
     @if (Operations.Find(Workspace.TreeId) is { IsActive: true } running)
@@ -57,7 +69,7 @@
         }
     }
 
-    <SchemaRegistryPanel />
+    <SchemaRegistryPanel Config="@_config" CatalogChanged="OnCatalogChanged" />
 
     <LtConfirmDestructive Open="@(_confirm == Confirm.Clear)"
                           OpenChanged="OnConfirmOpenChanged"
@@ -76,7 +88,9 @@
                           ObjectName="@Workspace.TreeId"
                           ConfirmText="Advance"
                           OnConfirm="AdvanceAsync">
-        New writes will be stamped with version @_advanceTarget from now on. The target version cannot be lowered again. Stored values stay at their version until they are read or migrated.
+        <p>New writes will be stamped with version @_advanceTarget from now on. The target version cannot be lowered again. Stored values stay at their version until they are read or migrated.</p>
+        <p>Materialised views over this tree are not refreshed: they keep seeing each value at the version it was stamped with.</p>
+        @RenderAdvanceRisks()
     </LtConfirmDestructive>
 
     <LtConfirmDestructive Open="@(_confirm == Confirm.AdvanceAndMigrate)"
@@ -86,7 +100,9 @@
                           ObjectName="@Workspace.TreeId"
                           ConfirmText="Advance and migrate"
                           OnConfirm="AdvanceAndMigrateAsync">
-        New writes will be stamped with version @_advanceTarget, which cannot be lowered again, and then every stored value is rewritten at that version in the background. You can follow the migration on the Remediation tab, and leave while it runs.
+        <p>New writes will be stamped with version @_advanceTarget, which cannot be lowered again, and then every stored value is rewritten at that version in the background. You can follow the migration on the Remediation tab, and leave while it runs.</p>
+        <p>@MigrationStops(_advanceTarget)</p>
+        @RenderAdvanceRisks()
     </LtConfirmDestructive>
 
     <LtDialog Open="@(_confirm == Confirm.Migrate)"
@@ -95,6 +111,7 @@
               Placement="@DialogPlacement">
         <ChildContent>
             <p>Every stored value is rewritten at the current target version, @(_config?.TargetVersion), in the background. Values already at that version are left alone, and running it again resumes or does nothing.</p>
+            <p>@MigrationStops(_config?.TargetVersion ?? 0)</p>
             <p>You can follow the migration on the Remediation tab, and leave while it runs.</p>
         </ChildContent>
         <Actions>
@@ -105,6 +122,26 @@
 }
 
 @code {
+    private RenderFragment RenderAdvanceRisks() => __builder =>
+    {
+        if (_config is not { } config || _catalog is null)
+        {
+            return;
+        }
+
+        var map = SchemaVersionMap.Build(_catalog, config);
+        if (!map.IsEmpty && !map.IsRegistered(config.SchemaId, _advanceTarget))
+        {
+            <p class="lt-schema-error">Version @_advanceTarget is not registered for family @config.SchemaId. Register it, and a migration path to it, before advancing.</p>
+        }
+
+        var stranded = map.StrandedBy(_advanceTarget);
+        if (stranded.Count > 0)
+        {
+            <p class="lt-schema-error">@StrandedText(stranded, _advanceTarget)</p>
+        }
+    };
+
     private RenderFragment RenderCurrent() => __builder =>
     {
         if (_config is not { } config)
@@ -152,7 +189,7 @@
             <h2 id="lt-schema-version-editor-title" class="lt-schema-section-title">@(_config is null ? "Turn on versioning" : "Change the version config")</h2>
             @if (_config is not null)
             {
-                <p class="lt-schema-note">This replaces the config as it is. To move to a higher version, advance the target instead: advancing is checked, this is not.</p>
+                <p class="lt-schema-note">This replaces the config as it is. To move to a higher version, advance the target instead: advancing is checked, this is not. Changing the family leaves values stamped with the old family to be read as they were stored.</p>
             }
             <LtTextInput Label="Schema family" Mono="true" Value="@_familyText" ValueChanged="value => _familyText = value" inputmode="numeric"
                          Hint="The number that names this tree's value family, stamped into every value." />

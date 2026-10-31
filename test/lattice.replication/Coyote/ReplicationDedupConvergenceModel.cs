@@ -316,6 +316,12 @@ public sealed class ReplicationDedupConvergenceModel : ICoyoteModel
 
         public Task<VersionedValue> ReadStoredWithVersionAsync(string key) => throw new NotSupportedException();
 
+        public Task<VersionedValue> ReadStoredForApplyAsync(string key) => throw new NotSupportedException();
+
+        public Task<ReplicationConditionalSetOutcome> ApplySetIfVersionAsync(
+            string key, byte[] value, HybridLogicalClock expectedVersion) =>
+            throw new NotSupportedException();
+
         public Task ApplyDeleteRangeAsync(
             string startInclusive, string endExclusive, HybridLogicalClock sourceHlc, string originClusterId,
             VersionVector? sourceVectorClock, IReadOnlyList<string>? explicitMatchedKeys = null) =>

@@ -1,0 +1,13 @@
+# An aborted rewrite still moves the alias to its partly built copy.
+MODULE: AbortTouchesNothingAbortPublishes
+TARGET: AbortTouchesNothing
+CLASS: Action
+SUMMARY: an aborted rewrite cuts over
+PERTURBS: BuildRewrite
+
+--- FIND
+               /\ UNCHANGED <<stored, wal, phys, intended, cap, promised>>
+--- REPLACE
+               /\ phys' = 2
+               /\ UNCHANGED <<stored, wal, intended, cap, promised>>
+--- END

@@ -1,0 +1,16 @@
+# A changed projection version on a current-state view is logged but not
+# rebuilt, so members the old filter extracted stay in the view.
+MODULE: MaterialisedViewNumeric
+ROW: ChangeFilter
+FILE: src/lattice/Views/ViewMaintainerGrain.cs
+DETECTORS: ViewMaintainerAggregationDrainTests.Aggregation_activation_rebuilds_when_the_persisted_projection_version_differs
+SUMMARY: a projection-version change no longer rebuilds the view
+
+--- FIND
+                    "View '{ViewName}' projection version changed ({Old} -> {New}); rebuilding.",
+                    ViewName, state.State.ProjectionVersion, registration.ProjectionVersion);
+                await RebuildAsync(cancellationToken);
+--- REPLACE
+                    "View '{ViewName}' projection version changed ({Old} -> {New}); rebuilding.",
+                    ViewName, state.State.ProjectionVersion, registration.ProjectionVersion);
+--- END

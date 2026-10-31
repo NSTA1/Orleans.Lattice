@@ -1,0 +1,13 @@
+# AbortPublishesNothing: a build-time abort discards the partial destination.
+MODULE: SchemaRemediationCutover
+ROW: AbortPublishesNothing
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.RunRemediationPassAsync_build_time_violation_discards_partial_destination_and_does_not_cut_over
+SUMMARY: a build-time abort keeps its partial destination
+
+--- FIND
+            await DiscardDestinationAsync(destination);
+            await AbortAsync(
+--- REPLACE
+            await AbortAsync(
+--- END

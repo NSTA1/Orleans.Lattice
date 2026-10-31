@@ -1,0 +1,14 @@
+# StaleWrite(c,s,k): a stale router's call on an armed shard is redirected.
+MODULE: SchemaRemediationCutover
+ROW: StaleWrite(c,s,k)
+FILE: src/lattice/BPlusTree/Grains/ShardRootGrain.RetainedRedirect.cs
+DETECTORS: SchemaRemediationCutoverAfterReshardIntegrationTests.Cutover_after_a_reshard_arms_every_source_shard
+SUMMARY: a shard with only its primary redirect armed ignores it
+
+--- FIND
+        if (state.State.RetainedRedirect is null && state.State.AdditionalRetainedRedirects is null)
+            return;
+--- REPLACE
+        if (state.State.RetainedRedirect is null || state.State.AdditionalRetainedRedirects is null)
+            return;
+--- END

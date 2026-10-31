@@ -1,0 +1,18 @@
+# The walk follows a hop past the target and treats reaching or passing the
+# target as success, so a read returns a body no chain of hops produces.
+MODULE: UpcastOrExplicitFailureOvershootAccepted
+TARGET: UpcastOrExplicitFailure
+CLASS: Invariant
+SUMMARY: the upcaster walk accepts a hop that overshoots the target
+
+--- FIND
+    IF c = t THEN TRUE
+    ELSE IF c > t \/ n = 0 THEN FALSE
+    ELSE IF \E h \in EffH : h[1] = c /\ h[2] <= t
+         THEN Walk((CHOOSE h \in EffH : h[1] = c /\ h[2] <= t)[2], t, n - 1)
+--- REPLACE
+    IF c >= t THEN TRUE
+    ELSE IF n = 0 THEN FALSE
+    ELSE IF \E h \in EffH : h[1] = c
+         THEN Walk((CHOOSE h \in EffH : h[1] = c)[2], t, n - 1)
+--- END

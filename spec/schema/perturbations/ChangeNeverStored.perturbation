@@ -1,0 +1,12 @@
+# Change(s,p) commits the setting row.
+MODULE: SchemaPolicyConfig
+ROW: Change(s,p)
+FILE: src/lattice.schema/LatticeSchemaAdmin.cs
+DETECTORS: LatticeSchemaAdminTests.SetPolicyAsync_delegates_and_invalidates_cache
+SUMMARY: the admin evicts the cache but never writes the policy row
+
+--- FIND
+        await policyStore.SetPolicyAsync(treeId, policy, cancellationToken).ConfigureAwait(false);
+--- REPLACE
+        await Task.CompletedTask.ConfigureAwait(false);
+--- END

@@ -57,7 +57,7 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_bootstrap_or_set_full_state_installs_into_empty_receiver()
     {
-        var (applier, lattice, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
+        var (applier, _, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         var entry = SnapshotEntry("k", Hlc(10), LatticeMergeMode.OrSet,
             EncodeOrSet(s => s.Add(OrSetMember, "site-b", 1)));
 
@@ -68,34 +68,32 @@ public partial class ReplicationApplierTests
         // so the full-state bytes are installed verbatim - no apply-grain
         // LWW write.
         await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
-        await lattice.Received(1).SetIfVersionAsync(
+        await apply.Received(1).ApplySetIfVersionAsync(
             "k",
             Arg.Is<byte[]>(b => JsonLatticeSerializer<OrSet>.Default.Deserialize(b).Contains(OrSetMember)),
-            Arg.Any<HybridLogicalClock>(),
-            Arg.Any<CancellationToken>());
+            Arg.Any<HybridLogicalClock>());
     }
 
     [Test]
     public async Task ApplyAsync_bootstrap_pn_counter_full_state_merges()
     {
-        var (applier, lattice, _, _) = CreateTypedCrdtApplier(LatticeMergeMode.PnCounter);
+        var (applier, _, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.PnCounter);
         var entry = SnapshotEntry("k", Hlc(11), LatticeMergeMode.PnCounter,
             EncodePnCounter(c => c.Increment("site-b", 7)));
 
         var result = await applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await lattice.Received(1).SetIfVersionAsync(
+        await apply.Received(1).ApplySetIfVersionAsync(
             "k",
             Arg.Is<byte[]>(b => JsonLatticeSerializer<PnCounter>.Default.Deserialize(b).Value == 7),
-            Arg.Any<HybridLogicalClock>(),
-            Arg.Any<CancellationToken>());
+            Arg.Any<HybridLogicalClock>());
     }
 
     [Test]
     public async Task ApplyAsync_bootstrap_version_vector_full_state_merges()
     {
-        var (applier, lattice, _, _) = CreateTypedCrdtApplier(LatticeMergeMode.VersionVector);
+        var (applier, _, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.VersionVector);
         var remoteHlc = Hlc(42, 3);
         var entry = SnapshotEntry("k", Hlc(12), LatticeMergeMode.VersionVector,
             EncodeVersionVector(v => v.Entries["site-b"] = remoteHlc));
@@ -103,79 +101,74 @@ public partial class ReplicationApplierTests
         var result = await applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await lattice.Received(1).SetIfVersionAsync(
+        await apply.Received(1).ApplySetIfVersionAsync(
             "k",
             Arg.Is<byte[]>(b => JsonLatticeSerializer<VersionVector>.Default.Deserialize(b).GetClock("site-b") == remoteHlc),
-            Arg.Any<HybridLogicalClock>(),
-            Arg.Any<CancellationToken>());
+            Arg.Any<HybridLogicalClock>());
     }
 
     [Test]
     public async Task ApplyAsync_bootstrap_mv_register_full_state_merges()
     {
-        var (applier, lattice, _, _) = CreateTypedCrdtApplier(LatticeMergeMode.MvRegister);
+        var (applier, _, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.MvRegister);
         var entry = SnapshotEntry("k", Hlc(13), LatticeMergeMode.MvRegister,
             EncodeMvRegister(r => r.Set("site-b", new byte[] { 0xab })));
 
         var result = await applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await lattice.Received(1).SetIfVersionAsync(
+        await apply.Received(1).ApplySetIfVersionAsync(
             "k",
             Arg.Is<byte[]>(b => JsonLatticeSerializer<MvRegister>.Default.Deserialize(b).Context.ContainsKey("site-b")),
-            Arg.Any<HybridLogicalClock>(),
-            Arg.Any<CancellationToken>());
+            Arg.Any<HybridLogicalClock>());
     }
 
     [Test]
     public async Task ApplyAsync_bootstrap_or_flag_full_state_merges()
     {
-        var (applier, lattice, _, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrFlag);
+        var (applier, _, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrFlag);
         var entry = SnapshotEntry("k", Hlc(14), LatticeMergeMode.OrFlag,
             EncodeOrFlag(f => f.Enable("site-b", 1)));
 
         var result = await applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await lattice.Received(1).SetIfVersionAsync(
+        await apply.Received(1).ApplySetIfVersionAsync(
             "k",
             Arg.Is<byte[]>(b => JsonLatticeSerializer<OrFlag>.Default.Deserialize(b).IsEnabled),
-            Arg.Any<HybridLogicalClock>(),
-            Arg.Any<CancellationToken>());
+            Arg.Any<HybridLogicalClock>());
     }
 
     [Test]
     public async Task ApplyAsync_bootstrap_rw_flag_full_state_merges()
     {
-        var (applier, lattice, _, _) = CreateTypedCrdtApplier(LatticeMergeMode.RwFlag);
+        var (applier, _, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.RwFlag);
         var entry = SnapshotEntry("k", Hlc(15), LatticeMergeMode.RwFlag,
             EncodeRwFlag(f => f.Enable("site-b", 1)));
 
         var result = await applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await lattice.Received(1).SetIfVersionAsync(
+        await apply.Received(1).ApplySetIfVersionAsync(
             "k",
             Arg.Is<byte[]>(b => JsonLatticeSerializer<RwFlag>.Default.Deserialize(b).IsEnabled),
-            Arg.Any<HybridLogicalClock>(),
-            Arg.Any<CancellationToken>());
+            Arg.Any<HybridLogicalClock>());
     }
 
     [Test]
     public async Task ApplyAsync_bootstrap_sequence_full_state_merges()
     {
-        var (applier, lattice, _, _) = CreateTypedCrdtApplier(LatticeMergeMode.Sequence);
+        var (applier, _, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.Sequence);
         var entry = SnapshotEntry("k", Hlc(16), LatticeMergeMode.Sequence,
             EncodeRga(r => r.InsertAfter(default, "site-b", new byte[] { 0x01 })));
 
         var result = await applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await lattice.Received(1).SetIfVersionAsync(
+        await apply.Received(1).ApplySetIfVersionAsync(
             "k",
             Arg.Is<byte[]>(b => JsonLatticeSerializer<Rga>.Default.Deserialize(b).ToList().Count == 1),
-            Arg.Any<HybridLogicalClock>(),
-            Arg.Any<CancellationToken>());
+            Arg.Any<HybridLogicalClock>());
     }
 
     // ------------------------------------------------------------------
@@ -189,16 +182,16 @@ public partial class ReplicationApplierTests
         // full state carries a different member. A state-based CRDT merge
         // must yield the union - neither the local add nor the snapshot add
         // may be clobbered (a blind LWW overwrite would lose one).
-        var (applier, lattice, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
+        var (applier, _, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         var localMember = new byte[] { 0x01 };
         var remoteMember = new byte[] { 0x02 };
         var existing = EncodeOrSet(s => s.Add(localMember, "site-a", 1));
-        apply.ReadStoredWithVersionAsync("k")
+        apply.ReadStoredForApplyAsync("k")
             .Returns(new VersionedValue { Value = existing, Version = Hlc(5) });
 
         byte[]? written = null;
-        lattice.SetIfVersionAsync("k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
-            .Returns(ci => { written = ci.ArgAt<byte[]>(1); return true; });
+        apply.ApplySetIfVersionAsync("k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>())
+            .Returns(ci => { written = ci.ArgAt<byte[]>(1); return ReplicationConditionalSetOutcome.Applied; });
 
         var entry = SnapshotEntry("k", Hlc(20), LatticeMergeMode.OrSet,
             EncodeOrSet(s => s.Add(remoteMember, "site-b", 1)));
@@ -229,14 +222,14 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_bootstrap_full_state_retries_on_cas_failure()
     {
-        var (applier, lattice, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
+        var (applier, _, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         // A non-empty receiver forces the merge-and-write loop (not the
         // verbatim install fast-path), so each CAS attempt re-reads and
         // re-writes; the first two lose the race.
-        apply.ReadStoredWithVersionAsync("k")
+        apply.ReadStoredForApplyAsync("k")
             .Returns(new VersionedValue { Value = EncodeOrSet(s => s.Add(new byte[] { 0x01 }, "site-a", 1)), Version = Hlc(5) });
-        lattice.SetIfVersionAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
-            .Returns(false, false, true);
+        apply.ApplySetIfVersionAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>())
+            .Returns(ReplicationConditionalSetOutcome.VersionMismatch, ReplicationConditionalSetOutcome.VersionMismatch, ReplicationConditionalSetOutcome.Applied);
 
         var entry = SnapshotEntry("k", Hlc(30), LatticeMergeMode.OrSet,
             EncodeOrSet(s => s.Add(OrSetMember, "site-b", 1)));
@@ -244,8 +237,8 @@ public partial class ReplicationApplierTests
         var result = await applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await lattice.Received(3).SetIfVersionAsync(
-            "k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>());
+        await apply.Received(3).ApplySetIfVersionAsync(
+            "k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>());
     }
 
     [Test]

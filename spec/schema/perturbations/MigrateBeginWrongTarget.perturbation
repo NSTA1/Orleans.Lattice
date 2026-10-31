@@ -1,0 +1,12 @@
+# MigrateBegin captures the tree's current target.
+MODULE: SchemaVersionFamily
+ROW: MigrateBegin
+FILE: src/lattice.schema/LatticeSchemaVersionAdmin.cs
+DETECTORS: LatticeSchemaVersionAdminTests.MigrateToTargetVersionAsync_drives_migration_to_current_target
+SUMMARY: a migration starts at a target the config does not hold
+
+--- FIND
+        return await MigrateCoreAsync(treeId, config.SchemaId, config.TargetVersion).ConfigureAwait(false);
+--- REPLACE
+        return await MigrateCoreAsync(treeId, config.SchemaId, config.TargetVersion + 1).ConfigureAwait(false);
+--- END

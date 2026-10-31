@@ -1,0 +1,14 @@
+# The sender takes an acknowledgement for an entry the receiver never handled.
+MODULE: AckedResolvedSpuriousAck
+TARGET: AckedResolved
+CLASS: Invariant
+SUMMARY: a pending entry is acknowledged without a delivery
+PERTURBS: LoseAck
+
+--- FIND
+    /\ sstate[e] = "Acked" /\ lostLeft > 0
+    /\ sstate' = [sstate EXCEPT ![e] = "Pending"]
+--- REPLACE
+    /\ sstate[e] = "Pending" /\ lostLeft > 0
+    /\ sstate' = [sstate EXCEPT ![e] = "Acked"]
+--- END

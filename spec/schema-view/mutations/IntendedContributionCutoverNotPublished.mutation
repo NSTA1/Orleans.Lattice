@@ -1,0 +1,13 @@
+# A completed rewrite whose cutover never moves the alias: readers are promised
+# the rewritten values while the view keeps the old copy.
+MODULE: IntendedContributionCutoverNotPublished
+TARGET: IntendedContribution
+CLASS: Invariant
+SUMMARY: cutover reports done without moving the alias
+PERTURBS: Cutover
+
+--- FIND
+    /\ phys' = 2 /\ rw' = "done"
+--- REPLACE
+    /\ rw' = "done" /\ UNCHANGED phys
+--- END

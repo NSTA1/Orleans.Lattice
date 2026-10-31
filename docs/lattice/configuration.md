@@ -2091,7 +2091,7 @@ siloBuilder.ConfigureLatticeView("adults", options =>
 | `AggregationMaxGroupEntries` | 0 | Aggregation views only: when greater than zero, bounds each `Min` / `Max` / `SetUnion` group shard (approximate mode). 0 keeps every group exact. Must not be negative. |
 | `MaxStagedTransactions` | 1024 | Maximum in-flight atomic-write transactions buffered before the backstop forces a rebuild. Must be at least 1. |
 | `MaxStagedBytes` | 64 MiB | Maximum buffered prepared-entry payload before the backstop forces a rebuild. Must be at least 1. |
-| `ReadHandleCacheTtl` | 1 s | How long an `ILatticeView` handle caches the resolved live view tree id. Bounds the post-swap read-staleness window. Must be greater than zero. |
+| `ReadHandleCacheTtl` | 1 s | How long an `ILatticeView` handle caches the resolved live view tree id. Bounds the post-swap read-staleness window. A handle that itself rebuilt, reconciled or waited on a read-your-writes barrier drops its cached id, so its next read re-resolves. Must be greater than zero. |
 | `OldGenerationReclaimGrace` | 5 s | How long a swapped-out view tree is retained before reclamation. Must exceed `ReadHandleCacheTtl`. |
 | `CrossTreeReadinessTimeout` | 5 s | Cross-tree atomic visibility only: how long a completed cross-tree batch waits for every present participant view before degrading to per-tree atomicity. Must be greater than zero. |
 | `ReplicationMode` | `DeriveLocally` | How the view tree is made available across clusters. `ShipView` requires the replication package. |

@@ -1,0 +1,12 @@
+# A scan that re-reads the policy per value judges values by different policies.
+MODULE: JudgedByStartPolicyReadsLivePolicy
+TARGET: JudgedByStartPolicy
+CLASS: Action
+SUMMARY: each value is judged by the tree's current policy
+PERTURBS: Step
+
+--- FIND
+           d == Verdict(scanPolicy, v)
+--- REPLACE
+           d == Verdict(policy, v)
+--- END

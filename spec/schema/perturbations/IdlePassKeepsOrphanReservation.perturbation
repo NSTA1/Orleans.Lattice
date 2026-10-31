@@ -1,0 +1,23 @@
+# IdlePass: an idle pass releases a reservation whose intent was never persisted.
+MODULE: SchemaRemediationCutover
+ROW: IdlePass
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.Idle_pass_releases_an_orphan_preparation_idempotently
+SUMMARY: an idle pass leaves an orphan reservation held
+
+--- FIND
+    public async Task RunRemediationPassAsync()
+    {
+        EnsureControlPlaneOrigin();
+        if (!state.State.InProgress)
+        {
+            await ReleaseAliasAsync();
+            return;
+--- REPLACE
+    public async Task RunRemediationPassAsync()
+    {
+        EnsureControlPlaneOrigin();
+        if (!state.State.InProgress)
+        {
+            return;
+--- END

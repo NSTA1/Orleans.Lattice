@@ -1,0 +1,16 @@
+# A resume that is not a resume: joining resets the durable cursor.
+MODULE: InFlightRemediationKeptJoinRestarts
+TARGET: InFlightRemediationKept
+CLASS: Action
+SUMMARY: a start that joins the in-flight remediation restarts it from its first value
+PERTURBS: Accept
+
+--- FIND
+            /\ UNCHANGED <<opOutcome, remInProgress, remOwner, remParams,
+                           remPhase, remCursor>>
+       ELSE /\ opWork' = [opWork EXCEPT ![o] = "Done"]
+--- REPLACE
+            /\ remPhase' = "DryRun" /\ remCursor' = 0
+            /\ UNCHANGED <<opOutcome, remInProgress, remOwner, remParams>>
+       ELSE /\ opWork' = [opWork EXCEPT ![o] = "Done"]
+--- END

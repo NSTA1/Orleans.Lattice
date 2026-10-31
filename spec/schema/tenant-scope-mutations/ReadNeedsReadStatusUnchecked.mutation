@@ -1,0 +1,13 @@
+# A status read checks only tenancy, not Read authority over the operation's
+# tree.
+MODULE: ReadNeedsReadStatusUnchecked
+TARGET: ReadNeedsRead
+CLASS: Action
+SUMMARY: a status read skips the read capability
+PERTURBS: Act
+
+--- FIND
+                 /\ seen' = seen \cup {<<c, p[1], p[2]>> : p \in {q \in ops : q[1] = c /\ Allowed(c, q[2], "Read")}}
+--- REPLACE
+                 /\ seen' = seen \cup {<<c, p[1], p[2]>> : p \in {q \in ops : q[1] = c /\ TenancyAllows(c, q[2])}}
+--- END

@@ -1599,6 +1599,16 @@ internal sealed partial class ReplicationApplier(
     private const int StateMergeMaxAttempts = 16;
 
     /// <summary>
+    /// Whether a full-state install is finished: the value was applied, or the
+    /// write interceptor diverted it (issue #5265). A diverted value was refused,
+    /// not lost to a concurrent writer, so it is not retried: under strict ingest
+    /// it is dead-lettered exactly once and the apply completes, and the
+    /// compare-and-swap loop keeps retrying a genuine version miss only.
+    /// </summary>
+    private static bool IsSettled(ReplicationConditionalSetOutcome outcome) =>
+        outcome is ReplicationConditionalSetOutcome.Applied or ReplicationConditionalSetOutcome.Diverted;
+
+    /// <summary>
     /// Routes an inbound CRDT-mode <see cref="MutationKind.Set"/> entry
     /// through the appropriate receive path based on whether the entry
     /// carries a typed <see cref="WalRecord.Delta"/>.
@@ -1700,13 +1710,18 @@ internal sealed partial class ReplicationApplier(
                 nameof(entry));
         }
 
-        var lattice = grainFactory.GetGrain<ILattice>(entry.TreeId);
         // Local state is read through the apply seam, never through
         // ILattice.GetWithVersionAsync: the public surface runs the read-path
         // value decoder, so folding its output and writing the fold back would
         // strip the per-value schema envelope off the stored row and make the
         // storage form of a key depend on whether it pre-existed the merge
-        // (issue #2813). Writes stay on ILattice.SetIfVersionAsync for the CAS.
+        // (issue #2813). The write is the apply seam's version-conditioned set,
+        // which runs the same gated write path as ILattice.SetIfVersionAsync but
+        // tells a diverted value apart from a version miss (issue #5265). Both
+        // halves route as a replication apply (issue #5294), so they resolve the
+        // same copy - a held bootstrap copy during a hold - and the copy receive
+        // fence refuses either with CopyReceiveFencedException, which ApplyAsync
+        // defers as on every other replicated path.
         var apply = grainFactory.GetGrain<IReplicationApplyGrain>(entry.TreeId);
         var stateSerializer = JsonLatticeSerializer<TState>.Default;
         var incoming = stateSerializer.Deserialize(entry.Value);
@@ -1715,11 +1730,10 @@ internal sealed partial class ReplicationApplier(
 
         for (var attempt = 0; attempt < StateMergeMaxAttempts; attempt++)
         {
-            var versioned = await apply.ReadStoredWithVersionAsync(entry.Key);
+            var versioned = await apply.ReadStoredForApplyAsync(entry.Key);
             if (versioned.Value is null)
             {
-                var installed = await lattice.SetIfVersionAsync(entry.Key, entry.Value, versioned.Version);
-                if (installed)
+                if (IsSettled(await apply.ApplySetIfVersionAsync(entry.Key, entry.Value, versioned.Version)))
                 {
                     return;
                 }
@@ -1730,8 +1744,7 @@ internal sealed partial class ReplicationApplier(
             var existing = stateSerializer.Deserialize(versioned.Value);
             mergeState(existing, incoming);
             var bytes = stateSerializer.Serialize(existing);
-            var ok = await lattice.SetIfVersionAsync(entry.Key, bytes, versioned.Version);
-            if (ok)
+            if (IsSettled(await apply.ApplySetIfVersionAsync(entry.Key, bytes, versioned.Version)))
             {
                 return;
             }
@@ -1806,10 +1819,11 @@ internal sealed partial class ReplicationApplier(
                 nameof(entry));
         }
 
-        var lattice = grainFactory.GetGrain<ILattice>(entry.TreeId);
         // See ApplyFullStateMergeAsync: local state is read through the apply
         // seam so the fold sees the stored (enveloped) form and the write-back
-        // preserves it (issue #2813).
+        // preserves it (issue #2813), the write tells a diverted value apart
+        // from a version miss (issue #5265), and both halves route as a
+        // replication apply under the copy receive fence (issue #5294).
         var apply = grainFactory.GetGrain<IReplicationApplyGrain>(entry.TreeId);
         var incoming = shape.DeserializeState(entry.Value);
 
@@ -1817,11 +1831,10 @@ internal sealed partial class ReplicationApplier(
 
         for (var attempt = 0; attempt < StateMergeMaxAttempts; attempt++)
         {
-            var versioned = await apply.ReadStoredWithVersionAsync(entry.Key);
+            var versioned = await apply.ReadStoredForApplyAsync(entry.Key);
             if (versioned.Value is null)
             {
-                var installed = await lattice.SetIfVersionAsync(entry.Key, entry.Value, versioned.Version);
-                if (installed)
+                if (IsSettled(await apply.ApplySetIfVersionAsync(entry.Key, entry.Value, versioned.Version)))
                 {
                     return;
                 }
@@ -1832,8 +1845,7 @@ internal sealed partial class ReplicationApplier(
             var existing = shape.DeserializeState(versioned.Value);
             shape.MergeStates(existing, incoming);
             var bytes = shape.SerializeState(existing);
-            var ok = await lattice.SetIfVersionAsync(entry.Key, bytes, versioned.Version);
-            if (ok)
+            if (IsSettled(await apply.ApplySetIfVersionAsync(entry.Key, bytes, versioned.Version)))
             {
                 return;
             }

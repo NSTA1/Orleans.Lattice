@@ -1,0 +1,19 @@
+# A retry that is not idempotent: the same id runs its work twice.
+MODULE: OneExecutionPerIdRetryRelaunches
+TARGET: OneExecutionPerId
+CLASS: Invariant
+SUMMARY: a retried start with an existing id launches the work again
+PERTURBS: Retry
+
+--- FIND
+    /\ handles' = handles \cup {o}
+    /\ UNCHANGED <<alive, crashes, stalls, rejects, launches>>
+    /\ UNCHANGED opVars /\ UNCHANGED remVars
+--- REPLACE
+    /\ handles' = handles \cup {o}
+    /\ launches' = [launches EXCEPT ![o] = @ + 1]
+    /\ opWork' = [opWork EXCEPT ![o] = "Accepting"]
+    /\ UNCHANGED <<alive, crashes, stalls, rejects>>
+    /\ UNCHANGED <<opState, opRunner, opParams, opCancel, opFollows, opSeen, opOutcome, opResultRem>>
+    /\ UNCHANGED remVars
+--- END

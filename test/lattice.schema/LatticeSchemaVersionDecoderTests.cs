@@ -91,6 +91,56 @@ public sealed class LatticeSchemaVersionDecoderTests
             Throws.InstanceOf<NotSupportedException>());
     }
 
+    /// <summary>
+    /// A stale value with no chain of hops to the target is an explicit failure,
+    /// never its stored-version body passed off as the target shape.
+    /// </summary>
+    [Test]
+    public void DecodeAsync_stale_value_with_no_upcast_path_throws_not_supported()
+    {
+        var registry = new LatticeSchemaRegistryBuilder()
+            .AddUpcaster(1, 2, 3, SetMember("c", 3))
+            .Build();
+        var decoder = new LatticeSchemaVersionDecoder(
+            Provider(new LatticeSchemaVersionConfig(schemaId: 1, targetVersion: 3)), registry);
+        var stored = LatticeSchemaEnvelope.Encode(1, 1, Utf8("{\"a\":1}")); // no v1 -> v2 hop
+
+        Assert.That(
+            async () => await decoder.DecodeAsync("orders", stored, CancellationToken.None),
+            Throws.InstanceOf<NotSupportedException>());
+    }
+
+    /// <summary>
+    /// The decoder resolves the tree's runtime catalog on every stale read, so a
+    /// hop registered after a failed read upcasts the same stored value on the next
+    /// read without a restart or a cache to invalidate.
+    /// </summary>
+    [Test]
+    public async Task DecodeAsync_resolves_the_runtime_catalog_on_every_read()
+    {
+        var host = new LatticeSchemaRegistryBuilder().AddSchema(1, 1, "v1").AddSchema(1, 2, "v2").Build();
+        var withHop = new LatticeSchemaRuntimeRegistration
+        {
+            Upcasters = [new() { SchemaId = 1, FromVersion = 1, ToVersion = 2, Transform = SetMember("b", 2) }],
+        };
+        var grain = Substitute.For<ILatticeSchemaRuntimeRegistryGrain>();
+        grain.GetAsync().Returns(new LatticeSchemaRuntimeRegistration(), withHop);
+        var grains = Substitute.For<IGrainFactory>();
+        grains.GetGrain<ILatticeSchemaRuntimeRegistryGrain>("orders", Arg.Any<string?>()).Returns(grain);
+        var transforms = new LatticeValueTransformRegistry([]);
+        var runtime = new SchemaRuntimeRegistry(grains, host, transforms, []);
+        var decoder = new LatticeSchemaVersionDecoder(
+            Provider(new LatticeSchemaVersionConfig(schemaId: 1, targetVersion: 2)), host, runtime);
+        var stored = LatticeSchemaEnvelope.Encode(1, 1, Utf8("{\"a\":1}"));
+
+        Assert.That(
+            async () => await decoder.DecodeAsync("orders", stored, CancellationToken.None),
+            Throws.InstanceOf<NotSupportedException>(), "no hop is registered yet");
+        var result = await decoder.DecodeAsync("orders", stored, CancellationToken.None);
+
+        Assert.That(JsonDocument.Parse(result).RootElement.GetProperty("b").GetInt32(), Is.EqualTo(2));
+    }
+
     [Test]
     public async Task DecodeAsync_enveloped_with_no_config_strips_stored_body()
     {

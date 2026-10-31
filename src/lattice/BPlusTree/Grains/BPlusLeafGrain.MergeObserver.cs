@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -260,12 +261,47 @@ internal sealed partial class BPlusLeafGrain
                 return outcome.TransformedValue!;
 
             case MergeOutcomeKind.AcceptWithEvent:
+                // Non-mutating: keep the canonical stored bytes, and surface the
+                // annotation on the merge-observer event sink (issue #5242).
+                RecordMergeObserverEvent(mode, outcome.EventReason);
+                return mergedStored;
+
             case MergeOutcomeKind.Accept:
             default:
-                // Non-mutating: keep the canonical stored bytes. The
-                // AcceptWithEvent reason is a non-mutating annotation surfaced to
-                // a future event sink; it does not alter the stored value.
+                // Non-mutating: keep the canonical stored bytes.
                 return mergedStored;
+        }
+    }
+
+    /// <summary>
+    /// The merge-observer event sink: counts one
+    /// <see cref="MergeOutcomeKind.AcceptWithEvent"/> outcome on
+    /// <see cref="LatticeMetrics.LeafMergeObserverEvents"/> and logs a structured
+    /// warning naming the leaf, the tree, the merge mode and the observer's
+    /// reason. The key itself is not logged. Reached only on an event outcome, so
+    /// an <see cref="MergeOutcomeKind.Accept"/> merge pays nothing here.
+    /// Observability only: never throws into the merge it describes.
+    /// </summary>
+    private void RecordMergeObserverEvent(LatticeMergeMode mode, string? reason)
+    {
+        LatticeMetrics.LeafMergeObserverEvents.Add(1, LeafTreeTag(), LeafTenantTag());
+
+        try
+        {
+            var logger = ResolveLogger();
+            if (logger is not null && logger.IsEnabled(LogLevel.Warning))
+            {
+                logger.LogWarning(
+                    "Leaf {GrainId} of tree {TreeId} kept a {MergeMode} merge result that the merge observer flagged: {Reason}. See orleans.lattice.leaf.merge_observer_events.",
+                    context.GrainId,
+                    state.State.TreeId,
+                    mode,
+                    reason);
+            }
+        }
+        catch
+        {
+            // Observability must never fail the merge it is describing.
         }
     }
 }

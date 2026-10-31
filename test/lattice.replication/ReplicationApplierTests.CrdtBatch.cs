@@ -45,7 +45,7 @@ public partial class ReplicationApplierTests
                 && items[2].Key == "c"));
         // No per-entry read-merge-write round trips.
         await lattice.DidNotReceiveWithAnyArgs().GetWithVersionAsync(default!, default);
-        await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
+        await apply.DidNotReceiveWithAnyArgs().ApplySetIfVersionAsync(default!, default!, default);
     }
 
     [Test]

@@ -130,6 +130,37 @@ public sealed class LatticeTreeAdminAliasShardMapIntegrationTests
         });
     }
 
+    [Test]
+    public async Task SetTreeAliasAsync_while_an_alias_operation_holds_the_reservation_is_refused_naming_it()
+    {
+        // Issue #5289: the explicit alias honours the reservation an in-flight
+        // resize, restore, revert or schema remediation holds, as delete does.
+        var physical = $"target-{Guid.NewGuid():N}";
+        var logical = $"logical-{Guid.NewGuid():N}";
+        await Registry.RegisterAsync(physical, new TreeRegistryEntry { ShardCount = InitialShards });
+        await Registry.RegisterAsync(logical, new TreeRegistryEntry { ShardCount = InitialShards });
+        var before = await Registry.GetEntryAsync(logical);
+        var deletion = _cluster.Client.GetGrain<ITreeDeletionGrain>(logical);
+        await deletion.BeginAliasChangeAsync("remediation:held");
+        try
+        {
+            var refused = Assert.ThrowsAsync<InvalidOperationException>(
+                () => _admin.SetTreeAliasAsync(logical, physical));
+
+            var after = await Registry.GetEntryAsync(logical);
+            Assert.Multiple(() =>
+            {
+                Assert.That(refused!.Message, Does.Contain(logical).And.Contain("remediation:held"), refused.Message);
+                Assert.That(after?.PhysicalTreeId, Is.Null, "a refused alias moves nothing");
+                Assert.That(after?.Lineage, Is.EqualTo(before?.Lineage));
+            });
+        }
+        finally
+        {
+            await deletion.EndAliasChangeAsync("remediation:held");
+        }
+    }
+
     private async Task<string> RegisterAndGrowAsync(string treeId)
     {
         await Registry.RegisterAsync(treeId, new TreeRegistryEntry { ShardCount = InitialShards });

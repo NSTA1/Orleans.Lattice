@@ -1,0 +1,13 @@
+# CutArm: every source shard is armed to redirect logical traffic.
+MODULE: SchemaRemediationCutover
+ROW: CutArm
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: SchemaRemediationCutoverAfterReshardIntegrationTests.Cutover_after_a_reshard_arms_every_source_shard
+SUMMARY: the cutover arms no source shard
+
+--- FIND
+                await grainFactory.GetGrain<IShardRootGrain>($"{retainedRouting.PhysicalTreeId}/{shardIndex}")
+                    .MarkRetainedRedirectAsync(destinationPhysical, operationId, TreeId);
+--- REPLACE
+                _ = shardIndex;
+--- END

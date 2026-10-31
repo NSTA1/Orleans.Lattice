@@ -75,6 +75,8 @@ once, either here or in the
 | Tenant rate budgets | 1 | 14 | 23 | 22 | [Rate-budget leases](../../spec/tenant-rate-budget/README.md) |
 | Tenant isolation | 1 | 25 | 25 | 31 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
 | Scheduling and progress | 10 | 196 | 244 | 119 | [Verified Scheduling and Progress](verified-scheduling.md) |
+| Schema enforcement and versioning | 9 | 145 | 175 | 289 | [Schema enforcement and versioning](../../spec/schema/README.md) |
+| Schema and view composition | 1 | 23 | 23 | 28 | [Schema and view composition](../../spec/schema-view/README.md) |
 
 **Behaviour rows** are the rows of a refinement note's action and property tables
 that assert a production behaviour. **Detector tests** are the distinct tests those
@@ -285,10 +287,11 @@ do not establish bounded latency.
 ## Focused materialised-view companions
 
 The tail row in the area census above is one lifecycle model, not a claim that
-it checks every view interaction. Eight focused companions supply separate
-replay, admission, physical identity, projection and joint-repair contracts.
-Together with the tail they have nine modules, 166 mutations, 213 behaviour
-rows and 192 TLC harness cases, derived from their checked manifests.
+it checks every view interaction. Nine focused companions supply separate
+replay, admission, physical identity, projection, joint-repair and
+schema-independent numeric contracts. Together with the tail they have ten
+modules, 186 mutations, 232 behaviour rows and 215 TLC harness cases, derived
+from their checked manifests.
 
 | Module | Base states | Variant states | Mutants | Harness cases | Production refinement |
 |--------|-------------|----------------|---------|---------------|-----------------------|
@@ -300,6 +303,7 @@ rows and 192 TLC harness cases, derived from their checked manifests.
 | `MaterialisedViewSourceAdmission` | 22,720 | 836 (`CrossTree`); 16,412 (`History`); 660 (`PendingSource`); 1,028 (`PendingOverlay`) | 21 | 26 | Yes, logical tuple/participant admission |
 | `MaterialisedViewResolvedIdentity` | 196 | 52 (`SameLog`); 60 (`FailedCandidate`); 49 (`LostCandidate`) | 16 | 20 | Yes, actual-log cache ownership |
 | `MaterialisedViewJointRepair` | 11,006 | 144 (`Legacy`); 4,572 (`SingleTarget`); 16,437 (`TwoFaults`) | 25 | 29 | Yes, conditional joint lifecycle |
+| `MaterialisedViewNumeric` | 8,208 | 44,134 (`Swap`); 38,698 (`TwoFaults`) | 20 | 23 | Yes, schema-independent Count/Sum extraction |
 
 **Yes is a bounded seam mapping, not a machine-checked implementation proof.**
 The full refinement acceptance/resolver audit passes without waived Pending or
@@ -508,6 +512,60 @@ gaps, states its full scope.
     arbitrary caller counts or a wall-clock service bound. Fairness does not
     imply bounded latency, and unbounded offered load need not become permanently
     Healthy. See [Verified Scheduling and Progress](verified-scheduling.md).
+
+- **Schema enforcement and versioning** ([`spec/schema/`](../../spec/schema/README.md)).
+  - **Covers:** a policy or version config set, cleared, cached and evicted
+    (the admin's silo before it returns, every other silo eventually); the
+    enforcement and versioning write stages in either registration order; the
+    version family, read-time decode and eager migration's abort; tracked
+    operations and compliance scans; strict ingest diverted to a durable
+    dead-letter record at a replication receiver; and the facade's tenant
+    scoping. Remediation and eager migration (`SchemaRemediationCutover`):
+    the reservation held from intent to a terminal report, a fresh destination
+    that inherits the source's layout, every copied value re-stamped at the
+    target, the policy installed before the alias-and-map swap (a migration
+    keeps the tree's policy), every source shard armed at its live layout,
+    crash recovery, aborts and cancels that publish nothing, and refusal of a
+    cutover whose captured source was superseded. Cross-region
+    (`SchemaCrossRegion`): each receiver judges replicated entries and atomic
+    batches by its own policy and catalog, and a refused batch entry is
+    dead-lettered durably while its siblings commit.
+  - **Does not cover:** writes during a remediation or migration build
+    (quiescence is required), an ownership-guard refusal of the swap, the
+    timing of policy propagation to other silos, and split or fold
+    publication; writes below the choke point (plain last-writer-wins
+    replication, backup restore, tree merge), which are never validated or
+    stamped; replication of any schema definition between regions; re-applying
+    a diverted entry, which stays diverted after the version is registered;
+    and the batched (`MergeManyAsync`) merges the merge-result observer does
+    not see. The tenant model covers the facade only, not the in-process
+    admins.
+
+- **Schema and view composition** ([`spec/schema-view/`](../../spec/schema-view/README.md)).
+  - **Covers:** the projection input contract on a versioned source: a
+    projection sees the envelope-stripped body at its stamped version on every
+    derivation path, and a target advance re-projects nothing; refused, retried
+    and diverted writes contribute nothing; an eager migration or remediation
+    cutover leaves no duplicate or obsolete membership and binds generation,
+    cursor and checkpoint to one physical copy; an abort touches nothing; and
+    the identity-aware head barrier.
+  - **Does not cover:** writes during a rewrite, or more than one rewrite or
+    alias move at a time; a projection that cannot read a live stamp (it stops
+    the drain); the post-cutover rebind latency a reader sees without the head
+    barrier; a source-wide atomic capture across views; accumulative history
+    views across a cutover; or arbitrary upcaster graphs, predicates, transforms
+    and projection encodings (the model fixes two versions, three body shapes,
+    one upcaster and one transform).
+
+- **Numeric view companion** ([`spec/view-numeric/`](../../spec/view-numeric/README.md),
+  module `MaterialisedViewNumeric`).
+  - **Covers:** Count/Sum aggregation maintenance with no schema component
+    installed: retracts on delete, reserved group key and filter exit,
+    overlapping atomic batches, durable per-group publication intents, crash
+    replay from the checkpoint, and rebinding under a fresh generation after a
+    projection change or a physical copy swap.
+  - **Does not cover:** schema interaction, which the composition model owns,
+    or numeric kinds other than Count and Sum.
 
 Across every area, the instances are bounded: each module checks a small number
 of copies, shards, keys and faults exhaustively, and says which. A clean run is

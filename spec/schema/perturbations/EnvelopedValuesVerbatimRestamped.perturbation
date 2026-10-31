@@ -1,0 +1,12 @@
+# EnvelopedValuesVerbatim: an enveloped entry is stored with its own tag.
+MODULE: SchemaStageOrdering
+ROW: EnvelopedValuesVerbatim
+FILE: src/lattice.schema/LatticeSchemaVersionWriteInterceptor.cs
+DETECTORS: LatticeSchemaVersionWriteInterceptorTests.OnWriteAsync_already_enveloped_local_write_accepts_verbatim
+SUMMARY: an already-enveloped value is stamped again
+
+--- FIND
+            return await OnEnvelopedAsync(treeId, key, value, version, cancellationToken).ConfigureAwait(false);
+--- REPLACE
+            return LatticeWriteDecision.AcceptTransformed(LatticeSchemaEnvelope.Encode(version.SchemaId, version.TargetVersion, value));
+--- END

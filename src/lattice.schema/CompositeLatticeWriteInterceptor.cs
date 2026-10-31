@@ -15,7 +15,10 @@ namespace Orleans.Lattice.Schema;
 /// is validated as a plain document first and then wrapped in the version envelope.
 /// This realises the issue's resolved rule that, when both features are on, values
 /// are validated against the target (post-upcast) shape and the envelope is applied
-/// last (a validator must never see the opaque enveloped bytes).
+/// last (a validator must never see the opaque enveloped bytes). A value that
+/// arrives already enveloped is validated by its reader-visible body (see
+/// <see cref="LatticeSchemaWriteInterceptor"/>) and passed to the versioning stage
+/// unchanged.
 /// </para>
 /// <para>
 /// <b>Zero overhead when off.</b> With a single stage the composite forwards

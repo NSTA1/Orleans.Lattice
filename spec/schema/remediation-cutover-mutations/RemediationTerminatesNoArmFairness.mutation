@@ -1,0 +1,11 @@
+# Nothing obliges a cutover to arm the source once it has swapped.
+MODULE: RemediationTerminatesNoArmFairness
+TARGET: RemediationTerminates
+CLASS: Temporal
+SUMMARY: drops weak fairness on arming the source
+
+--- FIND
+    /\ WF_vars(CutArm)
+--- REPLACE
+    /\ TRUE
+--- END

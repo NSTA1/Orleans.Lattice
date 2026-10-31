@@ -132,7 +132,11 @@ public sealed class AuthGroupAndPrecedenceEnforcementTests
         var observed = new List<string>();
         using (AuthClusterFixture.AsSubject("dave", "eu-readers"))
         {
-            await foreach (var key in _fixture.Lattice(tree).KeysAsync())
+            // ScanKeysAsync, not the raw KeysAsync stream: the raw stream can abort with
+            // EnumerationAbortedException under CI load (#5281). The wrapper re-asserts the
+            // ambient credential around every reopen (#1539), so each segment is still
+            // evaluated as dave and the gate assertion keeps its meaning.
+            await foreach (var key in _fixture.Lattice(tree).ScanKeysAsync())
             {
                 observed.Add(key);
             }

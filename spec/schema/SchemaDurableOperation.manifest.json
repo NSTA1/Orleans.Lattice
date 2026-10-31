@@ -1,0 +1,21 @@
+{
+  "mutations": "durable-operation-mutations",
+  "refinement": "SchemaDurableOperationRefinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 8,
+    "properties": 6,
+    "actions": 13,
+    "mutations": 17,
+    "behaviourRows": 25,
+    "distinctStates": 72732
+  },
+  "variants": {
+    "ThreeOps": {
+      "distinctStates": 2809060
+    },
+    "TwoParams": {
+      "distinctStates": 89916
+    }
+  }
+}

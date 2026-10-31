@@ -1,0 +1,13 @@
+# The cutover arms the shards of the layout recorded when the build began,
+# missing those a reshard added since (#4250).
+MODULE: RedirectsCoverSourceArmsInheritedLayout
+TARGET: RedirectsCoverSource
+CLASS: Action
+SUMMARY: the cutover arms the layout the destination inherited
+PERTURBS: CutArm
+
+--- FIND
+    /\ armed' = armed \cup {<<srcPhys, s, dest>> : s \in shards[srcPhys]}
+--- REPLACE
+    /\ armed' = armed \cup {<<srcPhys, s, dest>> : s \in inherited}
+--- END

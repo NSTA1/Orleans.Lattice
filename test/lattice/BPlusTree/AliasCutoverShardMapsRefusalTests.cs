@@ -66,6 +66,49 @@ public sealed class AliasCutoverShardMapsRefusalTests
     }
 
     [Test]
+    public async Task SwapCutoverAsync_superseded_since_the_captured_source_is_refused_without_writing()
+    {
+        // Issue #5289: a cutover publishes only over the physical tree it captured.
+        _registry.ResolveAsync(Logical).Returns(Task.FromResult("admin-copy"));
+        StubEntry(Destination, new TreeRegistryEntry { ShardCount = 3, ReplacedShardMap = Map(2) });
+
+        var refused = Assert.ThrowsAsync<InvalidOperationException>(() => AliasCutoverShardMaps.SwapCutoverAsync(
+            _grains, Logical, Destination, expectedSourcePhysicalTreeId: "captured-source"));
+
+        Assert.That(refused!.Message, Does.Contain("admin-copy").And.Contain("captured-source").And.Contain("superseded"));
+        await _registry.DidNotReceive().SwapAliasAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
+        await _registry.DidNotReceive().UpdateAsync(Arg.Any<string>(), Arg.Any<TreeRegistryEntry>());
+    }
+
+    [Test]
+    public async Task SwapCutoverAsync_over_the_captured_source_swaps_fenced_on_it()
+    {
+        _registry.ResolveAsync(Logical).Returns(Task.FromResult("captured-source"));
+        StubEntry(Destination, new TreeRegistryEntry { ShardCount = 3, ReplacedShardMap = Map(2) });
+
+        await AliasCutoverShardMaps.SwapCutoverAsync(
+            _grains, Logical, Destination, expectedSourcePhysicalTreeId: "captured-source");
+
+        await _registry.Received(1).SwapAliasAsync(
+            Logical, Destination, Arg.Any<ShardMap>(), Arg.Any<int?>(), "captured-source");
+    }
+
+    [Test]
+    public async Task SwapCutoverAsync_resumed_after_its_swap_publishes_nothing_whatever_it_captured()
+    {
+        _registry.ResolveAsync(Logical).Returns(Task.FromResult(Destination));
+        StubEntry(Destination, new TreeRegistryEntry { ShardCount = 3, ReplacedShardMap = Map(2) });
+
+        var replaced = await AliasCutoverShardMaps.SwapCutoverAsync(
+            _grains, Logical, Destination, expectedSourcePhysicalTreeId: "captured-source");
+
+        Assert.That(replaced!.Slots, Is.EqualTo(Map(2).Slots));
+        await _registry.DidNotReceive().SwapAliasAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
+    }
+
+    [Test]
     public async Task PrepareCutoverResolvingAsync_resumed_after_the_swap_with_no_destination_row_writes_nothing()
     {
         StubEntry(Logical, new TreeRegistryEntry { ShardCount = 2, PhysicalTreeId = Destination });

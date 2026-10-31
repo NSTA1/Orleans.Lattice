@@ -1,0 +1,12 @@
+# LeaseExpire(o): a record past its lease reads failed.
+MODULE: SchemaDurableOperation
+ROW: LeaseExpire(o)
+FILE: src/lattice/Operations/LatticeOperationGrain.cs
+DETECTORS: LatticeOperationGrainTests.A_running_operation_past_its_heartbeat_lease_reads_as_failed
+SUMMARY: a heartbeat lease never lapses
+
+--- FIND
+        if (now - state.State.LastHeartbeatUtc > Options.HeartbeatLease)
+--- REPLACE
+        if (now - state.State.LastHeartbeatUtc > TimeSpan.MaxValue)
+--- END

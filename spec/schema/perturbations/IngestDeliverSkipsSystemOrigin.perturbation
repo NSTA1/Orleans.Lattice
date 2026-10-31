@@ -1,0 +1,12 @@
+# Deliver: a replicated entry reaches the strict stages.
+MODULE: SchemaStrictIngest
+ROW: Deliver(e)
+FILE: src/lattice/LatticeWriteInterceptorEnforcement.cs
+DETECTORS: LatticeWriteInterceptorEnforcementTests.Skips_is_false_on_a_system_origin_turn_for_an_opting_interceptor, SchemaStrictIngestDeadLetterTests.Refused_entry_is_diverted_only_after_its_record_is_durable
+SUMMARY: every system-origin write skips the interceptor
+
+--- FIND
+        || (LatticeAccessGateContext.IsGateBypassed && !interceptor.InterceptsSystemOrigin);
+--- REPLACE
+        || LatticeAccessGateContext.IsGateBypassed;
+--- END

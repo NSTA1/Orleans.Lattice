@@ -1913,7 +1913,17 @@ internal sealed partial class LatticeGrain(
         }
     }
 
-    public Task SetAsync(string key, byte[] value, CancellationToken cancellationToken = default)
+    public Task SetAsync(string key, byte[] value, CancellationToken cancellationToken = default) =>
+        SetJudgedOnceAsync(key, value, judgement: null, cancellationToken);
+
+    /// <summary>
+    /// The body of <see cref="SetAsync(string, byte[], CancellationToken)"/>. A
+    /// non-null <paramref name="judgement"/> shares one write-interceptor verdict
+    /// across the passes of a single replicated delivery (issue #5285); the
+    /// public surface always passes <see langword="null"/>, so every public write
+    /// is judged.
+    /// </summary>
+    private Task SetJudgedOnceAsync(string key, byte[] value, WriteJudgement? judgement, CancellationToken cancellationToken)
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
@@ -1925,20 +1935,20 @@ internal sealed partial class LatticeGrain(
         EnforceAdmissionControl();
         var enforce = EnforcePointAsync(LatticeOperation.Write, key, cancellationToken);
         if (!enforce.IsCompletedSuccessfully)
-            return SetEnforcedSlowAsync(enforce, key, value, cancellationToken);
+            return SetEnforcedSlowAsync(enforce, key, value, judgement, cancellationToken);
         enforce.GetAwaiter().GetResult();
         var admit = ThrowIfWriteNotAdmittedAsync(cancellationToken);
         if (!admit.IsCompletedSuccessfully)
-            return SetAdmitThenWriteAsync(admit, key, value, cancellationToken);
+            return SetAdmitThenWriteAsync(admit, key, value, judgement, cancellationToken);
         admit.GetAwaiter().GetResult();
         if (WriteInterceptionActive)
-            return SetGatedTailAsync(key, value, cancellationToken);
+            return SetGatedTailAsync(key, value, judgement, cancellationToken);
         return LatticeIdempotencyContext.IsActive
             ? RunMutationAsync(ct => SetAsyncCore(key, value, ct), cancellationToken)
             : SetAsyncCore(key, value, cancellationToken);
     }
 
-    private async Task SetEnforcedSlowAsync(ValueTask enforce, string key, byte[] value, CancellationToken cancellationToken)
+    private async Task SetEnforcedSlowAsync(ValueTask enforce, string key, byte[] value, WriteJudgement? judgement, CancellationToken cancellationToken)
     {
         await enforce;
 
@@ -1946,7 +1956,7 @@ internal sealed partial class LatticeGrain(
         // caller-asserted active tenant, so running it first would let an
         // unauthorized caller drive another tenant's quota and rate budget.
         await ThrowIfWriteNotAdmittedAsync(cancellationToken);
-        await SetGatedTailAsync(key, value, cancellationToken);
+        await SetGatedTailAsync(key, value, judgement, cancellationToken);
     }
 
     /// <summary>
@@ -1955,11 +1965,11 @@ internal sealed partial class LatticeGrain(
     /// fast path and both slow-path continuations so the enforce-then-admit
     /// ordering is expressed exactly once.
     /// </summary>
-    private async Task SetGatedTailAsync(string key, byte[] value, CancellationToken cancellationToken)
+    private async Task SetGatedTailAsync(string key, byte[] value, WriteJudgement? judgement, CancellationToken cancellationToken)
     {
         if (WriteInterceptionActive)
         {
-            var outcome = await InterceptWriteAsync(LatticeOperation.Write, key, value, ttl: null, cancellationToken);
+            var outcome = await InterceptWriteOnceAsync(judgement, LatticeOperation.Write, key, value, ttl: null, cancellationToken);
             if (!outcome.Proceed) return;
             value = outcome.Value;
         }
@@ -2141,7 +2151,15 @@ internal sealed partial class LatticeGrain(
     }
 
     /// <inheritdoc />
-    public async Task SetAsync(string key, byte[] value, TimeSpan ttl, CancellationToken cancellationToken = default)
+    public Task SetAsync(string key, byte[] value, TimeSpan ttl, CancellationToken cancellationToken = default) =>
+        SetJudgedOnceAsync(key, value, ttl, judgement: null, cancellationToken);
+
+    /// <summary>
+    /// The body of <see cref="SetAsync(string, byte[], TimeSpan, CancellationToken)"/>;
+    /// see <see cref="SetJudgedOnceAsync(string, byte[], WriteJudgement?, CancellationToken)"/>
+    /// for <paramref name="judgement"/>.
+    /// </summary>
+    private async Task SetJudgedOnceAsync(string key, byte[] value, TimeSpan ttl, WriteJudgement? judgement, CancellationToken cancellationToken)
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
@@ -2162,7 +2180,7 @@ internal sealed partial class LatticeGrain(
                 "TTL is too large - absolute expiry would exceed DateTimeOffset.MaxValue.");
         if (WriteInterceptionActive)
         {
-            var outcome = await InterceptWriteAsync(LatticeOperation.Write, key, value, ttl, cancellationToken);
+            var outcome = await InterceptWriteOnceAsync(judgement, LatticeOperation.Write, key, value, ttl, cancellationToken);
             if (!outcome.Proceed) return;
             value = outcome.Value;
         }
@@ -2200,7 +2218,28 @@ internal sealed partial class LatticeGrain(
             cancellationToken);
     }
 
-    public async Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion, CancellationToken cancellationToken = default)
+    public Task<bool> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion, CancellationToken cancellationToken = default)
+    {
+        var outcome = SetIfVersionGatedAsync(key, value, expectedVersion, cancellationToken);
+        if (outcome.IsCompletedSuccessfully)
+            return outcome.Result == ReplicationConditionalSetOutcome.Applied ? TrueTask : FalseTask;
+        return AwaitAppliedAsync(outcome);
+
+        static async Task<bool> AwaitAppliedAsync(Task<ReplicationConditionalSetOutcome> pending) =>
+            await pending == ReplicationConditionalSetOutcome.Applied;
+    }
+
+    private static readonly Task<bool> TrueTask = Task.FromResult(true);
+    private static readonly Task<bool> FalseTask = Task.FromResult(false);
+
+    /// <summary>
+    /// The gated body shared by <see cref="SetIfVersionAsync"/> and
+    /// <see cref="ApplySetIfVersionAsync"/>: every guard, the access gate, write
+    /// interception, and the version-conditioned write. It reports a diversion
+    /// by the write interceptor apart from a version miss, which the public
+    /// surface folds into the same <see langword="false"/> (issue #5265).
+    /// </summary>
+    private async Task<ReplicationConditionalSetOutcome> SetIfVersionGatedAsync(string key, byte[] value, HybridLogicalClock expectedVersion, CancellationToken cancellationToken)
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
@@ -2216,7 +2255,7 @@ internal sealed partial class LatticeGrain(
         if (WriteInterceptionActive)
         {
             var outcome = await InterceptWriteAsync(LatticeOperation.Write, key, value, ttl: null, cancellationToken);
-            if (!outcome.Proceed) return false;
+            if (!outcome.Proceed) return ReplicationConditionalSetOutcome.Diverted;
             value = outcome.Value;
         }
         cancellationToken.ThrowIfCancellationRequested();
@@ -2227,8 +2266,9 @@ internal sealed partial class LatticeGrain(
         var applied = LatticeIdempotencyContext.IsActive
             ? await RunMutationAsync(ct => SetIfVersionAsyncCore(key, value, expectedVersion, ct), cancellationToken)
             : await SetIfVersionAsyncCore(key, value, expectedVersion, cancellationToken);
-        if (applied) await PublishEventAsync(LatticeTreeEventKind.Set, key);
-        return applied;
+        if (!applied) return ReplicationConditionalSetOutcome.VersionMismatch;
+        await PublishEventAsync(LatticeTreeEventKind.Set, key);
+        return ReplicationConditionalSetOutcome.Applied;
     }
 
     private Task<bool> SetIfVersionAsyncCore(string key, byte[] value, HybridLogicalClock expectedVersion, CancellationToken cancellationToken)
@@ -2244,7 +2284,7 @@ internal sealed partial class LatticeGrain(
     }
 
     public Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, CancellationToken cancellationToken = default) =>
-        ApplyCrdtDeltaGuardedAsync(key, mode, deltaBytes, expiresAtTicks: 0, cancellationToken);
+        ApplyCrdtDeltaGuardedAsync(key, mode, deltaBytes, expiresAtTicks: 0, judgement: null, cancellationToken);
 
     public Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, TimeSpan ttl, CancellationToken cancellationToken = default)
     {
@@ -2258,10 +2298,16 @@ internal sealed partial class LatticeGrain(
         // per-entry lifetimes are not shifted by client-clock skew, mirroring
         // SetAsync(key, value, ttl).
         var expiresAtTicks = nowUtc.Add(ttl).UtcTicks;
-        return ApplyCrdtDeltaGuardedAsync(key, mode, deltaBytes, expiresAtTicks, cancellationToken);
+        return ApplyCrdtDeltaGuardedAsync(key, mode, deltaBytes, expiresAtTicks, judgement: null, cancellationToken);
     }
 
-    private async Task<HybridLogicalClock> ApplyCrdtDeltaGuardedAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks, CancellationToken cancellationToken)
+    /// <summary>
+    /// The guarded CRDT apply shared by the public and replication surfaces. A
+    /// non-null <paramref name="judgement"/> shares one write-interceptor verdict
+    /// across the passes of a single replicated delivery (issue #5285); every
+    /// other caller passes <see langword="null"/>, so its delta is judged.
+    /// </summary>
+    private async Task<HybridLogicalClock> ApplyCrdtDeltaGuardedAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks, WriteJudgement? judgement, CancellationToken cancellationToken)
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
@@ -2276,7 +2322,7 @@ internal sealed partial class LatticeGrain(
         await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         if (WriteInterceptionActive)
         {
-            var outcome = await InterceptWriteAsync(LatticeOperation.CrdtApply, key, deltaBytes, ttl: null, cancellationToken);
+            var outcome = await InterceptWriteOnceAsync(judgement, LatticeOperation.CrdtApply, key, deltaBytes, ttl: null, cancellationToken);
             if (!outcome.Proceed) return default;
             deltaBytes = outcome.Value;
         }

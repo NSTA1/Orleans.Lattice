@@ -1,0 +1,14 @@
+# A build-time offender aborts without discarding the partial destination.
+MODULE: AbortPublishesNothingBuildAbortKeepsDestination
+TARGET: AbortPublishesNothing
+CLASS: Action
+SUMMARY: a build-time abort leaves its partial destination
+PERTURBS: BuildStep
+
+--- FIND
+          THEN /\ Finish("Aborted", k) /\ last' = "Abort"
+               /\ discarded' = discarded \cup {dest}
+--- REPLACE
+          THEN /\ Finish("Aborted", k) /\ last' = "Abort"
+               /\ discarded' = discarded
+--- END

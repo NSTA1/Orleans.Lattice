@@ -1326,6 +1326,18 @@
       "targets": [
         { "refId": "A", "expr": "sum by (instance) (rate(orleans_lattice_wal_replay_permits_served_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "replay permits served {{instance}}/s" }
       ]
+    },
+    {
+      "id": 5242,
+      "title": "Leaf merge-observer EVENTS by tree - issue #5242 (schema merge-result violations; absent = none or option off)",
+      "description": "Completed per-key merges for which the registered merge observer returned AcceptWithEvent (orleans.lattice.leaf.merge_observer_events) - issue #5242. With the schema add-on's ValidateCrdtMergeResults option on, each one is a merged value that fails the tree's schema policy, such as two individually valid CRDT deltas whose merged state breaks a rule. The merge is never blocked or changed: this panel is the only place the violation shows apart from the companion warning log, which names the leaf, the tree, the merge mode and the validation reason. OBSERVED PATHS ONLY: the foreground leaf set path and the typed-CRDT apply path consult the observer; MergeManyAsync merges (plain last-writer-wins replication apply, tree merge, merging restore, snapshot and resize copies) never do, so a violation arriving that way does not appear here. ABSENT IS NOT A MEASURED ZERO. The counter is not zero-primed, so a missing line is consistent with a healthy tree, with the option being off, and with a build that lacks the instrument. Run a compliance scan to establish which stored values are non-compliant.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 461 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_leaf_merge_observer_events_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} merge-observer events/s" }
+      ]
     }
   ]
 }

@@ -44,11 +44,11 @@ public partial class ReplicationApplierTests
         hwm.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
         // See CreateTypedCrdtApplier: the applier reads local state through
         // the apply seam, not through ILattice (issue #2813).
-        apply.ReadStoredWithVersionAsync(Arg.Any<string>())
+        apply.ReadStoredForApplyAsync(Arg.Any<string>())
             .Returns(new VersionedValue { Value = null, Version = HybridLogicalClock.Zero });
-        lattice.SetIfVersionAsync(
-            Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
-            .Returns(true);
+        apply.ApplySetIfVersionAsync(
+            Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>())
+            .Returns(ReplicationConditionalSetOutcome.Applied);
 
         var registry = new CrdtShapeRegistry();
         if (registerShape)
@@ -124,8 +124,8 @@ public partial class ReplicationApplierTests
         var result = await applier.ApplyAsync(OrMapEntry("k", Hlc(10)) with { Value = state });
 
         Assert.That(result.Applied, Is.True);
-        await lattice.Received(1).SetIfVersionAsync(
-            "k", state, HybridLogicalClock.Zero, Arg.Any<CancellationToken>());
+        await apply.Received(1).ApplySetIfVersionAsync(
+            "k", state, HybridLogicalClock.Zero);
         await apply.DidNotReceiveWithAnyArgs().ApplyCrdtDeltaWithExpiryAsync(
             default!, default, default!, default);
     }
@@ -136,14 +136,14 @@ public partial class ReplicationApplierTests
         var (applier, lattice, apply, _) = CreateOrMapApplier();
         var existing = OrMapState(("orders", "site-a", 5));
         var incoming = OrMapState(("shipments", "site-b", 2));
-        apply.ReadStoredWithVersionAsync("k")
+        apply.ReadStoredForApplyAsync("k")
             .Returns(new VersionedValue { Value = existing, Version = Hlc(4) });
         byte[]? installed = null;
-        lattice.SetIfVersionAsync("k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+        apply.ApplySetIfVersionAsync("k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>())
             .Returns(call =>
             {
                 installed = call.ArgAt<byte[]>(1);
-                return Task.FromResult(true);
+                return Task.FromResult(ReplicationConditionalSetOutcome.Applied);
             });
 
         var result = await applier.ApplyAsync(OrMapEntry("k", Hlc(10)) with { Value = incoming });
@@ -158,10 +158,10 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyAsync_retries_an_ormap_bootstrap_fold_when_the_optimistic_install_loses()
     {
-        var (applier, lattice, _, _) = CreateOrMapApplier();
+        var (applier, _, apply, _) = CreateOrMapApplier();
         var attempts = 0;
-        lattice.SetIfVersionAsync("k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromResult(++attempts > 1));
+        apply.ApplySetIfVersionAsync("k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>())
+            .Returns(_ => Task.FromResult(++attempts > 1 ? ReplicationConditionalSetOutcome.Applied : ReplicationConditionalSetOutcome.VersionMismatch));
 
         var result = await applier.ApplyAsync(
             OrMapEntry("k", Hlc(10)) with { Value = OrMapState(("orders", "site-b", 1)) });
@@ -176,9 +176,9 @@ public partial class ReplicationApplierTests
     [Test]
     public void ApplyAsync_faults_an_ormap_bootstrap_fold_that_exhausts_its_cas_budget()
     {
-        var (applier, lattice, _, _) = CreateOrMapApplier();
-        lattice.SetIfVersionAsync("k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
-            .Returns(false);
+        var (applier, _, apply, _) = CreateOrMapApplier();
+        apply.ApplySetIfVersionAsync("k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>())
+            .Returns(ReplicationConditionalSetOutcome.VersionMismatch);
 
         Assert.That(
             async () => await applier.ApplyAsync(
@@ -205,10 +205,10 @@ public partial class ReplicationApplierTests
     [Test]
     public void ApplyAsync_faults_a_typed_full_state_merge_that_exhausts_its_cas_budget()
     {
-        var (applier, lattice, _, _) = CreateTypedCrdtApplier(LatticeMergeMode.PnCounter);
-        lattice.SetIfVersionAsync(
-            Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
-            .Returns(false);
+        var (applier, _, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.PnCounter);
+        apply.ApplySetIfVersionAsync(
+            Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>())
+            .Returns(ReplicationConditionalSetOutcome.VersionMismatch);
 
         Assert.That(
             async () => await applier.ApplyAsync(

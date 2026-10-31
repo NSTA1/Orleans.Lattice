@@ -15,6 +15,32 @@ internal sealed partial class TreeDeletionGrain
             throw Refuse($"Cannot change an alias involving deleted tree '{TreeId}'; recover it first.");
     }
 
+    public Task EnsureAliasUnreservedAsync()
+    {
+        // Interleaved, so it reads the reservation as this activation holds it:
+        // one whose persist is still in flight refuses, which errs closed.
+        if (state.State.AliasOperationId is { } holder)
+        {
+            throw Refuse(
+                $"Cannot set the alias of tree '{TreeId}': {DescribeAliasOperation(holder)} '{holder}' holds its "
+                + "alias reservation. Retry after that operation completes, or cancel it.");
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Names the kind of operation an alias reservation id belongs to, from the
+    /// prefix its owner stamps, for a refusal an operator can act on.
+    /// </summary>
+    private static string DescribeAliasOperation(string operationId) => operationId switch
+    {
+        _ when operationId.StartsWith("resize:", StringComparison.Ordinal) => "resize",
+        _ when operationId.StartsWith("remediation:", StringComparison.Ordinal) => "schema remediation or migration",
+        _ when operationId.EndsWith(":revert", StringComparison.Ordinal) => "restore revert",
+        _ => "alias operation (a resize, restore, restore revert, or schema remediation or migration)",
+    };
+
     public async Task BeginAliasChangeAsync(string operationId)
     {
         ArgumentException.ThrowIfNullOrEmpty(operationId);

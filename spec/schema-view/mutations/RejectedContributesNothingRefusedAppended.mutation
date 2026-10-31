@@ -1,0 +1,18 @@
+# A local write the policy refuses is appended anyway, so the view folds it.
+MODULE: RejectedContributesNothingRefusedAppended
+TARGET: RejectedContributesNothing
+CLASS: Invariant
+SUMMARY: a refused local write still reaches the WAL
+PERTURBS: Write
+
+--- FIND
+         [] appended = 1 -> \E b \in {"s", "x"} : Submit(2, 2, b)
+--- REPLACE
+         [] appended = 1 -> \E b \in {"s", "x"} :
+              /\ submitted' = [submitted EXCEPT ![2] = b]
+              /\ mustRefuse' = IF Valid(b) THEN mustRefuse ELSE mustRefuse \cup {2}
+              /\ wal' = [wal EXCEPT ![phys] = Append(@,
+                   Entry(2, {2}, One(2, [ver |-> target, body |-> Fix(b)]), FALSE, TRUE))]
+              /\ stored' = [stored EXCEPT ![phys][2] = [ver |-> target, body |-> Fix(b)]]
+              /\ intended' = [intended EXCEPT ![2] = [ver |-> target, body |-> Fix(b)]]
+--- END

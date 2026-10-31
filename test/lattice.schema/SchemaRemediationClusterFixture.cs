@@ -13,6 +13,10 @@ public sealed class SchemaRemediationClusterFixture
 {
     public TestCluster Cluster { get; private set; } = null!;
 
+    /// <summary>The in-process silo's service provider.</summary>
+    public IServiceProvider SiloServices =>
+        Cluster.Silos.OfType<InProcessSiloHandle>().First().SiloHost.Services;
+
     public async Task InitializeAsync()
     {
         var builder = new TestClusterBuilder(1);

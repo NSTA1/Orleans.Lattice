@@ -1,0 +1,12 @@
+# StoredPolicyCompiles: no uncompilable policy is ever durable.
+MODULE: SchemaPolicyConfig
+ROW: StoredPolicyCompiles
+FILE: src/lattice.schema/LatticeSchemaPolicyStore.cs
+DETECTORS: LatticeSchemaPolicyStoreTests.SetPolicyAsync_negative_max_byte_length_is_rejected_and_not_stored
+SUMMARY: an uncompilable policy reaches the reserved tree
+
+--- FIND
+        _ = CompiledSchemaPolicy.Compile(policy);
+--- REPLACE
+        _ = policy;
+--- END

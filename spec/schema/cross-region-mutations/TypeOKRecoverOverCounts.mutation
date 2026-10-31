@@ -1,0 +1,15 @@
+# A recovery is counted against the fault budget past its bound.
+MODULE: TypeOKRecoverOverCounts
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: recovery records a fault count outside its domain
+PERTURBS: Recover
+
+--- FIND
+    /\ retried' = [e \in Entries |-> FALSE]
+    /\ UNCHANGED <<kind, body, stamp, strict, tgt, hop, st, tag, decided, faults, lastRead>>
+--- REPLACE
+    /\ retried' = [e \in Entries |-> FALSE]
+    /\ faults' = MaxFaults + 1
+    /\ UNCHANGED <<kind, body, stamp, strict, tgt, hop, st, tag, decided, lastRead>>
+--- END

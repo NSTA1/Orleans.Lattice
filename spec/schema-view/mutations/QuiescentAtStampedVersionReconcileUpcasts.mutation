@@ -1,0 +1,16 @@
+# A reconcile rebuild reads decoded values, so it reports drift against an
+# incrementally maintained view and installs upcast contributions.
+MODULE: QuiescentAtStampedVersionReconcileUpcasts
+TARGET: QuiescentAtStampedVersion
+CLASS: Invariant
+SUMMARY: a reconcile rebuild projects decoded, upcast bodies
+PERTURBS: Reconcile
+BOUNDS: MaxReconciles = 1
+
+--- FIND
+    /\ Live /\ reconciles < MaxReconciles
+    /\ Rebuild(Scan(phys))
+--- REPLACE
+    /\ Live /\ reconciles < MaxReconciles
+    /\ Rebuild([k \in Keys |-> Proj(defn, Decode(stored[phys][k]))])
+--- END

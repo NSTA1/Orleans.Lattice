@@ -1,0 +1,13 @@
+# Strict ingest stores a typed-CRDT delta at the stamp it arrived with, so a
+# later fold would have to upcast it.
+MODULE: CrdtLiftedAtIngestKeepsStamp
+TARGET: CrdtLiftedAtIngest
+CLASS: Action
+SUMMARY: a strictly ingested delta is not lifted to the receiver's target
+PERTURBS: Deliver
+
+--- FIND
+                         /\ tag' = [tag EXCEPT ![e] = IF kind[e] = "Crdt" THEN tgt ELSE stamp[e]]
+--- REPLACE
+                         /\ tag' = [tag EXCEPT ![e] = stamp[e]]
+--- END

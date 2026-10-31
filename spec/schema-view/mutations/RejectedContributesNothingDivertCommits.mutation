@@ -1,0 +1,16 @@
+# Strict ingest records a diversion but commits the entry as well, so the view
+# folds a value it should never have seen.
+MODULE: RejectedContributesNothingDivertCommits
+TARGET: RejectedContributesNothing
+CLASS: Invariant
+SUMMARY: a strict-ingest diversion is also committed
+PERTURBS: Replicate
+BOUNDS: StrictIngest = TRUE
+
+--- FIND
+          /\ IF diverted
+             THEN UNCHANGED <<wal, stored, intended>>
+--- REPLACE
+          /\ IF FALSE
+             THEN UNCHANGED <<wal, stored, intended>>
+--- END

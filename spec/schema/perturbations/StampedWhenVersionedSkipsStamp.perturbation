@@ -1,0 +1,12 @@
+# StampedWhenVersioned: every intercepted entry is stored self-describing.
+MODULE: SchemaStageOrdering
+ROW: StampedWhenVersioned
+FILE: src/lattice.schema/LatticeSchemaVersionWriteInterceptor.cs
+DETECTORS: LatticeSchemaVersionWriteInterceptorTests.OnWriteAsync_local_write_stamps_envelope_at_target, SchemaWriteStageRegistrationTests.Versioning_only_stamps_a_raw_local_write_at_the_target
+SUMMARY: a versioned tree stores a raw value
+
+--- FIND
+            LatticeSchemaEnvelope.Encode(version.SchemaId, version.TargetVersion, value));
+--- REPLACE
+            value);
+--- END

@@ -44,6 +44,7 @@ public sealed class SchemaTreeCacheExtensionsTests
         cache.CacheIfSpaceAvailable("Orders", "other");
 
         cache.InvalidateForMutation(
+            new SchemaTreeCacheGenerations(),
             new LatticeMutation { TreeId = sourceTree, Key = "orders" }, sourceTree);
 
         Assert.That(cache.ContainsKey("orders"), Is.False);
@@ -60,8 +61,80 @@ public sealed class SchemaTreeCacheExtensionsTests
         cache.CacheIfSpaceAvailable("orders", "cached");
 
         cache.InvalidateForMutation(
+            new SchemaTreeCacheGenerations(),
             new LatticeMutation { TreeId = treeId, Key = key! }, SchemaConstants.PolicyTree);
 
         Assert.That(cache["orders"], Is.EqualTo("cached"));
+    }
+
+    [Test]
+    public void CacheIfCurrent_installs_value_when_no_invalidation_happened()
+    {
+        var cache = new ConcurrentDictionary<string, string?>(StringComparer.Ordinal);
+        var generations = new SchemaTreeCacheGenerations();
+        var captured = generations.Capture("orders");
+
+        cache.CacheIfCurrent(generations, "orders", captured, "loaded");
+
+        Assert.That(cache["orders"], Is.EqualTo("loaded"));
+    }
+
+    [Test]
+    public void CacheIfCurrent_overtaken_by_invalidate_does_not_install_value()
+    {
+        var cache = new ConcurrentDictionary<string, string?>(StringComparer.Ordinal);
+        var generations = new SchemaTreeCacheGenerations();
+        var captured = generations.Capture("orders");
+
+        cache.Invalidate(generations, "orders");
+        cache.CacheIfCurrent(generations, "orders", captured, "stale");
+
+        Assert.That(cache.ContainsKey("orders"), Is.False);
+    }
+
+    [Test]
+    public void CacheIfCurrent_overtaken_by_matching_mutation_does_not_install_value()
+    {
+        var cache = new ConcurrentDictionary<string, string?>(StringComparer.Ordinal);
+        var generations = new SchemaTreeCacheGenerations();
+        var captured = generations.Capture("orders");
+
+        cache.InvalidateForMutation(
+            generations, new LatticeMutation { TreeId = SchemaConstants.PolicyTree, Key = "orders" }, SchemaConstants.PolicyTree);
+        cache.CacheIfCurrent(generations, "orders", captured, "stale");
+
+        Assert.That(cache.ContainsKey("orders"), Is.False);
+    }
+
+    [Test]
+    public void Invalidate_removes_entry_and_advances_generation()
+    {
+        var cache = new ConcurrentDictionary<string, string?>(StringComparer.Ordinal);
+        var generations = new SchemaTreeCacheGenerations();
+        cache.CacheIfSpaceAvailable("orders", "cached");
+        var captured = generations.Capture("orders");
+
+        cache.Invalidate(generations, "orders");
+
+        Assert.That(cache.ContainsKey("orders"), Is.False);
+        Assert.That(generations.IsCurrent("orders", captured), Is.False);
+    }
+
+    [Test]
+    public void InvalidateAll_clears_every_entry_and_overtakes_every_in_flight_load()
+    {
+        var cache = new ConcurrentDictionary<string, string?>(StringComparer.Ordinal);
+        var generations = new SchemaTreeCacheGenerations();
+        cache.CacheIfSpaceAvailable("orders", "cached");
+        cache.CacheIfSpaceAvailable("invoices", null);
+        var captured = Enumerable.Range(0, 200).Select(i => ("tree-" + i, generations.Capture("tree-" + i))).ToArray();
+
+        cache.InvalidateAll(generations);
+        foreach (var (treeId, generation) in captured)
+        {
+            cache.CacheIfCurrent(generations, treeId, generation, "stale");
+        }
+
+        Assert.That(cache, Is.Empty);
     }
 }

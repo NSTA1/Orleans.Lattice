@@ -1,0 +1,12 @@
+# Replaying entries the catalog already holds is refused as a conflict.
+MODULE: ReplayIdempotentReplayRefused
+TARGET: ReplayIdempotent
+CLASS: Action
+SUMMARY: an identical retry of a registration fails
+PERTURBS: Register
+
+--- FIND
+    LET ok == Admissible(a) IN
+--- REPLACE
+    LET ok == Admissible(a) /\ ~Contained(a) IN
+--- END

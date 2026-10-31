@@ -1,0 +1,13 @@
+# Acknowledge evicts the admin silo before returning.
+MODULE: SchemaPolicyConfig
+ROW: Acknowledge
+FILE: src/lattice.schema/LatticeSchemaAdmin.cs
+DETECTORS: LatticeSchemaAdminTests.SetPolicyAsync_delegates_and_invalidates_cache
+SUMMARY: SetPolicyAsync returns without evicting its own silo
+
+--- FIND
+        await policyStore.SetPolicyAsync(treeId, policy, cancellationToken).ConfigureAwait(false);
+        provider.Invalidate(treeId);
+--- REPLACE
+        await policyStore.SetPolicyAsync(treeId, policy, cancellationToken).ConfigureAwait(false);
+--- END

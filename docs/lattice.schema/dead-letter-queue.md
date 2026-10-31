@@ -18,15 +18,33 @@ a replicated typed-CRDT entry or an entry of a replicated atomic batch; a plain
 the strict check and never produce an entry (see
 [strict-mode ingest](schema-enforcement.md#strict-mode-ingest)). A dead-lettered
 entry of a replicated atomic batch is left out of that batch, and the receiver
-commits the batch's other entries.
+commits the batch's other entries. The entry's dead-letter record is an ordinary
+committed write to the `sys-schema-dlq` tree in its own right: it is not part of
+the batch's transaction, so it is durable and visible as soon as the diversion is
+reported, whether the entry's prepare arrived before or after the batch's commit
+decision, and whatever the batch's own terminal later does. It is stamped by the
+receiver's clock, not with the entry's source origin, clock or delta.
+
+The receiver judges each entry by its own region's policy and catalog, not the
+verdict of the region that wrote it, so a value one region accepted can be
+dead-lettered in another (see
+[runtime registration](schema-versioning.md#runtime-registration)). The
+`SchemaCrossRegion` TLA+ module checks this; see its
+[refinement note](../../spec/schema/SchemaCrossRegionRefinement.md).
 
 ## What lands in the DLQ
 
 An entry is created only in [strict-ingest](schema-enforcement.md#strict-mode-ingest)
 mode. Each entry records the offending key, a bounded preview of the value
 (capped by the writing add-on's `DeadLetterPreviewMaxBytes` option), the full byte
-length, a human-readable reason, the source, and a UTC timestamp. The source is one
-of:
+length, a human-readable reason, the source, and a UTC timestamp. For an item that
+arrived already carrying a version envelope, the preview and the byte length cover
+the stored, enveloped bytes, while the reason describes the body it was judged by
+(see [composition with versioning](schema-enforcement.md#composition-with-versioning)).
+A refused item is diverted once: a refused full-state CRDT row (the bootstrap form)
+is not retried as a version conflict, and an entry of a replicated atomic batch
+whose apply a bootstrap hold mirrors onto a second copy is recorded once, and that one record is committed independently of the batch.
+The source is one of:
 
 | `LatticeSchemaDeadLetterSource` | Meaning |
 |---|---|

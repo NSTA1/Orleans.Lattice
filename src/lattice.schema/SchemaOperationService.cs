@@ -159,13 +159,48 @@ internal sealed class SchemaOperationService(
     /// <summary>
     /// Maps a terminal report to the recorded outcome: a completed remediation
     /// succeeds; one that stopped at an offending value fails, naming the value; one
-    /// cancelled before cutover is cancelled.
+    /// cancelled before cutover is cancelled; and a followed remediation that ended
+    /// under another operation, with its outcome replaced on the coordinator
+    /// (<see cref="SchemaRemediationDriver.IsSuperseded"/>), fails as superseded.
     /// </summary>
     /// <param name="report">The terminal report.</param>
     /// <returns>The completion.</returns>
     internal static LatticeOperationCompletion ToCompletion(LatticeSchemaRemediationReport report)
     {
+        if (SchemaRemediationDriver.IsSuperseded(report))
+        {
+            var superseded = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [SchemaOperationResultKeys.Outcome] = SchemaOperationResultKeys.Superseded,
+            };
+            AddRemediationId(superseded, report);
+            return new LatticeOperationCompletion
+            {
+                State = LatticeOperationState.Failed,
+                FailureReason = SchemaRemediationDriver.SupersededReason(report.OperationId),
+                Result = superseded,
+            };
+        }
+
         var processed = report.ScannedCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (report.DidAbort && report.OffendingKey is null)
+        {
+            // A cutover another alias change superseded (#5289): no value is at fault.
+            var result = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [SchemaOperationResultKeys.Outcome] = SchemaOperationResultKeys.Aborted,
+                [SchemaOperationResultKeys.ValuesProcessed] = processed,
+                [SchemaOperationResultKeys.Reason] = report.Reason ?? string.Empty,
+            };
+            AddRemediationId(result, report);
+            return new LatticeOperationCompletion
+            {
+                State = LatticeOperationState.Failed,
+                FailureReason = report.Reason ?? "The remediation was aborted. Nothing was cut over.",
+                Result = result,
+            };
+        }
+
         if (report.DidAbort)
         {
             var result = new Dictionary<string, string>(StringComparer.Ordinal)

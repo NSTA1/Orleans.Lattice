@@ -1,0 +1,12 @@
+# Act: the policy write is handed the effective tree, not the bare name.
+MODULE: SchemaTenantScope
+ROW: Act
+FILE: src/lattice.api.schema/LatticeSchemaControl.cs
+DETECTORS: LatticeSchemaControlTenantScopeTests.SetPolicyAsync_under_a_confined_tenant_authorizes_and_writes_the_composed_tree
+SUMMARY: the admin receives the tree's last segment instead of the composed id
+
+--- FIND
+        await _admin.SetPolicyAsync(treeId, policy, cancellationToken).ConfigureAwait(false);
+--- REPLACE
+        await _admin.SetPolicyAsync(treeId.Substring(treeId.LastIndexOf('/') + 1), policy, cancellationToken).ConfigureAwait(false);
+--- END

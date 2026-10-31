@@ -1,0 +1,12 @@
+# SystemOriginGate: any registered stage opts the interceptor in.
+MODULE: SchemaStageOrdering
+ROW: SystemOriginGate
+FILE: src/lattice.schema/CompositeLatticeWriteInterceptor.cs
+DETECTORS: CompositeLatticeWriteInterceptorTests.InterceptsSystemOrigin_is_true_when_any_stage_intercepts, SchemaWriteStageRegistrationTests.Composed_registration_opts_into_system_origin_when_either_stage_is_globally_strict
+SUMMARY: the composite opts in only when its last stage does
+
+--- FIND
+                if (stage.InterceptsSystemOrigin)
+--- REPLACE
+                if (stage.InterceptsSystemOrigin && ReferenceEquals(stage, _stages[^1]))
+--- END

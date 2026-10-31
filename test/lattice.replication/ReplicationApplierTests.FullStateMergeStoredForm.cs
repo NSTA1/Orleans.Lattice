@@ -23,7 +23,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// </para>
 /// <para>
 /// The fix routes both merge sites through
-/// <see cref="IReplicationApplyGrain.ReadStoredWithVersionAsync"/>, the
+/// <see cref="IReplicationApplyGrain.ReadStoredForApplyAsync"/>, the
 /// non-decoding apply-side read. These tests drive genuinely different bytes
 /// down the two seams so an assertion cannot pass by coincidence: the stored
 /// value and the decoded value hold different members, and the merge output
@@ -43,7 +43,7 @@ public partial class ReplicationApplierTests
 
         // The stored row and the decoder's output differ by construction, so
         // the merge result names which seam the applier actually read.
-        apply.ReadStoredWithVersionAsync("k")
+        apply.ReadStoredForApplyAsync("k")
             .Returns(new VersionedValue
             {
                 Value = EncodeOrSet(s => s.Add(StoredOnlyMember, "site-a", 1)),
@@ -57,8 +57,8 @@ public partial class ReplicationApplierTests
             });
 
         byte[]? written = null;
-        lattice.SetIfVersionAsync("k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
-            .Returns(ci => { written = ci.ArgAt<byte[]>(1); return true; });
+        apply.ApplySetIfVersionAsync("k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>())
+            .Returns(ci => { written = ci.ArgAt<byte[]>(1); return ReplicationConditionalSetOutcome.Applied; });
 
         var result = await applier.ApplyAsync(SnapshotEntry(
             "k",
@@ -88,7 +88,7 @@ public partial class ReplicationApplierTests
     {
         var (applier, lattice, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
 
-        apply.ReadStoredWithVersionAsync("k")
+        apply.ReadStoredForApplyAsync("k")
             .Returns(new VersionedValue
             {
                 Value = EncodeOrSet(s => s.Add(StoredOnlyMember, "site-a", 1)),
@@ -102,8 +102,8 @@ public partial class ReplicationApplierTests
             });
 
         HybridLogicalClock? expected = null;
-        lattice.SetIfVersionAsync("k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
-            .Returns(ci => { expected = ci.ArgAt<HybridLogicalClock>(2); return true; });
+        apply.ApplySetIfVersionAsync("k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>())
+            .Returns(ci => { expected = ci.ArgAt<HybridLogicalClock>(2); return ReplicationConditionalSetOutcome.Applied; });
 
         await applier.ApplyAsync(SnapshotEntry(
             "k",
@@ -122,7 +122,7 @@ public partial class ReplicationApplierTests
     {
         var (applier, lattice, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
 
-        apply.ReadStoredWithVersionAsync("k")
+        apply.ReadStoredForApplyAsync("k")
             .Returns(new VersionedValue
             {
                 Value = EncodeOrSet(s => s.Add(StoredOnlyMember, "site-a", 1)),
@@ -135,7 +135,7 @@ public partial class ReplicationApplierTests
             LatticeMergeMode.OrSet,
             EncodeOrSet(s => s.Add(IncomingMember, "site-b", 1))));
 
-        await apply.Received(1).ReadStoredWithVersionAsync("k");
+        await apply.Received(1).ReadStoredForApplyAsync("k");
         await lattice.DidNotReceiveWithAnyArgs().GetWithVersionAsync(default!, default);
     }
 
@@ -144,14 +144,14 @@ public partial class ReplicationApplierTests
     {
         var (applier, lattice, apply, _) = CreateOrMapApplier();
 
-        apply.ReadStoredWithVersionAsync("k")
+        apply.ReadStoredForApplyAsync("k")
             .Returns(new VersionedValue { Value = OrMapState(("stored", "site-a", 5)), Version = Hlc(4) });
         lattice.GetWithVersionAsync("k", Arg.Any<CancellationToken>())
             .Returns(new VersionedValue { Value = OrMapState(("decoded", "site-a", 5)), Version = Hlc(4) });
 
         byte[]? written = null;
-        lattice.SetIfVersionAsync("k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
-            .Returns(ci => { written = ci.ArgAt<byte[]>(1); return true; });
+        apply.ApplySetIfVersionAsync("k", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>())
+            .Returns(ci => { written = ci.ArgAt<byte[]>(1); return ReplicationConditionalSetOutcome.Applied; });
 
         var result = await applier.ApplyAsync(
             OrMapEntry("k", Hlc(10)) with { Value = OrMapState(("incoming", "site-b", 2)) });

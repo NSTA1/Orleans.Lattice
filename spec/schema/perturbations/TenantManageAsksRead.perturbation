@@ -1,0 +1,12 @@
+# ManageNeedsSchemaAdmin: a mutation asks the gate for SchemaAdmin.
+MODULE: SchemaTenantScope
+ROW: ManageNeedsSchemaAdmin
+FILE: src/lattice.schema/SchemaAccessAuthorizer.cs
+DETECTORS: LatticeSchemaControlTenantScopeTests.A_schema_mutation_with_only_read_authority_is_denied_and_writes_nothing, SchemaAccessAuthorizerTests.AuthorizeManage_issues_a_whole_tree_schema_admin_request
+SUMMARY: a schema mutation is authorized with Read authority
+
+--- FIND
+            _gate, _membership, treeId, LatticeOperation.SchemaAdmin, cancellationToken);
+--- REPLACE
+            _gate, _membership, treeId, LatticeOperation.Read, cancellationToken);
+--- END

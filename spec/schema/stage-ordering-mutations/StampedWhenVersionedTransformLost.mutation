@@ -1,0 +1,13 @@
+# The choke point appends the submitted entries, discarding the chain's
+# transformed bytes.
+MODULE: StampedWhenVersionedTransformLost
+TARGET: StampedWhenVersioned
+CLASS: Action
+SUMMARY: the stamped value is not threaded to the append
+PERTURBS: Commit
+
+--- FIND
+    /\ stored' = kept /\ phase' = "Done" /\ outcome' = "Applied"
+--- REPLACE
+    /\ stored' = req /\ phase' = "Done" /\ outcome' = "Applied"
+--- END

@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.Extensions.Logging;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
@@ -35,7 +36,8 @@ public partial class BPlusLeafGrainTests
     private static BPlusLeafGrain CreateObserverGrain(
         ILatticeMergeObserver observer,
         ILatticeValueDecoder? decoder = null,
-        FakePersistentState<LeafNodeState>? state = null)
+        FakePersistentState<LeafNodeState>? state = null,
+        ILoggerFactory? loggerFactory = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("leaf", "test-leaf"));
@@ -47,6 +49,8 @@ public partial class BPlusLeafGrainTests
         services.GetService(typeof(ILatticeMergeObserver)).Returns(observer);
         if (decoder is not null)
             services.GetService(typeof(ILatticeValueDecoder)).Returns(decoder);
+        if (loggerFactory is not null)
+            services.GetService(typeof(ILoggerFactory)).Returns(loggerFactory);
         context.ActivationServices.Returns(services);
 
         var grainFactory = Substitute.For<IGrainFactory>();

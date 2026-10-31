@@ -1,0 +1,18 @@
+# An atomic batch drops a dead-lettered entry and commits the rest.
+MODULE: BatchAccountingAtomicDropsEntry
+TARGET: BatchAccounting
+CLASS: Action
+SUMMARY: an atomic batch treats an enforcement dead-letter as a drop
+PERTURBS: RunEnforcement
+
+--- FIND
+       ELSE IF ~tStrictE
+       THEN /\ Advance(val)
+            /\ UNCHANGED <<outcome, refusedBy, dropped, dlq>>
+       ELSE IF atomic
+--- REPLACE
+       ELSE IF ~tStrictE
+       THEN /\ Advance(val)
+            /\ UNCHANGED <<outcome, refusedBy, dropped, dlq>>
+       ELSE IF FALSE
+--- END

@@ -1,0 +1,19 @@
+# DrivenOnlyByFollowers: no driver slices a remediation it does not follow.
+MODULE: SchemaDurableOperation
+ROW: DrivenOnlyByFollowers
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.A_joined_driver_does_not_slice_or_report_a_later_remediation_after_the_followed_one_ended, LatticeSchemaRemediationGrainTests.A_cancelled_joined_driver_does_not_cancel_slice_or_report_a_later_remediation
+SUMMARY: a slice call naming one remediation slices another (#5267)
+
+--- FIND
+        if (state.State.InProgress
+            && !string.Equals(state.State.OperationId, operationId, StringComparison.Ordinal))
+        {
+            // Another operation's remediation: the caller does not follow it.
+--- REPLACE
+        if (state.State.InProgress
+            && !string.Equals(state.State.OperationId, operationId, StringComparison.Ordinal)
+            && operationId.Length < 0)
+        {
+            // Another operation's remediation: the caller does not follow it.
+--- END

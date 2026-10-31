@@ -1,0 +1,13 @@
+# A typed-CRDT apply resolves its route without the replication-apply mark, so
+# it lands on a copy a coordinated restore holds closed (#5294).
+MODULE: NothingLandsOnFencedCopyFoldUnfenced
+TARGET: NothingLandsOnFencedCopy
+CLASS: Action
+SUMMARY: the CRDT apply skips the restored copy's receive fence
+PERTURBS: Deliver
+
+--- FIND
+    /\ IF ~up["Copy"]
+--- REPLACE
+    /\ IF ~up["Copy"] /\ kind[e] # "Crdt"
+--- END

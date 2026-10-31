@@ -107,6 +107,9 @@ internal static class TlcCiShard
     /// <summary>The bounded fresh joint-repair, retry and acknowledgement-closure runs.</summary>
     public const string MaterialisedViewJointRepair = "TlcShardMaterialisedViewJointRepair";
 
+    /// <summary>The schema-independent numeric (Count/Sum) projection companion runs.</summary>
+    public const string MaterialisedViewNumeric = "TlcShardMaterialisedViewNumeric";
+
     /// <summary>The anti-entropy base and first measured mutation group.</summary>
     public const string AntiEntropy = "TlcShardAntiEntropy";
 
@@ -144,6 +147,31 @@ internal static class TlcCiShard
     public const string BPlusCascade = "TlcShardBPlusCascade";
 
     /// <summary>
+    /// Every base, variant and mutation of the Schema* modules under
+    /// <c>spec/schema/</c>, co-located so each base serves its mutations'
+    /// full-bound controls. Routed by name prefix into a dedicated shard so a
+    /// schema module never reaches the catch-all, and a new Schema* module joins
+    /// it with no routing change.
+    /// <para>
+    /// Split by module, never by mutation, once the measured item would exceed
+    /// the largest other TLC item: give the module an exact-name branch in
+    /// <see cref="SchemaCategory"/> ahead of the prefix rule and a shard of its
+    /// own, so its base stays co-located with its mutations. The per-module
+    /// measured costs live in the shard's <c>test-shards.json</c> note.
+    /// </para>
+    /// </summary>
+    public const string Schema = "TlcShardSchema";
+
+    /// <summary>
+    /// Every base, variant and mutation of <c>SchemaViewComposition</c> under
+    /// <c>spec/schema-view/</c>, the schema/view composition model (#5233). It is
+    /// named <c>Schema*</c> but lives in its own directory and measured shard, so
+    /// it neither rides the <see cref="Schema"/> prefix route nor lengthens that
+    /// shard's critical path.
+    /// </summary>
+    public const string SchemaView = "TlcShardSchemaView";
+
+    /// <summary>
     /// The prefix of the per-module category every TLC base, variant and
     /// mutation case carries beside its shard category (contract C2 of #5148),
     /// so <c>TestCategory=TlcModule_&lt;Module&gt;</c> selects exactly one
@@ -161,9 +189,10 @@ internal static class TlcCiShard
          MaterialisedViews, MaterialisedViewFence, MaterialisedViewHorizon,
          MaterialisedViewAggregation, MaterialisedViewRebind,
          MaterialisedViewReadyClosure, MaterialisedViewSourceAdmission,
-         MaterialisedViewResolvedIdentity, MaterialisedViewJointRepair,
+         MaterialisedViewResolvedIdentity, MaterialisedViewJointRepair, MaterialisedViewNumeric,
          AntiEntropy, AntiEntropy2, AntiEntropy3, TreeLifecycle, Aliasing, SplitGate,
-         Scheduling, SchedulingWorkloadB, SchedulingReplayTwoPartitions, SchedulingShipping, SchedulingShippingVariants];
+         Scheduling, SchedulingWorkloadB, SchedulingReplayTwoPartitions, SchedulingShipping, SchedulingShippingVariants,
+         Schema, SchemaView];
 
     private static readonly Lazy<IReadOnlyDictionary<(string Module, string Variant), string>> AtomicVariantCategories =
         new(CreateAtomicVariantCategories, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -182,6 +211,10 @@ internal static class TlcCiShard
         if (SchedulingCategory(module, mutation: mutation.Name) is { } schedulingCategory)
         {
             return schedulingCategory;
+        }
+        if (SchemaCategory(name) is { } schemaCategory)
+        {
+            return schemaCategory;
         }
         if (string.Equals(name, "AntiEntropy", StringComparison.Ordinal))
         {
@@ -239,7 +272,7 @@ internal static class TlcCiShard
     public static string? OfModule(SpecModule module)
     {
         ArgumentNullException.ThrowIfNull(module);
-        return SchedulingCategory(module) ?? LifecycleCategory(module.Name) ?? CoLocatedBaseCategory(module);
+        return SchedulingCategory(module) ?? SchemaCategory(module.Name) ?? LifecycleCategory(module.Name) ?? CoLocatedBaseCategory(module);
     }
 
     /// <summary>
@@ -300,6 +333,11 @@ internal static class TlcCiShard
         if (SchedulingCategory(module, variant) is { } schedulingCategory)
         {
             return schedulingCategory;
+        }
+
+        if (SchemaCategory(module.Name) is { } schemaCategory)
+        {
+            return schemaCategory;
         }
 
         if (string.Equals(module.Name, "AntiEntropy", StringComparison.Ordinal)
@@ -374,6 +412,11 @@ internal static class TlcCiShard
             : Scheduling;
     }
 
+    private static string? SchemaCategory(string name) =>
+        string.Equals(name, "SchemaViewComposition", StringComparison.Ordinal) ? SchemaView
+        : name.StartsWith("Schema", StringComparison.Ordinal) ? Schema
+        : null;
+
     private static string? LifecycleCategory(string name) =>
         name == "MaterialisedViewFence" ? MaterialisedViewFence
         : name == "MaterialisedViewHorizon" ? MaterialisedViewHorizon
@@ -383,6 +426,7 @@ internal static class TlcCiShard
         : name == "MaterialisedViewSourceAdmission" ? MaterialisedViewSourceAdmission
         : name == "MaterialisedViewResolvedIdentity" ? MaterialisedViewResolvedIdentity
         : string.Equals(name, "MaterialisedViewJointRepair", StringComparison.Ordinal) ? MaterialisedViewJointRepair
+        : string.Equals(name, "MaterialisedViewNumeric", StringComparison.Ordinal) ? MaterialisedViewNumeric
         : name.StartsWith("MaterialisedView", StringComparison.Ordinal) ? MaterialisedViews
         : name.StartsWith("AntiEntropy", StringComparison.Ordinal) ? AntiEntropy
         : name.StartsWith("TreeLifecycle", StringComparison.Ordinal) ? TreeLifecycle

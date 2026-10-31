@@ -1,0 +1,12 @@
+# DiversionAckedOnlyWhenRecorded: a record never replaces an earlier one.
+MODULE: SchemaStrictIngest
+ROW: DiversionAckedOnlyWhenRecorded
+FILE: src/lattice.schema/LatticeSchemaDeadLetterStore.cs
+DETECTORS: SchemaStrictIngestDeadLetterTests.Repeated_diversions_of_one_key_at_one_instant_are_all_retained
+SUMMARY: two records for one key at one instant share a storage key
+
+--- FIND
+        var unique = Guid.NewGuid().ToString("N")[..8];
+--- REPLACE
+        var unique = "00000000";
+--- END

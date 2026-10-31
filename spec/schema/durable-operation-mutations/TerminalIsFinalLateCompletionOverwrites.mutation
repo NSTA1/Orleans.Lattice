@@ -1,0 +1,16 @@
+# A completion that is not first-terminal-wins: a lost record is rewritten later.
+MODULE: TerminalIsFinalLateCompletionOverwrites
+TARGET: TerminalIsFinal
+CLASS: Action
+SUMMARY: a runner's late completion overwrites a record already declared lost
+PERTURBS: Finish
+
+--- FIND
+    /\ IF Terminal(o)
+       THEN UNCHANGED <<opState, opOutcome, opResultRem>>
+       ELSE IF opSeen[o] = NoOp
+--- REPLACE
+    /\ IF FALSE
+       THEN UNCHANGED <<opState, opOutcome, opResultRem>>
+       ELSE IF opSeen[o] = NoOp
+--- END

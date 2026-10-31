@@ -1,0 +1,12 @@
+# ReservationHeldWhileRunning: a finished migration releases the alias reservation.
+MODULE: SchemaVersionFamily
+ROW: ReservationHeldWhileRunning
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: SchemaVersionMigrationAbortIntegrationTests.AdvanceAndMigrateAsync_with_no_upcast_hop_aborts_naming_the_value_and_releases_the_reservation, SchemaVersionMigrationAbortIntegrationTests.MigrateToTargetVersionAsync_over_a_value_newer_than_the_target_aborts_and_releases_the_reservation
+SUMMARY: the alias reservation is dropped from state but never ended on the tree
+
+--- FIND
+        await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId).EndAliasChangeAsync(id);
+--- REPLACE
+        await Task.CompletedTask;
+--- END

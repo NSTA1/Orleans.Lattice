@@ -107,6 +107,12 @@ lattice	formal-tlc-view-ready-closure	deterministic	0.65
 lattice	formal-tlc-view-source-admission	deterministic	0.91
 lattice	formal-tlc-view-resolved-identity	deterministic	0.30
 lattice	formal-tlc-view-joint-repair	deterministic	0.63
+# formal-tlc-view-numeric (#5232): one sample, its 23 cases on leg 6 of
+# receipt-free ci.yml run 41064780376 (head ff6cc0c64).
+lattice	formal-tlc-view-numeric	deterministic	1.43
+# formal-tlc-schema-view (#5233): its 26 cases took 1.3 minutes locally at
+# LATTICE_TLC_CONCURRENCY=2; doubled until measured on its member PR's CI leg.
+lattice	formal-tlc-schema-view	deterministic	2.60
 lattice	formal-tlc-tree-lifecycle	deterministic	0.65
 lattice	formal-tlc-anti-entropy	deterministic	3.56
 lattice	formal-tlc-anti-entropy-2	deterministic	5.10
@@ -131,6 +137,19 @@ lattice	formal-tlc-atomic-variants-4	deterministic	8.88
 lattice	formal-tlc-atomic-variants-5	deterministic	9.43
 lattice	formal-tlc-atomic-variants-6	deterministic	8.97
 lattice	formal-tlc-backup	deterministic	3.94
+# formal-tlc-schema is one measured item: every Schema* module's base,
+# variants and mutations. Earlier figures: 30 cases 2.34 min (ci.yml run
+# 41065598921, #5226); 48 cases 1 m 54 s of dotnet test (run 41087582284,
+# #5227); 68 cases 6.64 min (run 41088681728, #5229). With SchemaStrictIngest
+# (#5228) and SchemaRemediationCutover (#5230) all 133 cases ran (the shared
+# spec/schema fingerprint changed, so no receipt applied) in 9.76 minutes
+# (dotnet test 9 m 42 s) in the member pull request ci.yml run 41134925542
+# (head 7b8e1edf5, job 124337189421, leg 3); the row takes that figure. TRX
+# case-seconds per module in that run (upper bounds, slot waits included;
+# 2234 case-s in 582 s wall): SchemaDurableOperation 763,
+# SchemaRemediationCutover 630, SchemaStageOrdering 226, SchemaVersionFamily 212,
+# SchemaPolicyConfig 201, SchemaStrictIngest 118, SchemaComplianceScan 84.
+lattice	formal-tlc-schema	deterministic	9.76
 lattice	formal-tlc-smoke	deterministic	0.27
 # lattice/rest (deterministic) uses complete passing item TRX from green run
 # 40648174016 (head c04710f914ed1628af05916aaf5f5272caa6d102); elapsed TRX

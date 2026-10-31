@@ -911,4 +911,7 @@ internal static class TypeAliases
 
     /// <summary>Alias for the per-physical-copy receive fence status.</summary>
     internal const string CopyReceiveFenceStatus = "ol.qft";
+
+    /// <summary>Alias for the outcome of a replication version-conditioned set (issue #5265).</summary>
+    internal const string ReplicationConditionalSetOutcome = "ol.rco";
 }

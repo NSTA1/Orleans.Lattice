@@ -22,7 +22,10 @@ public static class LatticeSchemaEnforcementServiceCollectionExtensions
     /// Adds schema enforcement to the silo. Must be called <i>after</i>
     /// <c>AddLattice(...)</c>: the core registration is the source of truth for the
     /// tree registry, the options system, and the no-op write interceptor this
-    /// add-on replaces.
+    /// add-on replaces. It may be called before or after
+    /// <c>AddLatticeSchemaVersioning(...)</c>: when versioning is already
+    /// registered, the validation stage is composed ahead of its envelope-stamping
+    /// stage rather than replacing it, so both orders resolve the same write path.
     /// </summary>
     /// <param name="builder">The silo builder.</param>
     /// <param name="configure">Optional delegate that populates <see cref="LatticeSchemaEnforcementOptions"/>.</param>
@@ -83,14 +86,21 @@ public static class LatticeSchemaEnforcementServiceCollectionExtensions
         builder.Services.AddSingleton<IMutationObserver>(
             sp => sp.GetRequiredService<LatticeSchemaPolicyProvider>());
 
+        // The observer above fires only on the silo that committed the policy write,
+        // so every silo also follows the cluster-wide policy epoch: a policy change
+        // reaches every silo's cache within PropagationInterval (#5238).
+        builder.Services.AddSchemaConfigEpochSynchronizer<LatticeSchemaPolicyProvider>(
+            SchemaConstants.PolicyTree,
+            sp => sp.GetRequiredService<IOptions<LatticeSchemaEnforcementOptions>>().Value.PropagationInterval);
+
         // Enforcement wiring: replace the core default NullLatticeWriteInterceptor
-        // (registered by AddLattice via TryAddSingleton) with the schema
-        // interceptor. Replace (not TryAdd) guarantees exactly one interceptor
-        // resolves and it is the enforcing one.
+        // (registered by AddLattice via TryAddSingleton) with the schema stage
+        // chain. Replace (not TryAdd) guarantees exactly one interceptor resolves.
+        // When versioning was registered first, the chain re-composes validation
+        // ahead of its stamping stage rather than discarding it (#5241), so the
+        // two add-ons may be registered in either order.
         builder.Services.TryAddSingleton<LatticeSchemaWriteInterceptor>();
-        builder.Services.Replace(
-            ServiceDescriptor.Singleton<ILatticeWriteInterceptor>(
-                sp => sp.GetRequiredService<LatticeSchemaWriteInterceptor>()));
+        SchemaWriteStageComposition.Compose(builder.Services);
 
         // In-process control plane over the stores + provider cache. Authorization is
         // applied by the facade / gRPC layer that exposes it, not by this admin itself.

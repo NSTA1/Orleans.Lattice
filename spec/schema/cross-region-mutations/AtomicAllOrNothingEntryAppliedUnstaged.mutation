@@ -1,0 +1,15 @@
+# An atomic-batch entry outside strict ingest is applied straight away instead
+# of staged for its batch's decision.
+MODULE: AtomicAllOrNothingEntryAppliedUnstaged
+TARGET: AtomicAllOrNothing
+CLASS: Invariant
+SUMMARY: an unjudged batch entry is applied before its decision
+PERTURBS: Deliver
+
+--- FIND
+       ELSE /\ st' = [st EXCEPT ![e] = IF kind[e] = "Atomic" THEN "Staged" ELSE "Stored"]
+            /\ tag' = [tag EXCEPT ![e] = stamp[e]]
+--- REPLACE
+       ELSE /\ st' = [st EXCEPT ![e] = "Stored"]
+            /\ tag' = [tag EXCEPT ![e] = stamp[e]]
+--- END

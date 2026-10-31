@@ -1,0 +1,14 @@
+# A follower that only ever slices: once another driver ends the remediation it waits forever.
+MODULE: OperationTerminatesFollowerNeverReturns
+TARGET: OperationTerminates
+CLASS: Temporal
+SUMMARY: a driver whose remediation another driver ended never learns of it
+PERTURBS: Observe
+
+--- FIND
+    /\ opWork[o] = "Driving" /\ alive[opRunner[o]]
+    /\ (~remInProgress \/ remOwner # opFollows[o])
+--- REPLACE
+    /\ opWork[o] = "Driving" /\ alive[opRunner[o]] /\ FALSE
+    /\ (~remInProgress \/ remOwner # opFollows[o])
+--- END

@@ -1,0 +1,14 @@
+# StatusSeesOwnTenantOnly: a status read looks the operation up under the caller's tenant.
+MODULE: SchemaTenantScope
+ROW: StatusSeesOwnTenantOnly
+FILE: src/lattice.api.schema/LatticeSchemaControl.Operations.cs
+DETECTORS: LatticeSchemaOperationsIntegrationTests.An_operation_in_another_tenant_or_over_unreadable_trees_is_not_found
+SUMMARY: a status read looks the operation up under the default tenant
+
+--- FIND
+        var record = await operations.Runner.GetAsync(tenantId, operationId).ConfigureAwait(false);
+        return record is not null && await IsVisibleAsync(record, cancellationToken).ConfigureAwait(false)
+--- REPLACE
+        var record = await operations.Runner.GetAsync(TenantId.Default.Value!, operationId).ConfigureAwait(false);
+        return record is not null && await IsVisibleAsync(record, cancellationToken).ConfigureAwait(false)
+--- END

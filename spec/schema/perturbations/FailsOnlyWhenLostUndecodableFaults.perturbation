@@ -1,0 +1,12 @@
+# FailsOnlyWhenLost: no stored value faults the scan.
+MODULE: SchemaComplianceScan
+ROW: FailsOnlyWhenLost
+FILE: src/lattice.schema/LatticeSchemaComplianceAdmin.cs
+DETECTORS: SchemaComplianceUndecodableValueIntegrationTests.Tracked_compliance_scan_over_undecodable_values_succeeds_and_records_them_as_non_compliant, LatticeSchemaComplianceAdminUndecodableTests.ScanCompliance_after_a_decode_fault_judges_the_rest_from_the_stored_form
+SUMMARY: an undecodable value faults the whole scan again (#5253)
+
+--- FIND
+        catch (Exception ex) when (SchemaUndecodableValue.IsDecodeFailure(ex) && DecoderActive(treeId))
+--- REPLACE
+        catch (Exception ex) when (SchemaUndecodableValue.IsDecodeFailure(ex) && DecoderActive(treeId) && ex.Data is null)
+--- END

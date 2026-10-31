@@ -1,0 +1,12 @@
+# Supersede: a cutover already superseded refuses before installing anything.
+MODULE: SchemaRemediationCutover
+ROW: Supersede
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.Cutover_superseded_before_it_starts_installs_no_policy_swaps_nothing_and_aborts_naming_it
+SUMMARY: a superseded cutover installs its policy before the fenced swap refuses it
+
+--- FIND
+        if (await SupersedingCopyAsync(sourcePhysical, destinationPhysical) is { } supersededBeforeCutover)
+--- REPLACE
+        if (sourcePhysical is null && await SupersedingCopyAsync(sourcePhysical, destinationPhysical) is { } supersededBeforeCutover)
+--- END

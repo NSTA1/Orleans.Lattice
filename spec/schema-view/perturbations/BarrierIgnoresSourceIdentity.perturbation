@@ -1,0 +1,19 @@
+# The head barrier stops requiring the view to be bound to the copy the alias
+# names, so after a cutover it returns on the retired copy's positions.
+MODULE: SchemaViewComposition
+ROW: BarrierExact
+FILE: src/lattice/Views/ViewMaintainerGrain.SourceHeadBarrier.cs
+DETECTORS: ViewSourceHeadBarrierCutoverIntegrationTests.WaitForSourceHeadAsync_after_a_migration_cutover_reflects_post_cutover_membership, SchemaViewCompositionIntegrationTests.Eager_migration_reprojects_each_value_once_at_its_captured_target_and_the_view_follows_the_new_copy
+SUMMARY: the head barrier ignores the source's physical identity
+
+--- FIND
+    private bool ReflectsSourceHead(string physical, long[] heads)
+    {
+        if (!IsBoundToPhysical(physical))
+        {
+            return false;
+        }
+--- REPLACE
+    private bool ReflectsSourceHead(string physical, long[] heads)
+    {
+--- END

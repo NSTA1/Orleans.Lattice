@@ -125,6 +125,19 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     Task EnsureAliasWritableAsync();
 
     /// <summary>
+    /// Rejects an explicit alias change while an alias operation - an in-flight
+    /// resize, shadow-cutover restore, restore revert, or schema remediation or
+    /// migration - holds this tree's alias reservation
+    /// (<see cref="BeginAliasChangeAsync"/>), exactly as <see cref="DeleteTreeAsync"/>
+    /// honours it. The <see cref="InvalidOperationException"/> names the holder. The
+    /// operations that hold the reservation publish through their own fenced
+    /// cutovers, which never call this. A pure read, interleaved so a probe never
+    /// queues behind a lifecycle verb.
+    /// </summary>
+    [Orleans.Concurrency.AlwaysInterleave]
+    Task EnsureAliasUnreservedAsync();
+
+    /// <summary>
     /// Returns <c>true</c> while logical deletion is pending or durable
     /// (whether or not the purge has completed). Physical retirement alone
     /// does not make the logical tree deleted, and a purged tree whose id has

@@ -1,0 +1,12 @@
+# The sender never re-delivers an entry whose attempt failed.
+MODULE: EveryEntryAcknowledgedNoRedelivery
+TARGET: EveryEntryAcknowledged
+CLASS: Temporal
+SUMMARY: a failed entry is never delivered again
+PERTURBS: Deliver
+
+--- FIND
+    /\ rphase = "Idle" /\ sstate[e] = "Pending"
+--- REPLACE
+    /\ rphase = "Idle" /\ sstate[e] = "Pending" /\ fails[e] = 0
+--- END

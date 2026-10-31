@@ -1,0 +1,12 @@
+# The defect #4966 fixed: the rule count was derived from the failure breakdown.
+MODULE: RuleCountIsPolicyRulesCountsReasons
+TARGET: RuleCountIsPolicyRules
+CLASS: Invariant
+SUMMARY: the report's rule count is the number of failure reasons (#4966)
+PERTURBS: Finish
+
+--- FIND
+    /\ repRuleCount' = RuleCount(scanPolicy)
+--- REPLACE
+    /\ repRuleCount' = FailureReasons
+--- END

@@ -1,0 +1,13 @@
+# A migration that re-stamps at a version other than the target it was asked
+# for when it began.
+MODULE: IntendedContributionBeginCapturesWrongTarget
+TARGET: IntendedContribution
+CLASS: Invariant
+SUMMARY: the migration captures the wrong target
+PERTURBS: BeginRewrite
+
+--- FIND
+    /\ cap' = target
+--- REPLACE
+    /\ cap' = 2
+--- END

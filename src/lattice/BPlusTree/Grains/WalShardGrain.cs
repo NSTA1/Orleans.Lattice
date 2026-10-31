@@ -1536,10 +1536,12 @@ internal sealed partial class WalShardGrain(
         // This stops a non-replicated CRDT tree's delta-only record
         // from replaying as an LWW null (issue #926): the resolver
         // returns null -> LwwRegister for any tree it does not know,
-        // which previously clobbered the durable mode here.
+        // which previously clobbered the durable mode here. The resolver is
+        // consulted under the logical tree (issue #5306), as the leaf and the
+        // writer's stamp are, so a derived physical copy reads its tree's mode.
         var mode = walEntry.Mutation.Mode != LatticeMergeMode.LwwRegister
             ? walEntry.Mutation.Mode
-            : modeResolver.Resolve(walEntry.Mutation.TreeId) ?? LatticeMergeMode.LwwRegister;
+            : modeResolver.Resolve(optionsResolver.GetMetricTreeId(walEntry.Mutation.TreeId)) ?? LatticeMergeMode.LwwRegister;
         // The WAL is durability-only at the core layer; the origin
         // cluster id is stamped upstream on the mutation itself by
         // the replication observer (when the replication package is
@@ -1552,11 +1554,13 @@ internal sealed partial class WalShardGrain(
         // where the replication observer has not yet stamped - the
         // resolver supplies the local cluster id. Single-cluster
         // hosts get string.Empty from the default resolver and the
-        // resulting record's OriginClusterId is empty.
+        // resulting record's OriginClusterId is empty. The resolver is
+        // consulted under the logical tree (issue #5313), as the writer's
+        // stamp is, so a derived copy reads its tree's configured identity.
         var entry = WalRecordConverter.ToWalRecord(
             walEntry.Mutation,
             mode,
-            originClusterId: clusterIdResolver.Resolve(walEntry.Mutation.TreeId));
+            originClusterId: clusterIdResolver.Resolve(optionsResolver.GetMetricTreeId(walEntry.Mutation.TreeId)));
         return new WalShardSequencedEntry { Sequence = walEntry.Offset, Entry = entry };
     }
 

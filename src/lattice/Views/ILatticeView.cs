@@ -106,10 +106,20 @@ public interface ILatticeView
     /// <see cref="LatticeViewReplicationMode.ShipView"/> consumer.
     /// <para>
     /// The applied position is tracked as the maximum applied source HLC across
-    /// the view's shard cursors. For a single source shard this is exact; across
-    /// multiple shards a lagging shard may still hold an unapplied entry below
-    /// <paramref name="target"/>, so prefer <see cref="WaitForSourceHeadAsync"/>
-    /// for a write-then-wait barrier that is exact regardless of shard count.
+    /// the view's shard cursors. For a single source shard this is exact for
+    /// writes stamped in log order; across multiple shards a lagging shard may
+    /// still hold an unapplied entry below <paramref name="target"/>, and a write
+    /// that keeps an older HLC (such as <see cref="ILattice.MergeAsync(string, CancellationToken)"/>)
+    /// or a source cutover onto a new physical tree is not ordered by HLC at all,
+    /// so prefer <see cref="WaitForSourceHeadAsync"/> for a write-then-wait barrier.
+    /// </para>
+    /// <para>
+    /// On return the handle drops its cached active-generation tree id, as
+    /// <see cref="RebuildAsync"/> and <see cref="ReconcileAsync"/> do, because the
+    /// drains this barrier drives can rebind the view and swap its generation: a read
+    /// on the same handle straight after it observes the generation the barrier waited
+    /// for rather than one <see cref="LatticeViewOptions.ReadHandleCacheTtl"/> still
+    /// remembers. The next read pays one maintainer round-trip to re-resolve it.
     /// </para>
     /// </summary>
     /// <param name="target">The source HLC the view must catch up to.</param>
@@ -118,14 +128,25 @@ public interface ILatticeView
     Task WaitForSourceHlcAsync(HybridLogicalClock target, TimeSpan timeout, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Convenience read-your-writes barrier that captures the source head HLC
-    /// (the highest committed source HLC across all shards) at the moment of the
-    /// call, then waits for the view to apply up to it - the natural
-    /// "write, then wait until my write is visible" pattern. Throws
-    /// <see cref="TimeoutException"/> if the view does not catch up within
-    /// <paramref name="timeout"/>.
+    /// Read-your-writes barrier: completes once every committed source write that
+    /// existed at the call, through the source's current physical tree, is
+    /// reflected in the view - the natural "write, then wait until my write is
+    /// visible" pattern. It captures the head position of each source WAL
+    /// partition at the call and waits for the view to consume through them, so it
+    /// is exact regardless of shard count, holds for writes that keep an older HLC
+    /// (such as <see cref="ILattice.MergeAsync(string, CancellationToken)"/>), and,
+    /// after a source cutover onto a new physical tree (a migration, remediation,
+    /// restore, resize or alias change), waits for the view to rebind to it.
+    /// Drives drains while it waits. Throws <see cref="TimeoutException"/> if the
+    /// view does not catch up within <paramref name="timeout"/>.
     /// Throws <see cref="InvalidOperationException"/> on a
     /// <see cref="LatticeViewReplicationMode.ShipView"/> consumer.
+    /// <para>
+    /// On return the handle drops its cached active-generation tree id, so a read on
+    /// the same handle straight after the barrier observes the generation a rebind it
+    /// drove swapped in, not one <see cref="LatticeViewOptions.ReadHandleCacheTtl"/>
+    /// still remembers.
+    /// </para>
     /// </summary>
     /// <param name="timeout">Maximum time to wait before throwing <see cref="TimeoutException"/>.</param>
     /// <param name="cancellationToken">Cancellation token observed while waiting.</param>

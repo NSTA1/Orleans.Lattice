@@ -1,0 +1,13 @@
+# A crashed pass resumes at the head instead of replaying the retained entries
+# from its checkpoint, so entries it never applied are lost.
+MODULE: QuiescentAtStampedVersionCrashSkipsRetained
+TARGET: QuiescentAtStampedVersion
+CLASS: Invariant
+SUMMARY: a crash resumes past the retained entries it had not applied
+PERTURBS: Fail
+
+--- FIND
+    /\ read' = checkpoint /\ faults' = faults + 1
+--- REPLACE
+    /\ read' = Len(BL) /\ faults' = faults + 1
+--- END

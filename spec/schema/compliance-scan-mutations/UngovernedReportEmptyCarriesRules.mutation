@@ -1,0 +1,12 @@
+# An ungoverned report must have no policy and every count zero.
+MODULE: UngovernedReportEmptyCarriesRules
+TARGET: UngovernedReportEmpty
+CLASS: Invariant
+SUMMARY: an ungoverned tree's report carries a rule count
+PERTURBS: Start
+
+--- FIND
+            /\ repRuleCount' = 0 /\ repReasons' = 0
+--- REPLACE
+            /\ repRuleCount' = 1 /\ repReasons' = 0
+--- END

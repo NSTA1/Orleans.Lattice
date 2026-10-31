@@ -1,0 +1,13 @@
+# CutSwap: the cutover swaps the alias onto the destination.
+MODULE: SchemaRemediationCutover
+ROW: CutSwap
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.StartVersionMigrationAsync_resumes_in_flight_migration_and_cuts_over, SchemaRemediationCutoverShardMapIntegrationTests.Cutover_of_a_resharded_tree_keeps_every_value_readable
+SUMMARY: the cutover arms and completes without swapping the alias
+
+--- FIND
+            finalReplacedMap = await AliasCutoverShardMaps.SwapCutoverAsync(
+                grainFactory, TreeId, destinationPhysical, expectedSourcePhysicalTreeId: sourcePhysical);
+--- REPLACE
+            finalReplacedMap = await Task.FromResult(replacedMap);
+--- END

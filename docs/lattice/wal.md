@@ -391,7 +391,10 @@ remove-then-`TryAdd` pattern that the replication package uses for
 `ILatticeMergeModeResolver`. The configured resolver reads
 `LatticeReplicationOptions.ClusterId` and caches the per-tree result with
 `IOptionsMonitor<T>.OnChange` invalidation, so the commit-time hot path is
-a single dictionary lookup.
+a single dictionary lookup. The writer asks for the id of the logical tree,
+so a physical copy the tree has been moved onto (by a resize, a restore, a
+bootstrap hold or a schema remediation or migration) stamps its writes with the logical tree's per-tree
+`ClusterId`, the id the tree's shipper selects on.
 
 The same resolver is consulted on the read-back path
 (the WAL partition page read) so the change feed projects the same origin

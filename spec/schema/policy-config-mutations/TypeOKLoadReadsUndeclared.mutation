@@ -1,0 +1,12 @@
+# TypeOK pairing: a cache miss reads a value outside the setting domain.
+MODULE: TypeOKLoadReadsUndeclared
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a load captures a value that is not a setting at all
+PERTURBS: BeginLoad
+
+--- FIND
+    /\ loadVal' = [loadVal EXCEPT ![s] = stored]
+--- REPLACE
+    /\ loadVal' = [loadVal EXCEPT ![s] = "Unknown"]
+--- END

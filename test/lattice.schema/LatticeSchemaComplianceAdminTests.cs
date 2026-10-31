@@ -157,6 +157,31 @@ public sealed class LatticeSchemaComplianceAdminTests
         });
     }
 
+    // ---- Policy read once, at the start ----------------------------------
+
+    [Test]
+    public async Task ScanCompliance_judges_every_value_with_the_policy_read_at_start()
+    {
+        var (admin, grain, provider) = Create();
+        var atStart = CompiledSchemaPolicy.Compile(new LatticeSchemaPolicy(new[] { LatticeSchemaRule.Json() }));
+        var changed = CompiledSchemaPolicy.Compile(
+            new LatticeSchemaPolicy(new[] { LatticeSchemaRule.MaxLength(1, "changed policy") }));
+        provider.GetCompiledPolicyAsync(Tree, Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<CompiledSchemaPolicy?>(atStart), new ValueTask<CompiledSchemaPolicy?>(changed));
+        SetEntries(grain, Kv("k1", "{\"a\":1}"), Kv("k2", "[1,2]"), Kv("k3", "{\"b\":2}"));
+
+        var report = await admin.ScanComplianceAsync(Tree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.CompliantCount, Is.EqualTo(3), "Every value is judged by the policy read at the start.");
+            Assert.That(report.NonCompliantCount, Is.Zero);
+            Assert.That(report.RuleCount, Is.EqualTo(1));
+            Assert.That(report.RuleBreakdown, Is.Empty);
+        });
+        await provider.Received(1).GetCompiledPolicyAsync(Tree, Arg.Any<CancellationToken>());
+    }
+
     // ---- Parameter guards -----------------------------------------------
 
     [TestCase(0, "{}")]

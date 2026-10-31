@@ -1,0 +1,12 @@
+# Commit: the choke point proceeds with the admitted bytes.
+MODULE: SchemaStrictIngest
+ROW: Commit(r)
+FILE: src/lattice/LatticeWriteInterceptorEnforcement.cs
+DETECTORS: LatticeWriteInterceptorEnforcementTests.InterceptPoint_accept_proceeds_with_the_original_value, SchemaStrictIngestDeadLetterTests.Valid_enveloped_entry_is_admitted_verbatim_with_no_record
+SUMMARY: an accepted entry proceeds with empty bytes
+
+--- FIND
+            LatticeWriteDecisionKind.Accept => LatticeWriteInterceptionOutcome.Write(value),
+--- REPLACE
+            LatticeWriteDecisionKind.Accept => LatticeWriteInterceptionOutcome.Write(System.Array.Empty<byte>()),
+--- END

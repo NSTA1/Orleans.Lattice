@@ -190,6 +190,7 @@ public partial class LatticeSchemaRemediationGrainTests
         context.GrainId.Returns(GrainId.Create("remediation", TreeId));
         var source = Substitute.For<ILattice>();
         source.EntriesAsync().Returns(EntriesBytes(("k1", Env(1, "{\"a\":1}"))));
+        source.KeysAsync().Returns(KeysOf(EntriesBytes(("k1", Env(1, "{\"a\":1}")))));
         source.GetManyAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>())
             .Returns(ci => PointReadsAsync(EntriesBytes(("k1", Env(1, "{\"a\":1}"))), ci.ArgAt<List<string>>(0)));
         source.GetRoutingAsync(true).Returns(new ValueTask<RoutingInfo>(
@@ -207,6 +208,8 @@ public partial class LatticeSchemaRemediationGrainTests
             .Returns(destination);
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registryGrain);
         grainFactory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shard);
+        var storedReader = StoredReader(() => EntriesBytes(("k1", Env(1, "{\"a\":1}"))));
+        grainFactory.GetGrain<IReplicationApplyGrain>(TreeId).Returns(storedReader);
         var state = new FakePersistentState<SchemaRemediationState>();
         var grain = new LatticeSchemaRemediationGrain(
             context,

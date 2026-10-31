@@ -1,0 +1,21 @@
+# The policy accepts a transformed body but the write path stores the body as
+# submitted, so the view folds the untransformed value.
+MODULE: IntendedContributionTransformDropped
+TARGET: IntendedContribution
+CLASS: Invariant
+SUMMARY: an accepting transform is dropped before the WAL append
+PERTURBS: Write
+
+--- FIND
+         [] appended = 1 -> \E b \in {"s", "x"} : Submit(2, 2, b)
+--- REPLACE
+         [] appended = 1 -> \E b \in {"s", "x"} :
+              /\ submitted' = [submitted EXCEPT ![2] = b]
+              /\ mustRefuse' = IF Valid(b) THEN mustRefuse ELSE mustRefuse \cup {2}
+              /\ IF Valid(b)
+                 THEN /\ wal' = [wal EXCEPT ![phys] = Append(@,
+                           Entry(2, {2}, One(2, [ver |-> target, body |-> b]), FALSE, TRUE))]
+                      /\ stored' = [stored EXCEPT ![phys][2] = [ver |-> target, body |-> b]]
+                      /\ intended' = [intended EXCEPT ![2] = [ver |-> target, body |-> Fix(b)]]
+                 ELSE UNCHANGED <<wal, stored, intended>>
+--- END

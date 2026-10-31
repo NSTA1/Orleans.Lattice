@@ -1,0 +1,12 @@
+# A remediation reported complete although its cutover never repointed the tree.
+MODULE: SucceededMeansCutOverSkipsSwap
+TARGET: SucceededMeansCutOver
+CLASS: Invariant
+SUMMARY: the cutover phase completes without swapping the alias
+PERTURBS: Slice
+
+--- FIND
+         [] remOwner \notin cutOver ->
+--- REPLACE
+         [] FALSE ->
+--- END

@@ -164,6 +164,88 @@ public class LatticeSchemaPolicyProviderTests
     }
 
     [Test]
+    public async Task GetCompiledPolicyAsync_load_overtaken_by_invalidate_does_not_cache_stale_policy()
+    {
+        // The store read blocks; an admin policy change commits and invalidates
+        // while it is in flight; the read then returns the pre-change answer.
+        var blockedRead = new TaskCompletionSource<LatticeSchemaPolicy?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var store = Substitute.For<ILatticeSchemaPolicyStore>();
+        store.GetPolicyAsync("orders", Arg.Any<CancellationToken>())
+            .Returns(blockedRead.Task, Task.FromResult<LatticeSchemaPolicy?>(JsonPolicy()));
+        var provider = CreateProvider(store);
+
+        var inFlight = provider.GetCompiledPolicyAsync("orders").AsTask();
+        provider.Invalidate("orders");
+        blockedRead.SetResult(null);
+        Assert.That(await inFlight, Is.Null);
+
+        // The overtaken load must not install its pre-change answer: the next
+        // lookup re-reads the store and sees the new policy.
+        var compiled = await provider.GetCompiledPolicyAsync("orders");
+
+        Assert.That(compiled, Is.Not.Null);
+        await store.Received(2).GetPolicyAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetCompiledPolicyAsync_load_overtaken_by_policy_mutation_does_not_cache_stale_policy()
+    {
+        var blockedRead = new TaskCompletionSource<LatticeSchemaPolicy?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var store = Substitute.For<ILatticeSchemaPolicyStore>();
+        store.GetPolicyAsync("orders", Arg.Any<CancellationToken>())
+            .Returns(blockedRead.Task, Task.FromResult<LatticeSchemaPolicy?>(JsonPolicy()));
+        var provider = CreateProvider(store);
+
+        var inFlight = provider.GetCompiledPolicyAsync("orders").AsTask();
+        await provider.OnMutationAsync(
+            new LatticeMutation { TreeId = "sys-schema-policy", Key = "orders" }, CancellationToken.None);
+        blockedRead.SetResult(null);
+        Assert.That(await inFlight, Is.Null);
+
+        var compiled = await provider.GetCompiledPolicyAsync("orders");
+
+        Assert.That(compiled, Is.Not.Null);
+        await store.Received(2).GetPolicyAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetCompiledPolicyAsync_load_not_overtaken_is_cached()
+    {
+        var blockedRead = new TaskCompletionSource<LatticeSchemaPolicy?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var store = Substitute.For<ILatticeSchemaPolicyStore>();
+        store.GetPolicyAsync("orders", Arg.Any<CancellationToken>()).Returns(blockedRead.Task);
+        var provider = CreateProvider(store);
+
+        var inFlight = provider.GetCompiledPolicyAsync("orders").AsTask();
+        blockedRead.SetResult(JsonPolicy());
+        _ = await inFlight;
+        _ = await provider.GetCompiledPolicyAsync("orders");
+
+        await store.Received(1).GetPolicyAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task InvalidateAll_forces_reload_of_every_tree_and_overtakes_an_in_flight_load()
+    {
+        var blockedRead = new TaskCompletionSource<LatticeSchemaPolicy?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var store = Substitute.For<ILatticeSchemaPolicyStore>();
+        store.GetPolicyAsync("orders", Arg.Any<CancellationToken>()).Returns(JsonPolicy());
+        store.GetPolicyAsync("invoices", Arg.Any<CancellationToken>())
+            .Returns(blockedRead.Task, Task.FromResult<LatticeSchemaPolicy?>(JsonPolicy()));
+        var provider = CreateProvider(store);
+        _ = await provider.GetCompiledPolicyAsync("orders");
+
+        var inFlight = provider.GetCompiledPolicyAsync("invoices").AsTask();
+        provider.InvalidateAll();
+        blockedRead.SetResult(null);
+        _ = await inFlight;
+
+        Assert.That(await provider.GetCompiledPolicyAsync("invoices"), Is.Not.Null);
+        _ = await provider.GetCompiledPolicyAsync("orders");
+        await store.Received(2).GetPolicyAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task OnMutationAsync_policy_tree_write_evicts_affected_tree()
     {
         var store = Substitute.For<ILatticeSchemaPolicyStore>();

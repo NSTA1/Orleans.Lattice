@@ -159,7 +159,8 @@ after the lift. Three rules make the restored copy unreachable to all of them:
   opens it. The minimum admission epoch survives the open.
 - **Checked on every routing resolution.** Every replicated write path on the
   tree's apply seam - point and batched writes and deletes, range deletes, CRDT
-  deltas, saga prepares, terminals and cross-tree finalizes, and the snapshot
+  deltas, both the read and the version-conditioned write of the full-state CRDT
+  fold, saga prepares, terminals and cross-tree finalizes, and the snapshot
   bootstrap import, which enters through the same applier - resolves its route
   under a replication-apply mark, and every resolution under that mark checks
   the resolved copy: it refuses a closed copy, and an open one whose minimum

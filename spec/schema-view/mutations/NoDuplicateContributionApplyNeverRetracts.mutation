@@ -1,0 +1,13 @@
+# An apply that adds the new contribution without retracting the key's prior
+# member counts a replayed or overwritten key twice.
+MODULE: NoDuplicateContributionApplyNeverRetracts
+TARGET: NoDuplicateContribution
+CLASS: Invariant
+SUMMARY: an ordinary apply adds without retracting the prior membership
+PERTURBS: Apply
+
+--- FIND
+          /\ slots' = Add(Retract(slots, mem[k]), new)
+--- REPLACE
+          /\ slots' = Add(slots, new)
+--- END

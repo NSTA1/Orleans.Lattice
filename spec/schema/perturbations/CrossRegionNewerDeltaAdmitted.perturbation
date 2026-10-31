@@ -1,0 +1,12 @@
+# StrictAdmitsOnlyServable: a delta stamped past the receiver's target is diverted.
+MODULE: SchemaCrossRegion
+ROW: StrictAdmitsOnlyServable
+FILE: src/lattice.schema/LatticeSchemaVersionWriteInterceptor.cs
+DETECTORS: SchemaCrossRegionIngestIntegrationTests.Strict_crdt_delta_stamped_past_the_receivers_target_is_dead_lettered_and_not_applied
+SUMMARY: a delta newer than the receiver's target is accepted as if at target
+
+--- FIND
+        if (schemaId == version.SchemaId && storedVersion == version.TargetVersion)
+--- REPLACE
+        if (schemaId == version.SchemaId && storedVersion >= version.TargetVersion)
+--- END

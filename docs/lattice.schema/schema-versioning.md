@@ -66,6 +66,8 @@ Each hop uses validated declarative value-transform IR, or a stable transform id
 
 Catalog scope is the selected region and effective tenant tree, not a process-global registry or a cross-region deployment mechanism. For a replicated tree, register the same definitions in every serving region before advancing its target or shipping values at that version. A missing descriptor or migration path remains an explicit refusal; discovery cannot prove that unknown external values will be readable.
 
+The same holds for the tree's policy and version config: they are stored in the region's own reserved `sys-schema-*` trees, so the replication stream carries stamped values, never the definitions that interpret them. A receiving region therefore judges and reads every replicated value by its own definitions. A plain last-writer-wins entry stamped past the receiver's target is stored with that stamp even under `StrictIngest`, and reads of it fail with `NotSupportedException` until the receiver registers that version and advances to it; the stored stamp is never rewritten. Under `StrictIngest`, a typed-CRDT delta or an atomic-batch entry the receiver cannot decode, or whose body its own policy refuses, is [dead-lettered](dead-letter-queue.md) rather than applied. That diversion is permanent: registering the version afterwards does not re-apply it, so the two regions differ for that key until it is written again (the dead-letter queue is read-only and keeps only a bounded preview of the value). Register and advance in the receiving regions before any source region advances or ships values at a new version. The `SchemaCrossRegion` TLA+ module checks this interaction; its [refinement note](../../spec/schema/SchemaCrossRegionRefinement.md) lists what is not checked.
+
 ### Versioning options
 
 See [configuration](configuration.md) for every silo-wide option, its default, registration-only switches and the composition order.
@@ -93,6 +95,12 @@ zero-valued config, so writes to such a tree keep their exact bytes with no
 envelope). `ClearVersionConfigAsync` opts the tree out again: new writes are no longer
 stamped, and an already-stamped stored value is still stripped of its envelope on
 read but returned at its stored version, because no target remains to upcast it to.
+
+A version-config change (`SetVersionConfigAsync`, `AdvanceTargetVersionAsync` or
+`ClearVersionConfigAsync`) takes effect on the silo that served the admin call as
+soon as the call returns, and on every other silo within
+`LatticeSchemaVersioningOptions.PropagationInterval` (one second by default; see
+[configuration](configuration.md)). Propagation is eventual, not synchronous.
 
 ## Declaring upcasters
 
@@ -131,7 +139,11 @@ version to read it. A hop whose DI `transformId` has no registered transform thr
 ## Advancing the target version
 
 Advancing a tree's target version is an admin action allowed at any time. The new
-target applies to new writes immediately; existing values are lifted lazily at read
+target applies to new writes on the serving silo as soon as the call returns, and on
+every other silo within `LatticeSchemaVersioningOptions.PropagationInterval` (one
+second by default); inside that window a lagging silo can still stamp at the previous
+target, and fails a read of a value stamped at the newer target with
+`NotSupportedException`. Existing values are lifted lazily at read
 time by the upcaster chain. The advance is **monotonic**: `AdvanceTargetVersionAsync`
 rejects an unversioned tree, and a target that is not strictly greater than the
 current one, with `InvalidOperationException`. (`SetVersionConfigAsync` replaces the
@@ -190,24 +202,40 @@ mechanism: it is all-or-nothing (nothing is cut over unless every value re-stamp
 and otherwise the tree is left untouched), idempotent (a value already at the target
 is passed through unchanged), and failover-resumable (the target is persisted before
 any side effect). Like a remediation, it holds the tree's alias reservation while it
-is in flight, so the tree cannot be deleted mid-migration and a migration of a
-deleted tree, or of one with a delete pending, is refused, and its cutover's alias
-swap is put to the same ownership check. The build reads the tree through the read
-path, which upcasts each value as it is read, so a value that cannot be upcast to
-the target (no registered hop, or a version newer than the target) fails that read
-rather than aborting the migration: the call throws `NotSupportedException` instead
-of returning an aborted report, and the migration stays in flight - still holding
-the alias reservation - so every re-issue throws again until the registry can
-upcast the value. A value that upcasts but violates the tree's enforcement policy
-aborts the migration with a report naming it. `AdvanceAndMigrateAsync` advances the
-target before it starts the migration, so if the migration is refused, aborts or
-throws, the new target stays in place and read-time upcasting serves the existing
-values. Like
+is in flight, so the tree cannot be deleted mid-migration and its alias cannot be set
+explicitly; a migration of a deleted tree, or of one with a delete pending, is
+refused; and its cutover's alias swap is put to the same ownership check and
+publishes only the copy of the tree the migration captured (see
+[remediation](schema-enforcement.md#bringing-existing-data-into-compliance)).
+
+A migration reads each stored value and upcasts it from its own stamped version to
+the target. If it reaches a value it cannot upcast (no registered upcaster on its
+path to the target, or a value stamped at a version newer than the target), the
+migration aborts: the call returns a report with `DidAbort` set, naming the
+offending key with a preview of its value. Nothing is cut over and the tree's data
+is untouched. The migration is no longer in flight and its alias reservation is
+released, so the tree can be deleted; register the missing upcaster and start a new
+migration. A value that upcasts but violates the tree's enforcement policy aborts
+the migration the same way. A tracked migration (`StartMigrationAsync` /
+`StartAdvanceAndMigrateAsync`) that aborts ends `Failed` with `outcome` = `aborted`,
+the `offendingKey`, and a failure reason ending `Nothing was cut over.`
+`AdvanceAndMigrateAsync` advances the target before it starts the migration, so if
+the migration is refused or aborts, the target advance stays committed and
+read-time upcasting serves the existing values. Like
 enforcement remediation, the data migration copies at the
 logical level and does not shadow-forward concurrent writes, so it should run when the
 tree is write-quiescent; the lazy read path keeps concurrent readers correct until it
 cuts over. When the tree also has an enforcement policy, each re-stamped value is
 validated against that policy during the build; the policy itself is left unchanged.
+
+The copy-and-cutover protocol beneath a migration - the alias reservation, intent
+with a fresh destination and the captured source, crash recovery from banked
+progress, the re-stamp at the target, the swap fenced on the captured source, the
+source's redirects, and the refusal of a superseded cutover - is model-checked by
+the `SchemaRemediationCutover` TLA+ module; its
+[refinement note](../../spec/schema/SchemaRemediationCutoverRefinement.md) maps
+each step to the code and lists what is not checked, including writes that land
+during the build.
 
 ## CRDT merge-input upcasting
 
@@ -226,6 +254,21 @@ stored version, with read-time upcasting lifting the converged state to the targ
 Under `StrictIngest`, a delta that cannot be upcast is
 [dead-lettered](dead-letter-queue.md) rather than applied, so a bad input never
 corrupts the converged state.
+
+[Materialised views](../lattice/materialised-views.md#projection-input-on-a-versioned-source)
+follow the same rule as CRDT folds: a view projection sees the stored body at its
+stamped version, envelope stripped, never upcast, so every derivation of a view
+folds identical input. Read-time upcasting applies to client reads only; an eager
+migration is the way to bring view contributions to the target shape. A projection
+change (which changes its version and rebuilds the view) is the other way.
+[`SchemaViewComposition`](../../spec/schema-view/README.md) checks that rule against
+version and upcaster changes that move a contribution's group, numeric or filter
+membership: advancing the target leaves every contribution at its stamped shape;
+an eager migration or transform remediation re-projects each rewritten value once
+at the stamp the rewrite gave it; an aborted rewrite changes no view; and a value
+written below the check, such as a tree merge or non-strict replication, is
+projected at its own (possibly newer) stamp even when the target cannot decode it,
+and then stops a migration until a hop is registered or the target advances.
 
 ## Ingest trust model
 
@@ -264,14 +307,18 @@ switch is on (see the caveat under
 
 When a tree uses both versioning and [enforcement](schema-enforcement.md), values
 are validated against the **target (post-upcast) shape**: a write is validated as a
-plain document before its envelope is applied. Advancing the target version and
-re-stamping existing values (`AdvanceAndMigrateAsync`) is a single shadow build:
-upcast each value, validate it against the tree's **existing** policy, cut over,
-aborting on the first value that violates it. The migration never changes the
+plain document before its envelope is applied. A value that arrives already
+enveloped (a replicated entry or delta, or a re-write of stored bytes) is judged by
+the body a reader is served, upcast to the target; one that cannot be decoded to the
+target is a violation, and an admitted one is stored with its envelope unchanged.
+Advancing the target version and re-stamping existing values
+(`AdvanceAndMigrateAsync`) is a single shadow build: upcast each value, validate it
+against the tree's **existing** policy, cut over, aborting on the first value that
+violates it or cannot be upcast. The migration never changes the
 policy; tightening it is the separate enforcement
 [remediation](schema-enforcement.md#bringing-existing-data-into-compliance), which
-writes the values it remediates without an envelope (see
-[composition with versioning](schema-enforcement.md#composition-with-versioning)).
+writes each value it remediates back enveloped at the version the transform ran on
+(see [composition with versioning](schema-enforcement.md#composition-with-versioning)).
 
 ## Current scope
 

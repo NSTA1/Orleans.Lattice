@@ -180,13 +180,25 @@ internal sealed class LatticeView(
         maintainer.ComputeViewDigestAsync(cancellationToken);
 
     /// <inheritdoc />
-    public Task WaitForSourceHlcAsync(HybridLogicalClock target, TimeSpan timeout, CancellationToken cancellationToken = default) =>
-        maintainer.WaitForSourceHlcAsync(target, timeout, cancellationToken);
+    public async Task WaitForSourceHlcAsync(HybridLogicalClock target, TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        await maintainer.WaitForSourceHlcAsync(target, timeout, cancellationToken);
+
+        // The drains this barrier drives can rebind the view and swap its active
+        // generation, so drop the cached id: the caller reads straight after a
+        // read-your-writes barrier and must see what it waited for (#5315).
+        InvalidateCache();
+    }
 
     /// <inheritdoc />
-    public Task WaitForSourceHeadAsync(TimeSpan timeout, CancellationToken cancellationToken = default) =>
-        // Single maintainer round-trip: the grain captures the source head and
-        // waits for the view to apply up to it in-process, instead of this
-        // handle issuing a separate CaptureSourceHeadHlc then WaitForSourceHlc.
-        maintainer.WaitForSourceHeadAsync(timeout, cancellationToken);
+    public async Task WaitForSourceHeadAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        // Single maintainer round-trip: the grain captures the source head
+        // positions and waits for the view to reflect them in-process.
+        await maintainer.WaitForSourceHeadAsync(timeout, cancellationToken);
+
+        // As for WaitForSourceHlcAsync: a rebind the barrier drove may have swapped
+        // the active generation, which a cached id would hide for its TTL (#5315).
+        InvalidateCache();
+    }
 }

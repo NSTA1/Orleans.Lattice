@@ -5174,7 +5174,7 @@
         },
         {
           "error_id": "precondition-failed",
-          "condition": "Facade precondition failed."
+          "condition": "Facade precondition failed, including while another operation (a resize, shadow-cutover restore, restore revert, or schema remediation or migration) holds the tree's alias reservation; the message names the holder."
         },
         {
           "error_id": "tree-ownership-denied",
@@ -5204,7 +5204,7 @@
         "source": "src/lattice/BPlusTree/AliasCutoverShardMaps.cs#AliasCutoverShardMaps.CarryAcrossExplicitAliasAsync"
       },
       "concurrency": {
-        "rule": "Only one level of alias indirection is allowed, the alias is refused while either tree is deleted or a delete of it is pending, and a refused alias writes nothing; a successful alias carries the target's shard map and split allocation mark onto the logical tree, writes the replaced map to the previous physical entry when possible, arms previous-copy redirects, and releases target redirects.",
+        "rule": "Only one level of alias indirection is allowed, the alias is refused while either tree is deleted or a delete of it is pending, it is refused with InvalidOperationException naming the holder while a resize, shadow-cutover restore, restore revert, or schema remediation or migration holds the tree's alias reservation (retry after that operation completes, or cancel it), and a refused alias writes nothing; a successful alias carries the target's shard map and split allocation mark onto the logical tree, writes the replaced map to the previous physical entry when possible, arms previous-copy redirects, and releases target redirects.",
         "source": "src/lattice/BPlusTree/AliasCutoverShardMaps.cs#AliasCutoverShardMaps.CarryAcrossExplicitAliasAsync"
       },
       "sources": [

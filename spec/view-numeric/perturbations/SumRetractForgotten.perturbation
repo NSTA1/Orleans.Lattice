@@ -1,0 +1,13 @@
+# A numeric replacement decrements the old slot's count but not its sum, so the
+# slots stop being the retract/add fold of membership.
+MODULE: MaterialisedViewNumeric
+ROW: SlotsMatchMembership
+FILE: src/lattice/Views/AggregationApplier.cs
+DETECTORS: AggregationMembershipAtomicityTests.ApplyAsync_regroup_retract_and_lost_response_keep_membership_atomic, MaterialisedViewNumericCompanionTests.Count_and_sum_follow_create_update_regroup_filter_exit_and_delete_exactly
+SUMMARY: the prior member's numeric is not subtracted from its slot
+
+--- FIND
+            oldRow = new AccumulatorRow(current.Count - 1, current.Sum - old.Numeric);
+--- REPLACE
+            oldRow = new AccumulatorRow(current.Count - 1, current.Sum);
+--- END

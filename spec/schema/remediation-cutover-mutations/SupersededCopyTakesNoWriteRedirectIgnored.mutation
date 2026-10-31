@@ -1,0 +1,13 @@
+# The retained redirect is not honoured, so a stale router writes into the
+# copy the cutover replaced.
+MODULE: SupersededCopyTakesNoWriteRedirectIgnored
+TARGET: SupersededCopyTakesNoWrite
+CLASS: Invariant
+SUMMARY: a stale router's write ignores the armed redirect
+PERTURBS: StaleWrite
+
+--- FIND
+    /\ LET t == Follow(c, s) IN
+--- REPLACE
+    /\ LET t == c IN
+--- END

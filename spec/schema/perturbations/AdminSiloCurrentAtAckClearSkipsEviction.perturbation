@@ -1,0 +1,13 @@
+# AdminSiloCurrentAtAck: the admin silo is current when the call returns.
+MODULE: SchemaPolicyConfig
+ROW: AdminSiloCurrentAtAck
+FILE: src/lattice.schema/LatticeSchemaAdmin.cs
+DETECTORS: LatticeSchemaAdminTests.ClearPolicyAsync_delegates_and_invalidates_cache
+SUMMARY: ClearPolicyAsync returns without evicting its own silo
+
+--- FIND
+        var removed = await policyStore.ClearPolicyAsync(treeId, cancellationToken).ConfigureAwait(false);
+        provider.Invalidate(treeId);
+--- REPLACE
+        var removed = await policyStore.ClearPolicyAsync(treeId, cancellationToken).ConfigureAwait(false);
+--- END

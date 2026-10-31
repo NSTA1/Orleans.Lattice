@@ -35,7 +35,9 @@ internal sealed partial class WalShardGrain
             }
         }
 
-        _localClusterId = clusterIdResolver.Resolve(_treeId);
+        // Under the logical tree (issue #5313), so a derived copy's floor tests
+        // local origin against the identity its records are stamped with.
+        _localClusterId = clusterIdResolver.Resolve(optionsResolver.GetMetricTreeId(_treeId));
     }
 
     /// <summary>

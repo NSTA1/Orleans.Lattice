@@ -1,0 +1,17 @@
+{
+  "mutations": "mutations",
+  "refinement": "SchemaViewCompositionRefinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 7,
+    "properties": 3,
+    "actions": 15,
+    "mutations": 23,
+    "behaviourRows": 23,
+    "distinctStates": 148514
+  },
+  "variants": {
+    "Remediate": { "distinctStates": 175624 },
+    "Strict": { "distinctStates": 1456498 }
+  }
+}

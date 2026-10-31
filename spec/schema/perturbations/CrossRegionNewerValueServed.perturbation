@@ -1,0 +1,12 @@
+# ReadsServeOrFail: a value stamped past the reader's target fails explicitly.
+MODULE: SchemaCrossRegion
+ROW: ReadsServeOrFail
+FILE: src/lattice.schema/LatticeSchemaVersionDecoder.cs
+DETECTORS: SchemaCrossRegionIngestIntegrationTests.Plain_lww_entry_stamped_past_the_receivers_target_is_stored_verbatim_under_strict_ingest_and_its_read_fails_explicitly
+SUMMARY: a newer-than-target value is served as if at target
+
+--- FIND
+        if (storedVersion == version.TargetVersion)
+--- REPLACE
+        if (storedVersion >= version.TargetVersion)
+--- END

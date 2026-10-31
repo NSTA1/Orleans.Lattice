@@ -1,0 +1,12 @@
+# Submit(o,a,r) hands the submitted value to the choke point.
+MODULE: SchemaStageOrdering
+ROW: Submit(o,a,r)
+FILE: src/lattice/LatticeWriteInterceptorEnforcement.cs
+DETECTORS: LatticeWriteInterceptorEnforcementTests.InterceptPoint_accept_proceeds_with_the_original_value
+SUMMARY: an accepted write proceeds with empty bytes instead of the submitted value
+
+--- FIND
+            LatticeWriteDecisionKind.Accept => LatticeWriteInterceptionOutcome.Write(value),
+--- REPLACE
+            LatticeWriteDecisionKind.Accept => LatticeWriteInterceptionOutcome.Write(Array.Empty<byte>()),
+--- END

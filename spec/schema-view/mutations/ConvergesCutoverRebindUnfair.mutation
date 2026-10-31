@@ -1,0 +1,13 @@
+# Without fairness on the rebind, a moved alias or a changed definition can
+# leave the view stale forever.
+MODULE: ConvergesCutoverRebindUnfair
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: the rebuild a cutover or a changed definition requires is never guaranteed to run
+
+--- FIND
+     /\ WF_vars(Apply) /\ WF_vars(ApplyBatch)
+     /\ WF_vars(Rebind)
+--- REPLACE
+     /\ WF_vars(Apply) /\ WF_vars(ApplyBatch)
+--- END

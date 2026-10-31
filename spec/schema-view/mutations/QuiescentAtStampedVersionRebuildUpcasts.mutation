@@ -1,0 +1,15 @@
+# A rebind rebuild reads the source through the decoding client path, so it
+# projects every value upcast to the target (the #5225 unaliased rebuild).
+MODULE: QuiescentAtStampedVersionRebuildUpcasts
+TARGET: QuiescentAtStampedVersion
+CLASS: Invariant
+SUMMARY: the rebind rebuild projects decoded, upcast bodies
+PERTURBS: Rebind
+
+--- FIND
+    /\ ~Live
+    /\ Rebuild(Scan(phys))
+--- REPLACE
+    /\ ~Live
+    /\ Rebuild([k \in Keys |-> Proj(defn, Decode(stored[phys][k]))])
+--- END

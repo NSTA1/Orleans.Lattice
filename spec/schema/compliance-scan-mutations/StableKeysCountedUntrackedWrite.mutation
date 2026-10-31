@@ -1,0 +1,13 @@
+# The non-snapshot premise: only keys untouched for the whole scan are promised; a write the
+# scan races is not.
+MODULE: StableKeysCountedUntrackedWrite
+TARGET: StableKeysCounted
+CLASS: Invariant
+SUMMARY: a write during the scan is not treated as concurrent with it
+PERTURBS: Write
+
+--- FIND
+    /\ touched' = IF phase = "Idle" THEN touched ELSE touched \cup {k}
+--- REPLACE
+    /\ touched' = touched
+--- END

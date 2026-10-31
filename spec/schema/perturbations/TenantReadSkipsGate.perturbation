@@ -1,0 +1,13 @@
+# ReadNeedsRead: a schema read asks the gate for Read before it is served.
+MODULE: SchemaTenantScope
+ROW: ReadNeedsRead
+FILE: src/lattice.api.schema/LatticeSchemaControl.cs
+DETECTORS: LatticeSchemaControlTests.GetPolicyAsync_denied_throws_and_does_not_touch_admin
+SUMMARY: a policy read is served without asking the gate for Read
+
+--- FIND
+        await _authorizer.AuthorizeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+        return await _admin.GetPolicyAsync(treeId, cancellationToken).ConfigureAwait(false);
+--- REPLACE
+        return await _admin.GetPolicyAsync(treeId, cancellationToken).ConfigureAwait(false);
+--- END

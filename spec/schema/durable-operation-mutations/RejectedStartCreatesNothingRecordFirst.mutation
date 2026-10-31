@@ -1,0 +1,19 @@
+# Validation after the record: a refused start leaves a queued operation and its handle behind.
+MODULE: RejectedStartCreatesNothingRecordFirst
+TARGET: RejectedStartCreatesNothing
+CLASS: Action
+SUMMARY: the record is created before admission refuses the start
+PERTURBS: StartRejected
+
+--- FIND
+    /\ rejects' = rejects + 1
+    /\ UNCHANGED <<alive, crashes, stalls, handles, launches>>
+    /\ UNCHANGED opVars /\ UNCHANGED remVars
+--- REPLACE
+    /\ opState[o] = "Absent"
+    /\ rejects' = rejects + 1 /\ handles' = handles \cup {o}
+    /\ opState' = [opState EXCEPT ![o] = "Failed"]
+    /\ UNCHANGED <<alive, crashes, stalls, launches>>
+    /\ UNCHANGED <<opRunner, opParams, opCancel, opWork, opFollows, opSeen, opOutcome, opResultRem>>
+    /\ UNCHANGED remVars
+--- END

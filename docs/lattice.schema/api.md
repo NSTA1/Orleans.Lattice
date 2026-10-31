@@ -8,7 +8,7 @@ The package provides opt-in schema enforcement and value versioning, a serializa
 
 ## Registration and administration
 
-Register `AddLatticeSchemaEnforcement` and/or `AddLatticeSchemaVersioning` after `AddLattice`. When both are present, enforcement must be registered first. See [configuration](configuration.md) for all five option properties and the registration-only merge observer.
+Register `AddLatticeSchemaEnforcement` and/or `AddLatticeSchemaVersioning` after `AddLattice`. When both are present they may be registered in either order; validation always runs before envelope stamping. See [configuration](configuration.md) for all seven option properties and the registration-only merge observer.
 
 `ILatticeSchemaAdmin`, `ILatticeSchemaVersionAdmin` and `ILatticeSchemaRemediationAdmin` are trusted host-side control services, not independently authorized remote endpoints. Put caller-facing changes behind [the Schema facade](../lattice.api.schema/README.md). `ILatticeSchemaComplianceAdmin` scans via the ordinary data plane, so caller read authority still applies.
 
@@ -16,7 +16,7 @@ The public store contracts persist policies, version configuration and dead-lett
 
 ## Policies, validation and transforms
 
-`LatticeSchemaPolicy` contains ordered rules and its per-tree strict flag. `LatticeSchemaPolicyValidator` compiles the policy once, rejects invalid configuration at construction, and returns the first failure reason from validation or `null` on success. Strip a schema envelope before validating a stored versioned value: policies judge the body bytes, not the envelope header.
+`LatticeSchemaPolicy` contains ordered rules and its per-tree strict flag. `LatticeSchemaPolicyValidator` compiles the policy once, rejects invalid configuration at construction, and returns the first failure reason from validation or `null` on success. Strip a schema envelope before validating a stored versioned value: policies judge the body bytes, not the envelope header. Cluster enforcement does this itself: it judges an already-enveloped value by the body a reader is served, upcast to the target.
 
 `LatticeValueTransform`, predicate/constant/value-kind models and transform translation/evaluation helpers describe portable remediation and upcasting work. A custom `ILatticeValueTransform` is resolved through `ILatticeValueTransformRegistry`; it is not silently embedded as executable code in the portable representation. See [value transforms](value-transforms.md).
 
@@ -235,6 +235,7 @@ The following inventory includes directly declared public members and overloads,
 - `public bool StrictIngest { get; set; }`
 - `public bool ValidateCrdtMergeResults { get; set; }`
 - `public int DeadLetterPreviewMaxBytes { get; set; }`
+- `public TimeSpan PropagationInterval { get; set; }`
 
 ### `Orleans.Lattice.Schema.LatticeSchemaEnforcementServiceCollectionExtensions`
 
@@ -464,6 +465,7 @@ The following inventory includes directly declared public members and overloads,
 
 - `public bool StrictIngest { get; set; }`
 - `public int DeadLetterPreviewMaxBytes { get; set; }`
+- `public TimeSpan PropagationInterval { get; set; }`
 
 ### `Orleans.Lattice.Schema.LatticeSchemaVersioningServiceCollectionExtensions`
 

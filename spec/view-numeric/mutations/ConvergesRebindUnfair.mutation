@@ -1,0 +1,13 @@
+# Without fairness on the rebind, a changed version can leave the view stale
+# forever.
+MODULE: ConvergesRebindUnfair
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: the rebuild a changed projection version requires is never guaranteed to run
+
+--- FIND
+     /\ WF_vars(Advance) /\ WF_vars(FlushBatch) /\ WF_vars(Checkpoint)
+     /\ WF_vars(Rebind)
+--- REPLACE
+     /\ WF_vars(Advance) /\ WF_vars(FlushBatch) /\ WF_vars(Checkpoint)
+--- END

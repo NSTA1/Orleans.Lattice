@@ -1,0 +1,13 @@
+# An eager migration re-envelopes each value at the target without upcasting
+# its body, so the copy carries the old shape under the new stamp.
+MODULE: SchemaViewComposition
+ROW: BuildRewrite
+FILE: src/lattice.schema/LatticeSchemaVersionMigration.cs
+DETECTORS: SchemaViewCompositionIntegrationTests.Eager_migration_reprojects_each_value_once_at_its_captured_target_and_the_view_follows_the_new_copy
+SUMMARY: the migration re-stamps without upcasting
+
+--- FIND
+        return LatticeSchemaEnvelope.Encode(stampedSchemaId, targetVersion, upcast);
+--- REPLACE
+        return LatticeSchemaEnvelope.Encode(stampedSchemaId, targetVersion, body);
+--- END

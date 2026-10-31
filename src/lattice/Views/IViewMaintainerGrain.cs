@@ -1,3 +1,4 @@
+using Orleans.Concurrency;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Views;
@@ -33,7 +34,16 @@ internal interface IViewMaintainerGrain : IGrainWithStringKey
     /// call never needs to block on the rebuild itself. <paramref name="newPhysicalTreeId"/>
     /// is the registry's post-swap effective physical id, carried for diagnostics;
     /// the authoritative re-resolve happens on the next drain.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/>: the registry sends it from
+    /// inside its own non-reentrant alias turn, after committing the new row. A
+    /// drain that has already seen that row may be rebuilding into a fresh
+    /// generation tree whose registration queues behind the same turn, so a push
+    /// that waited for the drain would deadlock the registry (#5279). It only
+    /// records the request, so interleaving it into a drain is safe.
+    /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task NotifySourceIdentityChangedAsync(string newPhysicalTreeId, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -127,12 +137,15 @@ internal interface IViewMaintainerGrain : IGrainWithStringKey
     Task<HybridLogicalClock> CaptureSourceHeadHlcAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Read-your-writes barrier against the current source head: captures the
-    /// source head HLC and drives drains until the view has applied up to it, or
-    /// throws <see cref="TimeoutException"/> once <paramref name="timeout"/>
-    /// elapses. Combines the capture and the wait into a single maintainer call
-    /// so the read handle does not pay two sequential grain round-trips per
-    /// barrier; the capture and wait run in-process on the one activation.
+    /// Read-your-writes barrier against the current source head: resolves the
+    /// source's current physical tree, captures the head offset of each of its
+    /// WAL partitions, and drives drains (forcing a rebind when the view is bound
+    /// to another physical tree) until the view is bound to that tree and has
+    /// consumed every entry below each captured head, or throws
+    /// <see cref="TimeoutException"/> once <paramref name="timeout"/> elapses.
+    /// Positional rather than an HLC watermark, so it also covers writes that keep
+    /// an older HLC and a source cutover onto a new physical tree. Runs as a single
+    /// maintainer call so the read handle pays one grain round-trip per barrier.
     /// Throws <see cref="InvalidOperationException"/> for a
     /// <see cref="LatticeViewReplicationMode.ShipView"/> consumer.
     /// </summary>

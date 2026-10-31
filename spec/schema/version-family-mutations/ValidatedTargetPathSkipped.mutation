@@ -1,0 +1,15 @@
+# The facade checks only that the new target is registered, not that the
+# current target can reach it.
+MODULE: ValidatedTargetPathSkipped
+TARGET: ValidatedTarget
+CLASS: Action
+SUMMARY: a replace accepts a registered target with no upcast path to it
+PERTURBS: SetConfig
+
+--- FIND
+    /\ IF TargetValid(t)
+       THEN cfg' = t /\ out' = Out("CfgAccepted")
+--- REPLACE
+    /\ IF ~Governed \/ DescReg(t)
+       THEN cfg' = t /\ out' = Out("CfgAccepted")
+--- END

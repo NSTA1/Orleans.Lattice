@@ -52,6 +52,11 @@
             <LtDefinition Term="Strict ingest">@(_policy.StrictIngest ? StrictOn : StrictOff)</LtDefinition>
         </LtDefinitionList>
 
+        @if (Workspace.Row.Version is not null)
+        {
+            <p class="lt-schema-note">This tree is versioned, and this one policy covers values of every version: rules cannot be scoped to a version. Values are checked as they are written; advancing the target version re-checks nothing already stored, so run a compliance scan to check stored values.</p>
+        }
+
         <LtTable TItem="RuleRow"
                  Items="@_rules"
                  Caption="@($"Rules of {Workspace.TreeId}'s policy")"

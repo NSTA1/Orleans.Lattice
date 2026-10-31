@@ -1,0 +1,13 @@
+# RejectLeavesNoMutation: a rejected write leaves nothing durable.
+MODULE: SchemaPolicyConfig
+ROW: RejectLeavesNoMutation
+FILE: src/lattice.schema/LatticeSchemaWriteInterceptor.cs
+DETECTORS: LatticeSchemaWriteInterceptorTests.OnWriteAsync_invalid_local_value_persists_nothing_to_dlq
+SUMMARY: a rejected local write is persisted before the rejection is thrown
+
+--- FIND
+            throw new LatticeSchemaViolationException(treeId, key, reason);
+--- REPLACE
+            await _deadLetters.AppendAsync(treeId, BuildDeadLetterEntry(key, value, reason, SourceFor(operation)), cancellationToken).ConfigureAwait(false);
+            throw new LatticeSchemaViolationException(treeId, key, reason);
+--- END

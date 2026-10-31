@@ -1,0 +1,12 @@
+# SucceededMeansCutOver: a completed remediation cut the tree over.
+MODULE: SchemaDurableOperation
+ROW: SucceededMeansCutOver
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: LatticeSchemaRemediationGrainTests.StartAsync_all_values_remediate_cuts_over_and_installs_policy
+SUMMARY: the cutover phase completes without cutting the tree over
+
+--- FIND
+                        if (await CutoverAsync())
+--- REPLACE
+                        if (await Task.FromResult(true))
+--- END

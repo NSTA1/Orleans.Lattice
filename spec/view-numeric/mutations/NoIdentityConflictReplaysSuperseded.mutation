@@ -1,0 +1,13 @@
+# Without the source-supersession drop (#4885), replaying an older ordinary
+# write after a newer batch resubmits its operation id with another payload.
+MODULE: NoIdentityConflictReplaysSuperseded
+TARGET: NoIdentityConflict
+CLASS: Invariant
+SUMMARY: a replayed ordinary write the source already superseded is resubmitted under its old id
+PERTURBS: Flip
+
+--- FIND
+          /\ IF Superseded(e) \/ old = new
+--- REPLACE
+          /\ IF old = new
+--- END

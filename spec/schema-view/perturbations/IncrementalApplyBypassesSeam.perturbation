@@ -1,0 +1,13 @@
+# Incremental aggregation apply projects the raw WAL mutation instead of the
+# seam's stripped input.
+MODULE: SchemaViewComposition
+ROW: Apply
+FILE: src/lattice/Views/ViewMaintainerGrain.Aggregation.cs
+DETECTORS: ProjectionInputSeamCharacterizationTests.Incremental_maintenance_projects_the_stripped_body_at_its_stamped_version
+SUMMARY: incremental apply bypasses the projection-input seam
+
+--- FIND
+            foreach (var contribution in registration.AggregationProjection!.Project(ProjectionInput(registration, mutation)))
+--- REPLACE
+            foreach (var contribution in registration.AggregationProjection!.Project(mutation))
+--- END

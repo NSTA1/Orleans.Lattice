@@ -1,0 +1,14 @@
+# The group write is skipped while the obligation naming it is retired.
+MODULE: IntentCoversStalePublishDropsWrite
+TARGET: IntentCoversStale
+CLASS: Invariant
+SUMMARY: a group write is lost but the intent naming the group is retired anyway
+PERTURBS: Publish
+
+--- FIND
+    /\ pub' = [pub EXCEPT ![g] = Enc(slots[g])]
+    /\ intent' = [intent EXCEPT ![k] = @ \ {g}]
+--- REPLACE
+    /\ pub' = pub
+    /\ intent' = [intent EXCEPT ![k] = @ \ {g}]
+--- END

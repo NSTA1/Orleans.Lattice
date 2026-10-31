@@ -22,9 +22,10 @@ public static class LatticeSchemaVersioningServiceCollectionExtensions
 {
     /// <summary>
     /// Adds schema versioning to the silo. Must be called <i>after</i>
-    /// <c>AddLattice(...)</c>, and - when schema enforcement is also used - <i>after</i>
-    /// <c>AddLatticeSchemaEnforcement(...)</c>, so the enforcement validation stage is
-    /// composed ahead of the versioning envelope stage on the write path.
+    /// <c>AddLattice(...)</c>. When schema enforcement is also used,
+    /// <c>AddLatticeSchemaEnforcement(...)</c> may be called before or after this
+    /// method: either order composes the enforcement validation stage ahead of the
+    /// versioning envelope stage on the write path.
     /// </summary>
     /// <param name="builder">The silo builder.</param>
     /// <param name="configureRegistry">
@@ -88,6 +89,13 @@ public static class LatticeSchemaVersioningServiceCollectionExtensions
         builder.Services.AddSingleton<IMutationObserver>(
             sp => sp.GetRequiredService<LatticeSchemaVersionProvider>());
 
+        // The observer above fires only on the silo that committed the config write,
+        // so every silo also follows the cluster-wide version-config epoch: a change
+        // reaches every silo's cache within PropagationInterval (#5238).
+        builder.Services.AddSchemaConfigEpochSynchronizer<LatticeSchemaVersionProvider>(
+            SchemaConstants.VersionConfigTree,
+            sp => sp.GetRequiredService<IOptions<LatticeSchemaVersioningOptions>>().Value.PropagationInterval);
+
         // Host-supplied schema registry (descriptors + upcasters), built once.
         builder.Services.AddSingleton<ILatticeSchemaRegistry>(sp =>
         {
@@ -98,14 +106,11 @@ public static class LatticeSchemaVersioningServiceCollectionExtensions
         builder.Services.TryAddSingleton<SchemaRuntimeRegistry>();
 
         // Write path: stamp the envelope. Compose after the enforcement validation
-        // stage when enforcement is also registered (its concrete type is resolved
-        // optionally, so versioning works with or without enforcement).
+        // stage when enforcement is also registered, before or after this call
+        // (its concrete type is resolved optionally, so versioning works with or
+        // without enforcement).
         builder.Services.TryAddSingleton<LatticeSchemaVersionWriteInterceptor>();
-        builder.Services.Replace(
-            ServiceDescriptor.Singleton<ILatticeWriteInterceptor>(sp =>
-                new CompositeLatticeWriteInterceptor(
-                    sp.GetRequiredService<LatticeSchemaVersionWriteInterceptor>(),
-                    sp.GetService<LatticeSchemaWriteInterceptor>())));
+        SchemaWriteStageComposition.Compose(builder.Services);
 
         // Read path: replace the core no-op decoder with the envelope-stripping /
         // upcasting decoder.

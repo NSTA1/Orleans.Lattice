@@ -1,0 +1,18 @@
+{
+  "mutations": "policy-config-mutations",
+  "refinement": "SchemaPolicyConfigRefinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 3,
+    "properties": 4,
+    "actions": 8,
+    "mutations": 8,
+    "behaviourRows": 13,
+    "distinctStates": 106331
+  },
+  "variants": {
+    "ThreeSilos": {
+      "distinctStates": 5993123
+    }
+  }
+}

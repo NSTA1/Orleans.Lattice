@@ -1,0 +1,12 @@
+# The completion mapping ignores the report: an aborted or cancelled remediation reads succeeded.
+MODULE: OutcomeMatchesRemediationEveryReportSucceeds
+TARGET: OutcomeMatchesRemediation
+CLASS: Invariant
+SUMMARY: every terminal remediation report is recorded as succeeded
+PERTURBS: Finish
+
+--- FIND
+            /\ opState' = [opState EXCEPT ![o] = StateOf(remResult[opSeen[o]])]
+--- REPLACE
+            /\ opState' = [opState EXCEPT ![o] = "Succeeded"]
+--- END
