@@ -83,6 +83,26 @@ public partial class TxRegistryGrainTests
         Assert.That(await grain.IsDecidedOrForgottenForPrepareAsync(live), Is.True);
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Prepare_forgetting_probe_waits_for_participant_durability_and_recomputes_after_rollback(bool failWrite)
+    {
+        var turn = new ConcurrentExclusiveSchedulerPair().ExclusiveScheduler;
+        var (state, gate) = GatedState(failWrite ? new InvalidOperationException("storage unavailable") : null);
+        var (grain, _) = CreateGrain(state);
+        var txid = Guid.NewGuid();
+        var register = OnTurnAsync(turn, () => grain.RegisterParticipantAsync(txid, 7));
+        var read = OnTurnAsync(turn, () => grain.IsDecidedOrForgottenForPrepareAsync(txid));
+        await DrainAsync(turn);
+        Assert.That(read.IsCompleted, Is.False);
+        gate.SetResult();
+        if (failWrite)
+            Assert.ThrowsAsync<TxRegistryWriteFailedException>(async () => await register);
+        else
+            await register;
+        Assert.That(await read, Is.EqualTo(failWrite));
+    }
+
     [Test]
     public void Settlement_fused_dispatches_retain_always_interleave()
     {

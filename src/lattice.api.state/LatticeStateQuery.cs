@@ -752,6 +752,8 @@ internal sealed class LatticeStateQuery(
         var factory = request.IncludeViewStats ? _services.GetService<ILatticeViewFactory>() : null;
         var entries = new List<ViewStateSummary>(Math.Min(pageSize, ordered.Count));
         string? nextToken = null;
+        (long? Lag, long? EntryCount)[]? sampleWave = null;
+        var waveStart = 0;
 
         for (var i = 0; i < ordered.Count; i++)
         {
@@ -765,7 +767,24 @@ internal sealed class LatticeStateQuery(
 
             long? lag = null;
             long? entryCount = null;
-            if (factory is not null)
+            if (factory is LatticeViewFactory defaultFactory)
+            {
+                if (sampleWave is null || i - waveStart == sampleWave.Length)
+                {
+                    waveStart = i;
+                    var width = Math.Min(BoundedFanOut.DefaultWidth, Math.Min(pageSize, ordered.Count) - i);
+                    var names = new string[width];
+                    for (var j = 0; j < width; j++)
+                        names[j] = ordered[i + j].ViewName;
+                    var handles = await defaultFactory.GetManyForSamplingAsync(names, cancellationToken)
+                        .ConfigureAwait(false);
+                    sampleWave = await BoundedFanOut.RunAsync(width, BoundedFanOut.DefaultWidth,
+                        async slot => await SampleViewHandleAsync(handles[slot], cancellationToken).ConfigureAwait(false),
+                        cancellationToken).ConfigureAwait(false);
+                }
+                (lag, entryCount) = sampleWave[i - waveStart];
+            }
+            else if (factory is not null)
             {
                 (lag, entryCount) = await SampleViewAsync(factory, registration.ViewName, cancellationToken)
                     .ConfigureAwait(false);
@@ -2618,6 +2637,20 @@ internal sealed class LatticeStateQuery(
         try
         {
             var view = await factory.GetAsync(viewName, cancellationToken).ConfigureAwait(false);
+            return await SampleViewHandleAsync(view, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return (null, null);
+        }
+    }
+
+    private static async Task<(long? Lag, long? EntryCount)> SampleViewHandleAsync(
+        ILatticeView? view, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
             if (view is null)
             {
                 return (null, null);
