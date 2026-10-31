@@ -114,7 +114,26 @@ internal sealed class FakeDataWriter(FakeStateClient state) : ILatticeDataApi
     public Task<CrossTreeAtomicWriteOutcome> SetManyAtomicCrossTreeAsync(IReadOnlyList<DataTreeBatch> batches, string operationId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
     /// <inheritdoc />
-    public Task SetManyAsync(string treeId, IReadOnlyList<Api.Data.DataEntry> upserts, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    /// <remarks>Refuses the whole batch before writing any of it, as the facade does, so the streamed import isolates the refused keys.</remarks>
+    public Task SetManyAsync(string treeId, IReadOnlyList<Api.Data.DataEntry> upserts, CancellationToken cancellationToken = default)
+    {
+        foreach (var entry in upserts)
+        {
+            Refuse(treeId, entry.Key);
+            if (Policy?.Invoke(entry.Value) is { } reason)
+            {
+                throw new ShellValueValidationException("The value was rejected by the tree's schema policy.", treeId, entry.Key, reason, new InvalidOperationException());
+            }
+        }
+
+        foreach (var entry in upserts)
+        {
+            Writes.Add("set:" + entry.Key);
+            Put(treeId, entry.Key, entry.Value);
+        }
+
+        return Task.CompletedTask;
+    }
 
     /// <inheritdoc />
     public Task<DataRangePage> ReadRangeAsync(DataRangeRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();

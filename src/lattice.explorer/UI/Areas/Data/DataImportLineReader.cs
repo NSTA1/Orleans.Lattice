@@ -140,15 +140,13 @@ internal sealed class DataImportLineReader : IDisposable
 
     private bool Complete(ReadOnlyMemory<byte> line, bool lineFeed)
     {
-        LineNumber++;
-        EndedWithLineFeed = lineFeed;
-        EndedWithCarriageReturn = lineFeed && !line.IsEmpty && line.Span[^1] == (byte)'\r';
-        if (EndedWithCarriageReturn)
+        var carriageReturn = lineFeed && !line.IsEmpty && line.Span[^1] == (byte)'\r';
+        if (carriageReturn)
         {
             line = line[..^1];
         }
 
-        if (LineNumber == 1 && line.Span.StartsWith(Utf8ByteOrderMark))
+        if (LineNumber == 0 && line.Span.StartsWith(Utf8ByteOrderMark))
         {
             line = line[Utf8ByteOrderMark.Length..];
         }
@@ -158,6 +156,9 @@ internal sealed class DataImportLineReader : IDisposable
             throw TooLong();
         }
 
+        LineNumber++;
+        EndedWithLineFeed = lineFeed;
+        EndedWithCarriageReturn = carriageReturn;
         _current = line;
         return true;
     }
