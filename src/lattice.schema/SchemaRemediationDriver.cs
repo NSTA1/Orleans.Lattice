@@ -19,9 +19,21 @@ namespace Orleans.Lattice.Schema;
 /// the driver stops and returns the last report it saw of the followed remediation,
 /// which is still <see cref="LatticeSchemaRemediationReport.InProgress"/>: the
 /// followed remediation was superseded (<see cref="IsSuperseded"/>).
+/// <para>
+/// A slice call that outruns the grain call timeout is retried rather than failing
+/// the run (issue #5440): each slice persists its cursor, so the retry resumes where
+/// the slow slice left off. Only <see cref="MaxConsecutiveSliceTimeouts"/> timeouts in
+/// a row end the run, rethrowing the cause.
+/// </para>
 /// </remarks>
 internal static class SchemaRemediationDriver
 {
+    /// <summary>
+    /// How many slices in a row may time out before the driver gives up and fails
+    /// the run with the cause (issue #5440). A slice that completes resets the count.
+    /// </summary>
+    internal const int MaxConsecutiveSliceTimeouts = 5;
+
     /// <summary>
     /// Drives <paramref name="accepted"/> to a terminal report.
     /// </summary>
@@ -38,6 +50,10 @@ internal static class SchemaRemediationDriver
     /// operation and the coordinator no longer holds its outcome, the last in-flight
     /// report the driver saw of it (<see cref="IsSuperseded"/>).
     /// </returns>
+    /// <exception cref="TimeoutException">
+    /// <see cref="MaxConsecutiveSliceTimeouts"/> slices in a row timed out; the inner
+    /// exception is the last timeout.
+    /// </exception>
     internal static async Task<LatticeSchemaRemediationReport> DriveAsync(
         ILatticeSchemaRemediationGrain grain,
         LatticeSchemaRemediationReport accepted,
@@ -47,6 +63,7 @@ internal static class SchemaRemediationDriver
         ArgumentNullException.ThrowIfNull(grain);
         var report = accepted;
         var followed = report.OperationId;
+        var consecutiveTimeouts = 0;
         if (progress is not null && report.InProgress)
         {
             await ReportAsync(progress, report, phaseTotal: null, cancellationToken).ConfigureAwait(false);
@@ -69,9 +86,34 @@ internal static class SchemaRemediationDriver
                 }
             }
 
-            var slice = followed is null
-                ? await grain.RunSliceAsync().ConfigureAwait(false)
-                : await grain.RunSliceAsync(followed).ConfigureAwait(false);
+            SchemaRemediationSlice slice;
+            try
+            {
+                slice = followed is null
+                    ? await grain.RunSliceAsync().ConfigureAwait(false)
+                    : await grain.RunSliceAsync(followed).ConfigureAwait(false);
+                consecutiveTimeouts = 0;
+            }
+            catch (TimeoutException ex)
+            {
+                // The call outran the grain call timeout (issue #5440). The slice
+                // itself may still be running, and it persists its cursor before it
+                // returns or banks what it wrote before it faults, so the next slice
+                // queues behind it on the non-reentrant coordinator and resumes from
+                // that cursor; a destination write is idempotent, so a repeated value
+                // is written again, never twice. The operation stays Running while the
+                // retries last.
+                if (++consecutiveTimeouts >= MaxConsecutiveSliceTimeouts)
+                {
+                    throw new TimeoutException(
+                        $"The schema remediation slice timed out {consecutiveTimeouts} consecutive times; the last "
+                        + $"attempt failed with: {ex.Message}",
+                        ex);
+                }
+
+                continue;
+            }
+
             if (followed is not null && !Follows(slice.Report, followed))
             {
                 return report;

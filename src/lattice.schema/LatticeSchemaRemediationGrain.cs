@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
@@ -115,6 +116,22 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// several slices.
     /// </summary>
     internal int SliceSize { get; set; } = DefaultSliceSize;
+
+    /// <summary>
+    /// The default wall-clock budget of one slice: a third of Orleans' default 30 second
+    /// response timeout, so a slice slowed by a loaded cluster still returns well inside
+    /// the caller's grain-call timeout (issue #5440).
+    /// </summary>
+    internal static readonly TimeSpan DefaultSliceTimeBudget = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// The wall-clock budget of one slice. Once it is spent, a slice stops after the
+    /// value it is processing, persists its cursor there and returns, and the driver
+    /// continues it with the next slice; a slice always processes at least one value,
+    /// so every slice makes progress. Defaults to <see cref="DefaultSliceTimeBudget"/>;
+    /// unit tests lower it to <see cref="TimeSpan.Zero"/> to drive one value per slice.
+    /// </summary>
+    internal TimeSpan SliceTimeBudget { get; set; } = DefaultSliceTimeBudget;
 
     /// <inheritdoc />
     public async Task<LatticeSchemaRemediationReport> StartAsync(
@@ -527,13 +544,15 @@ internal sealed class LatticeSchemaRemediationGrain(
 
     /// <summary>
     /// Runs one slice of the read-only dry-run gate: up to <see cref="SliceSize"/>
-    /// values after the durable cursor, each rewritten and revalidated. Aborts on the
-    /// first offender with no destination built and the original tree untouched;
-    /// advances to the build once the source is exhausted, recording the dry run's
-    /// count as the build's total; otherwise records how far it got.
+    /// values after the durable cursor, each rewritten and revalidated, stopping early
+    /// once <see cref="SliceTimeBudget"/> is spent. Aborts on the first offender with
+    /// no destination built and the original tree untouched; advances to the build once
+    /// the source is exhausted, recording the dry run's count as the build's total;
+    /// otherwise records how far it got.
     /// </summary>
     private async Task RunDryRunSliceAsync()
     {
+        var started = Stopwatch.GetTimestamp();
         var source = grainFactory.GetGrain<ILattice>(TreeId);
         var rewrite = await CreateRewriteAsync();
         var decode = TransformInputDecoderOrNull();
@@ -543,6 +562,7 @@ internal sealed class LatticeSchemaRemediationGrain(
         var done = 0;
         string? lastKey = null;
         Offender? offender = null;
+        var budgetSpent = false;
 
         var slice = await ReadSliceAsync(source, sliceSize);
         try
@@ -571,6 +591,11 @@ internal sealed class LatticeSchemaRemediationGrain(
 
                 done++;
                 lastKey = entry.Key;
+                if (done < slice.Entries.Count && SliceBudgetSpent(started))
+                {
+                    budgetSpent = true;
+                    break;
+                }
             }
         }
         catch
@@ -583,6 +608,12 @@ internal sealed class LatticeSchemaRemediationGrain(
         if (offender is { } failed)
         {
             await AbortAsync(scanned + 1, failed.Key, failed.Reason, failed.Preview);
+        }
+        else if (budgetSpent)
+        {
+            // The rest of the slice, and any fault the scan met beyond it, is the next
+            // slice's: it resumes after the last value this one processed.
+            await RecordSliceProgressAsync(scanned, lastKey);
         }
         else if (slice.Fault is { } fault)
         {
@@ -605,10 +636,12 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// destination. Aborts on the first offender, discarding the partial destination;
     /// advances to cutover once the source is exhausted; otherwise records how far it
     /// got. A slice re-run after a fault rewrites at most the values the fault
-    /// interrupted, and a destination write is idempotent.
+    /// interrupted, and a destination write is idempotent. Like the dry run, a slice
+    /// stops early once <see cref="SliceTimeBudget"/> is spent (issue #5440).
     /// </summary>
     private async Task RunBuildSliceAsync()
     {
+        var started = Stopwatch.GetTimestamp();
         if (state.State.ScanCursor is null)
         {
             // The destination inherits the logical tree's routing map, split
@@ -631,6 +664,7 @@ internal sealed class LatticeSchemaRemediationGrain(
         var done = 0;
         string? lastKey = null;
         Offender? offender = null;
+        var budgetSpent = false;
 
         var slice = await ReadSliceAsync(source, sliceSize);
         try
@@ -664,6 +698,11 @@ internal sealed class LatticeSchemaRemediationGrain(
                 await destination.SetAsync(entry.Key, input.Restamp(rewritten));
                 done++;
                 lastKey = entry.Key;
+                if (done < slice.Entries.Count && SliceBudgetSpent(started))
+                {
+                    budgetSpent = true;
+                    break;
+                }
             }
         }
         catch
@@ -677,6 +716,10 @@ internal sealed class LatticeSchemaRemediationGrain(
         {
             await DiscardDestinationAsync(destination);
             await AbortAsync(scanned + 1, failed.Key, failed.Reason, failed.Preview);
+        }
+        else if (budgetSpent)
+        {
+            await RecordSliceProgressAsync(scanned, lastKey);
         }
         else if (slice.Fault is { } fault)
         {
@@ -847,6 +890,9 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// successor, so a resumed scan neither repeats nor skips a key.
     /// </summary>
     private static string? After(string? cursor) => cursor is null ? null : cursor + '\0';
+
+    /// <summary>Whether a slice that started at <paramref name="started"/> has spent its <see cref="SliceTimeBudget"/>.</summary>
+    private bool SliceBudgetSpent(long started) => Stopwatch.GetElapsedTime(started) >= SliceTimeBudget;
 
     /// <summary>The first value a slice found it could not remediate.</summary>
     private readonly record struct Offender(string Key, string Reason, byte[] Preview);

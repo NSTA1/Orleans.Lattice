@@ -147,6 +147,79 @@ public sealed class SchemaRemediationDriverTests
     }
 
     [Test]
+    public async Task DriveAsync_retries_a_slice_that_outran_the_call_timeout_and_drives_on_to_completion()
+    {
+        var grain = Substitute.For<ILatticeSchemaRemediationGrain>();
+        var calls = 0;
+        grain.RunSliceAsync(OperationId).Returns(_ => ++calls switch
+        {
+            1 => Slice(LatticeSchemaRemediationPhase.Build, 2, 5),
+            2 => throw new TimeoutException("Response did not arrive on time in 00:00:30"),
+            3 => Slice(LatticeSchemaRemediationPhase.Build, 4, 5),
+            _ => new SchemaRemediationSlice(Done, null),
+        });
+        var progress = new RecordingProgress();
+
+        var report = await SchemaRemediationDriver.DriveAsync(
+            grain, InFlight(LatticeSchemaRemediationPhase.Build, 0), progress, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report, Is.EqualTo(Done), "a slow slice must not end the operation");
+            Assert.That(progress.Reports.Select(r => r.Completed), Is.EqualTo(new long[] { 0, 2, 4 }));
+        });
+        await grain.Received(4).RunSliceAsync(OperationId);
+    }
+
+    [Test]
+    public async Task DriveAsync_fails_with_the_cause_once_the_bounded_consecutive_timeouts_are_exhausted()
+    {
+        var grain = Substitute.For<ILatticeSchemaRemediationGrain>();
+        grain.RunSliceAsync(OperationId).Returns<SchemaRemediationSlice>(
+            _ => throw new TimeoutException("Response did not arrive on time"));
+
+        var thrown = Assert.ThrowsAsync<TimeoutException>(async () => await SchemaRemediationDriver.DriveAsync(
+            grain, InFlight(LatticeSchemaRemediationPhase.Build, 0), progress: null, CancellationToken.None));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown!.Message, Does.Contain($"{SchemaRemediationDriver.MaxConsecutiveSliceTimeouts} consecutive times"));
+            Assert.That(thrown.Message, Does.Contain("Response did not arrive on time"));
+            Assert.That(thrown.InnerException, Is.TypeOf<TimeoutException>());
+        });
+        await grain.Received(SchemaRemediationDriver.MaxConsecutiveSliceTimeouts).RunSliceAsync(OperationId);
+    }
+
+    [Test]
+    public async Task DriveAsync_resets_the_timeout_count_after_a_slice_completes()
+    {
+        var grain = Substitute.For<ILatticeSchemaRemediationGrain>();
+        var limit = SchemaRemediationDriver.MaxConsecutiveSliceTimeouts;
+        var calls = 0;
+        grain.RunSliceAsync(OperationId).Returns(_ =>
+        {
+            calls++;
+            if (calls == limit)
+            {
+                return Slice(LatticeSchemaRemediationPhase.Build, 3, 5);
+            }
+
+            if (calls < 2 * limit)
+            {
+                throw new TimeoutException("slow");
+            }
+
+            return new SchemaRemediationSlice(Done, null);
+        });
+
+        var report = await SchemaRemediationDriver.DriveAsync(
+            grain, InFlight(LatticeSchemaRemediationPhase.Build, 0), progress: null, CancellationToken.None);
+
+        Assert.That(report, Is.EqualTo(Done), "timeouts separated by a completed slice are not consecutive");
+        await grain.Received(2 * limit).RunSliceAsync(OperationId);
+    }
+
+    [Test]
     public void DriveAsync_rejects_a_null_grain() =>
         Assert.That(
             async () => await SchemaRemediationDriver.DriveAsync(null!, Done, null, CancellationToken.None),
