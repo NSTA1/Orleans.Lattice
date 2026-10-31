@@ -38,7 +38,8 @@ public sealed partial class AuditorsReviewChapter
         await SnapAsync(dana, "6", "policy", "factory-orders' policy, readable, with no Edit policy or Clear policy");
 
         await tab("Versions").ClickAsync();
-        await Expect(content.Locator("dd").Filter(new() { HasTextRegex = new Regex("^\\s*2\\s*$") }).First).ToBeVisibleAsync();
+        await Expect(content.GetByText("Target version", new() { Exact = true })).ToBeVisibleAsync();
+        await Expect(content.Locator(".lt-schema-heading")).ToContainTextAsync("version 2");
         await Expect(content.GetByRole(AriaRole.Button, new() { NameRegex = new Regex("^(Advance target version|Migrate stored values|Change config|Turn off versioning)") })).ToHaveCountAsync(0);
         await SnapAsync(dana, "6", "versions", "Versions: target version 2, with nothing to advance, migrate or turn off");
 
@@ -149,6 +150,7 @@ public sealed partial class AuditorsReviewChapter
         await Expect(shell.Heading).ToHaveTextAsync("Data");
         await Expect(content.GetByRole(AriaRole.Heading, new() { NameRegex = new Regex("^No trees") })).ToBeVisibleAsync();
         await Expect(content).ToContainTextAsync("There is no tree or view you can reach here.");
+        await Expect(content).ToContainTextAsync("you hold a grant to read it");
         await Expect(content.Locator("[data-lt-data-new-from-file]")).ToHaveCountAsync(0);
         await SnapAsync(nina, "11", "data", "Data: an empty directory that says why, and nothing to create");
 

@@ -86,8 +86,8 @@ public sealed partial class AuditorsReviewChapter
         }
 
         await tree.ShowLatestAsync();
-        await Expect(tree.Revisions.First).ToContainTextAsync(Names.Orders.DefaultCurrency);
-        await SnapAsync(dana, "2", "latest", "Latest: the whole timeline again, the migration's currency on top");
+        Assert.That((await tree.RevisionTimesAsync())[0], Is.EqualTo(migrated), "Latest shows the whole timeline again, U2's migration on top");
+        await SnapAsync(dana, "2", "latest", "Latest: the whole timeline again, the migration on top");
     }
 
     // U4.3: the telemetry, which dana reads only through the nested factory-staff group, and
