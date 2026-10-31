@@ -87,4 +87,19 @@ internal sealed class ViewRegistryGrain(
             ? (bool?)registration.IsAggregation
             : null);
     }
+
+    /// <inheritdoc />
+    public Task<bool?[]> GetAggregationKindsAsync(string[] viewNames)
+    {
+        ArgumentNullException.ThrowIfNull(viewNames);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(viewNames.Length, 32);
+        foreach (var name in viewNames)
+            ArgumentException.ThrowIfNullOrEmpty(name);
+
+        var kinds = new bool?[viewNames.Length];
+        for (var i = 0; i < viewNames.Length; i++)
+            if (state.State.Registrations.TryGetValue(viewNames[i], out var registration))
+                kinds[i] = registration.IsAggregation;
+        return Task.FromResult(kinds);
+    }
 }

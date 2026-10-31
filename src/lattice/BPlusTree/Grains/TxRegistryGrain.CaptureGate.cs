@@ -289,7 +289,17 @@ internal sealed partial class TxRegistryGrain
     {
         var status = await GetStatusForPrepareDedupAsync(txid);
         return status is TxStatus.Committed or TxStatus.Aborted
-            || (await GetParticipantsAsync(txid)).Count == 0;
+            || !await HasParticipantsAsync(txid);
+    }
+
+    private async Task<bool> HasParticipantsAsync(Guid txid)
+    {
+        while (true)
+        {
+            var hasParticipants = state.State.Participants.TryGetValue(txid, out var set) && set.Count != 0;
+            if (await WhenDurableAsync(txid))
+                return hasParticipants;
+        }
     }
 
     private Task<TxStatus> WithRecordedFallbackAsync(Guid txid, Task<TxStatus> read)
