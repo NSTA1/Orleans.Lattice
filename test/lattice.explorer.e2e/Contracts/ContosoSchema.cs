@@ -97,15 +97,34 @@ public static class ContosoSchema
     /// <summary>The pipeline's policy on <c>factory-lines</c> before U6: its one rule, not strict.</summary>
     public static LatticeSchemaPolicy LinesPipeline => new([LinesPipelineRule]);
 
-    /// <summary>U6's non-strict policy on <c>factory-lines</c>: one rule per builder card, and the pipeline's rule kept as it is.</summary>
-    public static LatticeSchemaPolicy LinesWorkshop => new(
+    /// <summary>The email pattern the builder's Email address format card compiles to (<c>SchemaFormatPatterns</c>).</summary>
+    public const string EmailPattern = @"^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\z";
+
+    /// <summary>The ISO date pattern the builder's ISO date format card compiles to (<c>SchemaFormatPatterns</c>).</summary>
+    public const string IsoDatePattern = @"^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])\z";
+
+    /// <summary>
+    /// The <c>line</c> values the builder's One-of-a-set card seeds from <c>factory-lines</c>, in its
+    /// order (most frequent first, then ordinal; every line occurs once, so ordinal: L1, L10, L11,
+    /// L12, L2, ...). A10 deletes <c>line/05</c>, so once A10 is produced L5 is not offered.
+    /// </summary>
+    /// <param name="lineFiveDeleted">Whether A10 has deleted <c>line/05</c>.</param>
+    public static IReadOnlyList<string> LineValues(bool lineFiveDeleted) =>
+        [.. Enumerable.Range(1, Names.Lines.Count).Where(index => !(lineFiveDeleted && index == 5)).Select(index => "L" + index).Order(StringComparer.Ordinal)];
+
+    /// <summary>
+    /// U6's non-strict policy on <c>factory-lines</c>, exactly as the builder's cards compile it:
+    /// one rule per builder card, and the pipeline's rule kept as it is.
+    /// </summary>
+    /// <param name="lineFiveDeleted">Whether A10 has deleted <c>line/05</c> (see <see cref="LineValues"/>).</param>
+    public static LatticeSchemaPolicy LinesWorkshop(bool lineFiveDeleted) => new(
     [
         LatticeSchemaRule.Structured(LatticePredicateNode.Compare(LatticeComparisonOperator.NotEqual, LatticePredicateNode.Member("line"), Null)),
         LatticeSchemaRule.Structured(LatticePredicateNode.Bool(
             LatticeBooleanOperator.Or,
             LatticePredicateNode.Compare(LatticeComparisonOperator.GreaterThanOrEqual, LatticePredicateNode.Member("rate"), Integer(0)),
             LatticePredicateNode.Compare(LatticeComparisonOperator.LessThan, LatticePredicateNode.Member("rate"), Integer(0)))),
-        LatticeSchemaRule.Structured(OneOf("line", [.. Enumerable.Range(1, Names.Lines.Count).Select(index => "L" + index)])),
+        LatticeSchemaRule.Structured(OneOf("line", LineValues(lineFiveDeleted))),
         LatticeSchemaRule.Structured(LatticePredicateNode.Bool(
             LatticeBooleanOperator.And,
             LatticePredicateNode.TypeOf("rate", LatticeValueKind.Integer),
@@ -116,8 +135,8 @@ public static class ContosoSchema
             LatticePredicateNode.TypeOf("line", LatticeValueKind.String),
             LatticePredicateNode.Compare(LatticeComparisonOperator.GreaterThanOrEqual, LatticePredicateNode.LengthOf("line"), Integer(2)),
             LatticePredicateNode.Compare(LatticeComparisonOperator.LessThanOrEqual, LatticePredicateNode.LengthOf("line"), Integer(3)))),
-        LatticeSchemaRule.Regex(@"^[^@\s]+@[^@\s]+\.[^@\s]+$", "owner"),
-        LatticeSchemaRule.Regex(@"^\d{4}-\d{2}-\d{2}$", "since"),
+        LatticeSchemaRule.Regex(EmailPattern, "owner"),
+        LatticeSchemaRule.Regex(IsoDatePattern, "since"),
         LatticeSchemaRule.Structured(LatticePredicateNode.StringCall(
             LatticeStringMethod.StartsWith, LatticePredicateNode.Member("line"), LatticePredicateNode.Const(LatticeConstant.Text("L")))),
         LatticeSchemaRule.Structured(LatticePredicateNode.Bool(

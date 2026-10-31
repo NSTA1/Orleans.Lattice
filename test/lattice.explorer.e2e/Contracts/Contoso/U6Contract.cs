@@ -9,7 +9,8 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts.Contoso;
 /// The schema rule workshop (U6, #5385), established as sam. Consumes the policy-as-code
 /// pipeline's rule on <c>factory-lines</c> (<see cref="ContosoHarness.AuthorLinesPipelineRuleAsync"/>).
 /// Produces a non-strict policy on <c>factory-lines</c> using every builder card and keeping
-/// the pipeline's rule verbatim (<see cref="ContosoSchema.LinesWorkshop"/>), and versioning in
+/// the pipeline's rule verbatim (<see cref="ContosoSchema.LinesWorkshop"/>, without L5 once A10 has deleted
+/// <c>line/05</c>), and versioning in
 /// family <see cref="ContosoSchema.LinesFamily"/> advanced and migrated to version 2.
 /// </summary>
 public sealed class U6Contract() : ChapterContract("U6")
@@ -23,9 +24,10 @@ public sealed class U6Contract() : ChapterContract("U6")
         var schema = ContractFacades.Of(context, Personas.Sam.Id).Schema;
         var lines = Names.Trees.FactoryLines;
 
-        if (!ContosoSchema.SameAs(await schema.GetPolicyAsync(lines), ContosoSchema.LinesWorkshop))
+        var workshop = ContosoSchema.LinesWorkshop(context.IsProduced("A10"));
+        if (!ContosoSchema.SameAs(await schema.GetPolicyAsync(lines), workshop))
         {
-            await schema.SetPolicyAsync(lines, ContosoSchema.LinesWorkshop);
+            await schema.SetPolicyAsync(lines, workshop);
         }
 
         if (await schema.GetVersionConfigAsync(lines) is null)
@@ -54,11 +56,11 @@ public sealed class U6Contract() : ChapterContract("U6")
 
         Require(policy is { StrictIngest: false }, "factory-lines has a non-strict policy");
         Require(ContosoSchema.Holds(policy, ContosoSchema.LinesPipelineRule), "the pipeline's rule is kept verbatim");
-        Require(policy!.Rules.Count >= 10, $"the policy uses every card ({policy.Rules.Count} rules)");
-        Require(policy.Rules.Any(rule => rule.Kind == LatticeSchemaRuleKind.Regex && rule.MemberPath == "owner"), "owner has a common format (email)");
-        Require(policy.Rules.Any(rule => rule.Kind == LatticeSchemaRuleKind.Regex && rule.MemberPath == "since"), "since has a common format (ISO date)");
-        Require(policy.Rules.Any(rule => rule.EncodingKind == LatticeSchemaEncodingKind.Json), "the whole value is well-formed JSON");
-        Require(policy.Rules.Any(rule => rule.MaxByteLength is not null), "the whole value has a largest size");
+
+        // Exactly the builder's compilation, so a seeded run and a UI-built run prove the same artefact.
+        Require(
+            ContosoSchema.SameAs(policy, ContosoSchema.LinesWorkshop(context.IsProduced("A10"))),
+            $"the policy is exactly the workshop's cards ({policy!.Rules.Count} rules)");
 
         var config = await schema.GetVersionConfigAsync(lines);
         Require(config is { SchemaId: ContosoSchema.LinesFamily, TargetVersion: 2 }, "factory-lines is versioned at version 2");
