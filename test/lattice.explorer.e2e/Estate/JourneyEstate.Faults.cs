@@ -17,6 +17,18 @@ public sealed record GatewayDestination(
     public bool Healthy => Health == "Healthy";
 }
 
+/// <summary>One grain activation and the silo hosting it.</summary>
+/// <param name="GrainId">The grain id, in Orleans' <c>{type}/{key}</c> form.</param>
+/// <param name="Silo">The index of the silo hosting it in its region.</param>
+public sealed record JourneyActivation(string GrainId, int Silo)
+{
+    /// <summary>The grain type: the part of <see cref="GrainId"/> before its first <c>/</c>.</summary>
+    public string GrainType => GrainId[..GrainId.IndexOf('/', StringComparison.Ordinal)];
+
+    /// <summary>The grain key: the part of <see cref="GrainId"/> after its first <c>/</c>.</summary>
+    public string Key => GrainId[(GrainId.IndexOf('/', StringComparison.Ordinal) + 1)..];
+}
+
 /// <summary>The process-level fault seams and diagnostics (issue #5359, scope item 9).</summary>
 public sealed partial class JourneyEstate
 {
@@ -123,6 +135,26 @@ public sealed partial class JourneyEstate
         var located = await response.Content.ReadFromJsonAsync<LocatedActivation>()
             ?? throw new InvalidOperationException("The silo did not say where the activation is.");
         return regionHost.Silos.Single(candidate => candidate.SiloPort == located.Port).Index;
+    }
+
+    /// <summary>
+    /// Every activation in <paramref name="region"/> whose grain key contains
+    /// <paramref name="keyFragment"/> (a tree id, say), with the silo hosting it: how a journey
+    /// finds the grains serving a tree without knowing the routing layer's grain types.
+    /// </summary>
+    /// <param name="keyFragment">A fragment of the grain key.</param>
+    /// <param name="region">The region.</param>
+    public async Task<IReadOnlyList<JourneyActivation>> FindActivationsAsync(string keyFragment, string region = West)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(keyFragment);
+        var regionHost = RegionOf(region);
+        var silo = regionHost.Silos.FirstOrDefault(candidate => candidate.IsRunning)
+            ?? throw new InvalidOperationException($"No {region} silo is running.");
+        var found = await _probe.GetFromJsonAsync<FoundActivation[]>(new Uri(
+            $"http://127.0.0.1:{silo.HttpPort}/e2e/activations?keyContains={Uri.EscapeDataString(keyFragment)}")) ?? [];
+        return [.. found.Select(activation => new JourneyActivation(
+            activation.GrainId,
+            regionHost.Silos.Single(candidate => candidate.SiloPort == activation.Port).Index))];
     }
 
     /// <summary>
@@ -250,6 +282,10 @@ public sealed partial class JourneyEstate
     private sealed record GatewayState([property: JsonPropertyName("destinations")] GatewayDestination[] Destinations);
 
     private sealed record LocatedActivation([property: JsonPropertyName("port")] int Port);
+
+    private sealed record FoundActivation(
+        [property: JsonPropertyName("grainId")] string GrainId,
+        [property: JsonPropertyName("port")] int Port);
 
     private sealed record InjectedOrphan([property: JsonPropertyName("orphan")] string Orphan);
 }

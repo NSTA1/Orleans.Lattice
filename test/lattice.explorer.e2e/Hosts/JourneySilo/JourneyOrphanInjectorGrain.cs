@@ -38,6 +38,13 @@ internal sealed class JourneyOrphanInjectorGrain : Grain, IJourneyOrphanInjector
 
         var donor = GrainFactory.GetGrain<IBPlusLeafGrain>(donorId);
         var link = await donor.GetKeyRangeAndNextSiblingAsync();
+        if (link.NextSibling is null && link.KeyRange.LowKeyInclusive is null && link.KeyRange.HighKeyExclusive is null)
+        {
+            // The root is the shard's only leaf: a split has never run here, so nothing could
+            // have been left unparented (and the audit rightly skips such a shard).
+            throw new InvalidOperationException($"Shard {shardIndex} of '{treeId}' is a single leaf that has never split.");
+        }
+
         var rows = await donor.GetLiveRawEntriesAsync();
         if (rows.Count == 0)
         {

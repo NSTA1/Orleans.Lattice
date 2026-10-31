@@ -3,6 +3,7 @@ using Grpc.Core;
 using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Api.Backup.Grpc;
 using Orleans.Lattice.Api.Data.Grpc;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Api.TreeAdmin.Grpc;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
@@ -58,18 +59,27 @@ public sealed class FaultSeamTests
         Assert.That((await Data().GetAsync(get)).Found, Is.True, "the next call goes through");
     }
 
-    /// <summary>A tree's grain activation is reported on one of the region's running silos.</summary>
+    /// <summary>
+    /// The grains serving a tree are found by key, and each is located on one of the region's
+    /// running silos, by its grain type and key, through the management grain.
+    /// </summary>
     [Test]
     [Order(3)]
     public async Task An_activation_is_located_on_a_running_silo()
     {
         await Data().SetAsync(new DataSetRequest { TreeId = "seam-locate", Key = "k", Value = [1] });
 
-        var silo = await Estate.LocateActivationAsync("lattice", "seam-locate");
+        var activations = await Estate.FindActivationsAsync("seam-locate");
+        Assert.That(activations, Is.Not.Empty, "writing to the tree activated the grains that serve it");
 
-        Assert.That(silo, Is.Not.Null, "the tree's grain is active somewhere");
-        Assert.That(Estate.WestRegion.Silos[silo!.Value].IsRunning, Is.True);
-        Assert.That(await Estate.LocateActivationAsync("lattice", "seam-never-touched"), Is.Null);
+        var activation = activations[0];
+        var silo = await Estate.LocateActivationAsync(activation.GrainType, activation.Key);
+        Assert.Multiple(() =>
+        {
+            Assert.That(silo, Is.EqualTo(activation.Silo), "located where the management grain lists it");
+            Assert.That(Estate.WestRegion.Silos[activation.Silo].IsRunning, Is.True);
+        });
+        Assert.That(await Estate.LocateActivationAsync(activation.GrainType, "seam-never-touched"), Is.Null);
     }
 
     /// <summary>An injected orphan is what the audit finds, the repair removes, and a re-audit no longer sees.</summary>
@@ -78,12 +88,16 @@ public sealed class FaultSeamTests
     public async Task An_injected_orphan_is_found_by_the_audit_and_repaired()
     {
         const string tree = "seam-orphans";
-        for (var i = 0; i < 20; i++)
+        var admin = LatticeTreeAdminApiGrpcClient.Create(Estate.Invoker(), JourneyEstate.Serialization);
+
+        // Small leaves, so the shards split and their roots are internal nodes: a shard whose
+        // root is its only leaf has nothing a split could have left unparented.
+        await admin.CreateTreeAsync(tree, shardCount: 2, maxLeafKeys: 4, maxInternalChildren: 4);
+        for (var i = 0; i < 60; i++)
         {
             await Data().SetAsync(new DataSetRequest { TreeId = tree, Key = $"key-{i:D3}", Value = Encoding.UTF8.GetBytes($"value-{i:D3}") });
         }
 
-        var admin = LatticeTreeAdminApiGrpcClient.Create(Estate.Invoker(), JourneyEstate.Serialization);
         Assert.That((await AuditAsync(admin, tree)).OrphanedLeafCount, Is.Zero, "a fresh tree has no orphan");
 
         var orphan = await Estate.InjectOrphanedLeafAsync(tree);
@@ -131,8 +145,16 @@ public sealed class FaultSeamTests
         Assert.That(await Estate.DeleteBackupArtifactAsync(backup.Id), Is.EqualTo(manifest));
 
         Assert.That(await Estate.BackupBlobsAsync(backup.Id), Does.Not.Contain(manifest), "the blob is gone");
-        var listed = await backups.ListBackupsAsync(new BackupCatalogRequest { PageSize = 50, NamePrefix = "seam-backup-1" });
-        Assert.That(listed.Entries.Select(entry => entry.Id), Does.Contain(backup.Id), "the catalogue still lists it");
+
+        // The catalogue's listing reads through the manifest, so it no longer offers the
+        // backup; its scrub is what reports the row left behind.
+        var scrub = await backups.StartCatalogScrubAsync(pruneOrphans: false);
+        var finished = await WaitForAsync(async () =>
+            (await backups.ListBackupOperationsAsync(new LatticeOperationListRequest { PageSize = 100 })).Operations
+                .FirstOrDefault(operation => operation.OperationId == scrub.OperationId && operation.IsTerminal));
+        Assert.That(finished.State, Is.EqualTo(LatticeOperationState.Succeeded), finished.FailureReason);
+        Assert.That(finished.Result.GetValueOrDefault(BackupOperationResultKeys.OrphanBackupIds, string.Empty).Split(','),
+            Does.Contain(backup.Id), "the catalogue holds a genuine orphan row");
     }
 
     /// <summary>A silo and the Explorer head are restarted, and the region serves again through both silos.</summary>

@@ -35,6 +35,19 @@ internal static class JourneyFaultEndpoints
             return Results.NotFound();
         });
 
+        // Every activation whose key contains a fragment, with its host: how a journey finds
+        // the grains serving a tree without knowing the routing layer's grain types.
+        app.MapGet(Prefix + "/activations", async (string keyContains, IGrainFactory grains) =>
+        {
+            var management = grains.GetGrain<IManagementGrain>(0);
+            var statistics = await management.GetDetailedGrainStatistics();
+            return Results.Ok(statistics
+                .Where(statistic => statistic.GrainId.Key.ToString()!.Contains(keyContains, StringComparison.Ordinal))
+                .Select(statistic => new { grainId = statistic.GrainId.ToString(), port = statistic.SiloAddress.Endpoint.Port })
+                .OrderBy(activation => activation.grainId, StringComparer.Ordinal)
+                .ToArray());
+        });
+
         app.MapPost(Prefix + "/orphan", async (string tree, int? shard, IGrainFactory grains) =>
         {
             try
