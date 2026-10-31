@@ -12,7 +12,7 @@ command:data.create-view	command	DataArea.CreateViewCommandId	New view... on a t
 command:data.delete-entry	command	DataEntryCommands.DeleteEntryId	Delete... an entry (G3)	U1
 command:data.edit-entry	command	DataEntryCommands.EditEntryId	Edit... an entry (G3)	U1
 command:data.export	command	DataArea.ExportCommandId	Export... a tree or prefix as a streamed download (G2)	U1
-command:data.import	command	pending:#5365	Import... NDJSON or CSV into a tree (G1)	A3
+command:data.import	command	DataArea.ImportCommandId	Import... NDJSON or CSV into a tree (G1)	A3
 command:data.new-entry	command	DataEntryCommands.NewEntryId	New entry... in a tree (G3)	U1
 command:data.refresh	command	DataArea.RefreshCommandId	The palette command data.refresh	U1
 command:go.home	command	ChromeCommands.GoHomeId	The palette command go.home	A1
@@ -37,6 +37,7 @@ option:ConfigureDataProtection	option	LatticeExplorerWebOptions.ConfigureDataPro
 option:DataProtectionApplicationName	option	LatticeExplorerWebOptions.DataProtectionApplicationName	The LatticeExplorerWebOptions.DataProtectionApplicationName hosting mode	C4
 option:DataProtectionKeyRingBlobUri	option	LatticeExplorerWebOptions.DataProtectionKeyRingBlobUri	The LatticeExplorerWebOptions.DataProtectionKeyRingBlobUri hosting mode	C4
 option:DataProtectionKeyRingCredential	option	LatticeExplorerWebOptions.DataProtectionKeyRingCredential	The LatticeExplorerWebOptions.DataProtectionKeyRingCredential hosting mode	C4
+option:MaxImportBytes	option	LatticeExplorerWebOptions.MaxImportBytes	The LatticeExplorerWebOptions.MaxImportBytes hosting mode	C4
 option:UseEnvironmentBootstrap	option	LatticeExplorerWebOptions.UseEnvironmentBootstrap	The LatticeExplorerWebOptions.UseEnvironmentBootstrap hosting mode	C4
 query-value:access.new=true	query-value	docs/lattice.explorer/managing-access.md#addresses	?new=true opens a New group or New rule dialog	A2
 query-value:access.view=permissions	query-value	docs/lattice.explorer/managing-access.md#explain	?view=permissions opens Effective permissions	A9
@@ -44,6 +45,7 @@ query-value:apps.filter=available	query-value	docs/lattice.explorer/lattice-apps
 query-value:apps.filter=installed	query-value	docs/lattice.explorer/lattice-apps.md#sources	The installed catalogue filter	A5
 query-value:apps.filter=updates	query-value	docs/lattice.explorer/lattice-apps.md#sources	The updates catalogue filter	A5
 query-value:backups.backup=id	query-value	docs/lattice.explorer/managing-backups.md#health	?backup= narrows Health to one backup	A6
+query-value:data.import=seed	query-value	docs/lattice.explorer/areas.md#importing-into-a-tree	?import=seed opens the Import dialog on a seed, as New tree from file does	A3
 query-value:schema.scan=start	query-value	docs/lattice.explorer/managing-schema.md#compliance	?scan=start starts a compliance scan	U2
 query-value:schema.show=all	query-value	docs/lattice.explorer/managing-schema.md#directory-page	?show=all lists every tree in the Schema directory	U2
 query-value:shell.all-tenants=true	query-value	docs/lattice.explorer/navigation-model.md#query-keys	?all-tenants=true shows every tenant's rows	T4
@@ -74,6 +76,7 @@ query:cluster.tab	query	ClusterAddresses.TabQuery	The ?tab= query key in cluster
 query:cluster.target	query	ClusterAddresses.TargetQuery	The ?target= query key in cluster	A8
 query:cluster.tree	query	ClusterAddresses.TreeQuery	The ?tree= query key in cluster	A12
 query:data.filter	query	DataTabs.FilterQuery	The ?filter= query key in data	U1
+query:data.import	query	DataTabs.ImportQuery	The ?import= query key in data, which opens a tree's Import dialog (G1)	A3
 query:data.index	query	DataTabs.IndexQuery	The ?index= query key in data	U1
 query:data.new	query	DataTabs.NewQuery	The ?new= query key in data, which opens a tree's New view dialog (G5)	A3
 query:data.tab	query	DataTabs.TabQuery	The ?tab= query key in data	U1
@@ -330,11 +333,11 @@ use-case:data/entry-view	use-case	docs/lattice.explorer/areas.md#data	The entry 
 use-case:data/export-streamed	use-case	docs/lattice.explorer/areas.md#exporting-a-tree	Export a prefix to CSV as a streamed download	U1
 use-case:data/history	use-case	docs/lattice.explorer/areas.md#data	History: choose a key, older revisions, Show as of, Latest	U4
 use-case:data/history-live-tail	use-case	docs/lattice.explorer/areas.md#data	History in prefix live-tail mode shows writes arriving	U1
-use-case:data/import-cancel	use-case	docs/lattice.explorer/areas.md#data	Cancel an import; the operation reports exactly what was committed	U1
-use-case:data/import-csv-new-tree	use-case	docs/lattice.explorer/areas.md#data	New tree from file: seed a new tree from a CSV file	U1
-use-case:data/import-ndjson-seed	use-case	docs/lattice.explorer/areas.md#data	Seed an empty tree from an NDJSON file	A3
-use-case:data/import-out-of-order	use-case	docs/lattice.explorer/areas.md#data	An unsorted seed file is refused at pre-flight with its line number, and nothing is written	A3
-use-case:data/import-upsert-rejections	use-case	docs/lattice.explorer/areas.md#data	Upsert import with schema rejections, and download the rejection list	U1
+use-case:data/import-cancel	use-case	docs/lattice.explorer/areas.md#importing-into-a-tree	Cancel an import; the operation reports exactly what was committed	U1
+use-case:data/import-csv-new-tree	use-case	docs/lattice.explorer/areas.md#importing-into-a-tree	New tree from file: seed a new tree from a CSV file	U1
+use-case:data/import-ndjson-seed	use-case	docs/lattice.explorer/areas.md#importing-into-a-tree	Seed an empty tree from an NDJSON file	A3
+use-case:data/import-out-of-order	use-case	docs/lattice.explorer/areas.md#importing-into-a-tree	An unsorted seed file is refused at pre-flight with its line number, and nothing is written	A3
+use-case:data/import-upsert-rejections	use-case	docs/lattice.explorer/areas.md#importing-into-a-tree	Upsert import with schema rejections, and download the rejection list	U1
 use-case:data/keys-paging	use-case	docs/lattice.explorer/areas.md#data	Keys: next and previous page, page size and prefix filter	U1
 use-case:data/live-updates	use-case	docs/lattice.explorer/areas.md#data	Live updates arrive, pause, and restart	U1
 use-case:data/metrics	use-case	docs/lattice.explorer/areas.md#data	Metrics: per-shard live keys and operations per second	U1
