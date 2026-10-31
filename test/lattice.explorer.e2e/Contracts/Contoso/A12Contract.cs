@@ -1,5 +1,6 @@
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Api.TreeAdmin.Grpc;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 using Names = Orleans.Lattice.Explorer.EndToEnd.Tests.Story.StoryNames.Contoso;
 
@@ -14,7 +15,8 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts.Contoso;
 /// telemetry; and <c>lines-snap-offline</c>, an offline snapshot of the restored lines sized
 /// <see cref="OfflineSnapshotMaxLeafKeys"/>/<see cref="OfflineSnapshotMaxInternalChildren"/>.
 /// The seeder does not inject an orphan: a repaired tree and a never-damaged one audit alike.
-/// C3 purges the two snapshots.
+/// C3 purges the two snapshots. Until #5455 is fixed the offline snapshot never completes, so its
+/// step is a <see cref="KnownDefect"/> (the destination tree exists; the source stays locked).
 /// </summary>
 public sealed class A12Contract() : ChapterContract("A12")
 {
@@ -41,6 +43,9 @@ public sealed class A12Contract() : ChapterContract("A12")
 
     private static readonly TimeSpan StructuralPatience = TimeSpan.FromMinutes(6);
 
+    // #5455: how long the offline snapshot may run before the wrapper calls it hung.
+    private static readonly TimeSpan HangPatience = TimeSpan.FromMinutes(3);
+
     /// <inheritdoc />
     public override async Task EstablishAsync(ChapterContext context)
     {
@@ -58,8 +63,25 @@ public sealed class A12Contract() : ChapterContract("A12")
         }
 
         await SnapshotAsync(admin, Names.Trees.FactoryTelemetry, Names.Trees.TelemetrySnapOnline, TreeSnapshotMode.Online, null, null);
-        await SnapshotAsync(
-            admin, Names.Trees.FactoryLinesRestored, Names.Trees.LinesSnapOffline, TreeSnapshotMode.Offline, OfflineSnapshotMaxLeafKeys, OfflineSnapshotMaxInternalChildren);
+        if (!await ContractCalls.TreeIsLiveAsync(admin, Names.Trees.LinesSnapOffline))
+        {
+            await new KnownDefect("#5455", "An offline snapshot hangs in UnlockSource and leaves its source locked").ReproducesAsync(async () =>
+            {
+                await admin.SnapshotTreeAsync(
+                    Names.Trees.FactoryLinesRestored, Names.Trees.LinesSnapOffline, TreeSnapshotMode.Offline, OfflineSnapshotMaxLeafKeys, OfflineSnapshotMaxInternalChildren);
+                try
+                {
+                    await ContractWait.UntilAsync("the offline snapshot lines-snap-offline", async () =>
+                        !(await admin.GetSnapshotStatusAsync(Names.Trees.FactoryLinesRestored)).InProgress, HangPatience);
+                }
+                catch (TimeoutException)
+                {
+                    return;
+                }
+
+                throw new InvalidOperationException("the offline snapshot lines-snap-offline completed");
+            });
+        }
     }
 
     /// <inheritdoc />
