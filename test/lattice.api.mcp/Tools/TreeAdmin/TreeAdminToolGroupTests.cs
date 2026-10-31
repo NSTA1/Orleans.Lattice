@@ -445,6 +445,17 @@ public sealed class TreeAdminToolGroupTests
     }
 
     [Test]
+    public void Set_alias_tool_description_states_the_alias_reservation_refusal()
+    {
+        var group = CreateGroup(enableSchemaControl: false, enableLifecycle: true);
+
+        var description = ServerTool(group, "lattice_treeadmin_tree_set_alias").ProtocolTool.Description;
+
+        Assert.That(description, Does.Contain("holds the tree's alias reservation"),
+            "an agent must learn from the tool description that set_alias is refused while another operation holds the reservation (#5289)");
+    }
+
+    [Test]
     public void Constructor_rejects_null_dependencies()
     {
         var provider = new ServiceCollection().BuildServiceProvider();
