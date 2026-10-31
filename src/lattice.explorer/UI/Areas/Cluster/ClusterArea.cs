@@ -28,6 +28,9 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
     /// <summary>The "Plan WAL move..." palette command's id.</summary>
     public const string PlanWalMoveCommandId = "cluster.plan-wal-move";
 
+    /// <summary>The "New tree..." palette command's id (G4, issue #5368).</summary>
+    public const string CreateTreeCommandId = "cluster.create-tree";
+
     private readonly ClusterFacades _facades;
     private readonly ClusterTreeCatalog _catalog;
     private AreaAvailability? _verdict;
@@ -60,6 +63,12 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
                 Detail = "Preview moving a WAL partition to another storage provider.",
                 Target = ClusterAddresses.Wal(),
                 InvokeAsync = _ => signals.RequestAsync(PlanWalMoveCommandId),
+            },
+            new ExplorerCommand(CreateTreeCommandId, "New tree...")
+            {
+                Detail = "Create an empty tree with a chosen shard count and node sizes.",
+                Target = ClusterAddresses.Trees,
+                InvokeAsync = _ => signals.RequestAsync(CreateTreeCommandId),
             },
         ];
 

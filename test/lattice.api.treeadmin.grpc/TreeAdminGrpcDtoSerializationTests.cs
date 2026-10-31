@@ -871,6 +871,46 @@ public sealed class TreeAdminGrpcDtoSerializationTests
     }
 
     [Test]
+    public void TreeViewProviderCatalog_response_round_trips_through_the_marshaller()
+    {
+        var copy = RoundTrip(new TreeViewProviderCatalog
+        {
+            Providers = System.Collections.Immutable.ImmutableArray.Create(
+                new TreeViewProviderInfo
+                {
+                    ProviderKey = "app.by-status.v1",
+                    Description = "Orders by status",
+                    PayloadFields = System.Collections.Immutable.ImmutableArray.Create(
+                        new TreeViewProviderField
+                        {
+                            Name = "limit",
+                            Label = "Limit",
+                            Description = "At most",
+                            Required = true,
+                            Kind = TreeViewProviderFieldKind.Number,
+                        }),
+                },
+                new TreeViewProviderInfo { ProviderKey = "app.raw.v1" }),
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Providers, Has.Length.EqualTo(2));
+            Assert.That(copy.Providers[0].ProviderKey, Is.EqualTo("app.by-status.v1"));
+            Assert.That(copy.Providers[0].Description, Is.EqualTo("Orders by status"));
+            Assert.That(copy.Providers[0].PayloadFields.Single(), Is.EqualTo(new TreeViewProviderField
+            {
+                Name = "limit",
+                Label = "Limit",
+                Description = "At most",
+                Required = true,
+                Kind = TreeViewProviderFieldKind.Number,
+            }));
+            Assert.That(copy.Providers[1].Description, Is.Null);
+        });
+    }
+
+    [Test]
     public void TreeViewStatus_response_round_trips_through_the_marshaller()
     {
         var copy = RoundTrip(new TreeViewStatus

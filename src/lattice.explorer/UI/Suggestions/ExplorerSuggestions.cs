@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Auth;
+using Orleans.Lattice.Explorer.UI.Areas.Access;
 using Orleans.Lattice.Explorer.UI.Areas.Cluster;
 using Orleans.Lattice.Explorer.UI.Areas.Data;
 using Orleans.Lattice.Explorer.UI.Design.Components;
@@ -31,7 +32,9 @@ internal sealed class ExplorerSuggestions(IServiceProvider services)
     private ILtSuggestionSource? _tenants;
     private ILtSuggestionSource? _users;
     private ILtSuggestionSource? _groups;
-    private ILtSuggestionSource? _groupsOrStored;
+    private ILtSuggestionSource? _storedGroups;
+    private ILtSuggestionSource? _clusterGroups;
+    private (string Tenant, ILtSuggestionSource Source)? _tenantTrees;
     private ILtSuggestionSource? _principals;
 
     /// <summary>The trees the caller can reach, by logical id.</summary>
@@ -46,6 +49,25 @@ internal sealed class ExplorerSuggestions(IServiceProvider services)
     public ILtSuggestionSource ClusterTrees => _clusterTrees ??= Build(() => new ClusterTreeSuggestionSource(
         services.GetRequiredService<ClusterTreeCatalog>(),
         () => services.GetService<ExplorerNavigator>()?.Current?.Tenant));
+
+    /// <summary>
+    /// One tenant's own trees by their full id (<c>t/{tenant}/{name}</c>), from the
+    /// Cluster area's catalogue, for a platform rule that names that tenant's group
+    /// and so may govern only its trees.
+    /// </summary>
+    /// <param name="tenant">The tenant.</param>
+    /// <returns>The source; the last tenant's is remembered.</returns>
+    public ILtSuggestionSource TreesOfTenant(string tenant)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(tenant);
+        if (_tenantTrees is not { } remembered || !string.Equals(remembered.Tenant, tenant, StringComparison.Ordinal))
+        {
+            remembered = (tenant, Build(() => new ClusterTreeSuggestionSource(services.GetRequiredService<ClusterTreeCatalog>(), () => tenant)));
+            _tenantTrees = remembered;
+        }
+
+        return remembered.Source;
+    }
 
     /// <summary>The cluster's own region and its peer regions.</summary>
     public ILtSuggestionSource Regions => _regions ??= Build(() => new RegionSuggestionSource(
@@ -72,8 +94,17 @@ internal sealed class ExplorerSuggestions(IServiceProvider services)
     /// <summary>Groups from the identity directory.</summary>
     public ILtSuggestionSource Groups => _groups ??= Build(() => new DirectorySuggestionSource(Auth(), DirectoryPrincipalKind.Group));
 
-    /// <summary>Groups from the identity directory, or from the auth store when there is no directory.</summary>
-    public ILtSuggestionSource GroupsOrStoredGroups => _groupsOrStored ??= Build(() => new DirectorySuggestionSource(Auth(), DirectoryPrincipalKind.Group, listStoredGroups: true));
+    /// <summary>
+    /// The cluster groups administered in the Access area (the auth store's own
+    /// groups), whether or not the identity directory lists them.
+    /// </summary>
+    public ILtSuggestionSource StoredGroups => _storedGroups ??= Build(() => new StoredGroupSuggestionSource(services.GetService<AccessCatalog>()));
+
+    /// <summary>
+    /// The cluster's groups from both sources, each labelled: the identity
+    /// directory's and the stored ones. Users are never offered.
+    /// </summary>
+    public ILtSuggestionSource ClusterGroups => _clusterGroups ??= Build(() => new ClusterGroupSuggestionSource(Groups, StoredGroups));
 
     /// <summary>Users and groups alike from the identity directory, for a field that takes either.</summary>
     public ILtSuggestionSource Principals => _principals ??= Build(() => new DirectorySuggestionSource(Auth(), kind: null));

@@ -1766,6 +1766,17 @@
       ],
       "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeViewCatalog.cs#TreeViewCatalog"
     },
+    "TreeViewProviderCatalog": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Providers",
+          "type": "ImmutableArray<TreeViewProviderInfo>",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeViewProviderCatalog.cs#TreeViewProviderCatalog"
+    },
     "TreeViewReconcileResult": {
       "kind": "record",
       "fields": [
@@ -3943,6 +3954,55 @@
         "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#ListOperationsAsync",
         "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#ListTreeAdminOperations",
         "docs/lattice.api.treeadmin/operations.md"
+      ]
+    },
+    {
+      "id": "list-view-providers",
+      "in_process": "ILatticeTreeAdmin.ListViewProvidersAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/ListViewProviders",
+      "transport_scope": "both",
+      "request": "TreeAdminTreeRequest",
+      "response": "TreeViewProviderCatalog",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "The source is empty, reserved, or a materialised-view tree."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The caller lacks whole-tree admin authority over the source."
+        },
+        {
+          "error_id": "precondition-failed",
+          "condition": "The materialised-view subsystem is not enabled on this cluster."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ListViewProvidersAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pure read with no side effects; no provider code runs.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ListViewProvidersAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ListViewProvidersAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ListViewProvidersAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#ListViewProviders",
+        "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#ListViewProvidersAsync"
       ]
     },
     {

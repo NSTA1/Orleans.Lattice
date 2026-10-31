@@ -21,7 +21,7 @@ internal static class JourneyBrowser
     /// circuit first writes the operator's appearance - which the chrome does only once the
     /// circuit is live - as the promise <c>window.__ltReady</c>.
     /// </summary>
-    private const string ReadyScript =
+    internal const string ReadyScript =
         """
         (() => {
           let ready;

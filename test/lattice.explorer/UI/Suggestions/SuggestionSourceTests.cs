@@ -199,7 +199,7 @@ public sealed class SuggestionSourceTests
     }
 
     [Test]
-    public async Task Without_a_directory_the_answer_is_unavailable_unless_stored_groups_may_stand_in()
+    public async Task Without_a_directory_the_answer_is_unavailable_for_users_and_groups_alike()
     {
         var admin = Substitute.For<ILatticeAuthAdmin>();
         admin.SearchDirectoryAsync(Arg.Any<DirectorySearchRequest>(), Arg.Any<CancellationToken>()).Returns(DirectorySearchResult.Unavailable);
@@ -207,14 +207,13 @@ public sealed class SuggestionSourceTests
             .Returns(new AuthGroupPage { Entries = [new AuthGroup { GroupId = "ops", DisplayName = "Operations" }, new AuthGroup { GroupId = "devs" }] });
 
         var users = await new DirectorySuggestionSource(admin, DirectoryPrincipalKind.User).SuggestAsync("o", 5, CancellationToken.None);
-        var groups = await new DirectorySuggestionSource(admin, DirectoryPrincipalKind.Group, listStoredGroups: true).SuggestAsync("o", 5, CancellationToken.None);
+        var groups = await new DirectorySuggestionSource(admin, DirectoryPrincipalKind.Group).SuggestAsync("o", 5, CancellationToken.None);
         var noFacade = await new DirectorySuggestionSource(null, null).SuggestAsync("o", 5, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
             Assert.That(users.UnavailableReason, Is.EqualTo(DirectorySuggestionSource.UnavailableReason));
-            Assert.That(groups.Items.Select(item => item.Value), Is.EqualTo(new[] { "ops" }));
-            Assert.That(groups.Items[0].Detail, Is.EqualTo("Operations"));
+            Assert.That(groups.UnavailableReason, Is.EqualTo(DirectorySuggestionSource.UnavailableReason), "stored groups are their own source");
             Assert.That(noFacade.IsAvailable, Is.False);
         });
     }

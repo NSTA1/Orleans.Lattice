@@ -26,7 +26,33 @@ public sealed class LatticeViewRegistrationBuilder
     /// <param name="provider">The definition factory invoked during create and rehydration.</param>
     public LatticeViewRegistrationBuilder AddRuntimeProjectionProvider(
         string providerKey,
+        Func<IServiceProvider, LatticeRuntimeViewProjectionContext, LatticeViewDefinition> provider) =>
+        AddProvider(providerKey, provider, description: null);
+
+    /// <summary>
+    /// Registers a keyed provider that reconstructs durable runtime-created view
+    /// definitions, together with the description an operator console lists it
+    /// with. A described provider receives its payload as a UTF-8 JSON object:
+    /// built from <see cref="LatticeRuntimeViewProviderDescription.PayloadFields"/>
+    /// when the description declares fields, otherwise typed by the operator. The
+    /// provider validates that JSON and throws to refuse it.
+    /// </summary>
+    /// <param name="providerKey">The stable non-empty provider key.</param>
+    /// <param name="description">What the provider builds and the shape of its JSON payload.</param>
+    /// <param name="provider">The definition factory invoked during create and rehydration.</param>
+    public LatticeViewRegistrationBuilder AddRuntimeProjectionProvider(
+        string providerKey,
+        LatticeRuntimeViewProviderDescription description,
         Func<IServiceProvider, LatticeRuntimeViewProjectionContext, LatticeViewDefinition> provider)
+    {
+        ArgumentNullException.ThrowIfNull(description);
+        return AddProvider(providerKey, provider, description);
+    }
+
+    private LatticeViewRegistrationBuilder AddProvider(
+        string providerKey,
+        Func<IServiceProvider, LatticeRuntimeViewProjectionContext, LatticeViewDefinition> provider,
+        LatticeRuntimeViewProviderDescription? description)
     {
         ArgumentException.ThrowIfNullOrEmpty(providerKey);
         ArgumentNullException.ThrowIfNull(provider);
@@ -45,7 +71,7 @@ public sealed class LatticeViewRegistrationBuilder
                 $"A runtime view projection provider with key '{providerKey}' is already registered.");
         }
 
-        _runtimeProviders.Add(new RuntimeViewProjectionProviderRegistration(providerKey, provider));
+        _runtimeProviders.Add(new RuntimeViewProjectionProviderRegistration(providerKey, provider, description));
         return this;
     }
 

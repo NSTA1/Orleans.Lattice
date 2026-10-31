@@ -158,6 +158,7 @@ The exact `ILatticeTreeAdmin` contract (published in `Orleans.Lattice.Api.Abstra
 | `SurveyOrphanedLeavesAsync` | `Task<TreeOrphanedLeafReport> SurveyOrphanedLeavesAsync(string treeId, string? resumeFrom = null, CancellationToken cancellationToken = default)` |
 | `RepairOrphanedLeavesAsync` | `Task<TreeOrphanedLeafReport> RepairOrphanedLeavesAsync(string treeId, string? resumeFrom = null, CancellationToken cancellationToken = default)` |
 | `ListViewsAsync` | `Task<TreeViewCatalog> ListViewsAsync(CancellationToken cancellationToken = default)` |
+| `ListViewProvidersAsync` | `Task<TreeViewProviderCatalog> ListViewProvidersAsync(string sourceTreeId, CancellationToken cancellationToken = default)` |
 | `CreateViewAsync` | `Task<TreeViewStatus> CreateViewAsync(string viewName, string sourceTreeId, string providerKey, byte[] payload, CancellationToken cancellationToken = default)` |
 | `GetViewStatusAsync` | `Task<TreeViewStatus> GetViewStatusAsync(string viewName, CancellationToken cancellationToken = default)` |
 | `DropViewAsync` | `Task DropViewAsync(string viewName, CancellationToken cancellationToken = default)` |
@@ -167,7 +168,7 @@ The exact `ILatticeTreeAdmin` contract (published in `Orleans.Lattice.Api.Abstra
 | `GetHistoryRetentionAsync` | `Task<TreeHistoryRetention> GetHistoryRetentionAsync(string treeId, CancellationToken cancellationToken = default)` |
 | `SetHistoryRetentionAsync` | `Task<TreeHistoryRetention> SetHistoryRetentionAsync(string treeId, TreeHistoryRetentionMode? mode, TimeSpan? window, CancellationToken cancellationToken = default)` |
 
-`DropViewAsync` and `RevertTreeRestoreAsync` return a bare `Task` (no payload); every other verb returns a result record. `SurveyOrphanedLeavesAsync` and `CreateViewAsync` are default interface methods that throw `NotSupportedException`, so an existing third-party implementation of `ILatticeTreeAdmin` stays source-compatible; the shipped facade implements both.
+`DropViewAsync` and `RevertTreeRestoreAsync` return a bare `Task` (no payload); every other verb returns a result record. `SurveyOrphanedLeavesAsync`, `ListViewProvidersAsync` and `CreateViewAsync` are default interface methods that throw `NotSupportedException`, so an existing third-party implementation of `ILatticeTreeAdmin` stays source-compatible; the shipped facade implements all three. `ListViewProvidersAsync` authorizes whole-tree admin over the source - the authority `CreateViewAsync` needs - and lists the host's runtime projection providers by key with their descriptions and payload fields (`TreeViewProviderCatalog`, `TreeViewProviderInfo`, `TreeViewProviderField`, `TreeViewProviderFieldKind`); see [Runtime projection providers](../lattice/materialised-views.md#runtime-projection-providers).
 
 ## WAL reclamation
 

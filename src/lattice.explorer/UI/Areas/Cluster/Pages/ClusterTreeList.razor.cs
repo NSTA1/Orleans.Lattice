@@ -10,16 +10,25 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 /// <summary>
 /// <c>/cluster/trees</c>: every tree by logical name, its owners, shards, WAL
 /// partitions and lifecycle state, each linking to its administration page. It
-/// owns the visible control of the "Reshard tree..." palette command.
+/// owns the visible controls of the "Reshard tree..." and "New tree..." palette
+/// commands; "New tree..." is drawn only for a caller the create-tree probe admits,
+/// and the command is refused, with a sentence, for one it does not.
 /// </summary>
 public partial class ClusterTreeList : IDisposable
 {
+    /// <summary>What a caller the create-tree probe refuses is told when the palette asks for a new tree.</summary>
+    internal const string CreateRefusedText = "Your identity holds no grant to create trees on this cluster.";
+
     private readonly ComponentLifetime _lifetime = new();
     private ClusterLoad<IReadOnlyList<ClusterTreeEntry>> _trees = ClusterLoad<IReadOnlyList<ClusterTreeEntry>>.Loading;
     private string? _filter;
     private bool _reshardOpen;
     private string? _reshardTree;
     private string? _reshardError;
+    private Task<bool>? _canCreateProbe;
+    private bool _canCreate;
+    private bool _createOpen;
+    private string? _createRefusal;
 
     [Inject]
     private ClusterTreeCatalog Catalog { get; set; } = default!;
@@ -35,6 +44,9 @@ public partial class ClusterTreeList : IDisposable
 
     [Inject]
     private ExplorerNavigator Navigator { get; set; } = default!;
+
+    [Inject]
+    private ClusterTreeCreation Creation { get; set; } = default!;
 
     /// <summary>The tenant a tenant-rooted address names, whose own trees are all the list shows; <see langword="null"/> on the cluster-wide address.</summary>
     [CascadingParameter(Name = ClusterScope.CascadeName)]
@@ -56,12 +68,40 @@ public partial class ClusterTreeList : IDisposable
     protected override async Task OnInitializedAsync()
     {
         Signals.Requested += OnCommand;
+        _canCreateProbe = ProbeCreateAsync();
         if (Signals.TryTake(ClusterArea.ReshardCommandId))
         {
             OpenReshard();
         }
 
+        if (Signals.TryTake(ClusterArea.CreateTreeCommandId))
+        {
+            _ = InvokeAsync(RequestCreateAsync);
+        }
+
         await LoadAsync(refresh: false);
+        await _canCreateProbe;
+    }
+
+    // The probe fails closed: no facade, a refusal or a fault leaves New tree... hidden.
+    private async Task<bool> ProbeCreateAsync()
+    {
+        bool answer;
+        try
+        {
+            answer = await Creation.CanCreateAsync(_lifetime.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+
+        if (!_lifetime.IsLeft)
+        {
+            _canCreate = answer;
+        }
+
+        return answer;
     }
 
     private async Task LoadAsync(bool refresh)
@@ -87,6 +127,39 @@ public partial class ClusterTreeList : IDisposable
                 StateHasChanged();
             });
         }
+        else if (string.Equals(commandId, ClusterArea.CreateTreeCommandId, StringComparison.Ordinal))
+        {
+            _ = InvokeAsync(RequestCreateAsync);
+        }
+    }
+
+    // The palette can ask before the probe has answered, so the request waits for
+    // it; a caller the probe refuses is told so rather than shown a dialog the
+    // cluster would refuse.
+    private async Task RequestCreateAsync()
+    {
+        var admitted = _canCreateProbe is { } probe && await probe;
+        if (_lifetime.IsLeft)
+        {
+            return;
+        }
+
+        if (admitted)
+        {
+            OpenCreate();
+        }
+        else
+        {
+            _createRefusal = CreateRefusedText;
+        }
+
+        StateHasChanged();
+    }
+
+    private void OpenCreate()
+    {
+        _createRefusal = null;
+        _createOpen = true;
     }
 
     private void OpenReshard()
