@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Reports;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
@@ -24,6 +25,23 @@ public abstract class ContractConformanceFixture(string storyline)
 
     /// <summary>The storyline.</summary>
     protected string Storyline { get; } = storyline;
+
+    /// <summary>
+    /// The chapter before which the Explorer is photographed: the estate then holds every
+    /// produce that chapter consumes. <see langword="null"/> takes no photographs.
+    /// </summary>
+    protected virtual string? SnapshotBefore => null;
+
+    /// <summary>The Explorer pages photographed, in order, as (file name, path).</summary>
+    private static readonly (string Name, string Path)[] SnapshotPages =
+    [
+        ("01-home", "/"),
+        ("02-data", "/data"),
+        ("03-access", "/access"),
+        ("04-schema", "/schema"),
+        ("05-backups", "/backups"),
+        ("06-apps", "/apps"),
+    ];
 
     /// <summary>Starts the storyline's estate.</summary>
     [OneTimeSetUp]
@@ -81,6 +99,11 @@ public abstract class ContractConformanceFixture(string storyline)
 
         var clock = Stopwatch.StartNew();
         TimeSpan establish = TimeSpan.Zero;
+        if (string.Equals(chapter, SnapshotBefore, StringComparison.Ordinal))
+        {
+            await SnapshotEstateAsync(chapter);
+        }
+
         try
         {
             await session.EstablishAsync(chapter);
@@ -95,6 +118,36 @@ public abstract class ContractConformanceFixture(string storyline)
             var phase = establish == TimeSpan.Zero ? "establish failed" : "verify failed";
             _rows.Add((chapter, phase, establish == TimeSpan.Zero ? clock.Elapsed : establish, establish == TimeSpan.Zero ? TimeSpan.Zero : clock.Elapsed, FirstLine(ex)));
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Photographs the Explorer, signed in as the storyline's first bootstrap administrator, on
+    /// the estate as established so far, into <c>artifacts/screenshots/contract-conformance-*</c>.
+    /// Best effort: a failed photograph is reported, never fails the self-test.
+    /// </summary>
+    /// <param name="chapter">The chapter about to be established.</param>
+    private async Task SnapshotEstateAsync(string chapter)
+    {
+        var estate = _estate ?? throw new InvalidOperationException("The estate did not start.");
+        var directory = Path.Combine(JourneyPaths.ProjectDirectory, "artifacts", "screenshots", $"contract-conformance-{Storyline.ToLowerInvariant()}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var persona = Personas.BootstrapAdministratorsOf(Storyline.ToLowerInvariant()).Select(Personas.Get).First();
+            await using var session = await estate.SignInAsAsync(persona);
+            foreach (var (name, path) in SnapshotPages)
+            {
+                await session.Shell.GotoAsync(path);
+                await Task.Delay(TimeSpan.FromSeconds(3));
+                await session.Page.ScreenshotAsync(new() { Path = Path.Combine(directory, $"{name}.png"), FullPage = true });
+            }
+
+            TestContext.Progress.WriteLine($"Photographed the {Storyline} estate at {chapter}'s consumes into {directory}.");
+        }
+        catch (Exception ex)
+        {
+            TestContext.Progress.WriteLine($"Could not photograph the {Storyline} estate at {chapter}'s consumes: {FirstLine(ex)}");
         }
     }
 

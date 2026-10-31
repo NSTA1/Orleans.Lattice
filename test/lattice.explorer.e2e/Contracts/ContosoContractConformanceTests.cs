@@ -10,6 +10,10 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts;
 [Category("ContractConformance")]
 public sealed class ContosoContractConformanceTests() : ContractConformanceFixture(StoryNames.Storylines.Contoso)
 {
+    /// <inheritdoc />
+    /// <remarks>C3 consumes every Contoso chapter before it, so the photographs show the estate fully seeded.</remarks>
+    protected override string? SnapshotBefore => "C3";
+
     /// <summary>Establishes and verifies <paramref name="chapter"/>.</summary>
     /// <param name="chapter">The chapter id.</param>
     [TestCaseSource(nameof(Chapters))]
