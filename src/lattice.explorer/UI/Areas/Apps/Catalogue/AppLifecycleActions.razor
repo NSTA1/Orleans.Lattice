@@ -18,6 +18,10 @@
         {
             <p class="lt-apps-error" role="alert">@_error</p>
         }
+        @if (_pending is { } pending)
+        {
+            <p role="status" data-lt-app-lifecycle-pending="@pending.ToString().ToLowerInvariant()">@PendingText(pending, name)</p>
+        }
         <div class="lt-apps-actions">
             @if (CanEnable)
             {
@@ -75,7 +79,9 @@
 }
 
 @code {
+    private readonly CancellationTokenSource _lifetime = new();
     private AppLifecycleVerb? _asking;
+    private AppLifecycleVerb? _pending;
     private AppLifecycleState? _state;
     private string? _error;
     private bool _busy;
@@ -102,6 +108,9 @@
     [Inject]
     internal LtToastService Toasts { get; set; } = default!;
 
+    [Inject]
+    internal TimeProvider Time { get; set; } = default!;
+
     private AppDescriptor? Installed => Flow?.Installed is { State: not (AppLifecycleState.NotInstalled or AppLifecycleState.Uninstalled) } installed ? installed : null;
 
     private AppLifecycleState CurrentState => _state ?? Installed!.State;
@@ -110,8 +119,13 @@
 
     private bool CanDisable => Access.Current?.Control.CanDisable == true && CurrentState == AppLifecycleState.Enabled;
 
-    /// <summary>Stops listening for palette commands.</summary>
-    public void Dispose() => Intents.Posted -= OnPosted;
+    /// <summary>Stops listening for palette commands and stops following a pending change.</summary>
+    public void Dispose()
+    {
+        Intents.Posted -= OnPosted;
+        _lifetime.Cancel();
+        _lifetime.Dispose();
+    }
 
     /// <inheritdoc />
     protected override void OnInitialized() => Intents.Posted += OnPosted;
@@ -166,14 +180,41 @@
                 _ => await control.UninstallAsync(installed.Slug),
             };
 
-            _state = result.State;
-            Toasts.Show($"{name} is {result.State.ToString().ToLowerInvariant()}.", LtToastTone.Success);
+            if (result.Pending)
+            {
+                _pending = verb;
+                StateHasChanged();
+                result = await AppLifecycleFollow.FollowAsync(control, result, Target(verb), Time, _lifetime.Token);
+                _pending = null;
+            }
+
+            if (result.Pending)
+            {
+                _state = result.State;
+                _error = $"The {verb.ToString().ToLowerInvariant()} of {name} is still running after {AppLifecycleFollow.Limit.TotalMinutes:0} minutes. Reload the page later to see its outcome.";
+            }
+            else if (result.State == AppLifecycleState.Failed)
+            {
+                _state = result.State;
+                _error = $"The {verb.ToString().ToLowerInvariant()} of {name} failed. Its status records why.";
+            }
+            else
+            {
+                _state = result.State;
+                Toasts.Show($"{name} is {result.State.ToString().ToLowerInvariant()}.", LtToastTone.Success);
+            }
+
             Access.Invalidate(installed.Slug);
             Directory.Invalidate();
             await OnChanged.InvokeAsync();
         }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+            // The page was left while a change it started was still running.
+        }
         catch (Exception error)
         {
+            _pending = null;
             _error = AppsFailureMessages.Describe(error, verb.ToString().ToLowerInvariant(), name);
         }
         finally
@@ -181,4 +222,18 @@
             _busy = false;
         }
     }
+
+    private static string PendingText(AppLifecycleVerb verb, string name) => verb switch
+    {
+        AppLifecycleVerb.Enable => $"Enabling {name}. The cluster accepted the change and is still applying it; this page updates when it finishes.",
+        AppLifecycleVerb.Disable => $"Disabling {name}. The cluster accepted the change and is still applying it; this page updates when it finishes.",
+        _ => $"Uninstalling {name}. The cluster accepted the change and is still applying it; this page updates when it finishes.",
+    };
+
+    private static AppLifecycleState Target(AppLifecycleVerb verb) => verb switch
+    {
+        AppLifecycleVerb.Enable => AppLifecycleState.Enabled,
+        AppLifecycleVerb.Disable => AppLifecycleState.Disabled,
+        _ => AppLifecycleState.Uninstalled,
+    };
 }

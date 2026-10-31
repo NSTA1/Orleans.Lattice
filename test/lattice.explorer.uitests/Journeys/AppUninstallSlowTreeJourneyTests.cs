@@ -6,9 +6,11 @@ namespace Orleans.Lattice.Explorer.UiTests.Journeys;
 
 /// <summary>
 /// Issue #5482 (epic #5401): uninstalling an app whose tree is slow to retire, as a loaded
-/// cluster retires a replicated tree. The tree's delete is held past the cluster's 30 second
-/// grain response timeout, and each step keeps an ordered screenshot under
-/// <c>screenshots/journey</c> for the pull request.
+/// cluster retires a replicated tree. The tree's delete is held past the app-control
+/// facade's accept window and the cluster's 30 second grain response timeout: the page
+/// shows the change in progress rather than an error, and reports it done once the tree
+/// retires. Each step keeps an ordered screenshot under <c>screenshots/journey</c> for the
+/// pull request.
 /// </summary>
 [TestFixture]
 [Category("UI")]
@@ -39,14 +41,16 @@ public sealed class AppUninstallSlowTreeJourneyTests : UiTestBase
                 await confirm.GetByRole(AriaRole.Button, new() { Name = "Uninstall", Exact = true }).ClickAsync();
                 await hold.Entered.Task.WaitAsync(HoldBound);
 
-                // Whatever the page reports while the tree is still held.
-                await Expect(lifecycle.Locator("[role=alert], [data-lt-app-lifecycle-pending]"))
-                    .ToBeVisibleAsync(new() { Timeout = 90_000 });
+                // Past the accept window the change is shown in progress, never as a failure.
+                var pending = lifecycle.Locator("[data-lt-app-lifecycle-pending=uninstall]");
+                await Expect(pending).ToContainTextAsync("Uninstalling Task board. The cluster accepted the change", new() { Timeout = 90_000 });
+                await Expect(lifecycle.Locator("[role=alert]")).ToHaveCountAsync(0);
                 await CaptureJourneyStepAsync(page, "d5482-02-uninstall-while-the-tree-retires");
             }
 
-            await page.ReloadAsync();
-            await Expect(Shell.Heading(page)).ToHaveTextAsync("Task board");
+            // Once the tree retires, the run finishes and the page reports it.
+            await Expect(Shell.ToastMessages(page).Filter(new() { HasText = "Task board is uninstalled." })).ToBeVisibleAsync(new() { Timeout = 60_000 });
+            await Expect(lifecycle).ToHaveCountAsync(0);
             await CaptureJourneyStepAsync(page, "d5482-03-after-the-tree-retired");
         }
         finally

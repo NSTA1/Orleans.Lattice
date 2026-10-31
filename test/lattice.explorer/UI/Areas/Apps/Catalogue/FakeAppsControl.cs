@@ -39,6 +39,28 @@ internal sealed class FakeAppsControl : ILatticeAppsControl, ILatticeAppRoleBind
     /// <summary>When set, <see cref="InstallAsync"/> waits for it.</summary>
     public TaskCompletionSource? InstallGate { get; set; }
 
+    /// <summary>Lifecycle verbs the cluster accepts but has not finished: they return a pending result and change nothing.</summary>
+    public HashSet<string> Pending { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>Moves an installed app to <paramref name="state"/>, as a pending change finishing would.</summary>
+    /// <param name="slug">The app.</param>
+    /// <param name="state">The state it reaches.</param>
+    public void Settle(string slug, AppLifecycleState state)
+    {
+        if (Installed.TryGetValue(slug, out var installed))
+        {
+            Installed[slug] = installed with { State = state };
+        }
+
+        for (var i = 0; i < Listed.Count; i++)
+        {
+            if (Listed[i].Slug == slug)
+            {
+                Listed[i] = Listed[i] with { State = state };
+            }
+        }
+    }
+
     /// <summary>Every install request.</summary>
     public List<AppInstallRequest> Installs { get; } = [];
 
@@ -152,6 +174,12 @@ internal sealed class FakeAppsControl : ILatticeAppsControl, ILatticeAppRoleBind
         }
 
         var version = Installed.GetValueOrDefault(slug)?.Version ?? Consents.GetValueOrDefault(slug)?.Version ?? "1.0.0";
+        if (Pending.Contains(verb))
+        {
+            var prior = Installed.GetValueOrDefault(slug)?.State ?? AppLifecycleState.Installed;
+            return Task.FromResult(new AppLifecycleResult { Slug = slug, Version = version, State = prior, Pending = true });
+        }
+
         if (Installed.TryGetValue(slug, out var installed))
         {
             Installed[slug] = installed with { State = state };

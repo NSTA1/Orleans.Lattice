@@ -356,10 +356,12 @@ is ungated and in-process, so a facade that exposes it must gate it itself.
 
 A run is a sequence of cluster calls (rules, replication, every owned tree, the registry
 transition), each bounded by the grain response timeout and each turning its own failure
-into a recorded outcome. The run as a whole is bounded by those steps rather than by a
-single response timeout, so a slow uninstall on a loaded cluster finishes and reports
-its outcome instead of failing part-way through when the default response timeout
-(30 seconds) elapses.
+into a recorded outcome. The run as a whole is bounded by those steps (up to ten
+minutes) rather than by a single response timeout, so a slow uninstall on a loaded
+cluster finishes and records its outcome instead of being abandoned part-way through
+when the default response timeout (30 seconds) elapses. The app-control facade returns
+a pending result for a run that is still going after its accept window; see
+[Lifecycle results](../lattice.api.apps/README.md).
 
 **Enable** resolves the installed version's manifest from the app source, validates
 it, compiles its roles against the pinned ceiling and bindings, re-verifies its

@@ -26,6 +26,10 @@ internal sealed class AppsFacades(IServiceProvider services)
     private readonly Lazy<ILatticeAppRoleBindings?> _roleBindings = new(services.GetShellFacade<ILatticeAppRoleBindings>);
     private readonly Lazy<ILatticeActiveTenantProvider?> _tenant = new(services.GetService<ILatticeActiveTenantProvider>);
     private readonly Lazy<ShellCaller> _caller = new(() => ShellCaller.Of(services));
+    private readonly Lazy<TimeProvider> _time = new(() => services.GetService<TimeProvider>() ?? TimeProvider.System);
+
+    /// <summary>The clock the area paces its follow-up reads on.</summary>
+    public TimeProvider Time => _time.Value;
 
     /// <summary>
     /// The tenant the circuit's calls assert right now, or <see langword="null"/>
