@@ -7,11 +7,10 @@ namespace Orleans.Lattice.Backup;
 /// capture (<c>{treeId}-{kind}-{ticks}-{guid}</c>), so the artifact itself is not
 /// content-addressed. The digest (the lowercase hexadecimal SHA-256 of the
 /// artifact bytes) is what restore and backup-health verification re-hash the
-/// bytes against, and the capture engine derives the backup id from it: a full
-/// backup's id is this digest, and an incremental's id is the SHA-256 of its base
-/// backup id folded with it. A retried capture that produces identical bytes (off
-/// the same base) therefore registers the same backup id, while still writing its
-/// own artifact under a new artifact id. The per-artifact <see cref="Scope"/>
+/// bytes against. The capture engine folds it into the backup id together with
+/// the artifact id and, for an increment, the base backup id
+/// (<see cref="BackupIdentity"/>), so two captures of identical bytes are two
+/// backups, each with its own artifact (issue #5418). The per-artifact <see cref="Scope"/>
 /// lets the descriptor granularity follow the backup definition rather than a
 /// fixed per-shard or per-page shape.
 /// </summary>

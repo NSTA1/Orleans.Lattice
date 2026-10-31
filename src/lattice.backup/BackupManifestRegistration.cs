@@ -4,8 +4,9 @@ namespace Orleans.Lattice.Backup;
 /// Reconciles a manifest that is being registered against the manifest already
 /// stored under the same backup id.
 /// <para>
-/// A backup id is a content address, so re-capturing identical bytes yields the
-/// same id: it is the <i>same</i> immutable backup, not a new one. Its capture
+/// A backup id names one capture (<see cref="BackupIdentity"/>), so an id registered
+/// again - by a catalog rebuild, or the set capture's membership stamp - is the
+/// <i>same</i> immutable backup, not a new one. Its capture
 /// time (<see cref="BackupManifest.CreatedAtUtc"/>) is therefore treated as
 /// immutable and carried forward from the first registration. Because a standalone
 /// backup's catalog-index key orders by that timestamp, holding it stable makes a

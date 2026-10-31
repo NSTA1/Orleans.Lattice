@@ -279,9 +279,11 @@ public sealed class LatticeBackupCaptureIntegrationTests
         var result = await _fixture.Capture.CaptureAsync(
             new LatticeBackupCaptureRequest("addressed", BackupScopeSelector.WholeTree(Tree)));
 
-        // The backup id is the lowercase-hex SHA-256 of the streamed payload.
+        // The backup id is a lowercase-hex SHA-256 unique to the capture (issue
+        // #5418); the payload's own digest is the content descriptor's hash.
         Assert.That(result.BackupId, Has.Length.EqualTo(64));
         Assert.That(result.BackupId, Does.Match("^[0-9a-f]{64}$"));
+        Assert.That(result.Manifest.ContentDescriptors.Single().ContentHash, Does.Match("^[0-9a-f]{64}$"));
     }
 
     // ---- Fail-fast size gate --------------------------------------------

@@ -70,6 +70,7 @@ another silo's. The model found #5357 and checks its fix; see
 | | `RestoreConverges` | Liveness | A restore followed by resumed replication converges. |
 | `BackupRetention` | `RetainedRestorable` | Invariant | Every backup the policy keeps, with its whole base chain, is restorable. |
 | | `ListedRestorable` | Invariant | Every backup the catalog lists, retained or not, is restorable. |
+| | `ListedInSink` | Invariant | Every backup the catalog lists has its manifest in the sink. |
 | | `SinkChainIntact` | Invariant | A published increment still in the sink has a restorable base. |
 | | `InFlightBaseSurvives` | Action | An increment is published only while its base is restorable. |
 | | `KeepPolicyHonoured` | Action | Nothing the policy keeps is pruned. |
@@ -154,7 +155,20 @@ refinement note's rows:
   under the guard; `ListedRestorableListingBeforeGuard` reproduces production
   before it, and its code analogue turns the fix's regression test red.
 
-All seven fixes have landed, so the reproducing mutations now stand as
+- **#5418** (`BackupRetention`, fixed): a full backup's id was the hash of its
+  payload alone, so a full capture of an unchanged tree republished an existing
+  backup's id. A pass that had listed and doomed that backup removed its row and
+  deleted its sink manifest, and the republishing capture then registered the
+  row again over a sink manifest that was gone; with the row removed later, the
+  capture's backup was lost outright and its artifact leaked. Found by the
+  module's independent review (#5352). The fix makes every backup id unique to
+  its capture: `BackupIdentity` folds the capture's own artifact id into it. The
+  module checks the fixed design, in which no capture republishes an id;
+  `ListedInSinkRepublishedId` reproduces production before it by adding that
+  republish to `Start`, and its code analogue turns the fix's regression test
+  red.
+
+All eight fixes have landed, so the reproducing mutations now stand as
 regression checks: each must keep firing, and each has a code analogue that turns
 the fix's regression tests red.
 ## Saga abstraction
@@ -201,4 +215,4 @@ notes and TLC's own state counts.
 | `BackupProvenance` | 5 | 0 | 4 | 5 | 8 | 2,199 |
 | `BackupRestore` | 5 | 1 | 16 | 20 | 20 | 22,700 |
 | `BackupCutover` | 5 | 2 | 10 | 12 | 16 | 39 |
-| `BackupRetention` | 4 | 3 | 16 | 22 | 21 | 209,846 |
+| `BackupRetention` | 5 | 3 | 16 | 23 | 22 | 209,846 |

@@ -152,10 +152,12 @@ Tick ==
 (***************************************************************************)
 (* A capture (environment start). Any free slot starts a full or an        *)
 (* incremental capture at any time; the scheduler's own captures, the      *)
-(* backup API's and another silo's are all such slots. An increment names  *)
-(* any base whose sink manifest it can read - the scheduler names the      *)
-(* newest catalog row, the API whatever its caller supplies - and the read *)
-(* is its only check of the base before it drains.                         *)
+(* backup API's and another silo's are all such slots. Every capture gets  *)
+(* a fresh id (BackupIdentity folds the capture's own artifact id into     *)
+(* it), so no capture ever republishes an existing backup's id (#5418).    *)
+(* An increment names any base whose sink manifest it can read - the       *)
+(* scheduler names the newest catalog row, the API whatever its caller     *)
+(* supplies - and the read is its only check of the base before it drains. *)
 (***************************************************************************)
 Start(c, k, b) ==
     /\ cap[c].ph = "idle"
@@ -415,6 +417,14 @@ InFlightBaseSurvives ==
     [][\A i \in Ids :
          (i \notin cat /\ i \in cat' /\ meta[i].kind = "incr")
             => (Restorable(meta[i].base))']_vars
+
+\* Every listed backup's manifest is in the sink: a catalog scrub never finds
+\* a listed backup orphaned, and a cold restore, which reads the sink alone,
+\* resolves every backup the catalog lists. A pass removes a row before it
+\* deletes the sink manifest, and a capture writes its sink manifest before it
+\* registers the row; a capture that republished an id a pass had doomed
+\* would register a row whose sink manifest the pass then deleted (#5418).
+ListedInSink == cat \subseteq snk
 
 \* A published increment still in the sink has a restorable base: a pass
 \* deletes an increment's sink manifest before its base's (tip first), so a

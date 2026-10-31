@@ -3,8 +3,9 @@ namespace Orleans.Lattice.Backup.Tests;
 /// <summary>
 /// A test <see cref="ILatticeBackupSink"/> that forwards to the real in-cluster
 /// sink and runs an optional hook immediately before and after each manifest
-/// write, so a test can place a retention pass at an exact point of an
-/// in-flight capture.
+/// write, and before each sink manifest listing, so a test can place a
+/// retention pass at an exact point of an in-flight capture, or a capture at
+/// the point of a retention pass's sink scan.
 /// </summary>
 internal sealed class InterceptingBackupSink(InClusterLatticeBackupSink inner) : ILatticeBackupSink
 {
@@ -14,11 +15,15 @@ internal sealed class InterceptingBackupSink(InClusterLatticeBackupSink inner) :
     /// <summary>Runs after a manifest is written; <see langword="null"/> for none.</summary>
     public static Func<BackupManifest, Task>? AfterManifestWrite { get; set; }
 
-    /// <summary>Clears both hooks.</summary>
+    /// <summary>Runs before the sink's manifests are listed; <see langword="null"/> for none.</summary>
+    public static Func<Task>? BeforeManifestList { get; set; }
+
+    /// <summary>Clears every hook.</summary>
     public static void Reset()
     {
         BeforeManifestWrite = null;
         AfterManifestWrite = null;
+        BeforeManifestList = null;
     }
 
     /// <inheritdoc />
@@ -62,8 +67,19 @@ internal sealed class InterceptingBackupSink(InClusterLatticeBackupSink inner) :
         inner.ReadManifestAsync(backupId, cancellationToken);
 
     /// <inheritdoc />
-    public IAsyncEnumerable<BackupManifest> ListManifestsAsync(CancellationToken cancellationToken = default) =>
-        inner.ListManifestsAsync(cancellationToken);
+    public async IAsyncEnumerable<BackupManifest> ListManifestsAsync(
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        if (BeforeManifestList is { } before)
+        {
+            await before();
+        }
+
+        await foreach (var manifest in inner.ListManifestsAsync(cancellationToken))
+        {
+            yield return manifest;
+        }
+    }
 
     /// <inheritdoc />
     public Task<bool> ManifestExistsAsync(string backupId, CancellationToken cancellationToken = default) =>

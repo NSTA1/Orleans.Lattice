@@ -14,14 +14,17 @@ the backup API's, and another silo's. A pass lists the catalog, computes the kee
 set and its base closure, and prunes the rest one storage call at a time; an
 increment reads its base, drains, writes its artifact and sink manifest, and
 publishes its catalog row. Any capture and any pass may crash at any step, and the
-clock advances. Each backup id is one capture's manifest with its own artifact. A
+clock advances. Each backup id is one capture's manifest with its own artifact:
+production derives a backup's id from its capture's own artifact id, so no
+capture republishes an existing id (#5418). A
 backup is restorable while its manifest resolves (catalog row first, then the sink
 manifest, as the restore engine resolves it), its artifact is in the sink, and its
 whole base chain is restorable. The model checks the fix of the defect it found
 (#5357): the two-sided fence between a pass and an increment, the transitive keep
 of what an increment outside the pass builds on, the tip-first delete order, and
 the activation-local guard that runs one pass at a time, with the pass's
-listing read under that guard (#5412).
+listing read under that guard (#5412), and that every listed backup's manifest
+stays in the sink because ids are unique per capture (#5418).
 
 ## The model is the fix of #5357
 
@@ -69,7 +72,7 @@ increment's sink manifest, or the increment finds its base's row gone.
 |---------------|---------------|------------------|
 | `now` | The wall clock | The wall clock (UtcNow), read by `BackupSchedulerGrain.PruneCoreAsync` for the keep set and by `LatticeBackupCaptureService.CaptureIncrementalAsync` for `BackupManifest.CreatedAtUtc`. |
 | `pol` | The scope's retention policy | `LatticeBackupScheduleOptions.RetentionKeepLast` and `LatticeBackupScheduleOptions.RetentionMaxAge`, with `LatticeBackupScheduleOptions.RetentionEnabled` set. |
-| `next`, `meta` | Each capture's manifest: kind, base and creation time | `BackupManifest.Kind`, `BackupManifest.BaseBackupId`, `BackupManifest.CreatedAtUtc`. |
+| `next`, `meta` | Each capture's manifest, under a fresh id: kind, base and creation time | `BackupIdentity.Compute` (the id, unique per capture), `BackupManifest.Kind`, `BackupManifest.BaseBackupId`, `BackupManifest.CreatedAtUtc`. |
 | `arts` | Artifacts in the sink | `ILatticeBackupSink.WriteArtifactAsync`, `ILatticeBackupSink.DeleteArtifactAsync`; one per capture (`BackupContentDescriptor.ArtifactId`). |
 | `snk` | Manifests in the sink | `ILatticeBackupSink.WriteManifestAsync`, `ILatticeBackupSink.DeleteManifestAsync`, `ILatticeBackupSink.ListManifestsAsync`. |
 | `cat` | Catalog rows | `ILatticeBackupCatalogStore.RegisterAsync`, `ILatticeBackupCatalogStore.RemoveAsync`, `ILatticeBackupCatalogStore.GetAsync`, `ILatticeBackupCatalogStore.ListAsync`. |
@@ -83,7 +86,7 @@ increment's sink manifest, or the increment finds its base's row gone.
 | Spec action | Protocol step | Code counterpart | Detector |
 |-------------|---------------|------------------|----------|
 | `Tick` | The clock advances | The wall clock read by `BackupSchedulerGrain.PruneCoreAsync`. **Environment argument:** the clock advances at any time by any amount the bound allows. The model's clock never steps back; production's wall clock can, which is the one premise stronger than production (see the gaps). | Yes: `BackupRetentionPlannerTests.Max_age_keeps_a_backup_created_exactly_at_the_cutoff` and `BackupSchedulerGrainUnitTests.RunScheduledCycleAsync_retention_max_age_keeps_recent_manifests`. |
-| `Start(c,k,b)` | A capture starts; an increment names a base whose sink manifest it can read | `BackupSchedulerGrain.TriggerIncrementalAsync` (base = the newest catalog row, `BackupSchedulerGrain.FindLatestForScopeAsync`), `BackupOperationService.StartIncrementalCaptureAsync` (base supplied by the caller), and the base read in `LatticeBackupCaptureService.CaptureIncrementalAsync`. **Environment argument:** any free slot starts any kind of capture at any time, and an increment may name any base with a sink manifest - a superset of the scheduler's choice and exactly the API's. | Yes: `LatticeBackupIncrementalCaptureTests.CaptureIncrementalAsync_throws_when_the_base_backup_is_missing` and `BackupRetentionConcurrencyTests.A_pass_after_the_increment_wrote_its_manifest_keeps_the_base_the_increment_builds_on`. |
+| `Start(c,k,b)` | A capture starts under a fresh id; an increment names a base whose sink manifest it can read | The id from `BackupIdentity.Compute` in `LatticeBackupCaptureService.CaptureIncrementalAsync` and the full capture; `BackupSchedulerGrain.TriggerIncrementalAsync` (base = the newest catalog row, `BackupSchedulerGrain.FindLatestForScopeAsync`), `BackupOperationService.StartIncrementalCaptureAsync` (base supplied by the caller), and the base read in `LatticeBackupCaptureService.CaptureIncrementalAsync`. **Environment argument:** any free slot starts any kind of capture at any time, and an increment may name any base with a sink manifest - a superset of the scheduler's choice and exactly the API's. | Yes: `BackupIdentityTests.Two_captures_of_identical_content_get_distinct_ids`, `LatticeBackupIncrementalCaptureTests.CaptureIncrementalAsync_throws_when_the_base_backup_is_missing` and `BackupRetentionConcurrencyTests.A_pass_after_the_increment_wrote_its_manifest_keeps_the_base_the_increment_builds_on`. |
 | `WriteArt(c)` | The capture streams its artifact | `ILatticeBackupSink.WriteArtifactAsync` in `LatticeBackupCaptureService.CaptureIncrementalAsync`. | Yes: `LatticeBackupIncrementalCaptureTests.CaptureIncrementalAsync_captures_only_the_delta_committed_after_the_base` and `BackupRetentionConcurrencyTests.A_pass_after_the_increment_wrote_its_manifest_keeps_the_base_the_increment_builds_on`, which probes every listed chain's artifacts. |
 | `WriteMan(c)` | The capture writes its sink manifest, before its check | `ILatticeBackupSink.WriteManifestAsync` in `LatticeBackupCaptureService.CaptureIncrementalAsync`. | Yes: `BackupRetentionConcurrencyTests.A_pass_after_the_increment_wrote_its_manifest_keeps_the_base_the_increment_builds_on`, whose pass finds the written manifest. |
 | `Check(c)` | The increment re-reads its base's catalog row | `ILatticeBackupCatalogStore.GetAsync` and `BackupRetentionPlanner.MayPublishIncrement` in `LatticeBackupCaptureService.CaptureIncrementalAsync`. | Yes: `BackupRetentionConcurrencyTests.A_pass_before_the_increment_wrote_its_manifest_makes_the_increment_fall_back_to_a_full_backup` (red without the re-check) and `BackupRetentionPlannerTests.An_increment_publishes_only_while_its_base_row_is_present`. |
@@ -105,6 +108,7 @@ increment's sink manifest, or the increment finds its base's row gone.
 |---------------|----------------------------------|----------|
 | `RetainedRestorable` | Every backup the retention policy keeps from the catalog, with its whole base chain, is restorable. Production violated it before #5357 was fixed. | Yes: `BackupRetentionConcurrencyTests.A_pass_after_the_increment_wrote_its_manifest_keeps_the_base_the_increment_builds_on` (red without the scan), `BackupRetentionCoyoteTests.Production_retention_never_leaves_a_listed_backup_unrestorable`, `BackupRetentionCoyoteTests.Without_the_dependent_scan_a_pass_deletes_a_base_an_increment_published_over` and `BackupRetentionTests.PruneAsync_keep_last_one_preserves_the_base_of_a_retained_increment`. |
 | `ListedRestorable` | Every backup the catalog lists is restorable, retained or not, so no pass leaves - or restores - a listed row whose manifest, artifact or base chain is gone. Production violated it before #5412 was fixed. | Yes: `BackupSchedulerGrainUnitTests.A_retention_pass_plans_from_a_listing_taken_under_the_one_pass_guard` (red with the listing read before the guard) and `BackupRetentionCoyoteTests.Production_retention_never_leaves_a_listed_backup_unrestorable`, which asserts every catalog row after every step. |
+| `ListedInSink` | Every listed backup's manifest is in the sink, so a catalog scrub never finds a listed backup orphaned and a cold restore resolves every listed backup. Production violated it before #5418 was fixed: a full capture of an unchanged tree republished a doomed backup's id. | Yes: `BackupRetentionConcurrencyTests.A_full_capture_of_an_unchanged_tree_during_a_pass_is_not_deleted_by_it` (red with content-addressed ids), `CapturingClusterStampTests.CaptureAsync_identical_content_publishes_a_distinct_backup_per_capture` and `BackupIdentityTests.Two_captures_of_identical_content_get_distinct_ids`. |
 | `SinkChainIntact` | A published increment still in the sink keeps a restorable base, so an interrupted pass never leaves one a catalog rebuild would list unrestorable. | Yes: `BackupSchedulerGrainUnitTests.PruneAsync_deletes_a_doomed_chain_tip_first` (red when the grain deletes in listing order), `BackupRetentionPlannerTests.Deletion_runs_tip_first` and `BackupRetentionTests.PruneAsync_keep_last_two_prunes_the_oldest_chain`. |
 | `InFlightBaseSurvives` | An increment is published only while its base is restorable: a pass never prunes the base an in-flight increment chose before it completes, or the increment does not publish. Production violated it before #5357 was fixed. | Yes: `BackupRetentionConcurrencyTests.A_pass_before_the_increment_wrote_its_manifest_makes_the_increment_fall_back_to_a_full_backup` (red without the re-check) and `BackupRetentionCoyoteTests.Without_the_base_recheck_an_increment_is_published_over_a_pruned_base`. |
 | `KeepPolicyHonoured` | A pass deletes a published backup's artifact only when the policy does not keep it: the newest keep-last by creation time then id, everything created at or after the max-age cutoff, everything when neither is set, and the base closure. | Yes: `BackupRetentionPlannerTests.Keep_last_keeps_the_newest_by_creation_time_then_ordinal_id`, `BackupRetentionPlannerTests.Max_age_keeps_a_backup_created_exactly_at_the_cutoff`, `BackupRetentionPlannerTests.A_backup_is_retained_when_either_knob_keeps_it` and `BackupRetentionTests.PruneAsync_keep_last_two_prunes_the_oldest_chain`. |
@@ -118,8 +122,8 @@ increment's sink manifest, or the increment finds its base's row gone.
 
 ## Property classification (issue #2321)
 
-TypeOK, RetainedRestorable, ListedRestorable and SinkChainIntact are state
-safety;
+TypeOK, RetainedRestorable, ListedRestorable, ListedInSink and SinkChainIntact
+are state safety;
 InFlightBaseSurvives and KeepPolicyHonoured are action safety;
 ExpiredEventuallyPruned is temporal liveness. Every property is reached and
 falsifiable. The TwoPasses variant re-checks every state and action property
@@ -137,11 +141,14 @@ and the one that keeps everything (`ExpiredEventuallyPrunedOneKnobUnbounded`)
 leave that fairness intact, so the property fails on a protocol defect.
 
 Every experiment is an anchored perturbation of an existing action or helper;
-none adds an action.
+none adds an action. One, ListedInSinkRepublishedId, adds a behaviour branch to
+an existing action (Start) rather than perturbing one it already has: the fixed
+design has no republish at all, so the defect is reachable only by adding it.
 
 | Mutation | Classification |
 |----------|----------------|
 | TypeOkIdRunaway | Anchored action: Start. |
+| ListedInSinkRepublishedId | Anchored action: Start, adding a branch in which a full capture takes the id of a full backup already in the sink. Production before #5418. |
 | RetainedRestorableArtifactNotWritten | Anchored action: WriteArt. |
 | RetainedRestorableManifestNotWritten | Anchored action: WriteMan. |
 | InFlightBaseSurvivesNoBaseRecheck | Anchored action: Check. Production before #5357. |
@@ -174,7 +181,9 @@ the one-pass guard and its release after a fault are asserted call by call.
 `BackupRetentionConcurrencyTests` runs a real single-silo cluster whose sink
 runs a retention pass from inside the increment's own manifest write, just
 before it and just after it, so the pass meets the increment on each side of the
-fence. `BackupRetentionCoyoteTests` explores every interleaving of a pass, an
+fence. A further concurrency test runs a full capture of the unchanged tree from inside
+the pass's sink scan, which is where a republished id would have met the pass.
+`BackupRetentionCoyoteTests` explores every interleaving of a pass, an
 increment and a newer full capture through the production planner, with one
 guard per side of the fence.
 
@@ -190,6 +199,7 @@ failure, and restored the source.
 | No one-pass guard. | `BackupSchedulerGrainUnitTests.A_retention_pass_is_skipped_while_another_is_in_flight`. |
 | The listing read before the one-pass guard (production before #5412). | `BackupSchedulerGrainUnitTests.A_retention_pass_plans_from_a_listing_taken_under_the_one_pass_guard`. |
 | The grain deletes in listing order, bypassing the planner's tip-first order. | `BackupSchedulerGrainUnitTests.PruneAsync_deletes_a_doomed_chain_tip_first`. |
+| A full backup's id is its payload digest alone (production before #5418). | `BackupRetentionConcurrencyTests.A_full_capture_of_an_unchanged_tree_during_a_pass_is_not_deleted_by_it`. |
 
 ## Defect mutations whose fixes have landed
 
@@ -197,9 +207,10 @@ InFlightBaseSurvivesNoBaseRecheck and RetainedRestorableNoDependentScan
 reproduce production before the fix of #5357 (the capture side and the pass side
 respectively), and RetainedRestorableConcurrentPasses the concurrent-pass hazard
 the same fix closes. ListedRestorableListingBeforeGuard reproduces the fix as
-first written, whose listing preceded its guard (#5412). Both fixes land with
-this module; every reproduction stands as a regression check, and each has an
-executed production analogue above.
+first written, whose listing preceded its guard (#5412), and
+ListedInSinkRepublishedId reproduces production's content-addressed full-backup
+ids (#5418). All three fixes land with this module; every reproduction stands as
+a regression check, and each has an executed production analogue above.
 
 ## Deliberate abstraction gaps
 
@@ -209,13 +220,6 @@ executed production analogue above.
   manifest also references, is therefore defensive and is pinned by its unit test
   rather than by the model.
   Production symbols: `BackupRetentionPlanner.RetainedArtifacts`.
-- **Content-addressed ids.** Each capture in the model gets a fresh id.
-  Production derives a backup id from its content, so two full captures of an
-  unchanged tree, or an identical retry of an increment, share an id and the
-  second overwrites the first's sink manifest and catalog row. A pass that listed
-  the earlier version can then delete the newer one. The model does not reach
-  this; a capture that republishes an id is outside it.
-  Production symbols: `BackupManifest.Id`, `IncrementalDeltaCollector.BackupId`.
 - **The clock never steps back.** `KeepPolicyHonoured` judges a deletion by the
   clock at the time of the delete, so it depends on the clock being monotonic
   (`KeepPolicyHonouredClockStepsBack` shows it). Production reads the wall clock,

@@ -25,7 +25,7 @@ public sealed record BackupSetManifest
     /// <param name="createdAtUtc">The wall-clock time the set capture completed.</param>
     /// <param name="crossTreeConsistent">Whether the members were captured at a single cross-tree causal fence.</param>
     /// <param name="fence">The causal fence the set was captured at, or <c>null</c> when <paramref name="crossTreeConsistent"/> is <c>false</c>.</param>
-    /// <param name="memberBackupIds">The ordered content-addressed ids of the member backups (one per tree). Must not be <c>null</c> or empty.</param>
+    /// <param name="memberBackupIds">The ordered ids of the member backups (one per tree). Must not be <c>null</c> or empty.</param>
     /// <exception cref="ArgumentException"><paramref name="setId"/> is empty, <paramref name="name"/> is <c>null</c> or empty, or <paramref name="memberBackupIds"/> is empty.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="memberBackupIds"/> is <c>null</c>.</exception>
     public BackupSetManifest(
@@ -83,7 +83,7 @@ public sealed record BackupSetManifest
     [Id(4)]
     public BackupSetFence? Fence { get; init; }
 
-    /// <summary>The ordered content-addressed ids of the member backups (one per tree).</summary>
+    /// <summary>The ordered ids of the member backups (one per tree).</summary>
     [Id(5)]
     public IReadOnlyList<string> MemberBackupIds { get; init; }
 }

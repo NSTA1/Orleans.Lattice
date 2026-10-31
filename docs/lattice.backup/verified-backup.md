@@ -101,6 +101,14 @@ not to hold in production:
   holding backups that pass had already pruned, and restore the catalog row of
   one whose data was gone. A pass now reads its listing only once it holds the
   guard. Found by the specification's independent review.
+- **A capture of an unchanged tree could be deleted by a retention pass
+  (#5418, fixed).** A full backup's id was the hash of its bytes alone, so a
+  capture of a tree that had not changed republished an older backup's id. A
+  retention pass that had already decided to prune the older backup then deleted
+  what the new capture had just written, so the catalog could list a backup the
+  storage no longer held, or lose the new backup outright. Every capture now gets
+  its own backup id, derived from its own artifact, so no capture ever reuses
+  another backup's id. Found by the specification's independent review.
 
 ## Which parts run in production code
 
@@ -142,8 +150,7 @@ Coverage of one half must not be read as coverage of the other. Not covered:
 - an operator's explicit backup delete, which removes the named backup whatever
   builds on it and is not coordinated with a retention pass running beside it,
   and catalog rebuild and scrub;
-- two captures that publish the same content-addressed backup id, and retention
-  over a sink shared between clusters.
+- retention over a sink shared between clusters.
 
 Each refinement note under [`spec/backup/`](../../spec/backup/README.md) lists in
 full what lies outside its scope, and any gap open against production.

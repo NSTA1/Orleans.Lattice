@@ -1,9 +1,8 @@
 namespace Orleans.Lattice.Backup;
 
 /// <summary>
-/// A self-describing description of one backup. A manifest is content-addressed
-/// by its <see cref="Id"/> so a retried capture that produces the same backup does
-/// not create a duplicate, and it carries everything a restore needs to be
+/// A self-describing description of one backup. Its <see cref="Id"/> is unique to
+/// the capture that produced it (<see cref="BackupIdentity"/>), and it carries everything a restore needs to be
 /// integrity-checked and applied faithfully without consulting the source cluster:
 /// the scope captured, the point-in-time consistency cut, the shard topology and
 /// structural digest, each key's declared shape / merge mode, per-origin
@@ -18,7 +17,7 @@ public sealed record BackupManifest
 {
     /// <summary>Initializes a new <see cref="BackupManifest"/>.</summary>
     /// <param name="id">
-    /// The content-addressed backup id. Must not be <c>null</c> or empty and must
+    /// The backup id, unique to its capture. Must not be <c>null</c> or empty and must
     /// not contain the reserved unit-separator character (<c>U+001F</c>) that the
     /// in-cluster sink and catalog use as a key separator.
     /// </param>
@@ -110,7 +109,7 @@ public sealed record BackupManifest
         CapturingClusterId = capturingClusterId;
     }
 
-    /// <summary>The content-addressed backup id.</summary>
+    /// <summary>The backup id, unique to the capture that produced it.</summary>
     [Id(0)]
     public string Id { get; init; }
 

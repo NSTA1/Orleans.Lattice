@@ -62,7 +62,7 @@ All five scope-typed methods throw `ArgumentNullException` when `scope` is null.
 
 The durable, introspectable index of manifests, persisted into the reserved `sys-backup-catalog` tree keyed by backup id.
 
-- `Task RegisterAsync(BackupManifest manifest, CancellationToken cancellationToken = default)` - registers or replaces a manifest, keyed by `manifest.Id`. Re-registering an id that is already catalogued carries the existing row's `CreatedAtUtc` forward (a backup id is a content address, so the capture time is immutable); every other field, set membership included, takes the incoming manifest's value. Idempotent. Throws `ArgumentNullException` when `manifest` is null.
+- `Task RegisterAsync(BackupManifest manifest, CancellationToken cancellationToken = default)` - registers or replaces a manifest, keyed by `manifest.Id`. Re-registering an id that is already catalogued carries the existing row's `CreatedAtUtc` forward (a backup's capture time is immutable; a catalog rebuild and a set's membership stamp re-register an id); every other field, set membership included, takes the incoming manifest's value. Idempotent. Throws `ArgumentNullException` when `manifest` is null.
 - `Task<BackupManifest?> GetAsync(string backupId, CancellationToken cancellationToken = default)` - reads a manifest, or `null`. Throws `ArgumentException` when `backupId` is null or empty.
 - `Task<bool> RemoveAsync(string backupId, CancellationToken cancellationToken = default)` - removes a manifest; returns `true` when one was removed. Throws `ArgumentException` when `backupId` is null or empty.
 - `IAsyncEnumerable<BackupManifest> ListAsync(CancellationToken cancellationToken = default)` - enumerates every catalogued manifest in backup-id order.
@@ -198,7 +198,7 @@ The saga-unaware read seam that expands a captured backup-set id into the per-tr
 
 One resolved member of a captured backup set: the member backup id and the tree it restores. Returned by `ILatticeBackupSetResolver`. An in-process value only (no serializer surface).
 
-- `string BackupId` - the content-addressed id of the member backup.
+- `string BackupId` - the id of the member backup.
 - `string TreeId` - the tree the member backup restores.
 
 ## Tenancy seam
