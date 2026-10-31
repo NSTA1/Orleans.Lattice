@@ -23,10 +23,12 @@ id. Against that, the
 starvation drive's retirement and one orphan sweeper (two in the `TwoSweepers`
 variant) each take a token per key, read the pins, read the leaf's durable row
 once, and decide each found pin through the consumer-id gate and the removal fence,
-as separate steps; the deleted-tree hold retires a discarded tree's pins; and the
-GC trims to WalDurability's floor. Routing changes, unreadable reads and abandoned
+as separate steps; the deleted-tree hold retires a discarded tree's pins; a completed
+purge's tree-level tail trims the log, clears the pin store and frees the id, and is
+re-driven until its record lands; and the GC trims to WalDurability's floor. Routing changes, unreadable reads and abandoned
 runs are environment faults, zero in the base and one in the `OneFault` variant.
-The design checked is the fenced one (issue #5358); production's unfenced removal is
+The design checked is the fenced one (issue #5358), with a purge tail that acts only
+on its own registry lineage (issue #5417); production's earlier behaviour is
 reproduced by mutations.
 
 ## Variable mapping
@@ -47,6 +49,7 @@ reproduced by mutations.
 | `pc`, `seen`, `found`, `verdict` | One retirement run | The sweep's `located` map and leaf reads in `LatticeWalGcScheduler.SweepOrphanedMaterialiserPinsCoreAsync`, and the drive's in `LatticeWalGcScheduler.RetireConsumerFencedAsync`. |
 | `touched` | Tokens a later merge invalidated | `WalMaterialiserPinGrain.RecordMerge` stamping the consumer's merge after the token from `WalMaterialiserPinGrain.GetRetirementTokenAsync`. |
 | `faults` | Environment budget | Modelling device only. |
+| `tailOwed`, `tailLin` | A completed purge's owed tail and the registry lineage it recorded | `TreeDeletionState.RegistryUnregisterPending` and `TreeDeletionState.PurgedRegistryLineage` (with `TreeDeletionState.PurgedRegistryLineageRecorded`), written with the purge's completion by `TreeDeletionGrain.ReadPurgedRegistryLineageAsync`. A registry entry's `TreeRegistryEntry.Lineage` is modelled by `inc`: every new registration stamps a fresh one. |
 
 ## Action mapping
 
@@ -67,6 +70,8 @@ reproduced by mutations.
 | `Recreate` | A cleared grain id is populated again | `BPlusLeafGrain.RecoverBindingAsync` admits a rowless leaf only by its purge marker (`BPlusLeafGrain.AdmitPurgeClearedAsync`); `BPlusLeafGrain.AdmitCreateIntentAsync` admits one under a create intent - a reused tree id's deterministic root leaf, a bulk load re-using a leaf id - when its record is purge-marked or absent (a fold deleted it) and no snapshot survives; each then binds the tree id through `BPlusLeafGrain.SetTreeIdAsync` before seeding. The dying activation cannot do it: its clear latches it against any later row write and deactivates it. **Over-approximation:** enabled from every husk whose own retirement has ended, no stronger than production's two admissions. Nothing waits for a retirement in flight. | Yes: `BPlusLeafGrainTests.Create_intent_re_creates_a_purge_cleared_leaf` and `PurgeRecoveryIntegrationTests.A_leaf_whose_purge_clear_was_interrupted_part_way_is_re_created_by_recovery`. |
 | `Discard` | An undone resize's unrecoverable copy is discarded | `LatticeWalGcScheduler.TryDiscardAbandonedCopyAsync` asks `ITreeDeletionGrain.DiscardIfAbandonedDerivedCopyAsync`; `TreeDeletionGrain.RecoverPhysicalAsync` refuses a discarded copy. | Yes: `LatticeWalGcSchedulerCadenceTests.ExecuteAsync_discards_a_deleted_tree_that_is_an_abandoned_resize_copy` and `UndoneResizeWalReleaseIntegrationTests.A_destination_retired_by_an_earlier_build_is_discarded_once_no_resize_names_it`. |
 | `DiscardRetire` | The deleted-tree hold retires every pin of a discarded tree | `LatticeWalGcScheduler.HoldDeletedTreeAsync` calls `ILeafCursorReporter.UnregisterTreeAsync` for `PhysicalTreeRetention.Discarded` only. | Yes: `LatticeWalGcSchedulerCadenceTests.ExecuteAsync_retires_the_pins_of_a_discarded_tree_without_touching_its_leaves` and `TreeDeletionGrainTests.Discard_retires_every_leaf_materialiser_pin_on_the_tree`. |
+| `PurgeTailRemove` | A completed purge's tail: trim the log, clear the pin store, remove the registry entry - only while the entry carries the recorded lineage | `TreeDeletionGrain.FinishCompletedPurgeAsync`: `TreeDeletionGrain.TrimPurgedWalAsync`, `TreeDeletionGrain.DeregisterLeafCursorsAsync` (pins before the registry entry, #5416), `TreeDeletionGrain.SettleRegistryEntryAsync`, gated by `TreeDeletionGrain.ClassifyPurgedRegistryEntryAsync` (#5417). **Over-approximation:** the model may re-drive it with no fault between; production re-drives only after the record's write, or the loop stop before it, threw, or the removal's reply was lost. | Yes: `TreeDeletionGrainTests.A_redriven_purge_leaves_a_reused_tree_id_untouched`, `TreeDeletionGrainTests.A_redriven_purge_whose_removal_never_landed_still_removes_the_purged_entry` and `TreeDeletionGrainTests.PurgeNow_clears_the_pin_store_before_the_registry_frees_the_tree_id`. |
+| `PurgeTailSettle` | A re-drive that finds the id registered again under another lineage only records the removal | `TreeDeletionGrain.RecordLandedRegistryRemovalAsync`, with the lineage compared against the one recorded at completion, never re-read. | Yes: `TreeDeletionGrainTests.A_reused_tree_id_is_recognised_once_a_redriven_purge_has_settled`, `TreeDeletionGrainTests.A_redriven_purge_of_an_entry_without_a_lineage_recognises_a_reuse` and `TreeDeletionGrainTests.A_redriven_purge_whose_removal_landed_only_records_it`. |
 | `GcTrim` | Trim to the durable floor | WalDurability's `GcTrim`: `LatticeWalGc.ApplyDurableMaterialiserFloorAsync` and `LatticeWalGc.TrimShardAsync`. **Over-approximation:** the model ignores the in-memory cursors production also consults, whose registry is per silo, so a GC pass on a silo that does not hold a leaf's cursor trims the shared WAL without it. | Yes: `WalGcTrimFloorCoyoteTests.Min_cursor_floor_never_trims_past_the_slowest_consumer` and `WalPinRetirementCoyoteTests.Fenced_retirement_never_retires_the_pin_of_a_recreated_leaf`. |
 | `Start(p)` | A sweep begins, or the drive's NotDriven verdict starts a retirement | `LatticeWalGcScheduler.SweepOrphanedMaterialiserPinsAsync` (local, rate-limited) or `WalOrphanPinSweepGrain.ProcessNextPhaseAsync` through `IWalOrphanPinSweepRunner.RunAsync`; `LatticeWalGcScheduler.RetireOrphanedPinAsync` after `LeafStarvationDriveOutcome.NotDriven`. | Yes: `LatticeWalGcSchedulerCadenceTests.A_silo_with_a_coordinator_does_not_sweep_locally` and `LatticeWalGcSchedulerCadenceTests.ExecuteAsync_retires_the_pin_of_a_leaf_that_reports_no_tree_id`. |
 | `Enum(p, k)` | Take a key's token, then read its pins | `WalMaterialiserPinGrain.GetRetirementTokenAsync` then `WalMaterialiserPinGrain.GetPinsAsync` per key of `WalMaterialiserPinRouting.EnumerateReadKeys`, in both retirement paths. | Yes: `LatticeWalGcSchedulerCadenceTests.The_sweep_retires_a_pin_from_every_key_it_was_found_under` and `LatticeWalGcSchedulerCadenceTests.The_sweep_does_not_remove_a_pin_that_a_leaf_recreated_after_its_read_seeded_into`. |
@@ -147,6 +152,8 @@ Every experiment is an anchored action perturbation; none splices in an action:
 | `NoTrimPastLiveNeedDiscardKeepsWrites` | Anchored action: `Discard`. |
 | `LivePublisherPinnedHoldRetiresRecoverableTree` | Anchored action: `DiscardRetire`; #3930's Deleted/Discarded distinction. |
 | `NoTrimPastLiveNeedTrimIgnoresBlockPin` | Anchored action: `GcTrim`. |
+| `NoTrimPastLiveNeedPurgeRedriveIgnoresLineage` | Anchored action: `PurgeTailRemove`. Production before #5417. |
+| `NoTrimPastLiveNeedRedriveReReadsLineage` | Anchored action: `PurgeTailSettle`. |
 
 ## Detectors
 
@@ -178,6 +185,15 @@ birth seeded under the same consumer id, and the trim could pass its
 un-checkpointed writes. The fix in this change fences the removal through the pin
 grain's per-activation merge stamps and moves the drive onto the sweep's fenced
 sequence; the mutations are ordinary regression checks.
+
+`NoTrimPastLiveNeedPurgeRedriveIgnoresLineage` reproduces issue #5417, found by the
+independent review of this model: a completed purge's tail - WAL trim, pin-store
+clear, registry removal - was re-driven whenever its registry removal was still
+recorded as owed, and that record is cleared only by a write after the removal. A
+removal that landed with its record unwritten was re-driven against an id a write or
+a create had registered again, trimming the new tree's acknowledged writes and
+clearing its pins. The purge now records the lineage of the entry it removes with
+its completion, and a re-drive acts only while the entry still carries it.
 
 ## Deliberate abstraction gaps
 
@@ -213,13 +229,13 @@ sequence; the mutations are ordinary regression checks.
   no block pin until it publishes; that window is the leaf lifecycle's, not the
   retirement's, and the model's seed always lands.
   Production symbols: `LeafCursorReporter.SeedDurableMaterialiserBlockManyAsync`.
-- **The tree-level purge clear.** A completed purge clears the whole pin store
-  through `ILeafCursorReporter.UnregisterTreeAsync` before it removes the tree's
-  registry entry - the step that frees the id for reuse - so no leaf of a reused
-  tree exists yet to lose its pins (issue #5416; before that fix the clear ran
-  after the removal). The model's purge is per leaf; the ordering is pinned by
+- **The tree-level purge tail, by step.** The model's purge tail is one step that
+  trims, clears the pin store and frees the id, so it cannot express the order of
+  those three: that the pin store is cleared before the registry entry is removed
+  (issue #5416) is pinned by
   `TreeDeletionGrainTests.PurgeNow_clears_the_pin_store_before_the_registry_frees_the_tree_id`
-  and `TreeDeletionGrainTests.CompletePurge_clears_the_pin_store_before_the_registry_frees_the_tree_id`.
-  A re-drive of a purge whose registry removal is still recorded as owed is outside
-  this module.
-  Production symbols: `WalMaterialiserPinGrain.ClearAsync`, `ILeafCursorReporter.UnregisterTreeAsync`, `TreeDeletionGrain.FinishCompletedPurgeAsync`.
+  and `TreeDeletionGrainTests.CompletePurge_clears_the_pin_store_before_the_registry_frees_the_tree_id`,
+  not by the model. Its single leaf completes the purge's walk with its own row
+  clear, and a purge completed by a build that predates the lineage record, or
+  whose entry was already gone, is re-driven without the check.
+  Production symbols: `WalMaterialiserPinGrain.ClearAsync`, `ILeafCursorReporter.UnregisterTreeAsync`, `TreeDeletionState.PurgedRegistryLineageRecorded`.

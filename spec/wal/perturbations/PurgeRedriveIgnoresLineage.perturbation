@@ -1,0 +1,22 @@
+# Issue #5417's production shape: a re-drive of a completed purge's tail acts on
+# the tree id without checking that the registry entry is still the purged
+# tree's, so a reused id's log is trimmed, its pins cleared and its entry removed.
+MODULE: WalPinRetirement
+ROW: PurgeTailRemove
+FILE: src/lattice/BPlusTree/Grains/TreeDeletionGrain.cs
+DETECTORS: TreeDeletionGrainTests.A_redriven_purge_leaves_a_reused_tree_id_untouched
+SUMMARY: the purge tail's re-drive skips the registry lineage check
+
+--- FIND
+        var entry = await ClassifyPurgedRegistryEntryAsync();
+        if (entry != PurgedRegistryEntry.Owned)
+        {
+            await RecordLandedRegistryRemovalAsync(entry);
+            await UnregisterAllRemindersAsync();
+--- REPLACE
+        var entry = PurgedRegistryEntry.Owned;
+        if (entry != PurgedRegistryEntry.Owned)
+        {
+            await RecordLandedRegistryRemovalAsync(entry);
+            await UnregisterAllRemindersAsync();
+--- END

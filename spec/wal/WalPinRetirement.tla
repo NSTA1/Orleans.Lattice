@@ -107,6 +107,12 @@ IdVerdict(c) == IF c = "cL" THEN "LeafPublished" ELSE "AmbiguousPartition"
 (*  owed      the pin-store keys L's terminal seam has still to retire.    *)
 (*  route     the key L's pins are routed to now.                          *)
 (*                                                                         *)
+(* Tree-level purge tail: tailOwed, the completed purge still owes its     *)
+(* registry removal, and with it the tail before it (the WAL trim and the  *)
+(* pin-store clear); tailLin, the lineage of the registry entry the purge  *)
+(* recorded with its completion. A registry entry's lineage is modelled by *)
+(* the incarnation: every re-population registers a new one.               *)
+(*                                                                         *)
 (* Pin store: pinOff[k, c], the entry under key k for consumer c (NoPin,   *)
 (* the Zero block pin -1, or an offset), merged by monotone max; pinInc[k], *)
 (* a ghost: the incarnation of L that last merged into cL's entry at k.    *)
@@ -120,17 +126,18 @@ VARIABLES next, tail,
           phase, inc, seeded, cp, need, purgeMark, owed, route,
           pinOff, pinInc,
           pc, seen, found, verdict, touched,
-          faults
+          faults, tailOwed, tailLin
 
 walVars  == <<next, tail>>
 leafVars == <<phase, inc, seeded, cp, need, purgeMark, owed, route>>
 pinVars  == <<pinOff, pinInc>>
 procVars == <<pc, seen, found, verdict, touched>>
+tailVars == <<tailOwed, tailLin>>
 vars == <<next, tail,
           phase, inc, seeded, cp, need, purgeMark, owed, route,
           pinOff, pinInc,
           pc, seen, found, verdict, touched,
-          faults>>
+          faults, tailOwed, tailLin>>
 
 Phases == {"live", "deleted", "marked", "draining", "husk", "discarded"}
 
@@ -153,6 +160,8 @@ TypeOK ==
    /\ verdict \in [Procs -> {"none", "husk", "live", "unreadable"}]
    /\ touched \in [Procs -> SUBSET Keys]
    /\ faults \in 0..MaxFaults
+   /\ tailOwed \in BOOLEAN
+   /\ tailLin \in 0..MaxInc
 
 (***************************************************************************)
 (* Derived views.                                                          *)
@@ -205,6 +214,8 @@ Init ==
     /\ verdict = [p \in Procs |-> "none"]
     /\ touched = [p \in Procs |-> {}]
     /\ faults = 0
+    /\ tailOwed = FALSE
+    /\ tailLin = 0
 
 (***************************************************************************)
 (* The leaf.                                                               *)
@@ -229,6 +240,7 @@ Write ==
     /\ UNCHANGED pinVars
     /\ UNCHANGED procVars
     /\ UNCHANGED faults
+    /\ UNCHANGED tailVars
 
 Checkpoint ==
     /\ phase = "live"
@@ -240,6 +252,7 @@ Checkpoint ==
     /\ UNCHANGED pinVars
     /\ UNCHANGED procVars
     /\ UNCHANGED faults
+    /\ UNCHANGED tailVars
 
 Publish ==
     /\ phase = "live"
@@ -251,6 +264,7 @@ Publish ==
     /\ UNCHANGED leafVars
     /\ UNCHANGED <<pc, seen, found, verdict>>
     /\ UNCHANGED faults
+    /\ UNCHANGED tailVars
 
 Seed ==
     /\ phase = "live"
@@ -261,6 +275,7 @@ Seed ==
     /\ UNCHANGED <<phase, inc, cp, need, purgeMark, owed, route>>
     /\ UNCHANGED <<pc, seen, found, verdict>>
     /\ UNCHANGED faults
+    /\ UNCHANGED tailVars
 
 (***************************************************************************)
 (* RouteChange: the pin store's routing for L's consumer id changes        *)
@@ -278,6 +293,7 @@ RouteChange ==
     /\ UNCHANGED <<phase, inc, seeded, cp, need, purgeMark, owed>>
     /\ UNCHANGED pinVars
     /\ UNCHANGED procVars
+    /\ UNCHANGED tailVars
 
 (***************************************************************************)
 (* Tree and leaf lifecycle.                                                *)
@@ -300,6 +316,7 @@ SoftDelete ==
     /\ UNCHANGED pinVars
     /\ UNCHANGED procVars
     /\ UNCHANGED faults
+    /\ UNCHANGED tailVars
 
 RecoverTree ==
     /\ phase \in {"deleted", "marked"}
@@ -310,6 +327,7 @@ RecoverTree ==
     /\ UNCHANGED pinVars
     /\ UNCHANGED procVars
     /\ UNCHANGED faults
+    /\ UNCHANGED tailVars
 
 MarkPurge ==
     /\ phase = "deleted"
@@ -320,6 +338,7 @@ MarkPurge ==
     /\ UNCHANGED pinVars
     /\ UNCHANGED procVars
     /\ UNCHANGED faults
+    /\ UNCHANGED tailVars
 
 Fold ==
     /\ phase = "live"
@@ -331,14 +350,20 @@ Fold ==
     /\ UNCHANGED pinVars
     /\ UNCHANGED procVars
     /\ UNCHANGED faults
+    /\ UNCHANGED tailVars
 
 ClearRow ==
     /\ \/ /\ phase = "marked"
           /\ need' = {}
           /\ owed' = Keys
+          \* The purge's walk completes with this, its only leaf: the tail is
+          \* owed, with the lineage of the entry it will remove.
+          /\ tailOwed' = TRUE
+          /\ tailLin' = inc
        \/ /\ phase = "draining"
           /\ owed = {}
           /\ UNCHANGED <<need, owed>>
+          /\ UNCHANGED tailVars
     /\ phase' = "husk"
     \* A purge's clear keeps the record, marked; a fold's deletes it. Either
     \* admits re-creating the rowless leaf (AdmitCreateIntentAsync).
@@ -368,6 +393,7 @@ SelfRetire(k) ==
     /\ UNCHANGED pinInc
     /\ UNCHANGED procVars
     /\ UNCHANGED faults
+    /\ UNCHANGED tailVars
 
 SelfRetireFail(k) ==
     /\ k \in owed
@@ -377,6 +403,7 @@ SelfRetireFail(k) ==
     /\ UNCHANGED pinVars
     /\ UNCHANGED procVars
     /\ UNCHANGED faults
+    /\ UNCHANGED tailVars
 
 (***************************************************************************)
 (* Recreate: L's grain id is populated again after its row was cleared - a *)
@@ -408,6 +435,7 @@ Recreate ==
     /\ UNCHANGED pinVars
     /\ UNCHANGED procVars
     /\ UNCHANGED faults
+    /\ UNCHANGED tailVars
 
 (***************************************************************************)
 (* Discard: a soft-deleted tree that is an undone resize's retired copy    *)
@@ -426,6 +454,7 @@ Discard ==
     /\ UNCHANGED pinVars
     /\ UNCHANGED procVars
     /\ UNCHANGED faults
+    /\ UNCHANGED tailVars
 
 DiscardRetire ==
     /\ phase = "discarded"
@@ -434,6 +463,47 @@ DiscardRetire ==
     /\ UNCHANGED walVars
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinInc
+    /\ UNCHANGED procVars
+    /\ UNCHANGED faults
+    /\ UNCHANGED tailVars
+
+(***************************************************************************)
+(* PurgeTailRemove / PurgeTailSettle: a completed purge's tree-level tail  *)
+(* (TreeDeletionGrain.FinishCompletedPurgeAsync): it trims every WAL       *)
+(* partition through its head, clears the tree's pin store (pins before   *)
+(* the registry entry, issue #5416) and removes the registry entry, which *)
+(* frees the id, then records the removal - or the write recording it, or *)
+(* the loop stop before it, throws and the record stays owed. A re-drive  *)
+(* then runs the tail again, so PurgeTailRemove may run any number of     *)
+(* times until the record lands: an over-approximation, since production  *)
+(* re-drives only after a fault. The tail acts only while the registry    *)
+(* entry still carries the lineage the purge recorded (issue #5417): once *)
+(* the id was populated again under a new lineage, the re-drive only      *)
+(* records the removal (PurgeTailSettle). A re-drive that finds the entry *)
+(* gone and not reused also only records it; acting again there is        *)
+(* harmless, so it is folded into PurgeTailRemove.                         *)
+(***************************************************************************)
+PurgeTailRemove ==
+    /\ tailOwed
+    /\ tailLin = inc
+    /\ tail' = IF next > tail THEN next ELSE tail
+    /\ pinOff' = [kc \in Keys \X Cons |-> NoPin]
+    /\ tailOwed' \in BOOLEAN
+    /\ UNCHANGED tailLin
+    /\ UNCHANGED next
+    /\ UNCHANGED leafVars
+    /\ UNCHANGED pinInc
+    /\ UNCHANGED procVars
+    /\ UNCHANGED faults
+
+PurgeTailSettle ==
+    /\ tailOwed
+    /\ tailLin # inc
+    /\ tailOwed' = FALSE
+    /\ UNCHANGED tailLin
+    /\ UNCHANGED walVars
+    /\ UNCHANGED leafVars
+    /\ UNCHANGED pinVars
     /\ UNCHANGED procVars
     /\ UNCHANGED faults
 
@@ -455,6 +525,7 @@ GcTrim ==
     /\ UNCHANGED pinVars
     /\ UNCHANGED procVars
     /\ UNCHANGED faults
+    /\ UNCHANGED tailVars
 
 (***************************************************************************)
 (* Retirement processes.                                                   *)
@@ -494,6 +565,7 @@ Start(p) ==
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
+    /\ UNCHANGED tailVars
 
 Enum(p, k) ==
     /\ pc[p] = "enum"
@@ -509,6 +581,7 @@ Enum(p, k) ==
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
+    /\ UNCHANGED tailVars
 
 Read(p) ==
     /\ pc[p] = "read"
@@ -519,6 +592,7 @@ Read(p) ==
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
+    /\ UNCHANGED tailVars
 
 ReadFail(p) ==
     /\ pc[p] = "read"
@@ -530,6 +604,7 @@ ReadFail(p) ==
     /\ UNCHANGED walVars
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
+    /\ UNCHANGED tailVars
 
 Decide(p, c, k) ==
     /\ pc[p] = "decide"
@@ -546,6 +621,7 @@ Decide(p, c, k) ==
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinInc
     /\ UNCHANGED faults
+    /\ UNCHANGED tailVars
 
 Done(p) ==
     /\ pc[p] = "decide"
@@ -559,6 +635,7 @@ Done(p) ==
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
+    /\ UNCHANGED tailVars
 
 Abandon(p) ==
     /\ pc[p] # "idle"
@@ -572,6 +649,7 @@ Abandon(p) ==
     /\ UNCHANGED walVars
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
+    /\ UNCHANGED tailVars
 
 Next ==
     \/ Write
@@ -589,6 +667,8 @@ Next ==
     \/ Recreate
     \/ Discard
     \/ DiscardRetire
+    \/ PurgeTailRemove
+    \/ PurgeTailSettle
     \/ GcTrim
     \/ \E p \in Procs : Start(p)
     \/ \E p \in Procs, k \in Keys : Enum(p, k)
