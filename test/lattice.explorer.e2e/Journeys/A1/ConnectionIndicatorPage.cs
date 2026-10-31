@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Microsoft.Playwright;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Shell;
 using static Microsoft.Playwright.Assertions;
@@ -13,8 +12,6 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Journeys.A1;
 /// <param name="shell">The shell the indicator belongs to.</param>
 public sealed class ConnectionIndicatorPage(ShellPage shell)
 {
-    private static readonly Regex ConnectionControl = new("connection", RegexOptions.IgnoreCase);
-
     /// <summary>The shell.</summary>
     public ShellPage Shell { get; } = shell ?? throw new ArgumentNullException(nameof(shell));
 
@@ -41,21 +38,43 @@ public sealed class ConnectionIndicatorPage(ShellPage shell)
     }
 
     /// <summary>
-    /// Asserts the indicator offers no control that opens a connection dialog: no
-    /// <b>Connection settings</b> (right on a head that refuses browser configuration) and
-    /// nothing in its place that opens the read-only <b>Cluster connection</b> dialog.
+    /// Opens the read-only <b>Cluster connection</b> dialog from the indicator - the endpoint
+    /// button in the header (named <c>Connection details: ...</c>), or <b>Connection details</b>
+    /// in the compact <b>Menu</b> sheet - and returns it.
     /// </summary>
-    public async Task ExpectNoConnectionDialogAffordanceAsync()
+    public async Task<ILocator> OpenConnectionDialogAsync()
     {
         if (await Shell.IsCompactAsync())
         {
             await Shell.OpenMenuAsync();
-            await Expect(ConnectionSection.GetByRole(AriaRole.Button, new() { NameRegex = ConnectionControl })).ToHaveCountAsync(0);
-            await Shell.CloseMenuAsync();
-            return;
+            await ConnectionSection.GetByRole(AriaRole.Button, new() { Name = "Connection details", Exact = true }).ClickAsync();
+        }
+        else
+        {
+            await Shell.Banner.Locator("button[data-lt-connection-details]").ClickAsync();
         }
 
-        await Expect(Shell.Banner.GetByRole(AriaRole.Button, new() { NameRegex = ConnectionControl })).ToHaveCountAsync(0);
+        var dialog = Shell.Page.GetByRole(AriaRole.Dialog, new() { Name = "Cluster connection" });
+        await Expect(dialog).ToBeVisibleAsync();
+        return dialog;
+    }
+
+    /// <summary>Asserts the read-only dialog names <paramref name="endpointAuthority"/> and offers no way to change it, then closes it.</summary>
+    /// <param name="dialog">The open dialog.</param>
+    /// <param name="endpointAuthority">The endpoint's <c>host:port</c>.</param>
+    public async Task ExpectReadOnlyAndCloseAsync(ILocator dialog, string endpointAuthority)
+    {
+        ArgumentNullException.ThrowIfNull(dialog);
+        ArgumentException.ThrowIfNullOrWhiteSpace(endpointAuthority);
+        await Expect(dialog).ToContainTextAsync(endpointAuthority);
+        await Expect(dialog).ToContainTextAsync("cannot be changed from the browser");
+        await Expect(dialog.GetByRole(AriaRole.Textbox)).ToHaveCountAsync(0);
+        await Shell.Page.Keyboard.PressAsync("Escape");
+        await Expect(dialog).ToBeHiddenAsync();
+        if (await Shell.IsCompactAsync() && await Shell.MenuSheet.IsVisibleAsync())
+        {
+            await Shell.CloseMenuAsync();
+        }
     }
 
     private ILocator ConnectionSection => Shell.MenuSheet.GetByRole(AriaRole.Region, new() { Name = "Connection" });

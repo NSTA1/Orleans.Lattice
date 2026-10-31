@@ -1,8 +1,6 @@
-using System.Text.RegularExpressions;
 using Microsoft.Playwright;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
-using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Shell;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 using static Microsoft.Playwright.Assertions;
@@ -56,7 +54,7 @@ internal sealed partial class FirstContactRun
 
     /// <summary>
     /// A1.8: signed out, Olivia follows a link to <c>/cluster/trees</c> and signs in from it. She
-    /// should land on that address; today she lands on Home (#5481).
+    /// lands on that address (#5481, fixed by #5507).
     /// </summary>
     public Task FollowDeepLinkSignedOutAsync() => StepAsync("8", async () =>
     {
@@ -68,12 +66,10 @@ internal sealed partial class FirstContactRun
 
         await Shell.SubmitSignInAsync(Olivia.Persona.Id, Olivia.Persona.Password);
         await Shell.ExpectSignedInAsync(Olivia.Persona.Id);
-        await new KnownDefect("#5481", "Signing in from a deep link lands on Home instead of the address asked for").ReproducesAsync(async () =>
-        {
-            await ExpectHomeAsync();
-            await Expect(Page).Not.ToHaveURLAsync(new Regex(Regex.Escape(DeepLink)));
-        });
-        await CheckpointAsync("8", "signed-in", "Signed in from the deep link, Olivia lands on Home rather than /cluster/trees (#5481)");
+        await ExpectAddressAsync(DeepLink);
+        await Shell.ExpectHeadingAsync("Trees");
+        Coverage.Hit("use-case:shell/deep-link-return");
+        await CheckpointAsync("8", "signed-in", "Signed in from the deep link, Olivia lands on /cluster/trees, the address she asked for");
     });
 
     /// <summary>

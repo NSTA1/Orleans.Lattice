@@ -1,6 +1,5 @@
 using Microsoft.Playwright;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
-using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using static Microsoft.Playwright.Assertions;
 
 namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Journeys.A1;
@@ -25,10 +24,12 @@ internal sealed partial class FirstContactRun
         Coverage.Hit("use-case:shell/connection-indicator");
         await CheckpointAsync("1", "signed-out", "Olivia opens the Explorer signed out: the indicator is connected to the west gateway, and the header offers Sign in");
 
-        // The read-only Cluster connection dialog should name the same endpoint, but a head that
-        // refuses browser configuration offers no way to open it once an endpoint is configured.
-        await new KnownDefect("#5479", "The read-only Cluster connection dialog cannot be opened on a configured head").ReproducesAsync(
-            () => Indicator.ExpectNoConnectionDialogAffordanceAsync());
+        // The deployment configured the endpoint, so the indicator's endpoint opens the read-only
+        // Cluster connection dialog, which names it and offers no way to change it (#5479).
+        var connection = await Indicator.OpenConnectionDialogAsync();
+        await CheckpointAsync("1", "connection-dialog", "The Cluster connection dialog names the configured west gateway, read-only");
+        await Indicator.ExpectReadOnlyAndCloseAsync(connection, WestGateway);
+        Coverage.Hit("dialog:shell/connection-read-only");
 
         var dialog = await Shell.OpenSignInAsync();
         await Expect(dialog.GetByLabel("Username")).ToBeVisibleAsync();
