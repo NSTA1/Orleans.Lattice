@@ -513,6 +513,60 @@ gaps, states its full scope.
     imply bounded latency, and unbounded offered load need not become permanently
     Healthy. See [Verified Scheduling and Progress](verified-scheduling.md).
 
+- **Schema enforcement and versioning** ([`spec/schema/`](../../spec/schema/README.md)).
+  - **Covers:** a policy or version config set, cleared, cached and evicted
+    (the admin's silo before it returns, every other silo eventually); the
+    enforcement and versioning write stages in either registration order; the
+    version family, read-time decode and eager migration's abort; tracked
+    operations and compliance scans; strict ingest diverted to a durable
+    dead-letter record at a replication receiver; and the facade's tenant
+    scoping. Remediation and eager migration (`SchemaRemediationCutover`):
+    the reservation held from intent to a terminal report, a fresh destination
+    that inherits the source's layout, every copied value re-stamped at the
+    target, the policy installed before the alias-and-map swap (a migration
+    keeps the tree's policy), every source shard armed at its live layout,
+    crash recovery, aborts and cancels that publish nothing, and refusal of a
+    cutover whose captured source was superseded. Cross-region
+    (`SchemaCrossRegion`): each receiver judges replicated entries and atomic
+    batches by its own policy and catalog, and a refused batch entry is
+    dead-lettered durably while its siblings commit.
+  - **Does not cover:** writes during a remediation or migration build
+    (quiescence is required), an ownership-guard refusal of the swap, the
+    timing of policy propagation to other silos, and split or fold
+    publication; writes below the choke point (plain last-writer-wins
+    replication, backup restore, tree merge), which are never validated or
+    stamped; replication of any schema definition between regions; re-applying
+    a diverted entry, which stays diverted after the version is registered;
+    and the batched (`MergeManyAsync`) merges the merge-result observer does
+    not see. The tenant model covers the facade only, not the in-process
+    admins.
+
+- **Schema and view composition** ([`spec/schema-view/`](../../spec/schema-view/README.md)).
+  - **Covers:** the projection input contract on a versioned source: a
+    projection sees the envelope-stripped body at its stamped version on every
+    derivation path, and a target advance re-projects nothing; refused, retried
+    and diverted writes contribute nothing; an eager migration or remediation
+    cutover leaves no duplicate or obsolete membership and binds generation,
+    cursor and checkpoint to one physical copy; an abort touches nothing; and
+    the identity-aware head barrier.
+  - **Does not cover:** writes during a rewrite, or more than one rewrite or
+    alias move at a time; a projection that cannot read a live stamp (it stops
+    the drain); the post-cutover rebind latency a reader sees without the head
+    barrier; a source-wide atomic capture across views; accumulative history
+    views across a cutover; or arbitrary upcaster graphs, predicates, transforms
+    and projection encodings (the model fixes two versions, three body shapes,
+    one upcaster and one transform).
+
+- **Numeric view companion** ([`spec/view-numeric/`](../../spec/view-numeric/README.md),
+  module `MaterialisedViewNumeric`).
+  - **Covers:** Count/Sum aggregation maintenance with no schema component
+    installed: retracts on delete, reserved group key and filter exit,
+    overlapping atomic batches, durable per-group publication intents, crash
+    replay from the checkpoint, and rebinding under a fresh generation after a
+    projection change or a physical copy swap.
+  - **Does not cover:** schema interaction, which the composition model owns,
+    or numeric kinds other than Count and Sum.
+
 Across every area, the instances are bounded: each module checks a small number
 of copies, shards, keys and faults exhaustively, and says which. A clean run is
 a statement about the design over that instance. The integration and

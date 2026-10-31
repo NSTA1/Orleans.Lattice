@@ -66,6 +66,8 @@ Each hop uses validated declarative value-transform IR, or a stable transform id
 
 Catalog scope is the selected region and effective tenant tree, not a process-global registry or a cross-region deployment mechanism. For a replicated tree, register the same definitions in every serving region before advancing its target or shipping values at that version. A missing descriptor or migration path remains an explicit refusal; discovery cannot prove that unknown external values will be readable.
 
+The same holds for the tree's policy and version config: they are stored in the region's own reserved `sys-schema-*` trees, so the replication stream carries stamped values, never the definitions that interpret them. A receiving region therefore judges and reads every replicated value by its own definitions. A plain last-writer-wins entry stamped past the receiver's target is stored with that stamp even under `StrictIngest`, and reads of it fail with `NotSupportedException` until the receiver registers that version and advances to it; the stored stamp is never rewritten. Under `StrictIngest`, a typed-CRDT delta or an atomic-batch entry the receiver cannot decode, or whose body its own policy refuses, is [dead-lettered](dead-letter-queue.md) rather than applied. That diversion is permanent: registering the version afterwards does not re-apply it, so the two regions differ for that key until it is written again (the dead-letter queue is read-only and keeps only a bounded preview of the value). Register and advance in the receiving regions before any source region advances or ships values at a new version. The `SchemaCrossRegion` TLA+ module checks this interaction; its [refinement note](../../spec/schema/SchemaCrossRegionRefinement.md) lists what is not checked.
+
 ### Versioning options
 
 See [configuration](configuration.md) for every silo-wide option, its default, registration-only switches and the composition order.
@@ -226,6 +228,15 @@ tree is write-quiescent; the lazy read path keeps concurrent readers correct unt
 cuts over. When the tree also has an enforcement policy, each re-stamped value is
 validated against that policy during the build; the policy itself is left unchanged.
 
+The copy-and-cutover protocol beneath a migration - the alias reservation, intent
+with a fresh destination and the captured source, crash recovery from banked
+progress, the re-stamp at the target, the swap fenced on the captured source, the
+source's redirects, and the refusal of a superseded cutover - is model-checked by
+the `SchemaRemediationCutover` TLA+ module; its
+[refinement note](../../spec/schema/SchemaRemediationCutoverRefinement.md) maps
+each step to the code and lists what is not checked, including writes that land
+during the build.
+
 ## CRDT merge-input upcasting
 
 For a last-writer-wins value, read-time upcasting is enough: the whole value is
@@ -248,7 +259,16 @@ corrupts the converged state.
 follow the same rule as CRDT folds: a view projection sees the stored body at its
 stamped version, envelope stripped, never upcast, so every derivation of a view
 folds identical input. Read-time upcasting applies to client reads only; an eager
-migration is the way to bring view contributions to the target shape.
+migration is the way to bring view contributions to the target shape. A projection
+change (which changes its version and rebuilds the view) is the other way.
+[`SchemaViewComposition`](../../spec/schema-view/README.md) checks that rule against
+version and upcaster changes that move a contribution's group, numeric or filter
+membership: advancing the target leaves every contribution at its stamped shape;
+an eager migration or transform remediation re-projects each rewritten value once
+at the stamp the rewrite gave it; an aborted rewrite changes no view; and a value
+written below the check, such as a tree merge or non-strict replication, is
+projected at its own (possibly newer) stamp even when the target cannot decode it,
+and then stops a migration until a hop is registered or the target advances.
 
 ## Ingest trust model
 
