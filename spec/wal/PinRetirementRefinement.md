@@ -17,8 +17,9 @@ id into a pin store spread over two routing keys, on one WAL partition of two
 offsets. The leaf writes, checkpoints, publishes and seeds; the tree is
 soft-deleted and recovered, purged (mark, row clear, own pin retirement, any of
 which can be interrupted), folded away, or discarded as an undone resize's copy;
-and a purge-cleared leaf's grain id can be populated again once, re-binding its
-tree id and seeding a block pin under the same consumer id. Against that, the
+and once a purge or a fold has cleared the leaf's row its grain id can be populated
+again once, re-binding its tree id and seeding a block pin under the same consumer
+id. Against that, the
 starvation drive's retirement and one orphan sweeper (two in the `TwoSweepers`
 variant) each take a token per key, read the pins, read the leaf's durable row
 once, and decide each found pin through the consumer-id gate and the removal fence,
@@ -38,7 +39,7 @@ reproduced by mutations.
 | `seeded` | The incarnation's birth block pin has landed | `BPlusLeafGrain.SeedDurableMaterialiserBlockPinAsync`, awaited by `BPlusLeafGrain.SetTreeIdAsync` and `BPlusLeafGrain.InitializeSiblingAsync` before the routed writes that follow. |
 | `cp` | The incarnation's durable checkpoint | The persisted projection checkpoint and the snapshot coverage `LeafDurablePinCore.Resolve` bounds the published offset by. |
 | `need` | Writes the incarnation must still replay from the WAL | Acknowledged writes above the durable checkpoint. A purge's row clear deletes them by design; a fold moved them to a survivor; a discard abandons the copy. |
-| `purgeMark` | The row record's purge marker | `LeafRowRecordState.PurgeCleared`, which alone admits re-creating a rowless leaf (`BPlusLeafGrain.AdmitPurgeClearedAsync`, `BPlusLeafGrain.AdmitCreateIntentAsync`). |
+| `purgeMark` | Whether the leaf's row record admits re-creating the rowless leaf | `LeafRowRecordState.PurgeCleared` after a purge's clear (`BPlusLeafGrain.AdmitPurgeClearedAsync`, `BPlusLeafGrain.AdmitCreateIntentAsync`), or no row record at all after a fold's clear deleted it (`BPlusLeafGrain.ClearRowRecordAsync`), which `BPlusLeafGrain.AdmitCreateIntentAsync` admits under a create intent when no snapshot survives either. Recovery and re-creation reset it. |
 | `owed` | The leaf's own pin retirements still owed by its terminal step | `BPlusLeafGrain.RetireMaterialiserPinsAsync`, one `ILeafCursorReporter.UnregisterAsync` per consumer, each fanning out to every read key. |
 | `route` | The key the leaf's pins are written under now | `WalMaterialiserPinRouting.ShardKey` under the shard count `WalMaterialiserPinRouting.ResolveShardCount` resolves. |
 | `pinOff` | The pin store's entries | `WalMaterialiserPinState` per key, merged by monotone max in `WalMaterialiserPinGrain.Merge`; `-1` is the Zero block pin, `NoPin` an absent entry. |
@@ -60,13 +61,13 @@ reproduced by mutations.
 | `RecoverTree` | Recovery hands the tree back, including a marked leaf whose row survived | `TreeDeletionGrain.RecoverPhysicalAsync` re-seeds the shards' bindings; `BPlusLeafGrain.RecoverBindingAsync` re-binds a rowful leaf and resets its marker. | Yes: `TreeDeletionGrainTests.Recover_reseeds_node_bindings_on_all_shards` and `PurgeRecoveryIntegrationTests.A_marked_leaf_whose_purge_was_interrupted_before_its_row_clear_recovers_without_latching_stale`. |
 | `MarkPurge` | The purge commits to the leaf, marker first | `BPlusLeafGrain.ClearGrainStateCoreAsync` (purge) calls `ILeafRowRecordGrain.MarkPurgeClearedAsync` before anything is cleared, and only names the pins. | Yes: `BPlusLeafGrainTests.Purge_clear_marks_the_row_record_before_the_row_is_cleared_and_keeps_it` and `BPlusLeafGrainTests.ClearGrainStateForPurge_interrupted_at_the_row_clear_keeps_the_pin`. |
 | `Fold` | An empty-leaf fold has moved the leaf's rows and retires its pins | The fold's drain precedes `BPlusLeafGrain.ClearGrainStateCoreAsync` (non-purge), which retires the pins through `BPlusLeafGrain.UnregisterMaterialiserPinsAsync` before the clear (#3101). The drain itself is spec/bplustree's (`BPlusReclaimRecovery`). | Yes: `BPlusLeafGrainTests.ClearGrainState_retires_the_pin_before_the_state_is_cleared` and `BPlusLeafGrainTests.ClearGrainState_retires_one_pin_per_wal_partition`. |
-| `ClearRow` | The row is cleared: after the mark for a purge, after the pin retirement for a fold | `BPlusLeafGrain.ClearGrainStateCoreAsync`: `state.ClearStateAsync` under the persist gate, the latch that refuses any later write of the row, then (purge only) `BPlusLeafGrain.RetireMaterialiserPinsAsync` last (#4700). | Yes: `BPlusLeafGrainTests.ClearGrainStateForPurge_retires_the_pin_only_after_the_row_is_cleared` and `BPlusLeafGrainTests.ClearGrainState_leaves_the_leaf_reading_as_having_no_durable_state`. |
+| `ClearRow` | The row is cleared: after the mark for a purge, after the pin retirement for a fold | `BPlusLeafGrain.ClearGrainStateCoreAsync`: `state.ClearStateAsync` under the persist gate, the latch that refuses any later write of the row, then (purge only) `BPlusLeafGrain.RetireMaterialiserPinsAsync` last (#4700). A fold's clear then deletes the row record (`BPlusLeafGrain.ClearRowRecordAsync`) and a purge's keeps it marked; either leaves the row re-creatable, so both set `purgeMark`. | Yes: `BPlusLeafGrainTests.ClearGrainStateForPurge_retires_the_pin_only_after_the_row_is_cleared` and `BPlusLeafGrainTests.ClearGrainState_leaves_the_leaf_reading_as_having_no_durable_state`. |
 | `SelfRetire(k)` | The terminal step removes its own pin under one key | `BPlusLeafGrain.RetireMaterialiserPinsAsync` calls `ILeafCursorReporter.UnregisterAsync`, which fans out to every read key. It is the publisher retiring itself in its own turn, so it is not fenced. | Yes: `BPlusLeafGrainTests.ClearGrainState_retires_the_materialiser_pin` and `BPlusLeafGrainTests.ClearGrainStateForPurge_retires_the_pin_only_after_the_row_is_cleared`. |
 | `SelfRetireFail(k)` | The terminal step's removal fails or is lost; the failure is swallowed | `BPlusLeafGrain.RetireMaterialiserPinsAsync` logs and continues; `LeafCursorReporter.UnregisterAsync` swallows a pin removal failure. **Environment:** enabled for every owed key, no stronger than production, where any provider fault or silo loss can strand one. | Yes: `BPlusLeafGrainTests.ClearGrainState_completes_when_the_reporter_faults` and `LeafCursorReporterDurableSeedTests.Unregister_swallows_and_logs_a_pin_removal_failure`. |
-| `Recreate` | A purge-cleared grain id is populated again | `BPlusLeafGrain.RecoverBindingAsync` admits a rowless leaf only by its purge marker (`BPlusLeafGrain.AdmitPurgeClearedAsync`), as does `BPlusLeafGrain.AdmitCreateIntentAsync` for a reused tree id's deterministic root leaf or a bulk load re-using a leaf id; each then binds the tree id through `BPlusLeafGrain.SetTreeIdAsync`. The dying activation's turn has ended first: a grain has one activation. Nothing waits for a retirement in flight. | Yes: `BPlusLeafGrainTests.Create_intent_re_creates_a_purge_cleared_leaf` and `PurgeRecoveryIntegrationTests.A_leaf_whose_purge_clear_was_interrupted_part_way_is_re_created_by_recovery`. |
+| `Recreate` | A cleared grain id is populated again | `BPlusLeafGrain.RecoverBindingAsync` admits a rowless leaf only by its purge marker (`BPlusLeafGrain.AdmitPurgeClearedAsync`); `BPlusLeafGrain.AdmitCreateIntentAsync` admits one under a create intent - a reused tree id's deterministic root leaf, a bulk load re-using a leaf id - when its record is purge-marked or absent (a fold deleted it) and no snapshot survives; each then binds the tree id through `BPlusLeafGrain.SetTreeIdAsync` before seeding. The dying activation cannot do it: its clear latches it against any later row write and deactivates it. **Over-approximation:** enabled from every husk whose own retirement has ended, no stronger than production's two admissions. Nothing waits for a retirement in flight. | Yes: `BPlusLeafGrainTests.Create_intent_re_creates_a_purge_cleared_leaf` and `PurgeRecoveryIntegrationTests.A_leaf_whose_purge_clear_was_interrupted_part_way_is_re_created_by_recovery`. |
 | `Discard` | An undone resize's unrecoverable copy is discarded | `LatticeWalGcScheduler.TryDiscardAbandonedCopyAsync` asks `ITreeDeletionGrain.DiscardIfAbandonedDerivedCopyAsync`; `TreeDeletionGrain.RecoverPhysicalAsync` refuses a discarded copy. | Yes: `LatticeWalGcSchedulerCadenceTests.ExecuteAsync_discards_a_deleted_tree_that_is_an_abandoned_resize_copy` and `UndoneResizeWalReleaseIntegrationTests.A_destination_retired_by_an_earlier_build_is_discarded_once_no_resize_names_it`. |
 | `DiscardRetire` | The deleted-tree hold retires every pin of a discarded tree | `LatticeWalGcScheduler.HoldDeletedTreeAsync` calls `ILeafCursorReporter.UnregisterTreeAsync` for `PhysicalTreeRetention.Discarded` only. | Yes: `LatticeWalGcSchedulerCadenceTests.ExecuteAsync_retires_the_pins_of_a_discarded_tree_without_touching_its_leaves` and `TreeDeletionGrainTests.Discard_retires_every_leaf_materialiser_pin_on_the_tree`. |
-| `GcTrim` | Trim to the durable floor | WalDurability's `GcTrim`: `LatticeWalGc.ApplyDurableMaterialiserFloorAsync` and `LatticeWalGc.TrimShardAsync`. **Over-approximation:** the model ignores the in-memory cursors production also consults, which do not survive an activation. | Yes: `WalGcTrimFloorCoyoteTests.Min_cursor_floor_never_trims_past_the_slowest_consumer` and `WalPinRetirementCoyoteTests.Fenced_retirement_never_retires_the_pin_of_a_recreated_leaf`. |
+| `GcTrim` | Trim to the durable floor | WalDurability's `GcTrim`: `LatticeWalGc.ApplyDurableMaterialiserFloorAsync` and `LatticeWalGc.TrimShardAsync`. **Over-approximation:** the model ignores the in-memory cursors production also consults, whose registry is per silo, so a GC pass on a silo that does not hold a leaf's cursor trims the shared WAL without it. | Yes: `WalGcTrimFloorCoyoteTests.Min_cursor_floor_never_trims_past_the_slowest_consumer` and `WalPinRetirementCoyoteTests.Fenced_retirement_never_retires_the_pin_of_a_recreated_leaf`. |
 | `Start(p)` | A sweep begins, or the drive's NotDriven verdict starts a retirement | `LatticeWalGcScheduler.SweepOrphanedMaterialiserPinsAsync` (local, rate-limited) or `WalOrphanPinSweepGrain.ProcessNextPhaseAsync` through `IWalOrphanPinSweepRunner.RunAsync`; `LatticeWalGcScheduler.RetireOrphanedPinAsync` after `LeafStarvationDriveOutcome.NotDriven`. | Yes: `LatticeWalGcSchedulerCadenceTests.A_silo_with_a_coordinator_does_not_sweep_locally` and `LatticeWalGcSchedulerCadenceTests.ExecuteAsync_retires_the_pin_of_a_leaf_that_reports_no_tree_id`. |
 | `Enum(p, k)` | Take a key's token, then read its pins | `WalMaterialiserPinGrain.GetRetirementTokenAsync` then `WalMaterialiserPinGrain.GetPinsAsync` per key of `WalMaterialiserPinRouting.EnumerateReadKeys`, in both retirement paths. | Yes: `LatticeWalGcSchedulerCadenceTests.The_sweep_retires_a_pin_from_every_key_it_was_found_under` and `LatticeWalGcSchedulerCadenceTests.The_sweep_does_not_remove_a_pin_that_a_leaf_recreated_after_its_read_seeded_into`. |
 | `Read(p)` | One durable read of the leaf's row, without activating it | `LatticeWalGcScheduler.ReadLeafSnapshotOrNullAsync` and `WalFloorHolderReader.ReadLeafCheckpointSnapshotAsync`, classified by `WalFloorHolderReader.Classify` and `WalOrphanPinRetirementCore.IsHusk`. | Yes: `LatticeWalGcSchedulerCadenceTests.A_husk_leaf_is_classified_as_orphaned_rather_than_repairable` and `LatticeWalGcSchedulerCadenceTests.The_drive_does_not_remove_a_pin_whose_leaf_row_is_live_again`. |
@@ -190,15 +191,20 @@ sequence; the mutations are ordinary regression checks.
   block; the HLC frontier, override holds and the offset census's completeness
   checks are WalDurability's and `WalPartitionReleaseModel`'s.
   Production symbols: `WalMaterialiserPinGrain.RaiseOverrideHoldsAsync`, `LatticeWalGc.ApplyDurableMaterialiserFloorAsync`.
-- **In-memory cursors.** The trim ignores the in-memory cursor registry, which
-  protects a live activation but not one that has stopped; the model therefore
-  reports a trim where production loses the write only once the re-created leaf's
-  activation ends before it republishes.
+- **In-memory cursors.** The trim ignores the in-memory cursor registry. That
+  registry is per silo and keeps a cursor until an unregister or a silo restart,
+  so it protects a leaf only from GC passes on the silo holding its cursor; a pass
+  on any other silo trims the shared WAL without it. The model therefore reports a
+  trim where production loses the write only once the re-created leaf also replays
+  cold - its activation ends before it checkpoints and republishes.
   Production symbols: `InMemoryWalCursorRegistry`, `ILeafCursorReporter.UnregisterAsync`.
 - **Late delivery of an abandoned retirement call.** A dying activation's own
   retirement completes or is dropped before the grain id can be populated again;
   a removal message still in flight from a lost silo that lands after the
-  re-creation's seed is not modelled.
+  re-creation's seed is not modelled, and neither is a duplicate activation of
+  the dying leaf (Orleans keeps one activation per grain only eventually, across a
+  membership change) whose retirement runs after the seed. Both need a silo or
+  directory failure; the self-retirement is unfenced, so either would erase the seed.
   Production symbols: `BPlusLeafGrain.RetireMaterialiserPinsAsync`.
 - **Pin-grain reactivation.** The fence's epoch is fixed in the model; a pin grain
   reactivated between a token and a removal refuses it, which only retains more.
@@ -208,5 +214,12 @@ sequence; the mutations are ordinary regression checks.
   retirement's, and the model's seed always lands.
   Production symbols: `LeafCursorReporter.SeedDurableMaterialiserBlockManyAsync`.
 - **The tree-level purge clear.** A completed purge clears the whole pin store
-  before a reused tree id can re-create a leaf; the model's purge is per leaf.
-  Production symbols: `WalMaterialiserPinGrain.ClearAsync`, `ILeafCursorReporter.UnregisterTreeAsync`.
+  through `ILeafCursorReporter.UnregisterTreeAsync` before it removes the tree's
+  registry entry - the step that frees the id for reuse - so no leaf of a reused
+  tree exists yet to lose its pins (issue #5416; before that fix the clear ran
+  after the removal). The model's purge is per leaf; the ordering is pinned by
+  `TreeDeletionGrainTests.PurgeNow_clears_the_pin_store_before_the_registry_frees_the_tree_id`
+  and `TreeDeletionGrainTests.CompletePurge_clears_the_pin_store_before_the_registry_frees_the_tree_id`.
+  A re-drive of a purge whose registry removal is still recorded as owed is outside
+  this module.
+  Production symbols: `WalMaterialiserPinGrain.ClearAsync`, `ILeafCursorReporter.UnregisterTreeAsync`, `TreeDeletionGrain.FinishCompletedPurgeAsync`.

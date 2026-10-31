@@ -27,7 +27,7 @@ exhaustively within the TLC budget.
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `WalDurability` | 11 | 4 | 26 | 43 | 39 | 226,592 |
 | `WalMove` | 5 | 2 | 13 | 18 | 18 | 1,617 |
-| `WalPinRetirement` | 3 | 3 | 23 | 28 | 28 | 131,779 |
+| `WalPinRetirement` | 3 | 3 | 23 | 28 | 28 | 119,280 |
 
 `Actions` counts the disjuncts of `Next`, including `WalMove`'s non-behavioural
 `Stutter`. `Behaviour rows` counts the action rows of the module's refinement note,
@@ -230,7 +230,7 @@ licenses a trim over writes it has not checkpointed. The module takes
 `WalDurability`'s floor, block pin and trim as given and models what sits beside
 them: the leaf's own retirement at its terminal step (a fold's, before its row
 clear; a purge's, after it, issue #4700), the deleted-tree hold's retirement of a
-discarded copy, a purge-cleared leaf populated again under the same grain id, and
+discarded copy, a leaf cleared by a purge or a fold populated again under the same grain id, and
 the two GC repairs - the bulk orphan sweep, from each silo's loop or the tree's
 `WalOrphanPinSweepGrain`, and the starvation drive's retirement after a NotDriven
 verdict. Each repair takes a token from every pin-store key, reads the pins, reads
@@ -254,11 +254,12 @@ duplicates the pin across keys, an unreadable leaf read or an abandoned run - an
 property, and liveness stays on the base (with two sweepers it takes about eight
 minutes). The variants' state counts are in the manifest.
 
-### The defect it found
+### Defects on this path
 
 | Issue | Defect | Mutations |
 |-------|--------|-----------|
 | #5358 | The GC removed an orphaned pin by consumer id, unconditionally, after a husk read taken in a separate step. A purge-cleared leaf re-created in between - a recovery re-binding it, a reused tree id re-seeding a deterministic root leaf, a bulk load re-using a leaf id - seeds its block pin under the same consumer id, often into the surviving entry where the monotone merge changes nothing; the removal then erased it and the trim could pass the re-created leaf's un-checkpointed writes. Both the sweep and the drive's NotDriven retirement had the window. **Fixed in this change**: every key's token is taken before its pins are read, the pin grain stamps every merge, `RemoveIfUnmergedSinceAsync` refuses a removal the consumer was merged past, and the drive retires through the same fenced sequence with a fresh durable read. | `NoTrimPastLiveNeedUnfencedRemoval`, `RetireOnlyHuskUnfencedRemoval`, `NoTrimPastLiveNeedDriveRemovesOnProbe` |
+| #5416 | Found by the independent review (#5351) rather than by the model: a completed tree purge removed the tree's registry entry - which frees the id for reuse - before it cleared the tree's whole pin store, so a write re-registering the id in between re-seeded the shard's deterministic root leaf under the purged leaf's consumer id, and the clear then erased that block pin, unfenced. **Fixed in the review's remediation**: the pin store is cleared before the registry entry is removed. The model's purge is per leaf, so this is pinned by `TreeDeletionGrainTests` instead (see the refinement note's abstraction gaps). | None |
 
 ### What it covers, and what it does not
 
@@ -267,7 +268,9 @@ fence, fail-closed reads - and its interleaving with the leaf's fold, purge,
 discard, recovery and re-creation, a routing change, and two sweepers. It does NOT
 cover several leaves or partitions per leaf, the pin's HLC frontier and override
 holds, the in-memory cursor registry, late delivery of a lost silo's removal
-message, or the sweep's floor-holder census and budgets; the refinement note's
+message or a duplicate activation's, the tree-wide pin-store clear that ends a
+purge (ordered before the registry frees the id, issue #5416, and pinned by tests),
+or the sweep's floor-holder census and budgets; the refinement note's
 abstraction gaps list them. Coverage of this module is not coverage of the trim
 itself, which is `WalDurability`'s.
 

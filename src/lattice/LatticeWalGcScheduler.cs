@@ -5980,8 +5980,13 @@ internal sealed class LatticeWalGcScheduler(
     /// reclaims whatever it would otherwise have reclaimed.
     /// </para>
     /// <para>
-    /// A host with no reporter registered (a pre-WAL host) has no registry to
-    /// remove from, so this is a no-op there.
+    /// A host with no reporter registered (a pre-WAL host) publishes no leaf
+    /// pins, so this is a no-op there. Since issue #5358 the removal goes through
+    /// the pin grains' fence (<see cref="RetireConsumerFencedAsync"/>), not the
+    /// reporter, so it no longer drops the consumer from this silo's in-memory
+    /// cursor registry or the reporter's pending durable pin. The drive targets
+    /// the durable pin only, and a pending pin a later flush re-publishes is an
+    /// orphan the next drive or sweep retires again.
     /// </para>
     /// </remarks>
     private async Task RetireOrphanedPinAsync(

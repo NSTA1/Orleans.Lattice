@@ -8,10 +8,10 @@
     "actions": 23,
     "mutations": 28,
     "behaviourRows": 28,
-    "distinctStates": 131779
+    "distinctStates": 119280
   },
   "variants": {
-    "OneFault": { "distinctStates": 1448780 },
-    "TwoSweepers": { "distinctStates": 1712289 }
+    "OneFault": { "distinctStates": 1298188 },
+    "TwoSweepers": { "distinctStates": 1544476 }
   }
 }

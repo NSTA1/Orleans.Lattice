@@ -195,8 +195,9 @@ internal sealed partial class TreeDeletionGrain
             // and so does a purge whose registry removal threw (issue #4265).
             if (state.State.Delegated)
             {
-                await SettleRegistryEntryAsync();
+                // Pins before the registry entry, as FinishCompletedPurgeAsync (#5416).
                 await DeregisterLeafCursorsAsync();
+                await SettleRegistryEntryAsync();
             }
             else if (state.State.RegistryUnregisterPending)
             {
