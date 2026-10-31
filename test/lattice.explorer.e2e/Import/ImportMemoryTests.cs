@@ -28,8 +28,10 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Import;
 /// </para>
 /// <para>
 /// The files are shaped so that a silo's growth measures what it streamed rather than what it
-/// stored. The seed file's lines carry padding the import reads and discards (the value
-/// pointer stores one small field), so a 200 MB seed builds a tree of a few megabytes. The
+/// stored. The seed file's 32 KB lines carry padding the import reads and discards (the value
+/// pointer stores one small field), so a 200 MB seed builds a tree of 6,400 small keys. A silo
+/// never sees the seed's file, only its entries; the hop the seed proves is the browser upload
+/// and the Explorer's reader, which read the whole file twice. The
 /// upsert file's lines are whole records written to a bounded set of keys, so the full 200 MB
 /// streams through the gateway and both silos while the tree keeps only the latest record per
 /// key.
@@ -119,7 +121,7 @@ public sealed class ImportMemoryTests
         var growth = await MeasureAsync(olivia, dialog, "Seed tree", lines, "seed-progress", "The seed streams the file: the pre-flight pass checks its order before anything is written");
         await olivia.SubstepAsync("succeeded", $"Seeded {ImportFiles.Count(lines)} entries; no process grew by 64 MB");
 
-        growth = WithWarmUp(growth, warmUpPeaks);
+        growth = await WithWarmUpAndSettledAsync(growth, warmUpPeaks);
         var (found, missing) = await FindEveryKeyAsync(SeedTree, Enumerable.Range(0, lines).Select(line => $"bulk/{line:D8}"));
         var scanned = await CountKeysAsync(SeedTree);
         var stats = await LatticeTreeAdminApiGrpcClient.Create(_estate.Invoker(), JourneyEstate.Serialization).GetTreeStatsAsync(SeedTree);
@@ -161,7 +163,7 @@ public sealed class ImportMemoryTests
         var growth = await MeasureAsync(olivia, dialog, "Import", lines, "upsert-progress", "The upsert streams every record through the gateway to the silos, a batch at a time");
         await olivia.SubstepAsync("succeeded", $"Wrote {ImportFiles.Count(lines)} records; no process grew by 64 MB");
 
-        growth = WithWarmUp(growth, warmUpPeaks);
+        growth = await WithWarmUpAndSettledAsync(growth, warmUpPeaks);
         var (found, _) = await FindEveryKeyAsync(UpsertTree, Enumerable.Range(0, UpsertKeys).Select(key => $"order/{key:D6}"));
         var scanned = await CountKeysAsync(UpsertTree);
         Report("Upsert", growth, $"A point read of each of the {UpsertKeys} keys finds {found}; a range scan of the tree reads {ImportFiles.Count(scanned)} keys.");
@@ -217,8 +219,28 @@ public sealed class ImportMemoryTests
         return peaks;
     }
 
-    private static IReadOnlyList<WorkingSetGrowth> WithWarmUp(IReadOnlyList<WorkingSetGrowth> growth, IReadOnlyList<WorkingSetGrowth> warmUp) =>
-        [.. growth.Select((reading, i) => reading with { WarmUpPeak = warmUp[i].Peak })];
+    /// <summary>
+    /// Adds the warm-up's peaks and, after the import has had time to settle, each silo's live
+    /// heap: a heap that returns to its baseline held work in flight, not the file.
+    /// </summary>
+    private async Task<IReadOnlyList<WorkingSetGrowth>> WithWarmUpAndSettledAsync(IReadOnlyList<WorkingSetGrowth> growth, IReadOnlyList<WorkingSetGrowth> warmUp)
+    {
+        await Task.Delay(TimeSpan.FromSeconds(20));
+        using var heap = new ManagedHeapReader();
+        var processes = MeasuredProcesses();
+        var settled = new List<WorkingSetGrowth>(growth.Count);
+        for (var i = 0; i < growth.Count; i++)
+        {
+            settled.Add(growth[i] with
+            {
+                WarmUpPeak = warmUp[i].Peak,
+                WarmUpHeapPeak = warmUp[i].HeapPeak,
+                HeapAfter = processes[i].MetricsPort is { } port ? await heap.ReadAsync(port) : null,
+            });
+        }
+
+        return settled;
+    }
 
     /// <summary>Reads every one of <paramref name="keys"/> by a point read, returning how many exist and a few that do not.</summary>
     private async Task<(int Found, IReadOnlyList<string> Missing)> FindEveryKeyAsync(string tree, IEnumerable<string> keys)

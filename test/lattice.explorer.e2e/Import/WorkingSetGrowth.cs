@@ -22,6 +22,12 @@ internal sealed record WorkingSetGrowth(string Process, long Baseline, long Peak
     /// <summary>The working-set peak the same process reached during the warm-up import, or <see langword="null"/>.</summary>
     public long? WarmUpPeak { get; init; }
 
+    /// <summary>The live-heap peak the same process reached during the warm-up import, or <see langword="null"/>.</summary>
+    public long? WarmUpHeapPeak { get; init; }
+
+    /// <summary>The live managed heap read once the import had settled, or <see langword="null"/> when not reported.</summary>
+    public long? HeapAfter { get; init; }
+
     /// <summary>A markdown table of <paramref name="readings"/> for a job summary or a PR body.</summary>
     /// <param name="title">The table's heading.</param>
     /// <param name="fileBytes">The size of the imported file, in bytes.</param>
@@ -32,12 +38,12 @@ internal sealed record WorkingSetGrowth(string Process, long Baseline, long Peak
         var text = new StringBuilder();
         text.AppendLine(CultureInfo.InvariantCulture, $"### {title} ({Mb(fileBytes)} file)");
         text.AppendLine();
-        text.AppendLine("| Process | Working set baseline | Working set peak | Growth | Warm-up peak | Live heap baseline | Live heap peak | Samples |");
-        text.AppendLine("|---|---:|---:|---:|---:|---:|---:|---:|");
+        text.AppendLine("| Process | Working set baseline | Working set peak | Growth | Warm-up working set peak | Live heap baseline | Live heap peak | Warm-up live heap peak | Live heap settled | Samples |");
+        text.AppendLine("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
         foreach (var reading in readings)
         {
             text.AppendLine(CultureInfo.InvariantCulture,
-                $"| {reading.Process} | {Mb(reading.Baseline)} | {Mb(reading.Peak)} | {Mb(reading.Growth)} | {Mb(reading.WarmUpPeak)} | {Mb(reading.HeapBaseline)} | {Mb(reading.HeapPeak)} | {reading.Samples} |");
+                $"| {reading.Process} | {Mb(reading.Baseline)} | {Mb(reading.Peak)} | {Mb(reading.Growth)} | {Mb(reading.WarmUpPeak)} | {Mb(reading.HeapBaseline)} | {Mb(reading.HeapPeak)} | {Mb(reading.WarmUpHeapPeak)} | {Mb(reading.HeapAfter)} | {reading.Samples} |");
         }
 
         return text.ToString();
