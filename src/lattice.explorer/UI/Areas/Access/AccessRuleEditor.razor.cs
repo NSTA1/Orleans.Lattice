@@ -82,6 +82,22 @@ public partial class AccessRuleEditor
             ? DelegationScopeOptions
             : BaseScopeOptions;
 
+    /// <summary>
+    /// The tenant whose group the subject names, or <see langword="null"/>: a rule
+    /// naming a tenant group may govern only that tenant's own trees, so the Tree
+    /// field then offers those, by full id.
+    /// </summary>
+    private string? SubjectTenant =>
+        _draft.SubjectKind == LatticeSubjectSelectorKind.Group && LatticeTenantGroupId.TryParse(_draft.SubjectId.Trim(), out var group)
+            ? group.Tenant.Value
+            : null;
+
+    private ILtSuggestionSource TreeSource => SubjectTenant is { } tenant ? Suggestions.TreesOfTenant(tenant) : Suggestions.Trees;
+
+    private string TreeHint => SubjectTenant is { } tenant
+        ? $"One of tenant {tenant}'s own trees, by its full id (t/{tenant}/...)."
+        : "The logical tree id the rule governs.";
+
     private string? ScopeHint => _draft.ScopeKind switch
     {
         AccessRuleDraft.ClusterScope when Model?.AllTreesGrantsEnabled == false =>

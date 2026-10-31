@@ -245,8 +245,13 @@ or to callers who administer the active tenant through the delegated tenant
 access facades; anonymous cluster refusal stays visible as an Unavailable sign-in
 prompt, while signed-in refusal by both probes hides the area. Its cluster-wide
 commands are `access.explain`, `access.create-rule` and `access.create-group`.
-See [Managing access](managing-access.md) for rule editing, group management and
-explain output.
+Cluster-wide subject pickers offer a group from two labelled sources, the
+identity directory (**Directory**) and the groups stored in Access (**Stored**),
+so a group created here can be used once a directory is configured; the rule
+editor also lets a platform operator choose a **Tenant group** by tenant and name,
+verified against that tenant's stored groups and confined to its own trees.
+See [Managing access](managing-access.md) for rule editing, group management,
+subject picking and explain output.
 
 ## Schema
 

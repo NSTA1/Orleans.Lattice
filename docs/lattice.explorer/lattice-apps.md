@@ -100,9 +100,9 @@ is pinned to the manifest digest of the version that was reviewed, so if the sou
 changes the app between the review and the install - for example to request another
 bridge operation - the cluster refuses the install, nothing is recorded, and the page
 asks you to review it again. Each
-role's group is a [picker](navigation-model.md#pickers) that suggests groups from the
-identity directory, or the auth store's own groups when there is no directory, and
-accepts any group id. Enabling,
+role's group is a [picker](navigation-model.md#pickers) that suggests the cluster's
+groups from the identity directory and those stored in the Access area, each labelled
+(**Directory**, **Stored**), and accepts any group id. Enabling,
 disabling, upgrading and uninstalling are native actions with explicit confirmation;
 the palette offers `apps.upgrade.{slug}` for an app with an update and
 `apps.disable.{slug}` for an enabled one.
