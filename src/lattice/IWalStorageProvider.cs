@@ -154,6 +154,32 @@ public interface IWalStorageProvider
     int MaxAppendBatchEntries => int.MaxValue;
 
     /// <summary>
+    /// Completes once every entry whose <see cref="AppendBatchAsync"/> or
+    /// <see cref="AppendEncodedBatchAsync"/> call on this provider instance had
+    /// already returned when this call began is readable through
+    /// <see cref="ReadAsync"/> and <see cref="ReadEncodedAsync"/>. A returned
+    /// append is always durable, but a provider may publish it to readers
+    /// later: the Azure Table provider returns once a batch's entry rows are
+    /// committed and makes the batch readable only when its manifest commit
+    /// lands. <see cref="GetHighestOffsetAsync"/> already counts such a batch,
+    /// so a caller that reads up to that offset - the managed WAL move's
+    /// quiesce, which copies the source tail it reports - calls this first.
+    /// <para>
+    /// The default completes immediately, which is correct for any provider
+    /// whose appends are readable when the call returns (the in-memory and file
+    /// providers). The barrier covers only appends issued through this provider
+    /// instance, so it is called on the silo that wrote. A deferred publication
+    /// that fails surfaces its fault here.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The WAL's tree id - the physical id the tree's data is written under (see <see cref="AppendBatchAsync"/>). Must not be <see langword="null"/>.</param>
+    /// <param name="shardIndex">The WAL partition index within the tree.</param>
+    /// <param name="cancellationToken">Cancels the caller's wait, not the publication it waits on.</param>
+    /// <returns>A task that completes when the partition's returned appends are readable.</returns>
+    Task WaitForAppendVisibilityAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+        => Task.CompletedTask;
+
+    /// <summary>
     /// Yields entries with <see cref="WalEntry.Offset"/> strictly greater
     /// than <paramref name="fromOffsetExclusive"/>, in ascending offset
     /// order, up to a maximum of <paramref name="maxEntries"/>. The

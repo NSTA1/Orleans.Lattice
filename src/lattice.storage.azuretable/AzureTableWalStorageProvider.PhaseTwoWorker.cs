@@ -99,6 +99,14 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     private readonly SortedDictionary<long, long> _acceptedRanges = new();
 
     /// <summary>
+    /// The completion of each batch in <see cref="_acceptedRanges"/>, keyed by
+    /// the same start offset and pruned and discarded with it, so
+    /// <see cref="WhenAcceptedCommitsSettledAsync"/> can wait for exactly the
+    /// batches that are accepted but not yet in the manifest.
+    /// </summary>
+    private readonly Dictionary<long, Task> _acceptedCommits = new();
+
+    /// <summary>
     /// Cached <see cref="LatticeMetrics.TagTree"/> tag forwarded to
     /// <see cref="LatticeMetrics.ProviderCommitDuration"/> and
     /// <see cref="LatticeMetrics.ProviderPhase2BatchSize"/>. Populated
@@ -331,6 +339,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             // queued. A batch that failed to enqueue is faulted above
             // and must never be vouched for.
             _acceptedRanges[startOffset] = endOffsetInclusive;
+            _acceptedCommits[startOffset] = tcs.Task;
             OutstandingCommits.Enter();
         }
 
@@ -435,6 +444,22 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     }
 
     /// <summary>
+    /// Completes when every batch accepted for phase 2 at the moment of the
+    /// call has settled: committed to the manifest (so readers see it) or
+    /// faulted (the fault is rethrown). Batches accepted after the call are
+    /// not waited on, so a busy shard cannot starve the caller.
+    /// </summary>
+    internal Task WhenAcceptedCommitsSettledAsync()
+    {
+        lock (_acceptedGate)
+        {
+            return _acceptedCommits.Count == 0
+                ? Task.CompletedTask
+                : Task.WhenAll([.. _acceptedCommits.Values]);
+        }
+    }
+
+    /// <summary>
     /// Drops accepted ranges that phase 2 has now committed, so the
     /// set stays bounded by what is actually in flight.
     /// </summary>
@@ -453,6 +478,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                     break;
                 }
                 _acceptedRanges.Remove(start);
+                _acceptedCommits.Remove(start);
             }
         }
     }
@@ -485,6 +511,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         lock (_acceptedGate)
         {
             _acceptedRanges.Clear();
+            _acceptedCommits.Clear();
         }
     }
 
