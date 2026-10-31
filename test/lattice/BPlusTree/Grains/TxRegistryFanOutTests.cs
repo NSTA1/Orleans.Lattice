@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// (issue #3501).
 /// </summary>
 [TestFixture]
-public class TxRegistryFanOutTests
+public partial class TxRegistryFanOutTests
 {
     private const string TreeId = "tree-fan";
     private const int Count = 3;

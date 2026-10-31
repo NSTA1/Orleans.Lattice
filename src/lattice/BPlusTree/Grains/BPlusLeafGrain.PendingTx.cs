@@ -273,9 +273,16 @@ internal sealed partial class BPlusLeafGrain
     /// leaf's own physical tree id once the tree has been resized. An
     /// <see cref="TxStatus.Indeterminate"/> answer is followed by the recorded
     /// verdict, because a decision masked by the retention window is still a
-    /// decision. Fails open: a registry fault or any undecided answer buckets
-    /// the prepare as before, since refusing a prepare the saga may still need
-    /// would lose a write.
+    /// decision. A registry fault or undecided answer buckets the prepare unless
+    /// this leaf applied its terminal during the probe. Otherwise refusing a
+    /// prepare the saga may still need would lose a write.
+    /// <para>
+    /// For a local author's forward, an undecided status is followed by the
+    /// participant row in the same RPC. That row exists before the first prepare
+    /// until ForgetAsync, and forwarded registrations only join an existing row
+    /// (#4632). Absence therefore proves forgetting, not an unstarted saga.
+    /// A peer-origin saga has no such local-row invariant and skips this probe.
+    /// </para>
     /// </summary>
     private async ValueTask<bool> IsForwardedPrepareForDecidedTransactionAsync(Guid txid)
     {
@@ -283,11 +290,14 @@ internal sealed partial class BPlusLeafGrain
         if (string.IsNullOrEmpty(treeId))
             return false;
 
-        TxStatus status;
+        bool decided;
         var registry = TxRegistryRouting.GetRegistry(grainFactory, treeId, txid);
         try
         {
-            status = await registry.GetStatusForPrepareDedupAsync(txid);
+            // Only a local author's participant row proves forgetting (#4632).
+            decided = LatticeOriginContext.Current is null
+                ? await registry.IsDecidedOrForgottenForPrepareAsync(txid)
+                : await registry.GetStatusForPrepareDedupAsync(txid) is TxStatus.Committed or TxStatus.Aborted;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -296,75 +306,17 @@ internal sealed partial class BPlusLeafGrain
             {
                 logger.LogDebug(
                     ex,
-                    "Could not read the decision for saga '{TxId}' on tree '{TreeId}' before bucketing a forwarded "
-                    + "prepare; bucketing it.",
+                    "Could not resolve the decision or local participant row for saga '{TxId}' on tree '{TreeId}' before bucketing a forwarded "
+                    + "prepare; checking the applied-terminal memory before bucketing it.",
                     txid,
                     treeId);
             }
 
-            return false;
+            return IsRecentlyTerminal(txid);
         }
 
         // The terminal may have landed while the registry call was in flight.
-        if (status is TxStatus.Committed or TxStatus.Aborted || IsRecentlyTerminal(txid))
-            return true;
-
-        return await IsForwardedPrepareForForgottenTransactionAsync(registry, txid, treeId);
-    }
-
-    /// <summary>
-    /// Whether the saga of a forwarded prepare whose registry reports it undecided
-    /// was in fact forgotten and its decision pruned (issue #4632). A forward
-    /// abandoned at its deadline can still be delivered after its saga committed,
-    /// completed and was forgotten, onto a leaf that no longer remembers the
-    /// terminal; bucketed, nothing would ever settle it, every later split or
-    /// resize would carry it, and it would pin the leaf's WAL prefix.
-    /// <para>
-    /// The registry's participant row tells the two apart for a saga this cluster
-    /// authored. Its coordinator holds the row in the registry the forwarded
-    /// marker names - its own tree - from before its first prepare dispatch until
-    /// <see cref="ITxRegistryGrain.ForgetAsync"/>, which runs after the decision,
-    /// and a forwarded registration only joins an existing row
-    /// (<see cref="ITxRegistryGrain.RegisterParticipantAsync"/>). Every forward is
-    /// sent after its source prepare, so an undecided saga with no row was
-    /// forgotten. The status is read first: a forget between the two reads leaves
-    /// the saga decided either way.
-    /// </para>
-    /// <para>
-    /// A replicated prepare (one carrying its author's
-    /// <see cref="LatticeOriginContext"/>) belongs to a saga this cluster never
-    /// forgets and whose row may be held by another registry, so it is bucketed
-    /// as before. Fails open on a registry fault.
-    /// </para>
-    /// </summary>
-    private async ValueTask<bool> IsForwardedPrepareForForgottenTransactionAsync(
-        ITxRegistryGrain registry, Guid txid, string treeId)
-    {
-        if (LatticeOriginContext.Current is not null)
-            return false;
-
-        IReadOnlyList<int> participants;
-        try
-        {
-            participants = await registry.GetParticipantsAsync(txid);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            var logger = ResolveLogger();
-            if (logger is not null && logger.IsEnabled(LogLevel.Debug))
-            {
-                logger.LogDebug(
-                    ex,
-                    "Could not read the participants of saga '{TxId}' on tree '{TreeId}' before bucketing a forwarded "
-                    + "prepare; bucketing it.",
-                    txid,
-                    treeId);
-            }
-
-            return false;
-        }
-
-        return participants.Count == 0 || IsRecentlyTerminal(txid);
+        return decided || IsRecentlyTerminal(txid);
     }
 
     /// <summary>
@@ -1406,7 +1358,7 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>
     /// The terminal-intent twin of <see cref="ResolvePendingStatusAsync"/> for
     /// the activation self-terminalise sweep, which APPLIES the answer (issue
-    /// #4485). It asks <see cref="ITxRegistryGrain.GetStatusForTerminalAsync"/>,
+    /// #4485). It asks <see cref="ITxRegistryGrain.GetStatusForSettlementAsync"/>,
     /// which returns a terminal verdict only once it is durably recorded on the
     /// registry, and never under a snapshot capture's decision gate for a saga
     /// not decided before it - so this sweep cannot land a terminal a capture's
@@ -1420,7 +1372,7 @@ internal sealed partial class BPlusLeafGrain
         if (string.IsNullOrEmpty(treeId)) return TxStatus.InFlight;
         return await TxRegistryRouting
             .GetRegistry(grainFactory, treeId, txid)
-            .GetStatusForTerminalAsync(txid);
+            .GetStatusForSettlementAsync(txid);
     }
 
     /// <summary>
@@ -1486,7 +1438,7 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="TxStatus.Indeterminate"/> for as long as the registry still
     /// stores its row. This sweep is not a read, so it then asks for the
     /// recorded verdict (<see cref="ITxRegistryGrain.GetRecordedStatusAsync"/>,
-    /// through <see cref="SelfTerminaliseFromRecordedStatusAsync"/>) and applies
+    /// within <see cref="ITxRegistryGrain.GetStatusForSettlementAsync"/>) and applies
     /// it; a recorded read that fails or finds no terminal row leaves the
     /// prepare resident for a later activation. Only once the row has been
     /// pruned - or at once under a zero retention - does the decision read back
@@ -1529,9 +1481,9 @@ internal sealed partial class BPlusLeafGrain
             // is also what a decision the registry has already pruned reads
             // back as - leaves the prepare resident and the clamp intact;
             // Indeterminate (a stored decision aged out of retention) is
-            // resolved from the recorded row below.
+            // resolved from the recorded row within the settlement RPC.
             //
-            // ResolvePendingStatusAsync issues an RPC to the ITxRegistryGrain,
+            // ResolvePendingStatusForTerminalAsync issues an RPC to the ITxRegistryGrain,
             // which can time out or fault when the registry is under load - the
             // same pressure that produces this pin. Containing that fault PER
             // TXID degrades a resolution failure to the pre-heal behaviour: the
@@ -1574,69 +1526,7 @@ internal sealed partial class BPlusLeafGrain
                 case TxStatus.Aborted:
                     ApplyTxAbort(txid);
                     break;
-                case TxStatus.Indeterminate:
-                    // The registry holds a decision it will no longer report on
-                    // the read path - typically the tombstone outlived
-                    // TxDecisionRetention while this leaf was down. The read
-                    // path is right to hide the key, but this sweep is not a
-                    // read: the prepare is work this leaf already owns and is
-                    // still holding open, and leaving it resident forever
-                    // pins the flush ceiling and leaks the bucket. Ask for the
-                    // recorded row explicitly.
-                    //
-                    // A failure here (older registry, unreachable grain) leaves
-                    // the prepare exactly as it was, which is the same outcome
-                    // as the resolve failure handled above, so the sweep simply
-                    // retries on a later activation.
-                    await SelfTerminaliseFromRecordedStatusAsync(txid);
-                    break;
             }
-        }
-    }
-
-    /// <summary>
-    /// Retention-mask bypass for the self-terminalisation sweep: asks the
-    /// registry for the physically recorded verdict behind an
-    /// <see cref="TxStatus.Indeterminate"/> answer and applies it locally.
-    /// Silently gives up when the registry cannot answer, leaving the prepare
-    /// resident for a later sweep.
-    /// </summary>
-    private async ValueTask SelfTerminaliseFromRecordedStatusAsync(Guid txid)
-    {
-        var treeId = state.State.TreeId;
-        if (string.IsNullOrEmpty(treeId)) return;
-
-        TxStatus recorded;
-        try
-        {
-            recorded = await TxRegistryRouting
-                .GetRegistry(grainFactory, treeId, txid)
-                .GetRecordedStatusAsync(txid);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            var logger = ResolveLogger();
-            if (logger is not null && logger.IsEnabled(LogLevel.Debug))
-            {
-                logger.LogDebug(
-                    ex,
-                    "Self-terminalise could not read the recorded outcome for saga '{TxId}' on tree '{TreeId}'; "
-                    + "leaving the prepare resident and retrying the heal on a later activation.",
-                    txid,
-                    treeId);
-            }
-
-            return;
-        }
-
-        switch (recorded)
-        {
-            case TxStatus.Committed:
-                await ApplyReplayTxCommitAsync(txid, state.State.Clock);
-                break;
-            case TxStatus.Aborted:
-                ApplyTxAbort(txid);
-                break;
         }
     }
 

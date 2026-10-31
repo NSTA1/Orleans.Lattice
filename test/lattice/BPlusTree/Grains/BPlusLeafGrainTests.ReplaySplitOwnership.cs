@@ -58,6 +58,7 @@ public partial class BPlusLeafGrainTests
         var registry = Substitute.For<ITxRegistryGrain>();
         registry.GetStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.Committed));
         registry.GetStatusForTerminalAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.Committed));
+        registry.GetStatusForSettlementAsync(Arg.Any<Guid>()).Returns(TxStatus.Committed);
         void ConfigureFactory(IGrainFactory factory)
         {
             factory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>()).Returns(sibling);

@@ -271,6 +271,27 @@ internal sealed partial class TxRegistryGrain
     public Task<TxStatus> GetStatusForPrepareDedupAsync(Guid txid) =>
         WithRecordedFallbackAsync(txid, GetStatusAsync(txid));
 
+    /// <inheritdoc />
+    public async Task<Dictionary<Guid, TxStatus>> GetStatusManyForSettlementAsync(IReadOnlyList<Guid> txids)
+    {
+        var statuses = await GetStatusManyForTerminalAsync(txids);
+        foreach (var txid in txids)
+        {
+            if (statuses[txid] == TxStatus.Indeterminate)
+                statuses[txid] = await GetRecordedStatusAsync(txid);
+        }
+
+        return statuses;
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> IsDecidedOrForgottenForPrepareAsync(Guid txid)
+    {
+        var status = await GetStatusForPrepareDedupAsync(txid);
+        return status is TxStatus.Committed or TxStatus.Aborted
+            || (await GetParticipantsAsync(txid)).Count == 0;
+    }
+
     private Task<TxStatus> WithRecordedFallbackAsync(Guid txid, Task<TxStatus> read)
     {
         if (read.IsCompletedSuccessfully)

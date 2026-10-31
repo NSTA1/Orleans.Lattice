@@ -203,8 +203,10 @@ internal static class PreparedBucketSweep
         // including for TxDecisionRetention after ForgetAsync
         // tombstones it - then Indeterminate until the row is pruned,
         // and InFlight (the default fallback) once it is gone. An
-        // Indeterminate answer is followed by the recorded decision,
-        // as in the pre-check (issue #4473). For Committed/Aborted we
+        // Indeterminate answer is followed by the recorded decision within
+        // the owning registry's settlement batch (issue #4473). A failed
+        // batch propagates before cleanup effects; recovery reruns the sweep.
+        // For Committed/Aborted we
         // apply the terminal directly. For anything else we leave the
         // entry pending - either the saga is genuinely still in flight
         // (its eventual broadcast will reach destination, which is now
@@ -215,13 +217,10 @@ internal static class PreparedBucketSweep
         if (perTxSnapshots is { Count: > 0 })
         {
             var txids = new List<Guid>(perTxSnapshots.Keys);
-            var statuses = await TxRegistryFanOut.GetStatusManyForTerminalAsync(
+            var statuses = await TxRegistryFanOut.GetStatusManyForSettlementAsync(
                 grainFactory, decisionTreeId, txids);
-            foreach (var (txid, reported) in statuses)
+            foreach (var (txid, status) in statuses)
             {
-                var status = reported == TxStatus.Indeterminate
-                    ? await RecordedDecisionAsync(grainFactory, decisionTreeId, txid)
-                    : reported;
                 // Only a DECIDED status authorises acting. Anything else -
                 // genuinely in flight, or a decision the registry currently
                 // cannot determine - leaves the entry pending. Testing for
@@ -303,9 +302,6 @@ internal static class PreparedBucketSweep
     /// </summary>
     private static Task<TxStatus> DecisionForSweepAsync(IGrainFactory grainFactory, string decisionTreeId, Guid txid) =>
         TxRegistryRouting.GetRegistry(grainFactory, decisionTreeId, txid).GetStatusForSettlementAsync(txid);
-
-    private static Task<TxStatus> RecordedDecisionAsync(IGrainFactory grainFactory, string decisionTreeId, Guid txid) =>
-        TxRegistryRouting.GetRegistry(grainFactory, decisionTreeId, txid).GetRecordedStatusAsync(txid);
 
     /// <summary>
     /// Replays a single <see cref="Orleans.Lattice.BPlusTree.PendingMutationSnapshot"/> through

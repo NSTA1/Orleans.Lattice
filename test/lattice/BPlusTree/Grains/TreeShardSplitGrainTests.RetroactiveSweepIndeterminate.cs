@@ -1,5 +1,6 @@
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -12,6 +13,66 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </summary>
 public partial class TreeShardSplitGrainTests
 {
+    [Test]
+    public async Task RetroactiveSweep_cleanup_fallback_failure_preserves_replays_and_whole_sweep_retry_settles()
+    {
+        var committed = Guid.NewGuid();
+        var aborted = Guid.NewGuid();
+        var factory = Substitute.For<IGrainFactory>();
+        var (_, _, source, target, _, registry) = CreateGrainWithSweepWiring(
+            leafSnapshots: [BuildSetSnapshot(committed, out _), BuildSetSnapshot(aborted, out _)],
+            preCheckStatus: TxStatus.InFlight,
+            postSweepStatus: TxStatus.Indeterminate,
+            factory: factory);
+        registry.GetRecordedStatusAsync(committed).Returns(TxStatus.Committed);
+        registry.GetRecordedStatusAsync(aborted)
+            .Returns(Task.FromException<TxStatus>(new InvalidOperationException("recorded status unavailable")));
+        var firstLeaf = (await source.GetLeftmostLeafIdAsync())!.Value;
+
+        Assert.ThrowsAsync<InvalidOperationException>(() => PreparedBucketSweep.RunAsync(
+            factory, TreeId, firstLeaf, target, [8, 10, 12, 14], 16, new PreparedBucketSweepProgress()));
+
+        await target.Received(2).SetAsync(Arg.Any<string>(), Arg.Any<byte[]>());
+        await target.DidNotReceive().AppendTxTerminalAsync(
+            Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>());
+
+        registry.GetRecordedStatusAsync(aborted).Returns(TxStatus.Aborted);
+        await PreparedBucketSweep.RunAsync(
+            factory, TreeId, firstLeaf, target, [8, 10, 12, 14], 16, new PreparedBucketSweepProgress());
+
+        await target.Received(4).SetAsync(Arg.Any<string>(), Arg.Any<byte[]>());
+        await target.Received(1).AppendTxTerminalAsync(committed, true, Arg.Any<IReadOnlyDictionary<string, byte[]>?>());
+        await target.Received(1).AppendTxTerminalAsync(aborted, false, Arg.Any<IReadOnlyDictionary<string, byte[]>?>());
+    }
+
+    [Test]
+    public async Task RetroactiveSweep_cleanup_settles_masked_transactions_in_one_registry_dispatch()
+    {
+        var committed = Guid.NewGuid();
+        var aborted = Guid.NewGuid();
+        var pending = Guid.NewGuid();
+        var (grain, _, _, target, _, registry) = CreateGrainWithSweepWiring(
+            leafSnapshots: [BuildSetSnapshot(committed, out _), BuildSetSnapshot(aborted, out _), BuildSetSnapshot(pending, out _)],
+            preCheckStatus: TxStatus.InFlight);
+        registry.GetStatusManyForSettlementAsync(Arg.Any<IReadOnlyList<Guid>>()).Returns(new Dictionary<Guid, TxStatus>
+        {
+            [committed] = TxStatus.Committed,
+            [aborted] = TxStatus.Aborted,
+            [pending] = TxStatus.InFlight,
+        });
+        registry.ClearReceivedCalls();
+
+        await grain.InitiateSplitStateAsync(0);
+
+        await registry.Received(1).GetStatusManyForSettlementAsync(
+            Arg.Is<IReadOnlyList<Guid>>(ids => ids.Count == 3 && ids.Contains(committed) && ids.Contains(aborted) && ids.Contains(pending)));
+        await registry.DidNotReceive().GetStatusManyForTerminalAsync(Arg.Any<IReadOnlyList<Guid>>());
+        await registry.DidNotReceive().GetRecordedStatusAsync(Arg.Any<Guid>());
+        await target.Received(1).AppendTxTerminalAsync(committed, true, Arg.Any<IReadOnlyDictionary<string, byte[]>?>());
+        await target.Received(1).AppendTxTerminalAsync(aborted, false, Arg.Any<IReadOnlyDictionary<string, byte[]>?>());
+        await target.DidNotReceive().AppendTxTerminalAsync(pending, Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>());
+    }
+
     [Test]
     public async Task RetroactiveSweep_applies_the_recorded_commit_when_the_pre_check_is_masked()
     {
