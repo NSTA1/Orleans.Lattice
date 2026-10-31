@@ -145,6 +145,16 @@ three, and the drain, as the only defence left in an arm of its own.
 
 ## Scope at the seams
 
+The registry's `GetStatusForSettlementAsync` composes terminal-intent status
+with the existing local recorded-status fallback only for `Indeterminate`.
+Replication prepare settlement and prepared-bucket migration pre-checks use
+one RPC instead of two on that fallback path. Both existing durability waits
+and the capture gate remain: a gated delegation without a local verdict stays
+InFlight. This removes a transport step, not an I1 decision or `Sweep` action.
+`TxRegistryGrainTests.Settlement` pins gated delegation and pending-write
+success/rollback behavior. This is a source mapping argument, not a new
+machine-checked refinement proof.
+
 Each item below is checked elsewhere, or argued here; none is an unchecked claim.
 
 - **Shard topology.** The model's shards are fixed. A split or reshard during a

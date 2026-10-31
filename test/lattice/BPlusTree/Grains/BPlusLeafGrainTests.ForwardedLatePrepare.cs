@@ -63,6 +63,8 @@ public partial class BPlusLeafGrainTests
         var registry = Substitute.For<ITxRegistryGrain>();
         registry.GetStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(status));
         registry.GetRecordedStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(recorded));
+        registry.GetStatusForPrepareDedupAsync(Arg.Any<Guid>())
+            .Returns(status == TxStatus.Indeterminate ? recorded : status);
         // A live saga's coordinator holds its participant row until it is
         // forgotten (issue #4632); tests of a forgotten saga clear it.
         registry.GetParticipantsAsync(Arg.Any<Guid>()).Returns(Task.FromResult<IReadOnlyList<int>>([0]));
@@ -76,6 +78,7 @@ public partial class BPlusLeafGrainTests
         var physicalRegistry = Substitute.For<ITxRegistryGrain>();
         physicalRegistry.GetStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.InFlight));
         physicalRegistry.GetRecordedStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.InFlight));
+        physicalRegistry.GetStatusForPrepareDedupAsync(Arg.Any<Guid>()).Returns(TxStatus.InFlight);
 
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ITxRegistryGrain>(Arg.Any<string>()).Returns(call =>
@@ -216,7 +219,7 @@ public partial class BPlusLeafGrainTests
             Assert.That(leaf.RecentlyTerminalCount, Is.Zero,
                 "the refusal must not record the terminal as applied, since that set also dedups terminals");
         });
-        await h.Registry.Received().GetStatusAsync(txid);
+        await h.Registry.Received(1).GetStatusForPrepareDedupAsync(txid);
     }
 
     [Test]
@@ -234,7 +237,8 @@ public partial class BPlusLeafGrainTests
         await ForwardedPrepareSetAsync(leaf, txid, "k", [11]);
 
         Assert.That(leaf.PendingTransactionCount, Is.Zero);
-        await h.Registry.Received().GetStatusAsync(txid);
+        await h.Registry.Received(1).GetStatusForPrepareDedupAsync(txid);
+        await h.PhysicalRegistry.DidNotReceive().GetStatusForPrepareDedupAsync(Arg.Any<Guid>());
         await h.PhysicalRegistry.DidNotReceive().GetStatusAsync(Arg.Any<Guid>());
     }
 
@@ -289,7 +293,9 @@ public partial class BPlusLeafGrainTests
 
         Assert.That(leaf.PendingTransactionCount, Is.Zero,
             "a decision masked by the retention window is still a decision");
-        await h.Registry.Received().GetRecordedStatusAsync(txid);
+        await h.Registry.Received(1).GetStatusForPrepareDedupAsync(txid);
+        await h.Registry.DidNotReceive().GetStatusAsync(txid);
+        await h.Registry.DidNotReceive().GetRecordedStatusAsync(txid);
     }
 
     [Test]
@@ -330,7 +336,7 @@ public partial class BPlusLeafGrainTests
     public async Task Forwarded_prepare_is_bucketed_when_the_registry_cannot_be_reached()
     {
         var h = BuildReactivatingLeaf(TxStatus.Committed);
-        h.Registry.GetStatusAsync(Arg.Any<Guid>()).Throws(new TimeoutException("registry unreachable"));
+        h.Registry.GetStatusForPrepareDedupAsync(Arg.Any<Guid>()).Throws(new TimeoutException("registry unreachable"));
         var txid = Guid.NewGuid();
         var leaf = h.Activate();
         await leaf.SetAsync("k", [1]);
@@ -355,6 +361,7 @@ public partial class BPlusLeafGrainTests
             "the coordinator's own prepare is acknowledged before the saga decides, so it is never late");
         await h.Registry.DidNotReceive().GetStatusAsync(Arg.Any<Guid>());
         await h.Registry.DidNotReceive().GetRecordedStatusAsync(Arg.Any<Guid>());
+        await h.Registry.DidNotReceive().GetStatusForPrepareDedupAsync(Arg.Any<Guid>());
         await h.PhysicalRegistry.DidNotReceive().GetStatusAsync(Arg.Any<Guid>());
     }
 

@@ -287,9 +287,7 @@ internal sealed partial class BPlusLeafGrain
         var registry = TxRegistryRouting.GetRegistry(grainFactory, treeId, txid);
         try
         {
-            status = await registry.GetStatusAsync(txid);
-            if (status == TxStatus.Indeterminate)
-                status = await registry.GetRecordedStatusAsync(txid);
+            status = await registry.GetStatusForPrepareDedupAsync(txid);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
