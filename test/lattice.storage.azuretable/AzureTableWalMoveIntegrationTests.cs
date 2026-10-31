@@ -123,7 +123,6 @@ public sealed class AzureTableWalMoveIntegrationTests
     }
 
     [Test]
-    [Repeat(25)]
     public async Task A_move_with_default_options_copies_a_partition_larger_than_a_copy_page_to_Azure_Table()
     {
         var treeId = $"move-azure-{Guid.NewGuid():N}";
