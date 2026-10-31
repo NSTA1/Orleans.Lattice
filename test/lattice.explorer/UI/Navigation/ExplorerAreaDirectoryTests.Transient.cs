@@ -238,6 +238,37 @@ public sealed partial class ExplorerAreaDirectoryTests
     }
 
     [Test]
+    public async Task The_recheck_state_is_announced_when_it_changes()
+    {
+        Exception? fault = new RpcException(new Status(StatusCode.Unavailable, "down"));
+        var area = new FakeArea("access", "Access")
+        {
+            Availability = _ => fault is null ? ValueTask.FromResult(AreaAvailability.Visible) : ValueTask.FromException<AreaAvailability>(fault),
+        };
+        var directory = new ExplorerAreaDirectory([area], new ExplorerChromeOptions { RecheckDelays = [TimeSpan.FromSeconds(1)] }, _time);
+        var announced = 0;
+        directory.RecheckStateChanged += () => Interlocked.Increment(ref announced);
+
+        await directory.GetEntriesAsync();
+        var afterUnchecked = (announced, directory.IsRecheckScheduled);
+        await directory.GetEntriesAsync();
+        var afterRepeat = announced;
+        _time.Advance(TimeSpan.FromSeconds(1));
+        var afterLastDue = (announced, directory.IsRecheckScheduled);
+        fault = null;
+        await directory.GetEntriesAsync();
+        var afterSettled = (announced, directory.IsRecheckScheduled);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(afterUnchecked, Is.EqualTo((1, true)), "an area could not be checked");
+            Assert.That(afterRepeat, Is.EqualTo(1), "nothing changed");
+            Assert.That(afterLastDue, Is.EqualTo((2, false)), "the last recheck fell due, so none is left");
+            Assert.That(afterSettled, Is.EqualTo((3, false)), "it settled");
+        });
+    }
+
+    [Test]
     public async Task Disposing_the_directory_cancels_a_waiting_recheck()
     {
         var directory = new ExplorerAreaDirectory(

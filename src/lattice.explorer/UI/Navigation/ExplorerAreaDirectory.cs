@@ -51,6 +51,7 @@ internal sealed class ExplorerAreaDirectory : IDisposable
     private ShellCallerKey _memoCaller;
     private ITimer? _recheck;
     private int _recheckAttempt;
+    private int _recheckStateChanged;
     private bool _disposed;
 
     /// <summary>Builds the directory over every registered area.</summary>
@@ -111,13 +112,20 @@ internal sealed class ExplorerAreaDirectory : IDisposable
     /// </summary>
     public event Action? Changed;
 
+    /// <summary>
+    /// Raised when <see cref="IsRecheckScheduled"/> may have changed: a recheck was
+    /// scheduled, fell due, was asked for, or everything settled. It may be raised
+    /// off the renderer's thread.
+    /// </summary>
+    public event Action? RecheckStateChanged;
+
     /// <summary>Every registered area, in spine order, whatever its availability.</summary>
     public IReadOnlyList<IExplorerArea> Areas => _areas;
 
     /// <summary>
-    /// Whether an automatic recheck is waiting to run: something could not be
-    /// checked and the attempts in <see cref="ExplorerChromeOptions.RecheckDelays"/>
-    /// are not yet spent.
+    /// Whether the directory will still check again on its own: something could not
+    /// be checked, and a recheck is waiting or the attempts in
+    /// <see cref="ExplorerChromeOptions.RecheckDelays"/> are not yet spent.
     /// </summary>
     public bool IsRecheckScheduled
     {
@@ -125,7 +133,9 @@ internal sealed class ExplorerAreaDirectory : IDisposable
         {
             lock (_gate)
             {
-                return _recheck is not null;
+                return !_disposed
+                    && (_uncheckedAvailability.Count > 0 || _uncheckedStatus.Count > 0)
+                    && (_recheck is not null || _recheckAttempt < _options.RecheckDelays.Count);
             }
         }
     }
@@ -148,8 +158,10 @@ internal sealed class ExplorerAreaDirectory : IDisposable
         {
             CancelRecheck();
             _recheckAttempt = 0;
+            MarkRecheckStateChanged();
         }
 
+        NotifyRecheckState();
         Changed?.Invoke();
     }
 
@@ -253,19 +265,29 @@ internal sealed class ExplorerAreaDirectory : IDisposable
         }
 
         _logger.LogWarning(error, "The {Area} area's Home status could not be checked ({Outcome}); it is checked again.", area.Key, outcome);
+        ExplorerAreaStatus status;
         lock (_gate)
         {
             if (!StillFor(caller))
             {
-                return ExplorerAreaStatus.Unchecked;
+                status = ExplorerAreaStatus.Unchecked;
             }
+            else
+            {
+                if (_uncheckedStatus.Add(area.Key))
+                {
+                    MarkRecheckStateChanged();
+                }
 
-            _uncheckedStatus.Add(area.Key);
-            ScheduleRecheck();
-            return _knownStatus.TryGetValue(area.Key, out var known) && known is not null
-                ? new ExplorerAreaStatus { Text = known, IsStale = true }
-                : ExplorerAreaStatus.Unchecked;
+                ScheduleRecheck();
+                status = _knownStatus.TryGetValue(area.Key, out var known) && known is not null
+                    ? new ExplorerAreaStatus { Text = known, IsStale = true }
+                    : ExplorerAreaStatus.Unchecked;
+            }
         }
+
+        NotifyRecheckState();
+        return status;
     }
 
     /// <inheritdoc />
@@ -314,26 +336,34 @@ internal sealed class ExplorerAreaDirectory : IDisposable
             "The {Area} area's availability could not be checked ({Outcome}); it is shown as not checked and checked again.",
             area.Key,
             outcome == TimeBoxed.Outcome.Completed ? "Unchecked" : outcome.ToString());
+        (AreaAvailability Availability, string? Badge, bool IsStale) answer;
         lock (_gate)
         {
             if (!StillFor(caller))
             {
-                return (AreaAvailability.Unchecked, null, false);
+                answer = (AreaAvailability.Unchecked, null, false);
             }
-
-            _uncheckedAvailability.Add(area.Key);
-            ScheduleRecheck();
-            if (_knownAvailability.TryGetValue(area.Key, out var known))
+            else
             {
+                if (_uncheckedAvailability.Add(area.Key))
+                {
+                    MarkRecheckStateChanged();
+                }
+
+                ScheduleRecheck();
+
                 // A hidden answer stays hidden: a fault never reveals an area this
                 // caller was refused.
-                return known.Availability.IsShown
-                    ? (known.Availability, known.Badge, true)
-                    : (AreaAvailability.Hidden, null, false);
+                answer = _knownAvailability.TryGetValue(area.Key, out var known)
+                    ? known.Availability.IsShown
+                        ? (known.Availability, known.Badge, true)
+                        : (AreaAvailability.Hidden, null, false)
+                    : (AreaAvailability.Unchecked, null, false);
             }
-
-            return (AreaAvailability.Unchecked, null, false);
         }
+
+        NotifyRecheckState();
+        return answer;
     }
 
     private void SettleAvailability(string key, ShellCallerKey caller, AreaAvailability availability, string? badge)
@@ -346,16 +376,19 @@ internal sealed class ExplorerAreaDirectory : IDisposable
             }
 
             _knownAvailability[key] = (availability, badge);
-            _uncheckedAvailability.Remove(key);
-            if (availability.Kind != AreaAvailabilityKind.Visible)
-            {
-                // Home asks only a visible area for its status, so a status still
-                // waiting to be checked would otherwise wait forever.
-                _uncheckedStatus.Remove(key);
-            }
+            var settled = _uncheckedAvailability.Remove(key);
 
-            ResetRecheckWhenSettled();
+            // Home asks only a visible area for its status, so a status still
+            // waiting to be checked would otherwise wait forever.
+            settled |= availability.Kind != AreaAvailabilityKind.Visible && _uncheckedStatus.Remove(key);
+            if (settled)
+            {
+                MarkRecheckStateChanged();
+                ResetRecheckWhenSettled();
+            }
         }
+
+        NotifyRecheckState();
     }
 
     private void SettleStatus(string key, ShellCallerKey caller, string? text)
@@ -368,9 +401,14 @@ internal sealed class ExplorerAreaDirectory : IDisposable
             }
 
             _knownStatus[key] = text;
-            _uncheckedStatus.Remove(key);
-            ResetRecheckWhenSettled();
+            if (_uncheckedStatus.Remove(key))
+            {
+                MarkRecheckStateChanged();
+                ResetRecheckWhenSettled();
+            }
         }
+
+        NotifyRecheckState();
     }
 
     /// <summary>
@@ -389,6 +427,7 @@ internal sealed class ExplorerAreaDirectory : IDisposable
             _uncheckedStatus.Clear();
             _recheckAttempt = 0;
             CancelRecheck();
+            MarkRecheckStateChanged();
         }
 
         return now == caller;
@@ -421,8 +460,10 @@ internal sealed class ExplorerAreaDirectory : IDisposable
             }
 
             CancelRecheck();
+            MarkRecheckStateChanged();
         }
 
+        NotifyRecheckState();
         Changed?.Invoke();
     }
 
@@ -433,6 +474,18 @@ internal sealed class ExplorerAreaDirectory : IDisposable
         {
             _recheckAttempt = 0;
             CancelRecheck();
+        }
+    }
+
+    /// <summary>Records that <see cref="IsRecheckScheduled"/> may have changed. Call under the gate.</summary>
+    private void MarkRecheckStateChanged() => Volatile.Write(ref _recheckStateChanged, 1);
+
+    /// <summary>Raises <see cref="RecheckStateChanged"/> once for every change recorded. Call outside the gate.</summary>
+    private void NotifyRecheckState()
+    {
+        if (Interlocked.Exchange(ref _recheckStateChanged, 0) == 1)
+        {
+            RecheckStateChanged?.Invoke();
         }
     }
 

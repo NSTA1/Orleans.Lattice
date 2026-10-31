@@ -8,7 +8,11 @@ namespace Orleans.Lattice.Explorer.UI.Layout;
 /// because the cluster did not answer (issue #5420): what happened, whether the
 /// Explorer is still checking again on its own, and a button that checks again now.
 /// </summary>
-public partial class AreaRecheckNotice
+/// <remarks>
+/// It takes no parameters, so its parent's renders do not reach it: it re-renders
+/// itself whenever the directory's recheck state changes.
+/// </remarks>
+public partial class AreaRecheckNotice : IDisposable
 {
     /// <summary>The sentence while automatic rechecks are still to run.</summary>
     internal const string CheckingMessage = "Some areas could not be checked because the cluster did not answer. Checking again automatically.";
@@ -20,6 +24,14 @@ public partial class AreaRecheckNotice
     internal ExplorerAreaDirectory Directory { get; set; } = default!;
 
     private string Message => Directory.IsRecheckScheduled ? CheckingMessage : StoppedMessage;
+
+    /// <summary>Stops following the directory.</summary>
+    public void Dispose() => Directory.RecheckStateChanged -= OnRecheckStateChanged;
+
+    /// <inheritdoc />
+    protected override void OnInitialized() => Directory.RecheckStateChanged += OnRecheckStateChanged;
+
+    private void OnRecheckStateChanged() => _ = InvokeAsync(StateHasChanged);
 
     private void CheckAgain() => Directory.Recheck();
 }
