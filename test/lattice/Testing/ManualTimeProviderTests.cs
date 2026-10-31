@@ -348,6 +348,31 @@ public sealed partial class ManualTimeProviderTests
         });
     }
 
+    [Test]
+    public void ArmedTimers_tracks_due_times_through_change_and_advance()
+    {
+        var clock = new ManualTimeProvider(Start);
+        using var disarmed = clock.CreateTimer(
+            _ => { }, state: null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        using var oneShot = clock.CreateTimer(
+            _ => { }, state: null, TimeSpan.FromSeconds(1), Timeout.InfiniteTimeSpan);
+
+        var initiallyArmed = clock.ArmedTimers;
+        disarmed.Change(TimeSpan.FromSeconds(2), Timeout.InfiniteTimeSpan);
+        var afterArming = clock.ArmedTimers;
+        clock.Advance(TimeSpan.FromSeconds(1));
+        var afterOneShotFired = clock.ArmedTimers;
+        disarmed.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(initiallyArmed, Is.EqualTo(1));
+            Assert.That(afterArming, Is.EqualTo(2));
+            Assert.That(afterOneShotFired, Is.EqualTo(1));
+            Assert.That(clock.ArmedTimers, Is.Zero);
+        });
+    }
+
     /// <summary>
     /// The counterexample the property exists to prevent: advancing before the
     /// subject has armed anything moves the clock past a deadline nobody is
