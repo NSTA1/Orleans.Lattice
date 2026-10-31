@@ -141,6 +141,7 @@ internal sealed class BackupsAreaPage(PersonaSession session)
         var treeBox = Content.GetByRole(AriaRole.Combobox, new() { Name = "Tree", Exact = true });
         await treeBox.FillAsync(tree);
         await Expect(treeBox).ToHaveValueAsync(tree);
+        await CloseSuggestionsAsync(treeBox);
         await Expect(Content.GetByLabel("Scope", new() { Exact = true })).ToHaveValueAsync("whole-tree");
     }
 
@@ -263,6 +264,7 @@ internal sealed class BackupsAreaPage(PersonaSession session)
         var treeBox = Content.GetByRole(AriaRole.Combobox, new() { Name = "Tree", Exact = true });
         await treeBox.FillAsync(tree);
         await Expect(treeBox).ToHaveValueAsync(tree);
+        await CloseSuggestionsAsync(treeBox);
         await Content.GetByRole(AriaRole.Button, new() { Name = "Show schedules", Exact = true }).ClickAsync();
         await Expect(Page).ToHaveURLAsync(new Regex("/backups/schedules\\?tree=" + Regex.Escape(Uri.EscapeDataString(tree)) + "$"), new() { Timeout = LoadTimeout });
         await Expect(Content.Locator("h2").Filter(new() { HasText = "Schedules of" })).ToContainTextAsync(tree, new() { Timeout = LoadTimeout });
@@ -414,6 +416,14 @@ internal sealed class BackupsAreaPage(PersonaSession session)
         {
             await row.GetByRole(AriaRole.Link, new() { Name = text, Exact = true }).ClickAsync();
         }
+    }
+
+    private async Task CloseSuggestionsAsync(ILocator combobox)
+    {
+        // Leaving the field closes its suggestions (and confirms the tree exists), so the list
+        // never covers the controls below it.
+        await Shell.Heading.ClickAsync();
+        await Expect(combobox).ToHaveAttributeAsync("aria-expanded", "false");
     }
 
     private async Task SelectAsync(string label, string option)
