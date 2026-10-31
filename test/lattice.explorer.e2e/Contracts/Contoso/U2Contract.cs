@@ -56,6 +56,8 @@ public sealed class U2Contract() : ChapterContract("U2")
     /// </param>
     public static async Task MigrateAsync(Orleans.Lattice.Api.Schema.Grpc.LatticeSchemaApiGrpcClient schema, string treeId, string what, Estate.LineFeedControl feed)
     {
+        // #5440: pause the line feed so its writes do not push a slice past the call timeout;
+        // remove the pause (and the retry below) once #5440 is fixed.
         var resume = !(await feed.StatusAsync()).Paused;
         await feed.PauseAsync();
         try
