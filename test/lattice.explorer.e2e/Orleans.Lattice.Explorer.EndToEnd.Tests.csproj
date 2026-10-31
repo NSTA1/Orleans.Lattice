@@ -22,6 +22,8 @@
     <Compile Remove="artifacts/**" />
     <None Remove="artifacts/**" />
     <Compile Include="Hosts\Shared\*.cs" Link="Hosts\Shared\%(Filename)%(Extension)" />
+    <!-- The UI-test suite's axe-core configuration, shared as source (#5360): every checkpoint sweeps under the same rules. -->
+    <Compile Include="..\lattice.explorer.uitests\Accessibility\AxeConformance.cs" Link="Checkpoints\Shared\AxeConformance.cs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -29,6 +31,7 @@
     <PackageReference Include="NUnit" Version="4.6.1" />
     <PackageReference Include="NUnit3TestAdapter" Version="6.2.0" />
     <PackageReference Include="Microsoft.Playwright" Version="1.49.0" />
+    <PackageReference Include="Deque.AxeCore.Playwright" Version="4.7.2" />
     <PackageReference Include="Azure.Data.Tables" Version="12.12.0" />
     <PackageReference Include="Azure.Storage.Blobs" Version="12.29.1" />
     <PackageReference Include="Grpc.Net.Client" Version="2.83.0" />

@@ -40,14 +40,11 @@ public sealed class JourneyEstateOptions
     public int WestSilos { get; init; } = 2;
 
     /// <summary>
-    /// The identity directory's users. Defaults to the bootstrap administrator and the line
-    /// feed's service identity; the persona catalogue (#5360) adds the rest.
+    /// The identity directory's users. Defaults to the Contoso cast of the persona catalogue
+    /// (<see cref="Cast.Personas.ContosoUsers"/>): every persona can sign in from boot, and
+    /// only the bootstrap administrator holds any right.
     /// </summary>
-    public IList<JourneyUser> Users { get; init; } =
-    [
-        new(Administrator, "Olivia Okafor", "olivia-journeys-1"),
-        new(LineFeedIdentity, "Line feed (ingestion service)", "line-feed-journeys-1"),
-    ];
+    public IList<JourneyUser> Users { get; init; } = Cast.Personas.ContosoUsers();
 
     /// <summary>The groups the identity directory publishes.</summary>
     public IList<JourneyDirectoryGroupEntry> DirectoryGroups { get; init; } = [];
