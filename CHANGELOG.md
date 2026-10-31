@@ -60,6 +60,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Explorer - Schema suggestions.** Case-colliding members resolve exact names before case-insensitive matches. Suggested text prefixes preserve complete Unicode characters, and allowed-value cards retain strings named true or false. ([#5339](https://github.com/NSTA1/Orleans.Lattice/issues/5339)) (`Orleans.Lattice.Explorer.UI`)
+
 - **Explorer - Control consistency.** Superseded picker confirmations and delayed choice callbacks cannot submit abandoned values, even after edit round-trips. Tables reapply changed sort keys and restore natural order when sorting is removed. ([#5321](https://github.com/NSTA1/Orleans.Lattice/issues/5321)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Schema - Assurance and contract fixes.** Versioned writes, migrations, remediation, strict ingest, materialised views and derived copies now agree on schema, merge-mode and cluster settings; the Explorer shows version reachability. Formal models cover each composition. ([#4908](https://github.com/NSTA1/Orleans.Lattice/issues/4908)) (`Orleans.Lattice`, `Orleans.Lattice.Schema`, `Orleans.Lattice.Replication`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Dashboards`, `Orleans.Lattice.Explorer.UI`)

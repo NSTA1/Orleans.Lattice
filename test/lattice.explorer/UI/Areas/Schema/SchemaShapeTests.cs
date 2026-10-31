@@ -9,6 +9,50 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Schema;
 public sealed class SchemaShapeTests
 {
     [Test]
+    public void Find_case_colliding_members_prefers_the_exact_path_at_every_level()
+    {
+        const string json = "{\"Order\":{\"Total\":1,\"total\":2},\"order\":{\"Total\":3,\"total\":4}}";
+        var rule = LatticeSchemaRule.Structured(LatticePredicateNode.Compare(
+            LatticeComparisonOperator.Equal, LatticePredicateNode.Member("order.total"),
+            LatticePredicateNode.Const(LatticeConstant.Integer(4))));
+        var shape = SchemaShape.Infer([Encoding.UTF8.GetBytes(json)], [rule]);
+        var node = shape.Find("order.total");
+        var validator = new LatticeSchemaPolicyValidator(new LatticeSchemaPolicy([rule]));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(node, Is.SameAs(shape.Root.Children["order"].Children["total"]));
+            Assert.That(node!.Numbers, Is.EqualTo((4d, 4d)));
+            Assert.That(node.NamedByPolicy, Is.True);
+            Assert.That(shape.Root.Children["Order"].Children["Total"].NamedByPolicy, Is.False);
+            Assert.That(validator.ValidateRule(0, Encoding.UTF8.GetBytes(json)), Is.Null);
+        });
+    }
+
+    [Test]
+    public void Infer_policy_path_preserves_an_exact_unseen_member_beside_a_case_variant()
+    {
+        var shape = SchemaShape.Infer(
+            [Encoding.UTF8.GetBytes("{\"Amount\":1,\"amount\":2}")],
+            [LatticeSchemaRule.Regex("x", "amount.missing")]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shape.Root.Children["amount"].Children["missing"].NamedByPolicy, Is.True);
+            Assert.That(shape.Root.Children["Amount"].Children, Is.Empty);
+            Assert.That(shape.Find("amount.missing")!.Unseen, Is.True);
+        });
+    }
+
+    [Test]
+    public void Find_without_an_exact_case_match_keeps_the_case_insensitive_fallback()
+    {
+        var shape = Infer("{\"Order\":{\"Total\":4}}");
+
+        Assert.That(shape.Find("ORDER.TOTAL"), Is.SameAs(shape.Root.Children["Order"].Children["Total"]));
+    }
+
+    [Test]
     public void Infer_object_at_depth_limit_records_its_type_without_visiting_children()
     {
         var json = "{\"hidden\":1}";
