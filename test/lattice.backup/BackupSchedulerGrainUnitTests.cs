@@ -21,7 +21,7 @@ namespace Orleans.Lattice.Backup.Tests;
 /// faked - no Orleans <c>TestCluster</c> is started.
 /// </summary>
 [TestFixture]
-public sealed class BackupSchedulerGrainUnitTests
+public sealed partial class BackupSchedulerGrainUnitTests
 {
     private const string ScopeTreeId = "orders";
 

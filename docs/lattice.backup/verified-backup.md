@@ -7,7 +7,7 @@ agent_spec: "docs/agents/api/backup.json"
 Backup and restore meet concurrent atomic writes, replication and failures at
 several points, and the argument that they stay consistent there was until now
 made only in prose and chaos tests. This page states what is now checked
-formally, by five TLA+ specifications under
+formally, by six TLA+ specifications under
 [`spec/backup/`](../../spec/backup/README.md) and by Coyote models driving
 extracted production cores, and - just as importantly - what is not.
 
@@ -20,6 +20,7 @@ extracted production cores, and - just as importantly - what is not.
 | Provenance | A manifest never names an empty origin, never drops a real one, and a backup chain's HLC frontier covers every write it captured and never regresses. | `BackupProvenance` |
 | Coordinated restore | A restore of a replicated tree is all-or-nothing across regions; no pre-restore write ever reaches a restored copy; a restore never installs another tenant's records; replication resumed after a restore converges. | `BackupRestore` |
 | Local cutover and revert | A reader never pairs one physical copy with another copy's shard map; once a restore returns every reader sees the restored copy, and once a revert returns none does, however stale its routing; a tree is never deleted while its copies are in motion; a restore, or a revert, that crashes part-way still completes on retry. | `BackupCutover` |
+| Retention pruning | Every backup the retention policy keeps, with its whole base chain, stays restorable while full and incremental captures of the same scope run alongside the pruning and either side crashes at any step; an incremental backup is published only while its base is restorable; nothing the policy keeps is pruned; and a backup outside the policy that nothing builds on is eventually pruned. | `BackupRetention` |
 
 Every property is paired with a deliberate defect (a mutation) that must make
 TLC report it, and every protocol step of each specification is perturbed by at
@@ -82,9 +83,21 @@ not to hold in production:
   design; the one exception it does not cover is an operator resolving a
   participant whose coordinator is lost, which is audited.
 
+- **Retention could prune the base of an incremental backup still being
+  captured (#5357, fixed).** A retention pass planned from a catalog listing
+  that cannot hold an increment still in flight, and an increment read its base
+  once, before it drained, so a pass could delete the base the increment had
+  chosen and the increment was then published without one: listed, and not
+  restorable. Two retention passes could also run at once on one scope. The fix
+  is a fence on both sides - a pass removes each backup's catalog row before it
+  looks in the sink for an increment built on it, and keeps any such backup; an
+  increment re-reads its base's catalog row just before it publishes, and takes
+  a fresh full backup instead if the row has gone - and one retention pass per
+  scope at a time. The specification checks that design.
+
 ## Which parts run in production code
 
-The checks reach production through four extracted cores, each executed by the
+The checks reach production through five extracted cores, each executed by the
 code that runs and by a test that drives it:
 
 - the cross-tree set's drain gate, re-check under the decision gate and
@@ -95,7 +108,9 @@ code that runs and by a test that drives it:
 - how an incremental backup resolves the atomic batches in its window against
   the decision gate;
 - the coordinated restore's single commit-or-abort decision
-  (shared production/test decision logic), also driven by a Coyote model.
+  (shared production/test decision logic), also driven by a Coyote model;
+- retention pruning's keep set, base closure, dependent scan, tip-first delete
+  order and an increment's publish check, also driven by a Coyote model.
 
 Everything else the specifications describe - the decision gate's registry leases, routing,
 redirects, the alias reservation, the write and receive fences - is mapped to
@@ -116,7 +131,11 @@ Coverage of one half must not be read as coverage of the other. Not covered:
   shard-ownership specification's `ShardOwnershipCutover` module checks, and
   which found #4689 (fixed);
 - the receiver side of cross-cluster atomic batches, which the atomic-commit
-  cross-cluster module checks ([formal coverage](../lattice/formal-coverage.md)).
+  cross-cluster module checks ([formal coverage](../lattice/formal-coverage.md));
+- an operator's explicit backup delete, which removes the named backup whatever
+  builds on it, and catalog rebuild and scrub;
+- two captures that publish the same content-addressed backup id, and retention
+  over a sink shared between clusters.
 
 Each refinement note under [`spec/backup/`](../../spec/backup/README.md) lists in
 full what lies outside its scope, and any gap open against production.

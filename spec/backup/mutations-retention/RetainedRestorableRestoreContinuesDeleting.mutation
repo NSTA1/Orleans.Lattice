@@ -1,0 +1,21 @@
+# Pairs with RetainedRestorable. The compensation restores a depended-on
+# manifest's row but leaves the manifest in the pass's plan, so the pass goes
+# on to delete the base it has just found an increment built on.
+MODULE: RetainedRestorableRestoreContinuesDeleting
+TARGET: RetainedRestorable
+CLASS: Invariant
+SUMMARY: a restored manifest stays doomed and is deleted anyway
+PERTURBS: RestoreRow
+
+--- FIND
+    /\ prBlocked' = [prBlocked EXCEPT ![p] = @ \ {m}]
+    /\ prDoomed' = [prDoomed EXCEPT ![p] = @ \ {m}]
+    /\ prPh' = [prPh EXCEPT ![p] =
+         IF prBlocked[p] = {m} THEN Settle(p, prDoomed[p] \ {m}) ELSE "restore"]
+--- REPLACE
+    /\ prBlocked' = [prBlocked EXCEPT ![p] = @ \ {m}]
+    \* MUTATION: the restored manifest stays in the plan.
+    /\ prDoomed' = prDoomed
+    /\ prPh' = [prPh EXCEPT ![p] =
+         IF prBlocked[p] = {m} THEN Settle(p, prDoomed[p]) ELSE "restore"]
+--- END

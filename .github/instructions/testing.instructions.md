@@ -1120,12 +1120,14 @@ targets and requires a clean run. The assurance document is
 
 ### Backup and restore property catalogue (epic #4430, issue #4440)
 
-The backup area's properties are checked by five TLA+ modules under
+The backup area's properties are checked by six TLA+ modules under
 [`spec/backup/`](../../spec/backup/README.md), each with its own refinement note
 naming the production symbols and detector tests per row. Its Coyote models
 live in the backup and replication test projects, not in `test/lattice/`, and
-drive two extracted cores: `CrossTreeFenceWindow` (backup set capture window)
-and `CrossClusterSagaDecisionCore` (coordinated restore decision). Two more
+drive three extracted cores: `CrossTreeFenceWindow` (backup set capture window),
+`BackupRetentionPlanner` (retention pruning's keep set, dependent scan and an
+increment's publish check, #5357) and `CrossClusterSagaDecisionCore`
+(coordinated restore decision). Two more
 cores have unit suites only, because they are folds that are not
 schedule-sensitive: `BackupChainFrontier` (origin normalisation and chain
 frontier) and `IncrementalSagaStaging` (how an increment resolves the sagas in
@@ -1143,6 +1145,8 @@ its window, #4589).
 | `BackupRestore` | `RestoreAllOrNothing` | No cluster serves its restored copy unless every cluster voted commit and none compensated. The participant fence timer is modelled; its unilateral compensation is a gap filed as #4637. | `CoordinatedRestoreDecisionModel` (`Committing_on_any_vote_leaves_the_restore_mixed`). |
 | `BackupRestore` | `RestoredCutNotReAdvanced`, `RestoreAdmitsOnlyNamespace`, `AckedWritesServed`, `RestoreConverges` | No pre-cutover write reaches a restored copy (the #4490 rebind-first resume, and the #4593 restored-copy fence against a stale cached admission or a parked entry); no foreign record installed; post-cutover writes survive; resumed replication converges (liveness). | None; detectors in the note. |
 | `BackupCutover` | `RestoreNeverTorn`, `CutoverServesRestored`, `RevertNeverServesRestored`, `DeleteNeverMidCutover`, `RestoreReturns`, `RevertReturns` | Alias and map move together; stale routing heals after a restore and after a revert; no delete mid-cutover; a crashed restore, and a revert crashed between its swap and its fix-up, complete on retry (liveness). | None; integration and chaos detectors in the note. |
+| `BackupRetention` | `RetainedRestorable`, `SinkChainIntact`, `InFlightBaseSurvives` | Every backup the retention policy keeps, with its base chain, stays restorable while captures race the pass; an increment publishes only while its base is restorable; an interrupted pass never leaves a published increment in the sink without its base. Models the #5357 fix. | `BackupRetentionModel` (guards `Without_the_base_recheck_an_increment_is_published_over_a_pruned_base`, `Without_the_dependent_scan_a_pass_deletes_a_base_an_increment_published_over`; witness `Exploration_reaches_an_increment_falling_back_because_a_pass_had_its_base`); `BackupRetentionConcurrencyTests`. |
+| `BackupRetention` | `KeepPolicyHonoured`, `ExpiredEventuallyPruned` | Nothing keep-last, max-age or the base closure keeps is pruned; a listed backup outside the policy that nothing builds on is eventually pruned, including after a faulted pass (liveness). | None; `BackupRetentionPlannerTests` and `BackupSchedulerGrainUnitTests`. |
 
 What these do not cover - a batch in flight across a whole cutover (checked by
 `ShardOwnershipCutover` under `spec/shard-ownership/`), reader atomicity across set members, in-place and cold

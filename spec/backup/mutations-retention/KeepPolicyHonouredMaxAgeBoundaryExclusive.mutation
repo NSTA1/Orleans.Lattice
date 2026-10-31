@@ -1,0 +1,14 @@
+# Pairs with KeepPolicyHonoured. The plan's max-age cutoff is exclusive, so a
+# backup exactly maxAge old - which the policy keeps - is pruned.
+MODULE: KeepPolicyHonouredMaxAgeBoundaryExclusive
+TARGET: KeepPolicyHonoured
+CLASS: Action
+SUMMARY: the max-age cutoff excludes a backup created exactly at it
+PERTURBS: PruneList
+
+--- FIND
+                     \/ pol.maxAge > 0 /\ meta[i].t + pol.maxAge >= now}
+--- REPLACE
+                     \* MUTATION: exclusive cutoff.
+                     \/ pol.maxAge > 0 /\ meta[i].t + pol.maxAge > now}
+--- END

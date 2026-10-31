@@ -1,0 +1,15 @@
+# Pairs with TypeOK. A capture starts with no id left to allocate.
+MODULE: TypeOkIdRunaway
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a capture allocates an id past the bound
+PERTURBS: Start
+
+--- FIND
+    /\ next <= MaxIds
+    /\ k = "full" => b = 0
+--- REPLACE
+    \* MUTATION: no id bound.
+    /\ next <= MaxIds + 1
+    /\ k = "full" => b = 0
+--- END

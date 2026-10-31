@@ -1,0 +1,20 @@
+# Pairs with RetainedRestorable. The pass deletes a doomed sink manifest as
+# soon as its row is gone, before the scan has decided whether an increment
+# depends on it.
+MODULE: RetainedRestorableDeleteBeforeScan
+TARGET: RetainedRestorable
+CLASS: Invariant
+SUMMARY: a sink manifest is deleted before the dependent scan
+PERTURBS: DelMan
+
+--- FIND
+    /\ \/ prPh[p] = "delete"
+       \/ prPh[p] = "restore" /\ prBlocked[p] = {}
+    /\ m \in prDoomed[p] \ prManGone[p]
+--- REPLACE
+    /\ \/ prPh[p] = "delete"
+       \/ prPh[p] = "restore" /\ prBlocked[p] = {}
+       \* MUTATION: deletion may start before the scan.
+       \/ prPh[p] = "rows" /\ m \in prGone[p]
+    /\ m \in prDoomed[p] \ prManGone[p]
+--- END

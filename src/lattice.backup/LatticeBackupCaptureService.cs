@@ -349,6 +349,7 @@ internal sealed class LatticeBackupCaptureService(
                 .ConfigureAwait(false);
         }
 
+        string retiredIncrementId;
         try
         {
             var backupId = collector.BackupId;
@@ -392,38 +393,68 @@ internal sealed class LatticeBackupCaptureService(
             }
 
             await sink.WriteManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
-            await catalog.RegisterAsync(manifest, cancellationToken).ConfigureAwait(false);
 
-            // Advance the WAL pin to the increment frontier so GC can now reclaim the
-            // entries we have captured; the next increment re-pins from its own base.
-            // An atomic write the increment held back (#4589) keeps its entries pinned
-            // through the blocked floor until a later increment resolves it; the report
-            // replaces the previous floor, so a floor nothing still needs is cleared.
-            await cursorRegistry.ReportCursorAsync(
-                treeId, consumerId, collector.HighestHlc, collector.BlockedFloor, cancellationToken)
-                .ConfigureAwait(false);
+            // The fence against a concurrent retention pass (issue #5357). The base
+            // was read once, before the drain, and a pass may have begun to prune it
+            // since. A pass removes a doomed base's catalog row before it scans the
+            // sink for increments built on it, so with this manifest already in the
+            // sink either the row is still here - and a pass that removes it later
+            // finds this manifest and keeps the base - or a pass is pruning the base
+            // and this increment must not be published over it.
+            var baseRow = await catalog.GetAsync(request.BaseBackupId, cancellationToken).ConfigureAwait(false);
+            if (BackupRetentionPlanner.MayPublishIncrement(manifest, baseRow))
+            {
+                await catalog.RegisterAsync(manifest, cancellationToken).ConfigureAwait(false);
 
-            LatticeBackupMetrics.RecordCaptureSuccess(
-                manifest,
-                stopwatch.Elapsed.TotalMilliseconds,
-                collector.ByteLength,
-                manifest.ContentDescriptors.Count,
-                collector.KeyDescriptors.Count);
-            var baseCutAgeMs = Math.Max(0d, (createdAtUtc - baseManifest.CreatedAtUtc).TotalMilliseconds);
-            LatticeBackupMetrics.RecordIncrementalLag(collector.KeyDescriptors.Count, baseCutAgeMs);
+                // Advance the WAL pin to the increment frontier so GC can now reclaim the
+                // entries we have captured; the next increment re-pins from its own base.
+                // An atomic write the increment held back (#4589) keeps its entries pinned
+                // through the blocked floor until a later increment resolves it; the report
+                // replaces the previous floor, so a floor nothing still needs is cleared.
+                await cursorRegistry.ReportCursorAsync(
+                    treeId, consumerId, collector.HighestHlc, collector.BlockedFloor, cancellationToken)
+                    .ConfigureAwait(false);
 
-            logger.LogInformation(
-                "Captured incremental backup {BackupId} of tree {TreeId} on base {BaseBackupId} "
-                + "({KeyCount} delta entries, {ByteLength} bytes).",
-                backupId, treeId, request.BaseBackupId, collector.KeyDescriptors.Count, collector.ByteLength);
+                LatticeBackupMetrics.RecordCaptureSuccess(
+                    manifest,
+                    stopwatch.Elapsed.TotalMilliseconds,
+                    collector.ByteLength,
+                    manifest.ContentDescriptors.Count,
+                    collector.KeyDescriptors.Count);
+                var baseCutAgeMs = Math.Max(0d, (createdAtUtc - baseManifest.CreatedAtUtc).TotalMilliseconds);
+                LatticeBackupMetrics.RecordIncrementalLag(collector.KeyDescriptors.Count, baseCutAgeMs);
 
-            return new LatticeBackupCaptureResult(backupId, manifest);
+                logger.LogInformation(
+                    "Captured incremental backup {BackupId} of tree {TreeId} on base {BaseBackupId} "
+                    + "({KeyCount} delta entries, {ByteLength} bytes).",
+                    backupId, treeId, request.BaseBackupId, collector.KeyDescriptors.Count, collector.ByteLength);
+
+                return new LatticeBackupCaptureResult(backupId, manifest);
+            }
+
+            retiredIncrementId = backupId;
         }
         catch (Exception ex) when (LatticeBackupMetrics.EmitCaptureFailure(
             BackupKind.Incremental, LatticeBackupMetrics.PhaseManifestCommit, ex))
         {
             throw;
         }
+
+        // The base was pruned while the increment drained: withdraw the increment's
+        // sink manifest (and its now unreferenced artifact) so nothing - a restore
+        // by id, a catalog rebuild - can find an increment with no base, then start
+        // a fresh full backup, exactly as the other unusable-base cases do.
+        logger.LogWarning(
+            "Base backup {BaseBackupId} of tree {TreeId} was pruned by retention while the increment "
+            + "drained; falling back to a full backup.",
+            request.BaseBackupId, treeId);
+        await sink.DeleteManifestAsync(retiredIncrementId, cancellationToken).ConfigureAwait(false);
+        await sink.DeleteArtifactAsync(artifactId, cancellationToken).ConfigureAwait(false);
+        await cursorRegistry.ReportCursorAsync(
+            treeId, consumerId, HybridLogicalClock.Zero, blockedAtHlc: null, cancellationToken).ConfigureAwait(false);
+        LatticeBackupMetrics.RecordCaptureRetry(LatticeBackupMetrics.ReasonIncrementalFallback);
+        return await CaptureTreeAsync(request.Name, scope, request.PageSize, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <inheritdoc />

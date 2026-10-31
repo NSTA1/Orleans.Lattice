@@ -1,15 +1,16 @@
 # TLA+ specifications of backup and restore against in-flight sagas
 
-This directory holds five TLA+ modules that check the backup and restore
-protocols where they meet concurrent atomic sagas, replication, and failures.
-Four are the deliverable of issue #4440, part of the formal-coverage epic #4430;
-`BackupIncremental` was added by its fix for #4589.
+This directory holds six TLA+ modules that check the backup and restore
+protocols where they meet concurrent atomic sagas, replication, captures and
+failures. Four are the deliverable of issue #4440, part of the formal-coverage
+epic #4430; `BackupIncremental` was added by its fix for #4589, and
+`BackupRetention` by issue #5350 of epic #5348.
 Each module has its own TLC configuration, manifest, mutation directory and
 refinement note. The layout every module follows, how to run TLC, and why TLC
 runs in CI are described in [`spec/README.md`](../README.md); this README covers
 only what is particular to the backup area.
 
-## The five modules, and why five
+## The six modules, and why six
 
 The area splits along the seam where the state each part needs stops
 overlapping, which also keeps every module's TLC run small:
@@ -21,6 +22,7 @@ overlapping, which also keeps every module's TLC run small:
 | [`BackupProvenance`](BackupProvenance.tla) | What a chain records: per-origin provenance, the #2621 empty-origin rule, and the chain's HLC frontier (#3758). | A local and a replicated origin, three writes, a chain of three links. |
 | [`BackupRestore`](BackupRestore.tla) | A coordinated restore across two regions, its per-record admission, and the replication that resumes after it, with delivery split into a cached-gate admission and a later landing, a causal-apply buffer, and the restored copy's receive fence (#4593). | Two clusters, two copies each, a backup with one admitted and one foreign record, two application writes, one saga (receive-fence epochs 0 and 1). |
 | [`BackupCutover`](BackupCutover.tla) | A local shadow-cutover restore and its revert: the alias and shard map that move together, the redirects that heal stale routing, the alias reservation, and a crash with a retry. | One tree, two copies, one stale routing cache, one crash. |
+| [`BackupRetention`](BackupRetention.tla) | Retention pruning racing full and incremental captures of the same scope: the keep set and its base closure, the pass's row-first delete and dependent scan, the increment's base re-check, tip-first deletion, one pass at a time, and a crash at any step (#5357). | Three backup ids, two capture slots, one retention pass (two in the `TwoPasses` variant), a clock of three ticks, one crash, keep-last of at most one and max-age of one tick. |
 
 An increment needs the WAL's partitions and offsets, which no other capture
 question does, so it is a module of its own rather than a third capture kind in
@@ -29,6 +31,20 @@ restore share no state the other needs: a restore installs an image
 as one value, and whether that image is whole is the capture module's question.
 Coordinated restore and the local cutover split for the same reason: the first
 is about clusters and replication, the second about one cluster's routing.
+Retention needs none of the saga, WAL or routing state, only manifests, their
+base links, the sink and the catalog, so it is a module of its own too.
+
+### Retention pruning
+
+`BackupRetention` reuses the chain abstraction of `BackupIncremental` at a
+coarser grain: a backup is a manifest with an artifact and, for an increment, a
+base, and what an increment holds is not modelled. A backup is restorable while
+its manifest resolves (catalog row first, then the sink manifest, as the restore
+engine resolves it), its artifact is in the sink, and its base is restorable.
+Every capture path that can run beside a pass for the same scope is one capture
+slot: the scheduler's own, the backup API's (which may name any base), and
+another silo's. The model found #5357 and checks its fix; see
+[`RefinementRetention.md`](RefinementRetention.md).
 
 ## Properties checked
 
@@ -52,6 +68,11 @@ is about clusters and replication, the second about one cluster's routing.
 | | `RestoreAdmitsOnlyNamespace` | Invariant | A restore never installs a record outside the tenant's namespace. |
 | | `AckedWritesServed` | Invariant | A post-cutover write stays served by its author. |
 | | `RestoreConverges` | Liveness | A restore followed by resumed replication converges. |
+| `BackupRetention` | `RetainedRestorable` | Invariant | Every backup the policy keeps, with its whole base chain, is restorable. |
+| | `SinkChainIntact` | Invariant | A published increment still in the sink has a restorable base. |
+| | `InFlightBaseSurvives` | Action | An increment is published only while its base is restorable. |
+| | `KeepPolicyHonoured` | Action | Nothing the policy keeps is pruned. |
+| | `ExpiredEventuallyPruned` | Liveness | A listed backup outside the policy that nothing builds on is eventually pruned. |
 | `BackupCutover` | `RestoreNeverTorn` | Invariant | A reader never pairs one copy with another copy's shard map. |
 | | `CutoverServesRestored` | Invariant | Once a restore returns, every reader is served the restored copy. |
 | | `RevertNeverServesRestored` | Invariant | Once a revert returns, no reader is served the restored copy. |
@@ -109,7 +130,20 @@ refinement note's rows:
   reproduces production before the fix, and its code analogue turns the fix's
   regression test red.
 
-All five fixes have landed, so the reproducing mutations now stand as
+- **#5357** (`BackupRetention`, fixed): a retention pass could delete the base
+  of an incremental backup still being captured, because it planned from a
+  catalog listing that cannot hold the in-flight increment, and the increment
+  read its base only before draining; the increment was then published with no
+  base. Two passes could also run at once on one scheduler activation and undo
+  each other's protection. The module checks the fix: a pass removes each
+  doomed row first, scans the sink for what an increment outside the pass builds
+  on and keeps it, and deletes tip first; an increment re-reads its base's
+  catalog row after writing its sink manifest and falls back to a full backup if
+  it is gone; one pass runs at a time. `InFlightBaseSurvivesNoBaseRecheck` and
+  `RetainedRestorableNoDependentScan` reproduce production before it, and their
+  code analogues turn the fix's regression tests red.
+
+All six fixes have landed, so the reproducing mutations now stand as
 regression checks: each must keep firing, and each has a code analogue that turns
 the fix's regression tests red.
 ## Saga abstraction
@@ -130,6 +164,7 @@ table in [`RefinementCapture.md`](RefinementCapture.md).
 | `CrossTreeFenceWindow` (backup) | The drain gate and post-capture re-observation of `LatticeBackupCaptureService` | `CrossTreeFenceWindowTests`; Coyote `CrossTreeFenceCaptureCoyoteTests`, which models the fence, its lapse window, the gate, the gated re-check and the post-capture re-observation over a two-tree saga, with a fixed-design arm, a quiet-set arm, an anti-vacuity witness that an accepted set holds the committed saga, four single-defence arms (each of the drain, the re-check, the re-observed epoch and the re-observed in-flight count alone keeps the set whole against the race it covers), and two guards that find a torn set once the defences for a race are removed. |
 | `IncrementalSagaStaging` (backup) | How an increment resolves the sagas in its window against the decision gate, in `IncrementalDeltaCollector` | `IncrementalSagaStagingTests` (core unit suite; the staging is a fold over the drained entries against a fixed decision snapshot, so it is not schedule-sensitive). |
 | `BackupChainFrontier` (backup) | Origin normalisation, per-origin high-water, and both consistency cuts, in both collectors and the capture service | `BackupChainFrontierTests` (core unit suite; the rules are not schedule-sensitive). |
+| `BackupRetentionPlanner` (backup) | The keep set, base closure, retained artifacts, dependent scan and tip-first order of `BackupSchedulerGrain`'s retention pass, and the publish check of `LatticeBackupCaptureService.CaptureIncrementalAsync` | `BackupRetentionPlannerTests`; Coyote `BackupRetentionCoyoteTests`, which races a pass against an increment and a newer full capture through the production planner, with a fixed-design arm, an anti-vacuity witness that the increment falls back, and one guard per side of the fence. |
 | `CrossClusterSagaDecisionCore` (replication) | The coordinated restore's single global decision in `CrossClusterSagaCoordinatorGrain` | `CrossClusterSagaDecisionCoreTests`; Coyote `CoordinatedRestoreDecisionCoyoteTests`, with a fixed-design arm and a guard. |
 
 ## How to run TLC
@@ -155,3 +190,4 @@ notes and TLC's own state counts.
 | `BackupProvenance` | 5 | 0 | 4 | 5 | 8 | 2,199 |
 | `BackupRestore` | 5 | 1 | 16 | 20 | 20 | 22,700 |
 | `BackupCutover` | 5 | 2 | 10 | 12 | 16 | 39 |
+| `BackupRetention` | 3 | 3 | 16 | 21 | 20 | 189,435 |
