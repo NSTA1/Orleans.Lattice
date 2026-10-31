@@ -177,6 +177,11 @@ CLASSIFY_CASES: list[tuple[str, list[str], str]] = [
         "false",
     ),
     (
+        "the explorer journeys run their own lane and seed nothing here",
+        ["test/lattice.explorer.e2e/Smoke/EstateSmokeTests.cs"],
+        "false",
+    ),
+    (
         "samples seed nothing",
         ["samples/AgentBacklog/template/backlog-protocol.md", "samples/Demo/Program.cs"],
         "false",
@@ -296,6 +301,12 @@ MUTATIONS: list[tuple[str, str, str]] = [
         "separately-laned uitests exclusion removed: a UI-test-only change "
         "would fail, though it runs its own lane and plans zero library legs",
         "    | grep -vE '^test/lattice\\.explorer\\.uitests/' \\",
+        "    | grep -vE '^$' \\",
+    ),
+    (
+        "separately-laned journeys exclusion removed: an end-to-end-only "
+        "change would fail, though it runs its own lane and plans zero legs",
+        "    | grep -vE '^test/lattice\\.explorer\\.e2e/' \\",
         "    | grep -vE '^$' \\",
     ),
     (

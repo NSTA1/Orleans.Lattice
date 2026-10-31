@@ -1,0 +1,90 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Orleans.Lattice.Explorer.EndToEnd.Hosts.Silo</RootNamespace>
+    <AssemblyName>Orleans.Lattice.Explorer.EndToEnd.JourneySilo</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!--
+    The journey silo is the reference-architecture silo built from source: the same
+    registration calls as reference-architecture/hosts/Silo/Program.cs (a parity test
+    holds the two in step), over project references rather than the released
+    packages, plus the add-ons the reference silo does not register (Apps, tenancy,
+    replication status) and the journey estate's identity directory.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Orleans.Server" Version="10.2.2" />
+    <PackageReference Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.2.2" />
+    <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.2.2" />
+    <PackageReference Include="Microsoft.Orleans.Reminders.AzureStorage" Version="10.2.2" />
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
+    <PackageReference Include="Azure.Data.Tables" Version="12.12.0" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
+    <PackageReference Include="OpenTelemetry.Exporter.Prometheus.AspNetCore" Version="1.15.3-beta.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\src\lattice\Orleans.Lattice.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.storage.azuretable\Orleans.Lattice.Storage.AzureTable.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.replication\Orleans.Lattice.Replication.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.replication.grpc\Orleans.Lattice.Replication.Grpc.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.replication\Orleans.Lattice.Api.Replication.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.replication.grpc\Orleans.Lattice.Api.Replication.Grpc.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.backup\Orleans.Lattice.Backup.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.backup.azureblob\Orleans.Lattice.Backup.AzureBlob.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.backup\Orleans.Lattice.Api.Backup.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.backup.grpc\Orleans.Lattice.Api.Backup.Grpc.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.state\Orleans.Lattice.Api.State.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.state.grpc\Orleans.Lattice.Api.State.Grpc.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.data\Orleans.Lattice.Api.Data.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.data.grpc\Orleans.Lattice.Api.Data.Grpc.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.auth\Orleans.Lattice.Api.Auth.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.auth.grpc\Orleans.Lattice.Api.Auth.Grpc.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.schema\Orleans.Lattice.Schema.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.schema\Orleans.Lattice.Api.Schema.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.schema.grpc\Orleans.Lattice.Api.Schema.Grpc.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.treeadmin\Orleans.Lattice.Api.TreeAdmin.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.treeadmin.grpc\Orleans.Lattice.Api.TreeAdmin.Grpc.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.auth\Orleans.Lattice.Auth.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.membership\Orleans.Lattice.Membership.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.scaling\Orleans.Lattice.Scaling.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.apps\Orleans.Lattice.Apps.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.apps\Orleans.Lattice.Api.Apps.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.apps.grpc\Orleans.Lattice.Api.Apps.Grpc.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.tenancy\Orleans.Lattice.Tenancy.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.tenantadmin\Orleans.Lattice.Api.TenantAdmin.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.tenantadmin.grpc\Orleans.Lattice.Api.TenantAdmin.Grpc.csproj" />
+    <ProjectReference Include="..\..\..\..\samples\Explorer\Apps\TaskBoard\src\TaskBoard.csproj" />
+    <!-- The reference heads' shared hosting helpers: probe-log suppression and the internal-port guard. -->
+    <ProjectReference Include="..\..\..\..\reference-architecture\hosts\Common\Orleans.Lattice.ReferenceArchitecture.Hosting.csproj" />
+  </ItemGroup>
+
+  <!--
+    Compiled from the reference silo's own source, not copied: the storage identity,
+    the replication topology parser and the bootstrap-administrator seeder are the
+    reference silo's, so a change there is a change here.
+  -->
+  <ItemGroup>
+    <Compile Include="..\..\..\..\reference-architecture\hosts\Silo\AzureStorageIdentity.cs" Link="Reference\AzureStorageIdentity.cs" />
+    <Compile Include="..\..\..\..\reference-architecture\hosts\Silo\ReplicationTopology.cs" Link="Reference\ReplicationTopology.cs" />
+    <Compile Include="..\..\..\..\reference-architecture\hosts\Silo\AdministratorAccessSeeder.cs" Link="Reference\AdministratorAccessSeeder.cs" />
+    <Compile Include="..\Shared\*.cs" Link="Shared\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <!--
+    The next version of the task-board app, served from the samples-next source: the
+    sample's own bundle with a manifest that adds one operation, so upgrade and
+    re-consent are reachable.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="Apps\task-board-next.manifest.json" LogicalName="JourneySilo.TaskBoardNext.manifest.json" />
+    <EmbeddedResource Include="..\..\..\..\samples\Explorer\Apps\TaskBoard\src\ui\*.html;..\..\..\..\samples\Explorer\Apps\TaskBoard\src\ui\*.css;..\..\..\..\samples\Explorer\Apps\TaskBoard\src\ui\*.mjs;..\..\..\..\samples\Explorer\Apps\TaskBoard\src\ui\*.svg" LogicalName="JourneySilo.TaskBoardNext.ui.%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>

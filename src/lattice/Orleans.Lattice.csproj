@@ -89,6 +89,7 @@
     <InternalsVisibleTo Include="Orleans.Lattice.Apps" />
     <InternalsVisibleTo Include="Orleans.Lattice.Apps.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Benchmark.Microbench" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Explorer.EndToEnd.JourneySilo" />
     <InternalsVisibleTo Include="Orleans.Lattice.Benchmark.LeafCacheGrowth" />
     <InternalsVisibleTo Include="Orleans.Lattice.Benchmark.RegistryFanIn" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
