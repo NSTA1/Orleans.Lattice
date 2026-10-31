@@ -7,7 +7,16 @@
     <LtSearchInput Label="Filter trees" Placeholder="Filter by name, app or tenant" @bind-Value="_filter" />
     <LtButton OnClick="() => LoadAsync(refresh: true)" Disabled="@_trees.IsLoading">Refresh</LtButton>
     <LtButton data-lt-command="@ClusterArea.ReshardCommandId" OnClick="OpenReshard">Reshard tree...</LtButton>
+    @if (_canCreate)
+    {
+        <LtButton data-lt-command="@ClusterArea.CreateTreeCommandId" OnClick="OpenCreate">New tree...</LtButton>
+    }
 </div>
+
+@if (_createRefusal is { } createRefusal)
+{
+    <p class="lt-cluster-note" role="status" data-lt-create-tree-hidden>@createRefusal</p>
+}
 
 @if (_trees.IsLoading)
 {
@@ -70,3 +79,5 @@ else
         </div>
     </form>
 </LtDialog>
+
+<ClusterTreeCreateDialog @bind-Open="_createOpen" Placement="@SheetPlacement" />

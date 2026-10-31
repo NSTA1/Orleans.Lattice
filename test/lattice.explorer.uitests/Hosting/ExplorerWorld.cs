@@ -52,7 +52,9 @@ namespace Orleans.Lattice.Explorer.UiTests;
 /// The seeded groups follow the task-board walkthrough: <c>alice</c> edits, <c>bob</c>
 /// and <c>dave</c> view, <c>carol</c> is bound to no role. <c>bob</c> also holds a broad allow on the
 /// whole cluster, which is what the isolation fixture needs to prove a viewer's write is
-/// refused by the app's roles rather than by the viewer's own rights.
+/// refused by the app's roles rather than by the viewer's own rights. <c>erin</c> observes
+/// the whole estate - cluster telemetry and read - and administers nothing, so the Cluster
+/// area shows her what she may not change.
 /// </para>
 /// </remarks>
 internal sealed partial class ExplorerWorld : IAsyncDisposable
@@ -333,6 +335,7 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
                 .AddUser(WorldIdentities.Bob, "Bob Ito")
                 .AddUser(WorldIdentities.Carol, "Carol Diaz")
                 .AddUser(WorldIdentities.Dave, "Dave Okafor")
+                .AddUser(WorldIdentities.Erin, "Erin Sato")
                 .AddUser(WorldIdentities.GlobexAdmin, "Globex tenant administrator")
                 .AddGroup(WorldIdentities.OperatorsGroup, "Floor Operators")
                 .AddGroup(WorldIdentities.EditorsGroup, "Task board editors")
@@ -498,6 +501,15 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
                 scope: LatticeScope.ClusterWide(),
                 operations: LatticeOperation.Read | LatticeOperation.RangeRead | LatticeOperation.Write
                     | LatticeOperation.Delete | LatticeOperation.RangeDelete,
+                effect: LatticeEffect.Allow));
+
+            // An observer of the whole estate: the Cluster area is visible to them,
+            // and administering a tree, or creating one, is not.
+            await policy.PutRuleAsync(new LatticeAuthorizationRule(
+                ruleId: "erin-observes-the-estate",
+                subject: LatticeSubjectSelector.User(WorldIdentities.Erin),
+                scope: LatticeScope.ClusterWide(),
+                operations: LatticeOperation.Read | LatticeOperation.RangeRead | LatticeOperation.Telemetry,
                 effect: LatticeEffect.Allow));
         }
     }

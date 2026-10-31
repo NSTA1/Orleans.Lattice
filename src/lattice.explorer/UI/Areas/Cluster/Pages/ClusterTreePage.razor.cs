@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.TreeAdmin;
+using Orleans.Lattice.Explorer.UI.Areas.Data;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Explorer.UI.Design.Components;
@@ -19,6 +20,7 @@ public partial class ClusterTreePage : IDisposable
     private ClusterLoad<LatticeTreeAdminCapabilities> _access = ClusterLoad<LatticeTreeAdminCapabilities>.Loading;
     private TreeConfigurationReport? _config;
     private string? _missingUnder;
+    private TreeCreationResult? _created;
 
     /// <summary>The logical tree id.</summary>
     [Parameter, EditorRequired]
@@ -47,6 +49,20 @@ public partial class ClusterTreePage : IDisposable
     [Inject]
     private ClusterTreeChanges TreeChanges { get; set; } = default!;
 
+    [Inject]
+    private ClusterTreeCreation Creation { get; set; } = default!;
+
+    private string ConfigurationHref =>
+        ClusterAddresses.TryTree(TreeId, ClusterTreeView.Overview, out var address)
+            ? Href(address.WithQuery(ClusterAddresses.TabQuery, "configuration"))
+            : string.Empty;
+
+    private string DataHref => Href(ExplorerAddress.ForTree(DataArea.AreaKey, TreeId));
+
+    private string CreatedSentence(TreeCreationResult created) =>
+        $"{TreeId} is new and empty, with {ClusterFormat.Plural(created.ShardCount, "physical shard")}, "
+        + $"{ClusterFormat.Count(created.MaxLeafKeys)} keys per leaf and {ClusterFormat.Count(created.MaxInternalChildren)} children per internal node. What next:";
+
     private string Lede => _config is { } config
         ? string.Join(" - ", new[]
         {
@@ -65,6 +81,13 @@ public partial class ClusterTreePage : IDisposable
     /// <inheritdoc />
     protected override async Task OnInitializedAsync()
     {
+        // A tree this circuit has just created arrives here once, on its Summary,
+        // with what to do next; a later visit or a reload shows the page alone.
+        if (Creation.TryTakeCreated(TreeId, out var created))
+        {
+            _created = created;
+        }
+
         var token = _lifetime.Token;
         _access = await ClusterLoad<LatticeTreeAdminCapabilities>.RunAsync(
             ct => ClusterTreeAccess.ProbeAsync(Facades.RequireTreeAdmin(), TreeId, ct),

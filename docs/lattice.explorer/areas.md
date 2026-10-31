@@ -449,7 +449,7 @@ region diagram.
 | Address | What it shows |
 | --- | --- |
 | `/cluster` | Estate overview: cluster id, service id, storage use, region diagram and links to Trees, WAL placement and Orphaned leaves. |
-| `/cluster/trees` | Every logical tree in the cluster, with owner, shard count, WAL partitions and lifecycle. System trees are not listed, and the list says so; a tenant-scoped list also leaves out other tenants' trees. |
+| `/cluster/trees` | Every logical tree in the cluster, with owner, shard count, WAL partitions and lifecycle. System trees are not listed, and the list says so; a tenant-scoped list also leaves out other tenants' trees. **New tree...** creates one. |
 | `/cluster/trees/{tree-path}` | One tree's summary, configuration, shards, storage and lifecycle tabs. |
 | `/cluster/trees/{tree-path}/tools` | Compaction, projection digest and bulk load tools. |
 | `/cluster/trees/{tree-path}/reshard` | Resumable online reshard status and staging. |
@@ -491,6 +491,34 @@ audits, the alias target, the reshard dialog) accepts only a listed tree. A
 snapshot's destination names a new tree, so it is a plain name box rather than a
 picker: it offers no list, and refuses a name that already exists ("A tree with
 this name already exists; a snapshot needs a new one.").
+
+**New tree...** (`cluster.create-tree`) creates an empty tree. It is drawn only for
+a caller the create-tree probe admits: the side-effect-free capability probe of a
+sentinel tree id, which grants a caller who administers every tree (or every tree
+of their tenant), else the probe of the first few listed trees, which grants a
+caller whose administration is scoped to some trees. For any other caller the
+control is hidden, and the palette command is refused with "Your identity holds no
+grant to create trees on this cluster.". The answer is remembered for 30 seconds
+for the caller it was read for. The dialog asks for the tree name and the physical
+shard count, keys per leaf and children per internal node, which start at the
+library defaults (64, 128 and 128) and each say what they do. A name that is
+empty, begins with the reserved `_lattice_` or `t/` namespace, has an empty part,
+or is too deep to have a Cluster address is refused beside the field in the
+cluster's own words; shards run from 1 to 4,096, keys per leaf from 2, and
+children from 3. **Review** then checks the exact name: a name the caller does not
+administer, a name already taken ("A tree named factory-floor already exists.
+Creating it again would change nothing; choose another name."), and, under a
+tenant, a tenant whose tree count has reached its quota ceiling ("Tenant acme is
+at its tree quota: 2 of 2 trees. Delete a tree, or ask a platform operator to
+raise the quota.") are refused before anything is written. The review names the
+tree, its tenant and its sizing, and **Create tree** creates it. At a
+tenant-rooted address the tree is created in that tenant. A refusal at the create
+itself is shown on the review: the cluster's idempotent create reports a name
+registered meanwhile as already existing, and a quota refusal is told in quota
+terms. A created tree is at once in the Cluster tree list and the Data directory,
+and the page opens on its Summary with a **Tree created** section, shown once,
+that offers to seed it with a bulk load, set its configuration and history
+retention, or browse it in Data.
 
 A tree page begins with a side-effect-free capability probe. If the caller has
 no tree-admin capability over the tree, it shows "Nothing you can administer".
@@ -619,6 +647,7 @@ The Cluster palette commands are:
 | --- | --- | --- |
 | `cluster.reshard-tree` | Reshard tree... | "Grow or shrink a tree's physical shard count, online." Opens the reshard chooser on `/cluster/trees`, then navigates to the chosen tree's reshard page. |
 | `cluster.plan-wal-move` | Plan WAL move... | Opens the WAL move planner on `/cluster/wal`, then navigates to the query-addressed plan. |
+| `cluster.create-tree` | New tree... | "Create an empty tree with a chosen shard count and node sizes." Opens the create-tree dialog on `/cluster/trees`, then lands on the new tree's Summary. Refused, with a sentence, for a caller who may not create trees. |
 
 Cluster faults are shown as short sentences, never a stack or a status code. An
 authorisation denial is always "You do not have permission to do this.". Any
