@@ -427,6 +427,10 @@ internal sealed partial class LatticeAdminGrain
 
         // Copies source entries with offset in (fromExclusive, throughInclusive]
         // to the target, preserving offsets. Returns the new exclusive cursor.
+        // A page can hold more entries than the target accepts in one append
+        // (the Azure Table provider caps a call at its 100-action transaction),
+        // so each page is written as dense runs of at most that many entries.
+        var maxAppend = dstProvider.MaxAppendBatchEntries;
         async Task<long> CopyRangeAsync(long fromExclusive, long throughInclusive)
         {
             var cursor = fromExclusive;
@@ -438,16 +442,27 @@ internal sealed partial class LatticeAdminGrain
                 {
                     break;
                 }
-                await dstProvider.AppendEncodedBatchAsync(
-                    physicalTreeId, partition, page.EncodedEntries, page.Offsets, encoder, cancellationToken);
 
-                var offsets = page.Offsets.Span;
-                if (copiedFrom < 0)
+                for (var start = 0; start < page.Offsets.Length;)
                 {
-                    copiedFrom = offsets[0];
+                    var length = WalMoveResumeCore.CopyChunkLength(page.Offsets.Span, start, maxAppend);
+                    await dstProvider.AppendEncodedBatchAsync(
+                        physicalTreeId,
+                        partition,
+                        page.EncodedEntries.Slice(start, length),
+                        page.Offsets.Slice(start, length),
+                        encoder,
+                        cancellationToken);
+
+                    var offsets = page.Offsets.Span;
+                    if (copiedFrom < 0)
+                    {
+                        copiedFrom = offsets[start];
+                    }
+                    copiedThrough = offsets[start + length - 1];
+                    start += length;
                 }
-                copiedThrough = offsets[^1];
-                cursor = offsets[^1];
+                cursor = copiedThrough;
 
                 // Units are offsets of the live tail: a resumed copy counts the
                 // prefix an earlier attempt already landed as done.

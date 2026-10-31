@@ -141,6 +141,19 @@ public interface IWalStorageProvider
     }
 
     /// <summary>
+    /// The largest number of entries this provider accepts in a single
+    /// <see cref="AppendBatchAsync"/> or <see cref="AppendEncodedBatchAsync"/>
+    /// call. A provider backed by a store with a per-transaction action cap
+    /// rejects a larger batch rather than fragmenting it (see the atomicity
+    /// contract above), so a caller that assembles batches from entries it did
+    /// not size itself - the managed WAL move's copy loop - chunks each batch to
+    /// this limit. The default is <see cref="int.MaxValue"/> (no per-call cap);
+    /// the Azure Table provider overrides it with its 100-action transaction cap.
+    /// Must be at least <c>1</c>.
+    /// </summary>
+    int MaxAppendBatchEntries => int.MaxValue;
+
+    /// <summary>
     /// Yields entries with <see cref="WalEntry.Offset"/> strictly greater
     /// than <paramref name="fromOffsetExclusive"/>, in ascending offset
     /// order, up to a maximum of <paramref name="maxEntries"/>. The

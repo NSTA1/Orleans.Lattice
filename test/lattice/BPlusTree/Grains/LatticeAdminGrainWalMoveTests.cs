@@ -65,6 +65,21 @@ public sealed partial class LatticeAdminGrainWalMoveTests
         /// <summary>Every offset handed to <see cref="AppendEncodedBatchAsync"/>, in call order.</summary>
         public List<long> AppendedOffsets { get; } = new();
 
+        /// <summary>The entry count of every <see cref="AppendEncodedBatchAsync"/> call, in call order.</summary>
+        public List<int> AppendBatchSizes { get; } = new();
+
+        /// <summary>
+        /// The per-call cap this provider advertises and enforces, as the Azure
+        /// Table provider does: a larger or non-dense batch is rejected rather than
+        /// fragmented.
+        /// </summary>
+        public int MaxAppendBatchEntries { get; init; } = int.MaxValue;
+
+        /// <summary>When set, the append call with this 1-based number fails once, before anything lands.</summary>
+        public int? FailOnAppendCall { get; set; }
+
+        private int _appendCalls;
+
         public void Seed(params long[] offsets)
         {
             foreach (var o in offsets)
@@ -84,6 +99,26 @@ public sealed partial class LatticeAdminGrainWalMoveTests
             string treeId, int shardIndex, ReadOnlyMemory<ArraySegment<byte>> encodedEntries,
             ReadOnlyMemory<long> offsets, IWalRecordEncoder encoder, CancellationToken cancellationToken)
         {
+            if (++_appendCalls == FailOnAppendCall)
+            {
+                FailOnAppendCall = null;
+                throw new InvalidOperationException("scripted append failure");
+            }
+            if (offsets.Length > MaxAppendBatchEntries)
+            {
+                throw new ArgumentException(
+                    $"the supplied batch of {offsets.Length} entries exceeds the per-call limit of {MaxAppendBatchEntries}.",
+                    nameof(encodedEntries));
+            }
+            var span = offsets.Span;
+            for (var i = 1; i < span.Length; i++)
+            {
+                if (span[i] != span[i - 1] + 1)
+                {
+                    throw new ArgumentException("batch offsets must be dense.", nameof(offsets));
+                }
+            }
+            AppendBatchSizes.Add(offsets.Length);
             foreach (var o in offsets.Span)
             {
                 _offsets.Add(o);
@@ -175,12 +210,17 @@ public sealed partial class LatticeAdminGrainWalMoveTests
         int walPartitions = 2,
         bool registerSecondary = true,
         bool deactivateThrows = false,
-        bool targetTrimRaisesHighWaterMark = false)
+        bool targetTrimRaisesHighWaterMark = false,
+        int targetMaxAppendBatchEntries = int.MaxValue)
     {
         pin ??= WalPlacementPin.Create();
 
         var source = new ScriptedWalProvider();
-        var target = new ScriptedWalProvider { TrimRaisesHighWaterMark = targetTrimRaisesHighWaterMark };
+        var target = new ScriptedWalProvider
+        {
+            TrimRaisesHighWaterMark = targetTrimRaisesHighWaterMark,
+            MaxAppendBatchEntries = targetMaxAppendBatchEntries,
+        };
         var providers = new Dictionary<string, IWalStorageProvider>(StringComparer.Ordinal)
         {
             [IWalStorageProviderCatalog.DefaultProviderKey] = source,
