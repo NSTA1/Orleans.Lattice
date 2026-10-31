@@ -214,6 +214,8 @@ public sealed class LeafCursorReporterDurablePinTests
             Removed.Add(consumerId);
             return Task.CompletedTask;
         }
+        public Task<WalMaterialiserPinToken> GetRetirementTokenAsync() => throw new NotSupportedException();
+        public Task<bool> RemoveIfUnmergedSinceAsync(string consumerId, WalMaterialiserPinToken token) => throw new NotSupportedException();
 
         public Task ClearAsync()
         {

@@ -1,0 +1,16 @@
+# Pairs with NoTrimPastLiveNeed. The trim ignores a Zero block pin, so a leaf that
+# has written but never checkpointed is trimmed past.
+MODULE: NoTrimPastLiveNeedTrimIgnoresBlockPin
+TARGET: NoTrimPastLiveNeed
+CLASS: Invariant
+SUMMARY: the trim does not stop at a block pin
+PERTURBS: GcTrim
+
+--- FIND
+GcTrim ==
+    /\ ~Blocking
+--- REPLACE
+GcTrim ==
+\* MUTATION: block pins do not stop the trim.
+    /\ TRUE
+--- END

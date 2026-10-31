@@ -1030,7 +1030,8 @@ production detectors, each proven red by perturbing production, in
 
 The WAL durability lifecycle has a TLA+ specification of its own, `spec/wal/`
 (`WalDurability.tla` for the leaf lifecycle under crash-anywhere recovery,
-`WalMove.tla` for shard moves), and an end-to-end Coyote companion,
+`WalMove.tla` for shard moves, `WalPinRetirement.tla` for the GC's retirement
+of orphaned materialiser pins), and an end-to-end Coyote companion,
 `WalDurabilityLifecycleModel` / `WalDurabilityLifecycleCoyoteTests`. The model
 drives five production cores together:
 
@@ -1064,6 +1065,9 @@ reported under that fix's own assertion tag, not merely some violation.
 | `ReaderNeverPassesHole`, `AllocatorNeverReissues` (`WalMove`) | As `ShippingNeverSkips` and `OffsetContiguity`. | `WalShippingWatermark`, `WalOffsetAllocationCore` | `WalShippingWatermarkModel`, `WalOffsetContiguityModel`. | Their models' guard tests. | Cited. |
 | `StreamEventuallyComplete` (`WalMove`) | A move's fence is always eventually lowered. | - | Not encoded in Coyote. | - | Gap: TLA+ only. |
 | `FenceEventuallyReleased` (`WalMove`) | A durable move fence is never held for ever, even once its coordinator is lost. | - | Not encoded in Coyote. | - | Gap: TLA+ only; its production detectors (#4525's fix) are named in `spec/wal/MoveRefinement.md`. |
+| `NoTrimPastLiveNeed`, `LivePublisherPinned`, `RetireOnlyHusk` (`WalPinRetirement`) | The GC never retires the pin of a leaf that is live or re-created under the same grain id, so the trim never passes writes it still needs (#5358). | `WalOrphanPinRetirementCore` | `WalPinRetirementModel`: the re-created leaf keeps a pin while it holds an un-checkpointed write. | `WalPinRetirementCoyoteTests.Unfenced_retirement_retires_the_pin_of_a_recreated_leaf` and `WalPinRetirementCoyoteTests.A_token_taken_after_the_read_does_not_fence_the_recreation`. | Net-new. |
+| `UnreadableNeverRetired` (`WalPinRetirement`) | A faulted leaf read never retires a pin. | `WalOrphanPinRetirementCore` | Not encoded in Coyote: `WalOrphanPinRetirementCoreTests` covers the arm. | - | Gap: TLA+ and unit tests only. |
+| `OrphanEventuallyRetired` (`WalPinRetirement`) | A gone leaf's pins are eventually retired, unless its grain id is populated again first. | - | Not encoded in Coyote. | - | Gap: TLA+ only; its production detectors are named in `spec/wal/PinRetirementRefinement.md`. |
 
 **Gap analysis.** Every assertion of `WalDurabilityLifecycleModel` and
 `WalPartitionReleaseModel` is the reporter of at least one guard: disabling any
@@ -1279,7 +1283,7 @@ above). This reverses an earlier decision to keep exhaustive TLC out of routine 
 "CI decision" section of `spec/README.md` records why. `spec/` is outside
 `Orleans.Lattice.slnx` and is not built by `dotnet`.
 
-The WAL durability lifecycle has its own modules under `spec/wal/` (`WalDurability.tla`, `WalMove.tla`), with the same mutation, refinement and Coyote pattern; see `spec/wal/README.md` and the WAL durability property catalogue above.
+The WAL durability lifecycle has its own modules under `spec/wal/` (`WalDurability.tla`, `WalMove.tla`, `WalPinRetirement.tla`), with the same mutation, refinement and Coyote pattern; see `spec/wal/README.md` and the WAL durability property catalogue above.
 
 ## Hygiene gates
 

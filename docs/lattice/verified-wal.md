@@ -51,6 +51,7 @@ directly is the public `InMemoryWalCursorRegistry`.
 | `WalBlockedFloorCore.Meet` | The lowest buffer-pin HLC across consumers - the meet (minimum) each consumer's live pin is folded into, so the GC's blocked floor tracks the slowest buffering consumer and never trims an entry a live buffer still needs. |
 | `WalMoveResumeCore` | Whether a move's target is a clean prefix of the source tail, and the offset a crashed-and-re-driven copy resumes just past - the resume arithmetic that makes an interrupted placement move copy each retained offset exactly once. |
 | `LeafDurablePinCore` | The durable materialiser pin a leaf publishes for a partition: a release for a partition with nothing to lose, the never-written release (#3453), the Zero block pin for a prefix whose only durable copy is the WAL, or a trim entitlement of `min(persisted checkpoint, covered)` - never the pending checkpoint (#3476). `BPlusLeafGrain.ResolveDurablePinForPartition` gathers the inputs and maps the verdict. |
+| `WalOrphanPinRetirementCore` | Whether the GC may remove an orphaned materialiser pin: only on a durable leaf read that is a husk (no record, or no tree id), only for a consumer id the gate reads as a leaf's own, within the pass budget, and - the fence of issue #5358 - only when the pin grain has recorded no merge of the consumer since the retirement's token, on the activation that issued it. The bulk orphan sweep, the starvation drive's retirement and `WalMaterialiserPinGrain.RemoveIfUnmergedSinceAsync` all route through it. |
 | `WalFallOffCore` | Whether the WAL has been trimmed past the first offset a replay resuming after a checkpoint still needs (`checkpoint >= 0 && tail > checkpoint + 1`; a durably recorded checkpoint of 0 is a real read position, issue #4433). Both the fall-off-log detector and the activation's cold-replay guard route through it, so the two cannot disagree. |
 
 The core files live under `src/lattice/`, `src/lattice/BPlusTree/`, and
@@ -81,6 +82,7 @@ The WAL models live under `test/lattice/BPlusTree/Coyote/`:
 | `WalBlockedFloorLifecycleModel` | `WalBlockedFloorCore` | The GC's blocked floor is the minimum live buffer pin across consumers, so through every interleaving of pin-take, pin-raise, and pin-clear it never rises above a live pin and never trims an entry a buffering consumer still needs. |
 | `WalMoveRedriveModel` | `WalMoveResumeCore` | A placement move's tail copy resumes just past what the target already holds, so a coordinator that crashes and re-drives at any offset boundary copies every retained offset exactly once with no duplicate and no gap. |
 | `WalDurabilityLifecycleModel` | `WalOffsetAllocationCore`, `WalShippingWatermark`, `LeafDurablePinCore`, `WalGcTrimCore`, `WalFallOffCore` | End to end, with a leaf stopping at any step: appends, out-of-order flushes, read-position replay, checkpoint persists and snapshot captures that can fail, pin publication and the GC trim, with a variant in which one leaf owns nothing so the never-written release is exercised. No acknowledged write is lost or skipped, no leaf falls off the log, no trim entitlement exceeds snapshot coverage, a failed persist is rolled back, and no pin exceeds the persisted checkpoint. |
+| `WalPinRetirementModel` | `WalOrphanPinRetirementCore` | A purge-cleared leaf re-created under the same grain id while a retirement takes its token, reads the leaf and removes: under every interleaving, the re-created leaf keeps a pin while it holds an un-checkpointed write. |
 | `WalPartitionReleaseModel` | `LeafDurablePinCore`, `WalGcTrimCore` | One leaf whose writes span two partitions, with HLC stamps and a retention TTL: the empty release of a partition the leaf has applied nothing in, writes stamped below the leaf's clock (replication, carried copies), and every GC arm that admits by stamp or by age. No acknowledged write leaves durable state, under the replay barrier of #4669 and the override hold of #4641. |
 
 ### Every model ships a non-vacuous guard test
@@ -140,6 +142,9 @@ asserts Coyote *finds* the resulting violation
   persisted checkpoint, reading the holds before the GC's head bound, and a trigger
   on a stamp below the clock alone, which misses a merge saturated at the HLC
   counter ceiling.
+- `WalPinRetirementModel` - two guards: removing the fence, and taking the token
+  after the leaf read; in each, Coyote finds the re-created leaf whose pin was
+  retired (issue #5358).
 
 A model with a green fix test and a green guard test is proven load-bearing for the
 assertions its guards name, and only for those. Every assertion of both
@@ -177,7 +182,11 @@ TLA+ specification in [`spec/wal/`](../../spec/wal/README.md):
   deleted are carved out of `ReadPositionHonest`;
 - `WalMove.tla`, a shard move with a durable fence, a shard crash and the loss of
   its coordinator, and, through a second configuration, two moves contending for the
-  same stream (one taking over the other's lapsed fence).
+  same stream (one taking over the other's lapsed fence);
+- `WalPinRetirement.tla`, the GC's retirement of orphaned materialiser pins - the
+  bulk sweep and the starvation drive, each a token, a leaf read and a fenced
+  removal as separate steps, two sweepers racing - against a leaf's fold, purge,
+  discard and re-creation under the same grain id.
 
 It follows the pattern of the atomic-commit specification: every property and every
 action has a mutation that makes a property fire, and a refinement note maps each
@@ -205,7 +214,7 @@ or an abstraction of the first version. Both are fixed:
 | #4523 | A never-written leaf with no snapshot releases its block at its persisted checkpoint; after a cold-rebuild capture below that release and a trim, its next activation latches stale. It needs two faults. Fixed: the release fires only under durable coverage. |
 | #4525 | A move's fence lives only in the source activation's memory and the flip re-checks nothing, so a source re-activated after the copy acknowledges writes the flip discards. Fixed: the fence is a durable record every new activation re-derives, and the flip requires it still held. |
 
-Since then the models have found eight more, each reproduced before its fix:
+Since then the models have found nine more, each reproduced before its fix:
 
 | Issue | Defect |
 |-------|--------|
@@ -216,12 +225,15 @@ Since then the models have found eight more, each reproduced before its fix:
 | #4669 | A cold leaf releases a partition its replay has not read. Fixed: no empty release before the replay barrier latches. |
 | #4641 | A write stamped below an empty release's frontier is trimmed by every stamp-based GC arm. Fixed: a durable override hold the GC reads as a block. |
 | #4699 | A move's quiesce ignores an abandoned call a predecessor activation left. Fixed: the drain check reads the process-wide registry. |
+| #5358 | The GC removed an orphaned pin by consumer id after a husk read taken in a separate step, so a purge-cleared leaf re-created in between lost the block pin its birth seeded under the same consumer id, and the trim could pass its un-checkpointed writes. Fixed: the removal is fenced by the pin grain's per-activation merge stamps, and the drive retires through the same fenced sequence. Found by `WalPinRetirement`. |
 | #4700 | A purge's shard-wide recovery flag re-creates empty a leaf the purge never reached, and strands cleared leaves when the reseed stops early. Fixed: each leaf carries its own purge marker, and recovery re-creates only a marked leaf, visiting every one. |
 
 **What is covered:** one WAL partition shared by two leaves, with two faults per
 behaviour for safety and one for liveness, and a variant with snapshot and row loss
 and a purge; one move with one shard crash and one coordinator crash, and a variant
-with two contending moves; and, in Coyote, a leaf spanning two partitions with HLC
+with two contending moves; the GC's orphan-pin retirement against a leaf re-created
+under the same grain id, with one sweeper and the drive, and variants with one fault
+and with two sweepers; and, in Coyote, a leaf spanning two partitions with HLC
 stamps and a retention TTL (`WalPartitionReleaseModel`).
 
 **What is not covered:**
@@ -230,7 +242,9 @@ stamps and a retention TTL (`WalPartitionReleaseModel`).
 - splits, resharding and saga state;
 - interleavings inside a grain turn's awaits;
 - replication consumers, beyond their effect on the trim floor;
-- liveness under two faults, or any property under three.
+- liveness under two faults, or any property under three;
+- for pin retirement, several leaves or partitions per leaf, the pin's HLC frontier
+  and override holds, and the in-memory cursor registry.
 
 Coverage of the leaf lifecycle does not imply coverage of any of those. Each module's
 refinement note lists its gaps in full.

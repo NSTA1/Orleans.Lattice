@@ -183,6 +183,35 @@ internal interface IWalMaterialiserPinGrain : IGrainWithStringKey
     Task RemoveAsync(string consumerId);
 
     /// <summary>
+    /// Returns a retirement token for this activation (issue #5358). A WAL GC
+    /// retirement takes it <b>before</b> it reads the pins it may remove, and
+    /// presents it to <see cref="RemoveIfUnmergedSinceAsync"/>, so a removal
+    /// decided on a stale read cannot erase a pin merged since.
+    /// </summary>
+    /// <returns>The token.</returns>
+    Task<WalMaterialiserPinToken> GetRetirementTokenAsync();
+
+    /// <summary>
+    /// Removes <paramref name="consumerId"/>'s durable pin exactly as
+    /// <see cref="RemoveAsync"/> does, but only when no report, seed or hold
+    /// has merged into the consumer's pin since <paramref name="token"/> was
+    /// taken, and only on the activation that issued it (issue #5358). A
+    /// refusal leaves the pin exactly where it is.
+    /// </summary>
+    /// <remarks>
+    /// This is the fence for the WAL GC's orphan retirement: the retirement
+    /// reads the pinned leaf's row as a husk in a separate step, and a leaf
+    /// re-created under the same grain id in between seeds its block pin under
+    /// the same consumer id - often into the surviving entry, where the
+    /// monotone merge changes nothing that a read could see. The merge is
+    /// recorded regardless, so the stale removal is refused.
+    /// </remarks>
+    /// <param name="consumerId">The consumer whose pin to remove. Must not be <see langword="null"/> or whitespace.</param>
+    /// <param name="token">The token taken before the read the removal was decided on.</param>
+    /// <returns><see langword="true"/> when the pin was removed (or was already absent); <see langword="false"/> when the fence refused.</returns>
+    Task<bool> RemoveIfUnmergedSinceAsync(string consumerId, WalMaterialiserPinToken token);
+
+    /// <summary>
     /// Clears every durable pin for this tree. Reserved for terminal
     /// tree-lifecycle events (tree deletion / purge) so the per-shard WAL
     /// GC is no longer floored by stale leaf pins after the tree's data has

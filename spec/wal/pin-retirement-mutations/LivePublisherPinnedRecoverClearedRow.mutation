@@ -1,0 +1,18 @@
+# Pairs with LivePublisherPinned. Recovery binds a leaf whose row a purge already
+# cleared as if its row had survived, rather than re-creating it with a fresh
+# birth seed: the previous incarnation comes back without the pins the purge
+# retired.
+MODULE: LivePublisherPinnedRecoverClearedRow
+TARGET: LivePublisherPinned
+CLASS: Invariant
+SUMMARY: recovery revives a cleared row without a birth seed
+PERTURBS: RecoverTree
+
+--- FIND
+    /\ phase \in {"deleted", "marked"}
+    /\ phase' = "live"
+--- REPLACE
+\* MUTATION: a cleared row is revived in place.
+    /\ phase \in {"deleted", "marked", "husk"}
+    /\ phase' = "live"
+--- END

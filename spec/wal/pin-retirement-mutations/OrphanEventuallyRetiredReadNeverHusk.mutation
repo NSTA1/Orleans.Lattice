@@ -1,0 +1,16 @@
+# Pairs with OrphanEventuallyRetired. A protocol defect with every fairness
+# assumption intact: the classifier never reports a husk (a row with no tree id
+# reads as checkpointed), so an orphan is never retired and its pin holds the
+# floor for ever - issue #3105's original shape.
+MODULE: OrphanEventuallyRetiredReadNeverHusk
+TARGET: OrphanEventuallyRetired
+CLASS: Temporal
+SUMMARY: the leaf read never classifies a husk, so no orphan is retired
+PERTURBS: Read
+
+--- FIND
+    /\ verdict' = [verdict EXCEPT ![p] = IF phase = "husk" THEN "husk" ELSE "live"]
+--- REPLACE
+\* MUTATION: a husk reads as live.
+    /\ verdict' = [verdict EXCEPT ![p] = "live"]
+--- END

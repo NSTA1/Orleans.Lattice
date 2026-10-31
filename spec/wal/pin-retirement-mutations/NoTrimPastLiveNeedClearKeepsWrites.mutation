@@ -1,0 +1,17 @@
+# Pairs with NoTrimPastLiveNeed. The purge's row clear is not the commit point of
+# the leaf's writes' deletion - they are still wanted after the row has gone - so
+# the husk the clear leaves licenses a retirement, and a trim, over them.
+MODULE: NoTrimPastLiveNeedClearKeepsWrites
+TARGET: NoTrimPastLiveNeed
+CLASS: Invariant
+SUMMARY: the purge clears the row while the leaf's writes are still needed
+PERTURBS: ClearRow
+
+--- FIND
+    /\ \/ /\ phase = "marked"
+          /\ need' = {}
+--- REPLACE
+\* MUTATION: the writes outlive the row.
+    /\ \/ /\ phase = "marked"
+          /\ need' = need
+--- END

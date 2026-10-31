@@ -1,0 +1,16 @@
+# Pairs with RetireOnlyHusk. Issue #4238's shape: the removal gate is dropped, so
+# a pin whose id merely parses to the husk's grain - published by a live
+# consumer the id does not name - is removed on evidence about another grain.
+MODULE: RetireOnlyHuskIgnoresIdGate
+TARGET: RetireOnlyHusk
+CLASS: Action
+SUMMARY: the removal ignores the consumer-id gate and retires a foreign consumer's pin
+PERTURBS: Decide
+BOUNDS: Foreign = TRUE
+
+--- FIND
+                    /\ IdVerdict(c) = "LeafPublished"
+--- REPLACE
+\* MUTATION: no consumer-id gate.
+                    /\ IdVerdict(c) \in {"LeafPublished", "AmbiguousPartition"}
+--- END

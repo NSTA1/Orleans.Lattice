@@ -706,6 +706,7 @@ internal static class TypeAliases
     internal const string IWalMaterialiserPinGrain = "ol.wpi";
     internal const string WalMaterialiserPinState = "ol.wps";
     internal const string WalMaterialiserPinReport = "ol.wpr";
+    internal const string WalMaterialiserPinToken = "ol.wpt";
 
     // Cluster-wide WAL GC orphan-pin sweep coordinator (#5097): one sweep per
     // tree per interval instead of one per silo.
