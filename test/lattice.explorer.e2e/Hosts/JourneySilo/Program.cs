@@ -1,5 +1,6 @@
 using System.Net;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
 using Orleans.Configuration;
 using Orleans.Lattice;
@@ -17,6 +18,8 @@ using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Api.Schema.Grpc;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.State.Grpc;
+using Orleans.Lattice.Api.Telemetry;
+using Orleans.Lattice.Api.Telemetry.Grpc;
 using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Api.TenantAdmin.Grpc;
 using Orleans.Lattice.Api.TreeAdmin;
@@ -56,7 +59,10 @@ using Orleans.Lattice.Tenancy;
 //     as the region's load balancer reaches it.
 //   * Add-ons the reference silo does not register: Apps (with the named app
 //     sources samples and samples-next), tenancy (off unless Tenancy:Enabled),
-//     and replication status.
+//     replication status, and the telemetry facade over the estate's Prometheus
+//     (only when Telemetry:BackendAddress is set).
+//   * The replication transport trusts the run-scoped CA, which a peer region's
+//     gateway certificate chains to.
 //   * Fault seams, enabled only by LATTICE_E2E_FAULTS=1.
 // ---------------------------------------------------------------------------
 
@@ -96,6 +102,8 @@ var digestProbeIntervalSeconds = config.GetValue("Replication:DigestProbeInterva
 
 var directory = JourneyDirectoryFile.FromEnvironment();
 var serverCertificate = JourneyHostEnvironment.LoadServerCertificate();
+var certificateAuthority = JourneyHostEnvironment.LoadCertificateAuthority();
+var telemetryBackend = config["Telemetry:BackendAddress"];
 
 builder.WebHost.ConfigureKestrel(kestrel =>
 {
@@ -188,6 +196,17 @@ builder.Host.UseOrleans(silo =>
         foreach (var (peerClusterId, endpoint) in replicationPeers)
         {
             grpc.Peers[peerClusterId] = endpoint;
+        }
+
+        // A peer region's gateway presents a certificate from the run-scoped CA, which
+        // the silo trusts as a service configured for a private PKI does.
+        if (certificateAuthority is not null)
+        {
+            grpc.ConfigureChannel = (_, channel) => channel.HttpHandler = new SocketsHttpHandler
+            {
+                EnableMultipleHttp2Connections = true,
+                SslOptions = { RemoteCertificateValidationCallback = JourneyHostEnvironment.TrustOnly(certificateAuthority) },
+            };
         }
     });
 
@@ -389,6 +408,24 @@ if (tenancyEnabled)
     builder.Services.AddSingleton<ILatticeTenantAdminApiAuthorizer, AllowAllTenantAdminApiAuthorizer>();
 }
 
+// Not in the reference silo, whose telemetry is read by the MCP head: the read-only
+// telemetry facade and its gRPC binding over the estate's Prometheus (#5362), as
+// reference-architecture/local-dev/hosts/Silo registers them, so the Explorer's
+// Telemetry area has boards. Wired only when Telemetry:BackendAddress names it.
+if (!string.IsNullOrWhiteSpace(telemetryBackend))
+{
+    builder.Services.Configure<LatticeTelemetryOptions>(options =>
+        options.BackendAddress = new Uri(telemetryBackend, UriKind.Absolute));
+    builder.Services.AddSingleton<IValidateOptions<LatticeTelemetryOptions>, LatticeTelemetryOptionsValidator>();
+    builder.Services.AddLatticeTelemetryApi();
+    builder.Services.AddLatticeTelemetryApiGrpc(options =>
+    {
+        options.RequireAuthorization = true;
+        options.CredentialScheme = credentialScheme;
+    });
+    builder.Services.AddSingleton<ILatticeTelemetryApiAuthorizer, AllowAllTelemetryApiAuthorizer>();
+}
+
 builder.Services.AddOpenTelemetry()
     .WithMetrics(metrics => metrics
         .AddMeter($"{LatticeMetrics.MeterName}*")
@@ -432,6 +469,11 @@ app.MapLatticeAppBridgeApiGrpc();
 if (tenancyEnabled)
 {
     app.MapLatticeTenantAdminApiGrpc();
+}
+
+if (!string.IsNullOrWhiteSpace(telemetryBackend))
+{
+    app.MapLatticeTelemetryApiGrpc();
 }
 
 app.MapLatticeScalingSignal();

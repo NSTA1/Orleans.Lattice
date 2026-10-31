@@ -51,7 +51,8 @@ public sealed class JourneyRegion
         int gatewayControlPort,
         int? gatewayPlaintextPort,
         IReadOnlyList<JourneyProcess> explorers,
-        IReadOnlyList<Uri> explorerUris)
+        IReadOnlyList<Uri> explorerUris,
+        Uri? consoleUri = null)
     {
         Name = name;
         Silos = silos;
@@ -61,6 +62,7 @@ public sealed class JourneyRegion
         GatewayPlaintextPort = gatewayPlaintextPort;
         ExplorerProcesses = explorers;
         ExplorerUris = explorerUris;
+        ConsoleUri = consoleUri ?? explorerUris[0];
     }
 
     /// <summary>The region's name: <see cref="JourneyEstate.West"/> or <see cref="JourneyEstate.East"/>.</summary>
@@ -77,6 +79,16 @@ public sealed class JourneyRegion
 
     /// <summary>The first Explorer head's base address.</summary>
     public Uri ExplorerUri => ExplorerUris[0];
+
+    /// <summary>
+    /// Where a person opens the region's console, ending in <c>/</c>: the one head itself in
+    /// west, and the gateway's console path (<c>https://{gateway}/console/</c>) in east, whose
+    /// replicas sit behind the gateway (#5362).
+    /// </summary>
+    public Uri ConsoleUri { get; }
+
+    /// <summary>Whether the region's Explorer heads are replicas behind its gateway.</summary>
+    public bool ConsoleBehindGateway => ConsoleUri != ExplorerUris[0];
 
     internal Uri GatewayControl { get; }
 
