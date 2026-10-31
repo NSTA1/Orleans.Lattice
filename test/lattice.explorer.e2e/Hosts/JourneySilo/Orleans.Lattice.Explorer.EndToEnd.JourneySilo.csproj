@@ -60,6 +60,8 @@
     <ProjectReference Include="..\..\..\..\src\lattice.tenancy\Orleans.Lattice.Tenancy.csproj" />
     <ProjectReference Include="..\..\..\..\src\lattice.api.tenantadmin\Orleans.Lattice.Api.TenantAdmin.csproj" />
     <ProjectReference Include="..\..\..\..\src\lattice.api.tenantadmin.grpc\Orleans.Lattice.Api.TenantAdmin.Grpc.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.telemetry\Orleans.Lattice.Api.Telemetry.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.telemetry.grpc\Orleans.Lattice.Api.Telemetry.Grpc.csproj" />
     <ProjectReference Include="..\..\..\..\samples\Explorer\Apps\TaskBoard\src\TaskBoard.csproj" />
     <!-- The reference heads' shared hosting helpers: probe-log suppression and the internal-port guard. -->
     <ProjectReference Include="..\..\..\..\reference-architecture\hosts\Common\Orleans.Lattice.ReferenceArchitecture.Hosting.csproj" />

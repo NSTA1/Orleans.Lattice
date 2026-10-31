@@ -25,6 +25,8 @@ using Yarp.ReverseProxy.Health;
 //   LATTICE_E2E_CA_CERT            the CA the silo certificates chain to
 //   LATTICE_E2E_CONTROL_PORT       the loopback port of the harness's control surface
 //   Gateway__PlaintextPort         optional h2c loopback listener (Windows workstations only)
+//   Gateway__Console__Backends     optional ';'-separated https:// Explorer replicas (#5362)
+//   Gateway__Console__Path         the console's path on the gateway (default /console)
 // ---------------------------------------------------------------------------
 
 var builder = WebApplication.CreateBuilder(args);
@@ -113,9 +115,67 @@ var route = new RouteConfig
     Match = new RouteMatch { Path = "{**catch-all}", Hosts = servedHosts },
 };
 
+var routes = new List<RouteConfig> { route };
+var clusters = new List<ClusterConfig> { cluster };
+
+// The region's console (#5362), when its Explorer replicas sit behind the gateway as
+// a scaled-out console sits behind its ingress: every request under the console's
+// path goes to one replica, held there by an affinity cookie (a Blazor Server
+// circuit lives on the replica that opened it), probed on /health like the silos.
+// The browser's Host is kept, so a replica builds every address it returns on the
+// gateway's, never on its own.
+var consoleBackends = (config["Gateway:Console:Backends"] ?? string.Empty)
+    .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+if (consoleBackends.Length > 0)
+{
+    var consolePath = "/" + (config["Gateway:Console:Path"] ?? "console").Trim('/');
+    var replicas = new Dictionary<string, DestinationConfig>(StringComparer.Ordinal);
+    for (var i = 0; i < consoleBackends.Length; i++)
+    {
+        replicas[$"explorer-{i}"] = new DestinationConfig { Address = consoleBackends[i] };
+    }
+
+    clusters.Add(new ClusterConfig
+    {
+        ClusterId = GatewayFaults.ConsoleCluster,
+        LoadBalancingPolicy = "RoundRobin",
+        Destinations = replicas,
+        SessionAffinity = new SessionAffinityConfig
+        {
+            Enabled = true,
+            Policy = "Cookie",
+            FailurePolicy = "Redistribute",
+            AffinityKeyName = ".Lattice.Gateway.Affinity",
+            Cookie = new SessionAffinityCookieConfig { Path = consolePath, SecurePolicy = CookieSecurePolicy.Always },
+        },
+        HealthCheck = new HealthCheckConfig
+        {
+            Active = new ActiveHealthCheckConfig
+            {
+                Enabled = true,
+                Interval = interval,
+                Timeout = interval,
+                Policy = HealthCheckConstants.ActivePolicy.ConsecutiveFailures,
+                Path = "/health",
+            },
+            AvailableDestinationsPolicy = HealthCheckConstants.AvailableDestinations.HealthyOrPanic,
+        },
+        Metadata = new Dictionary<string, string> { ["ConsecutiveFailuresHealthPolicy.Threshold"] = "1" },
+    });
+
+    routes.Add(new RouteConfig
+    {
+        RouteId = "console",
+        ClusterId = GatewayFaults.ConsoleCluster,
+        Order = -1,
+        Match = new RouteMatch { Path = consolePath + "/{**catch-all}", Hosts = servedHosts },
+        Transforms = [new Dictionary<string, string> { ["RequestHeaderOriginalHost"] = "true" }],
+    });
+}
+
 builder.Services.AddSingleton<GatewayFaults>();
 builder.Services.AddReverseProxy()
-    .LoadFromMemory([route], [cluster])
+    .LoadFromMemory(routes, clusters)
     .ConfigureHttpClient((_, handler) =>
         handler.SslOptions.RemoteCertificateValidationCallback = JourneyHostEnvironment.TrustOnly(authority));
 
@@ -132,15 +192,28 @@ app.MapReverseProxy(pipeline =>
     {
         // The harness's dropped-call seam: the next proxied call whose path matches
         // is torn down mid-flight, as a lost connection would be.
-        if (context.Connection.LocalPort != controlPort
-            && context.RequestServices.GetRequiredService<GatewayFaults>().TryConsume(context.Request.Path))
+        var faults = context.RequestServices.GetRequiredService<GatewayFaults>();
+        if (context.Connection.LocalPort != controlPort && faults.TryConsume(context.Request.Path))
         {
             context.Abort();
             return;
         }
 
+        // A drained destination leaves rotation for new requests, as an operator
+        // draining a replica takes it out of the load balancer: a request held to it
+        // by affinity is redistributed to another.
+        var proxy = context.GetReverseProxyFeature();
+        if (faults.HasDrained(proxy.Cluster.Config.ClusterId))
+        {
+            proxy.AvailableDestinations = proxy.AvailableDestinations
+                .Where(destination => !faults.IsDrained(proxy.Cluster.Config.ClusterId, destination.DestinationId))
+                .ToArray();
+        }
+
         await next();
     });
+    pipeline.UseSessionAffinity();
+    pipeline.UseLoadBalancing();
 });
 
 app.Run();

@@ -58,6 +58,66 @@ public sealed class JourneyEstateOptions
     /// <summary>Whether tenancy is registered (the Fabrikam estate turns it on).</summary>
     public bool Tenancy { get; init; }
 
+    /// <summary>
+    /// Whether delegated-access administration is on (<c>Tenancy:DelegatedAccess</c>); it has
+    /// effect only with <see cref="Tenancy"/>. The Fabrikam estate turns it on.
+    /// </summary>
+    public bool DelegatedAccessAdministration { get; init; }
+
+    /// <summary>
+    /// Whether the estate has an east region (#5362): <see cref="EastSilos"/> silos in a second
+    /// Orleans cluster on a storage account of its own, its own gateway, and
+    /// <see cref="EastConsoleReplicas"/> Explorer replicas behind that gateway under
+    /// <see cref="EastConsoleBasePath"/>, sharing a Blob-persisted key ring. West and east are
+    /// peered over the replication gRPC transport, over TLS, with one shared secret. Off by
+    /// default; <see cref="EstateProfile.Contoso"/> and <see cref="EstateProfile.Fabrikam"/> turn it on.
+    /// </summary>
+    public bool East { get; init; }
+
+    /// <summary>How many silos the east region runs.</summary>
+    public int EastSilos { get; init; } = 1;
+
+    /// <summary>How many Explorer replicas serve the east console behind its gateway.</summary>
+    public int EastConsoleReplicas { get; init; } = 2;
+
+    /// <summary>The east console's base path, on the replicas and on the east gateway.</summary>
+    public string EastConsoleBasePath { get; init; } = "/console";
+
+    /// <summary>
+    /// The trees the east silos enrol through configuration (<c>Replication:Trees</c>) rather
+    /// than at runtime, with their merge modes: <c>factory-lines</c> in the Contoso estate,
+    /// so a static-only enrolment exists.
+    /// </summary>
+    public IDictionary<string, LatticeMergeMode> EastStaticReplicatedTrees { get; init; } =
+        new Dictionary<string, LatticeMergeMode>(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Whether the estate runs Prometheus (#5362), scraping every silo's <c>/metrics</c>, with
+    /// every silo's telemetry facade registered against it so the Explorer has Telemetry boards.
+    /// </summary>
+    public bool Prometheus { get; init; }
+
+    /// <summary>How often Prometheus scrapes each silo: the time-compression knob for telemetry.</summary>
+    public TimeSpan PrometheusScrapeInterval { get; init; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>Whether the line feed runs. On by default; the Fabrikam estate has none.</summary>
+    public bool LineFeed { get; init; } = true;
+
+    /// <summary>
+    /// Whether every Explorer head lets the browser edit its connection settings
+    /// (<c>AllowInteractiveEndpointConfiguration</c>). Off by default, the production default;
+    /// the Fabrikam estate turns it on.
+    /// </summary>
+    public bool AllowInteractiveEndpointConfiguration { get; init; }
+
+    /// <summary>
+    /// When set, the estate runs a kiosk head (<c>{Name}-kiosk</c>): a third, west Explorer head
+    /// with <c>AllowEnvironmentCredentialSeed</c> on, seeded with this user's credential, so
+    /// every visitor is signed in as them. <see langword="null"/> (no kiosk) by default; the
+    /// Contoso estate seeds the platform operator, the one operator such a head is for.
+    /// </summary>
+    public string? KioskUser { get; init; }
+
     /// <summary>The gateway's active health-probe interval: a dead silo leaves rotation within it.</summary>
     public TimeSpan GatewayHealthInterval { get; init; } = TimeSpan.FromSeconds(2);
 

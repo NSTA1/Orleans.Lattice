@@ -6,7 +6,8 @@ name: Explorer Journeys
 # launched as real processes, a two-silo west region behind a TLS gateway with
 # active health checks, an Explorer head that holds the gateway as its one
 # endpoint, and every storage provider on Azurite - with the backup sink on a
-# separate account. `test/lattice.explorer.e2e/**` is carved out of the `code`
+# separate account. Estates with an east region (#5362) add a third Azurite
+# account for east, and each runs its own pinned Prometheus container. `test/lattice.explorer.e2e/**` is carved out of the `code`
 # and `nonSample` filters in `ci.yml` exactly as `test/lattice.explorer.uitests/**`
 # is, so the core matrix never tries to run it; this workflow is its runner.
 #
@@ -122,13 +123,16 @@ jobs:
     needs: plan
     if: needs.plan.outputs.push_is_member != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     env:
       # Two Azurite accounts, as reference-architecture/local/docker-compose.yml
       # runs them: the primary (Table, Blob, Queue) and a separate backup sink.
       LATTICE_E2E_STORAGE: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;
       LATTICE_E2E_BACKUP_STORAGE: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:11000/devstoreaccount1;
+      # The east region's own account (#5362): each region keeps its clustering,
+      # grain state, WAL and console key ring on storage of its own.
+      LATTICE_E2E_EAST_STORAGE: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:12000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:12001/devstoreaccount1;TableEndpoint=http://127.0.0.1:12002/devstoreaccount1;
       LATTICE_E2E_REQUIRED: '1'
       LATTICE_E2E_HOSTS_DIR: ${{ github.workspace }}/.journey-hosts
       # The commit each journey's screenshot manifest records (#5360): the PR's head, which
@@ -148,6 +152,16 @@ jobs:
           docker run -d --name azurite-backup -p 11000:10000 \
             mcr.microsoft.com/azure-storage/azurite:3.36.0 \
             azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose
+          docker run -d --name azurite-east -p 12000:10000 -p 12001:10001 -p 12002:10002 \
+            mcr.microsoft.com/azure-storage/azurite:3.36.0 \
+            azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose
+
+      # Each estate that runs Prometheus starts its own container from this image,
+      # on the host network with a scrape-target file the harness writes as silos
+      # start (their ports are allocated per run), so the lane only pulls it once.
+      # The tag is JourneyPrometheus.Image; change the two together.
+      - name: Pull Prometheus
+        run: docker pull prom/prometheus:v3.1.0
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
