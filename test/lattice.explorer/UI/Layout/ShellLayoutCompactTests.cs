@@ -24,7 +24,7 @@ public sealed class ShellLayoutCompactTests : ShellLayoutTestContext
         AddSlotProbes();
         var cut = RenderLayout();
 
-        var controls = cut.FindAll(".lt-shell-header button.lt-shell-header__control");
+        var controls = CompactControls(cut);
         Assert.Multiple(() =>
         {
             Assert.That(controls.Select(button => button.TextContent.Trim()), Is.EqualTo(new[] { "Directory", "Menu" }));
@@ -52,7 +52,7 @@ public sealed class ShellLayoutCompactTests : ShellLayoutTestContext
 
         Assert.Multiple(() =>
         {
-            Assert.That(cut.FindAll(".lt-shell-header button.lt-shell-header__control"), Is.Empty);
+            Assert.That(CompactControls(cut), Is.Empty);
             Assert.That(cut.Find(".lt-shell-header__wide").ClassList, Does.Not.Contain("lt-medium-up"));
             Assert.That(cut.FindAll(".lt-shell-header__wide [data-probe]"), Has.Count.EqualTo(2));
             Assert.That(cut.Find(".lt-shell-brand__prefix").ClassList, Does.Not.Contain("lt-medium-up"));
@@ -69,7 +69,7 @@ public sealed class ShellLayoutCompactTests : ShellLayoutTestContext
 
         await SetBandAsync(cut, 0);
 
-        var controls = cut.FindAll(".lt-shell-header button.lt-shell-header__control");
+        var controls = CompactControls(cut);
         Assert.Multiple(() =>
         {
             Assert.That(controls.Select(button => button.TextContent.Trim()), Is.EqualTo(new[] { "Directory", "Menu" }));
@@ -319,6 +319,10 @@ public sealed class ShellLayoutCompactTests : ShellLayoutTestContext
 
         Assert.That(cut.Find("[data-band]").GetAttribute("data-band"), Is.EqualTo("Compact"));
     }
+
+    /// <summary>The header's compact controls (Directory and Menu): its own buttons, never the wide controls' buttons.</summary>
+    private static IReadOnlyList<AngleSharp.Dom.IElement> CompactControls(IRenderedComponent<ShellLayout> cut) =>
+        cut.FindAll(".lt-shell-header > button, .lt-shell-header__end > button");
 
     /// <summary>A page that shows the band the layout cascades to it.</summary>
     public sealed class BandProbe : ComponentBase
