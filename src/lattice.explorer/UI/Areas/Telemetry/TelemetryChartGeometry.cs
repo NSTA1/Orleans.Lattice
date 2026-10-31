@@ -168,7 +168,7 @@ internal sealed class TelemetryChartGeometry
         var drawn = ordered.Take(MaxDrawn).ToArray();
         var finite = drawn.SelectMany(view => view.Values).Where(double.IsFinite).ToArray();
         var (minimum, maximum) = Extent(finite);
-        var ticks = new[] { minimum, (minimum + maximum) / 2, maximum }
+        var ticks = new[] { minimum, (minimum / 2) + (maximum / 2), maximum }
             .Select(value => new TelemetryAxisTick(Y(value, minimum, maximum), TelemetryFormat.Value(value, unit, semantic)))
             .ToArray();
 
@@ -224,8 +224,15 @@ internal sealed class TelemetryChartGeometry
         return Left + ((PlotRight - Left) * (times[index] - times[0]).Ticks / span);
     }
 
-    private static double Y(double value, double minimum, double maximum) =>
-        PlotBottom - ((PlotBottom - Top) * (value - minimum) / (maximum - minimum));
+    private static double Y(double value, double minimum, double maximum)
+    {
+        var span = maximum - minimum;
+        // Opposite finite extremes can have an infinite difference.
+        var fraction = double.IsFinite(span)
+            ? (value - minimum) / span
+            : ((value / 2) - (minimum / 2)) / ((maximum / 2) - (minimum / 2));
+        return PlotBottom - ((PlotBottom - Top) * fraction);
+    }
 
     private static (double Minimum, double Maximum) Extent(double[] values)
     {
@@ -252,15 +259,21 @@ internal sealed class TelemetryChartGeometry
         }
 
         var magnitude = Math.Pow(10, Math.Floor(Math.Log10(value)));
+        if (magnitude == 0)
+        {
+            return value;
+        }
+
         foreach (var factor in new[] { 1d, 2d, 2.5, 5d, 10d })
         {
-            if (factor * magnitude >= value)
+            var rounded = factor * magnitude;
+            if (rounded >= value)
             {
-                return factor * magnitude;
+                return double.IsFinite(rounded) ? rounded : value;
             }
         }
 
-        return 10 * magnitude;
+        return value;
     }
 
     private static string PathOf(IReadOnlyList<double> values, IReadOnlyList<DateTimeOffset> times, double minimum, double maximum)

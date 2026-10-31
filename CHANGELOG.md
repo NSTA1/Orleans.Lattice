@@ -64,6 +64,10 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Explorer - Schema validation.** Rule cards reject reversed large-integer bounds without rounding valid constants. Semantic-version cards reject empty identifiers and leading-zero numeric prereleases; saved patterns remain unchanged when reopened. ([#5347](https://github.com/NSTA1/Orleans.Lattice/issues/5347)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - Telemetry charts.** Finite readings retain finite SVG paths, axis ticks and labels even at very large or subnormal magnitudes. ([#5347](https://github.com/NSTA1/Orleans.Lattice/issues/5347)) (`Orleans.Lattice.Explorer.UI`)
+
 - **Explorer - Schema suggestions.** Case-colliding members resolve exact names before case-insensitive matches. Suggested text prefixes preserve complete Unicode characters, and allowed-value cards retain strings named true or false. ([#5339](https://github.com/NSTA1/Orleans.Lattice/issues/5339)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Control consistency.** Superseded picker confirmations and delayed choice callbacks cannot submit abandoned values, even after edit round-trips. Tables reapply changed sort keys and restore natural order when sorting is removed. ([#5321](https://github.com/NSTA1/Orleans.Lattice/issues/5321)) (`Orleans.Lattice.Explorer.UI`)
