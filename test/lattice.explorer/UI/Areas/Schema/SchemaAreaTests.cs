@@ -83,7 +83,7 @@ public sealed class SchemaAreaTests : SchemaTestContext
         Assert.That(await Area.GetAvailabilityAsync(CancellationToken.None), Is.EqualTo(AreaAvailability.Hidden));
 
         Schema.Faults["ProbeCapabilities"] = new ShellTransportException("unavailable", isTransient: true, new InvalidOperationException("inner"));
-        Assert.That(await Area.GetAvailabilityAsync(CancellationToken.None), Is.EqualTo(AreaAvailability.Hidden));
+        Assert.That(await Area.GetAvailabilityAsync(CancellationToken.None), Is.EqualTo(AreaAvailability.Unchecked), "no answer is not a refusal (#5420)");
 
         Schema.Faults.Remove("ProbeCapabilities");
         Assert.Multiple(async () =>

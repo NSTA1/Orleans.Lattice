@@ -618,6 +618,36 @@
   color: var(--lt-ink-3);
 }
 
+.lt-shell-estate__status--stale {
+  color: var(--lt-ink-3);
+  font-size: var(--lt-text-xs);
+}
+
+/*
+ * The recheck notice (issue #5420): some areas could not be checked because the
+ * cluster did not answer. A quiet line and its button, never an alarm colour: the
+ * cluster is expected back, and the Explorer is already checking again.
+ */
+.lt-shell-recheck {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lt-space-2) var(--lt-space-3);
+  max-width: 42rem;
+  margin: 0 0 var(--lt-space-4);
+}
+
+.lt-shell-recheck__text {
+  flex: 1 1 16rem;
+  margin: 0;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-shell-directory__nav .lt-shell-recheck {
+  margin: var(--lt-space-3) 0 0;
+}
+
 .lt-shell-not-found__ancestor {
   margin: 0;
   color: var(--lt-ink-2);

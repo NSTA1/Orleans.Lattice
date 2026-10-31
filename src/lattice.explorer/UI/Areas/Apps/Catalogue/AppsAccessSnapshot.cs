@@ -55,6 +55,13 @@ internal sealed record AppsAccessSnapshot
     /// <summary>Whether the area is shown at all.</summary>
     public bool IsVisible => WorkspaceServed || CanBrowseCatalogue || Control.CanList;
 
+    /// <summary>
+    /// Whether a capability probe met no answer from the cluster (issue #5420): its
+    /// flags still read denied, but the snapshot is not remembered, and a snapshot
+    /// that shows nothing reads as not checked rather than as a refusal.
+    /// </summary>
+    public bool ProbeUnanswered { get; init; }
+
     /// <summary>The installed apps whose last activation is known to have failed.</summary>
     public IEnumerable<AppSummary> FailedActivations => Installed.Where(app => app.State == AppLifecycleState.Failed);
 }

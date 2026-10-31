@@ -105,6 +105,12 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
     /// <summary>The <c>http://</c> (h2c) address of the world's gRPC surface.</summary>
     public string GrpcEndpoint { get; }
 
+    /// <summary>
+    /// The switch that fails the world's facade services with <c>Internal</c>, as a
+    /// silo leaving the cluster does (issue #5420). Dispose what it returns.
+    /// </summary>
+    public FacadeFaults Faults => Head.Services.GetRequiredService<FacadeFaults>();
+
     /// <summary>Starts the world and seeds its data, groups and rules.</summary>
     public static Task<ExplorerWorld> StartAsync() => StartCoreAsync(tenancy: false, delegatedAccess: false);
 
@@ -414,6 +420,8 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
         });
 
         var services = builder.Services;
+        services.AddSingleton<FacadeFaults>();
+        services.AddGrpc(options => options.Interceptors.Add<FacadeFaultInterceptor>());
         services.AddLatticeStateApiGrpc(o => { o.RequireAuthorization = false; o.CredentialScheme = TrustedUserAuthenticator.Scheme; });
         services.AddLatticeDataApiGrpc(o => { o.RequireAuthorization = false; o.CredentialScheme = TrustedUserAuthenticator.Scheme; });
         services.AddLatticeAuthApiGrpc(o => { o.RequireAuthorization = false; o.CredentialScheme = TrustedUserAuthenticator.Scheme; });
