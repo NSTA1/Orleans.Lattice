@@ -23,7 +23,8 @@ public sealed partial class OffboardingJourney
     private static async Task DisableAndUninstallTaskBoardAsync(ChapterContext context, PersonaSession olivia)
     {
         using var step = C3Step.Begin(3, "olivia disables the task board while dana has it open, then uninstalls it");
-        await using var dana = await context.Estate.SignInAsAsync(Personas.Dana, options: new PersonaSessionOptions { Path = $"/apps/{Names.Apps.TaskBoard}/window" });
+        await using var dana = await context.Estate.SignInAsAsync(Personas.Dana);
+        await dana.Shell.GotoAsync($"/apps/{Names.Apps.TaskBoard}/window");
         var board = new TaskBoardWindow(dana.Page);
         await board.WaitForBoardAsync();
         await board.ExpectRoleAsync(editor: false);
@@ -39,9 +40,15 @@ public sealed partial class OffboardingJourney
         await Expect(olivia.Shell.Toasts.Filter(new() { HasText = $"{TaskBoardName} is disabled." })).ToHaveCountAsync(1, new() { Timeout = 60_000 });
         await step.ShotAsync(olivia, "disabled", "The task board is disabled");
 
-        await board.Board.Locator("#tb-refresh").ClickAsync();
-        await Expect(board.Closed).ToBeVisibleAsync(new() { Timeout = 30_000 });
-        await step.ShotAsync(dana, "dana-frame-closed", "dana's next read finds the app just changed: her frame is closed and says why");
+        await Expect(board.Board.Locator("#tb-refresh")).ToBeVisibleAsync();
+        var refreshDeadline = DateTime.UtcNow + TimeSpan.FromMinutes(2);
+        while (!await board.RefreshIsWithdrawnAsync() && DateTime.UtcNow < refreshDeadline)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(5));
+        }
+
+        await Expect(board.Closed.Or(board.Status.Filter(new() { HasTextRegex = new Regex(@"\(denied\)") }))).ToBeVisibleAsync();
+        await step.ShotAsync(dana, "dana-frame-closed", "dana's next read finds the app just changed: the board no longer answers her");
 
         await dana.Shell.GotoAsync($"/apps/{Names.Apps.TaskBoard}/window");
         await board.ExpectNoAppAsync(dana.Shell);

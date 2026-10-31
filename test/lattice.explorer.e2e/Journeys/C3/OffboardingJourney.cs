@@ -38,7 +38,8 @@ public sealed partial class OffboardingJourney : JourneyChapter
 
         await using var olivia = await estate.SignInAsAsync(Personas.Olivia);
         await using var priya = await estate.SignInAsAsync(Personas.Priya, options: new PersonaSessionOptions { Path = EntryPath });
-        await using var priyasBoard = await estate.SignInAsAsync(Personas.Priya, options: new PersonaSessionOptions { Path = BoardPath(task.Id) });
+        await using var priyasBoard = await estate.SignInAsAsync(Personas.Priya);
+        await priyasBoard.Shell.GotoAsync(BoardPath(task.Id));
 
         await RemoveMemberWhileSessionIsOpenAsync(olivia, priya, priyasBoard);
         await ConfirmRoleWithdrawnAsync(olivia, priya, priyasBoard, task.Title);
@@ -102,15 +103,31 @@ public sealed partial class OffboardingJourney : JourneyChapter
         await Expect(members.GetByText(Personas.Priya.Id, new() { Exact = true })).ToHaveCountAsync(0);
         await step.ShotAsync(olivia, "priya-removed", "priya is removed from data-stewards");
 
-        await editor.GetByRole(AriaRole.Button, new() { Name = "Save", Exact = true }).ClickAsync();
-        await Expect(editor.Locator(".lt-data-editor__error")).ToBeVisibleAsync(new() { Timeout = 30_000 });
+        var save = editor.GetByRole(AriaRole.Button, new() { Name = "Save", Exact = true });
+        var refused = editor.Locator(".lt-data-editor__error");
+        await MembershipPropagation.EnforcedAsync("priya's save", async () =>
+        {
+            if (!await editor.IsVisibleAsync())
+            {
+                await edit.ClickAsync();
+                await Expect(editor.GetByRole(AriaRole.Textbox, new() { Name = "Value" })).ToBeVisibleAsync();
+            }
+
+            await save.ClickAsync();
+            await Expect(refused.Or(priya.Shell.Toasts.Filter(new() { HasText = "saved." }))).ToBeVisibleAsync(new() { Timeout = 30_000 });
+            return await refused.IsVisibleAsync();
+        });
         await step.ShotAsync(priya, "priya-save-refused", "priya's next save, from the editor she already had open, is refused");
 
         await priya.Page.Keyboard.PressAsync("Escape");
-        await priya.Shell.GotoAsync(EntryPath);
-        await Expect(priya.Shell.Heading).ToBeVisibleAsync();
-        await Expect(priya.Shell.Content.Locator("[data-lt-command^=\"data.\"][data-lt-command$=\"-entry\"]")).ToHaveCountAsync(0);
-        await Expect(priya.Shell.Content.GetByRole(AriaRole.Button, new() { Name = "Edit", Exact = true })).ToHaveCountAsync(0);
+        var writeAffordances = priya.Shell.Content.Locator("[data-lt-command^=\"data.\"][data-lt-command$=\"-entry\"]");
+        await MembershipPropagation.EnforcedAsync("priya's write affordances after a reload", async () =>
+        {
+            await priya.Shell.GotoAsync(EntryPath);
+            await Expect(priya.Shell.Heading).ToBeVisibleAsync();
+            await Expect(edit.Or(priya.Shell.Content.Locator(".lt-empty").First)).ToBeVisibleAsync(new() { Timeout = 60_000 });
+            return await writeAffordances.CountAsync() == 0 && await edit.CountAsync() == 0;
+        });
         await step.ShotAsync(priya, "priya-affordances-gone", "On refresh the tree offers priya no write affordance");
         Coverage.Hit("use-case:access/remove-member-live");
         step.Complete();
@@ -126,14 +143,17 @@ public sealed partial class OffboardingJourney : JourneyChapter
         using var step = C3Step.Begin(2, "priya no longer holds the task board's editor role; Explain says she may not write the orders");
         var board = new TaskBoardWindow(priyasBoard.Page);
         await Expect(board.Board.Locator("#tb-detail-title")).ToHaveTextAsync(taskTitle);
-        await board.Board.Locator("#tb-detail-actions [data-move=\"doing\"]").ClickAsync();
-        await board.ExpectChangeWithdrawnAsync();
+        await MembershipPropagation.EnforcedAsync("priya's move on her open board", board.MoveIsWithdrawnAsync);
         await step.ShotAsync(priyasBoard, "priya-board-withdrawn", "priya moves a task on the board she had open: the change is withdrawn");
 
-        await priya.Shell.GotoAsync("/apps");
-        await priya.Shell.ExpectHeadingAsync("Apps");
-        await Expect(priya.Shell.Content.GetByRole(AriaRole.Link, new() { Name = "Open Task board (opens in a new window)" })).ToHaveCountAsync(0);
-        await Expect(priya.Shell.Content.GetByText("Task board", new() { Exact = true })).ToHaveCountAsync(0);
+        var yourApps = priya.Shell.Content;
+        await MembershipPropagation.EnforcedAsync("priya's Your apps", async () =>
+        {
+            await priya.Shell.GotoAsync("/apps");
+            await priya.Shell.ExpectHeadingAsync("Apps");
+            await Expect(yourApps.Locator(".lt-empty").Or(yourApps.GetByRole(AriaRole.Table)).First).ToBeVisibleAsync(new() { Timeout = 60_000 });
+            return await yourApps.GetByText(TaskBoardName, new() { Exact = true }).CountAsync() == 0;
+        });
         await step.ShotAsync(priya, "priya-apps", "Your apps no longer offers priya the task board");
 
         await olivia.Shell.GotoAsync($"/apps/{Names.Apps.TaskBoard}");
