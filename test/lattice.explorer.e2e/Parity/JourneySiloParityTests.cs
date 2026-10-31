@@ -37,6 +37,53 @@ public sealed class JourneySiloParityTests
             + "test/lattice.explorer.e2e/Hosts/JourneySilo/Program.cs: " + string.Join(", ", missing));
     }
 
+    /// <summary>
+    /// The journey silo's disclosed deviations from the reference silo's configuration, each
+    /// with its reason. A deviation is a deliberate operator choice the story depends on; this
+    /// list keeps each one visible, and fails when the source no longer carries it.
+    /// </summary>
+    private static readonly (string Source, string Reason)[] Deviations =
+    [
+        ("AddLatticeSchemaEnforcement(options => options.StrictIngest = true)", "dead-letter feature coverage (#5389)"),
+        ("AddLatticeWalStorageProvider(JourneyHostEnvironment.SecondaryWalProviderKey", "a WAL move target for the Cluster area's WAL tools (A8, A12)"),
+        ("JourneyDelayedComplianceAdmin.Register(silo.Services)", "a test-only, fault-gated, bounded hold on a named tree's compliance scan (/e2e/compliance-delay), so a journey can stop a running scan (U2) or lose the silo running one (C2)"),
+    ];
+
+    /// <summary>
+    /// The journey silo's test-only seams, which no reference-architecture host may carry:
+    /// each name appears in no file under <c>reference-architecture/</c>.
+    /// </summary>
+    private static readonly string[] TestOnlySeams = ["JourneyComplianceScanDelay", "JourneyDelayedComplianceAdmin", "compliance-delay"];
+
+    /// <summary>No test-only seam of the journey silo reaches a reference-architecture host.</summary>
+    [Test]
+    public void No_test_only_seam_reaches_the_reference_architecture()
+    {
+        var root = Path.Combine(JourneyPaths.RepositoryRoot, "reference-architecture");
+        var files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+            .Where(file => !file.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                && !file.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                && Path.GetExtension(file) is ".cs" or ".json" or ".yaml" or ".yml" or ".bicep" or ".md" or ".csproj")
+            .ToArray();
+        Assert.That(files, Is.Not.Empty, "the scan found no reference-architecture files; the path is wrong");
+
+        var leaks = files
+            .SelectMany(file => TestOnlySeams.Where(seam => File.ReadAllText(file).Contains(seam, StringComparison.Ordinal)).Select(seam => $"{seam} in {file}"))
+            .ToArray();
+        Assert.That(leaks, Is.Empty, "A journey-only seam reached a reference-architecture host: " + string.Join("; ", leaks));
+    }
+
+    /// <summary>Every disclosed deviation is still made by the journey silo, so the list cannot rot into fiction.</summary>
+    [Test]
+    public void Every_disclosed_deviation_is_still_made_by_the_journey_silo()
+    {
+        var journey = File.ReadAllText(Path.Combine(JourneyPaths.ProjectDirectory, "Hosts", "JourneySilo", "Program.cs"));
+        var absent = Deviations.Where(deviation => !journey.Contains(deviation.Source, StringComparison.Ordinal))
+            .Select(deviation => $"{deviation.Source} ({deviation.Reason})")
+            .ToArray();
+        Assert.That(absent, Is.Empty, "Disclosed deviations the journey silo no longer makes; remove them from the list: " + string.Join("; ", absent));
+    }
+
     /// <summary>The pattern matches the call shapes the hosts use, and not a lookalike in prose.</summary>
     [Test]
     public void The_pattern_reads_registration_calls_only()

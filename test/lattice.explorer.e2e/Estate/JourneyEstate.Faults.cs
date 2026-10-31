@@ -212,6 +212,52 @@ public sealed partial class JourneyEstate
     }
 
     /// <summary>
+    /// Holds the next compliance scan of <paramref name="tree"/> on every running silo of
+    /// <paramref name="region"/>: the scan waits, Running in its first phase (Counting, total
+    /// not yet known), until <paramref name="delay"/> from now before it reads a value. The
+    /// hold is spent by the first scan of the tree on each silo, lapses at its deadline, ends
+    /// at once when the scan is cancelled, and is withdrawn by
+    /// <see cref="ClearComplianceScanDelayAsync"/>. Every silo is armed because the scan runs
+    /// on whichever silo accepted its start.
+    /// </summary>
+    /// <param name="tree">
+    /// The tree as the cluster scans it: a tenant-scoped tree in its effective form
+    /// (<c>t/{tenant}/{tree}</c>).
+    /// </param>
+    /// <param name="delay">How long from now the hold lasts: more than 0 and at most 3 minutes.</param>
+    /// <param name="region">The region.</param>
+    public async Task DelayComplianceScanAsync(string tree, TimeSpan delay, string region = West)
+    {
+        RequireFaults();
+        ArgumentException.ThrowIfNullOrEmpty(tree);
+        foreach (var silo in RegionOf(region).Silos.Where(candidate => candidate.IsRunning))
+        {
+            using var response = await _probe.PostAsync(new Uri(
+                $"http://127.0.0.1:{silo.HttpPort}/e2e/compliance-delay?tree={Uri.EscapeDataString(tree)}&seconds={delay.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}"), null);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException(
+                    $"Holding '{tree}''s compliance scan on {region} silo {silo.Index} failed: {(int)response.StatusCode} {await response.Content.ReadAsStringAsync()}");
+            }
+        }
+    }
+
+    /// <summary>Withdraws any hold <see cref="DelayComplianceScanAsync"/> armed on <paramref name="tree"/> on every running silo of <paramref name="region"/>.</summary>
+    /// <param name="tree">The tree, as it was armed.</param>
+    /// <param name="region">The region.</param>
+    public async Task ClearComplianceScanDelayAsync(string tree, string region = West)
+    {
+        RequireFaults();
+        ArgumentException.ThrowIfNullOrEmpty(tree);
+        foreach (var silo in RegionOf(region).Silos.Where(candidate => candidate.IsRunning))
+        {
+            using var response = await _probe.DeleteAsync(new Uri(
+                $"http://127.0.0.1:{silo.HttpPort}/e2e/compliance-delay?tree={Uri.EscapeDataString(tree)}"));
+            response.EnsureSuccessStatusCode();
+        }
+    }
+
+    /// <summary>
     /// Deletes one blob of a backup behind the backup catalogue's back, as a storage-side
     /// deletion would, so the catalogue holds a genuine orphan row.
     /// </summary>
