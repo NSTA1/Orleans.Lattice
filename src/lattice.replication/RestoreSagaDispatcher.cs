@@ -58,15 +58,41 @@ internal sealed class RestoreSagaDispatcher(
             return null;
         }
 
+        // The local membership answers from a per-silo snapshot that can lag an
+        // enable committed on another silo (#5462). A stale "not replicated" would
+        // replace a replicated tree here while its peers keep the writes the
+        // replacement discards, so every decline is confirmed against a refreshed
+        // snapshot first (at most one refresh per dispatch). Only "not replicated"
+        // is confirmed: a stale "replicated" errs toward the coordinated path,
+        // whose participants refuse loudly rather than diverge.
+        var refreshed = false;
+        async Task<bool> ConfirmedNotReplicatedAsync(Func<bool> notReplicated)
+        {
+            if (!notReplicated())
+            {
+                return false;
+            }
+
+            if (refreshed || membership is not IRefreshableReplicatedTreeMembership refreshable)
+            {
+                return true;
+            }
+
+            refreshed = true;
+            await RefreshMembershipAsync(refreshable, $"restore of backup '{request.BackupId}'", cancellationToken);
+            return notReplicated();
+        }
+
         // Fast local paths that avoid any manifest I/O: an explicitly targeted
         // tree that is not replicated, or a host with no replicated trees at all,
         // always takes the plain local restore.
-        if (request.TargetTreeId is not null && !membership.IsReplicated(request.TargetTreeId))
+        if (request.TargetTreeId is { } explicitTarget
+            && await ConfirmedNotReplicatedAsync(() => !membership.IsReplicated(explicitTarget)))
         {
             return null;
         }
 
-        if (membership.ReplicatedTrees.Count == 0)
+        if (await ConfirmedNotReplicatedAsync(() => membership.ReplicatedTrees.Count == 0))
         {
             return null;
         }
@@ -77,7 +103,7 @@ internal sealed class RestoreSagaDispatcher(
         var targetTree = report.TargetTreeId;
 
         // The decision is keyed on the target tree's replication status now.
-        if (!membership.IsReplicated(targetTree))
+        if (await ConfirmedNotReplicatedAsync(() => !membership.IsReplicated(targetTree)))
         {
             return null;
         }
@@ -183,14 +209,14 @@ internal sealed class RestoreSagaDispatcher(
         // multi-tree restore (no saga); if ANY member tree is replicated the set
         // runs one saga so it stays cross-tree atomic, with local-only members
         // riding along as local participants in the same saga.
-        var anyReplicated = false;
-        foreach (var member in members)
+        var anyReplicated = AnyMemberReplicated(members);
+
+        // A stale per-silo snapshot must not send a set holding a replicated tree
+        // down the uncoordinated local path (#5462): confirm against a refreshed one.
+        if (!anyReplicated && membership is IRefreshableReplicatedTreeMembership refreshable)
         {
-            if (membership.IsReplicated(member.TreeId))
-            {
-                anyReplicated = true;
-                break;
-            }
+            await RefreshMembershipAsync(refreshable, $"restore of backup set '{setId}'", cancellationToken);
+            anyReplicated = AnyMemberReplicated(members);
         }
 
         if (!anyReplicated)
@@ -260,6 +286,46 @@ internal sealed class RestoreSagaDispatcher(
         }
 
         return synthesized;
+    }
+
+    /// <summary>Whether any of <paramref name="members"/> is replicated per the current membership.</summary>
+    private bool AnyMemberReplicated(IReadOnlyList<BackupSetMember> members)
+    {
+        foreach (var member in members)
+        {
+            if (membership.IsReplicated(member.TreeId))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Brings the membership snapshot up to date before a decline, and refuses
+    /// the restore when it cannot (#5462): without a current answer this cluster
+    /// cannot tell a replicated target from an unreplicated one, and treating it
+    /// as unreplicated would replace it uncoordinated while its peers diverge.
+    /// </summary>
+    private async Task RefreshMembershipAsync(
+        IRefreshableReplicatedTreeMembership refreshable, string subject, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await refreshable.RefreshAsync(cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(ex,
+                "Coordinated restore: could not read the replication configuration to confirm whether the {Subject} "
+                + "targets a replicated tree; refusing rather than risk an uncoordinated replacement.",
+                subject);
+            throw new LatticeRestoreValidationException(
+                $"The {subject} was refused: this cluster could not read its replication configuration to establish "
+                + "whether the target is replicated, and restoring a replicated tree without coordinating its peers "
+                + "would leave them diverged. Retry once the configuration is readable.");
+        }
     }
 
     /// <summary>

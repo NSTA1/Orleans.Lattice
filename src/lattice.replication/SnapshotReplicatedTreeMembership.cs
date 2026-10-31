@@ -12,12 +12,17 @@ namespace Orleans.Lattice.Replication;
 /// static <see cref="LatticeReplicationOptions.ReplicatedTrees"/> seed map, so the
 /// options map continues to act as a floor while runtime enables overlay on top.
 /// Replaces <see cref="OptionsReplicatedTreeMembership"/> when the config-tree
-/// anchor is active.
+/// anchor is active. Refreshable on demand
+/// (<see cref="IRefreshableReplicatedTreeMembership"/>), because the snapshot can
+/// lag a config write committed on another silo by up to one epoch poll.
 /// </summary>
 internal sealed class SnapshotReplicatedTreeMembership(
     CompiledReplicationConfigSnapshotMaintainer maintainer,
-    IOptionsMonitor<LatticeReplicationOptions> options) : IReplicatedTreeMembership
+    IOptionsMonitor<LatticeReplicationOptions> options) : IReplicatedTreeMembership, IRefreshableReplicatedTreeMembership
 {
+    /// <inheritdoc />
+    public Task RefreshAsync(CancellationToken cancellationToken = default) =>
+        maintainer.RebuildNowAsync(cancellationToken);
     /// <inheritdoc />
     public IReadOnlyCollection<string> ReplicatedTrees
     {
