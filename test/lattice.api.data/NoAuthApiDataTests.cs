@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Api.Data.Tests;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public sealed class NoAuthApiDataTests
+public sealed partial class NoAuthApiDataTests
 {
     private NoAuthApiDataClusterFixture _fixture = null!;
 

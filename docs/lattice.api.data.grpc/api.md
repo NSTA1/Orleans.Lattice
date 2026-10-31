@@ -31,6 +31,7 @@ The silo must also register the facade itself with `AddLatticeDataApi()`; see th
 | `SetManyAsync` | `SetMany` | `DataSetManyRequest` | `DataSetManyResponse` |
 | `CrdtWriteAsync` | `CrdtWrite` | `CrdtWriteRequest` | `CrdtWriteResponse` |
 | `CrdtReadAsync` | `CrdtRead` | `CrdtReadRequest` | `CrdtReadResponse` |
+| `ProbeCapabilitiesAsync` | `ProbeCapabilities` | `DataProbeRequest` | `LatticeDataCapabilities` (facade DTO) |
 
 Every RPC is unary. A failed call surfaces as an `RpcException` whose status follows the binding's [status mapping](README.md#status-mapping).
 
@@ -86,6 +87,7 @@ The following inventory includes directly declared public members and overloads,
 - `public Task<DataSetManyResponse> SetManyAsync(DataSetManyRequest request, CancellationToken cancellationToken = default)`
 - `public Task<CrdtWriteResponse> CrdtWriteAsync(CrdtWriteRequest request, CancellationToken cancellationToken = default)`
 - `public Task<CrdtReadResponse> CrdtReadAsync(CrdtReadRequest request, CancellationToken cancellationToken = default)`
+- `public Task<LatticeDataCapabilities> ProbeCapabilitiesAsync(DataProbeRequest request, CancellationToken cancellationToken = default)`
 
 ### `Orleans.Lattice.Api.Data.Grpc.LatticeDataApiGrpcOptions`
 
@@ -280,6 +282,15 @@ The following inventory includes directly declared public members and overloads,
 - `public required string TreeId`
 - `public required string Key`
 
+### `Orleans.Lattice.Api.Data.Grpc.DataProbeRequest`
+
+[Source](../../src/lattice.api.data.grpc/Model/DataProbeRequest.cs) (line 12).
+
+`public sealed record DataProbeRequest`
+
+- `public required string TreeId`
+- `public string? Key`
+
 ### `Orleans.Lattice.Api.Data.Grpc.DataSetManyRequest`
 
 [Source](../../src/lattice.api.data.grpc/Model/DataSetManyRequest.cs) (line 16).
@@ -338,6 +349,7 @@ The following inventory includes directly declared public members and overloads,
 - `public const string CrdtReadResponse`
 - `public const string CrdtVectorEntry`
 - `public const string CrdtMapField`
+- `public const string DataProbeRequest`
 
 ### `Orleans.Lattice.Api.Data.Grpc.ILatticeDataApiAuthorizer`
 
@@ -380,6 +392,7 @@ The following inventory includes directly declared public members and overloads,
 - `SetMany`
 - `CrdtWrite`
 - `CrdtRead`
+- `ProbeCapabilities`
 
 ### `Orleans.Lattice.Api.Data.Grpc.LatticeDataApiAuthorizationContext`
 

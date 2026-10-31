@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Api.Data.Tests;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public sealed class AuthApiDataWriteReadTests
+public sealed partial class AuthApiDataWriteReadTests
 {
     private const string Writer = "data-writer";
     private const string Reader = "data-reader";

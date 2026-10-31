@@ -91,6 +91,14 @@ public sealed class LatticeDataApiGrpcClient
     public Task<CrdtReadResponse> CrdtReadAsync(CrdtReadRequest request, CancellationToken cancellationToken = default)
         => UnaryAsync(_methods.CrdtRead, request, cancellationToken);
 
+    /// <summary>
+    /// Probes, with no side effects, whether the caller may write or delete at a key
+    /// (or at any key of the tree when the request names none). A denial reports
+    /// <see langword="false"/> flags, never a <c>PermissionDenied</c> status.
+    /// </summary>
+    public Task<LatticeDataCapabilities> ProbeCapabilitiesAsync(DataProbeRequest request, CancellationToken cancellationToken = default)
+        => UnaryAsync(_methods.ProbeCapabilities, request, cancellationToken);
+
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,
         TRequest request,

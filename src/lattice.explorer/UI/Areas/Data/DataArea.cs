@@ -35,6 +35,7 @@ internal sealed class DataArea : IExplorerArea
     private readonly DataExportCommandScope _exportCommand;
     private readonly DataCommandSignals _signals;
     private readonly ExplorerCommand _refresh;
+    private readonly DataEntryCommands? _entryCommands;
 
     /// <summary>Creates the area.</summary>
     /// <param name="directory">The circuit's tree directory.</param>
@@ -63,6 +64,7 @@ internal sealed class DataArea : IExplorerArea
         _exportCommand = exportCommand;
         _signals = signals;
         Completions = completions;
+        _entryCommands = services.GetService(typeof(DataEntryCommands)) as DataEntryCommands;
         _refresh = new ExplorerCommand(RefreshCommandId, "Refresh the tree directory")
         {
             Detail = "Reload every tree and view you can reach.",
@@ -95,9 +97,12 @@ internal sealed class DataArea : IExplorerArea
     /// Refreshing the directory, always; creating a view, only while a tree
     /// workspace the caller administers is open, targeting that tree's New view
     /// dialog; and exporting, only while a tree workspace the caller may export is
-    /// open, opening that tree's Export dialog.
+    /// open, opening that tree's Export dialog; and the entry commands
+    /// (<see cref="DataEntryCommands"/>) while the open tree workspace draws their controls.
     /// </summary>
-    public IReadOnlyList<ExplorerCommand> Commands
+    public IReadOnlyList<ExplorerCommand> Commands => _entryCommands?.Commands is { Count: > 0 } entry ? [.. AreaCommands, .. entry] : AreaCommands;
+
+    private IReadOnlyList<ExplorerCommand> AreaCommands
     {
         get
         {

@@ -412,6 +412,9 @@ public sealed class LatticeMcpRegionTargetingEndToEndTests
         public Task<DataRangePage> ReadRangeAsync(DataRangeRequest request, CancellationToken cancellationToken = default)
             => throw new NotImplementedException();
 
+        public Task<LatticeDataCapabilities> ProbeCapabilitiesAsync(string treeId, string? key = null, CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
+
         public Task SetManyAsync(string treeId, IReadOnlyList<DataEntry> upserts, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public Task CounterIncrementAsync(string treeId, string key, string replicaId, long amount, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public Task CounterDecrementAsync(string treeId, string key, string replicaId, long amount, CancellationToken cancellationToken = default) => throw new NotImplementedException();

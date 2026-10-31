@@ -70,4 +70,7 @@ public static class GrpcDataTypeAliases
 
     /// <summary>Alias for <see cref="CrdtMapField"/>.</summary>
     public const string CrdtMapField = "oladg.crmf";
+
+    /// <summary>Alias for <see cref="DataProbeRequest"/>.</summary>
+    public const string DataProbeRequest = "oladg.prbq";
 }

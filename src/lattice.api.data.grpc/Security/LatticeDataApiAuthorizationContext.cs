@@ -51,6 +51,9 @@ public enum LatticeDataApiOperation
 
     /// <summary>The <c>CrdtRead</c> CRDT read RPC.</summary>
     CrdtRead,
+
+    /// <summary>The <c>ProbeCapabilities</c> side-effect-free write-capability probe RPC.</summary>
+    ProbeCapabilities,
 }
 
 /// <summary>

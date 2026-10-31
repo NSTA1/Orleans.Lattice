@@ -473,6 +473,22 @@
       ],
       "source": "src/lattice.api.data.grpc/Model/DataGetRequest.cs#DataGetRequest"
     },
+    "DataProbeRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.data.grpc/Model/DataProbeRequest.cs#DataProbeRequest"
+    },
     "DataRangeDeleteRequest": {
       "kind": "record",
       "fields": [
@@ -762,9 +778,36 @@
         "Unknown",
         "SetMany",
         "CrdtWrite",
-        "CrdtRead"
+        "CrdtRead",
+        "ProbeCapabilities"
       ],
       "source": "src/lattice.api.data.grpc/Security/LatticeDataApiAuthorizationContext.cs#LatticeDataApiOperation"
+    },
+    "LatticeDataCapabilities": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "CanWrite",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "CanDelete",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Data/Model/LatticeDataCapabilities.cs#LatticeDataCapabilities"
     },
     "LatticeMergeMode": {
       "kind": "enum",
@@ -1172,6 +1215,83 @@
         "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#Get",
         "src/lattice.api.data.grpc/LatticeDataApiGrpcMethods.cs#GetMethodName",
         "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#GetAsync"
+      ]
+    },
+    {
+      "id": "probe-capabilities",
+      "in_process": "ILatticeDataApi.ProbeCapabilitiesAsync",
+      "grpc_method": "/orleans.lattice.api.data/ProbeCapabilities",
+      "transport_scope": "both",
+      "request": "DataProbeRequest",
+      "response": "LatticeDataCapabilities",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "crdt-shape-not-registered",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "idempotency-key-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "replication-mode-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "reserved-tree-namespace",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Unary capability probes use no built-in client retry policy; the probe has no side effects, so a retry is safe.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#ProbeCapabilitiesAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The probe reads only the access gate's decision; it neither reads nor writes the tree.",
+        "source": "src/lattice.api.data/LatticeDataApi.Capabilities.cs#ProbeCapabilitiesAsync"
+      },
+      "concurrency": {
+        "rule": "A UX affordance, not a security boundary: every real write is still authorized on attempt, so a stale answer is refused by the write path.",
+        "source": "src/lattice.api.data/LatticeDataApi.Capabilities.cs#ProbeCapabilitiesAsync"
+      },
+      "sources": [
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#ProbeCapabilities",
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcMethods.cs#ProbeCapabilitiesMethodName",
+        "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#ProbeCapabilitiesAsync"
       ]
     },
     {

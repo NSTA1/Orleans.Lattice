@@ -81,7 +81,7 @@ transitively.
 
 | Feature | Surface | Summary |
 |---|---|---|
-| Data | [State API](../lattice.api.state/README.md), [tree administration](../lattice.api.treeadmin/README.md) | Trees and views, key scans (live or snapshot), entries, per-key history and point-in-time reads, metrics, strict-mode dead letters, tag indexes and materialised views. See [The Explorer areas](areas.md#data). |
+| Data | [State API](../lattice.api.state/README.md), [data API](../lattice.api.data/README.md), [tree administration](../lattice.api.treeadmin/README.md) | Trees and views, key scans (live or snapshot), entries and creating, editing and deleting them, per-key history and point-in-time reads, metrics, strict-mode dead letters, tag indexes and materialised views. See [The Explorer areas](areas.md#data). |
 | Apps | [App control, catalogue, workspace and bridge](../lattice.api.apps/README.md) | Your apps, the source catalogue, consent review, lifecycle, each app's own pages, and its sandboxed UI. See [Lattice Apps in the Explorer](lattice-apps.md). |
 | Access | [Auth control API](../lattice.api.auth/README.md), [Tenant administration API](../lattice.api.tenantadmin/README.md) | Cluster rules and groups, delegated tenant groups and members, tenant-tier rules, and decision explanation. See [Managing access](managing-access.md). |
 | Schema | [Schema control API](../lattice.api.schema/README.md) | Policy, version configuration, compliance scans, remediation and schema dead letters. See [Managing schema](managing-schema.md). |

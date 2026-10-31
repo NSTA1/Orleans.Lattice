@@ -167,6 +167,27 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
         LatticeAppsApiGrpcClient.Create(Invoker(user, tenant), Head.Services);
 
     /// <summary>
+    /// The data facade's gRPC client as <paramref name="user"/> sees it: what the
+    /// Explorer's own data transport would send on that user's behalf, used to write
+    /// behind an open editor or to forge a write the UI never offered (#5367).
+    /// </summary>
+    /// <param name="user">The caller, <see cref="WorldIdentities.Admin"/> by default.</param>
+    public LatticeDataApiGrpcClient Data(string user = WorldIdentities.Admin) =>
+        LatticeDataApiGrpcClient.Create(Invoker(user), Head.Services);
+
+    /// <summary>Sets <paramref name="treeId"/>'s schema policy as the administrator, through the schema facade the Schema area calls.</summary>
+    /// <param name="treeId">The tree.</param>
+    /// <param name="policy">The policy.</param>
+    public async Task SetPolicyAsync(string treeId, LatticeSchemaPolicy policy)
+    {
+        var token = Convert.ToBase64String(Encoding.UTF8.GetBytes(WorldIdentities.Admin + ":" + WorldIdentities.Password));
+        using (LatticeCredentialContext.Use(token, scheme: TrustedUserAuthenticator.Scheme))
+        {
+            await Head.Services.GetRequiredService<ILatticeSchemaControl>().SetPolicyAsync(treeId, policy);
+        }
+    }
+
+    /// <summary>
     /// Installs the task-board app from the in-image source with the walkthrough's
     /// bindings (<c>editor</c> to <c>task-editors</c>, <c>viewer</c> to
     /// <c>task-viewers</c>) and enables it, replacing any earlier install.

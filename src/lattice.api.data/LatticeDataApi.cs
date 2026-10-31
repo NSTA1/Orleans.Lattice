@@ -13,7 +13,10 @@ namespace Orleans.Lattice.Api.Data;
 internal sealed partial class LatticeDataApi(
     IGrainFactory grainFactory,
     IOptions<LatticeApiDataOptions> apiOptions,
-    ITenantContextResolver tenantResolver) : ILatticeDataApi
+    ITenantContextResolver tenantResolver,
+    ILatticeAccessGate? accessGate = null,
+    ILatticeMembershipContext? membership = null,
+    ILatticeReadGrantProbe? grantProbe = null) : ILatticeDataApi
 {
     private readonly IGrainFactory _grainFactory = grainFactory
         ?? throw new ArgumentNullException(nameof(grainFactory));
@@ -23,6 +26,15 @@ internal sealed partial class LatticeDataApi(
 
     private readonly ITenantContextResolver _tenantResolver = tenantResolver
         ?? throw new ArgumentNullException(nameof(tenantResolver));
+
+    // The capability probe's collaborators: the gate the write path consults, the
+    // membership seam that resolves the caller, and the any-grant probe. Each is
+    // optional, because a host with no authorization add-on registers none of them.
+    private readonly ILatticeAccessGate? _accessGate = accessGate;
+
+    private readonly ILatticeMembershipContext? _membership = membership;
+
+    private readonly ILatticeReadGrantProbe? _grantProbe = grantProbe;
 
     /// <summary>
     /// Resolves the caller-supplied, tenant-local tree name to the effective tree

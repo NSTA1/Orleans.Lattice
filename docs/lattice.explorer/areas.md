@@ -99,7 +99,7 @@ The complete route inventory below contains the 70 unique `@page` route patterns
   - `/t/{tenant}/cluster/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}/{p7?}/{p8?}`
 | Area | Key and root address | Facades read or driven | Scope | Visibility probe |
 | --- | --- | --- | --- | --- |
-| Data | `data`, `/data` | State API, including `ILatticeStateClient`; `ILatticeTreeAdmin` for tag-index and view actions; the Data API's range read for **Export...** | Tenant-scoped | No state reader makes the area Hidden. Before a catalogue is loaded for the current caller and endpoint, a disconnected connection is Unavailable with a sign-in or connect reason; a denied catalogue probe is Hidden, and other read failures are Unavailable with a fixed, action-specific reason. A loaded catalogue keeps the area Visible until its caller-scoped memo is invalidated or refreshed. |
+| Data | `data`, `/data` | State API, including `ILatticeStateClient`; `ILatticeTreeAdmin` for tag-index and view actions; `ILatticeDataApi`: its range read for **Export...**, and its writes and write-capability probe to create, edit and delete entries; `ILatticeSchemaControl` for the value editor's schema preview | Tenant-scoped | No state reader makes the area Hidden. Before a catalogue is loaded for the current caller and endpoint, a disconnected connection is Unavailable with a sign-in or connect reason; a denied catalogue probe is Hidden, and other read failures are Unavailable with a fixed, action-specific reason. A loaded catalogue keeps the area Visible until its caller-scoped memo is invalidated or refreshed. |
 | Apps | `apps`, `/apps` | `ILatticeAppWorkspace`, `ILatticeAppsControl`, `ILatticeAppCatalog`, and `ILatticeAuthAdmin` for role binding | Tenant-scoped | Probes workspace apps, catalogue capabilities and control capabilities. It is Visible when the caller has a workspace answer, can browse the catalogue, or can list installed apps. Probe faults and missing facades deny the relevant flags, so a head serving none of them is Hidden. |
 | Access | `access`, `/access` and `/t/{tenant}/access` | `ILatticeAuthAdmin`; delegated tenant policy and directory facades | Mixed: `/access` is cluster-wide; `/t/{tenant}/access` is tenant-rooted and filters rules/groups for that tenant, with delegated groups, members and rules available when enabled | The smallest cluster group-catalogue page admits cluster access administrators. Only a Hidden result falls through to delegated access: a valid non-default asserted tenant with delegated access enabled can admit its administrator. Missing both surfaces or a denied/faulted tenant posture hides the area; an anonymous cluster-wide denial is Unavailable with "Sign in to administer access on this cluster." |
 | Schema | `schema`, `/schema` | `ILatticeSchemaControl` | Tenant-scoped | Probes schema capabilities against a reserved, side-effect-free tree id. Any schema grant makes the area Visible. A refused anonymous caller sees Unavailable with "Sign in to manage schema on this cluster."; a signed-in refusal, missing facade, unserved cluster or fault is Hidden. |
@@ -145,6 +145,47 @@ fault details. Permission denials become "You do not have
 permission to read this entry.", unserved operations become "This cluster does
 not let you read this entry.", missing entries become "It no longer exists, or
 you cannot see it.", and transient failures ask the reader to try again.
+
+### Creating, editing and deleting an entry
+
+A caller who may write a tree changes it from the Keys tab. **New entry...** sits
+in the Keys toolbar; the entry panel adds **Edit** and **Delete...** beside
+**History of this key**, and a key with no live value offers **Write a value**.
+Each control is drawn only when the data facade's capability probe
+(`ILatticeDataApi.ProbeCapabilitiesAsync`) says the caller may write or delete -
+across the tree for **New entry...**, at the open key for **Edit** and
+**Delete...**. A view, a shared prefix, a missing data facade, a refused or faulted
+probe all read as no rights, so a reader sees none of the controls. Hiding is not
+the defence: the facade authorizes every write as the signed-in user, so a write
+the controls never offered is refused all the same.
+
+The value editor opens as a dialog (a sheet at the compact width). A new entry
+names its key in a plain text box that says, when the field is left, if the key
+already holds a value. The value is edited in one of three formats, chosen in
+**Edit as**: **JSON**, which is validated as it is typed (the error names the line
+and position) and re-indented by **Format JSON**; **Text (UTF-8)**, stored exactly
+as typed; and **Binary (base64)**, which a value that is not UTF-8 opens in and
+which replaces the value whole. A typed CRDT value changes through its typed
+operations and is not edited here; the panel says so instead of offering **Edit**.
+
+When the tree has a schema policy, the editor reads it once through the schema
+facade and checks the draft against it with the cluster's own validator as it is
+typed. It reports "Passes this tree's schema policy (N rules)", or that the
+cluster will refuse the value, with the reason of every rule it fails. A policy
+the caller cannot read is said to be unchecked, and the value is still saved.
+Saving a violating value is the facade's decision: the editor reports the
+refusal, with the policy's reason, and keeps the draft.
+
+On save the editor reads the entry again. If it was written or deleted after the
+editor opened - by another user, or by an ingestion feed - the newer value is
+shown with **Reload the newer value** and **Overwrite with my value**. The cluster
+is last-writer-wins, so this is a warning, not a lock. After a write the editor
+reads the key back and says "Entry ... saved." (or "created."), or that the key
+does not hold the value written.
+
+**Delete...** opens a destructive confirmation that names the key and asks for
+it to be typed. The deletion is a tombstone: the key's History keeps every
+revision and reads "Deleted" for the newest.
 
 The History tab has three modes. With neither `?key=` nor `?prefix=`, it asks
 for a key, in a [picker](navigation-model.md#pickers) that suggests the tree's keys
@@ -295,6 +336,9 @@ The Data palette commands are:
 | --- | --- | --- |
 | `data.refresh` | Refresh the tree directory | Drops the circuit's loaded tree and view list, reloads it, and updates the directory and workspace surfaces. |
 | `data.export` | Export... | Opens the Export dialog of the open tree workspace (see [Exporting a tree](#exporting-a-tree)). The palette offers it only while a tree workspace that draws **Export...** is open - the same verdict, for the same caller - and leaves it out everywhere else. |
+| `data.new-entry` | New entry... | Offered while a tree workspace whose caller may write it is open. Opens the value editor for a new key. |
+| `data.edit-entry` | Edit entry | Offered while an entry the caller may write is open. Opens the value editor on it. |
+| `data.delete-entry` | Delete entry... | Offered while a live entry the caller may delete is open. Opens the destructive confirmation. |
 
 The directory remembers a successful tree/view catalogue for one caller,
 endpoint and active tenant. It forgets the list when sign-in, endpoint or active
