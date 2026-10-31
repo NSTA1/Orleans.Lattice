@@ -121,9 +121,7 @@ public sealed partial class VectorIndex
     private int SearchPartitions(ReadOnlySpan<float> query, float queryNorm, Span<VectorSearchResult> results)
     {
         var wanted = Math.Min(_probes, _partitionCount);
-        var scale = _metric == VectorDistanceMetric.Cosine
-            ? queryNorm == 0f ? 0f : 1f / queryNorm
-            : 1f;
+        var scale = ScaleFor(queryNorm);
 
         int[]? rentedIds = null;
         float[]? rentedAffinity = null;
@@ -203,7 +201,7 @@ public sealed partial class VectorIndex
         for (var partition = 0; partition < _partitionCount; partition++)
         {
             var centroid = new ReadOnlySpan<float>(centroids, partition * _dimensions, _dimensions);
-            var score = (2f * TensorPrimitives.Dot(query, centroid) * scale) - _centroidSquaredNorms[partition];
+            var score = CentroidAffinity(query, centroid, scale, _centroidSquaredNorms[partition]);
 
             if (found == wanted &&
                 (score < affinity[wanted - 1] ||
@@ -239,22 +237,24 @@ public sealed partial class VectorIndex
     /// normalised copy of the vector.
     /// </summary>
     private int NearestPartition(ReadOnlySpan<float> vector, float scale) =>
-        NearestCentroid(vector, scale, _centroids, _centroidSquaredNorms, _partitionCount, _dimensions);
+        NearestCentroid(vector, scale, _centroids, _centroidSquaredNorms, _partitionCount, _dimensions, out _);
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int NearestCentroid(
         ReadOnlySpan<float> vector,
         float scale,
         float[] centroids,
         float[] centroidSquaredNorms,
         int partitionCount,
-        int dimensions)
+        int dimensions,
+        out float winningAffinity)
     {
         var best = 0;
         var bestAffinity = float.NegativeInfinity;
         for (var partition = 0; partition < partitionCount; partition++)
         {
             var centroid = new ReadOnlySpan<float>(centroids, partition * dimensions, dimensions);
-            var affinity = (2f * TensorPrimitives.Dot(vector, centroid) * scale) - centroidSquaredNorms[partition];
+            var affinity = CentroidAffinity(vector, centroid, scale, centroidSquaredNorms[partition]);
             if (affinity > bestAffinity)
             {
                 bestAffinity = affinity;
@@ -262,8 +262,14 @@ public sealed partial class VectorIndex
             }
         }
 
+        winningAffinity = bestAffinity;
         return best;
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static float CentroidAffinity(
+        ReadOnlySpan<float> vector, ReadOnlySpan<float> centroid, float scale, float centroidSquaredNorm) =>
+        (2f * TensorPrimitives.Dot(vector, centroid) * scale) - centroidSquaredNorm;
 
     // Bounded insertion into the caller's span. k is small and most candidates
     // fail the first comparison, so this beats a heap and, unlike a sort, needs
