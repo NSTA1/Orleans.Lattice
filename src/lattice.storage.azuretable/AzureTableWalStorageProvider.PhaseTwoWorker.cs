@@ -355,21 +355,39 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     /// <see cref="AzureTableWalStorageProvider.ReconcileAsync"/> would
     /// keep.
     /// </para>
+    /// <para>
+    /// The walk starts at the higher of <paramref name="persistedTail"/>
+    /// and the <c>TAIL</c> this worker has itself committed, because the
+    /// caller's read of the persisted row can be stale by the time the
+    /// walk runs (issue #5466). A commit that lands between that read and
+    /// this call prunes its range from the accepted set, so a walk anchored
+    /// on the stale value alone finds a hole where the pruned batch was and
+    /// stops short of an offset that is durable and committed. The commit
+    /// raises the worker's mark before it prunes, and both are observed
+    /// under the accepted-set gate, so every pruned range is covered by the
+    /// mark this walk reads.
+    /// </para>
     /// </summary>
     /// <param name="persistedTail">
     /// The shard's persisted <c>TAIL</c> offset, or <c>-1</c> when the
     /// shard has no <c>TAIL</c> row yet.
     /// </param>
     /// <returns>
-    /// <paramref name="persistedTail"/> when no accepted batch
-    /// contiguously extends it; otherwise the inclusive end of the
-    /// contiguous accepted run above it.
+    /// The higher of <paramref name="persistedTail"/> and this worker's
+    /// committed <c>TAIL</c> when no accepted batch contiguously extends
+    /// it; otherwise the inclusive end of the contiguous accepted run
+    /// above it.
     /// </returns>
     public long ContiguousAcceptedEndOffsetInclusive(long persistedTail)
     {
-        var frontier = persistedTail;
+        long frontier;
         lock (_acceptedGate)
         {
+            // Read inside the gate: PruneAcceptedRanges runs under it and
+            // only after RaiseHighestCommittedEndOffset, so a range missing
+            // from the set because it was pruned is covered by this value.
+            frontier = Math.Max(persistedTail, Interlocked.Read(ref _highestCommittedEndOffset));
+
             // SortedDictionary enumerates ascending by key, so one
             // forward pass finds the whole contiguous run and stops
             // at the first hole.
@@ -397,6 +415,23 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         }
 
         return frontier;
+    }
+
+    /// <summary>
+    /// Number of accepted ranges not yet pruned by a phase-2 commit or
+    /// discarded by a fault. Test-only observation of the set's bound,
+    /// which <see cref="ContiguousAcceptedEndOffsetInclusive"/> cannot
+    /// reveal because a pruned range is covered by the committed mark.
+    /// </summary>
+    internal int AcceptedRangeCount
+    {
+        get
+        {
+            lock (_acceptedGate)
+            {
+                return _acceptedRanges.Count;
+            }
+        }
     }
 
     /// <summary>
