@@ -63,4 +63,13 @@ public sealed class ChapterContext
     /// <summary>The context of another chapter of the same run.</summary>
     /// <param name="chapter">The chapter id.</param>
     public ChapterContext For(string chapter) => _session.ContextFor(chapter);
+
+    /// <summary>
+    /// Whether <paramref name="chapter"/>'s produces already hold in this run: produced by its UI
+    /// steps or established by its contract. A verifier uses it to skip a fact a later chapter
+    /// deliberately changes (U1 makes an A3 order valid; C3 offboards what A2 granted), because
+    /// isolated mode verifies a chapter's consumes after establishing all of them.
+    /// </summary>
+    /// <param name="chapter">The chapter id.</param>
+    public bool IsProduced(string chapter) => _session.IsEstablished(chapter);
 }
