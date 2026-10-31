@@ -113,7 +113,8 @@ public sealed class TreeWorkspacePage(ShellPage shell)
         }
 
         await link.ClickAsync();
-        await Expect(Page).ToHaveURLAsync(new Regex("[?&]key="));
+        await Expect(Page).ToHaveURLAsync(new Regex("[?&]key=" + Regex.Escape(Uri.EscapeDataString(key)).Replace("%2F", "(%2F|/)", StringComparison.Ordinal) + "(&|$)"));
+        await Expect(Content.Locator("section.lt-data-entry .lt-data-entry__key")).ToHaveTextAsync(key);
         await Expect(Content.GetByRole(AriaRole.Link, new() { Name = "History of this key", Exact = true })).ToBeVisibleAsync();
     }
 
@@ -181,6 +182,7 @@ public sealed class TreeWorkspacePage(ShellPage shell)
         await Expect(Content.GetByText("Showing the key as it stood at")).ToHaveCountAsync(0);
         await Expect(RevisionInEffect).ToHaveCountAsync(0);
         await Expect(AsOf).ToHaveValueAsync(string.Empty);
+        await Expect(Revisions.First).ToBeVisibleAsync();
     }
 
     /// <summary>Turns the History tab's <b>Follow new revisions</b> switch off, so the timeline holds still.</summary>

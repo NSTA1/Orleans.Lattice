@@ -27,6 +27,10 @@ public sealed partial class AuditorsReviewChapter : JourneyChapter
 
     private static JourneyRecorder Recorder => JourneyRecorder.For(JourneyId);
 
+    // Checks that failed for a reason outside this chapter (an upstream chapter not yet
+    // merged), recorded so the remaining steps still run; the chapter fails at its end.
+    private readonly List<string> _deferredFailures = [];
+
     /// <inheritdoc />
     public override async Task RunAsync(ChapterContext context)
     {
@@ -50,8 +54,6 @@ public sealed partial class AuditorsReviewChapter : JourneyChapter
 
         Assert.That(_deferredFailures, Is.Empty, "U4 ran every step, but these checks failed:" + Environment.NewLine + string.Join(Environment.NewLine, _deferredFailures));
     }
-
-    private readonly List<string> _deferredFailures = [];
 
     /// <summary>Runs one numbered step in its own coverage scope, so a later step's failure keeps this step's evidence.</summary>
     private static async Task StepAsync(string step, Func<Task> body)
