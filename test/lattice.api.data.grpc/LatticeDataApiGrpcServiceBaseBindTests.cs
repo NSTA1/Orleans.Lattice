@@ -11,14 +11,14 @@ namespace Orleans.Lattice.Api.Data.Grpc.Tests;
 /// Unit coverage for the gRPC binding hook on
 /// <see cref="LatticeDataApiGrpcServiceBase"/>. Proves the metadata-recording pass
 /// (null service impl) and the per-request-binding pass (concrete impl) both add
-/// all ten unary methods, that a null binder is rejected, and that the hook fails
+/// all eleven unary methods, that a null binder is rejected, and that the hook fails
 /// loudly when the method-definition holder was not initialised first.
 /// </summary>
 [TestFixture]
 [NonParallelizable]
 public sealed class LatticeDataApiGrpcServiceBaseBindTests
 {
-    private const int ExpectedMethodCount = 10;
+    private const int ExpectedMethodCount = 11;
 
     private LatticeDataApiGrpcMethods? _savedHolder;
 

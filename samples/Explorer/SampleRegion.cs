@@ -7,6 +7,8 @@ using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Api.Auth.Grpc;
 using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Api.Backup.Grpc;
+using Orleans.Lattice.Api.Data;
+using Orleans.Lattice.Api.Data.Grpc;
 using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Api.Replication.Grpc;
 using Orleans.Lattice.Api.Schema;
@@ -187,6 +189,10 @@ internal sealed class SampleRegion : IAsyncDisposable
         // The read-only state API behind the Data area.
         silo.AddLatticeStateApi();
 
+        // The read-write data plane behind the Data area's entry editor (#5367).
+        // Every write is authorized by the access gate as the signed-in user.
+        silo.AddLatticeDataApi();
+
         // Membership and authorization behind the Access area. The data plane is
         // deny-by-default; the bootstrap administrator bypasses the decision
         // engine, which is what lets the console's administrator see everything.
@@ -349,6 +355,11 @@ internal sealed class SampleRegion : IAsyncDisposable
             o.RequireAuthorization = false;
             o.CredentialScheme = DemoBasicAuthenticator.Scheme;
         });
+        services.AddLatticeDataApiGrpc(o =>
+        {
+            o.RequireAuthorization = false;
+            o.CredentialScheme = DemoBasicAuthenticator.Scheme;
+        });
         services.AddLatticeAuthApiGrpc(o =>
         {
             o.RequireAuthorization = false;
@@ -424,6 +435,7 @@ internal sealed class SampleRegion : IAsyncDisposable
     private static void MapGrpc(WebApplication app, SampleRegionPlan plan)
     {
         app.MapLatticeStateApiGrpc();
+        app.MapLatticeDataApiGrpc();
         app.MapLatticeAuthApiGrpc();
         app.MapLatticeSchemaApiGrpc();
         app.MapLatticeAppsApiGrpc();

@@ -148,6 +148,10 @@
    ========================================================================== */
 
 .lt-data-key {
+  display: inline-block;
+  /* WCAG 2.5.8: a key link in a dense row is still a 24px target. */
+  min-height: 24px;
+  line-height: 24px;
   overflow-wrap: anywhere;
 }
 
@@ -385,6 +389,66 @@
   background: var(--lt-marker);
   color: var(--lt-marker-ink);
   font-weight: var(--lt-weight-strong);
+}
+
+/* ==========================================================================
+   4b. The value editor (#5367)
+   ========================================================================== */
+
+.lt-data-editor {
+  display: grid;
+  gap: var(--lt-space-3);
+  min-width: min(40rem, 100%);
+}
+
+.lt-data-editor__key {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.lt-data-editor__value {
+  width: 100%;
+  min-height: 12rem;
+  resize: vertical;
+  font-variant-ligatures: none;
+  tab-size: 2;
+}
+
+.lt-data-editor__schema {
+  display: grid;
+  gap: var(--lt-space-1);
+}
+
+.lt-data-editor__schema-ok,
+.lt-data-editor__schema-fail,
+.lt-data-editor__error {
+  margin: 0;
+  font-size: var(--lt-text-sm);
+}
+
+.lt-data-editor__schema-fail,
+.lt-data-editor__error {
+  color: var(--lt-danger);
+  font-weight: var(--lt-weight-heading);
+}
+
+.lt-data-editor__violations {
+  margin: var(--lt-space-1) 0 0;
+  padding-inline-start: var(--lt-space-5);
+  color: var(--lt-ink);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-data-editor__conflict {
+  display: grid;
+  gap: var(--lt-space-2);
+  padding: var(--lt-space-3);
+  border: 1px solid var(--lt-warning);
+  border-radius: var(--lt-radius-md);
+}
+
+.lt-data-editor__conflict p {
+  margin: 0;
 }
 
 /* ==========================================================================

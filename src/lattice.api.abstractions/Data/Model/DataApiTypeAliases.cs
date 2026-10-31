@@ -38,4 +38,7 @@ public static class DataApiTypeAliases
 
     /// <summary>Alias for <see cref="DataRangeDeleteResult"/>.</summary>
     public const string DataRangeDeleteResult = "olad.dx";
+
+    /// <summary>Alias for <see cref="LatticeDataCapabilities"/>.</summary>
+    public const string LatticeDataCapabilities = "olad.cap";
 }

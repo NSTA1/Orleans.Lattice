@@ -1,6 +1,7 @@
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
+using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Api.TreeAdmin;
@@ -41,6 +42,14 @@ public abstract class DataTestContext : ShellChromeTestContext
         ExportSources.Source.Coverage = Orleans.Lattice.LatticeRangeReadGateCoverage.Denied;
         Services.AddSingleton<IDataExportSources>(ExportSources);
 
+        // The data facade behind the write controls, and the schema facade the value
+        // editor reads a policy through: neither ever dials a cluster.
+        Writer = new FakeDataWriter(Client);
+        Services.AddKeyedSingleton<ILatticeDataApi>(ShellFacades.Key, Writer);
+        Schema = Substitute.For<ILatticeSchemaControl>();
+        Schema.GetPolicyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(call => Task.FromResult(Policies.GetValueOrDefault(call.Arg<string>())));
+        Services.AddKeyedSingleton(ShellFacades.Key, Schema);
+
         // The grants the tenant has received: read only with tenancy on, and faked so a test never dials.
         Grants = new FakeTenancyCluster();
         Services.AddKeyedSingleton<ILatticeTenantGrantAdmin>(ShellFacades.Key, Grants);
@@ -55,6 +64,15 @@ public abstract class DataTestContext : ShellChromeTestContext
 
     /// <summary>The substitute tree-administration facade.</summary>
     internal ILatticeTreeAdmin Admin { get; }
+
+    /// <summary>The in-memory data facade behind the write controls (#5367).</summary>
+    internal FakeDataWriter Writer { get; }
+
+    /// <summary>The substitute schema facade the value editor reads a tree's policy through.</summary>
+    internal ILatticeSchemaControl Schema { get; }
+
+    /// <summary>The schema policy of each tree, by state id, as <see cref="Schema"/> returns it.</summary>
+    internal Dictionary<string, Orleans.Lattice.Schema.LatticeSchemaPolicy?> Policies { get; } = new(StringComparer.Ordinal);
 
     /// <summary>The scripted accept-then-poll half of <see cref="Admin"/> (#4124).</summary>
     internal TreeAdminOperationScript Tracked { get; }

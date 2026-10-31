@@ -157,6 +157,31 @@ public interface ILatticeDataApi
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<DataRangePage> ReadRangeAsync(DataRangeRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Probes, with no side effects, whether the current caller may write or delete
+    /// in <paramref name="treeId"/>: at <paramref name="key"/> when one is given, or
+    /// at any key of the tree when it is <see langword="null"/>. Evaluated through the
+    /// same fail-closed access gate the writes use; a denial of any kind (an anonymous
+    /// caller, no grant, a tenant the caller may not act as) reports
+    /// <see langword="false"/> rather than throwing. A UX affordance, not a security
+    /// boundary: every real write is still authorized on attempt.
+    /// <para>
+    /// A default member, so an implementer that predates it keeps compiling. That
+    /// default fails closed: it reports no write and no delete, so a management
+    /// surface hides its write controls against such an implementer, while the writes
+    /// themselves are still authorized on attempt. The package's own facade, its
+    /// gRPC binding and the remote adapters all answer the real probe.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">Logical tree identifier.</param>
+    /// <param name="key">The key to probe, or <see langword="null"/> to probe the tree as a whole.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<LatticeDataCapabilities> ProbeCapabilitiesAsync(string treeId, string? key = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return Task.FromResult(new LatticeDataCapabilities { TreeId = treeId, Key = key });
+    }
+
     // --- Typed CRDT operations (issue #1361) -------------------------------
     //
     // Each verb translates a semantic delta into the correct encoded CRDT delta

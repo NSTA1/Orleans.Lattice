@@ -55,6 +55,8 @@
     <ProjectReference Include="..\..\src\lattice.apps\Orleans.Lattice.Apps.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.apps\Orleans.Lattice.Api.Apps.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.apps.grpc\Orleans.Lattice.Api.Apps.Grpc.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.data\Orleans.Lattice.Api.Data.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.data.grpc\Orleans.Lattice.Api.Data.Grpc.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.treeadmin\Orleans.Lattice.Api.TreeAdmin.csproj" />
     <ProjectReference Include="..\..\src\lattice.api.treeadmin.grpc\Orleans.Lattice.Api.TreeAdmin.Grpc.csproj" />
     <ProjectReference Include="..\..\src\lattice.backup\Orleans.Lattice.Backup.csproj" />

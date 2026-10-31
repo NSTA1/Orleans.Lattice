@@ -7,10 +7,10 @@ namespace Orleans.Lattice.Api.Data.Grpc;
 /// <summary>
 /// Abstract base for the write-capable data-API gRPC service. Carries the
 /// <see cref="BindServiceMethodAttribute"/> that <c>Grpc.AspNetCore</c> reflects
-/// against to discover and register the ten unary RPCs (<c>Set</c>,
+/// against to discover and register the eleven unary RPCs (<c>Set</c>,
 /// <c>Delete</c>, <c>SetManyAtomic</c>, <c>SetManyAtomicCrossTree</c>,
 /// <c>Get</c>, <c>ReadRange</c>, <c>DeleteRange</c>, <c>SetMany</c>,
-/// <c>CrdtWrite</c>, <c>CrdtRead</c>).
+/// <c>CrdtWrite</c>, <c>CrdtRead</c>, <c>ProbeCapabilities</c>).
 /// </summary>
 /// <remarks>
 /// The base/derived split mirrors the codegen shape <c>Grpc.Tools</c> produces
@@ -54,6 +54,9 @@ internal abstract class LatticeDataApiGrpcServiceBase
     /// <summary>Reads a typed CRDT logical value. Implemented in <see cref="LatticeDataApiGrpcService"/>.</summary>
     public abstract Task<CrdtReadResponse> CrdtRead(CrdtReadRequest request, ServerCallContext context);
 
+    /// <summary>Probes the caller's write capabilities. Implemented in <see cref="LatticeDataApiGrpcService"/>.</summary>
+    public abstract Task<LatticeDataCapabilities> ProbeCapabilities(DataProbeRequest request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at
     /// startup with <paramref name="serviceImpl"/> set to <see langword="null"/>
@@ -83,6 +86,7 @@ internal abstract class LatticeDataApiGrpcServiceBase
             binder.AddMethod(methods.SetMany, (UnaryServerMethod<DataSetManyRequest, DataSetManyResponse>?)null);
             binder.AddMethod(methods.CrdtWrite, (UnaryServerMethod<CrdtWriteRequest, CrdtWriteResponse>?)null);
             binder.AddMethod(methods.CrdtRead, (UnaryServerMethod<CrdtReadRequest, CrdtReadResponse>?)null);
+            binder.AddMethod(methods.ProbeCapabilities, (UnaryServerMethod<DataProbeRequest, LatticeDataCapabilities>?)null);
             return;
         }
 
@@ -96,6 +100,7 @@ internal abstract class LatticeDataApiGrpcServiceBase
         binder.AddMethod(methods.SetMany, new UnaryServerMethod<DataSetManyRequest, DataSetManyResponse>(serviceImpl.SetMany));
         binder.AddMethod(methods.CrdtWrite, new UnaryServerMethod<CrdtWriteRequest, CrdtWriteResponse>(serviceImpl.CrdtWrite));
         binder.AddMethod(methods.CrdtRead, new UnaryServerMethod<CrdtReadRequest, CrdtReadResponse>(serviceImpl.CrdtRead));
+        binder.AddMethod(methods.ProbeCapabilities, new UnaryServerMethod<DataProbeRequest, LatticeDataCapabilities>(serviceImpl.ProbeCapabilities));
     }
 }
 
@@ -277,6 +282,10 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
     /// <inheritdoc />
     public override Task<CrdtReadResponse> CrdtRead(CrdtReadRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (api, req, ct) => DispatchCrdtReadAsync(api, req, ct));
+
+    /// <inheritdoc />
+    public override Task<LatticeDataCapabilities> ProbeCapabilities(DataProbeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (api, req, ct) => api.ProbeCapabilitiesAsync(req.TreeId, req.Key, ct));
 
     private static Task DispatchCrdtWriteAsync(ILatticeDataApi api, CrdtWriteRequest req, CancellationToken ct)
         => req.Op switch
