@@ -45,6 +45,7 @@ public partial class RestoreParticipantTests
         Assert.That(async () =>
         {
             await participant.PrepareAsync(Request());
+            await participant.CommitAsync(Request());
             await participant.AbortAsync(Request());
         }, Throws.InstanceOf<OperationCanceledException>());
     }
@@ -60,10 +61,50 @@ public partial class RestoreParticipantTests
         var participant = Participant(engine, FactoryFor(fence), restoreService: restoreService);
 
         await participant.PrepareAsync(Request());
+        await participant.CommitAsync(Request());
         await participant.AbortAsync(Request());
 
         await fence.Received(1).LiftAsync();
         await engine.Received(1).DeleteShadowAsync(TargetTree + "-shadow", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task AbortAsync_after_prepare_only_does_not_revert_but_deletes_shadow()
+    {
+        // #5443: a saga that only prepared never moved the alias, and the build's
+        // alias operation is still open on the target, so a revert would collide
+        // with it and fault. Deleting the shadow is what releases that operation.
+        var engine = HealthyEngine();
+        var restoreService = Substitute.For<ILatticeBackupRestoreService>();
+        var fence = Substitute.For<ISagaWriteFenceGrain>();
+        var participant = Participant(engine, FactoryFor(fence), restoreService: restoreService);
+
+        await participant.PrepareAsync(Request());
+        await participant.AbortAsync(Request());
+
+        await restoreService.DidNotReceive().RevertRestoreAsync(
+            Arg.Any<LatticeRestoreResult>(), Arg.Any<CancellationToken>());
+        await engine.Received(1).DeleteShadowAsync(TargetTree + "-shadow", Arg.Any<CancellationToken>());
+        await fence.Received(1).LiftAsync();
+    }
+
+    [Test]
+    public async Task AbortAsync_after_commit_reverts_then_deletes_shadow()
+    {
+        var engine = HealthyEngine();
+        var restoreService = Substitute.For<ILatticeBackupRestoreService>();
+        var participant = Participant(
+            engine, FactoryFor(Substitute.For<ISagaWriteFenceGrain>()), restoreService: restoreService);
+
+        await participant.PrepareAsync(Request());
+        await participant.CommitAsync(Request());
+        await participant.AbortAsync(Request());
+
+        Received.InOrder(() =>
+        {
+            restoreService.RevertRestoreAsync(Arg.Any<LatticeRestoreResult>(), Arg.Any<CancellationToken>());
+            engine.DeleteShadowAsync(TargetTree + "-shadow", Arg.Any<CancellationToken>());
+        });
     }
 
     [Test]

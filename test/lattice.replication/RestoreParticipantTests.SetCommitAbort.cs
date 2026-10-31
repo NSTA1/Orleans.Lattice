@@ -52,7 +52,7 @@ public partial class RestoreParticipantTests
     }
 
     [Test]
-    public async Task AbortSetAsync_after_prepare_reverts_and_deletes_every_member_then_lifts()
+    public async Task AbortSetAsync_after_prepare_deletes_every_member_without_reverting_then_lifts()
     {
         var engine = HealthyEngine();
         var restoreService = Substitute.For<ILatticeBackupRestoreService>();
@@ -67,10 +67,30 @@ public partial class RestoreParticipantTests
 
         await participant.AbortAsync(SetRequestFor(SetId));
 
-        await restoreService.Received(2).RevertRestoreAsync(Arg.Any<LatticeRestoreResult>(), Arg.Any<CancellationToken>());
+        // #5443: no member's alias moved, so there is nothing to revert, and a revert
+        // would collide with each build's still-open alias operation.
+        await restoreService.DidNotReceive().RevertRestoreAsync(Arg.Any<LatticeRestoreResult>(), Arg.Any<CancellationToken>());
         await engine.Received(2).DeleteShadowAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
         await fence.Received(1).LiftAsync();
         Assert.That(participant.TryGetLocalSetResult(SetId, out _), Is.False, "the aborted group is evicted");
+    }
+
+    [Test]
+    public async Task AbortSetAsync_after_commit_reverts_and_deletes_every_member()
+    {
+        var engine = HealthyEngine();
+        var restoreService = Substitute.For<ILatticeBackupRestoreService>();
+        var participant = Participant(
+            engine, FactoryFor(Substitute.For<ISagaWriteFenceGrain>()),
+            restoreService: restoreService,
+            setResolver: TwoMemberResolver());
+
+        await participant.PrepareAsync(SetRequestFor(SetId));
+        await participant.CommitAsync(SetRequestFor(SetId));
+        await participant.AbortAsync(SetRequestFor(SetId));
+
+        await restoreService.Received(2).RevertRestoreAsync(Arg.Any<LatticeRestoreResult>(), Arg.Any<CancellationToken>());
+        await engine.Received(2).DeleteShadowAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Test]

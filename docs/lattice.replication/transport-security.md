@@ -165,6 +165,20 @@ participant SPI or changing state. A different authorized peer cannot terminate
 the saga by knowing its id; mismatches return `PermissionDenied`. Matching retries,
 fence reminders and operator resolution continue to use the recorded identity.
 
+A restore participant acting on a remote coordinator's saga has no user identity:
+the operator who started the restore was authorized on the coordinator cluster, and
+the control call carries only that cluster's identity. The participant therefore
+runs its restore steps (admission probe, shadow build, cutover, and compensation)
+with *peer authority* - a system-origin scope - and only when the coordinator it
+received is a remote cluster, one of this cluster's current replication peers, the
+target tree is one this cluster replicates, and every tree the backup chain was
+captured from is the target or a tree this cluster replicates. The coordinator id
+is the credential-bound origin the service stamped, never a body value. Within those
+bounds a restore grants the peer nothing its replication stream does not already
+hold. A saga this cluster coordinates itself runs as the operator, whose identity
+flows with the loopback call, and is authorized as usual
+([#5443](https://github.com/NSTA1/Orleans.Lattice/issues/5443)).
+
 Turning off authentication or origin binding does not authorize these identity-sensitive
 operations: tenant snapshot and saga RPCs remain denied. An mTLS-only setup below
 does not provide the package's credential-bound peer identity for these operations.

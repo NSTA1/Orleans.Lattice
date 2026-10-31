@@ -26,7 +26,9 @@ namespace Orleans.Lattice.Replication;
 ///   shipping stays paused until the saga globally completes (the fence grain's
 ///   global gate), preserving cross-cluster atomic visibility.</description></item>
 ///   <item><description><b>Abort</b> reverts the alias to the pre-restore physical
-///   tree, reliably garbage collects the shadow so no storage leaks, then lifts
+///   tree when this participant had started the cutover (a saga that only
+///   prepared never moved it), reliably garbage collects the shadow so no storage
+///   leaks, then lifts
 ///   the fence. Idempotent and safe when called by the participant grain after it
 ///   learns an abort from the coordinator on fence expiry; that request carries
 ///   the persisted set id, so a backup-set restore takes the set path. Only a
@@ -49,6 +51,16 @@ namespace Orleans.Lattice.Replication;
 /// participant is inert and votes to abort any restore saga dispatched to it
 /// (no backup means nothing to restore), rather than failing to construct.
 /// </para>
+/// <para>
+/// <b>Authority.</b> The operator who starts a coordinated restore is authorized
+/// once, on the coordinator cluster. A participant acting on a remote
+/// coordinator's saga runs its restore steps with <b>peer authority</b> - a
+/// system-origin scope entered only for a current, authenticated replication
+/// peer, on trees this cluster replicates, replaying backups of trees this cluster
+/// replicates (#5443). Every other caller, this cluster's own coordinator
+/// included, runs as the ambient caller and is authorized as such. See
+/// <c>HasPeerAuthority</c> for the trust argument.
+/// </para>
 /// </summary>
 internal sealed class RestoreParticipant(
     ILatticeCoordinatedRestoreEngine? engine,
@@ -58,7 +70,8 @@ internal sealed class RestoreParticipant(
     ILogger<RestoreParticipant> logger,
     ILatticeBackupSetResolver? setResolver = null,
     IReplicatedTreeMembership? membership = null,
-    Microsoft.Extensions.Options.IOptionsMonitor<LatticeReplicationOptions>? options = null) : ISagaParticipant
+    Microsoft.Extensions.Options.IOptionsMonitor<LatticeReplicationOptions>? options = null,
+    IReplicationTopology? topology = null) : ISagaParticipant
 {
     /// <summary>
     /// Bounded retry budget for a transient capacity exhaustion mid-build. Past
@@ -74,6 +87,16 @@ internal sealed class RestoreParticipant(
     private const int CutoverFenceWindowSeconds = 0;
 
     private readonly ConcurrentDictionary<string, LatticeRestoreResult> _built =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Saga ids whose cutover this participant has started on this activation. An
+    /// abort reverts the alias only for these: a saga that only prepared never
+    /// moved the alias, and reverting it collides with the build's own open alias
+    /// operation (#5443). A reactivation that lost this set also lost the built
+    /// cache, so the abort takes the no-revert garbage-collect path either way.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, bool> _cutOver =
         new(StringComparer.Ordinal);
 
     /// <summary>Records a participant prepare vote on the saga vote counter, tagged by reason.</summary>
@@ -168,6 +191,127 @@ internal sealed class RestoreParticipant(
             "a coordinated restore may only target a tree this cluster is enrolled for.");
     }
 
+    /// <summary>
+    /// Whether this saga's restore steps run with <b>peer authority</b> - inside a
+    /// system-origin scope - rather than as the ambient caller (#5443).
+    /// <para>
+    /// A participant acting on a remote coordinator's saga has no user identity of
+    /// its own: the operator was authorized on the coordinator cluster, before the
+    /// saga started, and the control call that reaches this cluster carries only the
+    /// coordinator's cluster identity. Re-authorizing the engine's restore steps
+    /// against the ambient subject therefore checks <c>anonymous</c>, and on a
+    /// cluster that enforces authorization every replicated-tree restore was
+    /// compensated. The participant instead acts on the authority it does hold - the
+    /// authenticated replication peer's - and only where that authority already
+    /// reaches.
+    /// </para>
+    /// <para>
+    /// Every condition is re-derived locally; nothing the request body classifies is
+    /// trusted. Peer authority holds only when all of these are true:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><description>The membership, options and topology seams are wired. A
+    ///   missing seam is a refusal, never a pass.</description></item>
+    ///   <item><description>The coordinator is a <b>remote</b> cluster. On the
+    ///   inbound gRPC saga service <see cref="SagaControlRequest.CoordinatorClusterId"/>
+    ///   is overwritten with the transport-stamped origin, which must equal the
+    ///   cluster the presented credential is bound to, and is refused unless that
+    ///   origin is an authorized peer. A request this cluster's own coordinator loops
+    ///   back keeps the operator's ambient identity, which flows with the
+    ///   call.</description></item>
+    ///   <item><description>The coordinator is one of this cluster's
+    ///   <b>current</b> replication peers.</description></item>
+    ///   <item><description>The caller has already confined the targets to trees
+    ///   this cluster replicates (<see cref="IsHostedTarget"/>,
+    ///   <see cref="FilterHostedMembers"/>), and prepare confines every backup's
+    ///   captured source trees the same way (<see cref="SourcesEnrolled"/>).</description></item>
+    /// </list>
+    /// <para>
+    /// Within those bounds the restore grants the peer nothing its replication
+    /// stream does not already hold: an enrolled peer can already write any value
+    /// into a tree it replicates with this cluster, under system origin, and it
+    /// already receives every write to the trees whose backups it may restore.
+    /// </para>
+    /// </summary>
+    private bool HasPeerAuthority(SagaControlRequest request)
+    {
+        if (membership is null || options is null || topology is null)
+        {
+            return false;
+        }
+
+        var coordinator = request.CoordinatorClusterId;
+        if (string.IsNullOrEmpty(coordinator)
+            || string.Equals(coordinator, options.CurrentValue.ClusterId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        foreach (var peer in topology.CurrentPeers)
+        {
+            if (string.Equals(peer, coordinator, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        logger.LogWarning(
+            "Restore participant: saga '{SagaId}' names coordinator '{Coordinator}', which is not a current " +
+            "replication peer; its restore steps run as the ambient caller.",
+            request.SagaId, coordinator);
+        return false;
+    }
+
+    /// <summary>
+    /// Enters the system-origin scope that carries peer authority for
+    /// <paramref name="request"/>, or returns <c>null</c> (the ambient caller) when
+    /// <see cref="HasPeerAuthority"/> does not hold. Cold path: one restore saga
+    /// step per call, so the scope allocation is immaterial.
+    /// </summary>
+    private IDisposable? EnterPeerAuthority(SagaControlRequest request, out bool elevated)
+    {
+        elevated = HasPeerAuthority(request);
+        return elevated ? LatticeAccessGateContext.EnterSystemOrigin() : null;
+    }
+
+    /// <summary>
+    /// Whether every tree the backup chain in <paramref name="report"/> was captured
+    /// from is a tree a peer-authority restore may read: the target itself, or a
+    /// tree this cluster replicates. A report that names no source is unknown and
+    /// refused. Without this check a peer could name any catalogued backup -
+    /// including one of a tree kept deliberately cluster-local - and copy its
+    /// contents into a replicated tree, because the engine's captured-source
+    /// authorization is bypassed under system origin.
+    /// </summary>
+    private bool SourcesEnrolled(RestoreAdmissionReport report)
+    {
+        if (report.SourceTreeIds.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var source in report.SourceTreeIds)
+        {
+            if (!string.Equals(source, report.TargetTreeId, StringComparison.Ordinal)
+                && !membership!.IsReplicated(source))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>The refusal returned for a backup captured from a tree this cluster does not replicate.</summary>
+    private static SagaParticipantPrepareResult SourceNotReplicated(string targetTree)
+    {
+        RecordVote(LatticeReplicationMetrics.SagaReasonNotReplicated);
+        return new SagaParticipantPrepareResult(
+            SagaVote.Abort,
+            $"The backup restored into tree '{targetTree}' was captured from a tree this cluster does not " +
+            "replicate: a peer-coordinated restore may only replay backups of replicated trees.");
+    }
+
     /// <inheritdoc />
     public async Task<SagaParticipantPrepareResult> PrepareAsync(
         SagaControlRequest request, CancellationToken cancellationToken = default)
@@ -195,6 +339,7 @@ internal sealed class RestoreParticipant(
         }
 
         var restoreRequest = BuildRestoreRequest(request);
+        using var authority = EnterPeerAuthority(request, out var peerAuthority);
 
         // Admission pre-flight: probe the manifest's self-describing size and
         // topology and hard-refuse an infeasible target BEFORE building anything.
@@ -215,6 +360,15 @@ internal sealed class RestoreParticipant(
             RecordVote(LatticeReplicationMetrics.SagaReasonInfeasible);
             return new SagaParticipantPrepareResult(
                 SagaVote.Abort, $"Admission probe failed: {ex.Message}");
+        }
+
+        if (peerAuthority && !SourcesEnrolled(report))
+        {
+            logger.LogWarning(
+                "Restore participant: refusing saga '{SagaId}' - backup '{BackupId}' was captured from a tree " +
+                "this cluster does not replicate.",
+                request.SagaId, request.ManifestId);
+            return SourceNotReplicated(request.TargetTree);
         }
 
         if (!await capacity.CanHostAsync(report, cancellationToken))
@@ -310,6 +464,7 @@ internal sealed class RestoreParticipant(
         }
 
         var restoreRequest = BuildRestoreRequest(request);
+        using var authority = EnterPeerAuthority(request, out _);
 
         // Reuse the prepared shadow; if a reactivation lost the in-memory cache,
         // re-derive it - BuildShadowAsync is idempotent and resumable, so this
@@ -337,7 +492,9 @@ internal sealed class RestoreParticipant(
         });
 
         // Single atomic alias swap: a reader sees whole-old or whole-new, never
-        // half.
+        // half. Recorded first, so an abort after a commit that faulted part-way
+        // still reverts an alias that may have moved.
+        _cutOver[request.SagaId] = true;
         await engine.CommitShadowAsync(result, cancellationToken);
 
         // Unblock local writes on this cluster now it has flipped. Cross-cluster
@@ -388,10 +545,19 @@ internal sealed class RestoreParticipant(
         // the participant grain for an abort it learned from the coordinator on
         // fence expiry, and safe when the participant never prepared.
         var restoreRequest = BuildRestoreRequest(request);
+        using var authority = EnterPeerAuthority(request, out _);
 
         if (_built.TryGetValue(request.SagaId, out var result))
         {
-            await SafeRevertAsync(result, cancellationToken);
+            // Revert only an alias this participant moved. A saga that only
+            // prepared still holds the build's alias operation on the target, so a
+            // revert would collide with it and fault (#5443); deleting the shadow
+            // below releases that operation instead.
+            if (_cutOver.TryRemove(request.SagaId, out _))
+            {
+                await SafeRevertAsync(result, cancellationToken);
+            }
+
             await SafeDeleteShadowByIdAsync(result.ShadowPhysicalTreeId, cancellationToken);
             _built.TryRemove(request.SagaId, out _);
         }
@@ -482,6 +648,7 @@ internal sealed class RestoreParticipant(
         members = FilterHostedMembers(members, request);
         var requests = BuildSetRestoreRequests(members);
         var built = new List<LatticeRestoreResult>(requests.Count);
+        using var authority = EnterPeerAuthority(request, out var peerAuthority);
 
         foreach (var restoreRequest in requests)
         {
@@ -503,6 +670,16 @@ internal sealed class RestoreParticipant(
                 RecordVote(LatticeReplicationMetrics.SagaReasonInfeasible);
                 return new SagaParticipantPrepareResult(
                     SagaVote.Abort, $"Set admission probe failed: {ex.Message}");
+            }
+
+            if (peerAuthority && !SourcesEnrolled(report))
+            {
+                logger.LogWarning(
+                    "Restore participant: refusing set saga '{SagaId}' - member tree '{TreeId}' would replay a " +
+                    "backup captured from a tree this cluster does not replicate.",
+                    request.SagaId, restoreRequest.TargetTreeId);
+                await GarbageCollectAllAsync(built, requests, cancellationToken);
+                return SourceNotReplicated(restoreRequest.TargetTreeId!);
             }
 
             if (!await capacity.CanHostAsync(report, cancellationToken))
@@ -562,6 +739,7 @@ internal sealed class RestoreParticipant(
         }
 
         var requests = BuildSetRestoreRequests(members);
+        using var authority = EnterPeerAuthority(request, out _);
 
         // Reuse the prepared group; a reactivation that lost the cache re-derives
         // every member idempotently (BuildShadowAsync is resumable).
@@ -601,6 +779,7 @@ internal sealed class RestoreParticipant(
         // them shortens the write stall from N round trips to ceil(N / width)
         // without weakening the guarantee. A fault still surfaces after every
         // launched swap has settled, because ForEachAsync observes them all.
+        _cutOver[request.SagaId] = true;
         await BoundedFanOut.ForEachAsync(
             built,
             BoundedFanOut.DefaultWidth,
@@ -633,8 +812,15 @@ internal sealed class RestoreParticipant(
             return;
         }
 
+        using var authority = EnterPeerAuthority(request, out _);
+
         if (_builtSets.TryGetValue(request.SagaId, out var built))
         {
+            // Revert only aliases this participant moved: a group that only
+            // prepared still holds each build's alias operation, which a revert
+            // would collide with (#5443); the shadow delete releases it.
+            var cutOver = _cutOver.TryRemove(request.SagaId, out _);
+
             // Per member the revert must precede that member's shadow delete, so
             // the two steps stay serial INSIDE the body; across members there is
             // no such constraint, because each pair touches only its own tree.
@@ -646,7 +832,11 @@ internal sealed class RestoreParticipant(
                 BoundedFanOut.DefaultWidth,
                 async result =>
                 {
-                    await SafeRevertAsync(result, cancellationToken);
+                    if (cutOver)
+                    {
+                        await SafeRevertAsync(result, cancellationToken);
+                    }
+
                     await SafeDeleteShadowByIdAsync(result.ShadowPhysicalTreeId, cancellationToken);
                 });
 

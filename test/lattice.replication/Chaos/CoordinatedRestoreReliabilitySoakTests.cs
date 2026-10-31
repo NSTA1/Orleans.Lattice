@@ -117,8 +117,8 @@ public class CoordinatedRestoreReliabilitySoakTests
                 "the prepared cluster garbage collected its shadow on compensation");
             Assert.That(b.Engine.DeletedShadows, Is.Not.Empty,
                 "the failing cluster garbage collected its partial shadow");
-            Assert.That(a.Engine.RevertCount, Is.EqualTo(1),
-                "the prepared cluster reverted its alias to the pre-restore tree");
+            Assert.That(a.Engine.RevertCount, Is.EqualTo(0),
+                "the prepared cluster never cut over, so its alias needs no revert");
         });
     }
 

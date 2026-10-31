@@ -60,4 +60,23 @@ public sealed class RestoreAdmissionReport
 
     /// <summary>The base-first ordered chain of backup ids that would be replayed.</summary>
     public IReadOnlyList<string> ManifestChain { get; }
+
+    /// <summary>
+    /// The distinct trees the chain's manifests were captured from, in base-first
+    /// order of first appearance. The coordinated-restore engine always reports
+    /// at least one; an empty list means the producer did not report them, which a
+    /// consumer that relies on the value must treat as unknown and refuse.
+    /// </summary>
+    /// <exception cref="ArgumentNullException">The value is set to <c>null</c>.</exception>
+    public IReadOnlyList<string> SourceTreeIds
+    {
+        get => _sourceTreeIds;
+        init
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            _sourceTreeIds = value;
+        }
+    }
+
+    private readonly IReadOnlyList<string> _sourceTreeIds = [];
 }

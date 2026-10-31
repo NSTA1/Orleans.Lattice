@@ -184,8 +184,11 @@ public class CustomSagaParticipantModelTests
         Assert.That(a.Example.CommittedValue, Is.Null);
         Assert.That(b.Example.CommittedValue, Is.Null);
 
-        // Cluster A prepared, so both of its participants are compensated.
-        Assert.That(a.Engine.RevertCount, Is.EqualTo(1));
+        // Cluster A prepared, so both of its participants are compensated. The
+        // restore never cut over, so its compensation garbage collects without a
+        // revert (#5443).
+        Assert.That(a.Engine.RevertCount, Is.EqualTo(0));
+        Assert.That(a.Engine.DeleteCount, Is.GreaterThanOrEqualTo(1));
         Assert.That(a.Example.AbortCount, Is.EqualTo(1));
         Assert.That(a.Example.HasPendingValue, Is.False);
         await a.Fence.Received(1).LiftAsync();
@@ -269,7 +272,8 @@ public class CustomSagaParticipantModelTests
                 Assert.That(cluster.Example.AbortCount, Is.EqualTo(1),
                     "the coordinator's abort must compensate the custom participant");
                 Assert.That(cluster.Example.HasPendingValue, Is.False);
-                Assert.That(cluster.Engine.RevertCount, Is.EqualTo(1));
+                Assert.That(cluster.Engine.RevertCount, Is.EqualTo(0), "the restore never cut over, so nothing is reverted");
+                Assert.That(cluster.Engine.DeleteCount, Is.GreaterThanOrEqualTo(1));
                 Assert.That(cluster.State.State.Phase, Is.EqualTo(SagaPhase.Aborted));
             });
         }
