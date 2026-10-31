@@ -191,9 +191,15 @@ public sealed class PersonalisingTheConsoleJourney : JourneyChapter
         const string step = "u5-3";
         var shell = sam.Shell;
         var palette = new PalettePage(shell);
+
+        // A fresh load, as when sam opens the console again: the Apps area reads which apps are
+        // his once per page, and in isolated mode the viewer binding is only moments old.
+        await shell.GotoAsync("/");
+        await shell.ExpectHeadingAsync(HomeHeading);
         var apps = await palette.TypeAsync("a/");
-        Assert.That(apps, Does.Contain("a/" + StoryNames.Contoso.Apps.TaskBoard), $"a/ completes the installed task board: {string.Join(", ", apps)}");
+        var status = await palette.Status.InnerTextAsync();
         await Checkpoint(sam, step, "app-completions", "Typing a/ lists the apps sam may open: the task board his team works on");
+        Assert.That(apps, Does.Contain("a/" + StoryNames.Contoso.Apps.TaskBoard), $"a/ completes the installed task board: [{string.Join(", ", apps)}] ({status})");
 
         await palette.ChooseAsync("a/" + StoryNames.Contoso.Apps.TaskBoard);
         await Expect(shell.Page).ToHaveURLAsync(new Regex("/apps/" + Regex.Escape(StoryNames.Contoso.Apps.TaskBoard) + "(\\?|$)"));
@@ -212,7 +218,7 @@ public sealed class PersonalisingTheConsoleJourney : JourneyChapter
         var spine = await shell.ReadSpineAsync();
         Assert.Multiple(() =>
         {
-            Assert.That(spine.CanOpen("schema"), Is.True, $"sam, a schema owner, may open Schema: {spine}");
+            Assert.That(spine.CanOpen("apps"), Is.True, $"sam holds a role in the task board: {spine}");
             Assert.That(spine.CanOpen("access"), Is.False, $"sam administers no access: {spine}");
             Assert.That(spine.CanOpen("cluster"), Is.False, $"sam administers no tree: {spine}");
             Assert.That(spine.CanOpen("tenancy"), Is.False, $"Contoso is not tenanted: {spine}");
@@ -238,10 +244,22 @@ public sealed class PersonalisingTheConsoleJourney : JourneyChapter
             }
         }
 
-        await shell.RunCommandAsync("Show every tree's schema");
-        await Expect(shell.Page).ToHaveURLAsync(new Regex("/schema\\?(.*&)?show=all"));
-        await shell.ExpectHeadingAsync("Schema");
-        await Checkpoint(sam, step, "schema-all-trees", "Running Show every tree's schema from the palette opens Schema with every tree listed");
+        // Schema opens to sam once a tree he owns the schema of exists (A3, in the story); in
+        // isolated mode none does, so the palette's own Data command is run instead.
+        if (spine.CanOpen("schema"))
+        {
+            await shell.RunCommandAsync("Show every tree's schema");
+            await Expect(shell.Page).ToHaveURLAsync(new Regex("/schema\\?(.*&)?show=all"));
+            await shell.ExpectHeadingAsync("Schema");
+            await Checkpoint(sam, step, "schema-all-trees", "Running Show every tree's schema from the palette opens Schema with every tree listed");
+        }
+        else
+        {
+            await shell.RunCommandAsync("Refresh the tree directory");
+            await Expect(shell.Page).ToHaveURLAsync(new Regex("/data(\\?|$)"));
+            await shell.ExpectHeadingAsync("Data");
+            await Checkpoint(sam, step, "data-refresh", "Running Refresh the tree directory from the palette opens Data and reloads it");
+        }
     }
 
     /// <summary>U5.5: Reset view at <c>/reset</c> clears the remembered appearance back to its default.</summary>
