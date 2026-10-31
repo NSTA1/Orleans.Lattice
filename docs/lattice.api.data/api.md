@@ -170,6 +170,7 @@ The following inventory includes directly declared public members and overloads,
 - `public required string TreeId`
 - `public IReadOnlyList<DataEntry> Entries`
 - `public string? ContinuationToken`
+- `public LatticeRangeReadGateCoverage? GateCoverage`
 
 ### `Orleans.Lattice.Api.Data.DataRangeRequest`
 
@@ -182,6 +183,7 @@ The following inventory includes directly declared public members and overloads,
 - `public string? EndExclusive`
 - `public int PageSize`
 - `public string? ContinuationToken`
+- `public bool IncludeGateCoverage`
 
 ### `Orleans.Lattice.Api.Data.DataReadResult`
 

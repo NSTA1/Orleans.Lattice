@@ -13,6 +13,8 @@ using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Api.Auth.Grpc;
 using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Api.Backup.Grpc;
+using Orleans.Lattice.Api.Data;
+using Orleans.Lattice.Api.Data.Grpc;
 using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Api.Replication.Grpc;
 using Orleans.Lattice.Api.Schema;
@@ -340,6 +342,7 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
             silo.UseInMemoryReminderService();
             silo.AddLattice((services, name) => services.AddMemoryGrainStorage(name));
             silo.AddLatticeStateApi();
+            silo.AddLatticeDataApi();
 
             silo.AddLatticeMembership();
             silo.AddStaticIdentityDirectory(roster => roster
@@ -391,6 +394,7 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
 
         var services = builder.Services;
         services.AddLatticeStateApiGrpc(o => { o.RequireAuthorization = false; o.CredentialScheme = TrustedUserAuthenticator.Scheme; });
+        services.AddLatticeDataApiGrpc(o => { o.RequireAuthorization = false; o.CredentialScheme = TrustedUserAuthenticator.Scheme; });
         services.AddLatticeAuthApiGrpc(o => { o.RequireAuthorization = false; o.CredentialScheme = TrustedUserAuthenticator.Scheme; });
         services.AddLatticeSchemaApiGrpc(o => { o.RequireAuthorization = false; o.CredentialScheme = TrustedUserAuthenticator.Scheme; });
 
@@ -413,6 +417,7 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
     private static void MapClusterSurface(WebApplication app, bool tenancy)
     {
         app.MapLatticeStateApiGrpc();
+        app.MapLatticeDataApiGrpc();
         app.MapLatticeAuthApiGrpc();
         app.MapLatticeSchemaApiGrpc();
         app.MapLatticeAppsApiGrpc();
@@ -523,6 +528,8 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
                     | LatticeOperation.Delete | LatticeOperation.RangeDelete,
                 effect: LatticeEffect.Allow));
         }
+
+        await SeedExportAsync();
     }
 
     /// <summary>

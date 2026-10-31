@@ -148,7 +148,10 @@ public interface ILatticeDataApi
     /// <summary>
     /// Reads one page of the bounded range described by <paramref name="request"/>,
     /// in ascending key order, pruned to the caller's authorized key subset. An
-    /// unauthorized (or anonymous) caller reads back an empty page.
+    /// unauthorized (or anonymous) caller reads back an empty page. Set
+    /// <see cref="DataRangeRequest.IncludeGateCoverage"/> on the opening request to
+    /// learn, through <see cref="DataRangePage.GateCoverage"/>, whether that
+    /// pruning withheld anything.
     /// </summary>
     /// <param name="request">Range scope, page size, and optional continuation token.</param>
     /// <param name="cancellationToken">Cancellation token.</param>

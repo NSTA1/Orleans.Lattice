@@ -26,9 +26,14 @@ internal sealed class DataArea : IExplorerArea
     /// <summary>The command that opens the New view dialog over the administered tree the workspace shows.</summary>
     public const string CreateViewCommandId = "data.create-view";
 
+    /// <summary>The command that opens the Export dialog of the tree the workspace shows (issue #5366).</summary>
+    public const string ExportCommandId = "data.export";
+
     private readonly DataDirectory _directory;
     private readonly IServiceProvider _services;
     private readonly DataViewCommandScope _viewCommand;
+    private readonly DataExportCommandScope _exportCommand;
+    private readonly DataCommandSignals _signals;
     private readonly ExplorerCommand _refresh;
 
     /// <summary>Creates the area.</summary>
@@ -36,15 +41,27 @@ internal sealed class DataArea : IExplorerArea
     /// <param name="completions">The area's address completions.</param>
     /// <param name="services">The circuit's services, from which the state connection is read lazily.</param>
     /// <param name="viewCommand">The administered tree the workspace offers the New view command over.</param>
-    public DataArea(DataDirectory directory, DataCompletionSource completions, IServiceProvider services, DataViewCommandScope viewCommand)
+    /// <param name="exportCommand">The tree the workspace offers the Export command over.</param>
+    /// <param name="signals">Carries palette commands to the open tree page.</param>
+    public DataArea(
+        DataDirectory directory,
+        DataCompletionSource completions,
+        IServiceProvider services,
+        DataViewCommandScope viewCommand,
+        DataExportCommandScope exportCommand,
+        DataCommandSignals signals)
     {
         ArgumentNullException.ThrowIfNull(directory);
         ArgumentNullException.ThrowIfNull(completions);
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(viewCommand);
+        ArgumentNullException.ThrowIfNull(exportCommand);
+        ArgumentNullException.ThrowIfNull(signals);
         _directory = directory;
         _services = services;
         _viewCommand = viewCommand;
+        _exportCommand = exportCommand;
+        _signals = signals;
         Completions = completions;
         _refresh = new ExplorerCommand(RefreshCommandId, "Refresh the tree directory")
         {
@@ -75,23 +92,47 @@ internal sealed class DataArea : IExplorerArea
     }
 
     /// <summary>
-    /// Refreshing the directory, always; and creating a view, only while a tree
+    /// Refreshing the directory, always; creating a view, only while a tree
     /// workspace the caller administers is open, targeting that tree's New view
-    /// dialog.
+    /// dialog; and exporting, only while a tree workspace the caller may export is
+    /// open, opening that tree's Export dialog.
     /// </summary>
-    public IReadOnlyList<ExplorerCommand> Commands => _viewCommand.Source is { } source
-        ?
-        [
-            _refresh,
-            new ExplorerCommand(CreateViewCommandId, "New view...")
+    public IReadOnlyList<ExplorerCommand> Commands
+    {
+        get
+        {
+            var view = _viewCommand.Source;
+            var export = _exportCommand.Source;
+            if (view is null && export is null)
             {
-                Detail = "Create a materialised view over " + source.LogicalId + ".",
-                Target = source.Address
-                    .WithQuery(DataTabs.TabQuery, DataTabs.Views)
-                    .WithQuery(DataTabs.NewQuery, DataTabs.NewViewValue),
-            },
-        ]
-        : [_refresh];
+                return [_refresh];
+            }
+
+            var commands = new List<ExplorerCommand>(3) { _refresh };
+            if (view is not null)
+            {
+                commands.Add(new ExplorerCommand(CreateViewCommandId, "New view...")
+                {
+                    Detail = "Create a materialised view over " + view.LogicalId + ".",
+                    Target = view.Address
+                        .WithQuery(DataTabs.TabQuery, DataTabs.Views)
+                        .WithQuery(DataTabs.NewQuery, DataTabs.NewViewValue),
+                });
+            }
+
+            if (export is not null)
+            {
+                commands.Add(new ExplorerCommand(ExportCommandId, "Export...")
+                {
+                    Detail = "Download " + export.LogicalId + ", a key prefix or a key range as NDJSON or CSV.",
+                    Target = export.Address,
+                    InvokeAsync = _ => _signals.RequestAsync(ExportCommandId),
+                });
+            }
+
+            return commands;
+        }
+    }
 
     /// <inheritdoc />
     public async ValueTask<AreaAvailability> GetAvailabilityAsync(CancellationToken cancellationToken)

@@ -527,6 +527,11 @@
           "name": "ContinuationToken",
           "type": "string?",
           "required": false
+        },
+        {
+          "name": "GateCoverage",
+          "type": "LatticeRangeReadGateCoverage?",
+          "required": false
         }
       ],
       "source": "src/lattice.api.abstractions/Data/Model/DataRangePage.cs#DataRangePage"
@@ -557,6 +562,11 @@
         {
           "name": "ContinuationToken",
           "type": "string?",
+          "required": false
+        },
+        {
+          "name": "IncludeGateCoverage",
+          "type": "bool",
           "required": false
         }
       ],
@@ -763,6 +773,15 @@
         "Crdt"
       ],
       "source": "src/lattice/BPlusTree/Grains/LatticeMergeMode.cs#LatticeMergeMode"
+    },
+    "LatticeRangeReadGateCoverage": {
+      "kind": "enum",
+      "values": [
+        "Unrestricted",
+        "Filtered",
+        "Denied"
+      ],
+      "source": "src/lattice/BPlusTree/LatticeRangeReadGateCoverage.cs#LatticeRangeReadGateCoverage"
     }
   },
   "operations": [

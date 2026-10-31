@@ -45,6 +45,40 @@
   gap: var(--lt-space-3);
 }
 
+.lt-data-heading__actions {
+  margin-inline-start: auto;
+}
+
+.lt-data-export {
+  display: grid;
+  gap: var(--lt-space-3);
+}
+
+.lt-data-export__form {
+  display: grid;
+  gap: var(--lt-space-3);
+}
+
+.lt-data-export__note,
+.lt-data-export__result p {
+  max-width: var(--lt-measure);
+  margin: 0;
+  color: var(--lt-ink-2);
+}
+
+.lt-data-export__result {
+  display: grid;
+  gap: var(--lt-space-2);
+  justify-items: start;
+}
+
+.lt-data-export__error {
+  margin: 0;
+  padding-inline-start: var(--lt-space-3);
+  border-inline-start: 1px solid var(--lt-op-state-failed);
+  color: var(--lt-ink);
+}
+
 .lt-data-meta {
   display: flex;
   flex-wrap: wrap;

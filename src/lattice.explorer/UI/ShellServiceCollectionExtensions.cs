@@ -54,6 +54,7 @@ internal static partial class ShellServiceCollectionExtensions
 
         AddDesign(services);
         AddTransport(services);
+        AddDownloads(services);
         AddSession(services);
         AddChrome(services);
         AddAppFrame(services);
@@ -97,6 +98,10 @@ internal static partial class ShellServiceCollectionExtensions
     /// <summary>Credential-aware transport adapters for every facade the Shell consumes (T1, issue #3830).</summary>
     /// <param name="services">The service collection to register into.</param>
     static partial void AddTransport(IServiceCollection services);
+
+    /// <summary>The download seam: single-use, circuit-bound tickets for streamed downloads (G2, issue #5366).</summary>
+    /// <param name="services">The service collection to register into.</param>
+    static partial void AddDownloads(IServiceCollection services);
 
     /// <summary>The app frame host and bridge broker (X1, issue #3817).</summary>
     /// <param name="services">The service collection to register into.</param>
