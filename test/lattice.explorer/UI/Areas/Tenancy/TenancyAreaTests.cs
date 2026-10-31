@@ -261,19 +261,26 @@ public sealed class TenancyAreaTests : TenancyTestContext
     [Test]
     [TestCase("unserved")]
     [TestCase("unconfigured")]
-    [TestCase("transport")]
-    public async Task A_cluster_that_cannot_answer_hides_the_area(string fault)
+    public async Task A_cluster_that_answers_with_a_definite_fault_hides_the_area(string fault)
     {
         UseTenancyAs();
         Exception failure = fault switch
         {
             "unserved" => new NotSupportedException(),
-            "unconfigured" => new InvalidOperationException("not configured"),
-            _ => new TimeoutException(),
+            _ => new InvalidOperationException("not configured"),
         };
         Cluster.Fail(nameof(FakeTenancyCluster.GetCurrentTenantAsync), failure);
 
         Assert.That(await CreateArea().GetAvailabilityAsync(CancellationToken.None), Is.EqualTo(AreaAvailability.Hidden));
+    }
+
+    [Test]
+    public async Task A_cluster_that_does_not_answer_leaves_the_area_not_checked()
+    {
+        UseTenancyAs();
+        Cluster.Fail(nameof(FakeTenancyCluster.GetCurrentTenantAsync), new TimeoutException());
+
+        Assert.That(await CreateArea().GetAvailabilityAsync(CancellationToken.None), Is.EqualTo(AreaAvailability.Unchecked));
     }
 
     [Test]

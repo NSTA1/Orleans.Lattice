@@ -89,6 +89,34 @@ public sealed class DirectorySpineTests : ShellChromeTestContext
     }
 
     [Test]
+    public void A_stop_that_could_not_be_checked_or_is_stale_says_so_in_both_forms_and_carries_one_notice()
+    {
+        var access = new ExplorerAreaEntry(new FakeArea("access", "Access", 3), AreaAvailability.Unchecked);
+        var replication = new ExplorerAreaEntry(new FakeArea("replication", "Replication", 4), AreaAvailability.Visible) { IsStale = true };
+        ExplorerLocation At(string address) =>
+            new(ExplorerAddress.Parse(address), [Data, access, replication], EntriesLoaded: true, TenancyActive: false);
+
+        var wide = RenderSpine(At("/data"));
+        var rail = RenderSpine(At("/data"), rail: true);
+        var home = RenderSpine(At("/"));
+        var atUnchecked = RenderSpine(At("/access"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(wide.Find("[data-lt-command='go.access']").ClassList, Does.Contain("lt-shell-directory__link--unavailable"));
+            Assert.That(wide.Find("[data-lt-command='go.access'] .lt-shell-directory__reason").TextContent, Is.EqualTo(AreaAvailability.UncheckedReason));
+            Assert.That(wide.Find("[data-lt-command='go.replication']").ClassList, Does.Not.Contain("lt-shell-directory__link--unavailable"));
+            Assert.That(wide.Find("[data-lt-command='go.replication'] .lt-shell-directory__reason").TextContent, Is.EqualTo(DirectorySpine.StaleReason));
+            Assert.That(wide.FindAll("[data-lt-area-recheck]"), Has.Count.EqualTo(1));
+            Assert.That(rail.Find("[data-lt-command='go.access']").TextContent, Does.Contain("could not be checked"));
+            Assert.That(rail.Find("[data-lt-command='go.replication']").TextContent, Does.Contain("last known"));
+            Assert.That(rail.FindAll("[data-lt-area-recheck]"), Is.Empty, "the rail drops the notice as it drops reasons");
+            Assert.That(home.FindAll("[data-lt-area-recheck]"), Is.Empty, "Home carries its own");
+            Assert.That(atUnchecked.FindAll("[data-lt-area-recheck]"), Is.Empty, "the unchecked area's page carries its own");
+        });
+    }
+
+    [Test]
     public void While_nothing_is_known_a_skeleton_stands_in()
     {
         var cut = RenderSpine(ExplorerLocation.Initial);

@@ -14,7 +14,8 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 /// The area-wide answer probes a reserved sentinel tree id, which reads and
 /// writes nothing: it is the flags the probe reports - not the fact that it
 /// completed - that admit the caller. Every refusal, an unserved facade, a
-/// missing registration and any other fault fail closed. An anonymous caller who
+/// missing registration and any other fault fail closed; a transient fault reads
+/// as not checked, which admits nothing and is asked again. An anonymous caller who
 /// is refused is told to sign in; a signed-in one who is refused sees no area.
 /// </para>
 /// <para>
@@ -94,9 +95,14 @@ internal sealed class SchemaAccess : IDisposable
         {
             throw;
         }
+        catch (Exception exception) when (AreaProbeFaults.IsTransient(exception))
+        {
+            // The cluster did not answer: not checked, and not remembered.
+            return AreaAvailability.Unchecked;
+        }
         catch (Exception)
         {
-            // Unserved, unreachable, unconfigured or anything else: hidden, and asked again next time.
+            // Unserved, unconfigured or anything else: hidden, and asked again next time.
             return AreaAvailability.Hidden;
         }
 

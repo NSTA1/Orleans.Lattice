@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Lattice.Api.Apps;
+using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
@@ -173,15 +174,17 @@ internal sealed class AppsAccess(AppsFacades facades, ILogger<AppsAccess>? logge
         var catalogCapabilities = Task.FromResult(new LatticeAppCatalogCapabilities());
         var controlCapabilities = Task.FromResult(new LatticeAppsCapabilities());
         Task<ImmutableArray<WorkspaceAppSummary>?> myApps = Task.FromResult<ImmutableArray<WorkspaceAppSummary>?>(null);
+        var unanswered = 0;
+        void Unanswered() => Interlocked.Exchange(ref unanswered, 1);
 
         if (facades.Catalog is { } catalog)
         {
-            catalogCapabilities = GuardAsync(() => catalog.GetCapabilitiesAsync(), new LatticeAppCatalogCapabilities(), "catalogue capabilities");
+            catalogCapabilities = GuardAsync(() => catalog.GetCapabilitiesAsync(), new LatticeAppCatalogCapabilities(), "catalogue capabilities", Unanswered);
         }
 
         if (facades.Control is { } control)
         {
-            controlCapabilities = GuardAsync(() => control.GetCapabilitiesAsync(), new LatticeAppsCapabilities(), "app control capabilities");
+            controlCapabilities = GuardAsync(() => control.GetCapabilitiesAsync(), new LatticeAppsCapabilities(), "app control capabilities", Unanswered);
         }
 
         if (facades.Workspace is { } workspace)
@@ -189,7 +192,8 @@ internal sealed class AppsAccess(AppsFacades facades, ILogger<AppsAccess>? logge
             myApps = GuardAsync<ImmutableArray<WorkspaceAppSummary>?>(
                 async () => await workspace.ListMyAppsAsync().ConfigureAwait(false),
                 null,
-                "your apps");
+                "your apps",
+                Unanswered);
         }
 
         await Task.WhenAll(catalogCapabilities, controlCapabilities, myApps).ConfigureAwait(false);
@@ -200,6 +204,7 @@ internal sealed class AppsAccess(AppsFacades facades, ILogger<AppsAccess>? logge
             Control = await controlCapabilities.ConfigureAwait(false),
             WorkspaceServed = (await myApps.ConfigureAwait(false)).HasValue,
             MyApps = (await myApps.ConfigureAwait(false)) ?? [],
+            ProbeUnanswered = Volatile.Read(ref unanswered) == 1,
         };
 
         var installed = Task.FromResult(ImmutableArray<AppSummary>.Empty);
@@ -229,6 +234,13 @@ internal sealed class AppsAccess(AppsFacades facades, ILogger<AppsAccess>? logge
 
         lock (_gate)
         {
+            if (complete.ProbeUnanswered && _snapshotCaller == caller)
+            {
+                // The cluster did not answer a capability probe: answered to its own
+                // waiters, but never remembered, so the next read asks again.
+                _snapshot = null;
+            }
+
             if (facades.Caller == caller)
             {
                 _last = complete;
@@ -253,7 +265,7 @@ internal sealed class AppsAccess(AppsFacades facades, ILogger<AppsAccess>? logge
             [],
             "the catalogue index");
 
-    private async Task<T> GuardAsync<T>(Func<Task<T>> probe, T denied, string what)
+    private async Task<T> GuardAsync<T>(Func<Task<T>> probe, T denied, string what, Action? unanswered = null)
     {
         try
         {
@@ -261,6 +273,11 @@ internal sealed class AppsAccess(AppsFacades facades, ILogger<AppsAccess>? logge
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
+            if (unanswered is not null && AreaProbeFaults.IsTransient(error))
+            {
+                unanswered();
+            }
+
             _logger.LogInformation(error, "The Apps area could not read {What}; it is treated as denied.", what);
             return denied;
         }

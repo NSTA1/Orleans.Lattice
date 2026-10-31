@@ -1,0 +1,11 @@
+@*
+    Says that some areas, or their statuses, could not be checked because the
+    cluster did not answer, whether the Explorer is still checking again on its
+    own, and offers to check again now. A polite live region, so the change is
+    announced without moving focus.
+*@
+
+<div class="lt-shell-recheck" role="status" data-lt-area-recheck="@(Directory.IsRecheckScheduled ? "scheduled" : "stopped")">
+    <p class="lt-shell-recheck__text">@Message</p>
+    <LtButton Variant="LtButtonVariant.Outlined" OnClick="CheckAgain" data-lt-area-recheck-now="">Check again</LtButton>
+</div>

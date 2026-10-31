@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Navigation;
 /// order, and every question it asks an area time-boxed and failing closed.
 /// </summary>
 [TestFixture]
-public sealed class ExplorerAreaDirectoryTests
+public sealed partial class ExplorerAreaDirectoryTests
 {
     private readonly ManualTimeProvider _time = new();
 
@@ -86,11 +86,11 @@ public sealed class ExplorerAreaDirectoryTests
     }
 
     [Test]
-    public async Task An_area_whose_probe_faults_asynchronously_is_hidden()
+    public async Task An_area_whose_probe_faults_asynchronously_with_a_definite_fault_is_hidden()
     {
         var directory = Create(new FakeArea("data", "Data")
         {
-            Availability = _ => ValueTask.FromException<AreaAvailability>(new TimeoutException()),
+            Availability = _ => ValueTask.FromException<AreaAvailability>(new InvalidOperationException("not configured")),
         });
 
         Assert.That(await directory.GetEntriesAsync(), Is.Empty);
@@ -108,7 +108,7 @@ public sealed class ExplorerAreaDirectoryTests
     }
 
     [Test]
-    public async Task An_area_that_does_not_answer_in_time_is_hidden_and_the_others_are_not_held_back()
+    public async Task An_area_that_does_not_answer_in_time_is_not_checked_and_the_others_are_not_held_back()
     {
         var never = new TaskCompletionSource<AreaAvailability>();
         CancellationToken observed = default;
@@ -131,7 +131,9 @@ public sealed class ExplorerAreaDirectoryTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(entries.Select(entry => entry.Area.Key), Is.EqualTo(new[] { "data" }));
+            Assert.That(entries.Select(entry => entry.Area.Key), Is.EqualTo(new[] { "data", "slow" }));
+            Assert.That(entries[1].IsUnchecked, Is.True, "no answer in time is not an answer");
+            Assert.That(entries[1].IsVisible, Is.False, "and admits nothing");
             Assert.That(observed.IsCancellationRequested, Is.True, "the slow probe is told to stop");
         });
     }
@@ -174,7 +176,7 @@ public sealed class ExplorerAreaDirectoryTests
     }
 
     [Test]
-    public async Task A_home_status_is_returned_and_fails_closed_to_none()
+    public async Task A_home_status_is_returned_and_fails_closed_to_none_or_to_not_checked()
     {
         var never = new TaskCompletionSource<string?>();
         var directory = Create();
@@ -182,15 +184,16 @@ public sealed class ExplorerAreaDirectoryTests
         var answered = await directory.GetHomeStatusAsync(new FakeArea("data", "Data") { HomeStatus = _ => ValueTask.FromResult<string?>("12 trees") });
         var blank = await directory.GetHomeStatusAsync(new FakeArea("data", "Data") { HomeStatus = _ => ValueTask.FromResult<string?>(" ") });
         var failed = await directory.GetHomeStatusAsync(new FakeArea("data", "Data") { HomeStatus = _ => throw new InvalidOperationException() });
-        var pending = directory.GetHomeStatusAsync(new FakeArea("data", "Data") { HomeStatus = _ => new ValueTask<string?>(never.Task) });
+        var pending = directory.GetHomeStatusAsync(new FakeArea("apps", "Apps") { HomeStatus = _ => new ValueTask<string?>(never.Task) });
         _time.Advance(new ExplorerChromeOptions().HomeStatusTimeout);
 
         Assert.Multiple(async () =>
         {
-            Assert.That(answered, Is.EqualTo("12 trees"));
+            Assert.That(answered, Is.EqualTo(new ExplorerAreaStatus { Text = "12 trees" }));
+            Assert.That(answered!.NeedsRecheck, Is.False);
             Assert.That(blank, Is.Null);
-            Assert.That(failed, Is.Null);
-            Assert.That(await pending, Is.Null);
+            Assert.That(failed, Is.Null, "a definite fault is no line");
+            Assert.That(await pending, Is.SameAs(ExplorerAreaStatus.Unchecked), "no answer in time says it could not be checked");
         });
     }
 
@@ -231,6 +234,9 @@ public sealed class ExplorerAreaDirectoryTests
             Assert.That(default(AreaAvailability).IsShown, Is.False);
             Assert.That(AreaAvailability.Visible.IsShown, Is.True);
             Assert.That(AreaAvailability.Unavailable("Why.").IsShown, Is.True);
+            Assert.That(AreaAvailability.Unchecked.IsShown, Is.True);
+            Assert.That(AreaAvailability.Unchecked.Kind, Is.EqualTo(AreaAvailabilityKind.Unchecked));
+            Assert.That(AreaAvailability.Unchecked.Reason, Is.EqualTo(AreaAvailability.UncheckedReason));
             Assert.That(AreaAvailability.Visible.Reason, Is.Null);
             Assert.That(() => AreaAvailability.Unavailable(" "), Throws.ArgumentException);
         });
