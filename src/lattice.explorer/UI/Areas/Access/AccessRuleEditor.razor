@@ -2,7 +2,8 @@
     The rule editor: id, effect, subject, scope and the operation checklist.
     App install and Telemetry sit in their own group as scopeless cluster-wide
     capabilities; with a narrower scope they cannot be ticked, and a draft that
-    pairs them with one is refused before it is sent.
+    pairs them with one is refused before it is sent. No condition is offered:
+    conditions are not evaluated in this version.
 *@
 <form class="lt-access-form" @onsubmit="SaveAsync" novalidate>
     <LtNameInput @ref="_ruleIdBox" Label="Rule id" Value="@_draft.RuleId" ValueChanged="@(value => _draft.RuleId = value)"
@@ -57,7 +58,14 @@
     {
         <p class="lt-access-form__error" role="alert" data-lt-field="operations">@_errors.Operations</p>
     }
-    <LtTextInput Label="Condition (optional)" Mono="true" Value="@_draft.Condition" ValueChanged="@(value => _draft.Condition = value)" />
+    @if (_draft.HasCondition)
+    {
+        @* A condition is never evaluated, so the editor never authors one; a rule written
+           with one through the API shows it read-only, warned, and saves it unchanged. *@
+        <LtTextInput Label="Condition (not evaluated)" Mono="true" Value="@_draft.Condition" ReadOnly="true"
+                     Hint="Written through the API. It is kept as written when you save." />
+        <p class="lt-access-notice lt-access-notice--warning" role="note" data-lt-condition-warning="true">@AccessRuleFormat.ConditionNotEvaluatedMessage</p>
+    }
     @if (_errors.Form is not null)
     {
         <p class="lt-access-form__error" role="alert" data-lt-field="form">@_errors.Form</p>

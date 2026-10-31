@@ -214,16 +214,40 @@ public sealed class AccessRuleDraftTests
     }
 
     [Test]
-    public void A_blank_condition_is_dropped_and_the_ids_are_trimmed()
+    public void A_new_draft_carries_no_condition_and_the_ids_are_trimmed()
     {
         var draft = Valid();
         draft.RuleId = "  r1 ";
         draft.SubjectId = " ops ";
-        draft.Condition = "   ";
 
         var rule = draft.ToRule();
 
-        Assert.That((rule.RuleId, rule.Subject.Id, rule.Condition), Is.EqualTo(("r1", "ops", (string?)null)));
+        Assert.Multiple(() =>
+        {
+            Assert.That(draft.HasCondition, Is.False);
+            Assert.That((rule.RuleId, rule.Subject.Id, rule.Condition), Is.EqualTo(("r1", "ops", (string?)null)));
+        });
+    }
+
+    [Test]
+    [TestCase("region == \"eu\"")]
+    [TestCase("  padded condition  ")]
+    public void An_existing_rules_condition_is_carried_through_a_save_verbatim(string condition)
+    {
+        var existing = new LatticeAuthorizationRule(
+            "r1", LatticeSubjectSelector.Group("ops"), LatticeScope.Tree("orders"), LatticeOperation.Read, LatticeEffect.Allow, condition);
+
+        var draft = AccessRuleDraft.From(existing);
+        draft.SetOperation(LatticeOperation.Write, true);
+        var rule = draft.ToRule();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(draft.HasCondition, Is.True);
+            Assert.That(draft.Condition, Is.EqualTo(condition));
+            Assert.That(rule.Condition, Is.EqualTo(condition));
+            Assert.That(rule.Operations, Is.EqualTo(LatticeOperation.Read | LatticeOperation.Write));
+        });
     }
 
     private static AccessRuleDraft Valid()

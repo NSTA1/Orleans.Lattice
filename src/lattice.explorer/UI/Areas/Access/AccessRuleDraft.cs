@@ -55,8 +55,17 @@ internal sealed class AccessRuleDraft
     /// <summary>The granted or denied operations.</summary>
     public LatticeOperation Operations { get; set; }
 
-    /// <summary>The optional condition, carried through unchanged when blank.</summary>
-    public string Condition { get; set; } = string.Empty;
+    /// <summary>
+    /// The condition the edited rule already carries, kept verbatim, or
+    /// <see langword="null"/>. The editor never authors one: the authorization
+    /// engine does not evaluate conditions in this version, so offering one would
+    /// imply a narrowing that does not exist. A condition written through the API
+    /// is carried through a save unchanged so nothing is lost.
+    /// </summary>
+    public string? Condition { get; private init; }
+
+    /// <summary>Whether the edited rule carries a condition.</summary>
+    public bool HasCondition => !string.IsNullOrEmpty(Condition);
 
     /// <summary>Whether the chosen scope is the cluster-wide scope.</summary>
     public bool IsClusterWide => ScopeKind == ClusterScope;
@@ -96,7 +105,7 @@ internal sealed class AccessRuleDraft
             TreeId = kind is TreeScope or PrefixScope or KeyScope ? scope.TreeId : string.Empty,
             KeyOrPrefix = scope.KeyOrPrefix ?? string.Empty,
             Operations = rule.Operations,
-            Condition = rule.Condition ?? string.Empty,
+            Condition = rule.Condition,
         };
     }
 
@@ -246,6 +255,6 @@ internal sealed class AccessRuleDraft
             scope,
             Operations,
             Effect,
-            string.IsNullOrWhiteSpace(Condition) ? null : Condition.Trim());
+            Condition);
     }
 }

@@ -58,14 +58,15 @@ A rule draft includes:
 - an **Allow** or **Deny** effect;
 - a subject, chosen as a user or group;
 - a scope: whole tree, key prefix in a tree, single key in a tree, all trees, or access administration when delegation is enabled;
-- one or more operations, grouped as data operations, administration, and cluster-wide capabilities;
-- an optional condition.
+- one or more operations, grouped as data operations, administration, and cluster-wide capabilities.
+
+The editor offers no condition. `LatticeAuthorizationRule.Condition` is reserved for a future predicate language and is not evaluated in this version, so a rule that carries one grants or denies exactly as if it had none; a condition field would imply a narrowing that does not exist. A rule written with a condition through the API shows it read-only as **Condition (not evaluated)**, with the warning "Conditions are not evaluated in this version. This rule applies unconditionally, as if it had no condition." Saving such a rule keeps the condition exactly as written, and the saved confirmation repeats the warning.
 
 The editor refuses an empty rule id, an app-owned id prefix, an empty subject, a missing tree or key where the scope needs one, reserved system trees, no operations, or cluster-wide capabilities on a narrower scope. When all-trees grants are off, the scope hint says that data operations in a cluster-wide rule are refused while cluster-wide App install and Telemetry capabilities can still be granted.
 
 Saving a rule submits it directly to the cluster. Directory validation failures are shown beside the subject, app-owned-rule failures beside the rule id, and other denials or faults as a form error.
 
-The Rule details page shows effect, subject, scope, operations, condition, and owner. Authored rules can be edited. Deleting a rule opens a destructive confirmation named **Delete this rule**; the confirmation text states that the rule stops applying at once and cannot be undone. App-owned rules are read-only, are attributed to their app, and link to `/apps/{slug}/roles` so role bindings can be changed in the Apps area. The page also links to Explain for the rule's subject.
+The Rule details page shows effect, subject, scope, operations, and owner, and, for a rule that carries a condition, the condition with the same not-evaluated warning beside it. Authored rules can be edited. Deleting a rule opens a destructive confirmation named **Delete this rule**; the confirmation text states that the rule stops applying at once and cannot be undone. App-owned rules are read-only, are attributed to their app, and link to `/apps/{slug}/roles` so role bindings can be changed in the Apps area. The page also links to Explain for the rule's subject.
 
 ### Groups
 

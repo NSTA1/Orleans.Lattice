@@ -263,6 +263,61 @@ public sealed class AccessRuleEditorTests : AccessTestContext
     }
 
     [Test]
+    public void A_new_rule_offers_no_condition()
+    {
+        var cut = RenderEditor();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll("label").Select(label => label.TextContent), Has.None.Contains("Condition"));
+            Assert.That(cut.FindAll("[data-lt-condition-warning]"), Is.Empty);
+        });
+    }
+
+    [Test]
+    public void An_existing_rule_without_a_condition_offers_none()
+    {
+        Admin.WithRule(Rule("orders-read"));
+        var cut = RenderEditor(Rule("orders-read"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll("label").Select(label => label.TextContent), Has.None.Contains("Condition"));
+            Assert.That(cut.FindAll("[data-lt-condition-warning]"), Is.Empty);
+        });
+    }
+
+    [Test]
+    public void An_api_authored_condition_is_shown_read_only_with_the_warning_and_saved_verbatim()
+    {
+        const string condition = "  region == \"eu\" ";
+        var existing = Rule("eu-readers") with { Condition = condition };
+        Admin.WithRule(existing);
+        LatticeAuthorizationRule? saved = null;
+        var cut = RenderEditor(existing, rule => saved = rule);
+
+        var field = AccessForms.Field(cut, "Condition (not evaluated)");
+        Assert.Multiple(() =>
+        {
+            Assert.That(field.HasAttribute("readonly"), Is.True);
+            Assert.That(field.GetAttribute("value"), Is.EqualTo(condition));
+            Assert.That(cut.Find("[data-lt-condition-warning]").TextContent, Is.EqualTo(AccessRuleFormat.ConditionNotEvaluatedMessage));
+            Assert.That(cut.Find("[data-lt-condition-warning]").GetAttribute("role"), Is.EqualTo("note"));
+        });
+
+        cut.Find("[data-lt-operation=\"write\"]").Change(true);
+        cut.Find("form").Submit();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(saved, Is.Not.Null);
+            Assert.That(saved!.Condition, Is.EqualTo(condition));
+            Assert.That(Admin.Rules.Single().Condition, Is.EqualTo(condition));
+            Assert.That(Admin.Rules.Single().Operations, Is.EqualTo(LatticeOperation.Read | LatticeOperation.Write));
+        });
+    }
+
+    [Test]
     public void The_access_administration_scope_is_offered_only_when_delegation_is_on()
     {
         var off = RenderEditor();

@@ -1,4 +1,5 @@
 using Orleans.Lattice.Auth;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 
@@ -15,6 +16,39 @@ internal static class AccessRuleFormat
     /// so can only be granted by a rule at <see cref="LatticeScope.ClusterWide"/>.
     /// </summary>
     public const LatticeOperation ScopelessOperations = LatticeOperation.AppInstall | LatticeOperation.Telemetry;
+
+    /// <summary>
+    /// The warning shown wherever a rule's condition is shown. A condition is reserved
+    /// for a future predicate language and is never evaluated, so a rule that carries
+    /// one grants or denies exactly as if it had none.
+    /// </summary>
+    public const string ConditionNotEvaluatedMessage =
+        "Conditions are not evaluated in this version. This rule applies unconditionally, as if it had no condition.";
+
+    /// <summary>Whether <paramref name="rule"/> carries a condition.</summary>
+    /// <param name="rule">The rule.</param>
+    public static bool HasCondition(LatticeAuthorizationRule rule)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
+        return !string.IsNullOrEmpty(rule.Condition);
+    }
+
+    /// <summary>
+    /// The confirmation shown once <paramref name="rule"/> is saved: it repeats the
+    /// condition warning when the rule carries a condition.
+    /// </summary>
+    /// <param name="rule">The saved rule.</param>
+    /// <returns>The confirmation text.</returns>
+    public static string SavedMessage(LatticeAuthorizationRule rule) =>
+        HasCondition(rule)
+            ? $"Rule {rule.RuleId} saved. Its condition was kept as written. {ConditionNotEvaluatedMessage}"
+            : $"Rule {rule.RuleId} saved.";
+
+    /// <summary>The tone of <see cref="SavedMessage"/>: a warning when the rule carries a condition.</summary>
+    /// <param name="rule">The saved rule.</param>
+    /// <returns>The confirmation's tone.</returns>
+    public static LtToastTone SavedTone(LatticeAuthorizationRule rule) =>
+        HasCondition(rule) ? LtToastTone.Warning : LtToastTone.Success;
 
     /// <summary>Every operation the checklist offers, in the order and groups it offers them.</summary>
     public static IReadOnlyList<AccessOperationOption> Operations { get; } =
