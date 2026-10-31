@@ -128,8 +128,12 @@ public sealed class TaskBoardTeamJourney : JourneyChapter
             var outcome = await danaBoard.ForceWriteAsync("tasks/u3-dana-forced");
             Assert.That(outcome, Is.EqualTo("denied"), "A viewer's write through the frame's bridge must be refused by the app's roles.");
             await danaBoard.ExpectReadOnlyAsync();
+            await danaBoard.CaptureAsync(recorder, "u3-3", "write-refused", "A write dana forces from the browser's console is refused (denied); the board stays read-only");
+
+            await danaData.OpenDirectoryAsync();
+            await danaData.OpenKeysAsync();
             await danaData.ExpectKeysAsync(keys);
-            await danaBoard.CaptureAsync(recorder, "u3-3", "write-refused", "A write dana forces from the browser's console is refused (denied): the tree still holds only priya's three tasks");
+            await Capture(dana, "u3-3", "tree-unchanged", "Back in Data, the tree still holds only priya's three tasks: the refused write left nothing");
             Coverage.Hit("use-case:apps/frame-write-refused");
         });
 
@@ -210,7 +214,7 @@ public sealed class TaskBoardTeamJourney : JourneyChapter
         // U3.7: each persona's Apps page shows the roles they hold.
         await StepAsync("U3.7", async () =>
         {
-            await priyaApps.OpenAsync(expectTaskBoard: true);
+            await priyaApps.OpenAsync(expectTaskBoard: true, viaSpine: false);
             await priyaApps.ExpectTaskBoardRolesAsync(StoryNames.Contoso.Apps.EditorRole);
             await Capture(priya, "u3-7", "priya-roles", "priya's Your roles column: editor");
 

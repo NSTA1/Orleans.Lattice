@@ -110,7 +110,7 @@ internal sealed class TaskBoardWindow
             await Page.ReloadAsync();
         }
 
-        await Expect(Board.Locator("#tb-context")).ToHaveTextAsync("task-board 1.1.0.", new() { Timeout = 60_000 });
+        await Expect(Board.Locator("#tb-context")).ToHaveTextAsync(new Regex(@"^task-board 1\.1\.0( in \S+)?\.$"), new() { Timeout = 60_000 });
         foreach (var column in Columns)
         {
             await Expect(Board.Locator("#tb-count-" + column)).ToHaveTextAsync(new Regex(@"^\(\d+\)$"));

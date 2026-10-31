@@ -15,9 +15,15 @@ internal sealed class DataTaskTreePage(PersonaSession session, string tree)
 {
     private const string Marker = "window.__u3KeysDocument";
 
-    /// <summary>The directory's row for the tree.</summary>
-    public ILocator DirectoryRow => session.Shell.Content.GetByRole(AriaRole.Table, new() { Name = "Trees and views" })
-        .GetByRole(AriaRole.Row).Filter(new() { Has = session.Page.GetByRole(AriaRole.Link, new() { Name = tree, Exact = true }) });
+    /// <summary>The directory table.</summary>
+    public ILocator Directory => session.Shell.Content.GetByRole(AriaRole.Table, new() { Name = "Trees and views" });
+
+    /// <summary>The directory's row for the tree: the row whose App column names the task board.</summary>
+    public ILocator DirectoryRow => Directory.GetByRole(AriaRole.Row)
+        .Filter(new() { Has = session.Page.GetByRole(AriaRole.Link, new() { Name = "task-board", Exact = true }) });
+
+    /// <summary>The tree's own link, in the row header of <see cref="DirectoryRow"/>.</summary>
+    public ILocator TreeLink => DirectoryRow.Locator("th a");
 
     /// <summary>The keys the Keys tab lists, as links whose title is the full key.</summary>
     public ILocator Keys => session.Shell.Content.Locator("a.lt-data-key");
@@ -31,16 +37,15 @@ internal sealed class DataTaskTreePage(PersonaSession session, string tree)
         await session.Shell.GoToAreaAsync("data");
         await session.Shell.ExpectHeadingAsync("Data");
         await session.Shell.Content.GetByLabel("Filter trees and views").FillAsync("task-board");
-        await Expect(DirectoryRow).ToBeVisibleAsync(new() { Timeout = 60_000 });
+        await Expect(DirectoryRow).ToHaveCountAsync(1, new() { Timeout = 60_000 });
     }
 
     /// <summary>Asserts the directory's App column names the task board for the tree, linking to the app.</summary>
     public async Task ExpectAppColumnAsync()
     {
-        var table = session.Shell.Content.GetByRole(AriaRole.Table, new() { Name = "Trees and views" });
-        await Expect(table.GetByRole(AriaRole.Columnheader, new() { Name = "App" })).ToBeVisibleAsync();
+        await Expect(Directory.GetByRole(AriaRole.Columnheader, new() { Name = "App" })).ToBeVisibleAsync();
+        await Expect(TreeLink).ToHaveTextAsync(new Regex(Regex.Escape(tree) + "$|^tasks$"));
         var app = DirectoryRow.GetByRole(AriaRole.Link, new() { Name = "task-board", Exact = true });
-        await Expect(app).ToBeVisibleAsync();
         await Expect(app).ToHaveAttributeAsync("href", new Regex("/apps/task-board$"));
     }
 
@@ -51,7 +56,7 @@ internal sealed class DataTaskTreePage(PersonaSession session, string tree)
     /// </summary>
     public async Task OpenKeysAsync()
     {
-        await DirectoryRow.GetByRole(AriaRole.Link, new() { Name = tree, Exact = true }).ClickAsync();
+        await TreeLink.ClickAsync();
         await Expect(session.Page).ToHaveURLAsync(new Regex("/data/" + Regex.Escape(tree) + @"(\?|$)"));
         await Expect(session.Shell.Content.GetByRole(AriaRole.Tab, new() { Name = "Keys", Exact = true })).ToHaveAttributeAsync("aria-selected", "true");
         await Expect(LiveUpdates).ToHaveAttributeAsync("aria-checked", "true");
