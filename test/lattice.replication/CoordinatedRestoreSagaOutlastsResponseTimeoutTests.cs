@@ -87,14 +87,126 @@ public sealed class CoordinatedRestoreSagaOutlastsResponseTimeoutTests
         });
     }
 
+    [Test]
+    public async Task A_restore_whose_participant_prepare_outlasts_the_response_timeout_reports_the_committed_outcome()
+    {
+        // The shape F6 hit: the shadow build inside the participant's prepare outlasts
+        // the coordinator's call to the participant, so that call times out while the
+        // build carries on. The saga must still commit, and the restore must say so.
+        var setId = await ArrangeAdvancedSetAsync(injectEngineFaults: true);
+        var faults = _fixture.EngineFaults!;
+
+        var timeout = SiloResponseTimeout.Resolve(_fixture.SiloServices);
+        var original = timeout.Current;
+        var hold = new CoordinatedRestoreClusterFixture.PrepareHold();
+        faults.BuildHold = hold;
+        Task<IReadOnlyList<LatticeRestoreResult>>? restore = null;
+        try
+        {
+            timeout.Set(ShortResponseTimeout);
+            restore = _fixture.RestoreService.RestoreSetAsync(setId);
+            await hold.Entered.Task.WaitAsync(HangBound);
+
+            // The build is held inside the participant's prepare for twice the
+            // response timeout, so the coordinator's prepare call has timed out.
+            await Task.Delay(ShortResponseTimeout * 2);
+            Assert.That(restore.IsCompleted, Is.False,
+                () => "the restore ended while its participant was still preparing: " + restore.Exception?.GetBaseException());
+        }
+        finally
+        {
+            timeout.Set(original);
+            faults.BuildHold = null;
+            hold.Release.TrySetResult();
+        }
+
+        var results = await restore.WaitAsync(HangBound);
+
+        Assert.That(
+            results.Select(static r => r.TargetTreeId),
+            Is.EquivalentTo(new[] { ReplTree, LocalTree }),
+            "the restore reported the committed saga's result");
+        await AssertCutOverAndUnfencedAsync();
+    }
+
+    [Test]
+    public async Task A_restore_whose_cutover_fails_unfences_writes_and_reports_the_outcome_once_it_cuts_over()
+    {
+        // The other shape F6 hit: the decided commit's cutover failed (there, a
+        // redelivery authorized as anonymous) after the write fence engaged, and the
+        // tree stayed write-fenced. A failed cutover must release local writes while
+        // the commit is redelivered, and the restore must report what finally happened.
+        var setId = await ArrangeAdvancedSetAsync(injectEngineFaults: true);
+        var faults = _fixture.EngineFaults!;
+        faults.FailCommits = true;
+
+        var restore = _fixture.RestoreService.RestoreSetAsync(setId);
+        await faults.FirstCommitFailure.Task.WaitAsync(HangBound);
+
+        // While every cutover fails, the replicated member still takes writes.
+        var repl = _fixture.GrainFactory.GetGrain<ILattice>(ReplTree);
+        await WriteOnceUnfencedAsync(repl, "k/written-while-the-cutover-fails");
+        Assert.That(restore.IsCompleted, Is.False,
+            () => "a decided commit whose cutover fails is not a finished restore: " + restore.Exception?.GetBaseException());
+
+        faults.FailCommits = false;
+        var results = await restore.WaitAsync(HangBound);
+
+        Assert.That(
+            results.Select(static r => r.TargetTreeId),
+            Is.EquivalentTo(new[] { ReplTree, LocalTree }),
+            "the restore reported the saga's committed result once the cutover succeeded");
+        Assert.That(faults.CommitFailures, Is.GreaterThan(0));
+        await AssertCutOverAndUnfencedAsync();
+    }
+
+    /// <summary>
+    /// Writes <paramref name="key"/> once the tree takes writes. A redelivered cutover
+    /// re-engages the fence for its own short window, so a write that lands in one is
+    /// retried; a tree left fenced never takes it and the bound fails the test.
+    /// </summary>
+    private static async Task WriteOnceUnfencedAsync(ILattice tree, string key)
+    {
+        using var bound = new CancellationTokenSource(HangBound);
+        while (true)
+        {
+            try
+            {
+                await tree.SetAsync(key, Encoding.UTF8.GetBytes(key));
+                return;
+            }
+            catch (LatticeWriteFencedException) when (!bound.IsCancellationRequested)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(100), bound.Token);
+            }
+        }
+    }
+
+    /// <summary>Both members hold the restored cut, and the replicated member takes writes.</summary>
+    private async Task AssertCutOverAndUnfencedAsync()
+    {
+        var repl = _fixture.GrainFactory.GetGrain<ILattice>(ReplTree);
+        var local = _fixture.GrainFactory.GetGrain<ILattice>(LocalTree);
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(await repl.GetAsync(PostCutKey), Is.Null, "the replicated member was cut over to the restored copy");
+            Assert.That(await local.GetAsync(PostCutKey), Is.Null, "the local-only member was cut over to the restored copy");
+            Assert.That(_fixture.ControlChannel!.Aborted, Is.Empty, "a committed saga never compensated");
+        });
+
+        Assert.That(async () => await repl.SetAsync("k/after-restore", Encoding.UTF8.GetBytes("after")),
+            Throws.Nothing, "the restore left the tree's writes unfenced");
+    }
+
     /// <summary>
     /// Deploys the dispatcher-driven cluster, seeds two member trees, captures them
     /// as one cross-tree consistent set, advances both past the cut, and returns
     /// the set id.
     /// </summary>
-    private async Task<string> ArrangeAdvancedSetAsync()
+    private async Task<string> ArrangeAdvancedSetAsync(bool injectEngineFaults = false)
     {
-        await _fixture.InitializeAsync(driveThroughDispatcher: true, replicatedTrees: [ReplTree]);
+        await _fixture.InitializeAsync(
+            driveThroughDispatcher: true, replicatedTrees: [ReplTree], injectEngineFaults: injectEngineFaults);
 
         var repl = _fixture.GrainFactory.GetGrain<ILattice>(ReplTree);
         var local = _fixture.GrainFactory.GetGrain<ILattice>(LocalTree);

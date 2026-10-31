@@ -58,8 +58,12 @@ namespace Orleans.Lattice.Replication;
 /// system-origin scope entered only for a current, authenticated replication
 /// peer, on trees this cluster replicates, replaying backups of trees this cluster
 /// replicates (#5443). Every other caller, this cluster's own coordinator
-/// included, runs as the ambient caller and is authorized as such. See
-/// <c>HasPeerAuthority</c> for the trust argument.
+/// included, runs as the ambient caller and is authorized as such - with one
+/// exception: a commit or abort of this cluster's own saga that acts on the shadow
+/// this participant built in an authorized prepare runs with that prepare's
+/// authority, because the decision can be delivered with no user identity (#5506).
+/// See <c>HasPeerAuthority</c> and <c>EnterDecidedAuthority</c> for the trust
+/// arguments.
 /// </para>
 /// </summary>
 internal sealed class RestoreParticipant(
@@ -278,6 +282,81 @@ internal sealed class RestoreParticipant(
     {
         elevated = HasPeerAuthority(request);
         return elevated ? LatticeAccessGateContext.EnterSystemOrigin() : null;
+    }
+
+    /// <summary>
+    /// Enters the authority a commit or an abort of an already-prepared saga runs
+    /// under: peer authority when <see cref="HasPeerAuthority"/> holds, and
+    /// otherwise - for this cluster's <b>own</b> coordinator only - the authority of
+    /// the prepare this participant itself ran, when <paramref name="preparedHere"/>
+    /// says it holds the shadow that prepare built (issue #5506).
+    /// <para>
+    /// The decision to commit or compensate is made, and it is delivered by the
+    /// coordinator's keepalive reminder or the participant's fence expiry as often
+    /// as by the operator's own call, so it can arrive with no user identity at
+    /// all. Re-authorizing it against the ambient subject then checks
+    /// <c>anonymous</c>: the commit is refused after the write fence engaged, and
+    /// the saga can neither complete nor abort. The authority is granted only on
+    /// evidence of an authorized prepare: the cached shadow is put there only by a
+    /// shadow build that succeeded in this process for this saga id, and the
+    /// engine authorizes that build - <c>Restore</c> over the target and
+    /// <c>Backup</c> over every captured source - as the caller that ran it. The
+    /// step then acts only on that cached shadow (a commit swaps the target's alias
+    /// to it, an abort reverts and deletes it), never on anything the request
+    /// names, so it reaches nothing the authorized prepare did not. A participant
+    /// that lost its cache rebuilds as the ambient caller and is authorized as
+    /// such. A missing options seam is a refusal, never a pass.
+    /// </para>
+    /// </summary>
+    private IDisposable? EnterDecidedAuthority(SagaControlRequest request, bool preparedHere, out bool peerAuthority)
+    {
+        var peer = EnterPeerAuthority(request, out peerAuthority);
+        if (peer is not null || !preparedHere || options is null)
+        {
+            return peer;
+        }
+
+        var self = options.CurrentValue.ClusterId;
+        return !string.IsNullOrEmpty(self)
+            && string.Equals(request.CoordinatorClusterId, self, StringComparison.Ordinal)
+                ? LatticeAccessGateContext.EnterSystemOrigin()
+                : null;
+    }
+
+    /// <summary>
+    /// Runs the cutover <paramref name="cutover"/> inside the engaged write fence
+    /// and, if it fails, unblocks local writes before rethrowing (issue #5506). The
+    /// participant stays prepared and the decision is redelivered; a cutover that
+    /// fails must not hold the tree's writes fenced while it waits for that, and
+    /// the next delivery re-engages the fence before it swaps. Cross-cluster
+    /// shipping and receiving stay paused until the saga completes, as after a
+    /// successful local cutover.
+    /// </summary>
+    private async Task CutOverInsideFenceAsync(ISagaWriteFenceGrain fence, string sagaId, Func<Task> cutover)
+    {
+        try
+        {
+            await cutover();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Restore participant: cutover failed for saga '{SagaId}'; unblocking local writes until the commit is redelivered.",
+                sagaId);
+            try
+            {
+                await fence.UnblockWritesAsync();
+            }
+            catch (Exception unblock)
+            {
+                // The fence still self-lifts on its bounded cutover deadline.
+                logger.LogWarning(unblock,
+                    "Restore participant: could not unblock local writes for saga '{SagaId}' after a failed cutover.",
+                    sagaId);
+            }
+
+            throw;
+        }
     }
 
     /// <summary>
@@ -525,12 +604,13 @@ internal sealed class RestoreParticipant(
         }
 
         var restoreRequest = BuildRestoreRequest(request);
-        using var authority = EnterPeerAuthority(request, out var peerAuthority);
+        var preparedHere = _built.TryGetValue(request.SagaId, out var result);
+        using var authority = EnterDecidedAuthority(request, preparedHere, out var peerAuthority);
 
         // Reuse the prepared shadow; if a reactivation lost the in-memory cache,
         // re-derive it - BuildShadowAsync is idempotent and resumable, so this
         // resolves back to the same fully built shadow without a full rebuild.
-        if (!_built.TryGetValue(request.SagaId, out var result))
+        if (!preparedHere || result is null)
         {
             // The rebuild replays the backup again, so its sources are re-checked
             // against enrollment now rather than trusted from the earlier prepare.
@@ -564,7 +644,8 @@ internal sealed class RestoreParticipant(
         // half. Recorded first, so an abort after a commit that faulted part-way
         // still reverts an alias that may have moved.
         _cutOver[request.SagaId] = true;
-        await engine.CommitShadowAsync(result, cancellationToken);
+        await CutOverInsideFenceAsync(fence, request.SagaId,
+            () => engine.CommitShadowAsync(result, cancellationToken));
 
         // Unblock local writes on this cluster now it has flipped. Cross-cluster
         // shipping stays paused until the saga globally completes (the fence
@@ -614,9 +695,10 @@ internal sealed class RestoreParticipant(
         // the participant grain for an abort it learned from the coordinator on
         // fence expiry, and safe when the participant never prepared.
         var restoreRequest = BuildRestoreRequest(request);
-        using var authority = EnterPeerAuthority(request, out _);
+        var preparedHere = _built.TryGetValue(request.SagaId, out var result);
+        using var authority = EnterDecidedAuthority(request, preparedHere, out _);
 
-        if (_built.TryGetValue(request.SagaId, out var result))
+        if (preparedHere && result is not null)
         {
             // Revert only an alias this participant moved. A saga that only
             // prepared still holds the build's alias operation on the target, so a
@@ -815,11 +897,12 @@ internal sealed class RestoreParticipant(
         }
 
         var requests = BuildSetRestoreRequests(members);
-        using var authority = EnterPeerAuthority(request, out var peerAuthority);
+        var preparedHere = _builtSets.TryGetValue(request.SagaId, out var built);
+        using var authority = EnterDecidedAuthority(request, preparedHere, out var peerAuthority);
 
         // Reuse the prepared group; a reactivation that lost the cache re-derives
         // every member idempotently (BuildShadowAsync is resumable).
-        if (!_builtSets.TryGetValue(request.SagaId, out var built))
+        if (!preparedHere || built is null)
         {
             // The rebuild replays every member's backup again, so each member's
             // sources are re-checked against enrollment before any of it is rebuilt.
@@ -870,10 +953,10 @@ internal sealed class RestoreParticipant(
         // without weakening the guarantee. A fault still surfaces after every
         // launched swap has settled, because ForEachAsync observes them all.
         _cutOver[request.SagaId] = true;
-        await BoundedFanOut.ForEachAsync(
+        await CutOverInsideFenceAsync(fence, request.SagaId, () => BoundedFanOut.ForEachAsync(
             built,
             BoundedFanOut.DefaultWidth,
-            result => engine!.CommitShadowAsync(result, cancellationToken));
+            result => engine!.CommitShadowAsync(result, cancellationToken)));
 
         await fence.UnblockWritesAsync();
         RecordCommit(LatticeReplicationMetrics.SagaReasonSet);
@@ -902,9 +985,10 @@ internal sealed class RestoreParticipant(
             return;
         }
 
-        using var authority = EnterPeerAuthority(request, out _);
+        var preparedHere = _builtSets.TryGetValue(request.SagaId, out var built);
+        using var authority = EnterDecidedAuthority(request, preparedHere, out _);
 
-        if (_builtSets.TryGetValue(request.SagaId, out var built))
+        if (preparedHere && built is not null)
         {
             // Revert only aliases this participant moved: a group that only
             // prepared still holds each build's alias operation, which a revert

@@ -55,8 +55,17 @@ internal sealed class CoordinatedRestoreClusterFixture
     /// <summary>When set, the next silo build registers an access gate that denies every anonymous caller.</summary>
     private static bool _pendingDenyAnonymous;
 
+    /// <summary>The engine faults the next silo build wraps its restore engine with, or <c>null</c> for none.</summary>
+    private static RestoreEngineFaults? _pendingEngineFaults;
+
     /// <summary>The deployed test cluster.</summary>
     public TestCluster Cluster { get; private set; } = null!;
+
+    /// <summary>
+    /// The fault controls of the restore engine the saga drives, when the fixture was
+    /// initialized with <c>injectEngineFaults</c>; <c>null</c> otherwise.
+    /// </summary>
+    public RestoreEngineFaults? EngineFaults { get; private set; }
 
     /// <summary>The primary in-process silo's service provider.</summary>
     public IServiceProvider SiloServices =>
@@ -123,15 +132,23 @@ internal sealed class CoordinatedRestoreClusterFixture
     /// under system origin. Seed and read such a cluster inside
     /// <see cref="LatticeSystemOrigin.Enter"/>.
     /// </param>
+    /// <param name="injectEngineFaults">
+    /// When <c>true</c>, wraps the coordinated restore engine the dispatcher and the
+    /// restore participant drive so a test can hold its shadow builds or fail its
+    /// cutovers through <see cref="EngineFaults"/>.
+    /// </param>
     public async Task InitializeAsync(
         bool driveThroughDispatcher = false,
         IReadOnlyCollection<string>? replicatedTrees = null,
         bool refuseCapacity = false,
-        bool denyAnonymous = false)
+        bool denyAnonymous = false,
+        bool injectEngineFaults = false)
     {
         Completion = new FakeSagaCompletionSource();
         _pendingCompletion = Completion;
         _pendingDenyAnonymous = denyAnonymous;
+        EngineFaults = injectEngineFaults ? new RestoreEngineFaults() : null;
+        _pendingEngineFaults = EngineFaults;
 
         if (driveThroughDispatcher)
         {
@@ -174,8 +191,19 @@ internal sealed class CoordinatedRestoreClusterFixture
             var replicated = _pendingReplicatedTrees;
             var refuseCapacity = _pendingRefuseCapacity;
             var denyAnonymous = _pendingDenyAnonymous;
+            var engineFaults = _pendingEngineFaults;
 
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
+
+            if (engineFaults is not null)
+            {
+                // Registered before AddLatticeBackup, whose TryAdd then keeps it: the
+                // dispatcher and the participant drive the wrapper, which delegates to
+                // the real engine (the restore service implements both seams).
+                siloBuilder.Services.AddSingleton<ILatticeCoordinatedRestoreEngine>(sp => new FaultInjectingRestoreEngine(
+                    (ILatticeCoordinatedRestoreEngine)sp.GetRequiredService<ILatticeBackupRestoreService>(),
+                    engineFaults));
+            }
             siloBuilder.UseInMemoryReminderService();
 
             if (denyAnonymous)
@@ -235,6 +263,79 @@ internal sealed class CoordinatedRestoreClusterFixture
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Fault controls for the restore engine a fixture initialized with
+    /// <c>injectEngineFaults</c> drives.
+    /// </summary>
+    internal sealed class RestoreEngineFaults
+    {
+        private int _commitFailures;
+        private volatile bool _failCommits;
+
+        /// <summary>When set, every shadow build waits at this hold before it runs.</summary>
+        public PrepareHold? BuildHold { get; set; }
+
+        /// <summary>While <c>true</c>, every cutover fails the way an unauthorized one does.</summary>
+        public bool FailCommits
+        {
+            get => _failCommits;
+            set => _failCommits = value;
+        }
+
+        /// <summary>The number of cutovers failed so far.</summary>
+        public int CommitFailures => Volatile.Read(ref _commitFailures);
+
+        /// <summary>Completes when the first cutover has been failed.</summary>
+        public TaskCompletionSource FirstCommitFailure { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal void RecordCommitFailure()
+        {
+            Interlocked.Increment(ref _commitFailures);
+            FirstCommitFailure.TrySetResult();
+        }
+    }
+
+    /// <summary>
+    /// A coordinated restore engine that delegates to the real one, holding shadow
+    /// builds and failing cutovers as its <see cref="RestoreEngineFaults"/> direct.
+    /// </summary>
+    private sealed class FaultInjectingRestoreEngine(
+        ILatticeCoordinatedRestoreEngine inner, RestoreEngineFaults faults) : ILatticeCoordinatedRestoreEngine
+    {
+        public Task<RestoreAdmissionReport> ProbeAdmissionAsync(
+            LatticeRestoreRequest request, CancellationToken cancellationToken = default) =>
+            inner.ProbeAdmissionAsync(request, cancellationToken);
+
+        public async Task<LatticeRestoreResult> BuildShadowAsync(
+            LatticeRestoreRequest request, CancellationToken cancellationToken = default)
+        {
+            if (faults.BuildHold is { } hold)
+            {
+                hold.Entered.TrySetResult();
+                await hold.Release.Task;
+            }
+
+            return await inner.BuildShadowAsync(request, cancellationToken);
+        }
+
+        public Task CommitShadowAsync(LatticeRestoreResult shadow, CancellationToken cancellationToken = default)
+        {
+            if (faults.FailCommits)
+            {
+                faults.RecordCommitFailure();
+                return Task.FromException(new LatticeAuthorizationDeniedException(
+                    $"Injected: the cutover of '{shadow.TargetTreeId}' was refused."));
+            }
+
+            return inner.CommitShadowAsync(shadow, cancellationToken);
+        }
+
+        public Task DeleteShadowAsync(string shadowPhysicalTreeId, CancellationToken cancellationToken = default) =>
+            inner.DeleteShadowAsync(shadowPhysicalTreeId, cancellationToken);
+
+        public string ResolveShadowTreeId(LatticeRestoreRequest request) => inner.ResolveShadowTreeId(request);
     }
 
     private sealed class AllowDataTreesLwwRegisterResolver : ILatticeMergeModeResolver
