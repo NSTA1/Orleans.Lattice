@@ -170,7 +170,7 @@ public sealed class SessionFoldedPresentationTests : SessionTestContext
     }
 
     [Test]
-    public void Folded_a_read_only_head_offers_no_connection_settings()
+    public void Folded_a_read_only_head_offers_connection_details_in_place_of_the_settings()
     {
         UseReadOnlyEndpoint();
         Explorer.Configured(RemoteConfiguration(Endpoint));
@@ -180,7 +180,11 @@ public sealed class SessionFoldedPresentationTests : SessionTestContext
 
         Assert.That(
             cut.FindAll(".lt-dialog__actions button").Select(button => button.TextContent),
-            Is.EqualTo(new[] { "Reconnect" }));
+            Is.EqualTo(new[] { "Reconnect", "Connection details" }));
+
+        cut.FindAll("button").Single(button => button.TextContent == "Connection details").Click();
+
+        Assert.That(State.Overlay, Is.EqualTo(SessionOverlayKind.Configuration));
     }
 
     [Test]
