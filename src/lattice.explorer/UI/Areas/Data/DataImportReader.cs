@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Orleans.Lattice.Api.Data;
+using Orleans.Lattice.Explorer.UI.Downloads;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 
@@ -306,7 +307,7 @@ internal sealed class DataImportReader
             {
                 TrailerSeen = true;
                 TrailerComplete = trailer.ValueKind == JsonValueKind.Object
-                    && trailer.TryGetProperty("complete", out var complete)
+                    && trailer.TryGetProperty(ExplorerDownloadTrailer.Names.Complete, out var complete)
                     && complete.ValueKind == JsonValueKind.True;
                 return null;
             }
