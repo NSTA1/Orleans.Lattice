@@ -59,20 +59,18 @@ public sealed class PersonaSessionTests
         await olivia.SubstepAsync("signed-out", "Olivia arrives at the Explorer, signed out");
 
         await olivia.Shell.SubmitSignInAsync(olivia.Persona.Id, olivia.Persona.Password + "-mistyped");
+
+        // The cluster refuses the password at sign-in (#5415, fixed by #5421): the sign-in
+        // dialog reopens and says so, and no session is established.
+        await olivia.Shell.ExpectSignInRefusedAsync();
+        await Expect(olivia.Shell.SessionButton(olivia.Persona.Id)).ToHaveCountAsync(0);
+        await olivia.SubstepAsync("wrong-password-refused", "A mistyped password: the cluster refuses it at sign-in, and the dialog says so");
+
+        await olivia.Shell.CloseSignInAsync();
+        await olivia.Shell.ExpectSignedOutAsync();
         var refused = await olivia.Shell.ReadSpineAsync();
-
-        // Known defect #5415: the Explorer does not say the cluster refused the password; the
-        // session reads as signed in with no grants. Once F3's KnownDefect lands this step is
-        // wrapped in KnownDefect("#5415"), and on the fix it asserts the refusal and Sign in.
-        await olivia.SubstepAsync("wrong-password-refused", "A mistyped password: the cluster refuses it and nothing opens, though the header still names her (#5415)");
-        TestContext.Out.WriteLine($"After a refused password the spine is {refused}; the connection reads '{await olivia.Shell.Banner.GetByRole(AriaRole.Status).First.InnerTextAsync()}'.");
         Assert.That(refused.CanOpen("access"), Is.False, $"a refused password opens nothing: {refused}");
-
-        // Today (#5415) the refused session is presented as signed in, so it is signed out first.
-        if (await olivia.Shell.SessionButton(olivia.Persona.Id).IsVisibleAsync())
-        {
-            await olivia.Shell.SignOutAsync();
-        }
+        await olivia.SubstepAsync("still-signed-out", "No session was established: the header still offers Sign in");
 
         await olivia.SignInAsync();
         await olivia.Shell.ExpectConnectionAsync("Connected");
