@@ -5,6 +5,7 @@ using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Checkpoints;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts.Contoso;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 using static Microsoft.Playwright.Assertions;
@@ -39,6 +40,9 @@ public sealed class ProvisioningTheFactoryJourney : JourneyChapter
     /// <summary>The line of <see cref="UnsortedFile"/> the seed's pre-flight refuses.</summary>
     private const int UnsortedLine = 5;
 
+    /// <summary>The oversize file of step 2, one MiB over Contoso's import limit.</summary>
+    private const string OversizeFile = "orders-oversize.ndjson";
+
     /// <inheritdoc />
     public override async Task RunAsync(ChapterContext context)
     {
@@ -47,6 +51,7 @@ public sealed class ProvisioningTheFactoryJourney : JourneyChapter
         var files = Path.Combine(context.ArtifactsDirectory, "a3-files");
         var ordersFile = StoryData.WriteFile(files, Names.Files.OrdersNdjson);
         var unsortedFile = WriteUnsortedFile(files);
+        var oversizeFile = WriteOversizeFile(files);
 
         await using var olivia = await estate.SignInAsAsync(Personas.Olivia);
         var shell = olivia.Shell;
@@ -97,7 +102,17 @@ public sealed class ProvisioningTheFactoryJourney : JourneyChapter
 
             await data.ImportButton.ClickAsync();
             var import = data.ImportDialog(Names.Trees.FactoryOrders);
-            await DataPages.ChooseSeedFileAsync(import, ordersFile, OrdersKeyTemplate);
+            await DataPages.ChooseSeedFileAsync(import, oversizeFile, OrdersKeyTemplate);
+            await import.GetByRole(AriaRole.Button, new() { Name = "Seed tree", Exact = true }).ClickAsync();
+            await Expect(import.Locator(".lt-data-import__error")).ToContainTextAsync(
+                new Regex("^The file is 65(\\.0)? MiB; the largest file this Explorer imports is 64(\\.0)? MiB\\.$"));
+            await Expect(import.Locator(".lt-data-import")).ToHaveAttributeAsync("data-lt-import-state", "choose");
+            Coverage.Hit("option:MaxImportBytes");
+            await steps.SubstepAsync("oversize-refused", "A file over the head's 64 MiB import limit is refused before anything is read");
+
+            await import.Locator("#data-import-file").SetInputFilesAsync(ordersFile);
+            await import.GetByLabel("Key", new() { Exact = true }).FillAsync(OrdersKeyTemplate);
+            await Expect(import.Locator(".lt-data-import__error")).ToHaveCountAsync(0);
             await steps.SubstepAsync("file-chosen", "orders-2026-10.ndjson, Seed an empty tree, key order/{/id}, the whole line as the value");
 
             await DataPages.SeedAsync(import, "succeeded");
@@ -374,6 +389,17 @@ public sealed class ProvisioningTheFactoryJourney : JourneyChapter
         (orders[3], orders[4]) = (orders[4], orders[3]);
         var path = Path.Combine(directory, UnsortedFile);
         File.WriteAllText(path, string.Concat(orders.Select(order => order.Json + "\n")), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        return path;
+    }
+
+    // One MiB over Contoso's import limit. Only its size is read before the refusal, so the
+    // file is extended rather than written.
+    private static string WriteOversizeFile(string directory)
+    {
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, OversizeFile);
+        using var file = new FileStream(path, FileMode.Create, FileAccess.Write);
+        file.SetLength(EstateProfile.ContosoMaxImportBytes + (1024 * 1024));
         return path;
     }
 }
