@@ -105,7 +105,7 @@ public sealed class ProvisioningTheFactoryJourney : JourneyChapter
             await DataPages.ChooseSeedFileAsync(import, oversizeFile, OrdersKeyTemplate);
             await import.GetByRole(AriaRole.Button, new() { Name = "Seed tree", Exact = true }).ClickAsync();
             await Expect(import.Locator(".lt-data-import__error")).ToContainTextAsync(
-                new Regex("^The file is 65(\\.0)? MiB; the largest file this Explorer imports is 64(\\.0)? MiB\\.$"));
+                new Regex("^The file is 65\\.0 MB; the largest file this Explorer imports is 64\\.0 MB\\.$"));
             await Expect(import.Locator(".lt-data-import")).ToHaveAttributeAsync("data-lt-import-state", "choose");
             Coverage.Hit("option:MaxImportBytes");
             await steps.SubstepAsync("oversize-refused", "A file over the head's 64 MiB import limit is refused before anything is read");
