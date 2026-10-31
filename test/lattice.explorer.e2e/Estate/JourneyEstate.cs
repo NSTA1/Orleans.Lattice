@@ -39,6 +39,12 @@ public sealed partial class JourneyEstate : IAsyncDisposable
     private readonly Dictionary<string, JourneyRegion> _regions = new(StringComparer.Ordinal);
     private readonly List<JourneyProcess> _processes = [];
     private readonly HttpClient _probe;
+    private readonly Dictionary<string, int> _gatewayPorts = new(StringComparer.Ordinal);
+
+    // One secret for every region: with origin binding on (the default) both ends of a
+    // replication link must present the same cluster-wide secret.
+    private readonly string _replicationSecret = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
+    private JourneyPrometheus? _prometheus;
     private LineFeedControl? _lineFeed;
 
     private JourneyEstate(JourneyEstateOptions options, string id, JourneyStorage storage, JourneyCertificates certificates, string workDirectory)
@@ -96,7 +102,7 @@ public sealed partial class JourneyEstate : IAsyncDisposable
     {
         options ??= new JourneyEstateOptions();
         var id = $"{options.Name}-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Convert.ToHexString(RandomNumberGenerator.GetBytes(2)).ToLowerInvariant()}";
-        var storage = await JourneyStorage.ProvisionAsync(cancellationToken: cancellationToken);
+        var storage = await JourneyStorage.ProvisionAsync(east: options.East, cancellationToken: cancellationToken);
         var workDirectory = Path.Combine(Path.GetTempPath(), "lattice-e2e", id);
         Directory.CreateDirectory(workDirectory);
         var certificates = JourneyCertificates.Create(Path.Combine(workDirectory, "pki"), id);
@@ -104,8 +110,37 @@ public sealed partial class JourneyEstate : IAsyncDisposable
         try
         {
             estate.WriteDirectory();
-            await estate.StartRegionAsync(West, options.WestSilos, cancellationToken);
-            await estate.StartLineFeedAsync(cancellationToken);
+
+            // Every region's gateway port is known before any silo starts, because each
+            // region's silos name the other's gateway as their replication peer.
+            estate._gatewayPorts[West] = LoopbackPorts.Next();
+            if (options.East)
+            {
+                estate._gatewayPorts[East] = LoopbackPorts.Next();
+            }
+
+            if (options.Prometheus)
+            {
+                estate._prometheus = await JourneyPrometheus.StartAsync(
+                    id, Path.Combine(workDirectory, "prometheus"), options.PrometheusScrapeInterval, cancellationToken);
+            }
+
+            await estate.StartRegionAsync(West, options.WestSilos, consoleReplicas: 0, cancellationToken);
+            if (options.East)
+            {
+                await estate.StartRegionAsync(East, options.EastSilos, options.EastConsoleReplicas, cancellationToken);
+            }
+
+            if (options.KioskUser is { } kiosk)
+            {
+                await estate.StartKioskAsync(kiosk, cancellationToken);
+            }
+
+            if (options.LineFeed)
+            {
+                await estate.StartLineFeedAsync(cancellationToken);
+            }
+
             return estate;
         }
         catch
@@ -154,6 +189,12 @@ public sealed partial class JourneyEstate : IAsyncDisposable
         }
 
         _probe.Dispose();
+        if (_prometheus is not null)
+        {
+            await _prometheus.DisposeAsync();
+            _prometheus = null;
+        }
+
         await _storage.DisposeAsync();
         _certificates.Dispose();
         try
@@ -172,21 +213,23 @@ public sealed partial class JourneyEstate : IAsyncDisposable
             Groups = [.. _options.DirectoryGroups.Select(group => new JourneyDirectoryGroup(group.Id, group.DisplayName))],
         }.Write(_directoryFile);
 
-    private async Task StartRegionAsync(string region, int siloCount, CancellationToken cancellationToken)
+    private async Task StartRegionAsync(string region, int siloCount, int consoleReplicas, CancellationToken cancellationToken)
     {
         var silos = new List<JourneySiloHost>();
-        var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
         for (var i = 0; i < siloCount; i++)
         {
-            var silo = DescribeSilo(region, i, secret);
+            var silo = DescribeSilo(region, i, _replicationSecret);
             silos.Add(silo);
             _processes.Add(silo.Process);
 
             // One at a time: the first silo creates the tables the others join through.
             await silo.Process.StartAsync(_options.SiloStartTimeout, cancellationToken);
+            _prometheus?.AddSilo(region, i, silo.HttpPort);
         }
 
-        var gatewayPort = LoopbackPorts.Next();
+        var gatewayPort = _gatewayPorts[region];
+        var replicaPorts = Enumerable.Range(0, consoleReplicas).Select(_ => LoopbackPorts.Next()).ToArray();
+        var basePath = "/" + _options.EastConsoleBasePath.Trim('/');
         var controlPort = LoopbackPorts.Next();
         int? plaintextPort = ExplorerUsesTls ? null : LoopbackPorts.Next();
         var gatewayEnvironment = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -206,28 +249,86 @@ public sealed partial class JourneyEstate : IAsyncDisposable
             gatewayEnvironment["Gateway__PlaintextPort"] = plaintext.ToString();
         }
 
+        if (replicaPorts.Length > 0)
+        {
+            gatewayEnvironment["Gateway__Console__Backends"] = string.Join(';', replicaPorts.Select(port => $"https://127.0.0.1:{port}"));
+            gatewayEnvironment["Gateway__Console__Path"] = basePath;
+        }
+
         var gateway = new JourneyProcess($"{region}-gateway", JourneyHostBinaries.Gateway, gatewayEnvironment, ArtifactsDirectory,
             ready => WaitForAsync(async () => (await DestinationsAsync(new Uri($"http://127.0.0.1:{controlPort}/"), ready)).Any(d => d.Healthy), ready));
         _processes.Add(gateway);
         await gateway.StartAsync(_options.HostStartTimeout, cancellationToken);
 
-        var explorerPort = LoopbackPorts.Next();
-        var explorerUri = new Uri($"https://127.0.0.1:{explorerPort}/");
-        var explorerDirectory = Path.Combine(_workDirectory, $"{region}-explorer-0");
+        if (replicaPorts.Length == 0)
+        {
+            var (explorer, explorerUri) = await StartExplorerHeadAsync(
+                new ExplorerHead($"{region}-explorer-0", LoopbackPorts.Next(), "/", _options.ExplorerKeyRing, gatewayPort, plaintextPort), cancellationToken);
+            _regions[region] = new JourneyRegion(region, silos, gateway, gatewayPort, controlPort, plaintextPort, [explorer], [explorerUri]);
+            return;
+        }
+
+        // A scaled-out console: every replica under the base path, sharing one key ring in
+        // a Blob container on the region's own storage account, behind the gateway.
+        var keyRing = new Azure.Storage.Blobs.BlobServiceClient(_storage.ConnectionStringOf(region))
+            .GetBlobContainerClient($"{_storage.Prefix.ToLowerInvariant()}-{region}-console-keys");
+        await keyRing.CreateIfNotExistsAsync(cancellationToken: cancellationToken);
+        var explorers = new List<JourneyProcess>();
+        var explorerUris = new List<Uri>();
+        for (var i = 0; i < replicaPorts.Length; i++)
+        {
+            var (replica, replicaUri) = await StartExplorerHeadAsync(
+                new ExplorerHead($"{region}-explorer-{i}", replicaPorts[i], basePath, JourneyExplorerKeyRing.Blob, gatewayPort, plaintextPort)
+                {
+                    KeyRingAccount = _storage.ConnectionStringOf(region),
+                    KeyRingContainer = keyRing.Name,
+                    KeyRingBlob = "keys.xml",
+                    ReplicaName = $"{region}-explorer-{i}",
+                },
+                cancellationToken);
+            explorers.Add(replica);
+            explorerUris.Add(replicaUri);
+        }
+
+        var consoleRegion = new JourneyRegion(region, silos, gateway, gatewayPort, controlPort, plaintextPort, explorers, explorerUris,
+            new Uri($"https://127.0.0.1:{gatewayPort}{basePath}/"));
+        _regions[region] = consoleRegion;
+        await WaitForConsoleReplicasAsync(region, _options.HostStartTimeout, cancellationToken);
+    }
+
+    private async Task<(JourneyProcess Process, Uri Uri)> StartExplorerHeadAsync(ExplorerHead head, CancellationToken cancellationToken, IReadOnlyDictionary<string, string>? extra = null)
+    {
+        var mount = head.BasePath == "/" ? string.Empty : head.BasePath;
+        var explorerUri = new Uri($"https://127.0.0.1:{head.Port}{mount}/");
+        var root = new Uri($"https://127.0.0.1:{head.Port}/");
+        var explorerDirectory = Path.Combine(_workDirectory, head.Name);
         var explorerEnvironment = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["Explorer__Port"] = explorerPort.ToString(),
+            ["Explorer__Port"] = head.Port.ToString(),
             ["Explorer__ConfigFilePath"] = Path.Combine(explorerDirectory, "config.json"),
+            ["Explorer__BasePath"] = head.BasePath,
+            ["Explorer__AllowInteractiveEndpointConfiguration"] = _options.AllowInteractiveEndpointConfiguration.ToString(),
             ["Entra__Enabled"] = "false",
-            [JourneyHostEnvironment.TlsPfxFile] = _certificates.IssueServerPfx($"{region}-explorer-0"),
+            [JourneyHostEnvironment.TlsPfxFile] = _certificates.IssueServerPfx(head.Name),
             [JourneyHostEnvironment.TlsPfxPassword] = JourneyCertificates.PfxPassword,
             ["Logging__LogLevel__Default"] = "Warning",
             ["Logging__LogLevel__Orleans.Lattice"] = "Information",
         };
-        switch (_options.ExplorerKeyRing)
+        if (head.ReplicaName is { } replicaName)
+        {
+            explorerEnvironment["Explorer__ReplicaName"] = replicaName;
+            explorerEnvironment["Explorer__ApplicationName"] = "lattice-console";
+        }
+
+        switch (head.KeyRing)
         {
             case JourneyExplorerKeyRing.FileSystem:
-                explorerEnvironment["Explorer__KeysDirectory"] = Path.Combine(_workDirectory, $"{region}-explorer-keys");
+                explorerEnvironment["Explorer__KeysDirectory"] = Path.Combine(_workDirectory, $"{head.Name}-keys");
+                break;
+            case JourneyExplorerKeyRing.Blob when head.KeyRingAccount is { } account:
+                explorerEnvironment["Explorer__KeyRingBlobConnectionString"] = account;
+                explorerEnvironment["Explorer__KeyRingBlobContainer"] = head.KeyRingContainer!;
+                explorerEnvironment["Explorer__KeyRingBlobName"] = head.KeyRingBlob!;
                 break;
             case JourneyExplorerKeyRing.Blob:
                 var keyRing = new Azure.Storage.Blobs.BlobServiceClient(_storage.ConnectionString)
@@ -235,13 +336,13 @@ public sealed partial class JourneyEstate : IAsyncDisposable
                 await keyRing.CreateIfNotExistsAsync(cancellationToken: cancellationToken);
                 explorerEnvironment["Explorer__KeyRingBlobConnectionString"] = _storage.ConnectionString;
                 explorerEnvironment["Explorer__KeyRingBlobContainer"] = keyRing.Name;
-                explorerEnvironment["Explorer__KeyRingBlobName"] = $"{region}-keys.xml";
+                explorerEnvironment["Explorer__KeyRingBlobName"] = $"{head.Name}-keys.xml";
                 break;
         }
 
         if (ExplorerUsesTls)
         {
-            explorerEnvironment["LATTICE_EXPLORER_ENDPOINT"] = $"https://127.0.0.1:{gatewayPort}";
+            explorerEnvironment["LATTICE_EXPLORER_ENDPOINT"] = $"https://127.0.0.1:{head.GatewayPort}";
 
             // .NET on Linux builds its trust store from OpenSSL's, which honours this
             // variable: the head trusts the run's CA exactly as a container does once the
@@ -250,17 +351,21 @@ public sealed partial class JourneyEstate : IAsyncDisposable
         }
         else
         {
-            explorerEnvironment["LATTICE_EXPLORER_ENDPOINT"] = $"http://127.0.0.1:{plaintextPort}";
+            explorerEnvironment["LATTICE_EXPLORER_ENDPOINT"] = $"http://127.0.0.1:{head.PlaintextPort}";
             explorerEnvironment["LATTICE_EXPLORER_INSECURE_DEV"] = "true";
         }
 
-        var explorer = new JourneyProcess($"{region}-explorer-0", JourneyHostBinaries.Explorer, explorerEnvironment, ArtifactsDirectory,
+        foreach (var (key, value) in extra ?? new Dictionary<string, string>())
+        {
+            explorerEnvironment[key] = value;
+        }
+
+        var explorer = new JourneyProcess(head.Name, JourneyHostBinaries.Explorer, explorerEnvironment, ArtifactsDirectory,
             ready => WaitForAsync(async () =>
-                await IsOkAsync(new Uri(explorerUri, "health"), ready) && await IsOkAsync(new Uri(explorerUri, "_framework/blazor.web.js"), ready), ready));
+                await IsOkAsync(new Uri(root, "health"), ready) && await IsOkAsync(new Uri(explorerUri, "_framework/blazor.web.js"), ready), ready));
         _processes.Add(explorer);
         await explorer.StartAsync(_options.HostStartTimeout, cancellationToken);
-
-        _regions[region] = new JourneyRegion(region, silos, gateway, gatewayPort, controlPort, plaintextPort, [explorer], [explorerUri]);
+        return (explorer, explorerUri);
     }
 
     private JourneySiloHost DescribeSilo(string region, int index, string replicationSecret)
@@ -269,7 +374,7 @@ public sealed partial class JourneyEstate : IAsyncDisposable
         var cluster = $"{Id}-{region}";
         var environment = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["Storage__ConnectionString"] = _storage.ConnectionString,
+            ["Storage__ConnectionString"] = _storage.ConnectionStringOf(region),
             ["Backup__BlobConnectionString"] = _storage.BackupConnectionString,
             ["Backup__ContainerName"] = _storage.BackupContainer,
             ["Backup__Primary"] = (region == West).ToString(),
@@ -290,7 +395,8 @@ public sealed partial class JourneyEstate : IAsyncDisposable
             ["Auth__BootstrapAdministrators"] = string.Join(',', _options.BootstrapAdministrators),
             ["Schema__EnableVersioning"] = "true",
             ["Tenancy__Enabled"] = _options.Tenancy.ToString(),
-            ["LineFeed__Indexer"] = "true",
+            ["Tenancy__DelegatedAccess"] = _options.DelegatedAccessAdministration.ToString(),
+            ["LineFeed__Indexer"] = (region == West && _options.LineFeed).ToString(),
             [JourneyHostEnvironment.DirectoryFile] = _directoryFile,
             [JourneyHostEnvironment.TlsPfxFile] = _certificates.IssueServerPfx($"{region}-silo-{index}"),
             [JourneyHostEnvironment.TlsPfxPassword] = JourneyCertificates.PfxPassword,
@@ -302,6 +408,24 @@ public sealed partial class JourneyEstate : IAsyncDisposable
         if (_options.Faults)
         {
             environment[JourneyHostEnvironment.Faults] = JourneyHostEnvironment.Enabled;
+        }
+
+        // The other regions, each reached through its gateway, as a region's peers are
+        // reached through their ingress (Replication:Peers, plaintext off).
+        var peers = _gatewayPorts.Where(peer => peer.Key != region).Select(peer => $"{peer.Key}=https://127.0.0.1:{peer.Value}").ToArray();
+        if (peers.Length > 0)
+        {
+            environment["Replication__Peers"] = string.Join(',', peers);
+        }
+
+        if (region == East && _options.EastStaticReplicatedTrees.Count > 0)
+        {
+            environment["Replication__Trees"] = string.Join(',', _options.EastStaticReplicatedTrees.Select(tree => $"{tree.Key}={tree.Value}"));
+        }
+
+        if (_prometheus is not null)
+        {
+            environment["Telemetry__BackendAddress"] = _prometheus.Address.ToString().TrimEnd('/');
         }
 
         if (_options.CursorIdleTtl is { } cursor)
@@ -374,6 +498,24 @@ public sealed partial class JourneyEstate : IAsyncDisposable
         {
             await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken);
         }
+    }
+
+    /// <summary>One Explorer head the estate starts.</summary>
+    /// <param name="Name">The head's process name, such as <c>east-explorer-1</c>.</param>
+    /// <param name="Port">Its HTTPS port.</param>
+    /// <param name="BasePath">Its mount.</param>
+    /// <param name="KeyRing">Where it keeps its key ring.</param>
+    /// <param name="GatewayPort">Its region's gateway's TLS port.</param>
+    /// <param name="PlaintextPort">Its region's gateway's h2c port, on a Windows workstation only.</param>
+    private sealed record ExplorerHead(string Name, int Port, string BasePath, JourneyExplorerKeyRing KeyRing, int GatewayPort, int? PlaintextPort)
+    {
+        public string? KeyRingAccount { get; init; }
+
+        public string? KeyRingContainer { get; init; }
+
+        public string? KeyRingBlob { get; init; }
+
+        public string? ReplicaName { get; init; }
     }
 
     private JourneyRegion RegionOf(string region) =>
