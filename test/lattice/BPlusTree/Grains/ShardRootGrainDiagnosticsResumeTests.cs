@@ -87,6 +87,11 @@ public sealed class ShardRootGrainDiagnosticsResumeTests
         }
     }
 
+    private static T Resolve<T>(Dictionary<Guid, T> table, Guid key)
+        => table.TryGetValue(key, out var grain)
+            ? grain
+            : throw new InvalidOperationException($"The walk resolved an unregistered node '{key}'.");
+
     private static List<string> InRange(string[] keys, string? startInclusive, string? endExclusive) =>
         keys.Where(k => (startInclusive is null || string.CompareOrdinal(k, startInclusive) >= 0)
                 && (endExclusive is null || string.CompareOrdinal(k, endExclusive) < 0))
@@ -105,10 +110,13 @@ public sealed class ShardRootGrainDiagnosticsResumeTests
         var leaves = new Dictionary<Guid, IBPlusLeafGrain>();
         var internals = new Dictionary<Guid, IBPlusInternalGrain>();
 
-        factory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>()).Returns(call => leaves[call.ArgAt<Guid>(0)]);
-        factory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(call => leaves[call.ArgAt<GrainId>(0).GetGuidKey()]);
-        factory.GetGrain<IBPlusInternalGrain>(Arg.Any<Guid>()).Returns(call => internals[call.ArgAt<Guid>(0)]);
-        factory.GetGrain<IBPlusInternalGrain>(Arg.Any<GrainId>()).Returns(call => internals[call.ArgAt<GrainId>(0).GetGuidKey()]);
+        // An unregistered lookup throws InvalidOperationException: the shard's
+        // leaf-type probe (GetGrain(Guid.Empty)) tolerates exactly that and treats
+        // the fake factory as non-runtime, as ShardRootGrainDiagnosticsTests does.
+        factory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>()).Returns(call => Resolve(leaves, call.ArgAt<Guid>(0)));
+        factory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(call => Resolve(leaves, call.ArgAt<GrainId>(0).GetGuidKey()));
+        factory.GetGrain<IBPlusInternalGrain>(Arg.Any<Guid>()).Returns(call => Resolve(internals, call.ArgAt<Guid>(0)));
+        factory.GetGrain<IBPlusInternalGrain>(Arg.Any<GrainId>()).Returns(call => Resolve(internals, call.ArgAt<GrainId>(0).GetGuidKey()));
 
         var grain = new ShardRootGrain(
             context,
