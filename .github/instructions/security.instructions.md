@@ -182,9 +182,21 @@ gate will tell you if you forget.
   the peer, so the elevated probe is not an existence oracle, and a commit that must
   rebuild a lost shadow re-checks the sources before replaying anything.
   Anything else runs as the ambient caller and is authorized as such, including this
-  cluster's own coordinator. Do not widen it to other saga participants, or move it
-  to the saga service or participant grain, where it would elevate host-registered
-  participants too.
+  cluster's own coordinator - with one exception (#5506): a commit or abort of this
+  cluster's **own** saga whose shadow the participant built in this process runs
+  under system origin (`RestoreParticipant.EnterDecidedAuthority`), because the
+  decision is redelivered by the coordinator's keepalive reminder or the
+  participant's fence expiry with no user identity, and refusing it as anonymous
+  after the write fence engaged left the tree fenced with the saga unable to finish.
+  The cached shadow is the evidence: only a shadow build that succeeded, authorized
+  as its caller (`Restore` over the target and `Backup` over every captured source),
+  puts it there, and the elevated step acts only on that shadow, never on a tree or
+  backup the request names. A participant that lost the cache rebuilds as the
+  ambient caller; a missing options seam is a refusal. A failed cutover unblocks the
+  tree's local writes before the failure propagates, so the decision is redelivered
+  without the tree staying fenced. Do not widen it to other saga participants, or
+  move it to the saga service or participant grain, where it would elevate
+  host-registered participants too.
 
 ### Identity-directory validation (`src/lattice.membership`, `src/lattice.api.auth`)
 - Administrative membership-reference create paths (`UpsertGroupAsync`,

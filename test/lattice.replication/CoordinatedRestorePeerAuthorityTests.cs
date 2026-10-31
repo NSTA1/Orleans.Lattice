@@ -182,6 +182,62 @@ public sealed class CoordinatedRestorePeerAuthorityTests
         await AssertHoldsExactlyTheCutAsync(tree);
     }
 
+    [Test]
+    public async Task A_decided_commit_of_this_clusters_own_saga_redelivered_with_no_identity_completes()
+    {
+        // Issue #5506: this cluster's coordinator redelivers its decision from a
+        // reminder, which carries no identity. Before the fix the cutover was
+        // re-authorized as anonymous, refused after the write fence engaged, and the
+        // tree stayed write-fenced with the saga unable to finish.
+        const string tree = Target + "-redelivered";
+        var backupId = await SeedAndCaptureAsync(tree, "cut-redelivered");
+        var participant = NewParticipant(replicated: [tree], peers: [Peer]);
+        var request = Request("saga-redelivered", tree, backupId, coordinator: CoordinatedRestoreClusterFixture.ClusterId);
+
+        // The prepare runs as an authorized operator (system origin stands in for one).
+        using (LatticeSystemOrigin.Enter())
+        {
+            var vote = await participant.PrepareAsync(request);
+            Assert.That(vote.Vote, Is.EqualTo(SagaVote.Commit), vote.Detail);
+        }
+
+        Assert.That(LatticeSystemOrigin.IsActive, Is.False, "the redelivery arrives with no identity");
+        await participant.CommitAsync(request);
+
+        await AssertHoldsExactlyTheCutAsync(tree);
+        var fence = await _fixture.Fence(request.SagaId).GetSnapshotAsync();
+        Assert.That(fence.WritesUnblocked, Is.True, "the committed cutover released the tree's writes");
+        Assert.That(LatticeSystemOrigin.IsActive, Is.False, "the prepare's authority does not outlive the saga step");
+    }
+
+    [Test]
+    public async Task A_decided_abort_of_this_clusters_own_saga_redelivered_with_no_identity_compensates()
+    {
+        const string tree = Target + "-redelivered-abort";
+        var backupId = await SeedAndCaptureAsync(tree, "cut-redelivered-abort");
+        var participant = NewParticipant(replicated: [tree], peers: [Peer]);
+        var aborted = Request("saga-redelivered-abort-1", tree, backupId, coordinator: CoordinatedRestoreClusterFixture.ClusterId);
+
+        using (LatticeSystemOrigin.Enter())
+        {
+            Assert.That((await participant.PrepareAsync(aborted)).Vote, Is.EqualTo(SagaVote.Commit));
+        }
+
+        await participant.AbortAsync(aborted);
+
+        // A compensation refused as anonymous would leave the build's alias operation
+        // open, and the next restore's build would be refused.
+        var retried = Request("saga-redelivered-abort-2", tree, backupId, coordinator: CoordinatedRestoreClusterFixture.ClusterId);
+        using (LatticeSystemOrigin.Enter())
+        {
+            var vote = await participant.PrepareAsync(retried);
+            Assert.That(vote.Vote, Is.EqualTo(SagaVote.Commit), vote.Detail);
+            await participant.CommitAsync(retried);
+        }
+
+        await AssertHoldsExactlyTheCutAsync(tree);
+    }
+
     private async Task<string> SeedAndCaptureAsync(string tree, string label)
     {
         using var origin = LatticeSystemOrigin.Enter();
