@@ -3969,6 +3969,8 @@ capabilities:
         source: "src/lattice/IWalStorageProvider.cs#IWalStorageProvider"
       - statement: "AppendBatchAsync and AppendEncodedBatchAsync are all-or-nothing per call."
         source: "docs/lattice/wal-storage-providers.md"
+      - statement: "A provider advertises its per-call append cap through MaxAppendBatchEntries, and a WAL move copy chunks each page to it."
+        source: "src/lattice/IWalStorageProvider.cs#IWalStorageProvider.MaxAppendBatchEntries"
       - statement: "Providers preserve caller-assigned offsets verbatim and read entries in ascending offset order."
         source: "docs/lattice/wal-storage-providers.md"
       - statement: "AddLattice registers the in-memory WAL provider by default."
