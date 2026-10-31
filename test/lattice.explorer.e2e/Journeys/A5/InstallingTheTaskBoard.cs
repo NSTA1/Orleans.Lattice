@@ -210,17 +210,19 @@ public sealed class InstallingTheTaskBoard : JourneyChapter
 
         await run.StepAsync("5", async () =>
         {
+            // Off the UI, as the external actor it models: the samples source's publisher
+            // releases vNext, 1.1.0 (the version samples-next already offers).
+            await context.Estate.PublishAppNextVersionAsync(Apps.SamplesSource);
+
             await olivia.Shell.GotoAsync("/apps/catalogue");
             await apps.FilterAsync("Updates");
-            await apps.ExpectNoMatchAsync("Every installed app is on its source's newest version.");
-            await run.ShotAsync("updates", "The Updates filter compares each install with its own source: samples has nothing newer");
+            var update = apps.Row(TaskBoard, Apps.SamplesSource);
+            await Expect(update).ToContainTextAsync("Update available");
+            await Expect(update).ToContainTextAsync(Apps.TaskBoardNextVersion);
+            await Expect(apps.Rows).ToHaveCountAsync(1);
+            await run.ShotAsync("updates", "vNext appears: the Updates filter lists the task board, 1.1.0 from samples, where 1.0.0 came from");
 
-            await apps.FilterAsync("All");
-            await apps.SelectSourceAsync(Apps.SamplesNextSource);
-            await Expect(apps.Row(TaskBoard, Apps.SamplesNextSource)).ToContainTextAsync(Apps.TaskBoardNextVersion);
-            await run.ShotAsync("vnext-offered", "vNext appears from samples-next: the task board 1.1.0");
-
-            await apps.OpenRowActionAsync("Review", TaskBoard, Apps.SamplesNextSource);
+            await apps.OpenRowActionAsync("Upgrade", TaskBoard, Apps.SamplesSource);
             await Expect(review.Lede).ToContainTextAsync("v1.0.0 is installed; ");
             await Expect(review.Lede).ToContainTextAsync("offers v1.1.0.");
             await Expect(review.UpgradeDiff).ToContainTextAsync($"Changes what the role {Apps.EditorRole} may do");
@@ -229,10 +231,14 @@ public sealed class InstallingTheTaskBoard : JourneyChapter
             await Expect(review.Integration).ToContainTextAsync($"{A5Contract.TaskBoardTree} as LwwRegister");
             await run.ShotAsync("upgrade-diff", "The upgrade diff: the editor role adds range delete, which needs re-consent; its tree stays replicated", fullPage: true);
 
-            await review.ClickAsync($"Upgrade to v{Apps.TaskBoardNextVersion}...");
+            // The palette offers the same upgrade as a command, which starts it here.
+            await olivia.Shell.RunCommandAsync($"Upgrade {Apps.TaskBoard}");
             await review.ExpectBindingStepAsync("Bind roles to groups");
+            Coverage.Hit("use-case:apps/upgrade-command");
             await Expect(review.GroupFor(Apps.EditorRole)).ToHaveValueAsync(Groups.DataStewards);
             await Expect(review.GroupFor(Apps.ViewerRole)).ToHaveValueAsync(ContosoAccess.TaskBoardViewers.GroupId);
+            await run.ShotAsync("upgrade-command", "The palette's Upgrade task-board starts the upgrade: the bindings carry over");
+
             await review.ClickAsync("Continue");
             await review.ExpectCeilingStepAsync();
             await review.ExpectCeilingAsync(CeilingOperations, CeilingOperations);
@@ -255,8 +261,8 @@ public sealed class InstallingTheTaskBoard : JourneyChapter
         {
             await sections.OpenAsync(Apps.TaskBoard, TaskBoard, "overview");
             await Expect(sections.Panel).ToContainTextAsync(Apps.TaskBoardNextVersion);
-            await Expect(sections.Panel).ToContainTextAsync(Apps.SamplesNextSource);
-            await run.ShotAsync("overview", "Overview: version 1.1.0 from samples-next, enabled; olivia holds no role");
+            await Expect(sections.Panel).ToContainTextAsync(Apps.SamplesSource);
+            await run.ShotAsync("overview", "Overview: version 1.1.0 from samples, enabled; olivia holds no role");
 
             await sections.ChooseTabAsync(Apps.TaskBoard, TaskBoard, "Trees");
             await Expect(sections.Panel).ToContainTextAsync("tasks");

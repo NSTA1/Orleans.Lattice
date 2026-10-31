@@ -232,6 +232,28 @@ public sealed partial class JourneyEstate
     }
 
     /// <summary>
+    /// Releases the next version of the apps the journey app source <paramref name="source"/>
+    /// holds back, acting as that source's publisher: from now on every silo of the region's
+    /// cluster lists and resolves it (the <c>samples</c> source then offers the task board at
+    /// 1.1.0 beside 1.0.0). Idempotent and durable.
+    /// </summary>
+    /// <param name="source">The source key; only <c>samples</c> holds a version back.</param>
+    /// <param name="region">The region whose cluster the source belongs to.</param>
+    public async Task PublishAppNextVersionAsync(string source = "samples", string region = West)
+    {
+        RequireFaults();
+        ArgumentException.ThrowIfNullOrEmpty(source);
+        var silo = RegionOf(region).Silos.First(candidate => candidate.IsRunning);
+        using var response = await _probe.PostAsync(new Uri(
+            $"http://127.0.0.1:{silo.HttpPort}/e2e/apps/publish?source={Uri.EscapeDataString(source)}"), null);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(
+                $"Publishing the next version from source '{source}' failed: {(int)response.StatusCode} {await response.Content.ReadAsStringAsync()}");
+        }
+    }
+
+    /// <summary>
     /// Deletes one blob of a backup behind the backup catalogue's back, as a storage-side
     /// deletion would, so the catalogue holds a genuine orphan row.
     /// </summary>

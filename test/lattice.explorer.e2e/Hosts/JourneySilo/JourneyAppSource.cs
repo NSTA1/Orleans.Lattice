@@ -10,13 +10,24 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Hosts.Silo;
 /// operator publishes a curated catalogue: the in-image source's resolution, listing and
 /// digest-verified asset serving, under a source key of its own. The journey estate
 /// registers two, <see cref="Samples"/> and <see cref="SamplesNext"/>, so installing from a
-/// named source, upgrading across sources and re-consenting are all reachable.
+/// named source, upgrading within a source and across sources, and re-consenting are all
+/// reachable.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Both sources advertise <see cref="AppSourceCapabilities.Search"/>, matching a query's text
 /// against each app's slug, display name and summary, and <see cref="Samples"/> also lists
 /// <see cref="FillerCount"/> catalogue fillers (see <see cref="Fillers"/>), so the catalogue's
 /// text search and its "Load more apps" paging are reachable on the journey estate (A5, #5376).
+/// </para>
+/// <para>
+/// <see cref="Samples"/> ships the task board at 1.0.0 and offers its next version, 1.1.0 (the
+/// version <see cref="SamplesNext"/> offers), once its publisher has released it: when the
+/// cluster-wide <see cref="IJourneyCatalogueGrain"/> says so, set through the fault seams
+/// (<c>POST /e2e/apps/publish?source=samples</c>). Until then it is a one-version source; after,
+/// the task board's entry lists both versions, newest first, so an install from
+/// <see cref="Samples"/> shows under the catalogue's Updates filter.
+/// </para>
 /// </remarks>
 internal sealed class JourneyAppSource : IAppCatalogSource
 {
@@ -35,40 +46,41 @@ internal sealed class JourneyAppSource : IAppCatalogSource
     /// <summary>The summary every catalogue filler carries, so none can be mistaken for a real app.</summary>
     public const string FillerSummary = "Catalogue filler for journey A5 pagination";
 
+    private static IGrainFactory? _grains;
+
     private readonly InImageAppSource _inner;
+    private readonly InImageAppSource? _next;
     private readonly IReadOnlyList<AppSourceEntry> _fillers;
     private readonly Lock _gate = new();
     private AppSourceEntry[]? _listing;
+    private AppSourceEntry[]? _publishedListing;
 
-    private JourneyAppSource(string key, string displayName, InImageAppRegistration registration, bool fillers = false)
+    private JourneyAppSource(string key, string displayName, InImageAppRegistration registration, bool publishesNext = false)
     {
-        Descriptor = new AppSourceDescriptor(key, displayName, AppSourceKind.Static, AppSourceCapabilities.Enumerate | AppSourceCapabilities.Search);
-        var options = new InImageAppSourceOptions();
-        options.Registrations.Add(registration);
-        _inner = new InImageAppSource(Options.Create(options));
-        _fillers = fillers ? Fillers(key) : [];
+        var capabilities = AppSourceCapabilities.Enumerate | AppSourceCapabilities.Search;
+        Descriptor = new AppSourceDescriptor(key, displayName, AppSourceKind.Static, publishesNext ? capabilities | AppSourceCapabilities.MultipleVersions : capabilities);
+        _inner = Single(registration);
+        _next = publishesNext ? Single(NextRegistration()) : null;
+        _fillers = publishesNext ? Fillers(key) : [];
     }
 
     /// <inheritdoc />
     public AppSourceDescriptor Descriptor { get; }
 
-    /// <summary>The <see cref="Samples"/> source: the task-board sample at its shipped version.</summary>
+    /// <summary>The <see cref="Samples"/> source: the task-board sample at its shipped version, its next version once published, and the catalogue fillers.</summary>
     public static JourneyAppSource CreateSamples() =>
         new(Samples, "Samples", new InImageAppRegistration(
             AppSlug.Parse(TaskBoardApp.Slug),
             TaskBoardApp.Assembly,
             TaskBoardApp.ManifestResourceName),
-            fillers: true);
+            publishesNext: true);
 
     /// <summary>The <see cref="SamplesNext"/> source: the task board's next version, one added operation.</summary>
-    public static JourneyAppSource CreateSamplesNext() =>
-        new(SamplesNext, "Samples (next)", new InImageAppRegistration(
-            AppSlug.Parse(TaskBoardApp.Slug),
-            typeof(JourneyAppSource).Assembly,
-            "JourneySilo.TaskBoardNext.manifest.json")
-        {
-            AssetResourcePrefix = "JourneySilo.TaskBoardNext.ui.",
-        });
+    public static JourneyAppSource CreateSamplesNext() => new(SamplesNext, "Samples (next)", NextRegistration());
+
+    /// <summary>Gives every journey app source the cluster's grains, once the silo is built, so it can read what has been published.</summary>
+    /// <param name="grains">The silo's grain factory.</param>
+    public static void UseGrains(IGrainFactory grains) => _grains = grains;
 
     /// <inheritdoc />
     public async ValueTask<AppSourceResult> ResolveAsync(AppSlug slug, AppVersion? version = null, CancellationToken cancellationToken = default)
@@ -80,7 +92,17 @@ internal sealed class JourneyAppSource : IAppCatalogSource
                 : AppSourceResult.Resolved(fillerManifest, fillerProvenance, new FillerActivation(fillerManifest.Identity));
         }
 
-        var result = await _inner.ResolveAsync(slug, version, cancellationToken);
+        var source = _inner;
+        if (_next is not null && await NextPublishedAsync())
+        {
+            var next = await _next.ResolveAsync(slug, version: null, cancellationToken);
+            if (next.Manifest is { } nextManifest && (version is null || version == nextManifest.Identity.Version))
+            {
+                source = _next;
+            }
+        }
+
+        var result = await source.ResolveAsync(slug, version, cancellationToken);
         return result is { IsResolved: true, Manifest: { } manifest, Provenance: { } provenance, Activation: { } activation }
             ? AppSourceResult.Resolved(manifest, Rekey(provenance), activation)
             : result;
@@ -110,13 +132,39 @@ internal sealed class JourneyAppSource : IAppCatalogSource
     }
 
     /// <inheritdoc />
-    public ValueTask<AppAssetResult> OpenAssetAsync(
+    public async ValueTask<AppAssetResult> OpenAssetAsync(
         AppSlug slug,
         AppVersion version,
         string path,
         string expectedSha256,
-        CancellationToken cancellationToken = default) =>
-        _inner.OpenAssetAsync(slug, version, path, expectedSha256, cancellationToken);
+        CancellationToken cancellationToken = default)
+    {
+        if (_next is not null && await NextPublishedAsync()
+            && (await _next.ResolveAsync(slug, version, cancellationToken)).IsResolved)
+        {
+            return await _next.OpenAssetAsync(slug, version, path, expectedSha256, cancellationToken);
+        }
+
+        return await _inner.OpenAssetAsync(slug, version, path, expectedSha256, cancellationToken);
+    }
+
+    private static InImageAppSource Single(InImageAppRegistration registration)
+    {
+        var options = new InImageAppSourceOptions();
+        options.Registrations.Add(registration);
+        return new InImageAppSource(Options.Create(options));
+    }
+
+    private static InImageAppRegistration NextRegistration() => new(
+        AppSlug.Parse(TaskBoardApp.Slug),
+        typeof(JourneyAppSource).Assembly,
+        "JourneySilo.TaskBoardNext.manifest.json")
+    {
+        AssetResourcePrefix = "JourneySilo.TaskBoardNext.ui.",
+    };
+
+    private async ValueTask<bool> NextPublishedAsync() =>
+        _grains is { } grains && await grains.GetGrain<IJourneyCatalogueGrain>(Descriptor.Key).IsNextPublishedAsync();
 
     private AppProvenance Rekey(AppProvenance provenance) => new()
     {
@@ -127,19 +175,45 @@ internal sealed class JourneyAppSource : IAppCatalogSource
 
     private async ValueTask<AppSourceEntry[]> ListingAsync(CancellationToken cancellationToken)
     {
+        var published = _next is not null && await NextPublishedAsync();
         lock (_gate)
         {
-            if (_listing is not null)
+            if ((published ? _publishedListing : _listing) is { } cached)
             {
-                return _listing;
+                return cached;
             }
         }
 
         var entries = new List<AppSourceEntry>(_fillers);
+        foreach (var entry in await ListAllAsync(_inner, cancellationToken))
+        {
+            entries.Add(published ? await WithNextAsync(entry, cancellationToken) : entry);
+        }
+
+        var listing = entries.OrderBy(entry => entry.Slug.Value, StringComparer.Ordinal).ToArray();
+        lock (_gate)
+        {
+            return published ? _publishedListing ??= listing : _listing ??= listing;
+        }
+    }
+
+    // The task board's entry once its next version is published: both versions, newest first,
+    // described by the newest version's manifest.
+    private async ValueTask<AppSourceEntry> WithNextAsync(AppSourceEntry entry, CancellationToken cancellationToken)
+    {
+        var next = await _next!.ResolveAsync(entry.Slug, version: null, cancellationToken);
+        return next is { IsResolved: true, Manifest: { } manifest, Provenance: { } provenance } && entry.IsAvailable
+            ? AppSourceEntry.Available([manifest.Identity.Version, .. entry.Versions], manifest, Rekey(provenance))
+            : entry;
+    }
+
+    private async ValueTask<List<AppSourceEntry>> ListAllAsync(InImageAppSource source, CancellationToken cancellationToken)
+    {
+        var entries = new List<AppSourceEntry>();
         string? continuation = null;
         do
         {
-            var page = await _inner.ListAsync(new AppSourceQuery { PageSize = AppSourceQuery.MaxPageSize, Continuation = continuation }, cancellationToken);
+            var page = await source.ListAsync(new AppSourceQuery { PageSize = AppSourceQuery.MaxPageSize, Continuation = continuation }, cancellationToken);
             foreach (var entry in page.Entries)
             {
                 entries.Add(entry is { Manifest: { } manifest, Provenance: { } provenance }
@@ -151,11 +225,7 @@ internal sealed class JourneyAppSource : IAppCatalogSource
         }
         while (continuation is not null);
 
-        var listing = entries.OrderBy(entry => entry.Slug.Value, StringComparer.Ordinal).ToArray();
-        lock (_gate)
-        {
-            return _listing ??= listing;
-        }
+        return entries;
     }
 
     private static bool Matches(AppSourceEntry entry, string? text) =>
