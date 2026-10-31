@@ -185,8 +185,8 @@ public sealed class TaskBoardTeamJourney : JourneyChapter
             var press = ids[tasks[0].Title];
             await priya.Page.GotoAsync($"apps/task-board/window?path=/tasks/{press}&query=from=u3");
             await window.WaitForBoardAsync();
-            await window.ExpectNoDetailAsync();
-            await window.CaptureAsync(recorder, "u3-5", "deep-query", "BEFORE the fix: a deep link with ?path= and ?query= opens the window, but the board selects no task");
+            await window.ExpectDetailAsync(tasks[0].Title, U3Contract.Key(press), "To do");
+            await window.CaptureAsync(recorder, "u3-5", "deep-query", "A deep link with ?path= and ?query= opens the window on one task; the board reads its path past the query");
             Coverage.Hit("query:apps.query");
             Coverage.Hit("use-case:apps/open-frame");
         });
