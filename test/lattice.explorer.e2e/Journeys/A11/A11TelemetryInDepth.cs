@@ -69,7 +69,9 @@ public sealed class A11TelemetryInDepth : JourneyChapter
         _boards = await _telemetry.ReadBoardListAsync();
         var keys = _boards.Select(board => board.Key).ToArray();
         Assert.That(keys, Is.SupersetOf(BuiltInBoards), $"the built-in boards are listed (listed: {string.Join(", ", _boards)})");
-        Assert.That(keys, Does.Not.Contain("tenant"), "Contoso is not tenanted, so the Tenant board is not listed");
+        // olivia is a platform operator on the reserved default tenant, so she sees tenancy chrome
+        // (tenant-scope.md, "The reserved default tenant") and with it the Tenant board.
+        Assert.That(keys, Does.Contain("tenant"), "an operator on the default tenant sees the Tenant board");
         await ShotAsync("board-list", $"Olivia opens Telemetry: {_boards.Count} boards ({string.Join(", ", _boards.Select(board => board.Title))})");
 
         for (var i = 0; i < _boards.Count; i++)
