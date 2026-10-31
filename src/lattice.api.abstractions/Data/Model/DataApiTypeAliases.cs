@@ -41,4 +41,13 @@ public static class DataApiTypeAliases
 
     /// <summary>Alias for <see cref="LatticeDataCapabilities"/>.</summary>
     public const string LatticeDataCapabilities = "olad.cap";
+
+    /// <summary>Alias for <see cref="DataEntryRejection"/>.</summary>
+    public const string DataEntryRejection = "olad.mj";
+
+    /// <summary>Alias for <see cref="DataSetManyStreamBatch"/>.</summary>
+    public const string DataSetManyStreamBatch = "olad.mb";
+
+    /// <summary>Alias for <see cref="DataSetManyStreamResult"/>.</summary>
+    public const string DataSetManyStreamResult = "olad.mr";
 }

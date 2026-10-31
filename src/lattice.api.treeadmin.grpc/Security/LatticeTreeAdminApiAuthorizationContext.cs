@@ -81,6 +81,14 @@ public enum LatticeTreeAdminApiOperation
 
     /// <summary>The read-only <c>ListViewProviders</c> runtime view-provider listing RPC.</summary>
     ListViewProviders = 21,
+
+    /// <summary>
+    /// The mutating duplex <c>StreamBulkLoad</c> RPC. A streamed call carries its tree in
+    /// its first frame, which is not read until the call is admitted, so the authorization
+    /// context's target is <see langword="null"/>; the facade then authorizes the bulk-load
+    /// capability over the named tree, fail-closed, before anything is written.
+    /// </summary>
+    StreamBulkLoad = 22,
 }
 
 /// <summary>
