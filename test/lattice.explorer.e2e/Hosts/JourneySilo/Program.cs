@@ -279,6 +279,10 @@ builder.Host.UseOrleans(silo =>
     silo.AddLatticeSchemaApi();
     silo.AddLatticeTreeAdminApi();
 
+    // Not in the reference silo: the runtime view providers the story's views are
+    // created from through the Explorer's New view dialog.
+    silo.AddLatticeViews(JourneyViewProviders.Register);
+
     // Not in the reference silo: installable apps, from two named sources.
     silo.AddLatticeApps();
     silo.AddLatticeAppSource(JourneyAppSource.CreateSamples());

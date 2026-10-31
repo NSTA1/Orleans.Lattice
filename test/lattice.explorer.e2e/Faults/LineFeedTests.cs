@@ -81,6 +81,39 @@ public sealed class LineFeedTests
 
         await feed.ResumeAsync();
         await feed.WaitUntilAsync(status => status.TelemetryWritten > paused, Patience);
+
+        // The silo's order-status view provider projects each order to its status, which is
+        // how the story's orders-by-status view is created through the New view dialog.
+        var admin = Orleans.Lattice.Api.TreeAdmin.Grpc.LatticeTreeAdminApiGrpcClient.Create(Estate.Invoker(), JourneyEstate.Serialization);
+        var view = await admin.CreateViewAsync("e2e-orders-by-status", LineFeedControl.OrdersTree, "order-status", "{}"u8.ToArray());
+        Assert.That(view.ProviderKey, Is.EqualTo("order-status"));
+        var projected = await WaitForProjectedStatusAsync(admin, view.ViewName, $"order/{LineFeedControl.FirstOrder:D6}");
+        Assert.That(projected, Is.EqualTo("shipped"), "the view holds the order's status, not the order");
+    }
+
+    private static async Task<string?> WaitForProjectedStatusAsync(
+        Orleans.Lattice.Api.TreeAdmin.Grpc.LatticeTreeAdminApiGrpcClient admin, string viewName, string key)
+    {
+        var deadline = DateTime.UtcNow + Patience;
+        while (true)
+        {
+            var status = await admin.GetViewStatusAsync(viewName);
+            if (!string.IsNullOrEmpty(status.ActiveTreeId))
+            {
+                var read = await Data.GetAsync(new DataGetRequest { TreeId = status.ActiveTreeId, Key = key });
+                if (read.Found)
+                {
+                    return System.Text.Encoding.UTF8.GetString(read.Value);
+                }
+            }
+
+            if (DateTime.UtcNow > deadline)
+            {
+                return null;
+            }
+
+            await Task.Delay(500);
+        }
     }
 
     private static string? StatusOf(byte[] value)
