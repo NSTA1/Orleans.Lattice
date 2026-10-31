@@ -1,0 +1,449 @@
+id	kind	source	description	journey
+command:access.create-group	command	AccessArea.CreateGroupCommandId	The palette command access.create-group	A2
+command:access.create-rule	command	AccessArea.CreateRuleCommandId	The palette command access.create-rule	A2
+command:access.explain	command	AccessArea.ExplainCommandId	The palette command access.explain	A2
+command:appearance.menu	command	ChromeCommands.AppearanceMenuId	The palette command appearance.menu	A1
+command:apps.install	command	AppsArea.InstallCommandId	The palette command apps.install	A5
+command:backups.capture	command	BackupsArea.CaptureCommandId	The palette command backups.capture	A6
+command:cluster.create-tree	command	ClusterArea.CreateTreeCommandId	New tree... from the Cluster trees list (G4)	A3
+command:cluster.plan-wal-move	command	ClusterArea.PlanWalMoveCommandId	The palette command cluster.plan-wal-move	A8
+command:cluster.reshard-tree	command	ClusterArea.ReshardCommandId	The palette command cluster.reshard-tree	A8
+command:data.create-view	command	DataArea.CreateViewCommandId	New view... on a tree's Views tab (G5)	A3
+command:data.delete-entry	command	DataEntryCommands.DeleteEntryId	Delete... an entry (G3)	U1
+command:data.edit-entry	command	DataEntryCommands.EditEntryId	Edit... an entry (G3)	U1
+command:data.export	command	DataArea.ExportCommandId	Export... a tree or prefix as a streamed download (G2)	U1
+command:data.import	command	pending:#5365	Import... NDJSON or CSV into a tree (G1)	A3
+command:data.new-entry	command	DataEntryCommands.NewEntryId	New entry... in a tree (G3)	U1
+command:data.refresh	command	DataArea.RefreshCommandId	The palette command data.refresh	U1
+command:go.home	command	ChromeCommands.GoHomeId	The palette command go.home	A1
+command:replication.refresh	command	ReplicationArea.RefreshCommandId	The palette command replication.refresh	A7
+command:replication.trees	command	ReplicationArea.TreesCommandId	The palette command replication.trees	A7
+command:schema.all-trees	command	SchemaArea.AllTreesCommandId	The palette command schema.all-trees	U2
+command:schema.scan-compliance	command	SchemaArea.ScanCommandId	The palette command schema.scan-compliance	U2
+command:telemetry.refresh	command	TelemetryArea.RefreshCommandId	The palette command telemetry.refresh	A8
+command:tenancy.change-residency	command	TenancyArea.ChangeResidencyCommandId	The palette command tenancy.change-residency	T5
+command:tenancy.create-tenant	command	TenancyArea.CreateTenantCommandId	The palette command tenancy.create-tenant	T1
+command:tenancy.offer-grant	command	TenancyArea.OfferGrantCommandId	The palette command tenancy.offer-grant	T3
+command:tenancy.set-regions	command	TenancyArea.SetRegionsCommandId	The palette command tenancy.set-regions	T1
+command:tenant.switch	command	ChromeCommands.TenantSwitchId	The palette command tenant.switch	T2
+dialog:shell/connection-editable	dialog	docs/lattice.explorer/running-the-explorer.md#the-connection-dialog	Editable connection settings: Test connection fails on a wrong endpoint, succeeds on the right one, and saves	T1
+dialog:shell/connection-read-only	dialog	docs/lattice.explorer/running-the-explorer.md#the-connection-dialog	The connection dialog is read-only when interactive configuration is off	A1
+dialog:shell/sign-in	dialog	docs/lattice.explorer/connecting-to-an-auth-enabled-state-api.md#selecting-a-sign-in-method	The sign-in dialog offers the methods the State API advertises	A1
+option:AllowEnvironmentCredentialSeed	option	LatticeExplorerWebOptions.AllowEnvironmentCredentialSeed	The LatticeExplorerWebOptions.AllowEnvironmentCredentialSeed hosting mode	C4
+option:AllowInteractiveEndpointConfiguration	option	LatticeExplorerWebOptions.AllowInteractiveEndpointConfiguration	The LatticeExplorerWebOptions.AllowInteractiveEndpointConfiguration hosting mode	T1
+option:BasePath	option	LatticeExplorerWebOptions.BasePath	The LatticeExplorerWebOptions.BasePath hosting mode	C4
+option:ConfigFilePath	option	LatticeExplorerWebOptions.ConfigFilePath	The LatticeExplorerWebOptions.ConfigFilePath hosting mode	T1
+option:ConfigureDataProtection	option	LatticeExplorerWebOptions.ConfigureDataProtection	The LatticeExplorerWebOptions.ConfigureDataProtection hosting mode	C4
+option:DataProtectionApplicationName	option	LatticeExplorerWebOptions.DataProtectionApplicationName	The LatticeExplorerWebOptions.DataProtectionApplicationName hosting mode	C4
+option:DataProtectionKeyRingBlobUri	option	LatticeExplorerWebOptions.DataProtectionKeyRingBlobUri	The LatticeExplorerWebOptions.DataProtectionKeyRingBlobUri hosting mode	C4
+option:DataProtectionKeyRingCredential	option	LatticeExplorerWebOptions.DataProtectionKeyRingCredential	The LatticeExplorerWebOptions.DataProtectionKeyRingCredential hosting mode	C4
+option:UseEnvironmentBootstrap	option	LatticeExplorerWebOptions.UseEnvironmentBootstrap	The LatticeExplorerWebOptions.UseEnvironmentBootstrap hosting mode	C4
+query-value:access.new=true	query-value	docs/lattice.explorer/managing-access.md#addresses	?new=true opens a New group or New rule dialog	A2
+query-value:access.view=permissions	query-value	docs/lattice.explorer/managing-access.md#explain	?view=permissions opens Effective permissions	A9
+query-value:apps.filter=available	query-value	docs/lattice.explorer/lattice-apps.md#sources	The available catalogue filter	A5
+query-value:apps.filter=installed	query-value	docs/lattice.explorer/lattice-apps.md#sources	The installed catalogue filter	A5
+query-value:apps.filter=updates	query-value	docs/lattice.explorer/lattice-apps.md#sources	The updates catalogue filter	A5
+query-value:backups.backup=id	query-value	docs/lattice.explorer/managing-backups.md#health	?backup= narrows Health to one backup	A6
+query-value:schema.scan=start	query-value	docs/lattice.explorer/managing-schema.md#compliance	?scan=start starts a compliance scan	U2
+query-value:schema.show=all	query-value	docs/lattice.explorer/managing-schema.md#directory-page	?show=all lists every tree in the Schema directory	U2
+query-value:shell.all-tenants=true	query-value	docs/lattice.explorer/navigation-model.md#query-keys	?all-tenants=true shows every tenant's rows	T4
+query-value:telemetry.from=instant	query-value	docs/lattice.explorer/areas.md#telemetry	?from= and ?to= name an absolute window	A11
+query-value:telemetry.range=relative	query-value	docs/lattice.explorer/areas.md#telemetry	?range= names a relative range	A11
+query-value:telemetry.scope=all	query-value	docs/lattice.explorer/areas.md#telemetry	?scope=all asks for every tenant	T4
+query-value:telemetry.step=explicit	query-value	docs/lattice.explorer/areas.md#telemetry	?step= names an explicit step	A11
+query-value:telemetry.tree=tree	query-value	docs/lattice.explorer/areas.md#telemetry	?tree= narrows the charts to one tree	A11
+query-value:telemetry.view=table	query-value	docs/lattice.explorer/areas.md#telemetry	?view=table draws series as tables	A11
+query-value:tenancy.new=true	query-value	docs/lattice.explorer/areas.md#tenancy	?new=true opens New tenant	T1
+query:access.kind	query	AccessRoutes.KindQuery	The ?kind= query key in access	A9
+query:access.new	query	AccessRoutes.NewQuery	The ?new= query key in access	A2
+query:access.operation	query	AccessRoutes.OperationQuery	The ?operation= query key in access	A9
+query:access.subject	query	AccessRoutes.SubjectQuery	The ?subject= query key in access	A9
+query:access.tree	query	AccessRoutes.TreeQuery	The ?tree= query key in access	A9
+query:access.view	query	AccessRoutes.ViewQuery	The ?view= query key in access	A9
+query:apps.app	query	AppPageAddresses.AppQuery	The ?app= query key in apps	A5
+query:apps.filter	query	AppsRoutes.FilterQuery	The ?filter= query key in apps	A5
+query:apps.q	query	AppPageAddresses.SearchQuery; AppsRoutes.TextQuery	The ?q= query key in apps	A5
+query:apps.query	query	AppPageAddresses.InAppQuery	The ?query= query key in apps	U3
+query:apps.source	query	AppsRoutes.SourceQuery	The ?source= query key in apps	A5
+query:backups.backup	query	BackupsAddresses.BackupQuery	The ?backup= query key in backups	A6
+query:backups.kind	query	BackupsAddresses.KindQuery	The ?kind= query key in backups	A10
+query:backups.name	query	BackupsAddresses.NameQuery	The ?name= query key in backups	A6
+query:backups.tree	query	BackupsAddresses.TreeQuery	The ?tree= query key in backups	A10
+query:cluster.partition	query	ClusterAddresses.PartitionQuery	The ?partition= query key in cluster	A8
+query:cluster.tab	query	ClusterAddresses.TabQuery	The ?tab= query key in cluster	A3
+query:cluster.target	query	ClusterAddresses.TargetQuery	The ?target= query key in cluster	A8
+query:cluster.tree	query	ClusterAddresses.TreeQuery	The ?tree= query key in cluster	A12
+query:data.filter	query	DataTabs.FilterQuery	The ?filter= query key in data	U1
+query:data.index	query	DataTabs.IndexQuery	The ?index= query key in data	U1
+query:data.new	query	DataTabs.NewQuery	The ?new= query key in data, which opens a tree's New view dialog (G5)	A3
+query:data.tab	query	DataTabs.TabQuery	The ?tab= query key in data	U1
+query:data.tag	query	DataTabs.TagQuery	The ?tag= query key in data	U1
+query:replication.app	query	ReplicationAddresses.AppQuery	The ?app= query key in replication	A7
+query:replication.health	query	ReplicationAddresses.HealthQuery	The ?health= query key in replication	A7
+query:replication.region	query	ReplicationAddresses.RegionQuery	The ?region= query key in replication	A7
+query:schema.filter	query	SchemaAddresses.FilterQuery	The ?filter= query key in schema	U2
+query:schema.scan	query	SchemaAddresses.ScanQuery	The ?scan= query key in schema	U2
+query:schema.show	query	SchemaAddresses.ShowQuery	The ?show= query key in schema	U2
+query:schema.tab	query	SchemaAddresses.TabQuery	The ?tab= query key in schema	U2
+query:shell.all-tenants	query	ExplorerRouteSegments.AllTenantsQueryKey	The ?all-tenants= query key in shell	T4
+query:shell.at	query	ExplorerAddress.AtQuery	The ?at= query key in shell	U4
+query:shell.key	query	ExplorerAddress.KeyQuery	The ?key= query key in shell	U1
+query:shell.prefix	query	ExplorerAddress.PrefixQuery	The ?prefix= query key in shell	U1
+query:shell.tenant	query	ExplorerRouteSegments.TenantQueryKey	The ?tenant= query key in shell	T2
+query:telemetry.from	query	TelemetryWindow.FromQuery	The ?from= query key in telemetry	A11
+query:telemetry.range	query	TelemetryWindow.RangeQuery	The ?range= query key in telemetry	A11
+query:telemetry.scope	query	TelemetryWindow.ScopeQuery	The ?scope= query key in telemetry	T4
+query:telemetry.step	query	TelemetryWindow.StepQuery	The ?step= query key in telemetry	A11
+query:telemetry.to	query	TelemetryWindow.ToQuery	The ?to= query key in telemetry	A11
+query:telemetry.tree	query	TelemetryWindow.TreeQuery	The ?tree= query key in telemetry	A11
+query:telemetry.view	query	TelemetryWindow.ViewQuery	The ?view= query key in telemetry	A11
+query:tenancy.new	query	TenancyRoutes.NewQuery	The ?new= query key in tenancy	T1
+query:tenancy.set-regions	query	TenancyRoutes.SetRegionsQuery	The ?set-regions= query key in tenancy	T1
+route:/	route	HomePage	The page at /	A1
+route:/access	route	AccessRulesPage	The page at /access	A2
+route:/access/explain	route	AccessExplainPage	The page at /access/explain	A2
+route:/access/groups	route	AccessGroupsPage	The page at /access/groups	A2
+route:/access/groups/{p1}	route	AccessGroupPage	The page at /access/groups/{p1}	A2
+route:/access/rules	route	AccessRulesPage	The page at /access/rules	A2
+route:/access/rules/{p1}	route	AccessRulePage	The page at /access/rules/{p1}	A2
+route:/apps	route	AppsPage	The page at /apps	A5
+route:/apps/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	route	AppPage	The page at /apps/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	A5
+route:/apps/catalogue	route	AppsCataloguePage	The page at /apps/catalogue	A5
+route:/apps/catalogue/{p2}/{p3}	route	AppReviewPage	The page at /apps/catalogue/{p2}/{p3}	A5
+route:/backups	route	BackupsCataloguePage	The page at /backups	A6
+route:/backups/{p1}	route	BackupPage	The page at /backups/{p1}	A6
+route:/backups/health	route	BackupHealthPage	The page at /backups/health	A6
+route:/backups/maintenance	route	BackupMaintenancePage	The page at /backups/maintenance	A6
+route:/backups/new	route	BackupCapturePage	The page at /backups/new	A6
+route:/backups/operations/{p1}	route	BackupOperationPage	The page at /backups/operations/{p1}	A6
+route:/backups/schedules	route	BackupSchedulesPage	The page at /backups/schedules	A6
+route:/cluster	route	ClusterPage	The page at /cluster	A3
+route:/cluster/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}/{p7?}/{p8?}	route	ClusterPage	The page at /cluster/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}/{p7?}/{p8?}	A3
+route:/data	route	DataDirectoryPage	The page at /data	A3
+route:/data/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	route	DataTreePage	The page at /data/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	A3
+route:/not-found	route	NotFoundPage	The page at /not-found	A1
+route:/replication	route	ReplicationEstatePage	The page at /replication	A7
+route:/replication/trees	route	ReplicationTreesPage	The page at /replication/trees	A7
+route:/replication/trees/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	route	ReplicationTreePage	The page at /replication/trees/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	A7
+route:/reset	route	ResetPage	The page at /reset	A1
+route:/schema	route	SchemaDirectoryPage	The page at /schema	A4
+route:/schema/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	route	SchemaTreePage	The page at /schema/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	A4
+route:/t/{tenant}	route	HomePage	The page at /t/{tenant}	T2
+route:/t/{tenant}/access	route	AccessRulesPage	The page at /t/{tenant}/access	T2
+route:/t/{tenant}/access/explain	route	AccessExplainPage	The page at /t/{tenant}/access/explain	T2
+route:/t/{tenant}/access/groups	route	AccessGroupsPage	The page at /t/{tenant}/access/groups	T2
+route:/t/{tenant}/access/groups/{p1}	route	AccessGroupPage	The page at /t/{tenant}/access/groups/{p1}	T2
+route:/t/{tenant}/access/members	route	AccessMembersPage	The page at /t/{tenant}/access/members	T2
+route:/t/{tenant}/access/rules	route	AccessRulesPage	The page at /t/{tenant}/access/rules	T2
+route:/t/{tenant}/access/rules/{p1}	route	AccessRulePage	The page at /t/{tenant}/access/rules/{p1}	T2
+route:/t/{tenant}/apps	route	AppsPage	The page at /t/{tenant}/apps	T7
+route:/t/{tenant}/apps/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	route	AppPage	The page at /t/{tenant}/apps/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	T7
+route:/t/{tenant}/apps/catalogue	route	AppsCataloguePage	The page at /t/{tenant}/apps/catalogue	T7
+route:/t/{tenant}/apps/catalogue/{p2}/{p3}	route	AppReviewPage	The page at /t/{tenant}/apps/catalogue/{p2}/{p3}	T7
+route:/t/{tenant}/backups	route	BackupsCataloguePage	The page at /t/{tenant}/backups	T7
+route:/t/{tenant}/backups/{p1}	route	BackupPage	The page at /t/{tenant}/backups/{p1}	T7
+route:/t/{tenant}/backups/health	route	BackupHealthPage	The page at /t/{tenant}/backups/health	T7
+route:/t/{tenant}/backups/maintenance	route	BackupMaintenancePage	The page at /t/{tenant}/backups/maintenance	T7
+route:/t/{tenant}/backups/new	route	BackupCapturePage	The page at /t/{tenant}/backups/new	T7
+route:/t/{tenant}/backups/operations/{p1}	route	BackupOperationPage	The page at /t/{tenant}/backups/operations/{p1}	T7
+route:/t/{tenant}/backups/schedules	route	BackupSchedulesPage	The page at /t/{tenant}/backups/schedules	T7
+route:/t/{tenant}/cluster	route	ClusterPage	The page at /t/{tenant}/cluster	T2
+route:/t/{tenant}/cluster/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}/{p7?}/{p8?}	route	ClusterPage	The page at /t/{tenant}/cluster/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}/{p7?}/{p8?}	T7
+route:/t/{tenant}/data	route	DataDirectoryPage	The page at /t/{tenant}/data	T2
+route:/t/{tenant}/data/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	route	DataTreePage	The page at /t/{tenant}/data/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	T7
+route:/t/{tenant}/replication	route	ReplicationEstatePage	The page at /t/{tenant}/replication	T7
+route:/t/{tenant}/replication/trees	route	ReplicationTreesPage	The page at /t/{tenant}/replication/trees	T7
+route:/t/{tenant}/replication/trees/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	route	ReplicationTreePage	The page at /t/{tenant}/replication/trees/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	T7
+route:/t/{tenant}/schema	route	SchemaDirectoryPage	The page at /t/{tenant}/schema	T7
+route:/t/{tenant}/schema/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	route	SchemaTreePage	The page at /t/{tenant}/schema/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	T7
+route:/t/{tenant}/telemetry	route	TelemetryPage	The page at /t/{tenant}/telemetry	T7
+route:/t/{tenant}/telemetry/{p1}	route	TelemetryPage	The page at /t/{tenant}/telemetry/{p1}	T7
+route:/t/{tenant}/tenancy	route	MyTenantPage	The page at /t/{tenant}/tenancy	T2
+route:/t/{tenant}/tenancy/{p1}	route	MyTenantPage	The page at /t/{tenant}/tenancy/{p1}	T3
+route:/telemetry	route	TelemetryPage	The page at /telemetry	A8
+route:/telemetry/{p1}	route	TelemetryPage	The page at /telemetry/{p1}	A8
+route:/tenancy	route	TenancyDirectoryPage	The page at /tenancy	T1
+route:/tenancy/{p1}	route	TenancyTenantPage	The page at /tenancy/{p1}	T1
+route:/tenancy/{p1}/access	route	TenancyAccessPage	The page at /tenancy/{p1}/access	T1
+route:/tenancy/{p1}/grants	route	TenancyGrantsPage	The page at /tenancy/{p1}/grants	T3
+route:/tenancy/{p1}/members	route	TenancyAccessPage	The page at /tenancy/{p1}/members	T1
+route:/tenancy/{p1}/quota	route	TenancyQuotaPage	The page at /tenancy/{p1}/quota	T1
+route:/tenancy/{p1}/regions	route	TenancyRegionsPage	The page at /tenancy/{p1}/regions	T1
+route:/tenancy/{p1}/sharing	route	TenancyGrantsPage	The page at /tenancy/{p1}/sharing	T3
+subroute:access/explain	subroute	AccessRoutes.ExplainSegment	The /access/explain segment of its area's router	A2
+subroute:access/groups	subroute	AccessRoutes.GroupsSegment	The /access/groups segment of its area's router	A2
+subroute:access/members	subroute	AccessRoutes.MembersSegment	The /access/members segment of its area's router	T2
+subroute:access/rules	subroute	AccessRoutes.RulesSegment	The /access/rules segment of its area's router	A2
+subroute:apps/{app}/consent	subroute	AppPageTabs.Consent	The /apps/{app}/consent segment of its area's router	A5
+subroute:apps/{app}/overview	subroute	AppPageTabs.Overview	The /apps/{app}/overview segment of its area's router	A5
+subroute:apps/{app}/replication	subroute	AppPageTabs.Replication	The /apps/{app}/replication segment of its area's router	A5
+subroute:apps/{app}/roles	subroute	AppPageTabs.Roles	The /apps/{app}/roles segment of its area's router	A5
+subroute:apps/{app}/subscriptions	subroute	AppPageTabs.Subscriptions	The /apps/{app}/subscriptions segment of its area's router	A5
+subroute:apps/{app}/tools	subroute	AppPageTabs.Tools	The /apps/{app}/tools segment of its area's router	A5
+subroute:apps/{app}/trees	subroute	AppPageTabs.Trees	The /apps/{app}/trees segment of its area's router	A5
+subroute:apps/{app}/window	subroute	AppPageTabs.Window	The /apps/{app}/window segment of its area's router	U3
+subroute:apps/catalogue	subroute	AppPageAddresses.CatalogueSegment; AppsRoutes.CatalogueSegment	The /apps/catalogue segment of its area's router	A5
+subroute:apps/open	subroute	AppsRoutes.OpenSegment	The /apps/open segment of its area's router	U3
+subroute:apps/window	subroute	AppsRoutes.WindowSegment	The /apps/window segment of its area's router	U3
+subroute:backups/health	subroute	BackupsAddresses.HealthSegment	The /backups/health segment of its area's router	A6
+subroute:backups/maintenance	subroute	BackupsAddresses.MaintenanceSegment	The /backups/maintenance segment of its area's router	A6
+subroute:backups/new	subroute	BackupsAddresses.CaptureSegment	The /backups/new segment of its area's router	A6
+subroute:backups/operations	subroute	BackupsAddresses.OperationsSegment	The /backups/operations segment of its area's router	A6
+subroute:backups/schedules	subroute	BackupsAddresses.SchedulesSegment	The /backups/schedules segment of its area's router	A6
+subroute:cluster/orphans	subroute	ClusterAddresses.OrphansSegment	The /cluster/orphans segment of its area's router	A12
+subroute:cluster/trees	subroute	ClusterAddresses.TreesSegment	The /cluster/trees segment of its area's router	A3
+subroute:cluster/trees/{tree}/overview	subroute	ClusterAddresses.ViewWords	The /cluster/trees/{tree}/overview segment of its area's router	A3
+subroute:cluster/trees/{tree}/reshard	subroute	ClusterAddresses.ViewWords	The /cluster/trees/{tree}/reshard segment of its area's router	A8
+subroute:cluster/trees/{tree}/resize	subroute	ClusterAddresses.ViewWords	The /cluster/trees/{tree}/resize segment of its area's router	A8
+subroute:cluster/trees/{tree}/snapshot	subroute	ClusterAddresses.ViewWords	The /cluster/trees/{tree}/snapshot segment of its area's router	A8
+subroute:cluster/trees/{tree}/tools	subroute	ClusterAddresses.ViewWords	The /cluster/trees/{tree}/tools segment of its area's router	A3
+subroute:cluster/wal	subroute	ClusterAddresses.WalSegment	The /cluster/wal segment of its area's router	A8
+subroute:replication/trees	subroute	ReplicationAddresses.TreesSegment	The /replication/trees segment of its area's router	A7
+subroute:shell/not-found	subroute	ExplorerRoutes.NotFoundSegment	The /shell/not-found segment of its area's router	A1
+subroute:shell/t	subroute	ExplorerAddress.TenantSegment	The /shell/t segment of its area's router	T2
+subroute:telemetry/latency	subroute	TelemetryBoards	The /telemetry/latency segment of its area's router	A11
+subroute:telemetry/other	subroute	TelemetryBoards	The /telemetry/other segment of its area's router	A11
+subroute:telemetry/pressure	subroute	TelemetryBoards	The /telemetry/pressure segment of its area's router	A11
+subroute:telemetry/storage	subroute	TelemetryBoards	The /telemetry/storage segment of its area's router	A11
+subroute:telemetry/tenant	subroute	TelemetryBoards	The /telemetry/tenant segment of its area's router	T4
+subroute:telemetry/throughput	subroute	TelemetryBoards	The /telemetry/throughput segment of its area's router	A11
+subroute:tenancy/access	subroute	TenancyRoutes.AccessSegment	The /tenancy/access segment of its area's router	T1
+subroute:tenancy/grants	subroute	TenancyRoutes.GrantsSegment	The /tenancy/grants segment of its area's router	T3
+subroute:tenancy/members	subroute	TenancyRoutes.MembersSegment	The /tenancy/members segment of its area's router	T1
+subroute:tenancy/quota	subroute	TenancyRoutes.QuotaSegment	The /tenancy/quota segment of its area's router	T1
+subroute:tenancy/regions	subroute	TenancyRoutes.RegionsSegment	The /tenancy/regions segment of its area's router	T1
+subroute:tenancy/sharing	subroute	TenancyRoutes.SharingSegment	The /tenancy/sharing segment of its area's router	T3
+tab:cluster/configuration	tab	ClusterTreePage.razor	The configuration tab of a cluster tree	A3
+tab:cluster/lifecycle	tab	ClusterTreePage.razor	The lifecycle tab of a cluster tree	A3
+tab:cluster/shards	tab	ClusterTreePage.razor	The shards tab of a cluster tree	A3
+tab:cluster/storage	tab	ClusterTreePage.razor	The storage tab of a cluster tree	A3
+tab:cluster/summary	tab	ClusterAddresses.SummaryTab; ClusterTreePage.razor	The summary tab of a cluster tree	A3
+tab:data/dead-letters	tab	DataTabs.DeadLetters	The dead-letters tab of a data tree	U1
+tab:data/history	tab	DataTabs.History	The history tab of a data tree	U1
+tab:data/keys	tab	DataTabs.Keys	The keys tab of a data tree	A3
+tab:data/metrics	tab	DataTabs.Metrics	The metrics tab of a data tree	U1
+tab:data/tag-indexes	tab	DataTabs.TagIndexes	The tag-indexes tab of a data tree	A3
+tab:data/views	tab	DataTabs.Views	The views tab of a data tree	A3
+tab:schema/compliance	tab	SchemaTabs.Compliance	The compliance tab of a schema tree	U2
+tab:schema/dead-letters	tab	SchemaTabs.DeadLetters	The dead-letters tab of a schema tree	A4
+tab:schema/policy	tab	SchemaTabs.Policy	The policy tab of a schema tree	A4
+tab:schema/remediation	tab	SchemaTabs.Remediation	The remediation tab of a schema tree	U2
+tab:schema/versions	tab	SchemaTabs.Versions	The versions tab of a schema tree	A4
+use-case:access/addresses	use-case	docs/lattice.explorer/managing-access.md#addresses	Rule ids qualified by ?tree=, and a query-prefilled Explain	A9
+use-case:access/app-owned-rules	use-case	docs/lattice.explorer/managing-access.md#rules	An app's rules show read-only, attributed to the app	A5
+use-case:access/area	use-case	docs/lattice.explorer/areas.md#access	The Access area's rules, groups and explain pages	A2
+use-case:access/availability	use-case	docs/lattice.explorer/managing-access.md#availability	The Access area is hidden or read-only for a caller without access rights	U4
+use-case:access/effective-permissions	use-case	docs/lattice.explorer/managing-access.md#explain	Effective permissions	A9
+use-case:access/explain	use-case	docs/lattice.explorer/managing-access.md#explain	Explain a decision	A2
+use-case:access/group-create-rename-members	use-case	docs/lattice.explorer/managing-access.md#groups	Create and rename a group, and add and remove a member	A2
+use-case:access/group-delete	use-case	docs/lattice.explorer/managing-access.md#groups	Delete a group	C3
+use-case:access/group-pagination	use-case	docs/lattice.explorer/managing-access.md#groups	Group pagination	A2
+use-case:access/limits	use-case	docs/lattice.explorer/managing-access.md#limits-and-caching	Access lists page within their documented limits	A9
+use-case:access/nested-groups	use-case	docs/lattice.explorer/managing-access.md#groups	Nested groups	A9
+use-case:access/pages-and-actions	use-case	docs/lattice.explorer/managing-access.md#pages-and-actions	Rules, groups and explain pages and their actions	A2
+use-case:access/palette	use-case	docs/lattice.explorer/managing-access.md#palette-and-address-completions	The Access area's palette commands and completions	U5
+use-case:access/posture-banner	use-case	docs/lattice.explorer/managing-access.md#access-posture-banner	The access posture banner	U4
+use-case:access/remove-member-live	use-case	docs/lattice.explorer/managing-access.md#groups	Removing a member takes effect on their open session	C3
+use-case:access/rule-create-edit-delete	use-case	docs/lattice.explorer/managing-access.md#rules	Create, edit and delete a rule	A2
+use-case:access/rule-scopes-and-conditions	use-case	docs/lattice.explorer/managing-access.md#rules	Rule scopes (key, prefix, tree, all trees) and conditions	A9
+use-case:access/rule-search	use-case	docs/lattice.explorer/managing-access.md#rules	Rule search, the ownership filter and pagination	A9
+use-case:access/server-authority	use-case	docs/lattice.explorer/managing-access.md#server-authority	The server refuses an access change the caller may not make	U4
+use-case:access/tenant-group-rule	use-case	docs/lattice.explorer/managing-access.md#tenant-groups-in-a-platform-rule	A platform operator names a tenant group in a rule, which then governs only that tenant's own trees	T3
+use-case:access/subject-picker	use-case	docs/lattice.explorer/managing-access.md#subject-picking-and-directory-validation	The subject picker's directory validation, and stored and directory groups	A2
+use-case:access/through-nested-group	use-case	docs/lattice.explorer/managing-access.md#groups	Access granted through a nested group	U4
+use-case:apps/area	use-case	docs/lattice.explorer/areas.md#apps	The Apps area lists installed apps, and shows No apps yet before any	A5
+use-case:apps/disable-and-uninstall	use-case	docs/lattice.explorer/lattice-apps.md#consent-and-lifecycle	Disable and uninstall an app, and its just-changed state	C3
+use-case:apps/edit-consent	use-case	docs/lattice.explorer/lattice-apps.md#consent-and-lifecycle	Edit consent; an operation the ceiling does not offer shows Not offered	A5
+use-case:apps/frame-write-refused	use-case	docs/lattice.explorer/lattice-apps.md#the-app-frame	A viewer's write is refused by app roles inside the frame	U3
+use-case:apps/install	use-case	docs/lattice.explorer/lattice-apps.md#consent-and-lifecycle	Install through the ceiling and binding steps, Apply and Enable now	A5
+use-case:apps/landing	use-case	docs/lattice.explorer/lattice-apps.md#the-apps-area	The Apps landing, and an app's page and tabs	A5
+use-case:apps/no-role-no-access	use-case	docs/lattice.explorer/lattice-apps.md#the-app-frame	No access to an app without a role	U3
+use-case:apps/open-frame	use-case	docs/lattice.explorer/lattice-apps.md#opening-an-app	Open an app in its frame and window, Leave app, the legacy /open redirect, and deep ?path= and ?query=	U3
+use-case:apps/role-bindings	use-case	docs/lattice.explorer/lattice-apps.md#who-holds-an-app-role	Change role bindings, and Add me to {group}	A5
+use-case:apps/role-holding-notice	use-case	docs/lattice.explorer/lattice-apps.md#who-holds-an-app-role	The role-holding notice when a role's group loses a member	C3
+use-case:apps/roles-column	use-case	docs/lattice.explorer/lattice-apps.md#who-holds-an-app-role	The app roles column	U3
+use-case:apps/sources	use-case	docs/lattice.explorer/lattice-apps.md#sources	The catalogue source selector, filters, search and load more	A5
+use-case:apps/tenant-install	use-case	docs/lattice.explorer/lattice-apps.md#consent-and-lifecycle	Install an app into a tenant	T7
+use-case:apps/upgrade-and-re-consent	use-case	docs/lattice.explorer/lattice-apps.md#consent-and-lifecycle	Review the upgrade diff, upgrade, and Re-consent	A5
+use-case:backups/addresses	use-case	docs/lattice.explorer/managing-backups.md#addresses	Reopen a finished operation by its address	A10
+use-case:backups/area	use-case	docs/lattice.explorer/areas.md#backups	The Backups area's catalogue, capture, schedules, health and maintenance pages	A6
+use-case:backups/availability	use-case	docs/lattice.explorer/managing-backups.md#availability	The Backups area is hidden for a caller without backup rights, and restore is not offered	U4
+use-case:backups/capture-cancel	use-case	docs/lattice.explorer/managing-backups.md#capture	Cancel a capture	A6
+use-case:backups/capture-full	use-case	docs/lattice.explorer/managing-backups.md#capture	Capture a full backup to the separate backup account	A6
+use-case:backups/capture-kinds	use-case	docs/lattice.explorer/managing-backups.md#capture	Capture kinds: full (tree, prefix, key), incremental, and a set of trees at one fence	A10
+use-case:backups/catalogue-filters-and-paging	use-case	docs/lattice.explorer/managing-backups.md#catalogue	Filter the catalogue by tree and kind, and page through it	A10
+use-case:backups/catalogue-full-bases	use-case	docs/lattice.explorer/managing-backups.md#catalogue	Find full bases in the catalogue	A6
+use-case:backups/delete	use-case	docs/lattice.explorer/managing-backups.md#delete	Delete a backup	C3
+use-case:backups/health-monitoring	use-case	docs/lattice.explorer/managing-backups.md#health	Per-backup monitoring: Verify every, and Check now	A6
+use-case:backups/limits	use-case	docs/lattice.explorer/managing-backups.md#limits-and-caching	The catalogue pages within its documented limits	A10
+use-case:backups/maintenance	use-case	docs/lattice.explorer/managing-backups.md#maintenance	Rebuild the catalogue, and export an artifact	A6
+use-case:backups/navigation-row	use-case	docs/lattice.explorer/managing-backups.md#navigation-row	The area's navigation row	A6
+use-case:backups/operation-status	use-case	docs/lattice.explorer/managing-backups.md#operation-status-pages	A capture's operation status page	A6
+use-case:backups/palette	use-case	docs/lattice.explorer/managing-backups.md#palette-and-address-completions	The Backups area's palette commands and completions	U5
+use-case:backups/restore-chain	use-case	docs/lattice.explorer/managing-backups.md#backup-details	A backup's details show its restore chain	A10
+use-case:backups/restore-cold	use-case	docs/lattice.explorer/managing-backups.md#restore	Cold restore from the backup store alone	A10
+use-case:backups/restore-destructive-and-revert	use-case	docs/lattice.explorer/managing-backups.md#restore	A destructive restore, and revert from its status page	C1
+use-case:backups/restore-point-in-time	use-case	docs/lattice.explorer/managing-backups.md#restore	Point-in-time replace into a new tree, choosing the chain's restore point	A10
+use-case:backups/restore-repair	use-case	docs/lattice.explorer/managing-backups.md#restore	Repair missing items (non-destructive)	A10
+use-case:backups/restore-replicates	use-case	docs/lattice.explorer/managing-backups.md#restore	A restore propagates through replication	C1
+use-case:backups/schedule-cancel	use-case	docs/lattice.explorer/managing-backups.md#schedules	Cancel a schedule	C3
+use-case:backups/schedule-fires	use-case	docs/lattice.explorer/managing-backups.md#schedules	Add an hourly schedule and see it fire	A6
+use-case:backups/schedule-incremental	use-case	docs/lattice.explorer/managing-backups.md#schedules	Add an incremental schedule	A10
+use-case:backups/server-authority	use-case	docs/lattice.explorer/managing-backups.md#server-authority	The server refuses a backup operation the caller may not run	U4
+use-case:cluster/alias	use-case	docs/lattice.explorer/areas.md#cluster	Set an alias from Lifecycle	A3
+use-case:cluster/bulk-load	use-case	docs/lattice.explorer/areas.md#cluster	Pasted bulk load: compose, review, start over, and resume after a dropped append	A3
+use-case:cluster/compaction	use-case	docs/lattice.explorer/areas.md#cluster	Trigger compaction on a shard	A3
+use-case:cluster/configuration-and-retention	use-case	docs/lattice.explorer/areas.md#cluster	Save configuration and Save retention, and Summary reflects them	A3
+use-case:cluster/count-tombstones	use-case	docs/lattice.explorer/areas.md#cluster	Count a tree's tombstones	A8
+use-case:cluster/create-tree	use-case	docs/lattice.explorer/areas.md#cluster	New tree with a shard count: review and create, and land on Summary	A3
+use-case:cluster/create-tree-sizing	use-case	docs/lattice.explorer/areas.md#cluster	Tree creation with explicit sizing	A12
+use-case:cluster/delete-and-recover	use-case	docs/lattice.explorer/areas.md#cluster	Delete a tree from Lifecycle, then Recover it	C1
+use-case:cluster/digest	use-case	docs/lattice.explorer/areas.md#cluster	Read a shard's projection digest	A3
+use-case:cluster/operation-silo-lost	use-case	docs/lattice.explorer/areas.md#cluster	An operation whose silo is lost reads Failed, not Running	C2
+use-case:cluster/orphan-audit-and-repair	use-case	docs/lattice.explorer/areas.md#cluster	Audit for orphaned leaves and repair them	A12
+use-case:cluster/overview-re-measure	use-case	docs/lattice.explorer/areas.md#cluster	Re-measure the overview's storage figures	A8
+use-case:cluster/purge	use-case	docs/lattice.explorer/areas.md#cluster	Purge a deleted tree	C3
+use-case:cluster/region-diagram	use-case	docs/lattice.explorer/areas.md#cluster	The region diagram shows both regions and their link	A7
+use-case:cluster/reshard	use-case	docs/lattice.explorer/areas.md#cluster	Reshard a tree	A8
+use-case:cluster/reshard-grow-and-shrink	use-case	docs/lattice.explorer/areas.md#cluster	Grow and shrink reshards	A12
+use-case:cluster/resize-and-undo	use-case	docs/lattice.explorer/areas.md#cluster	Resize a tree, and undo the resize	A8
+use-case:cluster/silo-failover	use-case	docs/lattice.explorer/areas.md#cluster	A silo fails behind the gateway and the console keeps serving	C2
+use-case:cluster/snapshot	use-case	docs/lattice.explorer/areas.md#cluster	Snapshot a tree	A8
+use-case:cluster/snapshot-online-and-offline	use-case	docs/lattice.explorer/areas.md#cluster	Online and offline snapshots with sizing	A12
+use-case:cluster/tree-list-filters	use-case	docs/lattice.explorer/areas.md#cluster	The tree list's filters	A12
+use-case:cluster/wal-plan-move-reclaim	use-case	docs/lattice.explorer/areas.md#cluster	Plan, move and reclaim a WAL partition	A8
+use-case:cluster/wal-reclamation-states	use-case	docs/lattice.explorer/areas.md#wal-reclamation	Every WAL reclamation state	A12
+use-case:cluster/wal-stop-before-flip	use-case	docs/lattice.explorer/areas.md#cluster	Stop a WAL move before its flip	A12
+use-case:data/alias-resolution	use-case	docs/lattice.explorer/areas.md#data	An alias address resolves to its tree	U1
+use-case:data/app-column	use-case	docs/lattice.explorer/areas.md#data	The directory's App column names the app that owns a tree	U3
+use-case:data/app-data-live	use-case	docs/lattice.explorer/areas.md#data	An app's data arrives live in Data	U3
+use-case:data/cursor-expiry	use-case	docs/lattice.explorer/areas.md#data	An expired scan cursor recovers with Restart from the first page	U1
+use-case:data/dead-letters-paging	use-case	docs/lattice.explorer/areas.md#data	Dead letters list diverted writes; Load more dead letters pages through them	U1
+use-case:data/directory-filters	use-case	docs/lattice.explorer/areas.md#data	The Data directory's text, kind and shared filters, and Refresh	U1
+use-case:data/edit-diverted	use-case	docs/lattice.explorer/areas.md#creating-editing-and-deleting-an-entry	An invalid edit saved anyway is diverted to dead letters, and the UI says so	U1
+use-case:data/entry-edit-binary-and-raw	use-case	docs/lattice.explorer/areas.md#creating-editing-and-deleting-an-entry	Replace a binary value, and edit a value in raw UTF-8 mode	U1
+use-case:data/entry-edit-conflict	use-case	docs/lattice.explorer/areas.md#creating-editing-and-deleting-an-entry	A concurrent change on save shows the newer value and offers reload	U1
+use-case:data/entry-edit-preview	use-case	docs/lattice.explorer/areas.md#creating-editing-and-deleting-an-entry	Edit an entry with a schema preview, and save	U1
+use-case:data/entry-new-and-delete	use-case	docs/lattice.explorer/areas.md#creating-editing-and-deleting-an-entry	Create an entry, then delete it; History shows the tombstone	U1
+use-case:data/entry-view	use-case	docs/lattice.explorer/areas.md#data	The entry view shows a value as JSON, raw UTF-8 or base64	U1
+use-case:data/export-streamed	use-case	docs/lattice.explorer/areas.md#exporting-a-tree	Export a prefix to CSV as a streamed download	U1
+use-case:data/history	use-case	docs/lattice.explorer/areas.md#data	History: choose a key, older revisions, Show as of, Latest	U4
+use-case:data/history-live-tail	use-case	docs/lattice.explorer/areas.md#data	History in prefix live-tail mode shows writes arriving	U1
+use-case:data/import-cancel	use-case	docs/lattice.explorer/areas.md#data	Cancel an import; the operation reports exactly what was committed	U1
+use-case:data/import-csv-new-tree	use-case	docs/lattice.explorer/areas.md#data	New tree from file: seed a new tree from a CSV file	U1
+use-case:data/import-ndjson-seed	use-case	docs/lattice.explorer/areas.md#data	Seed an empty tree from an NDJSON file	A3
+use-case:data/import-out-of-order	use-case	docs/lattice.explorer/areas.md#data	An unsorted seed file is refused at pre-flight with its line number, and nothing is written	A3
+use-case:data/import-upsert-rejections	use-case	docs/lattice.explorer/areas.md#data	Upsert import with schema rejections, and download the rejection list	U1
+use-case:data/keys-paging	use-case	docs/lattice.explorer/areas.md#data	Keys: next and previous page, page size and prefix filter	U1
+use-case:data/live-updates	use-case	docs/lattice.explorer/areas.md#data	Live updates arrive, pause, and restart	U1
+use-case:data/metrics	use-case	docs/lattice.explorer/areas.md#data	Metrics: per-shard live keys and operations per second	U1
+use-case:data/snapshot-scan	use-case	docs/lattice.explorer/areas.md#data	Switch the keys panel to a snapshot scan and back	U1
+use-case:data/tag-index-keys	use-case	docs/lattice.explorer/areas.md#data	A tag index's keys for one tag, and Load more keys	U1
+use-case:data/tag-index-reconcile	use-case	docs/lattice.explorer/areas.md#data	Reconcile a tag index, and Stop a reconcile	A3
+use-case:data/view-create	use-case	docs/lattice.explorer/areas.md#data	Create a view; it reaches Ready and its projection is browsable	A3
+use-case:data/view-rebuild-stop-drop	use-case	docs/lattice.explorer/areas.md#data	Rebuild a view, stop the rebuild, and drop the view	C3
+use-case:data/view-reconcile	use-case	docs/lattice.explorer/areas.md#data	Reconcile a view	U1
+use-case:replication/disable	use-case	docs/lattice.explorer/areas.md#replication	Disable a tree's replication	C3
+use-case:replication/east-console	use-case	docs/lattice.explorer/areas.md#replication	The east console sees the replicated tree converge	A7
+use-case:replication/enrol	use-case	docs/lattice.explorer/areas.md#replication	Enrol a tree, choosing its merge mode and bootstrap source	A7
+use-case:replication/enrolment-shapes	use-case	docs/lattice.explorer/areas.md#replication	Static-only and app-owned enrolments	A7
+use-case:replication/filters	use-case	docs/lattice.explorer/areas.md#replication	The health, region and app filters	A7
+use-case:replication/outage-and-recovery	use-case	docs/lattice.explorer/areas.md#replication	A region outage shows error and retry states, and recovers	C2
+use-case:replication/visibility-paused-refresh	use-case	docs/lattice.explorer/areas.md#replication	Refresh pauses while the page is hidden	A7
+use-case:schema/addresses	use-case	docs/lattice.explorer/managing-schema.md#addresses	Schema addresses deep-link a tree, its tab and a compliance scan	U2
+use-case:schema/advance-and-migrate	use-case	docs/lattice.explorer/managing-schema.md#versions	Advance and migrate in one operation	U6
+use-case:schema/advanced-view	use-case	docs/lattice.explorer/managing-schema.md#advanced-view	The Advanced view, its composer, and Custom rule preservation	U6
+use-case:schema/area	use-case	docs/lattice.explorer/areas.md#schema	The Schema area lists trees with their policy and versioning	A4
+use-case:schema/availability	use-case	docs/lattice.explorer/managing-schema.md#availability	The Schema area is hidden or read-only for a caller without schema rights	U4
+use-case:schema/compliance	use-case	docs/lattice.explorer/managing-schema.md#compliance	Scan compliance, and the operation's stop, refresh and clear result	U2
+use-case:schema/dead-letters	use-case	docs/lattice.explorer/managing-schema.md#dead-letters	Dead letters count the writes strict ingest diverted	A4
+use-case:schema/directory	use-case	docs/lattice.explorer/managing-schema.md#directory-page	The directory's Policy and Versioning columns, ?show=all and its filter	U2
+use-case:schema/limits	use-case	docs/lattice.explorer/managing-schema.md#limits-and-caching	Schema lists page and cache within their documented limits	U2
+use-case:schema/palette	use-case	docs/lattice.explorer/managing-schema.md#palette-and-address-completions	The Schema area's palette commands and completions	U5
+use-case:schema/policy	use-case	docs/lattice.explorer/managing-schema.md#policy	Set a policy and turn strict ingest on	A4
+use-case:schema/policy-edit-and-clear	use-case	docs/lattice.explorer/managing-schema.md#policy	Edit a policy, and clear it	U2
+use-case:schema/remediation	use-case	docs/lattice.explorer/managing-schema.md#remediation	Remediate non-compliant values	U2
+use-case:schema/rule-builder	use-case	docs/lattice.explorer/managing-schema.md#rule-builder	The Number range and One-of-a-set cards	A4
+use-case:schema/rule-builder-every-card	use-case	docs/lattice.explorer/managing-schema.md#rule-builder	Every rule card (incl. Well-formed value and Largest size), disabled-card reasons, Or, move and remove	U6
+use-case:schema/sample-check	use-case	docs/lattice.explorer/managing-schema.md#checking-against-a-sample	The sample check flags violations; Save anyway	A4
+use-case:schema/sample-re-read	use-case	docs/lattice.explorer/managing-schema.md#checking-against-a-sample	Re-read the sample	U6
+use-case:schema/server-authority	use-case	docs/lattice.explorer/managing-schema.md#server-authority	The server refuses a schema change the caller may not make	U4
+use-case:schema/tree-workspace	use-case	docs/lattice.explorer/managing-schema.md#tree-workspace-and-tabs	A tree's schema workspace and its tabs	A4
+use-case:schema/versioning	use-case	docs/lattice.explorer/managing-schema.md#versions	Turn on versioning, register definitions and refresh them	A4
+use-case:schema/versions-advance-and-migrate	use-case	docs/lattice.explorer/managing-schema.md#versions	Advance, migrate, change the config, and turn versioning off	U2
+use-case:shell/address-completions	use-case	docs/lattice.explorer/navigation-model.md#completions	Address-line completions for areas and trees	A1
+use-case:shell/address-line	use-case	docs/lattice.explorer/navigation-model.md#the-address-line	Typing an address and accepting a completion navigates	A1
+use-case:shell/app-completion	use-case	docs/lattice.explorer/navigation-model.md#completions	The a/ completion lists the caller's apps	U5
+use-case:shell/app-frame-route	use-case	docs/lattice.explorer/running-the-explorer.md#lattice-app-frame-route	The app frame bootstrap resolves under the head's base path	C4
+use-case:shell/appearance-contrast	use-case	docs/lattice.explorer/theming-and-density.md#contrast	Every contrast: System, Standard and More	U5
+use-case:shell/appearance-density	use-case	docs/lattice.explorer/theming-and-density.md#density	Comfortable and compact density	U5
+use-case:shell/appearance-first-paint	use-case	docs/lattice.explorer/what-the-explorer-remembers.md#first-paint-and-appearance	A remembered appearance applies on first paint	U5
+use-case:shell/appearance-menu	use-case	docs/lattice.explorer/theming-and-density.md#appearance-menu-and-commands	The appearance menu and its palette commands set a persona's appearance	A1
+use-case:shell/appearance-theme	use-case	docs/lattice.explorer/theming-and-density.md#theme	Every theme: System, Paper and Board	U5
+use-case:shell/base-path	use-case	docs/lattice.explorer/running-the-explorer.md#mounting-under-a-subpath	Every area, static asset and app frame route resolves under a base path, and no link escapes it	C4
+use-case:shell/compact-directory-and-menu	use-case	docs/lattice.explorer/navigation-model.md#at-different-widths	The compact Directory and Menu affordances at a narrow width	U5
+use-case:shell/configuration	use-case	docs/lattice.explorer/running-the-explorer.md#configuration	A head's configuration document and environment bootstrap seed its endpoint	C4
+use-case:shell/connection-indicator	use-case	docs/lattice.explorer/running-the-explorer.md#the-connection-dialog	The connection indicator reports the live endpoint	A1
+use-case:shell/deep-link-return	use-case	docs/lattice.explorer/navigation-model.md#the-address-grammar	A deep link survives sign-in and returns to its address	A1
+use-case:shell/discovery	use-case	docs/lattice.explorer/connecting-to-an-auth-enabled-state-api.md#discovery	The Explorer discovers the State API's sign-in schemes before a persona signs in	A1
+use-case:shell/entra-sign-in	use-case	docs/lattice.explorer/connecting-to-an-auth-enabled-state-api.md#signing-in-with-entra	Sign in with Entra	A1
+use-case:shell/hosted-head	use-case	docs/lattice.explorer/running-the-explorer.md#two-ways-to-run-it	The Explorer runs as a hosted head in front of the estate	C4
+use-case:shell/isolated-head	use-case	docs/lattice.explorer/running-the-explorer.md#deployment-prefer-an-isolated-head	The console runs in its own head, isolated from the silos	C4
+use-case:shell/keyboard-only	use-case	docs/lattice.explorer/navigation-model.md#the-directory-spine	Keyboard-only navigation through the spine, address line and palette	A1
+use-case:shell/kiosk-credential-seed	use-case	docs/lattice.explorer/configuration.md#environment-variables	A kiosk head seeded from the environment opens signed in as its seeded identity, without the sign-in dialog	C4
+use-case:shell/no-grants-console	use-case	docs/lattice.explorer/area-availability.md#three-answers	A principal with no grants gets a coherent, empty console	U4
+use-case:shell/not-found	use-case	docs/lattice.explorer/navigation-model.md#routes-and-the-not-found-page	An unknown address lands on the not-found page	A1
+use-case:shell/palette	use-case	docs/lattice.explorer/navigation-model.md#the-command-palette	The command palette finds and runs a command	A1
+use-case:shell/palette-full-screen	use-case	docs/lattice.explorer/navigation-model.md#at-different-widths	The palette's full-screen form at a narrow width	U5
+use-case:shell/pickers	use-case	docs/lattice.explorer/navigation-model.md#pickers	Pickers complete subjects, trees and tenants	A2
+use-case:shell/preferences-outside-address	use-case	docs/lattice.explorer/navigation-model.md#where-the-address-ends-and-preferences-begin	Preferences persist outside the address	U5
+use-case:shell/query-keys	use-case	docs/lattice.explorer/navigation-model.md#query-keys	Query keys carry a page's state, so a prefilled address reproduces it	A9
+use-case:shell/reauth-interstitial	use-case	docs/lattice.explorer/connecting-to-an-auth-enabled-state-api.md#token-freshness-and-re-authentication	The re-authentication interstitial an expiring credential raises	C2
+use-case:shell/remembered-tenant	use-case	docs/lattice.explorer/what-the-explorer-remembers.md#routes-and-remembered-state	The remembered tenant returns on the next visit	T2
+use-case:shell/reset-view	use-case	docs/lattice.explorer/what-the-explorer-remembers.md#resetting-remembered-state	Reset view clears what the Explorer remembers	A1
+use-case:shell/route-inventory	use-case	docs/lattice.explorer/areas.md#declared-route-inventory	Every declared area root and child page renders under its tenant-rooted address	T7
+use-case:shell/security-headers	use-case	docs/lattice.explorer/running-the-explorer.md#security-response-headers	The shell and the frame bootstrap carry the documented security response headers (CSP; frame-ancestors on the frame route only)	C4
+use-case:shell/session-affinity	use-case	docs/lattice.explorer/multi-replica-hosting.md#live-circuits-still-need-session-affinity	A live circuit stays on its replica behind the gateway	C4
+use-case:shell/session-chrome	use-case	docs/lattice.explorer/connecting-to-an-auth-enabled-state-api.md#session-chrome-and-server-form-posts	The identity menu, sign-out and Reset view through the session chrome's server form posts	A1
+use-case:shell/shared-key-ring	use-case	docs/lattice.explorer/multi-replica-hosting.md#durable-auth-state-a-shared-data-protection-key-ring	Replicas sharing a Data Protection key ring keep a session across a replica switch and restarts	C4
+use-case:shell/sign-in-after-restart	use-case	docs/lattice.explorer/connecting-to-an-auth-enabled-state-api.md#where-credentials-live	Sign in again after an Explorer restart without persisted keys: the credential lived in the server-side session	C2
+use-case:shell/sign-in-basic	use-case	docs/lattice.explorer/connecting-to-an-auth-enabled-state-api.md#signing-in-with-basic	Sign in through the built-in Basic form: a wrong password is refused and the right one signs in	A1
+use-case:shell/sign-in-endpoints	use-case	docs/lattice.explorer/running-the-explorer.md#sign-in-endpoints	The sign-in and sign-out form posts land on the head's sign-in endpoints	A1
+use-case:shell/spine	use-case	docs/lattice.explorer/navigation-model.md#the-directory-spine	The directory spine lists the areas the caller may use	A1
+use-case:shell/tenant-re-rooting	use-case	docs/lattice.explorer/navigation-model.md#tenancy-and-re-rooting	Switching tenant re-roots the address under /t/{tenant}	T2
+use-case:shell/tenant-switcher	use-case	docs/lattice.explorer/navigation-model.md#the-tenant-switcher	The tenant switcher lists the caller's tenants, and a refused switch is reported	T2
+use-case:shell/unresponsive-console	use-case	docs/lattice.explorer/running-the-explorer.md#diagnosing-a-console-that-stops-responding	The session overlay and connection indicator when the console loses its circuit, and recovery	C2
+use-case:telemetry/chart-readout	use-case	docs/lattice.explorer/areas.md#telemetry	The keyboard chart readout	A11
+use-case:telemetry/every-tree	use-case	docs/lattice.explorer/areas.md#telemetry	Show every tree	A11
+use-case:telemetry/invalid-window	use-case	docs/lattice.explorer/areas.md#telemetry	The invalid-window notice	A11
+use-case:telemetry/outage	use-case	docs/lattice.explorer/areas.md#telemetry	A telemetry outage shows error and retry states	C2
+use-case:telemetry/windows	use-case	docs/lattice.explorer/areas.md#telemetry	Every relative and absolute window, and every step	A11
+use-case:tenancy/area	use-case	docs/lattice.explorer/areas.md#tenancy	The Tenancy directory, and Set regions... from it	T1
+use-case:tenancy/create-tenant	use-case	docs/lattice.explorer/tenant-scope.md#the-tenancy-area	Create a tenant with an initial residency	T1
+use-case:tenancy/default-tenant-canonical	use-case	docs/lattice.explorer/tenant-scope.md#the-reserved-default-tenant	Default-tenant canonicalisation for a non-operator	T4
+use-case:tenancy/default-tenant-operator	use-case	docs/lattice.explorer/tenant-scope.md#the-reserved-default-tenant	A platform operator keeps the tenancy chrome on the default tenant	T1
+use-case:tenancy/delegated-access	use-case	docs/lattice.explorer/tenant-scope.md#who-sees-the-pages	The delegated tenant access posture on an operator's support visit	T4
+use-case:tenancy/every-call-carries-the-tenant	use-case	docs/lattice.explorer/tenant-scope.md#every-call-carries-the-tenant	Every page under /t/{tenant} reads that tenant's data only	T7
+use-case:tenancy/explain	use-case	docs/lattice.explorer/tenant-scope.md#explain	A tenant administrator explains a decision	T2
+use-case:tenancy/explain-layers	use-case	docs/lattice.explorer/tenant-scope.md#explain	Explain shows its tenant and platform layers	T4
+use-case:tenancy/grant-agreement	use-case	docs/lattice.explorer/tenant-scope.md#trees-shared-through-a-grant	Offer, reject, re-offer and approve a grant: the two-step agreement	T3
+use-case:tenancy/grant-needs-authorization	use-case	docs/lattice.explorer/tenant-scope.md#trees-shared-through-a-grant	A grant never bypasses authorization; a read-write grant against a read-only rule	T3
+use-case:tenancy/grant-revoke	use-case	docs/lattice.explorer/tenant-scope.md#trees-shared-through-a-grant	Revoking a grant takes effect immediately	T3
+use-case:tenancy/grant-shared-rows	use-case	docs/lattice.explorer/tenant-scope.md#trees-shared-through-a-grant	Shared by, the shared filter and shared-prefix rows	T3
+use-case:tenancy/groups	use-case	docs/lattice.explorer/tenant-scope.md#groups	Tenant groups, and deleting one	T2
+use-case:tenancy/member-set-caps	use-case	docs/lattice.explorer/tenant-scope.md#members	Delegated member-set caps	T4
+use-case:tenancy/members-last-admin	use-case	docs/lattice.explorer/tenant-scope.md#members	Add admin subjects; removing the last one is refused	T1
+use-case:tenancy/override-backfill	use-case	docs/lattice.explorer/tenant-scope.md#regions-and-residency	Override a backfill	T6
+use-case:tenancy/picking-a-subject	use-case	docs/lattice.explorer/tenant-scope.md#picking-a-subject	Pick a tenant subject	T2
+use-case:tenancy/platform-rules-for-tenant	use-case	docs/lattice.explorer/tenant-scope.md#tenant-rules-on-the-cluster-pages	Platform rules scoped to a tenant's trees	T1
+use-case:tenancy/quota-edit	use-case	docs/lattice.explorer/tenant-scope.md#admin-set-quota-caps-and-app-bindings	Edit and save a tenant's quotas	T1
+use-case:tenancy/quota-refusal	use-case	docs/lattice.explorer/tenant-scope.md#admin-set-quota-caps-and-app-bindings	A tree create past the tenant's quota is refused	T2
+use-case:tenancy/residency-drain	use-case	docs/lattice.explorer/tenant-scope.md#regions-and-residency	Change residency and drain; revoke an allowed region	T5
+use-case:tenancy/residency-reset	use-case	docs/lattice.explorer/tenant-scope.md#regions-and-residency	Reset a residency	T6
+use-case:tenancy/rules	use-case	docs/lattice.explorer/tenant-scope.md#rules	Create, edit and delete a tenant rule	T2
+use-case:tenancy/stop-serving	use-case	docs/lattice.explorer/tenant-scope.md#regions-and-residency	Stop serving a tenant from a region	T6
+use-case:tenancy/suspend-resume-delete	use-case	docs/lattice.explorer/tenant-scope.md#regions-and-residency	Suspend, resume and delete a tenant	T5
+use-case:tenancy/switching	use-case	docs/lattice.explorer/tenant-scope.md#switching-tenants	Switch tenant with tenant.switch	T2
+use-case:tenancy/tenant-access	use-case	docs/lattice.explorer/tenant-scope.md#tenant-access	A tenant administrator manages the tenant's own access	T2
+use-case:tenancy/tenant-group-confinement	use-case	docs/lattice.explorer/tenant-scope.md#tenant-rules-on-the-cluster-pages	A rule naming a tenant group is confined to that tenant's trees	T3
+use-case:tenancy/what-is-scoped	use-case	docs/lattice.explorer/tenant-scope.md#what-is-scoped	Tenant-rooted variants of every area root and child page	T7
