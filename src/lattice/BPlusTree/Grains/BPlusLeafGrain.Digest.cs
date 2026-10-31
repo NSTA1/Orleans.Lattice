@@ -316,9 +316,8 @@ internal sealed partial class BPlusLeafGrain
         Span<byte> contribution = stackalloc byte[ProjectionHashSize];
         foreach (var (windowStart, windowEnd) in Cache.GetFullScanWindowsWithoutHydrating())
         {
-            var start = LaterLowerBound(windowStart, startInclusive);
-            var end = EarlierUpperBound(windowEnd, endExclusive);
-            if (start is not null && end is not null && string.CompareOrdinal(start, end) >= 0)
+            if (!OrdinalStrings.TryIntersectBounds(
+                windowStart, windowEnd, startInclusive, endExclusive, out var start, out var end))
             {
                 // The window lies wholly outside the requested range. Skipping
                 // it costs two ordinal comparisons and hydrates nothing.
@@ -339,28 +338,6 @@ internal sealed partial class BPlusLeafGrain
             EntryCount = count,
             CheckpointOffset = state.State.ProjectionCheckpointOffset,
         };
-    }
-
-    /// <summary>
-    /// Intersects two inclusive lower bounds, where <see langword="null"/>
-    /// denotes negative infinity: the tighter of the two is the larger key.
-    /// </summary>
-    private static string? LaterLowerBound(string? a, string? b)
-    {
-        if (a is null) return b;
-        if (b is null) return a;
-        return string.CompareOrdinal(a, b) >= 0 ? a : b;
-    }
-
-    /// <summary>
-    /// Intersects two exclusive upper bounds, where <see langword="null"/>
-    /// denotes positive infinity: the tighter of the two is the smaller key.
-    /// </summary>
-    private static string? EarlierUpperBound(string? a, string? b)
-    {
-        if (a is null) return b;
-        if (b is null) return a;
-        return string.CompareOrdinal(a, b) <= 0 ? a : b;
     }
 
     /// <summary>
