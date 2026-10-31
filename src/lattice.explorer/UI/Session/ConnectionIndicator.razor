@@ -38,5 +38,9 @@ else
         {
             <LtButton Variant="LtButtonVariant.Quiet" aria-haspopup="dialog" OnClick="OpenConfiguration">Connection settings</LtButton>
         }
+        else if (Explorer.IsConfigured)
+        {
+            <LtButton Variant="LtButtonVariant.Quiet" aria-haspopup="dialog" OnClick="OpenConfiguration">Connection details</LtButton>
+        }
     };
 }

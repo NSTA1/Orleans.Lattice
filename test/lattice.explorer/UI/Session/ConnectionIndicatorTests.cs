@@ -10,7 +10,8 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Session;
 /// <summary>
 /// The connection indicator: the endpoint and its state in words and a health
 /// role, Reconnect when down, Sign in after an authentication refusal, and the
-/// way into the connection settings.
+/// way into the connection settings - or, on a head that refuses browser-driven
+/// configuration, into the read-only connection details.
 /// </summary>
 [TestFixture]
 [FixtureLifeCycle(LifeCycle.InstancePerTestCase)]
@@ -121,25 +122,59 @@ public sealed class ConnectionIndicatorTests : SessionTestContext
         Assert.That(State.Overlay, Is.EqualTo(SessionOverlayKind.Configuration));
     }
 
-    [TestCase(false)]
-    [TestCase(true)]
-    public void A_read_only_head_offers_no_connection_settings(bool configured)
+    [Test]
+    public void A_read_only_head_with_no_endpoint_offers_nothing_because_the_first_run_gate_explains_it()
     {
         UseReadOnlyEndpoint();
-        if (configured)
-        {
-            Explorer.Configured(RemoteConfiguration(Endpoint));
-            StateConnection.Seed(new LatticeConnectionStatus(LatticeConnectionState.Faulted, Endpoint, "Unavailable"));
-        }
 
         var cut = Render<ConnectionIndicator>();
 
         Assert.Multiple(() =>
         {
-            Assert.That(Buttons(cut), Has.No.Member("Connection settings"));
+            Assert.That(Buttons(cut), Is.Empty);
             Assert.That(cut.FindAll("[aria-haspopup=dialog]"), Is.Empty);
-            Assert.That(Buttons(cut), configured ? Is.EqualTo(new[] { "Reconnect" }) : Is.Empty);
         });
+    }
+
+    [TestCase(LatticeConnectionState.Connected, new[] { "Connection details" })]
+    [TestCase(LatticeConnectionState.Faulted, new[] { "Reconnect", "Connection details" })]
+    public void A_configured_read_only_head_offers_connection_details_and_never_the_settings(LatticeConnectionState state, string[] expected)
+    {
+        UseReadOnlyEndpoint();
+        Explorer.Configured(RemoteConfiguration(Endpoint));
+        StateConnection.Seed(new LatticeConnectionStatus(state, Endpoint, "message"));
+
+        var cut = Render<ConnectionIndicator>();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Buttons(cut), Is.EqualTo(expected));
+            Assert.That(Buttons(cut), Has.No.Member("Connection settings"));
+            Assert.That(cut.FindAll("[aria-haspopup=dialog]").Select(button => button.TextContent), Is.EqualTo(new[] { "Connection details" }));
+        });
+    }
+
+    [Test]
+    public void Connection_details_opens_the_connection_dialog_which_a_read_only_head_draws_read_only()
+    {
+        UseReadOnlyEndpoint();
+        Explorer.Configured(RemoteConfiguration(Endpoint));
+        var cut = Render<ConnectionIndicator>();
+
+        cut.FindAll("button").Single(button => button.TextContent == "Connection details").Click();
+
+        Assert.That(State.Overlay, Is.EqualTo(SessionOverlayKind.Configuration));
+    }
+
+    [Test]
+    public void An_opted_in_head_offers_the_settings_and_not_the_read_only_details()
+    {
+        Explorer.Configured(RemoteConfiguration(Endpoint));
+        StateConnection.Seed(new LatticeConnectionStatus(LatticeConnectionState.Connected, Endpoint, null));
+
+        var cut = Render<ConnectionIndicator>();
+
+        Assert.That(Buttons(cut), Is.EqualTo(new[] { "Connection settings" }));
     }
 
     [Test]

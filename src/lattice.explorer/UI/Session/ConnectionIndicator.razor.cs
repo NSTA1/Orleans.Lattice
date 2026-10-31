@@ -12,10 +12,11 @@ namespace Orleans.Lattice.Explorer.UI.Session;
 /// slot: the connected endpoint, its state drawn in a health state role and
 /// always named in words, a Reconnect affordance when the connection is down, a
 /// Sign in affordance when the endpoint refused an anonymous call or the
-/// credential the session presented, and - only on
-/// a head that accepts browser-driven endpoint configuration
-/// (<see cref="SessionEndpointConfigurationOptions"/>) - the way into the
-/// connection settings.
+/// credential the session presented, and the way into the connection dialog:
+/// <b>Connection settings</b> on a head that accepts browser-driven endpoint
+/// configuration (<see cref="SessionEndpointConfigurationOptions"/>), otherwise,
+/// once an endpoint is configured, <b>Connection details</b>, which opens the same
+/// dialog read-only and dismissable.
 /// </summary>
 /// <remarks>
 /// <para>
