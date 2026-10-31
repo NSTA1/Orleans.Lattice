@@ -36,10 +36,16 @@ internal sealed record LineFeedStatus(
 /// orders are attached, moves an order along (<c>open</c> to <c>shipped</c>), sending an
 /// invalid order every <c>LineFeed:InvalidEvery</c> orders. Every write goes through the
 /// Data API as <c>line-feed</c>, so until that identity is granted rights its writes are
-/// refused and reported, never retried around.
+/// refused and reported, never retried around. A wrong-price burst (C1's faulty deploy)
+/// writes its orders already shipped, <see cref="BurstPerTick"/> a tick, so the burst shows
+/// as a spike on the writes board and its wrong totals stay stored until something
+/// replaces them.
 /// </summary>
 internal sealed class LineFeedService : BackgroundService
 {
+    /// <summary>How many wrong-priced orders a burst writes in one tick.</summary>
+    public const int BurstPerTick = 25;
+
     /// <summary>The telemetry tree; the first reading creates it.</summary>
     public const string TelemetryTree = "factory-telemetry";
 
@@ -185,6 +191,7 @@ internal sealed class LineFeedService : BackgroundService
 
             if (orders)
             {
+                await WriteWrongPriceBurstAsync(stoppingToken);
                 await WriteNextOrderAsync(stoppingToken);
             }
         }
@@ -198,6 +205,34 @@ internal sealed class LineFeedService : BackgroundService
         var value = new byte[sizeof(double)];
         BinaryPrimitives.WriteDoubleLittleEndian(value, 20.0 + (Math.Sin(sequence / 10.0) * 5.0));
         return value;
+    }
+
+    private async Task WriteWrongPriceBurstAsync(CancellationToken cancellationToken)
+    {
+        // A faulty deploy writes its orders already shipped at a hundred times the price, as
+        // fast as it can: the burst is a spike on the writes board, and the wrong totals stay.
+        for (var written = 0; written < BurstPerTick; written++)
+        {
+            lock (_gate)
+            {
+                if (_wrongPriceBurst == 0)
+                {
+                    return;
+                }
+            }
+
+            var number = _nextOrder;
+            if (!await WriteAsync(OrdersTree, OrderKey(number), Order(number, Total(number) * 100, "shipped"), counter: 3, cancellationToken))
+            {
+                return;
+            }
+
+            _nextOrder++;
+            lock (_gate)
+            {
+                _wrongPriceBurst--;
+            }
+        }
     }
 
     private async Task WriteNextOrderAsync(CancellationToken cancellationToken)
@@ -221,17 +256,6 @@ internal sealed class LineFeedService : BackgroundService
             total = -total;
             counter = 2;
         }
-        else
-        {
-            lock (_gate)
-            {
-                if (_wrongPriceBurst > 0)
-                {
-                    total *= 100;
-                    counter = 3;
-                }
-            }
-        }
 
         // An invalid order is sent once, as an upstream system sends it; whether it was
         // accepted or diverted is the schema policy's business.
@@ -239,13 +263,6 @@ internal sealed class LineFeedService : BackgroundService
         {
             _nextOrder++;
             _openOrder = counter == 2 ? null : number;
-            if (counter == 3)
-            {
-                lock (_gate)
-                {
-                    _wrongPriceBurst--;
-                }
-            }
         }
     }
 
