@@ -47,9 +47,17 @@ internal enum BackupRetentionRulesRemoved
 /// <para>
 /// The property, asserted after every step: every catalog row is restorable -
 /// its manifest resolves, its artifact is in the sink, and so is its whole base
-/// chain. No gate input is pinned: the base the increment names, its start time,
-/// the full capture's and the pass's start times, and every interleaving are
-/// drawn from the runtime. Every per-iteration value is a local of <see cref="Run"/>.
+/// chain. The interleaving is drawn from the runtime: which actor moves at every
+/// step, and so whether the pass, the newer full capture and the increment start
+/// before, during or after one another, and which base the increment names (the
+/// newest catalog row when it starts). The retention policy is pinned to
+/// keep-last-one at a fixed time, deliberately (#2319): the race under test needs
+/// only some newer backup to doom the increment's base, and keep-last-one dooms it
+/// exactly when the newer full capture publishes. Which backups each policy keeps
+/// - keep-last ordering, the max-age cutoff, the unbounded no-op - is a pure
+/// function of the listing, pinned case by case by
+/// <c>BackupRetentionPlannerTests</c> and over every policy by the TLA+ module.
+/// Every per-iteration value is a local of <see cref="Run"/>.
 /// </para>
 /// </summary>
 internal sealed class BackupRetentionModel(BackupRetentionRulesRemoved removed, bool witnessFallback = false) : ICoyoteModel
@@ -200,6 +208,7 @@ internal sealed class BackupRetentionModel(BackupRetentionRulesRemoved removed, 
             switch (passStep)
             {
                 case 0:
+                    // The policy is pinned to keep-last-one on purpose; see the class remarks (#2319).
                     var listing = catalog.Values.ToList();
                     var keep = BackupRetentionPlanner.ComputeRetained(listing, keepLast: 1, maxAge: null, T0.AddHours(1));
                     doomed = BackupRetentionPlanner.Doomed(listing, keep);

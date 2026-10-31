@@ -134,13 +134,13 @@ internal sealed class BackupSchedulerGrain(
         ArgumentNullException.ThrowIfNull(scope);
         await AuthorizeScheduleAsync(scope);
         var opts = Options;
-        var manifests = await ListScopeAsync(scope);
         if (!opts.RetentionEnabled)
         {
+            var manifests = await ListScopeAsync(scope);
             return new BackupRetentionReport(manifests.Count, Array.Empty<string>());
         }
 
-        return await PruneCoreAsync(manifests, opts);
+        return await PruneCoreAsync(scope, opts);
     }
 
     /// <inheritdoc />
@@ -164,8 +164,7 @@ internal sealed class BackupSchedulerGrain(
         var backupId = await RunCaptureAsync(incremental, scope);
         if (backupId is not null && Options.RetentionEnabled)
         {
-            var manifests = await ListScopeAsync(scope);
-            await PruneCoreAsync(manifests, Options);
+            await PruneCoreAsync(scope, Options);
         }
 
         return backupId;
@@ -391,7 +390,7 @@ internal sealed class BackupSchedulerGrain(
     }
 
     private async Task<BackupRetentionReport> PruneCoreAsync(
-        List<BackupManifest> manifests, LatticeBackupScheduleOptions opts)
+        BackupScopeSelector scope, LatticeBackupScheduleOptions opts)
     {
         // Activation-local prune guard (issue #5357). An operator PruneAsync and a
         // scheduled cycle's prune ([AlwaysInterleave]) can otherwise run at once,
@@ -402,12 +401,17 @@ internal sealed class BackupSchedulerGrain(
         {
             logger.LogInformation(
                 "Retention for scope {Scope} skipped: another retention pass is in flight.", ScopeKey);
-            return new BackupRetentionReport(manifests.Count, Array.Empty<string>());
+            var listed = await ListScopeAsync(scope);
+            return new BackupRetentionReport(listed.Count, Array.Empty<string>());
         }
 
         _pruneInFlight = true;
         try
         {
+            // The listing is taken under the guard (issue #5412). Taken before it, a
+            // pass could wait out another pass and then plan from a catalog that pass
+            // had already pruned, and restore the row of a backup it had deleted.
+            var manifests = await ListScopeAsync(scope);
             return await PruneUnderGuardAsync(manifests, opts);
         }
         finally

@@ -22,7 +22,7 @@ overlapping, which also keeps every module's TLC run small:
 | [`BackupProvenance`](BackupProvenance.tla) | What a chain records: per-origin provenance, the #2621 empty-origin rule, and the chain's HLC frontier (#3758). | A local and a replicated origin, three writes, a chain of three links. |
 | [`BackupRestore`](BackupRestore.tla) | A coordinated restore across two regions, its per-record admission, and the replication that resumes after it, with delivery split into a cached-gate admission and a later landing, a causal-apply buffer, and the restored copy's receive fence (#4593). | Two clusters, two copies each, a backup with one admitted and one foreign record, two application writes, one saga (receive-fence epochs 0 and 1). |
 | [`BackupCutover`](BackupCutover.tla) | A local shadow-cutover restore and its revert: the alias and shard map that move together, the redirects that heal stale routing, the alias reservation, and a crash with a retry. | One tree, two copies, one stale routing cache, one crash. |
-| [`BackupRetention`](BackupRetention.tla) | Retention pruning racing full and incremental captures of the same scope: the keep set and its base closure, the pass's row-first delete and dependent scan, the increment's base re-check, tip-first deletion, one pass at a time, and a crash at any step (#5357). | Three backup ids, two capture slots, one retention pass (two in the `TwoPasses` variant), a clock of three ticks, one crash, keep-last of at most one and max-age of one tick. |
+| [`BackupRetention`](BackupRetention.tla) | Retention pruning racing full and incremental captures of the same scope: the keep set and its base closure, the pass's row-first delete and dependent scan, the increment's base re-check, tip-first deletion, one pass at a time with its listing read under the guard, and a crash at any step (#5357, #5412). | Three backup ids, two capture slots, one retention pass (two in the `TwoPasses` variant), a clock of two ticks, one crash, keep-last of at most one and max-age of one tick. |
 
 An increment needs the WAL's partitions and offsets, which no other capture
 question does, so it is a module of its own rather than a third capture kind in
@@ -69,6 +69,7 @@ another silo's. The model found #5357 and checks its fix; see
 | | `AckedWritesServed` | Invariant | A post-cutover write stays served by its author. |
 | | `RestoreConverges` | Liveness | A restore followed by resumed replication converges. |
 | `BackupRetention` | `RetainedRestorable` | Invariant | Every backup the policy keeps, with its whole base chain, is restorable. |
+| | `ListedRestorable` | Invariant | Every backup the catalog lists, retained or not, is restorable. |
 | | `SinkChainIntact` | Invariant | A published increment still in the sink has a restorable base. |
 | | `InFlightBaseSurvives` | Action | An increment is published only while its base is restorable. |
 | | `KeepPolicyHonoured` | Action | Nothing the policy keeps is pruned. |
@@ -142,8 +143,18 @@ refinement note's rows:
   it is gone; one pass runs at a time. `InFlightBaseSurvivesNoBaseRecheck` and
   `RetainedRestorableNoDependentScan` reproduce production before it, and their
   code analogues turn the fix's regression tests red.
+- **#5412** (`BackupRetention`, fixed): the #5357 fix as first written read a
+  pass's catalog listing before it checked the one-pass guard, so a pass could
+  wait out another pass and then plan from a listing that still held rows that
+  pass had pruned; its scan could find an increment built on one of them and
+  restore the row of a backup whose manifest and artifact were gone, and the
+  increment's re-check then passed against it. Found by the module's
+  independent review (#5352) against a model that splits the listing from the
+  guard as production ordered them. The module checks the fix, a listing read
+  under the guard; `ListedRestorableListingBeforeGuard` reproduces production
+  before it, and its code analogue turns the fix's regression test red.
 
-All six fixes have landed, so the reproducing mutations now stand as
+All seven fixes have landed, so the reproducing mutations now stand as
 regression checks: each must keep firing, and each has a code analogue that turns
 the fix's regression tests red.
 ## Saga abstraction
@@ -190,4 +201,4 @@ notes and TLC's own state counts.
 | `BackupProvenance` | 5 | 0 | 4 | 5 | 8 | 2,199 |
 | `BackupRestore` | 5 | 1 | 16 | 20 | 20 | 22,700 |
 | `BackupCutover` | 5 | 2 | 10 | 12 | 16 | 39 |
-| `BackupRetention` | 3 | 3 | 16 | 21 | 20 | 189,435 |
+| `BackupRetention` | 4 | 3 | 16 | 22 | 21 | 209,846 |

@@ -11,7 +11,8 @@ PERTURBS: PruneList
 BOUNDS: NumPasses = 2
 
 --- FIND
-    \* The activation-local guard: a pass is skipped while another runs.
+    \* The activation-local guard, checked before the listing is read: a pass
+    \* is skipped while another runs.
     /\ \A q \in Passes : prPh[q] = "idle"
 --- REPLACE
     \* MUTATION: no prune guard.
