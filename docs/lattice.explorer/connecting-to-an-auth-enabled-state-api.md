@@ -73,6 +73,14 @@ opens the connection settings dialog when the web head allows endpoint editing
 (`AllowInteractiveEndpointConfiguration`). Otherwise it has no **Connection
 settings** entry; see [The connection dialog](running-the-explorer.md#the-connection-dialog).
 
+The indicator reports the endpoint, not individual reads. A refusal that
+answers one read - a tree the caller may not see or that no longer exists, a
+grant narrowed to part of a tree, an expired scan cursor, a change-feed
+position past retention - is shown where that read was made and leaves the
+indicator as it was. A refused credential still reads **Sign-in required**, and
+an endpoint that does not answer still reads **Reconnecting** and then
+**Disconnected**.
+
 ## Signing in with Basic
 
 Registering the core auth services makes the Basic provider available. The web

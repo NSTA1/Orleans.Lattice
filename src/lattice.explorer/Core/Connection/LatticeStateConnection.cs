@@ -713,19 +713,30 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
             };
 
     /// <summary>
-    /// Whether a refusal is a fact about the call rather than the endpoint: the
-    /// server answered an authenticated caller and refused it this one read for
-    /// want of a grant (<c>PermissionDenied</c>), as for a whole-tree metrics
-    /// sample under a grant narrowed to part of the tree. Such a refusal is
-    /// surfaced to the caller as <see cref="LatticeStateApiException.IsPermissionDenied"/>
-    /// and never moves <see cref="Status"/>, so one tree's authorization is not
-    /// reported as the connection reconnecting or needing a sign-in.
-    /// <c>Unauthenticated</c> is not call-scoped: it says the session's credential
-    /// was refused, and still faults the connection with a sign-in requirement.
-    /// The connection probe keeps its own handling, because a refused catalogue
-    /// read is the one answer that does describe the session.
+    /// Whether a failure is a fact about the call rather than the endpoint: the
+    /// server answered, and its answer concerns only what this call asked for.
+    /// <c>PermissionDenied</c> refuses an authenticated caller this one read (a
+    /// whole-tree metrics sample under a narrowed grant, say); <c>NotFound</c>
+    /// says the tree or index is gone or no longer visible to the caller (a grant
+    /// revoked mid-session); <c>InvalidArgument</c> rejects this request, such as
+    /// a continuation whose scan cursor expired; <c>FailedPrecondition</c> refuses
+    /// it in the tree's current state, such as a change-feed position past the
+    /// retention window; <c>AlreadyExists</c> and <c>OutOfRange</c> are likewise
+    /// about the request. Each is surfaced to the caller and never moves
+    /// <see cref="Status"/>, so one tree's answer is not reported as the
+    /// connection failing. <c>Unauthenticated</c> (the session's credential was
+    /// refused) and <c>Unimplemented</c> (the endpoint has no state API) do
+    /// describe the endpoint, and still fault the connection. The connection probe
+    /// keeps its own handling, because a refused catalogue read is the one answer
+    /// that does describe the session.
     /// </summary>
-    private static bool IsCallScopedRefusal(RpcException ex) => ex.StatusCode == StatusCode.PermissionDenied;
+    private static bool IsCallScopedRefusal(RpcException ex) => ex.StatusCode is
+        StatusCode.PermissionDenied or
+        StatusCode.NotFound or
+        StatusCode.InvalidArgument or
+        StatusCode.FailedPrecondition or
+        StatusCode.AlreadyExists or
+        StatusCode.OutOfRange;
 
     private static bool IsAuthFailure(RpcException ex) => ex.StatusCode is
         StatusCode.Unauthenticated or
