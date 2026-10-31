@@ -167,6 +167,15 @@ public partial class AccessExplainPage : IDisposable
         };
     }
 
+    /// <summary>
+    /// The note the Tree field shows for a tree the cluster does not list yet. A rule may
+    /// govern a tree before it is created, so the question is asked as typed.
+    /// </summary>
+    /// <param name="tree">The typed tree id.</param>
+    /// <returns>The note.</returns>
+    internal static string MissingTreeMessage(string tree) =>
+        $"No tree named {tree} exists yet. The answer is the one the cluster gives once it is created.";
+
     private Task ExplainAsync() => RunExplainAsync(updateAddress: true);
 
     private Task EffectivePermissionsAsync() => RunPermissionsAsync(updateAddress: true);
