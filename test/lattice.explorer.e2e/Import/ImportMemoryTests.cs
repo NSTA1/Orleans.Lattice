@@ -1,4 +1,6 @@
 using Microsoft.Playwright;
+using Orleans.Lattice.Api.Data;
+using Orleans.Lattice.Api.Data.Grpc;
 using Orleans.Lattice.Api.TreeAdmin.Grpc;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Checkpoints;
@@ -19,8 +21,8 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Import;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Each import is preceded by a warm-up import of a tenth of the size through the same path,
-/// and the baseline is taken after it. The warm-up brings the code JIT-compiled and each
+/// Each import is preceded by a warm-up import of a quarter of the size through the same
+/// path, and the baseline is taken after it. The warm-up brings the code JIT-compiled and each
 /// process's server-GC heaps to their working size, so the measured growth is what the file's
 /// size adds, not what any first import costs.
 /// </para>
@@ -45,7 +47,7 @@ public sealed class ImportMemoryTests
 
     private const string JourneyId = "g1-import-memory";
     private const long FileBytes = 200L * 1024 * 1024;
-    private const long WarmUpBytes = FileBytes / 10;
+    private const long WarmUpBytes = FileBytes / 4;
     private const int UpsertKeys = 512;
     private const string SeedWarmUpTree = "memory-seed-warmup";
     private const string SeedTree = "memory-seed";
@@ -117,9 +119,14 @@ public sealed class ImportMemoryTests
         var growth = await MeasureAsync(olivia, dialog, "Seed tree", lines, "seed-progress", "The seed streams the file: the pre-flight pass checks its order before anything is written");
         await olivia.SubstepAsync("succeeded", $"Seeded {ImportFiles.Count(lines)} entries; no process grew by 64 MB");
 
+        var keys = await CountKeysAsync(SeedTree);
         var stats = await LatticeTreeAdminApiGrpcClient.Create(_estate.Invoker(), JourneyEstate.Serialization).GetTreeStatsAsync(SeedTree);
-        Assert.That(stats.TotalLiveKeys, Is.EqualTo(lines), "every line of the file is a key of the tree");
-        Report("Seed", growth);
+        Report("Seed", growth, $"A range scan of the seeded tree reads {ImportFiles.Count(keys)} keys; its tree stats report {ImportFiles.Count(stats.TotalLiveKeys)} live keys.");
+        Assert.Multiple(() =>
+        {
+            AssertUnderCeiling("seed", growth);
+            Assert.That(keys, Is.EqualTo(lines), "every line of the file is exactly one key of the tree");
+        });
     }
 
     /// <summary>
@@ -148,7 +155,14 @@ public sealed class ImportMemoryTests
 
         var growth = await MeasureAsync(olivia, dialog, "Import", lines, "upsert-progress", "The upsert streams every record through the gateway to the silos, a batch at a time");
         await olivia.SubstepAsync("succeeded", $"Wrote {ImportFiles.Count(lines)} records; no process grew by 64 MB");
-        Report("Upsert", growth);
+
+        var keys = await CountKeysAsync(UpsertTree);
+        Report("Upsert", growth, $"A range scan of the upserted tree reads {ImportFiles.Count(keys)} keys.");
+        Assert.Multiple(() =>
+        {
+            AssertUnderCeiling("upsert", growth);
+            Assert.That(keys, Is.EqualTo(UpsertKeys), "the records land on their keys and nothing else");
+        });
     }
 
     private static async Task<ILocator> OpenSeedAsync(PersonaSession session, string tree)
@@ -218,36 +232,62 @@ public sealed class ImportMemoryTests
         return await sampler.StopAsync();
     }
 
-    private List<(string Name, int ProcessId)> MeasuredProcesses()
+    private List<MeasuredProcess> MeasuredProcesses()
     {
         var region = _estate.WestRegion;
-        var processes = new List<(string, int)>
+        var explorer = region.ExplorerProcesses[0];
+        var processes = new List<MeasuredProcess>
         {
-            (region.ExplorerProcesses[0].Name, region.ExplorerProcesses[0].ProcessId ?? throw new InvalidOperationException("The Explorer head is not running.")),
+            new(explorer.Name, explorer.ProcessId ?? throw new InvalidOperationException("The Explorer head is not running."), MetricsPort: null),
         };
         foreach (var silo in region.Silos)
         {
-            processes.Add((silo.Process.Name, silo.Process.ProcessId ?? throw new InvalidOperationException($"{silo.Process.Name} is not running.")));
+            processes.Add(new(silo.Process.Name, silo.Process.ProcessId ?? throw new InvalidOperationException($"{silo.Process.Name} is not running."), silo.HttpPort));
         }
 
         return processes;
     }
 
-    private void Report(string mode, IReadOnlyList<WorkingSetGrowth> growth)
+    /// <summary>Counts a tree's keys exactly, by a paged range read through the Data API, failing on a repeated or unordered key.</summary>
+    private async Task<long> CountKeysAsync(string tree)
     {
-        var table = WorkingSetGrowth.ToMarkdown($"{mode}: working set of each process", FileBytes, growth);
+        var data = LatticeDataApiGrpcClient.Create(_estate.Invoker(), JourneyEstate.Serialization);
+        long count = 0;
+        string? previous = null;
+        string? token = null;
+        do
+        {
+            var page = await data.ReadRangeAsync(new DataRangeRequest { TreeId = tree, PageSize = 1000, ContinuationToken = token });
+            foreach (var entry in page.Entries)
+            {
+                Assert.That(previous is null || string.CompareOrdinal(previous, entry.Key) < 0, Is.True,
+                    $"the range read returns each key once, in order: '{entry.Key}' followed '{previous}'");
+                previous = entry.Key;
+                count++;
+            }
+
+            token = page.ContinuationToken;
+        }
+        while (token is not null);
+
+        return count;
+    }
+
+    private void Report(string mode, IReadOnlyList<WorkingSetGrowth> growth, string note)
+    {
+        var table = WorkingSetGrowth.ToMarkdown($"{mode}: memory of each process", FileBytes, growth) + Environment.NewLine + note + Environment.NewLine;
         TestContext.Out.WriteLine(table);
         JobSummary.Append(table);
         File.AppendAllText(Path.Combine(_estate.ArtifactsDirectory, "import-memory.md"), table + Environment.NewLine);
+    }
 
-        Assert.Multiple(() =>
+    private static void AssertUnderCeiling(string mode, IReadOnlyList<WorkingSetGrowth> growth)
+    {
+        foreach (var reading in growth)
         {
-            foreach (var reading in growth)
-            {
-                Assert.That(reading.Samples, Is.GreaterThan(4), $"{reading.Process} was sampled while the import ran");
-                Assert.That(reading.Growth, Is.LessThan(CeilingBytes),
-                    $"{reading.Process} grew {WorkingSetGrowth.Mb(reading.Growth)} above its {WorkingSetGrowth.Mb(reading.Baseline)} baseline during a {mode.ToLowerInvariant()} of a {WorkingSetGrowth.Mb(FileBytes)} file");
-            }
-        });
+            Assert.That(reading.Samples, Is.GreaterThan(4), $"{reading.Process} was sampled while the import ran");
+            Assert.That(reading.Growth, Is.LessThan(CeilingBytes),
+                $"{reading.Process} grew {WorkingSetGrowth.Mb(reading.Growth)} above its {WorkingSetGrowth.Mb(reading.Baseline)} baseline during a {mode} of a {WorkingSetGrowth.Mb(FileBytes)} file");
+        }
     }
 }

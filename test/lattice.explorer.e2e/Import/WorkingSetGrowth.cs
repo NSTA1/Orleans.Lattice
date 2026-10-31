@@ -13,6 +13,12 @@ internal sealed record WorkingSetGrowth(string Process, long Baseline, long Peak
     /// <summary>How far the peak rose above the baseline, in bytes.</summary>
     public long Growth => Math.Max(0, Peak - Baseline);
 
+    /// <summary>The live managed heap after the last collection before the import, or <see langword="null"/> when not reported.</summary>
+    public long? HeapBaseline { get; init; }
+
+    /// <summary>The largest live managed heap after a collection while the import ran, or <see langword="null"/> when not reported.</summary>
+    public long? HeapPeak { get; init; }
+
     /// <summary>A markdown table of <paramref name="readings"/> for a job summary or a PR body.</summary>
     /// <param name="title">The table's heading.</param>
     /// <param name="fileBytes">The size of the imported file, in bytes.</param>
@@ -23,12 +29,12 @@ internal sealed record WorkingSetGrowth(string Process, long Baseline, long Peak
         var text = new StringBuilder();
         text.AppendLine(CultureInfo.InvariantCulture, $"### {title} ({Mb(fileBytes)} file)");
         text.AppendLine();
-        text.AppendLine("| Process | Baseline | Peak | Growth | Samples |");
-        text.AppendLine("|---|---:|---:|---:|---:|");
+        text.AppendLine("| Process | Working set baseline | Working set peak | Growth | Live heap baseline | Live heap peak | Samples |");
+        text.AppendLine("|---|---:|---:|---:|---:|---:|---:|");
         foreach (var reading in readings)
         {
             text.AppendLine(CultureInfo.InvariantCulture,
-                $"| {reading.Process} | {Mb(reading.Baseline)} | {Mb(reading.Peak)} | {Mb(reading.Growth)} | {reading.Samples} |");
+                $"| {reading.Process} | {Mb(reading.Baseline)} | {Mb(reading.Peak)} | {Mb(reading.Growth)} | {Mb(reading.HeapBaseline)} | {Mb(reading.HeapPeak)} | {reading.Samples} |");
         }
 
         return text.ToString();
@@ -38,4 +44,6 @@ internal sealed record WorkingSetGrowth(string Process, long Baseline, long Peak
     /// <param name="bytes">The byte count.</param>
     /// <returns>The text, such as <c>12.3 MB</c>.</returns>
     public static string Mb(long bytes) => string.Create(CultureInfo.InvariantCulture, $"{bytes / (1024.0 * 1024.0):0.0} MB");
+
+    private static string Mb(long? bytes) => bytes is { } value ? Mb(value) : "-";
 }
