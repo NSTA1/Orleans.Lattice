@@ -1,3 +1,5 @@
 id	reason
 use-case:shell/entra-sign-in	Entra is not exercised: CI has no identity provider, so personas sign in through the Basic form (epic #5401, decision D5).
 use-case:shell/reauth-interstitial	Only an expiring credential raises the re-authentication interstitial, and the estate's Basic credentials never expire (epic #5401, decision D5).
+option:DataProtectionKeyRingBlobUri	The Blob key-ring URI needs an Entra TokenCredential, which CI cannot issue (Azurite has no identity provider); C4 proves the shared ring through ConfigureDataProtection (epic #5401, decision D5).
+option:DataProtectionKeyRingCredential	The key-ring credential is an Entra TokenCredential, which CI cannot issue (Azurite has no identity provider); C4 proves the shared ring through ConfigureDataProtection (epic #5401, decision D5).
