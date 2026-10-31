@@ -1,0 +1,58 @@
+@*
+    The create-tree flow (G4, issue #5368): name and size, review, create. The
+    Cluster tree list opens it from New tree...; any surface that needs a new tree
+    first reuses it, and takes the created tree through Created instead of the
+    default landing on its Summary.
+*@
+<LtDialog Open="@Open" OpenChanged="OnOpenChangedAsync" Title="@Title" Placement="@Placement"
+          Description="Name the tree and choose its size. The next step reviews it; nothing is created until you confirm.">
+    @if (_stage == Stage.Compose)
+    {
+        <form class="lt-cluster-form" @onsubmit="ReviewAsync" aria-label="Name and size a new tree" data-lt-create-tree="compose">
+            <LtTextInput Label="Tree name" Mono="true" @bind-Value="_treeId" Error="@_treeIdError" Hint="@NameHint" autocomplete="off" spellcheck="false" />
+            <LtTextInput Label="Physical shards" Mono="true" @bind-Value="_shards" Error="@_shardsError" inputmode="numeric"
+                         Hint="@($"The independent B+ trees its keys are spread over; more spread writes wider. Starts at the library default of {ClusterFormat.Count(ClusterTreeCreation.DefaultShardCount)}; from 1 to {ClusterFormat.Count(ClusterTreeCreation.MaximumShardCount)}. Reshard changes it later.")" />
+            <LtTextInput Label="Keys per leaf" Mono="true" @bind-Value="_leaf" Error="@_leafError" inputmode="numeric"
+                         Hint="@($"How many keys a leaf holds before it splits. Starts at the library default of {ClusterFormat.Count(ClusterTreeCreation.DefaultMaxLeafKeys)}; at least {ClusterTreeCreation.MinimumMaxLeafKeys}. Resize changes it later.")" />
+            <LtTextInput Label="Children per internal node" Mono="true" @bind-Value="_internal" Error="@_internalError" inputmode="numeric"
+                         Hint="@($"How many children an internal node holds before it splits. Starts at the library default of {ClusterFormat.Count(ClusterTreeCreation.DefaultMaxInternalChildren)}; at least {ClusterTreeCreation.MinimumMaxInternalChildren}. Resize changes it later.")" />
+            @if (_refusal is { } refusal)
+            {
+                <p class="lt-cluster-error" role="alert" data-lt-create-tree-refusal>@refusal</p>
+            }
+            <div class="lt-dialog__actions">
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="OnCancelAsync">Cancel</LtButton>
+                <LtButton Type="LtButtonType.Submit" Disabled="@_busy">@(_busy ? "Checking..." : "Review")</LtButton>
+            </div>
+        </form>
+    }
+    else if (_request is { } request)
+    {
+        <section class="lt-cluster-review" aria-labelledby="@ReviewHeadingId" data-lt-create-tree="review">
+            <h3 class="lt-cluster-heading" id="@ReviewHeadingId">Review</h3>
+            <p>@ReviewSentence(request)</p>
+            <LtDefinitionList>
+                <LtDefinition Term="Tree" Mono="true">@request.TreeId</LtDefinition>
+                @if (_tenant is { } tenant)
+                {
+                    <LtDefinition Term="Tenant" Mono="true">@tenant</LtDefinition>
+                }
+                <LtDefinition Term="Physical shards">@ClusterFormat.Count(request.ShardCount)</LtDefinition>
+                <LtDefinition Term="Keys per leaf">@ClusterFormat.Count(request.MaxLeafKeys)</LtDefinition>
+                <LtDefinition Term="Children per internal node">@ClusterFormat.Count(request.MaxInternalChildren)</LtDefinition>
+            </LtDefinitionList>
+            @if (_busy)
+            {
+                <p class="lt-cluster-result" role="status" data-lt-create-tree-progress>Creating @request.TreeId...</p>
+            }
+            @if (_refusal is { } refusal)
+            {
+                <p class="lt-cluster-error" role="alert" data-lt-create-tree-refusal>@refusal</p>
+            }
+            <div class="lt-dialog__actions">
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="Back" Disabled="@_busy">Back</LtButton>
+                <LtButton OnClick="CreateAsync" Disabled="@_busy">Create tree</LtButton>
+            </div>
+        </section>
+    }
+</LtDialog>
