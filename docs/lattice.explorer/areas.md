@@ -754,6 +754,10 @@ changes, so they do not ask for destructive confirmation. Lifecycle operations
 do: Delete soft-deletes the tree and schedules purge, Recover restores normal
 reads and writes, Purge permanently removes tree state and is not an app
 operation, and Set alias points the logical name at another physical tree.
+**Add name...** in the same Alias section gives the tree another name: it names
+a free alias (a name that already holds a tree is refused, with a pointer to that
+tree's own Lifecycle) and, after the alias is typed to confirm, points it at this
+tree, so `/data/{alias}` and every read and write through the alias reach it.
 **Recoverable until** is shown with the recovery deadline only while the tree can
 still be recovered. Purge is accept-then-poll: the call can return while the shard
 walk is still running, so the tab says the purge was accepted, follows it with a

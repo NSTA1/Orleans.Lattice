@@ -9,7 +9,8 @@ using Names = Orleans.Lattice.Explorer.EndToEnd.Tests.Story.StoryNames.Contoso;
 namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts.Contoso;
 
 /// <summary>
-/// A3, provisioning the factory (#5374). Produces <c>factory-orders</c> (4 shards, the 240
+/// A3, provisioning the factory (#5374). Produces <c>factory-orders</c> (4 shards, full-value
+/// history retention set before any order is written, the 240
 /// orders of <see cref="StoryData.Orders"/>, alias <c>orders</c>, publish-events on - the
 /// tunable step 6 changes - the <c>orders-by-status</c> view over the silo's
 /// <c>order-status</c> provider, the line feed attached and the <c>order-status</c> tag index
@@ -27,6 +28,12 @@ public sealed class A3Contract() : ChapterContract("A3")
     /// <summary>The telemetry's history retention window (step 6).</summary>
     public static readonly TimeSpan TelemetryRetention = TimeSpan.FromDays(7);
 
+    /// <summary>
+    /// The history retention mode of <c>factory-orders</c>, set in step 1 before any order is
+    /// written, so every revision keeps its value (U4's Show as of reads an earlier one).
+    /// </summary>
+    public const TreeHistoryRetentionMode OrdersRetentionMode = TreeHistoryRetentionMode.FullValue;
+
     /// <inheritdoc />
     public override async Task EstablishAsync(ChapterContext context)
     {
@@ -34,6 +41,10 @@ public sealed class A3Contract() : ChapterContract("A3")
         var admin = facades.TreeAdmin;
 
         await admin.CreateTreeAsync(Names.Trees.FactoryOrders, shardCount: OrdersShardCount);
+
+        // Retention is stamped per revision at write time, so it is set before the seed (U4 reads
+        // an earlier value through Show as of).
+        await admin.SetHistoryRetentionAsync(Names.Trees.FactoryOrders, OrdersRetentionMode, null);
         await ContractCalls.SetManyAsync(facades.Data, Names.Trees.FactoryOrders, StoryData.Orders);
 
         await admin.CreateTreeAsync(Names.Trees.FactoryLines);
@@ -90,6 +101,10 @@ public sealed class A3Contract() : ChapterContract("A3")
         }
 
         Require((await admin.GetTreeConfigAsync(Names.Trees.FactoryOrders)).PublishEvents == true, "factory-orders publishes events (the tunable step 6 saves)");
+        if (!context.IsProduced("C1"))
+        {
+            RequireEqual((await admin.GetHistoryRetentionAsync(Names.Trees.FactoryOrders)).Mode, OrdersRetentionMode, "factory-orders keeps every revision's value (full-value history)");
+        }
 
         if (!context.IsProduced("C3"))
         {
