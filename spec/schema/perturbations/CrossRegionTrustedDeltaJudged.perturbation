@@ -1,0 +1,14 @@
+# UncheckedStoredVerbatim: without the tree's strict flag a delta is stored as it came.
+MODULE: SchemaCrossRegion
+ROW: UncheckedStoredVerbatim
+FILE: src/lattice.schema/LatticeSchemaVersionWriteInterceptor.cs
+DETECTORS: SchemaCrossRegionIngestIntegrationTests.Crdt_delta_stamped_past_the_target_of_a_tree_without_strict_ingest_is_stored_verbatim
+SUMMARY: a trusted delta is re-judged as if the tree were strict
+
+--- FIND
+        // strict-mode ingest re-validates and lifts the delta to the target here.
+        if (!LatticeAccessGateContext.IsSystemOrigin || !version.StrictIngest)
+--- REPLACE
+        // strict-mode ingest re-validates and lifts the delta to the target here.
+        if (!LatticeAccessGateContext.IsSystemOrigin)
+--- END

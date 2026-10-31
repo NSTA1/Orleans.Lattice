@@ -1,0 +1,13 @@
+# A registry read is served from the bare name's tree, so a confined tenant
+# reads the default tenant's catalog.
+MODULE: DisclosureStaysInTenantReadsRequestedName
+TARGET: DisclosureStaysInTenant
+CLASS: Invariant
+SUMMARY: a schema read is served from the unresolved name
+PERTURBS: Act
+
+--- FIND
+                 /\ disclosed' = disclosed \cup {<<c, t>>}
+--- REPLACE
+                 /\ disclosed' = disclosed \cup {<<c, req.n>>}
+--- END

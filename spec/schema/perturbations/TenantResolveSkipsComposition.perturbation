@@ -1,0 +1,12 @@
+# Resolve: a confined tenant's unqualified name is composed into its namespace.
+MODULE: SchemaTenantScope
+ROW: Resolve
+FILE: src/lattice/LatticeTenantResolution.cs
+DETECTORS: LatticeSchemaControlTenantScopeTests.SetPolicyAsync_under_a_confined_tenant_authorizes_and_writes_the_composed_tree, LatticeTenantResolutionTests.ComposeEffectiveTreeId_non_default_tenant_composes_a_scoped_id
+SUMMARY: a confined tenant's name is used bare instead of composed
+
+--- FIND
+        return LatticeTenantTrees.Compose(tenant, treeName);
+--- REPLACE
+        return treeName;
+--- END

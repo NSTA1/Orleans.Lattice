@@ -1,0 +1,15 @@
+# A write below the check is re-stamped at the receiver's target, as a local
+# write would be.
+MODULE: UncheckedStoredVerbatimStampedAtTarget
+TARGET: UncheckedStoredVerbatim
+CLASS: Action
+SUMMARY: an unjudged entry is stored re-stamped
+PERTURBS: Deliver
+
+--- FIND
+       ELSE /\ st' = [st EXCEPT ![e] = IF kind[e] = "Atomic" THEN "Staged" ELSE "Stored"]
+            /\ tag' = [tag EXCEPT ![e] = stamp[e]]
+--- REPLACE
+       ELSE /\ st' = [st EXCEPT ![e] = IF kind[e] = "Atomic" THEN "Staged" ELSE "Stored"]
+            /\ tag' = [tag EXCEPT ![e] = tgt]
+--- END

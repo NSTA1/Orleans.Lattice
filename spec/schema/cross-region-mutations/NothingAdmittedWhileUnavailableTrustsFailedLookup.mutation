@@ -1,0 +1,13 @@
+# Strict ingest judges and admits an entry although its catalog, policy or
+# dead-letter collaborator failed.
+MODULE: NothingAdmittedWhileUnavailableTrustsFailedLookup
+TARGET: NothingAdmittedWhileUnavailable
+CLASS: Action
+SUMMARY: a failed collaborator does not fail the write
+PERTURBS: Deliver
+
+--- FIND
+       THEN IF up["Deps"]
+--- REPLACE
+       THEN IF TRUE
+--- END

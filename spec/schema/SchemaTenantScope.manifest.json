@@ -1,0 +1,18 @@
+{
+  "mutations": "tenant-scope-mutations",
+  "refinement": "SchemaTenantScopeRefinement.md",
+  "nonBehaviouralActions": ["Stutter", "Receive", "Unconfirm", "Reconfirm"],
+  "counts": {
+    "invariants": 4,
+    "properties": 6,
+    "actions": 7,
+    "mutations": 12,
+    "behaviourRows": 12,
+    "distinctStates": 124968
+  },
+  "variants": {
+    "ThreeRequests": {
+      "distinctStates": 829104
+    }
+  }
+}

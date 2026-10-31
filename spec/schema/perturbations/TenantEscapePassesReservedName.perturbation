@@ -1,0 +1,12 @@
+# EscapeRefusedAtResolution: a confined tenant is refused a reserved add-on name.
+MODULE: SchemaTenantScope
+ROW: EscapeRefusedAtResolution
+FILE: src/lattice/LatticeTenantResolution.cs
+DETECTORS: LatticeSchemaControlTenantScopeTests.A_confined_tenants_reserved_name_is_refused_before_the_gate_and_the_admin
+SUMMARY: a confined tenant's reserved name passes through to the gate
+
+--- FIND
+        if (treeName.StartsWith(LatticeConstants.SystemDataTreePrefix, StringComparison.Ordinal))
+--- REPLACE
+        if (treeName.StartsWith("sys-never-", StringComparison.Ordinal))
+--- END

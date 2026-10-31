@@ -1,0 +1,16 @@
+# Registering the newer version in the receiver's catalog re-stamps stored
+# values at it.
+MODULE: StoredStampFixedRegisterRestamps
+TARGET: StoredStampFixed
+CLASS: Action
+SUMMARY: a catalog registration re-stamps stored values
+PERTURBS: Register
+
+--- FIND
+    /\ hop' = TRUE
+    /\ UNCHANGED <<kind, body, stamp, strict, tgt, st, tag, retried, decided, up, faults, lastRead>>
+--- REPLACE
+    /\ hop' = TRUE
+    /\ tag' = [e \in Entries |-> IF st[e] = "Pending" THEN tag[e] ELSE 2]
+    /\ UNCHANGED <<kind, body, stamp, strict, tgt, st, retried, decided, up, faults, lastRead>>
+--- END

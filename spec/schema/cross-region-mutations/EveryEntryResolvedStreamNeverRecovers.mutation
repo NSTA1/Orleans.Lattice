@@ -1,0 +1,15 @@
+# A failed stream is never restored, so its pending entries are never
+# delivered.
+MODULE: EveryEntryResolvedStreamNeverRecovers
+TARGET: EveryEntryResolved
+CLASS: Temporal
+SUMMARY: the stream does not come back after a fault
+PERTURBS: Recover
+
+--- FIND
+    /\ ~up[c]
+    /\ up' = [up EXCEPT ![c] = TRUE]
+--- REPLACE
+    /\ ~up[c] /\ c # "Link"
+    /\ up' = [up EXCEPT ![c] = TRUE]
+--- END
