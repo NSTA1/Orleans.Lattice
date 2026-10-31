@@ -131,6 +131,23 @@ internal sealed class AccessRuleDraft
         {
             errors.Subject = "Choose who the rule is about.";
         }
+        else if (SubjectKind == LatticeSubjectSelectorKind.Group && SubjectId.Trim().StartsWith(LatticeTenantTrees.SegmentPrefix, StringComparison.Ordinal))
+        {
+            // The cluster confines a rule naming a tenant group to that tenant's own
+            // trees (TenantRuleConfinement); say so before it is sent.
+            var confinement = TenantGroupConfinement(SubjectId.Trim());
+            if (confinement is not null)
+            {
+                if (NeedsTree && TreeId.Trim().Length > 0)
+                {
+                    errors.Tree = confinement;
+                }
+                else if (!NeedsTree)
+                {
+                    errors.Subject = confinement;
+                }
+            }
+        }
 
         if (NeedsTree)
         {
@@ -164,6 +181,45 @@ internal sealed class AccessRuleDraft
         }
 
         return errors;
+    }
+
+    /// <summary>
+    /// Why a rule naming the tenant group <paramref name="subject"/> cannot have this
+    /// draft's scope, or <see langword="null"/> when it can: the cluster admits such a
+    /// rule only on one of that tenant's own trees (<c>t/{tenant}/{name}</c>, not an
+    /// app-owned <c>a/...</c> or system tree). The cluster checks again on write.
+    /// </summary>
+    /// <param name="subject">The tenant group id the rule names.</param>
+    /// <returns>The refusal, or <see langword="null"/>.</returns>
+    internal string? TenantGroupConfinement(string subject)
+    {
+        if (!LatticeTenantGroupId.TryParse(subject, out var group))
+        {
+            return $"{subject} is not a well-formed tenant group id (t/{{tenant}}/{{name}}).";
+        }
+
+        var tenant = group.Tenant.Value;
+        var refusal = $"A rule naming tenant group {subject} may govern only tenant {tenant}'s own trees (t/{tenant}/...). Choose one of them.";
+        if (!NeedsTree)
+        {
+            return refusal;
+        }
+
+        var tree = TreeId.Trim();
+        var prefix = string.Concat(LatticeTenantTrees.SegmentPrefix, tenant, "/");
+        if (!tree.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return refusal;
+        }
+
+        var local = tree[prefix.Length..];
+        return local.Length == 0
+            || local == "*"
+            || local.StartsWith("a/", StringComparison.Ordinal)
+            || local.StartsWith("sys-", StringComparison.Ordinal)
+            || local.StartsWith("_lattice_", StringComparison.Ordinal)
+                ? refusal
+                : null;
     }
 
     /// <summary>The rule the draft describes. Call only after <see cref="Validate"/> reported no error.</summary>

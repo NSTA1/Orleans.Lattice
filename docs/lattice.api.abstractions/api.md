@@ -1208,6 +1208,7 @@ Implemented by [`Orleans.Lattice.Api.Auth`](../lattice.api.auth/README.md) and e
 - `public bool AllTreesGrantsEnabled { get; init; }`
 - `public bool AccessAdministrationDelegationEnabled { get; init; }`
 - `public bool DelegatedTenantAccessAdministrationEnabled { get; init; }`
+- `public bool DirectoryValidationRequired { get; init; }`
 
 ### `ApiAuthTypeAliases`
 
