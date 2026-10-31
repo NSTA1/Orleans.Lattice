@@ -42,6 +42,7 @@ public static partial class JourneyMasks
         ];
     }
 
+    // IgnoreCase only: Playwright hands the pattern to the browser, and refuses any flag JavaScript has no equivalent for.
     [GeneratedRegex(
         @"(127\.0\.0\.1|localhost|\[::1\]):\d{2,5}"
         + @"|\b\d{4}-\d{2}-\d{2}\b"
@@ -51,6 +52,6 @@ public static partial class JourneyMasks
         + @"|\d[\d.,]*\s*(/\s?s|/\s?min|per second|per minute|ops/s|B/s|KiB/s|MiB/s)"
         + @"|\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
         + @"|\b[0-9a-f]{32}\b",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+        RegexOptions.IgnoreCase)]
     private static partial Regex VolatileTextPattern();
 }
