@@ -7,6 +7,7 @@ using Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Sessions;
+using static Microsoft.Playwright.Assertions;
 using Trees = Orleans.Lattice.Explorer.EndToEnd.Tests.Story.StoryNames.Contoso.Trees;
 
 namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Journeys.C2;
@@ -57,9 +58,10 @@ public sealed partial class C2Resilience
             var routes = await estate.GatewayDestinationsAsync(JourneyEstate.West);
             Assert.That(routes.Where(route => route.Healthy).Select(route => route.Id), Is.EqualTo(new[] { "silo-0" }), "the gateway routes to silo 0 alone");
 
-            var actions = await keys.WaitForKeysAsync(expected, TimeSpan.FromMinutes(4));
-            step.Log(actions.Count == 0 ? "live updates resumed on their own" : "live updates resumed after: " + string.Join("; ", actions));
+            var notes = await keys.WaitForKeysAsync(expected, TimeSpan.FromMinutes(4));
+            step.Log("live updates resumed on their own; the tab's notes on the way: " + (notes.Count == 0 ? "none" : string.Join(" | ", notes)));
             await priya.Shell.ExpectConnectionAsync("Connected");
+            await Expect(keys.Notes).ToHaveCountAsync(0);
 
             if (watch.IsWatching)
             {
@@ -78,9 +80,7 @@ public sealed partial class C2Resilience
             await step.CaptureAsync(
                 priya,
                 "resumed",
-                actions.Count == 0
-                    ? $"Live updates resumed on silo 0 and all ten readings under {prefix} arrived; the indicator reads Connected"
-                    : $"After '{DataKeysView.RestartLiveButton}', all ten readings under {prefix} arrived; the indicator reads Connected");
+                $"Live updates resumed on their own and all ten readings under {prefix} arrived; the indicator reads Connected");
             Coverage.Hit("tab:data/keys");
             Coverage.Hit("use-case:cluster/silo-failover");
         }

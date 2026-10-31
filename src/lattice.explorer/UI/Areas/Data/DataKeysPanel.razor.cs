@@ -20,6 +20,9 @@ public partial class DataKeysPanel : IDisposable
     /// <summary>How many characters of a key a table cell shows before clipping.</summary>
     internal const int KeyClip = 96;
 
+    /// <summary>What the tab says when the change feed ended because the connection to the cluster degraded.</summary>
+    internal const string FeedLostNote = "Live updates paused because the connection to the cluster was lost. They resume when it is back.";
+
     private static readonly IReadOnlyList<LtSelectOption> ModeOptions =
     [
         new(nameof(EntryScanMode.Live), "Live"),
@@ -56,6 +59,8 @@ public partial class DataKeysPanel : IDisposable
     private bool _live = true;
     private string? _liveNote;
     private bool _liveRestartable;
+    private bool _feedLost;
+    private ILatticeStateConnection? _connection;
     private readonly ComponentLifetime _follows = new();
     private readonly ComponentLifetime _rightsLifetime = new();
     private int _entryVersion;
@@ -129,6 +134,11 @@ public partial class DataKeysPanel : IDisposable
         _reader = DataServices.Find<IDataReader>(Services);
         _client = ResolveClient();
         _followAvailable = _client is not null;
+        if (_client is ILatticeStateConnection connection)
+        {
+            _connection = connection;
+            connection.StatusChanged += OnConnectionChanged;
+        }
     }
 
     /// <inheritdoc />
@@ -197,6 +207,11 @@ public partial class DataKeysPanel : IDisposable
     public void Dispose()
     {
         EntryCommands.Requested -= OnCommand;
+        if (_connection is { } connection)
+        {
+            connection.StatusChanged -= OnConnectionChanged;
+        }
+
         if (_rightsFor is { } tree)
         {
             EntryCommands.HideTree(tree);
@@ -472,6 +487,7 @@ public partial class DataKeysPanel : IDisposable
         _live = live;
         _liveNote = null;
         _liveRestartable = false;
+        _feedLost = false;
         RestartFollow();
     }
 
@@ -480,7 +496,44 @@ public partial class DataKeysPanel : IDisposable
         _live = true;
         _liveNote = null;
         _liveRestartable = false;
+        _feedLost = false;
         RestartFollow();
+    }
+
+    private void OnConnectionChanged(LatticeConnectionStatus status)
+    {
+        if (status.State == LatticeConnectionState.Connected && Volatile.Read(ref _feedLost))
+        {
+            _ = InvokeAsync(ResumeLostFeedAsync);
+        }
+    }
+
+    /// <summary>
+    /// Follows the change feed again once the connection is back, after the feed
+    /// ended because the connection degraded, and reads the page again so the
+    /// changes made meanwhile are shown.
+    /// </summary>
+    private async Task ResumeLostFeedAsync()
+    {
+        if (!_feedLost || !_live || _lifetime.IsLeft)
+        {
+            return;
+        }
+
+        _feedLost = false;
+        _liveNote = null;
+        _liveRestartable = false;
+        RestartFollow();
+        if (_pager is null || _pager.PageIndex == 0)
+        {
+            await ResetAsync();
+        }
+        else
+        {
+            _stale = true;
+        }
+
+        StateHasChanged();
     }
 
     private void StopFollow()
@@ -514,6 +567,24 @@ public partial class DataKeysPanel : IDisposable
             await foreach (var change in client.ObserveChangesAsync(request, cancellationToken))
             {
                 await InvokeAsync(() => cancellationToken.IsCancellationRequested ? Task.CompletedTask : OnChangeAsync(change));
+            }
+
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                // The feed ended without being asked to: the connection gave up
+                // resubscribing once it degraded. Say so, and resume when it is back.
+                await InvokeAsync(() =>
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
+
+                    _feedLost = true;
+                    _liveNote = FeedLostNote;
+                    _liveRestartable = true;
+                    StateHasChanged();
+                });
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

@@ -131,7 +131,10 @@ Snapshot scan modes, page-size choices from the shared paging ladder, Previous
 and Next page buttons, and optional live updates from the state API change
 feed. If a scan cursor expires, the page offers a restart from the first page.
 If a live feed is not offered, it disables live updates; if the feed moves past
-the cursor, it reports that live updates stopped and offers a restart. The key
+the cursor, it reports that live updates stopped and offers a restart. If the
+connection to the cluster degrades and the feed ends with it, the tab says live
+updates paused, offers a restart, and resumes them by itself - reading the page
+again, so the changes made meanwhile are shown - once the connection is back. The key
 table clips long keys in cells but keeps the full key in details, and selecting
 one writes `?key=` and opens the entry panel. At the expanded width the entry
 stands beside the key table as a split view, kept in view while the list
