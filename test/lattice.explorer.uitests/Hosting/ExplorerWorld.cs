@@ -131,6 +131,10 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
         {
             await world.SeedTenantsAsync();
         }
+        else
+        {
+            await world.SeedObserverAsync();
+        }
 
         return world;
     }
@@ -502,10 +506,20 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
                 operations: LatticeOperation.Read | LatticeOperation.RangeRead | LatticeOperation.Write
                     | LatticeOperation.Delete | LatticeOperation.RangeDelete,
                 effect: LatticeEffect.Allow));
+        }
+    }
 
-            // An observer of the whole estate: the Cluster area is visible to them,
-            // and administering a tree, or creating one, is not.
-            await policy.PutRuleAsync(new LatticeAuthorizationRule(
+    /// <summary>
+    /// Seeds the observer of the whole estate, in the plain world only: the Cluster
+    /// area is visible to <see cref="WorldIdentities.Erin"/>, and administering a tree,
+    /// or creating one, is not. The tenancy worlds keep their single cluster-wide rule,
+    /// which the tenant-scoped Access journey counts.
+    /// </summary>
+    private async Task SeedObserverAsync()
+    {
+        using (LatticeSystemOrigin.Enter())
+        {
+            await Head.Services.GetRequiredService<ILatticeAuthorizationPolicyStore>().PutRuleAsync(new LatticeAuthorizationRule(
                 ruleId: "erin-observes-the-estate",
                 subject: LatticeSubjectSelector.User(WorldIdentities.Erin),
                 scope: LatticeScope.ClusterWide(),
