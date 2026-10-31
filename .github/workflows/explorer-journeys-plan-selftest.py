@@ -34,7 +34,7 @@ class Tree:
     """A temporary repository root with journey folders and story fixtures."""
 
     def __init__(self, journeys=("A1", "A10", "A3", "T2"), stories=("ContosoStoryTests", "FabrikamStoryTests"),
-                 contract=True):
+                 contract=True, storylines=("A1", "T1")):
         self._temporary = tempfile.TemporaryDirectory()
         self.root = Path(self._temporary.name)
         base = self.root / planner.JOURNEYS
@@ -54,8 +54,15 @@ class Tree:
         if contract:
             contracts = self.root / planner.E2E / "Contracts"
             contracts.mkdir(parents=True)
-            (contracts / "A1Contract.cs").write_text(
-                "public sealed class A1Contract\n    : IChapterContract\n{\n}\n")
+            (contracts / "ChapterContract.cs").write_text(
+                "public abstract class ChapterContract(string chapter) : IChapterContract\n{\n}\n")
+            for chapter in storylines:
+                if chapter == "A1":
+                    (contracts / "A1Contract.cs").write_text(
+                        "public sealed class A1Contract\n    : IChapterContract\n{\n}\n")
+                else:
+                    (contracts / f"{chapter}Contract.cs").write_text(
+                        f"public sealed class {chapter}Contract() : ChapterContract(\"{chapter}\")\n{{\n}}\n")
 
     def close(self):
         self._temporary.cleanup()
@@ -142,7 +149,7 @@ class PlanTests(unittest.TestCase):
     def test_leg_shapes(self):
         legs = {leg["name"]: leg for leg in self.plan(event="schedule", action="", base="")["legs"]}
         self.assertEqual(planner.HARNESS_FILTER, legs["harness"]["filter"])
-        for excluded in ("TestCategory!=Journey", "TestCategory!=Story", "TestCategory!=CoverageGate"):
+        for excluded in ("TestCategory!=Journey", "TestCategory!=Story", "TestCategory!=CoverageGate", "TestCategory!=ContractConformance"):
             self.assertIn(excluded, legs["harness"]["filter"])
         self.assertEqual("isolated", legs["isolated-a3"]["mode"])
         self.assertEqual("story", legs["story-fabrikam"]["mode"])
@@ -167,6 +174,17 @@ class PlanTests(unittest.TestCase):
         self.assertFalse([name for name in names(result) if name.startswith("story-")])
         self.assertTrue(any("No chapter contract" in note for note in result["notes"]))
         self.assertTrue(planner.has_chapter_contracts(self.tree.root), "a multi-line class declaration counts")
+
+    def test_a_story_leg_waits_for_its_own_storyline_contracts(self):
+        contoso = Tree(storylines=("A1",))
+        self.addCleanup(contoso.close)
+        self.assertEqual({"contoso"}, planner.storylines_with_contracts(contoso.root))
+        result = planner.plan(contoso.root, "schedule", "", "", None)
+        self.assertIn("story-contoso", names(result))
+        self.assertNotIn("story-fabrikam", names(result))
+        self.assertTrue(any("No fabrikam chapter has a contract" in note for note in result["notes"]))
+        self.assertEqual({"contoso", "fabrikam"}, planner.storylines_with_contracts(self.tree.root),
+                         "a contract derived from the ChapterContract base counts")
 
     def test_a_folder_that_is_not_a_chapter_fails_the_plan(self):
         for folder in ("Z1", "a-3"):
