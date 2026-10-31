@@ -310,6 +310,15 @@ builder.Host.UseOrleans(silo =>
     // trusted. Without it no write can ever reach the dead letters, and the Explorer's
     // dead-letter views have nothing to show (dead-letter feature coverage, #5389).
     silo.AddLatticeSchemaEnforcement(options => options.StrictIngest = true);
+
+    // Not in the reference silo, and only with the fault seams on: a test-only, bounded hold
+    // on a named tree's compliance scan (/e2e/compliance-delay), so a journey can act on a
+    // scan that is still running: U2 stops one, C2 loses the silo running one.
+    if (JourneyHostEnvironment.FaultsEnabled)
+    {
+        JourneyDelayedComplianceAdmin.Register(silo.Services);
+    }
+
     if (config.GetValue("Schema:EnableVersioning", false))
     {
         silo.AddLatticeSchemaVersioning();

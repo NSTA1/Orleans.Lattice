@@ -61,5 +61,22 @@ internal static class JourneyFaultEndpoints
                 return Results.Conflict(new { reason = ex.Message });
             }
         });
+
+        // A bounded hold on a tree's next compliance scan on this silo, so a journey can act
+        // while the scan is still Running (JourneyComplianceScanDelay). The harness arms every
+        // silo of a region, because the scan runs on whichever silo accepted its start.
+        app.MapPost(Prefix + "/compliance-delay", (string tree, double seconds, JourneyComplianceScanDelay delay) =>
+        {
+            if (string.IsNullOrEmpty(tree) || !double.IsFinite(seconds) || seconds <= 0 || seconds > JourneyComplianceScanDelay.MaximumDelay.TotalSeconds)
+            {
+                return Results.BadRequest(new { reason = $"Name a tree and a hold of more than 0 and at most {JourneyComplianceScanDelay.MaximumDelay.TotalSeconds:0} seconds." });
+            }
+
+            var until = delay.Arm(tree, TimeSpan.FromSeconds(seconds));
+            return Results.Ok(new { tree, until });
+        });
+
+        app.MapDelete(Prefix + "/compliance-delay", (string tree, JourneyComplianceScanDelay delay) =>
+            Results.Ok(new { tree, disarmed = delay.Disarm(tree) }));
     }
 }
