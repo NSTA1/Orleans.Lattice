@@ -32,6 +32,18 @@ membership**, never of where the backup was originally captured:
   single-cluster) - the restore runs as a plain local restore with no saga.
   There is nothing to coordinate.
 
+On a host with [runtime replication configuration](runtime-config.md), each
+silo answers "is this tree replicated?" from its own compiled snapshot, which
+can trail an enable committed on another silo by about a second. A stale "not
+replicated" would replace a replicated tree locally while its peers keep the
+writes the replacement discards, so the initiating cluster never declines on
+that answer alone: before it takes the local path it re-reads the replication
+configuration and decides on the refreshed answer. If it cannot read the
+configuration it refuses the restore with a `LatticeRestoreValidationException`
+rather than risk an uncoordinated replacement
+([#5462](https://github.com/NSTA1/Orleans.Lattice/issues/5462)). The same check
+guards a backup set.
+
 A **backup set** (multiple trees captured together) restores as one unit: if any
 member tree is replicated, the whole set restores under a single saga spanning
 the local cluster and every current replication peer, so every member tree flips

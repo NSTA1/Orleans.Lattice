@@ -1,6 +1,7 @@
 using System.Linq;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Orleans.Hosting;
 using Orleans.Lattice.Backup;
@@ -111,6 +112,18 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddSingleton<CompiledReplicationConfigSnapshotMaintainer>();
         builder.Services.AddSingleton<IMutationObserver>(
             sp => sp.GetRequiredService<CompiledReplicationConfigSnapshotMaintainer>());
+
+        // The cross-silo half (#5462): the change feed above fires only on the
+        // silo hosting the committing config leaf, so a silo that observes a
+        // config write advances the cluster-wide epoch (as a mutation observer)
+        // and every silo polls it and rebuilds when it moves (as a hosted
+        // service). Same instance for both roles. Without it every other silo
+        // kept the enrollment it compiled at warm-up.
+        builder.Services.TryAddSingleton<ReplicationConfigEpochSynchronizer>();
+        builder.Services.AddSingleton<IMutationObserver>(
+            sp => sp.GetRequiredService<ReplicationConfigEpochSynchronizer>());
+        builder.Services.AddSingleton<IHostedService>(
+            sp => sp.GetRequiredService<ReplicationConfigEpochSynchronizer>());
 
         // The runtime enable/disable authoring seam (and its tree-content probe)
         // the API facade depends on to author per-tree enablement into the config
