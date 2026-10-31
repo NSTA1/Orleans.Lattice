@@ -89,6 +89,7 @@ query:shell.all-tenants	query	ExplorerRouteSegments.AllTenantsQueryKey	The ?all-
 query:shell.at	query	ExplorerAddress.AtQuery	The ?at= query key in shell	U4
 query:shell.key	query	ExplorerAddress.KeyQuery	The ?key= query key in shell	U1
 query:shell.prefix	query	ExplorerAddress.PrefixQuery	The ?prefix= query key in shell	U1
+query:shell.signin	query	SessionSignInOptions.NoticeQueryKey	The ?signin=refused notice that reopens the sign-in dialog saying the cluster refused the password	A1
 query:shell.tenant	query	ExplorerRouteSegments.TenantQueryKey	The ?tenant= query key in shell	T2
 query:telemetry.from	query	TelemetryWindow.FromQuery	The ?from= query key in telemetry	A11
 query:telemetry.range	query	TelemetryWindow.RangeQuery	The ?range= query key in telemetry	A11
