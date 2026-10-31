@@ -61,9 +61,10 @@ was interrupted after it began scanning may have left behind (`shadow`).
 
 Decommission is modelled as waiting for an idle maintainer, and that is the
 production behaviour rather than a scope cut. `ViewMaintainerGrain` is not
-`[Reentrant]`; its only `[AlwaysInterleave]` method,
-`GetDurableReadPositionsAsync`, reads an immutable published snapshot and
-mutates nothing, and its drain timer does not interleave. A `DecommissionAsync`
+`[Reentrant]`. Its two `[AlwaysInterleave]` methods mutate nothing a rebuild
+reads: `GetDurableReadPositionsAsync` reads an immutable published snapshot, and
+`NotifySourceIdentityChangedAsync` only records that the source binding is
+stale for the next drain to re-resolve. Its drain timer does not interleave. A `DecommissionAsync`
 call therefore queues behind an in-progress rebuild turn and runs after it. The
 one way a rebuild can stop part-way is for the activation to fail or crash,
 which is the model's `Crash` with `shadow` still set; the next activation's
