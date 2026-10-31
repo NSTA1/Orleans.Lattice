@@ -12,12 +12,16 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// stream re-sends its unacknowledged window.
 /// </summary>
 /// <remarks>
-/// Each shard deduplicated a re-driven chunk only by its last-completed
-/// operation id, so a chunk re-sent after a later one had landed was grafted a
-/// second time below the shard's right edge. The tree then held duplicate rows
-/// (the count and the statistics over-reported) and a leaf chain whose keys
-/// regressed, so a range scan suppressed the regressed leaves and omitted keys
-/// that point reads still found. Runs on two silos and four shards.
+/// Two defects produced the same symptoms. Bulk-built leaves were born declaring
+/// no key range, and the WAL materialiser replays into a reactivating leaf every
+/// record its declared range covers, so each leaf that deactivated
+/// re-materialised every later key of its shard. And each shard deduplicated a
+/// re-driven chunk only by its last-completed operation id, so a chunk re-sent
+/// after a later one had landed was grafted a second time below the shard's
+/// right edge. Either way the tree held duplicate rows (the count and the
+/// statistics over-reported) and a leaf chain whose keys regressed, so a range
+/// scan suppressed the regressed leaves and omitted keys that point reads still
+/// found. Runs on two silos and four shards.
 /// </remarks>
 [TestFixture]
 [Category("Integration")]
@@ -93,6 +97,66 @@ public sealed class BulkLoadRedeliveryIntegrationTests
 
         var found = await tree.GetManyAsync(chunks.SelectMany(chunk => chunk.Select(e => e.Key)).ToList());
         Assert.That(found, Has.Count.EqualTo(keyCount), "a point read of every key finds it");
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Every_leaf_of_a_bulk_loaded_tree_declares_its_range_and_reactivates_holding_only_its_own_keys(bool streamed)
+    {
+        // The WAL materialiser replays into a reactivating leaf every record its
+        // declared range covers. Bulk-built leaves used to declare no range, so
+        // each one that deactivated re-materialised every later key of its shard:
+        // the count and statistics grew with every reactivation, and the leaf
+        // chain regressed so range scans suppressed whole leaves.
+        const int keyCount = 8_000;
+        var tree = await CreateTreeAsync(streamed ? "bulk-replay-streamed" : "bulk-replay-oneshot");
+        var chunks = Chunks(keyCount);
+        if (streamed)
+        {
+            var op = Guid.NewGuid().ToString("N");
+            for (var c = 0; c < chunks.Count; c++)
+            {
+                await tree.BulkAppendChunkAsync($"{op}/{c}", chunks[c]);
+            }
+        }
+        else
+        {
+            await tree.BulkLoadAsync(chunks.SelectMany(chunk => chunk).ToList());
+        }
+
+        var leaves = new List<IBPlusLeafGrain>();
+        for (var shardIndex = 0; shardIndex < ShardCount; shardIndex++)
+        {
+            var shard = _fixture.Cluster.GrainFactory.GetGrain<IShardRootGrain>($"{tree.GetPrimaryKeyString()}/{shardIndex}");
+            var ranges = new List<LeafKeyRange>();
+            for (var cursor = await shard.GetLeftmostLeafIdAsync(); cursor is { } id;)
+            {
+                var leaf = _fixture.Cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(id);
+                var link = await leaf.GetKeyRangeAndNextSiblingAsync();
+                ranges.Add(link.KeyRange);
+                leaves.Add(leaf);
+                cursor = link.NextSibling;
+            }
+
+            Assert.That(ranges, Has.Count.GreaterThan(1), $"precondition: shard {shardIndex} holds a multi-leaf chain");
+            Assert.Multiple(() =>
+            {
+                Assert.That(ranges[0].LowKeyInclusive, Is.Null, $"shard {shardIndex}: the first leaf is open below");
+                Assert.That(ranges[^1].HighKeyExclusive, Is.Null, $"shard {shardIndex}: the last leaf is open above");
+                for (var i = 1; i < ranges.Count; i++)
+                {
+                    Assert.That(ranges[i].LowKeyInclusive, Is.Not.Null.And.EqualTo(ranges[i - 1].HighKeyExclusive),
+                        $"shard {shardIndex}: leaf {i} begins where leaf {i - 1} ends");
+                }
+            });
+        }
+
+        foreach (var leaf in leaves)
+        {
+            await leaf.ForceDeactivateAsync();
+        }
+
+        await AssertExactAsync(tree, keyCount, await ScanAllKeysAsync(tree));
     }
 
     [Test]

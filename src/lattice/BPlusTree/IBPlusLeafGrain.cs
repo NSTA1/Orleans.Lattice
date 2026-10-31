@@ -743,6 +743,20 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task SetKeyRangeAsync(string? lowKeyInclusive, string? highKeyExclusive);
 
     /// <summary>
+    /// Narrows this leaf's exclusive high bound to <paramref name="highKeyExclusive"/>,
+    /// persisting it, when the current bound is open or lies above it; otherwise a
+    /// no-op, so a re-driven caller converges. A shard's bulk append calls it on the
+    /// rightmost leaf before it links the leaves it appended, so the leaf stops
+    /// declaring the keyspace those leaves now own: the WAL materialiser replays into
+    /// a leaf every record its declared range covers, so a leaf left open-ended would
+    /// re-materialise every later key of its shard when it next activated (issue
+    /// #5460). Throws <see cref="InvalidOperationException"/> when the bound is at or
+    /// below the leaf's low bound.
+    /// </summary>
+    /// <param name="highKeyExclusive">The new exclusive high bound. Must not be <see langword="null"/>.</param>
+    Task NarrowHighKeyAsync(string highKeyExclusive);
+
+    /// <summary>
     /// Returns this leaf's persisted owned-key-range bounds
     /// (<see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.LowKeyInclusive"/> /
     /// <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.HighKeyExclusive"/>) as a

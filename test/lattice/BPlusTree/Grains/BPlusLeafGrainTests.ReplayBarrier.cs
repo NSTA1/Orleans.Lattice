@@ -163,7 +163,7 @@ public partial class BPlusLeafGrainTests
         // behaviour-preserving for them, because their callers already blocked on
         // activation before this change.
         "SetShardIndexAsync", "SetKeyRangeAsync", "SetTreeIdAsync", "SetBindingAsync",
-        "InitializeSiblingAsync", "SetCheckpointOffsetHintsAsync", "SetParentAsync",
+        "InitializeSiblingAsync", "SetCheckpointOffsetHintsAsync", "SetParentAsync", "NarrowHighKeyAsync",
 
         // Recovery's birth seam (issue #4700): it re-binds, or re-creates, the leaf
         // through SetTreeIdAsync and SetShardIndexAsync, gated as they are.

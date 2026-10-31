@@ -42,7 +42,7 @@ internal sealed partial class ShardRootGrain
             clocks[i] = clock;
         }
 
-        await SeedBulkLoadLeavesAsync(leafIds, maxLeafKeys, sortedEntries.Count, (start, count) =>
+        await SeedBulkLoadLeavesAsync(leafIds, separators, maxLeafKeys, sortedEntries.Count, (start, count) =>
         {
             var batch = new Dictionary<string, LwwValue<byte[]>>(count);
             for (int j = 0; j < count; j++)
@@ -88,7 +88,7 @@ internal sealed partial class ShardRootGrain
         var (leafIds, separators) = PlanBulkLoadLeaves(
             shardKey, operationId, "bulkraw", maxLeafKeys, sortedEntries.Count, i => sortedEntries[i].Key);
 
-        await SeedBulkLoadLeavesAsync(leafIds, maxLeafKeys, sortedEntries.Count, (start, count) =>
+        await SeedBulkLoadLeavesAsync(leafIds, separators, maxLeafKeys, sortedEntries.Count, (start, count) =>
         {
             var batch = new Dictionary<string, LwwValue<byte[]>>(count);
             for (int j = 0; j < count; j++)
@@ -257,9 +257,20 @@ internal sealed partial class ShardRootGrain
     /// live batch set stays O(<see cref="BoundedFanOut.DefaultWidth"/>) instead of
     /// holding one dictionary per leaf for the whole load.
     /// </para>
+    /// <para>
+    /// <b>Each leaf is born declaring the range it owns</b>, from its own
+    /// separator to the next leaf's (open at the chain's two ends). The WAL
+    /// materialiser replays into a leaf every record its declared range covers,
+    /// and a leaf declaring no range covers its whole shard: these leaves used to
+    /// be born that way, so a leaf that deactivated re-materialised every later key
+    /// of its shard when it next activated - duplicate rows that over-counted, and
+    /// a leaf chain that regressed, so range scans suppressed whole leaves (issue
+    /// #5460).
+    /// </para>
     /// </remarks>
     private Task SeedBulkLoadLeavesAsync(
         List<GrainId> leafIds,
+        List<string?> separators,
         int maxLeafKeys,
         int entryCount,
         Func<int, int, Dictionary<string, LwwValue<byte[]>>> buildBatch)
@@ -287,10 +298,8 @@ internal sealed partial class ShardRootGrain
                 {
                     TreeId = treeId,
                     ShardIndex = shardIndex,
-                    // Bulk-load leaves carry no ownership range, exactly as the
-                    // serial version left them - it never called SetKeyRangeAsync.
-                    LowKeyInclusive = null,
-                    HighKeyExclusive = null,
+                    LowKeyInclusive = separators[slot],
+                    HighKeyExclusive = slot + 1 < leafIds.Count ? separators[slot + 1] : null,
                     PrevSibling = slot > 0 ? leafIds[slot - 1] : null,
                     NextSibling = slot + 1 < leafIds.Count ? leafIds[slot + 1] : null,
                 });
@@ -502,13 +511,17 @@ internal sealed partial class ShardRootGrain
             var newLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(newId);
 
             // The append creates this leaf, so its first row write carries a
-            // create intent naming it (issue #4654).
+            // create intent naming it (issue #4654). The leaf is born declaring
+            // the range it owns, up to the next appended leaf's separator and open
+            // at the tail (issue #5460; see SeedBulkLoadLeavesAsync).
             using (LatticeNewLeafIntentContext.BeginScope(newId))
             {
                 await newLeaf.InitializeSiblingAsync(new SiblingInitialization
                 {
                     TreeId = TreeId,
                     ShardIndex = MyShardIndex,
+                    LowKeyInclusive = separator,
+                    HighKeyExclusive = idx < sortedEntries.Count ? sortedEntries[idx].Key : null,
                     PrevSibling = leafIndex > 0 ? newLeafIds[leafIndex - 1] : null,
                     NextSibling = leafIndex + 1 < newLeafCount ? newLeafIds[leafIndex + 1] : null,
                 });
@@ -638,6 +651,11 @@ internal sealed partial class ShardRootGrain
 
         var existingLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(graft.ExistingRightmostLeafId);
         var firstNewLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(graft.NewLeaves[0].LeafId);
+
+        // The rightmost leaf stops declaring the keyspace the appended leaves now
+        // own before they are linked behind it (issue #5460). Narrowing only, so a
+        // resumed graft re-runs it harmlessly.
+        await existingLeaf.NarrowHighKeyAsync(graft.NewLeaves[0].SeparatorKey);
         await existingLeaf.SetNextSiblingAsync(graft.NewLeaves[0].LeafId);
         await firstNewLeaf.SetPrevSiblingAsync(graft.ExistingRightmostLeafId);
 

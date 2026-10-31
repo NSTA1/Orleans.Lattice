@@ -55,7 +55,6 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         await tail.Received(5).GetRawEntryAsync(Arg.Any<string>());
         Assert.Multiple(() =>
         {
-            Assert.That(h.Leaves, Has.Count.EqualTo(1), "no leaf may be minted for entries already grafted");
             Assert.That(h.State.State.PendingBulkGraft, Is.Null);
             Assert.That(h.State.State.RootNodeId, Is.EqualTo(existing));
             Assert.That(h.State.State.RootIsLeaf, Is.True);
@@ -76,7 +75,10 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         tail.GetAppendTailAsync().Returns((1, "a"), (2, "k0000"));
         StubStoredRows(tail);
 
-        var minted = new List<IBPlusLeafGrain>();
+        // The second appended leaf's birth faults on the first delivery only, so
+        // the first delivery has filled the rightmost leaf and seeded the first
+        // appended leaf when it gives up.
+        var births = 0;
         var failure = new IOException("a fault part-way through the append");
         h.Factory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>()).Returns(call =>
         {
@@ -85,12 +87,8 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
             var leaf = ResolveLeaf(h.Leaves, key);
             if (fresh)
             {
-                minted.Add(leaf);
-                if (minted.Count == 2)
-                {
-                    leaf.InitializeSiblingAsync(Arg.Any<SiblingInitialization>())
-                        .Returns(Task.FromException(failure), Task.CompletedTask);
-                }
+                leaf.InitializeSiblingAsync(Arg.Any<SiblingInitialization>())
+                    .Returns(_ => Interlocked.Increment(ref births) == 2 ? Task.FromException(failure) : Task.CompletedTask);
             }
 
             return leaf;
@@ -101,14 +99,25 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
 
         await h.Grain.BulkAppendAsync("op-1", Pairs(5));
 
-        Assert.That(minted, Has.Count.EqualTo(2), "the retry re-seeds the leaves the first delivery minted");
+        // Each appended leaf, keyed by the low bound it was born declaring.
+        var appended = h.Leaves.Values
+            .Select(l => (Leaf: l, Births: l.ReceivedCalls()
+                .Where(c => c.GetMethodInfo().Name == nameof(IBPlusLeafGrain.InitializeSiblingAsync))
+                .Select(c => ((SiblingInitialization)c.GetArguments()[0]!).LowKeyInclusive)
+                .Distinct()
+                .ToArray()))
+            .Where(x => x.Births.Length > 0)
+            .ToDictionary(x => x.Births.Single()!, x => x.Leaf);
+
+        Assert.That(appended.Keys, Is.EquivalentTo(new[] { "k0001", "k0003" }),
+            "the retry re-seeds the leaves the first delivery minted, each with the range it was born with");
         Assert.Multiple(() =>
         {
             Assert.That(MergedKeySets(tail), Is.EqualTo(new[] { new[] { "k0000" } }),
                 "the entry the first delivery filled the rightmost leaf with must not be merged again");
-            Assert.That(MergedKeySets(minted[0]), Is.EqualTo(new[] { new[] { "k0001", "k0002" }, new[] { "k0001", "k0002" } }),
-                "the retry must hand the first new leaf exactly the entries it already holds");
-            Assert.That(MergedKeySets(minted[1]), Is.EqualTo(new[] { new[] { "k0003", "k0004" } }));
+            Assert.That(MergedKeySets(appended["k0001"]), Is.EqualTo(new[] { new[] { "k0001", "k0002" }, new[] { "k0001", "k0002" } }),
+                "the retry must hand the first appended leaf exactly the entries it already holds");
+            Assert.That(MergedKeySets(appended["k0003"]), Is.EqualTo(new[] { new[] { "k0003", "k0004" } }));
             Assert.That(h.State.State.LastCompletedBulkOperationId, Is.EqualTo("op-1"));
         });
     }
