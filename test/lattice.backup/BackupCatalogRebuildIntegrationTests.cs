@@ -65,7 +65,7 @@ public sealed class BackupCatalogRebuildIntegrationTests
         var firstSeen = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
         // Catalogue the manifest first, then let the sink hold a later-timestamped
-        // re-capture of the same content-addressed id. The rebuild must reconcile
+        // copy of the same backup id. The rebuild must reconcile
         // in place and keep the first capture time.
         await _fixture.Catalog.RegisterAsync(Manifest("cafef00d", firstSeen));
         await _fixture.Sink.WriteManifestAsync(Manifest("cafef00d", firstSeen.AddDays(3)));

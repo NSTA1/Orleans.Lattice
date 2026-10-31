@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Api.Mcp;
 /// </summary>
 internal sealed record McpBackupManifest
 {
-    /// <summary>The content-addressed backup id (the catalog key).</summary>
+    /// <summary>The backup id (the catalog key), unique to the capture that produced it.</summary>
     public required string Id { get; init; }
 
     /// <summary>The human-readable backup name recorded on the manifest.</summary>
@@ -40,7 +40,7 @@ internal sealed record McpBackupManifest
     /// </summary>
     public string? BaseBackupId { get; init; }
 
-    /// <summary>The number of content-addressed artifacts the backup references.</summary>
+    /// <summary>The number of artifacts the backup references.</summary>
     public required int ArtifactCount { get; init; }
 
     /// <summary>

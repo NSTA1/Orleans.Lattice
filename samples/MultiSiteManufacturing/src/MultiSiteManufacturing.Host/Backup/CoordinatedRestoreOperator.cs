@@ -32,12 +32,12 @@ public sealed class CoordinatedRestoreOperator(
 {
     /// <summary>
     /// Captures a full, point-in-time backup of the whole fact tree to the shared
-    /// sink and returns the content-addressed backup id. The manifest lands in the
+    /// sink and returns its backup id. The manifest lands in the
     /// shared sink so any peer cluster can resolve and restore it.
     /// </summary>
     /// <param name="name">The human-readable backup name recorded on the manifest. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancels the capture.</param>
-    /// <returns>The content-addressed id of the captured backup.</returns>
+    /// <returns>The id of the captured backup.</returns>
     /// <exception cref="ArgumentException"><paramref name="name"/> is <c>null</c> or empty.</exception>
     public async Task<string> CaptureFactTreeAsync(string name, CancellationToken cancellationToken = default)
     {
@@ -61,7 +61,7 @@ public sealed class CoordinatedRestoreOperator(
     /// participating cluster flips together (all-or-nothing) and no peer re-advances
     /// the restored cut; when it is not replicated it runs as a plain local restore.
     /// </summary>
-    /// <param name="backupId">The content-addressed backup id to restore. Must not be <c>null</c> or empty.</param>
+    /// <param name="backupId">The backup id to restore. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancels the restore.</param>
     /// <returns>The restore outcome.</returns>
     /// <exception cref="ArgumentException"><paramref name="backupId"/> is <c>null</c> or empty.</exception>

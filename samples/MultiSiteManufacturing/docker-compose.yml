@@ -262,7 +262,7 @@ services:
       Seeder__Enabled: "true"
       ConnectionStrings__AzureTableStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-us:10000/devstoreaccount1;QueueEndpoint=http://azurite-us:10001/devstoreaccount1;TableEndpoint=http://azurite-us:10002/devstoreaccount1;"
       # Shared backup sink account (azurite-backup), reachable from BOTH
-      # clusters. The backup subsystem writes content-addressed manifests plus per-capture
+      # clusters. The backup subsystem writes per-capture manifests plus per-capture
       # artifacts here so a backup captured on either cluster is restorable
       # from any peer - the prerequisite for a coordinated multi-cluster
       # restore of a replicated tree.

@@ -17,7 +17,7 @@ namespace MultiSiteManufacturing.Host.Backup;
 /// replicated tree backed by that in-cluster sink. Registering this shared sink
 /// before <c>AddLatticeBackup</c> satisfies the guard.
 /// <para>
-/// Backup ids are content-addressed and artifact ids are per-capture, so a
+/// Backup ids and artifact ids are both per-capture, and a
 /// re-write of identical content for the same id is idempotent. Ids are hex-encoded into filesystem-safe file names
 /// that round-trip exactly, so the list operations can recover the original ids.
 /// A write lands through a temp file plus atomic move so a concurrent reader on a
