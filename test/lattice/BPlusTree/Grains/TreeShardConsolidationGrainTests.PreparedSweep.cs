@@ -89,7 +89,7 @@ public partial class TreeShardConsolidationGrainTests
         var txRegistry = Substitute.For<ITxRegistryGrain>();
         txRegistry.GetStatusForTerminalAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.InFlight));
         txRegistry.GetStatusForSettlementAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.InFlight));
-        txRegistry.GetStatusManyForTerminalAsync(Arg.Any<IReadOnlyList<Guid>>())
+        txRegistry.GetStatusManyForSettlementAsync(Arg.Any<IReadOnlyList<Guid>>())
             .Returns(ci => Task.FromResult(((IReadOnlyList<Guid>)ci[0]).ToDictionary(id => id, _ => TxStatus.InFlight)));
         h.Factory.GetGrain<ITxRegistryGrain>(TreeId).Returns(txRegistry);
         return snapshot;

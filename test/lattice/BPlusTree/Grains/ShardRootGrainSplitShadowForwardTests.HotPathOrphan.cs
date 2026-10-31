@@ -136,6 +136,12 @@ public partial class ShardRootGrainSplitShadowForwardTests
         var destinationRegistry = Substitute.For<ITxRegistryGrain>();
         destinationRegistry.GetStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.InFlight));
         destinationRegistry.GetStatusForPrepareDedupAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.InFlight));
+        destinationRegistry.IsDecidedOrForgottenForPrepareAsync(Arg.Any<Guid>()).Returns(async call =>
+        {
+            var txid = call.Arg<Guid>();
+            return await destinationRegistry.GetStatusForPrepareDedupAsync(txid) is TxStatus.Committed or TxStatus.Aborted
+                || (await destinationRegistry.GetParticipantsAsync(txid)).Count == 0;
+        });
         destinationRegistry.GetRecordedStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.InFlight));
         destinationRegistry.GetParticipantsAsync(Arg.Any<Guid>()).Returns(Task.FromResult<IReadOnlyList<int>>([SourceShardIndex]));
         destinationFactory.GetGrain<ITxRegistryGrain>(Arg.Any<string>()).Returns(destinationRegistry);

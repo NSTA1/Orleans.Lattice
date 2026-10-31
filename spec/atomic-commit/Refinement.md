@@ -165,6 +165,16 @@ same fallback and ShadowForwardOrphan retains its terminal re-check and
 failed-query bucketing behavior. The forwarded-late-prepare fixtures and
 `TxRegistryGrainTests.Settlement` exercise these boundaries; no model action,
 retention rule, decision cache write or terminal ordering was elided.
+Locally authored forwarded prepares now use
+`IsDecidedOrForgottenForPrepareAsync`, retaining that status read followed by
+the participant lookup only if undecided. Participant absence proves forgetting
+because the local saga registers before dispatch and Forget follows its decision.
+Peer-origin prepares keep the status-only path: local participant absence proves
+nothing for them. The leaf rechecks its applied-terminal memory after both a
+successful and a failed reply, so a failed participant lookup cannot recreate a
+bucket for a terminal applied during the status read. Without that evidence,
+failed probes still bucket. `BPlusLeafGrainTests.Local_forwarded_prepare_refuses_an_applied_terminal_even_when_the_fused_probe_faults`
+pins that interleaving.
 
 Some claims made in this directory are owned by an issue that is still **open**,
 and are not in scope for the refinement note's own work. This section records

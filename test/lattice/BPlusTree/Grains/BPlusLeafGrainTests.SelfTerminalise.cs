@@ -63,7 +63,7 @@ public partial class BPlusLeafGrainTests
         long persistedCheckpoint = 0)
     {
         var registry = Substitute.For<ITxRegistryGrain>();
-        registry.GetStatusForTerminalAsync(txId).Returns(registryOutcome);
+        registry.GetStatusForSettlementAsync(txId).Returns(registryOutcome);
         return BuildSelfTerminaliseLeafCore(txId, registry, out coordinator, persistedCheckpoint);
     }
 
@@ -79,7 +79,7 @@ public partial class BPlusLeafGrainTests
         long persistedCheckpoint = 0)
     {
         var registry = Substitute.For<ITxRegistryGrain>();
-        registry.GetStatusForTerminalAsync(txId)
+        registry.GetStatusForSettlementAsync(txId)
             .ThrowsAsync(new TimeoutException("registry unavailable during activation replay"));
         return BuildSelfTerminaliseLeafCore(txId, registry, out coordinator, persistedCheckpoint);
     }
@@ -248,6 +248,7 @@ public partial class BPlusLeafGrainTests
         var registry = Substitute.For<ITxRegistryGrain>();
         registry.GetStatusForTerminalAsync(txId).Returns(TxStatus.Indeterminate);
         registry.GetRecordedStatusAsync(txId).Returns(recordedOutcome);
+        registry.GetStatusForSettlementAsync(txId).Returns(recordedOutcome);
         return BuildSelfTerminaliseLeafCore(txId, registry, out coordinator, persistedCheckpoint: 0);
     }
 
@@ -321,6 +322,8 @@ public partial class BPlusLeafGrainTests
         var registry = Substitute.For<ITxRegistryGrain>();
         registry.GetStatusForTerminalAsync(txId).Returns(TxStatus.Indeterminate);
         registry.GetRecordedStatusAsync(txId)
+            .ThrowsAsync(new TimeoutException("registry unavailable during recorded-status probe"));
+        registry.GetStatusForSettlementAsync(txId)
             .ThrowsAsync(new TimeoutException("registry unavailable during recorded-status probe"));
         var (grain, state) = BuildSelfTerminaliseLeafCore(txId, registry, out _, persistedCheckpoint: 0);
 

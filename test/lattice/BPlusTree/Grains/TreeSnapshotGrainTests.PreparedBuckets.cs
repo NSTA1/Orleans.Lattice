@@ -63,7 +63,7 @@ public partial class TreeSnapshotGrainTests
         // (issue #4485); answer that seam the same way.
         registry.GetStatusForTerminalAsync(Arg.Any<Guid>()).Returns(Task.FromResult(status));
         registry.GetStatusForSettlementAsync(Arg.Any<Guid>()).Returns(Task.FromResult(status));
-        registry.GetStatusManyForTerminalAsync(Arg.Any<IReadOnlyList<Guid>>())
+        registry.GetStatusManyForSettlementAsync(Arg.Any<IReadOnlyList<Guid>>())
             .Returns(ci => Task.FromResult(((IReadOnlyList<Guid>)ci[0]).ToDictionary(id => id, _ => status)));
         grainFactory.GetGrain<ITxRegistryGrain>(
                 Arg.Is<string>(k => TxRegistryRouting.TreeIdFromKey(k) == treeId), Arg.Any<string?>())

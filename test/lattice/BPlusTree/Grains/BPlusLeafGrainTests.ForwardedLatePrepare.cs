@@ -68,6 +68,13 @@ public partial class BPlusLeafGrainTests
         // A live saga's coordinator holds its participant row until it is
         // forgotten (issue #4632); tests of a forgotten saga clear it.
         registry.GetParticipantsAsync(Arg.Any<Guid>()).Returns(Task.FromResult<IReadOnlyList<int>>([0]));
+        registry.IsDecidedOrForgottenForPrepareAsync(Arg.Any<Guid>()).Returns(async call =>
+        {
+            var txid = call.Arg<Guid>();
+            var answer = await registry.GetStatusForPrepareDedupAsync(txid);
+            return answer is TxStatus.Committed or TxStatus.Aborted
+                || (await registry.GetParticipantsAsync(txid)).Count == 0;
+        });
         registry.GetStatusManyAsync(Arg.Any<IReadOnlyList<Guid>>()).Returns(call =>
         {
             var answers = new Dictionary<Guid, TxStatus>();

@@ -150,7 +150,13 @@ with the existing local recorded-status fallback only for `Indeterminate`.
 Replication prepare settlement and prepared-bucket migration pre-checks use
 one RPC instead of two on that fallback path. Both existing durability waits
 and the capture gate remain: a gated delegation without a local verdict stays
-InFlight. This removes a transport step, not an I1 decision or `Sweep` action.
+InFlight. Activation self-terminalisation now uses that same scalar settlement
+read, retaining per-transaction fault containment. Post-migration cleanup uses
+`GetStatusManyForSettlementAsync`: the existing terminal batch and each
+conditional recorded read execute on the owning registry. No decision,
+durability wait or gate is removed. A fallback failure stops cleanup before
+effects; re-running the whole sweep is still idempotent. This removes transport
+steps, not an I1 decision or `Sweep` action.
 `TxRegistryGrainTests.Settlement` pins gated delegation and pending-write
 success/rollback behavior. This is a source mapping argument, not a new
 machine-checked refinement proof.

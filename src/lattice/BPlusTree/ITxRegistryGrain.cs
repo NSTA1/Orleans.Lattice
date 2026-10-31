@@ -790,6 +790,22 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// </summary>
     [AlwaysInterleave]
     Task<TxStatus> GetStatusForPrepareDedupAsync(Guid txid);
+
+    /// <summary>
+    /// Batched settlement with a conditional local recorded-verdict fallback.
+    /// Retains the terminal batch's durability and capture gates. For migration
+    /// cleanup, not reader visibility.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<Dictionary<Guid, TxStatus>> GetStatusManyForSettlementAsync(IReadOnlyList<Guid> txids);
+
+    /// <summary>
+    /// Checks the prepare-dedup status first, then participants only if undecided.
+    /// An absent participant row proves forgetting only for a locally authored
+    /// forwarded prepare; callers must not use this for peer-origin prepares.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<bool> IsDecidedOrForgottenForPrepareAsync(Guid txid);
 }
 
 /// <summary>

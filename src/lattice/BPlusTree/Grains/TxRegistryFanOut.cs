@@ -257,8 +257,20 @@ internal static class TxRegistryFanOut
     /// <param name="treeId">The tree id the registry is keyed by.</param>
     /// <param name="txids">The transaction ids to resolve.</param>
     /// <returns>The merged per-txid status map.</returns>
-    public static async Task<Dictionary<Guid, TxStatus>> GetStatusManyForTerminalAsync(
+    public static Task<Dictionary<Guid, TxStatus>> GetStatusManyForTerminalAsync(
         IGrainFactory grainFactory, string treeId, IReadOnlyList<Guid> txids)
+        => GetStatusManyForTerminalCoreAsync(grainFactory, treeId, txids, settlement: false);
+
+    /// <summary>
+    /// Terminal batch with the retention fallback performed on each owning
+    /// registry, avoiding one extra RPC per masked transaction.
+    /// </summary>
+    public static Task<Dictionary<Guid, TxStatus>> GetStatusManyForSettlementAsync(
+        IGrainFactory grainFactory, string treeId, IReadOnlyList<Guid> txids)
+        => GetStatusManyForTerminalCoreAsync(grainFactory, treeId, txids, settlement: true);
+
+    private static async Task<Dictionary<Guid, TxStatus>> GetStatusManyForTerminalCoreAsync(
+        IGrainFactory grainFactory, string treeId, IReadOnlyList<Guid> txids, bool settlement)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(txids);
@@ -267,7 +279,10 @@ internal static class TxRegistryFanOut
         var tasks = new List<Task<Dictionary<Guid, TxStatus>>>(groups.Count);
         foreach (var (key, group) in groups)
         {
-            tasks.Add(grainFactory.GetGrain<ITxRegistryGrain>(key).GetStatusManyForTerminalAsync(group));
+            var registry = grainFactory.GetGrain<ITxRegistryGrain>(key);
+            tasks.Add(settlement
+                ? registry.GetStatusManyForSettlementAsync(group)
+                : registry.GetStatusManyForTerminalAsync(group));
         }
 
         var parts = await Task.WhenAll(tasks);

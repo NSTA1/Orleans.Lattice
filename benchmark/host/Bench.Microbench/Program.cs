@@ -77,6 +77,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // The readfusion suite models WAL activation, resume and structure read dispatch.
 // The terminalcalls suite isolates chain reuse, clock fusion and no-writer clock elision.
 // The settlementcalls suite models conditional registry fallback dispatch at three callers.
+// The settlementfusion suite models activation, cleanup batches and local prepare probes.
 // The bootstrapcalls suite models capture, foreign scan and per-leaf saga discard fusion.
 // The maintenanceelisions suite selects the reshard, consolidation and options
 // lanes of autonomicprobes.
@@ -103,6 +104,20 @@ if (string.Equals(suite, "bootstrapcalls", StringComparison.OrdinalIgnoreCase))
 
 if (string.Equals(suite, "settlementcalls", StringComparison.OrdinalIgnoreCase))
 {
+    config = config.AddFilter(new SimpleFilter(benchmark =>
+        benchmark.Parameters["Path"] is SettlementCallBenchmarks.Site.ReplicatedPrepare
+            or SettlementCallBenchmarks.Site.MigrationPrecheck
+            or SettlementCallBenchmarks.Site.ForwardedPrepare));
+    var settlementSummary = BenchmarkRunner.Run<SettlementCallBenchmarks>(config);
+    return settlementSummary.HasCriticalValidationErrors || settlementSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
+if (string.Equals(suite, "settlementfusion", StringComparison.OrdinalIgnoreCase))
+{
+    config = config.AddFilter(new SimpleFilter(benchmark =>
+        benchmark.Parameters["Path"] is SettlementCallBenchmarks.Site.SelfTerminalise
+            or SettlementCallBenchmarks.Site.MigrationCleanup
+            or SettlementCallBenchmarks.Site.ForwardedForgetting));
     var settlementSummary = BenchmarkRunner.Run<SettlementCallBenchmarks>(config);
     return settlementSummary.HasCriticalValidationErrors || settlementSummary.Reports.Any(report => !report.Success) ? 1 : 0;
 }

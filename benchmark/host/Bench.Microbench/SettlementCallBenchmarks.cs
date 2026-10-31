@@ -4,10 +4,10 @@ using Orleans.Lattice.BPlusTree;
 namespace Orleans.Lattice.Benchmark.Microbench;
 
 /// <summary>
-/// Dispatch-only model of the conditional retention fallback at three production
-/// callers. Both lanes retain the status read and local recorded-verdict lookup;
-/// only the second transport dispatch disappears. Not real Orleans throughput
-/// or message allocations. Run with --suite settlementcalls.
+/// Dispatch-only model of retention and participant-read fusion at production
+/// callers. Both lanes retain the status read and conditional supplementary read;
+/// only transport dispatches disappear. Not real Orleans throughput or message
+/// allocations. Run with --suite settlementcalls or --suite settlementfusion.
 /// </summary>
 [MemoryDiagnoser]
 public class SettlementCallBenchmarks
@@ -21,13 +21,19 @@ public class SettlementCallBenchmarks
         MigrationPrecheck,
         /// <summary>Late forwarded prepare deduplication on a cold leaf.</summary>
         ForwardedPrepare,
+        /// <summary>Activation self-terminalisation, retaining per-txid fault containment.</summary>
+        SelfTerminalise,
+        /// <summary>One owning registry's post-migration batch of eight transactions.</summary>
+        MigrationCleanup,
+        /// <summary>Local forwarded prepare: status, then participants only if undecided.</summary>
+        ForwardedForgetting,
     }
 
     /// <summary>The production caller model.</summary>
     [ParamsAllValues]
     public Site Path { get; set; }
 
-    /// <summary>False is the unchanged one-call control.</summary>
+    /// <summary>Retention expiry, or a forgotten local saga. False keeps a live participant row.</summary>
     [Params(false, true)]
     public bool Expired { get; set; }
 
@@ -36,20 +42,21 @@ public class SettlementCallBenchmarks
     public LeafChainWalkElisionBenchmarks.HopModel Hop { get; set; }
 
     private int _calls;
-    private int _recordedReads;
+    private int _supplementaryReads;
 
     /// <summary>Prove equal answers, conditional local work and exact dispatch counts.</summary>
     [GlobalSetup]
     public void Setup()
     {
-        _calls = _recordedReads = 0;
+        _calls = _supplementaryReads = 0;
         var before = BeforeAsync().GetAwaiter().GetResult();
         var beforeCalls = _calls;
-        var beforeReads = _recordedReads;
-        _calls = _recordedReads = 0;
+        var beforeReads = _supplementaryReads;
+        _calls = _supplementaryReads = 0;
         var after = AfterAsync().GetAwaiter().GetResult();
-        if (before != after || beforeCalls != (Expired ? 2 : 1) || _calls != 1
-            || beforeReads != (Expired ? 1 : 0) || _recordedReads != beforeReads)
+        var expectedReads = Path == Site.ForwardedForgetting ? 1 : Expired ? TransactionCount : 0;
+        if (before != after || beforeCalls != 1 + expectedReads || _calls != 1
+            || beforeReads != expectedReads || _supplementaryReads != beforeReads)
             throw new InvalidOperationException("Settlement answer, retained local work or dispatch count differs.");
     }
 
@@ -58,13 +65,18 @@ public class SettlementCallBenchmarks
     public async Task<bool> BeforeAsync()
     {
         await DispatchAsync();
-        var status = ReadStatus();
-        if (status == TxStatus.Indeterminate)
+        var result = true;
+        for (var i = 0; i < TransactionCount; i++)
         {
-            await DispatchAsync();
-            status = ReadRecorded();
+            var status = ReadStatus();
+            if (NeedsSupplement(status))
+            {
+                await DispatchAsync();
+                status = ReadSupplement();
+            }
+            result &= Consume(status);
         }
-        return Consume(status);
+        return result;
     }
 
     /// <summary>The same conditional reads within one RPC.</summary>
@@ -72,21 +84,34 @@ public class SettlementCallBenchmarks
     public async Task<bool> AfterAsync()
     {
         await DispatchAsync();
-        var status = ReadStatus();
-        if (status == TxStatus.Indeterminate)
-            status = ReadRecorded();
-        return Consume(status);
+        var result = true;
+        for (var i = 0; i < TransactionCount; i++)
+        {
+            var status = ReadStatus();
+            if (NeedsSupplement(status))
+                status = ReadSupplement();
+            result &= Consume(status);
+        }
+        return result;
     }
 
-    private TxStatus ReadStatus() => Expired ? TxStatus.Indeterminate : TxStatus.Committed;
+    private int TransactionCount => Path == Site.MigrationCleanup ? 8 : 1;
 
-    private TxStatus ReadRecorded()
+    private bool NeedsSupplement(TxStatus status) => Path == Site.ForwardedForgetting
+        ? status is not (TxStatus.Committed or TxStatus.Aborted)
+        : status == TxStatus.Indeterminate;
+
+    private TxStatus ReadStatus() => Path == Site.ForwardedForgetting ? TxStatus.InFlight
+        : Expired ? TxStatus.Indeterminate : TxStatus.Committed;
+
+    private TxStatus ReadSupplement()
     {
-        _recordedReads++;
-        return TxStatus.Committed;
+        _supplementaryReads++;
+        // The local participant row answers absent only after forgetting.
+        return Path == Site.ForwardedForgetting && !Expired ? TxStatus.InFlight : TxStatus.Committed;
     }
 
-    private bool Consume(TxStatus status) => Path == Site.ForwardedPrepare
+    private bool Consume(TxStatus status) => Path is Site.ForwardedPrepare or Site.ForwardedForgetting
         ? status is TxStatus.Committed or TxStatus.Aborted
         : status == TxStatus.Committed;
 
