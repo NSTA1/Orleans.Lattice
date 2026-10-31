@@ -19,16 +19,94 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Layout;
 public sealed class ShellLayoutCompactTests : ShellLayoutTestContext
 {
     [Test]
-    public void Until_the_width_is_measured_the_expanded_frame_renders()
+    public void Until_the_width_is_measured_both_forms_render_and_the_breakpoint_layer_chooses()
     {
+        AddSlotProbes();
         var cut = RenderLayout();
+
+        var controls = cut.FindAll(".lt-shell-header button.lt-shell-header__control");
+        Assert.Multiple(() =>
+        {
+            Assert.That(controls.Select(button => button.TextContent.Trim()), Is.EqualTo(new[] { "Directory", "Menu" }));
+            Assert.That(controls.Select(button => button.ClassList.Contains("lt-only-compact")), Is.All.True,
+                "the compact controls show only below the small breakpoint");
+            Assert.That(cut.Find(".lt-shell-header__wide").ClassList, Does.Contain("lt-medium-up"),
+                "the wide controls show only from the medium breakpoint up");
+            Assert.That(cut.FindAll(".lt-shell-header__wide [data-probe]"), Has.Count.EqualTo(2));
+            Assert.That(cut.Find(".lt-shell-brand__prefix").ClassList, Does.Contain("lt-medium-up"));
+            Assert.That(cut.FindAll("#lt-shell-directory"), Has.Count.EqualTo(1));
+            Assert.That(cut.Find("#lt-shell-directory").ClassList, Does.Contain("lt-medium-up"));
+            Assert.That(cut.Find("#lt-shell-directory").ClassList, Does.Not.Contain("lt-shell-directory--rail"));
+            Assert.That(cut.Find(".lt-shell").ClassList, Does.Not.Contain("lt-shell--compact"));
+            Assert.That(cut.FindAll(".lt-dialog--sheet"), Is.Empty, "both sheets are closed");
+        });
+    }
+
+    [Test]
+    public async Task Measuring_the_expanded_band_drops_the_compact_controls_and_the_utilities()
+    {
+        AddSlotProbes();
+        var cut = RenderLayout();
+
+        await SetBandAsync(cut, 2);
 
         Assert.Multiple(() =>
         {
-            Assert.That(cut.FindAll("#lt-shell-directory"), Has.Count.EqualTo(1));
-            Assert.That(cut.Find("#lt-shell-directory").ClassList, Does.Not.Contain("lt-shell-directory--rail"));
-            Assert.That(cut.FindAll(".lt-shell-header button").Select(button => button.TextContent.Trim()), Does.Not.Contain("Menu"));
+            Assert.That(cut.FindAll(".lt-shell-header button.lt-shell-header__control"), Is.Empty);
+            Assert.That(cut.Find(".lt-shell-header__wide").ClassList, Does.Not.Contain("lt-medium-up"));
+            Assert.That(cut.FindAll(".lt-shell-header__wide [data-probe]"), Has.Count.EqualTo(2));
+            Assert.That(cut.Find(".lt-shell-brand__prefix").ClassList, Does.Not.Contain("lt-medium-up"));
+            Assert.That(cut.Find("#lt-shell-directory").ClassList, Does.Not.Contain("lt-medium-up"));
+            Assert.That(cut.FindAll("[class*='lt-only-compact'], [class*='lt-medium-up']"), Is.Empty);
         });
+    }
+
+    [Test]
+    public async Task Measuring_the_compact_band_keeps_only_the_compact_controls_untagged()
+    {
+        AddSlotProbes();
+        var cut = RenderLayout();
+
+        await SetBandAsync(cut, 0);
+
+        var controls = cut.FindAll(".lt-shell-header button.lt-shell-header__control");
+        Assert.Multiple(() =>
+        {
+            Assert.That(controls.Select(button => button.TextContent.Trim()), Is.EqualTo(new[] { "Directory", "Menu" }));
+            Assert.That(controls.Select(button => button.ClassList.Contains("lt-only-compact")), Is.All.False);
+            Assert.That(cut.FindAll(".lt-shell-header__wide"), Is.Empty);
+            Assert.That(cut.FindAll("#lt-shell-directory"), Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task A_sheet_opened_before_the_first_report_stays_open_when_the_report_confirms_compact()
+    {
+        // At a phone's width the breakpoint layer shows Menu before the browser has
+        // reported the band; the report that follows must not close what it opened.
+        AddSlotProbes();
+        var cut = RenderLayout();
+        cut.FindAll(".lt-shell-header button").Single(button => button.TextContent.Trim() == "Menu").Click();
+
+        await SetBandAsync(cut, 0);
+
+        var menu = cut.Find(".lt-dialog--sheet.lt-dialog--end");
+        Assert.That(
+            menu.QuerySelectorAll(".lt-shell-overflow [data-probe]").Select(element => element.GetAttribute("data-probe")),
+            Is.EqualTo(new[] { "connection", "identity" }));
+    }
+
+    [Test]
+    public void The_overflow_menu_folds_its_slots_before_the_width_is_measured()
+    {
+        // The real session slots read the band to fold; the menu is compact-only, so it
+        // cascades the compact band to them itself.
+        var cut = RenderLayout();
+
+        cut.FindAll(".lt-shell-header button").Single(button => button.TextContent.Trim() == "Menu").Click();
+
+        Assert.That(cut.FindAll(".lt-dialog--sheet .lt-shell-overflow section[aria-label='Connection']"), Has.Count.EqualTo(1),
+            "the connection indicator renders folded in the menu");
     }
 
     [Test]
@@ -234,7 +312,8 @@ public sealed class ShellLayoutCompactTests : ShellLayoutTestContext
             builder.OpenComponent<BandProbe>(0);
             builder.CloseComponent();
         }));
-        Assert.That(cut.Find("[data-band]").GetAttribute("data-band"), Is.EqualTo("Expanded"), "expanded until measured");
+        Assert.That(cut.Find("[data-band]").GetAttribute("data-band"), Is.EqualTo("none"),
+            "nothing is cascaded until measured, so a primitive renders its wide form");
 
         await SetBandAsync(cut, 0);
 
