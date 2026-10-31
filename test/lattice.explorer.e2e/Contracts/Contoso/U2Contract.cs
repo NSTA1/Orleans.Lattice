@@ -27,11 +27,8 @@ public sealed class U2Contract() : ChapterContract("U2")
 
         if (!ContosoSchema.SameAs(await schema.GetPolicyAsync(orders), ContosoSchema.OrdersRevised))
         {
-            await RunSchemaOperationAsync(
-                schema,
-                "the negative-total remediation",
-                context.Estate.LineFeed,
-                async () => (await schema.StartRemediationAsync(orders, ContosoSchema.NegativeTotalToZero, ContosoSchema.OrdersBaseline)).OperationId);
+            var remediation = await schema.StartRemediationAsync(orders, ContosoSchema.NegativeTotalToZero, ContosoSchema.OrdersBaseline);
+            await ContractWait.SucceededAsync("the negative-total remediation", () => schema.GetSchemaOperationStatusAsync(remediation.OperationId), OperationPatience);
             await schema.SetPolicyAsync(orders, ContosoSchema.OrdersRevised);
         }
 
@@ -40,64 +37,20 @@ public sealed class U2Contract() : ChapterContract("U2")
             await schema.AdvanceTargetVersionAsync(orders, 2);
         }
 
-        await MigrateAsync(schema, orders, "the migration to version 2", context.Estate.LineFeed);
+        await MigrateAsync(schema, orders, "the migration to version 2");
 
         await schema.ClearPolicyAsync(Names.Trees.FactoryOrdersArchive);
         await schema.ClearVersionConfigAsync(Names.Trees.FactoryOrdersArchive);
     }
 
-    /// <summary>
-    /// Starts a migration of <paramref name="treeId"/> and waits for it to succeed, starting it
-    /// again when a slice outran the grain call timeout (#5440); any other failure is final.
-    /// </summary>
+    /// <summary>Starts a migration of <paramref name="treeId"/> and waits for it to succeed.</summary>
     /// <param name="schema">The Schema API.</param>
     /// <param name="treeId">The tree.</param>
     /// <param name="what">The migration, for messages.</param>
-    /// <param name="feed">
-    /// The line feed, paused while the migration runs (and resumed after, unless it was already
-    /// paused) so its writes do not slow the slices past the call timeout.
-    /// </param>
-    public static Task MigrateAsync(Orleans.Lattice.Api.Schema.Grpc.LatticeSchemaApiGrpcClient schema, string treeId, string what, Estate.LineFeedControl feed) =>
-        RunSchemaOperationAsync(schema, what, feed, async () => (await schema.StartMigrationAsync(treeId)).OperationId);
-
-    /// <summary>
-    /// Starts a tracked schema operation and waits for it to succeed, starting it again when a
-    /// slice outran the grain call timeout (#5440); any other failure is final.
-    /// </summary>
-    /// <param name="schema">The Schema API.</param>
-    /// <param name="what">The operation, for messages.</param>
-    /// <param name="feed">The line feed, paused while the operation runs (see <see cref="MigrateAsync"/>).</param>
-    /// <param name="start">Starts the operation and returns its id.</param>
-    public static async Task RunSchemaOperationAsync(Orleans.Lattice.Api.Schema.Grpc.LatticeSchemaApiGrpcClient schema, string what, Estate.LineFeedControl feed, Func<Task<string>> start)
+    public static async Task MigrateAsync(Orleans.Lattice.Api.Schema.Grpc.LatticeSchemaApiGrpcClient schema, string treeId, string what)
     {
-        // #5440: pause the line feed so its writes do not push a slice past the call timeout;
-        // remove the pause (and the retry below) once #5440 is fixed.
-        var resume = !(await feed.StatusAsync()).Paused;
-        await feed.PauseAsync();
-        try
-        {
-            for (var attempt = 1; ; attempt++)
-            {
-                var operationId = await start();
-                try
-                {
-                    await ContractWait.SucceededAsync(what, () => schema.GetSchemaOperationStatusAsync(operationId), OperationPatience);
-                    return;
-                }
-                catch (InvalidOperationException ex) when (attempt < 5 && ex.Message.Contains("TimeoutException", StringComparison.Ordinal))
-                {
-                    // Known defect #5440: a slow slice fails the whole operation; start it again.
-                    TestContext.Progress.WriteLine($"{what}: attempt {attempt} hit #5440; retrying.");
-                }
-            }
-        }
-        finally
-        {
-            if (resume)
-            {
-                await feed.ResumeAsync();
-            }
-        }
+        var migration = await schema.StartMigrationAsync(treeId);
+        await ContractWait.SucceededAsync(what, () => schema.GetSchemaOperationStatusAsync(migration.OperationId), OperationPatience);
     }
 
     /// <inheritdoc />
