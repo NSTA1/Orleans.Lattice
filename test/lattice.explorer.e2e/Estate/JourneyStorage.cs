@@ -8,9 +8,11 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
 /// <summary>
 /// The estate's storage: every provider on Azurite, with the backup sink on a
 /// <em>separate</em> account, as <c>reference-architecture/local/docker-compose.yml</c>
-/// runs it. Endpoints named by <see cref="StorageVariable"/> and
-/// <see cref="BackupStorageVariable"/> are used as they are; otherwise two Azurite
-/// containers are started for the estate and removed with it. Every table and container
+/// runs it. An estate with an east region (#5362) gives east an account of its own, as
+/// each region of a deployment has its own storage. Endpoints named by
+/// <see cref="StorageVariable"/>, <see cref="BackupStorageVariable"/> and
+/// <see cref="EastStorageVariable"/> are used as they are; otherwise an Azurite container
+/// is started for each account and removed with the estate. Every table and container
 /// the estate creates carries the run-unique <see cref="Prefix"/>.
 /// </summary>
 /// <remarks>
@@ -27,6 +29,9 @@ internal sealed class JourneyStorage : IAsyncDisposable
     /// <summary>A connection string to an existing, separate backup account (Blob).</summary>
     public const string BackupStorageVariable = "LATTICE_E2E_BACKUP_STORAGE";
 
+    /// <summary>A connection string to an existing east-region account (Table, Blob, Queue), separate from the primary.</summary>
+    public const string EastStorageVariable = "LATTICE_E2E_EAST_STORAGE";
+
     /// <summary>Set to <c>1</c> to make unreachable storage a failure rather than an inconclusive skip.</summary>
     public const string RequiredVariable = "LATTICE_E2E_REQUIRED";
 
@@ -41,11 +46,12 @@ internal sealed class JourneyStorage : IAsyncDisposable
     private readonly List<string> _containers;
     private bool _reached;
 
-    private JourneyStorage(string prefix, string connectionString, string backupConnectionString, List<string> containers)
+    private JourneyStorage(string prefix, string connectionString, string backupConnectionString, string? eastConnectionString, List<string> containers)
     {
         Prefix = prefix;
         ConnectionString = connectionString;
         BackupConnectionString = backupConnectionString;
+        EastConnectionString = eastConnectionString;
         _containers = containers;
     }
 
@@ -57,6 +63,14 @@ internal sealed class JourneyStorage : IAsyncDisposable
 
     /// <summary>The backup account's connection string.</summary>
     public string BackupConnectionString { get; }
+
+    /// <summary>The east region's account's connection string, or <see langword="null"/> when the estate has no east region.</summary>
+    public string? EastConnectionString { get; }
+
+    /// <summary>The connection string of <paramref name="region"/>'s own account: east's when it has one, the primary otherwise.</summary>
+    /// <param name="region">The region.</param>
+    public string ConnectionStringOf(string region) =>
+        region == JourneyEstate.East && EastConnectionString is { } east ? east : ConnectionString;
 
     /// <summary>The backup sink's container.</summary>
     public string BackupContainer => Prefix.ToLowerInvariant() + "-backups";
@@ -85,8 +99,9 @@ internal sealed class JourneyStorage : IAsyncDisposable
 
     /// <summary>Provisions storage for one estate.</summary>
     /// <param name="readyTimeout">How long storage is given to answer; 90 seconds by default.</param>
+    /// <param name="east">Whether the estate has an east region, which gets an account of its own.</param>
     /// <param name="cancellationToken">Cancels provisioning.</param>
-    public static async Task<JourneyStorage> ProvisionAsync(TimeSpan? readyTimeout = null, CancellationToken cancellationToken = default)
+    public static async Task<JourneyStorage> ProvisionAsync(TimeSpan? readyTimeout = null, bool east = false, CancellationToken cancellationToken = default)
     {
         var prefix = "e2e" + Guid.NewGuid().ToString("N")[..10];
         var primary = Environment.GetEnvironmentVariable(StorageVariable);
@@ -115,7 +130,30 @@ internal sealed class JourneyStorage : IAsyncDisposable
             backup = EmulatorConnectionString(backupPort, null, null);
         }
 
-        var storage = new JourneyStorage(prefix, primary, backup, containers);
+        string? eastAccount = null;
+        if (east)
+        {
+            eastAccount = Environment.GetEnvironmentVariable(EastStorageVariable);
+            if (string.IsNullOrWhiteSpace(eastAccount))
+            {
+                var (tablePort, blobPort, queuePort) = (LoopbackPorts.Next(), LoopbackPorts.Next(), LoopbackPorts.Next());
+                var eastName = $"lattice-e2e-{prefix}-east";
+                try
+                {
+                    await StartAzuriteAsync(eastName, $"-p 127.0.0.1:{blobPort}:10000 -p 127.0.0.1:{queuePort}:10001 -p 127.0.0.1:{tablePort}:10002", cancellationToken);
+                    containers.Add(eastName);
+                }
+                catch
+                {
+                    await RemoveContainersAsync(containers);
+                    throw;
+                }
+
+                eastAccount = EmulatorConnectionString(blobPort, queuePort, tablePort);
+            }
+        }
+
+        var storage = new JourneyStorage(prefix, primary, backup, eastAccount, containers);
         try
         {
             await storage.WaitUntilReachableAsync(readyTimeout ?? DefaultReadyTimeout, cancellationToken);
@@ -150,10 +188,20 @@ internal sealed class JourneyStorage : IAsyncDisposable
 
         try
         {
-            var tables = new TableServiceClient(ConnectionString);
-            await foreach (var table in tables.QueryAsync($"TableName ge '{Prefix}' and TableName lt '{Prefix}~'"))
+            foreach (var account in Accounts())
             {
-                await tables.DeleteTableAsync(table.Name);
+                var tables = new TableServiceClient(account);
+                await foreach (var table in tables.QueryAsync($"TableName ge '{Prefix}' and TableName lt '{Prefix}~'"))
+                {
+                    await tables.DeleteTableAsync(table.Name);
+                }
+
+                // The estate's own containers (key rings among them), and nothing else's.
+                var blobs = new BlobServiceClient(account);
+                await foreach (var container in blobs.GetBlobContainersAsync(prefix: Prefix.ToLowerInvariant()))
+                {
+                    await blobs.DeleteBlobContainerAsync(container.Name);
+                }
             }
 
             await new BlobServiceClient(BackupConnectionString).GetBlobContainerClient(BackupContainer).DeleteIfExistsAsync();
@@ -163,6 +211,9 @@ internal sealed class JourneyStorage : IAsyncDisposable
             TestContext.Progress.WriteLine($"The journey estate could not remove its storage ({Prefix}): {ex.Message}");
         }
     }
+
+    private IEnumerable<string> Accounts() =>
+        EastConnectionString is { } east ? [ConnectionString, east] : [ConnectionString];
 
     private static string EmulatorConnectionString(int blobPort, int? queuePort, int? tablePort)
     {
@@ -193,6 +244,12 @@ internal sealed class JourneyStorage : IAsyncDisposable
                 await new TableServiceClient(ConnectionString).GetPropertiesAsync(attempt.Token);
                 await new BlobServiceClient(ConnectionString).GetPropertiesAsync(attempt.Token);
                 await new BlobServiceClient(BackupConnectionString).GetPropertiesAsync(attempt.Token);
+                if (EastConnectionString is { } east)
+                {
+                    await new TableServiceClient(east).GetPropertiesAsync(attempt.Token);
+                    await new BlobServiceClient(east).GetPropertiesAsync(attempt.Token);
+                }
+
                 _reached = true;
                 return;
             }
@@ -226,7 +283,7 @@ internal sealed class JourneyStorage : IAsyncDisposable
         }
     }
 
-    private static async Task<(int Exit, string Output)> DockerAsync(string arguments, CancellationToken cancellationToken)
+    internal static async Task<(int Exit, string Output)> DockerAsync(string arguments, CancellationToken cancellationToken)
     {
         Process process;
         try

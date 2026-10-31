@@ -8,10 +8,12 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
 /// <param name="Id">The gateway's destination id (<c>silo-{index}</c>).</param>
 /// <param name="Address">The silo's gRPC address.</param>
 /// <param name="Health">The active health check's verdict: <c>Healthy</c>, <c>Unhealthy</c> or <c>Unknown</c>.</param>
+/// <param name="Drained">Whether the harness has taken it out of rotation for new requests.</param>
 public sealed record GatewayDestination(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("address")] string Address,
-    [property: JsonPropertyName("health")] string Health)
+    [property: JsonPropertyName("health")] string Health,
+    [property: JsonPropertyName("drained")] bool Drained = false)
 {
     /// <summary>Whether the gateway routes to the silo.</summary>
     public bool Healthy => Health == "Healthy";
@@ -266,11 +268,11 @@ public sealed partial class JourneyEstate
         }
     }
 
-    private async Task<IReadOnlyList<GatewayDestination>> DestinationsAsync(Uri control, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<GatewayDestination>> DestinationsAsync(Uri control, CancellationToken cancellationToken, string cluster = "silos")
     {
         try
         {
-            var state = await _probe.GetFromJsonAsync<GatewayState>(new Uri(control, "control/destinations"), cancellationToken);
+            var state = await _probe.GetFromJsonAsync<GatewayState>(new Uri(control, "control/destinations?cluster=" + cluster), cancellationToken);
             return state?.Destinations ?? [];
         }
         catch (HttpRequestException)

@@ -53,9 +53,20 @@ Directory.CreateDirectory(Path.GetDirectoryName(configFilePath)!);
 var keysDirectory = config["Explorer:KeysDirectory"];
 var keyRingConnection = config["Explorer:KeyRingBlobConnectionString"];
 
+// The hosting variants the estate runs (#5362), each one of the web head's own
+// options set through configuration: the mount (east's console is under /console),
+// the Data Protection discriminator a scaled-out console's replicas share, the
+// editable connection dialog (Fabrikam) and the environment credential seed (the
+// Contoso kiosk head).
+var replicaName = config["Explorer:ReplicaName"];
+
 builder.Services.AddLatticeExplorerWeb(options =>
 {
     options.ConfigFilePath = configFilePath;
+    options.BasePath = config["Explorer:BasePath"] ?? "/";
+    options.DataProtectionApplicationName = config["Explorer:ApplicationName"];
+    options.AllowInteractiveEndpointConfiguration = config.GetValue("Explorer:AllowInteractiveEndpointConfiguration", false);
+    options.AllowEnvironmentCredentialSeed = config.GetValue("Explorer:AllowEnvironmentCredentialSeed", false);
     if (!string.IsNullOrWhiteSpace(keyRingConnection))
     {
         var container = config["Explorer:KeyRingBlobContainer"] ?? "explorer-keys";
@@ -71,6 +82,17 @@ builder.Services.AddLatticeExplorerWeb(options =>
 });
 
 var app = builder.Build();
+
+// A harness diagnostic, not a product header: which replica of a scaled-out console
+// served a response, so a journey can tell the gateway switched it.
+if (!string.IsNullOrWhiteSpace(replicaName))
+{
+    app.Use((context, next) =>
+    {
+        context.Response.Headers["X-Lattice-E2E-Replica"] = replicaName;
+        return next(context);
+    });
+}
 
 app.UseFrontDoorOriginLock(frontDoorId);
 app.UseAntiforgery();
