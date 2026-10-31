@@ -113,6 +113,14 @@ public interface ILatticeView
     /// or a source cutover onto a new physical tree is not ordered by HLC at all,
     /// so prefer <see cref="WaitForSourceHeadAsync"/> for a write-then-wait barrier.
     /// </para>
+    /// <para>
+    /// On return the handle drops its cached active-generation tree id, as
+    /// <see cref="RebuildAsync"/> and <see cref="ReconcileAsync"/> do, because the
+    /// drains this barrier drives can rebind the view and swap its generation: a read
+    /// on the same handle straight after it observes the generation the barrier waited
+    /// for rather than one <see cref="LatticeViewOptions.ReadHandleCacheTtl"/> still
+    /// remembers. The next read pays one maintainer round-trip to re-resolve it.
+    /// </para>
     /// </summary>
     /// <param name="target">The source HLC the view must catch up to.</param>
     /// <param name="timeout">Maximum time to wait before throwing <see cref="TimeoutException"/>.</param>
@@ -133,6 +141,12 @@ public interface ILatticeView
     /// view does not catch up within <paramref name="timeout"/>.
     /// Throws <see cref="InvalidOperationException"/> on a
     /// <see cref="LatticeViewReplicationMode.ShipView"/> consumer.
+    /// <para>
+    /// On return the handle drops its cached active-generation tree id, so a read on
+    /// the same handle straight after the barrier observes the generation a rebind it
+    /// drove swapped in, not one <see cref="LatticeViewOptions.ReadHandleCacheTtl"/>
+    /// still remembers.
+    /// </para>
     /// </summary>
     /// <param name="timeout">Maximum time to wait before throwing <see cref="TimeoutException"/>.</param>
     /// <param name="cancellationToken">Cancellation token observed while waiting.</param>
