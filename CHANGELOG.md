@@ -66,7 +66,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
-- **Explorer - Schema validation.** Rule cards reject reversed large-integer bounds without rounding valid constants. Semantic-version cards reject empty identifiers and leading-zero numeric prereleases; saved patterns remain unchanged when reopened. ([#5347](https://github.com/NSTA1/Orleans.Lattice/issues/5347)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Schema validation.** Rule cards preserve exact integer bounds, reject malformed numeric grouping and email addresses, and accept IPv4-embedded IPv6. Semantic versions enforce identifier rules. Saved patterns reopen unchanged. ([#5347](https://github.com/NSTA1/Orleans.Lattice/issues/5347), [#5429](https://github.com/NSTA1/Orleans.Lattice/issues/5429)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Telemetry charts.** Finite readings retain finite SVG paths, axis ticks and labels even at very large or subnormal magnitudes. ([#5347](https://github.com/NSTA1/Orleans.Lattice/issues/5347)) (`Orleans.Lattice.Explorer.UI`)
 
