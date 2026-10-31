@@ -32,6 +32,18 @@ membership**, never of where the backup was originally captured:
   single-cluster) - the restore runs as a plain local restore with no saga.
   There is nothing to coordinate.
 
+On a host with [runtime replication configuration](runtime-config.md), each
+silo answers "is this tree replicated?" from its own compiled snapshot, which
+can trail an enable committed on another silo by about a second. A stale "not
+replicated" would replace a replicated tree locally while its peers keep the
+writes the replacement discards, so the initiating cluster never declines on
+that answer alone: before it takes the local path it re-reads the replication
+configuration and decides on the refreshed answer. If it cannot read the
+configuration it refuses the restore with a `LatticeRestoreValidationException`
+rather than risk an uncoordinated replacement
+([#5462](https://github.com/NSTA1/Orleans.Lattice/issues/5462)). The same check
+guards a backup set.
+
 A **backup set** (multiple trees captured together) restores as one unit: if any
 member tree is replicated, the whole set restores under a single saga spanning
 the local cluster and every current replication peer, so every member tree flips
@@ -47,6 +59,20 @@ restore into a replicated target then runs the capacity check on the initiating
 cluster and refuses an infeasible target with a
 `LatticeRestoreValidationException` that names the refusal but not the target's
 stored size or shard count.
+
+That is the only place the caller is authorized. A participant cluster does not
+see the caller: the saga reaches it carrying only the coordinator cluster's
+credential-bound identity. It runs its restore steps with that peer's authority,
+and only for a current replication peer, a target tree it replicates, and a backup
+captured from the target or another tree it replicates; anything else it refuses,
+voting abort with reason `not-replicated`. A peer sees one refusal text whether the
+backup is missing or merely outside its enrollment, so it cannot use a restore to
+learn which backups exist. A commit that must rebuild a lost shadow re-checks the
+backup's sources first. The coordinator cluster's own
+participant runs as the caller. A cluster that enforces authorization therefore
+completes a coordinated restore its peer started, rather than refusing it as an
+anonymous caller ([#5443](https://github.com/NSTA1/Orleans.Lattice/issues/5443);
+see [Transport Security](transport-security.md#tenant-snapshot-disclosure-and-saga-ownership)).
 
 Before any cluster prepares, the coordinator probes every current peer over the
 saga control channel and refuses to start - with a
@@ -93,8 +119,13 @@ phases:
    send, so it ships from the restored copy even if the alias-change push to it
    was lost; it never drains the retired log onto a peer's restored copy (#4490).
 3. **Abort** - reached if any participant voted to abort. Every participant that
-   prepared is compensated: its shadow is reverted and garbage collected and the
-   pre-restore tree is left untouched.
+   prepared is compensated: its shadow is garbage collected and the pre-restore
+   tree is left untouched. A participant whose cutover started but did not
+   complete reverts the alias first; one that only prepared never moved it, so it
+   does not revert, and deleting the shadow releases the target's alias
+   reservation. A new prepare of the same (deterministic) saga id, or the
+   abort itself, clears that record, so a later run never reverts an earlier
+   run's cutover ([#5443](https://github.com/NSTA1/Orleans.Lattice/issues/5443)).
 
 These guarantees make this safe under failure:
 

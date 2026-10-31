@@ -959,7 +959,15 @@ The shipper is therefore also an offset-reading WAL consumer:
   partition, so it holds the whole log instead of racing the GC.
 - On an alias rebind it registers with the new physical log first and only
   then withdraws from the old one. It answers nothing for a log it no longer
-  reads.
+  reads. The registration happens at the rebind itself, not at the next
+  read, so no GC pass can run between the cursor reset and the hold
+  ([#5462](https://github.com/NSTA1/Orleans.Lattice/issues/5462)). The new
+  log can still have been trimmed before the swap, while it was being built
+  as a remediation, resize or restore copy that no shipper read yet; the
+  shipper then sees that gap on its first read, takes the peer off the log,
+  and the peer re-seeds from a snapshot export (see
+  [Forced gap](#forced-gap-a-peer-taken-off-the-log)). Until it does, the link reports as stalled
+  with the `ReseedRequired` stall reason.
 
 The GC refuses every entry at or above the lowest position any registered
 consumer reports for that partition, however the HLC clauses read. Only the
