@@ -133,6 +133,58 @@ public sealed partial class LatticeBackupGrpcServiceUnitTests
     }
 
     [Test]
+    public async Task GetBackupHealthConfig_wraps_the_effective_config_as_found()
+    {
+        var config = new BackupHealthConfig(false, TimeSpan.FromMinutes(90));
+        var control = Substitute.For<ILatticeBackupControl>();
+        control.GetBackupHealthConfigAsync("b6", Arg.Any<CancellationToken>()).Returns(config);
+        var service = CreateService(control);
+
+        var response = await service.GetBackupHealthConfig(
+            new BackupHealthConfigGetRequestMessage { BackupId = "b6" },
+            Context());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Found, Is.True);
+            Assert.That(response.Config, Is.EqualTo(config));
+        });
+    }
+
+    [Test]
+    public async Task GetBackupHealthConfig_reports_not_found_for_an_unknown_backup()
+    {
+        var control = Substitute.For<ILatticeBackupControl>();
+        control.GetBackupHealthConfigAsync("b7", Arg.Any<CancellationToken>()).Returns((BackupHealthConfig?)null);
+        var service = CreateService(control);
+
+        var response = await service.GetBackupHealthConfig(
+            new BackupHealthConfigGetRequestMessage { BackupId = "b7" },
+            Context());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Found, Is.False);
+            Assert.That(response.Config, Is.Null);
+        });
+    }
+
+    [Test]
+    public void GetBackupHealthConfig_maps_a_denial_to_permission_denied()
+    {
+        var control = Substitute.For<ILatticeBackupControl>();
+        control.GetBackupHealthConfigAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new LatticeAuthorizationDeniedException());
+        var service = CreateService(control);
+
+        var ex = Assert.ThrowsAsync<RpcException>(() => service.GetBackupHealthConfig(
+            new BackupHealthConfigGetRequestMessage { BackupId = "b8" },
+            Context()));
+
+        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+    }
+
+    [Test]
     public async Task InvokeAsync_stamps_the_bridged_credential_for_the_call()
     {
         var report = Report("b5");
