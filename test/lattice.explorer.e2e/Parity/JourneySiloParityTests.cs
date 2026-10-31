@@ -46,6 +46,7 @@ public sealed class JourneySiloParityTests
     [
         ("AddLatticeSchemaEnforcement(options => options.StrictIngest = true)", "dead-letter feature coverage (#5389)"),
         ("AddLatticeWalStorageProvider(JourneyHostEnvironment.SecondaryWalProviderKey", "a WAL move target for the Cluster area's WAL tools (A8, A12)"),
+        ("JourneyBackupWriteHold.Decorate(silo.Services)", "fault seam, only with LATTICE_E2E_FAULTS=1: the harness can hold backup artifact writes so a capture is still running when A6 cancels it (#5377)"),
     ];
 
     /// <summary>Every disclosed deviation is still made by the journey silo, so the list cannot rot into fiction.</summary>
