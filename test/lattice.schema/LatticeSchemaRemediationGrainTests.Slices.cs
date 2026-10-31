@@ -94,6 +94,110 @@ public partial class LatticeSchemaRemediationGrainTests
     }
 
     [Test]
+    public async Task RunSliceAsync_with_its_time_budget_spent_stops_after_one_value_and_resumes_after_it()
+    {
+        var h = CreateGrain(FiveDocuments);
+        h.Grain.SliceTimeBudget = TimeSpan.Zero;
+        await h.Grain.AcceptAsync(LatticeValueTransform.Passthrough(), JsonPolicy(), "op-budget");
+
+        var steps = new List<(LatticeSchemaRemediationPhase Phase, int Scanned, int? Total)>();
+        for (var i = 0; i < 20; i++)
+        {
+            var slice = await h.Grain.RunSliceAsync("op-budget");
+            steps.Add((slice.Report.Phase, slice.Report.ScannedCount, slice.PhaseTotal));
+            if (!slice.Report.InProgress)
+            {
+                break;
+            }
+        }
+
+        Assert.That(steps, Is.EqualTo(new (LatticeSchemaRemediationPhase, int, int?)[]
+        {
+            (LatticeSchemaRemediationPhase.DryRun, 1, null),
+            (LatticeSchemaRemediationPhase.DryRun, 2, null),
+            (LatticeSchemaRemediationPhase.DryRun, 3, null),
+            (LatticeSchemaRemediationPhase.DryRun, 4, null),
+            (LatticeSchemaRemediationPhase.Build, 0, 5),
+            (LatticeSchemaRemediationPhase.Build, 1, 5),
+            (LatticeSchemaRemediationPhase.Build, 2, 5),
+            (LatticeSchemaRemediationPhase.Build, 3, 5),
+            (LatticeSchemaRemediationPhase.Build, 4, 5),
+            (LatticeSchemaRemediationPhase.Cutover, 5, null),
+            (LatticeSchemaRemediationPhase.Completed, 5, null),
+        }), "every slice makes progress, and the dry run counts each value once");
+        foreach (var (key, _) in FiveDocuments)
+        {
+            await h.Destination.Received(1).SetAsync(key, Arg.Any<byte[]>(), Arg.Any<CancellationToken>());
+        }
+    }
+
+    [Test]
+    public void SliceTimeBudget_defaults_well_inside_the_grain_call_timeout()
+    {
+        var h = CreateGrain(FiveDocuments);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.Grain.SliceTimeBudget, Is.EqualTo(LatticeSchemaRemediationGrain.DefaultSliceTimeBudget));
+            Assert.That(LatticeSchemaRemediationGrain.DefaultSliceTimeBudget, Is.LessThanOrEqualTo(TimeSpan.FromSeconds(10)));
+        });
+    }
+
+    /// <summary>
+    /// Issue #5440: a migration slice that outran the 30 second grain call timeout
+    /// ended the tracked migration Failed although the slice went on to finish. The
+    /// first build slice here completes on the real coordinator, but its caller sees
+    /// the response timeout; the driver retries from the persisted cursor and the
+    /// migration ends Succeeded with every value written to the destination once.
+    /// </summary>
+    [Test]
+    public async Task A_migration_whose_slice_outruns_the_call_timeout_once_ends_succeeded_with_every_value_migrated_once()
+    {
+        (string Key, byte[] Value)[] values =
+        [
+            ("k1", Env(1, "{\"a\":1}")), ("k2", Env(1, "{\"a\":2}")), ("k3", Env(1, "{\"a\":3}")),
+            ("k4", Env(1, "{\"a\":4}")), ("k5", Env(1, "{\"a\":5}")), ("k6", Env(1, "{\"a\":6}")),
+        ];
+        var h = CreateGrainBytes(values, schemaRegistry: MigratingRegistry());
+        h.Grain.SliceSize = 2;
+        var accepted = await h.Grain.AcceptVersionMigrationAsync(MigSchemaId, 2, "op-slow");
+
+        var timedOut = false;
+        var caller = Substitute.For<ILatticeSchemaRemediationGrain>();
+        caller.RunSliceAsync(Arg.Any<string>()).Returns(async ci =>
+        {
+            var slice = await h.Grain.RunSliceAsync(ci.ArgAt<string>(0));
+            if (!timedOut && slice.Report.Phase == LatticeSchemaRemediationPhase.Build && slice.Report.ScannedCount > 0)
+            {
+                // The slice ran to completion on the coordinator, but its caller had
+                // already given up waiting for the response.
+                timedOut = true;
+                throw new TimeoutException("Response did not arrive on time in 00:00:30 for message: RunSliceAsync");
+            }
+
+            return slice;
+        });
+
+        var report = await SchemaRemediationDriver.DriveAsync(caller, accepted, progress: null, CancellationToken.None);
+        var completion = SchemaOperationService.ToCompletion(report);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(timedOut, Is.True, "precondition: a slice outran the call timeout");
+            Assert.That(report.Succeeded, Is.True, report.Reason);
+            Assert.That(report.ScannedCount, Is.EqualTo(values.Length));
+            Assert.That(completion.State, Is.EqualTo(Orleans.Lattice.Operations.LatticeOperationState.Succeeded));
+        });
+        foreach (var (key, _) in values)
+        {
+            await h.Destination.Received(1).SetAsync(
+                key, Arg.Is<byte[]>(v => VersionOf(v) == 2), Arg.Any<CancellationToken>());
+        }
+
+        await h.Registry.Received(1).SwapAliasAsync(TreeId, Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
+    }
+
+    [Test]
     public async Task RunSliceAsync_when_nothing_is_in_flight_is_a_no_op()
     {
         var h = CreateGrain(FiveDocuments);

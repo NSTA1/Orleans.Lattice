@@ -280,7 +280,12 @@ nothing further.
 
 `RemediateAsync` drives the remediation to a terminal state before it returns its
 `LatticeSchemaRemediationReport`, one slice per call into the cluster, so no single
-call runs for the whole remediation. To start one without waiting, and to follow
+call runs for the whole remediation. A slice is bounded by time as well as by value
+count: once it has run for 10 seconds it stops after the value in hand and returns,
+well inside Orleans' default 30-second grain call timeout. A slice call that still times out on a
+loaded cluster is retried from the slice's recorded cursor rather than failing the
+run, so a value is never written twice; only five timeouts in a row fail it, with the
+last timeout as the cause. To start one without waiting, and to follow
 its phase and values processed or cancel it before cutover, use the
 [schema operations](../lattice.api.schema/operations.md) of the control facade.
 Poll a running or last-known remediation with

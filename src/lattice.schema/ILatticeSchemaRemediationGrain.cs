@@ -106,10 +106,11 @@ internal interface ILatticeSchemaRemediationGrain : IGrainWithStringKey
 
     /// <summary>
     /// Runs one bounded slice of the in-flight remediation: up to a fixed number of
-    /// values of the dry run or the build, resuming strictly after the last value
-    /// the phase durably recorded, or the whole cutover. Persists the phase's
-    /// progress before returning, and banks the progress a faulted slice had made
-    /// before rethrowing. A no-op when nothing is in flight.
+    /// values of the dry run or the build, and no more than a fixed wall-clock budget
+    /// well inside the grain call timeout (at least one value), resuming strictly after
+    /// the last value the phase durably recorded, or the whole cutover. Persists the
+    /// phase's progress before returning, and banks the progress a faulted slice had
+    /// made before rethrowing. A no-op when nothing is in flight.
     /// </summary>
     /// <returns>The status after the slice, and the current phase's total when known.</returns>
     Task<SchemaRemediationSlice> RunSliceAsync();
