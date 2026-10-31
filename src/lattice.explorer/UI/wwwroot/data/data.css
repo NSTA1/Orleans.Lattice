@@ -148,6 +148,10 @@
    ========================================================================== */
 
 .lt-data-key {
+  display: inline-block;
+  /* WCAG 2.5.8: a key link in a dense row is still a 24px target. */
+  min-height: 24px;
+  line-height: 24px;
   overflow-wrap: anywhere;
 }
 
