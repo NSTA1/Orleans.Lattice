@@ -49,14 +49,14 @@ internal sealed class FakeAppsControl : ILatticeAppsControl, ILatticeAppRoleBind
     {
         if (Installed.TryGetValue(slug, out var installed))
         {
-            Installed[slug] = installed with { State = state };
+            Installed[slug] = installed with { State = state, PendingState = null };
         }
 
         for (var i = 0; i < Listed.Count; i++)
         {
             if (Listed[i].Slug == slug)
             {
-                Listed[i] = Listed[i] with { State = state };
+                Listed[i] = Listed[i] with { State = state, PendingState = null };
             }
         }
     }

@@ -4,13 +4,14 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 
 /// <summary>
 /// Follows a lifecycle change the cluster accepted but had not finished
-/// (<see cref="AppLifecycleResult.Pending"/>, issue #5482): reads the catalogue until the app
-/// reaches the change's target state, for up to <see cref="Limit"/>.
+/// (<see cref="AppLifecycleResult.Pending"/>, issue #5482): reads the catalogue until the run
+/// settles, for up to <see cref="Limit"/>.
 /// </summary>
 /// <remarks>
-/// A run records an interim failed status while it works, so a <see cref="AppLifecycleState.Failed"/>
-/// read is not final until the limit. The result then carries the last state read: still
-/// pending when the app is in neither the target nor a failed state, settled otherwise.
+/// The catalogue lists an app whose run is still in flight with its
+/// <see cref="AppSummary.PendingState"/> set and never as <see cref="AppLifecycleState.Failed"/>,
+/// so a listed Failed state is final and ends the follow at once. The result carries the last
+/// state read: settled once the app has reached the target or failed, still pending otherwise.
 /// </remarks>
 internal static class AppLifecycleFollow
 {
@@ -20,7 +21,7 @@ internal static class AppLifecycleFollow
     /// <summary>How long a still-running change is followed before the page stops waiting.</summary>
     internal static readonly TimeSpan Limit = TimeSpan.FromMinutes(5);
 
-    /// <summary>Follows <paramref name="accepted"/> until the app reaches <paramref name="target"/>.</summary>
+    /// <summary>Follows <paramref name="accepted"/> until the app reaches <paramref name="target"/> or fails.</summary>
     /// <param name="control">The lifecycle facade to read the catalogue from.</param>
     /// <param name="accepted">The pending result the change returned.</param>
     /// <param name="target">The state the change moves the app to.</param>
@@ -43,29 +44,43 @@ internal static class AppLifecycleFollow
         while (time.GetElapsedTime(started) < Limit)
         {
             await Task.Delay(PollInterval, time, cancellationToken);
-            var state = await ReadStateAsync(control, accepted.Slug, cancellationToken);
+            var (state, pending) = await ReadStateAsync(control, accepted.Slug, cancellationToken);
             current = current with { State = state };
+            if (pending is not null)
+            {
+                continue;
+            }
+
             if (state == target)
             {
                 return current with { Pending = false, Changed = true };
             }
+
+            if (state == AppLifecycleState.Failed)
+            {
+                return current with { Pending = false };
+            }
         }
 
-        return current.State == AppLifecycleState.Failed ? current with { Pending = false } : current;
+        return current;
     }
 
-    /// <summary>The state the catalogue lists <paramref name="slug"/> in; uninstalled when it is not listed.</summary>
-    private static async Task<AppLifecycleState> ReadStateAsync(ILatticeAppsControl control, string slug, CancellationToken cancellationToken)
+    /// <summary>
+    /// The state the catalogue lists <paramref name="slug"/> in, and the state a run in flight is
+    /// moving it to; uninstalled and settled when it is not listed.
+    /// </summary>
+    private static async Task<(AppLifecycleState State, AppLifecycleState? Pending)> ReadStateAsync(
+        ILatticeAppsControl control, string slug, CancellationToken cancellationToken)
     {
         var catalog = await control.ListAsync(cancellationToken);
         foreach (var app in catalog.Apps)
         {
             if (string.Equals(app.Slug, slug, StringComparison.Ordinal))
             {
-                return app.State;
+                return (app.State, app.PendingState);
             }
         }
 
-        return AppLifecycleState.Uninstalled;
+        return (AppLifecycleState.Uninstalled, null);
     }
 }

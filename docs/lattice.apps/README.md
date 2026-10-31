@@ -403,7 +403,11 @@ storage, keyed per install; a run that cannot read the existing
 status leaves it untouched rather than overwrite it, and a failed status write is
 only logged. That record is the evidence the
 control facade reports as a `Failed` state; a disabled registry state alone is never
-read as a failure.
+read as a failure. A replicated run records interim failure evidence before it enrols,
+so a run stopped part-way is never read as a success; the facade reads
+`IAppActivationPipeline.GetRunningOperationAsync`, which the activation grain answers
+from memory while a run executes, and reports a run in flight as pending rather than
+`Failed`.
 
 Two prerequisites are enforced fail-closed. Without membership, every caller
 resolves to the anonymous subject with no groups and every app rule would be

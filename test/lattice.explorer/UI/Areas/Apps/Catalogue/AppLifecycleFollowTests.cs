@@ -46,13 +46,51 @@ public sealed class AppLifecycleFollowTests
         Assert.That((await follow).State, Is.EqualTo(AppLifecycleState.Uninstalled));
     }
 
-    [TestCase(AppLifecycleState.Failed, false)]
-    [TestCase(AppLifecycleState.Disabled, true)]
-    public async Task At_the_limit_a_failed_app_settles_and_any_other_state_stays_pending(AppLifecycleState listed, bool pending)
+    [Test]
+    public async Task A_listed_failed_app_is_final_at_once()
     {
         var time = new ManualTimeProvider();
         var control = new FakeAppsControl();
-        control.Listed.Add(Summary(listed));
+        control.Listed.Add(Summary(AppLifecycleState.Failed));
+
+        var follow = AppLifecycleFollow.FollowAsync(control, Accepted, AppLifecycleState.Uninstalled, time, CancellationToken.None);
+        await StepAsync(time, follow);
+
+        Assert.That(follow.IsCompleted, Is.True, "a listed Failed state is never interim, so it ends the follow on the first read");
+        var result = await follow;
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Pending, Is.False);
+            Assert.That(result.Changed, Is.False);
+            Assert.That(result.State, Is.EqualTo(AppLifecycleState.Failed));
+        });
+    }
+
+    [Test]
+    public async Task An_app_listed_with_a_run_in_flight_is_followed_until_the_run_settles()
+    {
+        var time = new ManualTimeProvider();
+        var control = new FakeAppsControl();
+        control.Listed.Add(Summary(AppLifecycleState.Disabled) with { PendingState = AppLifecycleState.Uninstalled });
+
+        var follow = AppLifecycleFollow.FollowAsync(control, Accepted, AppLifecycleState.Uninstalled, time, CancellationToken.None);
+        await StepAsync(time, follow);
+        await StepAsync(time, follow);
+        Assert.That(follow.IsCompleted, Is.False, "the run is still in flight");
+
+        control.Settle(Slug, AppLifecycleState.Uninstalled);
+        await StepAsync(time, follow);
+
+        Assert.That((await follow).State, Is.EqualTo(AppLifecycleState.Uninstalled));
+    }
+
+    [TestCase(AppLifecycleState.Disabled, null)]
+    [TestCase(AppLifecycleState.Disabled, AppLifecycleState.Uninstalled)]
+    public async Task At_the_limit_an_app_that_has_not_reached_its_target_stays_pending(AppLifecycleState listed, AppLifecycleState? pendingState)
+    {
+        var time = new ManualTimeProvider();
+        var control = new FakeAppsControl();
+        control.Listed.Add(Summary(listed) with { PendingState = pendingState });
 
         var follow = AppLifecycleFollow.FollowAsync(control, Accepted, AppLifecycleState.Uninstalled, time, CancellationToken.None);
         var bound = (int)(AppLifecycleFollow.Limit / AppLifecycleFollow.PollInterval) + 2;
@@ -65,7 +103,7 @@ public sealed class AppLifecycleFollowTests
         var result = await follow;
         Assert.Multiple(() =>
         {
-            Assert.That(result.Pending, Is.EqualTo(pending));
+            Assert.That(result.Pending, Is.True);
             Assert.That(result.State, Is.EqualTo(listed));
         });
     }

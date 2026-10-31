@@ -21,9 +21,9 @@ public sealed record AppLifecycleResult
     /// A lifecycle run that outlasts the facade's accept window keeps running to completion and
     /// records its outcome; <see cref="State"/> then reports the state before the run and
     /// <see cref="Changed"/> is <see langword="false"/>. Poll
-    /// <see cref="ILatticeAppsControl.DescribeAsync"/> or <see cref="ILatticeAppsControl.ListAsync"/>
-    /// until the app leaves that state; a run that failed reports
-    /// <see cref="AppLifecycleState.Failed"/> there.
+    /// <see cref="ILatticeAppsControl.DescribeAsync"/> or <see cref="ILatticeAppsControl.ListAsync"/>:
+    /// they report the run as <see cref="AppSummary.PendingState"/> while it is in flight, and
+    /// <see cref="AppLifecycleState.Failed"/> only once it has ended failed.
     /// </summary>
     [Id(4)] public bool Pending { get; init; }
 }

@@ -117,6 +117,11 @@ public sealed class AppActivationResponseTimeoutClusterTests
 
                 await SoftDeleteGate.Entered.Task.WaitAsync(HangBound);
 
+                // The run in flight is reported while it is held: the query interleaves with it
+                // rather than queueing behind it (it would time out at the shortened timeout).
+                Assert.That(await pipeline.GetRunningOperationAsync(TenantId.Default, Slug),
+                    Is.EqualTo(AppActivationOperation.Uninstall), "the held uninstall is reported in flight");
+
                 // The soft-delete is held. Wait for the uninstall call to resolve, bounded at a
                 // multiple of the response timeout: a call that gives up at the timeout resolves
                 // inside the bound, and one that waits for its run does not.
@@ -138,6 +143,7 @@ public sealed class AppActivationResponseTimeoutClusterTests
 
         var deleted = await grains.GetGrain<ITreeDeletionGrain>(tree).IsDeletedAsync();
         var status = await pipeline.GetStatusAsync(TenantId.Default, Slug);
+        var running = await pipeline.GetRunningOperationAsync(TenantId.Default, Slug);
         Assert.Multiple(() =>
         {
             Assert.That(outcome.Succeeded, Is.True, () => string.Join("; ", outcome.Diagnostics.Select(d => d.Message)));
@@ -145,6 +151,7 @@ public sealed class AppActivationResponseTimeoutClusterTests
             Assert.That(deleted, Is.True, "the owned tree is soft-deleted");
             Assert.That(status?.LastOutcome.Operation, Is.EqualTo(AppActivationOperation.Uninstall), "the outcome is recorded");
             Assert.That(status?.LastOutcome.Succeeded, Is.True);
+            Assert.That(running, Is.Null, "no run is reported once it has ended");
         });
     }
 

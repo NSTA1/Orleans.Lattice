@@ -116,8 +116,13 @@ activation run, well under the request timeout of the ingresses a facade sits be
 (60 seconds at the reference Front Door, 100 seconds at a default YARP route). A run
 that takes longer is not cut off: it keeps running to completion and records its
 outcome, and the call returns with `Pending` set, `Changed` false, and the state the
-install had before the run. Poll `ListAsync` or `DescribeAsync` until the install
-reaches the requested state; a run that failed reports `Failed` there. Cancelling the
+install had before the run. Poll `ListAsync` or `DescribeAsync` until the run settles:
+while it is in flight they report the state before the run with `PendingState` set to
+the state the run is moving the install to (a reconcile's target is its current
+state), and never `Failed`, even though a replicated run records interim failure
+evidence before it enrols. `Failed` is reported only once no run is executing, so it
+always means a run that ended failed, including one whose silo stopped part-way, and a
+caller can treat it as final. Cancelling the
 call stops only the caller's wait, never an accepted run, so a lifecycle change is
 never left half-applied by a caller or a proxy giving up.
 

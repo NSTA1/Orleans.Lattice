@@ -1,3 +1,5 @@
+using Orleans.Concurrency;
+
 namespace Orleans.Lattice.Apps;
 
 /// <summary>
@@ -28,4 +30,12 @@ internal interface IAppActivationGrain : IGrainWithStringKey
         TenantId tenant,
         AppSlug slug,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The operation of the run executing on this activation right now, or <c>null</c> when none is.
+    /// Interleaves with a run in flight, and is held only in memory, so a run whose silo died is
+    /// never reported as still running (issue #5482).
+    /// </summary>
+    [AlwaysInterleave]
+    Task<AppActivationOperation?> GetRunningOperationAsync();
 }
