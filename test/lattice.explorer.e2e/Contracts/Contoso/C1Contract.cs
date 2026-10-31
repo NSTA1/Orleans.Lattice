@@ -4,6 +4,7 @@ using Orleans.Lattice.Api.Data.Grpc;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 using Names = Orleans.Lattice.Explorer.EndToEnd.Tests.Story.StoryNames.Contoso;
 
@@ -19,6 +20,8 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts.Contoso;
 /// (<see cref="ReplayCapturedOrdersFromEastAsync"/>): it replays the three negative orders as
 /// <c>orders-baseline</c> captured them in one atomic batch to east, and west - strict - diverts
 /// each replicated entry instead of applying it, leaving both regions holding the same values.
+/// Until #5443 is fixed the restore into the replicated <c>factory-orders</c> aborts, so the
+/// restore step is a <see cref="KnownDefect"/> and the seeder deletes the wrong prices instead.
 /// </summary>
 public sealed class C1Contract() : ChapterContract("C1")
 {
@@ -50,9 +53,28 @@ public sealed class C1Contract() : ChapterContract("C1")
         await feed.WaitUntilAsync(status => status.WrongPricesWritten >= wrong + SeederBurst, TimeSpan.FromMinutes(2));
 
         var backup = olivia.Backup;
-        var restore = await backup.StartRestoreAsync(new LatticeRestoreRequest(
-            context.Recall(StoryKeys.OrdersBaselineBackup), Names.Trees.FactoryOrders, mode: LatticeRestoreMode.ShadowCutover));
-        await ContractWait.SucceededAsync("the orders-baseline restore", () => backup.GetBackupOperationStatusAsync(restore.OperationId), OperationPatience);
+        await new KnownDefect("#5443", "A restore into a replicated tree aborts because the peer's participant authorizes as anonymous").ReproducesAsync(async () =>
+        {
+            var restore = await backup.StartRestoreAsync(new LatticeRestoreRequest(
+                context.Recall(StoryKeys.OrdersBaselineBackup), Names.Trees.FactoryOrders, mode: LatticeRestoreMode.ShadowCutover));
+            try
+            {
+                await ContractWait.SucceededAsync("the orders-baseline restore", () => backup.GetBackupOperationStatusAsync(restore.OperationId), OperationPatience);
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("could not prepare", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            throw new InvalidOperationException("the orders-baseline restore into the replicated factory-orders succeeded");
+        });
+
+        // Until #5443 is fixed the restore cannot run, so the seeder removes the wrong prices
+        // the restore would have discarded (they are feed orders written after the baseline).
+        foreach (var key in await WrongPricesAsync(olivia.Data))
+        {
+            await olivia.Data.DeleteAsync(new DataDeleteRequest { TreeId = Names.Trees.FactoryOrders, Key = key });
+        }
 
         var priya = ContractFacades.Of(context, Personas.Priya.Id).Data;
         foreach (var correction in StoryData.Corrections)

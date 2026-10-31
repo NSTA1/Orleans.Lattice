@@ -86,7 +86,14 @@ public sealed class A10Contract() : ChapterContract("A10")
         var offboarded = context.IsProduced("C3");
 
         // A just-captured backup can be missing from the listing for a moment: the catalogue
-        // hides a row until its manifest is in the backup store. Read until it settles.
+        // hides a row until its manifest is in the backup store, and a cold restore rebuilds
+        // the whole catalogue from the store. Read until every row checked below is listed.
+        var expected = new List<string> { Names.Backups.OrdersPrefix0001, Names.Backups.OrdersKey42, Names.Backups.LinesInc1 };
+        if (!offboarded)
+        {
+            expected.Add(Names.Backups.LinesFull);
+        }
+
         IReadOnlyList<BackupManifest> catalogue = [];
         try
         {
@@ -94,9 +101,9 @@ public sealed class A10Contract() : ChapterContract("A10")
             {
                 catalogue = await ContractCalls.BackupsAsync(backup);
                 return HistoricalCount(catalogue) >= Names.Backups.HistoricalCount
-                    && catalogue.Any(manifest => manifest.Name == Names.Backups.LinesInc1)
+                    && expected.All(name => catalogue.Any(manifest => manifest.Name == name))
                     && catalogue.Count(manifest => manifest.SetName == Names.Backups.FactorySet1) >= 2;
-            }, TimeSpan.FromMinutes(2));
+            }, TimeSpan.FromMinutes(3));
         }
         catch (TimeoutException)
         {
@@ -106,15 +113,15 @@ public sealed class A10Contract() : ChapterContract("A10")
         Require(
             HistoricalCount(catalogue) >= Names.Backups.HistoricalCount,
             $"the 60 historical telemetry backups are catalogued ({HistoricalCount(catalogue)} listed)");
-        RequireBackup(catalogue, Names.Backups.OrdersPrefix0001, BackupKind.Full, BackupScopeSelector.Prefix(Names.Trees.FactoryOrders, Names.Orders.BackupPrefix));
-        RequireBackup(catalogue, Names.Backups.OrdersKey42, BackupKind.Full, BackupScopeSelector.Key(Names.Trees.FactoryOrders, Names.Orders.Order42));
+        RequireBackup(context, catalogue, Names.Backups.OrdersPrefix0001, BackupKind.Full, BackupScopeSelector.Prefix(Names.Trees.FactoryOrders, Names.Orders.BackupPrefix));
+        RequireBackup(context, catalogue, Names.Backups.OrdersKey42, BackupKind.Full, BackupScopeSelector.Key(Names.Trees.FactoryOrders, Names.Orders.Order42));
         if (!offboarded)
         {
             // C3 deletes lines-full's manifest from storage and prunes its catalogue row.
-            RequireBackup(catalogue, Names.Backups.LinesFull, BackupKind.Full, LinesScope);
+            RequireBackup(context, catalogue, Names.Backups.LinesFull, BackupKind.Full, LinesScope);
         }
 
-        RequireBackup(catalogue, Names.Backups.LinesInc1, BackupKind.Incremental, LinesScope);
+        RequireBackup(context, catalogue, Names.Backups.LinesInc1, BackupKind.Incremental, LinesScope);
         var set = catalogue.Where(manifest => manifest.SetName == Names.Backups.FactorySet1).ToList();
         RequireEqual(set.Count, 2, "factory-set-1 holds two backups, the orders and the lines");
         Require(set.Select(member => member.SetId).Distinct().Count() == 1, "factory-set-1's members share one set");
@@ -162,8 +169,27 @@ public sealed class A10Contract() : ChapterContract("A10")
         await ContractWait.SucceededAsync(what, () => backup.GetBackupOperationStatusAsync(handle.OperationId), TimeSpan.FromMinutes(5));
     }
 
-    private void RequireBackup(IReadOnlyList<BackupManifest> catalogue, string name, BackupKind kind, BackupScopeSelector scope) =>
-        Require(catalogue.Any(manifest => manifest.Name == name && manifest.Kind == kind && manifest.Scope == scope), $"{name} is a {kind} backup of {scope.Kind} {scope.TreeId} {scope.KeyOrPrefix}");
+    private void RequireBackup(ChapterContext context, IReadOnlyList<BackupManifest> catalogue, string name, BackupKind kind, BackupScopeSelector scope)
+    {
+        var named = catalogue.Where(manifest => manifest.Name == name).Select(manifest => $"{manifest.Kind} {manifest.Scope.Kind} {manifest.Scope.TreeId} {manifest.Scope.KeyOrPrefix}").ToList();
+        var id = RecordedId(context, name);
+        var recorded = catalogue.Where(manifest => manifest.Id == id).Select(manifest => manifest.Name).ToList();
+        Require(
+            catalogue.Any(manifest => manifest.Name == name && manifest.Kind == kind && manifest.Scope == scope),
+            $"{name} is a {kind} backup of {scope.Kind} {scope.TreeId} {scope.KeyOrPrefix} (listed as: {(named.Count == 0 ? "absent" : string.Join("; ", named))}; its recorded id is listed under: [{string.Join(", ", recorded)}]; {catalogue.Count} rows)");
+    }
+
+    private static string? RecordedId(ChapterContext context, string name)
+    {
+        try
+        {
+            return context.Recall(StoryKeys.Backup(name));
+        }
+        catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException)
+        {
+            return null;
+        }
+    }
 
     private static int HistoricalCount(IReadOnlyList<BackupManifest> catalogue) =>
         catalogue.Select(manifest => manifest.Name).Where(name => name.StartsWith(ContosoHarness.HistoricalBackupPrefix, StringComparison.Ordinal)).Distinct(StringComparer.Ordinal).Count();
