@@ -372,6 +372,18 @@ public partial class DataImportDialog : IDisposable
         }
     }
 
+    /// <summary>Acknowledges a finished import: the next time the dialog opens it offers a new file.</summary>
+    private async Task DoneAsync()
+    {
+        if (Reading)
+        {
+            return;
+        }
+
+        Reset();
+        await OpenChanged.InvokeAsync(false);
+    }
+
     private async Task CloseAsync()
     {
         if (Reading)

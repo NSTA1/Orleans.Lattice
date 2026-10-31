@@ -109,6 +109,26 @@ public sealed class DataImportDialogTests : DataTestContext
     }
 
     [Test]
+    public void Done_acknowledges_a_finished_import_so_the_dialog_reopens_on_a_new_file()
+    {
+        Client.WithTree(Tree, keys: 0);
+        Writer.TreeRights[Tree] = (true, true);
+        var cut = RenderAt("data/orders");
+        cut.WaitUntil(() => Button(cut, "Import..."));
+        Button(cut, "Import...").Click();
+        cut.FindComponent<InputFile>().UploadFiles(InputFileContent.CreateFromText("{\"id\":\"a\"}\n", "orders.ndjson"));
+        cut.Find(".lt-data-import__form").Submit();
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-data-import").GetAttribute("data-lt-import-state"), Is.EqualTo("succeeded")));
+
+        Button(cut, "Done").Click();
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-data-import"), Is.Empty));
+        Button(cut, "Import...").Click();
+
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-data-import").GetAttribute("data-lt-import-state"), Is.EqualTo("choose")));
+        Assert.That(cut.FindAll(".lt-data-import__form"), Has.Count.EqualTo(1));
+    }
+
+    [Test]
     public void An_import_refuses_to_start_without_a_file_or_with_an_invalid_key()
     {
         Client.WithTree(Tree, keys: 0);
