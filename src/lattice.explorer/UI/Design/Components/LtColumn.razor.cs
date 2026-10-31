@@ -9,6 +9,8 @@ namespace Orleans.Lattice.Explorer.UI.Design.Components;
 /// <typeparam name="TItem">The type of one row.</typeparam>
 public partial class LtColumn<TItem> : IDisposable
 {
+    private Func<TItem, IComparable?>? _lastSortBy;
+    private bool _seenSort;
     /// <summary>The column header's text.</summary>
     [Parameter, EditorRequired]
     public string Title { get; set; } = string.Empty;
@@ -23,7 +25,8 @@ public partial class LtColumn<TItem> : IDisposable
 
     /// <summary>
     /// The value a row sorts by. When set, the header is a sort button; leave it
-    /// <see langword="null"/> for a column that cannot be sorted.
+    /// <see langword="null"/> for a column that cannot be sorted. Changing it
+    /// reapplies an active sort; clearing it restores the table's natural order.
     /// </summary>
     [Parameter]
     public Func<TItem, IComparable?>? SortBy { get; set; }
@@ -97,6 +100,19 @@ public partial class LtColumn<TItem> : IDisposable
         }
 
         Table.AddColumn(this);
+    }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        var changed = _seenSort && !Equals(SortBy, _lastSortBy);
+        var sortableChanged = (SortBy is null) != (_lastSortBy is null);
+        _seenSort = true;
+        _lastSortBy = SortBy;
+        if (changed)
+        {
+            Table?.SortKeyChanged(this, sortableChanged);
+        }
     }
 
     /// <inheritdoc />

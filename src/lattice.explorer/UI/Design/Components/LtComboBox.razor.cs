@@ -43,6 +43,8 @@ public partial class LtComboBox : IAsyncDisposable
     private readonly string _flagId;
     private readonly string _errorId;
     private readonly LtSuggestionPump _pump;
+    private readonly ComponentLifetime _edits = new();
+    private (LtComboBoxMode Mode, bool RejectExisting, bool Disabled, bool ReadOnly)? _lastContext;
     private ElementReference _input;
     private IJSObjectReference? _behaviour;
     private ILtSuggestionSource? _source;
@@ -93,7 +95,8 @@ public partial class LtComboBox : IAsyncDisposable
     /// <summary>
     /// Raised when a listed suggestion is chosen, with the suggestion itself, so a
     /// form can use its detail (such as a principal's display name). It does not
-    /// change what Enter does.
+    /// change what Enter does. If the field changes while a choice callback runs,
+    /// the remaining choice callbacks are abandoned.
     /// </summary>
     [Parameter]
     public EventCallback<LtSuggestion> OnChoose { get; set; }
@@ -252,19 +255,21 @@ public partial class LtComboBox : IAsyncDisposable
     /// value names nothing the source lists, or when <see cref="RejectExisting"/> and it
     /// already exists; otherwise <see langword="true"/>, including an empty value
     /// (whether one is required is the page's rule) and a source that cannot list
-    /// its values. A check superseded by a new value or source is refused.
+    /// its values. A check superseded by an edit, source or interaction-state change is refused,
+    /// even if the field subsequently returns to its earlier state.
     /// </returns>
     public async Task<bool> ConfirmAsync()
     {
         var text = _text;
         var source = Source;
+        var edit = _edits.Token;
         if (!CanSuggest || text.Length == 0)
         {
             return true;
         }
 
         var exists = await ExistsAsync(text).ConfigureAwait(true);
-        if (_disposed || !ReferenceEquals(source, Source) || !string.Equals(text, _text, StringComparison.Ordinal))
+        if (edit.IsCancellationRequested || _disposed || !ReferenceEquals(source, Source) || !string.Equals(text, _text, StringComparison.Ordinal))
         {
             // An answer belongs to both its text and its source, not to the next field state.
             return false;
@@ -284,6 +289,7 @@ public partial class LtComboBox : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _disposed = true;
+        _edits.Leave();
         _pump.Dispose();
         if (_behaviour is { } behaviour)
         {
@@ -310,6 +316,7 @@ public partial class LtComboBox : IAsyncDisposable
     /// <param name="value">The value to look for.</param>
     internal async Task<bool?> ExistsAsync(string value)
     {
+        var edit = _edits.Token;
         if (Source is not { } source)
         {
             return null;
@@ -317,7 +324,12 @@ public partial class LtComboBox : IAsyncDisposable
 
         var answer = _answer is not null && string.Equals(_answerText, value, StringComparison.Ordinal)
             ? _answer
-            : await LookUpAsync(source, value).ConfigureAwait(true);
+            : await LookUpAsync(source, value, edit).ConfigureAwait(true);
+
+        if (edit.IsCancellationRequested)
+        {
+            return null;
+        }
 
         if (!answer.IsAvailable)
         {
@@ -341,6 +353,7 @@ public partial class LtComboBox : IAsyncDisposable
     {
         if (!string.Equals(Value, _lastValue, StringComparison.Ordinal))
         {
+            _edits.Renew();
             _lastValue = Value;
             _text = Value ?? string.Empty;
             _matchError = null;
@@ -357,6 +370,7 @@ public partial class LtComboBox : IAsyncDisposable
 
         if (!ReferenceEquals(Source, _source))
         {
+            _edits.Renew();
             // A new source - another tree, another tenant - makes every answer stale.
             _source = Source;
             _pump.Cancel();
@@ -367,6 +381,18 @@ public partial class LtComboBox : IAsyncDisposable
             _flag = null;
             _active = -1;
         }
+
+        var context = (Mode, RejectExisting, Disabled, ReadOnly);
+        if (_lastContext is { } previous && previous != context)
+        {
+            _edits.Renew();
+            _pump.Cancel();
+            _matchError = null;
+            _flag = null;
+            Close();
+        }
+
+        _lastContext = context;
     }
 
     /// <inheritdoc />
@@ -419,6 +445,7 @@ public partial class LtComboBox : IAsyncDisposable
 
     private async Task OnTextChangedAsync(string? text)
     {
+        var edit = _edits.Renew();
         _text = text ?? string.Empty;
         _lastValue = _text;
         _matchError = null;
@@ -426,7 +453,10 @@ public partial class LtComboBox : IAsyncDisposable
         _open = true;
         _active = -1;
         await ValueChanged.InvokeAsync(_text).ConfigureAwait(true);
-        await RequestAsync().ConfigureAwait(true);
+        if (!edit.IsCancellationRequested)
+        {
+            await RequestAsync().ConfigureAwait(true);
+        }
     }
 
     private Task RequestAsync() =>
@@ -537,6 +567,12 @@ public partial class LtComboBox : IAsyncDisposable
 
     private async Task ChooseAsync(LtSuggestion item)
     {
+        if (_disposed || Disabled || ReadOnly)
+        {
+            return;
+        }
+
+        var edit = _edits.Renew();
         _text = item.Value;
         _lastValue = item.Value;
         _matchError = null;
@@ -550,8 +586,13 @@ public partial class LtComboBox : IAsyncDisposable
         Close();
         _status = item.Value + " chosen.";
         await ValueChanged.InvokeAsync(item.Value).ConfigureAwait(true);
+        if (edit.IsCancellationRequested)
+        {
+            return;
+        }
+
         await OnChoose.InvokeAsync(item).ConfigureAwait(true);
-        if (OnCommit.HasDelegate && _matchError is null)
+        if (!edit.IsCancellationRequested && OnCommit.HasDelegate && _matchError is null)
         {
             await OnCommit.InvokeAsync(item.Value).ConfigureAwait(true);
         }
@@ -611,12 +652,12 @@ public partial class LtComboBox : IAsyncDisposable
         return true;
     }
 
-    private async Task<LtSuggestionSet> LookUpAsync(ILtSuggestionSource source, string value)
+    private async Task<LtSuggestionSet> LookUpAsync(ILtSuggestionSource source, string value, CancellationToken edit)
     {
         try
         {
-            var answer = await source.SuggestAsync(value, Limit, CancellationToken.None).ConfigureAwait(true);
-            if (string.Equals(value, _text, StringComparison.Ordinal) && ReferenceEquals(source, Source))
+            var answer = await source.SuggestAsync(value, Limit, edit).ConfigureAwait(true);
+            if (!edit.IsCancellationRequested && string.Equals(value, _text, StringComparison.Ordinal) && ReferenceEquals(source, Source))
             {
                 Remember(value, answer);
             }
