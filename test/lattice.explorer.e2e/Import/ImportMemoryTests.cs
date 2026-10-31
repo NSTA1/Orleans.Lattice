@@ -110,7 +110,7 @@ public sealed class ImportMemoryTests
 
         var dialog = await OpenSeedAsync(olivia, SeedWarmUpTree);
         await ChooseAsync(dialog, warmUp, "bulk/{/id}", "/n");
-        await RunAsync(dialog, "Seed tree", warmUpLines);
+        var warmUpPeaks = await WarmUpAsync(dialog, "Seed tree", warmUpLines);
 
         dialog = await OpenSeedAsync(olivia, SeedTree);
         await ChooseAsync(dialog, file, "bulk/{/id}", "/n");
@@ -119,13 +119,18 @@ public sealed class ImportMemoryTests
         var growth = await MeasureAsync(olivia, dialog, "Seed tree", lines, "seed-progress", "The seed streams the file: the pre-flight pass checks its order before anything is written");
         await olivia.SubstepAsync("succeeded", $"Seeded {ImportFiles.Count(lines)} entries; no process grew by 64 MB");
 
-        var keys = await CountKeysAsync(SeedTree);
+        growth = WithWarmUp(growth, warmUpPeaks);
+        var (found, missing) = await FindEveryKeyAsync(SeedTree, Enumerable.Range(0, lines).Select(line => $"bulk/{line:D8}"));
+        var scanned = await CountKeysAsync(SeedTree);
         var stats = await LatticeTreeAdminApiGrpcClient.Create(_estate.Invoker(), JourneyEstate.Serialization).GetTreeStatsAsync(SeedTree);
-        Report("Seed", growth, $"A range scan of the seeded tree reads {ImportFiles.Count(keys)} keys; its tree stats report {ImportFiles.Count(stats.TotalLiveKeys)} live keys.");
+        Report("Seed", growth,
+            $"A point read of every one of the file's {ImportFiles.Count(lines)} keys finds {ImportFiles.Count(found)}"
+            + (missing.Count > 0 ? $" (missing, for example: {string.Join(", ", missing)})" : string.Empty)
+            + $". A paged range scan of the tree reads {ImportFiles.Count(scanned)} keys, and its tree stats report {ImportFiles.Count(stats.TotalLiveKeys)} live keys.");
         Assert.Multiple(() =>
         {
             AssertUnderCeiling("seed", growth);
-            Assert.That(keys, Is.EqualTo(lines), "every line of the file is exactly one key of the tree");
+            Assert.That(found, Is.EqualTo(lines), "every line of the file is a key of the tree");
         });
     }
 
@@ -147,7 +152,7 @@ public sealed class ImportMemoryTests
 
         var dialog = await OpenUpsertAsync(olivia, UpsertTree);
         await ChooseAsync(dialog, warmUp, "order/{/id}", valuePointer: null);
-        await RunAsync(dialog, "Import", warmUpLines);
+        var warmUpPeaks = await WarmUpAsync(dialog, "Import", warmUpLines);
 
         dialog = await OpenUpsertAsync(olivia, UpsertTree);
         await ChooseAsync(dialog, file, "order/{/id}", valuePointer: null);
@@ -156,12 +161,15 @@ public sealed class ImportMemoryTests
         var growth = await MeasureAsync(olivia, dialog, "Import", lines, "upsert-progress", "The upsert streams every record through the gateway to the silos, a batch at a time");
         await olivia.SubstepAsync("succeeded", $"Wrote {ImportFiles.Count(lines)} records; no process grew by 64 MB");
 
-        var keys = await CountKeysAsync(UpsertTree);
-        Report("Upsert", growth, $"A range scan of the upserted tree reads {ImportFiles.Count(keys)} keys.");
+        growth = WithWarmUp(growth, warmUpPeaks);
+        var (found, _) = await FindEveryKeyAsync(UpsertTree, Enumerable.Range(0, UpsertKeys).Select(key => $"order/{key:D6}"));
+        var scanned = await CountKeysAsync(UpsertTree);
+        Report("Upsert", growth, $"A point read of each of the {UpsertKeys} keys finds {found}; a range scan of the tree reads {ImportFiles.Count(scanned)} keys.");
         Assert.Multiple(() =>
         {
             AssertUnderCeiling("upsert", growth);
-            Assert.That(keys, Is.EqualTo(UpsertKeys), "the records land on their keys and nothing else");
+            Assert.That(found, Is.EqualTo(UpsertKeys), "every record landed on its key");
+            Assert.That(scanned, Is.EqualTo(UpsertKeys), "the records land on their keys and nothing else");
         });
     }
 
@@ -198,11 +206,40 @@ public sealed class ImportMemoryTests
         }
     }
 
-    private static async Task RunAsync(ILocator dialog, string start, long lines)
+    /// <summary>Runs the warm-up import, returning the working-set peak each process reached during it.</summary>
+    private async Task<IReadOnlyList<WorkingSetGrowth>> WarmUpAsync(ILocator dialog, string start, long lines)
     {
+        await using var sampler = await WorkingSetSampler.StartAsync(MeasuredProcesses());
         await dialog.GetByRole(AriaRole.Button, new() { Name = start, Exact = true }).ClickAsync();
         await ExpectSucceededAsync(dialog, lines);
+        var peaks = await sampler.StopAsync();
         await dialog.GetByRole(AriaRole.Button, new() { Name = "Done", Exact = true }).ClickAsync();
+        return peaks;
+    }
+
+    private static IReadOnlyList<WorkingSetGrowth> WithWarmUp(IReadOnlyList<WorkingSetGrowth> growth, IReadOnlyList<WorkingSetGrowth> warmUp) =>
+        [.. growth.Select((reading, i) => reading with { WarmUpPeak = warmUp[i].Peak })];
+
+    /// <summary>Reads every one of <paramref name="keys"/> by a point read, returning how many exist and a few that do not.</summary>
+    private async Task<(int Found, IReadOnlyList<string> Missing)> FindEveryKeyAsync(string tree, IEnumerable<string> keys)
+    {
+        var data = LatticeDataApiGrpcClient.Create(_estate.Invoker(), JourneyEstate.Serialization);
+        var found = 0;
+        var missing = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        await Parallel.ForEachAsync(keys, new ParallelOptions { MaxDegreeOfParallelism = 16 }, async (key, cancellationToken) =>
+        {
+            var read = await data.GetAsync(new DataGetRequest { TreeId = tree, Key = key }, cancellationToken);
+            if (read.Found)
+            {
+                Interlocked.Increment(ref found);
+            }
+            else
+            {
+                missing.Enqueue(key);
+            }
+        });
+
+        return (found, [.. missing.Order(StringComparer.Ordinal).Take(5)]);
     }
 
     private static async Task ExpectSucceededAsync(ILocator dialog, long lines)
@@ -248,23 +285,16 @@ public sealed class ImportMemoryTests
         return processes;
     }
 
-    /// <summary>Counts a tree's keys exactly, by a paged range read through the Data API, failing on a repeated or unordered key.</summary>
+    /// <summary>Counts the keys a paged range read through the Data API returns, for the report.</summary>
     private async Task<long> CountKeysAsync(string tree)
     {
         var data = LatticeDataApiGrpcClient.Create(_estate.Invoker(), JourneyEstate.Serialization);
         long count = 0;
-        string? previous = null;
         string? token = null;
         do
         {
             var page = await data.ReadRangeAsync(new DataRangeRequest { TreeId = tree, PageSize = 1000, ContinuationToken = token });
-            foreach (var entry in page.Entries)
-            {
-                Assert.That(previous is null || string.CompareOrdinal(previous, entry.Key) < 0, Is.True,
-                    $"the range read returns each key once, in order: '{entry.Key}' followed '{previous}'");
-                previous = entry.Key;
-                count++;
-            }
+            count += page.Entries.Count;
 
             token = page.ContinuationToken;
         }

@@ -38,7 +38,10 @@ internal sealed class ManagedHeapReader : IDisposable
                 continue;
             }
 
-            var value = line[(line.LastIndexOf(' ') + 1)..].Trim();
+            // A sample is `name{labels} value [timestamp]`: the value is the first token
+            // after the labels, and the exporter may append a timestamp after it.
+            var rest = line[(line.IndexOf('}') is var close and >= 0 ? close + 1 : Metric.Length)..].Trim();
+            var value = rest.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
             if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var bytes))
             {
                 total += (long)bytes;
