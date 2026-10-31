@@ -14,10 +14,12 @@ cores in the product assembly, and a Coyote model that executes those cores.
 |--------|-------------------|
 | [`WalDurability.tla`](WalDurability.tla) | The leaf side, end to end: append, out-of-order flush and acknowledgement, a shared stream read through per-leaf READ positions, checkpoint persists that can fail, snapshot captures that can fail, durable materialiser pins, the GC trim floor and its block pins, and leaf and shard crashes at any step with recovery from a snapshot or cold. |
 | [`WalMove.tla`](WalMove.tla) | A shard move: a durable fence under a lease and the source activation's fence, quiesce, copy and switch, concurrent with appends, out-of-order flushes, a consumer, the GC, a shard crash and the loss of the move's coordinator. |
+| [`WalPinRetirement.tla`](WalPinRetirement.tla) | The GC retiring orphaned materialiser pins - the bulk orphan sweep and the starvation drive, each taking a token per pin-store key, reading the leaf's durable row and removing through a fence as separate steps, two sweepers racing - against the leaf's fold, purge, discard and re-creation under the same grain id. See [below](#walpinretirement). |
 
-They are two modules because a move touches none of the leaf state. Keeping the
-move out of `WalDurability` keeps that module small enough to check its liveness
-properties exhaustively within the TLC budget.
+They are separate modules because a move touches none of the leaf state, and pin
+retirement only the leaf's lifecycle, not its replay. Keeping each out of
+`WalDurability` keeps that module small enough to check its liveness properties
+exhaustively within the TLC budget.
 
 ## Counts
 
@@ -25,6 +27,7 @@ properties exhaustively within the TLC budget.
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `WalDurability` | 11 | 4 | 26 | 43 | 39 | 226,592 |
 | `WalMove` | 5 | 2 | 13 | 18 | 18 | 1,617 |
+| `WalPinRetirement` | 3 | 3 | 23 | 28 | 28 | 131,779 |
 
 `Actions` counts the disjuncts of `Next`, including `WalMove`'s non-behavioural
 `Stutter`. `Behaviour rows` counts the action rows of the module's refinement note,
@@ -79,6 +82,12 @@ distinct states to depth 21, about fifteen seconds on two workers.
 | `WalMove.TwoMoves.cfg` | The move module with two moves contending for the stream, checked with every property. |
 | [`move-mutations/`](move-mutations/) | One or more deliberate defects per property and per action of `WalMove`. |
 | [`MoveRefinement.md`](MoveRefinement.md) | `WalMove` mapped to production. |
+| `WalPinRetirement.tla` / `.cfg` / `.manifest.json` | The pin-retirement module, its TLC model and its manifest. |
+| `WalPinRetirement.OneFault.cfg` | The pin-retirement module with one environment fault, checked against every safety property. |
+| `WalPinRetirement.TwoSweepers.cfg` | The pin-retirement module with a second orphan sweeper racing the first and the drive, checked against every safety property. |
+| [`pin-retirement-mutations/`](pin-retirement-mutations/) | One or more deliberate defects per property and per action of `WalPinRetirement`. |
+| [`PinRetirementRefinement.md`](PinRetirementRefinement.md) | `WalPinRetirement` mapped to production. |
+| [`perturbations/`](perturbations/README.md) | Production perturbations for `WalPinRetirement`'s detectors. |
 
 ## Properties checked
 
@@ -211,3 +220,67 @@ lifecycle, with crash-anywhere interleavings, against the production cores:
 
 Its guard tests each remove one fix, and each must be caught by the assertion that
 fix protects, identified by its tag in the bug report.
+
+## WalPinRetirement
+
+`WalPinRetirement` models the decision `spec/UNMODELLED.md` used to record as a gap:
+when the GC may remove a leaf's durable materialiser pin. Removing a pin lets the
+trim floor advance, so removing one a live - or re-creatable - leaf still relies on
+licenses a trim over writes it has not checkpointed. The module takes
+`WalDurability`'s floor, block pin and trim as given and models what sits beside
+them: the leaf's own retirement at its terminal step (a fold's, before its row
+clear; a purge's, after it, issue #4700), the deleted-tree hold's retirement of a
+discarded copy, a purge-cleared leaf populated again under the same grain id, and
+the two GC repairs - the bulk orphan sweep, from each silo's loop or the tree's
+`WalOrphanPinSweepGrain`, and the starvation drive's retirement after a NotDriven
+verdict. Each repair takes a token from every pin-store key, reads the pins, reads
+the leaf's durable row once and decides each pin as separate steps, so the leaf can
+change under it.
+
+| Property | Kind | Meaning |
+|----------|------|---------|
+| `TypeOK` | Invariant | State stays well-typed. |
+| `NoTrimPastLiveNeed` | Invariant | The WAL is never trimmed past a write a live, or recoverable, leaf still needs to replay. |
+| `LivePublisherPinned` | Invariant | A seeded incarnation whose row is bound always holds a pin somewhere in the store. |
+| `RetireOnlyHusk` | Action | A GC retirement removes a pin only if its publisher's row was cleared after publishing it and no later incarnation has merged into it. |
+| `UnreadableNeverRetired` | Action | A leaf read that faulted never retires a pin. |
+| `OrphanEventuallyRetired` | Liveness | A gone leaf's pins are eventually all retired, unless its grain id is populated again first. |
+
+The base checks every property with one sweeper, the drive and no environment
+fault (an interrupted self-retirement is not one; it is what leaves orphans), to
+depth 29. `WalPinRetirement.OneFault.cfg` adds one fault - a routing change that
+duplicates the pin across keys, an unreadable leaf read or an abandoned run - and
+`WalPinRetirement.TwoSweepers.cfg` races a second sweeper; both check every safety
+property, and liveness stays on the base (with two sweepers it takes about eight
+minutes). The variants' state counts are in the manifest.
+
+### The defect it found
+
+| Issue | Defect | Mutations |
+|-------|--------|-----------|
+| #5358 | The GC removed an orphaned pin by consumer id, unconditionally, after a husk read taken in a separate step. A purge-cleared leaf re-created in between - a recovery re-binding it, a reused tree id re-seeding a deterministic root leaf, a bulk load re-using a leaf id - seeds its block pin under the same consumer id, often into the surviving entry where the monotone merge changes nothing; the removal then erased it and the trim could pass the re-created leaf's un-checkpointed writes. Both the sweep and the drive's NotDriven retirement had the window. **Fixed in this change**: every key's token is taken before its pins are read, the pin grain stamps every merge, `RemoveIfUnmergedSinceAsync` refuses a removal the consumer was merged past, and the drive retires through the same fenced sequence with a fresh durable read. | `NoTrimPastLiveNeedUnfencedRemoval`, `RetireOnlyHuskUnfencedRemoval`, `NoTrimPastLiveNeedDriveRemovesOnProbe` |
+
+### What it covers, and what it does not
+
+It covers the retirement decision - the husk read, the consumer-id gate (#4238), the
+fence, fail-closed reads - and its interleaving with the leaf's fold, purge,
+discard, recovery and re-creation, a routing change, and two sweepers. It does NOT
+cover several leaves or partitions per leaf, the pin's HLC frontier and override
+holds, the in-memory cursor registry, late delivery of a lost silo's removal
+message, or the sweep's floor-holder census and budgets; the refinement note's
+abstraction gaps list them. Coverage of this module is not coverage of the trim
+itself, which is `WalDurability`'s.
+
+### Coyote companion
+
+`WalPinRetirementModel` (`test/lattice/BPlusTree/Coyote/`) executes the production
+core, `WalOrphanPinRetirementCore`, against a re-created leaf under every
+interleaving. Its guard tests remove the fence, and take the token after the read;
+Coyote re-finds the retired pin of a re-created leaf in each.
+
+```powershell
+java -cp C:\path\to\tla2tools.jar tlc2.TLC -config WalPinRetirement.cfg WalPinRetirement.tla
+```
+
+On two workers the base takes about twenty-five seconds, `OneFault` about a minute
+and `TwoSweepers` about two.

@@ -510,6 +510,8 @@ public sealed class LeafCursorReporterDurableSeedTests
             Task.FromResult<IReadOnlyDictionary<string, long>>(
                 new Dictionary<string, long>(StringComparer.Ordinal));
         public Task RemoveAsync(string consumerId) => Task.CompletedTask;
+        public Task<WalMaterialiserPinToken> GetRetirementTokenAsync() => throw new NotSupportedException();
+        public Task<bool> RemoveIfUnmergedSinceAsync(string consumerId, WalMaterialiserPinToken token) => throw new NotSupportedException();
         public Task ClearAsync() => Task.CompletedTask;
     }
 
@@ -539,6 +541,8 @@ public sealed class LeafCursorReporterDurableSeedTests
             Task.FromResult<IReadOnlyCollection<string>>(Array.Empty<string>());
         public Task<IReadOnlyDictionary<string, long>> GetPinOffsetsAsync() => throw fault();
         public Task RemoveAsync(string consumerId) => Fail();
+        public Task<WalMaterialiserPinToken> GetRetirementTokenAsync() => throw new NotSupportedException();
+        public Task<bool> RemoveIfUnmergedSinceAsync(string consumerId, WalMaterialiserPinToken token) => throw new NotSupportedException();
         public Task ClearAsync() => Fail();
     }
 

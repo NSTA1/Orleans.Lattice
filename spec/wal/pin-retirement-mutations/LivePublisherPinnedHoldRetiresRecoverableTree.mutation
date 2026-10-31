@@ -1,0 +1,17 @@
+# Pairs with LivePublisherPinned. The deleted-tree hold retires the pins of a tree
+# that is merely soft-deleted, not discarded; recovery then hands the tree back
+# with no pins (issue #3930's distinction between Deleted and Discarded).
+MODULE: LivePublisherPinnedHoldRetiresRecoverableTree
+TARGET: LivePublisherPinned
+CLASS: Invariant
+SUMMARY: the deleted-tree hold retires a recoverable tree's pins
+PERTURBS: DiscardRetire
+
+--- FIND
+    /\ phase = "discarded"
+    /\ \E kc \in Keys \X Cons : pinOff[kc] # NoPin
+--- REPLACE
+\* MUTATION: a soft-deleted tree is treated as discarded.
+    /\ phase \in {"discarded", "deleted"}
+    /\ \E kc \in Keys \X Cons : pinOff[kc] # NoPin
+--- END

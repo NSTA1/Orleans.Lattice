@@ -45,6 +45,7 @@ be quiet about one.
 | [`view-joint-repair/`](view-joint-repair/README.md) | `MaterialisedViewJointRepair` | Immutable fresh participant capture, joint repair visibility, decided retry recovery, and durable checkpoint acknowledgement closure. |
 | [`wal/`](wal/README.md) | `WalDurability` | The leaf WAL durability lifecycle under crash-anywhere recovery: append, out-of-order flush, per-leaf read checkpoints whose persist can fail, snapshots, durable pins and the GC trim they bound. |
 | [`wal/`](wal/README.md) | `WalMove` | A WAL partition moving between storage providers: fence, quiesced copy, placement switch and shard crash. |
+| [`wal/`](wal/README.md#walpinretirement) | `WalPinRetirement` | The WAL GC retiring orphaned materialiser pins - the bulk sweep and the starvation drive, their token, leaf read and fenced removal as separate steps, two sweepers racing - against a leaf's fold, purge, discard and re-creation under the same grain id. |
 | [`scheduling/`](scheduling/README.md) | `TurnOccupancy` | Non-reentrant grain turns, queued calls, and awaiting versus dispatching environment-controlled background work. |
 | [`scheduling/`](scheduling/README.md) | `WalAdmission` | Partition admission capacity, saturation waits, paced recovery release and budget outcomes under explicit progress premises. |
 | [`scheduling/`](scheduling/README.md#wal-back-pressure) | `WalBackPressure` | Tree-wide cached classification, scoped consumer responses, recovery hysteresis and signal-independent relief under explicit progress premises. |

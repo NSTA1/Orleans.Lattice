@@ -306,7 +306,9 @@ internal static class TlcCiShard
     /// their controls, as do the split AntiEntropy groups whose base stays
     /// where it is. BPlusCascade moved later (#5166): in CI run 40909619830 its
     /// base took 10 s against 227 s for its thirteen mutations, then split over
-    /// two shards, so its base and mutations now share one shard.
+    /// two shards, so its base and mutations now share one shard. WalPinRetirement
+    /// joined at creation (#5349): its base measured 24 s on two local workers,
+    /// far below half the replication-wal shard's 14-minute item.
     /// </para>
     /// </summary>
     private static string? CoLocatedBaseCategory(SpecModule module) => module.Name switch
@@ -316,7 +318,7 @@ internal static class TlcCiShard
         "BPlusCascade" => BPlusCascade,
         "ReplicationCausalDelivery" or "ReplicationLowWatermark" or "ReplicationReBootstrap" => ReBootstrap,
         "ShardOwnershipCrdt" or "ShardOwnershipCutover" or "ShardOwnershipFold" or "ShardOwnershipRetention" => ShardOwnership,
-        "Replication" or "WalDurability" or "WalMove" => ReplicationWal,
+        "Replication" or "WalDurability" or "WalMove" or "WalPinRetirement" => ReplicationWal,
         _ => null,
     };
 

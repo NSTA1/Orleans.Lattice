@@ -1336,7 +1336,11 @@ partitions each examined durable pin into `retired`, `retire_failed`, `deferred`
 `unreadable`; the decision arms also carry a `cause` of `orphaned` or
 `no_durable_state`. `orleans.lattice.wal.gc.drive_orphan_pin_retirement` records
 the same removal/refusal outcomes when the blocked-leaf drive gets a `NotDriven`
-verdict, with `cause="not_driven"`.
+verdict, with `cause="not_driven"`. Both routes remove only through the pin grain's
+fence (issue #5358): each key's retirement token is taken before its pins are read,
+and a removal is refused when the consumer was merged since - as a leaf re-created
+under the same grain id does when it seeds its block pin. A refused removal counts as
+`retire_failed`, and the next sweep re-examines the pin against a fresh read.
 
 Two further GC signals separate a tree that is catching up from one that is
 stuck (issue #3149). `orleans.lattice.wal.gc.floor_head_distance` records,

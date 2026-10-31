@@ -1,0 +1,15 @@
+# Pairs with OrphanEventuallyRetired. A protocol defect with fairness intact: a run
+# may finish before it has decided every pin it found, so a sweep that always does
+# never retires anything.
+MODULE: OrphanEventuallyRetiredDoneSkipsDecisions
+TARGET: OrphanEventuallyRetired
+CLASS: Temporal
+SUMMARY: a run finishes without deciding the pins it found
+PERTURBS: Done
+
+--- FIND
+    /\ \A c \in Cons : found[p][c] = {}
+--- REPLACE
+\* MUTATION: undecided pins do not hold the run open.
+    /\ TRUE
+--- END

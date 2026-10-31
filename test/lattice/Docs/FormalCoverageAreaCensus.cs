@@ -63,7 +63,7 @@ internal static class FormalCoverageAreaCensus
         new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
         {
             ["Single-cluster atomic commit"] = ["AtomicCommit"],
-            ["WAL durability lifecycle"] = ["WalDurability", "WalMove"],
+            ["WAL durability lifecycle"] = ["WalDurability", "WalMove", "WalPinRetirement"],
             ["Shard ownership"] =
             [
                 "ShardOwnership", "ShardOwnershipCrdt", "ShardOwnershipCutover", "ShardOwnershipFold",
