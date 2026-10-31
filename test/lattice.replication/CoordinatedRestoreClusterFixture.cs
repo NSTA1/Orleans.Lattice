@@ -293,6 +293,7 @@ internal sealed class CoordinatedRestoreClusterFixture
         private readonly List<SagaControlRequest> _committed = [];
         private readonly List<SagaControlRequest> _aborted = [];
         private IGrainFactory? _grainFactory;
+        private PrepareHold? _prepareHold;
 
         /// <summary>The prepare requests routed to the local participant, in order.</summary>
         public IReadOnlyList<SagaControlRequest> Prepared
@@ -319,11 +320,37 @@ internal sealed class CoordinatedRestoreClusterFixture
             (_grainFactory ?? throw new InvalidOperationException("The loopback control channel was not bound to a grain factory."))
                 .GetGrain<ICrossClusterSagaParticipantGrain>(request.SagaId);
 
-        /// <inheritdoc />
-        public Task<SagaControlResponse> PrepareAsync(string clusterId, SagaControlRequest request, CancellationToken cancellationToken = default)
+        /// <summary>
+        /// Holds every later prepare before it reaches the participant grain, until
+        /// the returned hold is released, so a test can keep a coordinated restore in
+        /// its prepare phase for as long as it chooses. The hold sits in the channel,
+        /// inside whatever drives the coordinator, and not in a grain call, so the
+        /// only grain call it can outlast is one the restore itself keeps open.
+        /// </summary>
+        public PrepareHold HoldPrepare()
         {
-            lock (_gate) { _prepared.Add(request); }
-            return Participant(request).PrepareAsync(request);
+            var hold = new PrepareHold();
+            lock (_gate) { _prepareHold = hold; }
+            return hold;
+        }
+
+        /// <inheritdoc />
+        public async Task<SagaControlResponse> PrepareAsync(string clusterId, SagaControlRequest request, CancellationToken cancellationToken = default)
+        {
+            PrepareHold? hold;
+            lock (_gate)
+            {
+                _prepared.Add(request);
+                hold = _prepareHold;
+            }
+
+            if (hold is not null)
+            {
+                hold.Entered.TrySetResult();
+                await hold.Release.Task;
+            }
+
+            return await Participant(request).PrepareAsync(request);
         }
 
         /// <inheritdoc />
@@ -343,6 +370,20 @@ internal sealed class CoordinatedRestoreClusterFixture
         /// <inheritdoc />
         public Task<SagaControlResponse> GetStatusAsync(string clusterId, SagaControlRequest request, CancellationToken cancellationToken = default) =>
             Participant(request).GetStatusAsync(request);
+    }
+
+    /// <summary>
+    /// A hold placed by <see cref="LoopbackSagaControlChannel.HoldPrepare"/>:
+    /// <see cref="Entered"/> completes when a prepare reaches it, and the prepare
+    /// proceeds once <see cref="Release"/> is completed.
+    /// </summary>
+    internal sealed class PrepareHold
+    {
+        /// <summary>Completes when a prepare has reached the hold.</summary>
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Complete to let every held prepare proceed.</summary>
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     /// <summary>
