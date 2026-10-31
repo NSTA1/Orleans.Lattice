@@ -194,6 +194,29 @@ public partial class ViewMaintainerIntegrationTests
     }
 
     [Test]
+    public async Task Maintainer_GetStatusAsync_matches_the_separate_lag_and_active_tree_reads()
+    {
+        var src = _fixture.Source(ViewClusterFixture.CountSource);
+        await src.SetAsync("status-1", ViewClusterFixture.AggValue("statusg"));
+
+        var view = await ViewAsync(ViewClusterFixture.CountView);
+        await view.WaitForSourceHeadAsync(Barrier);
+
+        var maintainer = _fixture.Cluster.Client.GetGrain<Orleans.Lattice.Views.IViewMaintainerGrain>(
+            ViewClusterFixture.CountView);
+        var status = await maintainer.GetStatusAsync();
+        var lag = await maintainer.GetLagAsync();
+        var activeTreeId = await maintainer.GetActiveTreeIdAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(status.Lag, Is.EqualTo(lag));
+            Assert.That(status.ActiveTreeId, Is.EqualTo(activeTreeId));
+            Assert.That(status.ActiveTreeId, Is.Not.Empty);
+        });
+    }
+
+    [Test]
     public async Task ComputeDigestAsync_is_stable_across_calls()
     {
         var src = _fixture.Source(ViewClusterFixture.SumSource);

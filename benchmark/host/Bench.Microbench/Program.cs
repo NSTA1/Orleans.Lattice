@@ -78,6 +78,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // The terminalcalls suite isolates chain reuse, clock fusion and no-writer clock elision.
 // The settlementcalls suite models conditional registry fallback dispatch at three callers.
 // The settlementfusion suite models activation, cleanup batches and local prepare probes.
+// The adminstatus suite models the tree-admin resize, reshard and view status elisions.
 // The bootstrapcalls suite models capture, foreign scan and per-leaf saga discard fusion.
 // The maintenanceelisions suite selects the reshard, consolidation and options
 // lanes of autonomicprobes.
@@ -89,11 +90,17 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // path is unchanged so CI / the trend dashboard keep running the main
 // LatticeMicroBenchmarks suite.
 //
-// Recognised suites: observer, leafgetmany, leafrangeread, leafrangedelete, authdecision, hotpath, hashalloc, identitydigestalloc, repocontexthashstaging, pooledreturntrims, rowcodec, ordedup, replayadmission, replayownership, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, crdtrunfolds, coalescedefertrims, grainindexquerytrims, grainindexplanfolds, applymergefanout, terminalpendingtrim, statetrims, stateorder, applygatetrims, alloctrio, crdtreadtrio, dataapicrdtreads, crdtprovenancedecode, historyreadtrims, ormapfilterhoisttrims, crdtcoveragecollapse, crdtdotscantrims, leafdigestscantrims, leafboundhoistdotspan, ormapdotspantranscode, tagrowtrims, tagindexbatching, decisionstamp, viewrebuildfanout, bulkloadfanout, fanoutcollapse, roundtripwaves, partitionwaves, batchhoisttrims, condsetmanyadmission, detachedtransfer, blockedcensus, partitionfloorsampling, sharetouch, orphanedsurvey, rowtranscodecopytrims, ormapkeyorderfoldbox, leafsnapshotframetrims, aggfold, aggsplice, aggfused, aggblock, aggshardgather, tenantgatesnapshot, aggkey, aggfoldwrite, vvpresize, digestappendfolds, sortcomparertrims, walbatchbuffertrims, setkeytrims, crdtapplyprobetrims, crdtapplywalktrims, crdtdeltauniontrims, crdtdecodewalktrims, scratchkeywindowtrims, gsetdecodetrims, tagwritetrims, crdtmergelivenesstrims, crdtlivenessgatetrims, walclockfloor, replayscanloop, registryprojection, registryoptions, registrymaintenance, leafchainwalk, cursorseedfanout, autonomicprobes, walpolling, internalnodefusion
+// Recognised suites: observer, leafgetmany, leafrangeread, leafrangedelete, authdecision, hotpath, hashalloc, identitydigestalloc, repocontexthashstaging, pooledreturntrims, rowcodec, ordedup, replayadmission, replayownership, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, crdtrunfolds, coalescedefertrims, grainindexquerytrims, grainindexplanfolds, applymergefanout, terminalpendingtrim, statetrims, stateorder, applygatetrims, alloctrio, crdtreadtrio, dataapicrdtreads, crdtprovenancedecode, historyreadtrims, ormapfilterhoisttrims, crdtcoveragecollapse, crdtdotscantrims, leafdigestscantrims, leafboundhoistdotspan, ormapdotspantranscode, tagrowtrims, tagindexbatching, decisionstamp, viewrebuildfanout, bulkloadfanout, fanoutcollapse, roundtripwaves, partitionwaves, batchhoisttrims, condsetmanyadmission, detachedtransfer, blockedcensus, partitionfloorsampling, sharetouch, orphanedsurvey, rowtranscodecopytrims, ormapkeyorderfoldbox, leafsnapshotframetrims, aggfold, aggsplice, aggfused, aggblock, aggshardgather, tenantgatesnapshot, aggkey, aggfoldwrite, vvpresize, digestappendfolds, sortcomparertrims, walbatchbuffertrims, setkeytrims, crdtapplyprobetrims, crdtapplywalktrims, crdtdeltauniontrims, crdtdecodewalktrims, scratchkeywindowtrims, gsetdecodetrims, tagwritetrims, crdtmergelivenesstrims, crdtlivenessgatetrims, walclockfloor, replayscanloop, registryprojection, registryoptions, registrymaintenance, leafchainwalk, cursorseedfanout, autonomicprobes, walpolling, internalnodefusion, adminstatus
 var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
     if (args[i] == "--suite") { suite = args[i + 1]; break; }
+}
+
+if (string.Equals(suite, "adminstatus", StringComparison.OrdinalIgnoreCase))
+{
+    var adminStatusSummary = BenchmarkRunner.Run<AdminStatusElisionBenchmarks>(config);
+    return adminStatusSummary.HasCriticalValidationErrors || adminStatusSummary.Reports.Any(report => !report.Success) ? 1 : 0;
 }
 
 if (string.Equals(suite, "bootstrapcalls", StringComparison.OrdinalIgnoreCase))

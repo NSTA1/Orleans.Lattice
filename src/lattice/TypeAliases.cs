@@ -112,6 +112,7 @@ internal static class TypeAliases
     internal const string TreeResizeUndoState = "ol.tru";
     internal const string ResizeUndoProgress = "ol.rup";
     internal const string ResizeProgress = "ol.rzg";
+    internal const string ResizeStatusSnapshot = "ol.rzs";
     internal const string SnapshotProgress = "ol.sng";
     internal const string ReshardProgress = "ol.rxg";
     internal const string TreeRegistryEntry = "ol.tre";
@@ -763,6 +764,9 @@ internal static class TypeAliases
 
     /// <summary>Alias for the view maintainer grain interface.</summary>
     internal const string IViewMaintainerGrain = "olr.vm";
+
+    /// <summary>Alias for the view maintainer's combined lag and active-tree status read.</summary>
+    internal const string ViewMaintainerStatus = "ol.vms";
 
     /// <summary>Alias for the view maintainer's durable checkpoint state.</summary>
     internal const string ViewCheckpointState = "olr.vc";

@@ -197,6 +197,14 @@ internal sealed partial class ViewMaintainerGrain
     }
 
     /// <inheritdoc />
+    public async Task<ViewMaintainerStatus> GetStatusAsync(CancellationToken cancellationToken = default)
+    {
+        var lag = await GetLagAsync(cancellationToken);
+        var activeTreeId = await GetActiveTreeIdAsync(cancellationToken);
+        return new ViewMaintainerStatus(lag, activeTreeId);
+    }
+
+    /// <inheritdoc />
     public async Task<ViewDigest> ComputeViewDigestAsync(CancellationToken cancellationToken = default)
     {
         using var viewReadScope = ViewReadContext.BeginScope();
