@@ -32,7 +32,9 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
-- **Performance - Tree-admin status reads.** Resize status uses one coordinator call instead of five, reshard status one instead of three, and view status one maintainer call instead of two, retaining system-tree rejection and identical answers. ([#5345](https://github.com/NSTA1/Orleans.Lattice/pull/5345)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin`)
+- **Performance - Tree-admin status reads.** Resize, reshard and view status use one grain call, down from five, three and two. Tree statistics overlap diagnostics and storage reads; authorization and system-tree rejection remain. ([#5345](https://github.com/NSTA1/Orleans.Lattice/pull/5345), [#5423](https://github.com/NSTA1/Orleans.Lattice/pull/5423)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin`)
+
+- **Performance - View sampling.** Default view statistics use two sampling calls instead of three. Remote runtime-view lookups return scalar metadata rather than all registrations, retaining fresh existence checks, aggregation bounds and custom-view behavior. ([#5423](https://github.com/NSTA1/Orleans.Lattice/pull/5423)) (`Orleans.Lattice`, `Orleans.Lattice.Api.State`)
 
 - **Performance - Settlement grain calls.** Prepare handling and activation healing use fewer registry calls. Migration cleanup resolves masked verdicts inside its existing batches; local forwarded prepares combine decision and participant probes. Durability, capture gates and reader intent remain. ([#5318](https://github.com/NSTA1/Orleans.Lattice/pull/5318), [#5338](https://github.com/NSTA1/Orleans.Lattice/pull/5338)) (`Orleans.Lattice`)
 
