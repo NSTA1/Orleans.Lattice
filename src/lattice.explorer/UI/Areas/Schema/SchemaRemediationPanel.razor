@@ -5,7 +5,8 @@
     checks each against the tree's current policy, and cuts the tree over only
     when every value passes; otherwise it stops at the first value that still
     fails and changes nothing. Only member set, remove and rename steps can be
-    written here; conditional and computed transforms use the API's declarative IR.
+    written here, and a set can be limited to values whose member meets a
+    condition (#5476); computed transforms use the API's declarative IR.
 *@
 
 @if (Workspace is not null)
@@ -32,7 +33,7 @@
             }
             else
             {
-                <p class="lt-schema-note">Every value is rewritten through these steps, in order, and checked against the tree's policy (@SchemaFormat.Policy(policy)). Members a step does not name are kept. Only set, remove and rename steps on top-level members can be written here; use the API's declarative IR for conditional or computed transforms.</p>
+                <p class="lt-schema-note">Every value is rewritten through these steps, in order, and checked against the tree's policy (@SchemaFormat.Policy(policy)). Members a step does not name are kept. Only set, remove and rename steps on top-level members can be written here, and a set step can be limited to the values whose member meets a condition; use the API's declarative IR for computed transforms.</p>
 
                 @if (_draft.Steps.Count == 0)
                 {
@@ -66,6 +67,19 @@
                             @if (_draft.ValueKind != SchemaConstantKind.Null)
                             {
                                 <LtTextInput Label="Value" Mono="true" Value="@_draft.Value" ValueChanged="value => _draft.Value = value" />
+                            }
+                            <LtSwitch Label="Only where the member meets a condition" Checked="@_draft.Conditional" CheckedChanged="value => { _draft.Conditional = value; _stepError = null; }"
+                                      Hint="Off: every value gets the member set. On: only a value whose member meets the condition gets it, and every other value keeps the member as it is. A value without the member gains it: a missing member reads as null." />
+                            @if (_draft.Conditional)
+                            {
+                                <div class="lt-schema-details__pair" role="group" aria-label="The condition">
+                                    <LtSelect Label="Where the member is" Options="@Comparisons" Value="@_draft.WhereOperator.ToString()" ValueChanged="OnWhereOperatorChanged" />
+                                    <LtSelect Label="Compared value kind" Options="@ValueKinds" Value="@_draft.WhereKind.ToString()" ValueChanged="OnWhereKindChanged" />
+                                </div>
+                                @if (_draft.WhereKind != SchemaConstantKind.Null)
+                                {
+                                    <LtTextInput Label="Compared value" Mono="true" Value="@_draft.WhereValue" ValueChanged="value => _draft.WhereValue = value" />
+                                }
                             }
                             break;
                     }
