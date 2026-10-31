@@ -236,7 +236,7 @@ public sealed class RunningTheConsoleJourney : JourneyChapter
             seeded.Add($"http://127.0.0.1:{plaintext}");
         }
 
-        Assert.That(await kiosk.ReadEndpointAsync(), Is.AnyOf(seeded.ToArray()), "the kiosk's endpoint is the one its environment seeded");
+        Assert.That((await kiosk.ReadEndpointAsync()).TrimEnd('/'), Is.AnyOf(seeded.ToArray()), "the kiosk's endpoint is the one its environment seeded");
         Coverage.Hit("option:UseEnvironmentBootstrap");
         Coverage.Hit("use-case:shell/configuration");
         await kiosk.Session.SubstepAsync(Recorder, step.Id, "kiosk-signed-in",
