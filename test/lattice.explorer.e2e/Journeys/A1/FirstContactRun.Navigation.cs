@@ -76,6 +76,10 @@ internal sealed partial class FirstContactRun
     /// </summary>
     public Task NavigateByKeyboardAsync() => StepAsync("5", async () =>
     {
+        // History navigation leaves focus wherever the restored page put it, possibly deep in a
+        // long form; a keyboard user starts again from the top of the document, as here.
+        await Page.EvaluateAsync("() => { document.activeElement?.blur(); document.body.setAttribute('tabindex', '-1'); document.body.focus(); document.body.removeAttribute('tabindex'); }");
+
         var reached = false;
         for (var press = 0; press < MaximumTabs && !reached; press++)
         {
@@ -84,7 +88,11 @@ internal sealed partial class FirstContactRun
                 """
                 () => {
                   const element = document.activeElement;
-                  if (element?.getAttribute('data-lt-command') === 'go.schema' && element.closest('nav[aria-label="Estate"]')) { return 'schema'; }
+                  // The spine is a nav labelled by its "Estate" heading (aria-labelledby), not aria-label.
+                  const nav = element?.closest('nav');
+                  const labelledBy = nav?.getAttribute('aria-labelledby');
+                  const name = nav?.getAttribute('aria-label') ?? (labelledBy ? document.getElementById(labelledBy)?.textContent.trim() : null);
+                  if (element?.getAttribute('data-lt-command') === 'go.schema' && name === 'Estate') { return 'schema'; }
                   if (element?.tagName === 'BUTTON' && element.closest('header') && element.textContent.trim() === 'Directory') { return 'directory'; }
                   return '';
                 }
