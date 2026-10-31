@@ -99,14 +99,20 @@ public sealed class LineFeedTests
         var diagnostics = string.Empty;
         while (true)
         {
-            // A view is read by its name through the State API, as the Explorer reads it: the
-            // Data API refuses a direct read of a view's backing tree, whose generation a
-            // rebuild can swap. The line feed keeps writing orders, so the view gains some
+            // A view is read through the State API at its active generation, as the Explorer
+            // reads it: the Data API refuses a direct read of a view's backing tree, whose
+            // generation a rebuild can swap. The line feed keeps writing orders, so the view gains some
             // whether or not it back-fills the ones written before it existed.
             var status = await admin.GetViewStatusAsync(viewName);
+            if (string.IsNullOrEmpty(status.ActiveTreeId) && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(1000);
+                continue;
+            }
+
             var scan = await state.ScanEntriesAsync(new Orleans.Lattice.Api.State.EntryScanRequest
             {
-                TreeId = viewName,
+                TreeId = status.ActiveTreeId,
                 StartInclusive = "order/",
                 EndExclusive = "order0",
                 PageSize = 20,
