@@ -37,8 +37,9 @@ internal sealed class ClusterWalPage(ShellPage shell)
         Coverage.Hit("query:cluster.tree");
     }
 
-    /// <summary>The placement audit's text: every partition's provider key and the placement version.</summary>
-    public async Task<string> AuditTextAsync() => (await Audit.InnerTextAsync()).Trim();
+    /// <summary>The placement audit's partition rows: every partition and the provider key it is on.</summary>
+    public async Task<string> AuditTextAsync() =>
+        string.Join(" | ", await Audit.Locator("tbody tr, li.lt-table-list__row").AllInnerTextsAsync()).Trim();
 
     /// <summary>Plans a move of <paramref name="partition"/> of the tree on screen to <paramref name="target"/>.</summary>
     /// <param name="partition">The partition.</param>

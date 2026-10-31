@@ -174,6 +174,7 @@ public sealed class A12ClusterInDepth : JourneyChapter
         var wal = new ClusterWalPage(olivia.Shell);
         await wal.OpenAsync(Restored);
         var placement = await wal.AuditTextAsync();
+        Assert.That(placement, Is.Not.Empty.And.Not.Contain(JourneyHostEnvironment.SecondaryWalProviderKey), "partition 0 starts on the default provider");
         await Shot(olivia, recorder, 4, "audit", "factory-lines-restored's WAL placement, audited");
 
         await wal.PlanAsync(0, JourneyHostEnvironment.SecondaryWalProviderKey);
@@ -197,7 +198,7 @@ public sealed class A12ClusterInDepth : JourneyChapter
 
         await wal.OpenAsync(Restored);
         Assert.That(await wal.AuditTextAsync(), Is.EqualTo(placement), "the partition's placement is unchanged");
-        await Shot(olivia, recorder, 4, "unchanged", "Audited again: the placement and its version are unchanged");
+        await Shot(olivia, recorder, 4, "unchanged", "Audited again: every partition is still on the provider it was on");
         Coverage.Hit("use-case:cluster/wal-stop-before-flip");
     }
 
