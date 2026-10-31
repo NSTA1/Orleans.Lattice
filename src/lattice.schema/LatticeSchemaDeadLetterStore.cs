@@ -22,7 +22,7 @@ internal sealed class LatticeSchemaDeadLetterStore(IGrainFactory grainFactory) :
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentNullException.ThrowIfNull(entry);
 
-        var unique = Guid.NewGuid().ToString("N")[..SchemaDeadLetterKey.UniqueSuffixLength];
+        var unique = Guid.NewGuid().ToString("N")[..8];
         var key = SchemaDeadLetterKey.Encode(treeId, entry.TimestampUtc, entry.Key, unique);
 
         // A diversion is judged while the diverted write's own context is ambient:
