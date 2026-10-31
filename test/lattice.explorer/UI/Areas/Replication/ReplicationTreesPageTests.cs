@@ -222,6 +222,21 @@ public sealed partial class ReplicationTreesPageTests : ReplicationTestContext
     }
 
     [Test]
+    public void A_probe_the_cluster_does_not_answer_offers_no_enable_control()
+    {
+        Control.ProbeFailure = new TimeoutException();
+
+        var cut = RenderAt<ReplicationTreesPage>("replication/trees");
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find(".lt-table__empty").TextContent.Trim(), Is.EqualTo("No tree you may manage is enrolled for replication."));
+            Assert.That(Control.Probes, Is.EqualTo(new[] { ReplicationDataSource.ProbeTreeId }));
+            Assert.That(cut.FindAll("button").Select(button => button.TextContent.Trim()), Does.Not.Contain("Enable replication for a tree"));
+        });
+    }
+
+    [Test]
     public void A_caller_granted_only_named_trees_is_offered_the_enable_control_by_the_trees_it_manages()
     {
         UseTrees();

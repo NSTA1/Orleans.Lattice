@@ -4,8 +4,10 @@ using static Microsoft.Playwright.Assertions;
 namespace Orleans.Lattice.Explorer.UiTests.Journeys;
 
 /// <summary>
-/// Issue #5478 (epic #5401): the Enrolled trees page as an observer with no
-/// Replication grant and as the administrator sees it.
+/// Issue #5478 (epic #5401): the Enrolled trees page offers <b>Enable replication for a
+/// tree</b> only to a caller who holds the Replication capability. An observer with read
+/// and telemetry rights sees the empty list and no control; the administrator on the
+/// same cluster, with nothing enrolled yet, is offered the first enrolment.
 /// </summary>
 /// <remarks>
 /// Each step keeps an ordered screenshot under <c>screenshots/journey-d5478-replication-enable</c>
@@ -15,19 +17,24 @@ namespace Orleans.Lattice.Explorer.UiTests.Journeys;
 [Category("UI")]
 public sealed class ReplicationEnrolmentJourneyTests : UiTestBase
 {
+    private const string EnableControl = "Enable replication for a tree";
+
     private int _shot;
 
     [Test]
-    public async Task The_enrolled_trees_page_as_an_observer_and_as_the_administrator()
+    public async Task Only_a_caller_with_the_Replication_grant_is_offered_enrolment()
     {
         var world = await UiHosts.WorldAsync();
 
         var observer = await OpenAsync(world.Head, "/replication/trees", WorldIdentities.Erin);
         await ExpectSettledAsync(observer);
+        await Expect(Shell.Content(observer).GetByText("No tree you may manage is enrolled for replication.")).ToBeVisibleAsync();
+        await Expect(Shell.Content(observer).GetByRole(AriaRole.Button, new() { Name = EnableControl })).ToHaveCountAsync(0);
         await ShotAsync(observer, "observer-enrolled-trees");
 
         var admin = await OpenAsync(world.Head, "/replication/trees", WorldIdentities.Admin);
         await ExpectSettledAsync(admin);
+        await Expect(Shell.Content(admin).GetByRole(AriaRole.Button, new() { Name = EnableControl })).ToBeVisibleAsync();
         await ShotAsync(admin, "administrator-enrolled-trees");
     }
 

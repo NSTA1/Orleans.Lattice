@@ -24,6 +24,20 @@ internal sealed class FakeReplicationControl : ILatticeReplicationControl
     /// <summary>Whether the caller may configure replication for a tree it is asked about.</summary>
     public bool MayConfigure { get; set; } = true;
 
+    /// <summary>Thrown by <see cref="ProbeCapabilitiesAsync"/> when set.</summary>
+    public Exception? ProbeFailure { get; set; }
+
+    /// <summary>Every tree id <see cref="ProbeCapabilitiesAsync"/> was asked about, in order.</summary>
+    public List<string> Probes { get; } = [];
+
+    public Task<ReplicationCapabilities> ProbeCapabilitiesAsync(string treeId, CancellationToken cancellationToken = default)
+    {
+        Probes.Add(treeId);
+        return ProbeFailure is not null
+            ? Task.FromException<ReplicationCapabilities>(ProbeFailure)
+            : Task.FromResult(new ReplicationCapabilities(treeId, MayConfigure));
+    }
+
     public List<(string TreeId, LatticeMergeMode Mode, string? Bootstrap)> Enables { get; } = [];
 
     public List<string> Disables { get; } = [];
