@@ -51,7 +51,8 @@ public interface ILatticeBackupScheduler
 
     /// <summary>
     /// Removes a runtime recurring backup schedule for <paramref name="scope"/>.
-    /// Idempotent: a missing schedule is a no-op.
+    /// Requires the Backup capability over the scope. Idempotent: a missing
+    /// schedule is a no-op.
     /// </summary>
     /// <param name="scope">The scope whose runtime schedule should be removed. Must not be <c>null</c>.</param>
     /// <param name="incremental"><c>true</c> to remove the incremental schedule, <c>false</c> for the full schedule.</param>
@@ -70,7 +71,8 @@ public interface ILatticeBackupScheduler
     /// <summary>
     /// Prunes the backup chain for <paramref name="scope"/> per its retention
     /// policy and returns the outcome. Preserves the base chain of every retained
-    /// increment; a no-op that retains everything when retention is disabled.
+    /// increment. Requires the Backup capability over the scope, including when
+    /// retention is disabled and the operation retains everything.
     /// </summary>
     /// <param name="scope">The scope to prune. Must not be <c>null</c>.</param>
     /// <returns>The retention outcome.</returns>

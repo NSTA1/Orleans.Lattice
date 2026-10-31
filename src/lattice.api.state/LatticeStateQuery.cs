@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Orleans.Configuration;
@@ -1021,7 +1022,7 @@ internal sealed class LatticeStateQuery(
 
         // TagsAsync yields the distinct tags in ascending ordinal order; the page
         // token is the last tag returned, applied as an exclusive lower bound.
-        await foreach (var tag in index.TagsAsync(cancellationToken).ConfigureAwait(false))
+        await foreach (var tag in ReadTagIndexAsync(index.TagsAsync(cancellationToken), cancellationToken).ConfigureAwait(false))
         {
             if (request.PageToken is not null && string.CompareOrdinal(tag, request.PageToken) <= 0)
             {
@@ -1213,7 +1214,7 @@ internal sealed class LatticeStateQuery(
 
         // TagsAsync yields the index-wide distinct tags in ascending ordinal
         // order; the page token is the last tag returned, an exclusive lower bound.
-        await foreach (var tag in index.TagsAsync(cancellationToken).ConfigureAwait(false))
+        await foreach (var tag in ReadTagIndexAsync(index.TagsAsync(cancellationToken), cancellationToken).ConfigureAwait(false))
         {
             if (request.PageToken is not null && string.CompareOrdinal(tag, request.PageToken) <= 0)
             {
@@ -1282,8 +1283,8 @@ internal sealed class LatticeStateQuery(
         // The multi-tree query yields (treeId, key) pairs ordered by covered tree
         // then by key, both ascending ordinal; the continuation token is the last
         // (treeId, key) returned, applied as an exclusive lower bound.
-        await foreach (var tagged in index.WithAllTags(request.Tag)
-            .WithCancellation(cancellationToken).ConfigureAwait(false))
+        await foreach (var tagged in ReadTagIndexAsync(
+            index.WithAllTags(request.Tag), cancellationToken).ConfigureAwait(false))
         {
             if (tenantVisibleTrees is not null && !tenantVisibleTrees.Contains(tagged.TreeId))
             {
@@ -1714,8 +1715,8 @@ internal sealed class LatticeStateQuery(
         var records = new List<EntryRecord>(pageSize);
         string? nextToken = null;
 
-        await foreach (var key in index.WithAllTags(request.Tag!)
-            .WithCancellation(cancellationToken).ConfigureAwait(false))
+        await foreach (var key in ReadTagIndexAsync(
+            index.WithAllTags(request.Tag!), cancellationToken).ConfigureAwait(false))
         {
             if (after is not null && string.CompareOrdinal(key, after) <= 0)
             {
@@ -1743,6 +1744,30 @@ internal sealed class LatticeStateQuery(
         }
 
         return EntryScanResult.Found(request.TreeId, records, nextToken);
+    }
+
+    // Only index advancement is infrastructure. Dispose the bypass before yielding
+    // so callers' source-key reads and presence checks retain their own access gate.
+    private static async IAsyncEnumerable<T> ReadTagIndexAsync<T>(
+        IAsyncEnumerable<T> entries,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await using var enumerator = entries.GetAsyncEnumerator(cancellationToken);
+        while (true)
+        {
+            bool hasNext;
+            using (LatticeAccessGateContext.EnterSystemOrigin())
+            {
+                hasNext = await enumerator.MoveNextAsync().ConfigureAwait(false);
+            }
+
+            if (!hasNext)
+            {
+                yield break;
+            }
+
+            yield return enumerator.Current;
+        }
     }
 
     public async Task<EntryDetailResult> GetEntryAsync(

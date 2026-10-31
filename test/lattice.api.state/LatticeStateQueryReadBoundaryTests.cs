@@ -163,11 +163,17 @@ public sealed class LatticeStateQueryReadBoundaryTests
 
     private static async IAsyncEnumerable<T> Stream<T>(
         IEnumerable<T> entries,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        [EnumeratorCancellation] CancellationToken cancellationToken = default,
+        bool requireIndexOrigin = false)
     {
         foreach (var entry in entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (requireIndexOrigin)
+            {
+                Assert.That(LatticeAccessGateContext.IsGateBypassed, Is.True,
+                    "Index rows are infrastructure after the source authorization check.");
+            }
             yield return entry;
         }
         await Task.CompletedTask;
@@ -194,14 +200,16 @@ public sealed class LatticeStateQueryReadBoundaryTests
             }));
             Index.CoveredTreesAsync(Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult<IReadOnlyList<string>>(covered ?? [TreeId]));
-            Index.TagsAsync(Arg.Any<CancellationToken>()).Returns(_ => Stream(new[] { "open", "secret-diagnosis" }));
-            SingleIndex.TagsAsync(Arg.Any<CancellationToken>()).Returns(_ => Stream(new[] { "open", "secret-diagnosis" }));
+            Index.TagsAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+                Stream(new[] { "open", "secret-diagnosis" }, requireIndexOrigin: true));
+            SingleIndex.TagsAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+                Stream(new[] { "open", "secret-diagnosis" }, requireIndexOrigin: true));
             var members = Substitute.For<ILatticeMultiTreeTagQuery>();
             members.GetAsyncEnumerator(Arg.Any<CancellationToken>()).Returns(call => Stream(new[]
             {
                 new TaggedKey("t/acme/orders", "public/1"),
                 new TaggedKey("t/other/secrets", "private/2"),
-            }).GetAsyncEnumerator(call.Arg<CancellationToken>()));
+            }, requireIndexOrigin: true).GetAsyncEnumerator(call.Arg<CancellationToken>()));
             Index.WithAllTags(Arg.Any<string[]>()).Returns(members);
             var factory = Substitute.For<ILatticeTagIndexFactory>();
             factory.CreateMultiTree(IndexName, Arg.Any<IReadOnlyCollection<string>?>()).Returns(Index);
@@ -209,7 +217,12 @@ public sealed class LatticeStateQueryReadBoundaryTests
             var grainFactory = Substitute.For<IGrainFactory>();
             var tree = Substitute.For<ILattice>();
             tree.TreeExistsAsync(Arg.Any<CancellationToken>()).Returns(true);
-            tree.ExistsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(true);
+            tree.ExistsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(_ =>
+            {
+                Assert.That(LatticeAccessGateContext.IsGateBypassed, Is.False,
+                    "The index bypass must not leak into a source-key presence read.");
+                return true;
+            });
             ForeignTree.ExistsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(true);
             grainFactory.GetGrain<ILattice>(Arg.Any<string>()).Returns(tree);
             grainFactory.GetGrain<ILattice>("t/other/secrets").Returns(ForeignTree);

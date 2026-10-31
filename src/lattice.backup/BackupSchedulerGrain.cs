@@ -49,6 +49,7 @@ internal sealed class BackupSchedulerGrain(
     /// <inheritdoc />
     public async Task<string?> TriggerFullAsync(BackupScopeSelector scope)
     {
+        await AuthorizeScheduleAsync(scope);
         await PersistScopeAsync(scope);
         return await RunCaptureAsync(incremental: false, scope);
     }
@@ -56,6 +57,7 @@ internal sealed class BackupSchedulerGrain(
     /// <inheritdoc />
     public async Task<string?> TriggerIncrementalAsync(BackupScopeSelector scope)
     {
+        await AuthorizeScheduleAsync(scope);
         await PersistScopeAsync(scope);
         return await RunCaptureAsync(incremental: true, scope);
     }
@@ -101,6 +103,12 @@ internal sealed class BackupSchedulerGrain(
     /// <inheritdoc />
     public async Task CancelScheduleAsync(bool incremental)
     {
+        if (state.State.Scope is not { } scope)
+        {
+            return;
+        }
+
+        await AuthorizeScheduleAsync(scope);
         var reminderName = incremental ? IncrementalScheduleReminderName : FullScheduleReminderName;
         await UnregisterReminderAsync(reminderName);
 
@@ -120,6 +128,7 @@ internal sealed class BackupSchedulerGrain(
     public async Task<BackupRetentionReport> PruneAsync(BackupScopeSelector scope)
     {
         ArgumentNullException.ThrowIfNull(scope);
+        await AuthorizeScheduleAsync(scope);
         var opts = Options;
         var manifests = await ListScopeAsync(scope);
         if (!opts.RetentionEnabled)
@@ -567,6 +576,11 @@ internal sealed class BackupSchedulerGrain(
     private async Task PersistScopeAsync(BackupScopeSelector scope)
     {
         ArgumentNullException.ThrowIfNull(scope);
+        if (!string.Equals(BackupScopeKey.For(scope), ScopeKey, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("The backup scope must match the scheduler grain key.", nameof(scope));
+        }
+
         if (!ScopeMatches(state.State.Scope, scope))
         {
             var previous = state.State.Scope;

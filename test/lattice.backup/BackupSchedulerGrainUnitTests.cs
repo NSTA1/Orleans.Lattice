@@ -489,6 +489,7 @@ public sealed class BackupSchedulerGrainUnitTests
         // Line 109: the else branch of CancelScheduleAsync that nulls out
         // state.State.RuntimeFullBackupInterval when incremental is false.
         var state = new FakePersistentState<BackupSchedulerState>();
+        state.State.Scope = TestScope;
         state.State.RuntimeFullBackupInterval = TimeSpan.FromHours(24);
         var reminders = Substitute.For<IReminderRegistry>();
         reminders.GetReminder(Arg.Any<GrainId>(), Arg.Any<string>())
