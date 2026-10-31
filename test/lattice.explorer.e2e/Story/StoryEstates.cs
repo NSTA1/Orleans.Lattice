@@ -18,6 +18,14 @@ public static class StoryEstates
     /// </summary>
     public const int ContosoRetentionKeepLast = 1000;
 
+    /// <summary>
+    /// The idle lifetime, in seconds, of a scan cursor over <c>factory-orders</c> on the Contoso
+    /// estate: one minute, the cursor reaper's floor, so U1 can leave a paged scan idle until
+    /// the cluster releases its cursor. Only that tree's cursors are shortened; a journey must
+    /// never leave a paged <c>factory-orders</c> scan idle longer than this mid-step.
+    /// </summary>
+    public const int ContosoOrdersCursorIdleSeconds = 60;
+
     /// <summary>The options of <paramref name="storyline"/>'s estate.</summary>
     /// <param name="storyline">A storyline from <see cref="StoryNames.Storylines"/>.</param>
     public static JourneyEstateOptions OptionsFor(string storyline) => storyline switch
@@ -31,6 +39,8 @@ public static class StoryEstates
     {
         var profile = EstateProfile.Contoso;
         profile.SiloEnvironment["Backup__RetentionKeepLast"] = ContosoRetentionKeepLast.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        profile.SiloEnvironment["Lattice__TreeCursorIdleTtlSeconds__" + StoryNames.Contoso.Trees.FactoryOrders] =
+            ContosoOrdersCursorIdleSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
         return profile;
     }
 

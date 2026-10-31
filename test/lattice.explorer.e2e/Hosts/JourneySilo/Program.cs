@@ -157,6 +157,16 @@ builder.Host.UseOrleans(silo =>
         silo.ConfigureLattice(options => options.CursorIdleTtl = TimeSpan.FromSeconds(cursorIdleSeconds));
     }
 
+    // The same, for one tree only (Lattice:TreeCursorIdleTtlSeconds:<tree>), so a journey can
+    // expire a scan on the tree it pages without shortening every other tree's cursors (U1).
+    foreach (var tree in config.GetSection("Lattice:TreeCursorIdleTtlSeconds").GetChildren())
+    {
+        if (int.TryParse(tree.Value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var treeCursorIdleSeconds))
+        {
+            silo.ConfigureLattice(tree.Key, options => options.CursorIdleTtl = TimeSpan.FromSeconds(treeCursorIdleSeconds));
+        }
+    }
+
     silo.AddAzureTableWalStorage(options =>
         storage.ConfigureWal(options, config["Wal:TableName"] ?? "OrleansLatticeWal"));
 

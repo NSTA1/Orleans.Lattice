@@ -175,7 +175,10 @@ typed. It reports "Passes this tree's schema policy (N rules)", or that the
 cluster will refuse the value, with the reason of every rule it fails. A policy
 the caller cannot read is said to be unchecked, and the value is still saved.
 Saving a violating value is the facade's decision: the editor reports the
-refusal, with the policy's reason, and keeps the draft.
+refusal, with the policy's reason, and keeps the draft. A refused write stores
+nothing and is not dead-lettered: only writes the cluster makes itself under a
+strict policy (a restore, a bulk load, a replicated batch) are diverted to the
+Dead letters tab.
 
 On save the editor reads the entry again. If it was written or deleted after the
 editor opened - by another user, or by an ingestion feed - the newer value is
@@ -429,6 +432,27 @@ The directory remembers a successful tree/view catalogue for one caller,
 endpoint and active tenant. It forgets the list when sign-in, endpoint or active
 tenant changes. A load follows at most 400 catalogue pages of 500 entries each,
 and a view catalogue denial leaves views absent rather than hiding the trees.
+
+### Deleting and recovering a tree
+
+A caller who may manage a tree's lifecycle (the `TreeLifecycle` grant, as the
+tree-administration facade's capability probe reports it) is offered
+**Delete tree...** in the tree workspace's heading, beside **Import...** and
+**Export...**. This is the same delete the Cluster area's Lifecycle tab offers,
+for a caller who holds the grant on a tree but not the cluster-wide Telemetry
+capability the Cluster area needs - a data steward who creates and loads her own
+trees, for example. It is never drawn for a view or a shared tree, and a missing
+facade, a refused or faulted probe all draw nothing; the facade still authorizes
+the delete itself.
+
+**Delete tree...** opens a destructive confirmation that asks for the tree's name
+to be typed. The delete is a soft delete: every read and write on the tree fails
+at once, and a hard purge is scheduled after the cluster's soft-delete window.
+The workspace's tabs give way to a note saying the tree is deleted and until when
+it can be recovered, with **Recover tree...** (another typed confirmation) while
+recovery is possible and a link back to the directory. The directory lists a
+soft-deleted tree as **Soft-deleted** until it is purged, and opening it again
+shows the same note. Purge is not offered here; it stays in the Cluster area.
 
 ## Apps
 
