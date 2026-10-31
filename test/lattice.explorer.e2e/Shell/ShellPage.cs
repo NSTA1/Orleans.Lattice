@@ -26,6 +26,9 @@ public sealed partial class ShellPage
     /// <summary>The heading of the page the Explorer renders for an address nothing lives at.</summary>
     public const string NotFoundHeading = "Nothing lives at this address";
 
+    /// <summary>What the sign-in dialog says when the cluster refuses a username and password (#5415).</summary>
+    public const string PasswordRefusedMessage = "The cluster did not accept this username and password.";
+
     /// <summary>Creates the page object over <paramref name="page"/>.</summary>
     /// <param name="page">A page showing the Explorer.</param>
     public ShellPage(IPage page)
@@ -119,9 +122,14 @@ public sealed partial class ShellPage
     /// <param name="user">The user name.</param>
     public ILocator SessionButton(string user) => Banner.GetByRole(AriaRole.Button, new() { Name = $"Your session: {user}" });
 
-    /// <summary>Opens the sign-in dialog from the header, or from the <b>Menu</b> sheet when compact.</summary>
+    /// <summary>Opens the sign-in dialog from the header, or from the <b>Menu</b> sheet when compact; a dialog already open (reopened after a refusal) is used as it is.</summary>
     public async Task<ILocator> OpenSignInAsync()
     {
+        if (await SignInDialog.IsVisibleAsync())
+        {
+            return SignInDialog;
+        }
+
         if (await IsCompactAsync())
         {
             await OpenMenuAsync();
@@ -175,6 +183,26 @@ public sealed partial class ShellPage
         }
 
         await Expect(SessionButton(user)).ToBeVisibleAsync();
+    }
+
+    /// <summary>
+    /// Asserts the cluster refused the credential just submitted: the sign-in dialog has reopened
+    /// and says <see cref="PasswordRefusedMessage"/>, and the refusal notice has left the address.
+    /// </summary>
+    public async Task ExpectSignInRefusedAsync()
+    {
+        await Expect(SignInDialog.GetByRole(AriaRole.Alert)).ToContainTextAsync(PasswordRefusedMessage);
+        await Expect(Page).Not.ToHaveURLAsync(new Regex("signin="));
+    }
+
+    /// <summary>Closes the sign-in dialog with Escape, if it is open.</summary>
+    public async Task CloseSignInAsync()
+    {
+        if (await SignInDialog.IsVisibleAsync())
+        {
+            await Page.Keyboard.PressAsync("Escape");
+            await Expect(SignInDialog).ToBeHiddenAsync();
+        }
     }
 
     /// <summary>Asserts nobody is signed in: the chrome offers <b>Sign in</b>.</summary>

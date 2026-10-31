@@ -17,6 +17,22 @@ public sealed partial class HostFaultLog
 {
     private const int MaxContinuationLines = 12;
 
+    /// <summary>
+    /// Records the product writes on purpose and that are known not to be faults, each matched
+    /// on its exact logger category and message shape and cited to the issue that tracks it. One
+    /// of these is reported as expected, never as a failure. Add an entry only with an issue,
+    /// and remove it when the issue is fixed.
+    /// </summary>
+    internal static IReadOnlyList<KnownHostRecord> Expected { get; } =
+    [
+        // #5442: GrainStorageFencingProbe deliberately writes its reserved probe row with a stale
+        // ETag on every silo start; the rejection is the success case, but the Azure Table
+        // provider logs every rejected write at Error (event 200107) before it throws.
+        new("#5442", new Regex(
+            @"^fail: Orleans\.Storage\.AzureTableGrainStorage\[200107\]\s+Error Writing: GrainType=_lattice_grain-storage-fencing-probe GrainId=_lattice_grain-storage-fencing-probe/probe .*InconsistentStateException: Table storage condition not Satisfied\.",
+            RegexOptions.Singleline)),
+    ];
+
     private readonly Func<IEnumerable<HostLogSource>> _sources;
     private readonly Dictionary<string, long> _offsets = new(StringComparer.Ordinal);
     private readonly List<Regex> _tolerated = [];
@@ -53,7 +69,11 @@ public sealed partial class HostFaultLog
                 foreach (var record in ReadNewRecords(source))
                 {
                     var line = $"[{source.Name}] {record}";
-                    if (source.FailsCheckpoint && !_tolerated.Any(pattern => pattern.IsMatch(record)))
+                    if (Expected.FirstOrDefault(known => known.Pattern.IsMatch(record)) is { } expected)
+                    {
+                        notes.Add($"[{source.Name}] expected ({expected.Issue}): {FirstLine(record)}");
+                    }
+                    else if (source.FailsCheckpoint && !_tolerated.Any(pattern => pattern.IsMatch(record)))
                     {
                         failures.Add(line);
                     }
@@ -133,6 +153,12 @@ public sealed partial class HostFaultLog
         }
 
         return records;
+    }
+
+    private static string FirstLine(string record)
+    {
+        var end = record.IndexOf('\n', StringComparison.Ordinal);
+        return (end < 0 ? record : record[..end]).TrimEnd('\r');
     }
 
     // The harness prefixes every captured line with its time and stream: "12:00:00.000 [out] ".

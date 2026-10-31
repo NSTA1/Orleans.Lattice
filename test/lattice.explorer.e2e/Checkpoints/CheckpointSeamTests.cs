@@ -101,6 +101,41 @@ public sealed class CheckpointSeamTests
         });
     }
 
+    /// <summary>
+    /// The fencing probe's deliberate stale-write record (#5442) is expected wherever it is
+    /// logged; the same provider error for any other grain, or any other failure, still fails.
+    /// </summary>
+    [Test]
+    public void Only_the_exact_fencing_probe_record_is_expected()
+    {
+        var log = Path.Combine(_scratch, "west-explorer-0.log");
+        File.WriteAllLines(log,
+        [
+            "16:35:20.138 [out] fail: Orleans.Storage.AzureTableGrainStorage[200107]",
+            "16:35:20.138 [out]       Error Writing: GrainType=_lattice_grain-storage-fencing-probe GrainId=_lattice_grain-storage-fencing-probe/probe ETag=W/\"datetime'2026-10-31T16%3A35%3A20.1171511Z'\" to Table=e2ewestGrains",
+            "16:35:20.138 [out]       InconsistentStateException: Table storage condition not Satisfied.  GrainType: _lattice_grain-storage-fencing-probe",
+            "16:35:20.138 [out]       Status: 412 (Precondition Failed)",
+            "16:35:21.000 [out] fail: Orleans.Storage.AzureTableGrainStorage[200107]",
+            "16:35:21.000 [out]       Error Writing: GrainType=lattice GrainId=lattice/factory-orders ETag=W/\"x\" to Table=e2ewestGrains",
+            "16:35:21.000 [out]       InconsistentStateException: Table storage condition not Satisfied.  GrainType: lattice",
+            "16:35:22.000 [out] fail: Orleans.Storage.AzureTableGrainStorage[200107]",
+            "16:35:22.000 [out]       Error Writing: GrainType=_lattice_grain-storage-fencing-probe GrainId=_lattice_grain-storage-fencing-probe/probe ETag=W/\"x\" to Table=e2ewestGrains",
+            "16:35:22.000 [out]       RequestFailedException: Service unavailable",
+        ]);
+        var hostFaults = new HostFaultLog(() => [new HostLogSource("west-explorer-0", log, FailsCheckpoint: true)]);
+
+        var (failures, notes) = hostFaults.Drain();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(notes, Has.Count.EqualTo(1).And.Some.StartsWith("[west-explorer-0] expected (#5442): fail: Orleans.Storage.AzureTableGrainStorage[200107]"));
+            Assert.That(failures, Has.Count.EqualTo(2), "another grain's conflict, and the probe failing some other way, are still faults");
+            Assert.That(failures, Has.Some.Contains("GrainType=lattice "));
+            Assert.That(failures, Has.Some.Contains("Service unavailable"));
+            Assert.That(HostFaultLog.Expected.Select(known => known.Issue), Has.All.Match(@"^#\d+$"), "every expected record cites its issue");
+        });
+    }
+
     /// <summary>Ids become file names, so only lower-case kebab-case is accepted.</summary>
     [TestCase("sign-in", true)]
     [TestCase("a3", true)]
