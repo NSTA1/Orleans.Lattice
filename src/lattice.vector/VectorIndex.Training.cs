@@ -268,7 +268,7 @@ public sealed partial class VectorIndex
             // centroids serve worst, which both refills the cell and reduces the
             // largest quantisation error. Marking that point as taken keeps a
             // second empty cell from claiming it too.
-            var worst = ArgMin(affinity, sampleCount);
+            var worst = IndexOfLowestAffinity(affinity, sampleCount);
             affinity[worst] = float.PositiveInfinity;
             WriteMetricSpaceVector(sampleLocations[worst], centroids, partition);
         }
@@ -456,7 +456,7 @@ public sealed partial class VectorIndex
         }
     }
 
-    private static int ArgMin(float[] values, int count)
+    private static int IndexOfLowestAffinity(float[] values, int count)
     {
         var best = 0;
         var bestValue = float.PositiveInfinity;
