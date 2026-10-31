@@ -99,6 +99,20 @@ public sealed class ManualTimeProvider : TimeProvider
         }
     }
 
+    /// <summary>
+    /// How many timers currently have a finite due time.
+    /// </summary>
+    public int ArmedTimers
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _timers.Count(timer => timer.IsArmed);
+            }
+        }
+    }
+
     /// <summary>Ticks per second, matching the units <see cref="GetTimestamp"/> returns.</summary>
     public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 
@@ -192,6 +206,9 @@ public sealed class ManualTimeProvider : TimeProvider
         private DateTimeOffset? _dueAt;
         private TimeSpan _period = Timeout.InfiniteTimeSpan;
         private bool _disposed;
+        private int _isArmed;
+
+        public bool IsArmed => Volatile.Read(ref _isArmed) != 0;
 
         public bool Change(TimeSpan dueTime, TimeSpan period)
         {
@@ -204,6 +221,7 @@ public sealed class ManualTimeProvider : TimeProvider
 
                 _dueAt = dueTime == Timeout.InfiniteTimeSpan ? null : clock.GetUtcNow() + dueTime;
                 _period = period;
+                Volatile.Write(ref _isArmed, _dueAt is null ? 0 : 1);
                 return true;
             }
         }
@@ -221,6 +239,7 @@ public sealed class ManualTimeProvider : TimeProvider
                 // that calls Change sets the next due time rather than having it
                 // overwritten on return.
                 _dueAt = _period == Timeout.InfiniteTimeSpan ? null : now + _period;
+                Volatile.Write(ref _isArmed, _dueAt is null ? 0 : 1);
             }
 
             // Outside the lock: a callback commonly disposes its own timer.
@@ -233,6 +252,7 @@ public sealed class ManualTimeProvider : TimeProvider
             {
                 _disposed = true;
                 _dueAt = null;
+                Volatile.Write(ref _isArmed, 0);
             }
 
             clock.Remove(this);
