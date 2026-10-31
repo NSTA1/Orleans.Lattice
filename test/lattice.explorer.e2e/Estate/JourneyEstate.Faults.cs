@@ -260,6 +260,53 @@ public sealed partial class JourneyEstate
         return names;
     }
 
+    /// <summary>
+    /// Holds the backup store's artifact writes on every running silo of <paramref name="region"/>,
+    /// as a congested backup storage account would: a capture started while the hold is on stays
+    /// running until it is cancelled or the hold is released. Dispose the result to release it;
+    /// the hold also lapses on its own after <paramref name="lapse"/> (five minutes by default).
+    /// </summary>
+    /// <param name="region">The region.</param>
+    /// <param name="lapse">How long the hold lasts unless released first.</param>
+    /// <returns>Releases the hold when disposed.</returns>
+    public async Task<IAsyncDisposable> HoldBackupWritesAsync(string region = West, TimeSpan? lapse = null)
+    {
+        RequireFaults();
+        var seconds = (int)Math.Ceiling((lapse ?? TimeSpan.FromMinutes(5)).TotalSeconds);
+        var silos = RegionOf(region).Silos.Where(silo => silo.IsRunning).ToList();
+        if (silos.Count == 0)
+        {
+            throw new InvalidOperationException($"No {region} silo is running.");
+        }
+
+        var hold = new BackupWriteHold(this, silos);
+        try
+        {
+            foreach (var silo in silos)
+            {
+                await PostBackupWritesAsync(silo, held: true, seconds);
+            }
+        }
+        catch
+        {
+            await hold.DisposeAsync();
+            throw;
+        }
+
+        return hold;
+    }
+
+    private async Task PostBackupWritesAsync(JourneySiloHost silo, bool held, int seconds)
+    {
+        using var response = await _probe.PostAsync(new Uri(
+            $"http://127.0.0.1:{silo.HttpPort}/e2e/backup-writes?held={(held ? "true" : "false")}&seconds={seconds}"), null);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(
+                $"{(held ? "Holding" : "Releasing")} silo {silo.Index}'s backup writes failed: {(int)response.StatusCode} {await response.Content.ReadAsStringAsync()}");
+        }
+    }
+
     private void RequireFaults()
     {
         if (!_options.Faults)
@@ -290,4 +337,23 @@ public sealed partial class JourneyEstate
         [property: JsonPropertyName("port")] int Port);
 
     private sealed record InjectedOrphan([property: JsonPropertyName("orphan")] string Orphan);
+
+    /// <summary>Releases a <see cref="HoldBackupWritesAsync"/> hold on the silos it was placed on, once.</summary>
+    private sealed class BackupWriteHold(JourneyEstate estate, IReadOnlyList<JourneySiloHost> silos) : IAsyncDisposable
+    {
+        private int _released;
+
+        public async ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref _released, 1) != 0)
+            {
+                return;
+            }
+
+            foreach (var silo in silos.Where(silo => silo.IsRunning))
+            {
+                await estate.PostBackupWritesAsync(silo, held: false, seconds: 0);
+            }
+        }
+    }
 }

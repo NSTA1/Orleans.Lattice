@@ -61,5 +61,21 @@ internal static class JourneyFaultEndpoints
                 return Results.Conflict(new { reason = ex.Message });
             }
         });
+
+        // Holds (or releases) this silo's backup artifact writes, as a congested backup
+        // account would, so a capture a journey starts is still running when it cancels it.
+        app.MapPost(Prefix + "/backup-writes", (bool held, int? seconds, JourneyBackupWriteHold hold) =>
+        {
+            if (held)
+            {
+                hold.Hold(TimeSpan.FromSeconds(Math.Clamp(seconds ?? 300, 1, 900)));
+            }
+            else
+            {
+                hold.Release();
+            }
+
+            return Results.Ok(new { held = hold.IsHeld });
+        });
     }
 }
