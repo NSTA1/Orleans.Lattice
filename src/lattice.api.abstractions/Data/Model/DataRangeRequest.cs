@@ -46,4 +46,14 @@ public sealed record DataRangeRequest
     /// bounds are ignored and paging resumes from where the prior page ended.
     /// </summary>
     [Id(4)] public string? ContinuationToken { get; init; }
+
+    /// <summary>
+    /// When <see langword="true"/> on a request that opens a fresh scan, the page
+    /// also reports <see cref="DataRangePage.GateCoverage"/>: how much of the
+    /// requested range the caller's access admits. A range read prunes the keys a
+    /// caller may not see without saying so, so this is how a caller tells a
+    /// complete read from a restricted one. Ignored on a continuation. Defaults to
+    /// <see langword="false"/>, which costs nothing extra.
+    /// </summary>
+    [Id(5)] public bool IncludeGateCoverage { get; init; }
 }

@@ -35,6 +35,12 @@ public abstract class DataTestContext : ShellChromeTestContext
         Services.AddSingleton<ILatticeStateClient>(Client);
         Services.AddKeyedSingleton(ShellFacades.Key, Admin);
 
+        // The Data API the Export action probes: in memory, and refusing by default so
+        // only a test that grants export sees the action or its palette command.
+        ExportSources = new FakeDataExportSources();
+        ExportSources.Source.Coverage = Orleans.Lattice.LatticeRangeReadGateCoverage.Denied;
+        Services.AddSingleton<IDataExportSources>(ExportSources);
+
         // The grants the tenant has received: read only with tenancy on, and faked so a test never dials.
         Grants = new FakeTenancyCluster();
         Services.AddKeyedSingleton<ILatticeTenantGrantAdmin>(ShellFacades.Key, Grants);
@@ -43,6 +49,9 @@ public abstract class DataTestContext : ShellChromeTestContext
 
     /// <summary>The in-memory state API.</summary>
     internal FakeStateClient Client { get; }
+
+    /// <summary>The in-memory Data API the Export action reads; it refuses export unless a test changes its coverage.</summary>
+    internal FakeDataExportSources ExportSources { get; }
 
     /// <summary>The substitute tree-administration facade.</summary>
     internal ILatticeTreeAdmin Admin { get; }

@@ -52,6 +52,8 @@ See [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md) for the isolation 
 
 A point read reports the entry's per-key `MergeMode` and flags every found value `Raw`, because the data plane returns stored bytes rather than a decoded value: a typed CRDT's bytes are its internal serialization, so read one through the typed CRDT read verbs. A range-read page likewise flags every entry `Raw` and leaves its `MergeMode` unset.
 
+A range read prunes the keys the caller may not read without saying so, so an empty or short page cannot by itself tell a restricted read from a small range. Set `DataRangeRequest.IncludeGateCoverage` on the request that opens a scan and the first page reports `DataRangePage.GateCoverage`: `Unrestricted` when the caller's access admits the whole requested range, `Filtered` when it narrows it, or `Denied` when it admits none of it, in which case no cursor is opened and the page is already drained. It is reported only for a tree the caller can observe (otherwise it is `null`, like the empty page itself), it is never asked again on a continuation, and it is a classification of the caller's own access, never a count or list of the withheld keys. The Explorer's data export uses it to end every file with a trailer that says whether keys were withheld.
+
 ### Typed CRDT facade verbs
 
 The typed CRDT facade exposes these exact public methods. Mutating verbs go over the unified `CrdtWrite` RPC; read verbs go over `CrdtRead`.

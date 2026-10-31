@@ -41,6 +41,12 @@ else
             <LtStatusPill Text="@sharedBy" />
             <LtStatusPill Text="@_tree.AccessText" />
         }
+        @if (_canExport)
+        {
+            <span class="lt-data-heading__actions">
+                <LtButton Variant="LtButtonVariant.Quiet" data-lt-command="@DataArea.ExportCommandId" OnClick="OpenExport">Export...</LtButton>
+            </span>
+        }
     </div>
     <p class="lt-data-meta">
         @if (_tree.SharedBy is { } sharer)
@@ -85,4 +91,13 @@ else
             <LtTab Id="@DataTabs.Views" Title="Views"><DataViewsPanel /></LtTab>
         </LtTabs>
     </CascadingValue>
+
+    @if (_canExport)
+    {
+        <DataExportDialog TreeId="@_tree.LogicalId"
+                          TreeName="@_tree.DisplayName"
+                          Prefix="@_workspace.Prefix"
+                          @bind-Open="_exportOpen"
+                          Placement="@(Breakpoint == LtBreakpoint.Compact ? LtDialogPlacement.End : LtDialogPlacement.Center)" />
+    }
 }
