@@ -108,9 +108,9 @@ public sealed class SchemaViewCompositionIntegrationTests
         var physical = await Grains.GetLatticeRegistry().ResolveAsync(source);
         Assert.That(physical, Is.Not.EqualTo(source), "the migration cut the source over to its rewritten copy");
 
-        // The rebind after a cutover is asynchronous and the HLC barrier does not
-        // span a source identity change, so wait for the view to converge.
-        var migrated = await views.ConvergeAsync(static s => s.Tag("plain:Total") == 3L && s.Sum == 14d);
+        // The head barrier follows the cutover to the rewritten copy (#5308).
+        await views.WaitForSourceHeadAsync();
+        var migrated = await views.ReadAsync();
         Assert.Multiple(() =>
         {
             Assert.That(migrated.Tag("plain:Amount"), Is.Null, "no member keeps its pre-migration shape");
@@ -183,7 +183,8 @@ public sealed class SchemaViewCompositionIntegrationTests
         Assert.That(await StampAsync(source, "a"), Is.EqualTo(((uint, uint)?)(SchemaId, 2u)),
             "the rewritten value is stamped at the version the transform ran on");
 
-        var after = await views.ConvergeAsync(static s => s.Tag("plain:Total") == 1L && s.Sum == 5d);
+        await views.WaitForSourceHeadAsync();
+        var after = await views.ReadAsync();
         Assert.Multiple(() =>
         {
             Assert.That(after.Tag("plain:Amount"), Is.Null);
@@ -239,7 +240,8 @@ public sealed class SchemaViewCompositionIntegrationTests
 
         Assert.That(await StampAsync(source, "m"), Is.EqualTo(((uint, uint)?)(SchemaId, 2u)),
             "a value written below the check keeps its source stamp");
-        var state = await views.ConvergeAsync(static s => s.Tag("plain:Total") == 1L);
+        await views.WaitForSourceHeadAsync();
+        var state = await views.ReadAsync();
         Assert.Multiple(() =>
         {
             Assert.That(state.Tag("plain:Amount"), Is.EqualTo(1L));
@@ -277,26 +279,6 @@ public sealed class SchemaViewCompositionIntegrationTests
         }
 
         public async Task<bool[]> ReconcileAllAsync() => [await Tags.ReconcileAsync(), await Total.ReconcileAsync()];
-
-        /// <summary>
-        /// Waits for both views to reach a state <paramref name="converged"/> accepts,
-        /// returning the last state read (which the caller asserts on).
-        /// </summary>
-        public async Task<ViewState> ConvergeAsync(Func<ViewState, bool> converged)
-        {
-            var deadline = DateTime.UtcNow + Barrier;
-            while (true)
-            {
-                await WaitForSourceHeadAsync();
-                var state = await ReadAsync();
-                if (converged(state) || DateTime.UtcNow >= deadline)
-                {
-                    return state;
-                }
-
-                await Task.Delay(100);
-            }
-        }
 
         public async Task<ViewState> ReadAsync()
         {

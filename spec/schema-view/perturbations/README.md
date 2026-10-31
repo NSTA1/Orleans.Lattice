@@ -22,7 +22,8 @@ path's own call site (`Apply`, `ApplyBatch`, `Reconcile`) and at the seam itself
 stage's transform (`Write`) and by accepting a refused write
 (`RejectedContributesNothing`), and the rewrite by re-stamping without the
 upcast (`BuildRewrite`) and by writing remediated values without an envelope
-(`IntendedContribution`).
+(`IntendedContribution`). The head barrier is seeded by dropping its source-identity
+check (`BarrierExact`).
 
 ## Unseeded rows
 
@@ -36,10 +37,9 @@ upcast (`BuildRewrite`) and by writing remediated values without an envelope
 | SchemaViewComposition | Cutover | The alias move and its fence are seeded by the remediation and version-family areas; the view's response to the move is the `Rebind` row. |
 | SchemaViewComposition | Fail | An environment action: a crash or lost response is injected by the detectors' harnesses, so no production code implements it; the replay it exercises is seeded through the numeric companion's checkpoint perturbations. |
 | SchemaViewComposition | Rebind | The rebuild a rebind runs is the shadow build the `ShadowRebuildBypassesSeam` perturbation already seeds for `Reconcile`; an edit to the identity heal itself yields a convergence timeout rather than an assertion. |
-| SchemaViewComposition | WaitHead | The identity-aware head barrier is the #5308 fix, which is not in this tree yet; its perturbation lands with it. |
+| SchemaViewComposition | WaitHead | The barrier is one production seam; its source-identity check is seeded through the `BarrierExact` row (`BarrierIgnoresSourceIdentity`) against the same detectors, so a second perturbation would repeat that experiment. |
 | SchemaViewComposition | NoDuplicateContribution | The retract/add fold is the applier's, seeded by the numeric companion's `SumRetractForgotten` and `RegroupLeavesOldSlot` perturbations; a cutover's rebuild replaces membership and slots together. |
 | SchemaViewComposition | BindingConsistent | Binding the generation, cursor and checkpoint to one copy is seeded by the numeric companion's `Rebind` path and the materialised-view tail area; an edit that splits them yields a heal that never converges, which is a timeout rather than an assertion. |
-| SchemaViewComposition | BarrierExact | The identity-aware head barrier is the #5308 fix, which is not in this tree yet; its perturbation lands with it. |
 | SchemaViewComposition | AdvanceReprojectsNothing | As for `Advance`: violating it needs added behaviour, not a removed one. |
 | SchemaViewComposition | AbortTouchesNothing | The abort contract is seeded by the version-family and remediation areas (`MigrationThrowsInsteadOfAborting`, `ReservationNeverReleased`) against the abort detectors this row cites alongside its own. |
 | SchemaViewComposition | Converges | Liveness. The single-file edits that break it are the seeded safety rows' edits; a progress-only edit yields a timeout, which is not detector evidence. |
