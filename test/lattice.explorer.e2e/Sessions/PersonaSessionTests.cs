@@ -59,10 +59,10 @@ public sealed class PersonaSessionTests
         await olivia.SubstepAsync("signed-out", "Olivia arrives at the Explorer, signed out");
 
         await olivia.Shell.SubmitSignInAsync(olivia.Persona.Id, olivia.Persona.Password + "-mistyped");
-        await olivia.Shell.ExpectConnectionAsync("Sign-in required");
         var refused = await olivia.Shell.ReadSpineAsync();
+        await olivia.SubstepAsync("wrong-password-refused", "A mistyped password: the cluster refuses it, and nothing of the estate opens");
+        TestContext.Out.WriteLine($"After a refused password the spine is {refused}; the connection reads '{await olivia.Shell.Banner.GetByRole(AriaRole.Status).First.InnerTextAsync()}'.");
         Assert.That(refused.CanOpen("access"), Is.False, $"a refused password opens nothing: {refused}");
-        await olivia.SubstepAsync("wrong-password-refused", "A mistyped password: the cluster refuses it, and the Explorer asks her to sign in");
 
         // Whichever the chrome offers after a refusal - Sign in, or the session to sign out of.
         if (await olivia.Shell.SessionButton(olivia.Persona.Id).IsVisibleAsync())

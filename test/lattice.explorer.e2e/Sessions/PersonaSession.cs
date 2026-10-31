@@ -115,7 +115,7 @@ public sealed class PersonaSession : IAsyncDisposable
     /// <summary>Signs the persona in through the Explorer's own sign-in form, with their own password.</summary>
     public Task SignInAsync() => Shell.SignInAsync(Persona.Id, Persona.Password);
 
-    /// <summary>Stops the trace (keeping it when the test failed) and closes the context.</summary>
+    /// <summary>Stops the trace and closes the context. The trace is kept only if the test fails (or always, under <c>LATTICE_E2E_TRACES=always</c>).</summary>
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
@@ -124,19 +124,20 @@ public sealed class PersonaSession : IAsyncDisposable
         }
 
         _disposed = true;
-        var keep = TestContext.CurrentContext.Result.Outcome.Status == NUnit.Framework.Interfaces.TestStatus.Failed
-            || string.Equals(Environment.GetEnvironmentVariable(TracesVariable), "always", StringComparison.OrdinalIgnoreCase);
+        var always = string.Equals(Environment.GetEnvironmentVariable(TracesVariable), "always", StringComparison.OrdinalIgnoreCase);
         try
         {
-            string? path = null;
-            if (keep)
-            {
-                var traces = System.IO.Path.Combine(_artifacts, "traces");
-                Directory.CreateDirectory(traces);
-                path = System.IO.Path.Combine(traces, $"{Persona.Id}-{Region}-{Interlocked.Increment(ref _sequence):D2}.trace.zip");
-            }
-
+            var traces = System.IO.Path.Combine(_artifacts, "traces");
+            Directory.CreateDirectory(traces);
+            var path = System.IO.Path.Combine(traces, $"{Persona.Id}-{Region}-{Interlocked.Increment(ref _sequence):D2}.trace.zip");
             await Context.Tracing.StopAsync(new TracingStopOptions { Path = path });
+
+            // Disposed inside its test, before NUnit knows the outcome: the journey's
+            // [Journey] attribute discards this trace once the test has passed.
+            if (!always && TestContext.CurrentContext.Test.ID is { Length: > 0 } test)
+            {
+                JourneyTraces.Register(test, path);
+            }
         }
         catch (PlaywrightException)
         {
