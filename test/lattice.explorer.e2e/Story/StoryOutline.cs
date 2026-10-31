@@ -33,7 +33,7 @@ public static class StoryOutline
             Chapter("U5", 5387, "Personalising the console", "U3"),
             Chapter("U4", 5388, "The auditor's review", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9", "A10", "A11", "A12", "U1", "U2", "U3", "U5", "U6"),
             Chapter("C1", 5389, "Incident and recovery", "U1", "U2", "A6", "A7"),
-            Chapter("C2", 5390, "Resilience", "A7", "A8"),
+            Chapter("C2", 5390, "Resilience", "A6", "A7", "A8"),
             Chapter("C3", 5391, "Offboarding and lifecycle", "U3", "A5", "A6", "A10", "A12", "C1"),
             Chapter("C4", 5392, "Running the console", "C3"),
         ];
