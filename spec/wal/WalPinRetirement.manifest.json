@@ -5,13 +5,13 @@
   "counts": {
     "invariants": 3,
     "properties": 3,
-    "actions": 23,
-    "mutations": 28,
-    "behaviourRows": 28,
-    "distinctStates": 119280
+    "actions": 25,
+    "mutations": 30,
+    "behaviourRows": 30,
+    "distinctStates": 223628
   },
   "variants": {
-    "OneFault": { "distinctStates": 1298188 },
-    "TwoSweepers": { "distinctStates": 1544476 }
+    "OneFault": { "distinctStates": 2414373 },
+    "TwoSweepers": { "distinctStates": 2878760 }
   }
 }

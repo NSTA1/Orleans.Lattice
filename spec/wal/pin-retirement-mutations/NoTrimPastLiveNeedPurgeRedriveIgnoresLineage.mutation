@@ -1,0 +1,19 @@
+# Pairs with NoTrimPastLiveNeed. Issue #5417's production shape: a re-drive of a
+# completed purge's tail, after its registry removal landed but the record of it
+# did not, acts on the tree id without checking that the registry entry is still
+# the purged tree's. Once a write has populated the id again, the re-drive trims
+# the new tree's acknowledged writes and clears its pins.
+MODULE: NoTrimPastLiveNeedPurgeRedriveIgnoresLineage
+TARGET: NoTrimPastLiveNeed
+CLASS: Invariant
+SUMMARY: the purge tail's re-drive acts on a reused tree id
+PERTURBS: PurgeTailRemove
+
+--- FIND
+    /\ tailOwed
+    /\ tailLin = inc
+--- REPLACE
+    /\ tailOwed
+\* MUTATION: no lineage check.
+    /\ TRUE
+--- END

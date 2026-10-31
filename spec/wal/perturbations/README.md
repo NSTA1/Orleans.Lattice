@@ -18,7 +18,8 @@ python3 tools/perturbations/run-perturbations.py --area wal --output result.json
 
 `WalPinRetirement` ([`PinRetirementRefinement.md`](../PinRetirementRefinement.md))
 is seeded on the rows issue #5358 broke: `Decide(p, c, k)` and `NoTrimPastLiveNeed`
-(the unfenced removal) and `Read(p)` (the drive retiring on its NotDriven verdict).
+(the unfenced removal) and `Read(p)` (the drive retiring on its NotDriven verdict), and on
+`PurgeTailRemove`, the row issue #5417 broke (the purge tail's re-drive acting on a tree id).
 `WalDurability` and `WalMove` have no perturbations yet, so the gate does not
 require their rows to be listed.
 
@@ -42,6 +43,7 @@ require their rows to be listed.
 | WalPinRetirement | Discard | The discard decision is the tree-lifecycle area's, detected by the undone-resize integration tests. |
 | WalPinRetirement | DiscardRetire | A one-line edit to the deleted-tree hold would also be seeded for SoftDelete; the row is detected by `LatticeWalGcSchedulerCadenceTests.ExecuteAsync_retires_the_pins_of_a_discarded_tree_without_touching_its_leaves`. |
 | WalPinRetirement | GcTrim | WalDurability's trim, detected by that note's rows. |
+| WalPinRetirement | PurgeTailSettle | Its edit would be the one seeded for `PurgeTailRemove`: production records the landed removal in the branch the lineage check selects, so removing the check breaks both rows at once. |
 | WalPinRetirement | Start(p) | Starting a run decides nothing; its detectors are the coordination fixtures. |
 | WalPinRetirement | Enum(p, k) | The order that matters is every token before the leaf read the removal is decided on, and both retirement paths take that read only after their key loop. Moving the drive's leaf read above its token loop turns `LatticeWalGcSchedulerCadenceTests.The_drive_does_not_remove_a_pin_that_a_leaf_recreated_after_its_read_seeded_into` red (checked by the #5351 review); that is a two-anchor edit, which a single perturbation cannot express. Reordering a key's token and its pin read is harmless, because the leaf read still follows both. The Coyote guard `WalPinRetirementCoyoteTests.A_token_taken_after_the_read_does_not_fence_the_recreation` proves the token-before-read rule on the model, not on production's call order. |
 | WalPinRetirement | ReadFail(p) | Fail-closed on a faulted read is a catch arm whose removal is a compile-shape change rather than an anchored edit; detected by `LatticeWalGcSchedulerCadenceTests.The_sweep_fails_closed_when_a_leaf_state_read_throws`. |

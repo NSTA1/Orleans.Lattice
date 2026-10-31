@@ -186,7 +186,8 @@ TLA+ specification in [`spec/wal/`](../../spec/wal/README.md):
 - `WalPinRetirement.tla`, the GC's retirement of orphaned materialiser pins - the
   bulk sweep and the starvation drive, each a token, a leaf read and a fenced
   removal as separate steps, two sweepers racing - against a leaf's fold, purge,
-  discard and re-creation under the same grain id.
+  discard and re-creation under the same grain id, and against a completed purge's
+  tree-level tail re-driven onto a reused tree id.
 
 It follows the pattern of the atomic-commit specification: every property and every
 action has a mutation that makes a property fire, and a refinement note maps each
@@ -228,6 +229,13 @@ Since then the models have found nine more, each reproduced before its fix:
 | #4700 | A purge's shard-wide recovery flag re-creates empty a leaf the purge never reached, and strands cleared leaves when the reseed stops early. Fixed: each leaf carries its own purge marker, and recovery re-creates only a marked leaf, visiting every one. |
 | #5358 | The GC removed an orphaned pin by consumer id after a husk read taken in a separate step, so a purge-cleared leaf re-created in between lost the block pin its birth seeded under the same consumer id, and the trim could pass its un-checkpointed writes. Fixed: the removal is fenced by the pin grain's per-activation merge stamps, and the drive retires through the same fenced sequence. Found by `WalPinRetirement`. |
 
+The independent review of `WalPinRetirement` found one more, reproduced by a test,
+fixed, and then added to the model, where a mutation reproduces it:
+
+| Issue | Defect |
+|-------|--------|
+| #5417 | A completed purge re-drove its tail - WAL trim, pin-store clear, registry removal - whenever its registry removal was still recorded as owed, so a removal that landed with its record unwritten was re-driven against an id a write had registered again, trimming the new tree's acknowledged writes. Fixed: the purge records the registry lineage it removes with its completion, and a re-drive acts only while the entry still carries it. |
+
 **What is covered:** one WAL partition shared by two leaves, with two faults per
 behaviour for safety and one for liveness, and a variant with snapshot and row loss
 and a purge; one move with one shard crash and one coordinator crash, and a variant
@@ -244,8 +252,8 @@ stamps and a retention TTL (`WalPartitionReleaseModel`).
 - replication consumers, beyond their effect on the trim floor;
 - liveness under two faults, or any property under three;
 - for pin retirement, several leaves or partitions per leaf, the pin's HLC frontier
-  and override holds, the in-memory cursor registry, and the tree-wide pin-store
-  clear that ends a purge (its ordering is pinned by tests instead).
+  and override holds, the in-memory cursor registry, and the order of the steps
+  inside a purge's tree-level tail (pinned by tests instead).
 
 Coverage of the leaf lifecycle does not imply coverage of any of those. Each module's
 refinement note lists its gaps in full.
