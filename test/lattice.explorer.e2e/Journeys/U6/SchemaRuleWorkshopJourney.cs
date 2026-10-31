@@ -66,7 +66,13 @@ public sealed class SchemaRuleWorkshopJourney : JourneyChapter
         var page = run.Page;
 
         // #5385: a schema owner whose grant names trees, not the whole cluster, sees the Schema area.
-        await Expect(run.Session.Shell.Stop("schema")).ToBeVisibleAsync();
+        var spine = await run.Session.Shell.ReadSpineAsync();
+        Assert.That(spine.CanOpen("schema"), Is.True, $"a schema owner of a few trees opens the Schema area: {spine}");
+        if (await run.Session.Shell.IsCompactAsync())
+        {
+            await run.Session.Shell.CloseDirectoryAsync();
+        }
+
         await run.ShotAsync(1, "home", "Sam's estate: the Schema area is listed for a schema owner of a few trees");
 
         await page.OpenTreeAsync(Tree);
