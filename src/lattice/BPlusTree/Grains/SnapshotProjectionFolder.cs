@@ -45,8 +45,14 @@ internal sealed class SnapshotProjectionFolder(
     string treeId,
     CrdtShapeRegistry crdtShapes,
     ILatticeEnvelopeCodec? envelopeCodec = null,
-    string? shapeTreeId = null)
+    string? shapeTreeId = null,
+    string? localOriginClusterId = null)
 {
+    // Issue #5524: the tree's own resolved origin. A row folded from a record
+    // stamped with it - or seeded from a baseline row that kept the stamp - stores
+    // a null origin, as a live own write does (LatticeRowOrigin).
+    private readonly string? _localOrigin = localOriginClusterId;
+
     // Issue #5300: a derived physical copy (resize, restore, bootstrap hold or
     // remediation destination) folds with the shape registered for the logical
     // tree it backs, not under its own physical id.
@@ -95,6 +101,12 @@ internal sealed class SnapshotProjectionFolder(
     /// </summary>
     public void SeedRow(string key, LwwValue<byte[]> value, LatticeMergeMode? mergeMode = null)
     {
+        if (!string.IsNullOrEmpty(value.OriginClusterId)
+            && LatticeRowOrigin.FromRecord(value.OriginClusterId, _localOrigin) is null)
+        {
+            value = value with { OriginClusterId = null };
+        }
+
         MergeIntoEntries(key, value);
         if (mergeMode is { } mode)
         {
@@ -200,13 +212,13 @@ internal sealed class SnapshotProjectionFolder(
         return rows;
     }
 
-    private static LwwValue<byte[]> BuildLww(in LatticeMutation mutation, bool isTombstone) => new()
+    private LwwValue<byte[]> BuildLww(in LatticeMutation mutation, bool isTombstone) => new()
     {
         Value = isTombstone ? null : mutation.Value,
         Timestamp = mutation.Timestamp,
         IsTombstone = isTombstone,
         ExpiresAtTicks = isTombstone ? 0 : mutation.ExpiresAtTicks,
-        OriginClusterId = mutation.OriginClusterId,
+        OriginClusterId = LatticeRowOrigin.FromRecord(mutation.OriginClusterId, _localOrigin),
         VectorClock = mutation.VectorClock,
     };
 
@@ -231,7 +243,7 @@ internal sealed class SnapshotProjectionFolder(
         Timestamp = mutation.Timestamp,
         IsTombstone = false,
         ExpiresAtTicks = mutation.ExpiresAtTicks,
-        OriginClusterId = mutation.OriginClusterId,
+        OriginClusterId = LatticeRowOrigin.FromRecord(mutation.OriginClusterId, _localOrigin),
         VectorClock = mutation.VectorClock,
     };
 
@@ -310,7 +322,7 @@ internal sealed class SnapshotProjectionFolder(
             Timestamp = mutation.Timestamp,
             IsTombstone = true,
             ExpiresAtTicks = 0,
-            OriginClusterId = mutation.OriginClusterId,
+            OriginClusterId = LatticeRowOrigin.FromRecord(mutation.OriginClusterId, _localOrigin),
             VectorClock = mutation.VectorClock,
         };
 
