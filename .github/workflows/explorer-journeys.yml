@@ -7,70 +7,142 @@ name: Explorer Journeys
 # active health checks, an Explorer head that holds the gateway as its one
 # endpoint, and every storage provider on Azurite - with the backup sink on a
 # separate account. Estates with an east region (#5362) add a third Azurite
-# account for east, and each runs its own pinned Prometheus container. `test/lattice.explorer.e2e/**` is carved out of the `code`
-# and `nonSample` filters in `ci.yml` exactly as `test/lattice.explorer.uitests/**`
-# is, so the core matrix never tries to run it; this workflow is its runner.
+# account for east, and each runs its own pinned Prometheus container.
+# `test/lattice.explorer.e2e/**` is carved out of the `code` and `nonSample`
+# filters in `ci.yml` exactly as `test/lattice.explorer.uitests/**` is, so the
+# core matrix never tries to run it; this workflow is its runner.
 #
-# FAIL CLOSED, NEVER INCONCLUSIVE. The lane sets LATTICE_E2E_REQUIRED=1, so a
+# FAIL CLOSED, NEVER INCONCLUSIVE. Every leg sets LATTICE_E2E_REQUIRED=1, so a
 # journey that cannot reach Azurite FAILS rather than going inconclusive, which
 # NUnit would count as neither passed nor failed - the false green the testing
-# master warns about.
+# master warns about. The harness leg proves it on every run: it stops Azurite
+# and requires the estate smoke fixture to fail.
 #
-# This is the minimal lane F1 lands; F5 (#5363) extends it with per-journey
-# isolated legs, the story legs, the nightly run and the screenshot provenance
-# check. Like ui-tests.yml it is advisory: a required check that never reports
-# would leave a PR pending forever.
+# LEGS (#5363). `explorer-journeys-plan.py` decides them; its docstring is the
+# contract and `explorer-journeys-plan-selftest.py` pins it:
+#   harness            every EndToEnd fixture that is not a journey, a story or
+#                      the coverage gate.
+#   isolated-<jid>     one per folder under test/lattice.explorer.e2e/Journeys/,
+#                      discovered from the directory, so adding a journey edits
+#                      no shared file. A pull request touching only Journeys/<id>/
+#                      runs that leg; a change to the Explorer, the harness, the
+#                      hosts, a facade or this lane runs every leg.
+#   story-contoso, story-fabrikam
+#                      the storyline run in order on one estate. A member pull
+#                      request runs its journeys' storylines on its MERGE commit
+#                      (the pull_request checkout), so a broken hand-off is caught
+#                      before it lands; the bucket-to-main pull request and the
+#                      nightly run run both.
+#   story-contoso-narrow  nightly only: the Contoso story at 390x844.
+# After the legs, `coverage-gate` unions every leg's coverage hits. On a body
+# edit of a member pull request, `provenance` checks the `## Journey
+# screenshots` section against the run its markers name.
+#
+# BUCKET PUSHES. The coordinator cancels every run a push to the bucket
+# triggers (epic D11): the cross-item gate is the bucket-to-main pull request.
+# The push trigger stays because CiIntegrationBranchTriggerTests requires every
+# lane that gates integration pull requests to run on the integration branch.
+#
+# Like ui-tests.yml it is advisory: a required check that never reports would
+# leave a PR pending forever. The epic makes a green story run on the
+# bucket-to-main pull request a merge condition by convention.
 on:
   pull_request:
-    # Branch list mirrors ci.yml and ui-tests.yml.
+    # Branch list mirrors ci.yml and ui-tests.yml. `edited` re-runs the lane
+    # when a pull request body changes, which is when the screenshot
+    # provenance check has something new to check; the planner runs no leg on
+    # it.
+    types: [opened, synchronize, reopened, edited]
     branches: [main, '*/epic/**', 'release/**']
     paths:
       - 'test/lattice.explorer.e2e/**'
-      - '!test/lattice.explorer.e2e/**/*.md'
       - 'src/lattice.explorer/**'
-      - '!src/lattice.explorer/**/*.md'
       # The feature catalogue's curated half cites these docs' anchors (#5361).
       - 'docs/lattice.explorer/**'
-      - 'reference-architecture/hosts/Silo/**'
-      - 'reference-architecture/hosts/Explorer/**'
-      - 'reference-architecture/hosts/Common/**'
+      - 'reference-architecture/hosts/**'
       - 'samples/Explorer/Apps/TaskBoard/**'
-      - '!samples/Explorer/Apps/TaskBoard/**/*.md'
+      # Every facade the Explorer calls, server and client side.
+      - 'src/lattice.api.abstractions/**'
+      - 'src/lattice.api.state*/**'
+      - 'src/lattice.api.data*/**'
+      - 'src/lattice.api.auth*/**'
+      - 'src/lattice.api.schema*/**'
+      - 'src/lattice.api.tenantadmin*/**'
+      - 'src/lattice.api.backup*/**'
+      - 'src/lattice.api.telemetry*/**'
+      - 'src/lattice.api.treeadmin*/**'
+      - 'src/lattice.api.replication*/**'
+      - 'src/lattice.api.apps*/**'
       - '.github/workflows/explorer-journeys.yml'
+      - '.github/workflows/explorer-journeys-plan*.py'
+      - '.github/workflows/journey-screenshot-provenance*.py'
+      - '.github/workflows/install-playwright-browsers.sh'
+      - '.github/workflows/run-playwright-install.py'
+      - '.github/workflows/playwright_apt_mirrors.py'
+      - '!test/lattice.explorer.e2e/**/*.md'
+      - '!src/lattice.explorer/**/*.md'
+      - '!reference-architecture/hosts/**/*.md'
+      - '!samples/Explorer/Apps/TaskBoard/**/*.md'
+      - '!src/lattice.api.*/**/*.md'
 
   # Integration-branch lane, mirroring ui-tests.yml (and its disclosed limit:
-  # on a push the paths filter sees only the member that just merged).
+  # on a push the paths filter sees only the member that just merged). Every
+  # bucket-push run is cancelled by the coordinator (see BUCKET PUSHES above).
   push:
     branches: ['*/epic/**']
     paths:
       - 'test/lattice.explorer.e2e/**'
-      - '!test/lattice.explorer.e2e/**/*.md'
       - 'src/lattice.explorer/**'
-      - '!src/lattice.explorer/**/*.md'
-      # The feature catalogue's curated half cites these docs' anchors (#5361).
       - 'docs/lattice.explorer/**'
-      - 'reference-architecture/hosts/Silo/**'
-      - 'reference-architecture/hosts/Explorer/**'
-      - 'reference-architecture/hosts/Common/**'
+      - 'reference-architecture/hosts/**'
       - 'samples/Explorer/Apps/TaskBoard/**'
-      - '!samples/Explorer/Apps/TaskBoard/**/*.md'
+      - 'src/lattice.api.abstractions/**'
+      - 'src/lattice.api.state*/**'
+      - 'src/lattice.api.data*/**'
+      - 'src/lattice.api.auth*/**'
+      - 'src/lattice.api.schema*/**'
+      - 'src/lattice.api.tenantadmin*/**'
+      - 'src/lattice.api.backup*/**'
+      - 'src/lattice.api.telemetry*/**'
+      - 'src/lattice.api.treeadmin*/**'
+      - 'src/lattice.api.replication*/**'
+      - 'src/lattice.api.apps*/**'
       - '.github/workflows/explorer-journeys.yml'
+      - '.github/workflows/explorer-journeys-plan*.py'
+      - '.github/workflows/journey-screenshot-provenance*.py'
+      - '.github/workflows/install-playwright-browsers.sh'
+      - '.github/workflows/run-playwright-install.py'
+      - '.github/workflows/playwright_apt_mirrors.py'
+      - '!test/lattice.explorer.e2e/**/*.md'
+      - '!src/lattice.explorer/**/*.md'
+      - '!reference-architecture/hosts/**/*.md'
+      - '!samples/Explorer/Apps/TaskBoard/**/*.md'
+      - '!src/lattice.api.*/**/*.md'
+
+  # Nightly: every leg, plus the Contoso story at 390x844 (runs on the default
+  # branch once the epic lands there).
+  schedule:
+    - cron: '17 2 * * *'
 
 permissions:
   contents: read
 
+# A body edit gets a group of its own, so checking the screenshot section never
+# cancels the legs of the push it describes.
 concurrency:
-  group: explorer-journeys-${{ github.ref }}
+  group: explorer-journeys-${{ github.ref }}-${{ github.event.action == 'edited' && 'body' || 'code' }}
   cancel-in-progress: true
 
 env:
   E2E_PROJECT: test/lattice.explorer.e2e/Orleans.Lattice.Explorer.EndToEnd.Tests.csproj
+  RESULTS: ${{ github.workspace }}/test-results
 
 jobs:
   # Member-push classifier, as in ui-tests.yml. The script is ci.yml's
   # `pushref` step, which is the SOURCE OF TRUTH for the rule. Do not edit it
   # here alone: CiIntegrationBranchTriggerTests fails the build when this copy
-  # and ci.yml's differ.
+  # and ci.yml's differ, and requires this job to stay a checkout and the
+  # classifier step.
   plan:
     name: Classify pushed ref
     runs-on: ubuntu-latest
@@ -118,43 +190,122 @@ jobs:
             echo "Pushed ref '$BRANCH' extends no existing branch; treating it as an integration branch."
           fi
 
-  journeys:
-    name: Estate harness (smoke and fault seams)
+  # Decides the legs and the journeys whose screenshots need a provenance
+  # check. Runs the planner's and the provenance check's self-tests first:
+  # both are pure Python, seconds, and this lane is the only one that calls
+  # them.
+  planner:
+    name: Plan legs
     needs: plan
     if: needs.plan.outputs.push_is_member != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      legs: ${{ steps.plan.outputs.legs }}
+      provenance: ${{ steps.plan.outputs.provenance }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Self-test the leg planner
+        run: python3 .github/workflows/explorer-journeys-plan-selftest.py
+
+      - name: Self-test the screenshot provenance check
+        run: python3 .github/workflows/journey-screenshot-provenance-selftest.py
+
+      # From the API rather than a git diff, so no history is fetched. A listing
+      # that fails leaves no file, and the planner then runs every leg.
+      - name: List the pull request's changed files
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -uo pipefail
+          if ! gh api --paginate "repos/$REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"; then
+            echo "::warning::Could not list the pull request's changed files; every leg runs."
+            rm -f "$RUNNER_TEMP/changed.txt"
+          fi
+
+      - name: Plan the legs
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          python3 .github/workflows/explorer-journeys-plan.py plan \
+            --event "$EVENT" --action "$ACTION" --base-ref "$BASE_REF" \
+            --changed-files "$RUNNER_TEMP/changed.txt"
+
+  legs:
+    name: ${{ matrix.name }}
+    needs: planner
+    if: needs.planner.outputs.legs != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.timeout }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.planner.outputs.legs) }}
 
     env:
-      # Two Azurite accounts, as reference-architecture/local/docker-compose.yml
-      # runs them: the primary (Table, Blob, Queue) and a separate backup sink.
+      # Three Azurite accounts, as reference-architecture/local/docker-compose.yml
+      # runs them: the primary (Table, Blob, Queue), a separate backup sink, and
+      # the east region's own account (#5362).
       LATTICE_E2E_STORAGE: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;
       LATTICE_E2E_BACKUP_STORAGE: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:11000/devstoreaccount1;
-      # The east region's own account (#5362): each region keeps its clustering,
-      # grain state, WAL and console key ring on storage of its own.
       LATTICE_E2E_EAST_STORAGE: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:12000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:12001/devstoreaccount1;TableEndpoint=http://127.0.0.1:12002/devstoreaccount1;
       LATTICE_E2E_REQUIRED: '1'
       LATTICE_E2E_HOSTS_DIR: ${{ github.workspace }}/.journey-hosts
       # The commit each journey's screenshot manifest records (#5360): the PR's head, which
       # its screenshot section is checked against, not the merge commit GITHUB_SHA names.
       LATTICE_E2E_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+      # isolated or story (#5361); the harness and isolated legs run isolated.
+      LATTICE_E2E_MODE: ${{ matrix.mode }}
+      # 'narrow' runs every session at 390x844 (#5360); empty is desktop.
+      LATTICE_E2E_VIEWPORT: ${{ matrix.viewport }}
+      LEG: ${{ matrix.name }}
 
     steps:
       - uses: actions/checkout@v5
 
-      # Started as containers rather than `services:` so the backup account's
-      # port can differ from the primary's, as in ci.yml's "Start Azurite" step.
+      # Started as containers rather than `services:` so the backup and east
+      # accounts' ports can differ from the primary's, as in ci.yml's "Start
+      # Azurite" step.
       - name: Start Azurite
         run: |
-          docker run -d --name azurite -p 10000:10000 -p 10001:10001 -p 10002:10002 \
-            mcr.microsoft.com/azure-storage/azurite:3.36.0 \
-            azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose
-          docker run -d --name azurite-backup -p 11000:10000 \
-            mcr.microsoft.com/azure-storage/azurite:3.36.0 \
-            azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose
-          docker run -d --name azurite-east -p 12000:10000 -p 12001:10001 -p 12002:10002 \
-            mcr.microsoft.com/azure-storage/azurite:3.36.0 \
-            azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose
+          set -euo pipefail
+          start() {
+            local name="$1"; shift
+            docker run -d --name "$name" "$@" mcr.microsoft.com/azure-storage/azurite:3.36.0 \
+              azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose
+          }
+          start azurite -p 10000:10000 -p 10001:10001 -p 10002:10002
+          start azurite-backup -p 11000:10000
+          start azurite-east -p 12000:10000 -p 12001:10001 -p 12002:10002
+
+      - name: Wait for Azurite
+        run: |
+          set -euo pipefail
+          for port in 10000 10001 10002 11000 12000 12001 12002; do
+            for attempt in $(seq 1 60); do
+              if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
+                echo "Azurite answers on port $port."
+                break
+              fi
+              if [ "$attempt" -eq 60 ]; then
+                echo "::error::Azurite did not open port $port within 60 seconds."
+                docker ps -a
+                exit 1
+              fi
+              sleep 1
+            done
+          done
 
       # Each estate that runs Prometheus starts its own container from this image,
       # on the host network with a scrape-target file the harness writes as silos
@@ -178,7 +329,7 @@ jobs:
       - name: Build the journey tests and hosts
         run: dotnet build "$E2E_PROJECT" --configuration Release
 
-      # Published once per job and launched by the harness with `dotnet <dll>`.
+      # Published once per leg and launched by the harness with `dotnet <dll>`.
       - name: Publish the journey hosts
         run: |
           set -euo pipefail
@@ -187,29 +338,196 @@ jobs:
             dotnet publish "$project" --configuration Release --no-restore --output "$LATTICE_E2E_HOSTS_DIR/$host"
           done
 
+      # Keyed on the project file, which pins Microsoft.Playwright.
+      - name: Cache Playwright browsers
+        id: pwcache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-e2e-chromium-${{ runner.os }}-${{ hashFiles('test/lattice.explorer.e2e/*.csproj') }}
+
       - name: Install Playwright Chromium
         timeout-minutes: 15
-        run: pwsh test/lattice.explorer.e2e/bin/Release/net10.0/playwright.ps1 install --with-deps chromium
+        env:
+          CACHE_HIT: ${{ steps.pwcache.outputs.cache-hit }}
+          PLAYWRIGHT_SEARCH_DIR: test/lattice.explorer.e2e/bin/Release
+        run: bash .github/workflows/install-playwright-browsers.sh "$CACHE_HIT" chromium
 
-      # tla-toolchain: not-required - the filter selects TestCategory=EndToEnd
-      # inside test/lattice.explorer.e2e, which contains no `Tlc`-category
-      # fixture. See spec/README.md and CiTlaToolchainProvisioningTests.
-      - name: Run the estate harness fixtures
+      # tla-toolchain: not-required - every leg's filter selects fixtures inside
+      # test/lattice.explorer.e2e, which contains no `Tlc`-category fixture. See
+      # spec/README.md and CiTlaToolchainProvisioningTests.
+      - name: Run the leg
+        env:
+          FILTER: ${{ matrix.filter }}
         run: |
           dotnet test "$E2E_PROJECT" --no-build --configuration Release \
-            --filter "TestCategory=EndToEnd" \
-            --logger "trx;LogFileName=explorer-journeys.trx" \
+            --filter "$FILTER" \
+            --results-directory "$RESULTS" \
+            --logger "trx;LogFileName=$LEG.trx" \
             --logger "console;verbosity=normal" \
-            --blame-hang-timeout 15m --blame-hang-dump-type none
+            --blame-hang-timeout 20m --blame-hang-dump-type none
 
-      # Every process's log and every screenshot and trace, kept on success too:
-      # member PRs take their journey screenshots from this artifact.
-      - name: Upload journey artifacts
+      # The leg's counts, every journey's ordered screenshot manifest and the
+      # leg's coverage hits, in the job summary; the pending-wrapper list and
+      # the story report are written there by the tests themselves. Fails a leg
+      # whose filter selected none of the tests it exists for.
+      - name: Summarise the leg
+        if: always()
+        env:
+          EXPECT: ${{ matrix.expect }}
+        run: |
+          python3 .github/workflows/explorer-journeys-plan.py leg-summary --leg "$LEG" \
+            --trx "$RESULTS/$LEG.trx" --artifacts test/lattice.explorer.e2e/artifacts --expect "$EXPECT"
+
+      # Every process's log, trace and screenshot, kept on success too.
+      - name: Upload the leg's artifacts
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: explorer-journeys
+          name: explorer-journeys-${{ matrix.name }}
           path: |
-            **/explorer-journeys.trx
+            test-results/**
             test/lattice.explorer.e2e/artifacts/**
           if-no-files-found: ignore
+
+      # The artifact a member pull request's screenshot section names (#5363):
+      # journey-screenshots-<jid>/manifest.json is what provenance checks.
+      - name: Upload the journey's screenshots
+        if: always() && matrix.kind == 'isolated'
+        uses: actions/upload-artifact@v6
+        with:
+          name: journey-screenshots-${{ matrix.jid }}
+          path: test/lattice.explorer.e2e/artifacts/screenshots/${{ matrix.jid }}/
+          if-no-files-found: ignore
+
+      - name: Upload the leg's screenshots
+        if: always() && matrix.kind != 'isolated'
+        uses: actions/upload-artifact@v6
+        with:
+          name: journey-screenshots-leg-${{ matrix.name }}
+          path: test/lattice.explorer.e2e/artifacts/screenshots/
+          if-no-files-found: ignore
+
+      - name: Upload coverage hits
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-hits-${{ matrix.name }}
+          path: test/lattice.explorer.e2e/artifacts/coverage-hits.json
+          if-no-files-found: ignore
+
+      # The fail-closed proof (#5363): with the primary Azurite stopped, the
+      # estate smoke fixture must FAIL - not pass, not go inconclusive.
+      - name: Prove a stopped Azurite fails the leg
+        if: success() && matrix.kind == 'harness'
+        run: |
+          set -uo pipefail
+          docker stop azurite
+          dotnet test "$E2E_PROJECT" --no-build --configuration Release \
+            --filter "FullyQualifiedName~Orleans.Lattice.Explorer.EndToEnd.Tests.Smoke.EstateSmokeTests" \
+            --results-directory "$RESULTS" \
+            --logger "trx;LogFileName=fail-closed-probe.trx" \
+            --blame-hang-timeout 10m --blame-hang-dump-type none
+          code=$?
+          docker start azurite
+          python3 .github/workflows/explorer-journeys-plan.py probe \
+            --trx "$RESULTS/fail-closed-probe.trx" --exit-code "$code"
+
+  # Unions every leg's coverage hits (#5361) and reports the catalogue features
+  # none of them proved. Soft until I1 (#5400) makes CoverageGate.Hard true.
+  coverage-gate:
+    name: Coverage gate (all legs)
+    needs: [plan, planner, legs]
+    if: always() && needs.plan.outputs.push_is_member != 'true' && needs.planner.result == 'success' && needs.planner.outputs.legs != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Find the coverage gate
+        id: gate
+        run: |
+          if [ -f test/lattice.explorer.e2e/FeatureCoverage/CoverageGateTests.cs ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::This tree has no coverage gate fixture (#5361); there is nothing to aggregate."
+          fi
+
+      - name: Download every leg's coverage hits
+        if: steps.gate.outputs.present == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: coverage-hits-*
+          path: coverage-hits
+
+      - name: Setup .NET
+        if: steps.gate.outputs.present == 'true'
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Cache NuGet packages
+        if: steps.gate.outputs.present == 'true'
+        uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: nuget-journeys-${{ runner.os }}-${{ hashFiles('src/**/*.csproj', 'test/lattice.explorer.e2e/**/*.csproj') }}
+          restore-keys: nuget-journeys-${{ runner.os }}-
+
+      - name: Run the coverage gate
+        if: steps.gate.outputs.present == 'true'
+        env:
+          LATTICE_E2E_COVERAGE_HITS: ${{ github.workspace }}/coverage-hits
+        run: |
+          set -euo pipefail
+          dotnet build "$E2E_PROJECT" --configuration Release
+          dotnet test "$E2E_PROJECT" --no-build --configuration Release \
+            --filter "TestCategory=CoverageGate" \
+            --results-directory "$RESULTS" \
+            --logger "trx;LogFileName=coverage-gate.trx" \
+            --blame-hang-timeout 10m --blame-hang-dump-type none
+          python3 .github/workflows/explorer-journeys-plan.py leg-summary --leg coverage-gate \
+            --trx "$RESULTS/coverage-gate.trx" \
+            --expect "Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage.CoverageGateTests"
+
+      - name: Upload the coverage report
+        if: always() && steps.gate.outputs.present == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: explorer-journeys-coverage-gate
+          path: |
+            test-results/**
+            test/lattice.explorer.e2e/artifacts/coverage-report.md
+            test/lattice.explorer.e2e/artifacts/job-summary.md
+          if-no-files-found: ignore
+
+  # Checks a member pull request's `## Journey screenshots` section against
+  # the run each marker names (#5363, epic D10). It runs when the body is
+  # edited (or the pull request reopened): a push makes every marker stale by
+  # construction, because the run its screenshots come from does not exist
+  # until the push, so the author pastes the section after that run and the
+  # edit runs this check against the head.
+  provenance:
+    name: Screenshot provenance
+    needs: [plan, planner]
+    if: github.event_name == 'pull_request' && needs.plan.outputs.push_is_member != 'true' && needs.planner.outputs.provenance != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: .github
+
+      - name: Check the screenshot section
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          JOURNEYS: ${{ needs.planner.outputs.provenance }}
+        run: python3 .github/workflows/journey-screenshot-provenance.py

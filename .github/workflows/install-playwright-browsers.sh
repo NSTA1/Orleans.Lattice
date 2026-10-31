@@ -15,9 +15,12 @@ for browser in "$@"; do
   esac
 done
 
-script="$(find test/lattice.explorer.uitests/bin/Release -name playwright.ps1 -print -quit)"
+# The build output to find playwright.ps1 in; the UI suite's unless a lane
+# names its own (explorer-journeys.yml names the end-to-end project's).
+search_dir="${PLAYWRIGHT_SEARCH_DIR:-test/lattice.explorer.uitests/bin/Release}"
+script="$(find "$search_dir" -name playwright.ps1 -print -quit 2>/dev/null || true)"
 if [ -z "$script" ]; then
-  echo "::error::playwright.ps1 not found under the UI build output."
+  echo "::error::playwright.ps1 not found under $search_dir."
   exit 1
 fi
 runner="$(dirname "$(realpath "${BASH_SOURCE[0]}")")/run-playwright-install.py"
