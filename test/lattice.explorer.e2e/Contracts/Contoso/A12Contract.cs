@@ -111,8 +111,22 @@ public sealed class A12Contract() : ChapterContract("A12")
         }
 
         await admin.SnapshotTreeAsync(source, destination, mode, maxLeafKeys, maxInternalChildren);
-        await ContractWait.UntilAsync($"the snapshot {destination}", async () =>
-            !(await admin.GetSnapshotStatusAsync(source)).InProgress
-            && (await admin.CheckTreeExistsAsync(destination)).Exists, StructuralPatience);
+        TreeSnapshotStatus? status = null;
+        var exists = false;
+        try
+        {
+            await ContractWait.UntilAsync($"the snapshot {destination}", async () =>
+            {
+                status = await admin.GetSnapshotStatusAsync(source);
+                exists = (await admin.CheckTreeExistsAsync(destination)).Exists;
+                return !status.InProgress && exists;
+            }, StructuralPatience);
+        }
+        catch (TimeoutException ex)
+        {
+            throw new TimeoutException(
+                $"{ex.Message} Last status of {source}: in progress {status?.InProgress}, phase {status?.Phase}, {status?.CopiedShardCount} of {status?.ShardCount} shards copied, destination {status?.RequestedDestinationTreeId}; {destination} exists: {exists}.",
+                ex);
+        }
     }
 }

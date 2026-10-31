@@ -27,8 +27,11 @@ public sealed class U2Contract() : ChapterContract("U2")
 
         if (!ContosoSchema.SameAs(await schema.GetPolicyAsync(orders), ContosoSchema.OrdersRevised))
         {
-            var remediation = await schema.StartRemediationAsync(orders, ContosoSchema.NegativeTotalToZero, ContosoSchema.OrdersBaseline);
-            await ContractWait.SucceededAsync("the negative-total remediation", () => schema.GetSchemaOperationStatusAsync(remediation.OperationId), OperationPatience);
+            await RunSchemaOperationAsync(
+                schema,
+                "the negative-total remediation",
+                context.Estate.LineFeed,
+                async () => (await schema.StartRemediationAsync(orders, ContosoSchema.NegativeTotalToZero, ContosoSchema.OrdersBaseline)).OperationId);
             await schema.SetPolicyAsync(orders, ContosoSchema.OrdersRevised);
         }
 
@@ -54,7 +57,18 @@ public sealed class U2Contract() : ChapterContract("U2")
     /// The line feed, paused while the migration runs (and resumed after, unless it was already
     /// paused) so its writes do not slow the slices past the call timeout.
     /// </param>
-    public static async Task MigrateAsync(Orleans.Lattice.Api.Schema.Grpc.LatticeSchemaApiGrpcClient schema, string treeId, string what, Estate.LineFeedControl feed)
+    public static Task MigrateAsync(Orleans.Lattice.Api.Schema.Grpc.LatticeSchemaApiGrpcClient schema, string treeId, string what, Estate.LineFeedControl feed) =>
+        RunSchemaOperationAsync(schema, what, feed, async () => (await schema.StartMigrationAsync(treeId)).OperationId);
+
+    /// <summary>
+    /// Starts a tracked schema operation and waits for it to succeed, starting it again when a
+    /// slice outran the grain call timeout (#5440); any other failure is final.
+    /// </summary>
+    /// <param name="schema">The Schema API.</param>
+    /// <param name="what">The operation, for messages.</param>
+    /// <param name="feed">The line feed, paused while the operation runs (see <see cref="MigrateAsync"/>).</param>
+    /// <param name="start">Starts the operation and returns its id.</param>
+    public static async Task RunSchemaOperationAsync(Orleans.Lattice.Api.Schema.Grpc.LatticeSchemaApiGrpcClient schema, string what, Estate.LineFeedControl feed, Func<Task<string>> start)
     {
         // #5440: pause the line feed so its writes do not push a slice past the call timeout;
         // remove the pause (and the retry below) once #5440 is fixed.
@@ -64,10 +78,10 @@ public sealed class U2Contract() : ChapterContract("U2")
         {
             for (var attempt = 1; ; attempt++)
             {
-                var migration = await schema.StartMigrationAsync(treeId);
+                var operationId = await start();
                 try
                 {
-                    await ContractWait.SucceededAsync(what, () => schema.GetSchemaOperationStatusAsync(migration.OperationId), OperationPatience);
+                    await ContractWait.SucceededAsync(what, () => schema.GetSchemaOperationStatusAsync(operationId), OperationPatience);
                     return;
                 }
                 catch (InvalidOperationException ex) when (attempt < 5 && ex.Message.Contains("TimeoutException", StringComparison.Ordinal))
