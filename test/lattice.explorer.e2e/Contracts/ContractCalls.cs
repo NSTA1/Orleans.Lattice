@@ -85,7 +85,7 @@ public static class ContractCalls
         && stored.Operations == rule.Operations
         && stored.Effect == LatticeEffect.Allow;
 
-    /// <summary>Every stored rule, across every page.</summary>
+    /// <summary>Every stored rule, across every page; a page that fails transiently (a stalled scan under load) is read again.</summary>
     /// <param name="auth">The Auth API.</param>
     public static async Task<IReadOnlyList<LatticeAuthorizationRule>> AllRulesAsync(LatticeAuthApiGrpcClient auth)
     {
@@ -93,7 +93,7 @@ public static class ContractCalls
         string? token = null;
         do
         {
-            var page = await auth.ListRulesAsync(new AuthPageRequest { PageSize = AuthPageRequest.MaxPageSize, PageToken = token });
+            var page = await ContractWait.RetryingAsync("a page of rules", () => auth.ListRulesAsync(new AuthPageRequest { PageSize = AuthPageRequest.MaxPageSize, PageToken = token }));
             rules.AddRange(page.Entries);
             token = page.NextPageToken;
         }
@@ -102,7 +102,7 @@ public static class ContractCalls
         return rules;
     }
 
-    /// <summary>Every stored group, across every page.</summary>
+    /// <summary>Every stored group, across every page; a page that fails transiently (a stalled scan under load) is read again.</summary>
     /// <param name="auth">The Auth API.</param>
     public static async Task<IReadOnlyList<AuthGroup>> AllGroupsAsync(LatticeAuthApiGrpcClient auth)
     {
@@ -110,7 +110,7 @@ public static class ContractCalls
         string? token = null;
         do
         {
-            var page = await auth.ListGroupsAsync(new AuthPageRequest { PageSize = AuthPageRequest.MaxPageSize, PageToken = token });
+            var page = await ContractWait.RetryingAsync("a page of groups", () => auth.ListGroupsAsync(new AuthPageRequest { PageSize = AuthPageRequest.MaxPageSize, PageToken = token }));
             groups.AddRange(page.Entries);
             token = page.NextPageToken;
         }
