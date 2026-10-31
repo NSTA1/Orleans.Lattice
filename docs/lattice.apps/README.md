@@ -354,6 +354,13 @@ callers skip the check), and return an `AppActivationOutcome` describing success
 structured failure (`AppActivationFailure`) with diagnostics. Its `GetStatusAsync` read
 is ungated and in-process, so a facade that exposes it must gate it itself.
 
+A run is a sequence of cluster calls (rules, replication, every owned tree, the registry
+transition), each bounded by the grain response timeout and each turning its own failure
+into a recorded outcome. The run as a whole is bounded by those steps rather than by a
+single response timeout, so a slow uninstall on a loaded cluster finishes and reports
+its outcome instead of failing part-way through when the default response timeout
+(30 seconds) elapses.
+
 **Enable** resolves the installed version's manifest from the app source, validates
 it, compiles its roles against the pinned ceiling and bindings, re-verifies its
 [tree ownership](#tree-ownership) claims, enrols the app's declared
