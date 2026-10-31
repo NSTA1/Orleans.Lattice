@@ -3,14 +3,14 @@
   "refinement": "RefinementRetention.md",
   "nonBehaviouralActions": ["Stutter"],
   "counts": {
-    "invariants": 3,
+    "invariants": 4,
     "properties": 3,
     "actions": 16,
-    "mutations": 21,
-    "behaviourRows": 20,
-    "distinctStates": 189435
+    "mutations": 22,
+    "behaviourRows": 21,
+    "distinctStates": 209846
   },
   "variants": {
-    "TwoPasses": { "distinctStates": 331942 }
+    "TwoPasses": { "distinctStates": 371154 }
   }
 }

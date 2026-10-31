@@ -212,13 +212,16 @@ Register(c) ==
     /\ UNCHANGED passVars
 
 \* An increment whose base was being pruned deletes its own sink manifest
-\* and falls back to a full capture, which the model starts as a new
-\* capture. Its artifact is left unreferenced.
+\* and then its artifact, as two storage calls, and falls back to a full
+\* capture, which the model starts as a new capture. The artifact delete is
+\* chosen nondeterministically so that a crash between the two calls - the
+\* manifest gone, the artifact left unreferenced - is covered too.
 Abandon(c) ==
     /\ cap[c].ph = "abandon"
     /\ snk' = snk \ {cap[c].id}
+    /\ arts' \in {arts, arts \ {cap[c].id}}
     /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0]]
-    /\ UNCHANGED <<now, pol, next, meta, arts, cat, crashes, pub>>
+    /\ UNCHANGED <<now, pol, next, meta, cat, crashes, pub>>
     /\ UNCHANGED passVars
 
 \* A capture crashes at any step (environment): its activation-local
@@ -233,29 +236,34 @@ CaptureCrash(c) ==
     /\ UNCHANGED passVars
 
 (***************************************************************************)
-(* A retention pass. PruneList is one ListScopeAsync and plan: it lists    *)
-(* the catalog, keeps what the policy retains, and dooms the rest; a pass  *)
-(* with nothing to prune does nothing. The keep set is computed here as    *)
-(* BackupRetentionPlanner computes it, separately from the RetainedIn the  *)
-(* properties judge by, so that a defect in the plan is a defect the       *)
-(* properties can see. The pass then removes every doomed row (RemoveRow), *)
-(* scans the sink once for increments built on a doomed manifest (Scan),   *)
-(* restores the row of every one it found depended on (RestoreRow), and   *)
-(* deletes each remaining doomed manifest's sink manifest (DelMan) and     *)
-(* then its artifact (DelArt). Every delete is its own storage call, in    *)
-(* any order across manifests.                                             *)
+(* A retention pass. PruneList is one ListScopeAsync and plan, taken under *)
+(* the activation-local guard: the guard is checked and set first and the  *)
+(* listing is read after it (issue #5412), so the plan is never older than *)
+(* the guard. It lists the catalog, keeps what the policy retains, and     *)
+(* dooms the rest; a pass with nothing to prune does nothing. The keep set *)
+(* is computed here as BackupRetentionPlanner computes it, separately from *)
+(* the RetainedIn the properties judge by, so that a defect in the plan is *)
+(* a defect the properties can see. The pass then removes every doomed row *)
+(* (RemoveRow), scans the sink once for increments built on a doomed       *)
+(* manifest (Scan), restores the row of every one it found depended on     *)
+(* (RestoreRow), and deletes each remaining doomed manifest's sink         *)
+(* manifest (DelMan) and then its artifact (DelArt). Every delete is its   *)
+(* own storage call, in any order across manifests.                        *)
 (***************************************************************************)
 PruneList(p) ==
     /\ prPh[p] = "idle"
-    \* The activation-local guard: a pass is skipped while another runs.
+    \* The activation-local guard, checked before the listing is read: a pass
+    \* is skipped while another runs.
     /\ \A q \in Passes : prPh[q] = "idle"
-    /\ LET Keep ==
+    \* The listing, read under the guard.
+    /\ LET L == cat
+           Keep ==
              IF pol.keepLast = 0 /\ pol.maxAge = 0
-             THEN cat
-             ELSE {i \in cat :
-                     \/ pol.keepLast > 0 /\ Cardinality({j \in cat : Newer(j, i)}) < pol.keepLast
+             THEN L
+             ELSE {i \in L :
+                     \/ pol.keepLast > 0 /\ Cardinality({j \in L : Newer(j, i)}) < pol.keepLast
                      \/ pol.maxAge > 0 /\ meta[i].t + pol.maxAge >= now}
-           D == cat \ CloseStep(CloseStep(CloseStep(Keep, cat), cat), cat)
+           D == L \ CloseStep(CloseStep(CloseStep(Keep, L), L), L)
        IN /\ D # {}
           /\ prPh' = [prPh EXCEPT ![p] = "rows"]
           /\ prDoomed' = [prDoomed EXCEPT ![p] = D]
@@ -395,6 +403,11 @@ Spec == Init /\ [][Next]_vars /\ \A p \in Passes : WF_vars(PassStep(p))
 \* base chain.
 RetainedRestorable == \A i \in RetainedIn(cat) : Restorable(i)
 
+\* Every backup the catalog lists is restorable, retained or not: a pass
+\* never leaves a listed row - a row it restored included - whose manifest,
+\* artifact or base chain is gone.
+ListedRestorable == \A i \in cat : Restorable(i)
+
 \* An increment is published only while its base is restorable: a pass never
 \* prunes the base an in-flight increment chose before that increment
 \* completes, or the increment does not publish.
@@ -410,13 +423,20 @@ InFlightBaseSurvives ==
 SinkChainIntact ==
     \A j \in snk \cap pub : meta[j].kind = "incr" => Restorable(meta[j].base)
 
-\* Nothing the policy keeps is pruned: an artifact is deleted only for a
-\* backup the policy would not retain even if it were still listed.
+\* Nothing the policy keeps is pruned: an artifact of a published backup is
+\* deleted only for a backup the policy would not retain even if it were
+\* still listed. An increment that never published withdraws its own
+\* artifact (Abandon); the policy does not apply to it.
 KeepPolicyHonoured ==
-    [][\A i \in Ids : (i \in arts /\ i \notin arts') => i \notin RetainedIn(cat \cup {i})]_vars
+    [][\A i \in pub :
+         (i \in arts /\ i \notin arts') => i \notin RetainedIn(cat \cup {i})]_vars
 
 \* A listed backup outside the policy and outside every retained closure,
-\* which no manifest builds on, is eventually no longer listed.
+\* which no manifest builds on, is eventually no longer listed. A manifest
+\* that builds on it includes the sink manifest a crashed increment left
+\* behind: such a leftover keeps its base listed for as long as it stays in
+\* the sink, which is the safe choice and is recorded as a deliberate gap in
+\* the refinement note rather than hidden here.
 Expired(i) == i \in cat /\ i \notin RetainedIn(cat) /\ ~Depended(i)
 
 ExpiredEventuallyPruned ==

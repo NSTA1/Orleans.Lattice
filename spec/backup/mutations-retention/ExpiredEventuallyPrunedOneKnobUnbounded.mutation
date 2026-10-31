@@ -9,9 +9,9 @@ PERTURBS: PruneList
 
 --- FIND
              IF pol.keepLast = 0 /\ pol.maxAge = 0
-             THEN cat
+             THEN L
 --- REPLACE
              \* MUTATION: one unset knob means unbounded.
              IF pol.keepLast = 0 \/ pol.maxAge = 0
-             THEN cat
+             THEN L
 --- END

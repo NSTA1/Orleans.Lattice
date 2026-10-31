@@ -20,7 +20,8 @@ manifest, as the restore engine resolves it), its artifact is in the sink, and i
 whole base chain is restorable. The model checks the fix of the defect it found
 (#5357): the two-sided fence between a pass and an increment, the transitive keep
 of what an increment outside the pass builds on, the tip-first delete order, and
-the activation-local guard that runs one pass at a time.
+the activation-local guard that runs one pass at a time, with the pass's
+listing read under that guard (#5412).
 
 ## The model is the fix of #5357
 
@@ -38,7 +39,12 @@ hazard, `RetainedRestorableConcurrentPasses`: an operator's
 `BackupSchedulerGrain.PruneAsync` and a scheduled cycle's prune
 (`BackupSchedulerGrain.RunScheduledCycleAsync`, which is `[AlwaysInterleave]`)
 can run at once on one activation, and one pass's restore re-opens the fence
-behind the other's scan.
+behind the other's scan. The independent review of this module (#5352) found
+that the guard as first written still let a pass read its catalog listing
+before checking it, so a pass could wait out another and then plan from a
+listing holding rows that pass had already pruned; its scan could restore the
+row of a backup whose manifest and artifact were gone (#5412,
+`ListedRestorableListingBeforeGuard`).
 
 The fix, routed through one pure core, `BackupRetentionPlanner`:
 
@@ -51,7 +57,8 @@ The fix, routed through one pure core, `BackupRetentionPlanner`:
   registers only if `BackupRetentionPlanner.MayPublishIncrement` allows it;
   otherwise it deletes its own sink manifest and artifact and falls back to a
   full capture;
-- a pass is skipped while another is in flight on the activation.
+- a pass is skipped while another is in flight on the activation, and reads
+  its listing only after it has taken the guard.
 
 Whichever side moves second sees the other: either the pass's scan finds the
 increment's sink manifest, or the increment finds its base's row gone.
@@ -81,13 +88,13 @@ increment's sink manifest, or the increment finds its base's row gone.
 | `WriteMan(c)` | The capture writes its sink manifest, before its check | `ILatticeBackupSink.WriteManifestAsync` in `LatticeBackupCaptureService.CaptureIncrementalAsync`. | Yes: `BackupRetentionConcurrencyTests.A_pass_after_the_increment_wrote_its_manifest_keeps_the_base_the_increment_builds_on`, whose pass finds the written manifest. |
 | `Check(c)` | The increment re-reads its base's catalog row | `ILatticeBackupCatalogStore.GetAsync` and `BackupRetentionPlanner.MayPublishIncrement` in `LatticeBackupCaptureService.CaptureIncrementalAsync`. | Yes: `BackupRetentionConcurrencyTests.A_pass_before_the_increment_wrote_its_manifest_makes_the_increment_fall_back_to_a_full_backup` (red without the re-check) and `BackupRetentionPlannerTests.An_increment_publishes_only_while_its_base_row_is_present`. |
 | `Register(c)` | The capture publishes its catalog row | `ILatticeBackupCatalogStore.RegisterAsync` in `LatticeBackupCaptureService.CaptureIncrementalAsync`. | Yes: `BackupRetentionConcurrencyTests.A_pass_after_the_increment_wrote_its_manifest_keeps_the_base_the_increment_builds_on` and `LatticeBackupIncrementalCaptureTests.CaptureIncrementalAsync_captures_only_the_delta_committed_after_the_base`. |
-| `Abandon(c)` | An increment whose base is being pruned withdraws its sink manifest and falls back to a full capture | The fallback at the end of `LatticeBackupCaptureService.CaptureIncrementalAsync`: `ILatticeBackupSink.DeleteManifestAsync`, `ILatticeBackupSink.DeleteArtifactAsync`, then `LatticeBackupCaptureService.CaptureTreeAsync`. The model starts the fallback full capture as a new `Start`. | Yes: `BackupRetentionConcurrencyTests.A_pass_before_the_increment_wrote_its_manifest_makes_the_increment_fall_back_to_a_full_backup`, which asserts the result is a full backup and no sink manifest names the pruned base. |
+| `Abandon(c)` | An increment whose base is being pruned withdraws its sink manifest and falls back to a full capture | The fallback at the end of `LatticeBackupCaptureService.CaptureIncrementalAsync`: `ILatticeBackupSink.DeleteManifestAsync`, `ILatticeBackupSink.DeleteArtifactAsync`, then `LatticeBackupCaptureService.CaptureTreeAsync`. The model deletes the artifact or not, nondeterministically, which covers a crash between the two deletes, and starts the fallback full capture as a new `Start`. | Yes: `BackupRetentionConcurrencyTests.A_pass_before_the_increment_wrote_its_manifest_makes_the_increment_fall_back_to_a_full_backup`, which asserts the result is a full backup and no sink manifest names the pruned base. |
 | `CaptureCrash(c)` | A capture crashes at any step; what it wrote stays | A faulted or lost capture. **Environment argument:** a crash may strike any capture at any step, up to the bound. | Yes: `BackupSchedulerGrainUnitTests.RunScheduledCycleAsync_rethrows_when_capture_service_throws`. |
-| `PruneList(p)` | One listing and plan: the keep set, its base closure and the doomed rest, under the one-pass guard | `BackupSchedulerGrain.ListScopeAsync`, `BackupRetentionPlanner.ComputeRetained`, `BackupRetentionPlanner.Doomed`, guarded by `BackupSchedulerGrain._pruneInFlight` in `BackupSchedulerGrain.PruneCoreAsync`. | Yes: `BackupRetentionTests.PruneAsync_keep_last_two_prunes_the_oldest_chain`, `BackupRetentionTests.PruneAsync_keep_last_one_preserves_the_base_of_a_retained_increment`, `BackupRetentionPlannerTests.Keep_last_keeps_the_newest_by_creation_time_then_ordinal_id` and `BackupSchedulerGrainUnitTests.A_retention_pass_is_skipped_while_another_is_in_flight` (red without the guard). |
+| `PruneList(p)` | One listing and plan: the keep set, its base closure and the doomed rest, read under the one-pass guard | `BackupSchedulerGrain._pruneInFlight` checked and set in `BackupSchedulerGrain.PruneCoreAsync`, then `BackupSchedulerGrain.ListScopeAsync`, `BackupRetentionPlanner.ComputeRetained` and `BackupRetentionPlanner.Doomed`. Production sets the guard synchronously and then awaits the listing; the model takes both in one step, which is equivalent because nothing a capture does depends on the guard. | Yes: `BackupRetentionTests.PruneAsync_keep_last_two_prunes_the_oldest_chain`, `BackupRetentionTests.PruneAsync_keep_last_one_preserves_the_base_of_a_retained_increment`, `BackupRetentionPlannerTests.Keep_last_keeps_the_newest_by_creation_time_then_ordinal_id`, `BackupSchedulerGrainUnitTests.A_retention_pass_is_skipped_while_another_is_in_flight` (red without the guard) and `BackupSchedulerGrainUnitTests.A_retention_pass_plans_from_a_listing_taken_under_the_one_pass_guard` (red with the listing read before the guard). |
 | `RemoveRow(p,m)` | The pass removes a doomed catalog row, before its scan | `ILatticeBackupCatalogStore.RemoveAsync` in `BackupSchedulerGrain.PruneUnderGuardAsync`. | Yes: `BackupSchedulerGrainUnitTests.PruneAsync_removes_the_doomed_row_before_it_scans_the_sink_then_deletes_manifest_then_artifacts`. |
 | `Scan(p)` | One sink scan for what an increment outside the pass builds on, transitively | `ILatticeBackupSink.ListManifestsAsync` and `BackupRetentionPlanner.DependedOn`. | Yes: `BackupSchedulerGrainUnitTests.PruneAsync_keeps_and_restores_a_doomed_base_an_in_flight_increment_builds_on` (red without the scan), `BackupRetentionConcurrencyTests.A_pass_after_the_increment_wrote_its_manifest_keeps_the_base_the_increment_builds_on` (red without the scan), `BackupRetentionPlannerTests.The_base_chain_of_a_kept_manifest_is_kept_transitively` and `BackupRetentionPlannerTests.An_increment_the_pass_is_itself_pruning_does_not_keep_its_base`. |
 | `RestoreRow(p,m)` | The pass restores a kept manifest's row and drops it from its plan | `ILatticeBackupCatalogStore.RegisterAsync` in `BackupSchedulerGrain.PruneUnderGuardAsync`. | Yes: `BackupSchedulerGrainUnitTests.PruneAsync_keeps_and_restores_a_doomed_base_an_in_flight_increment_builds_on` and `BackupRetentionConcurrencyTests.A_pass_after_the_increment_wrote_its_manifest_keeps_the_base_the_increment_builds_on`. |
-| `DelMan(p,m)` | The pass deletes a doomed sink manifest, tip first and after its scan | `ILatticeBackupSink.DeleteManifestAsync` over `BackupRetentionPlanner.TipFirst`. | Yes: `BackupSchedulerGrainUnitTests.PruneAsync_removes_the_doomed_row_before_it_scans_the_sink_then_deletes_manifest_then_artifacts` and `BackupRetentionPlannerTests.Deletion_runs_tip_first`. |
+| `DelMan(p,m)` | The pass deletes a doomed sink manifest, tip first and after its scan | `ILatticeBackupSink.DeleteManifestAsync` over `BackupRetentionPlanner.TipFirst`. | Yes: `BackupSchedulerGrainUnitTests.PruneAsync_removes_the_doomed_row_before_it_scans_the_sink_then_deletes_manifest_then_artifacts`, `BackupSchedulerGrainUnitTests.PruneAsync_deletes_a_doomed_chain_tip_first` (red when the grain deletes in listing order) and `BackupRetentionPlannerTests.Deletion_runs_tip_first`. |
 | `DelArt(p,m)` | The pass deletes the doomed manifest's unshared artifact | `ILatticeBackupSink.DeleteArtifactAsync`, skipping `BackupRetentionPlanner.RetainedArtifacts`. | Yes: `BackupSchedulerGrainUnitTests.PruneAsync_removes_the_doomed_row_before_it_scans_the_sink_then_deletes_manifest_then_artifacts` and `BackupRetentionPlannerTests.An_artifact_a_retained_manifest_references_is_retained`. |
 | `PruneCrash(p)` | A pass crashes at any step; its plan is lost and its deletes stay | A faulted pass or a lost activation; `BackupSchedulerGrain._pruneInFlight` is cleared in a `finally` and is never persisted. **Environment argument:** a crash may strike a pass at any step, up to the bound. | Yes: `BackupSchedulerGrainUnitTests.A_faulted_retention_pass_does_not_wedge_the_scope`. |
 | `Stutter` | Natural termination | Not a protocol step. | Not applicable: not a protocol step, so there is no production behaviour to detect. |
@@ -97,9 +104,10 @@ increment's sink manifest, or the increment finds its base's row gone.
 | Spec property | Code-level property it abstracts | Detector |
 |---------------|----------------------------------|----------|
 | `RetainedRestorable` | Every backup the retention policy keeps from the catalog, with its whole base chain, is restorable. Production violated it before #5357 was fixed. | Yes: `BackupRetentionConcurrencyTests.A_pass_after_the_increment_wrote_its_manifest_keeps_the_base_the_increment_builds_on` (red without the scan), `BackupRetentionCoyoteTests.Production_retention_never_leaves_a_listed_backup_unrestorable`, `BackupRetentionCoyoteTests.Without_the_dependent_scan_a_pass_deletes_a_base_an_increment_published_over` and `BackupRetentionTests.PruneAsync_keep_last_one_preserves_the_base_of_a_retained_increment`. |
-| `SinkChainIntact` | A published increment still in the sink keeps a restorable base, so an interrupted pass never leaves one a catalog rebuild would list unrestorable. | Yes: `BackupRetentionPlannerTests.Deletion_runs_tip_first` and `BackupRetentionTests.PruneAsync_keep_last_two_prunes_the_oldest_chain`. |
+| `ListedRestorable` | Every backup the catalog lists is restorable, retained or not, so no pass leaves - or restores - a listed row whose manifest, artifact or base chain is gone. Production violated it before #5412 was fixed. | Yes: `BackupSchedulerGrainUnitTests.A_retention_pass_plans_from_a_listing_taken_under_the_one_pass_guard` (red with the listing read before the guard) and `BackupRetentionCoyoteTests.Production_retention_never_leaves_a_listed_backup_unrestorable`, which asserts every catalog row after every step. |
+| `SinkChainIntact` | A published increment still in the sink keeps a restorable base, so an interrupted pass never leaves one a catalog rebuild would list unrestorable. | Yes: `BackupSchedulerGrainUnitTests.PruneAsync_deletes_a_doomed_chain_tip_first` (red when the grain deletes in listing order), `BackupRetentionPlannerTests.Deletion_runs_tip_first` and `BackupRetentionTests.PruneAsync_keep_last_two_prunes_the_oldest_chain`. |
 | `InFlightBaseSurvives` | An increment is published only while its base is restorable: a pass never prunes the base an in-flight increment chose before it completes, or the increment does not publish. Production violated it before #5357 was fixed. | Yes: `BackupRetentionConcurrencyTests.A_pass_before_the_increment_wrote_its_manifest_makes_the_increment_fall_back_to_a_full_backup` (red without the re-check) and `BackupRetentionCoyoteTests.Without_the_base_recheck_an_increment_is_published_over_a_pruned_base`. |
-| `KeepPolicyHonoured` | A pass deletes only what the policy does not keep: the newest keep-last by creation time then id, everything created at or after the max-age cutoff, everything when neither is set, and the base closure. | Yes: `BackupRetentionPlannerTests.Keep_last_keeps_the_newest_by_creation_time_then_ordinal_id`, `BackupRetentionPlannerTests.Max_age_keeps_a_backup_created_exactly_at_the_cutoff`, `BackupRetentionPlannerTests.A_backup_is_retained_when_either_knob_keeps_it` and `BackupRetentionTests.PruneAsync_keep_last_two_prunes_the_oldest_chain`. |
+| `KeepPolicyHonoured` | A pass deletes a published backup's artifact only when the policy does not keep it: the newest keep-last by creation time then id, everything created at or after the max-age cutoff, everything when neither is set, and the base closure. | Yes: `BackupRetentionPlannerTests.Keep_last_keeps_the_newest_by_creation_time_then_ordinal_id`, `BackupRetentionPlannerTests.Max_age_keeps_a_backup_created_exactly_at_the_cutoff`, `BackupRetentionPlannerTests.A_backup_is_retained_when_either_knob_keeps_it` and `BackupRetentionTests.PruneAsync_keep_last_two_prunes_the_oldest_chain`. |
 | `ExpiredEventuallyPruned` | A listed backup outside the policy that nothing builds on stops being listed, provided passes keep running and storage completes - including after a pass faulted. | Yes: `BackupRetentionTests.PruneAsync_keep_last_two_prunes_the_oldest_chain` and `BackupSchedulerGrainUnitTests.A_faulted_retention_pass_does_not_wedge_the_scope` (red when the guard is not cleared). |
 
 ## Excluded properties
@@ -110,7 +118,8 @@ increment's sink manifest, or the increment finds its base's row gone.
 
 ## Property classification (issue #2321)
 
-TypeOK, RetainedRestorable and SinkChainIntact are state safety;
+TypeOK, RetainedRestorable, ListedRestorable and SinkChainIntact are state
+safety;
 InFlightBaseSurvives and KeepPolicyHonoured are action safety;
 ExpiredEventuallyPruned is temporal liveness. Every property is reached and
 falsifiable. The TwoPasses variant re-checks every state and action property
@@ -141,6 +150,7 @@ none adds an action.
 | InFlightBaseSurvivesAbandonPublishes | Anchored action: Abandon. |
 | InFlightBaseSurvivesCrashPublishesUnchecked | Anchored action: CaptureCrash. |
 | KeepPolicyHonouredKeepsOldest | Anchored action: PruneList. |
+| ListedRestorableListingBeforeGuard | Anchored action: PruneList. Production before #5412; the stale listing is over-approximated by every row ever registered. |
 | KeepPolicyHonouredMaxAgeBoundaryExclusive | Anchored action: PruneList. |
 | ExpiredEventuallyPrunedOneKnobUnbounded | Anchored action: PruneList. |
 | RetainedRestorableConcurrentPasses | Anchored action: PruneList, at two passes (`BOUNDS:`). |
@@ -178,14 +188,18 @@ failure, and restored the source.
 | The increment publishes without the re-check (`MayPublishIncrement` bypassed). | `BackupRetentionConcurrencyTests.A_pass_before_the_increment_wrote_its_manifest_makes_the_increment_fall_back_to_a_full_backup`. |
 | The pass keeps nothing it finds built on (`DependedOn` bypassed). | `BackupRetentionConcurrencyTests.A_pass_after_the_increment_wrote_its_manifest_keeps_the_base_the_increment_builds_on` and `BackupSchedulerGrainUnitTests.PruneAsync_keeps_and_restores_a_doomed_base_an_in_flight_increment_builds_on`. |
 | No one-pass guard. | `BackupSchedulerGrainUnitTests.A_retention_pass_is_skipped_while_another_is_in_flight`. |
+| The listing read before the one-pass guard (production before #5412). | `BackupSchedulerGrainUnitTests.A_retention_pass_plans_from_a_listing_taken_under_the_one_pass_guard`. |
+| The grain deletes in listing order, bypassing the planner's tip-first order. | `BackupSchedulerGrainUnitTests.PruneAsync_deletes_a_doomed_chain_tip_first`. |
 
 ## Defect mutations whose fixes have landed
 
 InFlightBaseSurvivesNoBaseRecheck and RetainedRestorableNoDependentScan
 reproduce production before the fix of #5357 (the capture side and the pass side
 respectively), and RetainedRestorableConcurrentPasses the concurrent-pass hazard
-the same fix closes. The fix lands with this module; both reproductions stand as
-regression checks, and each has an executed production analogue above.
+the same fix closes. ListedRestorableListingBeforeGuard reproduces the fix as
+first written, whose listing preceded its guard (#5412). Both fixes land with
+this module; every reproduction stands as a regression check, and each has an
+executed production analogue above.
 
 ## Deliberate abstraction gaps
 
@@ -226,12 +240,29 @@ regression checks, and each has an executed production analogue above.
   Production symbols: `BackupSchedulerGrain.ListScopeAsync`.
 - **Operator delete and catalog repair.** An operator's explicit delete removes a
   named backup regardless of what builds on it, so it is outside the retention
-  policy by definition; it removes the catalog row first, the order the fixed pass
-  uses, so it does not reopen the fence. A catalog rebuild re-registers every sink
-  manifest and a scrub removes rows the sink cannot resolve; a pass interrupted
-  after removing rows leaves backups that only a rebuild lists again, and the
-  model does not run either repair.
+  policy by definition, and it breaks every increment built on what it deletes,
+  in flight or published. It also does not compose with a concurrent pass: when
+  a pass's listing holds the backup an operator then deletes, and an increment
+  built on it has written its sink manifest, the pass's scan finds the increment
+  and restores the deleted backup's catalog row over nothing - the outcome #5412
+  fixed between two passes, which no fence on the pass side can prevent without a
+  protocol shared with the delete. A catalog rebuild re-registers every sink
+  manifest and a scrub removes rows the sink cannot resolve; a rebuild racing a
+  pass can re-register a row the pass then deletes the payload of, and a pass
+  interrupted after removing rows leaves backups that only a rebuild lists again.
+  The model runs none of these.
   Production symbols: `LatticeBackupControl.DeleteBackupAsync`, `LatticeBackupCatalogRebuildService`, `LatticeBackupCatalogScrubService`.
+- **A crashed increment's leftover sink manifest.** An increment that crashes
+  after writing its sink manifest, or between withdrawing its manifest and its
+  artifact, leaves a sink manifest no catalog row lists. Every later pass that
+  dooms its base finds it in the scan and restores the base's row, so the base and
+  its chain stay listed, outside the policy, for as long as the leftover stays in
+  the sink. This is the safe choice - the leftover is a restorable increment a
+  catalog rebuild would list - and `ExpiredEventuallyPruned` states it rather than
+  hides it: its `Depended` premise counts sink manifests. Nothing removes the
+  leftover on its own; a catalog rebuild lists it, after which the policy applies
+  to it like any other backup, or an operator deletes it.
+  Production symbols: `BackupRetentionPlanner.DependedOn`, `LatticeBackupCatalogRebuildService`.
 - **Inventory and metrics.** The pass records each pruned manifest in the
   inventory registry and its reclaimed bytes as a metric; neither affects what is
   restorable.

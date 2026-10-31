@@ -7,8 +7,8 @@ SUMMARY: keep-last keeps the oldest backups
 PERTURBS: PruneList
 
 --- FIND
-                     \/ pol.keepLast > 0 /\ Cardinality({j \in cat : Newer(j, i)}) < pol.keepLast
+                     \/ pol.keepLast > 0 /\ Cardinality({j \in L : Newer(j, i)}) < pol.keepLast
 --- REPLACE
                      \* MUTATION: ordered oldest first.
-                     \/ pol.keepLast > 0 /\ Cardinality({j \in cat : Newer(i, j)}) < pol.keepLast
+                     \/ pol.keepLast > 0 /\ Cardinality({j \in L : Newer(i, j)}) < pol.keepLast
 --- END

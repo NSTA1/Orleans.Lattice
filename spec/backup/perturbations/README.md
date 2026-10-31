@@ -18,8 +18,11 @@ python3 tools/perturbations/run-perturbations.py --area backup --output result.j
 
 `BackupRetention` is seeded at the fence that #5357 added, its most
 safety-critical rows: the increment's base re-check (`Check(c)`), the pass's
-dependent scan (`Scan(p)`) and the one-pass guard (`PruneList(p)`). No other
-backup module has a perturbation yet.
+dependent scan (`Scan(p)`) and the one-pass guard (`PruneList(p)`); and at the
+two rows the module's independent review (#5352) found its detectors did not
+reach: a listing read under that guard (`ListedRestorable`, #5412) and the
+grain's tip-first delete order (`SinkChainIntact`). No other backup module has a
+perturbation yet.
 
 ## Unseeded rows
 
@@ -34,11 +37,10 @@ backup module has a perturbation yet.
 | BackupRetention | CaptureCrash(c) | An environment action: a crash is injected by the detectors' stores, so no production code implements it. |
 | BackupRetention | RemoveRow(p,m) | Removing the row later than the scan is the same production reordering as the scan finding nothing for an in-flight increment; `PassKeepsNothingBuiltOn` seeds that outcome against the same detectors. |
 | BackupRetention | RestoreRow(p,m) | Restoring the row and still deleting is the scan's outcome discarded; `PassKeepsNothingBuiltOn` seeds it against the same detectors. |
-| BackupRetention | DelMan(p,m) | The delete itself is the sink's; the order around it is the row-first and tip-first decision the seeded rows and `BackupRetentionPlannerTests.Deletion_runs_tip_first` pin. |
+| BackupRetention | DelMan(p,m) | The delete itself is the sink's; the order around it is the row-first and tip-first decision the seeded rows pin, the tip-first order through `PassDeletesInListingOrder`. |
 | BackupRetention | DelArt(p,m) | The delete itself is the sink's; which artifacts are kept is `BackupRetentionPlanner.RetainedArtifacts`, defensive because production artifact ids are unique per capture. |
 | BackupRetention | PruneCrash(p) | An environment action: a fault is injected by the detectors' stores. The guard's release after a fault is a `finally`, whose removal leaves the guard set and fails `BackupSchedulerGrainUnitTests.A_faulted_retention_pass_does_not_wedge_the_scope`. |
 | BackupRetention | RetainedRestorable | Its production edits are the seeded rows' edits: the pass's scan and the increment's re-check. |
-| BackupRetention | SinkChainIntact | Breaking it means deleting a base before its doomed increment, an ordering only an interrupted pass followed by a catalog rebuild can observe; the order is pinned by `BackupRetentionPlannerTests.Deletion_runs_tip_first`. |
 | BackupRetention | InFlightBaseSurvives | Its production edit is the publish check, which `IncrementPublishesWithoutBaseRecheck` seeds against the same detector. |
 | BackupRetention | KeepPolicyHonoured | The keep set is a pure function pinned case by case by `BackupRetentionPlannerTests`; a seed would repeat one of those cases. |
 | BackupRetention | ExpiredEventuallyPruned | Liveness. A wedged scope is the guard's `finally` missing; a never-pruning plan yields an assertion only against a named keep set, which the safety rows' detectors already make. |

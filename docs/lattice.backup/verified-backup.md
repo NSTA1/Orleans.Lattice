@@ -20,7 +20,7 @@ extracted production cores, and - just as importantly - what is not.
 | Provenance | A manifest never names an empty origin, never drops a real one, and a backup chain's HLC frontier covers every write it captured and never regresses. | `BackupProvenance` |
 | Coordinated restore | A restore of a replicated tree is all-or-nothing across regions; no pre-restore write ever reaches a restored copy; a restore never installs another tenant's records; replication resumed after a restore converges. | `BackupRestore` |
 | Local cutover and revert | A reader never pairs one physical copy with another copy's shard map; once a restore returns every reader sees the restored copy, and once a revert returns none does, however stale its routing; a tree is never deleted while its copies are in motion; a restore, or a revert, that crashes part-way still completes on retry. | `BackupCutover` |
-| Retention pruning | Every backup the retention policy keeps, with its whole base chain, stays restorable while full and incremental captures of the same scope run alongside the pruning and either side crashes at any step; an incremental backup is published only while its base is restorable; nothing the policy keeps is pruned; and a backup outside the policy that nothing builds on is eventually pruned. | `BackupRetention` |
+| Retention pruning | Every backup the catalog lists, and in particular every backup the retention policy keeps, with its whole base chain, stays restorable while full and incremental captures of the same scope run alongside the pruning and either side crashes at any step; an incremental backup is published only while its base is restorable; nothing the policy keeps is pruned; and a backup outside the policy that nothing builds on is eventually pruned. | `BackupRetention` |
 
 Every property is paired with a deliberate defect (a mutation) that must make
 TLC report it, and every protocol step of each specification is perturbed by at
@@ -95,6 +95,13 @@ not to hold in production:
   a fresh full backup instead if the row has gone - and one retention pass per
   scope at a time. The specification checks that design.
 
+- **A retention pass could plan from a stale listing (#5412, fixed).** The fix
+  above, as first written, read a pass's catalog listing before it took the
+  one-pass guard, so a pass could wait out another and then plan from a listing
+  holding backups that pass had already pruned, and restore the catalog row of
+  one whose data was gone. A pass now reads its listing only once it holds the
+  guard. Found by the specification's independent review.
+
 ## Which parts run in production code
 
 The checks reach production through five extracted cores, each executed by the
@@ -133,7 +140,8 @@ Coverage of one half must not be read as coverage of the other. Not covered:
 - the receiver side of cross-cluster atomic batches, which the atomic-commit
   cross-cluster module checks ([formal coverage](../lattice/formal-coverage.md));
 - an operator's explicit backup delete, which removes the named backup whatever
-  builds on it, and catalog rebuild and scrub;
+  builds on it and is not coordinated with a retention pass running beside it,
+  and catalog rebuild and scrub;
 - two captures that publish the same content-addressed backup id, and retention
   over a sink shared between clusters.
 

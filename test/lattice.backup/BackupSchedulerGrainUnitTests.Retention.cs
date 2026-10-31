@@ -75,6 +75,30 @@ public sealed partial class BackupSchedulerGrainUnitTests
     }
 
     [Test]
+    public async Task PruneAsync_deletes_a_doomed_chain_tip_first()
+    {
+        // The listing holds the base before its increment. Deleting in listing
+        // order would leave the doomed increment's sink manifest without its base
+        // for as long as the pass is interrupted between the two deletes.
+        var log = new List<string>();
+        var b0 = RetentionManifest("b0", 3);
+        var i1 = RetentionManifest("i1", 2, BackupKind.Incremental, "b0");
+        var newest = RetentionManifest("newest", 0);
+        var catalog = new RecordingCatalog(log, b0, i1, newest);
+        var sink = RecordingSink(log, () => [b0, i1, newest]);
+
+        var report = await CreateGrain(catalog: catalog, sink: sink, options: KeepLastOne).PruneAsync(TestScope);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.PrunedBackupIds, Is.EquivalentTo(new[] { "b0", "i1" }));
+            Assert.That(
+                log.Where(e => e.StartsWith("delete-manifest:", StringComparison.Ordinal)),
+                Is.EqualTo(new[] { "delete-manifest:i1", "delete-manifest:b0" }));
+        });
+    }
+
+    [Test]
     public async Task A_retention_pass_is_skipped_while_another_is_in_flight()
     {
         // The first pass is held at its first row removal, after it has listed and
@@ -113,6 +137,57 @@ public sealed partial class BackupSchedulerGrainUnitTests
             Assert.That(log.Count(e => e == "remove:old"), Is.EqualTo(1), "only one pass may remove, scan and delete");
             Assert.That(log.Count(e => e == "list"), Is.EqualTo(1), "only one pass may remove, scan and delete");
         });
+    }
+
+    [Test]
+    public async Task A_retention_pass_plans_from_a_listing_taken_under_the_one_pass_guard()
+    {
+        // The held pass lists the catalog and is held there. A second pass then runs
+        // and, if the held pass's listing was taken outside the guard, finds the
+        // guard free and deletes "old" whole. An increment on "old" writes its sink
+        // manifest after that pass's scan. Released, a held pass planning from its
+        // stale listing would find that increment in its scan and restore the row of
+        // "old", whose manifest and artifacts are already gone: the catalog would
+        // list a backup that cannot be restored, and the increment's base re-check
+        // would then pass against that row (issue #5357's fence, reopened).
+        var log = new List<string>();
+        var old = RetentionManifest("old", 2);
+        var newest = RetentionManifest("newest", 0);
+        var inFlight = RetentionManifest("in-flight", 0, BackupKind.Incremental, "old");
+        var sinkManifests = new Dictionary<string, BackupManifest>(StringComparer.Ordinal)
+        {
+            [old.Id] = old,
+            [newest.Id] = newest,
+        };
+        var listed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holds = 1;
+        var catalog = new RecordingCatalog(log, old, newest)
+        {
+            OnListed = async () =>
+            {
+                if (Interlocked.Decrement(ref holds) == 0)
+                {
+                    listed.TrySetResult();
+                    await release.Task;
+                }
+            },
+        };
+        var sink = RecordingSink(log, () => [.. sinkManifests.Values], deleteManifest: id =>
+            Task.FromResult(sinkManifests.Remove(id)));
+        var grain = CreateGrain(catalog: catalog, sink: sink, options: KeepLastOne);
+
+        var held = grain.PruneAsync(TestScope);
+        await listed.Task;
+        await grain.PruneAsync(TestScope);
+        sinkManifests[inFlight.Id] = inFlight;
+        release.SetResult();
+        await held;
+
+        foreach (var id in catalog.Ids)
+        {
+            Assert.That(sinkManifests, Does.ContainKey(id), $"catalog row '{id}' has no sink manifest");
+        }
     }
 
     [Test]
@@ -191,6 +266,8 @@ public sealed partial class BackupSchedulerGrainUnitTests
 
         public Func<string, Task>? OnRemove { get; init; }
 
+        public Func<Task>? OnListed { get; init; }
+
         public async Task<bool> RemoveAsync(string backupId, CancellationToken cancellationToken = default)
         {
             log.Add("remove:" + backupId);
@@ -205,7 +282,13 @@ public sealed partial class BackupSchedulerGrainUnitTests
         public async IAsyncEnumerable<BackupManifest> ListAsync(
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
-            foreach (var manifest in _rows.Values.ToList())
+            var snapshot = _rows.Values.ToList();
+            if (OnListed is { } hook)
+            {
+                await hook();
+            }
+
+            foreach (var manifest in snapshot)
             {
                 await Task.Yield();
                 yield return manifest;

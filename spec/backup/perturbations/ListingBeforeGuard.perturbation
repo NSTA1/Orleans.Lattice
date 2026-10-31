@@ -1,0 +1,41 @@
+# A pass reads its catalog listing before it checks the one-pass guard, as
+# the #5357 fix first did (#5412). A pass that waited out another then plans
+# from a listing that still holds rows the other pass pruned, and its scan can
+# restore the row of a backup whose manifest and artifacts are gone.
+# ListedRestorable: every backup the catalog lists is restorable.
+MODULE: BackupRetention
+ROW: ListedRestorable
+FILE: src/lattice.backup/BackupSchedulerGrain.cs
+DETECTORS: BackupSchedulerGrainUnitTests.A_retention_pass_plans_from_a_listing_taken_under_the_one_pass_guard
+SUMMARY: a retention pass plans from a listing taken before its one-pass guard
+
+--- FIND
+        if (_pruneInFlight)
+        {
+            logger.LogInformation(
+                "Retention for scope {Scope} skipped: another retention pass is in flight.", ScopeKey);
+            var listed = await ListScopeAsync(scope);
+            return new BackupRetentionReport(listed.Count, Array.Empty<string>());
+        }
+
+        _pruneInFlight = true;
+        try
+        {
+            // The listing is taken under the guard (issue #5412). Taken before it, a
+            // pass could wait out another pass and then plan from a catalog that pass
+            // had already pruned, and restore the row of a backup it had deleted.
+            var manifests = await ListScopeAsync(scope);
+--- REPLACE
+        var listed = await ListScopeAsync(scope);
+        if (_pruneInFlight)
+        {
+            logger.LogInformation(
+                "Retention for scope {Scope} skipped: another retention pass is in flight.", ScopeKey);
+            return new BackupRetentionReport(listed.Count, Array.Empty<string>());
+        }
+
+        _pruneInFlight = true;
+        try
+        {
+            var manifests = listed;
+--- END
