@@ -500,6 +500,7 @@ internal sealed class LatticeBackupCaptureService(
                 "Backup set '{SetName}' failed; registering its {MemberCount} captured member(s) as unstamped backups.",
                 request.Name,
                 unregistered.Count);
+            await RegisterUnstampedAsync(unregistered, CancellationToken.None).ConfigureAwait(false);
             throw;
         }
     }
@@ -746,6 +747,7 @@ internal sealed class LatticeBackupCaptureService(
             // captured members may be torn. Discard them (they remain as
             // orphan per-tree backups, registered unstamped) and retry with a
             // fresh fence and gate.
+            await RegisterUnstampedAsync(unregistered, cancellationToken).ConfigureAwait(false);
             BackupMetrics.CrossTreeFenceRetries.Add(1, LatticeTenantLabel.Platform);
             logger.LogDebug(
                 "Backup set '{SetName}' fence attempt {Attempt} was not accepted (re-check clean: {RecheckClean}, "
