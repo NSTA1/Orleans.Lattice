@@ -26,7 +26,7 @@ else
 @code {
     private RenderFragment ConnectionActions => __builder =>
     {
-        @if (Status.RequiresAuthentication && !Auth.IsAuthenticated)
+        @if (Status.RequiresAuthentication && (!Auth.IsAuthenticated || Status.CredentialRefused))
         {
             <LtButton OnClick="OpenSignIn">Sign in</LtButton>
         }

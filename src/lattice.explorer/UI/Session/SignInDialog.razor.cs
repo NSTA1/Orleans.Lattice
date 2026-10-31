@@ -57,6 +57,9 @@ public partial class SignInDialog
     [Inject]
     private SessionSignInOptions Options { get; set; } = default!;
 
+    [Inject]
+    private SessionChromeState State { get; set; } = default!;
+
     [CascadingParameter(Name = LtBreakpointCascade.Name)]
     private LtBreakpoint? Breakpoint { get; set; }
 
@@ -75,6 +78,10 @@ public partial class SignInDialog
     /// <inheritdoc />
     protected override async Task OnInitializedAsync()
     {
+        // Why the last sign-in did not take (the cluster refused the posted
+        // username and password), shown until the next attempt.
+        _error = State.SignInNotice;
+
         ExplorerAuthSchemeAdvertisement advertisement;
         try
         {

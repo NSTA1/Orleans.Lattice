@@ -5,7 +5,8 @@ namespace Orleans.Lattice.Explorer.UiTests;
 
 /// <summary>
 /// The test world's credential authenticator: it trusts the user name in a Basic
-/// credential as the caller, and never checks the password.
+/// credential as the caller, and refuses only <see cref="WorldIdentities.WrongPassword"/>,
+/// the world's stand-in for a mistyped password.
 /// </summary>
 /// <remarks>
 /// Only the identity is trusted. Everything that identity may do is decided by the
@@ -27,17 +28,24 @@ internal sealed class TrustedUserAuthenticator : ILatticeCredentialAuthenticator
     public ValueTask<LatticePrincipal?> AuthenticateAsync(LatticeCredential credential, CancellationToken cancellationToken = default)
     {
         string user;
+        string password;
         try
         {
             var decoded = Encoding.UTF8.GetString(Convert.FromBase64String(credential.Token));
             var separator = decoded.IndexOf(':', StringComparison.Ordinal);
             user = separator >= 0 ? decoded[..separator] : decoded;
+            password = separator >= 0 ? decoded[(separator + 1)..] : string.Empty;
         }
         catch (FormatException)
         {
             return ValueTask.FromResult<LatticePrincipal?>(null);
         }
 
-        return ValueTask.FromResult(string.IsNullOrEmpty(user) ? null : new LatticePrincipal(user, Issuer));
+        if (string.IsNullOrEmpty(user) || string.Equals(password, WorldIdentities.WrongPassword, StringComparison.Ordinal))
+        {
+            return ValueTask.FromResult<LatticePrincipal?>(null);
+        }
+
+        return ValueTask.FromResult<LatticePrincipal?>(new LatticePrincipal(user, Issuer));
     }
 }

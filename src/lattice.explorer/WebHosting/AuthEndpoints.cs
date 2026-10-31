@@ -2,7 +2,9 @@ using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.AspNetCore.WebUtilities;
 using Orleans.Lattice.Explorer.Core.Authentication;
+using Orleans.Lattice.Explorer.UI.Session;
 
 namespace Orleans.Lattice.Explorer.Web;
 
@@ -15,6 +17,13 @@ namespace Orleans.Lattice.Explorer.Web;
 /// victim's browser to sign the victim's own session in or out
 /// (login / logout CSRF).
 /// </summary>
+/// <remarks>
+/// A sign-in the cluster refuses (a wrong password) establishes no session: no
+/// cookie is written, and the redirect carries a
+/// <c>signin=refused</c> notice so the next document reopens the sign-in dialog
+/// and says the cluster did not accept the username and password. The notice
+/// carries neither the user name nor the password.
+/// </remarks>
 public static class AuthEndpoints
 {
     /// <summary>
@@ -46,7 +55,17 @@ public static class AuthEndpoints
             var password = form["password"].ToString();
             if (!string.IsNullOrWhiteSpace(username))
             {
-                await auth.LoginAsync(username.Trim(), password);
+                try
+                {
+                    await auth.LoginAsync(username.Trim(), password);
+                }
+                catch (ExplorerSignInRefusedException)
+                {
+                    return Results.Redirect(QueryHelpers.AddQueryString(
+                        redirectTo,
+                        SessionSignInOptions.NoticeQueryKey,
+                        SessionSignInOptions.RefusedNoticeValue));
+                }
             }
 
             return Results.Redirect(redirectTo);

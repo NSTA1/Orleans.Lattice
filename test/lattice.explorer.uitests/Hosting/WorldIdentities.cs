@@ -30,8 +30,14 @@ internal static class WorldIdentities
     /// </summary>
     public const string GlobexAdmin = "globex-admin";
 
-    /// <summary>The password every identity signs in with; the world never checks it.</summary>
+    /// <summary>The password every identity signs in with; the world checks only that it is not <see cref="WrongPassword"/>.</summary>
     public const string Password = "explorer";
+
+    /// <summary>
+    /// The one password the world refuses, for any identity: a mistyped password, so
+    /// the sign-in journey can prove a refused credential is refused at sign-in.
+    /// </summary>
+    public const string WrongPassword = "not-the-password";
 
     /// <summary>The group that may read the demo tree; <see cref="Alice"/> is a member.</summary>
     public const string OperatorsGroup = "operators";

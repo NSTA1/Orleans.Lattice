@@ -1,4 +1,6 @@
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.WebUtilities;
+using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
 
 namespace Orleans.Lattice.Explorer.UI.Session;
@@ -22,6 +24,12 @@ namespace Orleans.Lattice.Explorer.UI.Session;
 /// <c>ConfigurationGate</c> did, so every other session control can simply read
 /// Core's state and re-render on its change events.
 /// </para>
+/// <para>
+/// When the server sign-in endpoint redirects back after the cluster refused the
+/// posted username and password, the interactive circuit reopens the sign-in
+/// dialog with that notice and drops the notice from the address, so a reload or
+/// a bookmark does not repeat it.
+/// </para>
 /// </remarks>
 public partial class SessionOverlay
 {
@@ -36,6 +44,12 @@ public partial class SessionOverlay
     [Inject]
     private IExplorerSession Explorer { get; set; } = default!;
 
+    [Inject]
+    private IExplorerAuthSession Auth { get; set; } = default!;
+
+    [Inject]
+    private NavigationManager Navigation { get; set; } = default!;
+
     /// <inheritdoc />
     public void Dispose()
     {
@@ -44,11 +58,66 @@ public partial class SessionOverlay
     }
 
     /// <inheritdoc />
-    protected override Task OnInitializedAsync()
+    protected override async Task OnInitializedAsync()
     {
         State.Changed += OnChanged;
         Explorer.ConfigurationChanged += OnChanged;
-        return State.EnsureInitializedAsync();
+        await State.EnsureInitializedAsync();
+
+        // Only the interactive circuit acts on the notice: the prerender's own scope
+        // is discarded, and navigating there would redirect the document and drop
+        // the notice before the circuit could show it. The address is read first,
+        // so a document without the notice never asks for the renderer at all.
+        if (TryTakeRefusedNotice(Navigation.Uri, out var remaining) && RendererInfo.IsInteractive)
+        {
+            if (!Auth.IsAuthenticated)
+            {
+                State.OpenSignInWithNotice(ExplorerSignInRefusedException.PasswordRefusedMessage);
+            }
+
+            Navigation.NavigateTo(remaining, replace: true);
+        }
+    }
+
+    /// <summary>
+    /// Reports whether <paramref name="uri"/> carries the server sign-in endpoint's
+    /// refused notice, and the same address without it.
+    /// </summary>
+    /// <param name="uri">The absolute address.</param>
+    /// <param name="remaining">The address without the notice, when it carries one.</param>
+    /// <returns><see langword="true"/> when the address carries the refused notice.</returns>
+    internal static bool TryTakeRefusedNotice(string uri, out string remaining)
+    {
+        remaining = uri;
+        if (!Uri.TryCreate(uri, UriKind.Absolute, out var parsed) || parsed.Query.Length <= 1)
+        {
+            return false;
+        }
+
+        var query = QueryHelpers.ParseQuery(parsed.Query);
+        if (!query.TryGetValue(SessionSignInOptions.NoticeQueryKey, out var values)
+            || !values.Any(v => string.Equals(v, SessionSignInOptions.RefusedNoticeValue, StringComparison.Ordinal)))
+        {
+            return false;
+        }
+
+        var kept = new List<KeyValuePair<string, string?>>();
+        foreach (var (key, keyValues) in query)
+        {
+            if (string.Equals(key, SessionSignInOptions.NoticeQueryKey, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            foreach (var value in keyValues)
+            {
+                kept.Add(new(key, value));
+            }
+        }
+
+        var path = parsed.GetLeftPart(UriPartial.Path);
+        remaining = QueryHelpers.AddQueryString(path, kept) + parsed.Fragment;
+        return true;
     }
 
     private void Close() => State.CloseOverlay();

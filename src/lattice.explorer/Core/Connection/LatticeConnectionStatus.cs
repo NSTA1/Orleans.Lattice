@@ -24,6 +24,15 @@ public sealed record LatticeConnectionStatus(
         new(LatticeConnectionState.Disconnected, Endpoint: null, Message: "No endpoint configured.");
 
     /// <summary>
+    /// <see langword="true"/> when the endpoint refused the credential the
+    /// connection presented as unauthenticated - the cluster does not accept this
+    /// sign-in, as opposed to a caller it recognised but forbids. The UI then reads
+    /// the session as needing a sign-in rather than as signed in. Always
+    /// <see langword="false"/> for a call that carried no credential.
+    /// </summary>
+    public bool CredentialRefused { get; init; }
+
+    /// <summary>
     /// <see langword="true"/> when the connection is usable for reads
     /// (connected, or reconnecting within the grace window).
     /// </summary>
