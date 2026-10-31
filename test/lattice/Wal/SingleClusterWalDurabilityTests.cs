@@ -230,8 +230,9 @@ public sealed partial class SingleClusterWalDurabilityTests
             }
         }
 
+        var trimState = reportedTotal > 0 ? string.Empty : await DescribeTrimStateAsync(treeId, gc);
         Assert.That(reportedTotal, Is.GreaterThan(0),
-            $"RunOnceAsync must trim within the deadline; {passes} pass(es) reported zero, so the emission path was never exercised.");
+            $"RunOnceAsync must trim within the deadline; {passes} pass(es) reported zero, so the emission path was never exercised. {trimState}");
         Assert.Multiple(() =>
         {
             Assert.That(report.TreeName, Is.EqualTo(treeId));
@@ -443,8 +444,12 @@ public sealed partial class SingleClusterWalDurabilityTests
             await scheduler.StopAsync(CancellationToken.None);
         }
 
-        Assert.That(Interlocked.Read(ref trimmedForTree), Is.GreaterThan(0),
-            "the enabled core WAL GC scheduler must trim the non-replicated tree's WAL once its leaf cursor has advanced.");
+        var schedulerTrimmed = Interlocked.Read(ref trimmedForTree);
+        var schedulerTrimState = schedulerTrimmed > 0
+            ? string.Empty
+            : await DescribeTrimStateAsync(treeId, ttlGc);
+        Assert.That(schedulerTrimmed, Is.GreaterThan(0),
+            $"the enabled core WAL GC scheduler must trim the non-replicated tree's WAL once its leaf cursor has advanced. {schedulerTrimState}");
     }
 
     [Test]
@@ -546,8 +551,9 @@ public sealed partial class SingleClusterWalDurabilityTests
 
     /// <summary>
     /// Deactivates the tree's leaves and reads every written key back until a
-    /// partition retaining entries is free of block pins and uncovered override
-    /// holds, so a pass has durable writes to trim (issues #4622 and #4641).
+    /// partition retaining entries is free of block pins, of positive pins no
+    /// durable offset covers and of uncovered override holds, so a pass has
+    /// durable writes to trim (issues #4622, #4641 and #5325).
     /// </summary>
     private async Task CheckpointLeavesAsync(string treeId, ILattice tree, int keyCount)
     {
