@@ -52,6 +52,9 @@ internal sealed class CoordinatedRestoreClusterFixture
     /// <summary>When set, the next silo build wires a capacity probe that refuses every target.</summary>
     private static bool _pendingRefuseCapacity;
 
+    /// <summary>When set, the next silo build registers an access gate that denies every anonymous caller.</summary>
+    private static bool _pendingDenyAnonymous;
+
     /// <summary>The deployed test cluster.</summary>
     public TestCluster Cluster { get; private set; } = null!;
 
@@ -113,13 +116,22 @@ internal sealed class CoordinatedRestoreClusterFixture
     /// dispatcher-driven set restore votes abort and the coordinated abort path can be
     /// exercised end to end.
     /// </param>
+    /// <param name="denyAnonymous">
+    /// When <c>true</c>, registers an <see cref="ILatticeAccessGate"/> that denies every
+    /// anonymous caller, so the silo enforces authorization the way an estate with an
+    /// authorization add-on does: a turn with no identity is refused unless it runs
+    /// under system origin. Seed and read such a cluster inside
+    /// <see cref="LatticeSystemOrigin.Enter"/>.
+    /// </param>
     public async Task InitializeAsync(
         bool driveThroughDispatcher = false,
         IReadOnlyCollection<string>? replicatedTrees = null,
-        bool refuseCapacity = false)
+        bool refuseCapacity = false,
+        bool denyAnonymous = false)
     {
         Completion = new FakeSagaCompletionSource();
         _pendingCompletion = Completion;
+        _pendingDenyAnonymous = denyAnonymous;
 
         if (driveThroughDispatcher)
         {
@@ -161,9 +173,16 @@ internal sealed class CoordinatedRestoreClusterFixture
             var channel = _pendingChannel;
             var replicated = _pendingReplicatedTrees;
             var refuseCapacity = _pendingRefuseCapacity;
+            var denyAnonymous = _pendingDenyAnonymous;
 
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
+
+            if (denyAnonymous)
+            {
+                // Registered after AddLattice so it replaces the core allow-all gate.
+                siloBuilder.Services.AddSingleton<ILatticeAccessGate, DenyAnonymousAccessGate>();
+            }
 
             // Register the controllable completion source BEFORE AddLatticeReplication,
             // so the package's TryAddSingleton default (the coordinator-dialling source)
@@ -224,6 +243,20 @@ internal sealed class CoordinatedRestoreClusterFixture
             treeId.StartsWith(LatticeConstants.ViewTreePrefix, StringComparison.Ordinal)
                 ? null
                 : LatticeMergeMode.LwwRegister;
+    }
+
+    /// <summary>
+    /// A default-deny <see cref="ILatticeAccessGate"/>: every anonymous caller is
+    /// refused and every named subject allowed. The enforcement point skips the gate
+    /// for a system-origin turn, so only infrastructure-authored work gets through.
+    /// </summary>
+    private sealed class DenyAnonymousAccessGate : ILatticeAccessGate
+    {
+        public ValueTask<LatticeAccessDecision> AuthorizeAsync(
+            in LatticeAccessRequest request, CancellationToken cancellationToken = default) =>
+            request.Subject.IsAnonymous
+                ? new ValueTask<LatticeAccessDecision>(LatticeAccessDecision.Deny("anonymous callers are denied"))
+                : new ValueTask<LatticeAccessDecision>(LatticeAccessDecision.Allow());
     }
 
     /// <summary>

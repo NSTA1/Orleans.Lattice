@@ -169,6 +169,22 @@ gate will tell you if you forget.
   `PermissionDenied`, compared in constant time. An estate running an asymmetric
   per-peer secret scheme must set it to `false`, and must then not rely on a claimed
   origin for any security decision.
+- A coordinated-restore participant acting on a **remote** coordinator's saga runs
+  its restore steps under system origin (peer authority), because the operator was
+  authorized on the coordinator cluster and the saga carries no user identity
+  (#5443). `RestoreParticipant.HasPeerAuthority` grants it only when every seam is
+  wired, the received coordinator id - the credential-bound origin the saga service
+  stamped, never a body value - is a remote cluster in the current replication
+  topology, the target (or each set member) is locally enrolled, and every tree the
+  backup chain was captured from is the target or a locally replicated tree
+  (`RestoreAdmissionReport.SourceTreeIds`; an empty list is unknown and refused).
+  A failed elevated probe and an unreplicated source return the same refusal text to
+  the peer, so the elevated probe is not an existence oracle, and a commit that must
+  rebuild a lost shadow re-checks the sources before replaying anything.
+  Anything else runs as the ambient caller and is authorized as such, including this
+  cluster's own coordinator. Do not widen it to other saga participants, or move it
+  to the saga service or participant grain, where it would elevate host-registered
+  participants too.
 
 ### Identity-directory validation (`src/lattice.membership`, `src/lattice.api.auth`)
 - Administrative membership-reference create paths (`UpsertGroupAsync`,
