@@ -131,7 +131,7 @@ value by the body a reader is served, upcast to the tree's target version.
 | Document | What it covers |
 |---|---|
 | [Public API](api.md) | Public services, models, declared members and overloads. |
-| [Configuration](configuration.md) | Every option/default and registration-order constraint. |
+| [Configuration](configuration.md) | Every option/default and how the two add-ons compose. |
 | [Architecture](architecture.md) | Interception, version decoding, control and remediation pipelines. |
 | [Chaos tests](chaos-tests.md) | The concrete concurrency/fault scenarios in the schema suite. |
 | [Schema enforcement](schema-enforcement.md) | Per-tree policies, rule kinds, strict-mode ingest, background remediation. |
