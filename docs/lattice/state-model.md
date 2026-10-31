@@ -205,6 +205,12 @@ configuration error: that hosted service throws
 `InvalidOperationException` when it installs the descriptors, so host
 start-up fails.
 
+The shape is registered under the logical tree name. A physical copy the
+tree is moved onto - by a resize, a restore, a replication bootstrap hold or
+a schema remediation or migration - resolves its CRDT shape, and the tree's
+replication merge mode, through that logical tree, so the copy needs no
+registration of its own.
+
 ## Related surfaces
 
 - [WAL](wal.md) - the canonical durability layer.

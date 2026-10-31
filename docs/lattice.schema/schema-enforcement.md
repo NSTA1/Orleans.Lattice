@@ -240,9 +240,14 @@ installed on the tree.
 A remediation publishes only the copy of the tree it captured when it started. At
 cutover the tree must still resolve to that physical tree (or, when a cutover
 resumes after its swap, to the remediation's own destination). If another alias
-change has moved the tree, the cutover is refused: no policy the remediation
-installed is left in place, nothing is swapped, the remediated copy is discarded,
-and the alias reservation is released. The report ends `DidAbort` with no
+change has moved the tree, the cutover is refused: a target policy the cutover
+installed in the same attempt is withdrawn (the tree's previous policy restored,
+or the policy cleared if it had none), nothing is swapped, the remediated copy is
+discarded, and the alias reservation is released. A cutover that installed its
+target policy and was then interrupted before its swap does not know, when it
+resumes and finds the tree superseded, which policy that attempt replaced: it
+refuses without touching the policy and leaves the target policy installed, so
+check the tree's policy after a superseded remediation. The report ends `DidAbort` with no
 `OffendingKey` and a `Reason` naming the physical tree that superseded it; a
 tracked operation records `Failed` with `outcome` = `aborted` and that reason, and
 no `offendingKey`.
@@ -316,6 +321,15 @@ with `entries` progress and the same report encoded in the operation result. The
 blocking `ILatticeSchemaControl.ScanComplianceAsync` verb was removed in this major
 version after its 9.9.0 `LATTICE0002` deprecation.
 
+The copy-and-cutover protocol - the alias reservation, intent with a fresh
+destination and the captured source, crash recovery from banked progress, the
+re-stamp at the target, the policy install, the swap fenced on the captured
+source, the source's redirects, and the refusal of a superseded cutover - is
+model-checked by the `SchemaRemediationCutover` TLA+ module; its
+[refinement note](../../spec/schema/SchemaRemediationCutoverRefinement.md) maps
+each step to the code and lists what is not checked, including writes that land
+during the build.
+
 ## Composition with versioning
 
 When a tree uses both enforcement and [versioning](schema-versioning.md), a value
@@ -330,7 +344,11 @@ that cannot be decoded to the target (stamped newer than the target, or with no
 upcast path to it) is a violation, so a local write fails closed and a strict-mode
 ingested item is dead-lettered. An admitted value is stored with its envelope
 unchanged. On a silo that does not register versioning no read strips an
-envelope, so there the whole value is judged.
+envelope, so there the whole value is judged. A value the policy refuses, or that
+strict ingest diverts, never reaches a
+[materialised view](../lattice/materialised-views.md#projection-input-on-a-versioned-source);
+the composition is checked by
+[`SchemaViewComposition`](../../spec/schema-view/README.md).
 
 Advancing the target version and re-stamping existing values
 (`AdvanceAndMigrateAsync`) is a single shadow build: upcast each value, validate it

@@ -1788,7 +1788,7 @@ capabilities:
         hazard: "The existing view-tree WAL may contain writes authored under the old topology."
         source: "docs/lattice/materialised-views.md"
     concurrency_rules:
-      - statement: "WaitForSourceHeadAsync blocks until the view has applied the current source head for callers needing read-your-writes."
+      - statement: "WaitForSourceHeadAsync blocks until every committed source write that existed at the call, through the source's current physical tree, is reflected in the view, for callers needing read-your-writes."
         source: "docs/lattice/materialised-views.md"
       - statement: "Cross-tree source atomic writes flip participating views jointly unless a participant is unavailable past CrossTreeReadinessTimeout."
         source: "docs/lattice/materialised-views.md"

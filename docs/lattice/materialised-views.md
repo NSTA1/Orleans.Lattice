@@ -449,6 +449,19 @@ handle every version its source can hold, or the tree must be eagerly
 [migrated](../lattice.schema/schema-versioning.md#eager-background-migration),
 which upcasts and re-stamps every stored value at the target; its cutover rebuilds the view from the migrated values (see [Source-identity rebind](#source-identity-rebind)).
 
+**Formal model.** [`SchemaViewComposition`](../../spec/schema-view/SchemaViewCompositionRefinement.md)
+checks this contract composed with the schema write path, version family, strict
+ingest and a rewrite: a caught-up view is the projection of every stored value at
+its stamp on every derivation path, a target advance appends and re-projects
+nothing, a refused or diverted write contributes nothing, and an eager migration
+or remediation cutover leaves no duplicate or obsolete membership and rebinds the
+view onto the rewritten copy. `WaitForSourceHeadAsync` returns only once the view
+is bound to the copy the source names and has consumed its WAL through the head
+captured at the call, and both barriers drop the handle's cached generation, so a
+read on the same handle straight after a barrier sees what it waited for. The
+[numeric companion](../../spec/view-numeric/RefinementNumeric.md) checks Count/Sum
+maintenance without schema installed.
+
 ## Re-keyed views and deletes
 
 The optional `keySelector` relocates the view key. It is a pure function of the
@@ -750,8 +763,15 @@ healed by replication anti-entropy instead.
 ## Reading your own writes
 
 The default contract is best-effort lag. A caller that needs to observe its own
-write can opt into a barrier: `WaitForSourceHeadAsync` captures the current
-source head and blocks until the view has applied up to it.
+write can opt into a barrier: `WaitForSourceHeadAsync` returns once every
+committed source write that existed at the call is reflected in the view. It
+captures the head position of each of the source's write-ahead-log partitions,
+through the source's current physical tree, and waits for the view to consume
+through them, so it is exact regardless of shard count and holds for writes that
+keep an older HLC, such as `ILattice.MergeAsync`. After a source cutover onto a
+new physical tree (a schema migration or remediation, a restore, a resize or an
+alias change) it also waits for the view to rebind to the new tree, so a read
+after the barrier sees post-cutover membership.
 
 ```csharp verify
 public sealed class WriteThenReadService(ILatticeViewFactory views, IGrainFactory grains)
@@ -776,7 +796,14 @@ public sealed class WriteThenReadService(ILatticeViewFactory views, IGrainFactor
 
 `WaitForSourceHlcAsync(target, timeout)` is the lower-level form, completing once
 the view's highest applied source HLC reaches `target` (or throwing
-`TimeoutException`).
+`TimeoutException`). An HLC is not a log position: a lagging shard, a write that
+keeps an older HLC, or a cutover can leave an entry unapplied below `target`, so
+use `WaitForSourceHeadAsync` for write-then-read.
+
+Both barriers drop the handle's cached active generation when they return, so a
+read on the same handle straight after a barrier re-resolves the generation
+(one maintainer round-trip) and observes what the barrier waited for, rather than
+a generation `ReadHandleCacheTtl` still remembers.
 
 ## Atomic-write visibility
 
@@ -1151,7 +1178,7 @@ row notes its rule:
 | `AggregationMaxGroupEntries` | 0 | Aggregation views only: when greater than zero, bounds each `Min` / `Max` / `SetUnion` group shard (approximate mode). 0 keeps every group exact. Must not be negative. |
 | `MaxStagedTransactions` | 1024 | Maximum in-flight atomic-write transactions buffered before the backstop forces a rebuild. Must be at least 1. |
 | `MaxStagedBytes` | 64 MiB | Maximum buffered prepared-entry payload (key + value) before the backstop forces a rebuild. Must be at least 1. |
-| `ReadHandleCacheTtl` | 1 s | How long an `ILatticeView` handle caches the resolved live view tree id before re-resolving it. Bounds the post-swap read-staleness window. Must be greater than zero. |
+| `ReadHandleCacheTtl` | 1 s | How long an `ILatticeView` handle caches the resolved live view tree id before re-resolving it. Bounds the post-swap read-staleness window. A handle that itself rebuilt, reconciled or waited on a read-your-writes barrier drops its cached id, so its next read re-resolves. Must be greater than zero. |
 | `OldGenerationReclaimGrace` | 5 s | How long a swapped-out view tree is retained before reclamation. Must exceed `ReadHandleCacheTtl` so a reader holding a stale cached id still resolves a live tree. |
 | `CrossTreeReadinessTimeout` | 5 s | Cross-tree atomic visibility only: how long a completed cross-tree batch waits for every present participant view before degrading to per-tree atomicity. Must be greater than zero. |
 | `ReplicationMode` | `DeriveLocally` | How the view tree is made available across clusters. See [Replication modes](#replication-modes). |
