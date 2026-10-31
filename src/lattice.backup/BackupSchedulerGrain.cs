@@ -39,6 +39,13 @@ internal sealed class BackupSchedulerGrain(
     // grain clears it, so a stale in-flight flag can never wedge the scope.
     private bool _captureInFlight;
 
+    // The reminder-driven cycle in flight, if any (issue #5473): a reminder tick
+    // dispatches its cycle onto an interleaved one-shot grain timer and returns,
+    // and a tick that arrives while one is still running is coalesced into it.
+    // Activation-local, like the guards below.
+    private bool _tickCycleInFlight;
+    private IGrainTimer? _tickCycle;
+
     // Activation-local retention guard (issue #5357): one retention pass at a time.
     // Not persisted, for the same reason as the capture guard.
     private bool _pruneInFlight;
@@ -171,7 +178,7 @@ internal sealed class BackupSchedulerGrain(
     }
 
     /// <inheritdoc />
-    public Task<bool> IsIdleAsync() => Task.FromResult(!_captureInFlight);
+    public Task<bool> IsIdleAsync() => Task.FromResult(!_captureInFlight && !_tickCycleInFlight);
 
     /// <inheritdoc />
     public async Task<BackupSchedulerRuntimeStatus> GetScopeRuntimeStatusAsync()
@@ -201,9 +208,9 @@ internal sealed class BackupSchedulerGrain(
     }
 
     /// <summary>
-    /// Handles a schedule reminder by running one scheduled cycle (capture then
-    /// retention). Unknown reminder names and firings before the scope has been
-    /// configured are ignored.
+    /// Handles a schedule reminder by starting one scheduled cycle (capture then
+    /// retention) and returning without waiting for it. Unknown reminder names
+    /// and firings before the scope has been configured are ignored.
     /// </summary>
     /// <remarks>
     /// The cycle runs inside an <see cref="LatticeAccessGateContext.EnterSystemOrigin"/>
@@ -218,6 +225,19 @@ internal sealed class BackupSchedulerGrain(
     /// is taken where a caller asks for a schedule - see
     /// <see cref="AuthorizeScheduleAsync"/> - so a reminder can only exist because
     /// an authorized caller registered it.
+    /// <para>
+    /// The cycle is not run inside the reminder call (issue #5473). A capture can
+    /// outlast the reminder's response timeout, and <see cref="ReceiveReminder"/>
+    /// is not interleaving, so awaiting it here held the activation for the whole
+    /// capture: the reminder call timed out, and every tick that fired meanwhile
+    /// queued behind it and then ran its own capture back to back, so a schedule
+    /// shorter than its captures never caught up and kept the silo saturated.
+    /// Instead the tick dispatches the cycle onto an interleaved, keep-alive
+    /// one-shot grain timer and returns, and a tick that arrives while a
+    /// reminder-driven cycle is still running is coalesced into it: it starts
+    /// nothing and is recorded as an overrun. With no grain runtime (a unit-test
+    /// harness, where <c>RegisterGrainTimer</c> throws) the cycle runs inline.
+    /// </para>
     /// </remarks>
     public async Task ReceiveReminder(string reminderName, TickStatus status)
     {
@@ -226,8 +246,56 @@ internal sealed class BackupSchedulerGrain(
             return;
         }
 
-        using var origin = LatticeAccessGateContext.EnterSystemOrigin();
-        await RunScheduledCycleAsync(reminderName == IncrementalScheduleReminderName);
+        var incremental = reminderName == IncrementalScheduleReminderName;
+        if (_tickCycleInFlight)
+        {
+            LatticeBackupMetrics.RecordSchedulerOverrun(ScopeKey);
+            LatticeBackupMetrics.RecordSchedulerSkipped(ScopeKey);
+            logger.LogInformation(
+                "Backup scope {Scope}: a {Kind} schedule tick arrived while the previous scheduled cycle was "
+                + "still running; it was coalesced into that cycle.",
+                ScopeKey,
+                incremental ? "incremental" : "full");
+            return;
+        }
+
+        _tickCycleInFlight = true;
+        try
+        {
+            // The callback cannot run before this assignment: it is queued on the
+            // activation and the current turn does not yield before it.
+            _tickCycle = this.RegisterGrainTimer(
+                _ => RunTickCycleAsync(incremental),
+                new GrainTimerCreationOptions(TimeSpan.Zero, Timeout.InfiniteTimeSpan) { Interleave = true, KeepAlive = true });
+            return;
+        }
+        catch
+        {
+            _tickCycle = null;
+        }
+
+        await RunTickCycleAsync(incremental);
+    }
+
+    private async Task RunTickCycleAsync(bool incremental)
+    {
+        try
+        {
+            using var origin = LatticeAccessGateContext.EnterSystemOrigin();
+            await RunScheduledCycleAsync(incremental);
+        }
+        catch (Exception ex)
+        {
+            // The capture path has already recorded its outcome; this surfaces a
+            // fault anywhere in the cycle, retention included, which the reminder
+            // call no longer carries back to the runtime.
+            logger.LogWarning(ex, "Backup scope {Scope}: the scheduled cycle faulted.", ScopeKey);
+        }
+        finally
+        {
+            _tickCycleInFlight = false;
+            Interlocked.Exchange(ref _tickCycle, null)?.Dispose();
+        }
     }
 
     /// <summary>

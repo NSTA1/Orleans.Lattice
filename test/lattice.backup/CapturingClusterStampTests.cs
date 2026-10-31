@@ -134,17 +134,49 @@ public sealed class CapturingClusterStampTests
             new LatticeBackupCaptureRequest("second", BackupScopeSelector.WholeTree(Tree)));
 
         // A backup id is unique to its capture (issue #5418): identical live state
-        // yields the same payload digest but two backups, each with its own
-        // manifest and artifact, so neither capture can overwrite the other.
+        // yields two backups, each with its own manifest and artifact, so neither
+        // capture can overwrite the other.
+        //
+        // The two artifacts hold the same entries, but not necessarily the same
+        // bytes, so their content digests are not compared (#5472). A row written
+        // locally reads back from the snapshot with a null origin before
+        // background leaf materialization and an empty one after it; both mean
+        // "unstamped" (BackupChainFrontier.NormalizeOrigin) but serialize
+        // differently, so a capture taken either side of that materialization
+        // hashes differently. The entries are compared decoded instead.
+        var firstEntries = await DecodeAsync(first.Manifest);
+        var secondEntries = await DecodeAsync(second.Manifest);
         Assert.Multiple(async () =>
         {
             Assert.That(second.BackupId, Is.Not.EqualTo(first.BackupId));
-            Assert.That(
-                second.Manifest.ContentDescriptors.Single().ContentHash,
-                Is.EqualTo(first.Manifest.ContentDescriptors.Single().ContentHash));
+            Assert.That(secondEntries, Is.EqualTo(firstEntries));
+            Assert.That(firstEntries.Select(e => e.Key), Is.EqualTo(new[] { "k1", "k2" }));
             Assert.That((await _fixture.Sink.ProbeAsync(first.BackupId)).IsResolvable, Is.True);
             Assert.That((await _fixture.Sink.ProbeAsync(second.BackupId)).IsResolvable, Is.True);
         });
+    }
+
+    // Each captured entry with its origin normalized, so a null and an empty
+    // (both unstamped) origin compare equal.
+    private async Task<List<(string Key, string Value, HybridLogicalClock Timestamp, bool Tombstone, long ExpiresAt, string? Origin)>> DecodeAsync(
+        BackupManifest manifest)
+    {
+        var entries = new List<(string, string, HybridLogicalClock, bool, long, string?)>();
+        await foreach (var chunk in _fixture.Sink.ReadArtifactAsync(manifest.ContentDescriptors.Single().ArtifactId))
+        {
+            foreach (var entry in _fixture.Serializer.Deserialize<LwwEntry[]>(chunk))
+            {
+                entries.Add((
+                    entry.Key,
+                    Encoding.UTF8.GetString(entry.Value ?? []),
+                    entry.Timestamp,
+                    entry.IsTombstone,
+                    entry.ExpiresAtTicks,
+                    BackupChainFrontier.NormalizeOrigin(entry.OriginClusterId)));
+            }
+        }
+
+        return entries;
     }
 
     private static byte[] Bytes(string s) => Encoding.UTF8.GetBytes(s);
