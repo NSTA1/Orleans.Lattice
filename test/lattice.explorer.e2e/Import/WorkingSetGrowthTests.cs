@@ -44,4 +44,29 @@ public sealed class WorkingSetGrowthTests
 
         Assert.That(reading.Growth, Is.EqualTo(reading.Peak - reading.Baseline));
     }
+
+    /// <summary>
+    /// The live heap the proof gates on is charged with the largest forced-collection reading
+    /// taken while the import ran or once it settled, so memory the import left behind counts
+    /// as much as memory it held in flight.
+    /// </summary>
+    [Test]
+    public void Live_growth_is_the_larger_of_the_peak_and_the_settled_reading_above_the_baseline()
+    {
+        var held = new WorkingSetGrowth("west-silo-0", Baseline: 400 * Mb, Peak: 420 * Mb, Samples: 90)
+        {
+            LiveBaseline = 120 * Mb,
+            LivePeak = 130 * Mb,
+            LiveAfter = 125 * Mb,
+        };
+        var left = held with { LiveAfter = 140 * Mb };
+        var unread = held with { LiveBaseline = null };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(held.LiveGrowth, Is.EqualTo(10 * Mb));
+            Assert.That(left.LiveGrowth, Is.EqualTo(20 * Mb));
+            Assert.That(unread.LiveGrowth, Is.Null);
+        });
+    }
 }
