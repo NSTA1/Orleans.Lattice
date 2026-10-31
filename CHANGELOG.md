@@ -32,6 +32,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
+- **Performance - Tree-admin status reads.** Resize status uses one coordinator call instead of five, reshard status one instead of three, and view status one maintainer call instead of two, retaining system-tree rejection and identical answers. ([#5345](https://github.com/NSTA1/Orleans.Lattice/pull/5345)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin`)
+
 - **Performance - Settlement grain calls.** Prepare handling and activation healing use fewer registry calls. Migration cleanup resolves masked verdicts inside its existing batches; local forwarded prepares combine decision and participant probes. Durability, capture gates and reader intent remain. ([#5318](https://github.com/NSTA1/Orleans.Lattice/pull/5318), [#5338](https://github.com/NSTA1/Orleans.Lattice/pull/5338)) (`Orleans.Lattice`)
 
 - **Internal - Orphaned grain methods removed.** Internal grain-interface methods that no production code has called since 10.2.0, left behind by the call elisions above and in 10.2.0, are deleted or reduced to internal cores of the combined calls that replaced them. A rolling upgrade from 10.2.0 is unaffected; one straight from an earlier release would fail calls to the removed methods, so upgrade through 10.2.0. ([#5217](https://github.com/NSTA1/Orleans.Lattice/pull/5217)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
