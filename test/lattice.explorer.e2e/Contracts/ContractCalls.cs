@@ -35,17 +35,17 @@ public static class ContractCalls
         }
     }
 
-    /// <summary>Whether the group exists and holds every pinned member.</summary>
+    /// <summary>Whether the group exists and holds every pinned member; a read that fails transiently is retried.</summary>
     /// <param name="auth">The Auth API.</param>
     /// <param name="group">The pinned group.</param>
     public static async Task<bool> GroupHoldsAsync(LatticeAuthApiGrpcClient auth, PinnedGroup group)
     {
-        if ((await auth.GetGroupAsync(new AuthGroupRef { GroupId = group.GroupId })).Group is null)
+        if ((await ContractWait.RetryingAsync($"the group {group.GroupId}", () => auth.GetGroupAsync(new AuthGroupRef { GroupId = group.GroupId }))).Group is null)
         {
             return false;
         }
 
-        var members = (await auth.ListGroupMembersAsync(new AuthGroupRef { GroupId = group.GroupId })).Values;
+        var members = (await ContractWait.RetryingAsync($"the members of {group.GroupId}", () => auth.ListGroupMembersAsync(new AuthGroupRef { GroupId = group.GroupId }))).Values;
         return group.Users.Concat(group.Groups).All(members.Contains);
     }
 

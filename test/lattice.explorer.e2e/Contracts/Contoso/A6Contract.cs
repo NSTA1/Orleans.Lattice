@@ -9,7 +9,8 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts.Contoso;
 /// <c>factory-orders</c> (its id at <see cref="StoryKeys.OrdersBaselineBackup"/>), monitored with
 /// a 1-hour verify interval and healthy; and the "hourly" Full schedule on
 /// <c>factory-telemetry</c>, registered at <see cref="TelemetryScheduleInterval"/> - the story's
-/// compressed hour, the scheduler's minimum - with at least one success. C3 deletes the
+/// compressed hour, the scheduler's minimum - with at least one success, then settled to
+/// <see cref="TelemetrySteadyInterval"/>. C3 deletes the
 /// backup and cancels the schedule.
 /// </summary>
 public sealed class A6Contract() : ChapterContract("A6")
@@ -19,6 +20,9 @@ public sealed class A6Contract() : ChapterContract("A6")
     /// scheduler's minimum, standing for an hour so it fires inside the run.
     /// </summary>
     public static readonly TimeSpan TelemetryScheduleInterval = TimeSpan.FromMinutes(1);
+
+    /// <summary>The interval the telemetry's schedule settles to once it has fired: a real hour.</summary>
+    public static readonly TimeSpan TelemetrySteadyInterval = TimeSpan.FromHours(1);
 
     /// <summary>How often the baseline's health is verified.</summary>
     public static readonly TimeSpan BaselineVerifyInterval = TimeSpan.FromHours(1);
@@ -48,6 +52,11 @@ public sealed class A6Contract() : ChapterContract("A6")
             "the telemetry schedule's first success",
             async () => (await backup.GetScopeStatusAsync(TelemetryScope))?.LastFullSuccessUtc is not null,
             TimeSpan.FromMinutes(4));
+
+        // Once it has fired, the schedule settles to a real hour: a full capture of the growing
+        // telemetry every minute for the rest of the story saturates the estate (the catalogue's
+        // history view fell 1,000 s behind and grain calls timed out by U4 and C3).
+        await backup.ScheduleBackupAsync(TelemetryScope, incremental: false, TelemetrySteadyInterval);
     }
 
     /// <inheritdoc />
