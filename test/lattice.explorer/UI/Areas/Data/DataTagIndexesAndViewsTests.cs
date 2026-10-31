@@ -70,6 +70,7 @@ public sealed class DataTagIndexesAndViewsTests : DataTestContext
         {
             Assert.That(Rows(cut), Has.Count.EqualTo(1));
             Assert.That(Rows(cut)[0].TextContent, Does.Contain("by-region").And.Contain("Idle").And.Contain("2"));
+            Assert.That(cut.Find("tbody th a").ClassList, Does.Contain("lt-data-key"), "the index link is a 24px target (WCAG 2.5.8)");
         });
 
         Navigation.NavigateTo(cut.Find("tbody th a").GetAttribute("href")!);
@@ -192,6 +193,9 @@ public sealed class DataTagIndexesAndViewsTests : DataTestContext
             Assert.That(Rows(cut)[1].TextContent, Does.Contain("totals").And.Contain("12 behind"));
             Assert.That(cut.Markup, Does.Not.Contain("view-gen-"));
             Assert.That(cut.FindAll("button").Select(button => button.TextContent.Trim()), Has.None.EqualTo("Rebuild"));
+
+            // WCAG 2.5.8: the view link is a 24px target, as a key link is (found by journey A3).
+            Assert.That(cut.FindAll("tbody th a").Select(link => link.ClassList.Contains("lt-data-key")), Is.All.True);
         });
     }
 
