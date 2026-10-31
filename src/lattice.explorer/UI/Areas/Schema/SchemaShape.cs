@@ -112,7 +112,7 @@ internal sealed class SchemaShape
         var node = scope;
         foreach (var segment in path.Split('.'))
         {
-            var next = node.Children.FirstOrDefault(pair => string.Equals(pair.Key, segment, StringComparison.OrdinalIgnoreCase)).Value;
+            var next = FindChild(node, segment);
             if (next is null)
             {
                 return null;
@@ -287,7 +287,7 @@ internal sealed class SchemaShape
                 return null;
             }
 
-            var existing = node.Children.FirstOrDefault(pair => string.Equals(pair.Key, segment, StringComparison.OrdinalIgnoreCase)).Value;
+            var existing = FindChild(node, segment);
             node = existing ?? Child(node, segment);
             if (node is null)
             {
@@ -298,6 +298,11 @@ internal sealed class SchemaShape
         node.NamedByPolicy = true;
         return node;
     }
+
+    private static SchemaShapeNode? FindChild(SchemaShapeNode parent, string name) =>
+        parent.Children.TryGetValue(name, out var exact)
+            ? exact
+            : parent.Children.FirstOrDefault(pair => string.Equals(pair.Key, name, StringComparison.OrdinalIgnoreCase)).Value;
 
     private SchemaShapeNode? Child(SchemaShapeNode parent, string name)
     {

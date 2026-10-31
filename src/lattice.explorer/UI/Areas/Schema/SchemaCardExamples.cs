@@ -202,7 +202,7 @@ internal static class SchemaCardExamples
                 card.ValuesAreNumbers = seen?.Dominant == SchemaValueType.Number;
                 if (seen is { ManyValues: false })
                 {
-                    card.Values = [.. seen.Distinct.Where(value => value is not ("true" or "false"))];
+                    card.Values = [.. seen.Distinct.Where(value => value is not ("true" or "false") || seen.Texts.Contains(value, StringComparer.Ordinal))];
                 }
 
                 break;
@@ -255,7 +255,7 @@ internal static class SchemaCardExamples
         return Math.Max(root.Seen, node.Seen);
     }
 
-    /// <summary>The longest prefix every text shares, when there are at least two texts.</summary>
+    /// <summary>The longest complete-character prefix every text shares, capped at 40 UTF-16 code units, when there are at least two texts.</summary>
     /// <param name="texts">The texts.</param>
     /// <returns>The prefix; empty when there is none.</returns>
     internal static string CommonPrefix(IReadOnlyList<string> texts)
@@ -274,10 +274,10 @@ internal static class SchemaCardExamples
                 length++;
             }
 
-            prefix = prefix[..length];
+            prefix = LtTextCut.Prefix(prefix, length).ToString();
         }
 
-        return prefix.Length > 40 ? prefix[..40] : prefix;
+        return LtTextCut.Prefix(prefix, 40).ToString();
     }
 
     private static string Raw(double value) => value.ToString("R", CultureInfo.InvariantCulture);
