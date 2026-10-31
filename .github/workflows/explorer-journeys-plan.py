@@ -22,7 +22,8 @@ Legs:
                     discovered from the directory, so adding a journey edits
                     no shared file. LATTICE_E2E_MODE=isolated.
   story-<storyline> the Contoso and Fabrikam story fixtures, once they and a
-                    chapter contract (F6) exist in the tree.
+                    contract (F6) for one of that storyline's chapters exist in
+                    the tree (F6 lands Contoso's contracts before Fabrikam's).
                     LATTICE_E2E_MODE=story. On a pull request they run on its
                     merge commit, so a broken hand-off is caught before it lands.
   story-contoso-narrow  nightly only: the Contoso story at 390x844.
@@ -134,6 +135,20 @@ def story_fixtures(root):
 
 CONTRACT_DECLARATION = re.compile(r"\bclass\s+\w+[^{;]*:[^{;]*\bIChapterContract\b")
 
+# A chapter's contract is named for its chapter (A1Contract, T3Contract) and derives from
+# IChapterContract directly or through F6's ChapterContract base.
+CHAPTER_CONTRACT_DECLARATION = re.compile(
+    r"\bclass\s+([A-Za-z])\d+\w*\b[^{;]*:[^{;]*\b(?:IChapterContract|ChapterContract)\b")
+
+
+def _contract_sources(root):
+    base = Path(root) / E2E
+    for path in base.rglob("*.cs"):
+        parts = path.relative_to(base).parts
+        if parts[0] in ("SelfTests", "bin", "obj"):
+            continue
+        yield path.read_text(encoding="utf-8", errors="replace")
+
 
 def has_chapter_contracts(root):
     """Whether the tree implements any chapter contract (F6, #5364) outside the self-tests.
@@ -142,14 +157,18 @@ def has_chapter_contracts(root):
     contract at all it fails at its first chapter by construction; the story legs wait for
     the first contract rather than turn every member pull request red before F6 lands.
     """
-    base = Path(root) / E2E
-    for path in base.rglob("*.cs"):
-        parts = path.relative_to(base).parts
-        if parts[0] in ("SelfTests", "bin", "obj"):
-            continue
-        if CONTRACT_DECLARATION.search(path.read_text(encoding="utf-8", errors="replace")):
-            return True
-    return False
+    return any(CONTRACT_DECLARATION.search(text) for text in _contract_sources(root))
+
+
+def storylines_with_contracts(root):
+    """The storylines with at least one chapter's contract in the tree (F6 lands one storyline at a time)."""
+    found = set()
+    for text in _contract_sources(root):
+        for match in CHAPTER_CONTRACT_DECLARATION.finditer(text):
+            storyline = STORYLINE_BY_PREFIX.get(match.group(1).lower())
+            if storyline:
+                found.add(storyline)
+    return found
 
 
 def classify(path):
@@ -233,6 +252,13 @@ def plan(root, event, action="", base_ref="", changed=None):
         stories = []
         notes.append("No chapter contract (IChapterContract, F6 #5364) exists in this tree yet, so a story run "
                      "would fail at its first chapter by construction; no story leg is planned until one does.")
+    else:
+        covered = storylines_with_contracts(root)
+        for storyline, _ in stories:
+            if storyline not in covered:
+                notes.append(f"No {storyline} chapter has a contract (F6 #5364) in this tree yet, so its story run "
+                             "would fail at its first chapter by construction; no story leg is planned for it.")
+        stories = [(storyline, fixture) for storyline, fixture in stories if storyline in covered]
 
     def every_leg():
         return ([harness_leg()]
