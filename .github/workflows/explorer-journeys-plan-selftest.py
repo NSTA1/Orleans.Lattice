@@ -382,6 +382,34 @@ class WiringTests(unittest.TestCase):
         self.assertTrue((e2e / "Smoke" / "EstateSmokeTests.cs").is_file(),
                         "the fail-closed probe filters on Smoke.EstateSmokeTests")
         planner.discover_journeys(REPOSITORY)
+        # The names the legs filter on are F3's (#5361): every one must still exist as spelled.
+        gate = (e2e / "FeatureCoverage" / "CoverageGateTests.cs").read_text(encoding="utf-8")
+        self.assertIn('[Category("CoverageGate")]', gate)
+        self.assertIn("namespace " + planner.NAMESPACE + ".FeatureCoverage;", gate)
+        pending = (e2e / "Pending" / "PendingWrapperGateTests.cs").read_text(encoding="utf-8")
+        self.assertIn("namespace " + planner.NAMESPACE + ".Pending;", pending)
+        self.assertEqual(planner.NAMESPACE + ".Pending.PendingWrapperGateTests", planner.PENDING_GATE)
+        chapter = (e2e / "Story" / "JourneyChapter.cs").read_text(encoding="utf-8")
+        self.assertIn('[Category("Journey")]', chapter)
+        for storyline, fixture in planner.STORY_LEGS:
+            source = (e2e / "Story" / (fixture + ".cs")).read_text(encoding="utf-8")
+            self.assertIn('[Category("Story")]', source, fixture)
+            self.assertIn("namespace " + planner.NAMESPACE + ".Story;", source, fixture)
+        modes = (e2e / "Story" / "JourneyRunModes.cs").read_text(encoding="utf-8")
+        self.assertIn('"LATTICE_E2E_MODE"', modes)
+        hits = (e2e / "FeatureCoverage" / "CoverageHitsDocument.cs").read_text(encoding="utf-8")
+        self.assertIn('"LATTICE_E2E_COVERAGE_HITS"', hits)
+        self.assertIn('"coverage-hits.json"', hits)
+
+    def test_the_leg_summary_is_also_kept_as_an_artifact(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            trx = Path(scratch) / "leg.trx"
+            write_trx(trx, {"total": 1, "executed": 1, "passed": 1}, [planner.NAMESPACE + ".Smoke.X"])
+            artifacts = Path(scratch) / "artifacts"
+            code = planner_main(["leg-summary", "--leg", "harness", "--trx", str(trx), "--artifacts", str(artifacts),
+                                 "--expect", planner.NAMESPACE + "."], {})
+            self.assertEqual(0, code)
+            self.assertIn("## Leg `harness`", (artifacts / "job-summary.md").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

@@ -420,6 +420,12 @@ def main(argv=None):
         markdown, problems = leg_summary(args.leg, args.trx, args.artifacts, args.expect)
         print(markdown)
         append("GITHUB_STEP_SUMMARY", markdown)
+        if args.artifacts:
+            # F3's JobSummary keeps the same copy: a job summary is not visible to an anonymous
+            # viewer, the uploaded artifact is.
+            Path(args.artifacts).mkdir(parents=True, exist_ok=True)
+            with open(Path(args.artifacts) / "job-summary.md", "a", encoding="utf-8") as handle:
+                handle.write(markdown)
         for problem in problems:
             print(f"::error::{problem}")
         return 1 if problems else 0

@@ -448,31 +448,18 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Find the coverage gate
-        id: gate
-        run: |
-          if [ -f test/lattice.explorer.e2e/FeatureCoverage/CoverageGateTests.cs ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::This tree has no coverage gate fixture (#5361); there is nothing to aggregate."
-          fi
-
       - name: Download every leg's coverage hits
-        if: steps.gate.outputs.present == 'true'
         uses: actions/download-artifact@v8
         with:
           pattern: coverage-hits-*
           path: coverage-hits
 
       - name: Setup .NET
-        if: steps.gate.outputs.present == 'true'
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
       - name: Cache NuGet packages
-        if: steps.gate.outputs.present == 'true'
         uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
@@ -480,7 +467,6 @@ jobs:
           restore-keys: nuget-journeys-${{ runner.os }}-
 
       - name: Run the coverage gate
-        if: steps.gate.outputs.present == 'true'
         env:
           LATTICE_E2E_COVERAGE_HITS: ${{ github.workspace }}/coverage-hits
         run: |
@@ -496,7 +482,7 @@ jobs:
             --expect "Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage.CoverageGateTests"
 
       - name: Upload the coverage report
-        if: always() && steps.gate.outputs.present == 'true'
+        if: always()
         uses: actions/upload-artifact@v6
         with:
           name: explorer-journeys-coverage-gate
