@@ -20,7 +20,8 @@ Legs:
   isolated-<jid>    one per folder under test/lattice.explorer.e2e/Journeys/,
                     discovered from the directory, so adding a journey edits
                     no shared file. LATTICE_E2E_MODE=isolated.
-  story-<storyline> the Contoso and Fabrikam story fixtures, when present.
+  story-<storyline> the Contoso and Fabrikam story fixtures, once they and a
+                    chapter contract (F6) exist in the tree.
                     LATTICE_E2E_MODE=story. On a pull request they run on its
                     merge commit, so a broken hand-off is caught before it lands.
   story-contoso-narrow  nightly only: the Contoso story at 390x844.
@@ -129,6 +130,26 @@ def story_fixtures(root):
     ]
 
 
+CONTRACT_DECLARATION = re.compile(r"\bclass\s+\w+[^{;]*:[^{;]*\bIChapterContract\b")
+
+
+def has_chapter_contracts(root):
+    """Whether the tree implements any chapter contract (F6, #5364) outside the self-tests.
+
+    A story run establishes every chapter it cannot run through its contract, so with no
+    contract at all it fails at its first chapter by construction; the story legs wait for
+    the first contract rather than turn every member pull request red before F6 lands.
+    """
+    base = Path(root) / E2E
+    for path in base.rglob("*.cs"):
+        parts = path.relative_to(base).parts
+        if parts[0] in ("SelfTests", "bin", "obj"):
+            continue
+        if CONTRACT_DECLARATION.search(path.read_text(encoding="utf-8", errors="replace")):
+            return True
+    return False
+
+
 def classify(path):
     """'journey:<folder>', 'neutral' or 'all' for one changed file."""
     if path.lower().endswith(".md"):
@@ -206,6 +227,10 @@ def plan(root, event, action="", base_ref="", changed=None):
 
     if not stories:
         notes.append("No story fixture exists in this tree yet, so no story leg is planned.")
+    elif not has_chapter_contracts(root):
+        stories = []
+        notes.append("No chapter contract (IChapterContract, F6 #5364) exists in this tree yet, so a story run "
+                     "would fail at its first chapter by construction; no story leg is planned until one does.")
 
     def every_leg():
         return ([harness_leg()]

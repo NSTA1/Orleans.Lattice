@@ -33,7 +33,8 @@ def names(result):
 class Tree:
     """A temporary repository root with journey folders and story fixtures."""
 
-    def __init__(self, journeys=("A1", "A10", "A3", "T2"), stories=("ContosoStoryTests", "FabrikamStoryTests")):
+    def __init__(self, journeys=("A1", "A10", "A3", "T2"), stories=("ContosoStoryTests", "FabrikamStoryTests"),
+                 contract=True):
         self._temporary = tempfile.TemporaryDirectory()
         self.root = Path(self._temporary.name)
         base = self.root / planner.JOURNEYS
@@ -47,6 +48,14 @@ class Tree:
         story.mkdir(parents=True)
         for fixture in stories:
             (story / f"{fixture}.cs").write_text("// story\n")
+        tests = self.root / planner.E2E / "SelfTests"
+        tests.mkdir(parents=True)
+        (tests / "DelegateContract.cs").write_text("public sealed class DelegateContract : IChapterContract {}\n")
+        if contract:
+            contracts = self.root / planner.E2E / "Contracts"
+            contracts.mkdir(parents=True)
+            (contracts / "A1Contract.cs").write_text(
+                "public sealed class A1Contract\n    : IChapterContract\n{\n}\n")
 
     def close(self):
         self._temporary.cleanup()
@@ -149,6 +158,15 @@ class PlanTests(unittest.TestCase):
         result = planner.plan(bare.root, "schedule", "", "", None)
         self.assertFalse([name for name in names(result) if name.startswith("story-")])
         self.assertTrue(any("No story fixture" in note for note in result["notes"]))
+
+    def test_story_legs_wait_for_a_chapter_contract(self):
+        bare = Tree(contract=False)
+        self.addCleanup(bare.close)
+        self.assertFalse(planner.has_chapter_contracts(bare.root), "a self-test contract does not count")
+        result = planner.plan(bare.root, "schedule", "", "", None)
+        self.assertFalse([name for name in names(result) if name.startswith("story-")])
+        self.assertTrue(any("No chapter contract" in note for note in result["notes"]))
+        self.assertTrue(planner.has_chapter_contracts(self.tree.root), "a multi-line class declaration counts")
 
     def test_a_folder_that_is_not_a_chapter_fails_the_plan(self):
         for folder in ("Z1", "a-3"):

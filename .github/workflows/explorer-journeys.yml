@@ -32,7 +32,9 @@ name: Explorer Journeys
 #                      request runs its journeys' storylines on its MERGE commit
 #                      (the pull_request checkout), so a broken hand-off is caught
 #                      before it lands; the bucket-to-main pull request and the
-#                      nightly run run both.
+#                      nightly run run both. Planned once the tree holds a
+#                      chapter contract (F6, #5364): without one a story fails
+#                      at its first chapter by construction.
 #   story-contoso-narrow  nightly only: the Contoso story at 390x844.
 # After the legs, `coverage-gate` unions every leg's coverage hits. On a body
 # edit of a member pull request, `provenance` checks the `## Journey
