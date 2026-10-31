@@ -161,6 +161,33 @@ internal sealed class BackupsAreaPage(PersonaSession session)
     public Task ExpectOperationStateAsync(string state) =>
         Expect(OperationProgress).ToHaveAttributeAsync("data-lt-operation-state", state, new() { Timeout = OperationTimeout });
 
+    /// <summary>
+    /// Submits the capture form and waits for the staged capture's status page to report it
+    /// refused at its Check access stage, with <paramref name="message"/>.
+    /// </summary>
+    /// <param name="tree">The tree whose capture was refused.</param>
+    /// <param name="message">The refusal the page shows.</param>
+    public async Task SubmitCaptureExpectingRefusalAsync(string tree, string message)
+    {
+        await Content.GetByRole(AriaRole.Button, new() { Name = "Capture backup", Exact = true }).ClickAsync();
+        await Expect(Page).ToHaveURLAsync(new Regex("/backups/operations/[^/?]+$"), new() { Timeout = LoadTimeout });
+        await Shell.ExpectHeadingAsync("Capture a full backup of " + tree);
+        var status = Content.Locator("p.lt-backups-status");
+        await Expect(status.Locator(".lt-pill")).ToHaveTextAsync("Failed", new() { Timeout = LoadTimeout });
+        await Expect(status).ToContainTextAsync(message);
+        var checkAccess = Content.GetByRole(AriaRole.List, new() { Name = "Stages" }).GetByRole(AriaRole.Listitem).Filter(new() { HasText = "Check access" });
+        await Expect(checkAccess).ToContainTextAsync("Failed");
+        await Expect(OperationProgress).ToHaveCountAsync(0);
+    }
+
+    /// <summary>Asserts the schedules page offers the shown tree's schedules and the form to change them.</summary>
+    public async Task ExpectSchedulesOfferedAsync()
+    {
+        await Expect(ScheduleRow("Full")).ToBeVisibleAsync(new() { Timeout = LoadTimeout });
+        await Expect(Content.GetByRole(AriaRole.Button, new() { Name = "Save schedule", Exact = true })).ToBeVisibleAsync();
+        await Expect(Content.GetByText("You may not schedule backups of this tree.", new() { Exact = true })).ToHaveCountAsync(0);
+    }
+
     /// <summary>The value a definition list on the page gives <paramref name="term"/>.</summary>
     /// <param name="term">The term.</param>
     public ILocator Definition(string term) =>

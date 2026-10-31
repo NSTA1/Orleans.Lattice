@@ -1,5 +1,8 @@
 using System.Globalization;
 using Microsoft.Playwright;
+using Orleans.Lattice.Api.Auth.Grpc;
+using Orleans.Lattice.Auth;
+using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Checkpoints;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts;
@@ -22,7 +25,10 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Journeys.A6;
 /// through a back door: in step 2 it reads the backup storage account directly to show the
 /// captured artifacts landed there; in step 4 it holds the backup account's artifact writes, as a
 /// congested storage account would, so the capture Olivia starts by mistake is still running when
-/// she cancels it (a telemetry capture otherwise finishes in about a second).
+/// she cancels it (a telemetry capture otherwise finishes in about a second). In step 8 it acts
+/// as another administrator through the Auth API: it delegates backups to Priya, narrows the
+/// grant while her capture form is open so the server refuses her capture, restores it, and
+/// finally withdraws the delegation.
 /// </para>
 /// <para>
 /// The "hourly" schedule is registered at the story's compressed hour,
@@ -36,6 +42,12 @@ public sealed class A6BackupPostureJourney : JourneyChapter
 {
     /// <summary>The name of the capture Olivia starts by mistake, then cancels.</summary>
     public const string MistakenCapture = "telemetry-by-mistake";
+
+    /// <summary>The name of the capture the server refuses Priya once her grant is narrowed.</summary>
+    public const string PriyaCapture = "orders-by-priya";
+
+    /// <summary>The scratch rule that delegates backups to Priya during step 8; withdrawn before the chapter ends.</summary>
+    public const string DelegatedBackupRuleId = ContosoAccess.ScratchRulePrefix + "a6-priya-backups";
 
     private static readonly TimeSpan ScheduleFireTimeout = TimeSpan.FromMinutes(5);
 
@@ -230,7 +242,60 @@ public sealed class A6BackupPostureJourney : JourneyChapter
             Coverage.Hit("use-case:backups/maintenance");
             await olivia.SubstepAsync(Recorder, step, "catalogue-rebuilt", "Rebuild: every manifest is reconciled in place, nothing added, nothing changes");
         });
+
+        await StepAsync(8, async step =>
+        {
+            // Off-UI, the harness acts as another administrator through the Auth API: it
+            // delegates baseline captures to Priya for a while, narrows that grant while her
+            // capture form is open, then restores it, and finally withdraws the delegation so
+            // the estate leaves A6 exactly as A6's contract says.
+            var auth = ContractFacades.Of(context).Auth;
+            var priyaBackup = ContractFacades.Of(context, user: Personas.Priya.Id).Backup;
+            var orders = BackupScopeSelector.WholeTree(Names.Trees.FactoryOrders);
+            await auth.PutRuleAsync(new AuthPutRule { Rule = DelegatedBackup(withBackup: true) });
+            await ContractWait.UntilAsync("Priya's delegated backup grant", async () => (await priyaBackup.ProbeCapabilitiesAsync(orders)).CanCapture);
+            try
+            {
+                await using var priya = await estate.SignInAsAsync(Personas.Priya);
+                var priyaBackups = new BackupsAreaPage(priya);
+                await priyaBackups.OpenFromSpineAsync();
+                await priyaBackups.OpenCaptureFromToolbarAsync();
+                await priyaBackups.FillCaptureAsync("Full", PriyaCapture, Names.Trees.FactoryOrders);
+                await priya.SubstepAsync(Recorder, step, "priya-capture-form", "Priya, holding a delegated backup grant, fills in a full capture of factory-orders");
+
+                await auth.PutRuleAsync(new AuthPutRule { Rule = DelegatedBackup(withBackup: false) });
+                await ContractWait.UntilAsync("Priya's narrowed grant", async () => !(await priyaBackup.ProbeCapabilitiesAsync(orders)).CanCapture);
+                await priyaBackups.SubmitCaptureExpectingRefusalAsync(Names.Trees.FactoryOrders, "You are not permitted to do this.");
+                Assert.That(await ContractCalls.FindBackupAsync(backup, PriyaCapture), Is.Null, "the refused capture produced no backup");
+                Coverage.Hit("use-case:backups/server-authority");
+                await priya.SubstepAsync(Recorder, step, "priya-capture-refused", "Her grant narrowed while the form was open: the server refuses the capture at its Check access stage, and the page says so");
+
+                await auth.PutRuleAsync(new AuthPutRule { Rule = DelegatedBackup(withBackup: true) });
+                await ContractWait.UntilAsync("Priya's restored grant", async () => (await priyaBackup.ProbeCapabilitiesAsync(orders)).CanCapture);
+                await priyaBackups.BackToCatalogueAsync();
+                await priyaBackups.GoToAsync("Schedules", "Schedules");
+                await priyaBackups.ShowSchedulesAsync(Names.Trees.FactoryOrders);
+                await priyaBackups.ExpectSchedulesOfferedAsync();
+                await priya.SubstepAsync(Recorder, step, "priya-grant-restored", "The grant restored: the server lets Priya read and schedule factory-orders' backups again");
+            }
+            finally
+            {
+                await auth.RemoveRuleAsync(new AuthRuleRef { TreeId = LatticeScope.ClusterWideTreeId, RuleId = DelegatedBackupRuleId });
+            }
+
+            Assert.That(
+                (await ContractCalls.AllRulesAsync(auth)).Where(rule => rule.RuleId == DelegatedBackupRuleId),
+                Is.Empty,
+                "the delegation is withdrawn, so A6's produces are unchanged");
+        });
     }
+
+    private static LatticeAuthorizationRule DelegatedBackup(bool withBackup) => new(
+        DelegatedBackupRuleId,
+        LatticeSubjectSelector.User(Personas.Priya.Id),
+        LatticeScope.Tree(LatticeScope.ClusterWideTreeId),
+        ContosoAccess.ReadOps | (withBackup ? LatticeOperation.Backup : LatticeOperation.None),
+        LatticeEffect.Allow);
 
     private static async Task StepAsync(int number, Func<string, Task> body)
     {
