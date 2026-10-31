@@ -404,7 +404,7 @@ public sealed class SchemaRuleWorkshopJourney : JourneyChapter
 
         await page.OpenTabAsync("Versions");
         await Expect(page.Definition("Target version")).ToHaveTextAsync("2");
-        await Expect(page.Content.Locator(".lt-schema-heading .lt-pill__text").Filter(new() { HasTextRegex = new Regex("^version 2$") })).ToHaveCountAsync(1);
+        await Expect(page.Definition("Schema family")).ToHaveTextAsync("2");
         await run.ShotAsync(6, "at-version-2", "factory-lines now stamps version 2, and every stored line was rewritten at it");
         Coverage.Hit("use-case:schema/advance-and-migrate");
     }
