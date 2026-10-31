@@ -21,6 +21,9 @@ internal sealed class FakeReplicationControl : ILatticeReplicationControl
 
     public int Reads { get; private set; }
 
+    /// <summary>Whether the caller may configure replication for a tree it is asked about.</summary>
+    public bool MayConfigure { get; set; } = true;
+
     public List<(string TreeId, LatticeMergeMode Mode, string? Bootstrap)> Enables { get; } = [];
 
     public List<string> Disables { get; } = [];

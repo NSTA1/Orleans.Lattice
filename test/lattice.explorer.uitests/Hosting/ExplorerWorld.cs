@@ -422,6 +422,7 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
             silo.AddLatticeBackup();
             silo.AddLatticeBackupApi();
             silo.AddLatticeReplication(options => options.ClusterId = "explorer-uitests");
+            silo.AddLatticeReplicationApi();
             silo.AddLatticeReplicationStatusApi();
 
             silo.Services.AddSingleton<ILatticeCredentialAuthenticator, TrustedUserAuthenticator>();
@@ -463,6 +464,7 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
         app.MapLatticeAppBridgeApiGrpc();
         app.MapLatticeTreeAdminApiGrpc();
         app.MapLatticeBackupApiGrpc();
+        app.MapLatticeReplicationApiGrpc();
         app.MapLatticeReplicationStatusApiGrpc();
         if (tenancy)
         {
