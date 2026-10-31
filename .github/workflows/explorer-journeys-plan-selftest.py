@@ -201,13 +201,18 @@ class CommandLineTests(unittest.TestCase):
 
 
 def planner_main(argv, environment):
+    import contextlib
+    import io
     import os
     saved = {key: os.environ.get(key) for key in ("GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY")}
     try:
         for key in saved:
             os.environ.pop(key, None)
         os.environ.update(environment)
-        return planner.main(argv)
+        # The command prints workflow commands (::error::); inside a CI job they would become
+        # annotations on a green run, so the self-test swallows them.
+        with contextlib.redirect_stdout(io.StringIO()):
+            return planner.main(argv)
     finally:
         for key, value in saved.items():
             if value is None:
