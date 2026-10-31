@@ -15,7 +15,7 @@
 (* a starvation drive that reports NotDriven for such a leaf. Both run as  *)
 (* separate, non-atomic storage steps, two sweepers can race (each silo's *)
 (* local loop and the tree's coordinator grain), and the same leaf grain   *)
-(* id can be populated again after a purge cleared it.                     *)
+(* id can be populated again after a purge or a fold cleared its row.     *)
 (*                                                                         *)
 (* The design checked here is the one that fences the removal: a sweeper  *)
 (* takes a token from each pin-store key as it enumerates it, and a       *)
@@ -46,9 +46,10 @@ EXTENDS Naturals, Integers, FiniteSets, TLC
 (* did not publish it; only the gate's mutation sets it. Process 0 is the  *)
 (* starvation drive's retirement; processes 1..NSweepers are orphan        *)
 (* sweepers. MaxInc bounds how many times L's grain id is populated again  *)
-(* after a purge. MaxFaults bounds the environment faults - a routing     *)
-(* change, an unreadable leaf read, an abandoned run - and is zero in the  *)
-(* base: the OneFault variant checks the safety properties with one.       *)
+(* after its row was cleared. MaxFaults bounds the environment faults - a *)
+(* routing change, an unreadable leaf read, an abandoned run - and is     *)
+(* zero in the base: the OneFault variant checks the safety properties    *)
+(* with one.                                                               *)
 (***************************************************************************)
 Keys == {"k1", "k2"}
 \* The order the sweep enumerates them in (EnumerateReadKeys).
@@ -89,7 +90,7 @@ IdVerdict(c) == IF c = "cL" THEN "LeafPublished" ELSE "AmbiguousPartition"
 (*            cleared: no record or no tree id), "discarded" (an undone    *)
 (*            resize's copy that can never be recovered).                  *)
 (*  inc       the incarnation: how often L's id was populated again after  *)
-(*            a purge cleared it.                                          *)
+(*            its row was cleared.                                         *)
 (*  seeded    this incarnation's birth block pin has landed; L takes no    *)
 (*            write before it.                                             *)
 (*  cp        this incarnation's durable checkpoint: every write at or     *)
@@ -99,8 +100,10 @@ IdVerdict(c) == IF c = "cL" THEN "LeafPublished" ELSE "AmbiguousPartition"
 (*            acknowledged above its checkpoint. A purge's clear (which    *)
 (*            deletes them by design), a fold (which moved them to a       *)
 (*            survivor) and a discard (which abandons the copy) end it.    *)
-(*  purgeMark the row record's purge marker (PurgeCleared), which alone    *)
-(*            admits re-creating a rowless L.                              *)
+(*  purgeMark whether L's row record admits re-creating a rowless L: the   *)
+(*            purge marker (PurgeCleared), or no record at all once a      *)
+(*            fold's clear deleted it (AdmitCreateIntentAsync admits a     *)
+(*            create intent when neither record nor snapshot survives).    *)
 (*  owed      the pin-store keys L's terminal seam has still to retire.    *)
 (*  route     the key L's pins are routed to now.                          *)
 (*                                                                         *)
@@ -337,8 +340,11 @@ ClearRow ==
           /\ owed = {}
           /\ UNCHANGED <<need, owed>>
     /\ phase' = "husk"
+    \* A purge's clear keeps the record, marked; a fold's deletes it. Either
+    \* admits re-creating the rowless leaf (AdmitCreateIntentAsync).
+    /\ purgeMark' = TRUE
     /\ UNCHANGED walVars
-    /\ UNCHANGED <<inc, seeded, cp, purgeMark, route>>
+    /\ UNCHANGED <<inc, seeded, cp, route>>
     /\ UNCHANGED pinVars
     /\ UNCHANGED procVars
     /\ UNCHANGED faults
@@ -373,14 +379,19 @@ SelfRetireFail(k) ==
     /\ UNCHANGED faults
 
 (***************************************************************************)
-(* Recreate: L's grain id is populated again after a purge cleared it - a  *)
+(* Recreate: L's grain id is populated again after its row was cleared - a *)
 (* recovery re-binding a purge-cleared leaf, a reused tree id re-seeding a *)
-(* deterministic shard root leaf, a bulk load re-using a leaf id. Each is  *)
-(* admitted only by the purge marker (AdmitPurgeClearedAsync,              *)
-(* AdmitCreateIntentAsync) and binds the tree id before seeding its block  *)
-(* pin. The dying turn's own retirement has ended first: a grain has one   *)
-(* activation at a time. Nothing else gates it, and in particular nothing *)
-(* waits for an orphan sweep in flight.                                    *)
+(* deterministic shard root leaf, a bulk load re-using a leaf id. A        *)
+(* rowless leaf is admitted only when its row record shows the clear: the *)
+(* purge marker (AdmitPurgeClearedAsync, AdmitCreateIntentAsync), or no    *)
+(* record at all after a fold's clear deleted it (AdmitCreateIntentAsync,  *)
+(* with no snapshot surviving). It binds the tree id before seeding its    *)
+(* block pin. The dying turn's own retirement has ended first: the clear   *)
+(* latches the activation against any later row write (_leafStateCleared) *)
+(* and deactivates it, so the re-creation runs on a later activation; a    *)
+(* duplicate activation or a late-delivered removal from a lost one is a   *)
+(* stated abstraction gap. Nothing else gates it, and in particular        *)
+(* nothing waits for an orphan sweep in flight.                            *)
 (***************************************************************************)
 Recreate ==
     /\ phase = "husk"
@@ -430,7 +441,9 @@ DiscardRetire ==
 (* GcTrim: WalDurability's trim. No trim while any block pin stands;       *)
 (* otherwise every offset at or below the floor may go. It ignores the     *)
 (* in-memory cursors production also consults, which over-approximates    *)
-(* the trim: an activation's cursor does not survive its activation.       *)
+(* the trim: that registry is per silo and lasts until an unregister or a *)
+(* silo restart, and a GC pass on any silo not holding a leaf's cursor    *)
+(* trims the shared WAL without seeing it.                                *)
 (***************************************************************************)
 GcTrim ==
     /\ ~Blocking

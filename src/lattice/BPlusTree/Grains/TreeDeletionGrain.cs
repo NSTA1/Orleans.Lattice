@@ -397,8 +397,9 @@ internal sealed partial class TreeDeletionGrain(
 
         if (state.State.PurgeComplete && state.State.Delegated)
         {
-            await SettleRegistryEntryAsync();
+            // Pins before the registry entry, as FinishCompletedPurgeAsync (#5416).
             await DeregisterLeafCursorsAsync();
+            await SettleRegistryEntryAsync();
             return;
         }
         if (state.State.PurgeComplete && state.State.RegistryUnregisterPending)
@@ -810,17 +811,26 @@ internal sealed partial class TreeDeletionGrain(
     /// Finishes a purge whose completion is persisted: trims the tree's log
     /// while its registry entry still resolves the partition count and
     /// placement (issue #3936 - otherwise a purge that never discarded leaves
-    /// no cursor behind to ever trim it again), removes the registry entry,
-    /// then retires the cursors and reminders and publishes the purge. Safe to
-    /// re-drive after a failure: a removal still owed is recorded in
+    /// no cursor behind to ever trim it again), retires the leaf cursors and
+    /// durable materialiser pins, removes the registry entry, then retires the
+    /// reminders and publishes the purge. Safe to re-drive after a failure: a
+    /// removal still owed is recorded in
     /// <see cref="TreeDeletionState.RegistryUnregisterPending"/> (issue #4265).
     /// </summary>
+    /// <remarks>
+    /// The pins are cleared BEFORE the registry entry is removed (issue #5416).
+    /// Removing the entry is what frees the id: a write can then register it
+    /// again and re-seed the shard's deterministic root leaf, whose birth seed
+    /// lands under the purged root leaf's consumer id. A clear after that would
+    /// erase the new tree's block pins, unfenced. While the registry still names
+    /// the purged tree, no write can register it again.
+    /// </remarks>
     private async Task FinishCompletedPurgeAsync()
     {
         await TrimPurgedWalAsync();
+        await DeregisterLeafCursorsAsync();
         await SettleRegistryEntryAsync();
 
-        await DeregisterLeafCursorsAsync();
         await UnregisterAllRemindersAsync();
         await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreePurged);
     }

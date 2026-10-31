@@ -225,8 +225,8 @@ Since then the models have found nine more, each reproduced before its fix:
 | #4669 | A cold leaf releases a partition its replay has not read. Fixed: no empty release before the replay barrier latches. |
 | #4641 | A write stamped below an empty release's frontier is trimmed by every stamp-based GC arm. Fixed: a durable override hold the GC reads as a block. |
 | #4699 | A move's quiesce ignores an abandoned call a predecessor activation left. Fixed: the drain check reads the process-wide registry. |
-| #5358 | The GC removed an orphaned pin by consumer id after a husk read taken in a separate step, so a purge-cleared leaf re-created in between lost the block pin its birth seeded under the same consumer id, and the trim could pass its un-checkpointed writes. Fixed: the removal is fenced by the pin grain's per-activation merge stamps, and the drive retires through the same fenced sequence. Found by `WalPinRetirement`. |
 | #4700 | A purge's shard-wide recovery flag re-creates empty a leaf the purge never reached, and strands cleared leaves when the reseed stops early. Fixed: each leaf carries its own purge marker, and recovery re-creates only a marked leaf, visiting every one. |
+| #5358 | The GC removed an orphaned pin by consumer id after a husk read taken in a separate step, so a purge-cleared leaf re-created in between lost the block pin its birth seeded under the same consumer id, and the trim could pass its un-checkpointed writes. Fixed: the removal is fenced by the pin grain's per-activation merge stamps, and the drive retires through the same fenced sequence. Found by `WalPinRetirement`. |
 
 **What is covered:** one WAL partition shared by two leaves, with two faults per
 behaviour for safety and one for liveness, and a variant with snapshot and row loss
@@ -244,7 +244,8 @@ stamps and a retention TTL (`WalPartitionReleaseModel`).
 - replication consumers, beyond their effect on the trim floor;
 - liveness under two faults, or any property under three;
 - for pin retirement, several leaves or partitions per leaf, the pin's HLC frontier
-  and override holds, and the in-memory cursor registry.
+  and override holds, the in-memory cursor registry, and the tree-wide pin-store
+  clear that ends a purge (its ordering is pinned by tests instead).
 
 Coverage of the leaf lifecycle does not imply coverage of any of those. Each module's
 refinement note lists its gaps in full.
