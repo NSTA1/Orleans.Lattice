@@ -144,8 +144,7 @@ public partial class RestoreParticipantTests
 
     /// <summary>
     /// Drives a commit whose alias swap faults part-way, leaving the cutover started
-    /// but not completed - the one state from which an abort must revert. The
-    /// participant grain never delivers an abort after a commit that completed.
+    /// but not completed - a state from which an abort must revert.
     /// </summary>
     private static async Task CommitFaultingPartWayAsync(
         RestoreParticipant participant, ILatticeCoordinatedRestoreEngine engine, SagaControlRequest request)

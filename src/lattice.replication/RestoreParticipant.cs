@@ -90,14 +90,16 @@ internal sealed class RestoreParticipant(
         new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Saga ids whose cutover this participant has started, and whose commit has not
-    /// completed, on this activation. An abort reverts the alias only for these: a
-    /// saga that only prepared never moved the alias, and reverting it collides with
-    /// the build's own open alias operation (#5443). The record is dropped when the
-    /// commit completes (the participant grain never delivers an abort after a
-    /// commit), when an abort consumes it, and when a new prepare starts a fresh run
-    /// of a deterministic saga id, so a later run never inherits an earlier run's
-    /// cutover. A reactivation that lost this set also lost the built cache, so the
+    /// Saga ids whose cutover this participant has started in the current run of
+    /// the saga, on this activation. An abort reverts the alias only for these: a
+    /// saga that only prepared never moved the alias, and reverting it collides
+    /// with the build's own open alias operation (#5443). The record belongs to one
+    /// run: a new prepare starts a fresh run of the deterministic saga id and drops
+    /// it, and an abort consumes it, so a later run never reverts an earlier run's
+    /// cutover. It deliberately survives a completed commit, because an operator
+    /// who resolves a participant to abort after its commit completed locally, but
+    /// before its grain recorded the Committed phase, must still have the alias
+    /// reverted. A reactivation that lost this set also lost the built cache, so the
     /// abort takes the no-revert garbage-collect path either way.
     /// </summary>
     private readonly ConcurrentDictionary<string, bool> _cutOver =
@@ -568,9 +570,6 @@ internal sealed class RestoreParticipant(
         // shipping stays paused until the saga globally completes (the fence
         // grain's global gate), so no early-flipping cluster re-advances the cut.
         await fence.UnblockWritesAsync();
-
-        // The commit completed, so the participant is terminal for this run.
-        _cutOver.TryRemove(request.SagaId, out _);
         RecordCommit(LatticeReplicationMetrics.SagaReasonSingle);
     }
 
@@ -877,9 +876,6 @@ internal sealed class RestoreParticipant(
             result => engine!.CommitShadowAsync(result, cancellationToken));
 
         await fence.UnblockWritesAsync();
-
-        // The commit completed, so the participant is terminal for this run.
-        _cutOver.TryRemove(request.SagaId, out _);
         RecordCommit(LatticeReplicationMetrics.SagaReasonSet);
     }
 

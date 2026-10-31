@@ -109,6 +109,23 @@ public partial class RestoreParticipantTests
     }
 
     [Test]
+    public async Task AbortAsync_after_a_completed_commit_in_the_same_run_still_reverts()
+    {
+        // An operator resolving a participant to abort after its commit completed
+        // locally, but before its grain recorded Committed, must get the alias back.
+        var engine = HealthyEngine();
+        var restoreService = Substitute.For<ILatticeBackupRestoreService>();
+        var participant = Participant(
+            engine, FactoryFor(Substitute.For<ISagaWriteFenceGrain>()), restoreService: restoreService);
+
+        await participant.PrepareAsync(Request());
+        await participant.CommitAsync(Request());
+        await participant.AbortAsync(Request());
+
+        await restoreService.Received(1).RevertRestoreAsync(Arg.Any<LatticeRestoreResult>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task AbortAsync_of_a_rerun_after_a_completed_commit_leaves_the_earlier_alias_untouched()
     {
         // Saga ids are deterministic, so the same restore run again reuses the id. The

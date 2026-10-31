@@ -111,9 +111,9 @@ phases:
    tree is left untouched. A participant whose cutover started but did not
    complete reverts the alias first; one that only prepared never moved it, so it
    does not revert, and deleting the shadow releases the target's alias
-   reservation. A completed commit, or a new prepare of the same (deterministic)
-   saga id, clears that record, so a later run never reverts an earlier run's
-   cutover ([#5443](https://github.com/NSTA1/Orleans.Lattice/issues/5443)).
+   reservation. A new prepare of the same (deterministic) saga id, or the
+   abort itself, clears that record, so a later run never reverts an earlier
+   run's cutover ([#5443](https://github.com/NSTA1/Orleans.Lattice/issues/5443)).
 
 These guarantees make this safe under failure:
 
