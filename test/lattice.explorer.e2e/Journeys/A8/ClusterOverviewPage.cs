@@ -28,12 +28,29 @@ internal sealed class ClusterOverviewPage(ShellPage shell) : A8PageObject(shell)
     /// <summary>Why the last re-measure ended without figures.</summary>
     public ILocator RefreshError => Content.Locator("[data-lt-cluster=\"remeasure-error\"]");
 
-    /// <summary>Opens the Cluster area from its spine stop.</summary>
+    /// <summary>
+    /// The note a tenant-scoped overview draws in place of the cluster-wide controls, with its
+    /// "See the cluster-wide overview" link.
+    /// </summary>
+    public ILocator ClusterWideNote => Content.Locator("[data-lt-cluster-wide=\"true\"]");
+
+    /// <summary>
+    /// Opens the Cluster area from its spine stop, and the cluster-wide overview when the shell
+    /// lands on a tenant's: a tenant-scoped overview offers no re-measure and only its first
+    /// Administer stop.
+    /// </summary>
     public async Task OpenAsync()
     {
         await Shell.GoToAreaAsync("cluster");
         await Shell.ExpectHeadingAsync("Cluster");
         await Expect(Term("Cluster id")).Not.ToBeEmptyAsync();
+        await Expect(Measure.Or(ClusterWideNote)).ToBeVisibleAsync();
+        if (await ClusterWideNote.IsVisibleAsync())
+        {
+            await ClusterWideNote.GetByRole(AriaRole.Link, new() { Name = "See the cluster-wide overview" }).ClickAsync();
+            await Expect(ClusterWideNote).ToHaveCountAsync(0);
+        }
+
         await Expect(Measure).ToBeVisibleAsync();
         Coverage.Hit("route:/cluster");
     }
