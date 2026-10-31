@@ -78,4 +78,13 @@ internal sealed class ViewRegistryGrain(
     public Task<IReadOnlyList<RuntimeViewRegistration>> ListAsync() =>
         Task.FromResult<IReadOnlyList<RuntimeViewRegistration>>(
             state.State.Registrations.Values.ToArray());
+
+    /// <inheritdoc />
+    public Task<bool?> GetAggregationKindAsync(string viewName)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        return Task.FromResult(state.State.Registrations.TryGetValue(viewName, out var registration)
+            ? (bool?)registration.IsAggregation
+            : null);
+    }
 }

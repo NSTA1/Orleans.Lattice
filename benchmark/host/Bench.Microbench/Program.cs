@@ -79,6 +79,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // The settlementcalls suite models conditional registry fallback dispatch at three callers.
 // The settlementfusion suite models activation, cleanup batches and local prepare probes.
 // The adminstatus suite models the tree-admin resize, reshard and view status elisions.
+// Also recognised: adminsampling models view sample fusion, scalar lookup and tree-stat overlap.
 // The bootstrapcalls suite models capture, foreign scan and per-leaf saga discard fusion.
 // The maintenanceelisions suite selects the reshard, consolidation and options
 // lanes of autonomicprobes.
@@ -95,6 +96,13 @@ var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
     if (args[i] == "--suite") { suite = args[i + 1]; break; }
+}
+
+// adminsampling models view sample fusion, scalar registry lookup and tree-stat overlap.
+if (string.Equals(suite, "adminsampling", StringComparison.OrdinalIgnoreCase))
+{
+    var samplingSummary = BenchmarkRunner.Run<AdminSamplingBenchmarks>(config);
+    return samplingSummary.HasCriticalValidationErrors || samplingSummary.Reports.Any(report => !report.Success) ? 1 : 0;
 }
 
 if (string.Equals(suite, "adminstatus", StringComparison.OrdinalIgnoreCase))

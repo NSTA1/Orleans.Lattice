@@ -2623,6 +2623,12 @@ internal sealed class LatticeStateQuery(
                 return (null, null);
             }
 
+            if (view is LatticeView latticeView)
+            {
+                var stats = await latticeView.SampleStatsAsync(cancellationToken).ConfigureAwait(false);
+                return (stats.Lag, stats.EntryCount);
+            }
+
             var lag = await view.GetLagAsync(cancellationToken).ConfigureAwait(false);
             var count = await view.CountAsync(cancellationToken).ConfigureAwait(false);
             return (lag, count);

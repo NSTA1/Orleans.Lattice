@@ -180,16 +180,8 @@ internal sealed class LatticeViewFactory(
             return BuildHandle(viewName, startup.AggregationProjectionFactory is not null);
         }
 
-        var durable = await RegistryGrain.ListAsync();
-        for (var i = 0; i < durable.Count; i++)
-        {
-            if (string.Equals(durable[i].ViewName, viewName, StringComparison.Ordinal))
-            {
-                return BuildHandle(viewName, durable[i].IsAggregation);
-            }
-        }
-
-        return null;
+        var isAggregation = await RegistryGrain.GetAggregationKindAsync(viewName);
+        return isAggregation is { } kind ? BuildHandle(viewName, kind) : null;
     }
 
     private LatticeView BuildHandle(string viewName, bool isAggregation)

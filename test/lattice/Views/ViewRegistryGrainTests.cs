@@ -8,6 +8,23 @@ namespace Orleans.Lattice.Tests.Views;
 public sealed class ViewRegistryGrainTests
 {
     [Test]
+    public async Task GetAggregationKindAsync_preserves_missing_false_true_and_durable_delete()
+    {
+        var state = new FakePersistentState<ViewRegistryState>();
+        var grain = CreateGrain(state);
+        await grain.RegisterAsync(Registration("plain"));
+        await grain.RegisterAsync(Registration("aggregate") with { IsAggregation = true });
+
+        Assert.That(await grain.GetAggregationKindAsync("missing"), Is.Null);
+        Assert.That(await grain.GetAggregationKindAsync("PLAIN"), Is.Null);
+        Assert.That(await grain.GetAggregationKindAsync("plain"), Is.False);
+        Assert.That(await grain.GetAggregationKindAsync("aggregate"), Is.True);
+        await grain.UnregisterAsync("plain");
+        Assert.That(await grain.GetAggregationKindAsync("plain"), Is.Null);
+        Assert.That(state.WriteCount, Is.EqualTo(3));
+    }
+
+    [Test]
     public async Task RegisterAsync_retry_after_failed_initial_persist_writes_again()
     {
         var state = new FakePersistentState<ViewRegistryState>
