@@ -996,7 +996,7 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// rewrite is written as-is.
     /// </summary>
     private static async ValueTask<SchemaRestampInput> DecodedPlainAsync(ValueTask<byte[]> decode) =>
-        new(await decode.ConfigureAwait(false), Stamped: false, 0, 0);
+        new(await decode, Stamped: false, 0, 0);
 
     /// <summary>
     /// Compiles the target policy for build-time revalidation, or returns <c>null</c>
