@@ -46,6 +46,7 @@ public sealed class PreparedBucketSweepOriginalStampTests
         var registry = Substitute.For<ITxRegistryGrain>();
         registry.GetStatusAsync(tx).Returns(TxStatus.Committed);
         registry.GetStatusForTerminalAsync(tx).Returns(TxStatus.Committed);
+        registry.GetStatusForSettlementAsync(tx).Returns(TxStatus.Committed);
         factory.GetGrain<ITxRegistryGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(registry);
 
         var called = false;

@@ -12,6 +12,10 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Security
 
+- **Security - Tag source boundaries.** Distinct tag catalogs require unfiltered source read access, including every covered source for an index-wide union. Tags belonging only to protected keys are no longer disclosed to prefix-only readers. ([#5293](https://github.com/NSTA1/Orleans.Lattice/issues/5293)) (`Orleans.Lattice.Api.State`)
+
+- **Security - Tenant tag browsing.** Index-wide tag and member reads enforce tenant enumeration even without auth-backed visibility. Hidden sources suppress tag unions; hidden members cannot trigger presence probes or continuation pages. ([#5293](https://github.com/NSTA1/Orleans.Lattice/issues/5293)) (`Orleans.Lattice.Api.State`)
+
 - **Security - Backup isolation.** Backup backing trees now require explicit grants or bootstrap administration. Default-allow and all-trees grants no longer expose captured bytes from denied source trees. ([#5262](https://github.com/NSTA1/Orleans.Lattice/issues/5262)) (`Orleans.Lattice.Auth`)
 
 - **Security - Topology boundaries.** Raw tree, shard and sub-path topology now requires unfiltered tree or view-source read access, preventing protected split keys from reaching prefix-only readers. Filtered entry scans remain available. ([#5262](https://github.com/NSTA1/Orleans.Lattice/issues/5262)) (`Orleans.Lattice.Api.State`)
@@ -22,9 +26,11 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Security - Registry routing.** Authorization-enabled clusters refuse direct external calls to the internal tree registry, preventing forged physical routing entries from bypassing alias-target checks. Trusted infrastructure calls remain available. ([#5210](https://github.com/NSTA1/Orleans.Lattice/issues/5210)) (`Orleans.Lattice`)
 
-- **Security - Schema previews.** Schema backing trees now require explicit tree grants or bootstrap administration. Data-plane default-allow and all-trees grants no longer reveal dead-letter value previews from denied source trees. ([#5210](https://github.com/NSTA1/Orleans.Lattice/issues/5210)) (`Orleans.Lattice.Auth`)
+- **Security - Schema previews.** Schema backing trees require explicit grants or bootstrap administration. State dead-letter pages and counts additionally require unfiltered source read access, preventing prefix-only readers from recovering denied keys or captured values. ([#5210](https://github.com/NSTA1/Orleans.Lattice/issues/5210), [#5293](https://github.com/NSTA1/Orleans.Lattice/issues/5293)) (`Orleans.Lattice.Auth`, `Orleans.Lattice.Api.State`)
 
 ### Changed
+
+- **Performance - Settlement grain calls.** Replicated prepares, migration pre-checks and forwarded-prepare deduplication resolve Indeterminate status with one registry call instead of two, retaining local verdict durability, capture gates and reader intent. ([#5318](https://github.com/NSTA1/Orleans.Lattice/pull/5318)) (`Orleans.Lattice`)
 
 - **Internal - Orphaned grain methods removed.** Internal grain-interface methods that no production code has called since 10.2.0, left behind by the call elisions above and in 10.2.0, are deleted or reduced to internal cores of the combined calls that replaced them. A rolling upgrade from 10.2.0 is unaffected; one straight from an earlier release would fail calls to the removed methods, so upgrade through 10.2.0. ([#5217](https://github.com/NSTA1/Orleans.Lattice/pull/5217)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
 

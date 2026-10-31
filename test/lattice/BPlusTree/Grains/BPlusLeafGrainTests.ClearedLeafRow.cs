@@ -81,28 +81,44 @@ public partial class BPlusLeafGrainTests
     [TestCase(true)]
     public async Task A_clear_waits_for_an_interleaved_persist_already_in_flight(bool combined)
     {
-        var wal = new GrowingWal();
-        wal.GrowTo(3);
-        var (grain, state, _, _) = CreateLeafForFlushTail(wal.Coordinator);
-        await ActivateAsync(grain);
+        var turns = new ConcurrentExclusiveSchedulerPair();
+        try
+        {
+            // Interleaved Orleans calls share one turn scheduler, not parallel CLR threads.
+            await Task.Factory.StartNew(ExerciseAsync, CancellationToken.None,
+                TaskCreationOptions.None, turns.ExclusiveScheduler).Unwrap();
+        }
+        finally
+        {
+            turns.Complete();
+            await turns.Completion;
+        }
 
-        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        state.BeforeWrite = () => hold.Task;
-        var parentId = GrainId.Create("internal", "reparent-4914");
-        Task reparent = combined
-            ? grain.SetParentAndGetChildDigestSnapshotAsync(parentId)
-            : grain.SetParentAsync(parentId);
-        Assert.That(reparent.IsCompleted, Is.False, "the reparent write must be held open");
+        async Task ExerciseAsync()
+        {
+            var wal = new GrowingWal();
+            wal.GrowTo(3);
+            var (grain, state, _, _) = CreateLeafForFlushTail(wal.Coordinator);
+            await ActivateAsync(grain);
 
-        var clear = grain.ClearGrainStateAsync();
-        await Task.Delay(50);
-        Assert.That(clear.IsCompleted, Is.False,
-            "THE ASSERTION. The clear must not delete the row while a write is still in flight");
+            var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            state.BeforeWrite = () => hold.Task;
+            var parentId = GrainId.Create("internal", "reparent-4914");
+            Task reparent = combined
+                ? grain.SetParentAndGetChildDigestSnapshotAsync(parentId)
+                : grain.SetParentAsync(parentId);
+            Assert.That(reparent.IsCompleted, Is.False, "the reparent write must be held open");
 
-        hold.SetResult();
-        await reparent;
-        await clear;
+            var clear = grain.ClearGrainStateAsync();
+            await Task.Delay(50);
+            Assert.That(clear.IsCompleted, Is.False,
+                "THE ASSERTION. The clear must not delete the row while a write is still in flight");
 
-        Assert.That(state.RecordExists, Is.False, "the row stays deleted once both have finished");
+            hold.SetResult();
+            await reparent;
+            await clear;
+
+            Assert.That(state.RecordExists, Is.False, "the row stays deleted once both have finished");
+        }
     }
 }

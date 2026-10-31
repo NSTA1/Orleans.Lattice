@@ -156,6 +156,16 @@ because only the first can be closed.
 
 ## Territory owned by other open issues
 
+Forwarded-prepare deduplication calls `GetStatusForPrepareDedupAsync`, which
+composes the existing reader-intent status and conditional local recorded
+fallback in one RPC. It is not terminal intent and does not answer value reads:
+the capture gate still permits an uncached reader verdict while prohibiting
+terminal settlement from dialing the coordinator. RegistryMask retains the
+same fallback and ShadowForwardOrphan retains its terminal re-check and
+failed-query bucketing behavior. The forwarded-late-prepare fixtures and
+`TxRegistryGrainTests.Settlement` exercise these boundaries; no model action,
+retention rule, decision cache write or terminal ordering was elided.
+
 Some claims made in this directory are owned by an issue that is still **open**,
 and are not in scope for the refinement note's own work. This section records
 that boundary, so that a later census of the Detector column does not re-file

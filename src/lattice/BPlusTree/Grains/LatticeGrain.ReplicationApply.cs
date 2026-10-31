@@ -884,11 +884,7 @@ internal sealed partial class LatticeGrain
     private async Task<bool> TrySettleReplicatedPrepareAsync(Guid transactionId, Func<Task> applyCommitted)
     {
         var registry = TxRegistryRouting.GetRegistry(grainFactory, TreeId, transactionId);
-        var status = await registry.GetStatusForTerminalAsync(transactionId);
-        if (status == TxStatus.Indeterminate)
-        {
-            status = await registry.GetRecordedStatusAsync(transactionId);
-        }
+        var status = await registry.GetStatusForSettlementAsync(transactionId);
 
         switch (status)
         {
