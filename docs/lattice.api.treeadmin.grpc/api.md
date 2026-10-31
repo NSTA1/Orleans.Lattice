@@ -72,6 +72,7 @@ The service name is `orleans.lattice.api.treeadmin`, so each method's full path 
 | `PlanWalMove` | `TreeAdminWalMovePlanRequest` | `TreeWalMovePlan` | `ILatticeTreeAdmin.PlanWalMoveAsync` | `PlanWalMoveAsync` |
 | `ReclaimMovedWalSource` | `TreeAdminWalReclaimRequest` | `TreeWalMoveReceipt` | `ILatticeTreeAdmin.ReclaimMovedWalSourceAsync` | `ReclaimMovedWalSourceAsync` |
 | `ListViews` | `TreeAdminViewListRequest` | `TreeViewCatalog` | `ILatticeTreeAdmin.ListViewsAsync` | `ListViewsAsync` |
+| `ListViewProviders` | `TreeAdminTreeRequest` | `TreeViewProviderCatalog` | `ILatticeTreeAdmin.ListViewProvidersAsync` | `ListViewProvidersAsync` |
 | `CreateView` | `TreeAdminCreateViewRequest` | `TreeViewStatus` | `ILatticeTreeAdmin.CreateViewAsync` | `CreateViewAsync` |
 | `GetViewStatus` | `TreeAdminViewRequest` | `TreeViewStatus` | `ILatticeTreeAdmin.GetViewStatusAsync` | `GetViewStatusAsync` |
 | `DropView` | `TreeAdminViewRequest` | `TreeAdminViewRequest` | `ILatticeTreeAdmin.DropViewAsync` | `DropViewAsync` |
@@ -298,6 +299,7 @@ The following inventory includes directly declared public members and overloads,
 - `public Task<TreeWalMovePlan> PlanWalMoveAsync(string treeId, int partition, string targetProviderKey, CancellationToken cancellationToken = default)`
 - `public Task<TreeWalMoveReceipt> ReclaimMovedWalSourceAsync(string treeId, int partition, string sourceProviderKey, CancellationToken cancellationToken = default)`
 - `public Task<TreeViewCatalog> ListViewsAsync(CancellationToken cancellationToken = default)`
+- `public Task<TreeViewProviderCatalog> ListViewProvidersAsync(string sourceTreeId, CancellationToken cancellationToken = default)`
 - `public Task<TreeViewStatus> CreateViewAsync(string viewName, string sourceTreeId, string providerKey, byte[] payload, CancellationToken cancellationToken = default)`
 - `public Task<TreeViewStatus> GetViewStatusAsync(string viewName, CancellationToken cancellationToken = default)`
 - `public async Task DropViewAsync(string viewName, CancellationToken cancellationToken = default)`
@@ -364,6 +366,7 @@ The following inventory includes directly declared public members and overloads,
 - `ListStorageUsageRefreshes = 18`
 - `CancelStorageUsageRefresh = 19`
 - `GetWalReclamation = 20`
+- `ListViewProviders = 21`
 
 ### `Orleans.Lattice.Api.TreeAdmin.Grpc.TreeAdminBulkLoadAppendRequest`
 

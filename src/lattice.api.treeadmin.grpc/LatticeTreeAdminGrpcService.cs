@@ -211,6 +211,9 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     /// <summary>Reads which durable pin holds a tree's WAL floor and whether it has wedged reclamation. Implemented in <see cref="LatticeTreeAdminGrpcService"/>.</summary>
     public abstract Task<TreeWalReclamationReport> GetWalReclamation(TreeAdminTreeRequest request, ServerCallContext context);
 
+    /// <summary>Lists the runtime-view providers a caller may create a view with over one source tree on the wrapped facade.</summary>
+    public abstract Task<TreeViewProviderCatalog> ListViewProviders(TreeAdminTreeRequest request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at startup
     /// with <paramref name="serviceImpl"/> set to <see langword="null"/> to record
@@ -291,6 +294,7 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
             binder.AddMethod(methods.ListStorageUsageRefreshes, (UnaryServerMethod<LatticeOperationListRequest, LatticeOperationPage>?)null);
             binder.AddMethod(methods.CancelStorageUsageRefresh, (UnaryServerMethod<TreeAdminStorageUsageOperationRequest, TreeAdminStorageUsageOperationStatusResponse>?)null);
             binder.AddMethod(methods.GetWalReclamation, (UnaryServerMethod<TreeAdminTreeRequest, TreeWalReclamationReport>?)null);
+            binder.AddMethod(methods.ListViewProviders, (UnaryServerMethod<TreeAdminTreeRequest, TreeViewProviderCatalog>?)null);
             return;
         }
 
@@ -355,6 +359,7 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
         binder.AddMethod(methods.ListStorageUsageRefreshes, new UnaryServerMethod<LatticeOperationListRequest, LatticeOperationPage>(serviceImpl.ListStorageUsageRefreshes));
         binder.AddMethod(methods.CancelStorageUsageRefresh, new UnaryServerMethod<TreeAdminStorageUsageOperationRequest, TreeAdminStorageUsageOperationStatusResponse>(serviceImpl.CancelStorageUsageRefresh));
         binder.AddMethod(methods.GetWalReclamation, new UnaryServerMethod<TreeAdminTreeRequest, TreeWalReclamationReport>(serviceImpl.GetWalReclamation));
+        binder.AddMethod(methods.ListViewProviders, new UnaryServerMethod<TreeAdminTreeRequest, TreeViewProviderCatalog>(serviceImpl.ListViewProviders));
     }
 }
 
@@ -607,6 +612,10 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     /// <inheritdoc />
     public override Task<TreeViewCatalog> ListViews(TreeAdminViewListRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.ListViewsAsync(ct));
+
+    /// <inheritdoc />
+    public override Task<TreeViewProviderCatalog> ListViewProviders(TreeAdminTreeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.ListViewProvidersAsync(req.TreeId, ct));
 
     /// <inheritdoc />
     public override Task<TreeViewStatus> CreateView(TreeAdminCreateViewRequest request, ServerCallContext context)

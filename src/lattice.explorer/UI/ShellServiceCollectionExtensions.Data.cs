@@ -28,6 +28,7 @@ internal static partial class ShellServiceCollectionExtensions
         services.TryAddScoped<DataDirectory>();
         services.TryAddScoped<DataCompletionSource>();
         services.TryAddScoped<DataAdminGate>();
+        services.TryAddScoped<DataViewCommandScope>();
         services.AddExplorerArea<DataArea>();
     }
 }

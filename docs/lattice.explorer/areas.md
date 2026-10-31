@@ -122,7 +122,8 @@ The directory uses `?filter=` for the text filter. A tree workspace keeps state
 in query keys: `?tab=` chooses one of `keys`, `history`, `metrics`,
 `dead-letters`, `tag-indexes` or `views`; `?prefix=` narrows key scans and live
 tails; `?key=` opens an entry; `?at=` pins History to a UTC instant;
-`?index=` and `?tag=` select a tag index and tag.
+`?index=` and `?tag=` select a tag index and tag; on the Views tab,
+`?new=view` opens the New view dialog.
 
 The Keys tab pages through the tree by prefix or by tag. It offers Live and
 Snapshot scan modes, page-size choices from the shared paging ladder, Previous
@@ -183,7 +184,27 @@ from an earlier refresh.
 For callers that can administer the source tree, Reconcile compares the
 expected view with the live one and swaps it only when they differ; Rebuild
 builds a new generation and swaps it in. Both actions are behind destructive
-confirmations and both read every source key.
+confirmations and both read every source key. **Drop view...** removes the view,
+its projection tree and every generation of it, also behind a destructive
+confirmation; the source tree is untouched, and a view the host declares at
+startup cannot be dropped. Dropped from its own workspace, the tab returns to
+the source tree's views.
+
+**New view...** (palette command `data.create-view`, address
+`?tab=views&new=view`) creates a view over the tree. The dialog lists the
+projection providers the cluster's host registered, each with its description
+(the library's own filter provider is not offered), then takes a view name and
+the provider's payload: a form with one field per property when the provider
+describes its payload, otherwise JSON, checked for syntax before it is sent and
+validated by the provider. A refused create is reported in a fixed sentence.
+The created view appears in the list and its projection is browsable at
+`data/view-{name}`. A host registers a described provider with
+`AddRuntimeProjectionProvider(key, description, factory)` (see
+[Runtime view providers](../lattice/materialised-views.md#runtime-projection-providers)).
+
+Without administrative authority over the source tree, none of these actions
+is drawn, the palette offers no `data.create-view`, and `?new=view` opens
+nothing; the facade refuses a forged call all the same.
 
 A tag-index reconcile and a view reconcile or rebuild run on the cluster as
 tracked operations (see [Tracked operations](../lattice.api.treeadmin/operations.md)).

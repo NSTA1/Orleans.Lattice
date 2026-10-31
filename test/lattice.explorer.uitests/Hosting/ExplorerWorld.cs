@@ -79,6 +79,15 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
     /// </summary>
     public const string VersionsTree = "schema-versions";
 
+    /// <summary>
+    /// A tree of its own for the view administration journey (issue #5369), so the views
+    /// it creates and drops never appear over a tree another fixture reads.
+    /// </summary>
+    public const string ViewsTree = "line-readings";
+
+    /// <summary>How many entries <see cref="ViewsTree"/> holds.</summary>
+    public const int ViewsEntryCount = 6;
+
     private readonly GrpcChannel _adminChannel;
 
     private ExplorerWorld(ExplorerHead head, string grpcEndpoint)
@@ -369,6 +378,7 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
             silo.AddLatticeAppsApi();
             silo.AddLatticeAppBridgeApi();
 
+            silo.AddLatticeViews(WorldViewProviders.Register);
             silo.AddLatticeTreeAdminApi();
             silo.Services.AddSingleton<ILatticeBackupSink>(new Orleans.Lattice.Samples.Explorer.SampleSharedBackupSink());
             silo.AddLatticeBackup();
@@ -477,6 +487,12 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
             var membership = services.GetRequiredService<ILatticeMembershipDirectory>();
 
             await grains.GetGrain<ILattice>(VersionsTree).SetAsync("order/0001", Encoding.UTF8.GetBytes("{\"qty\":2}"));
+            var readings = grains.GetGrain<ILattice>(ViewsTree);
+            for (var i = 0; i < ViewsEntryCount; i++)
+            {
+                await readings.SetAsync($"reading-{i:D3}", Encoding.UTF8.GetBytes($"ok-{i:D3}"));
+            }
+
             // A membership edge alone makes no group: each seeded group gets its record,
             // so Access lists it and refuses its id as a new group's.
             await membership.UpsertGroupAsync(new MembershipGroup(WorldIdentities.OperatorsGroup, "Floor Operators"));

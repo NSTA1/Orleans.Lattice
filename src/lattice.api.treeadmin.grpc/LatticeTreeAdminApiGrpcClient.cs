@@ -969,6 +969,20 @@ public sealed class LatticeTreeAdminApiGrpcClient
         => UnaryAsync(_methods.ListViews, new TreeAdminViewListRequest(), cancellationToken);
 
     /// <summary>
+    /// Lists the runtime-view projection providers the caller may create a view with
+    /// over <paramref name="sourceTreeId"/>. Requires admin authority over the source.
+    /// </summary>
+    /// <param name="sourceTreeId">The source tree a view would be created over. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The host-registered providers, ordered by key.</returns>
+    /// <exception cref="ArgumentException"><paramref name="sourceTreeId"/> is <c>null</c> or empty.</exception>
+    public Task<TreeViewProviderCatalog> ListViewProvidersAsync(string sourceTreeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sourceTreeId);
+        return UnaryAsync(_methods.ListViewProviders, new TreeAdminTreeRequest { TreeId = sourceTreeId }, cancellationToken);
+    }
+
+    /// <summary>
     /// Creates a provider-backed runtime materialised view. The opaque payload is
     /// bounded locally before any transport call.
     /// </summary>

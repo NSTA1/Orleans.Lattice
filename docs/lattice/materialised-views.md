@@ -131,6 +131,46 @@ toward the source as the maintainer applies projected writes. The synchronous
 the background and therefore cannot report a durable-registration failure to
 the caller. Prefer `CreateAsync` for runtime creation.
 
+### Runtime projection providers
+
+A provider is what lets a view be created at runtime, through the
+tree-administration facade's `CreateViewAsync` or the Explorer's **New view...**
+dialog, rather than declared in code. Register it with a
+`LatticeRuntimeViewProviderDescription` so a console can list it with what it
+builds and the shape of its payload. A described provider receives its payload as
+a UTF-8 JSON object: built from the described fields when there are any (text,
+number or boolean, each optionally required), otherwise typed by the operator. The
+provider parses that JSON and throws to refuse it:
+
+```csharp verify
+siloBuilder.AddLatticeViews(views => views.AddRuntimeProjectionProvider(
+    "app.adults-over.v1",
+    new LatticeRuntimeViewProviderDescription(
+        "People at or over a minimum age",
+        [new LatticeRuntimeViewProviderField("minAge", "Minimum age")
+        {
+            Required = true,
+            Kind = LatticeRuntimeViewProviderFieldKind.Number,
+        }]),
+    (_, context) =>
+    {
+        using var payload = System.Text.Json.JsonDocument.Parse(context.Payload);
+        var minAge = payload.RootElement.GetProperty("minAge").GetInt32();
+        return new LatticeViewDefinition(
+            context.ViewName,
+            new PredicateLatticeViewProjection(
+                LatticePredicateTranslator.Translate<User>(u => u.Age >= minAge)));
+    }));
+```
+
+`ILatticeTreeAdmin.ListViewProvidersAsync(sourceTreeId)` lists the registered
+providers, ordered by key, to a caller holding admin authority over the source -
+the same authority creating a view needs. The library's built-in filter provider
+is never listed, because its payload is a private codec. A provider registered
+without a description is listed by key alone. `AddLatticeViews` may be called
+more than once (the auth, membership, backup and tenancy packages call it
+themselves); every call's providers and views accumulate.
+
 ### View names
 
 A view name is not just a label. It is the view maintainer's grain key, and it is

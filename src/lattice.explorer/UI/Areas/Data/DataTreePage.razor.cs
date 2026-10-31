@@ -28,6 +28,12 @@ public partial class DataTreePage : IDisposable
     [Inject]
     internal IServiceProvider Services { get; set; } = default!;
 
+    [Inject]
+    internal DataAdminGate Gate { get; set; } = default!;
+
+    [Inject]
+    internal DataViewCommandScope ViewCommand { get; set; } = default!;
+
     /// <inheritdoc />
     protected override async Task OnParametersSetAsync()
     {
@@ -47,6 +53,7 @@ public partial class DataTreePage : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
+        ViewCommand.Withdraw(_tree);
         _lifetime.Leave();
         GC.SuppressFinalize(this);
     }
@@ -55,6 +62,7 @@ public partial class DataTreePage : IDisposable
     {
         var token = _lifetime.Renew();
         _resolvedFor = target;
+        ViewCommand.Withdraw(_tree);
         _tree = null;
         _workspace = null;
         _source = null;
@@ -90,6 +98,31 @@ public partial class DataTreePage : IDisposable
 
         _source = Directory.FindByStateId(_tree.SourceStateId);
         _ = LoadKeyCountAsync(_tree);
+        _ = OfferViewCommandAsync(_tree, token);
+    }
+
+    /// <summary>
+    /// Offers the palette's New view command over <paramref name="tree"/> once the
+    /// caller is proven to administer it; a view, a shared tree or a refusal offers nothing.
+    /// </summary>
+    private async Task OfferViewCommandAsync(DataTreeEntry tree, CancellationToken token)
+    {
+        if (tree.Kind != DataTreeKind.Tree || tree.IsShared || Gate.Admin is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (await Gate.CanAdministerAsync(tree.StateId, token) && !token.IsCancellationRequested && ReferenceEquals(tree, _tree))
+            {
+                ViewCommand.Offer(tree);
+            }
+        }
+        catch (Exception)
+        {
+            // The command is a convenience; the Views tab draws its own control.
+        }
     }
 
     private async Task LoadKeyCountAsync(DataTreeEntry tree)
