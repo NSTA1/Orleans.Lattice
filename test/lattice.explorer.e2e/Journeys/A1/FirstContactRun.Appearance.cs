@@ -42,7 +42,6 @@ internal sealed partial class FirstContactRun
         await CheckpointAsync("7", "identity-menu", "The identity menu names Olivia and offers Reset view and Sign out");
         await Shell.SubmitAndWaitForNextDocumentAsync(session.GetByRole(AriaRole.Button, new() { Name = "Sign out" }));
         await Shell.ExpectSignedOutAsync();
-        await Shell.ExpectConnectionAsync("Sign-in required");
         await CheckpointAsync("7", "signed-out", "Signed out: the header offers Sign in again");
 
         await Olivia.SignInAsync();

@@ -22,7 +22,7 @@ public sealed class ConnectionIndicatorPage(ShellPage shell)
     /// Asserts the indicator reads <paramref name="state"/> and names <paramref name="endpointAuthority"/>,
     /// the <c>host:port</c> of the endpoint the head is configured with.
     /// </summary>
-    /// <param name="state">The connection state in words, such as <c>Sign-in required</c>.</param>
+    /// <param name="state">The connection state in words, such as <c>Connected</c>.</param>
     /// <param name="endpointAuthority">The endpoint's <c>host:port</c>.</param>
     public async Task ExpectAsync(string state, string endpointAuthority)
     {

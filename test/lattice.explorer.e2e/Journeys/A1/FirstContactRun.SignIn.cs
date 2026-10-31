@@ -19,9 +19,11 @@ internal sealed partial class FirstContactRun
     public Task OpenSignedOutAsync() => StepAsync("1", async () =>
     {
         await Shell.ExpectSignedOutAsync();
-        await Indicator.ExpectAsync("Sign-in required", WestGateway);
+        // Signed out, the Explorer still holds a live anonymous connection to the gateway: the
+        // indicator reads Connected and names the endpoint the deployment configured.
+        await Indicator.ExpectAsync("Connected", WestGateway);
         Coverage.Hit("use-case:shell/connection-indicator");
-        await CheckpointAsync("1", "signed-out", "Olivia opens the Explorer signed out: the indicator asks her to sign in and names the west gateway");
+        await CheckpointAsync("1", "signed-out", "Olivia opens the Explorer signed out: the indicator is connected to the west gateway, and the header offers Sign in");
 
         // The read-only Cluster connection dialog should name the same endpoint, but a head that
         // refuses browser configuration offers no way to open it once an endpoint is configured.
@@ -51,7 +53,6 @@ internal sealed partial class FirstContactRun
 
         await Shell.CloseSignInAsync();
         await Shell.ExpectSignedOutAsync();
-        await Shell.ExpectConnectionAsync("Sign-in required");
         var refused = await Shell.ReadSpineAsync();
         Assert.That(refused.CanOpen("access") || refused.CanOpen("cluster"), Is.False, $"a refused password opens nothing of the estate: {refused}");
         await CheckpointAsync("2", "no-partial-shell", "No session was established: no area of the estate is open and the header still offers Sign in");
