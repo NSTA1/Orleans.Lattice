@@ -127,7 +127,7 @@ public partial class RestoreParticipantTests
             });
         var participant = PeerParticipant(engine, [TargetTree], [CoordinatorCluster], restoreService);
         await participant.PrepareAsync(Request());
-        await participant.CommitAsync(Request());
+        await CommitFaultingPartWayAsync(participant, engine, Request());
         calls.Clear();
 
         await participant.AbortAsync(Request());
@@ -212,8 +212,127 @@ public partial class RestoreParticipantTests
         Assert.Multiple(() =>
         {
             Assert.That(result.Vote, Is.EqualTo(SagaVote.Abort));
-            Assert.That(result.Detail, Does.Contain("captured from a tree this cluster does not replicate"));
+            Assert.That(result.Detail, Is.EqualTo(PeerRefusalDetail));
             Assert.That(calls.Select(c => c.Call), Does.Not.Contain("build"));
+        });
+    }
+
+    /// <summary>The one refusal text a peer sees for a refused peer-coordinated prepare of the default request.</summary>
+    private const string PeerRefusalDetail =
+        "Backup '" + BackupId + "' cannot be restored into tree '" + TargetTree + "' by a peer-coordinated restore on this cluster.";
+
+    [Test]
+    public async Task PrepareAsync_from_a_peer_answers_a_failed_probe_and_an_unreplicated_source_identically()
+    {
+        // The probe runs elevated before the sources are known, so distinct answers
+        // would tell a peer whether a backup exists for a tree it may not restore.
+        var (missing, _) = ObservedEngine();
+        missing.ProbeAdmissionAsync(Arg.Any<LatticeRestoreRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<RestoreAdmissionReport>(
+                new LatticeRestoreValidationException($"No backup with id '{BackupId}' exists in the catalog or sink.")));
+        var (foreign, _) = ObservedEngine(sourceTreeId: "ledger-local");
+
+        var refusedMissing = await PeerParticipant(missing, [TargetTree], [CoordinatorCluster]).PrepareAsync(Request());
+        var refusedForeign = await PeerParticipant(foreign, [TargetTree], [CoordinatorCluster]).PrepareAsync(Request());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(refusedMissing.Vote, Is.EqualTo(SagaVote.Abort));
+            Assert.That(refusedForeign.Vote, Is.EqualTo(SagaVote.Abort));
+            Assert.That(refusedMissing.Detail, Is.EqualTo(refusedForeign.Detail));
+            Assert.That(refusedMissing.Detail, Is.EqualTo(PeerRefusalDetail));
+        });
+    }
+
+    [Test]
+    public async Task PrepareAsync_as_the_ambient_caller_still_reports_why_the_probe_failed()
+    {
+        var (engine, _) = ObservedEngine();
+        engine.ProbeAdmissionAsync(Arg.Any<LatticeRestoreRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<RestoreAdmissionReport>(new LatticeRestoreValidationException("missing")));
+        var participant = PeerParticipant(engine, [TargetTree], [CoordinatorCluster]);
+
+        var result = await participant.PrepareAsync(Request() with { CoordinatorClusterId = LocalCluster });
+
+        Assert.That(result.Detail, Is.EqualTo("Admission probe failed: missing"),
+            "the operator's own cluster keeps the diagnostic; only a peer gets the uniform refusal");
+    }
+
+    [Test]
+    public async Task CommitAsync_from_a_peer_that_must_rebuild_refuses_a_source_no_longer_replicated()
+    {
+        // Prepare ran on an activation whose cache is gone; since then the source tree
+        // stopped being replicated, so the rebuild must not replay its backup.
+        var (engine, calls) = ObservedEngine(sourceTreeId: "orders-archive");
+        var fence = Substitute.For<ISagaWriteFenceGrain>();
+        var participant = Participant(
+            engine,
+            FactoryFor(fence),
+            membership: MembershipFor(TargetTree),
+            options: OptionsFor(LocalCluster),
+            topology: TopologyFor(CoordinatorCluster));
+
+        await participant.CommitAsync(Request());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(calls.Select(c => c.Call), Does.Not.Contain("build"));
+            Assert.That(calls.Select(c => c.Call), Does.Not.Contain("commit"));
+        });
+        await fence.DidNotReceive().EngageAsync(Arg.Any<SagaWriteFenceRequest>());
+        await fence.Received(1).LiftAsync();
+    }
+
+    [Test]
+    public async Task CommitAsync_from_a_peer_that_must_rebuild_refuses_when_the_re_probe_fails()
+    {
+        var (engine, calls) = ObservedEngine();
+        engine.ProbeAdmissionAsync(Arg.Any<LatticeRestoreRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<RestoreAdmissionReport>(new InvalidOperationException("catalog unreachable")));
+        var participant = PeerParticipant(engine, [TargetTree], [CoordinatorCluster]);
+
+        await participant.CommitAsync(Request());
+
+        Assert.That(calls.Select(c => c.Call), Does.Not.Contain("build"));
+    }
+
+    [Test]
+    public async Task CommitAsync_from_a_peer_that_must_rebuild_still_rebuilds_an_enrolled_backup()
+    {
+        var (engine, calls) = ObservedEngine(sourceTreeId: "orders-archive");
+        var participant = PeerParticipant(engine, [TargetTree, "orders-archive"], [CoordinatorCluster]);
+
+        await participant.CommitAsync(Request());
+
+        Assert.That(calls, Is.EqualTo(new[] { ("probe", true), ("build", true), ("commit", true) }));
+    }
+
+    [Test]
+    public async Task CommitAsync_from_a_peer_with_its_shadow_cached_does_not_re_probe()
+    {
+        var (engine, calls) = ObservedEngine();
+        var participant = PeerParticipant(engine, [TargetTree], [CoordinatorCluster]);
+        await participant.PrepareAsync(Request());
+        calls.Clear();
+
+        await participant.CommitAsync(Request());
+
+        Assert.That(calls, Is.EqualTo(new[] { ("commit", true) }));
+    }
+
+    [Test]
+    public async Task CommitSetAsync_from_a_peer_that_must_rebuild_refuses_when_any_member_source_is_not_replicated()
+    {
+        var (engine, calls) = ObservedEngine(sourceTreeId: "ledger-local");
+        var participant = PeerParticipant(
+            engine, [TreeA, TreeB], [CoordinatorCluster], setResolver: TwoMemberResolver());
+
+        await participant.CommitAsync(SetRequestFor(SetId));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(calls.Select(c => c.Call), Does.Not.Contain("build"));
+            Assert.That(calls.Select(c => c.Call), Does.Not.Contain("commit"));
         });
     }
 

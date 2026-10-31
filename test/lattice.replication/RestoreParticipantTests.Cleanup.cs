@@ -33,7 +33,7 @@ public partial class RestoreParticipantTests
     }
 
     [Test]
-    public void AbortAsync_revert_cancelled_rethrows_cancellation()
+    public async Task AbortAsync_revert_cancelled_rethrows_cancellation()
     {
         var engine = HealthyEngine();
         var restoreService = Substitute.For<ILatticeBackupRestoreService>();
@@ -42,12 +42,12 @@ public partial class RestoreParticipantTests
         var participant = Participant(
             engine, FactoryFor(Substitute.For<ISagaWriteFenceGrain>()), restoreService: restoreService);
 
-        Assert.That(async () =>
-        {
-            await participant.PrepareAsync(Request());
-            await participant.CommitAsync(Request());
-            await participant.AbortAsync(Request());
-        }, Throws.InstanceOf<OperationCanceledException>());
+        await participant.PrepareAsync(Request());
+        await CommitFaultingPartWayAsync(participant, engine, Request());
+
+        Assert.That(
+            async () => await participant.AbortAsync(Request()),
+            Throws.InstanceOf<OperationCanceledException>());
     }
 
     [Test]
@@ -61,9 +61,10 @@ public partial class RestoreParticipantTests
         var participant = Participant(engine, FactoryFor(fence), restoreService: restoreService);
 
         await participant.PrepareAsync(Request());
-        await participant.CommitAsync(Request());
+        await CommitFaultingPartWayAsync(participant, engine, Request());
         await participant.AbortAsync(Request());
 
+        await restoreService.Received(1).RevertRestoreAsync(Arg.Any<LatticeRestoreResult>(), Arg.Any<CancellationToken>());
         await fence.Received(1).LiftAsync();
         await engine.Received(1).DeleteShadowAsync(TargetTree + "-shadow", Arg.Any<CancellationToken>());
     }
@@ -89,7 +90,7 @@ public partial class RestoreParticipantTests
     }
 
     [Test]
-    public async Task AbortAsync_after_commit_reverts_then_deletes_shadow()
+    public async Task AbortAsync_after_a_commit_that_faulted_part_way_reverts_then_deletes_shadow()
     {
         var engine = HealthyEngine();
         var restoreService = Substitute.For<ILatticeBackupRestoreService>();
@@ -97,7 +98,7 @@ public partial class RestoreParticipantTests
             engine, FactoryFor(Substitute.For<ISagaWriteFenceGrain>()), restoreService: restoreService);
 
         await participant.PrepareAsync(Request());
-        await participant.CommitAsync(Request());
+        await CommitFaultingPartWayAsync(participant, engine, Request());
         await participant.AbortAsync(Request());
 
         Received.InOrder(() =>
@@ -105,6 +106,48 @@ public partial class RestoreParticipantTests
             restoreService.RevertRestoreAsync(Arg.Any<LatticeRestoreResult>(), Arg.Any<CancellationToken>());
             engine.DeleteShadowAsync(TargetTree + "-shadow", Arg.Any<CancellationToken>());
         });
+    }
+
+    [Test]
+    public async Task AbortAsync_of_a_rerun_after_a_completed_commit_leaves_the_earlier_alias_untouched()
+    {
+        // Saga ids are deterministic, so the same restore run again reuses the id. The
+        // earlier run's cutover completed; the rerun only prepared, so its abort must
+        // not revert the alias the earlier run moved.
+        var engine = HealthyEngine();
+        var restoreService = Substitute.For<ILatticeBackupRestoreService>();
+        var participant = Participant(
+            engine, FactoryFor(Substitute.For<ISagaWriteFenceGrain>()), restoreService: restoreService);
+
+        await participant.PrepareAsync(Request());
+        await participant.CommitAsync(Request());
+
+        await participant.PrepareAsync(Request());
+        await participant.AbortAsync(Request());
+
+        await restoreService.DidNotReceive().RevertRestoreAsync(
+            Arg.Any<LatticeRestoreResult>(), Arg.Any<CancellationToken>());
+        await engine.Received(1).DeleteShadowAsync(TargetTree + "-shadow", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task AbortAsync_of_a_rerun_after_a_commit_that_faulted_part_way_does_not_revert()
+    {
+        // A new prepare starts a fresh run: the earlier run's started cutover is not
+        // this run's to revert.
+        var engine = HealthyEngine();
+        var restoreService = Substitute.For<ILatticeBackupRestoreService>();
+        var participant = Participant(
+            engine, FactoryFor(Substitute.For<ISagaWriteFenceGrain>()), restoreService: restoreService);
+
+        await participant.PrepareAsync(Request());
+        await CommitFaultingPartWayAsync(participant, engine, Request());
+
+        await participant.PrepareAsync(Request());
+        await participant.AbortAsync(Request());
+
+        await restoreService.DidNotReceive().RevertRestoreAsync(
+            Arg.Any<LatticeRestoreResult>(), Arg.Any<CancellationToken>());
     }
 
     [Test]

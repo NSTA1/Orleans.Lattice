@@ -76,7 +76,25 @@ public partial class RestoreParticipantTests
     }
 
     [Test]
-    public async Task AbortSetAsync_after_commit_reverts_and_deletes_every_member()
+    public async Task AbortSetAsync_after_a_commit_that_faulted_part_way_reverts_and_deletes_every_member()
+    {
+        var engine = HealthyEngine();
+        var restoreService = Substitute.For<ILatticeBackupRestoreService>();
+        var participant = Participant(
+            engine, FactoryFor(Substitute.For<ISagaWriteFenceGrain>()),
+            restoreService: restoreService,
+            setResolver: TwoMemberResolver());
+
+        await participant.PrepareAsync(SetRequestFor(SetId));
+        await CommitFaultingPartWayAsync(participant, engine, SetRequestFor(SetId));
+        await participant.AbortAsync(SetRequestFor(SetId));
+
+        await restoreService.Received(2).RevertRestoreAsync(Arg.Any<LatticeRestoreResult>(), Arg.Any<CancellationToken>());
+        await engine.Received(2).DeleteShadowAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task AbortSetAsync_of_a_rerun_after_a_completed_commit_leaves_every_member_alias_untouched()
     {
         var engine = HealthyEngine();
         var restoreService = Substitute.For<ILatticeBackupRestoreService>();
@@ -87,10 +105,12 @@ public partial class RestoreParticipantTests
 
         await participant.PrepareAsync(SetRequestFor(SetId));
         await participant.CommitAsync(SetRequestFor(SetId));
+
+        await participant.PrepareAsync(SetRequestFor(SetId));
         await participant.AbortAsync(SetRequestFor(SetId));
 
-        await restoreService.Received(2).RevertRestoreAsync(Arg.Any<LatticeRestoreResult>(), Arg.Any<CancellationToken>());
-        await engine.Received(2).DeleteShadowAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await restoreService.DidNotReceive().RevertRestoreAsync(
+            Arg.Any<LatticeRestoreResult>(), Arg.Any<CancellationToken>());
     }
 
     [Test]

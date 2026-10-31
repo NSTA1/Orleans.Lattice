@@ -178,6 +178,9 @@ gate will tell you if you forget.
   topology, the target (or each set member) is locally enrolled, and every tree the
   backup chain was captured from is the target or a locally replicated tree
   (`RestoreAdmissionReport.SourceTreeIds`; an empty list is unknown and refused).
+  A failed elevated probe and an unreplicated source return the same refusal text to
+  the peer, so the elevated probe is not an existence oracle, and a commit that must
+  rebuild a lost shadow re-checks the sources before replaying anything.
   Anything else runs as the ambient caller and is authorized as such, including this
   cluster's own coordinator. Do not widen it to other saga participants, or move it
   to the saga service or participant grain, where it would elevate host-registered

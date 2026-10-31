@@ -53,7 +53,10 @@ see the caller: the saga reaches it carrying only the coordinator cluster's
 credential-bound identity. It runs its restore steps with that peer's authority,
 and only for a current replication peer, a target tree it replicates, and a backup
 captured from the target or another tree it replicates; anything else it refuses,
-voting abort with reason `not-replicated`. The coordinator cluster's own
+voting abort with reason `not-replicated`. A peer sees one refusal text whether the
+backup is missing or merely outside its enrollment, so it cannot use a restore to
+learn which backups exist. A commit that must rebuild a lost shadow re-checks the
+backup's sources first. The coordinator cluster's own
 participant runs as the caller. A cluster that enforces authorization therefore
 completes a coordinated restore its peer started, rather than refusing it as an
 anonymous caller ([#5443](https://github.com/NSTA1/Orleans.Lattice/issues/5443);
@@ -105,10 +108,12 @@ phases:
    was lost; it never drains the retired log onto a peer's restored copy (#4490).
 3. **Abort** - reached if any participant voted to abort. Every participant that
    prepared is compensated: its shadow is garbage collected and the pre-restore
-   tree is left untouched. A participant that had already started its cutover
-   reverts the alias first; one that only prepared never moved it, so it does
-   not revert, and deleting the shadow releases the target's alias reservation
-   ([#5443](https://github.com/NSTA1/Orleans.Lattice/issues/5443)).
+   tree is left untouched. A participant whose cutover started but did not
+   complete reverts the alias first; one that only prepared never moved it, so it
+   does not revert, and deleting the shadow releases the target's alias
+   reservation. A completed commit, or a new prepare of the same (deterministic)
+   saga id, clears that record, so a later run never reverts an earlier run's
+   cutover ([#5443](https://github.com/NSTA1/Orleans.Lattice/issues/5443)).
 
 These guarantees make this safe under failure:
 

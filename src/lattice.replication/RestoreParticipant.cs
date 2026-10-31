@@ -90,11 +90,15 @@ internal sealed class RestoreParticipant(
         new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Saga ids whose cutover this participant has started on this activation. An
-    /// abort reverts the alias only for these: a saga that only prepared never
-    /// moved the alias, and reverting it collides with the build's own open alias
-    /// operation (#5443). A reactivation that lost this set also lost the built
-    /// cache, so the abort takes the no-revert garbage-collect path either way.
+    /// Saga ids whose cutover this participant has started, and whose commit has not
+    /// completed, on this activation. An abort reverts the alias only for these: a
+    /// saga that only prepared never moved the alias, and reverting it collides with
+    /// the build's own open alias operation (#5443). The record is dropped when the
+    /// commit completes (the participant grain never delivers an abort after a
+    /// commit), when an abort consumes it, and when a new prepare starts a fresh run
+    /// of a deterministic saga id, so a later run never inherits an earlier run's
+    /// cutover. A reactivation that lost this set also lost the built cache, so the
+    /// abort takes the no-revert garbage-collect path either way.
     /// </summary>
     private readonly ConcurrentDictionary<string, bool> _cutOver =
         new(StringComparer.Ordinal);
@@ -302,20 +306,70 @@ internal sealed class RestoreParticipant(
         return true;
     }
 
-    /// <summary>The refusal returned for a backup captured from a tree this cluster does not replicate.</summary>
-    private static SagaParticipantPrepareResult SourceNotReplicated(string targetTree)
+    /// <summary>
+    /// The single refusal a peer-coordinated prepare returns when the admission probe
+    /// fails <b>or</b> the backup's captured sources are not replicated here. The
+    /// probe runs under peer authority before the sources are known, so distinct
+    /// answers would let a peer learn whether a backup id exists, or what it holds,
+    /// for a tree it may not restore. The cause is logged locally and counted on the
+    /// vote metric; the peer sees the same text either way.
+    /// </summary>
+    private static SagaParticipantPrepareResult PeerRefusal(string backupId, string targetTree, string reason)
     {
-        RecordVote(LatticeReplicationMetrics.SagaReasonNotReplicated);
+        RecordVote(reason);
         return new SagaParticipantPrepareResult(
             SagaVote.Abort,
-            $"The backup restored into tree '{targetTree}' was captured from a tree this cluster does not " +
-            "replicate: a peer-coordinated restore may only replay backups of replicated trees.");
+            $"Backup '{backupId}' cannot be restored into tree '{targetTree}' by a peer-coordinated restore " +
+            "on this cluster.");
+    }
+
+    /// <summary>
+    /// Re-derives, at commit, that a backup a lost cache forces the participant to
+    /// rebuild from still replays only replicated trees: a source tree can stop being
+    /// replicated between prepare and commit. A probe failure is a refusal.
+    /// </summary>
+    private async Task<bool> SourcesStillEnrolledAsync(
+        string sagaId, LatticeRestoreRequest restoreRequest, CancellationToken cancellationToken)
+    {
+        RestoreAdmissionReport report;
+        try
+        {
+            report = await engine!.ProbeAdmissionAsync(restoreRequest, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Restore participant: commit re-probe failed for saga '{SagaId}' (backup '{BackupId}').",
+                sagaId, restoreRequest.BackupId);
+            return false;
+        }
+
+        return SourcesEnrolled(report);
+    }
+
+    /// <summary>Refuses a commit whose rebuild would replay a backup of a tree this cluster no longer replicates.</summary>
+    private async Task RefuseCommitAsync(SagaControlRequest request)
+    {
+        logger.LogWarning(
+            "Restore participant: refusing commit for saga '{SagaId}' - rebuilding its shadow would replay a backup " +
+            "captured from a tree this cluster does not replicate.",
+            request.SagaId);
+        RecordCommit(LatticeReplicationMetrics.SagaReasonNotReplicated);
+        await grainFactory.GetGrain<ISagaWriteFenceGrain>(request.SagaId).LiftAsync();
     }
 
     /// <inheritdoc />
     public async Task<SagaParticipantPrepareResult> PrepareAsync(
         SagaControlRequest request, CancellationToken cancellationToken = default)
     {
+        // A prepare starts a new run of this saga id (ids are deterministic), so no
+        // cutover recorded by an earlier run may be reverted by this run's abort.
+        _cutOver.TryRemove(request.SagaId, out _);
+
         if (engine is null)
         {
             RecordVote(LatticeReplicationMetrics.SagaReasonEngineUnavailable);
@@ -357,6 +411,11 @@ internal sealed class RestoreParticipant(
             logger.LogWarning(ex,
                 "Restore participant: admission probe failed for saga '{SagaId}' (backup '{BackupId}').",
                 request.SagaId, request.ManifestId);
+            if (peerAuthority)
+            {
+                return PeerRefusal(request.ManifestId, request.TargetTree, LatticeReplicationMetrics.SagaReasonInfeasible);
+            }
+
             RecordVote(LatticeReplicationMetrics.SagaReasonInfeasible);
             return new SagaParticipantPrepareResult(
                 SagaVote.Abort, $"Admission probe failed: {ex.Message}");
@@ -368,7 +427,7 @@ internal sealed class RestoreParticipant(
                 "Restore participant: refusing saga '{SagaId}' - backup '{BackupId}' was captured from a tree " +
                 "this cluster does not replicate.",
                 request.SagaId, request.ManifestId);
-            return SourceNotReplicated(request.TargetTree);
+            return PeerRefusal(request.ManifestId, request.TargetTree, LatticeReplicationMetrics.SagaReasonNotReplicated);
         }
 
         if (!await capacity.CanHostAsync(report, cancellationToken))
@@ -464,13 +523,21 @@ internal sealed class RestoreParticipant(
         }
 
         var restoreRequest = BuildRestoreRequest(request);
-        using var authority = EnterPeerAuthority(request, out _);
+        using var authority = EnterPeerAuthority(request, out var peerAuthority);
 
         // Reuse the prepared shadow; if a reactivation lost the in-memory cache,
         // re-derive it - BuildShadowAsync is idempotent and resumable, so this
         // resolves back to the same fully built shadow without a full rebuild.
         if (!_built.TryGetValue(request.SagaId, out var result))
         {
+            // The rebuild replays the backup again, so its sources are re-checked
+            // against enrollment now rather than trusted from the earlier prepare.
+            if (peerAuthority && !await SourcesStillEnrolledAsync(request.SagaId, restoreRequest, cancellationToken))
+            {
+                await RefuseCommitAsync(request);
+                return;
+            }
+
             result = await engine.BuildShadowAsync(restoreRequest, cancellationToken);
             _built[request.SagaId] = result;
         }
@@ -501,6 +568,9 @@ internal sealed class RestoreParticipant(
         // shipping stays paused until the saga globally completes (the fence
         // grain's global gate), so no early-flipping cluster re-advances the cut.
         await fence.UnblockWritesAsync();
+
+        // The commit completed, so the participant is terminal for this run.
+        _cutOver.TryRemove(request.SagaId, out _);
         RecordCommit(LatticeReplicationMetrics.SagaReasonSingle);
     }
 
@@ -667,6 +737,12 @@ internal sealed class RestoreParticipant(
                     "Restore participant: set admission probe failed for saga '{SagaId}' (member tree '{TreeId}').",
                     request.SagaId, restoreRequest.TargetTreeId);
                 await GarbageCollectAllAsync(built, requests, cancellationToken);
+                if (peerAuthority)
+                {
+                    return PeerRefusal(
+                        restoreRequest.BackupId, restoreRequest.TargetTreeId!, LatticeReplicationMetrics.SagaReasonInfeasible);
+                }
+
                 RecordVote(LatticeReplicationMetrics.SagaReasonInfeasible);
                 return new SagaParticipantPrepareResult(
                     SagaVote.Abort, $"Set admission probe failed: {ex.Message}");
@@ -679,7 +755,8 @@ internal sealed class RestoreParticipant(
                     "backup captured from a tree this cluster does not replicate.",
                     request.SagaId, restoreRequest.TargetTreeId);
                 await GarbageCollectAllAsync(built, requests, cancellationToken);
-                return SourceNotReplicated(restoreRequest.TargetTreeId!);
+                return PeerRefusal(
+                    restoreRequest.BackupId, restoreRequest.TargetTreeId!, LatticeReplicationMetrics.SagaReasonNotReplicated);
             }
 
             if (!await capacity.CanHostAsync(report, cancellationToken))
@@ -739,12 +816,26 @@ internal sealed class RestoreParticipant(
         }
 
         var requests = BuildSetRestoreRequests(members);
-        using var authority = EnterPeerAuthority(request, out _);
+        using var authority = EnterPeerAuthority(request, out var peerAuthority);
 
         // Reuse the prepared group; a reactivation that lost the cache re-derives
         // every member idempotently (BuildShadowAsync is resumable).
         if (!_builtSets.TryGetValue(request.SagaId, out var built))
         {
+            // The rebuild replays every member's backup again, so each member's
+            // sources are re-checked against enrollment before any of it is rebuilt.
+            if (peerAuthority)
+            {
+                foreach (var memberRequest in requests)
+                {
+                    if (!await SourcesStillEnrolledAsync(request.SagaId, memberRequest, cancellationToken))
+                    {
+                        await RefuseCommitAsync(request);
+                        return;
+                    }
+                }
+            }
+
             // Each build targets a DISTINCT member tree and produces that member's
             // own shadow, so no build can observe another's effect. RunAsync
             // returns the results in slot order, so `built` is still in the
@@ -786,6 +877,9 @@ internal sealed class RestoreParticipant(
             result => engine!.CommitShadowAsync(result, cancellationToken));
 
         await fence.UnblockWritesAsync();
+
+        // The commit completed, so the participant is terminal for this run.
+        _cutOver.TryRemove(request.SagaId, out _);
         RecordCommit(LatticeReplicationMetrics.SagaReasonSet);
     }
 

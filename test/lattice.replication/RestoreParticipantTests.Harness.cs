@@ -142,6 +142,20 @@ public partial class RestoreParticipantTests
     private static string TreeOf(CallInfo ci, string fallback) =>
         ((LatticeRestoreRequest)ci[0]).TargetTreeId ?? fallback;
 
+    /// <summary>
+    /// Drives a commit whose alias swap faults part-way, leaving the cutover started
+    /// but not completed - the one state from which an abort must revert. The
+    /// participant grain never delivers an abort after a commit that completed.
+    /// </summary>
+    private static async Task CommitFaultingPartWayAsync(
+        RestoreParticipant participant, ILatticeCoordinatedRestoreEngine engine, SagaControlRequest request)
+    {
+        engine.CommitShadowAsync(Arg.Any<LatticeRestoreResult>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("swap faulted part-way")));
+
+        Assert.That(async () => await participant.CommitAsync(request), Throws.Exception);
+    }
+
     private static SagaControlRequest SetRequestFor(
         string setId, string coordinator = CoordinatorCluster) =>
         new()

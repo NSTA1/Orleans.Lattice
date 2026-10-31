@@ -173,7 +173,9 @@ with *peer authority* - a system-origin scope - and only when the coordinator it
 received is a remote cluster, one of this cluster's current replication peers, the
 target tree is one this cluster replicates, and every tree the backup chain was
 captured from is the target or a tree this cluster replicates. The coordinator id
-is the credential-bound origin the service stamped, never a body value. Within those
+is the credential-bound origin the service stamped, never a body value. A peer
+receives one refusal text whether the backup is missing or outside its enrollment,
+and a commit that must rebuild a lost shadow re-checks the sources first. Within those
 bounds a restore grants the peer nothing its replication stream does not already
 hold. A saga this cluster coordinates itself runs as the operator, whose identity
 flows with the loopback call, and is authorized as usual

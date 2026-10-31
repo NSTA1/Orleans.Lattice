@@ -128,7 +128,7 @@ public sealed class CoordinatedRestorePeerAuthorityTests
         Assert.Multiple(() =>
         {
             Assert.That(vote.Vote, Is.EqualTo(SagaVote.Abort));
-            Assert.That(vote.Detail, Does.Contain("captured from a tree this cluster does not replicate"));
+            Assert.That(vote.Detail, Does.Contain("cannot be restored into tree"));
         });
 
         using (LatticeSystemOrigin.Enter())
@@ -136,6 +136,29 @@ public sealed class CoordinatedRestorePeerAuthorityTests
             Assert.That(await _fixture.GrainFactory.GetGrain<ILattice>(tree).CountAsync(), Is.Zero,
                 "nothing from the cluster-local backup reached the replicated tree");
         }
+    }
+
+    [Test]
+    public async Task A_peer_cannot_tell_a_missing_backup_from_one_it_may_not_restore()
+    {
+        const string tree = Target + "-oracle";
+        var secret = await SeedAndCaptureAsync(ClusterLocal + "-oracle", "cut-oracle");
+        var participant = NewParticipant(replicated: [tree], peers: [Peer]);
+
+        var forbidden = await participant.PrepareAsync(Request("saga-oracle-1", tree, secret, coordinator: Peer));
+        var missing = await participant.PrepareAsync(Request("saga-oracle-2", tree, secret, coordinator: Peer) with
+        {
+            ManifestId = "no-such-backup",
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(forbidden.Vote, Is.EqualTo(SagaVote.Abort));
+            Assert.That(missing.Vote, Is.EqualTo(SagaVote.Abort));
+            Assert.That(missing.Detail!.Replace("no-such-backup", "{backup}"),
+                Is.EqualTo(forbidden.Detail!.Replace(secret, "{backup}")),
+                "the two refusals differ only by the backup id the peer itself supplied");
+        });
     }
 
     [Test]
