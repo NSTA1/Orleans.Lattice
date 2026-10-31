@@ -9,7 +9,10 @@
  *
  * No width query appears here. The layout measures its own root and marks it
  * lt-shell--compact below the small breakpoint; the medium band's rail is a
- * modifier class too. Every interactive element is at least 44px in the
+ * modifier class too. Until the width is measured the layout draws both the
+ * compact and the wide chrome, tagged with the breakpoint layer's lt-only-compact
+ * and lt-medium-up utilities, so the first paint is already right. Every
+ * interactive element is at least 44px in the
  * comfortable density (the --lt-op-control-height and --lt-op-row-height
  * tokens) and never below 24px in the compact one.
  *
@@ -139,6 +142,12 @@
 
 .lt-shell-header__control {
   flex-shrink: 0;
+}
+
+/* The wide header's controls: one element for the layout to keep across renders,
+   laid out as if its children sat in .lt-shell-header__end themselves. */
+.lt-shell-header__wide {
+  display: contents;
 }
 
 .lt-shell-menu-host {
@@ -479,6 +488,13 @@
 
 .lt-shell--compact .lt-shell-body {
   grid-template-columns: minmax(0, 1fr);
+}
+
+/* The main landmark always takes the last column, so a spine the breakpoint layer
+   hides (before the band is measured) leaves an empty, zero-width first column
+   rather than pushing the content into it. */
+.lt-shell-body > .lt-shell-content {
+  grid-column: -2 / -1;
 }
 
 .lt-shell-directory {

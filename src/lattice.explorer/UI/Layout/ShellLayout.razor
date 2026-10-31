@@ -11,8 +11,10 @@
     compact moves the spine into a slide-in sheet and folds the header's slots and
     appearance controls into one overflow menu, which closes as soon as anything
     in it is activated so it never stacks under a session overlay. Until the
-    width is measured the expanded frame renders, so nothing here depends on
-    script to be usable.
+    width is measured (the prerender, and the live circuit's renders before the
+    browser reports) both forms of the chrome render and the breakpoint layer's
+    utilities show the one the width calls for, so the first paint is right at
+    every width and nothing here depends on script to be usable.
 
     The main landmark is gated: nothing renders before the circuit's session
     (configuration and sign-in) is loaded, nothing renders under a tenant a
@@ -35,10 +37,10 @@
         </nav>
 
         <header class="lt-shell-header">
-            @if (IsCompact)
+            @if (DrawsCompactChrome)
             {
                 <button type="button"
-                        class="lt-btn lt-btn--quiet lt-shell-header__control"
+                        class="@CompactControlClass"
                         aria-haspopup="dialog"
                         aria-expanded="@(_directoryOpen ? "true" : "false")"
                         @onclick="OpenDirectory"
@@ -49,13 +51,13 @@
             <a class="lt-shell-brand" href="@HomeHref">
                 <LtMark Size="22" />
                 @* Compact, the name drops its namespace so it fits between the header's two controls whole, never cut off. *@
-                <span class="lt-shell-brand__name">@if (!IsCompact) { <span class="lt-shell-brand__prefix">Orleans.</span> }Lattice Explorer</span>
+                <span class="lt-shell-brand__name">@if (DrawsWideChrome) { <span class="@BrandPrefixClass">Orleans.</span> }Lattice Explorer</span>
             </a>
             <div class="lt-shell-header__end">
-                @if (IsCompact)
+                @if (DrawsCompactChrome)
                 {
                     <button type="button"
-                            class="lt-btn lt-btn--quiet lt-shell-header__control"
+                            class="@CompactControlClass"
                             aria-haspopup="dialog"
                             aria-expanded="@(_menuOpen ? "true" : "false")"
                             @onclick="OpenMenu"
@@ -63,21 +65,24 @@
                         Menu
                     </button>
                 }
-                else
+                @if (DrawsWideChrome)
                 {
-                    @Slot(ShellSlotNames.HeaderConnection)
-                    <AppearanceMenu />
-                    <CascadingValue Value="_location">
-                        <TenantSwitcher />
-                    </CascadingValue>
-                    @Slot(ShellSlotNames.HeaderIdentity)
+                    @* One element whether or not the band is known, so measuring it never rebuilds the session slots. *@
+                    <div class="@WideControlsClass">
+                        @Slot(ShellSlotNames.HeaderConnection)
+                        <AppearanceMenu />
+                        <CascadingValue Value="_location">
+                            <TenantSwitcher />
+                        </CascadingValue>
+                        @Slot(ShellSlotNames.HeaderIdentity)
+                    </div>
                 }
             </div>
         </header>
     }
 
     <CascadingValue Value="_location">
-        <CascadingValue Name="@LtBreakpointCascade.Name" Value="_breakpoint">
+        <CascadingValue Name="@LtBreakpointCascade.Name" Value="Band">
             @if (IsStandalone)
             {
                 <main class="lt-shell-content" id="lt-shell-content" tabindex="-1" @ref="_content">
@@ -91,10 +96,10 @@
                 </div>
 
                 <div class="lt-shell-body">
-                    @if (!IsCompact)
+                    @if (DrawsWideChrome)
                     {
                         <div class="@DirectoryClass" id="lt-shell-directory" tabindex="-1" @ref="_directory">
-                            <DirectorySpine Rail="@(_breakpoint == LtBreakpoint.Medium)" />
+                            <DirectorySpine Rail="@(Band == LtBreakpoint.Medium)" />
                         </div>
                     }
                     <main class="lt-shell-content" id="lt-shell-content" tabindex="-1" @ref="_content">
@@ -102,7 +107,7 @@
                     </main>
                 </div>
 
-                @if (IsCompact)
+                @if (DrawsCompactChrome)
                 {
                     <LtDialog Open="_directoryOpen"
                               OpenChanged="OnDirectoryOpenChanged"
@@ -117,11 +122,14 @@
                               Title="Menu"
                               Placement="LtDialogPlacement.End"
                               ReturnFocus="_menuToggle">
-                        <div class="lt-shell-overflow" @onclick="CloseMenu">
-                            @Slot(ShellSlotNames.HeaderConnection)
-                            @Slot(ShellSlotNames.HeaderIdentity)
-                            <AppearanceControls />
-                        </div>
+                        @* The sheet exists only in the compact form, so its slots fold whether or not the width has been reported yet. *@
+                        <CascadingValue Name="@LtBreakpointCascade.Name" Value="CompactBand">
+                            <div class="lt-shell-overflow" @onclick="CloseMenu">
+                                @Slot(ShellSlotNames.HeaderConnection)
+                                @Slot(ShellSlotNames.HeaderIdentity)
+                                <AppearanceControls />
+                            </div>
+                        </CascadingValue>
                     </LtDialog>
                 }
             }

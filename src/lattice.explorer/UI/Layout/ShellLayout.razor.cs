@@ -33,7 +33,11 @@ namespace Orleans.Lattice.Explorer.UI.Layout;
 /// It cascades the measured <see cref="LtBreakpoint"/> as well, so the chrome and
 /// the primitives render their compact forms below the small breakpoint. The width
 /// is measured, not queried in a stylesheet, which keeps every layout width in the
-/// one breakpoint layer.
+/// one breakpoint layer. Until the browser has reported it, nothing is cascaded (a
+/// primitive renders its wide form, which hides no content), and the chrome draws
+/// both its compact and its wide controls, marked with the breakpoint layer's
+/// <c>lt-only-compact</c> and <c>lt-medium-up</c> utilities, so the browser picks
+/// the right one before the first paint and a late report changes nothing on screen.
 /// </para>
 /// <para>
 /// At an address its area marks standalone (<see cref="IExplorerArea.IsStandaloneAt"/>)
@@ -43,9 +47,11 @@ namespace Orleans.Lattice.Explorer.UI.Layout;
 /// </remarks>
 public partial class ShellLayout : IAsyncDisposable
 {
+    private static readonly LtBreakpoint? CompactBand = LtBreakpoint.Compact;
+
     private readonly ComponentLifetime _lifetime = new();
     private ExplorerLocation _location = ExplorerLocation.Initial;
-    private LtBreakpoint _breakpoint = LtBreakpoint.Expanded;
+    private LtBreakpoint? _breakpoint;
     private int _version;
     private bool _directoryOpen;
     private bool _menuOpen;
@@ -115,6 +121,24 @@ public partial class ShellLayout : IAsyncDisposable
 
     private bool IsCompact => _breakpoint == LtBreakpoint.Compact;
 
+    // The band the browser reported, or null before it has: the width cascade's value.
+    private LtBreakpoint? Band => _breakpoint;
+
+    private bool IsMeasured => _breakpoint is not null;
+
+    // Before the band is measured both forms are drawn and a stylesheet utility picks one.
+    private bool DrawsCompactChrome => !IsMeasured || IsCompact;
+
+    private bool DrawsWideChrome => !IsCompact;
+
+    private string CompactControlClass => IsMeasured
+        ? "lt-btn lt-btn--quiet lt-shell-header__control"
+        : "lt-btn lt-btn--quiet lt-shell-header__control lt-only-compact";
+
+    private string WideControlsClass => IsMeasured ? "lt-shell-header__wide" : "lt-shell-header__wide lt-medium-up";
+
+    private string BrandPrefixClass => IsMeasured ? "lt-shell-brand__prefix" : "lt-shell-brand__prefix lt-medium-up";
+
     // The browser's own address decides, so a standalone window never draws the chrome
     // while the layout is still resolving its location, nor a chromed page lose it. A
     // standalone address reached directly by a caller who is not signed in keeps the
@@ -135,9 +159,12 @@ public partial class ShellLayout : IAsyncDisposable
         _ => "lt-viewport lt-shell",
     };
 
-    private string DirectoryClass => _breakpoint == LtBreakpoint.Medium
-        ? "lt-shell-directory lt-shell-directory--rail"
-        : "lt-shell-directory";
+    private string DirectoryClass => (_breakpoint, IsMeasured) switch
+    {
+        (LtBreakpoint.Medium, _) => "lt-shell-directory lt-shell-directory--rail",
+        (_, false) => "lt-shell-directory lt-medium-up",
+        _ => "lt-shell-directory",
+    };
 
     private string HomeHref => Navigator.Canonicalize(ExplorerAddress.Home.WithTenant(_location.Address.Tenant)).ToHref();
 
@@ -611,9 +638,16 @@ public partial class ShellLayout : IAsyncDisposable
 
         if (next != _breakpoint)
         {
+            // The first report only confirms what the breakpoint layer already shows,
+            // so a sheet opened from the compact controls before it stays open; a
+            // later change of band moves the chrome and closes both sheets.
+            if (IsMeasured)
+            {
+                _directoryOpen = false;
+                _menuOpen = false;
+            }
+
             _breakpoint = next;
-            _directoryOpen = false;
-            _menuOpen = false;
             StateHasChanged();
         }
     });
