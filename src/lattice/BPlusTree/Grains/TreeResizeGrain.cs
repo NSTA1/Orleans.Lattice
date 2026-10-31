@@ -1832,13 +1832,29 @@ internal sealed class TreeResizeGrain(
     /// reservation an undo of a completed resize takes is not counted, so such an
     /// undo leaves the resize reading complete, as documented.
     /// </remarks>
-    public Task<bool> IsIdleAsync()
+    public Task<bool> IsIdleAsync() => Task.FromResult(IsIdle());
+
+    private bool IsIdle()
     {
         var durable = DurableResizeState;
         var completionHoldsReservation = durable is { Complete: true, AliasReservationId: not null }
             && !DurableUndoPending
             && _undoRunning == 0;
-        return Task.FromResult(!durable.InProgress && !completionHoldsReservation);
+        return !durable.InProgress && !completionHoldsReservation;
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// The idle flag and the undo flag are read synchronously before the progress
+    /// read can await, in the order a caller making the three separate calls
+    /// would observe them.
+    /// </remarks>
+    public async Task<ResizeStatusSnapshot> GetStatusAsync()
+    {
+        var idle = IsIdle();
+        var undoPending = DurableUndoPending;
+        var progress = await GetProgressAsync();
+        return new ResizeStatusSnapshot(idle, undoPending, progress);
     }
 
     /// <summary>

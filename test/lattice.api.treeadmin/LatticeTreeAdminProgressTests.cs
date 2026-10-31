@@ -45,10 +45,10 @@ public sealed class LatticeTreeAdminProgressTests
 
     // ----- Resize -----
 
-    private static ITreeResizeGrain ResizeReporting(IGrainFactory factory, ResizeProgress progress)
+    private static ITreeResizeGrain ResizeReporting(IGrainFactory factory, ResizeProgress progress, bool idle, bool undoPending = false)
     {
         var resize = Substitute.For<ITreeResizeGrain>();
-        resize.GetProgressAsync().Returns(progress);
+        resize.GetStatusAsync().Returns(new ResizeStatusSnapshot(idle, undoPending, progress));
         factory.GetGrain<ITreeResizeGrain>(Tree).Returns(resize);
         return resize;
     }
@@ -60,8 +60,7 @@ public sealed class LatticeTreeAdminProgressTests
     public async Task GetResizeStatusAsync_projects_the_phase_and_units_of_a_running_resize(int corePhase, string expected)
     {
         var (factory, lattice, _) = Wire();
-        lattice.IsResizeCompleteAsync().Returns(false);
-        ResizeReporting(factory, new ResizeProgress(true, (ResizePhase)corePhase, 5, 7));
+                ResizeReporting(factory, new ResizeProgress(true, (ResizePhase)corePhase, 5, 7), idle: false);
 
         var status = await Create(factory).GetResizeStatusAsync(Tree);
 
@@ -77,8 +76,7 @@ public sealed class LatticeTreeAdminProgressTests
     public async Task GetResizeStatusAsync_reports_an_unknown_total_rather_than_zero()
     {
         var (factory, lattice, _) = Wire();
-        lattice.IsResizeCompleteAsync().Returns(false);
-        ResizeReporting(factory, new ResizeProgress(true, ResizePhase.Swap, 0, 0));
+                ResizeReporting(factory, new ResizeProgress(true, ResizePhase.Swap, 0, 0), idle: false);
 
         var status = await Create(factory).GetResizeStatusAsync(Tree);
 
@@ -93,9 +91,7 @@ public sealed class LatticeTreeAdminProgressTests
     public async Task GetResizeStatusAsync_reports_an_unwinding_undo_as_its_own_phase_without_units()
     {
         var (factory, lattice, _) = Wire();
-        lattice.IsResizeCompleteAsync().Returns(false);
-        lattice.IsResizeUndoPendingAsync().Returns(true);
-        ResizeReporting(factory, new ResizeProgress(true, ResizePhase.Snapshot, 2, 7));
+                ResizeReporting(factory, new ResizeProgress(true, ResizePhase.Snapshot, 2, 7), idle: false, undoPending: true);
 
         var status = await Create(factory).GetResizeStatusAsync(Tree);
 
@@ -112,8 +108,7 @@ public sealed class LatticeTreeAdminProgressTests
     public async Task GetResizeStatusAsync_reports_no_progress_once_the_resize_has_completed()
     {
         var (factory, lattice, _) = Wire();
-        lattice.IsResizeCompleteAsync().Returns(true);
-        ResizeReporting(factory, new ResizeProgress(true, ResizePhase.Cleanup, 6, 7));
+                ResizeReporting(factory, new ResizeProgress(true, ResizePhase.Cleanup, 6, 7), idle: true);
 
         var status = await Create(factory).GetResizeStatusAsync(Tree);
 
@@ -129,8 +124,7 @@ public sealed class LatticeTreeAdminProgressTests
     public async Task ResizeTreeAsync_returns_the_progress_of_the_resize_it_started()
     {
         var (factory, lattice, _) = Wire();
-        lattice.IsResizeCompleteAsync().Returns(false);
-        ResizeReporting(factory, new ResizeProgress(true, ResizePhase.Snapshot, 0, 7));
+                ResizeReporting(factory, new ResizeProgress(true, ResizePhase.Snapshot, 0, 7), idle: false);
 
         var status = await Create(factory).ResizeTreeAsync(Tree, 256, 64);
 
@@ -196,7 +190,6 @@ public sealed class LatticeTreeAdminProgressTests
     public async Task GetReshardStatusAsync_reports_the_target_and_start_on_a_standalone_read()
     {
         var (factory, lattice, registry) = Wire();
-        lattice.IsReshardCompleteAsync().Returns(false);
         registry.GetShardMapAsync(Tree).Returns(new ShardMap { Slots = [0, 1, 2, 3, 4, 5, 0, 1], Version = 4 });
         ReshardReporting(factory, new ReshardProgress(true, 8, 2));
 
@@ -215,7 +208,6 @@ public sealed class LatticeTreeAdminProgressTests
     public async Task GetReshardStatusAsync_reports_an_unrecorded_start_as_unknown()
     {
         var (factory, lattice, registry) = Wire();
-        lattice.IsReshardCompleteAsync().Returns(false);
         registry.GetShardMapAsync(Tree).Returns((ShardMap?)null);
         ReshardReporting(factory, new ReshardProgress(true, 8, 0));
 
@@ -232,9 +224,8 @@ public sealed class LatticeTreeAdminProgressTests
     public async Task GetReshardStatusAsync_reports_no_target_once_the_reshard_has_completed()
     {
         var (factory, lattice, registry) = Wire();
-        lattice.IsReshardCompleteAsync().Returns(true);
         registry.GetShardMapAsync(Tree).Returns((ShardMap?)null);
-        ReshardReporting(factory, new ReshardProgress(true, 8, 2));
+        ReshardReporting(factory, new ReshardProgress(false, 8, 2));
 
         var status = await Create(factory).GetReshardStatusAsync(Tree);
 

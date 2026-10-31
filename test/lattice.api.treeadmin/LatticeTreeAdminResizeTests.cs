@@ -15,7 +15,7 @@ namespace Orleans.Lattice.Api.TreeAdmin.Tests;
 /// after authorizing the whole-tree <c>TreeLifecycle</c> capability fail-closed;
 /// the status read authorizes whole-tree <c>Read</c> and projects the tree's
 /// observable resize signal - the idle/in-flight state (from
-/// <see cref="ILattice.IsResizeCompleteAsync"/>) and the current node capacity
+/// the resize coordinator's fused <c>ITreeResizeGrain.GetStatusAsync</c>) and the current node capacity
 /// (from <see cref="ILatticeRegistry"/>). Driven purely with substitutes and a
 /// hand-written access gate - no cluster.
 /// </summary>
@@ -51,6 +51,14 @@ public sealed class LatticeTreeAdminResizeTests
         return (lattice, registry);
     }
 
+    private static ITreeResizeGrain ResizeStatus(IGrainFactory factory, bool idle, bool undoPending = false)
+    {
+        var resize = Substitute.For<ITreeResizeGrain>();
+        resize.GetStatusAsync().Returns(new ResizeStatusSnapshot(idle, undoPending, new ResizeProgress(!idle, ResizePhase.Snapshot, 0, 0)));
+        factory.GetGrain<ITreeResizeGrain>(Tree).Returns(resize);
+        return resize;
+    }
+
     // ----- ResizeTree -----
 
     [Test]
@@ -58,7 +66,7 @@ public sealed class LatticeTreeAdminResizeTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var (lattice, registry) = Wire(factory);
-        lattice.IsResizeCompleteAsync().Returns(false);
+        ResizeStatus(factory, idle: false);
         registry.GetEntryAsync(Tree).Returns(new TreeRegistryEntry { MaxLeafKeys = 64, MaxInternalChildren = 32 });
         var facade = Create(factory);
 
@@ -81,7 +89,7 @@ public sealed class LatticeTreeAdminResizeTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var (lattice, registry) = Wire(factory);
-        lattice.IsResizeCompleteAsync().Returns(true);
+        ResizeStatus(factory, idle: true);
         registry.GetEntryAsync(Tree).Returns(new TreeRegistryEntry { MaxLeafKeys = 256, MaxInternalChildren = 128 });
         var facade = Create(factory);
 
@@ -151,7 +159,7 @@ public sealed class LatticeTreeAdminResizeTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var (lattice, registry) = Wire(factory);
-        lattice.IsResizeCompleteAsync().Returns(false);
+        ResizeStatus(factory, idle: false);
         registry.GetEntryAsync(Tree).Returns(new TreeRegistryEntry { MaxLeafKeys = 64, MaxInternalChildren = 32 });
         var facade = Create(factory);
 
@@ -213,7 +221,7 @@ public sealed class LatticeTreeAdminResizeTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var (lattice, registry) = Wire(factory);
-        lattice.IsResizeCompleteAsync().Returns(true);
+        ResizeStatus(factory, idle: true);
         registry.GetEntryAsync(Tree).Returns(new TreeRegistryEntry { MaxLeafKeys = 200, MaxInternalChildren = 100 });
         var facade = Create(factory);
 
@@ -237,7 +245,7 @@ public sealed class LatticeTreeAdminResizeTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var (lattice, registry) = Wire(factory);
-        lattice.IsResizeCompleteAsync().Returns(true);
+        ResizeStatus(factory, idle: true);
         registry.GetEntryAsync(Tree).Returns((TreeRegistryEntry?)null);
         var facade = Create(factory);
 
@@ -256,7 +264,7 @@ public sealed class LatticeTreeAdminResizeTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var (lattice, registry) = Wire(factory);
-        lattice.IsResizeCompleteAsync().Returns(true);
+        ResizeStatus(factory, idle: true);
         registry.GetEntryAsync(Tree).Returns(new TreeRegistryEntry());
         var facade = Create(factory);
 
@@ -274,7 +282,7 @@ public sealed class LatticeTreeAdminResizeTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var (lattice, registry) = Wire(factory);
-        lattice.IsResizeCompleteAsync().Returns(false);
+        ResizeStatus(factory, idle: false);
         registry.GetEntryAsync(Tree).Returns(new TreeRegistryEntry { MaxLeafKeys = 64, MaxInternalChildren = 32 });
         var facade = Create(factory);
 
@@ -292,8 +300,7 @@ public sealed class LatticeTreeAdminResizeTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var (lattice, registry) = Wire(factory);
-        lattice.IsResizeCompleteAsync().Returns(false);
-        lattice.IsResizeUndoPendingAsync().Returns(true);
+        ResizeStatus(factory, idle: false, undoPending: true);
         registry.GetEntryAsync(Tree).Returns(new TreeRegistryEntry { MaxLeafKeys = 64, MaxInternalChildren = 32 });
         var facade = Create(factory);
 
@@ -307,12 +314,44 @@ public sealed class LatticeTreeAdminResizeTests
     }
 
     [Test]
+    public async Task GetResizeStatusAsync_reads_the_coordinator_once_and_never_routes_through_the_tree_grain()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var (lattice, registry) = Wire(factory);
+        var resize = ResizeStatus(factory, idle: false, undoPending: true);
+        registry.GetEntryAsync(Tree).Returns(new TreeRegistryEntry { MaxLeafKeys = 64, MaxInternalChildren = 32 });
+        var facade = Create(factory);
+
+        await facade.GetResizeStatusAsync(Tree);
+
+        await resize.Received(1).GetStatusAsync();
+        await resize.DidNotReceive().IsIdleAsync();
+        await resize.DidNotReceive().GetProgressAsync();
+        await lattice.DidNotReceive().IsResizeCompleteAsync(Arg.Any<CancellationToken>());
+        await lattice.DidNotReceive().IsResizeUndoPendingAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void GetResizeStatusAsync_on_a_system_tree_throws_the_reserved_namespace_exception()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var registry = Substitute.For<ILatticeRegistry>();
+        factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        var resize = Substitute.For<ITreeResizeGrain>();
+        factory.GetGrain<ITreeResizeGrain>(Arg.Any<string>()).Returns(resize);
+        var facade = Create(factory);
+
+        Assert.That(async () => await facade.GetResizeStatusAsync(LatticeConstants.RegistryTreeId),
+            Throws.TypeOf<LatticeReservedTreeNamespaceException>());
+        resize.DidNotReceive().GetStatusAsync();
+    }
+
+    [Test]
     public async Task UndoTreeResizeAsync_reports_undo_requested_when_the_unwind_outlasts_the_call()
     {
         var factory = Substitute.For<IGrainFactory>();
         var (lattice, registry) = Wire(factory);
-        lattice.IsResizeCompleteAsync().Returns(false);
-        lattice.IsResizeUndoPendingAsync().Returns(true);
+        ResizeStatus(factory, idle: false, undoPending: true);
         registry.GetEntryAsync(Tree).Returns(new TreeRegistryEntry { MaxLeafKeys = 64, MaxInternalChildren = 32 });
         var facade = Create(factory);
 

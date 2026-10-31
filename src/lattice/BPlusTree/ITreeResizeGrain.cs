@@ -213,4 +213,14 @@ internal interface ITreeResizeGrain : IGrainWithStringKey
     /// </summary>
     [AlwaysInterleave]
     Task<ResizeProgress> GetProgressAsync();
+
+    /// <summary>
+    /// Reads <see cref="IsIdleAsync"/>, the pending flag of
+    /// <see cref="GetUndoProgressAsync"/> and <see cref="GetProgressAsync"/> in
+    /// that order, in one call, so a status projection pays one grain hop rather
+    /// than three. Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/>
+    /// like each read it combines. A pure read.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<ResizeStatusSnapshot> GetStatusAsync();
 }

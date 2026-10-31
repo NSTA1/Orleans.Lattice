@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Api.TreeAdmin.Tests;
 /// <c>TreeLifecycle</c>) after authorizing the whole-tree <c>TreeLifecycle</c>
 /// capability fail-closed; the status read authorizes whole-tree <c>Read</c> and
 /// projects the tree's observable reshard signal - the idle/in-flight state (from
-/// <see cref="ILattice.IsReshardCompleteAsync"/>) and the current
+/// the reshard coordinator's <c>ITreeReshardGrain.GetProgressAsync</c>) and the current
 /// <see cref="ShardMap"/> fan-out (from <see cref="ILatticeRegistry"/>). Driven
 /// purely with substitutes and a hand-written access gate - no cluster.
 /// </summary>
@@ -49,6 +49,14 @@ public sealed class LatticeTreeAdminReshardTests
         return (lattice, registry);
     }
 
+    private static ITreeReshardGrain ReshardStatus(IGrainFactory factory, bool inProgress)
+    {
+        var reshard = Substitute.For<ITreeReshardGrain>();
+        reshard.GetProgressAsync().Returns(new ReshardProgress(inProgress, 0, 0));
+        factory.GetGrain<ITreeReshardGrain>(Tree).Returns(reshard);
+        return reshard;
+    }
+
     // ----- ReshardTree -----
 
     [Test]
@@ -56,7 +64,7 @@ public sealed class LatticeTreeAdminReshardTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var (lattice, registry) = Wire(factory);
-        lattice.IsReshardCompleteAsync().Returns(false);
+        ReshardStatus(factory, inProgress: true);
         // A four-slot map routing to two distinct physical shards.
         registry.GetShardMapAsync(Tree).Returns(new ShardMap { Slots = new[] { 1, 0, 1, 0 }, Version = 7 });
         var facade = Create(factory);
@@ -80,7 +88,7 @@ public sealed class LatticeTreeAdminReshardTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var (lattice, registry) = Wire(factory);
-        lattice.IsReshardCompleteAsync().Returns(true);
+        ReshardStatus(factory, inProgress: false);
         registry.GetShardMapAsync(Tree).Returns(new ShardMap { Slots = new[] { 0, 1, 2, 3 }, Version = 9 });
         var facade = Create(factory);
 
@@ -149,7 +157,7 @@ public sealed class LatticeTreeAdminReshardTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var (lattice, registry) = Wire(factory);
-        lattice.IsReshardCompleteAsync().Returns(true);
+        ReshardStatus(factory, inProgress: false);
         registry.GetShardMapAsync(Tree).Returns(new ShardMap { Slots = new[] { 1, 0, 1, 0 }, Version = 3 });
         var facade = Create(factory);
 
@@ -172,7 +180,7 @@ public sealed class LatticeTreeAdminReshardTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var (lattice, registry) = Wire(factory);
-        lattice.IsReshardCompleteAsync().Returns(true);
+        ReshardStatus(factory, inProgress: false);
         registry.GetShardMapAsync(Tree).Returns((ShardMap?)null);
         var facade = Create(factory);
 
@@ -192,13 +200,42 @@ public sealed class LatticeTreeAdminReshardTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var (lattice, registry) = Wire(factory);
-        lattice.IsReshardCompleteAsync().Returns(false);
+        ReshardStatus(factory, inProgress: true);
         registry.GetShardMapAsync(Tree).Returns(new ShardMap { Slots = new[] { 0, 1 }, Version = 1 });
         var facade = Create(factory);
 
         var status = await facade.GetReshardStatusAsync(Tree);
 
         Assert.That(status.InProgress, Is.True);
+    }
+
+    [Test]
+    public async Task GetReshardStatusAsync_reads_the_coordinator_progress_once_and_never_routes_through_the_tree_grain()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var (lattice, registry) = Wire(factory);
+        var reshard = ReshardStatus(factory, inProgress: true);
+        registry.GetShardMapAsync(Tree).Returns(new ShardMap { Slots = new[] { 0, 1 }, Version = 1 });
+        var facade = Create(factory);
+
+        await facade.GetReshardStatusAsync(Tree);
+
+        await reshard.Received(1).GetProgressAsync();
+        await reshard.DidNotReceive().IsIdleAsync();
+        await lattice.DidNotReceive().IsReshardCompleteAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void GetReshardStatusAsync_on_a_system_tree_throws_the_reserved_namespace_exception()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var reshard = Substitute.For<ITreeReshardGrain>();
+        factory.GetGrain<ITreeReshardGrain>(Arg.Any<string>()).Returns(reshard);
+        var facade = Create(factory);
+
+        Assert.That(async () => await facade.GetReshardStatusAsync(LatticeConstants.RegistryTreeId),
+            Throws.TypeOf<LatticeReservedTreeNamespaceException>());
+        reshard.DidNotReceive().GetProgressAsync();
     }
 
     [Test]

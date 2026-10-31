@@ -614,12 +614,22 @@ internal sealed partial class LatticeGrain(
     /// <see cref="ThrowIfUserOriginSystemDataTree"/>.
     /// </para>
     /// </summary>
-    private void ThrowIfSystemTree()
+    private void ThrowIfSystemTree() => ThrowIfSystemTree(TreeId);
+
+    /// <summary>
+    /// The system-tree rejection the public <see cref="ILattice"/> surface applies,
+    /// for a caller that reads a tree's coordinator directly instead of through a
+    /// <see cref="LatticeGrain"/> verb and must still reject a system tree exactly
+    /// as that verb would.
+    /// </summary>
+    /// <param name="treeId">The tree id the read addresses.</param>
+    /// <exception cref="LatticeReservedTreeNamespaceException"><paramref name="treeId"/> is a system tree.</exception>
+    internal static void ThrowIfSystemTree(string treeId)
     {
-        if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        if (treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
             throw new LatticeReservedTreeNamespaceException(
-                TreeId,
-                $"Tree ID '{TreeId}' is reserved for internal Lattice system trees and cannot be addressed via the public ILattice surface. Choose a tree name that does not start with '{LatticeConstants.SystemTreePrefix}'.");
+                treeId,
+                $"Tree ID '{treeId}' is reserved for internal Lattice system trees and cannot be addressed via the public ILattice surface. Choose a tree name that does not start with '{LatticeConstants.SystemTreePrefix}'.");
     }
 
     /// <summary>

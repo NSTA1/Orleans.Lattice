@@ -1172,7 +1172,8 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
 
     /// <summary>
     /// Projects the tree's observable reshard signal - the coordinator's idle/in-flight
-    /// state (via the public <see cref="ILattice.IsReshardCompleteAsync"/> read) and the
+    /// state (via the reshard coordinator's progress read, whose in-flight flag is the
+    /// same durable state <see cref="ILattice.IsReshardCompleteAsync"/> reports) and the
     /// current <see cref="ShardMap"/> fan-out (via the registry) - onto the
     /// transport-agnostic <see cref="TreeReshardStatus"/>. A tree with no custom map yet
     /// reports zeroed shard counts. <paramref name="requestedShardCount"/> echoes the
@@ -1195,14 +1196,17 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
         // throwing *after* the mutation had already been applied.
         bool complete;
         ReshardProgress progress;
+        Orleans.Lattice.BPlusTree.Grains.LatticeGrain.ThrowIfSystemTree(effectiveTreeId);
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            complete = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
-                .IsReshardCompleteAsync()
-                .ConfigureAwait(false);
+            // ILattice.IsReshardCompleteAsync forwards to ITreeReshardGrain.IsIdleAsync,
+            // which is exactly !InProgress of the same durable state GetProgressAsync
+            // reports, so the progress read alone answers both: 3 grain calls -> 1.
+            // The system-tree rejection the ILattice verb applied is kept above.
             progress = await _grainFactory.GetGrain<ITreeReshardGrain>(effectiveTreeId)
                 .GetProgressAsync()
                 .ConfigureAwait(false);
+            complete = !progress.InProgress;
         }
 
         var map = await _grainFactory.GetLatticeRegistry()
@@ -1951,9 +1955,11 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
         (string SourceTreeId, bool IsAggregation, string? ProviderKey, string? ProjectionVersion) registration,
         CancellationToken cancellationToken)
     {
-        var maintainer = _grainFactory.GetGrain<IViewMaintainerGrain>(effectiveViewName);
-        var lag = await maintainer.GetLagAsync(cancellationToken).ConfigureAwait(false);
-        var activeTreeId = await maintainer.GetActiveTreeIdAsync(cancellationToken).ConfigureAwait(false);
+        var status = await _grainFactory.GetGrain<IViewMaintainerGrain>(effectiveViewName)
+            .GetStatusAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var lag = status.Lag;
+        var activeTreeId = status.ActiveTreeId;
 
         return new TreeViewStatus
         {
@@ -2234,14 +2240,19 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
         bool complete;
         bool undoRequested;
         ResizeProgress progress;
+        Orleans.Lattice.BPlusTree.Grains.LatticeGrain.ThrowIfSystemTree(effectiveTreeId);
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            var lattice = _grainFactory.GetGrain<ILattice>(effectiveTreeId);
-            complete = await lattice.IsResizeCompleteAsync().ConfigureAwait(false);
-            undoRequested = await lattice.IsResizeUndoPendingAsync().ConfigureAwait(false);
-            progress = await _grainFactory.GetGrain<ITreeResizeGrain>(effectiveTreeId)
-                .GetProgressAsync()
+            // One fused coordinator read replaces ILattice.IsResizeCompleteAsync and
+            // ILattice.IsResizeUndoPendingAsync (each a LatticeGrain hop forwarding to
+            // this coordinator) plus the direct GetProgressAsync: 5 grain calls -> 1.
+            // The system-tree rejection the ILattice verbs applied is kept above.
+            var status = await _grainFactory.GetGrain<ITreeResizeGrain>(effectiveTreeId)
+                .GetStatusAsync()
                 .ConfigureAwait(false);
+            complete = status.Idle;
+            undoRequested = status.UndoPending;
+            progress = status.Progress;
         }
 
         var entry = await _grainFactory.GetLatticeRegistry()

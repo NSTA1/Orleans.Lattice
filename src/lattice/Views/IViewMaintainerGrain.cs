@@ -119,6 +119,13 @@ internal interface IViewMaintainerGrain : IGrainWithStringKey
     Task<string> GetActiveTreeIdAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns <see cref="GetLagAsync"/> and then <see cref="GetActiveTreeIdAsync"/>
+    /// from one turn, so a status read pays one maintainer call rather than two.
+    /// Throws exactly as <see cref="GetLagAsync"/> would.
+    /// </summary>
+    Task<ViewMaintainerStatus> GetStatusAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Read-your-writes barrier: drives drains until the highest applied source
     /// HLC reaches <paramref name="target"/>, or throws
     /// <see cref="TimeoutException"/> once <paramref name="timeout"/> elapses.
