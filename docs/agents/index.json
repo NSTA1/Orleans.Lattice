@@ -237,6 +237,20 @@
       "summary": "Install an app pinned to a reviewed manifest with role bindings and a version-pinned capability ceiling, then enable it, verify consent, re-bind roles, and disable or uninstall it."
     },
     {
+      "path": "procedures/auth-policy-administration.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Put or remove cluster authorization rules and upsert or remove groups and membership edges as an access administrator, guarding against self-lockout and confirming the effect with explain."
+    },
+    {
+      "path": "procedures/backup-catalog-maintenance.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Delete a backup tip-first, rebuild or scrub the backup catalog against the sink, and cancel a tracked backup operation, polling each to a terminal state."
+    },
+    {
       "path": "procedures/backup.yaml",
       "kind": "procedure",
       "format": "yaml",
@@ -307,6 +321,13 @@
       "summary": "Confirm a replication retention gap, request a routine or forced re-seed from a peer snapshot, and poll bootstrap status until the tree is live and unfenced."
     },
     {
+      "path": "procedures/repocontext-repository-index.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Onboard or re-ingest a repository's context index, repair a degraded index with a memory-preserving reset, or remove a repository only with explicit consent, polling index status to completion."
+    },
+    {
       "path": "procedures/reshard.yaml",
       "kind": "procedure",
       "format": "yaml",
@@ -325,7 +346,7 @@
       "kind": "procedure",
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
-      "summary": "Restore a tree or backup set through shadow cutover, run a tracked in-place, shadow-cutover or cold restore from the backup catalog, and revert a wrong cutover."
+      "summary": "Restore a backup or backup set into trees via shadow-cutover or tracked restore, and revert a shadow-cutover restore from its preserved result."
     },
     {
       "path": "procedures/retention.yaml",
@@ -339,7 +360,14 @@
       "kind": "procedure",
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
-      "summary": "Register a schema version, scan compliance, remediate if needed, then run a tracked advance-and-migrate and verify the target version and dead letters."
+      "summary": "Register a schema version, audit compliance (cancelling a scan if needed), then advance the target alone or advance-and-migrate a tree; revert an installed policy by re-setting or clearing it."
+    },
+    {
+      "path": "procedures/storage-usage-refresh.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Run a tracked deep re-measure of every tree's storage usage, read the cluster totals from its status, then read the refreshed per-tree figures with the cheap storage-usage read."
     },
     {
       "path": "procedures/tag-index-reconcile.yaml",
@@ -353,7 +381,7 @@
       "kind": "procedure",
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
-      "summary": "Delegate access administration to a tenant: create a tenant group, add members, admit it to the tenant, grant it a tenant-tier rule, and confirm the resulting decision."
+      "summary": "Delegate access administration to a tenant with groups, member-set entries and tenant-tier rules, revoke it by removing them, and confirm the deciding layer."
     },
     {
       "path": "procedures/tenant-lifecycle.yaml",
@@ -375,6 +403,20 @@
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
       "summary": "Soft-delete a tree, recover it within the recovery window, or hard-purge it with explicit confirmation."
+    },
+    {
+      "path": "procedures/tree-provisioning.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Create a tree with optional sizing, then set or repoint its alias onto a physical tree and verify the resolution, recording the prior target so the alias can be pointed back."
+    },
+    {
+      "path": "procedures/view-lifecycle.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Create a runtime materialised view from a host-registered projection provider, poll its apply lag to zero, or drop it and confirm it is gone from the runtime-view registry."
     },
     {
       "path": "procedures/view-rebuild.yaml",

@@ -13,7 +13,7 @@ surfaces:
     source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
 preconditions:
   - id: surface-available
-    check: "Every surface this procedure uses is registered on the host: read the availability of api/backup.json, api/treeadmin.json and, for each MCP tool used (lattice_backup_start_restore, lattice_treeadmin_tree_restore), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/backup.json, api/treeadmin.json and, for each MCP tool used (lattice_backup_start_restore, lattice_backup_revert_restore, lattice_treeadmin_tree_restore, lattice_treeadmin_tree_restore_set, lattice_treeadmin_tree_restore_revert), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
     source: "docs/agents/api/backup.json"
   - id: backup-exists
     check: "Backup id or set id exists and its chain can be described."
@@ -27,6 +27,18 @@ preconditions:
   - id: restore-scope-total
     check: "Backup-facade restore authorizes exactly one scope even when the backup id cannot resolve and no target tree is supplied."
     source: "src/lattice.api.backup/LatticeBackupControl.cs#LatticeBackupControl"
+  - id: set-id-multi-member
+    check: "A set id names a backup set of two or more trees; a single-scope capture returns a null SetId and its backup is restored with the single-tree restore verb."
+    source: "src/lattice.backup/LatticeBackupRestoreService.cs#LatticeBackupRestoreService.BuildUnresolvedSetExceptionAsync"
+  - id: revert-result-held
+    check: "To revert, the shadow-cutover restore result is held: backup id, target tree id, operation id, ShadowPhysicalTreeId and PreviousPhysicalTreeId."
+    source: "src/lattice.api.abstractions/TreeAdmin/Model/TreeRestoreResult.cs#TreeRestoreResult.PreviousPhysicalTreeId"
+  - id: revert-authority
+    check: "Revert requires whole-tree Restore authority over the result's target tree only; it consults no manifest, so it needs no Backup authority over a captured source tree."
+    source: "docs/lattice.backup/architecture.md"
+  - id: revert-same-tenant
+    check: "Tree-admin revert re-composes the result's target tree id under the current active tenant, so it reverts the original tree only under the tenant that performed the restore."
+    source: "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.RevertTreeRestoreAsync"
 steps:
   - n: 1
     action: "Describe the backup or set before restore."
@@ -35,12 +47,12 @@ steps:
     source: "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DescribeBackupAsync"
   - n: 2
     action: "Restore one tree through shadow cutover."
-    api: "ILatticeTreeAdmin.RestoreTreeAsync / RestoreTree"
+    api: "ILatticeTreeAdmin.RestoreTreeAsync / RestoreTree / lattice_treeadmin_tree_restore"
     expects: "Returns TreeRestoreResult including shadow and previous physical tree ids."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeAsync"
   - n: 3
     action: "Restore every tree in a backup set as one unit when set restore is intended."
-    api: "ILatticeTreeAdmin.RestoreTreeSetAsync / RestoreTreeSet"
+    api: "ILatticeTreeAdmin.RestoreTreeSetAsync / RestoreTreeSet / lattice_treeadmin_tree_restore_set"
     expects: "Returns per-member restore results this cluster applied."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeSetAsync"
   - n: 4
@@ -55,9 +67,24 @@ steps:
     source: "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartColdRestoreAsync"
   - n: 6
     action: "Revert a wrong shadow-cutover using the restore result fields."
-    api: "ILatticeTreeAdmin.RevertTreeRestoreAsync or ILatticeBackupControl.RevertRestoreAsync"
+    api: "ILatticeTreeAdmin.RevertTreeRestoreAsync / RevertTreeRestore / lattice_treeadmin_tree_restore_revert or ILatticeBackupControl.RevertRestoreAsync / RevertRestore / lattice_backup_revert_restore"
     expects: "Idempotently swaps back the pre-restore physical tree."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RevertTreeRestoreAsync"
+  - n: 7
+    action: "Revert through the tree-admin MCP tool by passing targetTreeId, backupId, operationId, shadowPhysicalTreeId and previousPhysicalTreeId from the tree_restore result or a tree_restore_set member result."
+    api: "lattice_treeadmin_tree_restore_revert"
+    expects: "Returns the reconstructed TreeRestoreResult with mode ShadowCutover once the alias is swapped back."
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminLifecycleToolHandlers.cs#TreeAdminLifecycleToolHandlers.RevertTreeRestoreAsync"
+  - n: 8
+    action: "Revert through the backup MCP tool by passing backupId, targetTreeId, operationId, mode ShadowCutover, shadowPhysicalTreeId and previousPhysicalTreeId from the succeeded lattice_backup_start_restore result."
+    api: "lattice_backup_revert_restore"
+    expects: "Returns reverted true with the backup id and target tree id."
+    source: "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs#BackupToolInvocations.RevertRestoreAsync"
+  - n: 9
+    action: "To roll back a set restore, hand each member result returned by the set restore back to the tree-admin revert verb individually."
+    api: "ILatticeTreeAdmin.RevertTreeRestoreAsync / RevertTreeRestore / lattice_treeadmin_tree_restore_revert"
+    expects: "Each reverted member tree's alias resolves to its previous physical tree again."
+    source: "src/lattice.api.abstractions/TreeAdmin/Model/TreeRestoreResult.cs#TreeRestoreResult"
 postconditions:
   - check: "Tree-admin RestoreTreeAsync uses ShadowCutover and returns the identifiers needed for revert."
     source: "src/lattice.api.abstractions/TreeAdmin/Model/TreeRestoreResult.cs#Mode"
@@ -65,6 +92,12 @@ postconditions:
     source: "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs"
   - check: "ShadowCutover restore carries the shadow tree's shard map onto the logical tree in the same registry write as the alias swap and records the replaced map on the shadow so revert can carry it back."
     source: "src/lattice/BPlusTree/AliasCutoverShardMaps.cs#AliasCutoverShardMaps.PrepareCutoverResolvingAsync"
+  - check: "Set restore returns one TreeRestoreResult per member tree this cluster restored, in the order the engine applied them."
+    source: "src/lattice.api.abstractions/TreeAdmin/Model/TreeRestoreSetResult.cs#TreeRestoreSetResult.Results"
+  - check: "Revert carries the previous tree's shard map back with the alias in one registry write."
+    source: "src/lattice/BPlusTree/AliasCutoverShardMaps.cs#AliasCutoverShardMaps.RevertAsync"
+  - check: "After revert the logical tree's cached routing is force-refreshed so callers observe the revert immediately, and the shadow tree is armed to redirect alias-routed traffic back onto the previous tree."
+    source: "src/lattice.backup/LatticeBackupRestoreService.cs#LatticeBackupRestoreService.RevertRestoreAsync"
 failure_modes:
   - id: inplace-not-rollback
     signal: "InPlace restore is chosen for a rollback objective."
@@ -86,37 +119,81 @@ failure_modes:
     signal: "Tracked restore status becomes Failed after the accepting silo is lost or stops heartbeating."
     effect: "The background restore is not resumed."
     response: "Start a new tracked restore after confirming the previous status."
+  - id: set-id-unresolved
+    signal: "Set restore throws ArgumentException (InvalidArgument over gRPC) because the set id resolved to no member trees."
+    effect: "Nothing is restored; when the id is a single-tree set's content address the message names the backup id to restore instead."
+    response: "Restore the named backup id with the single-tree restore verb, or correct the set id."
+  - id: revert-not-shadow-cutover
+    signal: "Revert throws ArgumentException because the result is not a ShadowCutover result or carries no PreviousPhysicalTreeId; lattice_backup_revert_restore reads an omitted mode as InPlace."
+    effect: "Nothing is reverted."
+    response: "Pass mode ShadowCutover and the shadow and previous physical tree ids from the original restore result; an InPlace restore cannot be reverted."
+  - id: revert-superseded
+    signal: "Revert throws InvalidOperationException stating that a later cutover superseded this restore."
+    effect: "The revert is refused before it takes the alias reservation or changes lineage, and the alias stays on the later physical copy."
+    response: "Do not use a superseded restore result to roll back a newer publication."
+  - id: revert-physical-mismatch
+    signal: "Revert throws LatticeRestoreValidationException (FailedPrecondition over gRPC) naming a physical tree that is neither a restore shadow of the target nor its current physical tree."
+    effect: "The alias is not moved."
+    response: "Pass the physical tree ids from the original restore result back verbatim."
+  - id: alias-reservation-held
+    signal: "Shadow-cutover restore or revert throws InvalidOperationException because the target tree is deleted, a delete of it is pending, or another alias change holds its alias reservation; the backup gRPC binding surfaces this as Internal with an opaque message."
+    effect: "No cutover or revert happens; a restore or revert that failed part-way keeps the reservation until the same request is retried to completion."
+    response: "Retry the same request to completion once the conflicting delete or alias change has cleared."
   - id: surface-not-available
     signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
     effect: "The operation cannot be carried out through that surface on this host."
     response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
 rollback:
   supported: true
-  mechanism: "ShadowCutover restore is reverted by passing the restore result back to the revert API; InPlace restore is not undoable."
+  mechanism: "ShadowCutover restore is reverted by passing the restore result back to the revert API; InPlace restore is not undoable. Revert verbs: ILatticeTreeAdmin.RevertTreeRestoreAsync, gRPC RevertTreeRestore, MCP lattice_treeadmin_tree_restore_revert; ILatticeBackupControl.RevertRestoreAsync, gRPC RevertRestore, MCP lattice_backup_revert_restore. A set restore is reverted member by member."
   steps:
     - action: "Preserve the restore result."
       api: "TreeRestoreResult or LatticeRestoreResult"
       source: "src/lattice.api.abstractions/TreeAdmin/Model/TreeRestoreResult.cs"
     - action: "Call RevertTreeRestoreAsync or RevertRestoreAsync."
-      api: "ILatticeTreeAdmin.RevertTreeRestoreAsync / ILatticeBackupControl.RevertRestoreAsync"
+      api: "ILatticeTreeAdmin.RevertTreeRestoreAsync / RevertTreeRestore / lattice_treeadmin_tree_restore_revert / ILatticeBackupControl.RevertRestoreAsync / RevertRestore / lattice_backup_revert_restore"
       source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RevertTreeRestoreAsync"
+    - action: "For a set restore, revert each member TreeRestoreResult individually."
+      api: "ILatticeTreeAdmin.RevertTreeRestoreAsync / RevertTreeRestore / lattice_treeadmin_tree_restore_revert"
+      source: "src/lattice.api.abstractions/TreeAdmin/Model/TreeRestoreResult.cs#TreeRestoreResult"
   source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RevertTreeRestoreAsync"
 concurrency:
-  - rule: "Backup set restore applies as all-or-nothing over its member trees."
-    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RestoreTreeSetAsync"
+  - rule: "When any member tree is replicated, backup set restore runs as one all-or-nothing coordinated saga so every member flips together on every participating cluster or none does."
+    source: "src/lattice.backup/ILatticeBackupRestoreService.cs#ILatticeBackupRestoreService.RestoreSetAsync"
   - rule: "RestoreSetAsync authorizes every member target before the coordinated saga dispatcher can fan work out to peers."
     source: "src/lattice.backup/LatticeBackupRestoreService.cs#LatticeBackupRestoreService.RestoreSetAsync"
   - rule: "Replicated tree restore is promoted to coordinated restore across current replication peers."
     source: "reference-architecture.md"
   - rule: "Tracked restore operations run on the accepting silo and are marked Failed on silo loss or lease lapse; resumption is not supported."
     source: "docs/lattice.api.abstractions/operations.md"
+  - rule: "When no member of a set is replicated, set restore restores each member tree in turn through its own shadow-cutover restore."
+    source: "src/lattice.backup/LatticeBackupRestoreService.cs#LatticeBackupRestoreService.RestoreSetAsync"
+  - rule: "A shadow-cutover restore and a revert each hold the target tree's alias reservation; while it is held, a delete, resize, schema remediation, or different restore or revert of the tree is refused."
+    source: "docs/lattice.backup/architecture.md"
+  - rule: "A revert that replaces a replicated tree's contents on one cluster alone leaves its peers holding the writes it discarded, so they may diverge."
+    source: "docs/lattice.backup/disaster-recovery.md"
 sources:
   - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
+  - "src/lattice.api.abstractions/TreeAdmin/Model/TreeRestoreResult.cs"
+  - "src/lattice.api.abstractions/TreeAdmin/Model/TreeRestoreSetResult.cs"
   - "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs"
   - "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs"
+  - "src/lattice.api.treeadmin/LatticeTreeAdmin.cs"
   - "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs"
+  - "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs"
   - "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs"
+  - "src/lattice.api.backup/LatticeBackupControl.cs"
   - "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs"
+  - "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs"
+  - "src/lattice.api.mcp/Tools/Backup/BackupToolMappings.cs"
+  - "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+  - "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminLifecycleToolHandlers.cs"
+  - "src/lattice.backup/LatticeBackupRestoreService.cs"
+  - "src/lattice/BPlusTree/AliasCutoverShardMaps.cs"
   - "docs/lattice.api.treeadmin/README.md"
+  - "docs/lattice.api.backup.grpc/architecture.md"
+  - "docs/lattice.backup/architecture.md"
   - "docs/lattice.backup/disaster-recovery.md"
   - "docs/lattice.replication/coordinated-restore.md"
+  - "docs/lattice.api.abstractions/operations.md"
+  - "reference-architecture.md"

@@ -1342,7 +1342,7 @@
         },
         {
           "id": "control-plane",
-          "check": "Tree is reserved auth, tenant-admin capability, tenant/app registry, membership/schema/backup backing store, or * sentinel.",
+          "check": "Tree is reserved auth, tenant-admin capability, tenant/app registry, membership/schema/backup backing store, tag-* shared tag index tree, or * sentinel.",
           "on_true": "explicit-control-allow",
           "on_false": "strict-fence",
           "source": "src/lattice.auth/PolicyAccessGate.cs"
@@ -1409,7 +1409,7 @@
       "nodes": [
         {
           "id": "all-trees-deny",
-          "check": "All-trees grants are enabled, the target tree is not sys-auth-*, sys-tenant-*, sys-app-*, sys-membership-*, sys-schema-*, sys-backup-*, _lattice_tenant_admin_* or the * sentinel, and the * bucket has a matching deny.",
+          "check": "All-trees grants are enabled, the target tree is not sys-auth-*, sys-tenant-*, sys-app-*, sys-membership-*, sys-schema-*, sys-backup-*, a tag-* shared tag index tree, _lattice_tenant_admin_* or the * sentinel, and the * bucket has a matching deny.",
           "on_true": "deny",
           "on_false": "collection-request",
           "source": "src/lattice.auth/PolicyEvaluator.cs#PolicyEvaluator"
@@ -1437,7 +1437,7 @@
         },
         {
           "id": "all-trees-allow",
-          "check": "All-trees grants are enabled, the target tree is not sys-auth-*, sys-tenant-*, sys-app-*, sys-membership-*, sys-schema-*, sys-backup-*, _lattice_tenant_admin_* or the * sentinel, and the * bucket has a matching allow.",
+          "check": "All-trees grants are enabled, the target tree is not sys-auth-*, sys-tenant-*, sys-app-*, sys-membership-*, sys-schema-*, sys-backup-*, a tag-* shared tag index tree, _lattice_tenant_admin_* or the * sentinel, and the * bucket has a matching allow.",
           "on_true": "allow",
           "on_false": "tenant-layer-applies",
           "source": "src/lattice.auth/PolicyEvaluator.cs"
@@ -2031,6 +2031,71 @@
         "src/lattice.api.replication.grpc/LatticeReplicationStatusGrpcService.cs#LatticeReplicationStatusGrpcService",
         "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus",
         "src/lattice.api.replication/ReplicationAccessAuthorizer.cs#ReplicationAccessAuthorizer"
+      ]
+    },
+    {
+      "id": "state-facade-unfiltered-read-visibility",
+      "nodes": [
+        {
+          "id": "visibility-enabled",
+          "check": "LatticeApiStateOptions.ReadVisibility is not Disabled and a real ILatticeAccessGate (not NullLatticeAccessGate) is registered.",
+          "on_true": "subject-anonymous",
+          "on_false": "serve",
+          "source": "src/lattice.api.state/LatticeStateVisibilityFilter.cs#LatticeStateVisibilityFilter.Enabled"
+        },
+        {
+          "id": "subject-anonymous",
+          "check": "The resolved caller subject is anonymous.",
+          "on_true": "hide",
+          "on_false": "target-is-view",
+          "source": "src/lattice.api.state/LatticeStateVisibilityFilter.cs#LatticeStateVisibilityFilter.ResolveTreeReadAccessAsync"
+        },
+        {
+          "id": "target-is-view",
+          "check": "The effective (tenant-scoped) tree id is a materialised-view tree.",
+          "on_true": "view-source-resolved",
+          "on_false": "tree-grant-unfiltered",
+          "source": "src/lattice.api.state/LatticeStateQuery.cs#LatticeStateQuery.IsUnfilteredTreeReadHiddenAsync"
+        },
+        {
+          "id": "tree-grant-unfiltered",
+          "check": "The access gate allows RangeRead on the tree and returns no key filter.",
+          "on_true": "serve",
+          "on_false": "hide",
+          "source": "src/lattice.api.state/LatticeStateVisibilityFilter.cs#LatticeStateVisibilityFilter.ResolveTreeReadAccessAsync"
+        },
+        {
+          "id": "view-source-resolved",
+          "check": "The view's source tree resolves from the local IViewCatalog or the durable view registry.",
+          "on_true": "source-grant-unfiltered",
+          "on_false": "hide",
+          "source": "src/lattice.api.state/LatticeStateViewSource.cs#LatticeStateViewSource.ResolveAsync"
+        },
+        {
+          "id": "source-grant-unfiltered",
+          "check": "The access gate allows RangeRead on the view's source tree and returns no key filter.",
+          "on_true": "serve",
+          "on_false": "hide",
+          "source": "src/lattice.api.state/LatticeStateViewSource.cs#LatticeStateViewSource.ResolveReadAccessAsync"
+        }
+      ],
+      "terminals": [
+        {
+          "id": "hide",
+          "outcome": "The read is hidden without reading backing data: GetTreeStructure returns TreeNotFound with no roots, GetDeadLetterCount returns 0, ListDeadLetters returns an empty page and ListTagValues returns an empty catalog page."
+        },
+        {
+          "id": "serve",
+          "outcome": "The read proceeds to the topology walk, the dead-letter store or the tag catalog."
+        }
+      ],
+      "fail_closed": "An anonymous subject, an unresolvable view source, a denied grant or any partial (key-filtered) grant hides the read; this layer runs inside the facade whatever the gRPC interceptor decided. ListIndexTags applies the same unfiltered test to every covered tree and additionally empties the union when any covered tree is outside the active tenant's enumeration set.",
+      "sources": [
+        "src/lattice.api.state/LatticeStateQuery.cs#LatticeStateQuery.IsUnfilteredTreeReadHiddenAsync",
+        "src/lattice.api.state/LatticeStateQuery.cs#LatticeStateQuery.ListIndexTagsAsync",
+        "src/lattice.api.state/LatticeStateVisibilityFilter.cs",
+        "src/lattice.api.state/LatticeStateViewSource.cs",
+        "docs/lattice.api.state/security.md"
       ]
     },
     {

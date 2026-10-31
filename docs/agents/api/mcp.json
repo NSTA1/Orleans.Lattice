@@ -473,6 +473,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -546,6 +550,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -640,6 +648,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -706,6 +718,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -777,6 +793,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -843,6 +863,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -923,6 +947,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -996,6 +1024,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -1074,6 +1106,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -1140,6 +1176,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -1252,6 +1292,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -1322,6 +1366,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region; a group id starting with t/ is removed only through the tenant directory facade (LatticeTenantOwnedGroupException)."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -1397,6 +1445,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -1472,6 +1524,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -1548,6 +1604,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -1619,21 +1679,25 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
         "safe": true,
-        "policy": "Retry by reissuing the same request.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DeleteBackupAsync"
+        "policy": "Reissuing is harmless, but the catalog row is removed before the sink manifest and the backup's own artifacts, so a retry after an interruption past that removal finds no catalog row, returns false and does not finish deleting the sink manifest or artifacts.",
+        "source": "src/lattice.api.backup/LatticeBackupControl.cs#LatticeBackupControl.DeleteBackupAsync"
       },
       "idempotency": {
-        "idempotent": true,
-        "basis": "Missing backup returns false.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DeleteBackupAsync"
+        "idempotent": "conditional",
+        "basis": "A missing backup returns false; a completed delete is idempotent, but a delete interrupted after its catalog row was removed is not completed by a retry.",
+        "source": "src/lattice.api.backup/LatticeBackupControl.cs#LatticeBackupControl.DeleteBackupAsync"
       },
       "concurrency": {
-        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
-        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DeleteBackupAsync"
+        "rule": "Delete keeps every artifact still referenced by another retained manifest, matched by artifact id rather than by base chain, then removes the catalog row, the sink manifest and the backup's unshared artifacts in that order.",
+        "source": "src/lattice.api.backup/LatticeBackupControl.cs#LatticeBackupControl.DeleteBackupAsync"
       },
       "sources": [
         "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs#BackupToolInvocations.DeleteBackupAsync",
@@ -1686,6 +1750,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -1773,6 +1841,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -1834,6 +1906,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -1916,6 +1992,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -1987,6 +2067,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -2062,6 +2146,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -2129,6 +2217,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -2247,6 +2339,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -2328,6 +2424,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -2433,6 +2533,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -2505,6 +2609,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -2584,6 +2692,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -2662,6 +2774,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -2773,6 +2889,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -2872,6 +2992,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -2970,6 +3094,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -3098,6 +3226,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -3180,6 +3312,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -3267,6 +3403,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -3339,6 +3479,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -3411,6 +3555,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -3493,6 +3641,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -3565,6 +3717,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -3637,6 +3793,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -3719,6 +3879,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -3791,6 +3955,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -3873,6 +4041,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -3945,6 +4117,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -4032,6 +4208,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -4119,6 +4299,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -4191,6 +4375,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -4291,6 +4479,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -4363,6 +4555,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -4456,6 +4652,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -4528,6 +4728,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -4621,6 +4825,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -4693,6 +4901,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -4787,6 +4999,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -4874,6 +5090,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -4946,6 +5166,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -5039,6 +5263,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -5111,6 +5339,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -5211,6 +5443,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -5283,6 +5519,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -5365,6 +5605,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -5441,6 +5685,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -5529,6 +5777,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -5605,6 +5857,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -5677,6 +5933,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -5758,6 +6018,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -5882,6 +6146,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -5966,6 +6234,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -6027,6 +6299,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -6101,6 +6377,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -6162,6 +6442,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -6235,6 +6519,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -6336,6 +6624,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -6403,6 +6695,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -6477,6 +6773,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -6572,6 +6872,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -6646,6 +6950,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -6727,6 +7035,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -6808,6 +7120,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -6890,6 +7206,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -6977,6 +7297,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -7059,6 +7383,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -7141,6 +7469,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -7271,6 +7603,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -7358,6 +7694,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -7745,6 +8085,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "An argument is missing or malformed, the tenant is the reserved default tenant, a confinement rule refuses the request (answered with fixed text naming the rule), or a group removal would remove the last admin entry."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -7827,6 +8171,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -7904,6 +8252,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -7982,6 +8334,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -8043,6 +8399,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -8114,6 +8474,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -8208,6 +8572,10 @@
         {
           "error_id": "mcp-exception",
           "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -8313,6 +8681,10 @@
         {
           "error_id": "mcp-exception",
           "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -8381,6 +8753,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -8462,6 +8838,10 @@
         {
           "error_id": "mcp-exception",
           "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -8550,6 +8930,10 @@
         {
           "error_id": "mcp-exception",
           "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -8643,6 +9027,10 @@
         {
           "error_id": "mcp-exception",
           "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -8736,12 +9124,16 @@
         {
           "error_id": "mcp-exception",
           "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
-        "safe": false,
-        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
-        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+        "safe": true,
+        "policy": "Reissue the same request after an ambiguous failure; the removal is idempotent and removing an absent member reports Changed false.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#ILatticeTenantDirectoryAdmin.RemoveGroupMemberAsync"
       },
       "idempotency": {
         "idempotent": true,
@@ -8817,6 +9209,10 @@
         {
           "error_id": "mcp-exception",
           "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -8899,12 +9295,16 @@
         {
           "error_id": "mcp-exception",
           "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
-        "safe": false,
-        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
-        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+        "safe": true,
+        "policy": "Reissue the same request after an ambiguous failure; the removal is idempotent and removing an absent group reports Removed false and an interrupted cascade completes on re-run.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#ILatticeTenantDirectoryAdmin.RemoveGroupAsync"
       },
       "idempotency": {
         "idempotent": true,
@@ -8987,6 +9387,10 @@
         {
           "error_id": "mcp-exception",
           "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -9049,6 +9453,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -9136,6 +9544,10 @@
         {
           "error_id": "mcp-exception",
           "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -9224,6 +9636,10 @@
         {
           "error_id": "mcp-exception",
           "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -9312,12 +9728,16 @@
         {
           "error_id": "mcp-exception",
           "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
-        "safe": false,
-        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
-        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+        "safe": true,
+        "policy": "Reissue the same request after an ambiguous failure; the removal is idempotent and removing an absent member-set entry reports Changed false.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#ILatticeTenantDirectoryAdmin.RemoveMemberAsync"
       },
       "idempotency": {
         "idempotent": true,
@@ -9384,6 +9804,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -9455,6 +9879,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -9536,6 +9964,10 @@
         {
           "error_id": "mcp-exception",
           "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -9624,6 +10056,10 @@
         {
           "error_id": "mcp-exception",
           "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -9748,6 +10184,10 @@
         {
           "error_id": "mcp-exception",
           "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -9830,12 +10270,16 @@
         {
           "error_id": "mcp-exception",
           "condition": "Delegated tenant access administration is disabled on the cluster, or a delegated access cap would be exceeded (the message names the dimension and limit)."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
-        "safe": false,
-        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
-        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+        "safe": true,
+        "policy": "Reissue the same request after an ambiguous failure; the removal is idempotent and removing an absent rule reports false.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs#ILatticeTenantPolicyAdmin.RemoveRuleAsync"
       },
       "idempotency": {
         "idempotent": true,
@@ -9843,7 +10287,7 @@
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
       },
       "concurrency": {
-        "rule": "Rule writes run under system origin through the policy store; MaxTenantRules uses verify-and-compensate.",
+        "rule": "Rule writes run under system origin through the policy store; removal checks no rule cap.",
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
       },
       "sources": [
@@ -9972,6 +10416,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -10049,6 +10497,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -10120,6 +10572,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -10210,6 +10666,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -10287,6 +10747,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -10364,6 +10828,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -10441,6 +10909,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -10512,6 +10984,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -10588,6 +11064,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -10656,6 +11136,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -10741,6 +11225,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -10819,6 +11307,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -10898,6 +11390,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -10976,6 +11472,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -11050,6 +11550,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -11117,6 +11621,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -11206,6 +11714,10 @@
         {
           "error_id": "mcp-exception",
           "condition": "The facade reports a tree-not-registered or not-found fault and the MCP translator surfaces it as an actionable McpException."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -11290,6 +11802,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -11366,6 +11882,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -11436,6 +11956,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -11506,6 +12030,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -11573,6 +12101,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -11648,6 +12180,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -11722,6 +12258,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -11789,6 +12329,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -11855,6 +12399,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -11921,6 +12469,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -11987,6 +12539,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -12053,6 +12609,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -12119,6 +12679,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -12185,6 +12749,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -12263,6 +12831,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -12334,6 +12906,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -12409,6 +12985,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -12476,6 +13056,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -12542,6 +13126,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -12617,6 +13205,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -12707,6 +13299,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -12783,6 +13379,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -12872,6 +13472,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -12946,6 +13550,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -13013,6 +13621,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -13080,6 +13692,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -13127,7 +13743,7 @@
           "type": "bool",
           "required": false,
           "default": "false",
-          "notes": "When true, force an expensive fresh leaf-walk that re-measures every shard; when false (the default), return the cheap cached WAL-poll aggregate."
+          "notes": "When true, force an expensive fresh leaf-walk that re-measures every shard; when false (the default), return each tree's cheap cached figures, refilled from shard-root byte totals and WAL partitions without walking leaves."
         },
         {
           "name": "region",
@@ -13148,6 +13764,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -13215,6 +13835,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -13290,6 +13914,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -13358,6 +13986,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -13425,6 +14057,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -13486,6 +14122,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -13564,6 +14204,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -13632,6 +14276,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -13724,6 +14372,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -13795,6 +14447,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -13862,6 +14518,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -13929,6 +14589,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -13996,6 +14660,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -14063,6 +14731,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -14141,6 +14813,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -14212,6 +14888,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -14289,6 +14969,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -14356,6 +15040,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -14439,6 +15127,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -14506,6 +15198,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -14577,6 +15273,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -14644,6 +15344,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -14728,6 +15432,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -14823,6 +15531,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -14894,6 +15606,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -14971,6 +15687,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -15109,6 +15829,10 @@
         {
           "error_id": "mcp-exception",
           "condition": "The facade reports a tree-not-registered or not-found fault and the MCP translator surfaces it as an actionable McpException."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -15206,6 +15930,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -15273,6 +16001,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -15340,6 +16072,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -15429,6 +16165,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -15500,6 +16240,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -15561,6 +16305,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -15639,6 +16387,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -15718,6 +16470,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -15786,6 +16542,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -15865,6 +16625,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -15948,6 +16712,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -16059,6 +16827,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -16127,6 +16899,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -16194,6 +16970,10 @@
         {
           "error_id": "invalid-argument",
           "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -16265,6 +17045,10 @@
         {
           "error_id": "mcp-exception",
           "condition": "The host registers no ILatticeWalReclamation, or a remote cluster answers Unimplemented; either is surfaced as an McpException message naming the cause."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
         }
       ],
       "retry": {
@@ -17580,14 +18364,14 @@
         }
       ],
       "retry": {
-        "safe": false,
-        "policy": "Do not blindly retry a mutating call after an ambiguous failure.",
-        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.BootstrapAsync"
+        "safe": true,
+        "policy": "After an ambiguous bootstrap failure, poll repocontext_index_status for the repository id; reissuing the same repository id is safe because the walk is idempotent and resumable.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildBootstrapTool"
       },
       "idempotency": {
-        "idempotent": false,
-        "basis": "Mutation has no general idempotency guarantee in the MCP binding.",
-        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.BootstrapAsync"
+        "idempotent": true,
+        "basis": "Re-running on an unchanged repository is a no-op, a changed repository updates only changed files and prunes deleted ones, and an interrupted run resumes without duplication.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildBootstrapTool"
       },
       "concurrency": {
         "rule": "Facade access gates and grains serialize or reject conflicting mutations according to the underlying facade contract.",
@@ -19085,14 +19869,14 @@
         }
       ],
       "retry": {
-        "safe": false,
-        "policy": "Retry only with the same idempotency key, fencing token, or resume token when the operation documents one; otherwise inspect status first.",
-        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.ResetIndexAsync"
+        "safe": true,
+        "policy": "After a timeout or dropped connection poll repocontext_index_status rather than re-running, because the reset sweep is bound to the host and keeps running; re-run only when a host restart left it Running in phase Resetting, which the idempotent re-run finishes.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildResetIndexTool"
       },
       "idempotency": {
-        "idempotent": "conditional",
-        "basis": "Source describes idempotency, resume/status polling, or state-based retry semantics; inspect status when a result is ambiguous.",
-        "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers.ResetIndexAsync"
+        "idempotent": true,
+        "basis": "Re-running the reset is idempotent and finishes an interrupted sweep; resetting an unknown repository is a no-op that reports zero deletions and does not register it.",
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildResetIndexTool"
       },
       "concurrency": {
         "rule": "Facade access gates and grains serialize or reject conflicting mutations according to the underlying facade contract.",
@@ -19477,11 +20261,11 @@
       "source": "src/lattice.api.mcp/Discovery/McpToolAuthorizationGate.cs#McpToolAuthorizationGate.IsAuthorizedAsync"
     },
     {
-      "id": "backend-transient",
+      "id": "facade-fault",
       "type": "McpException",
       "grpc_status": null,
-      "retryable": true,
-      "meaning": "A transient backend fault escaped the facade and was translated to a clean MCP fault.",
+      "retryable": "conditional",
+      "meaning": "A facade or binding fault that is not classified as a client error is thrown as an McpException: a local facade exception surfaces its type name and message; a remote gRPC fault surfaces only its status code and sanitised detail (FailedPrecondition detail verbatim, PermissionDenied and Unauthenticated kept as denials, Unavailable, DeadlineExceeded, Cancelled, Aborted and ResourceExhausted described as possibly not applied). Retry follows the tool's retry block; caller cancellation is rethrown untranslated.",
       "source": "src/lattice.api.mcp/Tools/McpToolFaultTranslator.cs#McpToolFaultTranslator.Translate"
     },
     {

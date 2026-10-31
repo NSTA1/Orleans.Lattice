@@ -513,6 +513,7 @@ invariants:
       - "A missing allow rule or null collaborator permits a mutation."
       - "A denied mutation writes any leaf, WAL, or coordinator state."
       - "A forged RequestContext capability bypasses the facade gate."
+      - "A direct external grain call reaches the tree registry's privileged routing or system-tree access."
     detection_signals:
       - type: metric
         name: "orleans.lattice.auth.decisions"
@@ -530,6 +531,8 @@ invariants:
         source: "docs/lattice.auth/security-posture.md"
       - step: "Keep gate enforcement on the facade grains and internal-origin assertions on physical grains."
         source: "docs/lattice.auth/security-posture.md"
+      - step: "Keep the tree registry grain's incoming-call filter asserting internal grain origin for the registry tree before any registry call runs."
+        source: "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.InternalOriginGuard.cs#LatticeRegistryGrain"
     sources:
       - ".github/instructions/security.instructions.md"
       - "docs/lattice.auth/security-posture.md"

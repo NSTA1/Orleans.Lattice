@@ -1075,7 +1075,7 @@
         },
         {
           "error_id": "failed-precondition",
-          "condition": "The tree is unversioned, the target does not advance, or versioning is not registered."
+          "condition": "The tree is unversioned, the target does not advance, versioning is not registered, or, when the tree's runtime schema catalog holds descriptors or upcasters, no descriptor is registered for the new target version or no registered migration path reaches it from the current target within the same schema family."
         }
       ],
       "retry": {
@@ -1095,7 +1095,8 @@
       "sources": [
         "src/lattice.api.abstractions/Schema/ILatticeSchemaControl.cs#AdvanceTargetVersionAsync",
         "src/lattice.api.schema.grpc/LatticeSchemaGrpcMethods.cs#AdvanceTargetVersionMethodName",
-        "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#AdvanceTargetVersion"
+        "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#AdvanceTargetVersion",
+        "src/lattice.schema/SchemaRuntimeRegistry.cs#SchemaRuntimeRegistry.ValidateTargetAsync"
       ]
     },
     {
