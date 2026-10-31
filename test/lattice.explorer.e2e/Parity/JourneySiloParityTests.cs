@@ -46,7 +46,32 @@ public sealed class JourneySiloParityTests
     [
         ("AddLatticeSchemaEnforcement(options => options.StrictIngest = true)", "dead-letter feature coverage (#5389)"),
         ("AddLatticeWalStorageProvider(JourneyHostEnvironment.SecondaryWalProviderKey", "a WAL move target for the Cluster area's WAL tools (A8, A12)"),
+        ("JourneyDelayedComplianceAdmin.Register(silo.Services)", "a test-only, fault-gated, bounded hold on a named tree's compliance scan (/e2e/compliance-delay), so a journey can stop a running scan (U2) or lose the silo running one (C2)"),
     ];
+
+    /// <summary>
+    /// The journey silo's test-only seams, which no reference-architecture host may carry:
+    /// each name appears in no file under <c>reference-architecture/</c>.
+    /// </summary>
+    private static readonly string[] TestOnlySeams = ["JourneyComplianceScanDelay", "JourneyDelayedComplianceAdmin", "compliance-delay"];
+
+    /// <summary>No test-only seam of the journey silo reaches a reference-architecture host.</summary>
+    [Test]
+    public void No_test_only_seam_reaches_the_reference_architecture()
+    {
+        var root = Path.Combine(JourneyPaths.RepositoryRoot, "reference-architecture");
+        var files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+            .Where(file => !file.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                && !file.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                && Path.GetExtension(file) is ".cs" or ".json" or ".yaml" or ".yml" or ".bicep" or ".md" or ".csproj")
+            .ToArray();
+        Assert.That(files, Is.Not.Empty, "the scan found no reference-architecture files; the path is wrong");
+
+        var leaks = files
+            .SelectMany(file => TestOnlySeams.Where(seam => File.ReadAllText(file).Contains(seam, StringComparison.Ordinal)).Select(seam => $"{seam} in {file}"))
+            .ToArray();
+        Assert.That(leaks, Is.Empty, "A journey-only seam reached a reference-architecture host: " + string.Join("; ", leaks));
+    }
 
     /// <summary>Every disclosed deviation is still made by the journey silo, so the list cannot rot into fiction.</summary>
     [Test]
