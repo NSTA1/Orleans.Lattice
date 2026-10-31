@@ -48,6 +48,11 @@ public sealed partial class OffboardingJourney
         }
 
         await Expect(board.Closed.Or(board.Status.Filter(new() { HasTextRegex = new Regex(@"\(denied\)") }))).ToBeVisibleAsync();
+        if (await board.Closed.IsVisibleAsync())
+        {
+            await Expect(board.Closed).ToContainTextAsync(new Regex("This app (was disabled|is no longer open to you)"));
+        }
+
         await step.ShotAsync(dana, "dana-frame-closed", "dana's next read finds the app just changed: the board no longer answers her");
 
         await dana.Shell.GotoAsync($"/apps/{Names.Apps.TaskBoard}/window");

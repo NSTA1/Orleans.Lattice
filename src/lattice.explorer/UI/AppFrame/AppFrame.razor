@@ -15,7 +15,7 @@
 
         case Phase.Failed:
             <div role="alert">
-                <LtEmptyState Title="@FailureTitle(_failure)">@FailureText(_failure)</LtEmptyState>
+                <LtEmptyState Title="@FailureTitle(_failure, _revokedReason)">@FailureText(_failure, _revokedReason)</LtEmptyState>
             </div>
             break;
 
