@@ -260,7 +260,9 @@ The web head maps two local form-post endpoints below the Explorer mount:
 - `POST auth/login` signs in with the submitted Basic username and password.
 - `POST auth/logout` clears the local State API credential.
 
-Both endpoints validate antiforgery tokens and redirect back to the Explorer base
+Both endpoints validate antiforgery tokens. A sign-in redirects back to the
+address it was made from when that is a local path under the Explorer base
+href, and to the base href otherwise; a sign-out always redirects to the base
 href. They are mapped by the public `AuthEndpoints.MapExplorerAuthEndpoints`
 extension, which `MapLatticeExplorer` calls with the base href as the redirect
 target. A federated provider such as the hosted-web Entra package can publish a
