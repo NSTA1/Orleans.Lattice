@@ -20,6 +20,12 @@ namespace Orleans.Lattice.Explorer.UI.Session;
 /// </summary>
 /// <remarks>
 /// <para>
+/// Inline, the read-only details are opened by the endpoint itself, a quiet
+/// button named <b>Connection details</b> before the address, so the header gains
+/// no control of its own; the address truncates before the brand does. Folded,
+/// <b>Connection details</b> is a button beneath the endpoint.
+/// </para>
+/// <para>
 /// Below the small breakpoint the header folds into its overflow menu, and the
 /// indicator renders there folded: the state and endpoint as a definition list,
 /// with the actions beneath them.
@@ -54,6 +60,9 @@ public partial class ConnectionIndicator
     private bool Folded => SessionPresentation.IsFolded(Breakpoint);
 
     private SessionConnectionPresentation Presentation => SessionConnectionPresentation.For(Status, Explorer.IsConfigured);
+
+    /// <summary>Whether the indicator opens the read-only connection details: a configured head that refuses browser-driven configuration.</summary>
+    private bool OffersDetails => !EndpointOptions.AllowInteractiveEndpointConfiguration && Explorer.IsConfigured;
 
     /// <inheritdoc />
     public void Dispose()

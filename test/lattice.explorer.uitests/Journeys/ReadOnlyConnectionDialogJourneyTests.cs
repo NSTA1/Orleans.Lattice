@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Microsoft.Playwright;
 using static Microsoft.Playwright.Assertions;
 
@@ -6,9 +7,11 @@ namespace Orleans.Lattice.Explorer.UiTests.Journeys;
 /// <summary>
 /// Issue #5479, in a real browser: on a configured head that refuses browser-driven
 /// endpoint configuration (the default), the connection indicator offers
-/// <b>Connection details</b>, at full width and in the compact Menu sheet, and it opens
-/// the read-only <b>Cluster connection</b> dialog showing the configured endpoint, with
-/// nothing to edit, test or save, which Close and Escape dismiss.
+/// <b>Connection details</b> - in the header the endpoint itself, named
+/// "Connection details: {endpoint}", and in the compact Menu sheet a button of that
+/// name - and it opens the read-only <b>Cluster connection</b> dialog showing the
+/// configured endpoint, with nothing to edit, test or save, which Close and Escape
+/// dismiss.
 /// </summary>
 /// <remarks>
 /// Each step saves an ordered screenshot under
@@ -27,8 +30,9 @@ public sealed class ReadOnlyConnectionDialogJourneyTests : UiTestBase
         var desktop = await OpenAsync(world.Head, "/", WorldIdentities.Admin);
         var banner = Shell.Banner(desktop);
         await Expect(banner.Locator("[role=status] > .lt-pill .lt-pill__text").First).ToHaveTextAsync("Connected");
-        var details = banner.GetByRole(AriaRole.Button, new() { Name = "Connection details", Exact = true });
+        var details = banner.GetByRole(AriaRole.Button, new() { NameRegex = new Regex("^Connection details: ") });
         await Expect(details).ToHaveAttributeAsync("aria-haspopup", "dialog");
+        await Expect(details.Locator("code")).ToHaveTextAsync(world.GrpcEndpoint);
         await Expect(banner.GetByRole(AriaRole.Button, new() { Name = "Connection settings" })).ToHaveCountAsync(0);
         await CaptureAsync(desktop, "01-desktop-header-connection-details");
 
