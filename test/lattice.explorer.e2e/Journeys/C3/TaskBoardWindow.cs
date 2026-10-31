@@ -56,13 +56,44 @@ internal sealed class TaskBoardWindow(IPage page)
     }
 
     /// <summary>
-    /// Waits until the board's last action has been answered: the frame host has closed the
-    /// app (its authority was withdrawn), or the board reports the change was refused.
+    /// Moves the open task to another column and waits until the board has answered, returning
+    /// whether the change was withdrawn: the frame host closed the app (its authority was
+    /// withdrawn), or the board reports the change refused. <see langword="false"/> when the
+    /// board reports the move made.
     /// </summary>
-    public async Task ExpectChangeWithdrawnAsync()
+    public async Task<bool> MoveIsWithdrawnAsync()
     {
+        var before = await Status.TextContentAsync() ?? string.Empty;
+        await Board.Locator("#tb-detail-actions [data-move]:visible").First.ClickAsync();
         var refused = Status.Filter(new() { HasTextRegex = new Regex(@"\((denied|unavailable)\)") });
-        await Expect(Closed.Or(refused)).ToBeVisibleAsync(new() { Timeout = 30_000 });
+        var answered = Status.Filter(new() { HasNotTextRegex = new Regex("^" + Regex.Escape(before) + "$") });
+        await Expect(Closed.Or(answered)).ToBeVisibleAsync(new() { Timeout = 30_000 });
+        return await Closed.IsVisibleAsync() || await refused.IsVisibleAsync();
+    }
+
+    /// <summary>
+    /// Presses the board's Refresh and waits until it has answered, returning whether its read
+    /// was withdrawn: the frame host closed the app, or the board could not be read because it
+    /// was denied. <see langword="false"/> when the board read its cards again.
+    /// </summary>
+    public async Task<bool> RefreshIsWithdrawnAsync()
+    {
+        if (await Closed.IsVisibleAsync())
+        {
+            return true;
+        }
+
+        await Board.Locator("#tb-refresh").ClickAsync();
+        var refused = Status.Filter(new() { HasTextRegex = new Regex(@"\((denied|unavailable)\)") });
+        try
+        {
+            await Expect(Closed.Or(refused)).ToBeVisibleAsync(new() { Timeout = 10_000 });
+            return true;
+        }
+        catch (PlaywrightException)
+        {
+            return false;
+        }
     }
 
     /// <summary>Asserts the window offers no app any more: no frame, whatever the page says instead.</summary>
