@@ -29,6 +29,7 @@ public static class ContractWait
         Exception? last = null;
         while (true)
         {
+            var attempt = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 if (await condition())
@@ -39,6 +40,7 @@ public static class ContractWait
             catch (RpcException ex) when (IsTransient(ex.StatusCode))
             {
                 last = ex;
+                ContractRetries.Record(what, attempt.Elapsed, $"{ex.StatusCode}: {ex.Status.Detail}");
             }
 
             if (DateTime.UtcNow > deadline)

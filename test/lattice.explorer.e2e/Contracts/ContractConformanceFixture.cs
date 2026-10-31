@@ -18,7 +18,7 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts;
 /// <param name="storyline">The storyline this fixture shards.</param>
 public abstract class ContractConformanceFixture(string storyline)
 {
-    private readonly List<(string Chapter, string Outcome, TimeSpan Establish, TimeSpan Verify, string? Detail)> _rows = [];
+    private readonly List<(string Chapter, string Outcome, TimeSpan Establish, TimeSpan Verify, int Retries, string? Detail)> _rows = [];
     private readonly HashSet<string> _failed = new(StringComparer.Ordinal);
     private JourneyEstate? _estate;
     private StorySession? _session;
@@ -59,11 +59,11 @@ public abstract class ContractConformanceFixture(string storyline)
         var report = new StringBuilder()
             .AppendLine($"### Contract conformance: {Storyline}")
             .AppendLine()
-            .AppendLine("| Chapter | Outcome | Establish | Verify | Detail |")
-            .AppendLine("|---|---|---|---|---|");
+            .AppendLine("| Chapter | Outcome | Establish | Verify | Retries | Detail |")
+            .AppendLine("|---|---|---|---|---|---|");
         foreach (var row in _rows)
         {
-            report.AppendLine($"| {row.Chapter} | {row.Outcome} | {row.Establish.TotalSeconds:0.0}s | {row.Verify.TotalSeconds:0.0}s | {Escape(row.Detail)} |");
+            report.AppendLine($"| {row.Chapter} | {row.Outcome} | {row.Establish.TotalSeconds:0.0}s | {row.Verify.TotalSeconds:0.0}s | {row.Retries} | {Escape(row.Detail)} |");
         }
 
         JobSummary.Append(report.ToString());
@@ -93,10 +93,11 @@ public abstract class ContractConformanceFixture(string storyline)
         if (blockers.Count > 0)
         {
             _failed.Add(chapter);
-            _rows.Add((chapter, "blocked", TimeSpan.Zero, TimeSpan.Zero, "blocked by " + string.Join(", ", blockers)));
+            _rows.Add((chapter, "blocked", TimeSpan.Zero, TimeSpan.Zero, 0, "blocked by " + string.Join(", ", blockers)));
             Assert.Ignore($"BLOCKED, never passed: {chapter} consumes {string.Join(", ", blockers)}, which did not conform.");
         }
 
+        var retriesBefore = ContractRetries.Count;
         var clock = Stopwatch.StartNew();
         TimeSpan establish = TimeSpan.Zero;
         if (string.Equals(chapter, SnapshotBefore, StringComparison.Ordinal))
@@ -110,13 +111,13 @@ public abstract class ContractConformanceFixture(string storyline)
             establish = clock.Elapsed;
             clock.Restart();
             await session.VerifyAsync(chapter);
-            _rows.Add((chapter, "conforms", establish, clock.Elapsed, null));
+            _rows.Add((chapter, "conforms", establish, clock.Elapsed, ContractRetries.Count - retriesBefore, null));
         }
         catch (Exception ex)
         {
             _failed.Add(chapter);
             var phase = establish == TimeSpan.Zero ? "establish failed" : "verify failed";
-            _rows.Add((chapter, phase, establish == TimeSpan.Zero ? clock.Elapsed : establish, establish == TimeSpan.Zero ? TimeSpan.Zero : clock.Elapsed, FirstLine(ex)));
+            _rows.Add((chapter, phase, establish == TimeSpan.Zero ? clock.Elapsed : establish, establish == TimeSpan.Zero ? TimeSpan.Zero : clock.Elapsed, ContractRetries.Count - retriesBefore, FirstLine(ex)));
             throw;
         }
     }
