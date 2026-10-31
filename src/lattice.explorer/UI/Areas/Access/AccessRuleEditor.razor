@@ -21,11 +21,12 @@
                          IdChanged="@(value => _draft.SubjectId = value)"
                          Error="@_errors.Subject"
                          DirectoryAvailable="@(Model?.DirectoryAvailable == true)"
-                         DirectoryExplanation="@Model?.DirectoryExplanation" />
+                         DirectoryExplanation="@Model?.DirectoryExplanation"
+                         AllowTenantGroups="true" />
     <LtSelect Label="Scope" Options="ScopeOptions" Value="@_draft.ScopeKind" ValueChanged="OnScopeChanged" Disabled="_draft.IsExisting" Hint="@ScopeHint" />
     @if (_draft.NeedsTree)
     {
-        <LtComboBox @ref="_treeBox" Label="Tree" Value="@_draft.TreeId" ValueChanged="@(value => _draft.TreeId = value)" ReadOnly="_draft.IsExisting" Error="@_errors.Tree" Hint="The logical tree id the rule governs." Source="@Suggestions.Trees" Noun="tree" />
+        <LtComboBox @ref="_treeBox" Label="Tree" Value="@_draft.TreeId" ValueChanged="@(value => _draft.TreeId = value)" ReadOnly="_draft.IsExisting" Error="@_errors.Tree" Hint="@TreeHint" Source="@TreeSource" Noun="tree" />
     }
     @if (_draft.NeedsKeyOrPrefix)
     {

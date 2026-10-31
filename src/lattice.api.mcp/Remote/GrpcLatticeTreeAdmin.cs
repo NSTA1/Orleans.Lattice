@@ -293,6 +293,10 @@ internal sealed class GrpcLatticeTreeAdmin : ILatticeTreeAdmin
         => _client.ListViewsAsync(cancellationToken);
 
     /// <inheritdoc />
+    public Task<TreeViewProviderCatalog> ListViewProvidersAsync(string sourceTreeId, CancellationToken cancellationToken = default)
+        => _client.ListViewProvidersAsync(sourceTreeId, cancellationToken);
+
+    /// <inheritdoc />
     public Task<TreeViewStatus> CreateViewAsync(
         string viewName,
         string sourceTreeId,

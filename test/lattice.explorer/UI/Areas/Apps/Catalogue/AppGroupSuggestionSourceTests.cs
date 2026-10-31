@@ -30,7 +30,7 @@ public sealed class AppGroupSuggestionSourceTests
         {
             Assert.That(failed.IsAvailable, Is.True);
             Assert.That(failed.Items.Select(item => (item.Value, item.Detail)),
-                Is.EqualTo(new[] { ("operators", "Cluster - Operations") }));
+                Is.EqualTo(new[] { ("operators", "Operations") }), "the cluster source's own label is kept");
             Assert.That(retried.Items.Select(item => item.Value), Is.EqualTo(new[] { "t/acme/ops", "operators" }));
             Assert.That(source.Tenant, Is.EqualTo("acme"));
         });

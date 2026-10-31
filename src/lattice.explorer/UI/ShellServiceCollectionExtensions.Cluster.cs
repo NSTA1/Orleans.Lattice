@@ -10,7 +10,8 @@ internal static partial class ShellServiceCollectionExtensions
 {
     /// <summary>
     /// Registers the Cluster area and its per-circuit state: the facade lookup, the
-    /// remembered tree catalogue and the palette command relay. The facades
+    /// remembered tree catalogue, the palette command relay and the create-tree
+    /// service (G4, issue #5368), every one per circuit. The facades
     /// themselves are T1's; the area resolves them optionally and hides itself
     /// when a head serves none.
     /// </summary>
@@ -21,6 +22,7 @@ internal static partial class ShellServiceCollectionExtensions
         services.TryAddScoped<ClusterTreeCatalog>();
         services.TryAddScoped<ClusterTreeChanges>();
         services.TryAddScoped<ClusterCommandSignals>();
+        services.TryAddScoped<ClusterTreeCreation>();
         services.AddExplorerArea<ClusterArea>();
     }
 }

@@ -29,6 +29,48 @@ public sealed class AccessRuleEditorTests : AccessTestContext
     }
 
     [Test]
+    public void With_a_directory_a_rule_is_saved_for_a_group_stored_here()
+    {
+        Admin.WithPrincipal("alice", "Alice", DirectoryPrincipalKind.User).WithGroup("data-stewards", "Data stewards");
+        LatticeAuthorizationRule? saved = null;
+        var cut = RenderEditor(onSaved: rule => saved = rule);
+
+        Fill(cut, "stewards-factory", "data-stewards", "factory-orders");
+        cut.Find("[data-lt-operation=\"read\"]").Change(true);
+        cut.Find("form").Submit();
+
+        cut.WaitUntil(() => Assert.That(saved, Is.Not.Null));
+        Assert.That(saved!.Subject, Is.EqualTo(LatticeSubjectSelector.Group("data-stewards")));
+    }
+
+    [Test]
+    public void An_operator_saves_a_rule_for_a_tenant_group_on_that_tenants_tree_and_is_told_before_any_other()
+    {
+        TenantFacades.AsOperator().WithGroup("acme", "acme-analysts");
+        LatticeAuthorizationRule? saved = null;
+        var cut = RenderEditor(onSaved: rule => saved = rule);
+        cut.WaitUntil(() => Assert.That(cut.FindAll("select option").Select(option => option.GetAttribute("value")), Has.Member(AccessSubjectPicker.TenantGroupValue)));
+
+        AccessForms.Type(cut, "Rule id", "acme-analysts-read");
+        AccessForms.Choose(cut, "Subject kind", AccessSubjectPicker.TenantGroupValue);
+        AccessForms.Type(cut, "Subject tenant", "acme");
+        AccessForms.Type(cut, "Subject", "acme-analysts");
+        AccessForms.Choose(cut, "Scope", AccessRuleDraft.TreeScope);
+        AccessForms.Type(cut, "Tree", "t/globex/orders");
+        cut.Find("[data-lt-operation=\"read\"]").Change(true);
+        cut.Find("form").Submit();
+
+        cut.WaitUntil(() => Assert.That(AccessForms.ErrorOf(cut, "Tree"), Does.StartWith("A rule naming tenant group t/acme/acme-analysts may govern only tenant acme's own trees")));
+        Assert.That(Admin.Calls, Does.Not.Contain(nameof(FakeAuthAdmin.PutRuleAsync)));
+
+        AccessForms.Type(cut, "Tree", "t/acme/acme-inventory");
+        cut.Find("form").Submit();
+
+        cut.WaitUntil(() => Assert.That(saved, Is.Not.Null));
+        Assert.That(saved!.Subject, Is.EqualTo(LatticeSubjectSelector.Group("t/acme/acme-analysts")));
+    }
+
+    [Test]
     public void The_checklist_offers_every_operation_in_three_groups()
     {
         var cut = RenderEditor();

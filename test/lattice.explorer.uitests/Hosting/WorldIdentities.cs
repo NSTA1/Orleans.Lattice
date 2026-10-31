@@ -19,6 +19,12 @@ internal static class WorldIdentities
     public const string Carol = "carol";
 
     /// <summary>
+    /// An estate observer: cluster telemetry and read over every tree, so the Cluster
+    /// area is visible, and no administration, so nothing in it may be changed.
+    /// </summary>
+    public const string Erin = "erin";
+
+    /// <summary>
     /// The administrator of tenant globex in the delegated-access world, and nothing
     /// else: not a platform operator, and named by no cluster rule.
     /// </summary>

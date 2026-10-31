@@ -194,6 +194,7 @@ The following inventory includes directly declared public members and overloads,
 - `Task<TreeWalMovePlan> PlanWalMoveAsync( string treeId, int partition, string targetProviderKey, CancellationToken cancellationToken = default)`
 - `Task<TreeWalMoveReceipt> ReclaimMovedWalSourceAsync( string treeId, int partition, string sourceProviderKey, CancellationToken cancellationToken = default)`
 - `Task<TreeViewCatalog> ListViewsAsync( CancellationToken cancellationToken = default)`
+- `Task<TreeViewProviderCatalog> ListViewProvidersAsync(string sourceTreeId, CancellationToken cancellationToken = default)`
 - `Task<TreeViewStatus> CreateViewAsync( string viewName, string sourceTreeId, string providerKey, byte[] payload, CancellationToken cancellationToken = default)`
 - `Task<TreeViewStatus> GetViewStatusAsync( string viewName, CancellationToken cancellationToken = default)`
 - `Task DropViewAsync( string viewName, CancellationToken cancellationToken = default)`

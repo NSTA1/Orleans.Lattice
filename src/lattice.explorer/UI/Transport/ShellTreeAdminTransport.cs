@@ -453,6 +453,17 @@ internal sealed partial class ShellTreeAdminTransport(ShellTransportChannel chan
     }
 
     /// <inheritdoc />
+    public Task<TreeViewProviderCatalog> ListViewProvidersAsync(string sourceTreeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sourceTreeId);
+        return CallAsync(
+            sourceTreeId,
+            static (client, state, ct) => client.ListViewProvidersAsync(state, ct),
+            null,
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<TreeViewStatus> CreateViewAsync(string viewName, string sourceTreeId, string providerKey, byte[] payload, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(viewName);

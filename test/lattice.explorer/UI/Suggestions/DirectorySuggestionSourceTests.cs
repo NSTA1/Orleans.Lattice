@@ -5,34 +5,28 @@ using Orleans.Lattice.Membership;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Suggestions;
 
-/// <summary>Directory search, exact-id resolution and stored-group failure boundaries.</summary>
+/// <summary>Directory search and exact-id resolution failure boundaries.</summary>
 [TestFixture]
 public sealed class DirectorySuggestionSourceTests
 {
     [TestCase("search")]
     [TestCase("resolve")]
-    [TestCase("groups")]
     public void SuggestAsync_caller_cancellation_propagates_from_each_read(string stage)
     {
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
         var fault = new OperationCanceledException(cancelled.Token);
         var admin = FailingAt(stage, fault);
-        var source = new DirectorySuggestionSource(admin, DirectoryPrincipalKind.Group, listStoredGroups: true);
+        var source = new DirectorySuggestionSource(admin, DirectoryPrincipalKind.Group);
 
         Assert.That(async () => await source.SuggestAsync("ops", 2, cancelled.Token), Throws.Exception.SameAs(fault));
     }
 
     [TestCase("search")]
-    [TestCase("groups")]
     public async Task SuggestAsync_unrequested_cancellation_answers_unavailable(string stage)
     {
         var admin = FailingAt(stage, new OperationCanceledException("server stopped"));
         var source = new DirectorySuggestionSource(admin, DirectoryPrincipalKind.Group);
-        if (stage == "groups")
-        {
-            source = new DirectorySuggestionSource(admin, DirectoryPrincipalKind.Group, listStoredGroups: true);
-        }
 
         var answer = await source.SuggestAsync("ops", 2, CancellationToken.None);
 
@@ -42,17 +36,6 @@ public sealed class DirectorySuggestionSourceTests
             Assert.That(answer.Items, Is.Empty);
             Assert.That(answer.UnavailableReason, Is.EqualTo(DirectorySuggestionSource.UnavailableReason));
         });
-    }
-
-    [Test]
-    public async Task SuggestAsync_stored_group_fault_answers_unavailable()
-    {
-        var admin = FailingAt("groups", new InvalidOperationException("group store unavailable"));
-        var source = new DirectorySuggestionSource(admin, DirectoryPrincipalKind.Group, listStoredGroups: true);
-
-        var answer = await source.SuggestAsync("ops", 2, CancellationToken.None);
-
-        Assert.That(answer.UnavailableReason, Is.EqualTo(DirectorySuggestionSource.UnavailableReason));
     }
 
     [TestCase(false)]
@@ -154,14 +137,11 @@ public sealed class DirectorySuggestionSourceTests
             .Returns(stage switch
             {
                 "search" => Task.FromException<DirectorySearchResult>(fault),
-                "groups" => Task.FromResult(DirectorySearchResult.Unavailable),
                 "resolve" => Task.FromResult(Page("ops-east", "ops-west")),
                 _ => throw new ArgumentOutOfRangeException(nameof(stage)),
             });
         admin.ResolveDirectoryPrincipalAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromException<DirectoryPrincipalDescriptor?>(fault));
-        admin.ListGroupsAsync(Arg.Any<AuthPageRequest>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromException<AuthGroupPage>(fault));
         return admin;
     }
 }

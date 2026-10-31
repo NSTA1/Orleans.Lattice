@@ -23,30 +23,35 @@ internal sealed class DataArea : IExplorerArea
     /// <summary>The command that reloads the directory.</summary>
     public const string RefreshCommandId = "data.refresh";
 
+    /// <summary>The command that opens the New view dialog over the administered tree the workspace shows.</summary>
+    public const string CreateViewCommandId = "data.create-view";
+
     private readonly DataDirectory _directory;
     private readonly IServiceProvider _services;
+    private readonly DataViewCommandScope _viewCommand;
+    private readonly ExplorerCommand _refresh;
 
     /// <summary>Creates the area.</summary>
     /// <param name="directory">The circuit's tree directory.</param>
     /// <param name="completions">The area's address completions.</param>
     /// <param name="services">The circuit's services, from which the state connection is read lazily.</param>
-    public DataArea(DataDirectory directory, DataCompletionSource completions, IServiceProvider services)
+    /// <param name="viewCommand">The administered tree the workspace offers the New view command over.</param>
+    public DataArea(DataDirectory directory, DataCompletionSource completions, IServiceProvider services, DataViewCommandScope viewCommand)
     {
         ArgumentNullException.ThrowIfNull(directory);
         ArgumentNullException.ThrowIfNull(completions);
         ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(viewCommand);
         _directory = directory;
         _services = services;
+        _viewCommand = viewCommand;
         Completions = completions;
-        Commands =
-        [
-            new ExplorerCommand(RefreshCommandId, "Refresh the tree directory")
-            {
-                Detail = "Reload every tree and view you can reach.",
-                Target = ExplorerAddress.ForArea(AreaKey),
-                InvokeAsync = async cancellationToken => await _directory.RefreshAsync(cancellationToken).ConfigureAwait(false),
-            },
-        ];
+        _refresh = new ExplorerCommand(RefreshCommandId, "Refresh the tree directory")
+        {
+            Detail = "Reload every tree and view you can reach.",
+            Target = ExplorerAddress.ForArea(AreaKey),
+            InvokeAsync = async cancellationToken => await _directory.RefreshAsync(cancellationToken).ConfigureAwait(false),
+        };
     }
 
     /// <inheritdoc />
@@ -69,8 +74,24 @@ internal sealed class DataArea : IExplorerArea
         return address.Path.Count == 0 ? null : [address.Path.Count];
     }
 
-    /// <inheritdoc />
-    public IReadOnlyList<ExplorerCommand> Commands { get; }
+    /// <summary>
+    /// Refreshing the directory, always; and creating a view, only while a tree
+    /// workspace the caller administers is open, targeting that tree's New view
+    /// dialog.
+    /// </summary>
+    public IReadOnlyList<ExplorerCommand> Commands => _viewCommand.Source is { } source
+        ?
+        [
+            _refresh,
+            new ExplorerCommand(CreateViewCommandId, "New view...")
+            {
+                Detail = "Create a materialised view over " + source.LogicalId + ".",
+                Target = source.Address
+                    .WithQuery(DataTabs.TabQuery, DataTabs.Views)
+                    .WithQuery(DataTabs.NewQuery, DataTabs.NewViewValue),
+            },
+        ]
+        : [_refresh];
 
     /// <inheritdoc />
     public async ValueTask<AreaAvailability> GetAvailabilityAsync(CancellationToken cancellationToken)

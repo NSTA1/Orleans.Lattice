@@ -52,7 +52,9 @@ namespace Orleans.Lattice.Explorer.UiTests;
 /// The seeded groups follow the task-board walkthrough: <c>alice</c> edits, <c>bob</c>
 /// and <c>dave</c> view, <c>carol</c> is bound to no role. <c>bob</c> also holds a broad allow on the
 /// whole cluster, which is what the isolation fixture needs to prove a viewer's write is
-/// refused by the app's roles rather than by the viewer's own rights.
+/// refused by the app's roles rather than by the viewer's own rights. <c>erin</c> observes
+/// the whole estate - cluster telemetry and read - and administers nothing, so the Cluster
+/// area shows her what she may not change.
 /// </para>
 /// </remarks>
 internal sealed partial class ExplorerWorld : IAsyncDisposable
@@ -76,6 +78,15 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
     /// on every run.
     /// </summary>
     public const string VersionsTree = "schema-versions";
+
+    /// <summary>
+    /// A tree of its own for the view administration journey (issue #5369), so the views
+    /// it creates and drops never appear over a tree another fixture reads.
+    /// </summary>
+    public const string ViewsTree = "line-readings";
+
+    /// <summary>How many entries <see cref="ViewsTree"/> holds.</summary>
+    public const int ViewsEntryCount = 6;
 
     private readonly GrpcChannel _adminChannel;
 
@@ -128,6 +139,10 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
         else if (tenancy)
         {
             await world.SeedTenantsAsync();
+        }
+        else
+        {
+            await world.SeedObserverAsync();
         }
 
         return world;
@@ -333,6 +348,7 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
                 .AddUser(WorldIdentities.Bob, "Bob Ito")
                 .AddUser(WorldIdentities.Carol, "Carol Diaz")
                 .AddUser(WorldIdentities.Dave, "Dave Okafor")
+                .AddUser(WorldIdentities.Erin, "Erin Sato")
                 .AddUser(WorldIdentities.GlobexAdmin, "Globex tenant administrator")
                 .AddGroup(WorldIdentities.OperatorsGroup, "Floor Operators")
                 .AddGroup(WorldIdentities.EditorsGroup, "Task board editors")
@@ -362,6 +378,7 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
             silo.AddLatticeAppsApi();
             silo.AddLatticeAppBridgeApi();
 
+            silo.AddLatticeViews(WorldViewProviders.Register);
             silo.AddLatticeTreeAdminApi();
             silo.Services.AddSingleton<ILatticeBackupSink>(new Orleans.Lattice.Samples.Explorer.SampleSharedBackupSink());
             silo.AddLatticeBackup();
@@ -470,6 +487,12 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
             var membership = services.GetRequiredService<ILatticeMembershipDirectory>();
 
             await grains.GetGrain<ILattice>(VersionsTree).SetAsync("order/0001", Encoding.UTF8.GetBytes("{\"qty\":2}"));
+            var readings = grains.GetGrain<ILattice>(ViewsTree);
+            for (var i = 0; i < ViewsEntryCount; i++)
+            {
+                await readings.SetAsync($"reading-{i:D3}", Encoding.UTF8.GetBytes($"ok-{i:D3}"));
+            }
+
             // A membership edge alone makes no group: each seeded group gets its record,
             // so Access lists it and refuses its id as a new group's.
             await membership.UpsertGroupAsync(new MembershipGroup(WorldIdentities.OperatorsGroup, "Floor Operators"));
@@ -498,6 +521,25 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
                 scope: LatticeScope.ClusterWide(),
                 operations: LatticeOperation.Read | LatticeOperation.RangeRead | LatticeOperation.Write
                     | LatticeOperation.Delete | LatticeOperation.RangeDelete,
+                effect: LatticeEffect.Allow));
+        }
+    }
+
+    /// <summary>
+    /// Seeds the observer of the whole estate, in the plain world only: the Cluster
+    /// area is visible to <see cref="WorldIdentities.Erin"/>, and administering a tree,
+    /// or creating one, is not. The tenancy worlds keep their single cluster-wide rule,
+    /// which the tenant-scoped Access journey counts.
+    /// </summary>
+    private async Task SeedObserverAsync()
+    {
+        using (LatticeSystemOrigin.Enter())
+        {
+            await Head.Services.GetRequiredService<ILatticeAuthorizationPolicyStore>().PutRuleAsync(new LatticeAuthorizationRule(
+                ruleId: "erin-observes-the-estate",
+                subject: LatticeSubjectSelector.User(WorldIdentities.Erin),
+                scope: LatticeScope.ClusterWide(),
+                operations: LatticeOperation.Read | LatticeOperation.RangeRead | LatticeOperation.Telemetry,
                 effect: LatticeEffect.Allow));
         }
     }
