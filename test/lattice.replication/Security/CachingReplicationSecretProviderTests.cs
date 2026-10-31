@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.Replication;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Replication.Tests.Security;
 
@@ -83,7 +84,7 @@ public class CachingReplicationSecretProviderTests
     [Test]
     public async Task GetAcceptedSecretsAsync_caches_when_refresh_interval_is_extreme()
     {
-        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var time = new ManualTimeProvider();
         var source = new CountingSource
         {
             Snapshot = new LatticeReplicationAcceptedSecrets(new[] { "alpha" }, "v1"),
@@ -102,7 +103,7 @@ public class CachingReplicationSecretProviderTests
     [Test]
     public async Task GetOutboundSecretAsync_caches_when_refresh_interval_is_extreme()
     {
-        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var time = new ManualTimeProvider();
         var source = new CountingSource { Secret = "alpha" };
         var p = new CachingReplicationSecretProvider(source, OptionsFor(TimeSpan.MaxValue), time);
 
@@ -115,7 +116,7 @@ public class CachingReplicationSecretProviderTests
     [Test]
     public async Task GetOutboundSecretAsync_caches_within_refresh_interval()
     {
-        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var time = new ManualTimeProvider();
         var source = new CountingSource { Secret = "alpha" };
         var p = new CachingReplicationSecretProvider(source, OptionsFor(TimeSpan.FromSeconds(60)), time);
 
@@ -129,7 +130,7 @@ public class CachingReplicationSecretProviderTests
     [Test]
     public async Task GetOutboundSecretAsync_refreshes_after_interval_elapses()
     {
-        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var time = new ManualTimeProvider();
         var source = new CountingSource { Secret = "alpha" };
         var p = new CachingReplicationSecretProvider(source, OptionsFor(TimeSpan.FromSeconds(10)), time);
 
@@ -152,7 +153,7 @@ public class CachingReplicationSecretProviderTests
     [Test]
     public async Task GetAcceptedSecretsAsync_caches_within_refresh_interval()
     {
-        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var time = new ManualTimeProvider();
         var source = new CountingSource
         {
             Snapshot = new LatticeReplicationAcceptedSecrets(new[] { "alpha" }, "v1"),
@@ -201,7 +202,7 @@ public class CachingReplicationSecretProviderTests
     [Test]
     public async Task GetAcceptedSecretsAsync_refreshes_after_interval_elapses()
     {
-        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var time = new ManualTimeProvider();
         var source = new CountingSource
         {
             Snapshot = new LatticeReplicationAcceptedSecrets(new[] { "alpha" }, "v1"),
@@ -218,7 +219,7 @@ public class CachingReplicationSecretProviderTests
     [Test]
     public async Task GetOutboundSecretAsync_keeps_per_peer_cache_entries_isolated()
     {
-        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var time = new ManualTimeProvider();
         var perPeer = new Dictionary<string, string?> { ["peer-a"] = "secret-a", ["peer-b"] = "secret-b" };
         var source = new PerPeerSource(perPeer);
         var p = new CachingReplicationSecretProvider(source, OptionsFor(TimeSpan.FromSeconds(60)), time);
@@ -237,7 +238,7 @@ public class CachingReplicationSecretProviderTests
     [Test]
     public void GetOutboundSecretAsync_surfaces_source_exception_rather_than_returning_stale_value()
     {
-        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var time = new ManualTimeProvider();
         var source = new ThrowingSource();
         var p = new CachingReplicationSecretProvider(source, OptionsFor(TimeSpan.FromMilliseconds(1)), time);
 
@@ -249,7 +250,7 @@ public class CachingReplicationSecretProviderTests
     [Test]
     public void GetAcceptedSecretsAsync_surfaces_source_exception_rather_than_returning_stale_value()
     {
-        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var time = new ManualTimeProvider();
         var source = new ThrowingSource();
         var p = new CachingReplicationSecretProvider(source, OptionsFor(TimeSpan.FromMilliseconds(1)), time);
 
@@ -261,7 +262,7 @@ public class CachingReplicationSecretProviderTests
     [Test]
     public async Task GetAcceptedSecretsAsync_concurrent_callers_share_one_source_fetch()
     {
-        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var time = new ManualTimeProvider();
         var source = new BlockingSource
         {
             Snapshot = new LatticeReplicationAcceptedSecrets(new[] { "alpha" }, "v1"),
@@ -325,14 +326,4 @@ public class CachingReplicationSecretProviderTests
         }
     }
 
-    /// <summary>
-    /// Minimal stub TimeProvider so we don't take a Microsoft.Extensions.TimeProvider.Testing reference.
-    /// </summary>
-    private sealed class FakeTimeProvider : TimeProvider
-    {
-        private DateTimeOffset _now;
-        public FakeTimeProvider(DateTimeOffset start) { _now = start; }
-        public void Advance(TimeSpan by) => _now += by;
-        public override DateTimeOffset GetUtcNow() => _now;
-    }
 }
