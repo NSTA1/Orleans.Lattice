@@ -1170,7 +1170,7 @@ internal sealed partial class BPlusLeafGrain
                 Timestamp = mutation.Timestamp,
                 IsTombstone = false,
                 ExpiresAtTicks = mutation.ExpiresAtTicks,
-                OriginClusterId = mutation.OriginClusterId,
+                OriginClusterId = RowOrigin(mutation.OriginClusterId),
                 VectorClock = mutation.VectorClock,
             };
             MergeIntoProjection(mutation.Key, folded);
@@ -1220,7 +1220,7 @@ internal sealed partial class BPlusLeafGrain
             Timestamp = mutation.Timestamp,
             IsTombstone = mutation.IsTombstone,
             ExpiresAtTicks = mutation.ExpiresAtTicks,
-            OriginClusterId = mutation.OriginClusterId,
+            OriginClusterId = RowOrigin(mutation.OriginClusterId),
             VectorClock = mutation.VectorClock,
             IsMigrated = mutation.IsMigrated,
         };
@@ -1248,7 +1248,7 @@ internal sealed partial class BPlusLeafGrain
             Timestamp = mutation.Timestamp,
             IsTombstone = mutation.IsTombstone,
             ExpiresAtTicks = mutation.ExpiresAtTicks,
-            OriginClusterId = mutation.OriginClusterId,
+            OriginClusterId = RowOrigin(mutation.OriginClusterId),
             VectorClock = mutation.VectorClock,
             IsMigrated = mutation.IsMigrated,
         };
@@ -1279,7 +1279,7 @@ internal sealed partial class BPlusLeafGrain
             Timestamp = mutation.Timestamp,
             IsTombstone = true,
             ExpiresAtTicks = 0,
-            OriginClusterId = mutation.OriginClusterId,
+            OriginClusterId = RowOrigin(mutation.OriginClusterId),
             VectorClock = mutation.VectorClock,
             IsMigrated = mutation.IsMigrated,
         };
@@ -1300,7 +1300,7 @@ internal sealed partial class BPlusLeafGrain
             Timestamp = mutation.Timestamp,
             IsTombstone = true,
             ExpiresAtTicks = 0,
-            OriginClusterId = mutation.OriginClusterId,
+            OriginClusterId = RowOrigin(mutation.OriginClusterId),
             VectorClock = mutation.VectorClock,
             IsMigrated = mutation.IsMigrated,
         };
@@ -1393,7 +1393,7 @@ internal sealed partial class BPlusLeafGrain
             Timestamp = mutation.Timestamp,
             IsTombstone = true,
             ExpiresAtTicks = 0,
-            OriginClusterId = mutation.OriginClusterId,
+            OriginClusterId = RowOrigin(mutation.OriginClusterId),
             VectorClock = mutation.VectorClock,
         };
 
