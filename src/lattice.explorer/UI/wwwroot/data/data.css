@@ -414,6 +414,11 @@
   tab-size: 2;
 }
 
+.lt-data-editor__schema {
+  display: grid;
+  gap: var(--lt-space-1);
+}
+
 .lt-data-editor__schema-ok,
 .lt-data-editor__schema-fail,
 .lt-data-editor__error {

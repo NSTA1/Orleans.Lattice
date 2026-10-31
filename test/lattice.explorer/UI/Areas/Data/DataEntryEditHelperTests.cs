@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Explorer.UI.Areas.Data;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Schema;
@@ -111,7 +112,7 @@ public sealed class DataEntryEditHelperTests
     [Test]
     public void Entry_commands_follow_what_is_published_and_withdraw_with_it()
     {
-        var commands = new DataEntryCommands();
+        var commands = new DataEntryCommands(new ServiceCollection().BuildServiceProvider());
         var tree = new DataTreeEntry { LogicalId = "orders", StateId = "orders", Kind = DataTreeKind.Tree };
 
         Assert.That(commands.Commands, Is.Empty);
@@ -132,7 +133,7 @@ public sealed class DataEntryEditHelperTests
     [Test]
     public async Task An_unheard_request_is_held_until_a_control_takes_it()
     {
-        var commands = new DataEntryCommands();
+        var commands = new DataEntryCommands(new ServiceCollection().BuildServiceProvider());
         await commands.RequestAsync(DataEntryCommands.EditEntryId);
 
         Assert.Multiple(() =>

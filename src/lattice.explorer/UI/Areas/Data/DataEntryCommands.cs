@@ -1,5 +1,6 @@
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 
@@ -11,6 +12,11 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 /// while its control is drawn, and running it navigates to that control's address
 /// and asks it to act. An unheard request is held until the control renders.
 /// </summary>
+/// <remarks>
+/// The rights published are the data facade's answer for one caller, so they are
+/// filed under that caller (the sign-in, the endpoint and the asserted tenant): once
+/// any of them changes, nothing is offered until the workspace publishes again.
+/// </remarks>
 internal sealed class DataEntryCommands
 {
     /// <summary>The id of the "New entry..." command.</summary>
@@ -22,12 +28,22 @@ internal sealed class DataEntryCommands
     /// <summary>The id of the "Delete entry..." command.</summary>
     public const string DeleteEntryId = "data.delete-entry";
 
+    private readonly ShellCaller _caller;
     private string? _pending;
+    private ShellCallerKey _publishedFor;
     private ExplorerAddress? _treeAddress;
     private string? _treeName;
     private DataWriteRights _treeRights;
     private string? _key;
     private DataWriteRights _keyRights;
+
+    /// <summary>Creates the commands for one circuit.</summary>
+    /// <param name="services">The circuit's services, from which the caller is read.</param>
+    public DataEntryCommands(IServiceProvider services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        _caller = ShellCaller.Of(services);
+    }
 
     /// <summary>Raised when a command is invoked while a control is listening.</summary>
     public event Action<string>? Requested;
@@ -37,7 +53,7 @@ internal sealed class DataEntryCommands
     {
         get
         {
-            if (_treeAddress is not { } tree || _treeName is not { } name)
+            if (_treeAddress is not { } tree || _treeName is not { } name || _publishedFor != _caller.Current)
             {
                 return [];
             }
@@ -87,6 +103,7 @@ internal sealed class DataEntryCommands
     public void ShowTree(DataTreeEntry tree, DataWriteRights rights)
     {
         ArgumentNullException.ThrowIfNull(tree);
+        _publishedFor = _caller.Current;
         _treeAddress = tree.Address;
         _treeName = tree.DisplayName;
         _treeRights = rights;
@@ -98,6 +115,11 @@ internal sealed class DataEntryCommands
     public void ShowEntry(string key, DataWriteRights rights)
     {
         ArgumentNullException.ThrowIfNull(key);
+        if (_publishedFor != _caller.Current)
+        {
+            return;
+        }
+
         _key = key;
         _keyRights = rights;
     }
