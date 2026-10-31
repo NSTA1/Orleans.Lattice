@@ -88,6 +88,33 @@ public sealed class ExplorerAuthSessionRefusalTests
     }
 
     [Test]
+    public async Task LoginAsync_in_a_scope_whose_session_was_never_loaded_loads_it_and_checks_the_credential()
+    {
+        // The web head's /auth/login runs in a fresh request scope: the explorer
+        // session there has not loaded its configuration, and the check must not be
+        // skipped for want of an endpoint.
+        var connection = Substitute.For<ILatticeStateConnection>();
+        connection.VerifyCredentialAsync(Arg.Any<LatticeConnectionSettings>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(LatticeCredentialCheck.Refused));
+        var explorerSession = Substitute.For<IExplorerSession>();
+        explorerSession.Connection.Returns(connection);
+        ExplorerConfiguration? current = null;
+        explorerSession.Current.Returns(_ => current);
+        explorerSession.InitializeAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            current = new ExplorerConfiguration { Endpoint = Endpoint };
+            return Task.FromResult(true);
+        });
+        var store = new InMemoryCredentialStore();
+        var session = new ExplorerAuthSession(explorerSession, store);
+
+        Assert.ThrowsAsync<ExplorerSignInRefusedException>(() => session.LoginAsync("olivia", "wrong"));
+
+        await explorerSession.Received(1).InitializeAsync(Arg.Any<CancellationToken>());
+        Assert.That(await store.GetAsync(), Is.Null);
+    }
+
+    [Test]
     public async Task LoginAsync_with_no_endpoint_configured_is_not_checked()
     {
         var (session, connection, _) = CreateSession(LatticeCredentialCheck.Refused, configured: false);

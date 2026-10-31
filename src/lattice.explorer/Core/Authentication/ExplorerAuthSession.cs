@@ -203,6 +203,15 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(schemeId);
         var method = SelectMethod(schemeId);
 
+        // A sign-in can run in a scope whose explorer session was never loaded - the
+        // web head's server form post handles it in a fresh request scope. Load it
+        // first, so the sign-in is checked against, and bound to, the configured
+        // endpoint rather than skipping the check for want of one.
+        if (_session.Current is null)
+        {
+            await _session.InitializeAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         // Read once: the challenge, the check below and the binding all use this value.
         var endpoint = _session.Current?.Endpoint;
         var context = new ExplorerAuthChallengeContext
