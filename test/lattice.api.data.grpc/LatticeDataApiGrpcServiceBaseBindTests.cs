@@ -18,7 +18,7 @@ namespace Orleans.Lattice.Api.Data.Grpc.Tests;
 [NonParallelizable]
 public sealed class LatticeDataApiGrpcServiceBaseBindTests
 {
-    private const int ExpectedMethodCount = 11;
+    private const int ExpectedMethodCount = 12;
 
     private LatticeDataApiGrpcMethods? _savedHolder;
 
@@ -98,6 +98,11 @@ public sealed class LatticeDataApiGrpcServiceBaseBindTests
         public override void AddMethod<TRequest, TResponse>(
             Method<TRequest, TResponse> method,
             UnaryServerMethod<TRequest, TResponse>? handler)
+            => AddedMethods++;
+
+        public override void AddMethod<TRequest, TResponse>(
+            Method<TRequest, TResponse> method,
+            DuplexStreamingServerMethod<TRequest, TResponse>? handler)
             => AddedMethods++;
     }
 }

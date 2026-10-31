@@ -52,7 +52,7 @@ public sealed class StreamingImportJourneyTests : UiTestBase
         await Expect(import).ToBeVisibleAsync();
         await Expect(import.Locator(".lt-data-import")).ToHaveAttributeAsync("data-lt-import-state", "choose");
         await Expect(import.GetByLabel("Mode")).ToHaveValueAsync("Seed");
-        await import.Locator("#lt-data-import-file").SetInputFilesAsync(new FilePayload
+        await import.Locator("#data-import-file").SetInputFilesAsync(new FilePayload
         {
             Name = "orders.ndjson",
             MimeType = "application/x-ndjson",
@@ -80,7 +80,7 @@ public sealed class StreamingImportJourneyTests : UiTestBase
         await Expect(importButton).ToHaveAttributeAsync("data-lt-command", "data.import");
         await importButton.ClickAsync();
         await Expect(import.GetByLabel("Mode")).ToHaveValueAsync("Upsert");
-        await import.Locator("#lt-data-import-file").SetInputFilesAsync(new FilePayload
+        await import.Locator("#data-import-file").SetInputFilesAsync(new FilePayload
         {
             Name = "corrections.csv",
             MimeType = "text/csv",
@@ -120,7 +120,7 @@ public sealed class StreamingImportJourneyTests : UiTestBase
         var page = await OpenAsync(world.Head, $"/data/{tree}?import=seed", WorldIdentities.Admin);
         var import = page.GetByRole(AriaRole.Dialog, new() { Name = $"Import into {tree}" });
         await Expect(import).ToBeVisibleAsync();
-        await import.Locator("#lt-data-import-file").SetInputFilesAsync(new FilePayload
+        await import.Locator("#data-import-file").SetInputFilesAsync(new FilePayload
         {
             Name = "unsorted.txt",
             MimeType = "text/plain",

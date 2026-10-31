@@ -98,7 +98,7 @@ public partial class DataImportDialog : IDisposable
         new("|", "Vertical bar"),
     ];
 
-    private string FileInputId => "lt-data-import-file";
+    private string FileInputId => "data-import-file";
 
     private bool Reading => _run is { IsFinished: false };
 

@@ -699,6 +699,12 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
             var result = await _control.CommitBulkLoadAsync(treeId, operationId, cancellationToken).ConfigureAwait(false);
             await responseStream.WriteAsync(new TreeAdminBulkLoadStreamResponse { Result = result }, cancellationToken).ConfigureAwait(false);
         }
+        catch (LatticeTenantAccessDeniedException exception)
+        {
+            // Named on its own so the tenant-denial contract gate sees the clause; the
+            // mapping is the same PermissionDenied the shared ladder below applies.
+            throw ToRpcException(exception, context);
+        }
         catch (Exception exception) when (exception is not RpcException)
         {
             throw ToRpcException(exception, context);
@@ -892,6 +898,12 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
         try
         {
             return await handler(facade, request, context.CancellationToken).ConfigureAwait(false);
+        }
+        catch (LatticeTenantAccessDeniedException exception)
+        {
+            // Named on its own so the tenant-denial contract gate sees the clause; the
+            // mapping is the same PermissionDenied the shared ladder below applies.
+            throw ToRpcException(exception, context);
         }
         catch (Exception exception) when (exception is not RpcException)
         {

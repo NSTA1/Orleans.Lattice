@@ -379,9 +379,11 @@ import**. Stop ends the import after the batch or chunk in flight, and the resul
 reports exactly what was written before it. The browser reads the file through the
 dialog's file input, so the dialog stays open while the file is read; leaving the
 tree page ends the read, and the import reports what it wrote. Closing the browser
-tab ends the circuit, which cancels the import and records it as cancelled. A
-finished import is shown again when the dialog reopens on its tree, until **Import
-another file**.
+tab ends the circuit, which cancels the import and records it as cancelled. An
+import belongs to the caller who started it: a sign-in, a sign-out, a new endpoint
+or another tenant cancels it, since its calls would otherwise go on as the new
+caller, and it is never shown to another caller. A finished import is shown again
+when the dialog reopens on its tree, until **Done** or **Import another file**.
 
 The result lists the first 100 refused lines with their line, key and reason, and
 **Prepare the list of refused lines** mints a download of every one through the
