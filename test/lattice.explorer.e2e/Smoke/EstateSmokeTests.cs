@@ -83,6 +83,7 @@ public sealed class EstateSmokeTests
         await JourneyBrowser.GotoAsync(page, "/");
         await JourneyBrowser.SignInAsync(page, JourneyEstateOptions.Administrator, _estate.PasswordOf(JourneyEstateOptions.Administrator));
         await ExpectServingAsync(page, "Estate");
+        await Expect(Content(page).GetByText(new System.Text.RegularExpressions.Regex(@"^1 trees? and \d+ views?"))).ToBeVisibleAsync(new() { Timeout = 60_000 });
         await JourneyBrowser.ScreenshotAsync(page, Path.Combine(shots, "01-signed-in-home.png"));
 
         await JourneyBrowser.Stop(page, "data").ClickAsync();
@@ -112,6 +113,8 @@ public sealed class EstateSmokeTests
         await JourneyBrowser.GotoAsync(page, "/");
         await ExpectServingAsync(page, "Estate");
         await Expect(JourneyBrowser.SessionButton(page, JourneyEstateOptions.Administrator)).ToBeVisibleAsync();
+        await Expect(JourneyBrowser.Stop(page, "data")).ToBeVisibleAsync();
+        await Expect(Content(page).GetByText(new System.Text.RegularExpressions.Regex(@"^1 trees? and \d+ views?"))).ToBeVisibleAsync(new() { Timeout = 60_000 });
         await JourneyBrowser.ScreenshotAsync(page, Path.Combine(shots, "04-home-after-silo-loss.png"));
     }
 
