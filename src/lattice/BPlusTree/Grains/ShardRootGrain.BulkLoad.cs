@@ -447,13 +447,17 @@ internal sealed partial class ShardRootGrain
             : await TraverseToRightmostLeafAsync();
 
         var rightmostLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(rightmostLeafId);
-        var existingCount = await rightmostLeaf.CountAsync();
+        var (existingCount, rightEdge) = await rightmostLeaf.GetAppendTailAsync();
+
+        // Issue #5460: entries at or below the shard's right edge were grafted by
+        // an earlier delivery of this batch, so they are skipped rather than
+        // grafted again. See SkipAlreadyGraftedAsync.
+        int idx = await SkipAlreadyGraftedAsync(operationId, sortedEntries, rightEdge);
         int space = maxLeafKeys - existingCount;
 
-        int idx = 0;
-        if (space > 0)
+        if (space > 0 && idx < sortedEntries.Count)
         {
-            int take = Math.Min(space, sortedEntries.Count);
+            int take = Math.Min(space, sortedEntries.Count - idx);
             var batch = new Dictionary<string, LwwValue<byte[]>>(take);
             for (int i = 0; i < take; i++, idx++)
             {
@@ -527,6 +531,73 @@ internal sealed partial class ShardRootGrain
 
         await CompleteBulkGraftAsync();
         await MirrorBulkAppendAsync(mirrored, sortedEntries);
+    }
+
+    /// <summary>
+    /// Returns how many leading entries of <paramref name="sortedEntries"/> sort at
+    /// or below <paramref name="rightEdge"/> - the highest live key of the shard's
+    /// rightmost leaf - and so were grafted by an earlier delivery of this batch.
+    /// The append starts from that index.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A bulk append grafts at the shard's right edge, so it is correct only for
+    /// keys above every key the shard already holds. The last-completed operation
+    /// id dedupes a retry of the batch the shard finished last, and nothing else.
+    /// A resumed bulk-load stream re-sends every unacknowledged chunk, which can
+    /// include one a later chunk has already superseded here; and a retry after a
+    /// fault part-way through an append finds the rightmost leaf already filled,
+    /// so it re-partitioned the remaining entries across the leaves the first
+    /// attempt had seeded. Either way entries were grafted a second time below
+    /// the right edge: rows duplicated across leaves, so counts and statistics
+    /// over-reported, and a leaf chain whose keys regress, so a range scan
+    /// suppressed the regressed leaves and omitted keys that point reads still
+    /// found (issue #5460).
+    /// </para>
+    /// <para>
+    /// The right edge records what was grafted whatever the operation id, so a
+    /// re-delivered entry is recognised by its key. Each skipped entry must have
+    /// a row in the shard - a tombstone counts, since a deleted key was still
+    /// grafted - or the batch is not a re-delivery but one out of order, which is
+    /// refused rather than silently dropped. The rows are read only for a
+    /// re-delivery: a fresh append skips nothing and reads nothing. They are
+    /// mirrored to an online resize's destination, as a same-operation retry's
+    /// rows are, so a crash between an apply and its mirror stays covered.
+    /// </para>
+    /// </remarks>
+    private async Task<int> SkipAlreadyGraftedAsync(
+        string operationId,
+        List<KeyValuePair<string, byte[]>> sortedEntries,
+        string? rightEdge)
+    {
+        if (rightEdge is null)
+            return 0;
+
+        var skip = 0;
+        while (skip < sortedEntries.Count && string.CompareOrdinal(sortedEntries[skip].Key, rightEdge) <= 0)
+            skip++;
+
+        if (skip == 0)
+            return 0;
+
+        var keys = new List<string>(skip);
+        for (var i = 0; i < skip; i++)
+            keys.Add(sortedEntries[i].Key);
+
+        var rows = await AppliedRowsAsync(keys);
+        foreach (var key in keys)
+        {
+            if (!rows.ContainsKey(key))
+            {
+                throw new InvalidOperationException(
+                    $"Bulk append '{operationId}' to shard {MyShardIndex} of tree '{TreeId}' carries key '{key}', "
+                    + $"which sorts at or below the shard's highest key '{rightEdge}' but was never stored here. "
+                    + "A bulk append's keys must sort after every key the shard already holds.");
+            }
+        }
+
+        await MirrorRowsAsync(rows, joinCrdt: false);
+        return skip;
     }
 
     private static void CollectMirroredRows(
