@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Clocks and version vectors</title>
+    <link rel="stylesheet" href="shared/brand/brand.css" />
+    <script src="node_modules/gsap/dist/gsap.min.js"></script>
+    <script src="node_modules/gsap/dist/CustomEase.min.js"></script>
+    <script src="node_modules/gsap/dist/MotionPathPlugin.min.js"></script>
+    <script src="shared/brand/motion.js"></script>
+    <script src="shared/brand/site/join-figures.js"></script>
+    <script src="shared/brand/site/packages.js"></script>
+    <script src="shared/brand/site/home.js"></script>
+    <script src="shared/brand/scene.js"></script>
+    <script src="shared/brand/code.js"></script>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--lt-surface);
+      }
+      #where-next {
+        position: absolute;
+        left: 0;
+        top: 0;
+      }
+      #version-vector-code {
+        position: absolute;
+        left: var(--lv-safe-x);
+        right: var(--lv-safe-x);
+        top: 430px;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="clocks-and-version-vectors"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-fps="30"
+      data-duration="121.393"
+    >
+      <div
+        id="opening"
+        data-composition-id="title-card"
+        data-composition-src="shared/components/title-card.html"
+        data-scene="opening"
+        data-track-index="0"
+        data-variable-values='{"kicker":"How it works","title":"Clocks and version vectors","subtitle":"Causal order, one replica at a time","beats":"0.5,7.159","end":12.765}'
+        data-start="0"
+        data-duration="12.765"
+      ></div>
+      <div
+        id="causal-history"
+        data-composition-id="version-vector"
+        data-composition-src="shared/components/version-vector.html"
+        data-scene="causal-history"
+        data-track-index="0"
+        data-variable-values='{"heading":"Causal history, entry by entry","caption":"A vector keeps each replica&#39;s highest clock","tableLabel":"Two causal histories and their pointwise maximum","historyHeading":"History","columnA":"Replica A","columnB":"Replica B","historyALabel":"A&#39;s view","historyAValueA":"2","historyAValueB":"1","historyBLabel":"B&#39;s view","historyBValueA":"1","historyBValueB":"3","mergedLabel":"Pointwise maximum","mergedValueA":"2","mergedValueB":"3","concurrentText":"Each history is ahead in a different entry: concurrent","dominatesText":"Every entry is at least as high as the history it contains","beats":"0.6,7.954,16.5,25.008,31.64,40.387,49.836,58.088,74.417,83.824,93.877","end":101.05}'
+        data-start="12.765"
+        data-duration="101.05"
+      ></div>
+      <div
+        id="version-vector-code"
+        class="clip"
+        data-scene="causal-history"
+        data-from-beat="7"
+        data-track-index="2"
+        data-start="70.853"
+        data-duration="42.962"
+      >
+        <pre class="lv-code"><code data-snippet="clocks-and-version-vectors/frontier-check">var history = tree.VersionVector("doc:12:history");
+await history.TickAsync("replica-A", cancellationToken);
+VersionVector current = await history.GetAsync(cancellationToken);
+var other = new VersionVector();
+other.Tick("replica-C");
+bool seenEverythingInOther = current.DominatesOrEquals(other);</code></pre>
+      </div>
+      <div
+        id="where-next"
+        data-composition-id="choice-list"
+        data-composition-src="shared/components/choice-list.html"
+        data-scene="where-next"
+        data-track-index="0"
+        data-variable-values='{"heading":"Back on Evaluate","items":"[{\"title\":\"The evidence\",\"detail\":\"Links on this episode&#39;s page\",\"beat\":0}]","beats":"0.6","end":7.578}'
+        data-start="113.815"
+        data-duration="7.578"
+      ></div>
+      <!-- narration:begin -->
+      <audio id="narration" src="renders/narration/clocks-and-version-vectors/narration.wav" data-start="0" data-duration="121.393" data-track-index="1"></audio>
+      <!-- narration:end -->
+    </div>
+    <script>
+      (function () {
+        window.LatticeCode.highlightAll(document);
+        const code = document.getElementById("version-vector-code");
+        const start = Number(code.dataset.start);
+        const end = start + Number(code.dataset.duration);
+        const { duration } = window.LatticeMotion;
+        const tl = gsap.timeline({ paused: true });
+        tl.fromTo(code, { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: duration.slow, ease: "lattice-out" }, start + 0.6);
+        tl.to(code, { opacity: 0, duration: duration.fast, ease: "power1.in" }, end - duration.fast);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["clocks-and-version-vectors"] = tl;
+      })();
+    </script>
+  </body>
+</html>

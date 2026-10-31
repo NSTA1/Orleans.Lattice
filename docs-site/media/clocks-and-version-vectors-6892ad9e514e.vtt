@@ -1,0 +1,141 @@
+WEBVTT
+
+1
+00:00:00.500 --> 00:00:03.622
+The guarantees showed
+what a caller can observe;
+
+2
+00:00:03.622 --> 00:00:06.809
+this episode asks how
+replicas compare histories.
+
+3
+00:00:07.159 --> 00:00:12.365
+This is Clocks and version vectors:
+causal order without a shared clock.
+
+4
+00:00:13.365 --> 00:00:15.606
+Local wall clocks can be skewed.
+
+5
+00:00:15.606 --> 00:00:20.369
+A timestamp alone cannot prove one
+replica has seen another's write.
+
+6
+00:00:20.719 --> 00:00:25.513
+A version vector records causal history,
+not application data.
+
+7
+00:00:25.513 --> 00:00:28.915
+It keeps one logical clock
+for each replica.
+
+8
+00:00:29.265 --> 00:00:33.620
+Each replica advances its own entry
+when it records a noteworthy event.
+
+9
+00:00:33.620 --> 00:00:37.423
+It also carries forward clocks
+from histories it has observed.
+
+10
+00:00:37.773 --> 00:00:44.055
+For example, A's vector can read A two,
+B one; B's can read A one, B three.
+
+11
+00:00:44.405 --> 00:00:45.671
+Compare each entry.
+
+12
+00:00:45.671 --> 00:00:48.137
+A is ahead on A, and B is ahead on B.
+
+13
+00:00:48.137 --> 00:00:52.802
+Each has information the other lacks,
+so the histories are concurrent.
+
+14
+00:00:53.152 --> 00:00:58.552
+Merge by taking the maximum clock
+in every replica entry: A two, B three.
+
+15
+00:00:58.552 --> 00:01:02.251
+Deliver that vector again,
+and it does not change.
+
+16
+00:01:02.601 --> 00:01:07.382
+One vector dominates another when it is
+at least as high in every entry.
+
+17
+00:01:07.382 --> 00:01:10.503
+It has seen all the history
+the other contains.
+
+18
+00:01:10.853 --> 00:01:15.218
+The check is component-wise:
+compare A with A and B with B,
+
+19
+00:01:15.218 --> 00:01:17.511
+not the total of their numbers.
+
+20
+00:01:17.511 --> 00:01:22.763
+A large value in one entry cannot make up
+for a smaller one in another.
+
+21
+00:01:22.763 --> 00:01:26.832
+The per-replica positions
+preserve the causal frontier.
+
+22
+00:01:27.182 --> 00:01:32.093
+The entries use hybrid logical clocks,
+but the vector compares each replica's
+
+23
+00:01:32.093 --> 00:01:36.239
+own history rather than relying
+on one shared wall-clock reading.
+
+24
+00:01:36.589 --> 00:01:41.951
+In Orleans.Lattice, the typed accessor can
+tick a named replica and read the vector;
+
+25
+00:01:41.951 --> 00:01:46.292
+the returned vector can test
+that relation with `DominatesOrEquals`.
+
+26
+00:01:46.642 --> 00:01:49.605
+The vector gives
+the application a causal signal;
+
+27
+00:01:49.605 --> 00:01:53.415
+the application still chooses
+how to resolve concurrent values.
+
+28
+00:01:54.415 --> 00:01:57.133
+Back on Evaluate, next: The evidence.
+
+29
+00:01:57.133 --> 00:02:01.393
+The links are on this episode's page
+in the documentation.

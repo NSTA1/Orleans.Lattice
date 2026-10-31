@@ -1,0 +1,193 @@
+<template id="version-vector-template">
+  <div
+    data-composition-id="version-vector"
+    data-width="1920"
+    data-height="1080"
+    data-composition-variables='[
+      {"id":"heading","type":"string","label":"Heading","default":"Causal history, entry by entry"},
+      {"id":"caption","type":"string","label":"Caption","default":"A vector keeps each replica's highest clock"},
+      {"id":"tableLabel","type":"string","label":"Table accessibility label","default":"Two causal histories and their pointwise maximum"},
+      {"id":"historyHeading","type":"string","label":"History column heading","default":"History"},
+      {"id":"columnA","type":"string","label":"Replica A column heading","default":"Replica A"},
+      {"id":"columnB","type":"string","label":"Replica B column heading","default":"Replica B"},
+      {"id":"historyALabel","type":"string","label":"First history label","default":"A's view"},
+      {"id":"historyAValueA","type":"string","label":"First history, replica A value","default":"2"},
+      {"id":"historyAValueB","type":"string","label":"First history, replica B value","default":"1"},
+      {"id":"historyBLabel","type":"string","label":"Second history label","default":"B's view"},
+      {"id":"historyBValueA","type":"string","label":"Second history, replica A value","default":"1"},
+      {"id":"historyBValueB","type":"string","label":"Second history, replica B value","default":"3"},
+      {"id":"mergedLabel","type":"string","label":"Merged history label","default":"Pointwise maximum"},
+      {"id":"mergedValueA","type":"string","label":"Merged history, replica A value","default":"2"},
+      {"id":"mergedValueB","type":"string","label":"Merged history, replica B value","default":"3"},
+      {"id":"concurrentText","type":"string","label":"Concurrency explanation","default":"Each history is ahead in a different entry: concurrent"},
+      {"id":"dominatesText","type":"string","label":"Dominance explanation","default":"Every entry is at least as high as the history it contains"},
+      {"id":"beats","type":"string","label":"Beats (stamped by npm run timeline)","default":""},
+      {"id":"end","type":"number","label":"Clip end (stamped by npm run timeline)","default":0}
+    ]'
+    class="lv-scene"
+  >
+    <h2 class="lv-heading vv-heading"></h2>
+    <p class="vv-caption"></p>
+    <div class="vv-table" role="table" aria-label="Two causal histories and their pointwise maximum">
+      <div class="vv-header" role="row">
+        <span class="vv-history-heading" role="columnheader"></span>
+        <span class="vv-column-a lv-mono" role="columnheader"></span>
+        <span class="vv-column-b lv-mono" role="columnheader"></span>
+      </div>
+      <div class="vv-row vv-history-a" role="row">
+        <span class="vv-history-label vv-label-a" role="rowheader"></span>
+        <span class="vv-value vv-value-a-a lv-mono" role="cell"></span>
+        <span class="vv-value vv-value-a-b lv-mono" role="cell"></span>
+      </div>
+      <div class="vv-row vv-history-b" role="row">
+        <span class="vv-history-label vv-label-b" role="rowheader"></span>
+        <span class="vv-value vv-value-b-a lv-mono" role="cell"></span>
+        <span class="vv-value vv-value-b-b lv-mono" role="cell"></span>
+      </div>
+      <div class="vv-row vv-merged" role="row">
+        <span class="vv-history-label" role="rowheader"><span class="lv-node vv-join"></span><span class="vv-merged-label"></span></span>
+        <span class="vv-value vv-merged-a lv-mono" role="cell"></span>
+        <span class="vv-value vv-merged-b lv-mono" role="cell"></span>
+      </div>
+    </div>
+    <p class="vv-concurrent"></p>
+    <p class="vv-dominates"></p>
+
+    <style>
+      [data-composition-id="version-vector"] {
+        width: 1920px;
+        height: 1080px;
+        background: var(--lt-surface);
+        font-family: var(--lv-font-sans);
+      }
+      [data-composition-id="version-vector"] .vv-caption {
+        position: absolute;
+        top: 170px;
+        left: var(--lv-safe-x);
+        margin: 0;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-label);
+      }
+      [data-composition-id="version-vector"] .vv-table {
+        position: absolute;
+        top: 280px;
+        left: var(--lv-safe-x);
+        right: var(--lv-safe-x);
+      }
+      [data-composition-id="version-vector"] .vv-header,
+      [data-composition-id="version-vector"] .vv-row {
+        display: grid;
+        grid-template-columns: 2fr 1fr 1fr;
+        align-items: center;
+        column-gap: 48px;
+      }
+      [data-composition-id="version-vector"] .vv-header {
+        padding: 0 0 24px;
+        border-bottom: var(--lv-rule-heavy) solid var(--lt-rule-strong);
+        color: var(--lt-ink-3);
+        font-size: var(--lv-type-label);
+      }
+      [data-composition-id="version-vector"] .vv-row {
+        min-height: 108px;
+        border-bottom: var(--lv-hairline) solid var(--lt-rule);
+      }
+      [data-composition-id="version-vector"] .vv-history-label {
+        display: flex;
+        align-items: center;
+        gap: 24px;
+        color: var(--lt-ink);
+        font-size: var(--lv-type-body);
+        font-weight: var(--lt-weight-strong);
+      }
+      [data-composition-id="version-vector"] .vv-value {
+        color: var(--lt-ink);
+        font-size: var(--lv-type-title);
+        text-align: center;
+      }
+      [data-composition-id="version-vector"] .vv-join {
+        width: var(--lv-node-sm);
+        height: var(--lv-node-sm);
+        flex: 0 0 var(--lv-node-sm);
+      }
+      [data-composition-id="version-vector"] .vv-concurrent,
+      [data-composition-id="version-vector"] .vv-dominates {
+        position: absolute;
+        left: var(--lv-safe-x);
+        right: var(--lv-safe-x);
+        margin: 0;
+        color: var(--lt-ink-2);
+        font-size: var(--lv-type-body);
+        line-height: var(--lt-leading-body);
+      }
+      [data-composition-id="version-vector"] .vv-concurrent {
+        top: 700px;
+      }
+      [data-composition-id="version-vector"] .vv-dominates {
+        top: 780px;
+      }
+    </style>
+
+    <script>
+      (function () {
+        const vars = window.__hyperframes.getVariables();
+        const root = document.querySelector('[data-composition-id="version-vector"]');
+        const q = (selector) => root.querySelector(selector);
+        const scene = window.LatticeScene;
+        const timing = scene.cue(vars);
+        const { duration } = window.LatticeMotion;
+        const tl = gsap.timeline({ paused: true });
+        const marker = getComputedStyle(root).getPropertyValue("--lt-marker").trim();
+        const surface = getComputedStyle(root).getPropertyValue("--lt-surface").trim();
+        const ink = getComputedStyle(root).getPropertyValue("--lt-ink").trim();
+        const histories = [q(".vv-history-a"), q(".vv-history-b")];
+        const merged = q(".vv-merged");
+
+        q(".vv-heading").textContent = scene.site(vars.heading);
+        q(".vv-caption").textContent = scene.site(vars.caption);
+        q(".vv-table").setAttribute("aria-label", scene.site(vars.tableLabel));
+        q(".vv-history-heading").textContent = scene.site(vars.historyHeading);
+        q(".vv-column-a").textContent = scene.site(vars.columnA);
+        q(".vv-column-b").textContent = scene.site(vars.columnB);
+        q(".vv-label-a").textContent = scene.site(vars.historyALabel);
+        q(".vv-value-a-a").textContent = scene.site(vars.historyAValueA);
+        q(".vv-value-a-b").textContent = scene.site(vars.historyAValueB);
+        q(".vv-label-b").textContent = scene.site(vars.historyBLabel);
+        q(".vv-value-b-a").textContent = scene.site(vars.historyBValueA);
+        q(".vv-value-b-b").textContent = scene.site(vars.historyBValueB);
+        q(".vv-merged-label").textContent = scene.site(vars.mergedLabel);
+        q(".vv-merged-a").textContent = scene.site(vars.mergedValueA);
+        q(".vv-merged-b").textContent = scene.site(vars.mergedValueB);
+        q(".vv-concurrent").textContent = scene.site(vars.concurrentText);
+        q(".vv-dominates").textContent = scene.site(vars.dominatesText);
+        tl.from(q(".vv-heading"), { opacity: 0, duration: duration.slow, ease: "lattice-out" }, 0);
+        tl.from(q(".vv-caption"), { opacity: 0, duration: duration.base, ease: "lattice-out" }, 0.25);
+        tl.set([...histories, merged, q(".vv-concurrent"), q(".vv-dominates")], { opacity: 0 }, 0);
+
+        const historiesAt = timing.at(3, 5);
+        tl.to(histories, { opacity: 1, y: 0, duration: duration.slow, stagger: 0.12, ease: "lattice-out" }, historiesAt);
+
+        const concurrentAt = timing.at(4, 8);
+        tl.to(q(".vv-concurrent"), { opacity: 1, duration: duration.base, ease: "lattice-out" }, concurrentAt);
+
+        const mergeAt = timing.at(5, 11);
+        tl.to(merged, { opacity: 1, duration: duration.slow, ease: "lattice-out" }, mergeAt);
+        tl.to(q(".vv-join"), { backgroundColor: marker, duration: duration.base }, mergeAt);
+
+        const dominatesAt = timing.at(6, 14);
+        tl.to(q(".vv-dominates"), { opacity: 1, duration: duration.base, ease: "lattice-out" }, dominatesAt);
+        tl.to(q(".vv-concurrent"), { color: ink, duration: duration.base }, dominatesAt);
+        tl.to(q(".vv-join"), { backgroundColor: surface, duration: duration.base }, dominatesAt + duration.base);
+        const codeAt = timing.at(7, 0.6);
+        tl.to(
+          [q(".vv-table"), q(".vv-concurrent"), q(".vv-dominates")],
+          { opacity: 0, duration: duration.slow, ease: "lattice-out" },
+          codeAt - duration.slow - 0.1
+        );
+        scene.exit(tl, root, timing);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["version-vector"] = tl;
+      })();
+    </script>
+  </div>
+</template>

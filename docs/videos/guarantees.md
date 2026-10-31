@@ -87,7 +87,7 @@ No code appears in this episode; it stays with the caller-visible contract.
 <!-- where-next:begin -->
 
 - **Next on Evaluate:** The evidence
-- **The deep dive:** Clocks and version vectors
+- **The deep dive:** [Clocks and version vectors](clocks-and-version-vectors.md)
 - **The pages it introduces:** [Consistency guarantees](../lattice/consistency.md)
 
 <!-- where-next:end -->
