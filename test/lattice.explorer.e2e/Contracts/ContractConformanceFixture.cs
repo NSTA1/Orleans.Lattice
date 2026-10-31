@@ -90,6 +90,13 @@ public abstract class ContractConformanceFixture(string storyline)
     protected async Task EstablishThenVerifyAsync(string chapter)
     {
         var session = _session ?? throw new InvalidOperationException("The estate did not start.");
+        if (string.Equals(chapter, SnapshotBefore, StringComparison.Ordinal))
+        {
+            // Photographed even when the chapter is blocked: the estate then holds every produce
+            // that did conform.
+            await SnapshotEstateAsync(chapter);
+        }
+
         var blockers = StoryOutline.Find(chapter)!.After.Where(_failed.Contains).ToList();
         if (blockers.Count > 0)
         {
@@ -109,11 +116,6 @@ public abstract class ContractConformanceFixture(string storyline)
         var retriesBefore = ContractRetries.Count;
         var clock = Stopwatch.StartNew();
         TimeSpan establish = TimeSpan.Zero;
-        if (string.Equals(chapter, SnapshotBefore, StringComparison.Ordinal))
-        {
-            await SnapshotEstateAsync(chapter);
-        }
-
         try
         {
             await session.EstablishAsync(chapter);
