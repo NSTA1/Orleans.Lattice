@@ -227,10 +227,10 @@ public sealed partial class BackupCatalogIndexQueryTests
     }
 
     [Test]
-    public async Task Incremental_chain_collapses_to_its_tip_full_scan()
+    public async Task Every_member_of_an_incremental_chain_is_listed_full_scan()
     {
-        // full "base" <- inc "i1" <- inc "i2" (the tip). Only the tip is listed;
-        // the base and the mid-chain increment are folded behind it.
+        // full "base" <- inc "i1" <- inc "i2". Each is a catalogued, restorable
+        // backup, so each is its own row, newest-first (issue #5450).
         var catalog = new FakeCatalog(
             Manifest("base", DateTimeOffset.UnixEpoch.AddHours(1)),
             Manifest("i1", DateTimeOffset.UnixEpoch.AddHours(2), kind: BackupKind.Incremental, baseBackupId: "base"),
@@ -238,11 +238,11 @@ public sealed partial class BackupCatalogIndexQueryTests
 
         var page = await QueryAsync(catalog, Request());
 
-        Assert.That(page.Entries.Select(e => e.Id), Is.EqualTo(new[] { "i2" }));
+        Assert.That(page.Entries.Select(e => e.Id), Is.EqualTo(new[] { "i2", "i1", "base" }));
     }
 
     [Test]
-    public async Task Incremental_chain_collapses_to_its_tip_via_index()
+    public async Task Every_member_of_an_incremental_chain_is_listed_via_index()
     {
         var baseFull = Manifest("base", DateTimeOffset.UnixEpoch.AddHours(1));
         var i1 = Manifest("i1", DateTimeOffset.UnixEpoch.AddHours(2), kind: BackupKind.Incremental, baseBackupId: "base");
@@ -253,7 +253,7 @@ public sealed partial class BackupCatalogIndexQueryTests
 
         var page = await QueryAsync(catalog, Request(), viewFactory: new FakeViewFactory(view));
 
-        Assert.That(page.Entries.Select(e => e.Id), Is.EqualTo(new[] { "i2" }));
+        Assert.That(page.Entries.Select(e => e.Id), Is.EqualTo(new[] { "i2", "i1", "base" }));
     }
 
     [Test]
@@ -268,11 +268,11 @@ public sealed partial class BackupCatalogIndexQueryTests
     }
 
     [Test]
-    public async Task Chain_tip_lists_alongside_unrelated_backups_newest_first()
+    public async Task A_full_backup_an_increment_builds_on_is_listed_alongside_unrelated_backups()
     {
-        // A standalone full, plus a chain base<-inc. The listing shows the
-        // standalone and the chain tip only, newest-first, and never the folded
-        // ancestors even though they carry distinct capture times.
+        // The reproduction of issue #5450: "lines-full" with "lines-inc-1" on it.
+        // The full is still catalogued and restorable, so the newest-first listing
+        // carries it next to its increment and to every unrelated backup.
         var catalog = new FakeCatalog(
             Manifest("standalone", DateTimeOffset.UnixEpoch.AddHours(10)),
             Manifest("base", DateTimeOffset.UnixEpoch.AddHours(1)),
@@ -280,7 +280,39 @@ public sealed partial class BackupCatalogIndexQueryTests
 
         var page = await QueryAsync(catalog, Request());
 
-        Assert.That(page.Entries.Select(e => e.Id), Is.EqualTo(new[] { "standalone", "tip" }));
+        Assert.That(page.Entries.Select(e => e.Id), Is.EqualTo(new[] { "standalone", "tip", "base" }));
+    }
+
+    [Test]
+    public async Task A_full_backup_an_increment_builds_on_matches_the_full_kind_filter()
+    {
+        // The Explorer's capture page offers bases by asking for the tree's full
+        // backups. A full that already carries an increment is still a valid base.
+        var baseFull = Manifest("base", DateTimeOffset.UnixEpoch.AddHours(1));
+        var tip = Manifest("tip", DateTimeOffset.UnixEpoch.AddHours(2), kind: BackupKind.Incremental, baseBackupId: "base");
+        var catalog = new FakeCatalog(baseFull, tip);
+
+        var scanned = await QueryAsync(catalog, Request(kind: BackupKind.Full, treeId: "orders"));
+        var indexed = await QueryAsync(
+            catalog, Request(kind: BackupKind.Full, treeId: "orders"), viewFactory: new FakeViewFactory(new FakeIndexView(baseFull, tip)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scanned.Entries.Select(e => e.Id), Is.EqualTo(new[] { "base" }));
+            Assert.That(indexed.Entries.Select(e => e.Id), Is.EqualTo(new[] { "base" }));
+        });
+    }
+
+    [Test]
+    public async Task A_full_backup_an_increment_builds_on_is_found_by_its_name()
+    {
+        var catalog = new FakeCatalog(
+            Manifest("base", DateTimeOffset.UnixEpoch.AddHours(1), name: "lines-full"),
+            Manifest("tip", DateTimeOffset.UnixEpoch.AddHours(2), name: "lines-inc-1", kind: BackupKind.Incremental, baseBackupId: "base"));
+
+        var page = await QueryAsync(catalog, Request(namePrefix: "lines-full"));
+
+        Assert.That(page.Entries.Select(e => e.Id), Is.EqualTo(new[] { "base" }));
     }
 
     [Test]
@@ -322,6 +354,8 @@ public sealed partial class BackupCatalogIndexQueryTests
 
         public int GetCalls { get; private set; }
 
+        public int ListCalls { get; private set; }
+
         public Task RegisterAsync(BackupManifest manifest, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
@@ -337,6 +371,7 @@ public sealed partial class BackupCatalogIndexQueryTests
         public async IAsyncEnumerable<BackupManifest> ListAsync(
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
+            ListCalls++;
             foreach (var manifest in _manifests.OrderBy(m => m.Id, StringComparer.Ordinal))
             {
                 yield return manifest;
