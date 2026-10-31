@@ -129,10 +129,28 @@ public sealed class ImportMemoryTests
             $"A point read of every one of the file's {ImportFiles.Count(lines)} keys finds {ImportFiles.Count(found)}"
             + (missing.Count > 0 ? $" (missing, for example: {string.Join(", ", missing)})" : string.Empty)
             + $". A paged range scan of the tree reads {ImportFiles.Count(scanned)} keys, and its tree stats report {ImportFiles.Count(stats.TotalLiveKeys)} live keys.");
+
+        // Issue #5460: the tree a seed builds is exact through every read path, not only point
+        // reads - the header's count and a scan that reaches the file's last key.
+        await dialog.GetByRole(AriaRole.Button, new() { Name = "Done", Exact = true }).ClickAsync();
+        var header = olivia.Shell.Content.GetByText(new System.Text.RegularExpressions.Regex(@"^[\d,]+ live keys?$"));
+        await Expect(header).ToBeVisibleAsync(new() { Timeout = 30_000 });
+        await olivia.SubstepAsync("tree-header", $"The tree header counts the seeded tree's live keys: {ImportFiles.Count(lines)} are expected");
+        var headerText = await header.InnerTextAsync();
+
+        var lastKey = $"bulk/{lines - 1:D8}";
+        await olivia.Shell.GotoAsync($"/data/{SeedTree}?prefix={Uri.EscapeDataString(lastKey[..^1])}");
+        var lastRow = olivia.Shell.Content.GetByRole(AriaRole.Link, new() { Name = lastKey, Exact = true });
+        await Expect(lastRow).ToBeVisibleAsync(new() { Timeout = 30_000 });
+        await olivia.SubstepAsync("keys-tail", $"A prefix scan of the Keys panel reaches the file's last key, {lastKey}");
+
         Assert.Multiple(() =>
         {
             AssertUnderCeiling("seed", growth);
             Assert.That(found, Is.EqualTo(lines), "every line of the file is a key of the tree");
+            Assert.That(scanned, Is.EqualTo(lines), "a paged range scan reads every key once");
+            Assert.That(stats.TotalLiveKeys, Is.EqualTo(lines), "the tree statistics count every key once");
+            Assert.That(headerText, Is.EqualTo($"{ImportFiles.Count(lines)} live keys"), "the tree header counts every key once");
         });
     }
 
