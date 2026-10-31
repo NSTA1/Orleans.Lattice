@@ -66,6 +66,18 @@ public sealed class AuthorizationRuleShapeTests
     }
 
     [Test]
+    public async Task A_previously_persisted_separator_id_still_enforces_its_deny()
+    {
+        var rule = GroupReadsPayroll() with { RuleId = "legacy\u001frule", Effect = LatticeEffect.Deny };
+        var harness = await AuthGateHarness.CreateAsync(new LatticeAuthOptions { DefaultEffect = LatticeEffect.Allow }, rule);
+        var member = new LatticeSubject("alice", new HashSet<string>(StringComparer.Ordinal) { "admins" });
+
+        var decision = await harness.Gate.AuthorizeAsync(new LatticeAccessRequest("payroll", LatticeOperation.Read, member, "k"));
+
+        Assert.That(decision.Allowed, Is.False, "new authoring validation must not retire an existing deny");
+    }
+
+    [Test]
     public async Task A_well_formed_rule_still_grants()
     {
         var harness = await AuthGateHarness.CreateAsync(new LatticeAuthOptions { DefaultEffect = LatticeEffect.Deny }, GroupReadsPayroll());

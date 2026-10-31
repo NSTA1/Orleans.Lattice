@@ -11,6 +11,13 @@ namespace Orleans.Lattice.Schema;
 /// </summary>
 internal static class SchemaDeadLetterKey
 {
+    internal const int UniqueSuffixLength = 8;
+
+    internal static bool BelongsToTree(string storageKey, string treeId, LatticeSchemaDeadLetterEntry entry) =>
+        storageKey.Length >= UniqueSuffixLength
+        && string.Equals(storageKey, Encode(treeId, entry.TimestampUtc, entry.Key, storageKey[^UniqueSuffixLength..]),
+            StringComparison.Ordinal);
+
     /// <summary>
     /// Builds the storage key for a dead-letter entry.
     /// </summary>

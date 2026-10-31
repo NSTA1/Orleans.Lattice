@@ -26,7 +26,9 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Security - Registry routing.** Authorization-enabled clusters refuse direct external calls to the internal tree registry, preventing forged physical routing entries from bypassing alias-target checks. Trusted infrastructure calls remain available. ([#5210](https://github.com/NSTA1/Orleans.Lattice/issues/5210)) (`Orleans.Lattice`)
 
-- **Security - Schema previews.** Schema backing trees require explicit grants or bootstrap administration. State dead-letter pages and counts additionally require unfiltered source read access, preventing prefix-only readers from recovering denied keys or captured values. ([#5210](https://github.com/NSTA1/Orleans.Lattice/issues/5210), [#5293](https://github.com/NSTA1/Orleans.Lattice/issues/5293)) (`Orleans.Lattice.Auth`, `Orleans.Lattice.Api.State`)
+- **Security - Schema previews.** Backing trees require explicit grants or bootstrap access. Dead-letter reads require unfiltered source access and exact-tree row identity, preventing prefix-only or separator-bearing tree names from exposing foreign keys, previews or counts. ([#5210](https://github.com/NSTA1/Orleans.Lattice/issues/5210), [#5293](https://github.com/NSTA1/Orleans.Lattice/issues/5293), [#5341](https://github.com/NSTA1/Orleans.Lattice/issues/5341)) (`Orleans.Lattice.Auth`, `Orleans.Lattice.Api.State`, `Orleans.Lattice.Schema`)
+
+- **Security - Policy rule identities.** Ambiguous rule ids cannot bypass app-owned or tenant-tier write guards. Per-tree lists exclude foreign scopes while previously persisted denies remain enforced. ([#5341](https://github.com/NSTA1/Orleans.Lattice/issues/5341)) (`Orleans.Lattice.Auth`)
 
 ### Changed
 

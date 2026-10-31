@@ -187,6 +187,22 @@ public sealed class LatticeAuthorizationPolicyStoreIntegrationTests
     }
 
     [Test]
+    public async Task ListRulesForTreeAsync_excludes_a_tree_containing_the_key_separator()
+    {
+        const string tree = "delimiter-isolation";
+        var ownRule = new LatticeAuthorizationRule("own", LatticeSubjectSelector.User("u"),
+            LatticeScope.Tree(tree), LatticeOperation.Read, LatticeEffect.Allow);
+        var otherRule = ownRule with { RuleId = "other", Scope = LatticeScope.Tree(tree + "\u001fprivate") };
+        await _fixture.Store.PutRuleAsync(ownRule);
+        await _fixture.Store.PutRuleAsync(otherRule);
+        await _fixture.RebuildPolicyAsync();
+
+        var listed = await CollectRuleIdsAsync(_fixture.Store.ListRulesForTreeAsync(tree));
+        Assert.That(listed, Is.EqualTo(new[] { "own" }));
+        Assert.That(await _fixture.Store.GetRuleAsync(otherRule.Scope.TreeId, otherRule.RuleId), Is.EqualTo(otherRule));
+    }
+
+    [Test]
     public async Task ListRulesAsync_returns_rules_across_trees()
     {
         var store = _fixture.Store;

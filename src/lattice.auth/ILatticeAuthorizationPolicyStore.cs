@@ -20,7 +20,7 @@ public interface ILatticeAuthorizationPolicyStore
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <exception cref="ArgumentNullException"><paramref name="rule"/> is <c>null</c>.</exception>
     /// <exception cref="ArgumentException">
-    /// The rule is malformed: an empty rule or subject id, an undefined effect, subject kind or scope
+    /// The rule is malformed: an empty rule or subject id, a rule id containing U+001F, an undefined effect, subject kind or scope
     /// kind, or a key or prefix missing from a key or prefix scope or present on a whole-tree scope
     /// (raised before anything is read); or the rule's scope targets the reserved <c>sys-auth-*</c> namespace; or the rule breaks tenant
     /// confinement: a tenant-tier rule outside its own tenant's non-app trees or tenant-wide scope, or
@@ -44,9 +44,9 @@ public interface ILatticeAuthorizationPolicyStore
     /// when no such rule exists.
     /// </summary>
     /// <param name="treeId">The rule's governed tree id. Must not be <c>null</c> or empty.</param>
-    /// <param name="ruleId">The rule id. Must not be <c>null</c> or empty.</param>
+    /// <param name="ruleId">The rule id. Must not be <c>null</c>, empty, or contain U+001F.</param>
     /// <param name="cancellationToken">Cancels the read.</param>
-    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="ruleId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="ruleId"/> is <c>null</c> or empty, or <paramref name="ruleId"/> contains U+001F.</exception>
     Task<LatticeAuthorizationRule?> GetRuleAsync(string treeId, string ruleId, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -54,9 +54,9 @@ public interface ILatticeAuthorizationPolicyStore
     /// when a rule was removed, <c>false</c> when none existed.
     /// </summary>
     /// <param name="treeId">The rule's governed tree id. Must not be <c>null</c> or empty.</param>
-    /// <param name="ruleId">The rule id. Must not be <c>null</c> or empty.</param>
+    /// <param name="ruleId">The rule id. Must not be <c>null</c>, empty, or contain U+001F.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
-    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="ruleId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="ruleId"/> is <c>null</c> or empty, or <paramref name="ruleId"/> contains U+001F.</exception>
     /// <exception cref="LatticeAppOwnedRuleException">
     /// <paramref name="ruleId"/> is in the app-owned namespace (<see cref="LatticeAppRuleIds.Prefix"/>) and
     /// the caller is not running under system origin. Raised before any lookup, so it does not disclose

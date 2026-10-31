@@ -44,6 +44,37 @@ public sealed class LatticeAuthorizationPolicyStoreAppOwnedRuleTests
     private static string Key(string ruleId) => Tree + AuthConstants.RuleKeySeparator + ruleId;
 
     [Test]
+    public async Task RemoveRuleAsync_rejects_a_composite_id_that_aliases_an_app_owned_rule()
+    {
+        var protectedTree = Tree + "\u001fsegment";
+        var protectedRule = Rule(AppRuleId) with { Scope = LatticeScope.Tree(protectedTree) };
+        using (LatticeSystemOrigin.Enter())
+        {
+            await _store.PutRuleAsync(protectedRule);
+        }
+        _policy.ClearReceivedCalls();
+
+        Assert.That(
+            () => _store.RemoveRuleAsync(Tree, "segment\u001f" + AppRuleId),
+            Throws.ArgumentException);
+        await _policy.DidNotReceive().DeleteAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void PutRuleAsync_rejects_a_composite_id_before_touching_storage()
+    {
+        Assert.That(() => _store.PutRuleAsync(Rule("segment\u001f" + AppRuleId)), Throws.ArgumentException);
+        Assert.That(_grainFactory.ReceivedCalls(), Is.Empty);
+    }
+
+    [Test]
+    public void GetRuleAsync_rejects_a_composite_id_before_touching_storage()
+    {
+        Assert.That(() => _store.GetRuleAsync(Tree, "segment\u001f" + AppRuleId), Throws.ArgumentException);
+        Assert.That(_grainFactory.ReceivedCalls(), Is.Empty);
+    }
+
+    [Test]
     public void PutRuleAsync_rejects_an_operator_write_to_an_app_owned_rule_id()
     {
         var ex = Assert.ThrowsAsync<LatticeAppOwnedRuleException>(() => _store.PutRuleAsync(Rule(AppRuleId)));

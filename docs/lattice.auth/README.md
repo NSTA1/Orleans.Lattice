@@ -85,6 +85,8 @@ Rule ids that start with `app:` (`LatticeAppRuleIds.Prefix`; test an id with `La
 
 Rule ids that start with `tenant:` (`LatticeTenantRuleIds.Prefix`) are **tenant-tier** rules, written by a tenant's own administrators through the tenant-administration facade when [delegated tenant access administration](../lattice.tenancy/README.md#delegated-tenant-access-administration) is on. The policy store guards them like `app:` ids: a `PutRuleAsync` or `RemoveRuleAsync` of one off system origin throws `LatticeTenantOwnedRuleException` before anything is read or written. Reads are not guarded, so operators can list them. The store also confines every tenant-tier rule, and every rule naming a tenant group, to the owning tenant's trees, for every caller; see [The tenant rule layer](tenant-layer.md#confinement-guards).
 
+Rule ids containing U+001F are rejected on write, point read, and delete before storage is touched, so a composite key cannot reinterpret an ordinary id as an app-owned or tenant-tier id. Existing persisted rules remain enforced, including denies. Per-tree lists check the stored rule's exact tree id, even when a tree name contains U+001F.
+
 Before any other check, and before anything is read or written, the store refuses a malformed rule with an `ArgumentException`: an empty rule id or subject id; an effect, subject kind or scope kind outside the defined values; or a key or prefix that is missing from a key or prefix scope, or present on a whole-tree scope. The public constructors do not check the enum values, and Orleans deserialization and `with` expressions skip the constructors entirely. When the snapshot compiles, it drops any malformed rule that reached the policy tree by restore or replication, so it never grants or denies.
 ### Scope
 

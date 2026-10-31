@@ -72,6 +72,12 @@ authorization of its own; the [schema API facade](../lattice.api.schema/README.m
 authorizes remote reads of the queue on Read authority (see
 [Capability gate](README.md#capability-gate)):
 
+Lists and counts include only the exact requested tree, even when tree names or
+item keys contain the storage delimiter U+001F. The store verifies each row's
+complete key against its recorded timestamp and item key; a shared key prefix
+alone is not evidence that the row belongs to the authorized tree. Counts use
+the same filtered scan as lists, including for previously persisted rows.
+
 ```csharp verify
 using Orleans.Lattice.Schema;
 
