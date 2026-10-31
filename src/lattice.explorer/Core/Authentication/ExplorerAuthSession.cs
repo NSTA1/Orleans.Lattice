@@ -194,6 +194,7 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
     /// <param name="inputs">Interactive inputs for the challenge, or <see langword="null"/> for schemes that take none.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <exception cref="ArgumentException"><paramref name="schemeId"/> is null/whitespace, or no provider handles it.</exception>
+    /// <exception cref="ExplorerSignInRefusedException">The cluster refused the credential; nothing is persisted or applied.</exception>
     public async Task LoginWithMethodAsync(
         string schemeId,
         IReadOnlyDictionary<string, string?>? inputs = null,
@@ -217,6 +218,12 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
         // so an invalid input or a cancelled login leaves the session untouched.
         var signIn = await method.ChallengeAsync(context, cancellationToken).ConfigureAwait(false);
         var isBasic = string.Equals(schemeId, ExplorerAuthSchemes.Basic, StringComparison.OrdinalIgnoreCase);
+
+        // Asks the cluster before anything is applied or persisted, so a credential it
+        // refuses (a wrong password) never becomes a session that is shown as signed
+        // in and then quietly denied everything, indistinguishable from a caller who
+        // holds no grants.
+        await RefuseRejectedSignInAsync(signIn, endpoint, isBasic, cancellationToken).ConfigureAwait(false);
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -325,6 +332,47 @@ public sealed class ExplorerAuthSession : IExplorerAuthSession, IDisposable
         }
 
         AuthenticationChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// Checks <paramref name="signIn"/> against the endpoint it was minted for, on a
+    /// channel of its own, and throws <see cref="ExplorerSignInRefusedException"/>
+    /// (disposing the sign-in's provider) when the cluster refuses it. An endpoint
+    /// that cannot judge it - unreachable, an older cluster, or none configured yet -
+    /// does not refuse it: every later call still carries the credential to the
+    /// cluster, which decides each one.
+    /// </summary>
+    private async Task RefuseRejectedSignInAsync(
+        ExplorerAuthSignIn signIn,
+        string? endpoint,
+        bool isBasic,
+        CancellationToken cancellationToken)
+    {
+        var configuration = _session.Current;
+        if (configuration is null || !IsSameEndpoint(endpoint, configuration.Endpoint))
+        {
+            return;
+        }
+
+        LatticeCredentialCheck check;
+        try
+        {
+            var settings = configuration.ToConnectionSettings() with { Authentication = signIn.Authentication };
+            check = await _session.Connection.VerifyCredentialAsync(settings, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            DisposeProvider(signIn);
+            throw;
+        }
+
+        if (check == LatticeCredentialCheck.Refused)
+        {
+            DisposeProvider(signIn);
+            throw new ExplorerSignInRefusedException(isBasic
+                ? ExplorerSignInRefusedException.PasswordRefusedMessage
+                : ExplorerSignInRefusedException.SignInRefusedMessage);
+        }
     }
 
     private async Task<ExplorerAuthSignIn> ChallengeBasicAsync(StoredCredential credential, string? endpoint, CancellationToken cancellationToken)

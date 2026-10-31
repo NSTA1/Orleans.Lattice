@@ -1,6 +1,6 @@
 @implements IDisposable
 
-@if (!Auth.IsAuthenticated)
+@if (!IsSignedIn)
 {
     <LtButton OnClick="OpenSignIn">Sign in</LtButton>
 }

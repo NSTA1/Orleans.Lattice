@@ -52,7 +52,12 @@ native server form posts:
 
 - `POST auth/login` validates an antiforgery token, reads `username` and
   `password`, signs in through the auth session, and redirects back to the
-  Explorer base href.
+  Explorer base href. When the cluster refuses the username and password, no
+  session is established and no credential cookie is written: the redirect
+  carries `?signin=refused`, and the next document reopens the sign-in dialog
+  saying "The cluster did not accept this username and password." before
+  dropping the notice from the address. The notice carries neither the user
+  name nor the password.
 - `POST auth/logout` validates an antiforgery token, clears the local State API
   credential, and redirects back to the Explorer base href.
 
@@ -62,7 +67,8 @@ the sign-out button posts to that provider endpoint instead of the local logout
 endpoint.
 
 The header connection indicator shows connection state, exposes **Sign in** when
-the endpoint requires authentication, can reconnect a disconnected endpoint, and
+the endpoint requires authentication or refuses the credential the session
+presented, can reconnect a disconnected endpoint, and
 opens the connection settings dialog when the web head allows endpoint editing
 (`AllowInteractiveEndpointConfiguration`). Otherwise it has no **Connection
 settings** entry; see [The connection dialog](running-the-explorer.md#the-connection-dialog).
@@ -84,6 +90,19 @@ The Basic method attaches an `authorization: Basic ...` header through the
 connection authentication seam. A static credential header is sent only to
 `https` endpoints, or to an endpoint whose settings explicitly allow unencrypted
 HTTP/2 for local development.
+
+Every sign-in is checked against the configured endpoint before it is applied,
+with one `ListTrees` call on a channel of its own
+(`ILatticeStateConnection.VerifyCredentialAsync`). The State API answers a
+credential the cluster refuses with `Unauthenticated`, so a wrong password
+fails with `ExplorerSignInRefusedException` and nothing is persisted or
+applied. A caller the cluster recognises but grants nothing is not refused: it
+signs in and sees its no-grant states. An endpoint that cannot judge the
+credential (unreachable, or an older cluster) does not block the sign-in; the
+cluster still decides every later call. If a credential is refused later in a
+session, the connection indicator reads **Sign-in required**
+(`LatticeConnectionStatus.CredentialRefused`) and the identity menu offers
+**Sign in** instead of naming the refused identity.
 
 ## Signing in with Entra
 

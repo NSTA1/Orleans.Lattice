@@ -123,6 +123,51 @@ internal sealed class MembershipContext : ILatticeMembershipContext
         return _cache.TryGetCached(cacheKey, out subject);
     }
 
+    /// <inheritdoc />
+    public ValueTask<LatticeCredentialVerdict> VerifyCurrentCredentialAsync(CancellationToken cancellationToken = default)
+    {
+        if (!LatticeCredentialContext.IsActive)
+        {
+            return new ValueTask<LatticeCredentialVerdict>(LatticeCredentialVerdict.Absent);
+        }
+
+        // Only a credential an authenticator recognises can be refused: one that
+        // nothing claims resolves anonymous without ever being judged, and stays
+        // as it resolved before the verdict existed.
+        if (!IsClaimed(LatticeCredentialContext.Current!.Value))
+        {
+            return new ValueTask<LatticeCredentialVerdict>(LatticeCredentialVerdict.Unverified);
+        }
+
+        // A claimed credential resolves to anonymous only when its authenticator
+        // refused it (reserved and empty subjects are refused by contract). An
+        // accepted credential is served from the resolution cache once warm; a
+        // refusal is never cached, exactly as it is not for ResolveCurrentAsync.
+        var resolution = ResolveCurrentAsync(cancellationToken);
+        return resolution.IsCompletedSuccessfully
+            ? new ValueTask<LatticeCredentialVerdict>(VerdictFor(resolution.Result))
+            : AwaitVerdictAsync(resolution);
+    }
+
+    private static async ValueTask<LatticeCredentialVerdict> AwaitVerdictAsync(ValueTask<LatticeSubject> resolution) =>
+        VerdictFor(await resolution.ConfigureAwait(false));
+
+    private static LatticeCredentialVerdict VerdictFor(LatticeSubject subject) =>
+        subject.IsAnonymous ? LatticeCredentialVerdict.Refused : LatticeCredentialVerdict.Accepted;
+
+    private bool IsClaimed(in LatticeCredential credential)
+    {
+        foreach (var authenticator in _authenticators)
+        {
+            if (authenticator.CanHandle(credential))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private async ValueTask<ResolvedSubject> ResolveUncachedAsync(LatticeCredential credential, CancellationToken cancellationToken)
     {
         ILatticeCredentialAuthenticator? selected = null;
