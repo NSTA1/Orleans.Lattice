@@ -239,15 +239,17 @@ public sealed partial class VectorIndex
     /// normalised copy of the vector.
     /// </summary>
     private int NearestPartition(ReadOnlySpan<float> vector, float scale) =>
-        NearestCentroid(vector, scale, _centroids, _centroidSquaredNorms, _partitionCount, _dimensions);
+        NearestCentroid(vector, scale, _centroids, _centroidSquaredNorms, _partitionCount, _dimensions, out _);
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int NearestCentroid(
         ReadOnlySpan<float> vector,
         float scale,
         float[] centroids,
         float[] centroidSquaredNorms,
         int partitionCount,
-        int dimensions)
+        int dimensions,
+        out float winningAffinity)
     {
         var best = 0;
         var bestAffinity = float.NegativeInfinity;
@@ -262,6 +264,7 @@ public sealed partial class VectorIndex
             }
         }
 
+        winningAffinity = bestAffinity;
         return best;
     }
 

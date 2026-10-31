@@ -131,7 +131,7 @@ public sealed partial class LtComboBoxTests
     [Test]
     public async Task ConfirmAsync_refuses_an_answer_from_a_source_replaced_while_validation_runs()
     {
-        var acme = new FakeSuggestionSource("orders") { Gated = true };
+        var acme = new FakeSuggestionSource("orders") { Gated = true, IgnoresCancellation = true };
         var globex = new FakeSuggestionSource("invoices");
         var cut = RenderBox(acme, p => p.Add(x => x.Value, "orders"));
 

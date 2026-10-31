@@ -80,8 +80,8 @@ public sealed partial class VectorIndex
                 var centroidSquaredNorms = new float[partitionCount];
 
                 SeedCentroids(sampleLocations, sampleCount, centroids, centroidSquaredNorms, partitionCount);
-                Refine(sampleLocations, sampleCount, centroids, centroidSquaredNorms, partitionCount);
-                Commit(orderedLocations, count, centroids, centroidSquaredNorms, partitionCount);
+                RefineCentroids(sampleLocations, sampleCount, centroids, centroidSquaredNorms, partitionCount);
+                CommitPartitioning(orderedLocations, count, centroids, centroidSquaredNorms, partitionCount);
                 return true;
             }
             finally
@@ -198,7 +198,7 @@ public sealed partial class VectorIndex
         }
     }
 
-    private void Refine(
+    private void RefineCentroids(
         long[] sampleLocations, int sampleCount, float[] centroids, float[] centroidSquaredNorms, int partitionCount)
     {
         var assignment = ArrayPool<int>.Shared.Rent(sampleCount);
@@ -276,7 +276,7 @@ public sealed partial class VectorIndex
         RecomputeSquaredNorms(centroids, centroidSquaredNorms, partitionCount);
     }
 
-    private void Commit(
+    private void CommitPartitioning(
         long[] orderedLocations,
         int count,
         float[] centroids,
@@ -408,17 +408,17 @@ public sealed partial class VectorIndex
         if ((long)count * partitionCount >= ParallelAssignmentThreshold)
         {
             Parallel.For(0, count, i =>
-                AssignOne(i, locations, centroids, centroidSquaredNorms, partitionCount, assignment, affinity));
+                AssignVectorToNearestCentroid(i, locations, centroids, centroidSquaredNorms, partitionCount, assignment, affinity));
             return;
         }
 
         for (var i = 0; i < count; i++)
         {
-            AssignOne(i, locations, centroids, centroidSquaredNorms, partitionCount, assignment, affinity);
+            AssignVectorToNearestCentroid(i, locations, centroids, centroidSquaredNorms, partitionCount, assignment, affinity);
         }
     }
 
-    private void AssignOne(
+    private void AssignVectorToNearestCentroid(
         int i,
         long[] locations,
         float[] centroids,
@@ -433,20 +433,8 @@ public sealed partial class VectorIndex
         var vector = VectorAt(segment, position);
         var scale = ScaleFor(_segmentNorms[segment][position]);
 
-        var best = 0;
-        var bestAffinity = float.NegativeInfinity;
-        for (var partition = 0; partition < partitionCount; partition++)
-        {
-            var centroid = new ReadOnlySpan<float>(centroids, partition * _dimensions, _dimensions);
-            var value = (2f * TensorPrimitives.Dot(vector, centroid) * scale) - centroidSquaredNorms[partition];
-            if (value > bestAffinity)
-            {
-                bestAffinity = value;
-                best = partition;
-            }
-        }
-
-        assignment[i] = best;
+        assignment[i] = NearestCentroid(
+            vector, scale, centroids, centroidSquaredNorms, partitionCount, _dimensions, out var bestAffinity);
         affinity[i] = bestAffinity;
     }
 

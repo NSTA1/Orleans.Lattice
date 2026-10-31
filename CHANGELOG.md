@@ -60,6 +60,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Explorer - Control consistency.** Superseded picker confirmations and delayed choice callbacks cannot submit abandoned values, even after edit round-trips. Tables reapply changed sort keys and restore natural order when sorting is removed. ([#5321](https://github.com/NSTA1/Orleans.Lattice/issues/5321)) (`Orleans.Lattice.Explorer.UI`)
+
 - **Schema - Assurance and contract fixes.** Versioned writes, migrations, remediation, strict ingest, materialised views and derived copies now agree on schema, merge-mode and cluster settings; the Explorer shows version reachability. Formal models cover each composition. ([#4908](https://github.com/NSTA1/Orleans.Lattice/issues/4908)) (`Orleans.Lattice`, `Orleans.Lattice.Schema`, `Orleans.Lattice.Replication`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Dashboards`, `Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Page and action ownership.** Backup actions retain their selection; saves cannot overlap; late compaction and orphan replies stop after disposal. Telemetry replies respect current navigation and refreshes, and caller changes recheck operator controls. ([#5204](https://github.com/NSTA1/Orleans.Lattice/issues/5204), [#5222](https://github.com/NSTA1/Orleans.Lattice/issues/5222), [#5270](https://github.com/NSTA1/Orleans.Lattice/issues/5270)) (`Orleans.Lattice.Explorer.UI`)

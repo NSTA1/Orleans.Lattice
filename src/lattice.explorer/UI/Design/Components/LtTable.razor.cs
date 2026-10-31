@@ -222,6 +222,28 @@ public partial class LtTable<TItem>
         }
     }
 
+    internal void SortKeyChanged(LtColumn<TItem> column, bool sortableChanged)
+    {
+        var rowsChanged = false;
+        if (ReferenceEquals(_sortColumn, column))
+        {
+            if (!column.IsSortable)
+            {
+                _sortColumn = null;
+            }
+
+            var previous = _rows;
+            ApplySort();
+            rowsChanged = !previous.SequenceEqual(_rows);
+        }
+
+        // A caller can recreate an equivalent delegate each render; only observable changes rerender.
+        if (sortableChanged || rowsChanged)
+        {
+            StateHasChanged();
+        }
+    }
+
     /// <inheritdoc />
     protected override void OnAfterRender(bool firstRender)
     {
