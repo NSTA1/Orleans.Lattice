@@ -56,7 +56,7 @@ public sealed class ViewAdministrationJourneyTests : UiTestBase
         await ShotAsync(page, "payload-form-filled");
 
         await dialog.GetByRole(AriaRole.Button, new() { Name = "Create view" }).ClickAsync();
-        await Expect(Shell.ToastMessages(page)).ToContainTextAsync($"Created view {ViewName}.");
+        await Expect(Shell.ToastMessages(page).Filter(new() { HasText = $"Created view {ViewName}." })).ToBeVisibleAsync();
         await Expect(dialog).ToBeHiddenAsync();
         var row = content.Locator("tbody tr").Filter(new() { HasText = ViewName });
         await Expect(row).ToBeVisibleAsync();
@@ -83,13 +83,13 @@ public sealed class ViewAdministrationJourneyTests : UiTestBase
         await Expect(progress).ToContainTextAsync($"Rebuilding {ViewName}");
         await Expect(progress.GetByRole(AriaRole.Button, new() { Name = "Stop" })).ToBeVisibleAsync();
         await ShotAsync(page, "rebuild-progress-with-stop");
-        await Expect(Shell.ToastMessages(page)).ToContainTextAsync($"Rebuilt {ViewName}.", new() { Timeout = 60_000 });
+        await Expect(Shell.ToastMessages(page).Filter(new() { HasText = $"Rebuilt {ViewName}." })).ToBeVisibleAsync(new() { Timeout = 60_000 });
         await ShotAsync(page, "rebuild-finished");
 
         await row.GetByRole(AriaRole.Button, new() { Name = "Reconcile", Exact = true }).ClickAsync();
         await confirm.Locator("input").FillAsync(ViewName);
         await confirm.GetByRole(AriaRole.Button, new() { Name = "Reconcile", Exact = true }).ClickAsync();
-        await Expect(Shell.ToastMessages(page)).ToContainTextAsync($"Reconciled {ViewName}", new() { Timeout = 60_000 });
+        await Expect(Shell.ToastMessages(page).Filter(new() { HasText = $"Reconciled {ViewName}" })).ToBeVisibleAsync(new() { Timeout = 60_000 });
         await ShotAsync(page, "reconcile-finished");
 
         await row.GetByRole(AriaRole.Button, new() { Name = "Drop view..." }).ClickAsync();
@@ -98,7 +98,7 @@ public sealed class ViewAdministrationJourneyTests : UiTestBase
         await ShotAsync(page, "drop-confirmation");
 
         await confirm.GetByRole(AriaRole.Button, new() { Name = "Drop view", Exact = true }).ClickAsync();
-        await Expect(Shell.ToastMessages(page)).ToContainTextAsync($"Dropped view {ViewName}.");
+        await Expect(Shell.ToastMessages(page).Filter(new() { HasText = $"Dropped view {ViewName}." })).ToBeVisibleAsync();
         await Expect(content.Locator("tbody tr").Filter(new() { HasText = ViewName })).ToHaveCountAsync(0);
         await ShotAsync(page, "view-dropped");
     }
