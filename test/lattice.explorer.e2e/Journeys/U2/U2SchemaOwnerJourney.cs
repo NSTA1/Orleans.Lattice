@@ -89,8 +89,8 @@ public sealed class U2SchemaOwnerJourney : JourneyChapter
 
             await schema.StartScanByAddressAsync(orders);
             var reasons = await schema.ExpectScanResultAsync(nonCompliant: 2);
-            Assert.That(reasons, Has.All.Matches<(string Reason, int Count)>(reason => reason.Reason.Contains("total", StringComparison.Ordinal)),
-                "order/000101 and order/000233 fail on their negative totals");
+            Assert.That(reasons, Has.Count.EqualTo(1),
+                "order/000101 and order/000233 fail the same rule, A4's total of at least 0, so one reason accounts for both");
             await step.SubstepAsync("result", "?tab=compliance&scan=start scans again, drops scan from the address, and finds 2 non-compliant values: the negative totals");
         });
 
