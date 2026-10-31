@@ -98,7 +98,11 @@ internal sealed class DataImportGate
     {
         try
         {
-            var admin = _services.GetShellFacade<Orleans.Lattice.Api.TreeAdmin.ILatticeTreeAdmin>();
+            if (_services.GetShellFacade<Orleans.Lattice.Api.TreeAdmin.ILatticeTreeAdmin>() is not { } admin)
+            {
+                return false;
+            }
+
             var capabilities = await admin.ProbeCapabilitiesAsync(stateId).ConfigureAwait(false);
             return capabilities?.CanBulkLoad == true;
         }
