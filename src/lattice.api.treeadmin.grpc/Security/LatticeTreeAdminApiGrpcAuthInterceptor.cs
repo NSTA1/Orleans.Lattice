@@ -236,6 +236,7 @@ internal sealed class LatticeTreeAdminApiGrpcAuthInterceptor : Interceptor
             LatticeTreeAdminGrpcMethods.ListStorageUsageRefreshesMethodName => LatticeTreeAdminApiOperation.ListStorageUsageRefreshes,
             LatticeTreeAdminGrpcMethods.CancelStorageUsageRefreshMethodName => LatticeTreeAdminApiOperation.CancelStorageUsageRefresh,
             LatticeTreeAdminGrpcMethods.GetWalReclamationMethodName => LatticeTreeAdminApiOperation.GetWalReclamation,
+            LatticeTreeAdminGrpcMethods.ListViewProvidersMethodName => LatticeTreeAdminApiOperation.ListViewProviders,
             _ => LatticeTreeAdminApiOperation.Unknown,
         };
 

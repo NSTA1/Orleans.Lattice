@@ -913,6 +913,27 @@ public interface ILatticeTreeAdmin
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Lists the runtime-view projection providers the caller may create a view with
+    /// over <paramref name="sourceTreeId"/> - every provider the cluster's host
+    /// registered, ordered by key, with its description and payload shape - after
+    /// authorizing whole-tree <see cref="LatticeOperation.Admin"/> over the source
+    /// fail-closed, the same authority <see cref="CreateViewAsync"/> requires. No
+    /// provider code runs. The library's own built-in filter provider is not listed,
+    /// because its payload is a private codec rather than something a caller supplies.
+    /// </summary>
+    /// <param name="sourceTreeId">The directly writable source tree a view would be created over. A materialised-view tree cannot be a source.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The providers; empty when the host registered none.</returns>
+    /// <exception cref="ArgumentException"><paramref name="sourceTreeId"/> is <c>null</c>, empty, reserved, or a materialised-view tree.</exception>
+    /// <exception cref="InvalidOperationException">The materialised-view subsystem is not enabled on this cluster.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks whole-tree admin authority over the source.</exception>
+    Task<TreeViewProviderCatalog> ListViewProvidersAsync(
+        string sourceTreeId,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException(
+            "This tree-administration implementation does not list runtime view providers.");
+
+    /// <summary>
     /// Creates a runtime materialised view named <paramref name="viewName"/> over
     /// <paramref name="sourceTreeId"/> using the host-registered projection provider
     /// identified by <paramref name="providerKey"/>. The opaque

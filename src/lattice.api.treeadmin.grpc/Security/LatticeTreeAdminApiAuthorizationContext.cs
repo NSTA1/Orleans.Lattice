@@ -78,6 +78,9 @@ public enum LatticeTreeAdminApiOperation
 
     /// <summary>The read-only <c>GetWalReclamation</c> WAL floor-holder RPC.</summary>
     GetWalReclamation = 20,
+
+    /// <summary>The read-only <c>ListViewProviders</c> runtime view-provider listing RPC.</summary>
+    ListViewProviders = 21,
 }
 
 /// <summary>

@@ -3,14 +3,16 @@ using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
+using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Explorer.UI.Operations;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 
 /// <summary>
 /// The Views tab: the views over a tree (or a view's own status), with the
-/// reconcile and rebuild actions the tree-administration facade offers, gated on
-/// the caller's authority over the source tree and confirmed before they run.
+/// reconcile, rebuild and drop actions the tree-administration facade offers and
+/// New view over the tree (#5369), gated on the caller's authority over the source
+/// tree and, for the destructive ones, confirmed before they run.
 /// A reconcile or rebuild runs on the cluster as a tracked operation (#4124): the
 /// tab follows its progress, picks it up again when it is opened later - after a
 /// reload or in another tab - and can ask it to stop.
@@ -27,6 +29,11 @@ public partial class DataViewsPanel : IDisposable
     private (DataTreeEntry View, bool Rebuild)? _starting;
     private bool _cancelling;
     private int _statusGeneration;
+    private bool _canCreate;
+    private bool _operationsOffered;
+    private DataTreeEntry? _pendingDrop;
+    private bool _dropping;
+    private string? _droppingView;
 
     [CascadingParameter]
     internal DataWorkspace? Workspace { get; set; }
@@ -39,6 +46,13 @@ public partial class DataViewsPanel : IDisposable
 
     [Inject]
     internal TimeProvider Time { get; set; } = default!;
+
+    /// <summary>Whether the facade runs tracked operations, so reconcile and rebuild can be offered.</summary>
+    private bool CanRunOperations => _operationsOffered;
+
+    /// <summary>Whether the address asks for the New view dialog (<c>?new=view</c>).</summary>
+    private bool CreateOpen => _canCreate
+        && string.Equals(Workspace?.Address.GetQuery(DataTabs.NewQuery), DataTabs.NewViewValue, StringComparison.Ordinal);
 
     /// <summary>The view an action is running on, or <see langword="null"/>.</summary>
     private string? Busy => _starting is { } starting
@@ -78,37 +92,58 @@ public partial class DataViewsPanel : IDisposable
         _pending = null;
         _starting = null;
         _cancelling = false;
+        _pendingDrop = null;
+        _dropping = false;
+        _canCreate = false;
+        try
+        {
+            await LoadAsync(workspace, token);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task LoadAsync(DataWorkspace workspace, CancellationToken token)
+    {
         _views = workspace.Tree.Kind == DataTreeKind.View ? [workspace.Tree] : workspace.Directory.ViewsOf(workspace.Tree);
         _statuses.Clear();
         _administrable.Clear();
         var operations = TreeAdminOperationsAccess.Of(Gate.Admin);
-        try
+        _operationsOffered = operations is not null;
+        var admin = Gate.Admin;
+        if (admin is not null && workspace.OffersAdministration && workspace.Tree.Kind != DataTreeKind.View)
         {
-            foreach (var view in _views)
+            var allowed = await Gate.CanAdministerAsync(workspace.Tree.StateId, token);
+            if (token.IsCancellationRequested)
             {
-                if (operations is not null && workspace.OffersAdministration && view.SourceStateId is { } source)
-                {
-                    var allowed = await Gate.CanAdministerAsync(source, token);
-                    if (token.IsCancellationRequested)
-                    {
-                        return;
-                    }
+                return;
+            }
 
-                    if (allowed)
-                    {
-                        _administrable.Add(view.StateId);
-                    }
+            _canCreate = allowed;
+        }
+
+        foreach (var view in _views)
+        {
+            if (admin is not null && workspace.OffersAdministration && view.SourceStateId is { } source)
+            {
+                var allowed = await Gate.CanAdministerAsync(source, token);
+                if (token.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                if (allowed)
+                {
+                    _administrable.Add(view.StateId);
                 }
             }
-
-            await RefreshStatusesAsync(token);
-            if (!token.IsCancellationRequested)
-            {
-                await ResumeAsync(operations, token);
-            }
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested)
+
+        await RefreshStatusesAsync(token);
+        if (!token.IsCancellationRequested)
         {
+            await ResumeAsync(operations, token);
         }
     }
 
@@ -219,6 +254,139 @@ public partial class DataViewsPanel : IDisposable
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
         }
+    }
+
+    private void OpenCreate()
+    {
+        if (Workspace is { } workspace)
+        {
+            workspace.NavigateTo(workspace.With(DataTabs.NewQuery, DataTabs.NewViewValue));
+        }
+    }
+
+    private void OnCreateOpenChanged(bool open)
+    {
+        if (!open && Workspace is { } workspace)
+        {
+            workspace.NavigateTo(workspace.With(DataTabs.NewQuery, null), replace: true);
+        }
+    }
+
+    private async Task OnCreatedAsync(TreeViewStatus status)
+    {
+        if (Workspace is not { } workspace)
+        {
+            return;
+        }
+
+        var token = _lifetime.Token;
+        Toasts.Show($"Created view {status.ViewName}.", LtToastTone.Success);
+        workspace.NavigateTo(workspace.With(DataTabs.NewQuery, null), replace: true);
+        await ReloadAsync(workspace, token);
+    }
+
+    private void AskDrop(DataTreeEntry view) => _pendingDrop = view;
+
+    private void OnDropOpenChanged(bool open)
+    {
+        if (!open)
+        {
+            _pendingDrop = null;
+        }
+    }
+
+    private async Task RunDropAsync()
+    {
+        if (_pendingDrop is not { } view || Gate.Admin is not { } admin || !CanAdminister(view) || Busy is not null || _dropping || Workspace is not { } workspace)
+        {
+            return;
+        }
+
+        _pendingDrop = null;
+        _dropping = true;
+        _droppingView = view.StateId;
+        var token = _lifetime.Token;
+        StateHasChanged();
+        try
+        {
+            await admin.DropViewAsync(ViewName(view), token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            Toasts.Show($"Dropped view {view.DisplayName}.", LtToastTone.Success);
+            if (workspace.Tree.Kind == DataTreeKind.View)
+            {
+                var source = workspace.Directory.FindByStateId(view.SourceStateId);
+                await workspace.Directory.RefreshAsync(token);
+                workspace.NavigateTo(source is null
+                    ? ExplorerAddress.ForArea(DataArea.AreaKey).WithTenant(workspace.Tree.Tenant)
+                    : workspace.AddressOf(source, DataTabs.Views));
+                return;
+            }
+
+            await ReloadAsync(workspace, token);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            if (!token.IsCancellationRequested)
+            {
+                Toasts.Show(DropErrorText(exception), LtToastTone.Danger);
+            }
+        }
+        finally
+        {
+            if (!token.IsCancellationRequested)
+            {
+                _dropping = false;
+                _droppingView = null;
+            }
+        }
+    }
+
+    /// <summary>The fixed sentence for a drop the cluster refused.</summary>
+    /// <param name="exception">The failure.</param>
+    internal static string DropErrorText(Exception exception) =>
+        !DataErrors.IsDenied(exception) && !DataErrors.IsNotOffered(exception) && IsPrecondition(exception)
+            ? "The cluster refused to drop this view. A view the host declares at startup cannot be dropped here."
+            : DataErrors.Describe(exception, "drop this view");
+
+    private static bool IsPrecondition(Exception exception) => exception switch
+    {
+        InvalidOperationException => true,
+        Grpc.Core.RpcException rpc => rpc.StatusCode == Grpc.Core.StatusCode.FailedPrecondition,
+        _ => exception.InnerException is Grpc.Core.RpcException { StatusCode: Grpc.Core.StatusCode.FailedPrecondition },
+    };
+
+    /// <summary>Reloads the directory, then the tab's views and statuses, after a view was created or dropped.</summary>
+    private async Task ReloadAsync(DataWorkspace workspace, CancellationToken token)
+    {
+        try
+        {
+            await workspace.Directory.RefreshAsync(token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            await LoadAsync(workspace, token);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            if (!token.IsCancellationRequested)
+            {
+                Toasts.Show(DataErrors.Describe(exception, "read the tree catalogue"), LtToastTone.Warning);
+            }
+        }
+
+        StateHasChanged();
     }
 
     private void Ask(DataTreeEntry view, bool rebuild) => _pending = (view, rebuild);
