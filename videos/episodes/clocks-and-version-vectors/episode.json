@@ -1,0 +1,16 @@
+{
+  "path": "how-it-works",
+  "order": 2,
+  "items": [
+    "H2"
+  ],
+  "poster": {
+    "scene": "causal-history",
+    "beat": 4,
+    "offset": -0.5
+  },
+  "published": {
+    "cut": "6892ad9e514e",
+    "bytes": 5803306
+  }
+}
