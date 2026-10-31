@@ -31,7 +31,7 @@ public partial class DataCreateViewDialog : IDisposable
     private readonly Dictionary<string, string> _texts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, bool> _flags = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _fieldErrors = new(StringComparer.Ordinal);
-    private readonly string _jsonId = "lt-data-view-json-" + Guid.NewGuid().ToString("N")[..8];
+    private readonly string _jsonId = "data-view-json-" + Guid.NewGuid().ToString("N")[..8];
     private IReadOnlyList<TreeViewProviderInfo>? _providers;
     private string? _loadError;
     private string? _providerKey;

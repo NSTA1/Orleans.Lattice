@@ -167,7 +167,9 @@ siloBuilder.AddLatticeViews(views => views.AddRuntimeProjectionProvider(
 providers, ordered by key, to a caller holding admin authority over the source -
 the same authority creating a view needs. The library's built-in filter provider
 is never listed, because its payload is a private codec. A provider registered
-without a description is listed by key alone.
+without a description is listed by key alone. `AddLatticeViews` may be called
+more than once (the auth, membership, backup and tenancy packages call it
+themselves); every call's providers and views accumulate.
 
 ### View names
 
