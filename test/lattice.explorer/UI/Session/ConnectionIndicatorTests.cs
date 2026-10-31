@@ -136,9 +136,9 @@ public sealed class ConnectionIndicatorTests : SessionTestContext
         });
     }
 
-    [TestCase(LatticeConnectionState.Connected, new[] { "Connection details" })]
-    [TestCase(LatticeConnectionState.Faulted, new[] { "Reconnect", "Connection details" })]
-    public void A_configured_read_only_head_offers_connection_details_and_never_the_settings(LatticeConnectionState state, string[] expected)
+    [TestCase(LatticeConnectionState.Connected, new string[0])]
+    [TestCase(LatticeConnectionState.Faulted, new[] { "Reconnect" })]
+    public void Inline_a_configured_read_only_head_makes_the_endpoint_itself_open_connection_details(LatticeConnectionState state, string[] others)
     {
         UseReadOnlyEndpoint();
         Explorer.Configured(RemoteConfiguration(Endpoint));
@@ -146,10 +146,32 @@ public sealed class ConnectionIndicatorTests : SessionTestContext
 
         var cut = Render<ConnectionIndicator>();
 
+        var details = cut.FindAll("[aria-haspopup=dialog]");
         Assert.Multiple(() =>
         {
-            Assert.That(Buttons(cut), Is.EqualTo(expected));
+            Assert.That(details, Has.Count.EqualTo(1), "one way into the details, and no second control beside the endpoint");
+            Assert.That(details[0].TextContent, Is.EqualTo("Connection details: " + Endpoint), "the accessible name leads with what it opens");
+            Assert.That(details[0].QuerySelector(".lt-visually-hidden")!.TextContent, Is.EqualTo("Connection details: "));
+            Assert.That(details[0].QuerySelector("code")!.TextContent, Is.EqualTo(Endpoint));
+            Assert.That(details[0].HasAttribute("data-lt-connection-details"), Is.True);
+            Assert.That(cut.FindAll("code"), Has.Count.EqualTo(1), "the endpoint is drawn once");
+            Assert.That(Buttons(cut).Where(text => !text.StartsWith("Connection details", StringComparison.Ordinal)), Is.EqualTo(others));
             Assert.That(Buttons(cut), Has.No.Member("Connection settings"));
+        });
+    }
+
+    [Test]
+    public void Inline_a_read_only_head_that_has_no_endpoint_to_show_yet_offers_connection_details_as_words()
+    {
+        UseReadOnlyEndpoint();
+        Explorer.Configured(RemoteConfiguration(Endpoint));
+        StateConnection.Seed(new LatticeConnectionStatus(LatticeConnectionState.Connecting, null, null));
+
+        var cut = Render<ConnectionIndicator>();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll("code"), Is.Empty);
             Assert.That(cut.FindAll("[aria-haspopup=dialog]").Select(button => button.TextContent), Is.EqualTo(new[] { "Connection details" }));
         });
     }
@@ -159,9 +181,10 @@ public sealed class ConnectionIndicatorTests : SessionTestContext
     {
         UseReadOnlyEndpoint();
         Explorer.Configured(RemoteConfiguration(Endpoint));
+        StateConnection.Seed(new LatticeConnectionStatus(LatticeConnectionState.Connected, Endpoint, null));
         var cut = Render<ConnectionIndicator>();
 
-        cut.FindAll("button").Single(button => button.TextContent == "Connection details").Click();
+        cut.Find("[aria-haspopup=dialog]").Click();
 
         Assert.That(State.Overlay, Is.EqualTo(SessionOverlayKind.Configuration));
     }
@@ -174,7 +197,12 @@ public sealed class ConnectionIndicatorTests : SessionTestContext
 
         var cut = Render<ConnectionIndicator>();
 
-        Assert.That(Buttons(cut), Is.EqualTo(new[] { "Connection settings" }));
+        Assert.Multiple(() =>
+        {
+            Assert.That(Buttons(cut), Is.EqualTo(new[] { "Connection settings" }));
+            Assert.That(cut.FindAll("[data-lt-connection-details]"), Is.Empty);
+            Assert.That(cut.Find("code").ParentElement!.TagName, Is.Not.EqualTo("BUTTON"));
+        });
     }
 
     [Test]

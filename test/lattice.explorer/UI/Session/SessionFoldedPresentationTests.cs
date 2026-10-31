@@ -178,9 +178,13 @@ public sealed class SessionFoldedPresentationTests : SessionTestContext
 
         var cut = RenderAt<ConnectionIndicator>(LtBreakpoint.Compact);
 
-        Assert.That(
-            cut.FindAll(".lt-dialog__actions button").Select(button => button.TextContent),
-            Is.EqualTo(new[] { "Reconnect", "Connection details" }));
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                cut.FindAll(".lt-dialog__actions button").Select(button => button.TextContent),
+                Is.EqualTo(new[] { "Reconnect", "Connection details" }));
+            Assert.That(cut.FindAll("[data-lt-connection-details]"), Is.Empty, "folded, the endpoint is a definition, not a second trigger");
+        });
 
         cut.FindAll("button").Single(button => button.TextContent == "Connection details").Click();
 

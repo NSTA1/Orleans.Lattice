@@ -107,9 +107,10 @@ the head, whatever address the visitor types. On a head anyone can reach, that
 would be a host and port probe into the head's own network.
 
 - **Not opted in (the default).** The header's connection indicator has no
-  **Connection settings** entry. Once an endpoint is configured it offers
-  **Connection details** instead (in the compact layout, inside the **Menu**
-  sheet), which opens the connection dialog read-only, titled **Cluster
+  **Connection settings** entry. Once an endpoint is configured, the endpoint the
+  indicator shows is itself a button named **Connection details** (in the
+  compact layout, a **Connection details** button inside the **Menu** sheet),
+  which opens the connection dialog read-only, titled **Cluster
   connection**: it shows the configured endpoint and says it is set by the
   deployment and cannot be changed from the browser, and **Close** or Escape
   dismisses it. With no endpoint configured, including on first run, the same

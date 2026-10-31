@@ -1,5 +1,6 @@
 using Bunit;
 using Orleans.Lattice.Explorer.Core.Authentication;
+using Orleans.Lattice.Explorer.Core.Connection;
 using Orleans.Lattice.Explorer.UI.Session;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Session;
@@ -113,10 +114,11 @@ public sealed class SessionOverlayTests : SessionTestContext
     {
         UseReadOnlyEndpoint();
         Explorer.Configured(RemoteConfiguration("https://cluster.example:8443"));
+        StateConnection.Seed(new LatticeConnectionStatus(LatticeConnectionState.Connected, "https://cluster.example:8443", null));
         var overlay = Render<SessionOverlay>();
         var indicator = Render<ConnectionIndicator>();
 
-        indicator.FindAll("button").Single(button => button.TextContent == "Connection details").Click();
+        indicator.Find("[aria-haspopup=dialog]").Click();
 
         var dialog = overlay.Find("[role=dialog]");
         Assert.Multiple(() =>
