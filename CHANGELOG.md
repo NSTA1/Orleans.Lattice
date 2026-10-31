@@ -12,11 +12,11 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Security
 
-- **Security - Tag source boundaries.** Distinct tag catalogs require unfiltered source read access, including every covered source for an index-wide union. Tags belonging only to protected keys are no longer disclosed to prefix-only readers. ([#5293](https://github.com/NSTA1/Orleans.Lattice/issues/5293)) (`Orleans.Lattice.Api.State`)
+- **Security - Tag source boundaries.** Shared tag trees require explicit grants or bootstrap access. Source-aware catalogs require unfiltered reads; member and entry scans retain source-key authorization, so default-allow, wildcard and prefix readers cannot recover denied keys or tags. ([#5293](https://github.com/NSTA1/Orleans.Lattice/issues/5293), [#5329](https://github.com/NSTA1/Orleans.Lattice/issues/5329)) (`Orleans.Lattice.Auth`, `Orleans.Lattice.Api.State`)
 
 - **Security - Tenant tag browsing.** Index-wide tag and member reads enforce tenant enumeration even without auth-backed visibility. Hidden sources suppress tag unions; hidden members cannot trigger presence probes or continuation pages. ([#5293](https://github.com/NSTA1/Orleans.Lattice/issues/5293)) (`Orleans.Lattice.Api.State`)
 
-- **Security - Backup isolation.** Backup backing trees now require explicit grants or bootstrap administration. Default-allow and all-trees grants no longer expose captured bytes from denied source trees. ([#5262](https://github.com/NSTA1/Orleans.Lattice/issues/5262)) (`Orleans.Lattice.Auth`)
+- **Security - Backup isolation.** Raw backup trees require explicit grants or bootstrap access. Scheduler pruning and cancellation require Backup scope authorization before catalog reads, reminder removal or state mutation; authorized reminders and capture behavior are preserved. ([#5262](https://github.com/NSTA1/Orleans.Lattice/issues/5262), [#5329](https://github.com/NSTA1/Orleans.Lattice/issues/5329)) (`Orleans.Lattice.Auth`, `Orleans.Lattice.Backup`)
 
 - **Security - Topology boundaries.** Raw tree, shard and sub-path topology now requires unfiltered tree or view-source read access, preventing protected split keys from reaching prefix-only readers. Filtered entry scans remain available. ([#5262](https://github.com/NSTA1/Orleans.Lattice/issues/5262)) (`Orleans.Lattice.Api.State`)
 

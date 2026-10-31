@@ -30,7 +30,7 @@ namespace Orleans.Lattice.Backup.Tests;
 /// </para>
 /// </remarks>
 [TestFixture]
-public sealed class BackupSchedulerGrainAccessGateTests
+public sealed partial class BackupSchedulerGrainAccessGateTests
 {
     private const string ScopeTreeId = "orders";
 
@@ -44,13 +44,20 @@ public sealed class BackupSchedulerGrainAccessGateTests
         FakePersistentState<BackupSchedulerState> state,
         out GatedCaptureService capture,
         IReminderRegistry? reminders = null,
-        BackupInventoryRegistry? inventory = null)
+        BackupInventoryRegistry? inventory = null,
+        ILatticeBackupCatalogStore? catalog = null,
+        ILatticeBackupSink? sink = null,
+        bool retentionEnabled = false)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("backup-scheduler", GrainKey));
 
         var monitor = Substitute.For<IOptionsMonitor<LatticeBackupScheduleOptions>>();
-        monitor.Get(Arg.Any<string>()).Returns(new LatticeBackupScheduleOptions { RetentionEnabled = false });
+        monitor.Get(Arg.Any<string>()).Returns(new LatticeBackupScheduleOptions
+        {
+            RetentionEnabled = retentionEnabled,
+            RetentionKeepLast = 1,
+        });
 
         // The capture service authorizes through a REAL authorizer over the supplied
         // gate, exactly as LatticeBackupCaptureService does before it touches data.
@@ -61,8 +68,8 @@ public sealed class BackupSchedulerGrainAccessGateTests
             reminders ?? Substitute.For<IReminderRegistry>(),
             capture,
             Substitute.For<ILatticeBackupIncrementalCaptureService>(),
-            Substitute.For<ILatticeBackupCatalogStore>(),
-            Substitute.For<ILatticeBackupSink>(),
+            catalog ?? Substitute.For<ILatticeBackupCatalogStore>(),
+            sink ?? Substitute.For<ILatticeBackupSink>(),
             monitor,
             NullLogger<BackupSchedulerGrain>.Instance,
             inventory ?? new BackupInventoryRegistry(),

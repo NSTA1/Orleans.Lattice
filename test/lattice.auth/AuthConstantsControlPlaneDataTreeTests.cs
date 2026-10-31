@@ -23,6 +23,8 @@ public sealed class AuthConstantsControlPlaneDataTreeTests
     [TestCase("sys-schema-policy")]
     [TestCase("sys-schema-version")]
     [TestCase("sys-schema-policy-history")]
+    [TestCase("tag-by-status")]
+    [TestCase("tag-shared")]
     public void IsControlPlaneDataTree_true_for_control_plane_backing_stores(string treeId)
     {
         Assert.That(AuthConstants.IsControlPlaneDataTree(treeId), Is.True);
@@ -37,6 +39,8 @@ public sealed class AuthConstantsControlPlaneDataTreeTests
     [TestCase("sys-schema")]
     [TestCase("SYS-SCHEMA-DLQ")]
     [TestCase("t/acme/sys-schema-dlq")]
+    [TestCase("TAG-by-status")]
+    [TestCase("t/acme/tag-by-status")]
     public void IsControlPlaneDataTree_false_for_everything_else(string treeId)
     {
         Assert.That(AuthConstants.IsControlPlaneDataTree(treeId), Is.False);
