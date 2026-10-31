@@ -54,6 +54,85 @@ public sealed class SchemaAreaTests : SchemaTestContext
     }
 
     [Test]
+    public async Task A_schema_owner_of_named_trees_only_sees_the_area()
+    {
+        // #5385: sam's grant names factory-lines, not every tree, so the sentinel admits
+        // nothing; one of the trees sam lists does.
+        Auth.SignIn("sam");
+        UseTrees("factory-lines", "factory-orders", "scratch");
+        Schema.DefaultCapabilities = FakeSchemaControl.None;
+        Schema.Capabilities["factory-orders"] = FakeSchemaControl.All;
+
+        var availability = await Area.GetAvailabilityAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(availability, Is.EqualTo(AreaAvailability.Visible));
+            Assert.That(Schema.Calls.Where(call => call.StartsWith("ProbeCapabilities:", StringComparison.Ordinal)), Is.EqualTo(new[]
+            {
+                "ProbeCapabilities:" + SchemaAccess.ProbeTreeId,
+                "ProbeCapabilities:factory-lines",
+                "ProbeCapabilities:factory-orders",
+            }), "the sentinel first, then the caller's own trees in order, stopping at the first that grants");
+        });
+    }
+
+    [Test]
+    public async Task A_caller_whose_own_trees_grant_nothing_sees_no_area()
+    {
+        Auth.SignIn("nina");
+        UseTrees("factory-lines", "scratch");
+        Schema.DefaultCapabilities = FakeSchemaControl.None;
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await Area.GetAvailabilityAsync(CancellationToken.None), Is.EqualTo(AreaAvailability.Hidden));
+            Assert.That(Schema.CountOf("ProbeCapabilities"), Is.EqualTo(3), "the sentinel and both trees");
+        });
+    }
+
+    [Test]
+    public async Task Past_the_probe_bound_with_trees_unasked_the_area_is_shown_not_hidden()
+    {
+        // Hiding the area from a caller who holds a grant is the worse failure: each tree's
+        // page answers for itself, and the cluster enforces every call.
+        Auth.SignIn("dana");
+        UseTrees([.. Enumerable.Range(1, SchemaAccess.MaximumTreeProbes + 1).Select(index => $"tree-{index:D2}")]);
+        Schema.DefaultCapabilities = FakeSchemaControl.None;
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await Area.GetAvailabilityAsync(CancellationToken.None), Is.EqualTo(AreaAvailability.Visible));
+            Assert.That(Schema.CountOf("ProbeCapabilities"), Is.EqualTo(1 + SchemaAccess.MaximumTreeProbes), "the bound is explicit");
+        });
+    }
+
+    [Test]
+    public async Task Exactly_the_probe_bound_of_trees_that_grant_nothing_hides_the_area()
+    {
+        Auth.SignIn("dana");
+        UseTrees([.. Enumerable.Range(1, SchemaAccess.MaximumTreeProbes).Select(index => $"tree-{index:D2}")]);
+        Schema.DefaultCapabilities = FakeSchemaControl.None;
+
+        Assert.That(await Area.GetAvailabilityAsync(CancellationToken.None), Is.EqualTo(AreaAvailability.Hidden));
+    }
+
+    [Test]
+    public async Task An_anonymous_caller_is_asked_to_sign_in_without_probing_any_tree()
+    {
+        UseTrees("factory-lines");
+        Schema.DefaultCapabilities = FakeSchemaControl.None;
+
+        var availability = await Area.GetAvailabilityAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(availability.Reason, Is.EqualTo(SchemaAccess.SignInReason));
+            Assert.That(Schema.CountOf("ProbeCapabilities"), Is.EqualTo(1));
+        });
+    }
+
+    [Test]
     public async Task An_anonymous_caller_the_probe_grants_nothing_is_asked_to_sign_in()
     {
         Schema.DefaultCapabilities = FakeSchemaControl.None;

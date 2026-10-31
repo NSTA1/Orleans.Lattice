@@ -64,6 +64,11 @@ public sealed class SchemaRuleWorkshopJourney : JourneyChapter
     private static async Task EveryCardAsync(Run run)
     {
         var page = run.Page;
+
+        // #5385: a schema owner whose grant names trees, not the whole cluster, sees the Schema area.
+        await Expect(run.Session.Shell.Stop("schema")).ToBeVisibleAsync();
+        await run.ShotAsync(1, "home", "Sam's estate: the Schema area is listed for a schema owner of a few trees");
+
         await page.OpenTreeAsync(Tree);
         await Expect(page.Definition("Rules")).ToContainTextAsync("1 rule, all of which a value must satisfy");
         Coverage.Hit("tab:schema/policy");

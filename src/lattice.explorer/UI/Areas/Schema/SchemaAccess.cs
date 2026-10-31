@@ -13,7 +13,10 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 /// <para>
 /// The area-wide answer probes a reserved sentinel tree id, which reads and
 /// writes nothing: it is the flags the probe reports - not the fact that it
-/// completed - that admit the caller. Every refusal, an unserved facade, a
+/// completed - that admit the caller. A grant that names trees rather than the
+/// whole cluster admits nothing on the sentinel, so a signed-in caller it refuses
+/// is asked about their own trees, up to <see cref="MaximumTreeProbes"/> of them
+/// (#5385). Every refusal, an unserved facade, a
 /// missing registration and any other fault fail closed; a transient fault reads
 /// as not checked, which admits nothing and is asked again. An anonymous caller who
 /// is refused is told to sign in; a signed-in one who is refused sees no area.
@@ -37,7 +40,16 @@ internal sealed class SchemaAccess : IDisposable
     /// <summary>How long a tree's probed grants are reused.</summary>
     public static readonly TimeSpan GrantFreshness = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// The most of the caller's own trees the area-wide answer probes when the sentinel
+    /// admits nothing (#5385). A caller whose first <see cref="MaximumTreeProbes"/> trees
+    /// all grant nothing, with more trees beyond them, sees the area: each tree's page then
+    /// answers for itself, and the cluster still enforces every call.
+    /// </summary>
+    public const int MaximumTreeProbes = 8;
+
     private readonly SchemaFacades _facades;
+    private readonly SchemaTreeCatalog? _catalog;
     private readonly TimeProvider _time;
     private readonly ConcurrentDictionary<string, (SchemaGrants Grants, DateTimeOffset ReadAt, ShellCallerKey Caller)> _trees = new(StringComparer.Ordinal);
     private Tuple<AreaAvailability, ShellCallerKey, DateTimeOffset>? _availability;
@@ -46,12 +58,18 @@ internal sealed class SchemaAccess : IDisposable
     /// <summary>Creates the access answer over the circuit's facades.</summary>
     /// <param name="facades">The area's facades.</param>
     /// <param name="time">The clock grant freshness is measured on.</param>
-    public SchemaAccess(SchemaFacades facades, TimeProvider time)
+    /// <param name="catalog">
+    /// The caller's trees, probed when the sentinel admits nothing so a caller whose grants
+    /// name trees rather than the whole cluster still sees the area; <see langword="null"/>
+    /// to answer from the sentinel alone.
+    /// </param>
+    public SchemaAccess(SchemaFacades facades, TimeProvider time, SchemaTreeCatalog? catalog = null)
     {
         ArgumentNullException.ThrowIfNull(facades);
         ArgumentNullException.ThrowIfNull(time);
         _facades = facades;
         _time = time;
+        _catalog = catalog;
         if (_facades.Auth is { } auth)
         {
             auth.AuthenticationChanged += Forget;
@@ -106,11 +124,29 @@ internal sealed class SchemaAccess : IDisposable
             return AreaAvailability.Hidden;
         }
 
-        var answer = grants.HasAny
-            ? AreaAvailability.Visible
-            : _facades.Auth is { IsAuthenticated: false }
-                ? AreaAvailability.Unavailable(SignInReason)
-                : AreaAvailability.Hidden;
+        AreaAvailability answer;
+        if (grants.HasAny)
+        {
+            answer = AreaAvailability.Visible;
+        }
+        else if (_facades.Auth is { IsAuthenticated: false })
+        {
+            answer = AreaAvailability.Unavailable(SignInReason);
+        }
+        else
+        {
+            // The sentinel answers for a grant over every tree. A grant that names trees
+            // (a schema owner of a few trees, #5385) admits nothing there, so ask the
+            // caller's own trees.
+            var trees = await ProbeOwnTreesAsync(cancellationToken).ConfigureAwait(false);
+            if (trees is null)
+            {
+                return AreaAvailability.Unchecked;
+            }
+
+            answer = trees.Value ? AreaAvailability.Visible : AreaAvailability.Hidden;
+        }
+
         // Remembered only for the caller it was read for, and only while that is
         // still the caller.
         if (_facades.Caller != caller || Volatile.Read(ref _generation) != generation)
@@ -188,5 +224,66 @@ internal sealed class SchemaAccess : IDisposable
         {
             session.ConfigurationChanged -= Forget;
         }
+    }
+
+    /// <summary>
+    /// Whether any of the caller's own trees grants schema read or management: the first
+    /// <see cref="MaximumTreeProbes"/> trees the caller lists, in order, stopping at the
+    /// first that grants. When that bound is reached with trees still unasked, the answer
+    /// is yes, because hiding the area from a caller who holds a grant is the worse
+    /// failure: its pages answer for each tree, and the cluster enforces every call.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the probes.</param>
+    /// <returns>
+    /// <see langword="true"/> to show the area, <see langword="false"/> to hide it, and
+    /// <see langword="null"/> when the cluster did not answer.
+    /// </returns>
+    private async Task<bool?> ProbeOwnTreesAsync(CancellationToken cancellationToken)
+    {
+        if (_catalog is null)
+        {
+            return false;
+        }
+
+        IReadOnlyList<string> trees;
+        try
+        {
+            trees = await _catalog.GetAsync(refresh: false, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (AreaProbeFaults.IsTransient(exception))
+        {
+            return null;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+
+        var listing = _facades.ListingTenant;
+        var probed = 0;
+        foreach (var tree in trees)
+        {
+            if (!ShellAssertedTenant.Lists(listing, tree))
+            {
+                continue;
+            }
+
+            if (probed == MaximumTreeProbes)
+            {
+                return true;
+            }
+
+            probed++;
+            if ((await GetGrantsAsync(tree, refresh: false, cancellationToken).ConfigureAwait(false)).HasAny)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

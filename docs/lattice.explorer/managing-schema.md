@@ -10,9 +10,9 @@ Schema is tenant-scoped. In a tenant-rooted Explorer, the same address under `/t
 
 ## Availability
 
-Schema is visible when its fail-closed capability probe returns a grant for an installed feature. The probe names a reserved sentinel tree and does not change schema or data. Definite answers expire after 30 seconds and are invalidated by sign-in, endpoint or tenant changes. A transport fault is not remembered, so the next navigation asks again. Replies from a previous caller cannot restore old grants or open editors.
+Schema is visible when its fail-closed capability probe returns a grant for an installed feature. The probe names a reserved sentinel tree and does not change schema or data. A grant that names trees rather than the whole cluster, such as a schema owner of a few trees, admits nothing on the sentinel, so a signed-in caller the sentinel refuses is asked about their own trees: the first eight trees they list, in order, until one grants schema read or management. When all eight grant nothing and the caller lists more trees, the area is shown rather than hidden: each tree's page then answers for itself, and the cluster still enforces every call. Definite answers expire after 30 seconds and are invalidated by sign-in, endpoint or tenant changes. A transport fault is not remembered, so the next navigation asks again. Replies from a previous caller cannot restore old grants or open editors.
 
-The area is hidden when the schema facade is absent, when a signed-in identity receives no grant or is refused by the probe, when the cluster does not serve schema administration, or when the connection is unavailable.
+The area is hidden when the schema facade is absent, when a signed-in identity receives no grant from the probe or any of the trees asked, when the cluster does not serve schema administration, or when the connection is unavailable.
 
 An anonymous caller whose probe returns no grants, or is refused, sees the area as unavailable. The exact sentence shown is:
 
@@ -30,7 +30,7 @@ Panel-level denials are shown beside the panel, for example **You may not read t
 | Enforcement only | Visible for a permitted installed feature; policy and compliance remain usable. Versions explains missing versioning. |
 | Versioning only | The engine supports this, but the stock schema API registration still requires enforcement. This facade combination is not supported. |
 | Full registration | Visible for permitted features; installed support and per-tree readiness gate each action separately. |
-| Unauthorized | Hidden for a signed-in caller with no grant; anonymous callers see the sign-in unavailable state. Direct routes still require per-tree grants. |
+| Unauthorized | Hidden for a signed-in caller with no grant on the sentinel or on the trees asked; anonymous callers see the sign-in unavailable state. Direct routes still require per-tree grants. |
 | Unreachable | Hidden without caching the failure. Direct routes show a retryable load error, not an authorization claim. |
 
 ## Addresses
