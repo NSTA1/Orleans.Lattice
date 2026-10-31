@@ -62,6 +62,7 @@
     <ProjectReference Include="..\..\src\lattice.api.state.grpc\Orleans.Lattice.Api.State.Grpc.csproj" />
     <!-- Reflected by the feature catalogue (FeatureCoverage/ExplorerSurface.cs, #5361); the journeys drive it out of process. -->
     <ProjectReference Include="..\..\src\lattice.explorer\WebHosting\Orleans.Lattice.Explorer.Web.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.replication.grpc\Orleans.Lattice.Api.Replication.Grpc.csproj" />
   </ItemGroup>
 
   <!--

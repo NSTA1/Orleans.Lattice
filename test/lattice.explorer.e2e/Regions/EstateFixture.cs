@@ -70,9 +70,17 @@ public abstract class EstateFixture
         return await context.NewPageAsync();
     }
 
-    /// <summary>Writes a screenshot of this fixture named <paramref name="name"/>.</summary>
+    /// <summary>
+    /// Writes a screenshot of this fixture named <paramref name="name"/>, once the desktop
+    /// chrome is drawn. The shell learns its width band from the browser after a render, so a
+    /// page can paint the compact chrome for a moment at desktop width; every shot here is at
+    /// desktop width, and a band that never arrives fails here rather than in a picture.
+    /// </summary>
     /// <param name="page">The page.</param>
     /// <param name="name">A file name such as <c>01-east-console.png</c>.</param>
-    protected Task ScreenshotAsync(IPage page, string name) =>
-        JourneyBrowser.ScreenshotAsync(page, Path.Combine(Estate.ArtifactsDirectory, "screenshots", name));
+    protected async Task ScreenshotAsync(IPage page, string name)
+    {
+        await Assertions.Expect(page.GetByRole(AriaRole.Navigation, new() { Name = "Estate" })).ToBeVisibleAsync();
+        await JourneyBrowser.ScreenshotAsync(page, Path.Combine(Estate.ArtifactsDirectory, "screenshots", name));
+    }
 }

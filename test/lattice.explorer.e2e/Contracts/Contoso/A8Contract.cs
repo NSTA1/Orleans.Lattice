@@ -27,7 +27,6 @@ public sealed class A8Contract() : ChapterContract("A8")
     /// <summary>The telemetry WAL partition A8 moves.</summary>
     public const int MovedPartition = 0;
 
-
     private static readonly TimeSpan StructuralPatience = TimeSpan.FromMinutes(6);
 
     /// <inheritdoc />

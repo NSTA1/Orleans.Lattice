@@ -90,4 +90,33 @@ internal static class WalMoveResumeCore
     /// </returns>
     public static bool TargetHoldsResumedPrefix(long dstHighestBefore, long dstLowestBefore, long srcLowest)
         => dstHighestBefore < srcLowest || (dstLowestBefore >= 0 && dstLowestBefore <= srcLowest);
+
+    /// <summary>
+    /// The number of entries, starting at <paramref name="start"/>, that the copy
+    /// hands to the target in one append: the longest run of dense ascending
+    /// offsets (each one more than the last) that does not exceed
+    /// <paramref name="maxAppendBatchEntries"/>. A copy page is read with the
+    /// move's <see cref="WalMoveOptions.EffectiveCopyPageSize"/>, which can exceed
+    /// a target provider's per-call cap (<see cref="IWalStorageProvider.MaxAppendBatchEntries"/>),
+    /// and a provider may reject a call whose offsets are not dense, so each page
+    /// is written as one or more such runs. Each run is its own all-or-nothing
+    /// append, so an interrupted copy leaves a clean prefix on the target and
+    /// <see cref="ResumeCursor"/> resumes past exactly what landed.
+    /// </summary>
+    /// <param name="offsets">The page's ascending offsets.</param>
+    /// <param name="start">The index of the first entry of the run; must be within <paramref name="offsets"/>.</param>
+    /// <param name="maxAppendBatchEntries">The target provider's per-call cap; values below <c>1</c> are treated as <c>1</c>.</param>
+    /// <returns>The run length, at least <c>1</c>.</returns>
+    public static int CopyChunkLength(ReadOnlySpan<long> offsets, int start, int maxAppendBatchEntries)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(start);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(start, offsets.Length);
+        var limit = Math.Min(offsets.Length - start, Math.Max(1, maxAppendBatchEntries));
+        var length = 1;
+        while (length < limit && offsets[start + length] == offsets[start + length - 1] + 1)
+        {
+            length++;
+        }
+        return length;
+    }
 }

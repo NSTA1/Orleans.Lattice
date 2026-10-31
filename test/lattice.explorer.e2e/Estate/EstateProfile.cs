@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
 public static class EstateProfile
 {
     /// <summary>The Fabrikam bootstrap administrator: the hosting operator.</summary>
-    public const string FabrikamAdministrator = "hal";
+    public static string FabrikamAdministrator => Cast.Personas.Hal.Id;
 
     /// <summary>
     /// Contoso, non-tenanted manufacturing: west (two silos behind a gateway, one Explorer that
@@ -35,7 +35,8 @@ public static class EstateProfile
     /// Fabrikam Cloud, a tenanted hosting provider: west and east regions shaped as Contoso's,
     /// with tenancy and delegated-access administration on (so the tenant-admin facades are
     /// served), Prometheus, Explorer heads whose connection settings the browser may edit, no
-    /// line feed and no kiosk. <c>hal</c> is the bootstrap administrator.
+    /// line feed and no kiosk. Its directory holds the Fabrikam cast (<see cref="Cast.Personas.Fabrikam"/>),
+    /// and <c>hal</c> is the bootstrap administrator.
     /// </summary>
     public static JourneyEstateOptions Fabrikam => new()
     {
@@ -46,7 +47,7 @@ public static class EstateProfile
         DelegatedAccessAdministration = true,
         AllowInteractiveEndpointConfiguration = true,
         LineFeed = false,
-        Users = [new(FabrikamAdministrator, "Hal Hughes", "hal-journeys-1")],
-        BootstrapAdministrators = [FabrikamAdministrator],
+        Users = Cast.Personas.FabrikamUsers(),
+        BootstrapAdministrators = Cast.Personas.BootstrapAdministratorsOf(Cast.Personas.FabrikamEstate),
     };
 }

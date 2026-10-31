@@ -123,6 +123,7 @@ public sealed class ContosoEstateTests : EstateFixture
         }
 
         Assert.That(drawn, Is.Not.Null, "no Telemetry board drew a series within two minutes of every silo being scraped");
+
         await ScreenshotAsync(page, "contoso-03-telemetry-board.png");
     }
 
@@ -143,6 +144,7 @@ public sealed class ContosoEstateTests : EstateFixture
         await JourneyBrowser.SignInAsync(page, JourneyEstateOptions.Administrator, Estate.PasswordOf(JourneyEstateOptions.Administrator));
         var first = await ServingReplicaAsync(page);
         Assert.That(page.Url, Does.StartWith(console.ToString()), "the console stays under its base path after sign-in");
+        await ExpectHomeRenderedAsync(page);
         await ScreenshotAsync(page, "contoso-01-east-console.png");
 
         try
@@ -175,6 +177,7 @@ public sealed class ContosoEstateTests : EstateFixture
 
         await Expect(JourneyBrowser.SessionButton(page, JourneyEstateOptions.Administrator)).ToBeVisibleAsync();
         await Expect(page.GetByRole(AriaRole.Dialog, new() { Name = "Sign in" })).ToHaveCountAsync(0);
+        await ExpectHomeRenderedAsync(page);
         await ScreenshotAsync(page, "contoso-05-kiosk-signed-in.png");
     }
 
@@ -213,6 +216,13 @@ public sealed class ContosoEstateTests : EstateFixture
         Assert.That(Estate.EastRegion.Silos.All(silo => silo.IsRunning), Is.True);
         var read = await Data(JourneyEstate.East).GetAsync(new DataGetRequest { TreeId = Tree, Key = "order/after" });
         Assert.That(read.Found, Is.True, "east keeps what it held before the outage");
+    }
+
+    /// <summary>The home page has finished loading: its heading and the directory's stops are drawn, not their skeletons.</summary>
+    private static async Task ExpectHomeRenderedAsync(IPage page)
+    {
+        await Expect(JourneyBrowser.Heading(page)).ToHaveTextAsync("Estate");
+        await Expect(JourneyBrowser.Stop(page, "telemetry")).ToBeVisibleAsync();
     }
 
     private static async Task<int> ServingReplicaAsync(IPage page)

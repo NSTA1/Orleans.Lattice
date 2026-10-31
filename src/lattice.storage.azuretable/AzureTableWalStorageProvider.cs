@@ -103,6 +103,13 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     public const int MaxEntriesPerBatch = 100;
 
     /// <summary>
+    /// Advertises <see cref="MaxEntriesPerBatch"/> so callers that assemble
+    /// their own batches (the managed WAL move's copy loop) chunk to the
+    /// transaction cap instead of tripping the per-call guard.
+    /// </summary>
+    public int MaxAppendBatchEntries => MaxEntriesPerBatch;
+
+    /// <summary>
     /// Row-key prefix for entry rows. Sorts before <see cref="HeadRowKey"/>
     /// so a <see cref="Azure.Data.Tables.TableClient.QueryAsync{T}(System.Linq.Expressions.Expression{System.Func{T, bool}}, System.Nullable{int}, System.Collections.Generic.IEnumerable{string}, System.Threading.CancellationToken)"/> filtering on
     /// <c>RowKey ge 'E' and RowKey lt 'F'</c> returns only entries.
