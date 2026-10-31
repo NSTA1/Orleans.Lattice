@@ -47,14 +47,23 @@ var configFilePath = config["Explorer:ConfigFilePath"]
     ?? Path.Combine(Path.GetTempPath(), "lattice-explorer", "config.json");
 Directory.CreateDirectory(Path.GetDirectoryName(configFilePath)!);
 
-// The key ring outlives the process, so a restarted head still reads the sign-in
-// cookies it issued, as a head with a persisted ring does.
+// The key ring, when one is configured to outlive the process: a directory (one head's
+// sessions survive its restart) or a blob (every replica of a region shares one ring).
+// With neither, the ring is ephemeral and a restart ends every session.
 var keysDirectory = config["Explorer:KeysDirectory"];
+var keyRingConnection = config["Explorer:KeyRingBlobConnectionString"];
 
 builder.Services.AddLatticeExplorerWeb(options =>
 {
     options.ConfigFilePath = configFilePath;
-    if (!string.IsNullOrWhiteSpace(keysDirectory))
+    if (!string.IsNullOrWhiteSpace(keyRingConnection))
+    {
+        var container = config["Explorer:KeyRingBlobContainer"] ?? "explorer-keys";
+        var blob = config["Explorer:KeyRingBlobName"] ?? "keys.xml";
+        options.ConfigureDataProtection = dataProtection =>
+            dataProtection.PersistKeysToAzureBlobStorage(keyRingConnection, container, blob);
+    }
+    else if (!string.IsNullOrWhiteSpace(keysDirectory))
     {
         options.ConfigureDataProtection = dataProtection =>
             dataProtection.PersistKeysToFileSystem(new DirectoryInfo(keysDirectory));

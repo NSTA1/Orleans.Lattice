@@ -177,7 +177,12 @@ internal sealed class LineFeedService : BackgroundService
                 continue;
             }
 
-            await WriteAsync(TelemetryTree, NextReadingKey(), NextReading(), counter: 0, stoppingToken);
+            if (await WriteAsync(TelemetryTree, ReadingKey(_sequence), Reading(_sequence), counter: 0, stoppingToken))
+            {
+                // A refused reading is offered again, so the series has no gaps once granted.
+                _sequence++;
+            }
+
             if (orders)
             {
                 await WriteNextOrderAsync(stoppingToken);
@@ -185,16 +190,13 @@ internal sealed class LineFeedService : BackgroundService
         }
     }
 
-    private string NextReadingKey()
-    {
-        var sequence = _sequence++;
-        return $"reading/{Sensors[sequence % Sensors.Length]}/{sequence / Sensors.Length:D8}";
-    }
+    private static string ReadingKey(long sequence) =>
+        $"reading/{Sensors[sequence % Sensors.Length]}/{sequence / Sensors.Length:D8}";
 
-    private byte[] NextReading()
+    private static byte[] Reading(long sequence)
     {
         var value = new byte[sizeof(double)];
-        BinaryPrimitives.WriteDoubleLittleEndian(value, 20.0 + (Math.Sin(_sequence / 10.0) * 5.0));
+        BinaryPrimitives.WriteDoubleLittleEndian(value, 20.0 + (Math.Sin(sequence / 10.0) * 5.0));
         return value;
     }
 

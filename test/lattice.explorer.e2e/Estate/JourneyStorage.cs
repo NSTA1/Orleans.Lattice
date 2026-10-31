@@ -39,6 +39,7 @@ internal sealed class JourneyStorage : IAsyncDisposable
     private static readonly TimeSpan DefaultReadyTimeout = TimeSpan.FromSeconds(90);
 
     private readonly List<string> _containers;
+    private bool _reached;
 
     private JourneyStorage(string prefix, string connectionString, string backupConnectionString, List<string> containers)
     {
@@ -140,7 +141,13 @@ internal sealed class JourneyStorage : IAsyncDisposable
             return;
         }
 
-        // Named, shared storage: drop what this estate created and leave the rest.
+        // Named, shared storage: drop what this estate created and leave the rest. Storage that
+        // never answered holds nothing of this estate's, and is not asked again.
+        if (!_reached)
+        {
+            return;
+        }
+
         try
         {
             var tables = new TableServiceClient(ConnectionString);
@@ -151,7 +158,7 @@ internal sealed class JourneyStorage : IAsyncDisposable
 
             await new BlobServiceClient(BackupConnectionString).GetBlobContainerClient(BackupContainer).DeleteIfExistsAsync();
         }
-        catch (Exception ex) when (ex is Azure.RequestFailedException or HttpRequestException)
+        catch (Exception ex) when (ex is Azure.RequestFailedException or HttpRequestException or AggregateException)
         {
             TestContext.Progress.WriteLine($"The journey estate could not remove its storage ({Prefix}): {ex.Message}");
         }
@@ -186,6 +193,7 @@ internal sealed class JourneyStorage : IAsyncDisposable
                 await new TableServiceClient(ConnectionString).GetPropertiesAsync(attempt.Token);
                 await new BlobServiceClient(ConnectionString).GetPropertiesAsync(attempt.Token);
                 await new BlobServiceClient(BackupConnectionString).GetPropertiesAsync(attempt.Token);
+                _reached = true;
                 return;
             }
             catch (Exception ex) when (ex is Azure.RequestFailedException or HttpRequestException or OperationCanceledException or AggregateException)

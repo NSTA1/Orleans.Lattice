@@ -11,6 +11,19 @@ public sealed record JourneyUser(string Id, string DisplayName, string Password)
 /// <param name="DisplayName">The name the directory publishes.</param>
 public sealed record JourneyDirectoryGroupEntry(string Id, string DisplayName);
 
+/// <summary>Where an Explorer head keeps its ASP.NET Data Protection key ring, which encrypts its sign-in cookies.</summary>
+public enum JourneyExplorerKeyRing
+{
+    /// <summary>Nowhere: an ephemeral ring, so a restarted head cannot read the cookies it issued and every session ends.</summary>
+    None = 0,
+
+    /// <summary>A directory that outlives the process, so one head's sessions survive its restart.</summary>
+    FileSystem = 1,
+
+    /// <summary>A blob in the estate's primary storage account, shared by every head of the region.</summary>
+    Blob = 2,
+}
+
 /// <summary>How a <see cref="JourneyEstate"/> is shaped. Every default is the Contoso west region of the epic's decision record.</summary>
 public sealed class JourneyEstateOptions
 {
@@ -50,6 +63,13 @@ public sealed class JourneyEstateOptions
 
     /// <summary>The gateway's active health-probe interval: a dead silo leaves rotation within it.</summary>
     public TimeSpan GatewayHealthInterval { get; init; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Where the west Explorer head keeps its Data Protection key ring. <see cref="JourneyExplorerKeyRing.None"/>
+    /// by default: the single west replica persists no keys, so a restart drops every sign-in session, as an
+    /// unconfigured head does. The east region's replicas share a Blob-persisted ring (#5362).
+    /// </summary>
+    public JourneyExplorerKeyRing ExplorerKeyRing { get; init; } = JourneyExplorerKeyRing.None;
 
     /// <summary>The idle lifetime of a scan cursor, or <see langword="null"/> for the product default.</summary>
     public TimeSpan? CursorIdleTtl { get; init; }

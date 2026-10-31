@@ -218,13 +218,27 @@ public sealed partial class JourneyEstate : IAsyncDisposable
         {
             ["Explorer__Port"] = explorerPort.ToString(),
             ["Explorer__ConfigFilePath"] = Path.Combine(explorerDirectory, "config.json"),
-            ["Explorer__KeysDirectory"] = Path.Combine(_workDirectory, $"{region}-explorer-keys"),
             ["Entra__Enabled"] = "false",
             [JourneyHostEnvironment.TlsPfxFile] = _certificates.IssueServerPfx($"{region}-explorer-0"),
             [JourneyHostEnvironment.TlsPfxPassword] = JourneyCertificates.PfxPassword,
             ["Logging__LogLevel__Default"] = "Warning",
             ["Logging__LogLevel__Orleans.Lattice"] = "Information",
         };
+        switch (_options.ExplorerKeyRing)
+        {
+            case JourneyExplorerKeyRing.FileSystem:
+                explorerEnvironment["Explorer__KeysDirectory"] = Path.Combine(_workDirectory, $"{region}-explorer-keys");
+                break;
+            case JourneyExplorerKeyRing.Blob:
+                var keyRing = new Azure.Storage.Blobs.BlobServiceClient(_storage.ConnectionString)
+                    .GetBlobContainerClient(_storage.Prefix.ToLowerInvariant() + "-keys");
+                await keyRing.CreateIfNotExistsAsync(cancellationToken: cancellationToken);
+                explorerEnvironment["Explorer__KeyRingBlobConnectionString"] = _storage.ConnectionString;
+                explorerEnvironment["Explorer__KeyRingBlobContainer"] = keyRing.Name;
+                explorerEnvironment["Explorer__KeyRingBlobName"] = $"{region}-keys.xml";
+                break;
+        }
+
         if (ExplorerUsesTls)
         {
             explorerEnvironment["LATTICE_EXPLORER_ENDPOINT"] = $"https://127.0.0.1:{gatewayPort}";

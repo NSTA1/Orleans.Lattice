@@ -124,7 +124,9 @@ public sealed class FaultSeamTests
         var backup = await WaitForAsync(async () =>
             (await backups.ListBackupsAsync(new BackupCatalogRequest { PageSize = 50, NamePrefix = "seam-backup-1" })).Entries.FirstOrDefault());
         var manifest = $"manifests/{backup.Id}";
-        Assert.That(await Estate.BackupBlobsAsync(backup.Id), Does.Contain(manifest), "the capture wrote its manifest");
+        var written = await WaitForAsync(async () =>
+            (await Estate.BackupBlobsAsync(backup.Id)).Contains(manifest) ? manifest : null);
+        Assert.That(written, Is.EqualTo(manifest), "the capture wrote its manifest");
 
         Assert.That(await Estate.DeleteBackupArtifactAsync(backup.Id), Is.EqualTo(manifest));
 

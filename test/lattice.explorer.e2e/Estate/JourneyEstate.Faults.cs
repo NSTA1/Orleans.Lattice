@@ -37,8 +37,9 @@ public sealed partial class JourneyEstate
     }
 
     /// <summary>
-    /// Restarts an Explorer head's process. Its key ring is persisted, so a browser signed in
-    /// before the restart is still signed in after it.
+    /// Restarts an Explorer head's process. Whether a browser signed in before the restart is
+    /// still signed in after it depends on <see cref="JourneyEstateOptions.ExplorerKeyRing"/>:
+    /// with the default (no persisted ring) the restart ends every session.
     /// </summary>
     /// <param name="region">The region.</param>
     /// <param name="index">The head's index.</param>
@@ -125,28 +126,55 @@ public sealed partial class JourneyEstate
     }
 
     /// <summary>
-    /// Leaves an orphaned leaf in physical shard <paramref name="shard"/> of
-    /// <paramref name="tree"/>: the persisted state a silo that crashed part way through a
-    /// leaf split leaves, so the orphan audit finds it and the repair can remove it.
+    /// Leaves an orphaned leaf in <paramref name="tree"/>: the persisted state a silo that
+    /// crashed part way through a leaf split leaves, so the orphan audit finds it and the
+    /// repair can remove it. The orphan shadows the leftmost leaf of physical shard
+    /// <paramref name="shard"/>, or - when no shard is named - of the first physical shard
+    /// whose leftmost leaf holds rows.
     /// </summary>
-    /// <param name="tree">The tree; its first leaf must hold rows.</param>
-    /// <param name="shard">The physical shard.</param>
+    /// <param name="tree">The tree; it must hold rows.</param>
+    /// <param name="shard">The physical shard, or <see langword="null"/> for the first that holds rows.</param>
     /// <param name="region">The region.</param>
     /// <returns>The orphan's grain id.</returns>
-    public async Task<string> InjectOrphanedLeafAsync(string tree, int shard = 0, string region = West)
+    public async Task<string> InjectOrphanedLeafAsync(string tree, int? shard = null, string region = West)
     {
         RequireFaults();
-        var silo = RegionOf(region).Silos.First(candidate => candidate.IsRunning);
-        using var response = await _probe.PostAsync(new Uri(
-            $"http://127.0.0.1:{silo.HttpPort}/e2e/orphan?tree={Uri.EscapeDataString(tree)}&shard={shard}"), null);
-        if (!response.IsSuccessStatusCode)
+        ArgumentException.ThrowIfNullOrEmpty(tree);
+        IEnumerable<int> candidates;
+        if (shard is { } named)
         {
-            throw new InvalidOperationException(
-                $"Injecting an orphan into '{tree}' failed: {(int)response.StatusCode} {await response.Content.ReadAsStringAsync()}");
+            candidates = [named];
+        }
+        else
+        {
+            var admin = Orleans.Lattice.Api.TreeAdmin.Grpc.LatticeTreeAdminApiGrpcClient.Create(Invoker(region: region), Serialization);
+            candidates = (await admin.InspectShardMapAsync(tree)).PhysicalShardIndices;
         }
 
-        return (await response.Content.ReadFromJsonAsync<InjectedOrphan>())?.Orphan
-            ?? throw new InvalidOperationException("The silo did not name the orphan it injected.");
+        var silo = RegionOf(region).Silos.First(candidate => candidate.IsRunning);
+        var refusals = new List<string>();
+        foreach (var index in candidates)
+        {
+            using var response = await _probe.PostAsync(new Uri(
+                $"http://127.0.0.1:{silo.HttpPort}/e2e/orphan?tree={Uri.EscapeDataString(tree)}&shard={index}"), null);
+            if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
+            {
+                refusals.Add($"shard {index}: {await response.Content.ReadAsStringAsync()}");
+                continue;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException(
+                    $"Injecting an orphan into '{tree}' failed: {(int)response.StatusCode} {await response.Content.ReadAsStringAsync()}");
+            }
+
+            return (await response.Content.ReadFromJsonAsync<InjectedOrphan>())?.Orphan
+                ?? throw new InvalidOperationException("The silo did not name the orphan it injected.");
+        }
+
+        throw new InvalidOperationException(
+            $"No physical shard of '{tree}' has a leaf holding rows to shadow: {string.Join("; ", refusals)}");
     }
 
     /// <summary>

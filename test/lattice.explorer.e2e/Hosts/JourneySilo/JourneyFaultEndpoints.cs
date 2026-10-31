@@ -23,7 +23,7 @@ internal static class JourneyFaultEndpoints
         {
             var wanted = GrainId.Create(grainType, key);
             var management = grains.GetGrain<IManagementGrain>(0);
-            var statistics = await management.GetDetailedGrainStatistics([grainType]);
+            var statistics = await management.GetDetailedGrainStatistics();
             foreach (var statistic in statistics)
             {
                 if (statistic.GrainId.Equals(wanted))
@@ -37,8 +37,16 @@ internal static class JourneyFaultEndpoints
 
         app.MapPost(Prefix + "/orphan", async (string tree, int? shard, IGrainFactory grains) =>
         {
-            var orphan = await grains.GetGrain<IJourneyOrphanInjectorGrain>(tree).InjectAsync(shard ?? 0);
-            return Results.Ok(new { orphan });
+            try
+            {
+                var orphan = await grains.GetGrain<IJourneyOrphanInjectorGrain>(tree).InjectAsync(shard ?? 0);
+                return Results.Ok(new { orphan });
+            }
+            catch (InvalidOperationException ex)
+            {
+                // The shard has no leaf holding rows to split; the harness tries the next one.
+                return Results.Conflict(new { reason = ex.Message });
+            }
         });
     }
 }
