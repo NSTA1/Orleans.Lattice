@@ -345,7 +345,7 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
                 {
                     EnterReconnecting();
                 }
-                else
+                else if (!IsCallScopedRefusal(ex))
                 {
                     SetFaulted(Friendly(ex), IsAuthFailure(ex));
                 }
@@ -407,7 +407,11 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
                             break;
                         }
 
-                        SetFaulted(Friendly(ex), IsAuthFailure(ex));
+                        if (!IsCallScopedRefusal(ex))
+                        {
+                            SetFaulted(Friendly(ex), IsAuthFailure(ex));
+                        }
+
                         throw new LatticeStateApiException(Friendly(ex), ex)
                         {
                             IsTransient = false,
@@ -642,6 +646,21 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
                 IsTransient = true,
                 RequiresAuthentication = false,
             };
+
+    /// <summary>
+    /// Whether a refusal is a fact about the call rather than the endpoint: the
+    /// server answered an authenticated caller and refused it this one read for
+    /// want of a grant (<c>PermissionDenied</c>), as for a whole-tree metrics
+    /// sample under a grant narrowed to part of the tree. Such a refusal is
+    /// surfaced to the caller as <see cref="LatticeStateApiException.IsPermissionDenied"/>
+    /// and never moves <see cref="Status"/>, so one tree's authorization is not
+    /// reported as the connection reconnecting or needing a sign-in.
+    /// <c>Unauthenticated</c> is not call-scoped: it says the session's credential
+    /// was refused, and still faults the connection with a sign-in requirement.
+    /// The connection probe keeps its own handling, because a refused catalogue
+    /// read is the one answer that does describe the session.
+    /// </summary>
+    private static bool IsCallScopedRefusal(RpcException ex) => ex.StatusCode == StatusCode.PermissionDenied;
 
     private static bool IsAuthFailure(RpcException ex) => ex.StatusCode is
         StatusCode.Unauthenticated or

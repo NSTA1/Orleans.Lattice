@@ -206,7 +206,10 @@ disables the live tail while the point-in-time view is active.
 The Metrics tab shows per-tree measures: lifecycle, shards, live keys,
 tombstones, depth, shards splitting, views and view lag where the cluster
 reports them. When detail metrics are paused, the affected measures read
-"Paused". The Dead letters tab reads a count and then pages strict-mode dead
+"Paused". The measures count every key in the tree, so a caller whose grant
+covers only part of it (a prefix-scoped rule, for example) is told they need
+read access to the whole tree; the tree's summary line then omits its key
+count, and the connection indicator stays Connected. The Dead letters tab reads a count and then pages strict-mode dead
 letters 50 at a time, with source, key, reason and clipped details. Both tabs
 show fixed sentences when the state API is unavailable, denied or faulted.
 

@@ -1,5 +1,7 @@
+using Grpc.Core;
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.State;
+using Orleans.Lattice.Explorer.Core.Connection;
 using Orleans.Lattice.Explorer.Core.Metrics;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 
@@ -17,6 +19,7 @@ public partial class DataMetricsPanel : IDisposable
     private DateTimeOffset? _sampledAt;
     private bool _loading;
     private string? _error;
+    private bool _withheld;
 
     [CascadingParameter]
     internal DataWorkspace? Workspace { get; set; }
@@ -76,6 +79,18 @@ public partial class DataMetricsPanel : IDisposable
         return measures;
     }
 
+    /// <summary>
+    /// Whether the cluster refused a signed-in caller the grant, as opposed to
+    /// refusing an anonymous one, which the shared sentence and sign-in describe.
+    /// </summary>
+    internal static bool IsGrantRefusal(Exception exception) => exception switch
+    {
+        LatticeAuthorizationDeniedException => true,
+        LatticeStateApiException state => state.IsPermissionDenied,
+        RpcException rpc => rpc.StatusCode == StatusCode.PermissionDenied,
+        _ => false,
+    };
+
     private async Task LoadAsync()
     {
         if (Workspace is not { } workspace)
@@ -95,6 +110,7 @@ public partial class DataMetricsPanel : IDisposable
 
         _loading = true;
         _error = null;
+        _withheld = false;
         try
         {
             var metrics = await reader.GetAsync(workspace.Tree.StateId, token);
@@ -115,7 +131,17 @@ public partial class DataMetricsPanel : IDisposable
             if (!token.IsCancellationRequested)
             {
                 _metrics = null;
-                _error = DataErrors.Describe(exception, "read this tree's metrics");
+                if (IsGrantRefusal(exception))
+                {
+                    // The measures count every key in the tree, so the cluster
+                    // withholds them from a grant that covers only part of it. That
+                    // is an answer, not a failure: retrying cannot change it.
+                    _withheld = true;
+                }
+                else
+                {
+                    _error = DataErrors.Describe(exception, "read this tree's metrics");
+                }
             }
         }
         finally
