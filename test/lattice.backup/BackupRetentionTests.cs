@@ -87,7 +87,7 @@ public sealed class BackupRetentionTests
     }
 
     // Captures full -> incremental -> full -> incremental, mutating between each so
-    // every capture is a distinct content-addressed backup. Returns the four ids in
+    // every capture holds distinct content. Returns the four ids in
     // capture order: b0 (full), i1 (increment of b0), b2 (full), i3 (increment of b2).
     private async Task<(string B0, string I1, string B2, string I3)> CaptureChainAsync(
         BackupScopeSelector scope)

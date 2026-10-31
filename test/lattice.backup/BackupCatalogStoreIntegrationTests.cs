@@ -61,8 +61,8 @@ public sealed class BackupCatalogStoreIntegrationTests
     [Test]
     public async Task RegisterAsync_preserves_the_first_created_timestamp_on_recapture()
     {
-        // A backup id is a content address, so a re-capture of identical content
-        // re-registers the same id with a fresh capture time. The store must keep
+        // A backup id re-registered (by a catalog rebuild or a set stamp) can carry
+        // a fresh capture time. The store must keep
         // the first-seen timestamp so the catalog index (keyed by capture time) is
         // never re-keyed into an orphaned duplicate row.
         var firstSeen = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);

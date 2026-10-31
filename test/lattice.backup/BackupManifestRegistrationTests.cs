@@ -2,8 +2,8 @@ namespace Orleans.Lattice.Backup.Tests;
 
 /// <summary>
 /// Regression coverage for <see cref="BackupManifestRegistration"/>: re-registering
-/// a content-addressed backup id must preserve the immutable, index-key-determining
-/// fields from the first registration, so a re-capture of identical content never
+/// an already-registered backup id must preserve the immutable, index-key-determining
+/// fields from the first registration, so a re-registration never
 /// re-keys the catalog index into an orphaned duplicate row (the "one backup shows
 /// as several rows" defect).
 /// </summary>

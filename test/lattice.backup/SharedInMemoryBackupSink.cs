@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Backup.Tests;
 
 /// <summary>
 /// The process-local, thread-safe backing store shared by two independent test
-/// clusters. It holds the raw backup payload - content-addressed artifact bytes
+/// clusters. It holds the raw backup payload - per-capture artifact bytes
 /// and serialized manifest bytes - and nothing else. Because a
 /// <see cref="SharedBackupStore"/> is the <b>only</b> object handed to both
 /// clusters, it is the single point of shared state a cross-cluster disaster
@@ -21,7 +21,7 @@ namespace Orleans.Lattice.Backup.Tests;
 /// </summary>
 public sealed class SharedBackupStore
 {
-    /// <summary>Content-addressed artifact id to its ordered run of chunk buffers.</summary>
+    /// <summary>Per-capture artifact id to its ordered run of chunk buffers.</summary>
     public ConcurrentDictionary<string, byte[][]> Artifacts { get; } = new(StringComparer.Ordinal);
 
     /// <summary>Backup id to its serialized <see cref="BackupManifest"/> bytes.</summary>
@@ -42,7 +42,7 @@ public sealed class SharedBackupStore
 /// Manifests round-trip through the supplied <see cref="Serializer"/>, so a
 /// manifest authored on the capturing cluster is decoded from bytes on the
 /// restoring cluster rather than shared as a live object. Artifact and backup ids
-/// are content-addressed, so re-writing identical content is idempotent.
+/// are per-capture, and re-writing identical content is idempotent.
 /// </para>
 /// </summary>
 public sealed class SharedInMemoryBackupSink : ILatticeBackupSink
@@ -85,7 +85,7 @@ public sealed class SharedInMemoryBackupSink : ILatticeBackupSink
             chunks.Add(chunk.ToArray());
         }
 
-        // Content-addressed id: an identical retry overwrites with identical bytes.
+        // An identical retry of the same id overwrites with identical bytes.
         _store.Artifacts[artifactId] = chunks.ToArray();
     }
 

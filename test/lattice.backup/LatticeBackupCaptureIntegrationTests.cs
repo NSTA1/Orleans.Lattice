@@ -270,7 +270,7 @@ public sealed class LatticeBackupCaptureIntegrationTests
     }
 
     [Test]
-    public async Task CaptureAsync_content_addresses_the_backup_id()
+    public async Task CaptureAsync_derives_a_lowercase_hex_sha256_backup_id()
     {
         await _fixture.InitializeAsync();
         var tree = _fixture.GrainFactory.GetGrain<ILattice>(Tree);

@@ -5,7 +5,7 @@ namespace Orleans.Lattice.Backup.Tests;
 
 /// <summary>
 /// Unit coverage for the backup manifest model: the scope selector shape, the
-/// self-describing manifest fields, argument validation, and the content-address
+/// self-describing manifest fields, argument validation, and the payload-digest
 /// helper.
 /// </summary>
 public sealed class BackupManifestModelTests

@@ -423,7 +423,7 @@ builder.Host.UseOrleans(silo =>
             if (!string.IsNullOrWhiteSpace(backupBlobConnectionString))
             {
                 // One shared container across BOTH clusters. Backup and artifact
-                // backup ids are content-addressed and artifact ids are per-capture, so a shared container never collides;
+                // backup ids and artifact ids are both per-capture, so a shared container never collides;
                 // sharing it is exactly what lets a peer resolve the manifest and
                 // artifacts a sibling cluster captured.
                 silo.AddLatticeBackupAzureBlob(o =>

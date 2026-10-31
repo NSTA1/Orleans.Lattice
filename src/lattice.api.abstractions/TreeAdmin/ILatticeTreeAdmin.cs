@@ -458,7 +458,7 @@ public interface ILatticeTreeAdmin
     /// <paramref name="operationId"/> converges to the same state.
     /// </summary>
     /// <param name="treeId">The tree to restore into. Must not be <c>null</c>, empty, or reserved.</param>
-    /// <param name="backupId">The content-addressed id of the backup to restore. Must not be <c>null</c> or empty.</param>
+    /// <param name="backupId">The id of the backup to restore. Must not be <c>null</c> or empty.</param>
     /// <param name="operationId">An idempotency key that makes a retried restore a no-op, or <c>null</c> to derive one from the request. Must not be empty when supplied.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The restore outcome, including the shadow and previous physical trees needed to revert it.</returns>

@@ -1658,7 +1658,7 @@
           "name": "backupId",
           "type": "string",
           "required": true,
-          "notes": "The content-addressed backup id to delete."
+          "notes": "The backup id to delete."
         },
         {
           "name": "region",
@@ -1729,7 +1729,7 @@
           "name": "backupId",
           "type": "string",
           "required": true,
-          "notes": "The content-addressed backup id to describe."
+          "notes": "The backup id to describe."
         },
         {
           "name": "region",
@@ -2746,7 +2746,7 @@
           "name": "backupId",
           "type": "string",
           "required": true,
-          "notes": "The content-addressed id of the backup to verify."
+          "notes": "The id of the backup to verify."
         },
         {
           "name": "operationId",
@@ -2943,7 +2943,7 @@
           "name": "backupId",
           "type": "string",
           "required": true,
-          "notes": "The content-addressed id of the backup to restore."
+          "notes": "The id of the backup to restore."
         },
         {
           "name": "targetTreeId",
@@ -15404,7 +15404,7 @@
           "name": "backupId",
           "type": "string",
           "required": true,
-          "notes": "The content-addressed id of the backup to restore. Must not be null or empty."
+          "notes": "The id of the backup to restore. Must not be null or empty."
         },
         {
           "name": "operationId",
