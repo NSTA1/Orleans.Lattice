@@ -71,6 +71,22 @@ internal sealed partial class TreeDeletionGrain
             d.LogicalPurgeComplete || (d.IsDeleted && d.PurgeComplete && !d.RetainsRegistryEntry));
     }
 
+    /// <inheritdoc />
+    public Task<bool> HoldsDeletionAsync()
+    {
+        // From the persisted snapshot, as HoldsCompletedPurgeAsync. A logical
+        // deletion holds the id until its purge completes, which removes the
+        // logical row; a retired copy whose id is also a live logical tree is
+        // not deleted under that id. A physical deletion holds it until its purge
+        // has completed AND removed the registry row: until then the row still
+        // naming the id is the purged tree's own, not a reuse.
+        var d = Durable;
+        if (d.LogicalPhysicalTreeId is not null)
+            return Task.FromResult(!d.LogicalPurgeComplete);
+        if (d.RetainsRegistryEntry)
+            return Task.FromResult(false);
+        return Task.FromResult(d.IsDeleted && !(d.PurgeComplete && !d.RegistryUnregisterPending));
+    }
     /// <summary>
     /// Whether the id was registered again after its purge completed, so the
     /// deletion record describes a tree that no longer exists. Pure read.

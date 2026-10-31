@@ -4,14 +4,15 @@
 MODULE: NoTrimPastLiveNeedRedriveReReadsLineage
 TARGET: NoTrimPastLiveNeed
 CLASS: Invariant
-SUMMARY: the re-drive records the reused entry's lineage as the purged one
+SUMMARY: the re-drive takes the current entry's lineage for the purged one
 PERTURBS: PurgeTailSettle
 
 --- FIND
     /\ tailOwed' = FALSE
-    /\ UNCHANGED tailLin
+    /\ UNCHANGED <<tailLin, regPresent, regLin>>
 --- REPLACE
 \* MUTATION: the lineage is re-read, not the recorded one.
     /\ UNCHANGED tailOwed
-    /\ tailLin' = inc
+    /\ tailLin' = regLin
+    /\ UNCHANGED <<regPresent, regLin>>
 --- END

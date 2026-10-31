@@ -3249,7 +3249,9 @@ internal sealed partial class ShardRootGrain(
     /// purge has tombstoned (<see cref="ShardRootState.IsPurged"/>, issue #4503).
     /// The copy is live again only when the registry says so: for a routed call,
     /// when the router's logical tree resolves to this copy; for a call with no
-    /// routed stamp, when this id is registered and not aliased elsewhere. That
+    /// routed stamp, when this id is registered and not aliased elsewhere - and,
+    /// in either case, when that id's deletion record no longer holds a deletion
+    /// or a purge whose registry removal is owed (issue #5458). That
     /// is the deliberate reuse of the id (issue #3940), and the seed that follows
     /// lifts the tombstone. Otherwise a routed call is refused with the
     /// stale-routing signal the soft-delete window gave, so its router refreshes
@@ -3286,6 +3288,21 @@ internal sealed partial class ShardRootGrain(
                 if (!forWrite && purgedAnswersEmpty) return false;
                 throw new LatticeTreePurgedException(TreeId);
             }
+        }
+
+        // A registry entry naming the id live is not yet a reuse (issue #5458):
+        // a purge keeps the purged tree's own entry until the last step of its
+        // tail, so during the walk and while the entry's removal is owed it is
+        // the deleted tree that the registry names. Admitting a write then
+        // re-seeded the root leaf under the purged entry's lineage, and the
+        // purge's tail unpinned and unregistered that live leaf. The id's
+        // deletion record tells the cases apart: it holds the id until the
+        // purge has completed and removed the registry row, after which a row
+        // naming the id is a reuse.
+        if (await grainFactory.GetGrain<ITreeDeletionGrain>(routedLogical ?? TreeId).HoldsDeletionAsync())
+        {
+            if (!forWrite && purgedAnswersEmpty) return false;
+            throw new InvalidOperationException("This tree has been deleted and is no longer accessible.");
         }
 
         return await PrepareForOperationSlowAsync(forWrite, purgedAnswersEmpty);
