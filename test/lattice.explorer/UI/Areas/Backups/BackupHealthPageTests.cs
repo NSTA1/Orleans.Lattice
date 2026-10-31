@@ -233,6 +233,29 @@ public sealed class BackupHealthPageTests : BackupsTestContext
     }
 
     [Test]
+    public void Saved_monitoring_reads_back_when_the_page_is_opened_again()
+    {
+        // #5523: the form opened On / 24 h whatever the backup's stored monitoring was.
+        Backups.HealthAvailable = () => Task.FromResult(true);
+        Seed(FakeBackupControl.Manifest("b1", "nightly"));
+        var first = RenderAt<BackupHealthPage>("backups/health?backup=b1");
+        first.WaitUntil(() => Assert.That(first.FindAll("form.lt-backups-form"), Has.Count.EqualTo(1)));
+        first.Find("button[role=switch]").Click();
+        first.FindAll("form.lt-backups-form input")[0].Input("1");
+        first.FindAll("form.lt-backups-form input")[1].Input("0");
+        first.Find("form.lt-backups-form").Submit();
+        first.WaitUntil(() => Assert.That(first.Find("form [role=status]").TextContent, Is.EqualTo("Monitoring off for this backup.")));
+
+        var reopened = RenderAt<BackupHealthPage>("backups/health?backup=b1");
+
+        reopened.WaitUntil(() =>
+        {
+            Assert.That(reopened.Find("button[role=switch]").GetAttribute("aria-checked"), Is.EqualTo("false"));
+            Assert.That(reopened.FindAll("form.lt-backups-form input").Select(input => input.GetAttribute("value")), Is.EqualTo(new[] { "1", "0" }));
+        });
+    }
+
+    [Test]
     public void A_bad_or_refused_configuration_says_why()
     {
         Backups.HealthAvailable = () => Task.FromResult(true);
