@@ -1554,11 +1554,13 @@ internal sealed partial class WalShardGrain(
         // where the replication observer has not yet stamped - the
         // resolver supplies the local cluster id. Single-cluster
         // hosts get string.Empty from the default resolver and the
-        // resulting record's OriginClusterId is empty.
+        // resulting record's OriginClusterId is empty. The resolver is
+        // consulted under the logical tree (issue #5313), as the writer's
+        // stamp is, so a derived copy reads its tree's configured identity.
         var entry = WalRecordConverter.ToWalRecord(
             walEntry.Mutation,
             mode,
-            originClusterId: clusterIdResolver.Resolve(walEntry.Mutation.TreeId));
+            originClusterId: clusterIdResolver.Resolve(optionsResolver.GetMetricTreeId(walEntry.Mutation.TreeId)));
         return new WalShardSequencedEntry { Sequence = walEntry.Offset, Entry = entry };
     }
 

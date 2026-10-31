@@ -1400,8 +1400,12 @@ internal sealed class WalCommitLogWriter(
             ? entry.Mode
             : modeResolver.Resolve(optionsResolver.GetMetricTreeId(entry.TreeId)) ?? LatticeMergeMode.LwwRegister;
 
+        // The origin resolves under the logical tree (issue #5313): a per-tree
+        // ClusterId override is configured under the logical name, and the
+        // tree's shipper ships only records carrying it, so a derived copy's
+        // record stamped with the cluster-wide id would never ship.
         var resolvedOrigin = string.IsNullOrEmpty(entry.OriginClusterId)
-            ? clusterIdResolver.Resolve(entry.TreeId)
+            ? clusterIdResolver.Resolve(optionsResolver.GetMetricTreeId(entry.TreeId))
             : entry.OriginClusterId;
 
         // Defensive snapshot of the producer-side frontier - the
