@@ -99,7 +99,7 @@ The complete route inventory below contains the 70 unique `@page` route patterns
   - `/t/{tenant}/cluster/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}/{p7?}/{p8?}`
 | Area | Key and root address | Facades read or driven | Scope | Visibility probe |
 | --- | --- | --- | --- | --- |
-| Data | `data`, `/data` | State API, including `ILatticeStateClient`; `ILatticeTreeAdmin` for tag-index and view actions | Tenant-scoped | No state reader makes the area Hidden. Before a catalogue is loaded for the current caller and endpoint, a disconnected connection is Unavailable with a sign-in or connect reason; a denied catalogue probe is Hidden, and other read failures are Unavailable with a fixed, action-specific reason. A loaded catalogue keeps the area Visible until its caller-scoped memo is invalidated or refreshed. |
+| Data | `data`, `/data` | State API, including `ILatticeStateClient`; `ILatticeTreeAdmin` for tag-index and view actions; `ILatticeDataApi`: its range read for **Export...**, and its writes and write-capability probe to create, edit and delete entries; `ILatticeSchemaControl` for the value editor's schema preview | Tenant-scoped | No state reader makes the area Hidden. Before a catalogue is loaded for the current caller and endpoint, a disconnected connection is Unavailable with a sign-in or connect reason; a denied catalogue probe is Hidden, and other read failures are Unavailable with a fixed, action-specific reason. A loaded catalogue keeps the area Visible until its caller-scoped memo is invalidated or refreshed. |
 | Apps | `apps`, `/apps` | `ILatticeAppWorkspace`, `ILatticeAppsControl`, `ILatticeAppCatalog`, and `ILatticeAuthAdmin` for role binding | Tenant-scoped | Probes workspace apps, catalogue capabilities and control capabilities. It is Visible when the caller has a workspace answer, can browse the catalogue, or can list installed apps. Probe faults and missing facades deny the relevant flags, so a head serving none of them is Hidden. |
 | Access | `access`, `/access` and `/t/{tenant}/access` | `ILatticeAuthAdmin`; delegated tenant policy and directory facades | Mixed: `/access` is cluster-wide; `/t/{tenant}/access` is tenant-rooted and filters rules/groups for that tenant, with delegated groups, members and rules available when enabled | The smallest cluster group-catalogue page admits cluster access administrators. Only a Hidden result falls through to delegated access: a valid non-default asserted tenant with delegated access enabled can admit its administrator. Missing both surfaces or a denied/faulted tenant posture hides the area; an anonymous cluster-wide denial is Unavailable with "Sign in to administer access on this cluster." |
 | Schema | `schema`, `/schema` | `ILatticeSchemaControl` | Tenant-scoped | Probes schema capabilities against a reserved, side-effect-free tree id. Any schema grant makes the area Visible. A refused anonymous caller sees Unavailable with "Sign in to manage schema on this cluster."; a signed-in refusal, missing facade, unserved cluster or fault is Hidden. |
@@ -146,6 +146,47 @@ permission to read this entry.", unserved operations become "This cluster does
 not let you read this entry.", missing entries become "It no longer exists, or
 you cannot see it.", and transient failures ask the reader to try again.
 
+### Creating, editing and deleting an entry
+
+A caller who may write a tree changes it from the Keys tab. **New entry...** sits
+in the Keys toolbar; the entry panel adds **Edit** and **Delete...** beside
+**History of this key**, and a key with no live value offers **Write a value**.
+Each control is drawn only when the data facade's capability probe
+(`ILatticeDataApi.ProbeCapabilitiesAsync`) says the caller may write or delete -
+across the tree for **New entry...**, at the open key for **Edit** and
+**Delete...**. A view, a shared prefix, a missing data facade, a refused or faulted
+probe all read as no rights, so a reader sees none of the controls. Hiding is not
+the defence: the facade authorizes every write as the signed-in user, so a write
+the controls never offered is refused all the same.
+
+The value editor opens as a dialog (a sheet at the compact width). A new entry
+names its key in a plain text box that says, when the field is left, if the key
+already holds a value. The value is edited in one of three formats, chosen in
+**Edit as**: **JSON**, which is validated as it is typed (the error names the line
+and position) and re-indented by **Format JSON**; **Text (UTF-8)**, stored exactly
+as typed; and **Binary (base64)**, which a value that is not UTF-8 opens in and
+which replaces the value whole. A typed CRDT value changes through its typed
+operations and is not edited here; the panel says so instead of offering **Edit**.
+
+When the tree has a schema policy, the editor reads it once through the schema
+facade and checks the draft against it with the cluster's own validator as it is
+typed. It reports "Passes this tree's schema policy (N rules)", or that the
+cluster will refuse the value, with the reason of every rule it fails. A policy
+the caller cannot read is said to be unchecked, and the value is still saved.
+Saving a violating value is the facade's decision: the editor reports the
+refusal, with the policy's reason, and keeps the draft.
+
+On save the editor reads the entry again. If it was written or deleted after the
+editor opened - by another user, or by an ingestion feed - the newer value is
+shown with **Reload the newer value** and **Overwrite with my value**. The cluster
+is last-writer-wins, so this is a warning, not a lock. After a write the editor
+reads the key back and says "Entry ... saved." (or "created."), or that the key
+does not hold the value written.
+
+**Delete...** opens a destructive confirmation that names the key and asks for
+it to be typed. The deletion is a tombstone: the key's History keeps every
+revision and reads "Deleted" for the newest.
+
 The History tab has three modes. With neither `?key=` nor `?prefix=`, it asks
 for a key, in a [picker](navigation-model.md#pickers) that suggests the tree's keys
 starting with what you type (one bounded prefix scan per query) and accepts any key. With `?prefix=`, it follows live changes under that prefix and keeps
@@ -165,7 +206,10 @@ disables the live tail while the point-in-time view is active.
 The Metrics tab shows per-tree measures: lifecycle, shards, live keys,
 tombstones, depth, shards splitting, views and view lag where the cluster
 reports them. When detail metrics are paused, the affected measures read
-"Paused". The Dead letters tab reads a count and then pages strict-mode dead
+"Paused". The measures count every key in the tree, so a caller whose grant
+covers only part of it (a prefix-scoped rule, for example) is told they need
+read access to the whole tree; the tree's summary line then omits its key
+count, and the connection indicator stays Connected. The Dead letters tab reads a count and then pages strict-mode dead
 letters 50 at a time, with source, key, reason and clipped details. Both tabs
 show fixed sentences when the state API is unavailable, denied or faulted.
 
@@ -216,6 +260,64 @@ announced once; a failed or stopped one stays on the tab with the phase it
 reached and why. The actions are drawn only when the Explorer's tree-administration
 facade runs tracked operations.
 
+### Exporting a tree
+
+A tree workspace offers **Export...** (command `data.export`) beside its heading
+when the caller may range-read at least part of the tree. The page asks the
+[Data API](../lattice.api.data/README.md) once, per tree and per caller, for a
+one-entry range read with gate coverage: a whole or a narrowed range-read grant
+draws the action, and a denial, a tree the caller cannot observe, a cluster that
+serves no Data API, or any fault leaves it out. Views and shared prefixes are not
+offered. The download is still authorized by the facade, key by key.
+
+The dialog asks **What to export** - the whole tree, keys with a prefix (prefilled
+from the workspace's `?prefix=`), or a key range from an included first key up to
+an excluded stop key - and a **Format**, NDJSON or CSV. **Prepare download**
+captures the endpoint, the caller's sign-in for it and the tenant asserted now,
+and mints a single-use download ticket that is redeemable for one minute, from
+this browser tab only. **Download** posts the ticket's token, the tab's binding and
+the antiforgery token to the `downloads` endpoint under the Explorer's mount; no
+credential ever appears in a URL. The file streams as it is read, one page of 256
+entries at a time, so neither the browser nor the Explorer holds the whole file.
+The dialog follows the download: a progress line while it streams, then
+**Complete** or **Not complete** with the reason. A sign-in or sign-out, a change of
+cluster, or the tab closing withdraws a waiting ticket and stops a running export.
+A token that is reused, expired, or presented from another tab is refused with an
+empty `204`, so the console stays put and the dialog says what happened.
+
+If the scan's cursor expires mid-export it is reopened just after the last key
+written, so no key is written twice or skipped.
+
+The file format is `lattice-export/1`, written in UTF-8 without a byte-order mark:
+
+- A value is written as **JSON**, verbatim, when its bytes are exactly one RFC 8259
+  JSON value with no byte-order mark, no leading or trailing whitespace and no
+  carriage return or line feed. Any other value is written as standard, padded
+  **base64** and marked `base64`. Either way the original bytes are recoverable
+  exactly: the raw JSON text of the value, or its base64-decoded bytes. Values are
+  the stored bytes, so a typed CRDT entry exports its internal serialization.
+- **NDJSON** (`application/x-ndjson`): one object per line, each ending in a line
+  feed: `{"key":"order/0017","value":{"total":-5}}`, or
+  `{"key":"blob","value":"AP8QIA==","encoding":"base64"}`.
+- **CSV** (`text/csv`, RFC 4180, CRLF line ends): the header `key,value,encoding`,
+  then one row per entry with the key always quoted, and either a quoted JSON value
+  with `json` or a base64 value with `base64` in the encoding column.
+- **The trailer** is always last, and a file without one was cut off. In NDJSON it
+  is the line `{"trailer":{...}}`, an object with no `key`; in CSV it is a row with
+  an empty key, the trailer object quoted as its value, and `trailer` as its
+  encoding. The object is
+  `{"format":"lattice-export/1","items":N,"complete":true|false,"refused":"none|some|all|unknown","reason":null|"..."}`.
+  `complete` is true only when every key in the scope is in the file. `refused` says
+  whether the caller's access withheld keys: `some` when it narrows the scope,
+  `all` when it denies it, and `unknown` when the export stopped or the tree could
+  not be read. It is a classification and never a count or list of withheld keys,
+  which would disclose data the caller may not read. `reason` is a plain sentence
+  whenever the file is not complete.
+
+The download endpoint, the single-use ticket and the trailer are a shared seam: any
+other Explorer download, such as an import's rejection list, is minted and
+streamed the same way.
+
 App-owned trees use logical ids shaped like `a/{slug}/...`. Data links their
 owner badge to `/apps/{slug}`, and tag and view member rows preserve those
 logical links. Physical state ids, tenant-composed ids, restore shadows and view
@@ -231,11 +333,15 @@ pickers and address completions offer shared trees with their owner and access,
 and Home's Data line counts them ("..., and 2 shared with this tenant."). When the
 tenant's grants cannot be listed, the directory shows its own trees with a note.
 
-The Data palette command is:
+The Data palette commands are:
 
 | Command id | Label | Effect |
 | --- | --- | --- |
 | `data.refresh` | Refresh the tree directory | Drops the circuit's loaded tree and view list, reloads it, and updates the directory and workspace surfaces. |
+| `data.export` | Export... | Opens the Export dialog of the open tree workspace (see [Exporting a tree](#exporting-a-tree)). The palette offers it only while a tree workspace that draws **Export...** is open - the same verdict, for the same caller - and leaves it out everywhere else. |
+| `data.new-entry` | New entry... | Offered while a tree workspace whose caller may write it is open. Opens the value editor for a new key. |
+| `data.edit-entry` | Edit entry | Offered while an entry the caller may write is open. Opens the value editor on it. |
+| `data.delete-entry` | Delete entry... | Offered while a live entry the caller may delete is open. Opens the destructive confirmation. |
 
 The directory remembers a successful tree/view catalogue for one caller,
 endpoint and active tenant. It forgets the list when sign-in, endpoint or active

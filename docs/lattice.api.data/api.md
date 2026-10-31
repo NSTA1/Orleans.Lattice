@@ -21,6 +21,7 @@ The remote transport's surface - `LatticeDataApiGrpcClient`, the wire records, a
 | Point and bulk writes | `SetAsync`, `DeleteAsync`, `DeleteRangeAsync`, `SetManyAsync` |
 | Atomic batches | `SetManyAtomicAsync`, `SetManyAtomicCrossTreeAsync` |
 | Reads | `GetAsync`, `ReadRangeAsync` |
+| Capability probe | `ProbeCapabilitiesAsync` - whether the caller may write or delete at a key, or anywhere in a tree, answered from the access gate with no side effects. A default interface member: an implementer written before it existed keeps compiling and reports no write and no delete (fail-closed), so a management surface hides its write controls against it while real writes are still authorized on attempt. This package's facade, the gRPC binding and the MCP remote adapter answer the real probe. |
 | Typed CRDT verbs | the PN-counter, OR-set, OR-flag, RW-flag, G-counter, G-set, RW-set, version-vector, multi-value register, max/min register, sequence and OR-map methods listed in [Typed CRDT facade verbs](README.md#typed-crdt-facade-verbs) |
 
 ## Related
@@ -71,6 +72,7 @@ The following inventory includes directly declared public members and overloads,
 - `Task SetManyAsync(string treeId, IReadOnlyList<DataEntry> upserts, CancellationToken cancellationToken = default)`
 - `Task<DataReadResult> GetAsync(string treeId, string key, CancellationToken cancellationToken = default)`
 - `Task<DataRangePage> ReadRangeAsync(DataRangeRequest request, CancellationToken cancellationToken = default)`
+- `Task<LatticeDataCapabilities> ProbeCapabilitiesAsync(string treeId, string? key = null, CancellationToken cancellationToken = default)` (default interface member; reports no capability unless overridden)
 - `Task CounterIncrementAsync(string treeId, string key, string replicaId, long amount, CancellationToken cancellationToken = default)`
 - `Task CounterDecrementAsync(string treeId, string key, string replicaId, long amount, CancellationToken cancellationToken = default)`
 - `Task<long> CounterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)`
@@ -119,6 +121,7 @@ The following inventory includes directly declared public members and overloads,
 - `public const string DataReadResult`
 - `public const string DataRangeDeleteRequest`
 - `public const string DataRangeDeleteResult`
+- `public const string LatticeDataCapabilities`
 
 ### `Orleans.Lattice.Api.Data.DataAtomicBatch`
 
@@ -170,6 +173,7 @@ The following inventory includes directly declared public members and overloads,
 - `public required string TreeId`
 - `public IReadOnlyList<DataEntry> Entries`
 - `public string? ContinuationToken`
+- `public LatticeRangeReadGateCoverage? GateCoverage`
 
 ### `Orleans.Lattice.Api.Data.DataRangeRequest`
 
@@ -182,6 +186,7 @@ The following inventory includes directly declared public members and overloads,
 - `public string? EndExclusive`
 - `public int PageSize`
 - `public string? ContinuationToken`
+- `public bool IncludeGateCoverage`
 
 ### `Orleans.Lattice.Api.Data.DataReadResult`
 
@@ -207,3 +212,14 @@ The following inventory includes directly declared public members and overloads,
 - `public required string TreeId`
 - `public List<DataEntry> Upserts`
 - `public List<string> DeleteKeys`
+
+### `Orleans.Lattice.Api.Data.LatticeDataCapabilities`
+
+[Source](../../src/lattice.api.abstractions/Data/Model/LatticeDataCapabilities.cs) (line 27).
+
+`public sealed record LatticeDataCapabilities`
+
+- `public required string TreeId`
+- `public string? Key`
+- `public bool CanWrite`
+- `public bool CanDelete`

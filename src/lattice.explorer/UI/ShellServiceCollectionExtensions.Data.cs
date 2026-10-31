@@ -29,6 +29,12 @@ internal static partial class ShellServiceCollectionExtensions
         services.TryAddScoped<DataCompletionSource>();
         services.TryAddScoped<DataAdminGate>();
         services.TryAddScoped<DataViewCommandScope>();
+        services.TryAddScoped<DataExportCommandScope>();
+        services.TryAddScoped<DataCommandSignals>();
+        services.TryAddScoped<DataExportGate>();
+        services.TryAddScoped<IDataExportSources, ShellDataExportSources>();
+        services.TryAddScoped<DataWriteGate>();
+        services.TryAddScoped<DataEntryCommands>();
         services.AddExplorerArea<DataArea>();
     }
 }

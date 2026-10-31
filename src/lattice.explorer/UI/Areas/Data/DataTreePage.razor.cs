@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Explorer.Core.Metrics;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Explorer.UI.Design.Components;
+using Orleans.Lattice.Explorer.UI.Design.Tokens;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 
@@ -9,7 +10,8 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 /// The Data area's tree workspace at <c>/data/{tree-path}</c>: the tree the
 /// address names, resolved against the caller's directory (so an address the
 /// caller cannot reach reads as not found), with its keys, history, metrics,
-/// dead letters, tag indexes and views as tabs.
+/// dead letters, tag indexes and views as tabs. It owns the visible control of
+/// the <c>data.export</c> command, drawn only for a caller the export gate admits.
 /// </summary>
 public partial class DataTreePage : IDisposable
 {
@@ -21,6 +23,8 @@ public partial class DataTreePage : IDisposable
     private long? _liveKeys;
     private bool _missing;
     private string? _error;
+    private bool _canExport;
+    private bool _exportOpen;
 
     [Inject]
     internal DataDirectory Directory { get; set; } = default!;
@@ -33,6 +37,25 @@ public partial class DataTreePage : IDisposable
 
     [Inject]
     internal DataViewCommandScope ViewCommand { get; set; } = default!;
+
+    [Inject]
+    internal DataExportGate ExportGate { get; set; } = default!;
+
+    [Inject]
+    internal DataExportCommandScope ExportCommand { get; set; } = default!;
+
+    [Inject]
+    internal DataCommandSignals Signals { get; set; } = default!;
+
+    [CascadingParameter(Name = LtBreakpointCascade.Name)]
+    internal LtBreakpoint? Breakpoint { get; set; }
+
+    /// <inheritdoc />
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+        Signals.Requested += OnCommand;
+    }
 
     /// <inheritdoc />
     protected override async Task OnParametersSetAsync()
@@ -54,6 +77,8 @@ public partial class DataTreePage : IDisposable
     public void Dispose()
     {
         ViewCommand.Withdraw(_tree);
+        ExportCommand.Withdraw(_tree);
+        Signals.Requested -= OnCommand;
         _lifetime.Leave();
         GC.SuppressFinalize(this);
     }
@@ -63,12 +88,15 @@ public partial class DataTreePage : IDisposable
         var token = _lifetime.Renew();
         _resolvedFor = target;
         ViewCommand.Withdraw(_tree);
+        ExportCommand.Withdraw(_tree);
         _tree = null;
         _workspace = null;
         _source = null;
         _liveKeys = null;
         _missing = false;
         _error = null;
+        _canExport = false;
+        _exportOpen = false;
         try
         {
             var tree = await Directory.ResolveAsync(target, token);
@@ -99,6 +127,7 @@ public partial class DataTreePage : IDisposable
         _source = Directory.FindByStateId(_tree.SourceStateId);
         _ = LoadKeyCountAsync(_tree);
         _ = OfferViewCommandAsync(_tree, token);
+        _ = LoadExportGateAsync(_tree);
     }
 
     /// <summary>
@@ -124,6 +153,52 @@ public partial class DataTreePage : IDisposable
             // The command is a convenience; the Views tab draws its own control.
         }
     }
+
+    private async Task LoadExportGateAsync(DataTreeEntry tree)
+    {
+        bool allowed;
+        try
+        {
+            allowed = await ExportGate.CanExportAsync(tree, _lifetime.Token);
+        }
+        catch (Exception)
+        {
+            return;
+        }
+
+        if (!allowed || !ReferenceEquals(tree, _tree))
+        {
+            return;
+        }
+
+        _canExport = true;
+        ExportCommand.Offer(tree);
+        if (Signals.TryTake(DataArea.ExportCommandId))
+        {
+            _exportOpen = true;
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void OnCommand(string commandId)
+    {
+        if (string.Equals(commandId, DataArea.ExportCommandId, StringComparison.Ordinal))
+        {
+            _ = InvokeAsync(() =>
+            {
+                // A caller the gate does not admit has no Export control, and the command
+                // opens nothing for them either.
+                if (_canExport)
+                {
+                    _exportOpen = true;
+                    StateHasChanged();
+                }
+            });
+        }
+    }
+
+    private void OpenExport() => _exportOpen = true;
 
     private async Task LoadKeyCountAsync(DataTreeEntry tree)
     {

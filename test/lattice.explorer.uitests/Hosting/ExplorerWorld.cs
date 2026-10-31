@@ -13,6 +13,8 @@ using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Api.Auth.Grpc;
 using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Api.Backup.Grpc;
+using Orleans.Lattice.Api.Data;
+using Orleans.Lattice.Api.Data.Grpc;
 using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Api.Replication.Grpc;
 using Orleans.Lattice.Api.Schema;
@@ -163,6 +165,27 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
     /// </param>
     public ILatticeAppsControl AppsControl(string user = WorldIdentities.Admin, string? tenant = null) =>
         LatticeAppsApiGrpcClient.Create(Invoker(user, tenant), Head.Services);
+
+    /// <summary>
+    /// The data facade's gRPC client as <paramref name="user"/> sees it: what the
+    /// Explorer's own data transport would send on that user's behalf, used to write
+    /// behind an open editor or to forge a write the UI never offered (#5367).
+    /// </summary>
+    /// <param name="user">The caller, <see cref="WorldIdentities.Admin"/> by default.</param>
+    public LatticeDataApiGrpcClient Data(string user = WorldIdentities.Admin) =>
+        LatticeDataApiGrpcClient.Create(Invoker(user), Head.Services);
+
+    /// <summary>Sets <paramref name="treeId"/>'s schema policy as the administrator, through the schema facade the Schema area calls.</summary>
+    /// <param name="treeId">The tree.</param>
+    /// <param name="policy">The policy.</param>
+    public async Task SetPolicyAsync(string treeId, LatticeSchemaPolicy policy)
+    {
+        var token = Convert.ToBase64String(Encoding.UTF8.GetBytes(WorldIdentities.Admin + ":" + WorldIdentities.Password));
+        using (LatticeCredentialContext.Use(token, scheme: TrustedUserAuthenticator.Scheme))
+        {
+            await Head.Services.GetRequiredService<ILatticeSchemaControl>().SetPolicyAsync(treeId, policy);
+        }
+    }
 
     /// <summary>
     /// Installs the task-board app from the in-image source with the walkthrough's
@@ -340,6 +363,7 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
             silo.UseInMemoryReminderService();
             silo.AddLattice((services, name) => services.AddMemoryGrainStorage(name));
             silo.AddLatticeStateApi();
+            silo.AddLatticeDataApi();
 
             silo.AddLatticeMembership();
             silo.AddStaticIdentityDirectory(roster => roster
@@ -391,6 +415,7 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
 
         var services = builder.Services;
         services.AddLatticeStateApiGrpc(o => { o.RequireAuthorization = false; o.CredentialScheme = TrustedUserAuthenticator.Scheme; });
+        services.AddLatticeDataApiGrpc(o => { o.RequireAuthorization = false; o.CredentialScheme = TrustedUserAuthenticator.Scheme; });
         services.AddLatticeAuthApiGrpc(o => { o.RequireAuthorization = false; o.CredentialScheme = TrustedUserAuthenticator.Scheme; });
         services.AddLatticeSchemaApiGrpc(o => { o.RequireAuthorization = false; o.CredentialScheme = TrustedUserAuthenticator.Scheme; });
 
@@ -413,6 +438,7 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
     private static void MapClusterSurface(WebApplication app, bool tenancy)
     {
         app.MapLatticeStateApiGrpc();
+        app.MapLatticeDataApiGrpc();
         app.MapLatticeAuthApiGrpc();
         app.MapLatticeSchemaApiGrpc();
         app.MapLatticeAppsApiGrpc();
@@ -523,6 +549,8 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
                     | LatticeOperation.Delete | LatticeOperation.RangeDelete,
                 effect: LatticeEffect.Allow));
         }
+
+        await SeedExportAsync();
     }
 
     /// <summary>

@@ -1,0 +1,90 @@
+@using Orleans.Lattice.Explorer.UI.Downloads
+
+@*
+    The Export dialog (issue #5366). The user chooses a scope and a format and
+    prepares the download, which mints a single-use, circuit-bound ticket; the
+    Download button then posts that ticket, with this circuit's binding and the
+    antiforgery token, to the download endpoint, and the browser saves the file
+    as it streams. The dialog follows the ticket: progress while it streams, and
+    the trailer's verdict - complete, or partial and why - when it ends.
+*@
+
+<LtDialog Open="Open"
+          OpenChanged="OnOpenChangedAsync"
+          Title="@($"Export {TreeName}")"
+          Description="Download keys and their values as a file. The file is written as it is read, and its last line says whether it is complete."
+          Placement="Placement">
+    <div class="lt-data-export" data-lt-export-state="@StateName">
+        @if (_ticket is null)
+        {
+            <form class="lt-data-export__form" @onsubmit="Prepare">
+                <LtSelect Label="What to export" Options="ScopeOptions" Value="@ScopeValue" ValueChanged="OnScopeChanged" />
+                @if (_scope == DataExportScopeKind.Prefix)
+                {
+                    <LtTextInput Label="Prefix" Mono="true" @bind-Value="_prefix" Hint="Every key that starts with this text." />
+                }
+                else if (_scope == DataExportScopeKind.Range)
+                {
+                    <LtTextInput Label="From key" Mono="true" @bind-Value="_from" Hint="The first key, included. Leave empty to start at the first key." />
+                    <LtTextInput Label="Up to key" Mono="true" @bind-Value="_to" Hint="The range stops before this key. Leave empty to run to the last key." />
+                }
+                <LtSelect Label="Format" Options="FormatOptions" Value="@FormatValue" ValueChanged="OnFormatChanged" Hint="@FormatHint" />
+                @if (_error is not null)
+                {
+                    <p class="lt-data-export__error" role="alert">@_error</p>
+                }
+                <div class="lt-dialog__actions">
+                    <LtButton Variant="LtButtonVariant.Quiet" OnClick="CloseAsync">Cancel</LtButton>
+                    <LtButton Type="LtButtonType.Submit">Prepare download</LtButton>
+                </div>
+            </form>
+        }
+        else if (_prepared is { } prepared)
+        {
+            var ticket = _ticket;
+            <LtDefinitionList>
+                <LtDefinition Term="Scope" Mono="@(prepared.Scope != DataExportScopeKind.Tree)">@ScopeText(prepared)</LtDefinition>
+                <LtDefinition Term="File" Mono="true">@prepared.FileName</LtDefinition>
+            </LtDefinitionList>
+
+            @switch (ticket.State)
+            {
+                case ExplorerDownloadState.Ready:
+                    <p class="lt-data-export__note">Your download is ready. The button works once, from this tab, within the next minute.</p>
+                    <form method="post" action="@ExplorerDownloads.FormAction" data-enhance="false" class="lt-data-export__download">
+                        <AntiforgeryToken />
+                        <input type="hidden" name="@ExplorerDownloads.TokenField" value="@ticket.Token" />
+                        <input type="hidden" name="@ExplorerDownloads.BindingField" value="@Downloads.Binding" />
+                        <div class="lt-dialog__actions">
+                            <LtButton Variant="LtButtonVariant.Quiet" OnClick="Withdraw">Cancel</LtButton>
+                            <LtButton Type="LtButtonType.Submit" data-lt-export-download="true">Download</LtButton>
+                        </div>
+                    </form>
+                    break;
+                case ExplorerDownloadState.Running:
+                    <LtProgress Label="Export progress" Phase="Exporting" Value="@ticket.Items" Detail="@ProgressText(ticket)" />
+                    <div class="lt-dialog__actions">
+                        <LtButton Variant="LtButtonVariant.Quiet" OnClick="Withdraw">Stop export</LtButton>
+                    </div>
+                    break;
+                case ExplorerDownloadState.Finished when ticket.Trailer is { } trailer:
+                    <div class="lt-data-export__result" role="status">
+                        <LtStatusPill State="@(trailer.Complete ? LtStateRole.Healthy : LtStateRole.Lagging)" Text="@(trailer.Complete ? "Complete" : "Not complete")" />
+                        <p>@ResultText(trailer)</p>
+                    </div>
+                    <div class="lt-dialog__actions">
+                        <LtButton Variant="LtButtonVariant.Quiet" OnClick="Reset">Export again</LtButton>
+                        <LtButton OnClick="CloseAsync">Done</LtButton>
+                    </div>
+                    break;
+                default:
+                    <p class="lt-data-export__error" role="alert">@RefusalText(ticket.State)</p>
+                    <div class="lt-dialog__actions">
+                        <LtButton Variant="LtButtonVariant.Quiet" OnClick="CloseAsync">Done</LtButton>
+                        <LtButton OnClick="Reset">Prepare again</LtButton>
+                    </div>
+                    break;
+            }
+        }
+    </div>
+</LtDialog>

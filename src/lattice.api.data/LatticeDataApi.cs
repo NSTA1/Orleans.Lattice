@@ -13,7 +13,10 @@ namespace Orleans.Lattice.Api.Data;
 internal sealed partial class LatticeDataApi(
     IGrainFactory grainFactory,
     IOptions<LatticeApiDataOptions> apiOptions,
-    ITenantContextResolver tenantResolver) : ILatticeDataApi
+    ITenantContextResolver tenantResolver,
+    ILatticeAccessGate? accessGate = null,
+    ILatticeMembershipContext? membership = null,
+    ILatticeReadGrantProbe? grantProbe = null) : ILatticeDataApi
 {
     private readonly IGrainFactory _grainFactory = grainFactory
         ?? throw new ArgumentNullException(nameof(grainFactory));
@@ -23,6 +26,15 @@ internal sealed partial class LatticeDataApi(
 
     private readonly ITenantContextResolver _tenantResolver = tenantResolver
         ?? throw new ArgumentNullException(nameof(tenantResolver));
+
+    // The capability probe's collaborators: the gate the write path consults, the
+    // membership seam that resolves the caller, and the any-grant probe. Each is
+    // optional, because a host with no authorization add-on registers none of them.
+    private readonly ILatticeAccessGate? _accessGate = accessGate;
+
+    private readonly ILatticeMembershipContext? _membership = membership;
+
+    private readonly ILatticeReadGrantProbe? _grantProbe = grantProbe;
 
     /// <summary>
     /// Resolves the caller-supplied, tenant-local tree name to the effective tree
@@ -298,6 +310,7 @@ internal sealed partial class LatticeDataApi(
         var fresh = string.IsNullOrEmpty(request.ContinuationToken);
 
         string cursorId;
+        LatticeRangeReadGateCoverage? coverage = null;
         if (fresh)
         {
             // An unknown tree yields an empty, fully-drained page rather than a
@@ -310,6 +323,28 @@ internal sealed partial class LatticeDataApi(
                     Entries = Array.Empty<DataEntry>(),
                     ContinuationToken = null,
                 };
+            }
+
+            // Asked only when the caller wants to know, and only once the tree is
+            // known to be observable to them: the existence probe above is
+            // read-gated, so this never discloses a tree the caller cannot see.
+            if (request.IncludeGateCoverage)
+            {
+                coverage = await tree.GetRangeReadGateCoverageAsync(
+                    request.StartInclusive,
+                    request.EndExclusive,
+                    cancellationToken).ConfigureAwait(false);
+                if (coverage == LatticeRangeReadGateCoverage.Denied)
+                {
+                    // A denied range reads nothing, so no cursor is opened for it.
+                    return new DataRangePage
+                    {
+                        TreeId = request.TreeId,
+                        Entries = Array.Empty<DataEntry>(),
+                        ContinuationToken = null,
+                        GateCoverage = coverage,
+                    };
+                }
             }
 
             cursorId = await tree.OpenEntryCursorAsync(
@@ -367,6 +402,7 @@ internal sealed partial class LatticeDataApi(
             TreeId = request.TreeId,
             Entries = entries,
             ContinuationToken = continuation,
+            GateCoverage = coverage,
         };
     }
 

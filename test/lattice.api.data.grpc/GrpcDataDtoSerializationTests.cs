@@ -347,6 +347,21 @@ public sealed class GrpcDataDtoSerializationTests
     }
 
     [Test]
+    public void DataProbeRequest_and_capabilities_round_trip()
+    {
+        var request = new DataProbeRequest { TreeId = "t", Key = "k" };
+        var whole = new DataProbeRequest { TreeId = "t" };
+        var report = new LatticeDataCapabilities { TreeId = "t", Key = "k", CanWrite = true, CanDelete = false };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(RoundTrip(request), Is.EqualTo(request));
+            Assert.That(RoundTrip(whole).Key, Is.Null);
+            Assert.That(RoundTrip(report), Is.EqualTo(report));
+        });
+    }
+
+    [Test]
     public void Marshaller_round_trips_a_crdt_write_request_through_the_grpc_contexts()
     {
         var original = new CrdtWriteRequest
