@@ -78,7 +78,9 @@ public sealed class CopyLogHoldReplicationIntegrationTests
         var remediation = Grains.GetGrain<ILatticeSchemaRemediationGrain>(MigratedTree);
         const string operationId = "clh-migration";
         await remediation.AcceptAsync(
-            LatticeValueTransform.RenameMember("a", "b"), new LatticeSchemaPolicy([LatticeSchemaRule.Json()]), operationId);
+            LatticeValueTransform.Passthrough(LatticeValueTransform.RenameMember("a", "b")),
+            new LatticeSchemaPolicy([LatticeSchemaRule.Json()]),
+            operationId);
 
         // Drive the dry run and the build; stop at the cutover, with the copy built.
         LatticeSchemaRemediationReport status;
@@ -88,7 +90,7 @@ public sealed class CopyLogHoldReplicationIntegrationTests
         }
         while (status.InProgress && status.Phase != LatticeSchemaRemediationPhase.Cutover);
 
-        Assert.That(status.Phase, Is.EqualTo(LatticeSchemaRemediationPhase.Cutover), "precondition: the copy is built");
+        Assert.That(status.Phase, Is.EqualTo(LatticeSchemaRemediationPhase.Cutover), $"precondition: the copy is built ({status.Reason})");
         var copy = status.DestinationTreeId!;
         Assert.That(await HoldRegisteredOnAsync(copy), Is.True, "the build holds the copy's log");
 
