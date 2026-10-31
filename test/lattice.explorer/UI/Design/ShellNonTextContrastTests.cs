@@ -118,6 +118,19 @@ public sealed class ShellNonTextContrastTests
     }
 
     [Test]
+    public void A_table_sort_header_keeps_the_minimum_target_size()
+    {
+        // WCAG 2.2 SC 2.5.8: the sort button is the whole column header's
+        // target, and a bare line of small text is under 24px tall.
+        var sort = ShellStylesheets.Rules(ShellStylesheets.Primitives)
+            .Single(rule => rule.AtRule.Length == 0 && rule.Selector == ".lt-table__sort");
+        var minHeight = System.Text.RegularExpressions.Regex.Match(sort.Body, @"(?:^|[;{\s])min-height:\s*(?<v>[^;]+);");
+
+        Assert.That(minHeight.Success, Is.True, ".lt-table__sort must declare a min-height");
+        Assert.That(ShellStylesheets.Pixels(minHeight.Groups["v"].Value), Is.GreaterThanOrEqualTo(24));
+    }
+
+    [Test]
     public void Comfortable_rows_and_controls_are_touch_targets()
     {
         // The responsive contract (epic #3807): in the default density every row
