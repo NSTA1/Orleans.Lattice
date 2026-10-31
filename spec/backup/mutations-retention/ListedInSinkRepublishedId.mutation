@@ -1,0 +1,29 @@
+# Pairs with ListedInSink. Production before the fix of #5418: a full
+# backup's id was the hash of its payload alone, so a full capture of an
+# unchanged tree republished an existing backup's id. A pass that had listed
+# and doomed that backup removed its row and deleted its sink manifest, the
+# republishing capture registered the row again (with no row left to
+# reconcile against), and the catalog listed a backup the sink no longer held.
+# The mutation adds a branch to Start: a full capture may take the id of a
+# full backup already in the sink instead of a fresh one.
+MODULE: ListedInSinkRepublishedId
+TARGET: ListedInSink
+CLASS: Invariant
+SUMMARY: a full capture republishes an existing full backup's id
+PERTURBS: Start
+
+--- FIND
+    /\ meta' = [meta EXCEPT ![next] = [kind |-> k, base |-> b, t |-> now]]
+    /\ cap' = [cap EXCEPT ![c] = [ph |-> "drain", id |-> next]]
+    /\ next' = next + 1
+--- REPLACE
+    /\ \/ /\ meta' = [meta EXCEPT ![next] = [kind |-> k, base |-> b, t |-> now]]
+          /\ cap' = [cap EXCEPT ![c] = [ph |-> "drain", id |-> next]]
+          /\ next' = next + 1
+       \* MUTATION: a full capture of unchanged content republishes the id.
+       \/ /\ k = "full"
+          /\ \E r \in snk :
+                /\ meta[r].kind = "full"
+                /\ cap' = [cap EXCEPT ![c] = [ph |-> "drain", id |-> r]]
+          /\ UNCHANGED <<meta, next>>
+--- END

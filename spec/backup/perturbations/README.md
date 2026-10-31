@@ -21,7 +21,8 @@ safety-critical rows: the increment's base re-check (`Check(c)`), the pass's
 dependent scan (`Scan(p)`) and the one-pass guard (`PruneList(p)`); and at the
 two rows the module's independent review (#5352) found its detectors did not
 reach: a listing read under that guard (`ListedRestorable`, #5412) and the
-grain's tip-first delete order (`SinkChainIntact`). No other backup module has a
+grain's tip-first delete order (`SinkChainIntact`); and at the capture-unique
+backup id that #5418 added (`ListedInSink`). No other backup module has a
 perturbation yet.
 
 ## Unseeded rows
@@ -29,7 +30,7 @@ perturbation yet.
 | Module | Row | Reason |
 |--------|-----|--------|
 | BackupRetention | Tick | An environment action: the wall clock. No production code implements it; the planner's time arithmetic is pinned by its unit tests. |
-| BackupRetention | Start(c,k,b) | An environment action: a capture starting. Its one production check, that the base's sink manifest exists, is shared by every incremental capture and pinned by the incremental capture suite, outside retention. |
+| BackupRetention | Start(c,k,b) | An environment action: a capture starting. Its id allocation is seeded through `ListedInSink` (`CaptureRepublishesContentId`); its one other production check, that the base's sink manifest exists, is shared by every incremental capture and pinned by the incremental capture suite, outside retention. |
 | BackupRetention | WriteArt(c) | The artifact write is the capture engine's, common to every capture; an edit that drops it fails every capture test, which measures the capture engine rather than retention. |
 | BackupRetention | WriteMan(c) | The manifest write is the capture engine's, common to every capture; dropping it fails every capture test, not the retention detectors specifically. |
 | BackupRetention | Register(c) | The catalog registration is the capture engine's, common to every capture; dropping it fails every capture test, not the retention detectors specifically. |

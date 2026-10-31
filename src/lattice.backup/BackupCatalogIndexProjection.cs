@@ -19,11 +19,12 @@ namespace Orleans.Lattice.Backup;
 /// so a deleted backup can never surface through the index.
 /// </para>
 /// <para>
-/// <b>Standalone re-captures are idempotent.</b> A backup id is a content address
-/// and a standalone backup's capture time is held immutable by
-/// <see cref="BackupManifestRegistration"/> when the id is re-registered, so
-/// re-capturing identical content re-keys to the same index key and upserts in
-/// place rather than leaving an orphaned duplicate row behind. A row left behind by
+/// <b>Re-registration is idempotent.</b> A standalone backup's capture time is
+/// held immutable by <see cref="BackupManifestRegistration"/> when its id is
+/// re-registered (a set stamp, a catalog rebuild), so a re-registration re-keys to
+/// the same index key and upserts in place rather than leaving an orphaned
+/// duplicate row behind. Each capture has its own id (issue #5418), so a capture
+/// never re-registers another capture's backup. A row left behind by
 /// an earlier index generation (before this became idempotent, or by a set stamp)
 /// is healed by the liveness check and the created-descending read's per-page
 /// de-duplication, and shed entirely the next time the non-accumulative view

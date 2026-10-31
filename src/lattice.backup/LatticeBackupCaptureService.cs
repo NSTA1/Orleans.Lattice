@@ -267,7 +267,6 @@ internal sealed class LatticeBackupCaptureService(
                             startInclusive,
                             endExclusive,
                             ResolveTreeMergeMode(treeId),
-                            request.BaseBackupId,
                             request.PageSize,
                             async (txIds, _) =>
                             {
@@ -352,7 +351,9 @@ internal sealed class LatticeBackupCaptureService(
         string retiredIncrementId;
         try
         {
-            var backupId = collector.BackupId;
+            // Unique to this capture (issue #5418); the payload digest stays in the
+            // content descriptor for the restore integrity gate.
+            var backupId = BackupIdentity.Compute(request.BaseBackupId, collector.ContentHash, artifactId);
             var lattice = grainFactory.GetGrain<ILattice>(treeId);
             var topology = await BuildTopologyAsync(lattice, startInclusive, endExclusive, cancellationToken)
                 .ConfigureAwait(false);
@@ -706,7 +707,7 @@ internal sealed class LatticeBackupCaptureService(
             // A cross-tree saga was still delegated under the gate, one registered
             // on the set mid-capture, or the gate was not held throughout: the
             // captured members may be torn. Discard them (they remain as
-            // content-addressed orphan per-tree backups) and retry with a fresh
+            // orphan per-tree backups) and retry with a fresh
             // fence and gate.
             BackupMetrics.CrossTreeFenceRetries.Add(1, LatticeTenantLabel.Platform);
             logger.LogDebug(
@@ -987,9 +988,10 @@ internal sealed class LatticeBackupCaptureService(
                     stream,
                     cancellationToken).ConfigureAwait(false);
 
-                // The manifest id is the content address of the streamed payload, so a
-                // capture that produced identical bytes registers the same backup id.
-                var backupId = collector.ContentHash;
+                // The manifest id is unique to this capture (issue #5418): it folds the
+                // capture's own artifact id into the payload digest, so a capture of an
+                // unchanged tree never re-publishes an existing backup's id.
+                var backupId = BackupIdentity.Compute(null, collector.ContentHash, artifactId);
 
                 var topology = await BuildTopologyAsync(lattice, startInclusive, endExclusive, cancellationToken)
                     .ConfigureAwait(false);
@@ -1132,9 +1134,9 @@ internal sealed class LatticeBackupCaptureService(
     }
 
     /// <summary>
-    /// Builds a per-capture, ASCII, separator-free artifact id. The manifest id
-    /// (the content address) is derived after streaming; the artifact id only
-    /// needs to be unique per capture.
+    /// Builds a per-capture, ASCII, separator-free artifact id. It is unique per
+    /// capture, and the manifest id is derived from it and the payload digest
+    /// after streaming (<see cref="BackupIdentity"/>), so it is unique too.
     /// </summary>
     private static string BuildArtifactId(BackupScopeSelector scope, DateTimeOffset createdAtUtc) =>
         $"{scope.TreeId}-{scope.Kind}-{createdAtUtc.UtcTicks}-{Guid.NewGuid():N}";

@@ -83,6 +83,61 @@ public sealed class BackupRetentionConcurrencyTests
         }
     }
 
+    [Test]
+    public async Task A_full_capture_of_an_unchanged_tree_during_a_pass_is_not_deleted_by_it()
+    {
+        // Issue #5418. A pass lists an expired full backup and removes its row;
+        // at the pass's sink scan, a full capture of the unchanged tree runs. Were
+        // backup ids content addresses, that capture would republish the expired
+        // backup's id - writing its sink manifest and registering its row - and the
+        // pass would then delete the sink manifest it had just written, leaving the
+        // catalog listing a backup the sink no longer holds.
+        _fixture = new SchedulerClusterFixture();
+        await _fixture.InitializeAsync(
+            o =>
+            {
+                o.RetentionEnabled = true;
+                o.RetentionMaxAge = TimeSpan.FromMilliseconds(200);
+            },
+            intercepted: true);
+        var scope = BackupScopeSelector.WholeTree(Tree);
+        await SeedAsync("k1", "v1");
+        var expired = await _fixture.CaptureService.CaptureAsync(new LatticeBackupCaptureRequest("expired", scope));
+        await Task.Delay(400);
+
+        LatticeBackupCaptureResult? recaptured = null;
+        InterceptingBackupSink.BeforeManifestList = async () =>
+        {
+            if (recaptured is null)
+            {
+                recaptured = await _fixture.CaptureService.CaptureAsync(new LatticeBackupCaptureRequest("unchanged", scope));
+            }
+        };
+
+        var report = await _fixture.Scheduler(scope).PruneAsync(scope);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recaptured, Is.Not.Null, "the capture must have run inside the pass");
+            Assert.That(report.PrunedBackupIds, Is.EqualTo(new[] { expired.BackupId }));
+        });
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await _fixture.Catalog.GetAsync(recaptured!.BackupId), Is.Not.Null, "the new capture must stay listed");
+            Assert.That((await _fixture.Sink.ProbeAsync(recaptured.BackupId)).IsResolvable, Is.True, "the new capture must stay resolvable from the sink");
+        });
+        await AssertEveryListedBackupResolvesFromTheSinkAsync();
+    }
+
+    private async Task AssertEveryListedBackupResolvesFromTheSinkAsync()
+    {
+        await foreach (var manifest in _fixture.Catalog.ListAsync())
+        {
+            var probe = await _fixture.Sink.ProbeAsync(manifest.Id);
+            Assert.That(probe.IsResolvable, Is.True, $"listed backup '{manifest.Id}' is not resolvable from the sink");
+        }
+    }
+
     private async Task<(BackupScopeSelector Scope, string BaseId)> DeployWithBaseAsync()
     {
         _fixture = new SchedulerClusterFixture();

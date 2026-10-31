@@ -11,8 +11,7 @@ namespace Orleans.Lattice.Backup.Tests;
 /// deployment, where it is simply the local cluster id. An incremental extends
 /// only the chain owned by its base's capturing cluster; an extend request whose
 /// base was captured on a different cluster produces a fresh full rather than a
-/// forked chain. Content-addressed artifacts remain idempotent across identical
-/// captures.
+/// forked chain. Identical captures publish distinct backups (issue #5418).
 /// </summary>
 [Category("Integration")]
 public sealed class CapturingClusterStampTests
@@ -119,10 +118,10 @@ public sealed class CapturingClusterStampTests
         });
     }
 
-    // ---- Content-addressed idempotency -----------------------------------
+    // ---- One backup per capture ------------------------------------------
 
     [Test]
-    public async Task CaptureAsync_identical_content_is_idempotent_in_the_sink()
+    public async Task CaptureAsync_identical_content_publishes_a_distinct_backup_per_capture()
     {
         await _fixture.InitializeAsync();
         var tree = _fixture.GrainFactory.GetGrain<ILattice>(Tree);
@@ -134,21 +133,18 @@ public sealed class CapturingClusterStampTests
         var second = await _fixture.Capture.CaptureAsync(
             new LatticeBackupCaptureRequest("second", BackupScopeSelector.WholeTree(Tree)));
 
-        // Content-addressed id: identical live state re-captures the same backup id.
-        Assert.That(second.BackupId, Is.EqualTo(first.BackupId));
-
-        // The sink holds exactly one manifest for that content-addressed id: the
-        // second write was an idempotent overwrite, not a duplicate.
-        var manifestsForId = new List<BackupManifest>();
-        await foreach (var manifest in _fixture.Sink.ListManifestsAsync())
+        // A backup id is unique to its capture (issue #5418): identical live state
+        // yields the same payload digest but two backups, each with its own
+        // manifest and artifact, so neither capture can overwrite the other.
+        Assert.Multiple(async () =>
         {
-            if (manifest.Id == first.BackupId)
-            {
-                manifestsForId.Add(manifest);
-            }
-        }
-
-        Assert.That(manifestsForId, Has.Count.EqualTo(1));
+            Assert.That(second.BackupId, Is.Not.EqualTo(first.BackupId));
+            Assert.That(
+                second.Manifest.ContentDescriptors.Single().ContentHash,
+                Is.EqualTo(first.Manifest.ContentDescriptors.Single().ContentHash));
+            Assert.That((await _fixture.Sink.ProbeAsync(first.BackupId)).IsResolvable, Is.True);
+            Assert.That((await _fixture.Sink.ProbeAsync(second.BackupId)).IsResolvable, Is.True);
+        });
     }
 
     private static byte[] Bytes(string s) => Encoding.UTF8.GetBytes(s);

@@ -29,7 +29,6 @@ public sealed partial class IncrementalDeltaCollectorTests
             startInclusive: null,
             endExclusive: null,
             mergeMode: BackupKeyMergeMode.LastWriterWins,
-            baseBackupId: "base-id",
             batchSize: 100,
             resolveDecisions: (_, _) => Task.FromResult<IReadOnlyDictionary<Guid, TxStatus>>(new Dictionary<Guid, TxStatus>()));
 

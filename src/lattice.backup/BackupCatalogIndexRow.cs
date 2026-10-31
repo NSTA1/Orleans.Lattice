@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Backup;
 [Immutable]
 public sealed record BackupCatalogIndexRow
 {
-    /// <summary>The content-addressed id of the indexed backup.</summary>
+    /// <summary>The id of the indexed backup.</summary>
     [Id(0)] public string BackupId { get; init; } = string.Empty;
 
     /// <summary>The indexed backup's own human-readable name.</summary>

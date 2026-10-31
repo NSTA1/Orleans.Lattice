@@ -17,7 +17,7 @@ public sealed record LatticeRestoreRequest
 
     /// <summary>Initializes a new <see cref="LatticeRestoreRequest"/>.</summary>
     /// <param name="backupId">
-    /// The content-addressed id of the backup to restore to. Must not be <c>null</c>
+    /// The id of the backup to restore to. Must not be <c>null</c>
     /// or empty.
     /// </param>
     /// <param name="targetTreeId">
@@ -72,7 +72,7 @@ public sealed record LatticeRestoreRequest
         ApplyBatchSize = applyBatchSize;
     }
 
-    /// <summary>The content-addressed id of the backup to restore to.</summary>
+    /// <summary>The id of the backup to restore to.</summary>
     public string BackupId { get; init; }
 
     /// <summary>The tree to restore into, or <c>null</c> to restore into the captured tree.</summary>
