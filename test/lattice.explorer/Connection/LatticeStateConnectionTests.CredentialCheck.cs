@@ -127,6 +127,38 @@ public partial class LatticeStateConnectionTests
     }
 
     [Test]
+    public async Task UnauthenticatedSignedInRead_FaultsAsSignInRequired_AndCredentialRefused()
+    {
+        var client = new FakeStateClient();
+        var (connection, _) = NewConnection(_ => client);
+        await connection.ConfigureAsync(Settings() with { Authentication = LatticeCallAuthentication.Basic("olivia", "wrong") });
+        client.ListTreesHandler = _ => throw Permanent();
+
+        Assert.ThrowsAsync<LatticeStateApiException>(() => connection.ListTreesAsync(new CatalogRequest()));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(connection.Status.State, Is.EqualTo(LatticeConnectionState.Faulted));
+            Assert.That(connection.Status.RequiresAuthentication, Is.True);
+            Assert.That(connection.Status.CredentialRefused, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task ForbiddenSignedInRead_LeavesTheConnectionAlone()
+    {
+        var client = new FakeStateClient();
+        var (connection, _) = NewConnection(_ => client);
+        await connection.ConfigureAsync(Settings() with { Authentication = LatticeCallAuthentication.Basic("dave", "right") });
+        var before = connection.Status;
+        client.ListTreesHandler = _ => throw Denied();
+
+        Assert.ThrowsAsync<LatticeStateApiException>(() => connection.ListTreesAsync(new CatalogRequest()));
+
+        Assert.That(connection.Status, Is.EqualTo(before), "a per-call PermissionDenied is not a credential refusal");
+    }
+
+    [Test]
     public async Task ForbiddenSignedInCall_IsNotACredentialRefusal()
     {
         var client = new FakeStateClient();
