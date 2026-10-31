@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Explorer.UiTests.Journeys;
 /// Streaming export of a tree (issue #5366), in a real browser over the real download
 /// endpoint: an operator exports a prefix as NDJSON and the whole tree, a user whose grant
 /// covers only part of the tree downloads exactly that part with a trailer that says keys
-/// were withheld, and a user the Data API does not admit to the tree is offered no export at all.
+/// were withheld, and a user without read on the tree is offered no export at all.
 /// </summary>
 /// <remarks>
 /// Each step saves an ordered screenshot under <c>screenshots/data-export-journey/</c>,
@@ -95,16 +95,15 @@ public sealed class DataExportJourneyTests : UiTestBase
     }
 
     [Test]
-    public async Task A_user_the_data_api_does_not_admit_to_the_tree_is_offered_no_export()
+    public async Task A_user_without_read_on_the_tree_is_offered_no_export()
     {
         var world = await UiHosts.WorldAsync();
         var page = await OpenAsync(world.Head, "/data/" + Tree, WorldIdentities.Carol);
-        await Expect(Shell.Heading(page)).ToHaveTextAsync(Tree);
 
-        // The keys panel has finished asking, so the action has had its chance to appear.
-        await Expect(Shell.Content(page).Locator(".lt-skeleton")).ToHaveCountAsync(0);
-        await Expect(Shell.Content(page).Locator("[data-lt-command=\"data.export\"]")).ToHaveCountAsync(0);
-        await CaptureAsync(page, "07-no-export-without-read-access");
+        // Carol holds no read on the tree, so it is not reachable and nothing offers to export it.
+        await Expect(Shell.Heading(page)).ToHaveTextAsync(ExplorerAreas.NotFoundHeading);
+        await Expect(page.Locator("[data-lt-command=\"data.export\"]")).ToHaveCountAsync(0);
+        await CaptureAsync(page, "07-no-export-for-a-caller-without-read");
     }
 
     private static async Task<string[]> ReadLinesAsync(IDownload file) =>
@@ -112,10 +111,9 @@ public sealed class DataExportJourneyTests : UiTestBase
 
     private static async Task<string> ReadTextAsync(IDownload file)
     {
-        var path = await file.PathAsync();
-        var text = await File.ReadAllTextAsync(path, Encoding.UTF8);
-        Assert.That(text, Does.Not.StartWith("\uFEFF"), "the file has no byte-order mark");
-        return text;
+        var bytes = await File.ReadAllBytesAsync(await file.PathAsync());
+        Assert.That(bytes.AsSpan().StartsWith((ReadOnlySpan<byte>)[0xEF, 0xBB, 0xBF]), Is.False, "the file has no byte-order mark");
+        return Encoding.UTF8.GetString(bytes);
     }
 
     private static async Task CaptureAsync(IPage page, string step)
