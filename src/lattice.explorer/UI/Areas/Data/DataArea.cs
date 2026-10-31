@@ -29,6 +29,9 @@ internal sealed class DataArea : IExplorerArea
     /// <summary>The command that opens the Export dialog of the tree the workspace shows (issue #5366).</summary>
     public const string ExportCommandId = "data.export";
 
+    /// <summary>The command that opens the Import dialog of the tree the workspace shows (issue #5365).</summary>
+    public const string ImportCommandId = "data.import";
+
     private readonly DataDirectory _directory;
     private readonly IServiceProvider _services;
     private readonly DataViewCommandScope _viewCommand;
@@ -36,6 +39,7 @@ internal sealed class DataArea : IExplorerArea
     private readonly DataCommandSignals _signals;
     private readonly ExplorerCommand _refresh;
     private readonly DataEntryCommands? _entryCommands;
+    private readonly DataImportCommandScope? _importCommand;
 
     /// <summary>Creates the area.</summary>
     /// <param name="directory">The circuit's tree directory.</param>
@@ -65,6 +69,7 @@ internal sealed class DataArea : IExplorerArea
         _signals = signals;
         Completions = completions;
         _entryCommands = services.GetService(typeof(DataEntryCommands)) as DataEntryCommands;
+        _importCommand = services.GetService(typeof(DataImportCommandScope)) as DataImportCommandScope;
         _refresh = new ExplorerCommand(RefreshCommandId, "Refresh the tree directory")
         {
             Detail = "Reload every tree and view you can reach.",
@@ -97,7 +102,8 @@ internal sealed class DataArea : IExplorerArea
     /// Refreshing the directory, always; creating a view, only while a tree
     /// workspace the caller administers is open, targeting that tree's New view
     /// dialog; and exporting, only while a tree workspace the caller may export is
-    /// open, opening that tree's Export dialog; and the entry commands
+    /// open, opening that tree's Export dialog; importing, only while a tree workspace the
+    /// caller may import into is open, opening that tree's Import dialog; and the entry commands
     /// (<see cref="DataEntryCommands"/>) while the open tree workspace draws their controls.
     /// </summary>
     public IReadOnlyList<ExplorerCommand> Commands => _entryCommands?.Commands is { Count: > 0 } entry ? [.. AreaCommands, .. entry] : AreaCommands;
@@ -108,12 +114,13 @@ internal sealed class DataArea : IExplorerArea
         {
             var view = _viewCommand.Source;
             var export = _exportCommand.Source;
-            if (view is null && export is null)
+            var import = _importCommand?.Source;
+            if (view is null && export is null && import is null)
             {
                 return [_refresh];
             }
 
-            var commands = new List<ExplorerCommand>(3) { _refresh };
+            var commands = new List<ExplorerCommand>(4) { _refresh };
             if (view is not null)
             {
                 commands.Add(new ExplorerCommand(CreateViewCommandId, "New view...")
@@ -132,6 +139,16 @@ internal sealed class DataArea : IExplorerArea
                     Detail = "Download " + export.LogicalId + ", a key prefix or a key range as NDJSON or CSV.",
                     Target = export.Address,
                     InvokeAsync = _ => _signals.RequestAsync(ExportCommandId),
+                });
+            }
+
+            if (import is not null)
+            {
+                commands.Add(new ExplorerCommand(ImportCommandId, "Import...")
+                {
+                    Detail = "Load an NDJSON, CSV or exported file into " + import.LogicalId + ".",
+                    Target = import.Address,
+                    InvokeAsync = _ => _signals.RequestAsync(ImportCommandId),
                 });
             }
 

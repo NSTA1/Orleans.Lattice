@@ -49,24 +49,31 @@ internal sealed record DataExportRequest
     public string ContentType => Format == DataExportFormat.Csv ? "text/csv; charset=utf-8" : "application/x-ndjson";
 
     /// <summary>The file name the browser saves the export as: the tree's name, made safe, with the format's extension.</summary>
-    public string FileName
-    {
-        get
-        {
-            var stem = new StringBuilder(Math.Min(TreeName.Length, MaxFileStem));
-            foreach (var c in TreeName)
-            {
-                if (stem.Length == MaxFileStem)
-                {
-                    break;
-                }
+    public string FileName => SafeFileStem(TreeName) + (Format == DataExportFormat.Csv ? ".csv" : ".ndjson");
 
-                stem.Append(char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '-');
+    /// <summary>
+    /// A file-name stem made from a tree's name: ASCII letters, digits, <c>-</c>, <c>_</c> and
+    /// <c>.</c> kept, anything else written as <c>-</c>, at most <see cref="MaxFileStem"/>
+    /// characters, and <c>export</c> when nothing is left.
+    /// </summary>
+    /// <param name="treeName">The tree's name.</param>
+    /// <returns>The stem.</returns>
+    internal static string SafeFileStem(string treeName)
+    {
+        ArgumentNullException.ThrowIfNull(treeName);
+        var stem = new StringBuilder(Math.Min(treeName.Length, MaxFileStem));
+        foreach (var c in treeName)
+        {
+            if (stem.Length == MaxFileStem)
+            {
+                break;
             }
 
-            var name = stem.ToString().Trim('-', '.');
-            return (name.Length == 0 ? "export" : name) + (Format == DataExportFormat.Csv ? ".csv" : ".ndjson");
+            stem.Append(char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '-');
         }
+
+        var name = stem.ToString().Trim('-', '.');
+        return name.Length == 0 ? "export" : name;
     }
 
     /// <summary>Why the request cannot run, in plain words, or <see langword="null"/> when it can.</summary>

@@ -92,6 +92,28 @@ internal sealed partial class ShellDataTransport(ShellTransportChannel channel)
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Streams over the binding's single duplex <c>StreamSetMany</c> call on the circuit's
+    /// channel, through the same client every other verb uses, rather than one unary call
+    /// per batch.
+    /// </remarks>
+    public Task<DataSetManyStreamResult> SetManyStreamAsync(
+        string treeId,
+        IAsyncEnumerable<DataEntry> upserts,
+        IProgress<DataSetManyStreamBatch>? progress = null,
+        DataSetManyStreamOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentNullException.ThrowIfNull(upserts);
+        return CallAsync(
+            (TreeId: treeId, Upserts: upserts, Progress: progress, Options: options),
+            static (client, state, ct) => client.SetManyStreamAsync(state.TreeId, state.Upserts, state.Progress, state.Options, ct),
+            treeId,
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<DataReadResult> GetAsync(string treeId, string key, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);

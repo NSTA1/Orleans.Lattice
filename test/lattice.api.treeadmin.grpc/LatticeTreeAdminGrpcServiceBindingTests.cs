@@ -53,5 +53,13 @@ public sealed class LatticeTreeAdminGrpcServiceBindingTests
             Assert.That(handler, Is.Not.Null);
             MethodNames.Add(method.Name);
         }
+
+        public override void AddMethod<TRequest, TResponse>(
+            Method<TRequest, TResponse> method,
+            DuplexStreamingServerMethod<TRequest, TResponse>? handler)
+        {
+            Assert.That(handler, Is.Not.Null);
+            MethodNames.Add(method.Name);
+        }
     }
 }

@@ -53,6 +53,7 @@ endpoint mapping agree on the mount point.
 | `DataProtectionKeyRingBlobUri` | `Uri?` | `null` | Azure Blob Storage URI for a shared ASP.NET Data Protection key ring. Use this for multi-replica hosted-web sign-in so replicas can decrypt each other's cookies. `DataProtectionKeyRingCredential` is required when this is set. |
 | `DataProtectionKeyRingCredential` | `TokenCredential?` | `null` | Azure credential used to read and write the key-ring blob named by `DataProtectionKeyRingBlobUri`. Required when the blob URI is set; ignored otherwise. |
 | `DataProtectionApplicationName` | `string?` | `null` | Optional Data Protection application discriminator. Set the same stable value on every replica that must share cookies. |
+| `MaxImportBytes` | `long` | `2147483648` (2 GiB) | The largest file, in bytes, the Data area's Import dialog reads. An import streams the file at every hop and holds only a bounded window of it whatever its size, so this bounds how long one import may occupy the head and the cluster rather than how much memory it takes. A larger file is refused before any of it is read. |
 | `ConfigureDataProtection` | `Action<IDataProtectionBuilder>?` | `null` | Escape hatch invoked after the built-in Data Protection configuration, so a host can add key encryption, a custom key lifetime, or a different store. |
 
 Setting `DataProtectionKeyRingBlobUri` without

@@ -198,6 +198,7 @@ internal sealed class LatticeDataApiGrpcAuthInterceptor : Interceptor
             LatticeDataApiGrpcMethods.CrdtWriteMethodName => LatticeDataApiOperation.CrdtWrite,
             LatticeDataApiGrpcMethods.CrdtReadMethodName => LatticeDataApiOperation.CrdtRead,
             LatticeDataApiGrpcMethods.ProbeCapabilitiesMethodName => LatticeDataApiOperation.ProbeCapabilities,
+            LatticeDataApiGrpcMethods.StreamSetManyMethodName => LatticeDataApiOperation.StreamSetMany,
             _ => LatticeDataApiOperation.Unknown,
         };
 
@@ -213,6 +214,7 @@ internal sealed class LatticeDataApiGrpcAuthInterceptor : Interceptor
             CrdtWriteRequest cw => cw.TreeId,
             CrdtReadRequest cr => cr.TreeId,
             DataProbeRequest pr => pr.TreeId,
+            DataSetManyStreamRequest sms => sms.TreeId,
             // The cross-tree batch spans several trees; present no single target.
             _ => null,
         };

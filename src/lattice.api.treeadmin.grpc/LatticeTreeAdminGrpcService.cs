@@ -214,6 +214,12 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     /// <summary>Lists the runtime-view providers a caller may create a view with over one source tree on the wrapped facade.</summary>
     public abstract Task<TreeViewProviderCatalog> ListViewProviders(TreeAdminTreeRequest request, ServerCallContext context);
 
+    /// <summary>Streams a bulk load: appends each chunk frame through the wrapped facade, acknowledges it, and commits on the client's half-close.</summary>
+    public abstract Task StreamBulkLoad(
+        IAsyncStreamReader<TreeAdminBulkLoadStreamRequest> requestStream,
+        IServerStreamWriter<TreeAdminBulkLoadStreamResponse> responseStream,
+        ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at startup
     /// with <paramref name="serviceImpl"/> set to <see langword="null"/> to record
@@ -295,6 +301,7 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
             binder.AddMethod(methods.CancelStorageUsageRefresh, (UnaryServerMethod<TreeAdminStorageUsageOperationRequest, TreeAdminStorageUsageOperationStatusResponse>?)null);
             binder.AddMethod(methods.GetWalReclamation, (UnaryServerMethod<TreeAdminTreeRequest, TreeWalReclamationReport>?)null);
             binder.AddMethod(methods.ListViewProviders, (UnaryServerMethod<TreeAdminTreeRequest, TreeViewProviderCatalog>?)null);
+            binder.AddMethod(methods.StreamBulkLoad, (DuplexStreamingServerMethod<TreeAdminBulkLoadStreamRequest, TreeAdminBulkLoadStreamResponse>?)null);
             return;
         }
 
@@ -360,6 +367,7 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
         binder.AddMethod(methods.CancelStorageUsageRefresh, new UnaryServerMethod<TreeAdminStorageUsageOperationRequest, TreeAdminStorageUsageOperationStatusResponse>(serviceImpl.CancelStorageUsageRefresh));
         binder.AddMethod(methods.GetWalReclamation, new UnaryServerMethod<TreeAdminTreeRequest, TreeWalReclamationReport>(serviceImpl.GetWalReclamation));
         binder.AddMethod(methods.ListViewProviders, new UnaryServerMethod<TreeAdminTreeRequest, TreeViewProviderCatalog>(serviceImpl.ListViewProviders));
+        binder.AddMethod(methods.StreamBulkLoad, new DuplexStreamingServerMethod<TreeAdminBulkLoadStreamRequest, TreeAdminBulkLoadStreamResponse>(serviceImpl.StreamBulkLoad));
     }
 }
 
@@ -618,6 +626,92 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
         => InvokeAsync(request, context, static (control, req, ct) => control.ListViewProvidersAsync(req.TreeId, ct));
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Each frame's chunk is appended through <see cref="ILatticeTreeAdmin.AppendBulkLoadAsync"/>
+    /// at the chunk index the client chose, so a resumed stream that re-sends a chunk is the
+    /// same idempotent no-op as a re-driven unary append, and each append is authorized by the
+    /// facade exactly as the unary one is. The frames are processed one at a time and each is
+    /// acknowledged before the next is read, so the server holds one chunk per stream.
+    /// </remarks>
+    public override async Task StreamBulkLoad(
+        IAsyncStreamReader<TreeAdminBulkLoadStreamRequest> requestStream,
+        IServerStreamWriter<TreeAdminBulkLoadStreamResponse> responseStream,
+        ServerCallContext context)
+    {
+        ArgumentNullException.ThrowIfNull(requestStream);
+        ArgumentNullException.ThrowIfNull(responseStream);
+        ArgumentNullException.ThrowIfNull(context);
+        using var credentialScope = StampCallerCredential(context);
+        using var activeTenantScope = StampActiveTenant(context);
+        var cancellationToken = context.CancellationToken;
+
+        try
+        {
+            if (!await requestStream.MoveNext(cancellationToken).ConfigureAwait(false))
+            {
+                throw new ArgumentException("The bulk-load stream ended before its opening frame named a tree and an operation.");
+            }
+
+            var frame = requestStream.Current ?? throw new ArgumentException("The bulk-load stream's opening frame is empty.");
+            var treeId = frame.TreeId;
+            var operationId = frame.OperationId;
+            ArgumentException.ThrowIfNullOrEmpty(treeId);
+            ArgumentException.ThrowIfNullOrEmpty(operationId);
+
+            if (!frame.Resume)
+            {
+                await _control.BeginBulkLoadAsync(treeId, operationId, cancellationToken).ConfigureAwait(false);
+            }
+
+            await responseStream.WriteAsync(new TreeAdminBulkLoadStreamResponse { Opened = true }, cancellationToken).ConfigureAwait(false);
+
+            string? previousKey = null;
+            while (true)
+            {
+                if (!string.Equals(frame.TreeId, treeId, StringComparison.Ordinal)
+                    || !string.Equals(frame.OperationId, operationId, StringComparison.Ordinal))
+                {
+                    throw new ArgumentException("Every frame of a bulk-load stream must name the tree and operation its opening frame named.");
+                }
+
+                if (frame.Entries is { Count: > 0 } entries)
+                {
+                    // The facade checks order within the chunk; across chunks of one stream
+                    // only the stream can see it.
+                    if (previousKey is not null && string.CompareOrdinal(entries[0].Key, previousKey) <= 0)
+                    {
+                        throw new BulkLoadOrderException(treeId, frame.ChunkIndex, entries[0].Key, previousKey);
+                    }
+
+                    var ack = await _control.AppendBulkLoadAsync(treeId, operationId, frame.ChunkIndex, entries, cancellationToken).ConfigureAwait(false);
+                    previousKey = entries[^1].Key;
+                    await responseStream.WriteAsync(new TreeAdminBulkLoadStreamResponse { Ack = ack }, cancellationToken).ConfigureAwait(false);
+                }
+
+                if (!await requestStream.MoveNext(cancellationToken).ConfigureAwait(false))
+                {
+                    break;
+                }
+
+                frame = requestStream.Current ?? throw new ArgumentException("A bulk-load stream frame is empty.");
+            }
+
+            var result = await _control.CommitBulkLoadAsync(treeId, operationId, cancellationToken).ConfigureAwait(false);
+            await responseStream.WriteAsync(new TreeAdminBulkLoadStreamResponse { Result = result }, cancellationToken).ConfigureAwait(false);
+        }
+        catch (LatticeTenantAccessDeniedException exception)
+        {
+            // Named on its own so the tenant-denial contract gate sees the clause; the
+            // mapping is the same PermissionDenied the shared ladder below applies.
+            throw ToRpcException(exception, context);
+        }
+        catch (Exception exception) when (exception is not RpcException)
+        {
+            throw ToRpcException(exception, context);
+        }
+    }
+
+    /// <inheritdoc />
     public override Task<TreeViewStatus> CreateView(TreeAdminCreateViewRequest request, ServerCallContext context)
         => InvokeAsync(
             request,
@@ -805,64 +899,63 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
         {
             return await handler(facade, request, context.CancellationToken).ConfigureAwait(false);
         }
-        catch (RpcException)
+        catch (LatticeTenantAccessDeniedException exception)
         {
-            throw;
+            // Named on its own so the tenant-denial contract gate sees the clause; the
+            // mapping is the same PermissionDenied the shared ladder below applies.
+            throw ToRpcException(exception, context);
         }
-        catch (OperationCanceledException)
+        catch (Exception exception) when (exception is not RpcException)
         {
-            throw new RpcException(new Status(StatusCode.Cancelled, "The tree-administration control-API request was cancelled."));
+            throw ToRpcException(exception, context);
         }
-        catch (LatticeAuthorizationDeniedException ex)
+    }
+
+    /// <summary>
+    /// Translates a facade fault into the status the binding reports, shared by the unary
+    /// handlers and the streamed bulk load so every RPC answers the same fault the same way.
+    /// The arms are tested in order, most specific first.
+    /// </summary>
+    private RpcException ToRpcException(Exception exception, ServerCallContext context)
+    {
+        switch (exception)
         {
-            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
-        }
-        catch (LatticeTreeOwnershipDeniedException ex)
-        {
-            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
-        }
-        catch (KeyNotFoundException ex)
-        {
-            throw new RpcException(new Status(StatusCode.NotFound, ex.Message));
-        }
-        catch (TreeNotEmptyException ex)
-        {
-            // The bulk-load target already carries data: a distinct precondition
-            // failure, surfaced as FailedPrecondition so a client can tell it apart
-            // from a bad argument and retry against a fresh tree.
-            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
-        }
-        catch (BulkLoadOrderException ex)
-        {
-            // An out-of-order chunk is a caller-side contract breach: the keys within
-            // the chunk were not strictly ascending. InvalidArgument mirrors the
-            // local ArgumentException mapping.
-            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
-        }
-        catch (InvalidOperationException ex)
-        {
-            // A precondition failure surfaced by the composed facade. The message
-            // is safe and actionable (no secrets), so surface it as
-            // FailedPrecondition instead of the opaque Internal below.
-            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
-        }
-        catch (ArgumentException ex)
-        {
-            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
-        }
-        // A fail-closed tenant resolution: the caller has no valid active tenant,
-        // or may not act as the one it asserted. That is an authorization outcome,
-        // not a server fault, so it must not fall through to Internal below - which
-        // would replace the actionable reason with a generic message and invite a
-        // client to retry a decision that will never change.
-        catch (LatticeTenantAccessDeniedException ex)
-        {
-            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Api.TreeAdmin: gRPC call to {Method} failed.", context.Method);
-            throw new RpcException(new Status(StatusCode.Internal, "The tree-administration control-API request failed."));
+            case OperationCanceledException:
+                return new RpcException(new Status(StatusCode.Cancelled, "The tree-administration control-API request was cancelled."));
+            case LatticeAuthorizationDeniedException ex:
+                return new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+            case LatticeTreeOwnershipDeniedException ex:
+                return new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+            case KeyNotFoundException ex:
+                return new RpcException(new Status(StatusCode.NotFound, ex.Message));
+            case TreeNotEmptyException ex:
+                // The bulk-load target already carries data: a distinct precondition
+                // failure, surfaced as FailedPrecondition so a client can tell it apart
+                // from a bad argument and retry against a fresh tree.
+                return new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+            case BulkLoadOrderException ex:
+                // An out-of-order chunk is a caller-side contract breach: the keys within
+                // the chunk were not strictly ascending. InvalidArgument mirrors the
+                // local ArgumentException mapping.
+                return new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+            case InvalidOperationException ex:
+                // A precondition failure surfaced by the composed facade. The message
+                // is safe and actionable (no secrets), so surface it as
+                // FailedPrecondition instead of the opaque Internal below.
+                return new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+            case ArgumentException ex:
+                return new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+
+            // A fail-closed tenant resolution: the caller has no valid active tenant,
+            // or may not act as the one it asserted. That is an authorization outcome,
+            // not a server fault, so it must not fall through to Internal below - which
+            // would replace the actionable reason with a generic message and invite a
+            // client to retry a decision that will never change.
+            case LatticeTenantAccessDeniedException ex:
+                return new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+            default:
+                _logger.LogError(exception, "Api.TreeAdmin: gRPC call to {Method} failed.", context.Method);
+                return new RpcException(new Status(StatusCode.Internal, "The tree-administration control-API request failed."));
         }
     }
 }

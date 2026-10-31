@@ -25,6 +25,9 @@ public partial class DataTreePage : IDisposable
     private string? _error;
     private bool _canExport;
     private bool _exportOpen;
+    private DataImportRights _importRights;
+    private bool _importOpen;
+    private bool _seedFirst;
 
     [Inject]
     internal DataDirectory Directory { get; set; } = default!;
@@ -46,6 +49,12 @@ public partial class DataTreePage : IDisposable
 
     [Inject]
     internal DataCommandSignals Signals { get; set; } = default!;
+
+    [Inject]
+    internal DataImportGate ImportGate { get; set; } = default!;
+
+    [Inject]
+    internal DataImportCommandScope ImportCommand { get; set; } = default!;
 
     [CascadingParameter(Name = LtBreakpointCascade.Name)]
     internal LtBreakpoint? Breakpoint { get; set; }
@@ -78,6 +87,7 @@ public partial class DataTreePage : IDisposable
     {
         ViewCommand.Withdraw(_tree);
         ExportCommand.Withdraw(_tree);
+        ImportCommand.Withdraw(_tree);
         Signals.Requested -= OnCommand;
         _lifetime.Leave();
         GC.SuppressFinalize(this);
@@ -89,6 +99,7 @@ public partial class DataTreePage : IDisposable
         _resolvedFor = target;
         ViewCommand.Withdraw(_tree);
         ExportCommand.Withdraw(_tree);
+        ImportCommand.Withdraw(_tree);
         _tree = null;
         _workspace = null;
         _source = null;
@@ -97,6 +108,8 @@ public partial class DataTreePage : IDisposable
         _error = null;
         _canExport = false;
         _exportOpen = false;
+        _importRights = DataImportRights.None;
+        _importOpen = false;
         try
         {
             var tree = await Directory.ResolveAsync(target, token);
@@ -128,6 +141,7 @@ public partial class DataTreePage : IDisposable
         _ = LoadKeyCountAsync(_tree);
         _ = OfferViewCommandAsync(_tree, token);
         _ = LoadExportGateAsync(_tree);
+        _ = LoadImportGateAsync(_tree);
     }
 
     /// <summary>
@@ -183,6 +197,20 @@ public partial class DataTreePage : IDisposable
 
     private void OnCommand(string commandId)
     {
+        if (string.Equals(commandId, DataArea.ImportCommandId, StringComparison.Ordinal))
+        {
+            _ = InvokeAsync(() =>
+            {
+                // A caller the gate admits to no mode has no Import control, and the
+                // command opens nothing for them either.
+                if (_importRights.Any)
+                {
+                    _seedFirst = false;
+                    _importOpen = true;
+                    StateHasChanged();
+                }
+            });
+        }
         if (string.Equals(commandId, DataArea.ExportCommandId, StringComparison.Ordinal))
         {
             _ = InvokeAsync(() =>
@@ -199,6 +227,55 @@ public partial class DataTreePage : IDisposable
     }
 
     private void OpenExport() => _exportOpen = true;
+
+    private void OpenImport()
+    {
+        _seedFirst = false;
+        _importOpen = true;
+    }
+
+    /// <summary>
+    /// Draws the Import control, and offers its palette command, once the gate admits the
+    /// caller to some import mode; opens the dialog at once when the palette or a
+    /// <c>?import=seed</c> address (a tree just created from a file) asked for it.
+    /// </summary>
+    private async Task LoadImportGateAsync(DataTreeEntry tree)
+    {
+        DataImportRights rights;
+        try
+        {
+            rights = await ImportGate.ForTreeAsync(tree, _lifetime.Token);
+        }
+        catch (Exception)
+        {
+            return;
+        }
+
+        if (!rights.Any || !ReferenceEquals(tree, _tree))
+        {
+            return;
+        }
+
+        _importRights = rights;
+        ImportCommand.Offer(tree);
+        var seed = string.Equals(Address.GetQuery(DataTabs.ImportQuery), DataTabs.ImportSeedValue, StringComparison.Ordinal);
+        if (Signals.TryTake(DataArea.ImportCommandId) || seed)
+        {
+            _seedFirst = seed;
+            _importOpen = true;
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task OnImportedAsync()
+    {
+        _liveKeys = null;
+        if (_tree is { } tree)
+        {
+            await LoadKeyCountAsync(tree);
+        }
+    }
 
     private async Task LoadKeyCountAsync(DataTreeEntry tree)
     {

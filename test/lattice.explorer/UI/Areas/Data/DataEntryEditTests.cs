@@ -58,7 +58,7 @@ public sealed class DataEntryEditTests : DataTestContext
 
         Assert.That(
             Area.Commands.Select(command => command.Id),
-            Is.EquivalentTo(new[] { DataArea.RefreshCommandId, DataEntryCommands.NewEntryId, DataEntryCommands.EditEntryId, DataEntryCommands.DeleteEntryId }));
+            Is.EquivalentTo(new[] { DataArea.RefreshCommandId, DataArea.ImportCommandId, DataEntryCommands.NewEntryId, DataEntryCommands.EditEntryId, DataEntryCommands.DeleteEntryId }));
     }
 
     [Test]

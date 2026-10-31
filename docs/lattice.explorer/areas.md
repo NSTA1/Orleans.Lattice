@@ -123,7 +123,8 @@ in query keys: `?tab=` chooses one of `keys`, `history`, `metrics`,
 `dead-letters`, `tag-indexes` or `views`; `?prefix=` narrows key scans and live
 tails; `?key=` opens an entry; `?at=` pins History to a UTC instant;
 `?index=` and `?tag=` select a tag index and tag; on the Views tab,
-`?new=view` opens the New view dialog.
+`?new=view` opens the New view dialog; and `?import=seed` opens the Import
+dialog on a seed (see [Importing into a tree](#importing-into-a-tree)).
 
 The Keys tab pages through the tree by prefix or by tag. It offers Live and
 Snapshot scan modes, page-size choices from the shared paging ladder, Previous
@@ -318,6 +319,86 @@ The download endpoint, the single-use ticket and the trailer are a shared seam: 
 other Explorer download, such as an import's rejection list, is minted and
 streamed the same way.
 
+### Importing into a tree
+
+A tree workspace offers **Import...** (command `data.import`) beside its heading
+when the caller may use at least one import mode on the tree: **Add or replace
+entries** (an upsert) needs the write right the
+[Data API](../lattice.api.data/README.md)'s capability probe reports, and **Seed an
+empty tree (bulk load)** needs the bulk-load grant the
+[tree-administration API](../lattice.api.treeadmin/README.md)'s probe reports. Only
+the modes the caller may use are offered; a caller who may use neither is shown no
+control, and the palette offers no command. Views and shared trees are not offered.
+The facades still authorize every chunk and batch the import sends.
+
+The dialog asks for a **File**, its **Format**, the **Mode**, and, for NDJSON and CSV,
+where each **Key** and **Value** come from:
+
+- **NDJSON**: one JSON value per line; blank lines are skipped. The key is a JSON
+  Pointer (`/id`) or a template mixing literal text with pointers in braces
+  (`order/{/id}`); a pointer to a string gives its text, to a number or boolean its
+  literal, and to anything else refuses the line. The value is the line's bytes
+  verbatim, or the JSON value at a pointer.
+- **CSV**: RFC 4180, UTF-8 with or without a byte-order mark, with a header row and a
+  comma, semicolon, tab or vertical-bar delimiter. The key is a column (`id`) or a
+  template (`order/{id}`). The value is the row as a JSON object of header name to
+  field text - with **Infer numbers and booleans**, a field that reads as a JSON
+  number or as `true`/`false` is written as one - or one column's raw text.
+- **Lattice export**: a `lattice-export/1` NDJSON file (see
+  [Exporting a tree](#exporting-a-tree)). Each line's key and value are restored
+  exactly, base64 values included, and the dialog notes a file whose trailer is
+  missing or says the export was not complete.
+- **key=value lines**: the first `=` splits the key from the value, stored as UTF-8.
+
+A file's extension suggests its format (`.csv` and `.tsv`, `.ndjson`, `.jsonl` and
+`.json`, `.txt`). `{{` and `}}` write a literal brace in a key template.
+
+The import is **streamed at every hop**. The browser's file is read a buffer at a
+time over the circuit, parsed one line at a time, and handed through a bounded
+channel to the facade's streaming member, which sends it to the cluster over a
+single duplex gRPC call: `StreamBulkLoad` for a seed, `StreamSetMany` for an upsert.
+No hop holds the file, so memory is bounded by the channel and one batch whatever
+the file's size. A line longer than 4 MB stops the file at that line. The largest
+file is set by `LatticeExplorerWebOptions.MaxImportBytes` (2 GiB by default).
+
+- **Upsert** writes in batches of 256, in any key order, into a tree that may hold
+  keys. A line that cannot be read, and an entry the cluster refuses (a key the
+  caller may not write, a value the tree's schema policy rejects), is counted and
+  listed with its line, and every other entry still lands. Schema enforcement,
+  per-key authorization and dead-lettering apply exactly as for any other write.
+- **Seed** bulk-loads an empty tree in chunks of 1,000. A pre-flight pass reads the
+  whole file first and refuses it, naming the line, on the first line that cannot
+  be read or whose key does not sort strictly after the one before; nothing is
+  written. The load pass then reads the file again. A stream broken by a transient
+  fault resumes from its first unacknowledged chunk, with no entry lost or written
+  twice. A tree that already holds keys or tombstones is refused.
+
+While the file is read the dialog shows the operation's progress - bytes read of the
+file, lines read, entries written, the rate and the refused lines - with **Stop
+import**. Stop ends the import after the batch or chunk in flight, and the result
+reports exactly what was written before it. The browser reads the file through the
+dialog's file input, so the dialog stays open while the file is read; leaving the
+tree page ends the read, and the import reports what it wrote. Closing the browser
+tab ends the circuit, which cancels the import and records it as cancelled. An
+import belongs to the caller who started it: a sign-in, a sign-out, a new endpoint
+or another tenant cancels it, since its calls would otherwise go on as the new
+caller, and it is never shown to another caller. A finished import is shown again
+when the dialog reopens on its tree, until **Done** or **Import another file**.
+
+The result lists the first 100 refused lines with their line, key and reason, and
+**Prepare the list of refused lines** mints a download of every one through the
+download seam above: NDJSON with one `{"line","key","code","reason"}` object per
+line - `code` is `format` for a line that could not be read, or the Data API's
+`denied`, `schema` or `invalid` - ending in a `lattice-import-rejections/1` trailer.
+The list never carries values; it is kept in a temporary file deleted when the
+import is forgotten or the circuit ends.
+
+**New tree from file...** on the Data directory, drawn for a caller who may create
+trees, creates a tree through the Cluster area's New tree dialog and opens its
+Import dialog on a seed (`/data/{tree}?import=seed`). The Cluster tools' **Bulk
+load** section links to the same address, so a file seeds through the same
+pipeline as the typed `key=value` list.
+
 App-owned trees use logical ids shaped like `a/{slug}/...`. Data links their
 owner badge to `/apps/{slug}`, and tag and view member rows preserve those
 logical links. Physical state ids, tenant-composed ids, restore shadows and view
@@ -339,6 +420,7 @@ The Data palette commands are:
 | --- | --- | --- |
 | `data.refresh` | Refresh the tree directory | Drops the circuit's loaded tree and view list, reloads it, and updates the directory and workspace surfaces. |
 | `data.export` | Export... | Opens the Export dialog of the open tree workspace (see [Exporting a tree](#exporting-a-tree)). The palette offers it only while a tree workspace that draws **Export...** is open - the same verdict, for the same caller - and leaves it out everywhere else. |
+| `data.import` | Import... | Opens the Import dialog of the open tree workspace (see [Importing into a tree](#importing-into-a-tree)). The palette offers it only while a tree workspace that draws **Import...** is open, for the same caller. |
 | `data.new-entry` | New entry... | Offered while a tree workspace whose caller may write it is open. Opens the value editor for a new key. |
 | `data.edit-entry` | Edit entry | Offered while an entry the caller may write is open. Opens the value editor on it. |
 | `data.delete-entry` | Delete entry... | Offered while a live entry the caller may delete is open. Opens the destructive confirmation. |

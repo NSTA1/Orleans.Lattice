@@ -1,0 +1,136 @@
+@using Microsoft.AspNetCore.Components.Forms
+@using Orleans.Lattice.Explorer.UI.Downloads
+@using Orleans.Lattice.Explorer.UI.Operations
+
+@*
+    The Import dialog (issue #5365). The user chooses a file, its format, the mode and
+    where each key and value come from, then starts the import, which streams the file
+    a buffer at a time through a bounded channel into the streaming facade member for
+    the mode. The browser reads the file through the file input, so the dialog stays
+    open, and the input rendered, while the file is read; the import itself belongs to
+    the circuit, so a finished import is shown again when the dialog reopens on its tree.
+*@
+
+<LtDialog Open="Open"
+          OpenChanged="OnOpenChangedAsync"
+          Title="@($"Import into {TreeName}")"
+          Description="Load entries from a file. The file is read a piece at a time, so its size is bounded only by the head's import limit."
+          ShowClose="@(!Reading)"
+          DismissOnEscape="@(!Reading)"
+          Placement="Placement">
+    <div class="lt-data-import" data-lt-import-state="@StateName">
+        @* The browser reads the chosen file through this input, so it stays rendered while an import runs. *@
+        <div class="lt-data-import__file" hidden="@(_run is not null)">
+            <label class="lt-data-import__file-label" for="@FileInputId">File</label>
+            <InputFile id="@FileInputId" OnChange="OnFileChosen" accept=".ndjson,.jsonl,.json,.csv,.tsv,.txt" aria-describedby="@($"{FileInputId}-hint")" />
+            <span class="lt-data-import__hint" id="@($"{FileInputId}-hint")">@FileHint</span>
+        </div>
+        @if (_run is null)
+        {
+            <form class="lt-data-import__form" @onsubmit="StartAsync">
+                <LtSelect Label="Format" Options="FormatOptions" Value="@_format.ToString()" ValueChanged="OnFormatChanged" Hint="@FormatHint" />
+                <LtSelect Label="Mode" Options="ModeOptions" Value="@_mode.ToString()" ValueChanged="OnModeChanged" Hint="@ModeHint" />
+                @if (UsesKeyTemplate)
+                {
+                    <LtTextInput Label="Key" Mono="true" @bind-Value="_keyTemplate" Hint="@KeyHint" />
+                    <LtSelect Label="Value" Options="ValueOptions" Value="@_valueSource.ToString()" ValueChanged="OnValueSourceChanged" />
+                    @if (_valueSource == DataImportValueSource.Field)
+                    {
+                        <LtTextInput Label="@(_format == DataImportFormat.Csv ? "Value column" : "Value pointer")" Mono="true" @bind-Value="_valueField" />
+                    }
+                }
+                @if (_format == DataImportFormat.Csv)
+                {
+                    <LtSelect Label="Delimiter" Options="DelimiterOptions" Value="@DelimiterValue" ValueChanged="OnDelimiterChanged" />
+                    @if (_valueSource == DataImportValueSource.Record)
+                    {
+                        <LtCheckbox Label="Infer numbers and booleans" @bind-Checked="_inferTypes" Hint="Write a field that reads as a number, true or false as one, rather than as text." />
+                    }
+                }
+                @if (_error is not null)
+                {
+                    <p class="lt-data-import__error" role="alert">@_error</p>
+                }
+                <div class="lt-dialog__actions">
+                    <LtButton Variant="LtButtonVariant.Quiet" OnClick="CloseAsync">Cancel</LtButton>
+                    <LtButton Type="LtButtonType.Submit" Variant="@(_mode == DataImportMode.Seed ? LtButtonVariant.Destructive : LtButtonVariant.Outlined)">@(_mode == DataImportMode.Seed ? "Seed tree" : "Import")</LtButton>
+                </div>
+            </form>
+        }
+        else
+        {
+            var run = _run;
+            <LtOperationProgress Status="@run.ToStatus()" Label="Import progress" PhaseName="PhaseText" />
+            <LtDefinitionList>
+                <LtDefinition Term="File" Mono="true">@_fileName</LtDefinition>
+                <LtDefinition Term="Read">@ReadText(run)</LtDefinition>
+                @if (run.Settings.Mode == DataImportMode.Seed && run.EntriesChecked > 0)
+                {
+                    <LtDefinition Term="Checked">@Count(run.EntriesChecked, "entry", "entries")</LtDefinition>
+                }
+                <LtDefinition Term="Written"><span data-lt-import-committed="@run.EntriesCommitted">@Count(run.EntriesCommitted, "entry", "entries")</span></LtDefinition>
+                <LtDefinition Term="Rate"><span data-lt-volatile="true">@RateText(run)</span></LtDefinition>
+                <LtDefinition Term="Refused"><span data-lt-import-refused="@run.Rejections.Count">@Count(run.Rejections.Count, "line", "lines")</span></LtDefinition>
+            </LtDefinitionList>
+
+            @if (!run.IsFinished)
+            {
+                <div class="lt-dialog__actions">
+                    <LtButton Variant="LtButtonVariant.Destructive" Disabled="@run.StopRequested" OnClick="Stop" data-lt-import-stop="true">@(run.StopRequested ? "Stopping..." : "Stop import")</LtButton>
+                </div>
+            }
+            else
+            {
+                <div class="lt-data-import__result" role="status">
+                    <p>@ResultText(run)</p>
+                    @if (run.Note is { } note)
+                    {
+                        <p class="lt-data-import__note">@note</p>
+                    }
+                </div>
+
+                @if (run.Rejections.Count > 0)
+                {
+                    var shown = run.Rejections.Shown;
+                    <h3 class="lt-data-import__heading">Refused lines</h3>
+                    @if (run.Rejections.Count > shown.Count)
+                    {
+                        <p class="lt-data-import__note">The first @shown.Count of @Count(run.Rejections.Count, "refused line", "refused lines"). Download the list for every one.</p>
+                    }
+                    <table class="lt-data-import__refused" data-lt-import-refusals="true">
+                        <thead><tr><th scope="col">Line</th><th scope="col">Key</th><th scope="col">Reason</th></tr></thead>
+                        <tbody>
+                            @foreach (var refused in shown)
+                            {
+                                <tr>
+                                    <td class="lt-shell-mono">@(refused.Line?.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) ?? "-")</td>
+                                    <td class="lt-shell-mono">@(refused.Key ?? "-")</td>
+                                    <td>@refused.Reason</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+
+                    @if (_ticket is { State: ExplorerDownloadState.Ready } ticket)
+                    {
+                        <form method="post" action="@ExplorerDownloads.FormAction" data-enhance="false" class="lt-data-import__download">
+                            <AntiforgeryToken />
+                            <input type="hidden" name="@ExplorerDownloads.TokenField" value="@ticket.Token" />
+                            <input type="hidden" name="@ExplorerDownloads.BindingField" value="@Downloads.Binding" />
+                            <LtButton Type="LtButtonType.Submit" data-lt-import-download="true">Download refused lines</LtButton>
+                        </form>
+                    }
+                    else
+                    {
+                        <LtButton Variant="LtButtonVariant.Quiet" OnClick="PrepareRejections">Prepare the list of refused lines</LtButton>
+                    }
+                }
+
+                <div class="lt-dialog__actions">
+                    <LtButton Variant="LtButtonVariant.Quiet" OnClick="Reset">Import another file</LtButton>
+                    <LtButton OnClick="DoneAsync">Done</LtButton>
+                </div>
+            }
+        }
+    </div>
+</LtDialog>

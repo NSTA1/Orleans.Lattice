@@ -141,5 +141,10 @@ public sealed class TreeAdminGrpcViewProviderTests
             Method<TRequest, TResponse> method,
             UnaryServerMethod<TRequest, TResponse>? handler) =>
             MethodNames.Add(method.Name);
+
+        public override void AddMethod<TRequest, TResponse>(
+            Method<TRequest, TResponse> method,
+            DuplexStreamingServerMethod<TRequest, TResponse>? handler) =>
+            MethodNames.Add(method.Name);
     }
 }

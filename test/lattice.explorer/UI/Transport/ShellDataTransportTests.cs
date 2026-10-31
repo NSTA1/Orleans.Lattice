@@ -23,6 +23,7 @@ public sealed class ShellDataTransportTests : ShellTransportAdapterContractTests
         new("SetManyAtomicAsync", Service + "SetManyAtomic", (f, ct) => f.SetManyAtomicAsync("orders", new DataAtomicBatch(), "op", ct)),
         new("SetManyAtomicCrossTreeAsync", Service + "SetManyAtomicCrossTree", (f, ct) => f.SetManyAtomicCrossTreeAsync([], "op", ct)),
         new("SetManyAsync", Service + "SetMany", (f, ct) => f.SetManyAsync("orders", [], ct)),
+        new("SetManyStreamAsync", Service + "StreamSetMany", (f, ct) => f.SetManyStreamAsync("orders", NoEntries(), cancellationToken: ct)),
         new("GetAsync", Service + "Get", (f, ct) => f.GetAsync("orders", "k", ct)),
         new("ReadRangeAsync", Service + "ReadRange", (f, ct) => f.ReadRangeAsync(new DataRangeRequest { TreeId = "orders" }, ct)),
         new("ProbeCapabilitiesAsync", Service + "ProbeCapabilities", (f, ct) => f.ProbeCapabilitiesAsync("orders", "k", ct)),
@@ -61,12 +62,24 @@ public sealed class ShellDataTransportTests : ShellTransportAdapterContractTests
         new("MapGetAsync", Service + "CrdtRead", (f, ct) => f.MapGetAsync("orders", "k", ct)),
     ];
 
+    internal override void ScriptSuccess(ShellTransportPeer peer) =>
+        peer.Respond(Service + "StreamSetMany", new Orleans.Lattice.Api.Data.Grpc.DataSetManyStreamResponse
+        {
+            Result = new DataSetManyStreamResult { TreeId = "orders", EntryCount = 0, CommittedCount = 0, RejectedCount = 0, BatchCount = 0 },
+        });
+
     [Test]
     public void The_contract_covers_every_member_of_the_facade()
     {
         var declared = typeof(ILatticeDataApi).GetMethods().Select(method => method.Name).ToHashSet(StringComparer.Ordinal);
 
         Assert.That(Calls().Select(call => call.Member).ToHashSet(StringComparer.Ordinal), Is.EquivalentTo(declared));
+    }
+
+    private static async IAsyncEnumerable<DataEntry> NoEntries()
+    {
+        await Task.CompletedTask;
+        yield break;
     }
 
     [Test]

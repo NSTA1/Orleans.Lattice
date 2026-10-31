@@ -60,6 +60,9 @@ internal sealed class LatticeDataApiGrpcMethods
     /// <summary>The unary side-effect-free write-capability probe RPC method name.</summary>
     public const string ProbeCapabilitiesMethodName = "ProbeCapabilities";
 
+    /// <summary>The duplex streamed bulk-write RPC method name: batches in, per-batch outcomes and the totals out.</summary>
+    public const string StreamSetManyMethodName = "StreamSetMany";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeDataApiGrpcMethods(
         Serializer<DataSetRequest> setRequestSerializer,
@@ -83,7 +86,9 @@ internal sealed class LatticeDataApiGrpcMethods
         Serializer<CrdtReadRequest> crdtReadRequestSerializer,
         Serializer<CrdtReadResponse> crdtReadResponseSerializer,
         Serializer<DataProbeRequest> probeRequestSerializer,
-        Serializer<LatticeDataCapabilities> capabilitiesSerializer)
+        Serializer<LatticeDataCapabilities> capabilitiesSerializer,
+        Serializer<DataSetManyStreamRequest> setManyStreamRequestSerializer,
+        Serializer<DataSetManyStreamResponse> setManyStreamResponseSerializer)
     {
         ArgumentNullException.ThrowIfNull(setRequestSerializer);
         ArgumentNullException.ThrowIfNull(setResponseSerializer);
@@ -184,6 +189,15 @@ internal sealed class LatticeDataApiGrpcMethods
             name: ProbeCapabilitiesMethodName,
             requestMarshaller: LatticeDataApiGrpcMarshallers.Create(probeRequestSerializer),
             responseMarshaller: LatticeDataApiGrpcMarshallers.Create(capabilitiesSerializer));
+
+        ArgumentNullException.ThrowIfNull(setManyStreamRequestSerializer);
+        ArgumentNullException.ThrowIfNull(setManyStreamResponseSerializer);
+        StreamSetMany = new Method<DataSetManyStreamRequest, DataSetManyStreamResponse>(
+            type: MethodType.DuplexStreaming,
+            serviceName: ServiceName,
+            name: StreamSetManyMethodName,
+            requestMarshaller: LatticeDataApiGrpcMarshallers.Create(setManyStreamRequestSerializer),
+            responseMarshaller: LatticeDataApiGrpcMarshallers.Create(setManyStreamResponseSerializer));
     }
 
     /// <summary>The unary <c>Set</c> point-write RPC.</summary>
@@ -219,6 +233,9 @@ internal sealed class LatticeDataApiGrpcMethods
     /// <summary>The unary <c>ProbeCapabilities</c> side-effect-free write-capability probe RPC.</summary>
     public Method<DataProbeRequest, LatticeDataCapabilities> ProbeCapabilities { get; }
 
+    /// <summary>The duplex <c>StreamSetMany</c> RPC: batches in, per-batch outcomes and the stream's totals out.</summary>
+    public Method<DataSetManyStreamRequest, DataSetManyStreamResponse> StreamSetMany { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
     /// <paramref name="serializerProvider"/>. Shared by the server-side DI factory
@@ -250,7 +267,9 @@ internal sealed class LatticeDataApiGrpcMethods
             serializerProvider.GetRequiredService<Serializer<CrdtReadRequest>>(),
             serializerProvider.GetRequiredService<Serializer<CrdtReadResponse>>(),
             serializerProvider.GetRequiredService<Serializer<DataProbeRequest>>(),
-            serializerProvider.GetRequiredService<Serializer<LatticeDataCapabilities>>());
+            serializerProvider.GetRequiredService<Serializer<LatticeDataCapabilities>>(),
+            serializerProvider.GetRequiredService<Serializer<DataSetManyStreamRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<DataSetManyStreamResponse>>());
     }
 }
 

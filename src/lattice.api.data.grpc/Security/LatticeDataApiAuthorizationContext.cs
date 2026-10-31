@@ -54,6 +54,14 @@ public enum LatticeDataApiOperation
 
     /// <summary>The <c>ProbeCapabilities</c> side-effect-free write-capability probe RPC.</summary>
     ProbeCapabilities,
+
+    /// <summary>
+    /// The duplex <c>StreamSetMany</c> streamed bulk-write RPC. A streamed call carries its
+    /// tree in its frames, which are not read until the call is admitted, so the
+    /// authorization context's target is <see langword="null"/>; the gated data plane then
+    /// authorizes every key of every frame, fail-closed, before it is written.
+    /// </summary>
+    StreamSetMany,
 }
 
 /// <summary>

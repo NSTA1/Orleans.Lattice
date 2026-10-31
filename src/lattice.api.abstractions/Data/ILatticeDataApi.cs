@@ -135,6 +135,47 @@ public interface ILatticeDataApi
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Writes <paramref name="upserts"/> on <paramref name="treeId"/> as a stream:
+    /// non-atomically, in batches of <see cref="DataSetManyStreamOptions.BatchSize"/>,
+    /// each written as <see cref="SetManyAsync"/> writes one, in any key order. Each
+    /// batch's outcome is reported to <paramref name="progress"/> as it completes, and
+    /// memory is bounded by the batch size, never by the length of the stream.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Per-entry refusals do not stop the stream.</b> An entry the caller may not
+    /// write, a value the tree's schema policy rejects, or an entry that is not a valid
+    /// write is reported in <see cref="DataSetManyStreamBatch.Rejections"/> with its key
+    /// and a reason, and every other entry of its batch is still written. Authorization
+    /// per key, schema enforcement and dead-lettering apply exactly as they do to any
+    /// other write. Any other fault - a quota, a cancellation, an unreachable cluster -
+    /// ends the stream; the batches already reported stay written.
+    /// </para>
+    /// <para>
+    /// This member is additive with a default implementation over
+    /// <see cref="SetManyAsync"/> and <see cref="SetAsync"/>, so an existing
+    /// implementation keeps compiling and streams without change; a binding overrides
+    /// it to stream over a single call.
+    /// </para>
+    /// </remarks>
+    /// <param name="treeId">Logical tree identifier.</param>
+    /// <param name="upserts">The entries to write, in any order.</param>
+    /// <param name="progress">Receives each batch's outcome, or <see langword="null"/>.</param>
+    /// <param name="options">The batching options, or <see langword="null"/> for <see cref="DataSetManyStreamOptions.Default"/>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The stream's totals.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="upserts"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">An option is out of range.</exception>
+    Task<DataSetManyStreamResult> SetManyStreamAsync(
+        string treeId,
+        IAsyncEnumerable<DataEntry> upserts,
+        IProgress<DataSetManyStreamBatch>? progress = null,
+        DataSetManyStreamOptions? options = null,
+        CancellationToken cancellationToken = default) =>
+        DataSetManyStreaming.RunAsync(this, treeId, upserts, progress, options, cancellationToken);
+
+    /// <summary>
     /// Reads the value at <paramref name="key"/> on <paramref name="treeId"/>.
     /// A key the caller may not read (an anonymous caller included) reports
     /// absent (<see cref="DataReadResult.Found"/> is <see langword="false"/>),

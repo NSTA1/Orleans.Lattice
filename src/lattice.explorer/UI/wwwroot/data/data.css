@@ -466,3 +466,66 @@
     border-inline-start: var(--lt-diagram-ring-width) solid Highlight;
   }
 }
+
+/* The Import dialog (issue #5365). */
+.lt-data-import,
+.lt-data-import__form,
+.lt-data-import__download {
+  display: grid;
+  gap: var(--lt-space-3);
+}
+
+.lt-data-import__file {
+  display: grid;
+  gap: var(--lt-space-1);
+}
+
+.lt-data-import__file[hidden] {
+  display: none;
+}
+
+.lt-data-import__file-label {
+  color: var(--lt-ink);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-data-import__hint,
+.lt-data-import__note,
+.lt-data-import__result p {
+  max-width: var(--lt-measure);
+  margin: 0;
+  color: var(--lt-ink-2);
+  font-size: var(--lt-text-sm);
+}
+
+.lt-data-import__result {
+  display: grid;
+  gap: var(--lt-space-2);
+}
+
+.lt-data-import__heading {
+  margin: 0;
+  font-size: var(--lt-text-sm);
+}
+
+.lt-data-import__refused {
+  inline-size: 100%;
+  border-collapse: collapse;
+  font-size: var(--lt-text-sm);
+}
+
+.lt-data-import__refused th,
+.lt-data-import__refused td {
+  padding: var(--lt-space-1) var(--lt-space-2);
+  border-block-end: 1px solid var(--lt-rule);
+  text-align: start;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.lt-data-import__error {
+  margin: 0;
+  padding-inline-start: var(--lt-space-3);
+  border-inline-start: 1px solid var(--lt-op-state-failed);
+  color: var(--lt-ink);
+}

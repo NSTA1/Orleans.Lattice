@@ -181,6 +181,14 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
     public LatticeDataApiGrpcClient Data(string user = WorldIdentities.Admin) =>
         LatticeDataApiGrpcClient.Create(Invoker(user), Head.Services);
 
+    /// <summary>
+    /// A tree-administration client acting as <paramref name="user"/>, for a journey to create a tree or
+    /// read its statistics the way the facade reports them (#5365).
+    /// </summary>
+    /// <param name="user">The caller, <see cref="WorldIdentities.Admin"/> by default.</param>
+    public LatticeTreeAdminApiGrpcClient TreeAdmin(string user = WorldIdentities.Admin) =>
+        LatticeTreeAdminApiGrpcClient.Create(Invoker(user), Head.Services);
+
     /// <summary>Sets <paramref name="treeId"/>'s schema policy as the administrator, through the schema facade the Schema area calls.</summary>
     /// <param name="treeId">The tree.</param>
     /// <param name="policy">The policy.</param>

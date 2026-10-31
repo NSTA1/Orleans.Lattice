@@ -574,6 +574,52 @@ public sealed class LatticeTreeAdminApiGrpcClient
     }
 
     /// <summary>
+    /// Streams <paramref name="sortedEntries"/> into the empty tree <paramref name="treeId"/>
+    /// as one bulk load over a single duplex <c>StreamBulkLoad</c> call: the entries are
+    /// cut into chunks of <see cref="TreeBulkLoadStreamOptions.ChunkSize"/>, at most
+    /// <see cref="TreeBulkLoadStreamOptions.MaxUnacknowledgedChunks"/> are in flight
+    /// unacknowledged, each acknowledgement is reported to <paramref name="progress"/>,
+    /// and the load is committed when the stream ends. Requires the whole-tree bulk-load
+    /// capability.
+    /// </summary>
+    /// <remarks>
+    /// A call broken by a transient transport fault (an unavailable server or a reset
+    /// connection) is reopened as a resume of the same session, up to
+    /// <see cref="TreeBulkLoadStreamOptions.MaxResumeAttempts"/> times, and every chunk
+    /// not yet acknowledged is sent again; a chunk that had already landed is an
+    /// idempotent no-op, so no entry is lost or written twice. Memory is bounded by the
+    /// chunk size and the window, whatever the length of the stream.
+    /// </remarks>
+    /// <param name="treeId">The tree to bulk-load. Must not be <c>null</c> or empty.</param>
+    /// <param name="operationId">The caller's stable bulk-load operation id. Must not be <c>null</c> or empty, and must not contain <c>'/'</c>.</param>
+    /// <param name="sortedEntries">The entries, in strictly ascending key order.</param>
+    /// <param name="progress">Receives each chunk's acknowledgement, or <see langword="null"/>.</param>
+    /// <param name="options">The chunking, window and resume options, or <see langword="null"/> for the defaults.</param>
+    /// <param name="cancellationToken">Cancellation token. Cancelling abandons the load without committing it.</param>
+    /// <returns>The committed load's result.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="operationId"/> is <c>null</c> or empty, or <paramref name="operationId"/> contains <c>'/'</c>.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="sortedEntries"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">An option is out of range.</exception>
+    /// <exception cref="BulkLoadOrderException">The entries are not in strictly ascending key order; nothing after the offending chunk is sent.</exception>
+    public Task<TreeBulkLoadResult> BulkLoadStreamAsync(
+        string treeId,
+        string operationId,
+        IAsyncEnumerable<DataEntry> sortedEntries,
+        IProgress<TreeBulkLoadChunkAck>? progress = null,
+        TreeBulkLoadStreamOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ThrowIfInvalidBulkLoadOperationId(operationId);
+        ArgumentNullException.ThrowIfNull(sortedEntries);
+        options ??= TreeBulkLoadStreamOptions.Default;
+        options.Validate();
+
+        return new TreeAdminBulkLoadStreamCall(treeId, operationId, options, progress)
+            .RunAsync(_invoker, _methods.StreamBulkLoad, sortedEntries, cancellationToken);
+    }
+
+    /// <summary>
     /// Restores the captured backup <paramref name="backupId"/> into
     /// <paramref name="treeId"/> via an online, reversible shadow-cutover. Requires the
     /// whole-tree restore capability.
