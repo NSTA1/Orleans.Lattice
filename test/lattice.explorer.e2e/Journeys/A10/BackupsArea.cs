@@ -309,7 +309,7 @@ internal sealed class BackupsArea(ShellPage shell)
     /// <param name="kind">The kind.</param>
     public ILocator ScheduleRow(string kind) =>
         Content.Locator("table.lt-table tbody tr, ul.lt-table-list__rows > li")
-            .Filter(new() { HasTextRegex = new Regex("^\\s*" + kind + "\\b") });
+            .Filter(new() { HasTextRegex = new Regex("^\\s*" + kind) });
 
     /// <summary>Fills the schedule form: the kind, and the interval in hours and minutes.</summary>
     /// <param name="kind">The kind's label.</param>
