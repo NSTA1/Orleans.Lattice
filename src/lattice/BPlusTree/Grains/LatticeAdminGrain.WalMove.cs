@@ -440,7 +440,18 @@ internal sealed partial class LatticeAdminGrain
                     physicalTreeId, partition, cursor, opts.EffectiveCopyPageSize, encoder, cancellationToken);
                 if (page.Offsets.Length == 0)
                 {
-                    break;
+                    // The source is quiesced at throughInclusive, so it must
+                    // yield entries up to there. An empty page short of it
+                    // means the copy cannot reach the tail it is cutting over
+                    // (a suffix not yet readable from the source, or trimmed
+                    // under the copy). Fail closed here rather than lean on
+                    // the optional verification: with VerifyAfterCopy off, a
+                    // short copy would flip the pin and the target would
+                    // re-issue offsets the source already holds (#5466).
+                    throw new InvalidOperationException(
+                        $"WAL move of {physicalTreeId}/{partition} aborted: the copy reached offset {cursor} but the "
+                        + $"source returned no entries past it, short of the quiesced highest offset {throughInclusive}. "
+                        + "The pin was not flipped; the source remains live; retry.");
                 }
 
                 for (var start = 0; start < page.Offsets.Length;)
