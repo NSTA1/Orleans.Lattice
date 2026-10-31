@@ -1,0 +1,16 @@
+# A rebind that moves the binding to the new copy but keeps the old copy's
+# generation, cursor and checkpoint.
+MODULE: BindingConsistentRebindKeepsCursor
+TARGET: BindingConsistent
+CLASS: Invariant
+SUMMARY: the rebind relabels the binding without rebuilding
+PERTURBS: Rebind
+
+--- FIND
+    /\ ~Live
+    /\ Rebuild(Scan(phys))
+--- REPLACE
+    /\ ~Live
+    /\ bound' = phys /\ viewDefn' = defn
+    /\ UNCHANGED <<genCopy, read, checkpoint, mem, slots, applied, barrier>>
+--- END

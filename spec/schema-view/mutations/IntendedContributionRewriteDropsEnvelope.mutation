@@ -1,0 +1,14 @@
+# The rewrite writes its rewritten bodies without an envelope, so the copy
+# loses the stamp the rewrite promised (the #5243 defect for a transform).
+MODULE: IntendedContributionRewriteDropsEnvelope
+TARGET: IntendedContribution
+CLASS: Invariant
+SUMMARY: the rewrite stores un-enveloped bodies
+PERTURBS: BuildRewrite
+
+--- FIND
+               /\ stored' = [stored EXCEPT ![2] = [k \in Keys |-> Rewritten(stored[1][k], at)]]
+--- REPLACE
+               /\ stored' = [stored EXCEPT ![2] = [k \in Keys |->
+                    [ver |-> 0, body |-> Rewritten(stored[1][k], at).body]]]
+--- END

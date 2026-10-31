@@ -1,0 +1,15 @@
+# An advance to a version the catalog does not declare: the facade must refuse
+# a target that is not registered and reachable.
+MODULE: TypeOKAdvancePastCatalog
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: the target advances past every declared version
+PERTURBS: Advance
+
+--- FIND
+    /\ target = 1 /\ target' = 2
+    /\ UNCHANGED <<appended, defn, phys, stored, wal, intended, submitted,
+--- REPLACE
+    /\ target = 1 /\ target' = 3
+    /\ UNCHANGED <<appended, defn, phys, stored, wal, intended, submitted,
+--- END

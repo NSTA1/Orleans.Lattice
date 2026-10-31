@@ -76,6 +76,7 @@ once, either here or in the
 | Tenant isolation | 1 | 25 | 25 | 31 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
 | Scheduling and progress | 10 | 196 | 244 | 119 | [Verified Scheduling and Progress](verified-scheduling.md) |
 | Schema enforcement and versioning | 9 | 145 | 175 | 289 | [Schema enforcement and versioning](../../spec/schema/README.md) |
+| Schema and view composition | 1 | 23 | 23 | 28 | [Schema and view composition](../../spec/schema-view/README.md) |
 
 **Behaviour rows** are the rows of a refinement note's action and property tables
 that assert a production behaviour. **Detector tests** are the distinct tests those

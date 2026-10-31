@@ -1,0 +1,13 @@
+# A local write the policy refuses is accepted, so it reaches the WAL and the
+# view.
+MODULE: SchemaViewComposition
+ROW: RejectedContributesNothing
+FILE: src/lattice.schema/LatticeSchemaWriteInterceptor.cs
+DETECTORS: SchemaViewCompositionIntegrationTests.Refused_write_contributes_nothing_and_a_retried_write_is_counted_once
+SUMMARY: an invalid local write is accepted instead of rejected
+
+--- FIND
+            throw new LatticeSchemaViolationException(treeId, key, reason);
+--- REPLACE
+            return LatticeWriteDecision.Accept();
+--- END

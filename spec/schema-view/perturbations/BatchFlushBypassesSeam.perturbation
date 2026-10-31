@@ -1,0 +1,13 @@
+# A decided batch's aggregation flush projects each prepared member's raw
+# bytes instead of the seam's stripped input.
+MODULE: SchemaViewComposition
+ROW: ApplyBatch
+FILE: src/lattice/Views/ViewMaintainerGrain.Aggregation.cs
+DETECTORS: ProjectionInputSeamCharacterizationTests.Atomic_publication_projects_the_same_input_and_reconciles_without_drift
+SUMMARY: atomic publication bypasses the projection-input seam
+
+--- FIND
+Project(ProjectionInput(registration, prepared)))
+--- REPLACE
+Project(prepared))
+--- END

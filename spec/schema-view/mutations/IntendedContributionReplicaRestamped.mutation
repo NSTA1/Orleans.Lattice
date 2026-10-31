@@ -1,0 +1,17 @@
+# A replicated entry re-stamped at the receiver's target instead of kept at its
+# source stamp: the view projects the wrong shape.
+MODULE: IntendedContributionReplicaRestamped
+TARGET: IntendedContribution
+CLASS: Invariant
+SUMMARY: a value arriving below the check is stored at the receiver target, not its source stamp
+PERTURBS: Replicate
+
+--- FIND
+             ELSE /\ wal' = [wal EXCEPT ![phys] = Append(@,
+                       Entry(ReplicaUnit, {1}, One(1, v), FALSE, TRUE))]
+                  /\ stored' = [stored EXCEPT ![phys][1] = v]
+--- REPLACE
+             ELSE /\ wal' = [wal EXCEPT ![phys] = Append(@,
+                       Entry(ReplicaUnit, {1}, One(1, [v EXCEPT !.ver = target]), FALSE, TRUE))]
+                  /\ stored' = [stored EXCEPT ![phys][1] = [v EXCEPT !.ver = target]]
+--- END

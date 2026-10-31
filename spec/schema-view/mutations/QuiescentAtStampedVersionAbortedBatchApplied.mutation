@@ -1,0 +1,12 @@
+# An aborted batch is published as if it had committed.
+MODULE: QuiescentAtStampedVersionAbortedBatchApplied
+TARGET: QuiescentAtStampedVersion
+CLASS: Invariant
+SUMMARY: atomic publication folds an aborted batch
+PERTURBS: ApplyBatch
+
+--- FIND
+       IN IF e.commit
+--- REPLACE
+       IN IF TRUE
+--- END

@@ -1,0 +1,13 @@
+# A transform remediation of a versioned tree writes its rewritten values
+# without an envelope (the #5243 defect).
+MODULE: SchemaViewComposition
+ROW: IntendedContribution
+FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
+DETECTORS: SchemaViewCompositionIntegrationTests.Transform_remediation_reprojects_each_rewritten_body_at_the_target_stamp
+SUMMARY: the remediation build drops the version envelope
+
+--- FIND
+                await destination.SetAsync(entry.Key, input.Restamp(rewritten));
+--- REPLACE
+                await destination.SetAsync(entry.Key, rewritten);
+--- END

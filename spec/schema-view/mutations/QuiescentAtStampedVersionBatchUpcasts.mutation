@@ -1,0 +1,13 @@
+# Atomic publication decodes each batch member to the live target before
+# projecting it, so the same value projects differently by path.
+MODULE: QuiescentAtStampedVersionBatchUpcasts
+TARGET: QuiescentAtStampedVersion
+CLASS: Invariant
+SUMMARY: atomic publication projects the body upcast to the target
+PERTURBS: ApplyBatch
+
+--- FIND
+           m1 == [k \in Keys |-> Proj(viewDefn, Input(e.vals[k]))]
+--- REPLACE
+           m1 == [k \in Keys |-> Proj(viewDefn, Decode(e.vals[k]))]
+--- END
