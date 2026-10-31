@@ -67,9 +67,12 @@ else
         </LtDefinition>
         <LtDefinition Term="Scope" Mono="true">@AccessRuleFormat.ScopeLabel(rule.Scope)</LtDefinition>
         <LtDefinition Term="Operations">@AccessRuleFormat.OperationsLabel(rule.Operations)</LtDefinition>
-        @if (!string.IsNullOrEmpty(rule.Condition))
+        @if (AccessRuleFormat.HasCondition(rule))
         {
-            <LtDefinition Term="Condition" Mono="true">@rule.Condition</LtDefinition>
+            <LtDefinition Term="Condition">
+                <span class="lt-shell-mono" data-lt-condition="true">@rule.Condition</span>
+                <span class="lt-access-condition-warning" role="note" data-lt-condition-warning="true">@AccessRuleFormat.ConditionNotEvaluatedMessage</span>
+            </LtDefinition>
         }
         <LtDefinition Term="Owner">
             @if (_owner is { } appOwner)

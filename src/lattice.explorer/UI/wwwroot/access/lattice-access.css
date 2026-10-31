@@ -92,6 +92,20 @@
   color: var(--lt-ink);
 }
 
+/* A warning a rule carries: a condition the authorization engine never evaluates. */
+.lt-access-notice--warning {
+  border-left-color: var(--lt-warning);
+}
+
+.lt-access-condition-warning {
+  display: block;
+  max-width: 48rem;
+  margin-top: var(--lt-space-2);
+  padding-left: var(--lt-space-3);
+  border-left: 2px solid var(--lt-warning);
+  color: var(--lt-ink);
+}
+
 /* 3. Toolbar helpers. */
 .lt-access-filter {
   display: flex;
