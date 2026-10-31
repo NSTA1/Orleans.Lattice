@@ -96,7 +96,47 @@ public sealed class LtTableLifecycleTests : ShellDesignTestContext
             .Add(x => x.Items, new (string Name, int? Key)[] { ("two", 2), ("missing-first", null), ("one", 1), ("missing-second", null) })
             .Add(x => x.ChildContent, Columns(includeSort: true)));
 
-    private static RenderFragment Columns(bool includeSort, bool includeName = true) => builder =>
+    [TestCase(false)]
+    [TestCase(true)]
+    public void Changing_the_sorted_columns_key_reorders_existing_rows(bool descending)
+    {
+        var cut = RenderTable();
+        cut.Find("thead button").Click();
+        if (descending)
+        {
+            cut.Find("thead button").Click();
+        }
+
+        cut.Render(p => p.Add(x => x.ChildContent,
+            Columns(includeSort: true, sortBy: row => row.Key is { } key ? -key : null)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Names(cut), Is.EqualTo(descending
+                ? new[] { "one", "two", "missing-first", "missing-second" }
+                : new[] { "missing-first", "missing-second", "two", "one" }));
+            Assert.That(cut.FindAll("th[aria-sort]").Single().GetAttribute("aria-sort"),
+                Is.EqualTo(descending ? "descending" : "ascending"));
+        });
+    }
+
+    [Test]
+    public void Clearing_the_sorted_columns_key_restores_natural_order_and_removes_sort_state()
+    {
+        var cut = RenderTable();
+        cut.Find("thead button").Click();
+
+        cut.Render(p => p.Add(x => x.ChildContent, Columns(includeSort: true, canSort: false)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Names(cut), Is.EqualTo(new[] { "two", "missing-first", "one", "missing-second" }));
+            Assert.That(cut.FindAll("thead button, th[aria-sort]"), Is.Empty);
+        });
+    }
+
+    private static RenderFragment Columns(bool includeSort, bool includeName = true,
+        Func<(string Name, int? Key), IComparable?>? sortBy = null, bool canSort = true) => builder =>
     {
         if (includeName)
         {
@@ -111,7 +151,8 @@ public sealed class LtTableLifecycleTests : ShellDesignTestContext
             builder.OpenComponent<LtColumn<(string Name, int? Key)>>(3);
             builder.AddComponentParameter(4, nameof(LtColumn<(string, int?)>.Title), "Key");
             builder.AddComponentParameter(5, nameof(LtColumn<(string, int?)>.Value), (Func<(string Name, int? Key), object?>)(row => row.Key));
-            builder.AddComponentParameter(6, nameof(LtColumn<(string, int?)>.SortBy), (Func<(string Name, int? Key), IComparable?>)(row => row.Key));
+            builder.AddComponentParameter(6, nameof(LtColumn<(string, int?)>.SortBy),
+                canSort ? sortBy ?? (Func<(string Name, int? Key), IComparable?>)(row => row.Key) : null);
             builder.CloseComponent();
         }
     };
