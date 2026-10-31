@@ -27,6 +27,9 @@ public sealed class A8Contract() : ChapterContract("A8")
     /// <summary>The telemetry WAL partition A8 moves.</summary>
     public const int MovedPartition = 0;
 
+    /// <summary>The WAL move's copy page: the Azure Table batch cap, until #5445 chunks pages itself.</summary>
+    public const int WalMoveCopyPageSize = 100;
+
     private static readonly TimeSpan StructuralPatience = TimeSpan.FromMinutes(6);
 
     /// <inheritdoc />
@@ -62,7 +65,8 @@ public sealed class A8Contract() : ChapterContract("A8")
         if (await PartitionKeyAsync(admin) != JourneyHostEnvironment.SecondaryWalProviderKey)
         {
             var source = await PartitionKeyAsync(admin);
-            var move = await admin.StartWalMoveAsync(telemetry, MovedPartition, JourneyHostEnvironment.SecondaryWalProviderKey);
+            // CopyPageSize 100: the default 256-entry page exceeds the Azure Table batch cap (#5445).
+            var move = await admin.StartWalMoveAsync(telemetry, MovedPartition, JourneyHostEnvironment.SecondaryWalProviderKey, new TreeWalMoveOptions { CopyPageSize = WalMoveCopyPageSize });
             await ContractWait.SucceededAsync("the telemetry WAL move", () => admin.GetTreeAdminOperationStatusAsync(move.OperationId), StructuralPatience);
             await admin.ReclaimMovedWalSourceAsync(telemetry, MovedPartition, source);
         }

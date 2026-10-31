@@ -83,7 +83,7 @@ public sealed class C1Contract() : ChapterContract("C1")
         }
 
         var schema = ContractFacades.Of(context, Personas.Sam.Id).Schema;
-        await U2Contract.MigrateAsync(schema, Names.Trees.FactoryOrders, "the re-migration to version 2");
+        await U2Contract.MigrateAsync(schema, Names.Trees.FactoryOrders, "the re-migration to version 2", context.Estate.LineFeed);
 
         await ReplayCapturedOrdersFromEastAsync(context.Estate);
     }

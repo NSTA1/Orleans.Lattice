@@ -37,7 +37,7 @@ public sealed class U2Contract() : ChapterContract("U2")
             await schema.AdvanceTargetVersionAsync(orders, 2);
         }
 
-        await MigrateAsync(schema, orders, "the migration to version 2");
+        await MigrateAsync(schema, orders, "the migration to version 2", context.Estate.LineFeed);
 
         await schema.ClearPolicyAsync(Names.Trees.FactoryOrdersArchive);
         await schema.ClearVersionConfigAsync(Names.Trees.FactoryOrdersArchive);
@@ -50,19 +50,36 @@ public sealed class U2Contract() : ChapterContract("U2")
     /// <param name="schema">The Schema API.</param>
     /// <param name="treeId">The tree.</param>
     /// <param name="what">The migration, for messages.</param>
-    public static async Task MigrateAsync(Orleans.Lattice.Api.Schema.Grpc.LatticeSchemaApiGrpcClient schema, string treeId, string what)
+    /// <param name="feed">
+    /// The line feed, paused while the migration runs (and resumed after, unless it was already
+    /// paused) so its writes do not slow the slices past the call timeout.
+    /// </param>
+    public static async Task MigrateAsync(Orleans.Lattice.Api.Schema.Grpc.LatticeSchemaApiGrpcClient schema, string treeId, string what, Estate.LineFeedControl feed)
     {
-        for (var attempt = 1; ; attempt++)
+        var resume = !(await feed.StatusAsync()).Paused;
+        await feed.PauseAsync();
+        try
         {
-            var migration = await schema.StartMigrationAsync(treeId);
-            try
+            for (var attempt = 1; ; attempt++)
             {
-                await ContractWait.SucceededAsync(what, () => schema.GetSchemaOperationStatusAsync(migration.OperationId), OperationPatience);
-                return;
+                var migration = await schema.StartMigrationAsync(treeId);
+                try
+                {
+                    await ContractWait.SucceededAsync(what, () => schema.GetSchemaOperationStatusAsync(migration.OperationId), OperationPatience);
+                    return;
+                }
+                catch (InvalidOperationException ex) when (attempt < 5 && ex.Message.Contains("TimeoutException", StringComparison.Ordinal))
+                {
+                    // Known defect #5440: a slow slice fails the whole operation; start it again.
+                    TestContext.Progress.WriteLine($"{what}: attempt {attempt} hit #5440; retrying.");
+                }
             }
-            catch (InvalidOperationException ex) when (attempt < 3 && ex.Message.Contains("TimeoutException", StringComparison.Ordinal))
+        }
+        finally
+        {
+            if (resume)
             {
-                // Known defect #5440: a slow slice fails the whole operation; start it again.
+                await feed.ResumeAsync();
             }
         }
     }
