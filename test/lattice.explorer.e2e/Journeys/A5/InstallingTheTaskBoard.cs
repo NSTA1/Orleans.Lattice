@@ -74,7 +74,7 @@ public sealed class InstallingTheTaskBoard : JourneyChapter
             await run.ShotAsync("filter-updates", "The Updates filter: no installed app has an update");
 
             await apps.FilterAsync("All");
-            await Expect(apps.Row(TaskBoard, Apps.SamplesSource)).ToContainTextAsync("Available");
+            await Expect(apps.Row(TaskBoard, Apps.SamplesSource)).ToContainTextAsync("Offered by 2 sources");
             Coverage.Hit("use-case:apps/sources");
             await apps.OpenRowActionAsync("Review", TaskBoard, Apps.SamplesSource);
         });
@@ -120,7 +120,7 @@ public sealed class InstallingTheTaskBoard : JourneyChapter
 
             await review.ClickAsync("Install v1.0.0");
             await review.ExpectStatusAsync("Task board v1.0.0 is installed and not enabled yet.");
-            await Expect(review.AppAddress).ToHaveTextAsync("/apps/task-board");
+            await Expect(review.AppAddress).ToHaveTextAsync(new System.Text.RegularExpressions.Regex("/apps/task-board$"));
             await run.ShotAsync("installed", "Installed v1.0.0, not enabled yet; its page is /apps/task-board");
 
             await review.ClickAsync("Enable now");
