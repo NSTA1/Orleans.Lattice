@@ -1,4 +1,6 @@
+using System.Text;
 using Microsoft.Playwright;
+using Orleans.Lattice.Api.Data.Grpc;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Browser;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
 using static Microsoft.Playwright.Assertions;
@@ -67,18 +69,25 @@ public sealed class EstateSmokeTests
     [Test]
     public async Task Administrator_signs_in_and_keeps_browsing_after_a_west_silo_dies()
     {
+        const string tree = "smoke-lines";
+        var data = LatticeDataApiGrpcClient.Create(_estate.Invoker(), JourneyEstate.Serialization);
+        for (var i = 1; i <= 3; i++)
+        {
+            await data.SetAsync(new DataSetRequest { TreeId = tree, Key = $"line/{i:D2}", Value = Encoding.UTF8.GetBytes($"{{\"line\":{i}}}") });
+        }
+
         _context = await JourneyBrowser.NewContextAsync(_estate.ExplorerUri);
         var page = await _context.NewPageAsync();
         var shots = Path.Combine(_estate.ArtifactsDirectory, "screenshots");
 
         await JourneyBrowser.GotoAsync(page, "/");
         await JourneyBrowser.SignInAsync(page, JourneyEstateOptions.Administrator, _estate.PasswordOf(JourneyEstateOptions.Administrator));
-        await Expect(JourneyBrowser.Heading(page)).ToBeVisibleAsync();
+        await ExpectServingAsync(page, "Estate");
         await JourneyBrowser.ScreenshotAsync(page, Path.Combine(shots, "01-signed-in-home.png"));
 
         await JourneyBrowser.Stop(page, "data").ClickAsync();
-        await Expect(page).ToHaveURLAsync(new System.Text.RegularExpressions.Regex("/data"));
-        await Expect(JourneyBrowser.Heading(page)).ToBeVisibleAsync();
+        await ExpectServingAsync(page, "Data");
+        await Expect(Content(page).GetByText(tree, new() { Exact = true }).First).ToBeVisibleAsync();
         await JourneyBrowser.ScreenshotAsync(page, Path.Combine(shots, "02-data-before-silo-loss.png"));
 
         await _estate.KillSiloAsync(JourneyEstate.West, 0);
@@ -92,15 +101,30 @@ public sealed class EstateSmokeTests
                 "the gateway's active health check removes a dead silo within its probe interval");
         });
 
-        foreach (var area in new[] { "access", "data" })
-        {
-            await JourneyBrowser.Stop(page, area).ClickAsync();
-            await Expect(page).ToHaveURLAsync(new System.Text.RegularExpressions.Regex("/" + area));
-            await Expect(JourneyBrowser.Heading(page)).ToBeVisibleAsync();
-        }
+        await JourneyBrowser.Stop(page, "access").ClickAsync();
+        await ExpectServingAsync(page, "Access");
+
+        await JourneyBrowser.Stop(page, "data").ClickAsync();
+        await ExpectServingAsync(page, "Data");
+        await Expect(Content(page).GetByText(tree, new() { Exact = true }).First).ToBeVisibleAsync();
+        await JourneyBrowser.ScreenshotAsync(page, Path.Combine(shots, "03-data-after-silo-loss.png"));
 
         await JourneyBrowser.GotoAsync(page, "/");
+        await ExpectServingAsync(page, "Estate");
         await Expect(JourneyBrowser.SessionButton(page, JourneyEstateOptions.Administrator)).ToBeVisibleAsync();
-        await JourneyBrowser.ScreenshotAsync(page, Path.Combine(shots, "03-home-after-silo-loss.png"));
+        await JourneyBrowser.ScreenshotAsync(page, Path.Combine(shots, "04-home-after-silo-loss.png"));
+    }
+
+    private static ILocator Content(IPage page) => page.Locator("main#lt-shell-content");
+
+    /// <summary>
+    /// The page shows <paramref name="heading"/> and the header reports the head connected:
+    /// the Explorer is serving through the gateway, not merely rendering a cached shell.
+    /// </summary>
+    private static async Task ExpectServingAsync(IPage page, string heading)
+    {
+        await Expect(JourneyBrowser.Heading(page)).ToHaveTextAsync(heading, new() { Timeout = 60_000 });
+        await Expect(page.GetByRole(AriaRole.Banner).GetByText("Connected", new() { Exact = true }))
+            .ToBeVisibleAsync(new() { Timeout = 60_000 });
     }
 }
