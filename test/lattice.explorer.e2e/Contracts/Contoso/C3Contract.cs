@@ -1,3 +1,4 @@
+using Grpc.Core;
 using Orleans.Lattice.Api.Apps;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Api.Auth.Grpc;
@@ -28,6 +29,26 @@ public sealed class C3Contract() : ChapterContract("C3")
 
     /// <inheritdoc />
     public override async Task EstablishAsync(ChapterContext context)
+    {
+        // Late in the story the estate is loaded enough that a teardown call can outlast the
+        // grain call timeout after it took effect. Every step below checks state before it
+        // acts, so the whole teardown is simply run again on such a failure.
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await EstablishOnceAsync(context);
+                return;
+            }
+            catch (RpcException ex) when (attempt < 3 && ex.StatusCode is StatusCode.Internal or StatusCode.Unavailable or StatusCode.DeadlineExceeded)
+            {
+                TestContext.Progress.WriteLine($"C3: attempt {attempt} failed transiently ({ex.Status.Detail}); running the teardown again.");
+                await Task.Delay(TimeSpan.FromSeconds(10));
+            }
+        }
+    }
+
+    private static async Task EstablishOnceAsync(ChapterContext context)
     {
         var facades = ContractFacades.Of(context);
         var auth = facades.Auth;

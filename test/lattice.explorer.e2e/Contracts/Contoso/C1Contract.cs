@@ -4,7 +4,6 @@ using Orleans.Lattice.Api.Data.Grpc;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
-using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 using Names = Orleans.Lattice.Explorer.EndToEnd.Tests.Story.StoryNames.Contoso;
 
@@ -20,8 +19,6 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts.Contoso;
 /// (<see cref="ReplayCapturedOrdersFromEastAsync"/>): it replays the three negative orders as
 /// <c>orders-baseline</c> captured them in one atomic batch to east, and west - strict - diverts
 /// each replicated entry instead of applying it, leaving both regions holding the same values.
-/// The restore is wrapped in a tolerant <see cref="KnownDefect"/> (#5443): see the evidence at
-/// the step.
 /// </summary>
 public sealed class C1Contract() : ChapterContract("C1")
 {
@@ -53,46 +50,9 @@ public sealed class C1Contract() : ChapterContract("C1")
         await feed.WaitUntilAsync(status => status.WrongPricesWritten >= wrong + SeederBurst, TimeSpan.FromMinutes(2));
 
         var backup = olivia.Backup;
-        var wrongKeys = await WrongPricesAsync(olivia.Data);
-        var restored = false;
-
-        // #5443, tolerant: the outcome depends on the state of west's shipper to east, not on the
-        // fix. When the shipper is healthy the restore runs as a coordinated saga and east's
-        // participant refuses it as `anonymous` ("could not prepare", run 41219981422). When
-        // U2's remediation has swapped factory-orders' physical log and the shipper's reset
-        // cursor (0) is already trimmed (first retained 60), east awaits a re-seed and west takes
-        // the restore uncoordinated: it succeeds and logs "replaced outside a coordinated
-        // restore", leaving east holding the discarded writes (run 41227595172). Both outcomes
-        // pass; the seeder converges the two regions on either path below.
-        await new KnownDefect("#5443", "A restore into a replicated tree aborts because the peer's participant authorizes as anonymous").ReproducesAsync(async () =>
-        {
-            var restore = await backup.StartRestoreAsync(new LatticeRestoreRequest(
-                context.Recall(StoryKeys.OrdersBaselineBackup), Names.Trees.FactoryOrders, mode: LatticeRestoreMode.ShadowCutover));
-            try
-            {
-                await ContractWait.SucceededAsync("the orders-baseline restore", () => backup.GetBackupOperationStatusAsync(restore.OperationId), OperationPatience);
-                restored = true;
-            }
-            catch (InvalidOperationException ex) when (ex.Message.Contains("could not prepare", StringComparison.Ordinal))
-            {
-                TestContext.Progress.WriteLine("C1: the orders-baseline restore aborted (#5443); the seeder deletes the wrong prices instead.");
-            }
-        });
-
-        // The wrong prices are feed orders written after the baseline, so the restore discards
-        // them. Without it, delete them in west; and delete them in east either way, because an
-        // uncoordinated restore leaves east holding them (a delete's newer stamp wins over a
-        // replicated write that arrives later).
-        var east = ContractFacades.Of(context, region: JourneyEstate.East).Data;
-        foreach (var key in wrongKeys)
-        {
-            if (!restored)
-            {
-                await olivia.Data.DeleteAsync(new DataDeleteRequest { TreeId = Names.Trees.FactoryOrders, Key = key });
-            }
-
-            await east.DeleteAsync(new DataDeleteRequest { TreeId = Names.Trees.FactoryOrders, Key = key });
-        }
+        var restore = await backup.StartRestoreAsync(new LatticeRestoreRequest(
+            context.Recall(StoryKeys.OrdersBaselineBackup), Names.Trees.FactoryOrders, mode: LatticeRestoreMode.ShadowCutover));
+        await ContractWait.SucceededAsync("the orders-baseline restore", () => backup.GetBackupOperationStatusAsync(restore.OperationId), OperationPatience);
 
         var priya = ContractFacades.Of(context, Personas.Priya.Id).Data;
         foreach (var correction in StoryData.Corrections)

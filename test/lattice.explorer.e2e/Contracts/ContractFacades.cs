@@ -1,4 +1,5 @@
 using Grpc.Core;
+using Grpc.Core.Interceptors;
 using Orleans.Lattice.Api.Apps.Grpc;
 using Orleans.Lattice.Api.Auth.Grpc;
 using Orleans.Lattice.Api.Backup.Grpc;
@@ -27,7 +28,7 @@ public sealed class ContractFacades
         Estate = estate;
         User = user;
         Region = region;
-        _invoker = estate.Invoker(user, region: region, tenant: tenant);
+        _invoker = estate.Invoker(user, region: region, tenant: tenant).Intercept(TransientReadRetryInterceptor.Instance);
     }
 
     /// <summary>The estate.</summary>
