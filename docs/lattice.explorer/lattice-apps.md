@@ -196,7 +196,10 @@ An app's UI never runs in the Explorer's own page.
   never consented to is not offered to the frame.
 - **Credentials.** No credential ever enters the frame. If the frame loads a new
   page, the Explorer closes it. An upgrade, disable or uninstall revokes the session,
-  and the Explorer replaces the frame with a message asking you to open the app again.
+  and so does a lost role: the next bridge call of a user who no longer holds any of
+  the app's roles finds the app is no longer theirs. The Explorer replaces the frame
+  with a message saying which happened - disabled, uninstalled, upgraded, or no longer
+  open to you - and asking you to open the app again.
 
 **Residual risk.** A sandbox cannot guarantee zero egress. For example, WebRTC is not
 blocked where the browser does not support the `webrtc` directive. Data handed to a

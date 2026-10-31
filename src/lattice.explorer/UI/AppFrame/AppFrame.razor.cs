@@ -36,6 +36,7 @@ public sealed partial class AppFrame : IAsyncDisposable
 
     private Phase _phase = Phase.Authorizing;
     private AppFrameFailure _failure;
+    private string? _revokedReason;
     private AppFrameLaunch? _launch;
     private AppBridgeSession? _session;
     private string? _authorizedSlug;
@@ -412,6 +413,7 @@ public sealed partial class AppFrame : IAsyncDisposable
         _launch = null;
         _phase = Phase.Authorizing;
         _failure = default;
+        _revokedReason = null;
         _attachRequested = false;
         _srcArmed = false;
         _ready = false;
@@ -523,6 +525,7 @@ public sealed partial class AppFrame : IAsyncDisposable
             }
         }
 
+        _revokedReason = reason;
         await FailAsync(AppFrameFailure.Revoked, detach: false).ConfigureAwait(true);
     }
 
@@ -611,7 +614,7 @@ public sealed partial class AppFrame : IAsyncDisposable
         }
     }
 
-    private static string FailureTitle(AppFrameFailure failure) => failure switch
+    private static string FailureTitle(AppFrameFailure failure, string? revokedReason) => failure switch
     {
         AppFrameFailure.NoUi => "This app has no interface",
         AppFrameFailure.DigestMismatch or AppFrameFailure.BundleDigestMismatch => "The app's interface failed verification",
@@ -620,12 +623,12 @@ public sealed partial class AppFrame : IAsyncDisposable
         AppFrameFailure.ProtocolUnsupported => "This app needs a newer Explorer",
         AppFrameFailure.FrameFailed => "The app failed to start",
         AppFrameFailure.Reloaded => "The app was closed",
-        AppFrameFailure.Revoked => "This app has changed",
+        AppFrameFailure.Revoked => RevokedTitle(revokedReason),
         AppFrameFailure.Unavailable => "The app could not be opened",
         _ => "This app is not available",
     };
 
-    private static string FailureText(AppFrameFailure failure) => failure switch
+    private static string FailureText(AppFrameFailure failure, string? revokedReason) => failure switch
     {
         AppFrameFailure.NoUi => "The installed version of this app does not ship a user interface. Its other pages are still available.",
         AppFrameFailure.DigestMismatch => "A file in the app's interface does not match the digest its manifest pins, so nothing was loaded.",
@@ -635,9 +638,29 @@ public sealed partial class AppFrame : IAsyncDisposable
         AppFrameFailure.ProtocolUnsupported => "The app requires a frame protocol this Explorer does not provide.",
         AppFrameFailure.FrameFailed => "The app's frame reported that it could not load its interface.",
         AppFrameFailure.Reloaded => "The app's frame loaded a new page, so it was closed.",
-        AppFrameFailure.Revoked => "The app was disabled, uninstalled or upgraded since it was opened. Open it again to continue.",
+        AppFrameFailure.Revoked => RevokedText(revokedReason),
         AppFrameFailure.Unavailable => "The Explorer could not reach the cluster or the browser. Try again.",
         _ => "You do not have access to this app, or it is not enabled.",
+    };
+
+    // The reason the host withdrew the frame's authority decides what the user is told: only a
+    // disable, an uninstall, or an upgrade or reinstall is named as such. Anything else - most
+    // often a role the user no longer holds - is reported as access that has ended, never as a
+    // lifecycle change that did not happen.
+    private static string RevokedTitle(string? reason) => reason switch
+    {
+        AppFrameProtocol.RevokedDisabled => "This app was disabled",
+        AppFrameProtocol.RevokedUninstalled => "This app was uninstalled",
+        AppFrameProtocol.RevokedUpgraded or AppFrameProtocol.RevokedRevision => "This app has changed",
+        _ => "This app is no longer open to you",
+    };
+
+    private static string RevokedText(string? reason) => reason switch
+    {
+        AppFrameProtocol.RevokedDisabled => "It was disabled since it was opened, so its interface was closed. It can be opened again once it is enabled.",
+        AppFrameProtocol.RevokedUninstalled => "It was uninstalled since it was opened, so its interface was closed.",
+        AppFrameProtocol.RevokedUpgraded or AppFrameProtocol.RevokedRevision => "It was upgraded or reinstalled since it was opened. Open it again to continue.",
+        _ => "Its interface was closed because you can no longer use it as it was opened: you may no longer hold a role in it, or it may have been disabled or uninstalled. Open it again to see whether you still can.",
     };
 
     [LoggerMessage(EventId = 1, Level = LogLevel.Warning, Message = "The frame for '{AppSlug}' reported failure '{Code}'.")]

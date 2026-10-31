@@ -178,11 +178,46 @@ public sealed partial class AppFrameComponentTests
 
         var reply = await PortAsync(cut, "{\"id\":1,\"op\":\"data.read\",\"args\":{\"action\":\"get\",\"tree\":\"orders\",\"key\":\"k\"}}");
 
-        AssertFailed(cut, AppFrameFailure.Revoked, "This app has changed");
+        AssertFailed(cut, AppFrameFailure.Revoked, "This app was disabled");
         Assert.Multiple(() =>
         {
             Assert.That(reply, Is.Null);
             Assert.That(_module.Invocations["revoke"].Single().Arguments[1], Is.EqualTo("disabled"));
+            Assert.That(cut.Markup, Does.Contain("It was disabled since it was opened"));
+        });
+    }
+
+    [Test]
+    public async Task A_bridge_revocation_after_an_uninstall_says_the_app_was_uninstalled()
+    {
+        var cut = RenderFrame();
+        await ReadyAsync(cut);
+        _bridge.Throw = new AppBridgeException(AppBridgeFailure.NotFound);
+        _workspace.Descriptions[Slug] = Describe() with { State = AppLifecycleState.Uninstalled };
+
+        await PortAsync(cut, "{\"id\":1,\"op\":\"data.read\",\"args\":{\"action\":\"get\",\"tree\":\"orders\",\"key\":\"k\"}}");
+
+        AssertFailed(cut, AppFrameFailure.Revoked, "This app was uninstalled");
+        Assert.That(_module.Invocations["revoke"].Single().Arguments[1], Is.EqualTo("uninstalled"));
+    }
+
+    [Test]
+    public async Task A_lost_role_closes_the_frame_without_claiming_the_app_changed()
+    {
+        var cut = RenderFrame();
+        await ReadyAsync(cut);
+        _bridge.Throw = new AppBridgeException(AppBridgeFailure.Denied);
+        _workspace.Descriptions.Remove(Slug);
+
+        var reply = await PortAsync(cut, "{\"id\":1,\"op\":\"data.read\",\"args\":{\"action\":\"get\",\"tree\":\"orders\",\"key\":\"k\"}}");
+
+        AssertFailed(cut, AppFrameFailure.Revoked, "This app is no longer open to you");
+        Assert.Multiple(() =>
+        {
+            Assert.That(reply, Is.Null);
+            Assert.That(_module.Invocations["revoke"].Single().Arguments[1], Is.EqualTo("closed"));
+            Assert.That(cut.Markup, Does.Contain("you may no longer hold a role in it"));
+            Assert.That(cut.Markup, Does.Not.Contain("upgraded"));
         });
     }
 
