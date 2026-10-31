@@ -187,7 +187,8 @@ TLA+ specification in [`spec/wal/`](../../spec/wal/README.md):
   bulk sweep and the starvation drive, each a token, a leaf read and a fenced
   removal as separate steps, two sweepers racing - against a leaf's fold, purge,
   discard and re-creation under the same grain id, and against a completed purge's
-  tree-level tail re-driven onto a reused tree id.
+  tree-level tail re-driven onto a reused tree id or racing a write to the purged
+  shard.
 
 It follows the pattern of the atomic-commit specification: every property and every
 action has a mutation that makes a property fire, and a refinement note maps each
@@ -229,12 +230,16 @@ Since then the models have found nine more, each reproduced before its fix:
 | #4700 | A purge's shard-wide recovery flag re-creates empty a leaf the purge never reached, and strands cleared leaves when the reseed stops early. Fixed: each leaf carries its own purge marker, and recovery re-creates only a marked leaf, visiting every one. |
 | #5358 | The GC removed an orphaned pin by consumer id after a husk read taken in a separate step, so a purge-cleared leaf re-created in between lost the block pin its birth seeded under the same consumer id, and the trim could pass its un-checkpointed writes. Fixed: the removal is fenced by the pin grain's per-activation merge stamps, and the drive retires through the same fenced sequence. Found by `WalPinRetirement`. |
 
-The independent review of `WalPinRetirement` found one more, reproduced by a test,
-fixed, and then added to the model, where a mutation reproduces it:
+The independent review of `WalPinRetirement` found four more, each reproduced by a
+test and fixed. Three are in the model, where a mutation reproduces each; the
+fourth is pinned by tests:
 
 | Issue | Defect |
 |-------|--------|
+| #5416 | A completed purge removed the tree's registry entry, which frees the id, before it cleared the tree's pin store, so a write that registered the id again in between had its birth block pin erased by the clear. Fixed: the pin store is cleared before the registry entry is removed. The model's purge tail is one step, so tests pin this order. |
 | #5417 | A completed purge re-drove its tail - WAL trim, pin-store clear, registry removal - whenever its registry removal was still recorded as owed, so a removal that landed with its record unwritten was re-driven against an id a write had registered again, trimming the new tree's acknowledged writes. Fixed: the purge records the registry lineage it removes with its completion, and a re-drive acts only while the entry still carries it. |
+| #5458 | A purged shard admitted a write whenever the registry named the id live, and while a purge's tail is owed that is the purged tree's own entry. The write re-seeded the root leaf under the purged lineage, so the tail took the entry for its own, unpinned and unregistered the live leaf, and the acknowledged write was lost on a cold replay. Fixed: the shard asks the deletion record, which holds the id until the purge has removed its registry row. |
+| #5459 | A resized tree's logical purge re-drove its completion, which removes the logical registry entry, against a logical id a create had registered again. Fixed: the completion records the lineage of the entry it removes before the first removal, and a re-drive removes nothing once the entry is gone or carries another lineage. Outside the model, which has no data-less logical id; tests pin it. |
 
 **What is covered:** one WAL partition shared by two leaves, with two faults per
 behaviour for safety and one for liveness, and a variant with snapshot and row loss

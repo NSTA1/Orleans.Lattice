@@ -831,7 +831,10 @@ internal sealed partial class TreeDeletionGrain(
     /// again and re-seed the shard's deterministic root leaf, whose birth seed
     /// lands under the purged root leaf's consumer id. A clear after that would
     /// erase the new tree's block pins, unfenced. While the registry still names
-    /// the purged tree, no write can register it again.
+    /// the purged tree, no write can register it again, and none can re-seed a
+    /// purged shard under that entry either: a purged shard admits a write only
+    /// once this record no longer holds the deletion (issue #5458,
+    /// <see cref="HoldsDeletionAsync"/>).
     /// <para>
     /// Every step acts on the tree id, not on the purged tree, so each runs only
     /// while the registry entry is still the purged tree's own (issue #5417). A
@@ -903,8 +906,12 @@ internal sealed partial class TreeDeletionGrain(
     /// A purge that owes nothing, keeps its entry, or predates the lineage record
     /// is <see cref="PurgedRegistryEntry.Owned"/>, its behaviour unchanged.
     /// Otherwise the entry is the purged tree's own only while it carries the
-    /// recorded lineage. A new registration always stamps a fresh lineage, so a
-    /// reused id never matches, even when the purged entry carried none.
+    /// recorded lineage. A registration of an absent id stamps a fresh lineage
+    /// unless its caller supplies one, and no caller registering a tree id
+    /// supplies a lineage, so a reused id does not match, even when the purged
+    /// entry carried none. A purged shard does not re-seed under the purged
+    /// entry itself (issue #5458), so the entry still carrying the recorded
+    /// lineage is the purged tree's own.
     /// </summary>
     /// <remarks>
     /// The check and the removal that follows it are not atomic, and need not

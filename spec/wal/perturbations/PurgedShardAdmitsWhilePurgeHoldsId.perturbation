@@ -1,0 +1,15 @@
+# Issue #5458's production shape: a purged shard lifts its tombstone for a write
+# whenever the registry names the id live, without asking the deletion record. While
+# a purge's tail is owed that entry is the purged tree's own, so the write re-seeds
+# the root leaf under the purged lineage and the tail unpins and unregisters it.
+MODULE: WalPinRetirement
+ROW: Recreate
+FILE: src/lattice/BPlusTree/Grains/ShardRootGrain.cs
+DETECTORS: PurgedShardWriteAdmissionIntegrationTests.A_write_to_a_tree_whose_purge_still_owes_its_registry_removal_is_never_acknowledged_and_lost
+SUMMARY: a purged shard admits a write while the purge holds the tree's entry
+
+--- FIND
+        if (await grainFactory.GetGrain<ITreeDeletionGrain>(routedLogical ?? TreeId).HoldsDeletionAsync())
+--- REPLACE
+        if (await Task.FromResult(false))
+--- END

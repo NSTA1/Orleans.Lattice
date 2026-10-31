@@ -27,7 +27,7 @@ exhaustively within the TLC budget.
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `WalDurability` | 11 | 4 | 26 | 43 | 39 | 226,592 |
 | `WalMove` | 5 | 2 | 13 | 18 | 18 | 1,617 |
-| `WalPinRetirement` | 3 | 3 | 25 | 30 | 30 | 223,628 |
+| `WalPinRetirement` | 3 | 3 | 25 | 31 | 30 | 284,019 |
 
 `Actions` counts the disjuncts of `Next`, including `WalMove`'s non-behavioural
 `Stutter`. `Behaviour rows` counts the action rows of the module's refinement note,
@@ -262,6 +262,8 @@ minutes). The variants' state counts are in the manifest.
 | #5358 | The GC removed an orphaned pin by consumer id, unconditionally, after a husk read taken in a separate step. A purge-cleared leaf re-created in between - a recovery re-binding it, a reused tree id re-seeding a deterministic root leaf, a bulk load re-using a leaf id - seeds its block pin under the same consumer id, often into the surviving entry where the monotone merge changes nothing; the removal then erased it and the trim could pass the re-created leaf's un-checkpointed writes. Both the sweep and the drive's NotDriven retirement had the window. **Fixed in this change**: every key's token is taken before its pins are read, the pin grain stamps every merge, `RemoveIfUnmergedSinceAsync` refuses a removal the consumer was merged past, and the drive retires through the same fenced sequence with a fresh durable read. | `NoTrimPastLiveNeedUnfencedRemoval`, `RetireOnlyHuskUnfencedRemoval`, `NoTrimPastLiveNeedDriveRemovesOnProbe` |
 | #5416 | Found by the independent review (#5351) rather than by the model: a completed tree purge removed the tree's registry entry - which frees the id for reuse - before it cleared the tree's whole pin store, so a write re-registering the id in between re-seeded the shard's deterministic root leaf under the purged leaf's consumer id, and the clear then erased that block pin, unfenced. **Fixed in the review's remediation**: the pin store is cleared before the registry entry is removed. The model's purge tail is one step, so this ordering is pinned by `TreeDeletionGrainTests` instead (see the refinement note's abstraction gaps). | None |
 | #5417 | Found by the independent review (#5351): a completed purge's tail - WAL trim, pin-store clear, registry removal - was re-driven whenever its registry removal was still recorded as owed, and the record is cleared only by a write after the removal. A removal that landed with its record unwritten (the write, or the loop stop before it, threw) was re-driven against an id a write or a create had registered again: the new tree's acknowledged writes were trimmed, its pins cleared and its registration removed. **Fixed**: the purge records the lineage of the registry entry it removes with its completion, and a re-drive acts only while the entry still carries it; otherwise it only records the removal. | `NoTrimPastLiveNeedPurgeRedriveIgnoresLineage`, `NoTrimPastLiveNeedRedriveReReadsLineage` |
+| #5458 | Found by the independent review's confirmation pass (#5351), with `Recreate` widened to keep the registry entry's lineage: a purged shard admitted a write whenever the registry named the id live, and while a purge's tail is owed that is the purged tree's own entry. The write re-seeded the root leaf under the purged lineage, so the tail's lineage check took the entry for the purge's own and unpinned and unregistered the live leaf; the acknowledged write was lost on a cold replay. **Fixed**: `ShardRootGrain.PrepareForPurgedCopyAsync` asks the deletion record (`HoldsDeletionAsync`), which holds the id until the purge has removed its registry row, and refuses the write until then. | `LivePublisherPinnedRecreateWhilePurgeHoldsId` |
+| #5459 | Found by the same pass: a resized tree's logical purge re-drove its completion - the logical registry entry's removal - against a logical id a create had registered again, the #5417 class on the logical path. **Fixed**: the completion records the lineage of the entry it removes, in its own write before the first removal, and a re-drive that finds the entry gone or carrying another lineage removes nothing. The model has no data-less logical id, so `TreeDeletionGrainTests` pin it (see the refinement note's abstraction gaps). | None |
 
 ### What it covers, and what it does not
 
@@ -272,7 +274,8 @@ cover several leaves or partitions per leaf, the pin's HLC frontier and override
 holds, the in-memory cursor registry, late delivery of a lost silo's removal
 message or a duplicate activation's, the order of the steps inside a purge's
 tree-level tail (the pin-store clear before the registry frees the id, issue #5416,
-pinned by tests), or the sweep's floor-holder census and budgets; the refinement note's
+pinned by tests), a resized tree's logical purge completion (pinned by tests), or
+the sweep's floor-holder census and budgets; the refinement note's
 abstraction gaps list them. Coverage of this module is not coverage of the trim
 itself, which is `WalDurability`'s.
 
@@ -287,5 +290,5 @@ Coyote re-finds the retired pin of a re-created leaf in each.
 java -cp C:\path\to\tla2tools.jar tlc2.TLC -config WalPinRetirement.cfg WalPinRetirement.tla
 ```
 
-On two workers the base takes about a minute and a half, and each variant about three
-minutes.
+On six workers the base took about a minute and a half, `OneFault` about a minute and
+`TwoSweepers` about a minute and a half.

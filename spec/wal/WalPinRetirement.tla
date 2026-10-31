@@ -107,11 +107,12 @@ IdVerdict(c) == IF c = "cL" THEN "LeafPublished" ELSE "AmbiguousPartition"
 (*  owed      the pin-store keys L's terminal seam has still to retire.    *)
 (*  route     the key L's pins are routed to now.                          *)
 (*                                                                         *)
-(* Tree-level purge tail: tailOwed, the completed purge still owes its     *)
-(* registry removal, and with it the tail before it (the WAL trim and the  *)
-(* pin-store clear); tailLin, the lineage of the registry entry the purge  *)
-(* recorded with its completion. A registry entry's lineage is modelled by *)
-(* the incarnation: every re-population registers a new one.               *)
+(* Tree-level registry and purge tail: regPresent, the tree's registry     *)
+(* entry exists; regLin, its lineage; tailOwed, the completed purge still  *)
+(* owes its registry removal, and with it the tail before it (the WAL trim *)
+(* and the pin-store clear); tailLin, the lineage the purge recorded with  *)
+(* its completion. A re-population while the entry exists keeps its       *)
+(* lineage; a registration of the absent id stamps a new one (issue #5458).*)
 (*                                                                         *)
 (* Pin store: pinOff[k, c], the entry under key k for consumer c (NoPin,   *)
 (* the Zero block pin -1, or an offset), merged by monotone max; pinInc[k], *)
@@ -126,18 +127,18 @@ VARIABLES next, tail,
           phase, inc, seeded, cp, need, purgeMark, owed, route,
           pinOff, pinInc,
           pc, seen, found, verdict, touched,
-          faults, tailOwed, tailLin
+          faults, tailOwed, tailLin, regPresent, regLin
 
 walVars  == <<next, tail>>
 leafVars == <<phase, inc, seeded, cp, need, purgeMark, owed, route>>
 pinVars  == <<pinOff, pinInc>>
 procVars == <<pc, seen, found, verdict, touched>>
-tailVars == <<tailOwed, tailLin>>
+tailVars == <<tailOwed, tailLin, regPresent, regLin>>
 vars == <<next, tail,
           phase, inc, seeded, cp, need, purgeMark, owed, route,
           pinOff, pinInc,
           pc, seen, found, verdict, touched,
-          faults, tailOwed, tailLin>>
+          faults, tailOwed, tailLin, regPresent, regLin>>
 
 Phases == {"live", "deleted", "marked", "draining", "husk", "discarded"}
 
@@ -162,6 +163,8 @@ TypeOK ==
    /\ faults \in 0..MaxFaults
    /\ tailOwed \in BOOLEAN
    /\ tailLin \in 0..MaxInc
+   /\ regPresent \in BOOLEAN
+   /\ regLin \in 0..MaxInc
 
 (***************************************************************************)
 (* Derived views.                                                          *)
@@ -216,6 +219,8 @@ Init ==
     /\ faults = 0
     /\ tailOwed = FALSE
     /\ tailLin = 0
+    /\ regPresent = TRUE
+    /\ regLin = 0
 
 (***************************************************************************)
 (* The leaf.                                                               *)
@@ -359,7 +364,8 @@ ClearRow ==
           \* The purge's walk completes with this, its only leaf: the tail is
           \* owed, with the lineage of the entry it will remove.
           /\ tailOwed' = TRUE
-          /\ tailLin' = inc
+          /\ tailLin' = regLin
+          /\ UNCHANGED <<regPresent, regLin>>
        \/ /\ phase = "draining"
           /\ owed = {}
           /\ UNCHANGED <<need, owed>>
@@ -417,25 +423,40 @@ SelfRetireFail(k) ==
 (* latches the activation against any later row write (_leafStateCleared) *)
 (* and deactivates it, so the re-creation runs on a later activation; a    *)
 (* duplicate activation or a late-delivered removal from a lost one is a   *)
-(* stated abstraction gap. Nothing else gates it, and in particular        *)
-(* nothing waits for an orphan sweep in flight.                            *)
+(* stated abstraction gap. A purged shard re-seeds only once the tree's    *)
+(* deletion record no longer holds the deletion (HoldsDeletionAsync, issue *)
+(* #5458): not while the purge's tail is owed. A shard the purge never     *)
+(* tombstoned, under an id registered again by a create verb or by its own *)
+(* first write, consults no deletion record, so while the tail is owed L   *)
+(* stands for that shard's leaf and may be populated once the purged       *)
+(* tree's own entry is gone or replaced. While the registry entry exists   *)
+(* the re-population keeps its lineage (EnsureRootAsync registers          *)
+(* nothing); otherwise the write registers the id again, stamping a new    *)
+(* one. Nothing else gates it, and in particular nothing waits for an      *)
+(* orphan sweep in flight.                                                 *)
 (***************************************************************************)
 Recreate ==
     /\ phase = "husk"
     /\ purgeMark
     /\ owed = {}
     /\ inc < MaxInc
+    /\ \/ ~tailOwed
+       \/ ~(regPresent /\ regLin = tailLin)
     /\ phase' = "live"
     /\ inc' = inc + 1
     /\ seeded' = FALSE
     /\ cp' = -1
     /\ purgeMark' = FALSE
+    /\ IF regPresent
+       THEN UNCHANGED <<regPresent, regLin>>
+       ELSE /\ regPresent' = TRUE
+            /\ regLin' = inc + 1
+    /\ UNCHANGED <<tailOwed, tailLin>>
     /\ UNCHANGED walVars
     /\ UNCHANGED <<need, owed, route>>
     /\ UNCHANGED pinVars
     /\ UNCHANGED procVars
     /\ UNCHANGED faults
-    /\ UNCHANGED tailVars
 
 (***************************************************************************)
 (* Discard: a soft-deleted tree that is an undone resize's retired copy    *)
@@ -477,19 +498,20 @@ DiscardRetire ==
 (* then runs the tail again, so PurgeTailRemove may run any number of     *)
 (* times until the record lands: an over-approximation, since production  *)
 (* re-drives only after a fault. The tail acts only while the registry    *)
-(* entry still carries the lineage the purge recorded (issue #5417): once *)
-(* the id was populated again under a new lineage, the re-drive only      *)
-(* records the removal (PurgeTailSettle). A re-drive that finds the entry *)
-(* gone and not reused also only records it; acting again there is        *)
-(* harmless, so it is folded into PurgeTailRemove.                         *)
+(* entry exists and still carries the lineage the purge recorded (issue   *)
+(* #5417). A re-drive that finds the entry gone - the removal landed - or *)
+(* carrying another lineage - the id was registered again - only records  *)
+(* the removal (PurgeTailSettle).                                          *)
 (***************************************************************************)
 PurgeTailRemove ==
     /\ tailOwed
-    /\ tailLin = inc
+    /\ regPresent
+    /\ regLin = tailLin
     /\ tail' = IF next > tail THEN next ELSE tail
     /\ pinOff' = [kc \in Keys \X Cons |-> NoPin]
+    /\ regPresent' = FALSE
     /\ tailOwed' \in BOOLEAN
-    /\ UNCHANGED tailLin
+    /\ UNCHANGED <<tailLin, regLin>>
     /\ UNCHANGED next
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinInc
@@ -498,9 +520,9 @@ PurgeTailRemove ==
 
 PurgeTailSettle ==
     /\ tailOwed
-    /\ tailLin # inc
+    /\ ~(regPresent /\ regLin = tailLin)
     /\ tailOwed' = FALSE
-    /\ UNCHANGED tailLin
+    /\ UNCHANGED <<tailLin, regPresent, regLin>>
     /\ UNCHANGED walVars
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars

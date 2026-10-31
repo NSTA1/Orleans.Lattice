@@ -121,10 +121,13 @@ public partial class TreeDeletionGrainTests
         Assert.ThrowsAsync<InvalidOperationException>(() => h.Grain.PurgeNowAsync());
         registry.UnregisterAsync(TreeId).Returns(Task.CompletedTask);
         registry.ClearReceivedCalls();
+        h.Wal.ClearReceivedCalls();
         h.Reporter.ClearReceivedCalls();
 
         await h.Grain.ReceiveReminder("deletion-keepalive", default);
 
+        await h.Wal.Received(1).TrimAsync(TreeId, 0, 4, Arg.Any<CancellationToken>());
+        await h.Wal.Received(1).TrimAsync(TreeId, 2, 9, Arg.Any<CancellationToken>());
         await h.Reporter.Received(1).UnregisterTreeAsync(TreeId, Arg.Any<CancellationToken>());
         await registry.Received(1).UnregisterAsync(TreeId);
         Assert.That(h.State.State.RegistryUnregisterPending, Is.False);
