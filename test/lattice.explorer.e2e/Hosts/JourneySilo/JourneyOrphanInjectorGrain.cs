@@ -1,0 +1,96 @@
+using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.Primitives;
+
+namespace Orleans.Lattice.Explorer.EndToEnd.Hosts.Silo;
+
+/// <summary>
+/// The journey host's orphaned-leaf injector, reachable only when the fault seams are
+/// enabled (<c>LATTICE_E2E_FAULTS=1</c>). It leaves behind exactly the persisted state a
+/// silo that crashed part way through a leaf split leaves: the new sibling initialised,
+/// filled with a shadow copy of its donor's rows, and linked into the shard's sibling
+/// chain from both sides - and the parent never told. Nothing routes to the leaf, so the
+/// orphaned-leaf audit finds it and, because every row it holds is readable by descent,
+/// the repair may unsplice it.
+/// </summary>
+internal interface IJourneyOrphanInjectorGrain : IGrainWithStringKey
+{
+    /// <summary>
+    /// Splices an orphan after the second leaf of physical shard <paramref name="shardIndex"/>
+    /// of the tree this grain is keyed by.
+    /// </summary>
+    /// <param name="shardIndex">The physical shard.</param>
+    /// <returns>The orphan's grain id.</returns>
+    Task<string> InjectAsync(int shardIndex);
+}
+
+/// <inheritdoc cref="IJourneyOrphanInjectorGrain" />
+internal sealed class JourneyOrphanInjectorGrain : Grain, IJourneyOrphanInjectorGrain
+{
+    /// <inheritdoc />
+    public async Task<string> InjectAsync(int shardIndex)
+    {
+        var treeId = this.GetPrimaryKeyString();
+        var physical = await GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).ResolveAsync(treeId);
+        var shard = GrainFactory.GetGrain<IShardRootGrain>($"{physical}/{shardIndex}");
+        var headId = await shard.GetLeftmostLeafIdAsync()
+            ?? throw new InvalidOperationException($"Shard {shardIndex} of '{treeId}' has no leaf to split.");
+
+        // The donor is the chain's second leaf, so the orphan declares a leading bound a
+        // descent can be made on - the shape measured in the field. An orphan with no low
+        // bound would be a head, whose reachability the audit cannot decide.
+        var head = await GrainFactory.GetGrain<IBPlusLeafGrain>(headId).GetKeyRangeAndNextSiblingAsync();
+        if (head.NextSibling is not { } donorId)
+        {
+            throw new InvalidOperationException($"Shard {shardIndex} of '{treeId}' is a single leaf that has never split.");
+        }
+
+        var donor = GrainFactory.GetGrain<IBPlusLeafGrain>(donorId);
+        var link = await donor.GetKeyRangeAndNextSiblingAsync();
+        if (link.KeyRange.LowKeyInclusive is null)
+        {
+            throw new InvalidOperationException($"The second leaf of shard {shardIndex} of '{treeId}' declares no leading bound.");
+        }
+
+        var rows = await donor.GetLiveRawEntriesAsync();
+        if (rows.Count == 0)
+        {
+            throw new InvalidOperationException($"The second leaf of shard {shardIndex} of '{treeId}' holds no rows to shadow.");
+        }
+
+        var orphanId = GrainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid()).GetGrainId();
+        var orphan = GrainFactory.GetGrain<IBPlusLeafGrain>(orphanId);
+        using (LatticeNewLeafIntentContext.BeginScope(orphanId))
+        {
+            // The split's first two steps: the sibling is born with its bounds and links,
+            // then receives the rows it was handed.
+            await orphan.InitializeSiblingAsync(new SiblingInitialization
+            {
+                TreeId = physical,
+                ShardIndex = shardIndex,
+                LowKeyInclusive = link.KeyRange.LowKeyInclusive,
+                HighKeyExclusive = link.KeyRange.HighKeyExclusive,
+                PrevSibling = donorId,
+                NextSibling = link.NextSibling,
+            });
+
+            var shadow = new Dictionary<string, LwwValue<byte[]>>(rows.Count, StringComparer.Ordinal);
+            foreach (var row in rows)
+            {
+                shadow[row.Key] = row.ToLwwValue();
+            }
+
+            await orphan.MergeEntriesAsync(shadow);
+        }
+
+        // The third: the chain learns of the sibling from both sides. The fourth - the
+        // parent adopting it - is the step the crash never reached.
+        await donor.SetNextSiblingAsync(orphanId);
+        if (link.NextSibling is { } next)
+        {
+            await GrainFactory.GetGrain<IBPlusLeafGrain>(next).SetPrevSiblingAsync(orphanId);
+        }
+
+        return orphanId.ToString();
+    }
+}

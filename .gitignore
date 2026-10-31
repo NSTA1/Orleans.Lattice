@@ -121,6 +121,10 @@ ipch/
 
 # Visual Studio Trace Files
 *.e2e
+# ...but not the Explorer end-to-end journeys project, whose directory name ends in .e2e.
+!/test/lattice.explorer.e2e/
+# Its per-estate process logs, screenshots and traces.
+/test/lattice.explorer.e2e/artifacts/
 
 # TFS 2012 Local Workspace
 $tf/

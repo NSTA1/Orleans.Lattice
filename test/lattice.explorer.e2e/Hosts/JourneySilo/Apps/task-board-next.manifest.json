@@ -1,0 +1,57 @@
+{
+  "identity": {
+    "slug": "task-board",
+    "version": "1.1.0",
+    "provenance": {
+      "source": "samples-next",
+      "publisher": "Orleans.Lattice samples",
+      "reference": "embedded:JourneySilo.TaskBoardNext.manifest.json"
+    }
+  },
+  "presentation": {
+    "displayName": "Task board",
+    "summary": "A three-column task board whose cards live as JSON values in the app's own tree.",
+    "description": "Task board is the Explorer's pilot app with an untrusted UI.\nIt lists, adds, moves and deletes task cards stored under tasks/{id} in its one tree, and deep-links the selected card into the Explorer's address line.\nViewers can read the board. Editors can also change it.",
+    "icon": { "path": "icon.svg", "digest": "c367e956895304c28f0936bd8f80db36308cfd837e8827c71ebe87940b4403a6" },
+    "categories": ["productivity", "sample"],
+    "publisherDisplayName": "Orleans.Lattice samples"
+  },
+  "trees": [{ "name": "tasks" }],
+  "roles": [
+    {
+      "name": "viewer",
+      "operations": ["Read", "RangeRead"],
+      "scopes": [{ "tree": "tasks" }]
+    },
+    {
+      "name": "editor",
+      "operations": ["Read", "RangeRead", "Write", "Delete", "RangeDelete"],
+      "scopes": [{ "tree": "tasks" }]
+    }
+  ],
+  "replication": [{ "tree": "tasks", "mergeMode": "LwwRegister" }],
+  "schema": [],
+  "subscriptions": [],
+  "mcpTools": [],
+  "ui": {
+    "entry": "index.html",
+    "styles": ["app.css"],
+    "scripts": [{ "path": "app.mjs", "module": true }],
+    "assets": [
+      { "path": "index.html", "mediaType": "text/html", "digest": "48e16d67c058dd9f19f64f7b27bd03fc1dfb33d39d9774be88acd988df2b8bf2" },
+      { "path": "app.css", "mediaType": "text/css", "digest": "a2ad7151751a9261c28b05c7a7888bc3e6033eee044666d923a750fe22e2873b" },
+      { "path": "app.mjs", "mediaType": "text/javascript", "digest": "b7ed4f42e3d83ff257e1f14da22cf0edc18ba19ba72c023c3f79db6a3926952a" },
+      { "path": "icon.svg", "mediaType": "image/svg+xml", "digest": "c367e956895304c28f0936bd8f80db36308cfd837e8827c71ebe87940b4403a6" }
+    ],
+    "bundleDigest": "9fc2b6363b01c55f69ec7bdda7ef5cfd12b14494115e5af8eed34697106b57b1",
+    "bridge": [
+      { "operation": "context.read" },
+      { "operation": "data.read", "trees": ["tasks"] },
+      { "operation": "data.write", "trees": ["tasks"] },
+      { "operation": "data.delete", "trees": ["tasks"] },
+      { "operation": "nav.sync" },
+      { "operation": "ui.notify" }
+    ],
+    "minProtocol": 1
+  }
+}

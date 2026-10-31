@@ -104,6 +104,11 @@
   <Project Path="test/lattice.backup.azureblob/Orleans.Lattice.Backup.AzureBlob.Tests.csproj" />
   <Project Path="test/lattice.explorer/Orleans.Lattice.Explorer.Tests.csproj" />
   <Project Path="test/lattice.explorer.uitests/Orleans.Lattice.Explorer.UiTests.csproj" />
+  <Project Path="test/lattice.explorer.e2e/Orleans.Lattice.Explorer.EndToEnd.Tests.csproj" />
+  <Project Path="test/lattice.explorer.e2e/Hosts/JourneySilo/Orleans.Lattice.Explorer.EndToEnd.JourneySilo.csproj" />
+  <Project Path="test/lattice.explorer.e2e/Hosts/JourneyExplorer/Orleans.Lattice.Explorer.EndToEnd.JourneyExplorer.csproj" />
+  <Project Path="test/lattice.explorer.e2e/Hosts/JourneyGateway/Orleans.Lattice.Explorer.EndToEnd.JourneyGateway.csproj" />
+  <Project Path="test/lattice.explorer.e2e/Hosts/LineFeed/Orleans.Lattice.Explorer.EndToEnd.LineFeed.csproj" />
   <Project Path="test/lattice.explorer.entra/Orleans.Lattice.Explorer.Entra.Tests.csproj" />
   <Project Path="test/lattice.explorer.entra.web/Orleans.Lattice.Explorer.Entra.Web.Tests.csproj" />
   <Project Path="test/lattice.caching.azureblob/Orleans.Lattice.Caching.AzureBlob.Tests.csproj" />

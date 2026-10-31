@@ -1,0 +1,194 @@
+name: Explorer Journeys
+
+# Advisory (non-required) lane for the Explorer end-to-end journeys (epic #5401).
+#
+# The journeys run against a production-shaped estate (#5359): journey hosts
+# launched as real processes, a two-silo west region behind a TLS gateway with
+# active health checks, an Explorer head that holds the gateway as its one
+# endpoint, and every storage provider on Azurite - with the backup sink on a
+# separate account. `test/lattice.explorer.e2e/**` is carved out of the `code`
+# and `nonSample` filters in `ci.yml` exactly as `test/lattice.explorer.uitests/**`
+# is, so the core matrix never tries to run it; this workflow is its runner.
+#
+# FAIL CLOSED, NEVER INCONCLUSIVE. The lane sets LATTICE_E2E_REQUIRED=1, so a
+# journey that cannot reach Azurite FAILS rather than going inconclusive, which
+# NUnit would count as neither passed nor failed - the false green the testing
+# master warns about.
+#
+# This is the minimal lane F1 lands; F5 (#5363) extends it with per-journey
+# isolated legs, the story legs, the nightly run and the screenshot provenance
+# check. Like ui-tests.yml it is advisory: a required check that never reports
+# would leave a PR pending forever.
+on:
+  pull_request:
+    # Branch list mirrors ci.yml and ui-tests.yml.
+    branches: [main, '*/epic/**', 'release/**']
+    paths:
+      - 'test/lattice.explorer.e2e/**'
+      - '!test/lattice.explorer.e2e/**/*.md'
+      - 'src/lattice.explorer/**'
+      - '!src/lattice.explorer/**/*.md'
+      - 'reference-architecture/hosts/Silo/**'
+      - 'reference-architecture/hosts/Explorer/**'
+      - 'reference-architecture/hosts/Common/**'
+      - 'samples/Explorer/Apps/TaskBoard/**'
+      - '!samples/Explorer/Apps/TaskBoard/**/*.md'
+      - '.github/workflows/explorer-journeys.yml'
+
+  # Integration-branch lane, mirroring ui-tests.yml (and its disclosed limit:
+  # on a push the paths filter sees only the member that just merged).
+  push:
+    branches: ['*/epic/**']
+    paths:
+      - 'test/lattice.explorer.e2e/**'
+      - '!test/lattice.explorer.e2e/**/*.md'
+      - 'src/lattice.explorer/**'
+      - '!src/lattice.explorer/**/*.md'
+      - 'reference-architecture/hosts/Silo/**'
+      - 'reference-architecture/hosts/Explorer/**'
+      - 'reference-architecture/hosts/Common/**'
+      - 'samples/Explorer/Apps/TaskBoard/**'
+      - '!samples/Explorer/Apps/TaskBoard/**/*.md'
+      - '.github/workflows/explorer-journeys.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: explorer-journeys-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  E2E_PROJECT: test/lattice.explorer.e2e/Orleans.Lattice.Explorer.EndToEnd.Tests.csproj
+
+jobs:
+  # Member-push classifier, as in ui-tests.yml. The script is ci.yml's
+  # `pushref` step, which is the SOURCE OF TRUTH for the rule. Do not edit it
+  # here alone: CiIntegrationBranchTriggerTests fails the build when this copy
+  # and ci.yml's differ.
+  plan:
+    name: Classify pushed ref
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      push_is_member: ${{ steps.pushref.outputs.member }}
+    steps:
+      - uses: actions/checkout@v5
+        if: github.event_name == 'push'
+        with:
+          fetch-depth: 1
+          sparse-checkout: .github
+
+      - name: Classify the pushed integration ref
+        id: pushref
+        if: github.event_name == 'push'
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          member=false
+          parent=""
+
+          while read -r _sha ref; do
+            branch="${ref#refs/heads/}"
+
+            # A proper prefix, and the very next character is the `-` separator.
+            case "$BRANCH" in
+              "$branch"-*)
+                if [ "$branch" != "$BRANCH" ]; then
+                  member=true
+                  parent="$branch"
+                fi
+                ;;
+            esac
+          done < <(git ls-remote --heads origin)
+
+          echo "member=$member" >> "$GITHUB_OUTPUT"
+          echo "parent=$parent" >> "$GITHUB_OUTPUT"
+
+          if [ "$member" = "true" ]; then
+            echo "Pushed ref '$BRANCH' extends integration branch '$parent'; treating it as a member."
+          else
+            echo "Pushed ref '$BRANCH' extends no existing branch; treating it as an integration branch."
+          fi
+
+  journeys:
+    name: Estate harness (smoke and fault seams)
+    needs: plan
+    if: needs.plan.outputs.push_is_member != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      # Two Azurite accounts, as reference-architecture/local/docker-compose.yml
+      # runs them: the primary (Table, Blob, Queue) and a separate backup sink.
+      LATTICE_E2E_STORAGE: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;
+      LATTICE_E2E_BACKUP_STORAGE: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:11000/devstoreaccount1;
+      LATTICE_E2E_REQUIRED: '1'
+      LATTICE_E2E_HOSTS_DIR: ${{ github.workspace }}/.journey-hosts
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # Started as containers rather than `services:` so the backup account's
+      # port can differ from the primary's, as in ci.yml's "Start Azurite" step.
+      - name: Start Azurite
+        run: |
+          docker run -d --name azurite -p 10000:10000 -p 10001:10001 -p 10002:10002 \
+            mcr.microsoft.com/azure-storage/azurite:3.36.0 \
+            azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose
+          docker run -d --name azurite-backup -p 11000:10000 \
+            mcr.microsoft.com/azure-storage/azurite:3.36.0 \
+            azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: nuget-journeys-${{ runner.os }}-${{ hashFiles('src/**/*.csproj', 'test/lattice.explorer.e2e/**/*.csproj') }}
+          restore-keys: nuget-journeys-${{ runner.os }}-
+
+      - name: Build the journey tests and hosts
+        run: dotnet build "$E2E_PROJECT" --configuration Release
+
+      # Published once per job and launched by the harness with `dotnet <dll>`.
+      - name: Publish the journey hosts
+        run: |
+          set -euo pipefail
+          for host in JourneySilo JourneyExplorer JourneyGateway LineFeed; do
+            project=$(ls test/lattice.explorer.e2e/Hosts/$host/*.csproj)
+            dotnet publish "$project" --configuration Release --no-restore --output "$LATTICE_E2E_HOSTS_DIR/$host"
+          done
+
+      - name: Install Playwright Chromium
+        timeout-minutes: 15
+        run: pwsh test/lattice.explorer.e2e/bin/Release/net10.0/playwright.ps1 install --with-deps chromium
+
+      # tla-toolchain: not-required - the filter selects TestCategory=EndToEnd
+      # inside test/lattice.explorer.e2e, which contains no `Tlc`-category
+      # fixture. See spec/README.md and CiTlaToolchainProvisioningTests.
+      - name: Run the estate harness fixtures
+        run: |
+          dotnet test "$E2E_PROJECT" --no-build --configuration Release \
+            --filter "TestCategory=EndToEnd" \
+            --logger "trx;LogFileName=explorer-journeys.trx" \
+            --logger "console;verbosity=normal" \
+            --blame-hang-timeout 15m --blame-hang-dump-type none
+
+      # Every process's log and every screenshot and trace, kept on success too:
+      # member PRs take their journey screenshots from this artifact.
+      - name: Upload journey artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: explorer-journeys
+          path: |
+            **/explorer-journeys.trx
+            test/lattice.explorer.e2e/artifacts/**
+          if-no-files-found: ignore
