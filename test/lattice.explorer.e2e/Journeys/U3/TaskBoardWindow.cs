@@ -87,21 +87,26 @@ internal sealed class TaskBoardWindow
     /// <summary>
     /// Waits until the frame has loaded the board and the board has read its tree: it names the
     /// installed version and shows every column's count. A role grant reaches the workspace a
-    /// moment after a binding changes, so a window that still says the app is not open yet is
-    /// loaded again, a bounded number of times, as a user would reload it.
+    /// moment after a binding changes, and each silo's app registry catches up with an upgrade
+    /// on its own, so a window that says the app is not open yet, or whose launch was refused,
+    /// is loaded again, a bounded number of times, as a user would reload it; each reload is
+    /// written to the test's output.
     /// </summary>
     public async Task WaitForBoardAsync()
     {
         var closed = Page.GetByRole(AriaRole.Heading, new() { NameRegex = new Regex("is not open to you yet") });
+        var refused = Host.GetByRole(AriaRole.Alert);
         for (var attempt = 0; ; attempt++)
         {
-            await Expect(Element.Or(closed)).ToBeVisibleAsync(new() { Timeout = 60_000 });
+            await Expect(Element.Or(closed).Or(refused)).ToBeVisibleAsync(new() { Timeout = 60_000 });
             if (await Element.IsVisibleAsync() || attempt >= 10)
             {
                 break;
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(2));
+            var reason = await refused.IsVisibleAsync() ? await refused.InnerTextAsync() : "is not open to you yet";
+            TestContext.Out.WriteLine($"The task board's window at {Page.Url} did not open (attempt {attempt + 1}): {reason.ReplaceLineEndings(" ")}. Reloading.");
+            await Task.Delay(TimeSpan.FromSeconds(3));
             await Page.ReloadAsync();
         }
 
