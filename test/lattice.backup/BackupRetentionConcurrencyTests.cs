@@ -181,6 +181,38 @@ public sealed class BackupRetentionConcurrencyTests
         await AssertEveryListedBackupResolvesFromTheSinkAsync();
     }
 
+    [Test]
+    public async Task A_set_that_fails_after_a_member_was_captured_lists_that_member_unstamped()
+    {
+        // Issue #5449. A multi-tree set member's catalog row waits for the set's
+        // membership stamp. When the set fails before the stamp - here the items
+        // member's manifest write throws, after the orders member was captured -
+        // nothing will stamp the orders member, so it must be listed unstamped, as
+        // an ordinary backup, rather than left in the sink with no catalog row.
+        _fixture = new SchedulerClusterFixture();
+        await _fixture.InitializeAsync(intercepted: true);
+        var orders = BackupScopeSelector.WholeTree(Tree);
+        var items = BackupScopeSelector.WholeTree(ItemsTree);
+        await SeedAsync("k1", "v1");
+        await _fixture.GrainFactory.GetGrain<ILattice>(ItemsTree).SetAsync("i1", Encoding.UTF8.GetBytes("v1"));
+        InterceptingBackupSink.BeforeManifestWrite = manifest =>
+            manifest.Scope.TreeId == ItemsTree
+                ? throw new InvalidOperationException("simulated sink fault on the second member")
+                : Task.CompletedTask;
+
+        await Assert.ThatAsync(
+            async () => await _fixture.CaptureService.CaptureSetAsync(new LatticeBackupSetCaptureRequest("set", [orders, items])),
+            Throws.InvalidOperationException);
+
+        var listed = await _fixture.ListScopeAsync(orders);
+        Assert.Multiple(() =>
+        {
+            Assert.That(listed, Has.Count.EqualTo(1), "the captured orders member must be listed");
+            Assert.That(listed.Select(m => m.SetId), Has.All.Null, "a member nothing stamped is listed unstamped");
+        });
+        await AssertEveryListedBackupResolvesFromTheSinkAsync();
+    }
+
     private async Task AssertEveryListedBackupResolvesFromTheSinkAsync()
     {
         await foreach (var manifest in _fixture.Catalog.ListAsync())

@@ -5,8 +5,8 @@ namespace Orleans.Lattice.Backup;
 /// stored under the same backup id.
 /// <para>
 /// A backup id names one capture (<see cref="BackupIdentity"/>), so an id registered
-/// again - by a catalog rebuild, or the set capture's membership stamp - is the
-/// <i>same</i> immutable backup, not a new one. Its capture
+/// again - by a catalog rebuild, or a retention pass restoring a row it removed - is
+/// the <i>same</i> immutable backup, not a new one. Its capture
 /// time (<see cref="BackupManifest.CreatedAtUtc"/>) is therefore treated as
 /// immutable and carried forward from the first registration. Because a standalone
 /// backup's catalog-index key orders by that timestamp, holding it stable makes a
@@ -15,9 +15,9 @@ namespace Orleans.Lattice.Backup;
 /// </para>
 /// <para>
 /// Set membership (<see cref="BackupManifest.SetId"/> and friends) is deliberately
-/// <b>not</b> preserved: the multi-tree set capture legitimately re-registers each
-/// member to stamp the shared set identity after the members are captured, and that
-/// stamp must win.
+/// <b>not</b> preserved: the incoming manifest is authoritative for every field but
+/// the capture time. A multi-tree set member is registered once, by the set's
+/// membership stamp (issue #5449), so the stamp is never overwritten by a capture.
 /// </para>
 /// </summary>
 internal static class BackupManifestRegistration
