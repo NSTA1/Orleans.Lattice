@@ -6,7 +6,7 @@ using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 using static Microsoft.Playwright.Assertions;
-using Hosting = Orleans.Lattice.Explorer.EndToEnd.Tests.Story.StoryNames.Contoso.Hosting;
+using HostingNames = Orleans.Lattice.Explorer.EndToEnd.Tests.Story.StoryNames.Contoso.Hosting;
 
 namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Journeys.C4;
 
@@ -40,8 +40,8 @@ public sealed class RunningTheConsoleJourney : JourneyChapter
         ArgumentNullException.ThrowIfNull(context);
         var estate = context.Estate;
         var east = estate.EastRegion;
-        Assert.That(east.ConsoleUri.AbsolutePath, Is.EqualTo(Hosting.ConsoleBasePath + "/"), "the east console is mounted under its base path");
-        Assert.That(estate.KioskName, Is.EqualTo(Hosting.Kiosk), "the kiosk head is Contoso's");
+        Assert.That(east.ConsoleUri.AbsolutePath, Is.EqualTo(HostingNames.ConsoleBasePath + "/"), "the east console is mounted under its base path");
+        Assert.That(estate.KioskName, Is.EqualTo(HostingNames.Kiosk), "the kiosk head is Contoso's");
 
         await using var console = await ConsoleHostPage.OpenAsync(estate, Personas.Olivia, east.ConsoleUri, JourneyEstate.East);
         await TheEastConsoleUnderItsBasePathAsync(estate, console);
