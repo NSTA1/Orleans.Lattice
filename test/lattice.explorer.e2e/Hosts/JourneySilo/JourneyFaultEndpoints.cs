@@ -61,5 +61,18 @@ internal static class JourneyFaultEndpoints
                 return Results.Conflict(new { reason = ex.Message });
             }
         });
+
+        // A journey app source's publisher releasing its next version (A5, #5376), recorded
+        // cluster-wide so every silo's copy of the source lists it from now on.
+        app.MapPost(Prefix + "/apps/publish", async (string source, IGrainFactory grains) =>
+        {
+            if (source != JourneyAppSource.Samples)
+            {
+                return Results.NotFound(new { reason = $"Source '{source}' has no next version to publish." });
+            }
+
+            await grains.GetGrain<IJourneyCatalogueGrain>(source).PublishNextAsync();
+            return Results.Ok(new { source });
+        });
     }
 }

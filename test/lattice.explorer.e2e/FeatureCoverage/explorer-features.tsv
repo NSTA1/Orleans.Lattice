@@ -269,6 +269,7 @@ use-case:apps/roles-column	use-case	docs/lattice.explorer/lattice-apps.md#who-ho
 use-case:apps/sources	use-case	docs/lattice.explorer/lattice-apps.md#sources	The catalogue source selector, filters, search and load more	A5
 use-case:apps/tenant-install	use-case	docs/lattice.explorer/lattice-apps.md#consent-and-lifecycle	Install an app into a tenant	T7
 use-case:apps/upgrade-and-re-consent	use-case	docs/lattice.explorer/lattice-apps.md#consent-and-lifecycle	Review the upgrade diff, upgrade, and Re-consent	A5
+use-case:apps/upgrade-command	use-case	docs/lattice.explorer/lattice-apps.md#consent-and-lifecycle	The palette's apps.upgrade.{slug} command for an installed app with an update	A5
 use-case:backups/addresses	use-case	docs/lattice.explorer/managing-backups.md#addresses	Reopen a finished operation by its address	A10
 use-case:backups/area	use-case	docs/lattice.explorer/areas.md#backups	The Backups area's catalogue, capture, schedules, health and maintenance pages	A6
 use-case:backups/availability	use-case	docs/lattice.explorer/managing-backups.md#availability	The Backups area is hidden for a caller without backup rights, and restore is not offered	U4

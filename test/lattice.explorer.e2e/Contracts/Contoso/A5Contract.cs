@@ -7,8 +7,9 @@ using Groups = Orleans.Lattice.Explorer.EndToEnd.Tests.Story.StoryNames.Contoso.
 namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts.Contoso;
 
 /// <summary>
-/// A5, installing the task board (#5376). Produces the task board at vNext (1.1.0, from
-/// <c>samples-next</c>) enabled, with the ceiling <see cref="NextCeiling"/>, the bindings
+/// A5, installing the task board (#5376). Produces the task board at vNext (1.1.0) enabled,
+/// upgraded within <c>samples</c> once that source's publisher released it (the harness's
+/// <c>PublishAppNextVersionAsync</c>; <c>samples-next</c> offers the same version), with the ceiling <see cref="NextCeiling"/>, the bindings
 /// <see cref="Bindings"/>, and its <c>tasks</c> tree (<see cref="TaskBoardTree"/>, recorded at
 /// <see cref="StoryKeys.TaskBoardTree"/>) declared replicated by its manifest. An app role binds to
 /// exactly one group, so step 4 rebinds viewer from <c>auditors</c> to
@@ -63,11 +64,15 @@ public sealed class A5Contract() : ChapterContract("A5")
         if (current.Version != Apps.TaskBoardNextVersion)
         {
             await apps.UpdateRoleBindingsAsync(new AppRoleBindingsUpdate { Slug = Apps.TaskBoard, Version = current.Version, RoleBindings = Bindings });
+
+            // vNext appears: the samples source's publisher releases 1.1.0, the version
+            // samples-next also offers, so the install upgrades within its own source.
+            await context.Estate.PublishAppNextVersionAsync(Apps.SamplesSource);
             await apps.InstallAsync(new AppInstallRequest
             {
                 Slug = Apps.TaskBoard,
                 Version = Apps.TaskBoardNextVersion,
-                SourceKey = Apps.SamplesNextSource,
+                SourceKey = Apps.SamplesSource,
                 Ceiling = new AppCapabilityCeilingDescriptor { AllowedOperations = NextCeiling },
                 RoleBindings = Bindings,
             });
@@ -100,6 +105,7 @@ public sealed class A5Contract() : ChapterContract("A5")
         var app = await ContractFacades.Of(context).Apps.DescribeAsync(Apps.TaskBoard);
         Require(app is not null, "the task board is installed");
         RequireEqual(app!.Version, Apps.TaskBoardNextVersion, "the task board is at vNext");
+        RequireEqual(app.Provenance.Source, Apps.SamplesSource, "vNext was installed from the samples source it was first installed from");
         RequireEqual(app.State, AppLifecycleState.Enabled, "the task board is enabled");
         Require(SameBindings(app.RoleBindings), "editor is bound to data-stewards, viewer to task-board-viewers");
         Require(app.Ceiling is { } ceiling && (ceiling.AllowedOperations & NextCeiling) == NextCeiling, "vNext's ceiling is consented");
