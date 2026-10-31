@@ -19,6 +19,7 @@ The remote transport's surface - `LatticeDataApiGrpcClient`, the wire records, a
 | Group | Methods |
 |---|---|
 | Point and bulk writes | `SetAsync`, `DeleteAsync`, `DeleteRangeAsync`, `SetManyAsync` |
+| Streamed bulk write | `SetManyStreamAsync` - writes an `IAsyncEnumerable<DataEntry>` non-atomically in batches of `DataSetManyStreamOptions.BatchSize` (256 by default), reporting each batch's `DataSetManyStreamBatch` outcome as it completes and returning the `DataSetManyStreamResult` totals; memory is bounded by the batch, never by the stream. An entry refused for its own sake - a key the caller may not write (`denied`), a value the schema policy rejects (`schema`), or an invalid write (`invalid`) - is reported in the batch's `Rejections` with its ordinal, key and reason, and every other entry still lands; any other fault ends the stream. A default interface member over `SetManyAsync` and `SetAsync`, so an existing implementer streams without change; the gRPC binding streams over one duplex call. Used by the Explorer's import (issue #5365). |
 | Atomic batches | `SetManyAtomicAsync`, `SetManyAtomicCrossTreeAsync` |
 | Reads | `GetAsync`, `ReadRangeAsync` |
 | Capability probe | `ProbeCapabilitiesAsync` - whether the caller may write or delete at a key, or anywhere in a tree, answered from the access gate with no side effects. A default interface member: an implementer written before it existed keeps compiling and reports no write and no delete (fail-closed), so a management surface hides its write controls against it while real writes are still authorized on attempt. This package's facade, the gRPC binding and the MCP remote adapter answer the real probe. |
@@ -70,6 +71,7 @@ The following inventory includes directly declared public members and overloads,
 - `Task SetManyAtomicAsync(string treeId, DataAtomicBatch batch, string operationId, CancellationToken cancellationToken = default)`
 - `Task<CrossTreeAtomicWriteOutcome> SetManyAtomicCrossTreeAsync(IReadOnlyList<DataTreeBatch> batches, string operationId, CancellationToken cancellationToken = default)`
 - `Task SetManyAsync(string treeId, IReadOnlyList<DataEntry> upserts, CancellationToken cancellationToken = default)`
+- `Task<DataSetManyStreamResult> SetManyStreamAsync(string treeId, IAsyncEnumerable<DataEntry> upserts, IProgress<DataSetManyStreamBatch>? progress = null, DataSetManyStreamOptions? options = null, CancellationToken cancellationToken = default)` (default interface member; batches through `SetManyAsync`, isolating per-entry refusals through `SetAsync`)
 - `Task<DataReadResult> GetAsync(string treeId, string key, CancellationToken cancellationToken = default)`
 - `Task<DataRangePage> ReadRangeAsync(DataRangeRequest request, CancellationToken cancellationToken = default)`
 - `Task<LatticeDataCapabilities> ProbeCapabilitiesAsync(string treeId, string? key = null, CancellationToken cancellationToken = default)` (default interface member; reports no capability unless overridden)
@@ -122,6 +124,9 @@ The following inventory includes directly declared public members and overloads,
 - `public const string DataRangeDeleteRequest`
 - `public const string DataRangeDeleteResult`
 - `public const string LatticeDataCapabilities`
+- `public const string DataEntryRejection`
+- `public const string DataSetManyStreamBatch`
+- `public const string DataSetManyStreamResult`
 
 ### `Orleans.Lattice.Api.Data.DataAtomicBatch`
 
@@ -223,3 +228,55 @@ The following inventory includes directly declared public members and overloads,
 - `public string? Key`
 - `public bool CanWrite`
 - `public bool CanDelete`
+
+### `Orleans.Lattice.Api.Data.DataSetManyStreamOptions`
+
+[Source](../../src/lattice.api.abstractions/Data/Model/DataSetManyStreamOptions.cs) (line 8).
+
+`public sealed record DataSetManyStreamOptions`
+
+- `public const int DefaultBatchSize`
+- `public const int MaxBatchSize`
+- `public static DataSetManyStreamOptions Default`
+- `public int BatchSize`
+- `public long FirstOrdinal`
+- `public void Validate()`
+
+### `Orleans.Lattice.Api.Data.DataSetManyStreamBatch`
+
+[Source](../../src/lattice.api.abstractions/Data/Model/DataSetManyStreamBatch.cs) (line 11).
+
+`public sealed record DataSetManyStreamBatch`
+
+- `public required string TreeId`
+- `public required long BatchIndex`
+- `public required long FirstOrdinal`
+- `public required int EntryCount`
+- `public required int CommittedCount`
+- `public IReadOnlyList<DataEntryRejection> Rejections`
+
+### `Orleans.Lattice.Api.Data.DataEntryRejection`
+
+[Source](../../src/lattice.api.abstractions/Data/Model/DataEntryRejection.cs) (line 11).
+
+`public sealed record DataEntryRejection`
+
+- `public const string DeniedCode`
+- `public const string SchemaCode`
+- `public const string InvalidCode`
+- `public required long Ordinal`
+- `public required string Key`
+- `public required string Code`
+- `public required string Reason`
+
+### `Orleans.Lattice.Api.Data.DataSetManyStreamResult`
+
+[Source](../../src/lattice.api.abstractions/Data/Model/DataSetManyStreamResult.cs) (line 11).
+
+`public sealed record DataSetManyStreamResult`
+
+- `public required string TreeId`
+- `public required long EntryCount`
+- `public required long CommittedCount`
+- `public required long RejectedCount`
+- `public required long BatchCount`

@@ -12,7 +12,7 @@ Code-first gRPC binding for [Orleans.Lattice.Api.TreeAdmin](../lattice.api.treea
 
 It provides:
 
-- **A code-first gRPC service.** Unary RPCs cover the capability probe, diagnostics and inspection reads, tree lifecycle, alias and configuration, deletion and recovery, bulk load, restore, reshard, resize, snapshot, WAL placement and movement, WAL reclamation, orphaned-leaf audit / survey / repair, view and tag-index management, shard compaction, history retention, accept-then-poll maintenance and storage-usage refresh operations, and the unauthenticated auth-scheme discovery call - bound from C# definitions rather than a `.proto`. The orphaned-leaf survey is the one operation without an RPC of its own: `SurveyOrphanedLeavesAsync` rides the `AuditOrphanedLeaves` RPC with the request's `Survey` flag set.
+- **A code-first gRPC service.** Unary RPCs cover the capability probe, diagnostics and inspection reads, tree lifecycle, alias and configuration, deletion and recovery, bulk load, restore, reshard, resize, snapshot, WAL placement and movement, WAL reclamation, orphaned-leaf audit / survey / repair, view and tag-index management, shard compaction, history retention, accept-then-poll maintenance and storage-usage refresh operations, and the unauthenticated auth-scheme discovery call - bound from C# definitions rather than a `.proto`. One duplex RPC, `StreamBulkLoad`, streams a whole bulk-load session and resumes it when the transport drops. The orphaned-leaf survey is the one operation without an RPC of its own: `SurveyOrphanedLeavesAsync` rides the `AuditOrphanedLeaves` RPC with the request's `Survey` flag set.
 - **A public typed client.** `LatticeTreeAdminApiGrpcClient` exposes one method per RPC over a caller-supplied gRPC `CallInvoker`.
 - **Shared Orleans marshalling.** Every wire message is a `[GenerateSerializer]` record serialized with the Orleans binary serializer. Each RPC wraps the facade operation's arguments in this package's own request record (for example `TreeAdminCreateRequest`), and its response reuses the facade's result record from `Orleans.Lattice.Api.Abstractions`. The exceptions follow the facade's shape: `RevertTreeRestore` sends the facade's own `TreeRestoreResult` as its request and echoes it back, `DropView` echoes its `TreeAdminViewRequest` (both facade verbs return a bare `Task`), `RestoreTreeSet` wraps the member results in the facade's `TreeRestoreSetResult`, and `GetAuthScheme` uses this package's own `AuthSchemeAdvertisementRequest` / `AuthSchemeAdvertisement` records. The gRPC contract therefore adapts over the facade DTOs rather than being wire-identical to them, and client and server stay in lock-step by construction.
 - **Layered authorization.** A per-call `ILatticeTreeAdminApiAuthorizer` seam gates every protected RPC at the edge, and the composed facade re-authorizes the resolved caller through the core access gate. The edge gate defaults to deny (`DenyTreeAdminApiAuthorizer`, with `RequireAuthorization` defaulting to `true`). The facade gate denies by default only when `Orleans.Lattice.Auth` is registered, whose `LatticeAuthOptions.DefaultEffect` defaults to `Deny`; without that add-on the core no-op access gate allows every call, so the edge gate is the only barrier.
@@ -29,7 +29,7 @@ The package has no external broker and no `.proto` file to maintain.
 
 ## Service and RPCs
 
-The gRPC service name is `orleans.lattice.api.treeadmin`. Every RPC is unary. The client method that drives each RPC:
+The gRPC service name is `orleans.lattice.api.treeadmin`. Every RPC is unary except the duplex `StreamBulkLoad`. The client method that drives each RPC:
 
 | Area | Client methods |
 |---|---|
@@ -38,7 +38,7 @@ The gRPC service name is `orleans.lattice.api.treeadmin`. Every RPC is unary. Th
 | Storage usage refresh | `StartStorageUsageRefreshAsync`, `GetStorageUsageRefreshStatusAsync`, `ListStorageUsageRefreshesAsync`, `CancelStorageUsageRefreshAsync` |
 | Lifecycle and configuration | `CreateTreeAsync`, `CheckTreeExistsAsync`, `SetTreeAliasAsync`, `ResolveTreeAliasAsync`, `GetTreeConfigAsync`, `SetTreeConfigAsync` |
 | Deletion and recovery | `DeleteTreeAsync`, `RecoverTreeAsync`, `PurgeTreeAsync`, `GetTreeDeletionStatusAsync` |
-| Bulk load | `BeginBulkLoadAsync`, `AppendBulkLoadAsync`, `CommitBulkLoadAsync` |
+| Bulk load | `BeginBulkLoadAsync`, `AppendBulkLoadAsync`, `CommitBulkLoadAsync`, and the streamed `BulkLoadStreamAsync` (duplex `StreamBulkLoad`) |
 | Restore | `RestoreTreeAsync`, `RestoreTreeSetAsync`, `RevertTreeRestoreAsync` |
 | Reshard and resize | `ReshardTreeAsync`, `GetReshardStatusAsync`, `ResizeTreeAsync`, `UndoTreeResizeAsync`, `GetResizeStatusAsync` |
 | Snapshot | `SnapshotTreeAsync`, `GetSnapshotStatusAsync` |
@@ -86,6 +86,7 @@ The reshard, resize and snapshot RPCs return the facade's status records unchang
 | `BeginBulkLoadAsync` | `Task<TreeBulkLoadSession> BeginBulkLoadAsync(string treeId, string operationId, CancellationToken cancellationToken = default)` |
 | `AppendBulkLoadAsync` | `Task<TreeBulkLoadChunkAck> AppendBulkLoadAsync(string treeId, string operationId, long chunkIndex, IReadOnlyList<DataEntry> entries, CancellationToken cancellationToken = default)` |
 | `CommitBulkLoadAsync` | `Task<TreeBulkLoadResult> CommitBulkLoadAsync(string treeId, string operationId, CancellationToken cancellationToken = default)` |
+| `BulkLoadStreamAsync` | `Task<TreeBulkLoadResult> BulkLoadStreamAsync(string treeId, string operationId, IAsyncEnumerable<DataEntry> sortedEntries, IProgress<TreeBulkLoadChunkAck>? progress = null, TreeBulkLoadStreamOptions? options = null, CancellationToken cancellationToken = default)` |
 | `RestoreTreeAsync` | `Task<TreeRestoreResult> RestoreTreeAsync(string treeId, string backupId, string? operationId = null, CancellationToken cancellationToken = default)` |
 | `RestoreTreeSetAsync` | `Task<IReadOnlyList<TreeRestoreResult>> RestoreTreeSetAsync(string setId, CancellationToken cancellationToken = default)` |
 | `RevertTreeRestoreAsync` | `Task RevertTreeRestoreAsync(TreeRestoreResult restore, CancellationToken cancellationToken = default)` |
@@ -145,6 +146,8 @@ The request records this package defines, each an Orleans-serialized `[GenerateS
 | `TreeAdminPurgeRequest` | `required string TreeId`, `bool Confirm` | `PurgeTree` |
 | `TreeAdminBulkLoadSessionRequest` | `required string TreeId`, `required string OperationId` | `BeginBulkLoad`, `CommitBulkLoad` |
 | `TreeAdminBulkLoadAppendRequest` | `required string TreeId`, `required string OperationId`, `long ChunkIndex`, `IReadOnlyList<DataEntry> Entries` | `AppendBulkLoad` |
+| `TreeAdminBulkLoadStreamRequest` | `required string TreeId`, `required string OperationId`, `bool Resume`, `long ChunkIndex`, `IReadOnlyList<DataEntry> Entries` | `StreamBulkLoad` (one frame per chunk) |
+| `TreeAdminBulkLoadStreamResponse` | `bool Opened`, `TreeBulkLoadChunkAck? Ack`, `TreeBulkLoadResult? Result` | `StreamBulkLoad` (one frame per chunk, then the result) |
 | `TreeAdminRestoreRequest` | `required string TreeId`, `required string BackupId`, `string? OperationId` | `RestoreTree` |
 | `TreeAdminRestoreSetRequest` | `required string SetId` | `RestoreTreeSet` |
 | `TreeAdminReshardRequest` | `required string TreeId`, `int TargetShardCount` | `ReshardTree` |
