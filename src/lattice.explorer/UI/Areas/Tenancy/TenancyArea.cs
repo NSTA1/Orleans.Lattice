@@ -161,7 +161,9 @@ internal sealed class TenancyArea : IExplorerArea
         }
 
         var availability = await ProbeAsync(caller.Authenticated, cancellationToken).ConfigureAwait(true);
-        if (_catalog.Caller.Current == caller && string.Equals(_catalog.ActiveTenant, active, StringComparison.Ordinal))
+        if (_catalog.Caller.Current == caller
+            && string.Equals(_catalog.ActiveTenant, active, StringComparison.Ordinal)
+            && availability.Kind != AreaAvailabilityKind.Unchecked)
         {
             _verdict = (caller, active, availability);
         }
@@ -233,7 +235,8 @@ internal sealed class TenancyArea : IExplorerArea
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            return AreaAvailability.Hidden;
+            // The cluster did not answer: not checked. Any other fault is read as a refusal.
+            return AreaProbeFaults.IsTransient(exception) ? AreaAvailability.Unchecked : AreaAvailability.Hidden;
         }
     }
 }

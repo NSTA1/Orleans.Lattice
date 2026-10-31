@@ -167,6 +167,12 @@
             {
                 <NotFoundPage />
             }
+            else if (entry.IsUnchecked)
+            {
+                <h1 class="lt-shell-page-title">@area.DisplayName</h1>
+                <LtEmptyState Title="Could not be checked" HeadingLevel="2">@entry.Availability.Reason</LtEmptyState>
+                <AreaRecheckNotice />
+            }
             else if (!entry.IsVisible)
             {
                 <h1 class="lt-shell-page-title">@area.DisplayName</h1>

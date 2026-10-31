@@ -89,6 +89,7 @@ query:shell.all-tenants	query	ExplorerRouteSegments.AllTenantsQueryKey	The ?all-
 query:shell.at	query	ExplorerAddress.AtQuery	The ?at= query key in shell	U4
 query:shell.key	query	ExplorerAddress.KeyQuery	The ?key= query key in shell	U1
 query:shell.prefix	query	ExplorerAddress.PrefixQuery	The ?prefix= query key in shell	U1
+query:shell.signin	query	SessionSignInOptions.NoticeQueryKey	The ?signin=refused notice that reopens the sign-in dialog saying the cluster refused the password	A1
 query:shell.tenant	query	ExplorerRouteSegments.TenantQueryKey	The ?tenant= query key in shell	T2
 query:telemetry.from	query	TelemetryWindow.FromQuery	The ?from= query key in telemetry	A11
 query:telemetry.range	query	TelemetryWindow.RangeQuery	The ?range= query key in telemetry	A11
@@ -391,7 +392,7 @@ use-case:shell/hosted-head	use-case	docs/lattice.explorer/running-the-explorer.m
 use-case:shell/isolated-head	use-case	docs/lattice.explorer/running-the-explorer.md#deployment-prefer-an-isolated-head	The console runs in its own head, isolated from the silos	C4
 use-case:shell/keyboard-only	use-case	docs/lattice.explorer/navigation-model.md#the-directory-spine	Keyboard-only navigation through the spine, address line and palette	A1
 use-case:shell/kiosk-credential-seed	use-case	docs/lattice.explorer/configuration.md#environment-variables	A kiosk head seeded from the environment opens signed in as its seeded identity, without the sign-in dialog	C4
-use-case:shell/no-grants-console	use-case	docs/lattice.explorer/area-availability.md#three-answers	A principal with no grants gets a coherent, empty console	U4
+use-case:shell/no-grants-console	use-case	docs/lattice.explorer/area-availability.md#four-answers	A principal with no grants gets a coherent, empty console	U4
 use-case:shell/not-found	use-case	docs/lattice.explorer/navigation-model.md#routes-and-the-not-found-page	An unknown address lands on the not-found page	A1
 use-case:shell/palette	use-case	docs/lattice.explorer/navigation-model.md#the-command-palette	The command palette finds and runs a command	A1
 use-case:shell/palette-full-screen	use-case	docs/lattice.explorer/navigation-model.md#at-different-widths	The palette's full-screen form at a narrow width	U5

@@ -126,7 +126,7 @@ internal sealed class ReplicationDataSource : IDisposable
         lock (_gate)
         {
             ForgetIfTheCallerChanged();
-            if (generation == _generation && request == _estateRead && !cancellationToken.IsCancellationRequested)
+            if (generation == _generation && request == _estateRead && !cancellationToken.IsCancellationRequested && Remembers(read.Fault))
             {
                 _estate = (read, _time.GetUtcNow());
             }
@@ -188,7 +188,7 @@ internal sealed class ReplicationDataSource : IDisposable
         lock (_gate)
         {
             ForgetIfTheCallerChanged();
-            if (generation == _generation && request == _configRead && !cancellationToken.IsCancellationRequested)
+            if (generation == _generation && request == _configRead && !cancellationToken.IsCancellationRequested && Remembers(read.Fault))
             {
                 _config = (read, _time.GetUtcNow());
             }
@@ -288,6 +288,10 @@ internal sealed class ReplicationDataSource : IDisposable
     }
 
     private bool Fresh(DateTimeOffset? at) => at is { } read && _time.GetUtcNow() - read < _options.CacheLifetime;
+
+    // A read the cluster did not answer proved nothing, so the next read asks
+    // again rather than reusing it (issue #5420); every other outcome is reused.
+    private static bool Remembers(ReplicationFault? fault) => fault is not { IsTransient: true };
 
     /// <summary>
     /// The enrolment report narrowed to the trees a listing under

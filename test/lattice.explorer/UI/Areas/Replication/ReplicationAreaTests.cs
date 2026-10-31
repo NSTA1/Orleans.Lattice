@@ -74,6 +74,28 @@ public sealed class ReplicationAreaTests
         Assert.That(await Create().GetAvailabilityAsync(CancellationToken.None), Is.EqualTo(AreaAvailability.Hidden));
     }
 
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task It_is_not_checked_when_neither_read_admits_and_one_met_no_answer(bool statusUnanswered)
+    {
+        var internalFault = new ShellTransportException("activation lost", isTransient: false, new Grpc.Core.RpcException(new Grpc.Core.Status(Grpc.Core.StatusCode.Internal, "x")));
+        _status.Failure = statusUnanswered ? internalFault : new LatticeAuthorizationDeniedException();
+        _control.ReadFailure = statusUnanswered ? new InvalidOperationException("not connected") : internalFault;
+        var area = Create();
+
+        var during = await area.GetAvailabilityAsync(CancellationToken.None);
+        _status.Failure = null;
+        _control.ReadFailure = null;
+        _control.Trees.Add(Tree("orders"));
+        var after = await area.GetAvailabilityAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(during, Is.EqualTo(AreaAvailability.Unchecked), "no answer is not a refusal (#5420)");
+            Assert.That(after, Is.EqualTo(AreaAvailability.Visible), "a read the cluster did not answer is not reused");
+        });
+    }
+
     [Test]
     public async Task It_is_hidden_when_no_replication_facade_is_registered()
     {

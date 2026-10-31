@@ -55,7 +55,6 @@ public sealed class CallerKeyedMemoHygieneTests
         [typeof(Orleans.Lattice.Explorer.UI.Layout.ShellChromeInterop)] = "The imported JavaScript module.",
         [typeof(BackupsInterop)] = "The imported JavaScript module.",
         [typeof(Orleans.Lattice.Explorer.UI.Areas.Replication.JsReplicationPageVisibility)] = "The page-visibility JavaScript callback.",
-        [typeof(ExplorerAreaDirectory)] = "The registered areas by key; availability is asked of each area, which keys its own verdict.",
         [typeof(ClusterCommandSignals)] = "A palette command waiting for its page: a command id, not a cluster answer.",
         [typeof(SchemaCommandSignals)] = "A palette command waiting for its page: a command id, not a cluster answer.",
         [typeof(DataCommandSignals)] = "A palette command waiting for its page: a command id, not a cluster answer.",
