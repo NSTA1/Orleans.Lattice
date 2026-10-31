@@ -139,9 +139,14 @@ public sealed class DataExportEncoderTests
         Assert.That(row, Is.EqualTo(",\"{\"\"format\"\":\"\"lattice-export/1\"\",\"\"items\"\":0,\"\"complete\"\":false,\"\"refused\"\":\"\"all\"\",\"\"reason\"\":\"\"denied\"\"}\",trailer\r\n"));
     }
 
-    [TestCase("\ud800")]
-    [TestCase("a\udc00b")]
-    [TestCase("tail\ud83d")]
+    private static readonly string[] UnpairedSurrogateKeys =
+    [
+        new string('\ud800', 1),
+        "a" + '\udc00' + "b",
+        "tail" + '\ud83d',
+    ];
+
+    [TestCaseSource(nameof(UnpairedSurrogateKeys))]
     public void A_key_with_an_unpaired_surrogate_is_refused_in_either_format(string key)
     {
         using var ndjson = new DataExportEncoder(DataExportFormat.Ndjson);

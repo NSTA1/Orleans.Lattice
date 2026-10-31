@@ -140,8 +140,8 @@ public partial class DataExportDialog : IDisposable
         {
             var ticket = Downloads.Mint(new DataExportDownload(request, Sources.ForDownload(connection)));
             _error = null;
-            _prepared = request;
             Watch(ticket);
+            _prepared = request;
         }
         catch (InvalidOperationException exception)
         {

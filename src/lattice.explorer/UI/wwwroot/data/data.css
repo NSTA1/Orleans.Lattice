@@ -54,7 +54,8 @@
   gap: var(--lt-space-3);
 }
 
-.lt-data-export__form {
+.lt-data-export__form,
+.lt-data-export__download {
   display: grid;
   gap: var(--lt-space-3);
 }

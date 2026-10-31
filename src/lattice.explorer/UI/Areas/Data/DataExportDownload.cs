@@ -120,7 +120,18 @@ internal sealed class DataExportDownload : ExplorerDownload
 
             foreach (var entry in page.Entries)
             {
-                var record = encoder.Entry(entry.Key, entry.Value);
+                ReadOnlyMemory<byte> record;
+                try
+                {
+                    record = encoder.Entry(entry.Key, entry.Value);
+                }
+                catch (DataExportKeyException)
+                {
+                    // The trailer counts the entries written before the one that stopped it.
+                    ticket.Report(items, bytes);
+                    throw;
+                }
+
                 await body.WriteAsync(record, cancellationToken).ConfigureAwait(false);
                 bytes += record.Length;
                 items++;

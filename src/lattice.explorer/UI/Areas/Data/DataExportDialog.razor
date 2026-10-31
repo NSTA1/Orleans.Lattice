@@ -39,12 +39,12 @@
                 </div>
             </form>
         }
-        else
+        else if (_prepared is { } prepared)
         {
             var ticket = _ticket;
             <LtDefinitionList>
-                <LtDefinition Term="Scope" Mono="@(_prepared!.Scope != DataExportScopeKind.Tree)">@ScopeText(_prepared!)</LtDefinition>
-                <LtDefinition Term="File" Mono="true">@_prepared!.FileName</LtDefinition>
+                <LtDefinition Term="Scope" Mono="@(prepared.Scope != DataExportScopeKind.Tree)">@ScopeText(prepared)</LtDefinition>
+                <LtDefinition Term="File" Mono="true">@prepared.FileName</LtDefinition>
             </LtDefinitionList>
 
             @switch (ticket.State)

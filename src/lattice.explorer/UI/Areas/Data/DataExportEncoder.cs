@@ -195,7 +195,8 @@ internal sealed class DataExportEncoder : IDisposable
             || IsJsonWhitespace(value[0])
             || IsJsonWhitespace(value[^1])
             || value.StartsWith(Utf8ByteOrderMark)
-            || value.IndexOfAny((byte)'\r', (byte)'\n') >= 0)
+            || value.IndexOfAny((byte)'\r', (byte)'\n') >= 0
+            || !System.Text.Unicode.Utf8.IsValid(value))
         {
             return false;
         }

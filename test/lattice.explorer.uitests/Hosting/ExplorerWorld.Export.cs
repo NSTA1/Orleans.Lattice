@@ -11,7 +11,8 @@ internal sealed partial class ExplorerWorld
     /// A ledger of JSON entries under <c>public/</c> and <c>private/</c>, and one binary
     /// value, which the export journey downloads. <see cref="WorldIdentities.Dave"/> may
     /// range-read only <c>public/</c>, so his export is narrowed; <see cref="WorldIdentities.Carol"/>
-    /// may read single keys but not range-read, so she is offered no export at all.
+    /// may browse the tree (range read) but holds no read on it, so the Data API does not
+    /// admit her to the tree and she is offered no export at all.
     /// </summary>
     public const string ExportTree = "export-ledger";
 
@@ -48,10 +49,10 @@ internal sealed partial class ExplorerWorld
                 effect: LatticeEffect.Allow));
 
             await policy.PutRuleAsync(new LatticeAuthorizationRule(
-                ruleId: "carol-point-read-export-ledger",
+                ruleId: "carol-browse-export-ledger",
                 subject: LatticeSubjectSelector.User(WorldIdentities.Carol),
                 scope: LatticeScope.Tree(ExportTree),
-                operations: LatticeOperation.Read,
+                operations: LatticeOperation.RangeRead,
                 effect: LatticeEffect.Allow));
         }
     }
