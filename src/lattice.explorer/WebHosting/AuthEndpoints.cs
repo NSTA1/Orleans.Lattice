@@ -30,8 +30,9 @@ namespace Orleans.Lattice.Explorer.Web;
 /// from, which the sign-in dialog writes into the form's return-path field
 /// (issue #5481). That field is client-supplied, so it is honoured only when it is
 /// a plain rooted path under the base href: no scheme or host, no <c>//</c> or
-/// <c>\</c> prefix, no backslash, whitespace, control or non-ASCII character, no
-/// <c>.</c> or <c>..</c> segment, and none of those after percent-decoding either.
+/// <c>\</c> prefix, no backslash, whitespace, control or non-ASCII character, and
+/// no <c>.</c> or <c>..</c> segment; and its path, percent-decoded, must still have
+/// no <c>//</c> or <c>\</c> prefix, backslash, control character or dot segment.
 /// Anything else, or more than one value, falls back to the base href, so the
 /// endpoint can never be used as an open redirect. Sign-out always returns to the
 /// base href.
@@ -137,10 +138,16 @@ public static class AuthEndpoints
             return false;
         }
 
-        // Every percent-decoded form must be just as plain, so an encoded "//",
-        // backslash, control character or dot segment cannot slip through. The
-        // decoding allocates, but only for a candidate that carries a '%'.
-        var decoded = candidate;
+        // Every percent-decoded form of the path must be just as safe, so an encoded
+        // "//", backslash, control character or dot segment cannot slip through. The
+        // query is left encoded: it never decides where the browser goes. The
+        // decoding allocates, but only for a path that carries a '%'.
+        if (!path.Contains('%'))
+        {
+            return true;
+        }
+
+        var decoded = path.ToString();
         for (var round = 0; decoded.Contains('%'); round++)
         {
             if (round == MaxUnescapeRounds)
@@ -154,7 +161,7 @@ public static class AuthEndpoints
                 break;
             }
 
-            if (!IsPlainRootedPath(next))
+            if (!IsSafeDecodedPath(next))
             {
                 return false;
             }
@@ -165,9 +172,13 @@ public static class AuthEndpoints
         return true;
     }
 
+    /// <summary>
+    /// The raw form, which becomes the <c>Location</c> header: rooted, not
+    /// <c>//</c> or <c>/\</c>, printable ASCII only, no backslash, no dot segment.
+    /// </summary>
     private static bool IsPlainRootedPath(string value)
     {
-        if (value.Length == 0 || value[0] != '/' || (value.Length > 1 && value[1] is '/' or '\\'))
+        if (!IsRootedNotAuthority(value))
         {
             return false;
         }
@@ -180,7 +191,38 @@ public static class AuthEndpoints
             }
         }
 
-        var rest = PathPart(value)[1..];
+        return HasNoDotSegment(PathPart(value));
+    }
+
+    /// <summary>
+    /// A decoded path: still rooted and not <c>//</c> or <c>/\</c>, with no
+    /// backslash, control character or dot segment. A decoded space or non-ASCII
+    /// letter is an ordinary path character, such as a tree id, and is allowed.
+    /// </summary>
+    private static bool IsSafeDecodedPath(string path)
+    {
+        if (!IsRootedNotAuthority(path))
+        {
+            return false;
+        }
+
+        foreach (var c in path)
+        {
+            if (char.IsControl(c) || c == '\\')
+            {
+                return false;
+            }
+        }
+
+        return HasNoDotSegment(path);
+    }
+
+    private static bool IsRootedNotAuthority(string value) =>
+        value.Length > 0 && value[0] == '/' && !(value.Length > 1 && value[1] is '/' or '\\');
+
+    private static bool HasNoDotSegment(ReadOnlySpan<char> path)
+    {
+        var rest = path[1..];
         while (true)
         {
             var slash = rest.IndexOf('/');

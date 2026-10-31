@@ -175,12 +175,19 @@ public class AuthEndpointsTests
         Assert.That(location, Is.EqualTo("/cluster/trees/orders?tab=storage&signin=refused"));
     }
 
-    [Test]
-    public async Task LoginPost_withAReturnPathUnderTheBaseHref_redirectsBackToIt()
+    [TestCase("/explorer/", "/explorer/cluster/trees", "/explorer/cluster/trees")]
+    [TestCase("/explorer/", "/explorer", "/explorer")]
+    [TestCase("/explorer/", "/Explorer/cluster", "/Explorer/cluster")]
+    [TestCase("/", "/", "/")]
+    [TestCase("/", "/cluster/trees/my%20tree", "/cluster/trees/my%20tree")]
+    [TestCase("/", "/cluster/trees/caf%C3%A9", "/cluster/trees/caf%C3%A9")]
+    [TestCase("/", "/data?prefix=a%20b%2F..%2F%2F#keys", "/data?prefix=a%20b%2F..%2F%2F#keys")]
+    [TestCase("/", "/data/orders?tab=keys&prefix=50%25", "/data/orders?tab=keys&prefix=50%25")]
+    public async Task LoginPost_withAReturnPathUnderTheBaseHref_redirectsBackToIt(string basePath, string returnUrl, string expected)
     {
-        var location = await PostLoginAsync("/explorer/", "/explorer/cluster/trees");
+        var location = await PostLoginAsync(basePath, returnUrl);
 
-        Assert.That(location, Is.EqualTo("/explorer/cluster/trees"));
+        Assert.That(location, Is.EqualTo(expected));
     }
 
     [TestCase("/explorer/", "/elsewhere/cluster")]
