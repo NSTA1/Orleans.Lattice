@@ -183,8 +183,13 @@ flows with the loopback call, and is authorized as usual
 its commit or abort can be redelivered with no identity at all - by the coordinator's
 keepalive reminder or the participant's fence expiry - so a participant that built
 the saga's shadow in an authorized prepare carries that prepare's authority into the
-commit or abort, which acts only on that shadow; one that lost its cached shadow
-rebuilds as the caller. A cutover that fails releases the tree's local writes
+commit or abort, which acts only on that shadow. It does so only when this cluster's
+own coordinator has durably recorded that decision, which the participant reads
+from the coordinator's persisted state rather than from the request; one that lost
+its cached shadow rebuilds as the caller. A commit that names this cluster as its
+coordinator before that coordinator has decided to commit - or when its decision
+cannot be read - is refused before any cutover, whoever sends it. A cutover that
+fails releases the tree's local writes
 before the decision is redelivered, so it never leaves the tree write-fenced
 ([#5506](https://github.com/NSTA1/Orleans.Lattice/issues/5506)).
 
