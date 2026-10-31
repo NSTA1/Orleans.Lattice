@@ -98,7 +98,8 @@ internal static class AuthConstants
     /// (<see cref="IsControlPlaneRegistryTree"/>) or the membership store
     /// (<c>sys-membership-*</c>, owned by <c>Orleans.Lattice.Membership</c>) or schema
     /// backing stores (<c>sys-schema-*</c>, owned by <c>Orleans.Lattice.Schema</c>)
-    /// or backup stores (<c>sys-backup-*</c>, owned by <c>Orleans.Lattice.Backup</c>).
+    /// or backup stores (<c>sys-backup-*</c>, owned by <c>Orleans.Lattice.Backup</c>)
+    /// or shared tag indexes (<c>tag-*</c>, which encode source keys and tags).
     /// These hold cross-tenant membership, source-value dead-letter previews and
     /// captured source data.
     /// The enforcement gate governs these with control-plane read
@@ -106,7 +107,7 @@ internal static class AuthConstants
     /// them from the all-trees tier, so neither <see cref="LatticeEffect.Allow"/> as
     /// the default nor a cluster-wide all-trees wildcard can read them; an explicit
     /// rule scoped at the tree, or a bootstrap administrator, still can. Allocation-
-    /// free: at most five ordinal prefix probes on the request's tree id.
+    /// free: at most six ordinal prefix probes on the request's tree id.
     /// </summary>
     /// <param name="treeId">The candidate tree id. Must not be <c>null</c>.</param>
     /// <returns><c>true</c> if the id is a control-plane system-data tree; otherwise <c>false</c>.</returns>
@@ -115,7 +116,8 @@ internal static class AuthConstants
         IsControlPlaneRegistryTree(treeId)
         || treeId.StartsWith(Membership.MembershipConstants.TreePrefix, StringComparison.Ordinal)
         || treeId.StartsWith("sys-schema-", StringComparison.Ordinal)
-        || treeId.StartsWith("sys-backup-", StringComparison.Ordinal);
+        || treeId.StartsWith("sys-backup-", StringComparison.Ordinal)
+        || treeId.StartsWith(LatticeConstants.TagIndexTreePrefix, StringComparison.Ordinal);
 
     /// <summary>
     /// Whether <paramref name="rule"/> is well formed: a non-empty rule id; a defined
