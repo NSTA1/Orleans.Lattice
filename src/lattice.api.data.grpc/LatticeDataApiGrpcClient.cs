@@ -83,6 +83,38 @@ public sealed class LatticeDataApiGrpcClient
     public Task<DataSetManyResponse> SetManyAsync(DataSetManyRequest request, CancellationToken cancellationToken = default)
         => UnaryAsync(_methods.SetMany, request, cancellationToken);
 
+    /// <summary>
+    /// Writes <paramref name="upserts"/> on <paramref name="treeId"/> as a stream over a single
+    /// duplex <c>StreamSetMany</c> call: non-atomically, in batches of
+    /// <see cref="DataSetManyStreamOptions.BatchSize"/>, at most four batches unanswered at a
+    /// time, each batch's outcome reported to <paramref name="progress"/> as the server
+    /// answers it. An entry refused for its own sake (a denied key, a value the schema policy
+    /// rejects) is reported in its batch's <see cref="DataSetManyStreamBatch.Rejections"/>
+    /// and every other entry lands; any other fault ends the call with its status.
+    /// </summary>
+    /// <param name="treeId">Logical tree identifier. Must not be <c>null</c> or empty.</param>
+    /// <param name="upserts">The entries, in any order.</param>
+    /// <param name="progress">Receives each batch's outcome, or <see langword="null"/>.</param>
+    /// <param name="options">The batching options, or <see langword="null"/> for the defaults.</param>
+    /// <param name="cancellationToken">Cancellation token. Cancelling abandons the stream; the batches already answered stay written.</param>
+    /// <returns>The stream's totals.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="upserts"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">An option is out of range.</exception>
+    public Task<DataSetManyStreamResult> SetManyStreamAsync(
+        string treeId,
+        IAsyncEnumerable<DataEntry> upserts,
+        IProgress<DataSetManyStreamBatch>? progress = null,
+        DataSetManyStreamOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentNullException.ThrowIfNull(upserts);
+        options ??= DataSetManyStreamOptions.Default;
+        options.Validate();
+        return DataSetManyStreamCall.RunAsync(_invoker, _methods.StreamSetMany, treeId, upserts, progress, options, cancellationToken);
+    }
+
     /// <summary>Applies a typed CRDT write delta. A denied key aborts with a <c>PermissionDenied</c> status.</summary>
     public Task<CrdtWriteResponse> CrdtWriteAsync(CrdtWriteRequest request, CancellationToken cancellationToken = default)
         => UnaryAsync(_methods.CrdtWrite, request, cancellationToken);

@@ -16,6 +16,8 @@ Read and mutation operations are not one undifferentiated admin grant: the surfa
 
 Tree configuration, statistics, schema and WAL-reclamation diagnostics remain direct request/response calls. Long-running view rebuild/reconcile, tag-index repair, WAL move, orphaned-leaf audit and storage-usage refresh use accept-then-poll operations with an idempotency id, progress/status and result data. Cancellation of a start request is not cancellation of the recorded operation; use the operation cancellation contract.
 
+A bulk load (tree creation from sorted data) is a session: `BeginBulkLoadAsync`, one `AppendBulkLoadAsync` per strictly ascending chunk, then `CommitBulkLoadAsync`. `BulkLoadStreamAsync` drives that whole session from an `IAsyncEnumerable<DataEntry>`, chunking it by `TreeBulkLoadStreamOptions.ChunkSize` (1,000 by default), checking that keys stay ascending across chunk boundaries (`BulkLoadOrderException`), and reporting each acknowledged chunk; memory is bounded by the chunk, never by the stream. It is a default interface member over the three session calls, so an existing implementer streams without change; the gRPC binding streams the session over one duplex call that resumes from the last acknowledged chunk when the transport drops. Set `FirstChunkIndex` to resume a session yourself. Used by the Explorer's seed import (issue #5365).
+
 Use `StorageUsageRefreshResults.TryReadSummary` for cluster totals and the public operation result helpers for other results. A WAL move does not reclaim the old provider's tail automatically: reclamation is a separate irreversible finalization, and `ILatticeWalReclamation` diagnoses the durable pin/leaf state that controls trimming.
 
 ## Related
@@ -176,6 +178,7 @@ The following inventory includes directly declared public members and overloads,
 - `Task<TreeBulkLoadSession> BeginBulkLoadAsync( string treeId, string operationId, CancellationToken cancellationToken = default)`
 - `Task<TreeBulkLoadChunkAck> AppendBulkLoadAsync( string treeId, string operationId, long chunkIndex, IReadOnlyList<DataEntry> entries, CancellationToken cancellationToken = default)`
 - `Task<TreeBulkLoadResult> CommitBulkLoadAsync( string treeId, string operationId, CancellationToken cancellationToken = default)`
+- `Task<TreeBulkLoadResult> BulkLoadStreamAsync( string treeId, string operationId, IAsyncEnumerable<DataEntry> sortedEntries, IProgress<TreeBulkLoadChunkAck>? progress = null, TreeBulkLoadStreamOptions? options = null, CancellationToken cancellationToken = default)` (default interface member)
 - `Task<TreeRestoreResult> RestoreTreeAsync( string treeId, string backupId, string? operationId = null, CancellationToken cancellationToken = default)`
 - `Task<IReadOnlyList<TreeRestoreResult>> RestoreTreeSetAsync( string setId, CancellationToken cancellationToken = default)`
 - `Task RevertTreeRestoreAsync( TreeRestoreResult restore, CancellationToken cancellationToken = default)`
@@ -455,6 +458,23 @@ The following inventory includes directly declared public members and overloads,
 
 - `public required string TreeId { get; init; }`
 - `public required string OperationId { get; init; }`
+
+### `Orleans.Lattice.Api.TreeAdmin.TreeBulkLoadStreamOptions`
+
+[Source](../../src/lattice.api.abstractions/TreeAdmin/Model/TreeBulkLoadStreamOptions.cs) (line 15).
+
+`public sealed record TreeBulkLoadStreamOptions`
+
+- `public const int DefaultChunkSize`
+- `public const int MaxChunkSize`
+- `public const int DefaultMaxUnacknowledgedChunks`
+- `public const int DefaultMaxResumeAttempts`
+- `public static TreeBulkLoadStreamOptions Default { get; }`
+- `public int ChunkSize { get; init; }`
+- `public long FirstChunkIndex { get; init; }`
+- `public int MaxUnacknowledgedChunks { get; init; }`
+- `public int MaxResumeAttempts { get; init; }`
+- `public void Validate()`
 
 ### `Orleans.Lattice.Api.TreeAdmin.TreeCompactionTriggerResult`
 
