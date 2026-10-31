@@ -13,7 +13,7 @@ surfaces:
     source: "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs"
 preconditions:
   - id: surface-available
-    check: "Every surface this procedure uses is registered on the host: read the availability of api/tenantadmin.json and, for each MCP tool used (lattice_tenant_access_posture, lattice_tenant_explain, lattice_tenant_group_member_add, lattice_tenant_group_upsert, lattice_tenant_member_add, lattice_tenant_rule_put), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/tenantadmin.json and, for each MCP tool used (lattice_tenant_access_posture, lattice_tenant_explain, lattice_tenant_group_member_add, lattice_tenant_group_member_remove, lattice_tenant_group_remove, lattice_tenant_group_upsert, lattice_tenant_member_add, lattice_tenant_member_remove, lattice_tenant_rule_put, lattice_tenant_rule_remove), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
     source: "docs/agents/api/tenantadmin.json"
   - id: feature-enabled
     check: "LatticeTenancyOptions.DelegatedAccessAdministrationEnabled is true; GetPostureAsync reports Enabled."
@@ -24,6 +24,9 @@ preconditions:
   - id: not-default-tenant
     check: "The tenant is not the reserved default tenant."
     source: "docs/lattice.tenancy/README.md"
+  - id: not-last-admin-group
+    check: "A tenant group to be removed is not the tenant's last admin-set entry."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#RemoveGroupAsync"
 steps:
   - n: 1
     action: "Read the tenant access posture."
@@ -55,11 +58,46 @@ steps:
     api: "ILatticeTenantPolicyAdmin.ExplainAsync / ExplainTenantAccess / lattice_tenant_explain"
     expects: "DecidingLayer is Tenant with the new rule, or Platform when an operator rule decides first."
     source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs#ExplainAsync"
+  - n: 7
+    action: "To revoke, remove the tenant rule that grants the access, by its tenant-local id."
+    api: "ILatticeTenantPolicyAdmin.RemoveRuleAsync / RemoveTenantRule / lattice_tenant_rule_remove"
+    expects: "true when a rule was removed; false, with nothing changed, when the tenant has no rule of that id; an operator rule is never removed."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs#RemoveRuleAsync"
+  - n: 8
+    action: "To revoke one subject's group-derived access, remove it as a direct member of the tenant group."
+    api: "ILatticeTenantDirectoryAdmin.RemoveGroupMemberAsync / RemoveTenantGroupMember / lattice_tenant_group_member_remove"
+    expects: "Changed is true when the edge was removed, false when the member was not in the group."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#RemoveGroupMemberAsync"
+  - n: 9
+    action: "To stop a subject or group acting as the tenant, remove its entry from the tenant member set."
+    api: "ILatticeTenantDirectoryAdmin.RemoveMemberAsync / RemoveTenantMember / lattice_tenant_member_remove"
+    expects: "Changed is true when the entry was removed, false when it was not present; the admin set and the rules are not changed."
+    source: "src/lattice.api.tenantadmin/Directory/LatticeTenantDirectoryAdmin.MemberSet.cs#RemoveMemberAsync"
+  - n: 10
+    action: "To revoke everything granted through a tenant group, remove the group."
+    api: "ILatticeTenantDirectoryAdmin.RemoveGroupAsync / RemoveTenantGroup / lattice_tenant_group_remove"
+    expects: "Removed is true, with EdgesRemoved, RemovedFromMemberSet, RemovedFromAdminSet and the local RemovedRuleIds; a group that does not exist reports Removed false and cascades nothing."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#RemoveGroupAsync"
+  - n: 11
+    action: "Confirm the decision the revoked subject now receives."
+    api: "ILatticeTenantPolicyAdmin.ExplainAsync / ExplainTenantAccess / lattice_tenant_explain"
+    expects: "Explain evaluates the serving silo's compiled policy snapshot, so once it has rebuilt DecidingRuleId is no longer the removed rule; DecidingLayer is null when DefaultEffect decides, or Platform when an operator rule decides."
+    source: "src/lattice.api.tenantadmin/Policy/EngineTenantPolicyDecisionSource.cs#EngineTenantPolicyDecisionSource"
 postconditions:
   - check: "Members of the group may act as the tenant and are allowed what the rule grants, unless an operator rule decides otherwise."
     source: "docs/lattice.auth/tenant-layer.md"
   - check: "No change reaches another tenant's trees, app-owned trees or system trees."
     source: "docs/lattice.auth/tenant-layer.md"
+  - check: "A removed tenant rule stops admitting on every silo once that silo's compiled policy snapshot rebuilds, about a second after the write plus the rebuild."
+    source: "docs/lattice.auth/README.md"
+  - check: "A removed member-set entry is a tenant registry write, so a subject that acted as the tenant only through that entry is refused on the tenant's trees as soon as the write commits."
+    source: "docs/lattice.tenancy/README.md"
+  - check: "A removed group edge is a sys-membership-* write: the committing silo flushes its subject-resolution cache, but another silo can keep the pre-removal groups until its entry expires, at most ResolutionCacheTtl (default 5 minutes) or the token's expiry."
+    source: "docs/lattice.membership/configuration.md"
+  - check: "After a group removal no member-set entry, admin-set entry, tenant rule or membership edge names the group."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#RemoveGroupAsync"
+  - check: "Revocation never removes or overrides an operator rule; a matching operator allow still admits."
+    source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs#ILatticeTenantPolicyAdmin"
 failure_modes:
   - id: feature-disabled
     signal: "TenantAccessAdministrationDisabledException (gRPC FailedPrecondition)."
@@ -77,13 +115,29 @@ failure_modes:
     signal: "ExplainAsync reports DecidingLayer Platform."
     effect: "The tenant rule has no effect on that request."
     response: "Ask a platform operator to change the operator rule; a tenant rule cannot override it."
+  - id: last-admin-group
+    signal: "TenantLastAdminSubjectException from removing a group that is the tenant's last admin-set entry (gRPC FailedPrecondition)."
+    effect: "Nothing is written."
+    response: "Keep another admin-set entry in place before removing the group."
+  - id: default-tenant
+    signal: "ReservedTenantOperationException (gRPC FailedPrecondition)."
+    effect: "The operation is refused; the default tenant has no tenant groups, members or tenant-tier rules."
+    response: "Name a non-default tenant."
+  - id: nothing-removed
+    signal: "RemoveRuleAsync returns false, or Changed or Removed is false."
+    effect: "No rule, edge, entry or group matched, so nothing changed."
+    response: "Check the local id, group name and subject kind, which decides the stored id matched; a subject can still hold access through another entry, group or rule."
+  - id: revocation-not-yet-visible
+    signal: "A revoked subject is still admitted on some silo shortly after the removal returned."
+    effect: "That silo's policy snapshot has not rebuilt, or it still caches the subject's pre-removal groups."
+    response: "Wait for the policy rebuild and, for a removed group edge, for that silo's resolution-cache entry to expire."
   - id: surface-not-available
     signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
     effect: "The operation cannot be carried out through that surface on this host."
     response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
 rollback:
   supported: true
-  mechanism: "Remove the rule, the member-set entry and the group; removing the group cascades its edges, entries and tenant rules."
+  mechanism: "Undo a grant by removing the rule, the member-set entry and the group; removing the group cascades its edges, entries and tenant rules. Undo a revocation by re-adding what was removed, read before the removal; re-adds count against the caps again."
   steps:
     - action: "Remove the tenant rule that granted the access."
       api: "ILatticeTenantPolicyAdmin.RemoveRuleAsync"
@@ -94,16 +148,45 @@ rollback:
     - action: "Remove the group, which cascades its edges, entries and tenant rules."
       api: "ILatticeTenantDirectoryAdmin.RemoveGroupAsync"
       source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#RemoveGroupAsync"
+    - action: "Undo a rule removal by putting the full rule again under the same local id; the removal returns no rule definition."
+      api: "ILatticeTenantPolicyAdmin.PutRuleAsync"
+      source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs#PutRuleAsync"
+    - action: "Undo a group-member removal by adding the member again."
+      api: "ILatticeTenantDirectoryAdmin.AddGroupMemberAsync"
+      source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#AddGroupMemberAsync"
+    - action: "Undo a member-set removal by adding the entry again."
+      api: "ILatticeTenantDirectoryAdmin.AddMemberAsync"
+      source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#AddMemberAsync"
+    - action: "Undo a group removal by re-creating the group, then re-adding its members, member-set entry and rules; the result reports only EdgesRemoved as a count and the local RemovedRuleIds."
+      api: "ILatticeTenantDirectoryAdmin.UpsertGroupAsync"
+      source: "src/lattice.api.abstractions/TenantAdmin/Model/TenantGroupRemovalResult.cs#TenantGroupRemovalResult"
+    - action: "Re-add a cascaded admin-set entry when RemovedFromAdminSet was true."
+      api: "ILatticeTenantAccessAdmin.AddAdminSubjectAsync"
+      source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAccessAdmin.cs#AddAdminSubjectAsync"
   source: "docs/lattice.api.tenantadmin/README.md"
 concurrency:
   - rule: "Cap-governed additions are verified after the write and withdrawn when over the cap; concurrent racers may all be refused."
     source: "docs/lattice.api.tenantadmin/README.md"
   - rule: "Removing the tenant's last admin entry, including a group, is refused with TenantLastAdminSubjectException; the guard runs inside the registry compare-and-set loop, so concurrent removals cannot empty the set."
     source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#RemoveGroupAsync"
+  - rule: "A member-set or admin-set removal is stamped later than the entry it removes and the local clock, so Changed true means the entry is gone even when a silo whose clock runs ahead wrote it."
+    source: "docs/lattice.api.tenantadmin/README.md"
+  - rule: "Every removal is idempotent; a group removal interrupted part-way is completed by re-running it, because the group record is removed last."
+    source: "src/lattice.api.tenantadmin/Directory/LatticeTenantDirectoryAdmin.Groups.cs#RemoveGroupAsync"
 sources:
   - "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs"
   - "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
+  - "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAccessAdmin.cs"
+  - "src/lattice.api.abstractions/TenantAdmin/Model/TenantGroupRemovalResult.cs"
+  - "src/lattice.api.abstractions/TenantAdmin/Model/TenantExplanation.cs"
+  - "src/lattice.api.tenantadmin/Directory/LatticeTenantDirectoryAdmin.Groups.cs"
+  - "src/lattice.api.tenantadmin/Directory/LatticeTenantDirectoryAdmin.MemberSet.cs"
+  - "src/lattice.api.tenantadmin/Policy/EngineTenantPolicyDecisionSource.cs"
   - "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs"
+  - "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.TenantAccess.cs"
   - "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs"
   - "docs/lattice.tenancy/README.md"
   - "docs/lattice.api.tenantadmin/README.md"
+  - "docs/lattice.auth/README.md"
+  - "docs/lattice.auth/tenant-layer.md"
+  - "docs/lattice.membership/configuration.md"

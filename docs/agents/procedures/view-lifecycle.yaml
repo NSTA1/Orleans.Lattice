@@ -1,0 +1,157 @@
+schema: lattice.agents/procedure/v1
+id: view-lifecycle
+name: "Create or drop a runtime materialised view"
+surfaces:
+  in_process:
+    api: "ILatticeTreeAdmin.CreateViewAsync and DropViewAsync"
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CreateViewAsync"
+  grpc:
+    api: "/orleans.lattice.api.treeadmin/CreateView and DropView"
+    source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#CreateViewMethodName"
+  mcp_tool:
+    api: "lattice_treeadmin_view_create and lattice_treeadmin_view_drop"
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+preconditions:
+  - id: surface-available
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/treeadmin.json and, for each MCP tool used (lattice_treeadmin_view_create, lattice_treeadmin_view_drop, lattice_treeadmin_view_list, lattice_treeadmin_view_status), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
+    source: "docs/agents/api/treeadmin.json"
+  - id: view-subsystem
+    check: "The materialised-view subsystem is registered on the cluster with AddLatticeViews."
+    source: "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.RequireViews"
+  - id: source-admin
+    check: "Caller has whole-tree Admin authority over the caller-supplied source tree for create, and over the view's resolved source tree for drop; rebinding an existing view to a different source also requires Admin over the source it currently tails."
+    source: "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.CreateViewAsync"
+  - id: verification-reads
+    check: "Listing views requires the cluster-wide Telemetry capability; reading a view's status requires whole-tree Read authority over the view's resolved source tree."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - id: view-name-valid
+    check: "The view name is non-empty and contains no control character, none of '/', '\\', '#' or '?', and no '~' generation separator."
+    source: "src/lattice/Views/ViewNameValidator.cs#ViewNameValidator.TryValidate"
+  - id: source-eligible
+    check: "The source is a directly writable tree: not a materialised-view tree, not in the reserved '_lattice_' system namespace, and not a tenant-scoped id the active tenant does not own."
+    source: "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.CreateViewAsync"
+  - id: provider-registered
+    check: "The provider key is registered on the host through AddRuntimeProjectionProvider, or is the built-in filter-only predicate provider key orleans.lattice.predicate.v1; the payload is at most 65536 bytes (base64-encoded on the MCP tool)."
+    source: "src/lattice/Views/LatticeViewsServiceCollectionExtensions.cs#PredicateRuntimeViewProjectionCodec.ProviderKey"
+  - id: projection-from-provider
+    check: "Projection kind (filter or aggregation), accumulative shape and projection version are derived by the provider on the target cluster and cannot be supplied by the caller."
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+  - id: drop-runtime-only
+    check: "The drop target is a runtime-registered view: not declared at startup through AddLatticeViews and not declared by a Lattice add-on over a reserved system tree."
+    source: "src/lattice/Views/LatticeViewFactory.cs#LatticeViewFactory.DeleteAsync"
+steps:
+  - n: 1
+    action: "List runtime views to check whether the view name is already registered."
+    api: "ILatticeTreeAdmin.ListViewsAsync / ListViews / lattice_treeadmin_view_list"
+    expects: "Returns each runtime view's name, source tree, aggregation shape, accumulative flag, provider key and projection version; startup-declared views are not listed."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ListViewsAsync"
+  - n: 2
+    action: "Create the view from the view name, source tree id, provider key and provider payload."
+    api: "ILatticeTreeAdmin.CreateViewAsync / CreateView / lattice_treeadmin_view_create"
+    expects: "Returns the view status with source tree, aggregation shape, apply lag, active tree id, provider key and projection version."
+    source: "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.CreateViewAsync"
+  - n: 3
+    action: "Poll view status until the apply lag reaches zero."
+    api: "ILatticeTreeAdmin.GetViewStatusAsync / GetViewStatus / lattice_treeadmin_view_status"
+    expects: "ApplyLag is the count of committed-but-unapplied source WAL entries summed across source partitions; zero means the view has caught up to the source head as of the read."
+    source: "src/lattice.api.abstractions/TreeAdmin/Model/TreeViewStatus.cs#TreeViewStatus.ApplyLag"
+  - n: 4
+    action: "When removing the view, drop it by name."
+    api: "ILatticeTreeAdmin.DropViewAsync / DropView / lattice_treeadmin_view_drop"
+    expects: "Completes with no payload in process; gRPC echoes the request and the MCP tool returns the dropped view name."
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminLifecycleToolHandlers.cs#TreeAdminLifecycleToolHandlers.DropViewAsync"
+  - n: 5
+    action: "List runtime views again to confirm the create or drop against the cluster-wide runtime-view registry."
+    api: "ILatticeTreeAdmin.ListViewsAsync / ListViews / lattice_treeadmin_view_list"
+    expects: "A created view is listed with its provider key and projection version; a dropped view is absent."
+    source: "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.ListViewsAsync"
+postconditions:
+  - check: "Create returns after the durable runtime registration is written and the silo-local catalog entry is registered; the view maintainer is activated in the background."
+    source: "src/lattice/Views/LatticeViewFactory.cs#LatticeViewFactory.RegisterDurablyAndActivateAsync"
+  - check: "Initial backfill runs asynchronously after create; the view converges toward the source as the maintainer applies projected writes."
+    source: "docs/lattice/materialised-views.md"
+  - check: "The view tree id is view-{name}, or t/{tenant}/view-{name} when an active non-default tenant scopes the view name."
+    source: "src/lattice/Views/LatticeViewTrees.cs#LatticeViewTrees.ComposeTreeId"
+  - check: "Status reports the generation-addressed id of the view tree currently serving reads as ActiveTreeId."
+    source: "src/lattice.api.abstractions/TreeAdmin/Model/TreeViewStatus.cs#TreeViewStatus.ActiveTreeId"
+  - check: "Provider payloads are never returned by create, status or list."
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+  - check: "Drop stops the maintainer, unregisters its keepalive reminder, releases the source WAL cursor pin, soft-deletes every backing view-tree generation, resets the durable checkpoint, and removes the catalog entry and runtime registration."
+    source: "docs/lattice/materialised-views.md"
+  - check: "After drop the view name is free; a view re-created under the same name materialises in a fresh view-{name}~g{N} generation because a deleted tree id is never reused."
+    source: "docs/lattice/materialised-views.md"
+failure_modes:
+  - id: view-subsystem-absent
+    signal: "InvalidOperationException (FailedPrecondition over gRPC) stating the materialised-view subsystem is not enabled."
+    effect: "No view verb is performed."
+    response: "Register AddLatticeViews on the host before using view administration."
+  - id: invalid-request
+    signal: "ArgumentException or ArgumentOutOfRangeException (InvalidArgument over gRPC) for an illegal view name, an empty source or provider key, a view-tree or reserved source, a payload over 65536 bytes, or a non-base64 MCP payload."
+    effect: "No view is registered."
+    response: "Correct the argument and retry."
+  - id: access-denied
+    signal: "LatticeAuthorizationDeniedException or LatticeTenantAccessDeniedException (PermissionDenied over gRPC)."
+    effect: "No view is created or dropped."
+    response: "Obtain whole-tree Admin over the source tree, and over the current source when rebinding, or act under the owning tenant."
+  - id: provider-unavailable
+    signal: "InvalidOperationException naming a provider key not configured on this silo, a provider that returned null, a definition name that differs from the view name, or an empty projection version."
+    effect: "No runtime registration is written."
+    response: "Register the provider on every silo with AddRuntimeProjectionProvider or fix the provider, then retry."
+  - id: replication-topology-mismatch
+    signal: "InvalidOperationException stating the view's LatticeViewReplicationMode or ShipViewProducerClusterId does not match whether its view tree or source tree is replicated."
+    effect: "No runtime registration is written."
+    response: "Make the view's named LatticeViewOptions agree with the replication topology the message names, then retry."
+  - id: create-timeout
+    signal: "A transport timeout on create or an immediate status read while a large initial backfill holds the maintainer."
+    effect: "The durable registration may have succeeded and the view keeps converging."
+    response: "Poll view status and apply lag; do not infer rollback from a create-time timeout."
+  - id: runtime-drop-rejected
+    signal: "InvalidOperationException (FailedPrecondition over gRPC) for a view declared at startup through AddLatticeViews or declared by a Lattice add-on over a reserved system tree."
+    effect: "The view remains; its declaration would re-create it on the next silo start."
+    response: "Remove the startup declaration instead of using runtime drop."
+  - id: unregister-write-failed
+    signal: "Drop fails after the maintainer is decommissioned because the runtime-view registry state write failed."
+    effect: "The registry restores the registration in memory so a retry re-attempts the write."
+    response: "Retry the drop."
+  - id: surface-not-available
+    signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
+    effect: "The operation cannot be carried out through that surface on this host."
+    response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
+rollback:
+  supported: true
+  mechanism: "Undo a create by dropping the view. A drop has no inverse: re-create the view, which materialises in a fresh generation and converges toward the source again."
+  steps:
+    - action: "Drop the created view."
+      api: "ILatticeTreeAdmin.DropViewAsync / DropView / lattice_treeadmin_view_drop"
+      source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DropViewAsync"
+    - action: "Re-create a dropped view with the same source, provider key and payload."
+      api: "ILatticeTreeAdmin.CreateViewAsync / CreateView / lattice_treeadmin_view_create"
+      source: "docs/lattice/materialised-views.md"
+  source: "docs/lattice/materialised-views.md"
+concurrency:
+  - rule: "Runtime view registration is last-write-wins per view name, so a create over an existing name with a different source, provider, payload or version rebinds that view."
+    source: "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.CreateViewAsync"
+  - rule: "Re-issuing a create whose registration equals the existing one returns without writing the durable registry."
+    source: "src/lattice/Views/ViewRegistryGrain.cs#ViewRegistryGrain.RegisterAsync"
+  - rule: "Drop of a view registered in neither the silo-local catalog nor the runtime-view registry returns without authorization or effect."
+    source: "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.DropViewAsync"
+  - rule: "A source tree that still has one or more views cannot be deleted; drop its views first."
+    source: "docs/lattice/materialised-views.md"
+  - rule: "Each silo reconciles its cached catalog entry with the durable registration on activation, so a durable delete or a recreation retires a stale cached entry."
+    source: "docs/lattice/materialised-views.md"
+sources:
+  - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
+  - "src/lattice.api.abstractions/TreeAdmin/Model/TreeViewStatus.cs"
+  - "src/lattice.api.treeadmin/LatticeTreeAdmin.cs"
+  - "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs"
+  - "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs"
+  - "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+  - "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminLifecycleToolHandlers.cs"
+  - "src/lattice/Views/LatticeViewFactory.cs"
+  - "src/lattice/Views/LatticeViewTrees.cs"
+  - "src/lattice/Views/ViewNameValidator.cs"
+  - "src/lattice/Views/ViewRegistryGrain.cs"
+  - "src/lattice/Views/ViewReplicationTopology.cs"
+  - "src/lattice/Views/LatticeViewsServiceCollectionExtensions.cs"
+  - "docs/lattice.api.treeadmin/README.md"
+  - "docs/lattice/materialised-views.md"

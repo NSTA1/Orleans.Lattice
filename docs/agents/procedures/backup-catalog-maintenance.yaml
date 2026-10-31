@@ -1,0 +1,164 @@
+schema: lattice.agents/procedure/v1
+id: backup-catalog-maintenance
+name: "Maintain the backup catalog: delete a backup, rebuild or scrub the catalog, cancel a backup operation"
+surfaces:
+  in_process:
+    api: "ILatticeBackupControl.DeleteBackupAsync and ILatticeBackupOperations.StartCatalogRebuildAsync, StartCatalogScrubAsync, CancelOperationAsync"
+    source: "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DeleteBackupAsync"
+  grpc:
+    api: "/orleans.lattice.api.backup/DeleteBackup and /orleans.lattice.api.backup/StartCatalogRebuild, /orleans.lattice.api.backup/StartCatalogScrub, /orleans.lattice.api.backup/CancelBackupOperation"
+    source: "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#DeleteBackupMethodName"
+  mcp_tool:
+    api: "lattice_backup_delete and lattice_backup_start_catalog_rebuild, lattice_backup_start_catalog_scrub, lattice_backup_operation_cancel"
+    source: "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs"
+preconditions:
+  - id: surface-available
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/backup.json and, for each MCP tool used (lattice_backup_delete, lattice_backup_start_catalog_rebuild, lattice_backup_start_catalog_scrub, lattice_backup_operation_cancel, lattice_backup_operation_status, lattice_backup_operation_list, lattice_backup_list, lattice_backup_describe), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
+    source: "docs/agents/api/backup.json"
+  - id: backup-engine-registered
+    check: "AddLatticeBackupApi is called after AddLatticeBackup; otherwise registration throws InvalidOperationException."
+    source: "src/lattice.api.backup/LatticeApiBackupServiceCollectionExtensions.cs#LatticeApiBackupServiceCollectionExtensions.AddLatticeBackupApi"
+  - id: mcp-control-opt-in
+    check: "Over MCP, lattice_backup_delete, lattice_backup_start_catalog_rebuild, lattice_backup_start_catalog_scrub and lattice_backup_operation_cancel are contributed only when EnableBackupControlTools is true (AddBackupTools enableControl: true)."
+    source: "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup.BuildTools"
+  - id: grpc-authorizer
+    check: "Over gRPC, the host registers an ILatticeBackupApiAuthorizer that admits the call; the default DenyAllBackupApiAuthorizer rejects every call with PermissionDenied."
+    source: "src/lattice.api.backup.grpc/Security/ILatticeBackupApiAuthorizer.cs#DenyAllBackupApiAuthorizer"
+  - id: mcp-authorizer
+    check: "Over MCP, the host registers an ILatticeApiMcpAuthorizer that admits the call; the default DenyAllMcpAuthorizer rejects every call."
+    source: "docs/lattice.api.mcp/security.md"
+  - id: delete-backup-grant
+    check: "To delete, the caller holds the Backup grant over the scope recorded in the backup's manifest."
+    source: "src/lattice.api.backup/LatticeBackupControl.cs#LatticeBackupControl.DeleteBackupAsync"
+  - id: catalog-restore-grant
+    check: "To start a catalog rebuild or scrub, the caller holds the Restore grant over the reserved catalog tree sys-backup-catalog."
+    source: "docs/lattice.api.backup/api.md"
+  - id: cancel-start-grant
+    check: "To cancel, the caller holds the grant that starting the operation required over every recorded scope: Restore for restore, cold-restore, catalog-rebuild and catalog-scrub kinds; Backup for every other backup kind."
+    source: "src/lattice.api.backup/LatticeBackupControl.Operations.cs#LatticeBackupControl.RequiresRestoreGrant"
+  - id: no-retained-dependent
+    check: "Before deleting a backup, no retained incremental backup has the backup in its base chain; delete does not check BaseBackupId dependencies."
+    source: "docs/lattice.api.backup/README.md"
+steps:
+  - n: 1
+    action: "Before a delete, list the catalog and describe each candidate dependent; a backup whose chain ids contain the target id depends on it."
+    api: "ILatticeBackupControl.ListBackupsAsync / ListBackups / lattice_backup_list and ILatticeBackupControl.DescribeBackupAsync / DescribeBackup / lattice_backup_describe"
+    expects: "List returns readable manifests page by page; describe returns the manifest and its base-first chain ids, or null when absent."
+    source: "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DescribeBackupAsync"
+  - n: 2
+    action: "Delete the backup by id, deleting an incremental chain tip-first."
+    api: "ILatticeBackupControl.DeleteBackupAsync / DeleteBackup / lattice_backup_delete"
+    expects: "Returns true when a backup was removed and false when no catalog row existed for the id."
+    source: "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DeleteBackupAsync"
+  - n: 3
+    action: "When the catalog has drifted from the sink, start a tracked catalog rebuild."
+    api: "ILatticeBackupOperations.StartCatalogRebuildAsync / StartCatalogRebuild / lattice_backup_start_catalog_rebuild"
+    expects: "Returns an operation handle at once; a reused operation id returns the existing operation with Created false and starts nothing."
+    source: "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartCatalogRebuildAsync"
+  - n: 4
+    action: "To find catalog rows the sink cannot resolve, start a tracked catalog scrub with pruneOrphans false."
+    api: "ILatticeBackupOperations.StartCatalogScrubAsync / StartCatalogScrub / lattice_backup_start_catalog_scrub"
+    expects: "Returns an operation handle at once; with pruneOrphans false the pass only flags orphans."
+    source: "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartCatalogScrubAsync"
+  - n: 5
+    action: "Poll the tracked operation until its state is terminal and read its result map."
+    api: "ILatticeBackupOperations.GetOperationStatusAsync / GetBackupOperationStatus / lattice_backup_operation_status"
+    expects: "A succeeded rebuild carries scannedCount, registeredCount and reconciledCount; a succeeded scrub carries scannedCount, orphanCount, removedCount, pruned and orphanBackupIds."
+    source: "docs/lattice.api.backup/operations.md"
+  - n: 6
+    action: "Only after reviewing orphanBackupIds, start a second scrub with pruneOrphans true and poll it to a terminal state."
+    api: "ILatticeBackupOperations.StartCatalogScrubAsync / StartCatalogScrub / lattice_backup_start_catalog_scrub"
+    expects: "The PruningOrphans phase removes each orphan catalog row under system origin and removedCount reports the rows removed."
+    source: "src/lattice.backup/LatticeBackupCatalogScrubService.cs#LatticeBackupCatalogScrubService.ScrubAsync"
+  - n: 7
+    action: "To stop a running backup-facade operation, request cancellation by operation id; list operations to recover a lost id."
+    api: "ILatticeBackupOperations.CancelOperationAsync / CancelBackupOperation / lattice_backup_operation_cancel and ILatticeBackupOperations.ListOperationsAsync / ListBackupOperations / lattice_backup_operation_list"
+    expects: "Returns the status after the request, or null when the operation is not visible to the caller; a terminal operation is returned unchanged."
+    source: "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync"
+  - n: 8
+    action: "Poll the cancelled operation until it reads Cancelled."
+    api: "ILatticeBackupOperations.GetOperationStatusAsync / GetBackupOperationStatus / lattice_backup_operation_status"
+    expects: "The state stays non-terminal until the work observes the request at its next progress report or heartbeat, then reads Cancelled."
+    source: "docs/lattice.api.abstractions/operations.md"
+postconditions:
+  - check: "A deleted backup's catalog row and sink manifest are removed, its artifacts not referenced by any other retained manifest are deleted, and its stored health report is discarded."
+    source: "src/lattice.api.backup/LatticeBackupControl.cs#LatticeBackupControl.DeleteBackupAsync"
+  - check: "Describe of a deleted backup id returns null."
+    source: "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DescribeBackupAsync"
+  - check: "Inventory BytesReclaimed counts retention passes only, not a backup deleted through the facade."
+    source: "docs/lattice.api.backup/api.md"
+  - check: "A succeeded rebuild has registered every manifest the sink listed during the pass; ScannedCount equals RegisteredCount plus ReconciledCount."
+    source: "src/lattice.backup/LatticeBackupCatalogRebuildService.cs#LatticeBackupCatalogRebuildService.RebuildFromSinkAsync"
+  - check: "A scrub with pruneOrphans false leaves the catalog unchanged and reports removedCount zero."
+    source: "docs/lattice.backup/api.md"
+  - check: "Scrub pruning removes only catalog rows; it does not delete sink manifests or artifacts."
+    source: "src/lattice.backup/LatticeBackupCatalogScrubService.cs#LatticeBackupCatalogScrubService.ScrubAsync"
+failure_modes:
+  - id: broken-chain
+    signal: "A retained incremental backup's base was deleted; its describe chain ends early and a restore of it fails with LatticeRestoreValidationException."
+    effect: "The increment can no longer be restored."
+    response: "Delete incremental chains tip-first; restore an earlier intact chain if one remains."
+  - id: unauthorized
+    signal: "LatticeAuthorizationDeniedException, gRPC PermissionDenied, or an MCP authorization denial."
+    effect: "Nothing is deleted, started or cancelled."
+    response: "Grant Backup over the manifest scope for delete, Restore over sys-backup-catalog for rebuild or scrub, or the starting grant for cancel, then retry."
+  - id: operation-not-visible
+    signal: "Cancel or status returns null or found false."
+    effect: "No cancellation is recorded."
+    response: "Check the operation id, tenant and read grant; list operations to find the id."
+  - id: operation-id-conflict
+    signal: "InvalidOperationException because the supplied operation id is in use by an operation of a different kind, or ArgumentException for a malformed id."
+    effect: "No rebuild or scrub is started."
+    response: "Pass a fresh id of 1 to 128 ASCII letters, digits, '-', '_' or '.', or omit it."
+  - id: partial-delete-retry
+    signal: "A delete faulted after removing the catalog row; a retry returns false while the sink manifest or artifacts may remain."
+    effect: "Sink payload can outlive the catalog row."
+    response: "If the sink manifest survived, start a catalog rebuild to re-register it, then delete the backup again; artifacts left after the sink manifest was deleted are not reclaimed by any surfaced operation (#5334)."
+  - id: operation-runner-lost
+    signal: "Tracked rebuild or scrub status becomes Failed after the accepting silo is lost or its lease lapses."
+    effect: "The pass is not resumed; rows already registered or pruned stay as written."
+    response: "Start a new rebuild or scrub; both are idempotent on re-run."
+  - id: surface-not-available
+    signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
+    effect: "The operation cannot be carried out through that surface on this host."
+    response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
+rollback:
+  supported: false
+  mechanism: "Delete has no inverse: the catalog row, sink manifest and unshared artifacts are removed and no undelete verb is surfaced. A pruned catalog row returns only if a catalog rebuild finds its manifest still in the sink. Cancel has no inverse; start the operation again."
+  steps:
+    - action: "Re-register catalog rows for every manifest still in the sink, including rows a scrub pruned."
+      api: "ILatticeBackupOperations.StartCatalogRebuildAsync / StartCatalogRebuild / lattice_backup_start_catalog_rebuild"
+      source: "src/lattice.backup/LatticeBackupCatalogRebuildService.cs#LatticeBackupCatalogRebuildService.RebuildFromSinkAsync"
+  source: "src/lattice.api.backup/LatticeBackupControl.cs#LatticeBackupControl.DeleteBackupAsync"
+concurrency:
+  - rule: "Delete checks shared artifacts by artifact id across retained manifests, not by base chain, so a base backup can be deleted while an increment still depends on it."
+    source: "docs/lattice.api.backup/README.md"
+  - rule: "Delete removes the catalog row before the sink manifest and artifacts."
+    source: "src/lattice.api.backup/LatticeBackupControl.cs#LatticeBackupControl.DeleteBackupAsync"
+  - rule: "Catalog rebuild re-registers every manifest the sink lists without probing artifact presence, so a pruned orphan whose sink manifest survives reappears after a rebuild."
+    source: "src/lattice.backup/LatticeBackupCatalogRebuildService.cs#LatticeBackupCatalogRebuildService.RebuildFromSinkAsync"
+  - rule: "Scrub drains the catalog read pass before pruning, then removes orphan rows one at a time."
+    source: "src/lattice.backup/LatticeBackupCatalogScrubService.cs#LatticeBackupCatalogScrubService.ScrubAsync"
+  - rule: "Tracked operations run on the accepting silo, are marked Failed on silo loss or lease lapse, and are not resumed."
+    source: "docs/lattice.api.abstractions/operations.md"
+  - rule: "Status, list and cancel see only backup-kind operations in the caller's tenant over scopes the caller may read, or restore into for restore and catalog kinds."
+    source: "src/lattice.api.backup/LatticeBackupControl.Operations.cs#LatticeBackupControl.IsVisibleAsync"
+sources:
+  - "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs"
+  - "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs"
+  - "src/lattice.api.abstractions/Operations/ILatticeOperations.cs"
+  - "src/lattice.api.backup/LatticeBackupControl.cs"
+  - "src/lattice.api.backup/LatticeBackupControl.Operations.cs"
+  - "src/lattice.api.backup/LatticeApiBackupServiceCollectionExtensions.cs"
+  - "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs"
+  - "src/lattice.api.backup.grpc/Security/ILatticeBackupApiAuthorizer.cs"
+  - "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs"
+  - "src/lattice.api.mcp/Tools/Backup/McpBackupOperationHandle.cs"
+  - "src/lattice.backup/LatticeBackupCatalogRebuildService.cs"
+  - "src/lattice.backup/LatticeBackupCatalogScrubService.cs"
+  - "docs/lattice.api.backup/README.md"
+  - "docs/lattice.api.backup/api.md"
+  - "docs/lattice.api.backup/operations.md"
+  - "docs/lattice.api.abstractions/operations.md"
+  - "docs/lattice.backup/api.md"
+  - "docs/lattice.api.mcp/security.md"

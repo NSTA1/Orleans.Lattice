@@ -2735,7 +2735,7 @@
       "errors": [
         {
           "error_id": "invalid-argument",
-          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id)."
+          "condition": "The tenant id is not a valid tenant id, or the group name is not a valid local group name."
         },
         {
           "error_id": "permission-denied",
@@ -2743,7 +2743,7 @@
         },
         {
           "error_id": "failed-precondition",
-          "condition": "Delegated tenant access administration is disabled, the target is the reserved default tenant, or (removals) the last admin entry would be removed."
+          "condition": "Delegated tenant access administration is disabled, the target is the reserved default tenant, or the group is the tenant's last admin-set entry (TenantLastAdminSubjectException)."
         },
         {
           "error_id": "unimplemented",
@@ -2751,9 +2751,9 @@
         }
       ],
       "retry": {
-        "safe": false,
-        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
-        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+        "safe": true,
+        "policy": "Reissue the same request after an ambiguous failure; the removal is idempotent and removing an absent group reports Removed false and an interrupted cascade completes on re-run.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#ILatticeTenantDirectoryAdmin.RemoveGroupAsync"
       },
       "idempotency": {
         "idempotent": true,
@@ -2780,7 +2780,7 @@
       "errors": [
         {
           "error_id": "invalid-argument",
-          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id)."
+          "condition": "An argument is null, empty or malformed."
         },
         {
           "error_id": "permission-denied",
@@ -2788,7 +2788,7 @@
         },
         {
           "error_id": "failed-precondition",
-          "condition": "Delegated tenant access administration is disabled, the target is the reserved default tenant, or (removals) the last admin entry would be removed."
+          "condition": "Delegated tenant access administration is disabled or the target is the reserved default tenant."
         },
         {
           "error_id": "unimplemented",
@@ -2796,9 +2796,9 @@
         }
       ],
       "retry": {
-        "safe": false,
-        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
-        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+        "safe": true,
+        "policy": "Reissue the same request after an ambiguous failure; the removal is idempotent and removing an absent member reports Changed false.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#ILatticeTenantDirectoryAdmin.RemoveGroupMemberAsync"
       },
       "idempotency": {
         "idempotent": true,
@@ -2825,7 +2825,7 @@
       "errors": [
         {
           "error_id": "invalid-argument",
-          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id)."
+          "condition": "An argument is null, empty or malformed."
         },
         {
           "error_id": "permission-denied",
@@ -2833,7 +2833,7 @@
         },
         {
           "error_id": "failed-precondition",
-          "condition": "Delegated tenant access administration is disabled, the target is the reserved default tenant, or (removals) the last admin entry would be removed."
+          "condition": "Delegated tenant access administration is disabled or the target is the reserved default tenant."
         },
         {
           "error_id": "unimplemented",
@@ -2841,9 +2841,9 @@
         }
       ],
       "retry": {
-        "safe": false,
-        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
-        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+        "safe": true,
+        "policy": "Reissue the same request after an ambiguous failure; the removal is idempotent and removing an absent member-set entry reports Changed false.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#ILatticeTenantDirectoryAdmin.RemoveMemberAsync"
       },
       "idempotency": {
         "idempotent": true,
@@ -2870,7 +2870,7 @@
       "errors": [
         {
           "error_id": "invalid-argument",
-          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id)."
+          "condition": "The tenant id is not a valid tenant id, or the rule id is null or empty."
         },
         {
           "error_id": "permission-denied",
@@ -2878,7 +2878,7 @@
         },
         {
           "error_id": "failed-precondition",
-          "condition": "Delegated tenant access administration is disabled, the target is the reserved default tenant, or (removals) the last admin entry would be removed."
+          "condition": "Delegated tenant access administration is disabled or the target is the reserved default tenant."
         },
         {
           "error_id": "unimplemented",
@@ -2886,9 +2886,9 @@
         }
       ],
       "retry": {
-        "safe": false,
-        "policy": "No facade retry policy is defined; configure retries on the caller or CallInvoker.",
-        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+        "safe": true,
+        "policy": "Reissue the same request after an ambiguous failure; the removal is idempotent and removing an absent rule reports false.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs#ILatticeTenantPolicyAdmin.RemoveRuleAsync"
       },
       "idempotency": {
         "idempotent": true,
@@ -2896,7 +2896,7 @@
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
       },
       "concurrency": {
-        "rule": "Rule writes run under system origin through the policy store; MaxTenantRules uses verify-and-compensate.",
+        "rule": "Rule writes run under system origin through the policy store; removal checks no rule cap.",
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs"
       },
       "sources": [

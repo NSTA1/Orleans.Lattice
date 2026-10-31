@@ -1,0 +1,178 @@
+schema: lattice.agents/procedure/v1
+id: tree-provisioning
+name: "Create a tree and set or repoint its alias"
+surfaces:
+  in_process:
+    api: "ILatticeTreeAdmin.CreateTreeAsync, SetTreeAliasAsync"
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CreateTreeAsync"
+  grpc:
+    api: "/orleans.lattice.api.treeadmin/CreateTree, SetTreeAlias"
+    source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#CreateTreeMethodName"
+  mcp_tool:
+    api: "lattice_treeadmin_tree_create, lattice_treeadmin_tree_set_alias"
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+preconditions:
+  - id: surface-available
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/treeadmin.json and, for each MCP tool used (lattice_treeadmin_tree_create, lattice_treeadmin_tree_set_alias, lattice_treeadmin_tree_exists, lattice_treeadmin_tree_get_config, lattice_treeadmin_tree_resolve_alias, lattice_treeadmin_tree_delete), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
+    source: "docs/agents/api/treeadmin.json"
+  - id: mcp-lifecycle-opt-in
+    check: "The MCP create and set-alias tools are registered only when the host enabled the tree-admin lifecycle tools; the read tools need no opt-in."
+    source: "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#AddTreeAdminTools"
+  - id: create-admin-authority
+    check: "Caller holds whole-tree Admin authority over the tree id being created."
+    source: "src/lattice.api.treeadmin/TreeAdminAccessAuthorizer.cs#AuthorizeTreeAdminAsync"
+  - id: tenant-quota-admits
+    check: "With the tenancy add-on active, the active tenant's quota admits one more tree; the check runs only after authorization."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - id: alias-admin-authority
+    check: "Caller holds whole-tree Admin authority over both the logical tree id and the physical target tree id."
+    source: "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#SetTreeAliasAsync"
+  - id: tree-id-valid
+    check: "Each tree id is non-empty, does not start with the reserved _lattice_ prefix, and is not a t/ tenant-namespace id the active tenant does not own."
+    source: "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#ThrowIfReserved"
+  - id: sizing-positive
+    check: "Every supplied shardCount, maxLeafKeys and maxInternalChildren value is strictly positive; omitted values take the library defaults."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CreateTreeAsync"
+  - id: alias-target-admissible
+    check: "The physical target differs from the logical tree id, is not itself aliased, is not a sys- tree when the logical tree is ordinary, and does not cross a tenant boundary."
+    source: "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#ThrowIfAliasEscalatesNamespace"
+  - id: alias-trees-live
+    check: "Neither the logical tree, the target, nor the logical tree the target was derived from is logically deleted or has a logical delete pending, and the logical id is not a purged id."
+    source: "docs/lattice/tree-registry.md"
+steps:
+  - n: 1
+    action: "Check whether the tree id is already registered."
+    api: "ILatticeTreeAdmin.CheckTreeExistsAsync / CheckTreeExists / lattice_treeadmin_tree_exists"
+    expects: "Exists is false for a new id; Exists true means a create will preserve the existing configuration."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CheckTreeExistsAsync"
+  - n: 2
+    action: "Create the tree with the optional initial sizing."
+    api: "ILatticeTreeAdmin.CreateTreeAsync / CreateTree / lattice_treeadmin_tree_create"
+    expects: "Returns Created true with the effective pinned sizing, or Created false with the sizing the tree was first pinned with."
+    source: "src/lattice.api.abstractions/TreeAdmin/Model/TreeCreationResult.cs#TreeCreationResult.Created"
+  - n: 3
+    action: "Read the registry-backed configuration to verify the pins."
+    api: "ILatticeTreeAdmin.GetTreeConfigAsync / GetTreeConfig / lattice_treeadmin_tree_get_config"
+    expects: "Exists is true and ShardCount, MaxLeafKeys and MaxInternalChildren match the create result."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetTreeConfigAsync"
+  - n: 4
+    action: "Before an alias change, resolve the logical tree and record its current PhysicalTreeId for rollback."
+    api: "ILatticeTreeAdmin.ResolveTreeAliasAsync / ResolveTreeAlias / lattice_treeadmin_tree_resolve_alias"
+    expects: "Returns PhysicalTreeId, which equals the logical id when IsAliased is false."
+    source: "src/lattice.api.abstractions/TreeAdmin/Model/TreeAliasResolution.cs#TreeAliasResolution.IsAliased"
+  - n: 5
+    action: "Resolve the intended physical target and confirm it is not itself aliased."
+    api: "ILatticeTreeAdmin.ResolveTreeAliasAsync / ResolveTreeAlias / lattice_treeadmin_tree_resolve_alias"
+    expects: "IsAliased is false for the target."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeAliasAsync"
+  - n: 6
+    action: "Set or repoint the alias of the logical tree onto the physical target."
+    api: "ILatticeTreeAdmin.SetTreeAliasAsync / SetTreeAlias / lattice_treeadmin_tree_set_alias"
+    expects: "Returns PhysicalTreeId equal to the target and IsAliased true."
+    source: "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#SetTreeAliasAsync"
+  - n: 7
+    action: "Resolve the logical tree again and read its configuration to confirm the alias."
+    api: "ILatticeTreeAdmin.ResolveTreeAliasAsync / ResolveTreeAlias / lattice_treeadmin_tree_resolve_alias and ILatticeTreeAdmin.GetTreeConfigAsync / GetTreeConfig / lattice_treeadmin_tree_get_config"
+    expects: "Both report the target as the physical tree id."
+    source: "src/lattice.api.abstractions/TreeAdmin/Model/TreeConfigurationReport.cs#TreeConfigurationReport.PhysicalTreeId"
+postconditions:
+  - check: "A new tree is registered with the supplied sizing pins, and any pin not supplied is seeded with the default of 64 shards, 128 keys per leaf and 128 children per internal node."
+    source: "docs/lattice/tree-registry.md"
+  - check: "A create against an already-registered tree changes nothing and reports the sizing that tree was first pinned with."
+    source: "src/lattice.api.abstractions/TreeAdmin/Model/TreeCreationResult.cs#TreeCreationResult"
+  - check: "After an alias change, the logical tree's shard map and split allocation mark are the target's, written in the same registry write as the alias, so every key the target holds is readable through the logical tree."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeAliasAsync"
+  - check: "Before the alias call returns, the physical tree the alias leaves is armed to redirect readers and writers that still address it onto the target."
+    source: "docs/lattice.api.treeadmin/README.md"
+  - check: "The replaced shard map is written to the previous physical tree's own registry entry when that tree is not the logical id itself."
+    source: "src/lattice/BPlusTree/AliasCutoverShardMaps.cs#AliasCutoverShardMaps.StampReplacedCopyAsync"
+  - check: "Data-plane authorization for traffic through the logical tree is still evaluated against the logical tree id, not the target."
+    source: "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#SetTreeAliasAsync"
+  - check: "Setting an alias on a logical id with no registry entry adds an entry for that id."
+    source: "docs/lattice/tree-registry.md"
+failure_modes:
+  - id: reserved-tree-id
+    signal: "ArgumentException (gRPC InvalidArgument) naming a reserved _lattice_ id or a t/ tenant-namespace id the active tenant does not own."
+    effect: "Nothing is registered or aliased."
+    response: "Use an unqualified, non-reserved tree id; administer a tenant's tree through that tenant's own scope."
+  - id: invalid-sizing
+    signal: "ArgumentOutOfRangeException (gRPC InvalidArgument) for a supplied sizing value that is not strictly positive."
+    effect: "No tree is registered."
+    response: "Supply positive values or omit them to take the library defaults."
+  - id: authorization-denied
+    signal: "LatticeAuthorizationDeniedException (gRPC PermissionDenied) when whole-tree Admin is not granted over the created tree, the logical tree, or the alias target."
+    effect: "Nothing is registered or aliased."
+    response: "Obtain whole-tree Admin over every tree id named in the call, then retry."
+  - id: tenant-create-refused
+    signal: "With tenancy active, LatticeQuotaExceededException (gRPC FailedPrecondition) or LatticeTenantAccessDeniedException (gRPC PermissionDenied) when the tenant's quota does not admit the create."
+    effect: "No tree is registered."
+    response: "Free tree-count quota or raise the tenant's quota before retrying."
+  - id: alias-target-rejected
+    signal: "ArgumentException (gRPC InvalidArgument) when the target equals the logical id, is a sys- tree aliased from an ordinary tree, or belongs to another tenant's namespace."
+    effect: "A refused alias changes nothing."
+    response: "Choose a target in the same namespace as the logical tree."
+  - id: alias-target-aliased
+    signal: "InvalidOperationException (gRPC FailedPrecondition) because the target is itself aliased."
+    effect: "A refused alias changes nothing."
+    response: "Alias onto the physical tree the target resolves to instead."
+  - id: alias-tree-deleted
+    signal: "InvalidOperationException (gRPC FailedPrecondition) because either tree is deleted or a delete of it is pending."
+    effect: "A refused alias changes nothing."
+    response: "Recover the deleted tree or wait for the delete to settle, then retry."
+  - id: alias-ownership-denied
+    signal: "LatticeTreeOwnershipDeniedException (gRPC PermissionDenied) carrying the ownership guard's reason."
+    effect: "A refused alias changes nothing."
+    response: "Pick a target the registered ownership guard allows for this logical tree."
+  - id: alias-concurrent-change
+    signal: "InvalidOperationException (gRPC FailedPrecondition) because another alias change moved the logical tree while the call ran."
+    effect: "The swap is refused with nothing written."
+    response: "Resolve the logical tree again, then retry against the current state."
+  - id: rollback-delete-refused
+    signal: "DeleteTreeAsync rejects the tree with InvalidOperationException because another tree aliases it or its alias targets a tree it does not own."
+    effect: "The created tree stays live."
+    response: "Repoint or delete the aliasing tree first, then retry the delete."
+  - id: surface-not-available
+    signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
+    effect: "The operation cannot be carried out through that surface on this host."
+    response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
+rollback:
+  supported: true
+  mechanism: "An alias is undone by setting it back to the physical tree id recorded before the change, which works only when that was a distinct tree: the facade has no verb that removes an alias. A created tree is undone by soft-delete, which needs whole-tree TreeLifecycle authority and stays recoverable until its purge."
+  steps:
+    - action: "Set the logical tree's alias back to the PhysicalTreeId recorded in step 4 when it differed from the logical id."
+      api: "ILatticeTreeAdmin.SetTreeAliasAsync / SetTreeAlias / lattice_treeadmin_tree_set_alias"
+      source: "docs/lattice/tree-registry.md"
+    - action: "Soft-delete a tree this procedure created."
+      api: "ILatticeTreeAdmin.DeleteTreeAsync / DeleteTree / lattice_treeadmin_tree_delete"
+      source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#DeleteTreeAsync"
+    - action: "Recover the tree within its recovery window if the soft-delete was mistaken."
+      api: "ILatticeTreeAdmin.RecoverTreeAsync / RecoverTree"
+      source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RecoverTreeAsync"
+  source: "docs/lattice/tree-registry.md"
+concurrency:
+  - rule: "Create is idempotent: creating an already-registered id is a no-op that preserves its existing configuration and ignores the supplied sizing."
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CreateTreeAsync"
+  - rule: "The alias swap is fenced on the physical tree the logical tree resolved to when the call began, so a racing alias change is refused rather than overwritten."
+    source: "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs#SwapAliasAsync"
+  - rule: "An administrative alias change takes no alias-change reservation and is not refused by one held by a resize, restore or remediation."
+    source: "docs/lattice/tree-registry.md"
+  - rule: "Alias changes and logical deletion never overlap: an alias change is refused while either tree is deleted or a delete is pending."
+    source: "docs/lattice/tree-registry.md"
+  - rule: "Re-setting the current alias keeps the current map and lineage and repairs any redirect left on the target, so a retry after an interrupted call is safe."
+    source: "docs/lattice/tree-registry.md"
+  - rule: "An alias move interrupted after publication is completed forward by registry recovery without a caller retry; it is never rolled back to the old alias."
+    source: "docs/lattice/tree-registry.md"
+sources:
+  - "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs"
+  - "src/lattice.api.abstractions/TreeAdmin/Model/TreeCreationResult.cs"
+  - "src/lattice.api.abstractions/TreeAdmin/Model/TreeAliasResolution.cs"
+  - "src/lattice.api.abstractions/TreeAdmin/Model/TreeConfigurationReport.cs"
+  - "src/lattice.api.treeadmin/LatticeTreeAdmin.cs"
+  - "src/lattice.api.treeadmin/TreeAdminAccessAuthorizer.cs"
+  - "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs"
+  - "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
+  - "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs"
+  - "src/lattice/BPlusTree/AliasCutoverShardMaps.cs"
+  - "src/lattice/BPlusTree/Grains/LatticeRegistryGrain.cs"
+  - "docs/lattice.api.treeadmin/README.md"
+  - "docs/lattice/tree-registry.md"

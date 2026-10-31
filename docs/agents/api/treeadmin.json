@@ -2529,15 +2529,14 @@
       "grpc_method": "/orleans.lattice.api.treeadmin/CancelStorageUsageRefresh",
       "transport_scope": "both",
       "request": "TreeAdminStorageUsageOperationRequest",
-      "response": "TreeAdminStorageUsageOperationStatusResponse",
+      "response": {
+        "type": "TreeAdminStorageUsageOperationStatusResponse",
+        "meaning": "Null when the operation id is unknown, does not name a storage-usage refresh, or the caller lacks cluster telemetry authority; an unauthorized caller is answered as if the operation did not exist."
+      },
       "errors": [
         {
           "error_id": "invalid-argument",
           "condition": "Request validation failed."
-        },
-        {
-          "error_id": "permission-denied",
-          "condition": "The caller lacks cluster telemetry authority."
         },
         {
           "error_id": "cancelled",
@@ -2568,7 +2567,8 @@
       },
       "sources": [
         "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync",
-        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#CancelStorageUsageRefresh"
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#CancelStorageUsageRefresh",
+        "src/lattice.api.treeadmin/LatticeStorageUsageOperations.cs#LatticeStorageUsageOperations.CancelOperationAsync"
       ]
     },
     {
@@ -2729,6 +2729,14 @@
           "condition": "Authorization denied the caller."
         },
         {
+          "error_id": "precondition-failed",
+          "condition": "A tenant quota controller refuses the create with LatticeQuotaExceededException (an InvalidOperationException)."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "The active tenant cannot be resolved, attempts a reserved namespace escape, or tenant admission refuses the create because MaxTreeCount would be exceeded (LatticeTenantAccessDeniedException)."
+        },
+        {
           "error_id": "cancelled",
           "condition": "Call cancellation."
         },
@@ -2753,7 +2761,8 @@
       },
       "sources": [
         "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#CreateTreeAsync",
-        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#CreateTree"
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#CreateTree",
+        "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin"
       ]
     },
     {
@@ -3627,6 +3636,10 @@
           "condition": "Authorization denied the caller."
         },
         {
+          "error_id": "not-found",
+          "condition": "No runtime or startup-declared view with that name is registered (KeyNotFoundException)."
+        },
+        {
           "error_id": "precondition-failed",
           "condition": "Facade precondition failed."
         },
@@ -3655,7 +3668,8 @@
       },
       "sources": [
         "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#GetViewStatusAsync",
-        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetViewStatus"
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#GetViewStatus",
+        "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin"
       ]
     },
     {
@@ -5167,6 +5181,10 @@
           "condition": "The registered ownership guard refuses the alias."
         },
         {
+          "error_id": "tenant-access-denied",
+          "condition": "The active tenant cannot be resolved or attempts a reserved namespace escape while either tree id is composed (LatticeTenantAccessDeniedException)."
+        },
+        {
           "error_id": "cancelled",
           "condition": "Call cancellation."
         },
@@ -5192,7 +5210,8 @@
       "sources": [
         "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SetTreeAliasAsync",
         "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#SetTreeAlias",
-        "src/lattice/ITreeOwnershipGuard.cs#ITreeOwnershipGuard"
+        "src/lattice/ITreeOwnershipGuard.cs#ITreeOwnershipGuard",
+        "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin"
       ]
     },
     {
