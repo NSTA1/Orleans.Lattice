@@ -165,11 +165,22 @@ public interface ILatticeDataApi
     /// caller, no grant, a tenant the caller may not act as) reports
     /// <see langword="false"/> rather than throwing. A UX affordance, not a security
     /// boundary: every real write is still authorized on attempt.
+    /// <para>
+    /// A default member, so an implementer that predates it keeps compiling. That
+    /// default fails closed: it reports no write and no delete, so a management
+    /// surface hides its write controls against such an implementer, while the writes
+    /// themselves are still authorized on attempt. The package's own facade, its
+    /// gRPC binding and the remote adapters all answer the real probe.
+    /// </para>
     /// </summary>
     /// <param name="treeId">Logical tree identifier.</param>
     /// <param name="key">The key to probe, or <see langword="null"/> to probe the tree as a whole.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    Task<LatticeDataCapabilities> ProbeCapabilitiesAsync(string treeId, string? key = null, CancellationToken cancellationToken = default);
+    Task<LatticeDataCapabilities> ProbeCapabilitiesAsync(string treeId, string? key = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return Task.FromResult(new LatticeDataCapabilities { TreeId = treeId, Key = key });
+    }
 
     // --- Typed CRDT operations (issue #1361) -------------------------------
     //

@@ -178,9 +178,6 @@ public sealed class McpToolFaultTranslationEndToEndTests
         public Task<DataRangePage> ReadRangeAsync(DataRangeRequest request, CancellationToken cancellationToken = default)
             => throw fault;
 
-        public Task<LatticeDataCapabilities> ProbeCapabilitiesAsync(string treeId, string? key = null, CancellationToken cancellationToken = default)
-            => throw fault;
-
         public Task SetManyAsync(string treeId, IReadOnlyList<DataEntry> upserts, CancellationToken cancellationToken = default)
             => throw fault;
 
