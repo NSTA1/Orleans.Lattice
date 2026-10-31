@@ -199,6 +199,13 @@ public sealed partial class DataStewardJourney
                     return;
                 }
 
+                var failed = _priya.Shell.Content.GetByRole(AriaRole.Heading, new() { Name = "The keys did not load" });
+                if (await failed.IsVisibleAsync())
+                {
+                    Assert.Fail("U1.3: resuming a scan whose cursor lapsed showed 'The keys did not load' instead of the cursor-expired state: "
+                        + await _priya.Shell.Content.InnerTextAsync());
+                }
+
                 if (await _tree.PagePosition.IsVisibleAsync() && (await _tree.PagePosition.InnerTextAsync()).Trim() != position)
                 {
                     break;
