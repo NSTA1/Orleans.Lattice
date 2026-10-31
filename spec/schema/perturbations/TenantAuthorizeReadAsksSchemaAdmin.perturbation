@@ -1,0 +1,12 @@
+# Authorize: an inspection asks the gate for Read over the whole effective tree.
+MODULE: SchemaTenantScope
+ROW: Authorize
+FILE: src/lattice.schema/SchemaAccessAuthorizer.cs
+DETECTORS: SchemaAccessAuthorizerTests.AuthorizeRead_issues_a_whole_tree_read_request
+SUMMARY: a schema read is authorized as a schema mutation
+
+--- FIND
+            _gate, _membership, treeId, LatticeOperation.Read, cancellationToken);
+--- REPLACE
+            _gate, _membership, treeId, LatticeOperation.SchemaAdmin, cancellationToken);
+--- END

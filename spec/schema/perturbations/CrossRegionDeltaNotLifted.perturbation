@@ -1,0 +1,14 @@
+# CrdtLiftedAtIngest: a strictly ingested older delta is re-enveloped at the target.
+MODULE: SchemaCrossRegion
+ROW: CrdtLiftedAtIngest
+FILE: src/lattice.schema/LatticeSchemaVersionWriteInterceptor.cs
+DETECTORS: SchemaCrossRegionIngestIntegrationTests.Strict_crdt_delta_stamped_below_the_receivers_target_is_lifted_to_the_target_once_at_ingest
+SUMMARY: an older delta is admitted at its own stamp, leaving the fold to upcast it
+
+--- FIND
+            var upcast = registry.Upcast(version.SchemaId, storedVersion, version.TargetVersion, body);
+            return LatticeWriteDecision.AcceptTransformed(
+                LatticeSchemaEnvelope.Encode(version.SchemaId, version.TargetVersion, upcast));
+--- REPLACE
+            return LatticeWriteDecision.AcceptTransformed(delta);
+--- END

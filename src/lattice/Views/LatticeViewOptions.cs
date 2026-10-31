@@ -219,7 +219,8 @@ public sealed class LatticeViewOptions
     /// before re-resolving it from the maintainer. After a shadow-swap rebuild a
     /// reader may serve the prior (fully-built, slightly stale) generation for up
     /// to this window before it observes the swap; it never serves a half-built or
-    /// empty tree. Must be greater than zero; the default is
+    /// empty tree. A handle that itself rebuilt, reconciled or waited on a
+    /// read-your-writes barrier drops its cached id, so its next read re-resolves. Must be greater than zero; the default is
     /// <see cref="DefaultReadHandleCacheTtl"/>.
     /// </summary>
     public TimeSpan ReadHandleCacheTtl { get; set; } = DefaultReadHandleCacheTtl;

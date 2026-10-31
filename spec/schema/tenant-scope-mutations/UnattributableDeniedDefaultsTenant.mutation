@@ -1,0 +1,13 @@
+# A caller whose tenant could not be attributed is silently treated as the
+# default tenant.
+MODULE: UnattributableDeniedDefaultsTenant
+TARGET: UnattributableDenied
+CLASS: Action
+SUMMARY: a failed tenant resolution falls back to the default tenant
+PERTURBS: Resolve
+
+--- FIND
+ELSE Compose(req.c, req.n)
+--- REPLACE
+ELSE Compose(IF req.c = "None" THEN "D" ELSE req.c, req.n)
+--- END

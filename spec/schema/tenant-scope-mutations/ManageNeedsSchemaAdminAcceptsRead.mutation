@@ -1,0 +1,12 @@
+# A schema mutation is authorized with Read authority.
+MODULE: ManageNeedsSchemaAdminAcceptsRead
+TARGET: ManageNeedsSchemaAdmin
+CLASS: Action
+SUMMARY: mutations are gated on Read rather than SchemaAdmin
+PERTURBS: Authorize
+
+--- FIND
+    /\ IF req.op = "Status" \/ Allowed(req.c, req.eff, CapOf(req.op))
+--- REPLACE
+    /\ IF req.op = "Status" \/ Allowed(req.c, req.eff, "Read")
+--- END

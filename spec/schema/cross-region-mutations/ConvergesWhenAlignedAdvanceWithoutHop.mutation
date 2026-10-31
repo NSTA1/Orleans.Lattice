@@ -1,0 +1,15 @@
+# The receiver advances to the newer version without the hop to it, so a value
+# stamped at the older version is unreadable there for good.
+MODULE: ConvergesWhenAlignedAdvanceWithoutHop
+TARGET: ConvergesWhenAligned
+CLASS: Temporal
+SUMMARY: the target advances to a version unreachable from stored stamps
+PERTURBS: Advance
+
+--- FIND
+    /\ tgt = 1 /\ hop
+    /\ tgt' = 2
+--- REPLACE
+    /\ tgt = 1
+    /\ tgt' = 2
+--- END

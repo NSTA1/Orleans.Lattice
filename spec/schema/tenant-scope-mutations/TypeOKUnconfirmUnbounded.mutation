@@ -1,0 +1,12 @@
+# A tenancy confirmation loss is not bounded by the fault budget.
+MODULE: TypeOKUnconfirmUnbounded
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a confirmation loss is taken with no fault budget left
+PERTURBS: Unconfirm
+
+--- FIND
+    /\ confirm /\ faults < MaxFaults
+--- REPLACE
+    /\ confirm
+--- END

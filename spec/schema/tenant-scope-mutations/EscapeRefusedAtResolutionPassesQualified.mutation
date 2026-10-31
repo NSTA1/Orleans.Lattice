@@ -1,0 +1,13 @@
+# A confined tenant's reserved or malformed name is passed through uncomposed,
+# so the gate admits a platform-owned tree on capability alone.
+MODULE: EscapeRefusedAtResolutionPassesQualified
+TARGET: EscapeRefusedAtResolution
+CLASS: Action
+SUMMARY: resolution passes a namespace escape through
+PERTURBS: Resolve
+
+--- FIND
+ELSE Compose(req.c, req.n)
+--- REPLACE
+ELSE IF req.c = "T1" /\ req.n \in {"sys-x", "t/bad"} THEN req.n ELSE Compose(req.c, req.n)
+--- END

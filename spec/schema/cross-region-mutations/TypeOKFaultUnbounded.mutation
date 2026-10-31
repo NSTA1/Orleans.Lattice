@@ -1,0 +1,12 @@
+# A collaborator fault is not bounded, so the fault counter leaves its domain.
+MODULE: TypeOKFaultUnbounded
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a fault is taken with no fault budget left
+PERTURBS: Fault
+
+--- FIND
+    /\ up[c] /\ faults < MaxFaults
+--- REPLACE
+    /\ up[c]
+--- END

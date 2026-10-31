@@ -1,0 +1,15 @@
+# The batch's decision waits for every entry to be staged, so a diverted
+# entry strands the rest of its batch.
+MODULE: EveryEntryResolvedDiversionStrandsBatch
+TARGET: EveryEntryResolved
+CLASS: Temporal
+SUMMARY: a diverted entry is counted as missing from its batch
+PERTURBS: Decide
+
+--- FIND
+    /\ \A e \in AtomicEntries : st[e] # "Pending"
+    /\ decided' = TRUE
+--- REPLACE
+    /\ \A e \in AtomicEntries : st[e] = "Staged"
+    /\ decided' = TRUE
+--- END
