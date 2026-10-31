@@ -63,6 +63,22 @@ public sealed class SignInDialogTests : SessionTestContext
     }
 
     [Test]
+    public void The_server_form_carries_the_address_it_was_opened_on_as_the_return_path()
+    {
+        // Issue #5481: without it every sign-in landed on Home.
+        UseOptions(new SessionSignInOptions { LoginPath = "explorer/auth/login" });
+        Services.GetRequiredService<Microsoft.AspNetCore.Components.NavigationManager>()
+            .NavigateTo("/explorer/cluster/trees/orders?tab=storage&signin=refused#shards");
+
+        var cut = Render<SignInDialog>();
+
+        Assert.That(
+            cut.Find("form").QuerySelector("input[type=hidden][name=returnUrl]")?.GetAttribute("value"),
+            Is.EqualTo("/explorer/cluster/trees/orders?tab=storage#shards"),
+            "the return path is the current address, rooted, without the refused notice");
+    }
+
+    [Test]
     public void The_in_circuit_password_form_signs_in_and_closes()
     {
         UseOptions(new SessionSignInOptions { UseServerFormPost = false });
