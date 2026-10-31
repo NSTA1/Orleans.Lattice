@@ -53,7 +53,9 @@ internal sealed class LatticeSchemaDeadLetterStore(IGrainFactory grainFactory) :
                 .ScanEntriesAsync<LatticeSchemaDeadLetterEntry>(start, end, cancellationToken: cancellationToken)
                 .ConfigureAwait(false))
             {
-                if (entry.Value is { } deadLetter)
+                // Tree ids may contain the delimiter. Check the complete key
+                // against the stored timestamp and item key, not just its prefix.
+                if (entry.Value is { } deadLetter && SchemaDeadLetterKey.BelongsToTree(entry.Key, treeId, deadLetter))
                 {
                     yield return deadLetter;
                 }
@@ -66,11 +68,11 @@ internal sealed class LatticeSchemaDeadLetterStore(IGrainFactory grainFactory) :
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
 
-        var start = SchemaDeadLetterKey.PrefixStart(treeId);
-        var end = SchemaDeadLetterKey.PrefixEnd(treeId);
-        using (LatticeAccessGateContext.EnterSystemOrigin())
+        var count = 0;
+        await foreach (var _ in ListAsync(treeId, cancellationToken).ConfigureAwait(false))
         {
-            return await Queue.CountAsync(start, end, cancellationToken).ConfigureAwait(false);
+            count++;
         }
+        return count;
     }
 }

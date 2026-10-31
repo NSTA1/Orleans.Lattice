@@ -68,6 +68,7 @@ internal sealed class LatticeAuthorizationPolicyStore(
         // defined kinds, so a rule carrying an undefined one is refused before
         // either runs. Reads nothing.
         AuthConstants.EnsureWellFormedRule(rule, nameof(rule));
+        EnsureUnambiguousRuleId(rule.RuleId);
         EnsureAppOwnedRuleWritable(rule.RuleId, nameof(rule));
         EnsureTenantOwnedRuleWritable(rule.RuleId, nameof(rule));
 
@@ -96,7 +97,7 @@ internal sealed class LatticeAuthorizationPolicyStore(
     public async Task<LatticeAuthorizationRule?> GetRuleAsync(string treeId, string ruleId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        ArgumentException.ThrowIfNullOrEmpty(ruleId);
+        EnsureUnambiguousRuleId(ruleId);
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
             return await Policy.GetAsync<LatticeAuthorizationRule>(RuleKey(treeId, ruleId), cancellationToken).ConfigureAwait(false);
@@ -107,7 +108,7 @@ internal sealed class LatticeAuthorizationPolicyStore(
     public async Task<bool> RemoveRuleAsync(string treeId, string ruleId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        ArgumentException.ThrowIfNullOrEmpty(ruleId);
+        EnsureUnambiguousRuleId(ruleId);
         EnsureAppOwnedRuleWritable(ruleId, nameof(ruleId));
         EnsureTenantOwnedRuleWritable(ruleId, nameof(ruleId));
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
@@ -131,7 +132,7 @@ internal sealed class LatticeAuthorizationPolicyStore(
                 .ScanEntriesAsync<LatticeAuthorizationRule>(prefix, PrefixUpperBound(prefix), cancellationToken: cancellationToken)
                 .ConfigureAwait(false))
             {
-                if (entry.Value is { } rule)
+                if (entry.Value is { } rule && string.Equals(rule.Scope.TreeId, treeId, StringComparison.Ordinal))
                 {
                     yield return rule;
                 }
@@ -216,6 +217,17 @@ internal sealed class LatticeAuthorizationPolicyStore(
     /// <inheritdoc />
     public Task<int> PurgeTenantRulesAsync(TenantId tenant, CancellationToken cancellationToken = default) =>
         TenantRulePurge.PurgeAsync(this, tenant, cancellationToken);
+
+    private static void EnsureUnambiguousRuleId(string ruleId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(ruleId);
+        // Otherwise shifting a separator from the tree to the id aliases a
+        // protected app/tenant rule while checking a different id's namespace.
+        if (ruleId.Contains(AuthConstants.RuleKeySeparator))
+        {
+            throw new ArgumentException("A rule id must not contain the U+001F storage separator.", nameof(ruleId));
+        }
+    }
 
     private static string RuleKey(string treeId, string ruleId) =>
         string.Create(

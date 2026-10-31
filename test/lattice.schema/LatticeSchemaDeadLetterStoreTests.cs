@@ -92,6 +92,28 @@ public sealed class LatticeSchemaDeadLetterStoreTests
     }
 
     [Test]
+    public async Task ListAsync_and_CountAsync_exclude_separator_prefixed_foreign_trees()
+    {
+        var store = CreateStore();
+        var when = DateTimeOffset.UnixEpoch;
+        const string tree = "orders";
+        await store.AppendAsync(tree, Entry("own\u001fkey", when));
+        await store.AppendAsync(tree + "\u001fprivate", Entry("secret", when));
+        await store.AppendAsync(tree + "\u001f" + when.UtcTicks.ToString("D19"),
+            Entry("secret-with-timestamp-prefix", when));
+
+        var keys = new List<string>();
+        await foreach (var entry in store.ListAsync(tree))
+        {
+            keys.Add(entry.Key);
+        }
+
+        Assert.That(keys, Is.EqualTo(new[] { "own\u001fkey" }));
+        Assert.That(await store.CountAsync(tree), Is.EqualTo(1));
+        Assert.That(await store.CountAsync(tree + "\u001fprivate"), Is.EqualTo(1));
+    }
+
+    [Test]
     public async Task CountAsync_empty_tree_returns_zero()
     {
         var store = CreateStore();
