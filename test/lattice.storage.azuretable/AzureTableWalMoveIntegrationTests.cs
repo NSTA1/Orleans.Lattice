@@ -182,4 +182,46 @@ public sealed class AzureTableWalMoveIntegrationTests
         var first = await tree.GetAsync("k-0000");
         Assert.That(first, Is.EqualTo(Encoding.UTF8.GetBytes("v-0")));
     }
+
+    [Test]
+    [Repeat(25)]
+    public async Task A_move_off_an_Azure_Table_source_straight_after_writes_copies_the_whole_tail()
+    {
+        // Issue #5470. Under pipelined phase-2 commits an Azure Table append
+        // returns before its manifest commit, so the batch is counted in the
+        // source's highest offset but not yet readable. The quiesce must
+        // publish it before reporting the tail, or the copy stops short of the
+        // tail and the move refuses to cut over.
+        var treeId = $"move-off-azure-{Guid.NewGuid():N}";
+        var registry = _cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.RegisterAsync(treeId, new TreeRegistryEntry { ShardCount = 1, WalPartitions = 1 });
+        var tree = _cluster.Client.GetGrain<ILattice>(treeId);
+        var physical = (await tree.GetRoutingAsync()).PhysicalTreeId;
+        var admin = _cluster.Client.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey);
+
+        await tree.SetAsync("seed", Encoding.UTF8.GetBytes("seed"));
+        Assert.That((await admin.ExecuteWalMoveAsync(treeId, 0, AzureKey)).Outcome, Is.EqualTo(WalMoveOutcome.Moved));
+        var azure = Providers.Azure;
+        Assert.That(azure, Is.Not.Null, "the move must have resolved the Azure Table provider");
+
+        for (var i = 0; i < 120; i++)
+        {
+            await tree.SetAsync($"a-{i:D4}", Encoding.UTF8.GetBytes($"v-{i}"));
+        }
+
+        // No settling delay: the last write's phase-2 commit may still be in flight.
+        var receipt = await admin.ExecuteWalMoveAsync(treeId, 0, IWalStorageProviderCatalog.DefaultProviderKey);
+
+        await azure!.FlushPhaseTwoAsync(CancellationToken.None);
+        var sourceOffsets = await ReadOffsetsAsync(azure, physical);
+        var targetOffsets = await ReadOffsetsAsync(Providers.Baseline, physical);
+        Assert.Multiple(() =>
+        {
+            Assert.That(receipt.Outcome, Is.EqualTo(WalMoveOutcome.Moved));
+            Assert.That(receipt.TargetHighestOffset, Is.EqualTo(receipt.SourceHighestOffset));
+            Assert.That(targetOffsets, Is.EqualTo(sourceOffsets),
+                "every entry of the Azure Table source, including its last batch, lands on the target");
+        });
+        Assert.That(await tree.GetAsync("a-0119"), Is.EqualTo(Encoding.UTF8.GetBytes("v-119")));
+    }
 }
