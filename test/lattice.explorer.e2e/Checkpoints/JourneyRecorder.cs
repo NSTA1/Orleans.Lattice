@@ -161,8 +161,14 @@ public sealed class JourneyRecorder
                 return null;
             }
 
+            if (!git.WaitForExit(5_000))
+            {
+                git.Kill(entireProcessTree: true);
+                throw new TimeoutException(
+                    $"'git rev-parse HEAD' in {JourneyPaths.RepositoryRoot} did not exit within 5 seconds, so the screenshot manifest cannot name its commit. Set {CommitVariable} instead.");
+            }
+
             var output = git.StandardOutput.ReadToEnd().Trim();
-            git.WaitForExit(5_000);
             return git.ExitCode == 0 && output.Length > 0 ? output : null;
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
