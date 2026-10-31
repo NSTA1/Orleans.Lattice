@@ -40,7 +40,7 @@
                  DetailTitle="@(index => index.IndexName)">
             <ChildContent>
                 <LtColumn TItem="TagIndexRef" Context="index" Title="Index" RowHeader="true" Mono="true">
-                    <a href="@Workspace.Href(IndexAddress(index.IndexName))">@index.IndexName</a>
+                    <a class="lt-data-key" href="@Workspace.Href(IndexAddress(index.IndexName))">@index.IndexName</a>
                 </LtColumn>
                 <LtColumn TItem="TagIndexRef" Context="index" Title="Reconcile">
                     <LtStatusPill State="@ReconcileRole(index)" Text="@ReconcileText(index)" />
