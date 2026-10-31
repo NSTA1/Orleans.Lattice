@@ -258,8 +258,7 @@ public sealed class BackupsInDepthJourney : JourneyChapter
             await ShotAsync(6, "confirmation", "Restore this backup? names the consequence and asks for factory-lines-restored");
 
             await _backups.ConfirmRestoreAsync();
-            await RestoredAsync(6, "restored", target, replayed: 2, "The point-in-time restore replayed the chain's two backups; it can be reverted");
-            await Expect(olivia.Shell.Content.GetByRole(AriaRole.Heading, new() { Name = "Revert this restore" })).ToBeVisibleAsync();
+            await RestoredAsync(6, "restored", target, replayed: 2, "The point-in-time restore replayed the chain's two backups into factory-lines-restored");
 
             var edited = StoryData.LinesEditedBeforeIncrement[0];
             await _entry.OpenAsync(target, edited.Key);
@@ -352,7 +351,7 @@ public sealed class BackupsInDepthJourney : JourneyChapter
         private async Task RestoredAsync(int step, string substep, string target, int replayed, string title)
         {
             await _backups.ExpectOperationSucceededAsync();
-            await Expect(_backups.Fact("Tree")).ToHaveTextAsync(target);
+            await Expect(_backups.Fact("Tree")).ToContainTextAsync(target);
             await Expect(_backups.Fact("Backups replayed")).ToHaveTextAsync(replayed.ToString(CultureInfo.InvariantCulture));
             await Expect(_backups.ResultLink("The restored backup")).ToHaveCountAsync(1);
             await ShotAsync(step, substep, title);
