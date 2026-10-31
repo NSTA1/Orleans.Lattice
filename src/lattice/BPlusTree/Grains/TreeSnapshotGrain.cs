@@ -484,21 +484,76 @@ internal sealed class TreeSnapshotGrain(
         Stopwatch.GetElapsedTime(sliceStart) >= sliceDuration;
 
     /// <inheritdoc />
-    public async Task<bool> RunSnapshotSliceAsync()
+    public Task<bool> RunSnapshotSliceAsync()
     {
-        if (!state.State.InProgress) return true;
+        if (!state.State.InProgress) return Task.FromResult(true);
 
-        var sliceStart = Stopwatch.GetTimestamp();
         var drainOptions = optionsResolver.GetConfiguredOptions(SourceTreeId);
-        var sliceDuration = SliceDuration(drainOptions);
+        return RunSliceCoreAsync(drainOptions, SliceDuration(drainOptions),
+            yieldOnRetry: false, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// The longest one phase-timer tick (<see cref="ProcessPhaseTickAsync"/>)
+    /// keeps advancing the snapshot. Half of <see cref="MaxSnapshotSliceDuration"/>:
+    /// a resize drives its snapshot through <see cref="RunSnapshotSliceAsync"/>
+    /// on the same non-reentrant turn as this timer, so a call queued behind a
+    /// tick waits at most this long before its own slice starts, and the two
+    /// together stay well inside Orleans' thirty-second response timeout
+    /// (issue #5455).
+    /// </summary>
+    internal static readonly TimeSpan MaxPhaseTickSliceDuration = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// The wall-clock length of one phase-timer tick: <see cref="SliceDuration"/>
+    /// capped at <see cref="MaxPhaseTickSliceDuration"/>.
+    /// </summary>
+    internal static TimeSpan PhaseTickSliceDuration(LatticeOptions options)
+    {
+        var slice = SliceDuration(options);
+        return slice < MaxPhaseTickSliceDuration ? slice : MaxPhaseTickSliceDuration;
+    }
+
+    /// <summary>
+    /// Advances the snapshot through as many steps as fit in one bounded slice
+    /// (<see cref="PhaseTickSliceDuration"/>) rather than the single step the base
+    /// coordinator takes per tick. Every step is a short fan-out or one shard's
+    /// copy or unlock, so one step per two-second tick paced an offline snapshot
+    /// of a 96-shard tree at over six minutes, with the source locked throughout
+    /// (issue #5455). A step that fails and spends its retry ends the tick, so a
+    /// retry waits for the next tick as it always has; a teardown of the timer
+    /// ends it too.
+    /// </summary>
+    protected internal override Task ProcessPhaseTickAsync()
+    {
+        if (!state.State.InProgress) return Task.CompletedTask;
+
+        var drainOptions = optionsResolver.GetConfiguredOptions(SourceTreeId);
+        return RunSliceCoreAsync(drainOptions, PhaseTickSliceDuration(drainOptions),
+            yieldOnRetry: true, PhaseTickToken);
+    }
+
+    /// <summary>
+    /// Steps the snapshot until it completes, <paramref name="sliceDuration"/>
+    /// expires, or <paramref name="cancellationToken"/> is cancelled, always
+    /// taking at least one step. When <paramref name="yieldOnRetry"/> is set, a
+    /// step that failed and spent a retry (<see cref="TreeSnapshotState.ShardRetries"/>
+    /// rose) ends the slice. Each step is itself bounded: the phase transitions
+    /// are single fan-outs, and the online copy yields at the slice deadline.
+    /// </summary>
+    /// <returns>Whether no snapshot is in progress any more.</returns>
+    private async Task<bool> RunSliceCoreAsync(
+        LatticeOptions drainOptions, TimeSpan sliceDuration, bool yieldOnRetry,
+        CancellationToken cancellationToken)
+    {
+        var sliceStart = Stopwatch.GetTimestamp();
 
         // Always take at least one step, so a slice whose prologue already spent
         // the budget still makes progress; then keep stepping until the snapshot
-        // completes or the slice expires. Each step is itself bounded: the phase
-        // transitions are single fan-outs, and the online copy yields at the
-        // slice deadline.
+        // completes or the slice expires.
         do
         {
+            var retriesBefore = state.State.ShardRetries;
             if (state.State.Mode == SnapshotMode.Online
                 && state.State.Phase == SnapshotPhase.Copy
                 && state.State.NextShardIndex < CopiedShardIndices.Length)
@@ -509,8 +564,12 @@ internal sealed class TreeSnapshotGrain(
             {
                 await ProcessNextPhaseAsync();
             }
+
+            if (yieldOnRetry && state.State.ShardRetries > retriesBefore) break;
         }
-        while (state.State.InProgress && !SliceExpired(sliceStart, sliceDuration));
+        while (state.State.InProgress
+            && !cancellationToken.IsCancellationRequested
+            && !SliceExpired(sliceStart, sliceDuration));
 
         return !state.State.InProgress;
     }
