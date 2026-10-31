@@ -160,9 +160,9 @@ public sealed partial class JourneyEstate
     /// <summary>
     /// Leaves an orphaned leaf in <paramref name="tree"/>: the persisted state a silo that
     /// crashed part way through a leaf split leaves, so the orphan audit finds it and the
-    /// repair can remove it. The orphan shadows the leftmost leaf of physical shard
+    /// repair can remove it. The orphan shadows the second leaf of physical shard
     /// <paramref name="shard"/>, or - when no shard is named - of the first physical shard
-    /// whose leftmost leaf holds rows.
+    /// that has split and whose second leaf holds rows.
     /// </summary>
     /// <param name="tree">The tree; it must hold rows.</param>
     /// <param name="shard">The physical shard, or <see langword="null"/> for the first that holds rows.</param>

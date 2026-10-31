@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Hosts.Silo;
 internal interface IJourneyOrphanInjectorGrain : IGrainWithStringKey
 {
     /// <summary>
-    /// Splices an orphan after the leftmost leaf of physical shard <paramref name="shardIndex"/>
+    /// Splices an orphan after the second leaf of physical shard <paramref name="shardIndex"/>
     /// of the tree this grain is keyed by.
     /// </summary>
     /// <param name="shardIndex">The physical shard.</param>
@@ -33,22 +33,29 @@ internal sealed class JourneyOrphanInjectorGrain : Grain, IJourneyOrphanInjector
         var treeId = this.GetPrimaryKeyString();
         var physical = await GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).ResolveAsync(treeId);
         var shard = GrainFactory.GetGrain<IShardRootGrain>($"{physical}/{shardIndex}");
-        var donorId = await shard.GetLeftmostLeafIdAsync()
+        var headId = await shard.GetLeftmostLeafIdAsync()
             ?? throw new InvalidOperationException($"Shard {shardIndex} of '{treeId}' has no leaf to split.");
+
+        // The donor is the chain's second leaf, so the orphan declares a leading bound a
+        // descent can be made on - the shape measured in the field. An orphan with no low
+        // bound would be a head, whose reachability the audit cannot decide.
+        var head = await GrainFactory.GetGrain<IBPlusLeafGrain>(headId).GetKeyRangeAndNextSiblingAsync();
+        if (head.NextSibling is not { } donorId)
+        {
+            throw new InvalidOperationException($"Shard {shardIndex} of '{treeId}' is a single leaf that has never split.");
+        }
 
         var donor = GrainFactory.GetGrain<IBPlusLeafGrain>(donorId);
         var link = await donor.GetKeyRangeAndNextSiblingAsync();
-        if (link.NextSibling is null && link.KeyRange.LowKeyInclusive is null && link.KeyRange.HighKeyExclusive is null)
+        if (link.KeyRange.LowKeyInclusive is null)
         {
-            // The root is the shard's only leaf: a split has never run here, so nothing could
-            // have been left unparented (and the audit rightly skips such a shard).
-            throw new InvalidOperationException($"Shard {shardIndex} of '{treeId}' is a single leaf that has never split.");
+            throw new InvalidOperationException($"The second leaf of shard {shardIndex} of '{treeId}' declares no leading bound.");
         }
 
         var rows = await donor.GetLiveRawEntriesAsync();
         if (rows.Count == 0)
         {
-            throw new InvalidOperationException($"The leftmost leaf of shard {shardIndex} of '{treeId}' holds no rows to shadow.");
+            throw new InvalidOperationException($"The second leaf of shard {shardIndex} of '{treeId}' holds no rows to shadow.");
         }
 
         var orphanId = GrainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid()).GetGrainId();
