@@ -369,20 +369,32 @@
   top: calc(100% + var(--lt-space-1));
   inset-inline: 0;
   z-index: 950;
-  max-height: min(28rem, 70vh);
-  overflow: auto;
   padding: var(--lt-space-2) 0;
   border: 1px solid var(--lt-rule-strong);
   border-radius: var(--lt-radius-md);
   background: var(--lt-surface-raised);
 }
 
+/*
+  The listbox itself scrolls, not the frame around it: a scrolling element that is
+  the combobox's popup (the listbox its aria-controls names) is driven from the
+  input by the arrow keys, whereas an unnamed scrolling wrapper is a region a
+  keyboard user cannot reach (WCAG 2.1.1; axe scrollable-region-focusable).
+*/
+.lt-shell-combobox__popup > .lt-shell-combobox__list {
+  max-height: min(28rem, 70vh);
+  overflow: auto;
+}
+
 .lt-shell-address-line--sheet .lt-shell-combobox__popup {
   position: static;
-  max-height: none;
   margin-top: var(--lt-space-2);
   border-inline: 0;
   border-radius: 0;
+}
+
+.lt-shell-address-line--sheet .lt-shell-combobox__popup > .lt-shell-combobox__list {
+  max-height: none;
 }
 
 .lt-shell-combobox__list {

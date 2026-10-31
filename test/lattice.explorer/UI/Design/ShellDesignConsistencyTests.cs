@@ -114,6 +114,21 @@ public sealed class ShellDesignConsistencyTests
             "a floating list overflowed the panel's hairline border");
     }
 
+    [Test]
+    public void The_address_lines_listbox_scrolls_not_the_frame_around_it()
+    {
+        // Issue #5360: a long palette scrolled an unnamed wrapper, a region the keyboard
+        // cannot reach (axe scrollable-region-focusable). The listbox the combobox controls
+        // is the scroller, and is driven from the input by the arrow keys.
+        Assert.Multiple(() =>
+        {
+            Assert.That(Body(Chrome, ".lt-shell-combobox__popup"), Does.Not.Contain("overflow"));
+            Assert.That(Body(Chrome, ".lt-shell-combobox__popup > .lt-shell-combobox__list"), Does.Contain("overflow: auto;").And.Contain("max-height:"));
+            Assert.That(Body(Chrome, ".lt-shell-address-line--sheet .lt-shell-combobox__popup > .lt-shell-combobox__list"), Does.Contain("max-height: none;"),
+                "the full-screen palette's list runs the height of the sheet");
+        });
+    }
+
     private static string Body(string stylesheet, string selector)
     {
         var matches = ShellStylesheets.Rules(stylesheet).Where(rule => rule.AtRule.Length == 0 && rule.Selector == selector).ToArray();
