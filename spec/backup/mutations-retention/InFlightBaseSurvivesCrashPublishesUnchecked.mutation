@@ -1,0 +1,21 @@
+# Pairs with InFlightBaseSurvives. The row becomes visible before the check
+# runs - as it would if a capture registered first and checked afterwards -
+# so a crash between the two leaves an unchecked increment published.
+MODULE: InFlightBaseSurvivesCrashPublishesUnchecked
+TARGET: InFlightBaseSurvives
+CLASS: Action
+SUMMARY: a crash after the manifest write leaves the unchecked increment registered
+PERTURBS: CaptureCrash
+
+--- FIND
+    /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0]]
+    /\ UNCHANGED <<now, pol, next, meta>>
+    /\ UNCHANGED storeVars
+--- REPLACE
+    /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0]]
+    /\ UNCHANGED <<now, pol, next, meta>>
+    \* MUTATION: the row was registered before the check.
+    /\ cat' = IF cap[c].ph = "man" THEN cat \cup {cap[c].id} ELSE cat
+    /\ pub' = IF cap[c].ph = "man" THEN pub \cup {cap[c].id} ELSE pub
+    /\ UNCHANGED <<arts, snk>>
+--- END

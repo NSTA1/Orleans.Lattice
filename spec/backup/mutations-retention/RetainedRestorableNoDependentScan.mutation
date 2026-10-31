@@ -1,0 +1,17 @@
+# Pairs with RetainedRestorable. Production before the fix (#5357): a pass
+# deleted every manifest outside the policy's keep set and its listed base
+# closure, without looking for an increment built on it that the listing did
+# not hold yet. An increment that passed its check before the row was removed
+# is then published on a deleted base.
+MODULE: RetainedRestorableNoDependentScan
+TARGET: RetainedRestorable
+CLASS: Invariant
+SUMMARY: the pass never scans the sink for increments built on a doomed manifest
+PERTURBS: Scan
+
+--- FIND
+    /\ prBlocked' = [prBlocked EXCEPT ![p] = Blocked(p)]
+--- REPLACE
+    \* MUTATION: no dependent scan.
+    /\ prBlocked' = [prBlocked EXCEPT ![p] = {}]
+--- END

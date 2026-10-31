@@ -39,6 +39,10 @@ internal sealed class BackupSchedulerGrain(
     // grain clears it, so a stale in-flight flag can never wedge the scope.
     private bool _captureInFlight;
 
+    // Activation-local retention guard (issue #5357): one retention pass at a time.
+    // Not persisted, for the same reason as the capture guard.
+    private bool _pruneInFlight;
+
     /// <inheritdoc />
     public IGrainContext GrainContext => context;
 
@@ -389,35 +393,83 @@ internal sealed class BackupSchedulerGrain(
     private async Task<BackupRetentionReport> PruneCoreAsync(
         List<BackupManifest> manifests, LatticeBackupScheduleOptions opts)
     {
-        var keep = ComputeKeepSet(manifests, opts, DateTimeOffset.UtcNow);
-        ExpandBaseClosure(manifests, keep);
+        // Activation-local prune guard (issue #5357). An operator PruneAsync and a
+        // scheduled cycle's prune ([AlwaysInterleave]) can otherwise run at once,
+        // each from its own stale plan: one pass can restore a depended-on row after
+        // the other has scanned for dependents and moved on to delete it. Like the
+        // capture guard it is not persisted, so a crash cannot wedge the scope.
+        if (_pruneInFlight)
+        {
+            logger.LogInformation(
+                "Retention for scope {Scope} skipped: another retention pass is in flight.", ScopeKey);
+            return new BackupRetentionReport(manifests.Count, Array.Empty<string>());
+        }
+
+        _pruneInFlight = true;
+        try
+        {
+            return await PruneUnderGuardAsync(manifests, opts);
+        }
+        finally
+        {
+            _pruneInFlight = false;
+        }
+    }
+
+    private async Task<BackupRetentionReport> PruneUnderGuardAsync(
+        List<BackupManifest> manifests, LatticeBackupScheduleOptions opts)
+    {
+        var keep = BackupRetentionPlanner.ComputeRetained(
+            manifests, opts.RetentionKeepLast, opts.RetentionMaxAge, DateTimeOffset.UtcNow);
+        var doomed = BackupRetentionPlanner.Doomed(manifests, keep);
+        if (doomed.Count == 0)
+        {
+            logger.LogInformation(
+                "Retention pruned 0 backup(s) and retained {Retained} for scope {Scope}.",
+                manifests.Count, ScopeKey);
+            return new BackupRetentionReport(manifests.Count, Array.Empty<string>());
+        }
 
         // Artifacts referenced by any retained manifest must survive even if a
         // pruned manifest happens to reference the same artifact id.
-        var retainedArtifacts = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var manifest in manifests)
-        {
-            if (!keep.Contains(manifest.Id))
-            {
-                continue;
-            }
+        var retainedArtifacts = BackupRetentionPlanner.RetainedArtifacts(manifests, keep);
 
-            foreach (var descriptor in manifest.ContentDescriptors)
+        // The fence against an in-flight incremental capture (issue #5357). Each
+        // doomed row is removed FIRST, so an increment that re-reads its base's row
+        // after this point abandons itself; then one sink scan finds every
+        // increment that wrote its manifest before that point, and the row of any
+        // doomed manifest one outside this pass builds on - and of its own base
+        // chain - is restored instead of deleted.
+        foreach (var manifest in doomed)
+        {
+            await catalog.RemoveAsync(manifest.Id);
+        }
+
+        var sinkManifests = new List<BackupManifest>();
+        await foreach (var manifest in sink.ListManifestsAsync())
+        {
+            sinkManifests.Add(manifest);
+        }
+
+        var blocked = BackupRetentionPlanner.DependedOn(doomed, sinkManifests);
+        foreach (var manifest in doomed)
+        {
+            if (blocked.Contains(manifest.Id))
             {
-                retainedArtifacts.Add(descriptor.ArtifactId);
+                await catalog.RegisterAsync(manifest);
             }
         }
 
         var prunedIds = new List<string>();
         var prunedManifests = new List<BackupManifest>();
         long reclaimedBytes = 0;
-        foreach (var manifest in manifests)
+        var deleting = doomed.Where(m => !blocked.Contains(m.Id)).ToList();
+        foreach (var manifest in BackupRetentionPlanner.TipFirst(deleting))
         {
-            if (keep.Contains(manifest.Id))
-            {
-                continue;
-            }
-
+            // Tip first, and each sink manifest before its artifacts, so an
+            // interrupted pass leaves unreferenced artifacts rather than a manifest
+            // without them, or an increment without its base.
+            await sink.DeleteManifestAsync(manifest.Id);
             foreach (var descriptor in manifest.ContentDescriptors)
             {
                 if (!retainedArtifacts.Contains(descriptor.ArtifactId))
@@ -427,8 +479,6 @@ internal sealed class BackupSchedulerGrain(
                 }
             }
 
-            await sink.DeleteManifestAsync(manifest.Id);
-            await catalog.RemoveAsync(manifest.Id);
             prunedIds.Add(manifest.Id);
             prunedManifests.Add(manifest);
         }
@@ -443,84 +493,18 @@ internal sealed class BackupSchedulerGrain(
             LatticeBackupMetrics.RecordRetention(ScopeKey, reclaimedBytes, prunedIds.Count);
         }
 
+        if (blocked.Count > 0)
+        {
+            logger.LogInformation(
+                "Retention kept {Blocked} backup(s) outside the policy for scope {Scope}: an incremental backup builds on each.",
+                blocked.Count, ScopeKey);
+        }
+
         logger.LogInformation(
             "Retention pruned {Pruned} backup(s) and retained {Retained} for scope {Scope}.",
             prunedIds.Count, manifests.Count - prunedIds.Count, ScopeKey);
 
         return new BackupRetentionReport(manifests.Count - prunedIds.Count, prunedIds);
-    }
-
-    private static HashSet<string> ComputeKeepSet(
-        IReadOnlyList<BackupManifest> manifests, LatticeBackupScheduleOptions opts, DateTimeOffset now)
-    {
-        var keep = new HashSet<string>(StringComparer.Ordinal);
-
-        // Retention enabled but unbounded (neither knob set) retains everything -
-        // a safe no-op that never prunes.
-        if (opts.RetentionKeepLast is null && opts.RetentionMaxAge is null)
-        {
-            foreach (var manifest in manifests)
-            {
-                keep.Add(manifest.Id);
-            }
-
-            return keep;
-        }
-
-        if (opts.RetentionKeepLast is { } keepLast)
-        {
-            var recent = manifests
-                .OrderByDescending(m => m.CreatedAtUtc)
-                .ThenByDescending(m => m.Id, StringComparer.Ordinal)
-                .Take(keepLast);
-            foreach (var manifest in recent)
-            {
-                keep.Add(manifest.Id);
-            }
-        }
-
-        if (opts.RetentionMaxAge is { } maxAge)
-        {
-            // Guard the subtraction: a very large (but validator-permitted, since the
-            // validator only rejects a non-positive window) RetentionMaxAge would push
-            // the cutoff below DateTimeOffset.MinValue and throw. A "retain for
-            // practically forever" window means keep every manifest, so saturate the
-            // cutoff at MinValue rather than fault the retention pass.
-            var cutoff = maxAge >= now - DateTimeOffset.MinValue
-                ? DateTimeOffset.MinValue
-                : now - maxAge;
-            foreach (var manifest in manifests.Where(m => m.CreatedAtUtc >= cutoff))
-            {
-                keep.Add(manifest.Id);
-            }
-        }
-
-        return keep;
-    }
-
-    private static void ExpandBaseClosure(IReadOnlyList<BackupManifest> manifests, HashSet<string> keep)
-    {
-        var byId = new Dictionary<string, BackupManifest>(StringComparer.Ordinal);
-        foreach (var manifest in manifests)
-        {
-            byId[manifest.Id] = manifest;
-        }
-
-        var changed = true;
-        while (changed)
-        {
-            changed = false;
-            foreach (var id in keep.ToList())
-            {
-                if (byId.TryGetValue(id, out var manifest)
-                    && manifest.BaseBackupId is { } baseId
-                    && byId.ContainsKey(baseId)
-                    && keep.Add(baseId))
-                {
-                    changed = true;
-                }
-            }
-        }
     }
 
     private async Task ApplyScheduleAsync(string reminderName, bool enabled, TimeSpan interval)

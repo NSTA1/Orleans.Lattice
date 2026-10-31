@@ -1,0 +1,16 @@
+# Pairs with InFlightBaseSurvives. Production before the fix (#5357): an
+# incremental capture read its base once, before it drained, and published
+# without looking at the base again, so a pass that pruned the base during
+# the drain left the catalog listing an increment whose base was gone.
+MODULE: InFlightBaseSurvivesNoBaseRecheck
+TARGET: InFlightBaseSurvives
+CLASS: Action
+SUMMARY: an increment publishes without re-reading its base's catalog row
+PERTURBS: Check
+
+--- FIND
+                    IF m.kind = "full" \/ m.base \in cat THEN "ok" ELSE "abandon"]
+--- REPLACE
+                    \* MUTATION: no re-check of the base before publishing.
+                    "ok"]
+--- END

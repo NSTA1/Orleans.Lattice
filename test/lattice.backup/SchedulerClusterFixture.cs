@@ -16,6 +16,7 @@ public sealed class SchedulerClusterFixture
 {
     private static Action<LatticeBackupScheduleOptions>? s_configure;
     private static bool s_gated;
+    private static bool s_intercepted;
 
     /// <summary>
     /// A mutable toggle a test can flip to change the incremental-schedule setting
@@ -53,12 +54,26 @@ public sealed class SchedulerClusterFixture
     internal ILatticeBackupSchedulerGrain Scheduler(BackupScopeSelector scope) =>
         GrainFactory.GetGrain<ILatticeBackupSchedulerGrain>(BackupScopeKey.For(scope));
 
-    /// <summary>Deploys the cluster with the given schedule / retention configuration.</summary>
+    /// <summary>The silo-side full capture service.</summary>
+    public ILatticeBackupCaptureService CaptureService =>
+        SiloServices.GetRequiredService<ILatticeBackupCaptureService>();
+
+    /// <summary>The silo-side incremental capture service.</summary>
+    public ILatticeBackupIncrementalCaptureService IncrementalService =>
+        SiloServices.GetRequiredService<ILatticeBackupIncrementalCaptureService>();
+
+    /// <summary>
+    /// Deploys the cluster with the given schedule / retention configuration.
+    /// When <paramref name="intercepted"/> is set, the sink is an
+    /// <see cref="InterceptingBackupSink"/> over the real in-cluster sink.
+    /// </summary>
     public async Task InitializeAsync(
-        Action<LatticeBackupScheduleOptions>? configure = null, bool gated = false)
+        Action<LatticeBackupScheduleOptions>? configure = null, bool gated = false, bool intercepted = false)
     {
         s_configure = configure;
         s_gated = gated;
+        s_intercepted = intercepted;
+        InterceptingBackupSink.Reset();
         var builder = new TestClusterBuilder(1);
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         Cluster = builder.Build();
@@ -111,6 +126,13 @@ public sealed class SchedulerClusterFixture
             if (s_configure is not null)
             {
                 siloBuilder.ConfigureLatticeBackupSchedule(s_configure);
+            }
+
+            if (s_intercepted)
+            {
+                siloBuilder.Services.AddSingleton<InClusterLatticeBackupSink>();
+                siloBuilder.Services.Replace(
+                    ServiceDescriptor.Singleton<ILatticeBackupSink, InterceptingBackupSink>());
             }
 
             if (s_gated)

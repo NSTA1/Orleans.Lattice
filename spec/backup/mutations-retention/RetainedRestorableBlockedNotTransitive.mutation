@@ -1,0 +1,14 @@
+# Pairs with RetainedRestorable. The scan keeps a doomed manifest an
+# increment outside the pass builds on, but not that manifest's own base, so
+# the pass deletes the base of a chain it has just decided to keep.
+MODULE: RetainedRestorableBlockedNotTransitive
+TARGET: RetainedRestorable
+CLASS: Invariant
+SUMMARY: the dependent scan does not follow the kept manifest's own base
+
+--- FIND
+    IN Grow(Grow(Grow(B0)))
+--- REPLACE
+    \* MUTATION: no transitive closure.
+    IN B0
+--- END

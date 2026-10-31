@@ -110,6 +110,8 @@ Per-scope configuration for scheduled backup triggering and backup-chain retenti
 
 A backup is retained if it satisfies `RetentionKeepLast` **or** `RetentionMaxAge`; only a backup that fails every enabled rule is eligible for pruning. With `RetentionEnabled` set but neither bound configured, nothing is pruned. Regardless of either bound, the base chain of a retained increment is always preserved, so a restore chain is never left with a missing ancestor.
 
+A retention pass is also safe against captures that run while it does. It removes each eligible backup's catalog row first, then looks in the sink for any incremental backup built on it - including one still being captured - and keeps such a backup, restoring its row, instead of deleting it. An incremental capture re-reads its base's catalog row just before it publishes and, if a pass has begun to prune that base, withdraws its manifest and takes a fresh full backup instead. One scope runs one retention pass at a time; a pass requested while another is in flight is skipped. Because the row goes first, a pass interrupted part-way leaves backups that are no longer listed rather than listed backups that cannot be restored; their sink payload is reclaimed after a catalog rebuild lists them again. See the [formal model](../../spec/backup/RefinementRetention.md).
+
 ## Sink selection
 
 The storage sink is selected through the `ILatticeBackupSink` seam, not a property on these options. `AddLatticeBackup` installs the default in-cluster sink (a reserved dogfooded tree). To use durable external storage, register the [Azure Blob Storage sink](../lattice.backup.azureblob/configuration.md), which replaces the sink registration outright.
