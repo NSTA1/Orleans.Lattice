@@ -2542,10 +2542,8 @@ internal sealed partial class BPlusLeafGrain(
                 string.CompareOrdinal(windowStart, scanEnd) >= 0)
                 break;
 
-            var from = OrdinalStrings.MaxBound(windowStart, scanStart);
-            var to = OrdinalStrings.MinBound(windowEnd, scanEnd);
-            if (from is not null && to is not null &&
-                string.CompareOrdinal(from, to) >= 0)
+            if (!OrdinalStrings.TryIntersectBounds(
+                windowStart, windowEnd, scanStart, scanEnd, out var from, out var to))
                 continue;
 
             // No per-row bound re-test. [from, to) already folds every bound
@@ -3910,10 +3908,8 @@ internal sealed partial class BPlusLeafGrain(
                 string.CompareOrdinal(windowStart, scanEnd) >= 0)
                 break;
 
-            var from = OrdinalStrings.MaxBound(windowStart, scanStart);
-            var to = OrdinalStrings.MinBound(windowEnd, scanEnd);
-            if (from is not null && to is not null &&
-                string.CompareOrdinal(from, to) >= 0)
+            if (!OrdinalStrings.TryIntersectBounds(
+                windowStart, windowEnd, scanStart, scanEnd, out var from, out var to))
                 continue;
 
             foreach (var (key, lww) in Cache.EnumerateRange(from, to))
@@ -4039,10 +4035,8 @@ internal sealed partial class BPlusLeafGrain(
                 string.CompareOrdinal(windowStart, scanEnd) >= 0)
                 break;
 
-            var from = OrdinalStrings.MaxBound(windowStart, scanStart);
-            var to = OrdinalStrings.MinBound(windowEnd, scanEnd);
-            if (from is not null && to is not null &&
-                string.CompareOrdinal(from, to) >= 0)
+            if (!OrdinalStrings.TryIntersectBounds(
+                windowStart, windowEnd, scanStart, scanEnd, out var from, out var to))
                 continue;
 
             foreach (var (key, lww) in Cache.EnumerateRange(from, to))

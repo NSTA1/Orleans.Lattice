@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace Orleans.Lattice;
 
 /// <summary>
@@ -36,6 +38,23 @@ internal static class OrdinalStrings
         => left is null ? right
             : right is null ? left
             : string.CompareOrdinal(left, right) <= 0 ? left : right;
+
+    /// <summary>
+    /// Clips a half-open window to a half-open range, returning whether the
+    /// intersection is non-empty. Null lower bounds denote negative infinity;
+    /// null upper bounds denote positive infinity. The returned bounds may only
+    /// be enumerated when this method returns <see langword="true"/>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static bool TryIntersectBounds(
+        string? windowStart, string? windowEnd,
+        string? rangeStart, string? rangeEnd,
+        out string? start, out string? end)
+    {
+        start = MaxBound(windowStart, rangeStart);
+        end = MinBound(windowEnd, rangeEnd);
+        return !(start is not null && end is not null && string.CompareOrdinal(start, end) >= 0);
+    }
 
     /// <summary>
     /// Returns <see langword="true"/> when <paramref name="values"/> holds an
