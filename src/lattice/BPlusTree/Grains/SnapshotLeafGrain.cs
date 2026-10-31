@@ -24,7 +24,8 @@ internal sealed class SnapshotLeafGrain(
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     ILogger<SnapshotLeafGrain> logger,
-    LatticeOptionsResolver? optionsResolver = null) : Grain, ISnapshotLeafGrain
+    LatticeOptionsResolver? optionsResolver = null,
+    ILatticeOriginClusterIdResolver? originClusterIdResolver = null) : Grain, ISnapshotLeafGrain
 {
     /// <summary>Tree this snapshot leaf belongs to (set on first <see cref="OpenAsync"/>).</summary>
     private string _treeId = string.Empty;
@@ -213,7 +214,7 @@ internal sealed class SnapshotLeafGrain(
         _baselineToken = baselineToken;
         if (optionsResolver is not null)
             await optionsResolver.ResolveMetricTreeIdAsync(treeId);
-        _folder = new SnapshotProjectionFolder(treeId, ResolveCrdtShapeRegistry(), ResolveEnvelopeCodec(), MetricTreeId);
+        _folder = new SnapshotProjectionFolder(treeId, ResolveCrdtShapeRegistry(), ResolveEnvelopeCodec(), MetricTreeId, originClusterIdResolver?.Resolve(MetricTreeId));
 
         if (baselineToken != Guid.Empty)
         {
@@ -287,7 +288,7 @@ internal sealed class SnapshotLeafGrain(
         _capturedOffsetsByPartition = capturedHead;
         _baselineToken = baselineToken;
         _seedBaseline = baseline;
-        _folder = new SnapshotProjectionFolder(treeId, ResolveCrdtShapeRegistry(), ResolveEnvelopeCodec(), MetricTreeId);
+        _folder = new SnapshotProjectionFolder(treeId, ResolveCrdtShapeRegistry(), ResolveEnvelopeCodec(), MetricTreeId, originClusterIdResolver?.Resolve(MetricTreeId));
 
         // Seed the rows verbatim. Donor-orphan ownership filtering is applied by
         // the read path against the cursor-supplied owned-slot set (set on the

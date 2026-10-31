@@ -126,7 +126,14 @@ and the observer publish must happen after both, inside a commit-log scope.
    its baseline, so on a silo wired through `AddLattice` this step always runs;
    it is skipped only for a leaf that has no tree id yet (one created outside
    `ILattice`, for example by a test harness). Failures here propagate to the
-   caller before any in-memory state has been touched.
+   caller before any in-memory state has been touched. The writer fills an
+   empty origin with the tree's resolved origin (the local cluster id on a
+   replicated tree, an empty string on a single-cluster host), which the
+   shipper and receivers rely on. The leaf row of an own write keeps a null
+   origin, and a row rebuilt from the record later - by the projection, a
+   replay or a snapshot's fold - turns that stamp back into null, so an own
+   row has one representation however it was produced; a peer's origin is
+   kept.
 
 3. **apply** - LWW-merge the value into the in-memory entry cache. If
    the leaf's entry count crosses `MaxLeafKeys`, or its live state bytes cross

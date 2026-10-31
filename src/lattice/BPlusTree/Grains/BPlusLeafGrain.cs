@@ -11,12 +11,6 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// in a sorted dictionary. Splits when the entry count exceeds the leaf-sizing
 /// pin in the tree registry.
 /// </summary>
-// CS9113: 'originClusterIdResolver' is referenced only inside #if LATTICE_DIAG
-// blocks (used by DiagSiloTag to disambiguate Site A vs Site B emissions in the
-// shared file-based DiagSink log). Suppressed at the parameter list because in
-// non-diag builds the parameter is genuinely unread, but removing it would break
-// the activation-DI signature and the diag build's site-tagging behaviour.
-#pragma warning disable CS9113
 internal sealed partial class BPlusLeafGrain(
     IGrainContext context,
     [PersistentState("leaf", LatticeOptions.StorageProviderName)] IPersistentState<LeafNodeState> state,
@@ -24,9 +18,22 @@ internal sealed partial class BPlusLeafGrain(
     LatticeOptionsResolver optionsResolver,
     MutationObserverDispatcher mutationObservers,
     ILatticeOriginClusterIdResolver originClusterIdResolver) : IBPlusLeafGrain, ILeafProjection, IGrainBase
-#pragma warning restore CS9113
 {
     IGrainContext IGrainBase.GrainContext => context;
+
+    /// <summary>
+    /// The origin a row rebuilt from a WAL record stores (issue #5524): the
+    /// record's own-write stamp becomes <see langword="null"/>, as a live own
+    /// write stores it, and a peer's id is kept. Resolved under the logical
+    /// tree, as <c>WalCommitLogWriter</c> stamped it.
+    /// </summary>
+    private string? RowOrigin(string? recordOrigin) =>
+        string.IsNullOrEmpty(recordOrigin)
+            ? null
+            : LatticeRowOrigin.FromRecord(recordOrigin, originClusterIdResolver.Resolve(MetricTreeId));
+
+    /// <summary>The tree's own resolved origin, for a snapshot fold this leaf builds.</summary>
+    private string LocalOrigin => originClusterIdResolver.Resolve(MetricTreeId);
 
 #if LATTICE_DIAG
     /// <summary>
