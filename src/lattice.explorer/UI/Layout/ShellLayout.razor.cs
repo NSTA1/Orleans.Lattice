@@ -30,14 +30,18 @@ namespace Orleans.Lattice.Explorer.UI.Layout;
 /// the location every page and chrome component reads.
 /// </para>
 /// <para>
-/// It cascades the measured <see cref="LtBreakpoint"/> as well, so the chrome and
-/// the primitives render their compact forms below the small breakpoint. The width
-/// is measured, not queried in a stylesheet, which keeps every layout width in the
-/// one breakpoint layer. Until the browser has reported it, nothing is cascaded (a
-/// primitive renders its wide form, which hides no content), and the chrome draws
-/// both its compact and its wide controls, marked with the breakpoint layer's
-/// <c>lt-only-compact</c> and <c>lt-medium-up</c> utilities, so the browser picks
-/// the right one before the first paint and a late report changes nothing on screen.
+/// It cascades the measured <see cref="LtBreakpoint"/> as well, for behaviour and for
+/// markup that differs by band: the chrome's compact controls and sheets, and the
+/// primitives' compact forms. Styling never waits for it: the root is the size
+/// container the band styles query (the compact band's stacked toolbars, paddings and
+/// brand, the medium band's rail), at the widths the breakpoint layer declares, so the
+/// browser styles each band before the first paint. Until the browser has reported the
+/// band, nothing is cascaded under <see cref="LtBreakpointCascade.Name"/> (a primitive
+/// renders its wide form, which hides no content), <see cref="LtBreakpointCascade.PendingName"/>
+/// cascades <see langword="true"/>, and the chrome draws both its compact and its wide
+/// markup, marked with the breakpoint layer's <c>lt-only-compact</c> and
+/// <c>lt-medium-up</c> utilities, so the browser picks the right one before the first
+/// paint and a late report changes nothing on screen.
 /// </para>
 /// <para>
 /// At an address its area marks standalone (<see cref="IExplorerArea.IsStandaloneAt"/>)
@@ -148,23 +152,15 @@ public partial class ShellLayout : IAsyncDisposable
         Navigator.IsStandalone(Navigator.Current ?? _location.Address)
         && (!_sessionReady || AuthSession.IsAuthenticated);
 
-    // The compact modifier is how a stylesheet reacts to the band without a width
-    // query: every .lt-toolbar under it stacks. The standalone modifier lets the main
-    // landmark fill the viewport when no chrome is drawn.
-    private string RootClass => (IsCompact, IsStandalone) switch
-    {
-        (true, true) => "lt-viewport lt-shell lt-shell--compact lt-shell--standalone",
-        (true, false) => "lt-viewport lt-shell lt-shell--compact",
-        (false, true) => "lt-viewport lt-shell lt-shell--standalone",
-        _ => "lt-viewport lt-shell",
-    };
+    // The root is the size container every band style queries (the compact band's
+    // stacked toolbars, paddings and brand; the medium band's rail), so the browser,
+    // not the measured band, styles each band from the first paint. The standalone
+    // modifier lets the main landmark fill the viewport when no chrome is drawn.
+    private string RootClass => IsStandalone ? "lt-viewport lt-shell lt-shell--standalone" : "lt-viewport lt-shell";
 
-    private string DirectoryClass => (_breakpoint, IsMeasured) switch
-    {
-        (LtBreakpoint.Medium, _) => "lt-shell-directory lt-shell-directory--rail",
-        (_, false) => "lt-shell-directory lt-medium-up",
-        _ => "lt-shell-directory",
-    };
+    // One column form for the medium and expanded bands: the rail is a size-container
+    // query on it, so measuring the band never changes the spine.
+    private string DirectoryClass => IsMeasured ? "lt-shell-directory" : "lt-shell-directory lt-medium-up";
 
     private string HomeHref => Navigator.Canonicalize(ExplorerAddress.Home.WithTenant(_location.Address.Tenant)).ToHref();
 
