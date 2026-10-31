@@ -28,7 +28,7 @@ internal sealed class DataDirectoryPage(ShellPage shell) : A8PageObject(shell)
         {
             await entry.First.WaitForAsync(new() { Timeout = 15_000 });
         }
-        catch (PlaywrightException)
+        catch (Exception exception) when (exception is PlaywrightException or System.TimeoutException)
         {
             await Content.Locator("button[data-lt-command=\"data.refresh\"]").ClickAsync();
         }

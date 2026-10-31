@@ -31,6 +31,8 @@ public sealed class CapacityAndWalJourney : JourneyChapter
     private const string Telemetry = Names.Trees.FactoryTelemetry;
     private const string Orders = Names.Trees.FactoryOrders;
     private const string Snapshot = Names.Trees.FactoryOrdersSnapshot;
+    private const float ExpectTimeoutMs = 30_000;
+    private const float PlaywrightDefaultExpectTimeoutMs = 5_000;
 
     /// <inheritdoc />
     public override async Task RunAsync(ChapterContext context)
@@ -44,13 +46,23 @@ public sealed class CapacityAndWalJourney : JourneyChapter
         var recorder = JourneyRecorder.For(JourneyId);
         Task Capture(string step, string substep, string title) => olivia.SubstepAsync(recorder, step, substep, title);
 
-        await StepAsync("1", () => ReadTheWritesBoardAsync(olivia, Capture));
-        await StepAsync("2", () => MeasureAndFindTheHotShardAsync(olivia, Capture));
-        await StepAsync("3", () => ReshardTheTelemetryAsync(olivia, Capture));
-        await StepAsync("4", () => ResizeUndoAndResizeAgainAsync(olivia, Capture));
-        await StepAsync("5", () => SnapshotTheOrdersAsync(olivia, Capture));
-        await StepAsync("6", () => MoveAndReclaimAWalPartitionAsync(olivia, Capture));
-        await StepAsync("7", () => CountTheTombstonesAsync(olivia, Capture));
+        // A busy estate answers the cluster pages' reads in seconds, not milliseconds: give every
+        // assertion the context's own action timeout, and restore Playwright's default after.
+        SetDefaultExpectTimeout(ExpectTimeoutMs);
+        try
+        {
+            await StepAsync("1", () => ReadTheWritesBoardAsync(olivia, Capture));
+            await StepAsync("2", () => MeasureAndFindTheHotShardAsync(olivia, Capture));
+            await StepAsync("3", () => ReshardTheTelemetryAsync(olivia, Capture));
+            await StepAsync("4", () => ResizeUndoAndResizeAgainAsync(olivia, Capture));
+            await StepAsync("5", () => SnapshotTheOrdersAsync(olivia, Capture));
+            await StepAsync("6", () => MoveAndReclaimAWalPartitionAsync(olivia, Capture));
+            await StepAsync("7", () => CountTheTombstonesAsync(olivia, Capture));
+        }
+        finally
+        {
+            SetDefaultExpectTimeout(PlaywrightDefaultExpectTimeoutMs);
+        }
     }
 
     // Each step commits its coverage hits on its own, so a later step's failure keeps the
