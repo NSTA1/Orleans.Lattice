@@ -83,7 +83,8 @@ HARNESS_FILTER = (
     "TestCategory=EndToEnd&TestCategory!=Journey&TestCategory!=Story&TestCategory!=CoverageGate"
 )
 JOURNEY_FOLDER = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
-TIMEOUTS = {"harness": 45, "isolated": 45, "story": 150}
+# The harness leg carries the east-region and Fabrikam estate fixtures (#5362).
+TIMEOUTS = {"harness": 60, "isolated": 45, "story": 150}
 
 
 class PlanError(Exception):
