@@ -31,6 +31,21 @@ internal sealed class SchemaTransformDraft
     /// <summary>For a set, the constant as typed.</summary>
     public string Value { get; set; } = string.Empty;
 
+    /// <summary>
+    /// For a set, whether the constant is written only where the member meets a condition
+    /// (#5476); every other value keeps the member it has.
+    /// </summary>
+    public bool Conditional { get; set; }
+
+    /// <summary>For a conditional set, how the member is compared.</summary>
+    public LatticeComparisonOperator WhereOperator { get; set; } = LatticeComparisonOperator.LessThan;
+
+    /// <summary>For a conditional set, the kind of constant the member is compared with.</summary>
+    public SchemaConstantKind WhereKind { get; set; } = SchemaConstantKind.Number;
+
+    /// <summary>For a conditional set, the constant the member is compared with, as typed.</summary>
+    public string WhereValue { get; set; } = string.Empty;
+
     /// <summary>Adds the step being written, or explains why it cannot be added.</summary>
     /// <param name="error">Why it cannot, as a plain sentence.</param>
     /// <returns><see langword="true"/> when the step was added.</returns>
@@ -73,19 +88,24 @@ internal sealed class SchemaTransformDraft
                     return false;
                 }
 
-                var stored = ValueKind switch
+                SchemaTransformCondition? where = null;
+                if (Conditional)
                 {
-                    SchemaConstantKind.Null => null,
-                    SchemaConstantKind.Text => Value,
-                    _ => Value.Trim(),
-                };
-                _steps.Add(new SchemaTransformStep(Kind, path, null, ValueKind, stored));
+                    if (!TryCondition(out where, out error))
+                    {
+                        return false;
+                    }
+                }
+
+                _steps.Add(new SchemaTransformStep(Kind, path, null, ValueKind, Stored(ValueKind, Value), where));
                 break;
         }
 
         Path = string.Empty;
         ToPath = string.Empty;
         Value = string.Empty;
+        Conditional = false;
+        WhereValue = string.Empty;
         return true;
     }
 
@@ -108,6 +128,10 @@ internal sealed class SchemaTransformDraft
         ToPath = string.Empty;
         ValueKind = SchemaConstantKind.Text;
         Value = string.Empty;
+        Conditional = false;
+        WhereOperator = LatticeComparisonOperator.LessThan;
+        WhereKind = SchemaConstantKind.Number;
+        WhereValue = string.Empty;
     }
 
     /// <summary>Builds the transform the steps describe, or explains why there is none.</summary>
@@ -144,12 +168,57 @@ internal sealed class SchemaTransformDraft
                         return false;
                     }
 
-                    operations[i] = LatticeValueTransform.SetMember(step.Path, LatticeValueTransform.Const(constant));
+                    var written = LatticeValueTransform.Const(constant);
+                    if (step.Where is { } where)
+                    {
+                        if (!TryConstant(where.ValueKind, where.Value ?? string.Empty, out var compared, out error))
+                        {
+                            return false;
+                        }
+
+                        // Where the member does not meet the condition it is written back as it
+                        // is, so only the values the condition picks out change.
+                        written = LatticeValueTransform.Conditional(
+                            LatticePredicateNode.Compare(where.Operator, LatticePredicateNode.Member(step.Path), LatticePredicateNode.Const(compared)),
+                            written,
+                            LatticeValueTransform.Member(step.Path));
+                    }
+
+                    operations[i] = LatticeValueTransform.SetMember(step.Path, written);
                     break;
             }
         }
 
         transform = LatticeValueTransform.Passthrough(operations);
+        return true;
+    }
+
+    /// <summary>The constant as a step stores it: text exactly as typed, null as nothing, anything else trimmed.</summary>
+    private static string? Stored(SchemaConstantKind kind, string text) => kind switch
+    {
+        SchemaConstantKind.Null => null,
+        SchemaConstantKind.Text => text,
+        _ => text.Trim(),
+    };
+
+    /// <summary>Validates the condition being written for a conditional set.</summary>
+    private bool TryCondition(out SchemaTransformCondition? condition, out string? error)
+    {
+        condition = null;
+        if (WhereKind == SchemaConstantKind.Null
+            && WhereOperator is not (LatticeComparisonOperator.Equal or LatticeComparisonOperator.NotEqual))
+        {
+            error = "Compare a member with null only as equal to or not equal to.";
+            return false;
+        }
+
+        if (!TryConstant(WhereKind, WhereValue, out _, out error))
+        {
+            error = "The condition's value: " + error;
+            return false;
+        }
+
+        condition = new SchemaTransformCondition(WhereOperator, WhereKind, Stored(WhereKind, WhereValue));
         return true;
     }
 

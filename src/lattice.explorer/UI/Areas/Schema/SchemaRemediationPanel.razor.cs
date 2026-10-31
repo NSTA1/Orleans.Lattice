@@ -24,6 +24,9 @@ public partial class SchemaRemediationPanel : IDisposable
         new(nameof(SchemaConstantKind.Null), "Null"),
     ];
 
+    private static readonly IReadOnlyList<LtSelectOption> Comparisons =
+        [.. SchemaTransformCondition.Comparisons.Select(comparison => new LtSelectOption(comparison.Operator.ToString(), comparison.Words))];
+
     private readonly SchemaTransformDraft _draft = new();
     private string? _loadedTree;
     private string? _stepError;
@@ -84,6 +87,24 @@ public partial class SchemaRemediationPanel : IDisposable
         if (Enum.TryParse<SchemaConstantKind>(value, out var kind))
         {
             _draft.ValueKind = kind;
+            _stepError = null;
+        }
+    }
+
+    private void OnWhereOperatorChanged(string value)
+    {
+        if (Enum.TryParse<LatticeComparisonOperator>(value, out var comparison))
+        {
+            _draft.WhereOperator = comparison;
+            _stepError = null;
+        }
+    }
+
+    private void OnWhereKindChanged(string value)
+    {
+        if (Enum.TryParse<SchemaConstantKind>(value, out var kind))
+        {
+            _draft.WhereKind = kind;
             _stepError = null;
         }
     }
