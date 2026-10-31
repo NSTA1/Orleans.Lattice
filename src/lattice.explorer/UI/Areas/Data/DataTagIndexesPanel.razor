@@ -102,7 +102,7 @@
                     <ul class="lt-data-list">
                         @foreach (var tree in _covered)
                         {
-                            <li><a class="lt-shell-mono" href="@Workspace.Href(tree.Address)">@tree.DisplayName</a></li>
+                            <li><a class="lt-shell-mono lt-data-key" href="@Workspace.Href(tree.Address)">@tree.DisplayName</a></li>
                         }
                     </ul>
                     @if (_hiddenCovered > 0)
@@ -146,7 +146,7 @@
                             <LtColumn TItem="DataTagMember" Context="member" Title="Tree" Mono="true">
                                 @if (member.Tree is { } tree)
                                 {
-                                    <a href="@Workspace.Href(tree.Address)">@tree.DisplayName</a>
+                                    <a class="lt-data-key" href="@Workspace.Href(tree.Address)">@tree.DisplayName</a>
                                 }
                                 else
                                 {
@@ -156,7 +156,7 @@
                             <LtColumn TItem="DataTagMember" Context="member" Title="Key" RowHeader="true" Mono="true">
                                 @if (member.Tree is { } tree)
                                 {
-                                    <a href="@Workspace.Href(tree.Address.WithQuery(ExplorerAddress.KeyQuery, member.Key))">@DataKeysPanel.Clip(member.Key)</a>
+                                    <a class="lt-data-key" href="@Workspace.Href(tree.Address.WithQuery(ExplorerAddress.KeyQuery, member.Key))">@DataKeysPanel.Clip(member.Key)</a>
                                 }
                                 else
                                 {

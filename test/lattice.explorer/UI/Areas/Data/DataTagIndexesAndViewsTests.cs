@@ -78,6 +78,8 @@ public sealed class DataTagIndexesAndViewsTests : DataTestContext
         {
             Assert.That(cut.Find(".lt-data-entry h2").TextContent, Is.EqualTo("Tag index by-region"));
             Assert.That(cut.FindAll(".lt-data-list a").Select(link => link.TextContent), Is.EqualTo(new[] { "orders" }));
+            Assert.That(cut.FindAll(".lt-data-list a").Select(link => link.ClassList.Contains("lt-data-key")), Is.All.True,
+                "a covered tree's link is a 24px target (WCAG 2.5.8, found by journey A3)");
             Assert.That(cut.Find(".lt-data-entry").TextContent, Does.Contain("It also covers 1 tree you cannot see."));
             Assert.That(cut.FindAll(".lt-data-tag").Select(tag => tag.TextContent), Is.EqualTo(new[] { "eu", "us" }));
         });
@@ -88,6 +90,8 @@ public sealed class DataTagIndexesAndViewsTests : DataTestContext
             Assert.That(cut.FindAll(".lt-data-tag")[0].GetAttribute("aria-current"), Is.EqualTo("true"));
             var memberLinks = cut.FindAll(".lt-data-entry tbody a").Select(link => link.GetAttribute("href")).ToArray();
             Assert.That(memberLinks, Does.Contain("data/orders?key=key%2F0001"));
+            Assert.That(cut.FindAll(".lt-data-entry tbody a").Select(link => link.ClassList.Contains("lt-data-key")), Is.All.True,
+                "a member's tree and key links are 24px targets (WCAG 2.5.8)");
             Assert.That(cut.Find(".lt-data-entry").TextContent, Does.Contain("A tree you cannot see"));
             Assert.That(cut.Markup, Does.Not.Contain("hidden-physical").And.Not.Contain("tag-by-region"));
         });
