@@ -99,7 +99,9 @@ public sealed class A3Contract() : ChapterContract("A3")
         var index = await admin.GetTagIndexStatusAsync(Names.TagIndexes.OrderStatus);
         Require(index.CoveredTrees.Contains(Names.Trees.FactoryOrders), "the order-status tag index covers factory-orders");
 
-        RequireEqual(await ContractCalls.CountPrefixAsync(facades.Data, Names.Trees.FactoryLines, "line/"), Names.Lines.Count, "factory-lines holds 12 lines");
+        // A10 deletes one line, which its repair does not bring back.
+        var lines = context.IsProduced("A10") ? Names.Lines.Count - 1 : Names.Lines.Count;
+        RequireEqual(await ContractCalls.CountPrefixAsync(facades.Data, Names.Trees.FactoryLines, "line/"), lines, $"factory-lines holds {lines} lines");
 
         if (!context.IsProduced("A8"))
         {

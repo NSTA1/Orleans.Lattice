@@ -61,8 +61,7 @@ public sealed class C1Contract() : ChapterContract("C1")
         }
 
         var schema = ContractFacades.Of(context, Personas.Sam.Id).Schema;
-        var migration = await schema.StartMigrationAsync(Names.Trees.FactoryOrders);
-        await ContractWait.SucceededAsync("the re-migration to version 2", () => schema.GetSchemaOperationStatusAsync(migration.OperationId), OperationPatience);
+        await U2Contract.MigrateAsync(schema, Names.Trees.FactoryOrders, "the re-migration to version 2");
 
         await ReplayCapturedOrdersFromEastAsync(context.Estate);
     }

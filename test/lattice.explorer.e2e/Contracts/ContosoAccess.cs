@@ -102,6 +102,17 @@ public static class ContosoAccess
     public static PinnedRule FactoryStaffTelemetryRead { get; } = Group(
         StoryNames.Contoso.Rules.FactoryStaffTelemetryRead, StoryNames.Contoso.Groups.FactoryStaff, Trees.FactoryTelemetry, ReadOps);
 
+    /// <summary>
+    /// A5's group the task board's viewer role binds to: the auditors and the schema owners,
+    /// nested. An app role binds to exactly one group, so the two teams that view the board are
+    /// gathered in one group rather than bound twice.
+    /// </summary>
+    public static PinnedGroup TaskBoardViewers { get; } = new(
+        "task-board-viewers",
+        "Task board viewers",
+        [],
+        [StoryNames.Contoso.Groups.Auditors, StoryNames.Contoso.Groups.SchemaOwners]);
+
     /// <summary>The tree backing the line feed's <c>order-status</c> tag index.</summary>
     public const string OrderStatusIndexTree = "tag-" + StoryNames.Contoso.TagIndexes.OrderStatus;
 

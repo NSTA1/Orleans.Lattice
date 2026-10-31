@@ -107,11 +107,16 @@ public static class ContosoHarness
     public static async Task SeedHistoricalBackupsAsync(JourneyEstate estate)
     {
         var backup = ContractFacades.Of(estate).Backup;
-        var existing = (await ContractCalls.BackupsAsync(backup, Names.Trees.FactoryTelemetry))
-            .Select(manifest => manifest.Name)
-            .ToHashSet(StringComparer.Ordinal);
-        foreach (var number in Enumerable.Range(1, Names.Backups.HistoricalCount))
+        var existing = await HistoricalNamesAsync(backup);
+        var number = 0;
+        while (existing.Count < Names.Backups.HistoricalCount)
         {
+            number++;
+            if (number > Names.Backups.HistoricalCount * 2)
+            {
+                throw new InvalidOperationException($"Only {existing.Count} historical backups are catalogued after {number - 1} captures.");
+            }
+
             var name = HistoricalBackupName(number);
             if (existing.Contains(name))
             {
@@ -120,8 +125,22 @@ public static class ContosoHarness
 
             var handle = await backup.StartBackupAsync(new LatticeBackupCaptureRequest(name, BackupScopeSelector.WholeTree(Names.Trees.FactoryTelemetry)));
             await ContractCalls.CapturedBackupIdAsync(backup, handle.OperationId, $"the historical capture {name}");
+            existing.Add(name);
+            if (existing.Count == Names.Backups.HistoricalCount)
+            {
+                // A capture whose content another backup already holds is catalogued under the
+                // earlier name, so count what the catalogue lists, once it has settled, and top up.
+                await Task.Delay(TimeSpan.FromSeconds(5));
+                existing = await HistoricalNamesAsync(backup);
+            }
         }
     }
+
+    private static async Task<HashSet<string>> HistoricalNamesAsync(Orleans.Lattice.Api.Backup.Grpc.LatticeBackupApiGrpcClient backup) =>
+        (await ContractCalls.BackupsAsync(backup, Names.Trees.FactoryTelemetry))
+            .Select(manifest => manifest.Name)
+            .Where(name => name.StartsWith(HistoricalBackupPrefix, StringComparison.Ordinal))
+            .ToHashSet(StringComparer.Ordinal);
 
     /// <summary>The <paramref name="number"/>th historical backup's name.</summary>
     /// <param name="number">From 1 to 60.</param>

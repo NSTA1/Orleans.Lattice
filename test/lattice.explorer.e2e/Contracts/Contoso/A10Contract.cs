@@ -12,8 +12,9 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts.Contoso;
 /// <c>orders-prefix-0001</c>, the one-key capture <c>orders-key-42</c>, <c>lines-full</c> and its
 /// incremental <c>lines-inc-1</c> (taken after <see cref="StoryData.LinesEditedBeforeIncrement"/>),
 /// the cross-tree consistent set <c>factory-set-1</c> of the orders and the lines;
-/// <c>factory-lines</c> repaired in place from <c>lines-full</c> (the deleted
-/// <see cref="StoryData.LineDeletedBeforeRepair"/> back, the edits kept);
+/// <c>factory-lines</c> repaired in place from <c>lines-full</c> - a repair only fills a key no
+/// write has touched since the backup, so the edits are kept and the deleted
+/// <see cref="StoryData.LineDeletedBeforeRepair"/> stays deleted (its deletion is the newer write);
 /// <c>factory-lines-restored</c> (point-in-time replace from <c>lines-inc-1</c>) and
 /// <c>factory-lines-cold</c> (cold restore of <c>lines-full</c>); and an incremental schedule
 /// on <c>factory-lines</c> at <see cref="LinesScheduleInterval"/>. Every backup id is recorded at
@@ -118,10 +119,9 @@ public sealed class A10Contract() : ChapterContract("A10")
         RequireEqual(set.Count, 2, "factory-set-1 holds two backups, the orders and the lines");
         Require(set.Select(member => member.SetId).Distinct().Count() == 1, "factory-set-1's members share one set");
 
-        foreach (var key in new[] { StoryData.LineDeletedBeforeRepair }.Concat(StoryData.LinesEditedBeforeIncrement.Select(line => line.Key)))
-        {
-            Require(await ContractCalls.GetAsync(facades.Data, Names.Trees.FactoryLines, key) is not null, $"factory-lines holds {key} after the repair");
-        }
+        Require(
+            await ContractCalls.GetAsync(facades.Data, Names.Trees.FactoryLines, StoryData.LineDeletedBeforeRepair) is null,
+            $"{StoryData.LineDeletedBeforeRepair}, deleted after the backup, stays deleted through the repair");
 
         foreach (var edited in StoryData.LinesEditedBeforeIncrement)
         {

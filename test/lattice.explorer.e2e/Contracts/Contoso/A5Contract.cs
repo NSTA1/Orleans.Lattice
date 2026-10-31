@@ -10,7 +10,10 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts.Contoso;
 /// A5, installing the task board (#5376). Produces the task board at vNext (1.1.0, from
 /// <c>samples-next</c>) enabled, with the ceiling <see cref="NextCeiling"/>, the bindings
 /// <see cref="Bindings"/>, and its <c>tasks</c> tree (<see cref="TaskBoardTree"/>, recorded at
-/// <see cref="StoryKeys.TaskBoardTree"/>) declared replicated by its manifest. C3 uninstalls it.
+/// <see cref="StoryKeys.TaskBoardTree"/>) declared replicated by its manifest. An app role binds to
+/// exactly one group, so step 4 rebinds viewer from <c>auditors</c> to
+/// <see cref="ContosoAccess.TaskBoardViewers"/>, which nests the auditors and the schema owners.
+/// C3 uninstalls it.
 /// </summary>
 public sealed class A5Contract() : ChapterContract("A5")
 {
@@ -23,17 +26,24 @@ public sealed class A5Contract() : ChapterContract("A5")
     /// <summary>The vNext ceiling, re-consented on upgrade: vNext's editor adds RangeDelete.</summary>
     public const LatticeOperation NextCeiling = ContosoAccess.EditOps | LatticeOperation.RangeDelete;
 
-    /// <summary>The role bindings A5 leaves: editor to the stewards, viewer to the auditors and the schema owners.</summary>
-    public static ImmutableArray<AppRoleBindingDescriptor> Bindings { get; } =
+    /// <summary>The role bindings of the version 1 install: editor to the stewards, viewer to the auditors.</summary>
+    public static ImmutableArray<AppRoleBindingDescriptor> FirstBindings { get; } =
     [
         new() { RoleName = Apps.EditorRole, GroupId = Groups.DataStewards },
         new() { RoleName = Apps.ViewerRole, GroupId = Groups.Auditors },
-        new() { RoleName = Apps.ViewerRole, GroupId = Groups.SchemaOwners },
+    ];
+
+    /// <summary>The role bindings A5 leaves: editor to the stewards, viewer to <see cref="ContosoAccess.TaskBoardViewers"/>.</summary>
+    public static ImmutableArray<AppRoleBindingDescriptor> Bindings { get; } =
+    [
+        new() { RoleName = Apps.EditorRole, GroupId = Groups.DataStewards },
+        new() { RoleName = Apps.ViewerRole, GroupId = ContosoAccess.TaskBoardViewers.GroupId },
     ];
 
     /// <inheritdoc />
     public override async Task EstablishAsync(ChapterContext context)
     {
+        await ContractCalls.UpsertGroupAsync(ContractFacades.Of(context).Auth, ContosoAccess.TaskBoardViewers);
         var apps = ContractFacades.Of(context).Apps;
         var installed = await InstalledAsync(apps);
         if (installed is null)
@@ -44,7 +54,7 @@ public sealed class A5Contract() : ChapterContract("A5")
                 Version = Apps.TaskBoardVersion,
                 SourceKey = Apps.SamplesSource,
                 Ceiling = new AppCapabilityCeilingDescriptor { AllowedOperations = FirstCeiling },
-                RoleBindings = [Bindings[0], Bindings[1]],
+                RoleBindings = FirstBindings,
             });
             await apps.EnableAsync(Apps.TaskBoard);
         }
@@ -86,11 +96,12 @@ public sealed class A5Contract() : ChapterContract("A5")
             return;
         }
 
+        Require(await ContractCalls.GroupHoldsAsync(ContractFacades.Of(context).Auth, ContosoAccess.TaskBoardViewers), "task-board-viewers nests the auditors and the schema owners");
         var app = await ContractFacades.Of(context).Apps.DescribeAsync(Apps.TaskBoard);
         Require(app is not null, "the task board is installed");
         RequireEqual(app!.Version, Apps.TaskBoardNextVersion, "the task board is at vNext");
         RequireEqual(app.State, AppLifecycleState.Enabled, "the task board is enabled");
-        Require(SameBindings(app.RoleBindings), "editor is bound to data-stewards, viewer to auditors and schema-owners");
+        Require(SameBindings(app.RoleBindings), "editor is bound to data-stewards, viewer to task-board-viewers");
         Require(app.Ceiling is { } ceiling && (ceiling.AllowedOperations & NextCeiling) == NextCeiling, "vNext's ceiling is consented");
         Require(app.Replication.Length > 0, "its tree is declared replicated by its manifest");
         Require((await ContractFacades.Of(context).TreeAdmin.CheckTreeExistsAsync(TaskBoardTree)).Exists, "its tasks tree exists");

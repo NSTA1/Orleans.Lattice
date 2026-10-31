@@ -37,11 +37,34 @@ public sealed class U2Contract() : ChapterContract("U2")
             await schema.AdvanceTargetVersionAsync(orders, 2);
         }
 
-        var migration = await schema.StartMigrationAsync(orders);
-        await ContractWait.SucceededAsync("the migration to version 2", () => schema.GetSchemaOperationStatusAsync(migration.OperationId), OperationPatience);
+        await MigrateAsync(schema, orders, "the migration to version 2");
 
         await schema.ClearPolicyAsync(Names.Trees.FactoryOrdersArchive);
         await schema.ClearVersionConfigAsync(Names.Trees.FactoryOrdersArchive);
+    }
+
+    /// <summary>
+    /// Starts a migration of <paramref name="treeId"/> and waits for it to succeed, starting it
+    /// again when a slice outran the grain call timeout (#5440); any other failure is final.
+    /// </summary>
+    /// <param name="schema">The Schema API.</param>
+    /// <param name="treeId">The tree.</param>
+    /// <param name="what">The migration, for messages.</param>
+    public static async Task MigrateAsync(Orleans.Lattice.Api.Schema.Grpc.LatticeSchemaApiGrpcClient schema, string treeId, string what)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            var migration = await schema.StartMigrationAsync(treeId);
+            try
+            {
+                await ContractWait.SucceededAsync(what, () => schema.GetSchemaOperationStatusAsync(migration.OperationId), OperationPatience);
+                return;
+            }
+            catch (InvalidOperationException ex) when (attempt < 3 && ex.Message.Contains("TimeoutException", StringComparison.Ordinal))
+            {
+                // Known defect #5440: a slow slice fails the whole operation; start it again.
+            }
+        }
     }
 
     /// <inheritdoc />
