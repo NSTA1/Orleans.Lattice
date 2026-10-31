@@ -252,6 +252,18 @@ a regression check, and each has an executed production analogue above.
   duplicate activation after a membership failure could run a second pass and is
   outside the model (`RetainedRestorableConcurrentPasses` shows what that costs).
   Production symbols: `BackupSchedulerGrain`.
+- **Schedule cadence and reminder ticks.** The model has no clock-driven
+  schedule: a capture may start at any time in any slot, and a pass may follow
+  any capture. Production's reminder tick now dispatches its cycle (capture,
+  then retention) onto an interleaved grain timer and returns, and a tick that
+  fires while a reminder-driven cycle is still running starts nothing. That
+  only removes interleavings the model already explores - two scheduled cycles
+  overlapping each other - while a capture through the backup API or another
+  silo still overlaps a pass, as the capture slots model; the one-pass guard is
+  unchanged. Cadence, tick coalescing and the load a schedule puts on the silo
+  are liveness and resource questions the safety properties do not ask, and are
+  pinned by the scheduler's overlap tests instead.
+  Production symbols: `BackupSchedulerGrain.ReceiveReminder`, `BackupSchedulerGrain.RunScheduledCycleAsync`.
 - **An atomic catalog listing.** `PruneList` reads the whole catalog in one step.
   Production streams it; a row registered during the stream may be missed, which
   is the same as a listing taken before that registration, and a missed row is

@@ -92,7 +92,7 @@ internal interface ILatticeBackupSchedulerGrain : IGrainWithStringKey
     [AlwaysInterleave]
     Task<string?> RunScheduledCycleAsync(bool incremental);
 
-    /// <summary>Returns <c>true</c> when no capture is currently in flight for the scope.</summary>
+    /// <summary>Returns <c>true</c> when no capture, and no reminder-driven cycle, is currently in flight for the scope.</summary>
     [AlwaysInterleave]
     Task<bool> IsIdleAsync();
 
