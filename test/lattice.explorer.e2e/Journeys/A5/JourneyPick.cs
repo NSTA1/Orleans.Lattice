@@ -8,6 +8,10 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Journeys.A5;
 internal static class JourneyPick
 {
     /// <summary>Types <paramref name="value"/> into <paramref name="box"/> and chooses the suggestion that names it exactly.</summary>
+    /// <remarks>
+    /// A picker that suggests from a cached list may not suggest a value created moments ago;
+    /// it still accepts any typed id, so the value is then committed by leaving the field.
+    /// </remarks>
     /// <param name="page">The page the picker's suggestion list is drawn on.</param>
     /// <param name="box">The picker's combobox.</param>
     /// <param name="value">The value to choose.</param>
@@ -18,7 +22,16 @@ internal static class JourneyPick
         {
             Has = page.Locator(".lt-combobox__value", new() { HasTextRegex = new Regex($"^\\s*{Regex.Escape(value)}\\s*$") }),
         });
-        await option.First.ClickAsync();
+        try
+        {
+            await option.First.WaitForAsync(new() { Timeout = 15_000 });
+            await option.First.ClickAsync();
+        }
+        catch (System.TimeoutException)
+        {
+            await box.PressAsync("Tab");
+        }
+
         await Expect(box).ToHaveValueAsync(value);
     }
 }

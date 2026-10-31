@@ -29,11 +29,31 @@ internal sealed class AccessForAppsPage(ShellPage shell)
     /// <param name="slug">The app slug.</param>
     public async Task ShowAppOwnedRulesAsync(string slug)
     {
-        await shell.GotoAsync("/access/rules");
-        await shell.ExpectHeadingAsync("Access");
-        await Content.GetByRole(AriaRole.Group, new() { Name = "Show", Exact = true }).GetByRole(AriaRole.Button, new() { Name = "App-owned", Exact = true }).ClickAsync();
+        // The rules an enable compiles reach the listing a moment later: read it again until they do.
         var rows = AppRuleRows(slug);
-        await Expect(rows.First).ToBeVisibleAsync(new() { Timeout = 60_000 });
+        for (var attempt = 1; ; attempt++)
+        {
+            await shell.GotoAsync("/access/rules");
+            await shell.ExpectHeadingAsync("Access");
+            await Content.GetByRole(AriaRole.Group, new() { Name = "Show", Exact = true }).GetByRole(AriaRole.Button, new() { Name = "App-owned", Exact = true }).ClickAsync();
+            var more = Content.GetByRole(AriaRole.Button, new() { Name = "Load more rules", Exact = true });
+            for (var page = 0; page < 5 && await rows.CountAsync() == 0 && await more.IsVisibleAsync(); page++)
+            {
+                // The cluster holds more rules than one page: the filter applies to those loaded.
+                await more.ClickAsync();
+                await Page.WaitForTimeoutAsync(2_000);
+            }
+
+            try
+            {
+                await rows.First.WaitForAsync(new() { Timeout = 10_000 });
+                break;
+            }
+            catch (System.TimeoutException) when (attempt < 6)
+            {
+            }
+        }
+
         var owners = rows.GetByRole(AriaRole.Link, new() { Name = $"app {slug}", Exact = true });
         await Expect(owners.First).ToHaveAttributeAsync("href", new Regex($"/apps/{Regex.Escape(slug)}/roles$"));
         Coverage.Hit("route:/access/rules");
