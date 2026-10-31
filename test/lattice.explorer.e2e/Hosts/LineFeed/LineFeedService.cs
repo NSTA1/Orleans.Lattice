@@ -32,7 +32,8 @@ internal sealed record LineFeedStatus(
 
 /// <summary>
 /// The factory's upstream ingestion service. It does nothing until it is started, as a
-/// real service is onboarded; then every tick it writes a telemetry reading and, once
+/// real service is onboarded; then every tick it writes a telemetry reading (and overwrites
+/// <see cref="LatestReadingKey"/> with it) and, once
 /// orders are attached, moves an order along (<c>open</c> to <c>shipped</c>), sending an
 /// invalid order every <c>LineFeed:InvalidEvery</c> orders. Every write goes through the
 /// Data API as <c>line-feed</c>, so until that identity is granted rights its writes are
@@ -48,6 +49,16 @@ internal sealed class LineFeedService : BackgroundService
 
     /// <summary>The first order number the line feed allocates, clear of the seeded orders.</summary>
     public const int FirstOrder = 100_001;
+
+    /// <summary>
+    /// The telemetry key rewritten with every accepted reading: the line's latest reading,
+    /// and so a key with hundreds of revisions a few minutes after the feed starts.
+    /// </summary>
+    public const string LatestReadingKey = "reading/latest";
+
+    // The write counter for the latest-reading key: counted in no status figure, so
+    // TelemetryWritten stays the number of readings in the series.
+    private const int LatestCounter = -1;
 
     private static readonly string[] Sensors = ["press-1", "press-2", "oven-1", "conveyor-1"];
 
@@ -179,6 +190,10 @@ internal sealed class LineFeedService : BackgroundService
 
             if (await WriteAsync(TelemetryTree, ReadingKey(_sequence), Reading(_sequence), counter: 0, stoppingToken))
             {
+                // The panel's "latest reading" is overwritten on every accepted reading, so
+                // it is the one key with a long history (two revisions a second).
+                await WriteAsync(TelemetryTree, LatestReadingKey, Reading(_sequence), counter: LatestCounter, stoppingToken);
+
                 // A refused reading is offered again, so the series has no gaps once granted.
                 _sequence++;
             }
@@ -268,6 +283,7 @@ internal sealed class LineFeedService : BackgroundService
                 _consecutiveFailures = 0;
                 switch (counter)
                 {
+                    case LatestCounter: break;
                     case 0: _telemetry++; break;
                     case 2: _invalid++; break;
                     case 3: _wrongPrices++; _orders++; break;

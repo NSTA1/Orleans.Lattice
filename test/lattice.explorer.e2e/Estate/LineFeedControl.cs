@@ -44,6 +44,12 @@ public sealed class LineFeedControl
     /// <summary>The first order number it allocates, clear of the 240 seeded orders.</summary>
     public const int FirstOrder = 100_001;
 
+    /// <summary>
+    /// The telemetry key overwritten with every accepted reading (the line's latest reading),
+    /// so the one key in the estate with hundreds of revisions: a History tab that pages.
+    /// </summary>
+    public const string LatestReadingKey = "reading/latest";
+
     private readonly HttpClient _http;
 
     internal LineFeedControl(JourneyProcess process, int controlPort)
