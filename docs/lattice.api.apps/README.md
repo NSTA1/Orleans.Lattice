@@ -111,6 +111,16 @@ recorded outcome of a live install's last activation run failed (a caller error 
 as an invalid transition does not count). A disabled install
 is never reported as `Failed` merely because it is disabled.
 
+`EnableAsync`, `DisableAsync` and `UninstallAsync` wait up to 20 seconds for their
+activation run, well under the request timeout of the ingresses a facade sits behind
+(60 seconds at the reference Front Door, 100 seconds at a default YARP route). A run
+that takes longer is not cut off: it keeps running to completion and records its
+outcome, and the call returns with `Pending` set, `Changed` false, and the state the
+install had before the run. Poll `ListAsync` or `DescribeAsync` until the install
+reaches the requested state; a run that failed reports `Failed` there. Cancelling the
+call stops only the caller's wait, never an accepted run, so a lifecycle change is
+never left half-applied by a caller or a proxy giving up.
+
 A failed activation run throws `InvalidOperationException` naming the operation,
 the `AppActivationFailure` value and the first diagnostic, for example
 `The enable of app 'orders' failed (ReplicationModeChangeRejected): ...`. That

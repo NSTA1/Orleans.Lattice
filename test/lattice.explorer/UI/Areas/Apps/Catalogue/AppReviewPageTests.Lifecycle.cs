@@ -121,6 +121,34 @@ public sealed partial class AppReviewPageTests
         Assert.That(cut.FindAll("section[aria-labelledby=lt-apps-lifecycle] button"), Is.Empty);
     }
 
+    [Test]
+    public void An_uninstall_the_cluster_is_still_applying_is_shown_in_progress_and_followed_to_its_end()
+    {
+        Control.Pending.Add("uninstall");
+        var cut = RenderInstalled(AppLifecycleState.Disabled);
+        var toasts = Services.GetRequiredService<LtToastService>();
+
+        Button(cut, "Uninstall").Click();
+        cut.Find("[role=alertdialog] input").Input("task-board");
+        cut.Find("[role=alertdialog] form").Submit();
+
+        // The status is drawn after the follow armed its first wait, so the advance below cannot overtake it.
+        cut.WaitUntil(() => Assert.That(cut.Find("[data-lt-app-lifecycle-pending=uninstall]").TextContent,
+            Does.StartWith("Uninstalling Task board. The cluster accepted the change")));
+        Assert.Multiple(() =>
+        {
+            Assert.That(toasts.Toasts, Is.Empty, "nothing is reported done while the change runs");
+            Assert.That(cut.FindAll("section[aria-labelledby=lt-apps-lifecycle] [role=alert]"), Is.Empty, "a running change is not an error");
+            Assert.That(cut.FindAll("section[aria-labelledby=lt-apps-lifecycle] button").All(button => button.HasAttribute("disabled")), Is.True);
+        });
+
+        Control.Settle("task-board", AppLifecycleState.Uninstalled);
+        cut.InvokeAsync(() => Time.Advance(AppLifecycleFollow.PollInterval));
+
+        cut.WaitUntil(() => Assert.That(toasts.Toasts.Single().Message, Is.EqualTo("Task board is uninstalled.")));
+        Assert.That(cut.FindAll("[data-lt-app-lifecycle-pending]"), Is.Empty);
+    }
+
     private IRenderedComponent<AppReviewPage> RenderInstalled(AppLifecycleState state, bool adopted = false, string? conflict = null)
     {
         var app = AppsTestData.TaskBoard(adopted: adopted);
