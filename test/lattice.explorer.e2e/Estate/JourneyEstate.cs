@@ -320,6 +320,11 @@ public sealed partial class JourneyEstate : IAsyncDisposable
             explorerEnvironment["Explorer__ApplicationName"] = "lattice-console";
         }
 
+        if (_options.ExplorerMaxImportBytes is { } maxImportBytes)
+        {
+            explorerEnvironment["Explorer__MaxImportBytes"] = maxImportBytes.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
         switch (head.KeyRing)
         {
             case JourneyExplorerKeyRing.FileSystem:

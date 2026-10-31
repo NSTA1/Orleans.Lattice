@@ -67,6 +67,10 @@ builder.Services.AddLatticeExplorerWeb(options =>
     options.DataProtectionApplicationName = config["Explorer:ApplicationName"];
     options.AllowInteractiveEndpointConfiguration = config.GetValue("Explorer:AllowInteractiveEndpointConfiguration", false);
     options.AllowEnvironmentCredentialSeed = config.GetValue("Explorer:AllowEnvironmentCredentialSeed", false);
+    if (config.GetValue<long?>("Explorer:MaxImportBytes") is { } maxImportBytes)
+    {
+        options.MaxImportBytes = maxImportBytes;
+    }
     if (!string.IsNullOrWhiteSpace(keyRingConnection))
     {
         var container = config["Explorer:KeyRingBlobContainer"] ?? "explorer-keys";

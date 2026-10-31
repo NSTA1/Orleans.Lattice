@@ -131,6 +131,13 @@ public sealed class JourneyEstateOptions
     /// <summary>The idle lifetime of a scan cursor, or <see langword="null"/> for the product default.</summary>
     public TimeSpan? CursorIdleTtl { get; init; }
 
+    /// <summary>
+    /// The largest file every Explorer head imports (<c>LatticeExplorerWebOptions.MaxImportBytes</c>), or
+    /// <see langword="null"/> for the product default (2 GiB). Contoso lowers it so A3 can drive an oversize
+    /// import without writing gigabytes.
+    /// </summary>
+    public long? ExplorerMaxImportBytes { get; init; }
+
     /// <summary>The full-backup schedule's cadence, or <see langword="null"/> for the reference default (24 hours).</summary>
     public TimeSpan? FullBackupInterval { get; init; }
 

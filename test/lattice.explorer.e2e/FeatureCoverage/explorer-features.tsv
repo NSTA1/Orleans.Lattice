@@ -37,7 +37,7 @@ option:ConfigureDataProtection	option	LatticeExplorerWebOptions.ConfigureDataPro
 option:DataProtectionApplicationName	option	LatticeExplorerWebOptions.DataProtectionApplicationName	The LatticeExplorerWebOptions.DataProtectionApplicationName hosting mode	C4
 option:DataProtectionKeyRingBlobUri	option	LatticeExplorerWebOptions.DataProtectionKeyRingBlobUri	The LatticeExplorerWebOptions.DataProtectionKeyRingBlobUri hosting mode	C4
 option:DataProtectionKeyRingCredential	option	LatticeExplorerWebOptions.DataProtectionKeyRingCredential	The LatticeExplorerWebOptions.DataProtectionKeyRingCredential hosting mode	C4
-option:MaxImportBytes	option	LatticeExplorerWebOptions.MaxImportBytes	The LatticeExplorerWebOptions.MaxImportBytes hosting mode	C4
+option:MaxImportBytes	option	LatticeExplorerWebOptions.MaxImportBytes	The LatticeExplorerWebOptions.MaxImportBytes hosting mode	A3
 option:UseEnvironmentBootstrap	option	LatticeExplorerWebOptions.UseEnvironmentBootstrap	The LatticeExplorerWebOptions.UseEnvironmentBootstrap hosting mode	C4
 query-value:access.new=true	query-value	docs/lattice.explorer/managing-access.md#addresses	?new=true opens a New group or New rule dialog	A2
 query-value:access.view=permissions	query-value	docs/lattice.explorer/managing-access.md#explain	?view=permissions opens Effective permissions	A9
