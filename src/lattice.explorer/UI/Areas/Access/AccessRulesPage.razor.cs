@@ -292,7 +292,7 @@ public partial class AccessRulesPage : IDisposable
             ];
         }
 
-        Toasts.Show($"Rule {rule.RuleId} saved.", LtToastTone.Success);
+        Toasts.Show(AccessRuleFormat.SavedMessage(rule), AccessRuleFormat.SavedTone(rule));
         return Task.CompletedTask;
     }
 }

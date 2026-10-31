@@ -45,4 +45,26 @@ public interface ILatticeMembershipContext
         subject = default;
         return false;
     }
+
+    /// <summary>
+    /// Reports what the cluster made of the credential on the ambient
+    /// <see cref="LatticeCredentialContext"/>: absent, accepted, refused by the
+    /// authenticator that recognised it, or unverified because nothing
+    /// recognises it. Unlike <see cref="ResolveCurrentAsync"/>, which folds a
+    /// refused credential into <see cref="LatticeSubject.Anonymous"/>, this lets
+    /// a transport binding answer a refused credential as unauthenticated.
+    /// </summary>
+    /// <remarks>
+    /// The default implementation cannot tell a refused credential from an
+    /// unrecognised one, so it reports <see cref="LatticeCredentialVerdict.Absent"/>
+    /// or <see cref="LatticeCredentialVerdict.Unverified"/> and never
+    /// <see cref="LatticeCredentialVerdict.Refused"/>: a context that does not
+    /// implement this leaves every caller exactly as it resolves today. Call it
+    /// through <see cref="LatticeCredentialVerification.VerifyCurrentAsync"/>,
+    /// which runs any directory read this needs under the gate-bypass scope.
+    /// </remarks>
+    /// <param name="cancellationToken">Cancels the verification.</param>
+    /// <returns>The verdict on the ambient credential.</returns>
+    ValueTask<LatticeCredentialVerdict> VerifyCurrentCredentialAsync(CancellationToken cancellationToken = default) =>
+        new(LatticeCredentialContext.IsActive ? LatticeCredentialVerdict.Unverified : LatticeCredentialVerdict.Absent);
 }

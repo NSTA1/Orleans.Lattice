@@ -109,6 +109,32 @@ public class AuthEndpointsTests
     }
 
     [Test]
+    public async Task LoginPost_refusedByTheCluster_redirectsWithTheRefusedNotice_andNoCredential()
+    {
+        var (server, auth) = await CreateServerAsync();
+        auth.LoginAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new ExplorerSignInRefusedException(ExplorerSignInRefusedException.PasswordRefusedMessage)));
+        using var client = CreateCookieClient(server);
+
+        var token = await GetTokenAsync(client);
+
+        var response = await client.PostAsync("/auth/login", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            [TokenFieldName] = token,
+            ["username"] = "olivia",
+            ["password"] = "wrong-password",
+        }));
+
+        var location = response.Headers.Location?.ToString();
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Redirect));
+            Assert.That(location, Is.EqualTo("/?signin=refused"));
+            Assert.That(location, Does.Not.Contain("olivia").And.Not.Contain("wrong-password"));
+        });
+    }
+
+    [Test]
     public async Task LogoutPost_withValidAntiforgeryToken_signsOutAndRedirects()
     {
         var (server, auth) = await CreateServerAsync();
