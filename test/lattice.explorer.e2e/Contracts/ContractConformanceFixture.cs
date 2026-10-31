@@ -1,0 +1,109 @@
+using System.Diagnostics;
+using System.Text;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Reports;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
+
+namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts;
+
+/// <summary>
+/// The contract conformance self-test (#5364): on one real estate per storyline, every chapter
+/// in serial story order is established through its contract and then verified through it, so
+/// a seeder and its verifier can never disagree silently. Running the chapters in order on one
+/// estate also proves each seeder establishes only its own chapter on top of the ones before
+/// it, and each verifier tolerates what the later chapters change. A chapter whose consumes
+/// failed is reported blocked, never passed. Results go to the job summary.
+/// </summary>
+/// <param name="storyline">The storyline this fixture shards.</param>
+public abstract class ContractConformanceFixture(string storyline)
+{
+    private readonly List<(string Chapter, string Outcome, TimeSpan Establish, TimeSpan Verify, string? Detail)> _rows = [];
+    private readonly HashSet<string> _failed = new(StringComparer.Ordinal);
+    private JourneyEstate? _estate;
+    private StorySession? _session;
+
+    /// <summary>The storyline.</summary>
+    protected string Storyline { get; } = storyline;
+
+    /// <summary>Starts the storyline's estate.</summary>
+    [OneTimeSetUp]
+    public async Task StartEstateAsync()
+    {
+        _estate = await StoryEstates.StartAsync(Storyline);
+        _session = new StorySession(
+            Storyline, JourneyRunMode.Isolated, _estate, ChapterContracts.Discovered, StoryPlan.GraphFor(Storyline), _estate.ArtifactsDirectory);
+    }
+
+    /// <summary>Writes the conformance table and the ledger, and stops the estate.</summary>
+    [OneTimeTearDown]
+    public async Task StopEstateAsync()
+    {
+        var report = new StringBuilder()
+            .AppendLine($"### Contract conformance: {Storyline}")
+            .AppendLine()
+            .AppendLine("| Chapter | Outcome | Establish | Verify | Detail |")
+            .AppendLine("|---|---|---|---|---|");
+        foreach (var row in _rows)
+        {
+            report.AppendLine($"| {row.Chapter} | {row.Outcome} | {row.Establish.TotalSeconds:0.0}s | {row.Verify.TotalSeconds:0.0}s | {Escape(row.Detail)} |");
+        }
+
+        JobSummary.Append(report.ToString());
+        if (_session is not null && _estate is not null)
+        {
+            File.WriteAllText(Path.Combine(_estate.ArtifactsDirectory, $"conformance-ledger-{Storyline}.json"), _session.Ledger.ToJson());
+        }
+
+        if (_estate is not null)
+        {
+            await _estate.DisposeAsync();
+        }
+    }
+
+    /// <summary>One test case per outline chapter of <paramref name="storyline"/>, in serial story order.</summary>
+    /// <param name="storyline">The storyline.</param>
+    protected static IEnumerable<TestCaseData> CasesFor(string storyline) =>
+        StoryOutline.For(storyline).Select((chapter, index) =>
+            new TestCaseData(chapter.Id).SetName($"{index + 1:D2}_{chapter.Id}_establishes_what_it_verifies"));
+
+    /// <summary>Establishes <paramref name="chapter"/> through its contract, then verifies it through the same contract.</summary>
+    /// <param name="chapter">The chapter id.</param>
+    protected async Task EstablishThenVerifyAsync(string chapter)
+    {
+        var session = _session ?? throw new InvalidOperationException("The estate did not start.");
+        var blockers = StoryOutline.Find(chapter)!.After.Where(_failed.Contains).ToList();
+        if (blockers.Count > 0)
+        {
+            _failed.Add(chapter);
+            _rows.Add((chapter, "blocked", TimeSpan.Zero, TimeSpan.Zero, "blocked by " + string.Join(", ", blockers)));
+            Assert.Ignore($"BLOCKED, never passed: {chapter} consumes {string.Join(", ", blockers)}, which did not conform.");
+        }
+
+        var clock = Stopwatch.StartNew();
+        TimeSpan establish = TimeSpan.Zero;
+        try
+        {
+            await session.EstablishAsync(chapter);
+            establish = clock.Elapsed;
+            clock.Restart();
+            await session.VerifyAsync(chapter);
+            _rows.Add((chapter, "conforms", establish, clock.Elapsed, null));
+        }
+        catch (Exception ex)
+        {
+            _failed.Add(chapter);
+            var phase = establish == TimeSpan.Zero ? "establish failed" : "verify failed";
+            _rows.Add((chapter, phase, establish == TimeSpan.Zero ? clock.Elapsed : establish, establish == TimeSpan.Zero ? TimeSpan.Zero : clock.Elapsed, FirstLine(ex)));
+            throw;
+        }
+    }
+
+    private static string FirstLine(Exception exception)
+    {
+        var message = exception is AggregateException { InnerException: { } inner } ? inner.Message : exception.Message;
+        var line = message.Split('\n', 2)[0].Trim();
+        return line.Length > 240 ? line[..240] + "..." : line;
+    }
+
+    private static string Escape(string? text) => text is null ? string.Empty : text.Replace("|", "\\|", StringComparison.Ordinal);
+}

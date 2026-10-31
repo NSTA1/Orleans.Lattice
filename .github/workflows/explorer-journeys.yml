@@ -197,7 +197,7 @@ jobs:
       - name: Run the estate harness fixtures
         run: |
           dotnet test "$E2E_PROJECT" --no-build --configuration Release \
-            --filter "TestCategory=EndToEnd" \
+            --filter "TestCategory=EndToEnd&TestCategory!=ContractConformance" \
             --logger "trx;LogFileName=explorer-journeys.trx" \
             --logger "console;verbosity=normal" \
             --blame-hang-timeout 15m --blame-hang-dump-type none
@@ -211,5 +211,109 @@ jobs:
           name: explorer-journeys
           path: |
             **/explorer-journeys.trx
+            test/lattice.explorer.e2e/artifacts/**
+          if-no-files-found: ignore
+
+  # The F6 contract conformance self-test (#5364): on one estate per storyline, every
+  # chapter's contract establishes its produces through the facades and then verifies
+  # them, in serial story order. Sharded by storyline, one leg each; the main harness
+  # job excludes it.
+  contract-conformance:
+    name: Contract conformance (${{ matrix.storyline }})
+    needs: plan
+    if: needs.plan.outputs.push_is_member != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        storyline: [Contoso]
+
+    env:
+      # Two Azurite accounts, as reference-architecture/local/docker-compose.yml
+      # runs them: the primary (Table, Blob, Queue) and a separate backup sink.
+      LATTICE_E2E_STORAGE: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;
+      LATTICE_E2E_BACKUP_STORAGE: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:11000/devstoreaccount1;
+      # The east region's own account (#5362): each region keeps its clustering,
+      # grain state, WAL and console key ring on storage of its own.
+      LATTICE_E2E_EAST_STORAGE: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:12000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:12001/devstoreaccount1;TableEndpoint=http://127.0.0.1:12002/devstoreaccount1;
+      LATTICE_E2E_REQUIRED: '1'
+      LATTICE_E2E_HOSTS_DIR: ${{ github.workspace }}/.journey-hosts
+      # The commit each journey's screenshot manifest records (#5360): the PR's head, which
+      # its screenshot section is checked against, not the merge commit GITHUB_SHA names.
+      LATTICE_E2E_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # Started as containers rather than `services:` so the backup account's
+      # port can differ from the primary's, as in ci.yml's "Start Azurite" step.
+      - name: Start Azurite
+        run: |
+          docker run -d --name azurite -p 10000:10000 -p 10001:10001 -p 10002:10002 \
+            mcr.microsoft.com/azure-storage/azurite:3.36.0 \
+            azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose
+          docker run -d --name azurite-backup -p 11000:10000 \
+            mcr.microsoft.com/azure-storage/azurite:3.36.0 \
+            azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose
+          docker run -d --name azurite-east -p 12000:10000 -p 12001:10001 -p 12002:10002 \
+            mcr.microsoft.com/azure-storage/azurite:3.36.0 \
+            azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose
+
+      # Each estate that runs Prometheus starts its own container from this image,
+      # on the host network with a scrape-target file the harness writes as silos
+      # start (their ports are allocated per run), so the lane only pulls it once.
+      # The tag is JourneyPrometheus.Image; change the two together.
+      - name: Pull Prometheus
+        run: docker pull prom/prometheus:v3.1.0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: nuget-journeys-${{ runner.os }}-${{ hashFiles('src/**/*.csproj', 'test/lattice.explorer.e2e/**/*.csproj') }}
+          restore-keys: nuget-journeys-${{ runner.os }}-
+
+      - name: Build the journey tests and hosts
+        run: dotnet build "$E2E_PROJECT" --configuration Release
+
+      # Published once per job and launched by the harness with `dotnet <dll>`.
+      - name: Publish the journey hosts
+        run: |
+          set -euo pipefail
+          for host in JourneySilo JourneyExplorer JourneyGateway LineFeed; do
+            project=$(ls test/lattice.explorer.e2e/Hosts/$host/*.csproj)
+            dotnet publish "$project" --configuration Release --no-restore --output "$LATTICE_E2E_HOSTS_DIR/$host"
+          done
+
+      - name: Install Playwright Chromium
+        timeout-minutes: 15
+        run: pwsh test/lattice.explorer.e2e/bin/Release/net10.0/playwright.ps1 install --with-deps chromium
+
+      # tla-toolchain: not-required - the filter selects TestCategory=EndToEnd
+      # inside test/lattice.explorer.e2e, which contains no `Tlc`-category
+      # fixture. See spec/README.md and CiTlaToolchainProvisioningTests.
+      - name: Run the ${{ matrix.storyline }} contract conformance self-test
+        run: |
+          dotnet test "$E2E_PROJECT" --no-build --configuration Release \
+            --filter "TestCategory=ContractConformance&FullyQualifiedName~${{ matrix.storyline }}ContractConformanceTests" \
+            --logger "trx;LogFileName=contract-conformance.trx" \
+            --logger "console;verbosity=normal" \
+            --blame-hang-timeout 30m --blame-hang-dump-type none
+
+      # Every process's log and every screenshot and trace, kept on success too:
+      # member PRs take their journey screenshots from this artifact.
+      - name: Upload journey artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: contract-conformance-${{ matrix.storyline }}
+          path: |
+            **/contract-conformance.trx
             test/lattice.explorer.e2e/artifacts/**
           if-no-files-found: ignore
