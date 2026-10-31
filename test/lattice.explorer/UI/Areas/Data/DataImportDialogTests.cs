@@ -94,7 +94,7 @@ public sealed class DataImportDialogTests : DataTestContext
             "orders.ndjson"));
         cut.Find(".lt-data-import__form").Submit();
 
-        cut.WaitUntil(() => Assert.That(cut.Find(".lt-data-import").GetAttribute("data-lt-import-state"), Is.EqualTo("succeeded")), TimeSpan.FromSeconds(10));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-data-import").GetAttribute("data-lt-import-state"), Is.EqualTo("succeeded")));
         var rows = cut.FindAll("[data-lt-import-refusals] tbody tr").Select(row => row.TextContent).ToList();
         Assert.Multiple(() =>
         {
@@ -126,12 +126,12 @@ public sealed class DataImportDialogTests : DataTestContext
         Assert.That(cut.Find(".lt-data-import__error").TextContent, Does.Contain("JSON Pointer"));
     }
 
-    [TestCase("rows.csv", DataImportFormat.Csv, ',')]
-    [TestCase("rows.tsv", DataImportFormat.Csv, '\t')]
-    [TestCase("rows.jsonl", DataImportFormat.Ndjson, ',')]
-    [TestCase("rows.txt", DataImportFormat.KeyValue, ',')]
-    public void A_file_name_suggests_its_format(string name, DataImportFormat format, char delimiter) =>
-        Assert.That(DataImportDialog.FormatFor(name), Is.EqualTo((format, delimiter)));
+    [TestCase("rows.csv", "Csv", ',')]
+    [TestCase("rows.tsv", "Csv", '\t')]
+    [TestCase("rows.jsonl", "Ndjson", ',')]
+    [TestCase("rows.txt", "KeyValue", ',')]
+    public void A_file_name_suggests_its_format(string name, string format, char delimiter) =>
+        Assert.That(DataImportDialog.FormatFor(name), Is.EqualTo((Enum.Parse<DataImportFormat>(format), delimiter)));
 
     [Test]
     public void A_file_name_with_no_known_extension_suggests_nothing() =>

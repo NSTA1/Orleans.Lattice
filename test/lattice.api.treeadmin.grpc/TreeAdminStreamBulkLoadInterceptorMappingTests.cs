@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Api.TreeAdmin.Grpc.Tests;
