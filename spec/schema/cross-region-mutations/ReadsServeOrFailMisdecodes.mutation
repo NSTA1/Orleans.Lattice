@@ -1,0 +1,12 @@
+# A read serves a body for a stamp the receiver's catalog cannot decode.
+MODULE: ReadsServeOrFailMisdecodes
+TARGET: ReadsServeOrFail
+CLASS: Action
+SUMMARY: an undecodable stamp is served instead of failing explicitly
+PERTURBS: Read
+
+--- FIND
+    /\ lastRead' = [e |-> e, out |-> IF Servable(tag[e]) THEN "Body" ELSE "Fail"]
+--- REPLACE
+    /\ lastRead' = [e |-> e, out |-> "Body"]
+--- END

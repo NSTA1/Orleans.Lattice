@@ -1,0 +1,13 @@
+# Strict ingest admits an entry whose stamp the receiver's own catalog cannot
+# serve, as if the source region's definitions applied.
+MODULE: StrictAdmitsOnlyServableIgnoresCatalog
+TARGET: StrictAdmitsOnlyServable
+CLASS: Invariant
+SUMMARY: strict ingest skips the receiver's decodability check
+PERTURBS: Deliver
+
+--- FIND
+            THEN /\ IF Servable(stamp[e]) /\ body[e] = "Good"
+--- REPLACE
+            THEN /\ IF body[e] = "Good"
+--- END

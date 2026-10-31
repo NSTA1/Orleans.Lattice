@@ -1,0 +1,13 @@
+# The schema authorizer consults only the capability grant and not the tenancy
+# half of the gate.
+MODULE: AuthorizedOnlyWhenConfirmedCapabilityOnly
+TARGET: AuthorizedOnlyWhenConfirmed
+CLASS: Action
+SUMMARY: authorization skips the tenancy gate
+PERTURBS: Authorize
+
+--- FIND
+    /\ IF req.op = "Status" \/ Allowed(req.c, req.eff, CapOf(req.op))
+--- REPLACE
+    /\ IF req.op = "Status" \/ CapOf(req.op) \in grant[req.c]
+--- END

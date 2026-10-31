@@ -1,0 +1,13 @@
+# The operation is handed the caller's bare name rather than the effective tree
+# it authorized, so a confined tenant's write lands in the default tenant's tree.
+MODULE: EffectsStayInTenantActsOnRequestedName
+TARGET: EffectsStayInTenant
+CLASS: Invariant
+SUMMARY: the operation acts on the unresolved name
+PERTURBS: Act
+
+--- FIND
+           t == req.eff
+--- REPLACE
+           t == req.n
+--- END

@@ -1,0 +1,12 @@
+# A request is admitted past the request bound, so the counter leaves its domain.
+MODULE: TypeOKReceiveOverCounts
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a request is received with no request budget left
+PERTURBS: Receive
+
+--- FIND
+    /\ req.phase = "Idle" /\ count < MaxRequests
+--- REPLACE
+    /\ req.phase = "Idle"
+--- END

@@ -23,9 +23,11 @@ have one perturbation for every behaviour row. `SchemaVersionFamily`
 `SchemaDurableOperation`
 ([`SchemaDurableOperationRefinement.md`](../SchemaDurableOperationRefinement.md))
 `SchemaComplianceScan`
-([`SchemaComplianceScanRefinement.md`](../SchemaComplianceScanRefinement.md))
-and `SchemaRemediationCutover`
-([`SchemaRemediationCutoverRefinement.md`](../SchemaRemediationCutoverRefinement.md))
+([`SchemaComplianceScanRefinement.md`](../SchemaComplianceScanRefinement.md)),
+`SchemaRemediationCutover`
+([`SchemaRemediationCutoverRefinement.md`](../SchemaRemediationCutoverRefinement.md)),
+`SchemaCrossRegion` ([`SchemaCrossRegionRefinement.md`](../SchemaCrossRegionRefinement.md))
+and `SchemaTenantScope` ([`SchemaTenantScopeRefinement.md`](../SchemaTenantScopeRefinement.md))
 seed every behaviour row except those listed below. The gate requires every
 behaviour row of a module that has any perturbation to be either seeded here or
 listed below, never both.
@@ -48,3 +50,13 @@ listed below, never both.
 | SchemaStrictIngest | Propagate | The same production edit as `SchemaPolicyConfig`'s `Propagate(s)` row, which `PropagateIgnoresChangeFeed` seeds against the same detector; a second copy adds no evidence. |
 | SchemaRemediationCutover | Reshard | An environment step: the online reshard is the tree-lifecycle model's protocol, and an edit to it is a reshard defect, not a remediation one; the `RedirectsCoverSource` and `DestinationInheritsTopology` perturbations seed the remediation's response to a reshard. |
 | SchemaRemediationCutover | RemediationTerminates | Liveness: every edit that stops a remediation terminating is one of the seeded `Bank`, `CutArm`, `Complete` or `ProgressNeverRegresses` perturbations, whose detectors this row cites. |
+| SchemaCrossRegion | Deliver(e) | Every single-file edit to the receiver's ingest path is one of the seeded `StrictAdmitsOnlyServable`, `CrdtLiftedAtIngest`, `UncheckedStoredVerbatim` or `AtomicAllOrNothing` perturbations, whose detectors this row cites. |
+| SchemaCrossRegion | Decide | Applying a batch's terminal is the atomic-commit protocol's step, with no schema code on it; the schema-specific part, that a diverted entry leaves nothing staged, is the `AtomicAllOrNothing` perturbation's edit. |
+| SchemaCrossRegion | Read(e) | The same production edit as the `ReadsServeOrFail` perturbation, against the same detector; a second copy adds no evidence. |
+| SchemaCrossRegion | Register | The same production edit as `SchemaVersionFamily`'s `Register(a)` row, which `RegisterNeverPersists` seeds; a second copy adds no evidence. |
+| SchemaCrossRegion | Advance | The same production edit as `SchemaVersionFamily`'s `Advance(t)` row, which `AdvanceSkipsCatalogCheck` seeds; a second copy adds no evidence. |
+| SchemaCrossRegion | StoredStampFixed | The version admins, the runtime registry and the fold hold no path that rewrites a stored value's envelope, so no edit to one production file introduces one; the detectors pin the contract end to end against any future such path. |
+| SchemaCrossRegion | NothingAdmittedWhileUnavailable | The same production edit as `SchemaStrictIngest`'s `Judge(r)` row, which `IngestJudgeTrustsFailedLookup` seeds against the same detector; a second copy adds no evidence. |
+| SchemaCrossRegion | AdmittedNeverDropped | No receiver code aborts a replicated batch's other entries on a diversion; an edit that did would have to add the abort path, not perturb an existing one. The detectors pin the contract against any future such path. |
+| SchemaCrossRegion | EveryEntryResolved | Liveness: every edit that stops an entry resolving is one of the seeded `StrictAdmitsOnlyServable` or `AtomicAllOrNothing` perturbations, or the applier's re-throw that `SchemaStrictIngest`'s `Settle` row seeds. |
+| SchemaTenantScope | EffectsStayInTenant | Every single-file edit that lands an effect outside the caller's tenant is one of the seeded `Resolve`, `Act`, `UnattributableDenied` or `EscapeRefusedAtResolution` perturbations against the same facade seam this row's detectors drive. |

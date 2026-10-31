@@ -1,0 +1,20 @@
+# NothingLandsOnFencedCopy: the full-state CRDT fold reads and writes under the
+# replication-apply mark, so both halves meet the restored copy's receive fence.
+MODULE: SchemaCrossRegion
+ROW: NothingLandsOnFencedCopy
+FILE: src/lattice/BPlusTree/Grains/LatticeGrain.ReplicationApply.cs
+DETECTORS: FullStateCopyReceiveFenceIntegrationTests.Full_state_pn_counter_row_routed_to_a_closed_restored_copy_is_deferred_not_applied, FullStateCopyReceiveFenceIntegrationTests.Full_state_or_map_row_routed_to_a_closed_restored_copy_is_deferred_not_applied
+SUMMARY: the full-state fold resolves its copy without the replication-apply mark, as before #5294
+
+--- FIND
+        ReplicationApplyScope.Enter();
+        return await GetWithVersionCoreAsync(key, decode: false, CancellationToken.None);
+--- REPLACE
+        return await GetWithVersionCoreAsync(key, decode: false, CancellationToken.None);
+--- END
+--- FIND
+        ReplicationApplyScope.Enter();
+        return await SetIfVersionGatedAsync(key, value, expectedVersion, CancellationToken.None);
+--- REPLACE
+        return await SetIfVersionGatedAsync(key, value, expectedVersion, CancellationToken.None);
+--- END

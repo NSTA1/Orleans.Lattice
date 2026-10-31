@@ -1,0 +1,12 @@
+# UnattributableDenied: a caller with no attributable tenant is refused.
+MODULE: SchemaTenantScope
+ROW: UnattributableDenied
+FILE: src/lattice/LatticeTenantResolution.cs
+DETECTORS: LatticeSchemaControlTenantScopeTests.An_unattributed_caller_is_refused_before_the_gate_and_the_admin, LatticeTenantResolutionTests.ResolveEffectiveTreeIdAsync_async_denying_resolver_fails_closed
+SUMMARY: an unattributed caller keeps its bare name instead of being refused
+
+--- FIND
+            throw new LatticeTenantAccessDeniedException();
+--- REPLACE
+            return treeName;
+--- END

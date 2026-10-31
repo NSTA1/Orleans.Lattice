@@ -1,0 +1,12 @@
+# AuthorizedOnlyWhenConfirmed: a decision the tenancy gate cannot confirm denies.
+MODULE: SchemaTenantScope
+ROW: AuthorizedOnlyWhenConfirmed
+FILE: src/lattice.tenancy/TenantGateEnforcer.cs
+DETECTORS: TenantGateEnforcerSnapshotLagTests.EnforceAsync_registry_failure_while_the_snapshot_is_not_authoritative_denies
+SUMMARY: an unconfirmable tenancy decision is allowed
+
+--- FIND
+            return DenyUnconfirmed(in pending);
+--- REPLACE
+            return LatticeAccessDecision.Allow();
+--- END

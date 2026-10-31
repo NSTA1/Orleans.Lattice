@@ -1,0 +1,15 @@
+# The batch's decision reveals its staged entries before every entry of the
+# batch was admitted or diverted.
+MODULE: AtomicAllOrNothingDecidesEarly
+TARGET: AtomicAllOrNothing
+CLASS: Invariant
+SUMMARY: the decision is applied while an entry of its batch is still pending
+PERTURBS: Decide
+
+--- FIND
+    /\ \A e \in AtomicEntries : st[e] # "Pending"
+    /\ decided' = TRUE
+--- REPLACE
+    /\ \E e \in AtomicEntries : st[e] # "Pending"
+    /\ decided' = TRUE
+--- END

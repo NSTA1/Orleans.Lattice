@@ -1,0 +1,12 @@
+# ActsOnAuthorizedTree: the catalog read uses the id the gate authorized.
+MODULE: SchemaTenantScope
+ROW: ActsOnAuthorizedTree
+FILE: src/lattice.api.schema/LatticeSchemaControl.Registry.cs
+DETECTORS: LatticeSchemaControlTenantScopeTests.GetRegistryAsync_under_a_confined_tenant_reads_the_composed_trees_catalog
+SUMMARY: the catalog is read under the bare name after authorizing the composed id
+
+--- FIND
+        return await RequireRuntimeRegistry().GetAsync(treeId).ConfigureAwait(false);
+--- REPLACE
+        return await RequireRuntimeRegistry().GetAsync(treeId.Substring(treeId.LastIndexOf('/') + 1)).ConfigureAwait(false);
+--- END

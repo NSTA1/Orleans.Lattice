@@ -1,0 +1,12 @@
+# A status read looks an operation id up across every tenant's records.
+MODULE: StatusSeesOwnTenantOnlyIgnoresTenant
+TARGET: StatusSeesOwnTenantOnly
+CLASS: Invariant
+SUMMARY: operation records are not scoped to the caller's tenant
+PERTURBS: Act
+
+--- FIND
+                 /\ seen' = seen \cup {<<c, p[1], p[2]>> : p \in {q \in ops : q[1] = c /\ Allowed(c, q[2], "Read")}}
+--- REPLACE
+                 /\ seen' = seen \cup {<<c, p[1], p[2]>> : p \in {q \in ops : Allowed(c, q[2], "Read")}}
+--- END
