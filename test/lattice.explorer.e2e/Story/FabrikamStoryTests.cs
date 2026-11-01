@@ -1,6 +1,6 @@
 namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 
-/// <summary>The Fabrikam story (T1 to T6) on one tenanted estate, in story mode.</summary>
+/// <summary>The Fabrikam story (T1 to T7) on one tenanted estate, in story mode.</summary>
 [TestFixture]
 [Category("UI")]
 [Category("AzureStorageEmulator")]

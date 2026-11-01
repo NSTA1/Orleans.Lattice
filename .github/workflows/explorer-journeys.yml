@@ -542,7 +542,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        storyline: [Contoso]
+        storyline: [Contoso, Fabrikam]
 
     env:
       # Two Azurite accounts, as reference-architecture/local/docker-compose.yml
