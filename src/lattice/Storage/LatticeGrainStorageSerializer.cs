@@ -171,11 +171,28 @@ public sealed class LatticeGrainStorageSerializer : IGrainStorageSerializer
         // written before the type was marked is still JSON; both must read.
         if (!HasBinaryMagic(bytes.Span))
         {
-            return this.fallback.Deserialize<T>(input);
+            return this.fallback.Deserialize<T>(RepairSynthesizedCollectionTypeNames(input, bytes.Span));
         }
 
         return this.serializer.Deserialize<T>(
             new ReadOnlySequence<byte>(bytes[BinaryMagic.Length..]));
+    }
+
+    // Issue #5579: a JSON row written while a member held a compiler-synthesized
+    // collection names a type Newtonsoft cannot construct, which made the state
+    // unreadable on every activation. Such rows are rewritten before the
+    // fallback sees them; every other payload, including any non-JSON one, is
+    // passed through untouched.
+    private static BinaryData RepairSynthesizedCollectionTypeNames(BinaryData input, ReadOnlySpan<byte> bytes)
+    {
+        if (!SynthesizedCollectionTypeNames.MayContain(bytes))
+        {
+            return input;
+        }
+
+        var original = input.ToString();
+        var repaired = SynthesizedCollectionTypeNames.Repair(original);
+        return ReferenceEquals(repaired, original) ? input : BinaryData.FromString(repaired);
     }
 
     private static bool HasBinaryMagic(ReadOnlySpan<byte> payload) =>

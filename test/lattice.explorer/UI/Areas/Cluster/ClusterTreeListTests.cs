@@ -78,6 +78,31 @@ public sealed class ClusterTreeListTests : ClusterTestContext
     }
 
     [Test]
+    public void The_filter_narrows_by_owner_and_state_as_their_columns_read()
+    {
+        UseTrees(
+            Tree("a/crm/orders") with { IsAlias = true, PhysicalTreeId = "a/crm/orders/resized/7f3a" },
+            Tree("invoices"),
+            Tree("t/acme/ledger") with { Lifecycle = TreeLifecycleState.SoftDeleted });
+        var cut = RenderAt("/cluster/trees");
+        cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr"), Has.Count.EqualTo(3)));
+
+        cut.Find("input[type=search]").Input("app crm");
+        Assert.That(cut.FindAll("tbody tr a").Select(link => link.TextContent), Is.EqualTo(new[] { "a/crm/orders" }));
+
+        cut.Find("input[type=search]").Input("deleted");
+        Assert.That(cut.FindAll("tbody tr a").Select(link => link.TextContent), Is.EqualTo(new[] { "t/acme/ledger" }));
+
+        cut.Find("input[type=search]").Input("aliased");
+        Assert.That(cut.FindAll("tbody tr a").Select(link => link.TextContent), Is.EqualTo(new[] { "a/crm/orders" }));
+
+        cut.Find("input[type=search]").Input("live");
+        Assert.That(cut.FindAll("tbody tr"), Has.Count.EqualTo(2), "Live and Live, aliased");
+
+        Assert.That(cut.Find("input[type=search]").GetAttribute("placeholder"), Is.EqualTo("Filter by name, owner or state"));
+    }
+
+    [Test]
     public void An_empty_cluster_and_a_failed_read_each_say_so()
     {
         var empty = RenderAt("/cluster/trees");

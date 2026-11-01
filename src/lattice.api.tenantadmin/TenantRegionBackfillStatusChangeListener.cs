@@ -4,18 +4,14 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 
 internal sealed class TenantRegionBackfillStatusChangeListener(
     TenantRegionBackfillCoordinatorDispatcher dispatcher,
-    Microsoft.Extensions.Options.IOptions<Orleans.Configuration.ClusterOptions> clusterOptions)
+    TenantLocalRegion localRegion)
     : ITenantRegionStatusChangeListener
 {
-    private readonly string _localRegionId = string.IsNullOrEmpty(clusterOptions.Value.ClusterId)
-        ? "default"
-        : clusterOptions.Value.ClusterId;
-
     public Task OnRegionStatusChangedAsync(
         TenantRegionStatusChange change,
         CancellationToken cancellationToken)
     {
-        if (!string.Equals(change.RegionId, _localRegionId, StringComparison.Ordinal)
+        if (!string.Equals(change.RegionId, localRegion.RegionId, StringComparison.Ordinal)
             || change.CurrentStatus is not (TenantRegionStatus.Provisioning or TenantRegionStatus.Backfilling))
         {
             return Task.CompletedTask;

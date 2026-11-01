@@ -133,6 +133,15 @@ public static class LatticeTenancyServiceCollectionExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<LatticeTenancyOptions>, LatticeTenancyOptionsValidator>());
 
+        // The single authority for the region this silo serves (issue #5575): the
+        // replication cluster id on a replicated host, which is the id allowed
+        // regions and residency name, else the Orleans cluster id. Every
+        // region-scoped tenancy component resolves it here, and the silo refuses to
+        // start when it cannot be resolved rather than defaulting a region.
+        builder.Services.TryAddSingleton<TenantLocalRegion>();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, TenantLocalRegionStartupValidator>());
+
         // The registry persists TenantRecord state through the Orleans binary
         // serializer (not the lossy default JSON path), so register the wrapper
         // as an open generic that binds Orleans' Serializer<T> for the record.

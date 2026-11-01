@@ -105,6 +105,8 @@ public sealed class ReflectionSeamAuditTests
             "Framework-owned caller: BackgroundService.StartAsync invokes ExecuteAsync, so no call site of ours can regress.",
         ["test/shared/Orleans.Lattice.Testing/CrdtBufferOwnershipContractTestsBase.cs"] =
             "Census: a contract sweep whose subject is the population of members, so there is no single wiring to exempt.",
+        ["test/shared/Orleans.Lattice.Testing/GrainStateStorageRoundTripContractTestsBase.cs"] =
+            "Census (#5579): its subject is the population of IPersistentState<T> state types round-tripped through JSON grain storage. It reflects only to build probe states (non-public constructors, init-only setters) and to close its own generic RoundTrip<T>; it invokes no private production behaviour.",
     };
 
     /// <summary>

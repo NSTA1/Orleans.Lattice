@@ -40,6 +40,11 @@ internal static class LatticeGrainStorageSerializerRegistration
 
         services.AddSingleton<LatticeGrainStorageSerializerMarker>();
 
+        // Lets the JSON fallback read the read-only and immutable dictionaries
+        // it writes (issue #5579); see ReadOnlyDictionaryJsonConverter.
+        services.PostConfigure<OrleansJsonSerializerOptions>(
+            options => options.JsonSerializerSettings.Converters.Insert(0, new ReadOnlyDictionaryJsonConverter()));
+
         var prior = services.LastOrDefault(
             d => d.ServiceType == typeof(IGrainStorageSerializer) && !d.IsKeyedService);
 
