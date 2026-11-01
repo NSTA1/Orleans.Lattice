@@ -1,6 +1,7 @@
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.UI.Areas.Backups;
 using Orleans.Lattice.Explorer.UI.Transport;
+using Orleans.Lattice.Testing.Hygiene;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Backups;
 
@@ -170,5 +171,16 @@ public sealed class BackupsHelperTests
             Assert.That(() => BackupsInterop.FileNameFor("", "a"), Throws.ArgumentException);
             Assert.That(() => BackupsInterop.FileNameFor("b", ""), Throws.ArgumentException);
         });
+    }
+
+    [Test]
+    public void A_stacked_list_of_links_is_tall_enough_to_space_its_targets_24px_apart()
+    {
+        var css = File.ReadAllText(Path.Combine(HygieneRepository.FindRepoRoot(), "src", "lattice.explorer", "UI", "wwwroot", "backups", "lattice-backups.css"));
+
+        Assert.That(
+            System.Text.RegularExpressions.Regex.IsMatch(css, @"\.lt-backups-list \.lt-backups-link\s*\{[^}]*min-block-size:\s*1\.5rem;"),
+            Is.True,
+            "An operation's result links stack in a list, so each needs a 24px row to meet WCAG 2.2 target size (axe target-size).");
     }
 }
