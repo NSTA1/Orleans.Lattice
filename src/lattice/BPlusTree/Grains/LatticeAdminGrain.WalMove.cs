@@ -589,6 +589,10 @@ internal sealed partial class LatticeAdminGrain
             // 4. Verify the target tail before the irreversible cutover. The
             //    overshoot guard runs even when content verification is off.
             await ReportMoveProgressAsync(LatticeMaintenanceProgress.Verifying);
+            // The copy wrote the target through this silo's provider instance;
+            // wait until those appends are readable, so the verification and
+            // the target's first readers after the cutover see the whole copy.
+            await dstProvider.WaitForAppendVisibilityAsync(physicalTreeId, partition, cancellationToken);
             dstHighest = await dstProvider.GetHighestOffsetAsync(physicalTreeId, partition, cancellationToken);
             if (srcHighest >= 0 && dstHighest > srcHighest)
             {

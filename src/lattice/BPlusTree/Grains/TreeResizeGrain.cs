@@ -1566,6 +1566,11 @@ internal sealed class TreeResizeGrain(
             throw;
         }
 
+        // The logical tree now resolves to the copy: its replication shippers rebind
+        // and register on the copy's log, which ends the hold the build kept on it
+        // (#5471), within its grace at the latest.
+        await WalCopyLogHold.PublishAsync(grainFactory, snapshotTreeId, logger);
+
         // The logical tree now resolves to the new physical tree. Converge any tag
         // index covering this tree onto the resized structure promptly rather than
         // at the next scheduled reconcile sweep. Best-effort: the trigger swallows
