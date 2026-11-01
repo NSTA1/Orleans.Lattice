@@ -104,7 +104,7 @@ public sealed partial class C2Resilience
         await JourneyBrowser.WaitForInteractiveAsync(page);
     }
 
-    [GeneratedRegex("WebSocket|_blazor|Connection disconnected|ERR_CONNECTION_REFUSED|Failed to load resource|reconnect|Rejoin|circuit", RegexOptions.IgnoreCase)]
+    [GeneratedRegex("WebSocket|_blazor|Connection disconnected|ERR_CONNECTION_REFUSED|Failed to load resource|reconnect|Rejoin|circuit|Failed to complete negotiation with the server|Failed to start the connection", RegexOptions.IgnoreCase)]
     private static partial Regex CircuitLost();
 
     [GeneratedRegex("rejoin|reconnect", RegexOptions.IgnoreCase)]
