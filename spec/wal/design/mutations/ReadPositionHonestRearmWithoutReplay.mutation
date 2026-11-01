@@ -7,9 +7,9 @@ SUMMARY: the owner re-arms once the marker closes, without replaying to the reco
 PERTURBS: LiveAdvance
 
 --- FIND
-    /\ ~hoOpen
-    /\ rp[a] >= hoClosedAt - 1
+    /\ ~MarkerOpen(a)
+    /\ rp[a] >= MarkerClosedAt(a) - 1
 --- REPLACE
-    /\ ~hoOpen
+    /\ ~MarkerOpen(a)
 \* MUTATION: no replay to the close head.
 --- END

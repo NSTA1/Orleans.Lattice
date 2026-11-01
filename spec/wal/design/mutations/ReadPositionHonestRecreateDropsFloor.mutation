@@ -1,0 +1,16 @@
+# Re-creation removes the leaf's epoch entry without raising the partition's
+# retired floor, so the re-created leaf claims into an empty entry at an epoch a
+# surviving duplicate of the old incarnation already holds.
+MODULE: ReadPositionHonestRecreateDropsFloor
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: retiring an epoch entry does not raise the partition's retired floor
+PERTURBS: Recreate
+BOUNDS: WithRecreate = TRUE
+
+--- FIND
+    /\ retired' = Max2(retired, fence)
+--- REPLACE
+\* MUTATION: the floor is not raised.
+    /\ retired' = retired
+--- END

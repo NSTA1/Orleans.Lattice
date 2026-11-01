@@ -1,29 +1,42 @@
-# A lazy fence: the epoch is persisted eagerly but enforced only from the
-# activation's first append, so a stale duplicate appends between the claim and
-# that append, above the claim head the newer activation replays to.
+# A lazy fence: the epoch is persisted eagerly but the shard's entry is raised
+# only by the activation's first append, so a stale duplicate appends between
+# the newer activation's claim and that append, above the claim head the newer
+# activation replays to.
 MODULE: NoTrimPastAckedLazyFence
 TARGET: NoTrimPastAcked
 CLASS: Invariant
-SUMMARY: the claim does not raise the WAL shard's fence; the activation's first append does
-PERTURBS: Claim, OwnAppend
+SUMMARY: the claim does not raise the WAL shard's entry; the activation's first append does
+PERTURBS: Claim, OwnAlloc
 
 --- FIND
-    /\ shardFence' = Max2(shardFence, rowEpoch + 1)
-    /\ claimHead' = [claimHead EXCEPT ![a] = next]
+        /\ fence' = Max2(fence, e)
+        /\ memFence' = Max2(fence, e)
 --- REPLACE
-\* MUTATION: the claim leaves the shard's table alone.
-    /\ shardFence' = shardFence
-    /\ claimHead' = [claimHead EXCEPT ![a] = next]
+\* MUTATION: the claim leaves the shard's entry alone.
+        /\ fence' = fence
+        /\ memFence' = memFence
 --- END
 
 --- FIND
+    /\ memFence > 0
+    /\ epoch[a] >= memFence
+    /\ next < MaxOff
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = a]
+    /\ inflight' = inflight \cup {next}
     /\ staleAccepted' = (staleAccepted \/ epoch[a] < maxClaimed)
-    /\ UNCHANGED <<inflight, floor, up, rp, snapCov, snapRows, epochVars, handVars,
-                   envVars, maxClaimed, rejected, advanced, advancedPastForeign>>
+    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, viewVars, envVars,
+                   wghosts>>
 --- REPLACE
+    /\ epoch[a] >= memFence
+    /\ next < MaxOff
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = a]
+    /\ inflight' = inflight \cup {next}
     /\ staleAccepted' = (staleAccepted \/ epoch[a] < maxClaimed)
-\* MUTATION: the first append raises the table instead.
-    /\ shardFence' = Max2(shardFence, epoch[a])
-    /\ UNCHANGED <<inflight, floor, up, rp, snapCov, snapRows, rowEpoch, seen, epoch, claimHead, handVars,
-                   envVars, maxClaimed, rejected, advanced, advancedPastForeign>>
+\* MUTATION: the first append raises the entry instead.
+    /\ fence' = Max2(fence, epoch[a])
+    /\ memFence' = Max2(memFence, epoch[a])
+    /\ UNCHANGED <<durable, acked, floor, leafVars, rowEpoch, seen, epoch, claimHead, retired,
+                   maxClaimed, handVars, viewVars, envVars, wghosts>>
 --- END

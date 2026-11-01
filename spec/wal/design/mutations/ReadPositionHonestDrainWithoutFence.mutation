@@ -1,0 +1,18 @@
+# A drain that waits instead of fencing. The close records the allocator head
+# without re-claiming the author's epoch, so a write admitted before the close
+# and delivered after it is allocated above the recorded head; the owner re-arms
+# below it and passes it. Waiting for every admitted write to return is the same
+# thing in this model: a call returns by timeout while its append is still
+# delivered.
+MODULE: ReadPositionHonestDrainWithoutFence
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the close records the head without fencing out writes admitted before it
+PERTURBS: Close
+
+--- FIND
+    /\ fFence' = fEpoch + 1
+--- REPLACE
+\* MUTATION: no fence: the shard's entry for the author is not raised.
+    /\ fFence' = fFence
+--- END

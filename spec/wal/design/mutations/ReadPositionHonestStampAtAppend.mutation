@@ -1,0 +1,25 @@
+# The append is stamped with the author's epoch when it is sent, not when the
+# write was admitted, so a write admitted before the close carries the
+# re-claimed epoch and is accepted above the recorded head.
+MODULE: ReadPositionHonestStampAtAppend
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the foreign append carries the author's current epoch instead of the epoch it was admitted under
+PERTURBS: ForeignAlloc, ForeignReject
+
+--- FIND
+    /\ fpend
+    /\ fstamp >= fFence
+--- REPLACE
+    /\ fpend
+\* MUTATION: stamped at append time.
+    /\ fEpoch >= fFence
+--- END
+
+--- FIND
+    /\ fpend
+    /\ fstamp < fFence
+--- REPLACE
+    /\ fpend
+    /\ fEpoch < fFence
+--- END

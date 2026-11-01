@@ -3,17 +3,15 @@
 MODULE: NoTrimPastAckedNoEpochCheck
 TARGET: NoTrimPastAcked
 CLASS: Invariant
-SUMMARY: the WAL shard accepts an append from an epoch below its table's
-PERTURBS: OwnAppend
+SUMMARY: the WAL shard accepts an append from an epoch below its entry
+PERTURBS: OwnAlloc
 
 --- FIND
-    /\ epoch[a] > 0
-    /\ epoch[a] >= shardFence
+    /\ memFence > 0
+    /\ epoch[a] >= memFence
     /\ next < MaxOff
-    /\ next' = next + 1
 --- REPLACE
-    /\ epoch[a] > 0
+    /\ memFence > 0
 \* MUTATION: the shard does not check the epoch.
     /\ next < MaxOff
-    /\ next' = next + 1
 --- END
