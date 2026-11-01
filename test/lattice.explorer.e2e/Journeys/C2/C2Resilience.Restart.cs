@@ -18,7 +18,8 @@ public sealed partial class C2Resilience
     /// C2.3: the harness kills the west Explorer (which persists no Data Protection keys) under
     /// priya's open tab, and starts it again. Her tab says it lost the server; once the head is
     /// back the page reloads itself at the same address, where her old session cookie no longer
-    /// decrypts: the console reads <b>Sign-in required</b> and offers <b>Sign in</b>. She signs in
+    /// decrypts: the banner offers <b>Sign in</b> (the connection indicator still reads
+    /// Connected, because the cluster itself stayed reachable). She signs in
     /// through the sign-in dialog. That she lands on Home rather than back on the address she was
     /// on is #5481.
     /// </summary>
@@ -52,8 +53,7 @@ public sealed partial class C2Resilience
         await WaitForReloadAsync(page, TimeSpan.FromMinutes(2));
         Assert.That(new Uri(page.Url).PathAndQuery, Is.EqualTo(address.PathAndQuery), "the tab reloaded itself at the address it was on");
         await priya.Shell.ExpectSignedOutAsync();
-        await priya.Shell.ExpectConnectionAsync("Sign-in required");
-        await step.CaptureAsync(priya, "signed-out", "The page reloaded at the same address; the old session no longer decrypts, so the console reads Sign-in required");
+        await step.CaptureAsync(priya, "signed-out", "The page reloaded at the same address; the old session no longer decrypts, so the banner offers Sign in");
         Coverage.Hit("use-case:shell/unresponsive-console");
 
         var dialog = await priya.Shell.OpenSignInAsync();
