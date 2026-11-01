@@ -127,7 +127,7 @@ public sealed class AppPagesRegistrationTests
         var rules = ShellStylesheets.Rules("src/lattice.explorer/UI/wwwroot/apps/app.css");
         var ownClasses = rules
             .SelectMany(rule => System.Text.RegularExpressions.Regex.Matches(rule.Selector, @"\.(lt-[a-z0-9_-]+)").Select(match => match.Groups[1].Value))
-            .Where(name => !name.StartsWith("lt-tabs", StringComparison.Ordinal) && !name.StartsWith("lt-btn", StringComparison.Ordinal));
+            .Where(name => !name.StartsWith("lt-tabs", StringComparison.Ordinal) && !name.StartsWith("lt-btn", StringComparison.Ordinal) && !name.StartsWith("lt-table", StringComparison.Ordinal));
 
         Assert.Multiple(() =>
         {
@@ -135,6 +135,8 @@ public sealed class AppPagesRegistrationTests
             Assert.That(ownClasses, Has.All.StartWith("lt-app-"));
             Assert.That(rules.Single(rule => rule.Selector == ".lt-app-sections .lt-tabs__tab").Body, Does.Contain("min-height: 2.75rem;"));
             Assert.That(rules.Single(rule => rule.Selector == ".lt-app-actions > .lt-btn").Body, Does.Contain("min-height: 2.75rem;"));
+            Assert.That(rules.Single(rule => rule.Selector == ".lt-app-sections .lt-table__cell > a").Body, Does.Contain("min-block-size: 1.5rem;"),
+                "a section table's link, such as a tree name, is a 24px touch target (WCAG 2.2 target size, journey A5)");
         });
     }
 }
