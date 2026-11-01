@@ -111,6 +111,12 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
     /// </summary>
     public FacadeFaults Faults => Head.Services.GetRequiredService<FacadeFaults>();
 
+    /// <summary>
+    /// The switch that holds a tree's delete until the test releases it, as a loaded cluster
+    /// delays retiring a replicated tree (issue #5482). Dispose what it returns.
+    /// </summary>
+    public TreeDeleteHolds TreeDeletes => Head.Services.GetRequiredService<TreeDeleteHolds>();
+
     /// <summary>Starts the world and seeds its data, groups and rules.</summary>
     public static Task<ExplorerWorld> StartAsync() => StartCoreAsync(tenancy: false, delegatedAccess: false);
 
@@ -426,10 +432,12 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
             silo.AddLatticeReplicationStatusApi();
 
             silo.Services.AddSingleton<ILatticeCredentialAuthenticator, TrustedUserAuthenticator>();
+            silo.AddIncomingGrainCallFilter<TreeDeleteHoldFilter>();
         });
 
         var services = builder.Services;
         services.AddSingleton<FacadeFaults>();
+        services.AddSingleton<TreeDeleteHolds>();
         services.AddGrpc(options => options.Interceptors.Add<FacadeFaultInterceptor>());
         services.AddLatticeStateApiGrpc(o => { o.RequireAuthorization = false; o.CredentialScheme = TrustedUserAuthenticator.Scheme; });
         services.AddLatticeDataApiGrpc(o => { o.RequireAuthorization = false; o.CredentialScheme = TrustedUserAuthenticator.Scheme; });
