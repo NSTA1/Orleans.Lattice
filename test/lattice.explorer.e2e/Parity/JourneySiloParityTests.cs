@@ -27,6 +27,8 @@ public sealed class JourneySiloParityTests
         "GET /e2e/activation",  // which silo hosts an activation
         "GET /e2e/activations", // the activations whose key contains a fragment
         "POST /e2e/orphan",     // the state a crash mid-split leaves (#5359)
+        "POST /e2e/compliance-delay",   // a bounded hold on a named tree's compliance scan (U2, C2)
+        "DELETE /e2e/compliance-delay", // release that hold early
         "POST /e2e/memory",     // the live heap after a forced collection, on silos and the Explorer head (#5475)
     ];
 
