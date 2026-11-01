@@ -1,4 +1,5 @@
 using Orleans.Lattice.Api.Data;
+using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Explorer.EndToEnd.HostContract;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Checkpoints;
@@ -242,6 +243,11 @@ public sealed class A12ClusterInDepth : JourneyChapter
     // 6. Off-UI, an orphaned leaf; the audit finds it, Show each leaf, Repair..., and a re-audit is clean.
     private static async Task RepairOrphanAsync(ChapterContext context, PersonaSession olivia, JourneyRecorder recorder)
     {
+        // A reshard can report complete while a grown shard still finishes its split, and the
+        // orphan pass declines such a shard (a ShardSplitInProgress gap) rather than judge it
+        // (#5550). Wait, bounded, until every shard is judged, so neither the injection nor the
+        // audit below lands on a shard mid-split.
+        await WaitUntilEveryShardIsJudgedAsync(context.Estate, TimeSpan.FromMinutes(2));
         await context.Estate.InjectOrphanedLeafAsync(Restored);
 
         var orphans = new ClusterOrphansPage(olivia.Shell);
@@ -265,6 +271,33 @@ public sealed class A12ClusterInDepth : JourneyChapter
         var data = ContractFacades.Of(estate).Data;
         var map = await ContractFacades.Of(estate).TreeAdmin.InspectShardMapAsync(Restored);
         await ContractCalls.SetManyAsync(data, Restored, SplitBurst(map.VirtualShardCount).Select(key => new StoryEntry(key, "{\"burst\":true}")));
+    }
+
+    private static async Task WaitUntilEveryShardIsJudgedAsync(JourneyEstate estate, TimeSpan timeout)
+    {
+        var admin = ContractFacades.Of(estate).TreeAdmin;
+        var deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            var splitting = 0;
+            TreeOrphanedLeafReport? report = null;
+            do
+            {
+                report = await admin.AuditOrphanedLeavesAsync(Restored, report?.ResumeFrom);
+                splitting += report.Gaps.Count(gap => gap.Reason == TreeOrphanedLeafGapReason.ShardSplitInProgress);
+            }
+            while (!report.IsComplete);
+
+            if (splitting == 0)
+            {
+                return;
+            }
+
+            Assert.That(DateTime.UtcNow, Is.LessThan(deadline),
+                $"{Restored} still had {splitting} shard(s) mid-split after {timeout.TotalMinutes} minutes");
+            TestContext.Progress.WriteLine($"A12.6: {splitting} shard(s) of {Restored} still mid-split; auditing again");
+            await Task.Delay(TimeSpan.FromSeconds(2));
+        }
     }
 
     private static async Task DeleteSplitBurstAsync(JourneyEstate estate)
