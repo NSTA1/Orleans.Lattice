@@ -104,8 +104,12 @@ function taskPath(id) {
   return id === null ? "/" : "/tasks/" + id;
 }
 
+// The Explorer delivers the window's in-app path with its ?query= appended
+// ("/tasks/{id}?from=..."): the board selects by the path alone, so a deep link
+// that carries a query still opens its task.
 function idFromPath(path) {
-  const match = /^\/tasks\/([^/?#]+)$/.exec(path);
+  const bare = typeof path === "string" ? path.split(/[?#]/, 1)[0] : "";
+  const match = /^\/tasks\/([^/]+)$/.exec(bare);
   return match !== null && ID_PATTERN.test(match[1]) ? match[1] : null;
 }
 
