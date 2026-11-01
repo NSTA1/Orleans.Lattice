@@ -19,8 +19,12 @@ namespace Orleans.Lattice.Membership;
 /// is reflected without a process restart, and it is flushed whenever
 /// <see cref="LatticeMembershipOptions"/> changes, so a subject mapped under the
 /// previous group merge rules is not served after them. The observer runs on the silo that
-/// commits the write, so in a multi-silo cluster another silo's cache keeps a
-/// pre-change entry until that entry expires. Cache hits and misses are counted on the
+/// commits the write, so on its own it would leave another silo's cache serving a
+/// pre-change entry until that entry expired; the
+/// <see cref="MembershipEpochSynchronizer"/> closes that gap by flushing every
+/// other silo within about a second through a cluster-wide epoch, and once it is in
+/// charge a warm entry is served only while its last poll confirmed the cache
+/// current (see <see cref="RequireConfirmedCurrency"/>). Cache hits and misses are counted on the
 /// membership-owned meter through <see cref="LatticeMembershipMetrics"/>.
 /// </summary>
 internal sealed class MembershipResolutionCache : IMutationObserver, IDisposable
@@ -46,6 +50,14 @@ internal sealed class MembershipResolutionCache : IMutationObserver, IDisposable
     // the pre-flush rules is never cached after the flush that was meant to
     // evict it.
     private long _generation;
+
+    // Cross-silo currency (#5518). Zero until a MembershipEpochSynchronizer takes
+    // charge of this cache; from then on a warm entry is served only while
+    // _currentUntilUtcTicks - set by each successful epoch poll - lies ahead, so a
+    // silo that cannot learn of membership writes committed elsewhere stops
+    // serving cached resolutions instead of serving pre-change groups.
+    private int _confirmedCurrencyRequired;
+    private long _currentUntilUtcTicks;
 
     /// <summary>
     /// Initializes the cache and subscribes it to option changes, each of which
@@ -83,7 +95,9 @@ internal sealed class MembershipResolutionCache : IMutationObserver, IDisposable
     {
         if (_options.CurrentValue.ResolutionCacheTtl > TimeSpan.Zero
             && _entries.TryGetValue(cacheKey, out var entry)
-            && _timeProvider.GetUtcNow() < entry.ExpiresAt)
+            && _timeProvider.GetUtcNow() is var now
+            && now < entry.ExpiresAt
+            && IsConfirmedCurrent(now))
         {
             subject = entry.Subject;
             LatticeMembershipMetrics.RecordResolutionCacheHit();
@@ -113,7 +127,7 @@ internal sealed class MembershipResolutionCache : IMutationObserver, IDisposable
         var ttl = _options.CurrentValue.ResolutionCacheTtl;
         var now = _timeProvider.GetUtcNow();
 
-        if (ttl > TimeSpan.Zero && _entries.TryGetValue(cacheKey, out var entry) && now < entry.ExpiresAt)
+        if (ttl > TimeSpan.Zero && _entries.TryGetValue(cacheKey, out var entry) && now < entry.ExpiresAt && IsConfirmedCurrent(now))
         {
             LatticeMembershipMetrics.RecordResolutionCacheHit();
             return entry.Subject;
@@ -208,6 +222,35 @@ internal sealed class MembershipResolutionCache : IMutationObserver, IDisposable
         Interlocked.Increment(ref _generation);
         _entries.Clear();
     }
+
+    /// <summary>
+    /// Makes the cache serve a warm entry only while a confirmation from
+    /// <see cref="ConfirmCurrentUntil"/> holds. Called once by the
+    /// <see cref="MembershipEpochSynchronizer"/> that takes charge of keeping this
+    /// cache current with membership writes committed on other silos; a cache
+    /// nobody keeps current (a host without the synchronizer) is unaffected.
+    /// </summary>
+    internal void RequireConfirmedCurrency() => Volatile.Write(ref _confirmedCurrencyRequired, 1);
+
+    /// <summary>
+    /// Records that a read of the cluster-wide membership epoch found nothing this
+    /// cache has not already reflected, so warm entries may be served until
+    /// <paramref name="until"/>.
+    /// </summary>
+    /// <param name="until">The instant the confirmation lapses.</param>
+    internal void ConfirmCurrentUntil(DateTimeOffset until) =>
+        Volatile.Write(ref _currentUntilUtcTicks, until.UtcTicks);
+
+    /// <summary>
+    /// Whether a warm entry may be served at <paramref name="now"/>: always when no
+    /// synchronizer keeps the cache current, otherwise only while its last
+    /// confirmation holds.
+    /// </summary>
+    /// <param name="now">The current instant.</param>
+    /// <returns><c>true</c> when a warm entry may be served.</returns>
+    internal bool IsConfirmedCurrent(DateTimeOffset now) =>
+        Volatile.Read(ref _confirmedCurrencyRequired) == 0
+        || now.UtcTicks < Volatile.Read(ref _currentUntilUtcTicks);
 
     /// <summary>Stops flushing on option changes.</summary>
     public void Dispose() => Interlocked.Exchange(ref _optionsChange, null)?.Dispose();

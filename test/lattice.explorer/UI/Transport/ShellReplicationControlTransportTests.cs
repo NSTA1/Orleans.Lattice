@@ -13,6 +13,7 @@ public sealed class ShellReplicationControlTransportTests : ShellTransportAdapte
         new("EnableReplicationAsync", Service + "EnableReplication", (f, ct) => f.EnableReplicationAsync("orders", LatticeMergeMode.LwwRegister, "west", ct)),
         new("DisableReplicationAsync", Service + "DisableReplication", (f, ct) => f.DisableReplicationAsync("orders", ct)),
         new("GetReplicationConfigAsync", Service + "GetReplicationConfig", (f, ct) => f.GetReplicationConfigAsync(ct)),
+        new("ProbeCapabilitiesAsync", Service + "ProbeCapabilities", (f, ct) => f.ProbeCapabilitiesAsync("orders", ct)),
     ];
 
     [Test]
@@ -37,6 +38,7 @@ public sealed class ShellReplicationControlTransportTests : ShellTransportAdapte
         {
             Assert.That(() => control.EnableReplicationAsync(string.Empty, LatticeMergeMode.LwwRegister), Throws.ArgumentException);
             Assert.That(() => control.DisableReplicationAsync(string.Empty), Throws.ArgumentException);
+            Assert.That(() => control.ProbeCapabilitiesAsync(string.Empty), Throws.ArgumentException);
             Assert.That(circuit.Peer.Requests, Is.Empty);
         });
     }
