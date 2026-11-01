@@ -348,10 +348,8 @@ public sealed class SchemaRuleBuilderCardTests : SchemaRuleBuilderTestBase
     }
 
     [Test]
-    public void Every_rule_action_names_itself_with_its_visible_text()
+    public void Every_labelled_rule_action_names_its_visible_text()
     {
-        // #5385: "Or..." was named "Add an alternative to rule 1", which axe reports as
-        // label-content-name-mismatch: a speech user saying the word they see finds nothing.
         UseTrees("scratch");
         var cut = OpenEditor("scratch");
         StartRule(cut);
@@ -360,24 +358,16 @@ public sealed class SchemaRuleBuilderCardTests : SchemaRuleBuilderTestBase
         Type(cut, "Smallest", "0");
         Commit(cut);
 
-        cut.WaitUntil(() =>
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-schema-ruleset__actions button"), Is.Not.Empty));
+        Assert.Multiple(() =>
         {
-            var buttons = cut.FindAll(".lt-schema-ruleset__actions button");
-            Assert.That(buttons, Is.Not.Empty);
-            Assert.Multiple(() =>
+            foreach (var button in cut.FindAll(".lt-schema-ruleset__actions button"))
             {
-                foreach (var button in buttons)
-                {
-                    var visible = Words(button.TextContent);
-                    var name = Words(button.GetAttribute("aria-label") ?? button.TextContent);
-                    Assert.That(name, Does.Contain(visible), $"'{button.GetAttribute("aria-label")}' does not contain its visible text '{button.TextContent.Trim()}'.");
-                }
-            });
+                var visible = Text(button).TrimEnd('.');
+                Assert.That(button.GetAttribute("aria-label"), Does.Contain(visible).IgnoreCase,
+                    $"The accessible name of the '{Text(button)}' button must contain its visible text (WCAG 2.5.3).");
+            }
         });
-
-        static string Words(string text) =>
-            string.Join(' ', new string([.. text.Where(c => char.IsLetterOrDigit(c) || char.IsWhiteSpace(c))])
-                .Split(' ', StringSplitOptions.RemoveEmptyEntries)).ToLowerInvariant();
     }
 
     [Test]

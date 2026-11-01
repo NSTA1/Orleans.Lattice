@@ -124,10 +124,10 @@ internal sealed class LatticeAppWorkspace : ILatticeAppWorkspace
             }
 
             var record = granted.Install.Record;
-            var status = _pipeline is null
-                ? null
-                : await _pipeline.GetStatusAsync(record.Tenant, slug, cancellationToken).ConfigureAwait(false);
-            return AppsWorkspaceMapping.ToDescriptor(granted, AppsControlMapping.ToWireState(record.State, status));
+            var state = _pipeline is null
+                ? AppsControlMapping.ToWireState(record.State, status: null)
+                : (await AppsLiveState.ReadAsync(_pipeline, record.Tenant, record, cancellationToken).ConfigureAwait(false)).State;
+            return AppsWorkspaceMapping.ToDescriptor(granted, state);
         }
         catch (Exception ex) when (AppsControlExceptionSanitizer.TryRewrite(ex, appSlug, out var sanitized))
         {

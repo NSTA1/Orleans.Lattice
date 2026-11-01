@@ -1,5 +1,4 @@
 using Orleans.Lattice.Explorer.Core.Data;
-using Orleans.Lattice.Schema;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 
@@ -19,9 +18,5 @@ internal readonly record struct DataEntryVersion(bool Exists, HybridLogicalClock
 
     /// <summary>The body a person edits: the stored bytes with any schema version envelope stripped.</summary>
     /// <param name="value">The stored bytes.</param>
-    public static byte[] Body(byte[] value)
-    {
-        ArgumentNullException.ThrowIfNull(value);
-        return LatticeSchemaEnvelope.IsEnveloped(value) ? LatticeSchemaEnvelope.StripToBody(value) : value;
-    }
+    public static byte[] Body(byte[] value) => DataValueEnvelope.Body(value);
 }

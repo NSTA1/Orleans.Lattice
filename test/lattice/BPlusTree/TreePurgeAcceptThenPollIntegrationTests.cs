@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Reflection;
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Configuration;
@@ -432,37 +431,6 @@ public sealed class TreePurgeAcceptThenPollIntegrationTests
 
             await context.Invoke();
         }
-    }
-
-    /// <summary>
-    /// The silo's runtime response timeout. The configured
-    /// <c>SiloMessagingOptions.ResponseTimeout</c> is only read once, when the
-    /// runtime client is built, so relaxing it for setup has to go through the
-    /// runtime client, which Orleans keeps internal. Grain calls sent from the silo
-    /// take both their deadline and their message expiry from this value.
-    /// </summary>
-    private sealed class SiloResponseTimeout(object runtimeClient, MethodInfo get, MethodInfo set)
-    {
-        internal static SiloResponseTimeout Resolve(IServiceProvider services)
-        {
-            var type = typeof(MessagingOptions).Assembly.GetType("Orleans.Runtime.IRuntimeClient");
-            Assert.That(type, Is.Not.Null,
-                "Orleans.Runtime.IRuntimeClient was renamed or moved; update how this fixture relaxes its setup timeout.");
-            var get = type!.GetMethod("GetResponseTimeout", Type.EmptyTypes);
-            var set = type.GetMethod("SetResponseTimeout", [typeof(TimeSpan)]);
-            var client = services.GetService(type);
-            Assert.Multiple(() =>
-            {
-                Assert.That(get, Is.Not.Null, "IRuntimeClient.GetResponseTimeout was renamed; update this fixture.");
-                Assert.That(set, Is.Not.Null, "IRuntimeClient.SetResponseTimeout was renamed; update this fixture.");
-                Assert.That(client, Is.Not.Null, "the silo no longer registers IRuntimeClient; update this fixture.");
-            });
-            return new SiloResponseTimeout(client!, get!, set!);
-        }
-
-        public TimeSpan Current => (TimeSpan)get.Invoke(runtimeClient, null)!;
-
-        public void Set(TimeSpan timeout) => set.Invoke(runtimeClient, [timeout]);
     }
 
     private sealed class SiloConfigurator : ISiloConfigurator
