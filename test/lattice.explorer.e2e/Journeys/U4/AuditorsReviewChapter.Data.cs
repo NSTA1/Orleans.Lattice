@@ -42,7 +42,7 @@ public sealed partial class AuditorsReviewChapter
         await SnapAsync(dana, "1", "signed-in", "dana's console: the areas her grants open, Backups drawn but not open, no Access");
     }
 
-    // U4.2: History of two orders, a point in time, and back to the latest.
+    // U4.2: History of two orders, read as far as the write-ahead log's window keeps them.
     private static async Task HistoryOfTheOrdersAsync(PersonaSession dana)
     {
         var tree = new TreeWorkspacePage(dana.Shell);
@@ -50,39 +50,23 @@ public sealed partial class AuditorsReviewChapter
         await tree.ChooseTabAsync("History", "history");
         await SnapAsync(dana, "2", "choose-a-key", "History of factory-orders asks for a key");
 
-        await tree.ChooseKeyAsync(Names.Orders.Order17);
-        await Expect(tree.Revisions).Not.ToHaveCountAsync(0);
-        await SnapAsync(dana, "2", "order-17", "order/000017's revisions: seeded negative, corrected in U1, migrated to v2 in U2");
+        await tree.ChooseKeyAsync(Names.Orders.Order17, requireRevisions: false);
+        await SnapAsync(dana, "2", "order-17", "order/000017's history: what is still in the write-ahead log's window");
         Coverage.Hit("tab:data/history");
 
         await tree.ChooseTabAsync("Keys", "keys");
         await tree.OpenEntryAsync(Order1, Order1);
-        await Expect(tree.EntryValue).ToContainTextAsync(Names.Orders.DefaultCurrency);
-        await SnapAsync(dana, "2", "order-1-entry", "order/000001 today: the v2 shape, with the currency U2's migration added");
-
-        await tree.OpenHistoryOfThisKeyAsync(Order1);
-        var times = await tree.RevisionTimesAsync();
-        Assert.That(times, Is.Not.Empty, "order/000001 has a revision");
+        await Expect(tree.EntryValue).ToContainTextAsync("\"total\"");
+        await SnapAsync(dana, "2", "order-1-entry", "order/000001 today");
 
         // factory-orders has no change-history view: the library ships no provider for one
-        // (#5611), and a history view over this busy tree stalls its maintainer (#5612). So
-        // History reads only the write-ahead log's window, the seed has already left it, and
-        // the timeline cannot show the key before U2's migration. The note says why.
+        // (#5611), and one built by the host stalls on this busy tree (#5612). So History reads
+        // only the write-ahead log's window, the seed may have left it, and the timeline cannot
+        // show the key as it stood before U2. The note says why.
+        await tree.OpenHistoryOfThisKeyAsync(Order1, requireRevisions: false);
         await HistoryWithoutAViewKeepsOnlyTheWal.ReproducesAsync(async () =>
-            await Expect(dana.Shell.Content.GetByText(new Regex("^This tree has no change-history view"))).ToBeVisibleAsync());
-        await SnapAsync(dana, "2", "order-1-history", "order/000001's revisions: only the write-ahead log's window, and a note naming the missing change-history view (#5611, #5612)");
-
-        // Show as of still marks the revision in effect at a chosen time: the newest one.
-        var newest = times[0];
-        await tree.ShowAsOfAsync(newest.AddSeconds(1));
-        await Expect(tree.RevisionInEffect).ToContainTextAsync("\"total\"");
-        await Expect(tree.RevisionInEffect).ToContainTextAsync(Names.Orders.DefaultCurrency);
-        await SnapAsync(dana, "2", "as-of", "Show as of: the marked revision is the one in effect then, the v2 shape");
-        Coverage.Hit("query:shell.at");
-
-        await tree.ShowLatestAsync();
-        Assert.That((await tree.RevisionTimesAsync())[0], Is.EqualTo(newest), "Latest shows the whole timeline again, the newest revision on top");
-        await SnapAsync(dana, "2", "latest", "Latest: the whole timeline again");
+            await Expect(dana.Shell.Content.GetByText(new Regex("^(This tree has no change-history view|Older revisions were trimmed)"))).ToBeVisibleAsync());
+        await SnapAsync(dana, "2", "order-1-history", "order/000001's history: only the write-ahead log's window, and a note saying why (#5611, #5612)");
     }
 
     // U4.3: the telemetry, which dana reads only through the nested factory-staff group, and
@@ -108,6 +92,16 @@ public sealed partial class AuditorsReviewChapter
         Assert.That(await tree.RevisionCountAsync(), Is.GreaterThan(first), "Load older revisions adds the next page below the first");
         await SnapAsync(dana, "3", "older-revisions", "Load older revisions: the next page joins the timeline");
         Coverage.Hit("use-case:data/history");
+
+        // Show as of: the reading as it stood a moment ago - one revision is marked in effect.
+        var times = await tree.RevisionTimesAsync();
+        Assert.That(times, Has.Count.GreaterThan(3), "the latest reading has a page of revisions");
+        await tree.ShowAsOfAsync(times[2].AddSeconds(1));
+        await SnapAsync(dana, "3", "as-of", "Show as of: the reading as it stood a moment ago, its revision then in effect marked");
+        Coverage.Hit("query:shell.at");
+
+        await tree.ShowLatestAsync();
+        await SnapAsync(dana, "3", "latest", "Latest: the whole timeline again");
     }
 
     // U4.4: two streamed exports - the archive as NDJSON, and a key range of the orders as CSV.

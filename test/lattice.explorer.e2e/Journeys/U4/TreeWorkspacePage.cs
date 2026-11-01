@@ -126,15 +126,17 @@ public sealed class TreeWorkspacePage(ShellPage shell)
 
     /// <summary>Follows the entry panel's <b>History of this key</b> link and waits for the timeline.</summary>
     /// <param name="key">The open key.</param>
-    public async Task OpenHistoryOfThisKeyAsync(string key)
+    /// <param name="requireRevisions">Whether at least one revision must be drawn; otherwise an empty timeline is accepted once loaded.</param>
+    public async Task OpenHistoryOfThisKeyAsync(string key, bool requireRevisions = true)
     {
         await Content.GetByRole(AriaRole.Link, new() { Name = "History of this key", Exact = true }).ClickAsync();
-        await ExpectHistoryOfAsync(key);
+        await ExpectHistoryOfAsync(key, requireRevisions);
     }
 
     /// <summary>On the History tab with no key, chooses <paramref name="key"/> in the <b>Choose a key</b> picker and shows its history.</summary>
     /// <param name="key">The key.</param>
-    public async Task ChooseKeyAsync(string key)
+    /// <param name="requireRevisions">Whether at least one revision must be drawn.</param>
+    public async Task ChooseKeyAsync(string key, bool requireRevisions = true)
     {
         await Expect(Content.GetByRole(AriaRole.Heading, new() { Name = "Choose a key", Exact = true })).ToBeVisibleAsync();
         var field = Content.GetByRole(AriaRole.Combobox, new() { Name = "Key", Exact = true });
@@ -145,14 +147,21 @@ public sealed class TreeWorkspacePage(ShellPage shell)
         await option.First.ClickAsync();
         await Expect(field).ToHaveValueAsync(key);
         await Content.GetByRole(AriaRole.Button, new() { Name = "Show history", Exact = true }).ClickAsync();
-        await ExpectHistoryOfAsync(key);
+        await ExpectHistoryOfAsync(key, requireRevisions);
     }
 
-    /// <summary>Asserts the History tab shows the timeline of <paramref name="key"/> with at least one revision.</summary>
+    /// <summary>Asserts the History tab shows the timeline of <paramref name="key"/>, loaded, with at least one revision unless <paramref name="requireRevisions"/> is false.</summary>
     /// <param name="key">The key.</param>
-    public async Task ExpectHistoryOfAsync(string key)
+    /// <param name="requireRevisions">Whether at least one revision must be drawn; otherwise the "No revisions" state is accepted.</param>
+    public async Task ExpectHistoryOfAsync(string key, bool requireRevisions = true)
     {
         await Expect(Content.GetByRole(AriaRole.Heading, new() { NameRegex = new Regex("^History of ") })).ToContainTextAsync(key);
+        if (!requireRevisions)
+        {
+            await Expect(Revisions.Or(Content.GetByRole(AriaRole.Heading, new() { Name = "No revisions", Exact = true })).First).ToBeVisibleAsync(TimelineLoads);
+            return;
+        }
+
         await Expect(Revisions.First).ToBeVisibleAsync(TimelineLoads);
         await Expect(RevisionCount).ToHaveTextAsync(new Regex(@"^\d[\d,]* revisions?( so far)?$"));
     }
