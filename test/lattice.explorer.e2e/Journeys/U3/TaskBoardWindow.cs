@@ -123,17 +123,46 @@ internal sealed class TaskBoardWindow
         var closed = Page.GetByRole(AriaRole.Heading, new() { NameRegex = new Regex("is not open to you yet") });
         var notFound = Page.GetByRole(AriaRole.Heading, new() { Name = ShellPage.NotFoundHeading, Exact = true });
         var refused = Host.GetByRole(AriaRole.Alert);
+        var context = Board.Locator("#tb-context");
+        var loaded = new Regex(@"^task-board 1\.1\.0( in \S+)?\.$");
         for (var attempt = 0; ; attempt++)
         {
-            await Expect(Element.Or(closed).Or(notFound).Or(refused)).ToBeVisibleAsync(new() { Timeout = 60_000 });
-            if (await Element.IsVisibleAsync())
+            // The board has loaded only once it has read its tree. A window can draw the frame
+            // and then give way to a refusal (the page's own read of the app can answer
+            // differently from the one that drew it), so a refusal counts at any point until then.
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
+            string? refusal = null;
+            while (true)
+            {
+                if (await context.IsVisibleAsync() && loaded.IsMatch(await context.InnerTextAsync()))
+                {
+                    break;
+                }
+
+                refusal = await refused.IsVisibleAsync() ? await refused.InnerTextAsync()
+                    : await notFound.IsVisibleAsync() ? ShellPage.NotFoundHeading
+                    : await closed.IsVisibleAsync() ? "is not open to you yet"
+                    : null;
+                if (refusal is not null)
+                {
+                    break;
+                }
+
+                if (DateTime.UtcNow > deadline)
+                {
+                    refusal = "the board did not load within 60 s" + (await Element.IsVisibleAsync() ? " (its frame is shown)" : " (no frame is shown)");
+                    break;
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(250));
+            }
+
+            if (refusal is null)
             {
                 break;
             }
 
-            LastRefusal = (await refused.IsVisibleAsync() ? await refused.InnerTextAsync()
-                : await notFound.IsVisibleAsync() ? ShellPage.NotFoundHeading
-                : "is not open to you yet").ReplaceLineEndings(" ");
+            LastRefusal = refusal.ReplaceLineEndings(" ");
             if (_readServer is not null)
             {
                 LastServerView = await _readServer();
@@ -149,7 +178,6 @@ internal sealed class TaskBoardWindow
             await Page.ReloadAsync();
         }
 
-        await Expect(Board.Locator("#tb-context")).ToHaveTextAsync(new Regex(@"^task-board 1\.1\.0( in \S+)?\.$"), new() { Timeout = 60_000 });
         foreach (var column in Columns)
         {
             await Expect(Board.Locator("#tb-count-" + column)).ToHaveTextAsync(new Regex(@"^\(\d+\)$"));
