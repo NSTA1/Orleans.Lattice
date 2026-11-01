@@ -70,7 +70,7 @@ internal sealed class RuleDetailsPage(ShellPage shell)
     public async Task DeleteAsync(ILocator confirm, string ruleId)
     {
         await confirm.GetByRole(AriaRole.Button, new() { Name = "Delete rule", Exact = true }).ClickAsync();
-        await Expect(shell.Toasts.Filter(new() { HasText = $"Rule {ruleId} deleted." })).ToBeVisibleAsync();
+        await Expect(shell.Toasts.Filter(new() { HasText = $"Rule {ruleId} deleted." }).Last).ToBeVisibleAsync();
         await shell.ExpectHeadingAsync("Access");
     }
 

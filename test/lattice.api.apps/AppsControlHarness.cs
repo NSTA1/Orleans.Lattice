@@ -27,7 +27,10 @@ internal sealed class AppsControlHarness
 
     public ConfigurableTenantResolver Tenants { get; } = new();
 
-    public LatticeAppsControl Control => new(Registry, Source, Pipeline, Gate, Tenants);
+    /// <summary>The clock the facade's accept window is measured on.</summary>
+    public Orleans.Lattice.Testing.ManualTimeProvider Time { get; } = new();
+
+    public LatticeAppsControl Control => new(Registry, Source, Pipeline, Gate, Tenants, timeProvider: Time);
 
     public TenantId Tenant => Tenants.Tenant;
 

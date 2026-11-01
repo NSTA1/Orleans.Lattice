@@ -125,12 +125,11 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         builder.Services.AddSingleton<IHostedService>(
             sp => sp.GetRequiredService<ReplicationConfigEpochSynchronizer>());
 
-        // The runtime enable/disable authoring seam (and its tree-content probe)
-        // the API facade depends on to author per-tree enablement into the config
-        // OR-Map. Registered here because it composes the config store, the
-        // precondition validator, the replication context, and the bootstrap
-        // admin seam that AddLatticeReplication already installed.
-        builder.Services.TryAddSingleton<ILatticeTreeContentProbe, GrainFactoryTreeContentProbe>();
+        // The runtime enable/disable authoring seam the API facade depends on to
+        // author per-tree enablement into the config OR-Map. Registered here
+        // because it composes the config store, the precondition validator, the
+        // replication context, and the bootstrap admin seam that
+        // AddLatticeReplication already installed.
         builder.Services.TryAddSingleton<ILatticeReplicationConfigAuthority, LatticeReplicationConfigAuthority>();
 
         // Swap the options-only merge-mode resolver for the snapshot-backed one

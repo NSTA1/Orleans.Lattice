@@ -37,7 +37,7 @@ option:ConfigureDataProtection	option	LatticeExplorerWebOptions.ConfigureDataPro
 option:DataProtectionApplicationName	option	LatticeExplorerWebOptions.DataProtectionApplicationName	The LatticeExplorerWebOptions.DataProtectionApplicationName hosting mode	C4
 option:DataProtectionKeyRingBlobUri	option	LatticeExplorerWebOptions.DataProtectionKeyRingBlobUri	The LatticeExplorerWebOptions.DataProtectionKeyRingBlobUri hosting mode	C4
 option:DataProtectionKeyRingCredential	option	LatticeExplorerWebOptions.DataProtectionKeyRingCredential	The LatticeExplorerWebOptions.DataProtectionKeyRingCredential hosting mode	C4
-option:MaxImportBytes	option	LatticeExplorerWebOptions.MaxImportBytes	The LatticeExplorerWebOptions.MaxImportBytes hosting mode	C4
+option:MaxImportBytes	option	LatticeExplorerWebOptions.MaxImportBytes	The LatticeExplorerWebOptions.MaxImportBytes hosting mode	A3
 option:UseEnvironmentBootstrap	option	LatticeExplorerWebOptions.UseEnvironmentBootstrap	The LatticeExplorerWebOptions.UseEnvironmentBootstrap hosting mode	C4
 query-value:access.new=true	query-value	docs/lattice.explorer/managing-access.md#addresses	?new=true opens a New group or New rule dialog	A2
 query-value:access.view=permissions	query-value	docs/lattice.explorer/managing-access.md#explain	?view=permissions opens Effective permissions	A9
@@ -158,6 +158,7 @@ route:/t/{tenant}/data/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	route	DataTreePage	The
 route:/t/{tenant}/replication	route	ReplicationEstatePage	The page at /t/{tenant}/replication	T7
 route:/t/{tenant}/replication/trees	route	ReplicationTreesPage	The page at /t/{tenant}/replication/trees	T7
 route:/t/{tenant}/replication/trees/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	route	ReplicationTreePage	The page at /t/{tenant}/replication/trees/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	T7
+route:/t/{tenant}/reset	route	ResetPage	The page at /t/{tenant}/reset	A1
 route:/t/{tenant}/schema	route	SchemaDirectoryPage	The page at /t/{tenant}/schema	T7
 route:/t/{tenant}/schema/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	route	SchemaTreePage	The page at /t/{tenant}/schema/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	T7
 route:/t/{tenant}/telemetry	route	TelemetryPage	The page at /t/{tenant}/telemetry	T7
@@ -297,6 +298,7 @@ use-case:backups/schedule-fires	use-case	docs/lattice.explorer/managing-backups.
 use-case:backups/schedule-incremental	use-case	docs/lattice.explorer/managing-backups.md#schedules	Add an incremental schedule	A10
 use-case:backups/server-authority	use-case	docs/lattice.explorer/managing-backups.md#server-authority	The server refuses a backup operation the caller may not run	U4
 use-case:cluster/alias	use-case	docs/lattice.explorer/areas.md#cluster	Set an alias from Lifecycle	A3
+use-case:cluster/alias-name	use-case	docs/lattice.explorer/areas.md#cluster	Add name... gives a tree another name from Lifecycle, and the alias reaches it in Data	A3
 use-case:cluster/bulk-load	use-case	docs/lattice.explorer/areas.md#cluster	Pasted bulk load: compose, review, start over, and resume after a dropped append	A3
 use-case:cluster/compaction	use-case	docs/lattice.explorer/areas.md#cluster	Trigger compaction on a shard	A3
 use-case:cluster/configuration-and-retention	use-case	docs/lattice.explorer/areas.md#cluster	Save configuration and Save retention, and Summary reflects them	A3
@@ -345,7 +347,7 @@ use-case:data/live-updates	use-case	docs/lattice.explorer/areas.md#data	Live upd
 use-case:data/metrics	use-case	docs/lattice.explorer/areas.md#data	Metrics: per-shard live keys and operations per second	U1
 use-case:data/snapshot-scan	use-case	docs/lattice.explorer/areas.md#data	Switch the keys panel to a snapshot scan and back	U1
 use-case:data/tag-index-keys	use-case	docs/lattice.explorer/areas.md#data	A tag index's keys for one tag, and Load more keys	U1
-use-case:data/tag-index-reconcile	use-case	docs/lattice.explorer/areas.md#data	Reconcile a tag index, and Stop a reconcile	A3
+use-case:data/tag-index-reconcile	use-case	docs/lattice.explorer/areas.md#data	Reconcile a tag index, and follow it to its end	A3
 use-case:data/view-create	use-case	docs/lattice.explorer/areas.md#data	Create a view; it reaches Ready and its projection is browsable	A3
 use-case:data/view-rebuild-stop-drop	use-case	docs/lattice.explorer/areas.md#data	Rebuild a view, stop the rebuild, and drop the view	C3
 use-case:data/view-reconcile	use-case	docs/lattice.explorer/areas.md#data	Reconcile a view	U1

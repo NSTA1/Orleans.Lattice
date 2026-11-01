@@ -144,6 +144,62 @@ public partial class BPlusLeafGrainTests
         });
     }
 
+    // --- Issue #5550: the seal forbids a WIDEN, not an unsplice ---
+
+    [Test]
+    public async Task TryUnlinkSuccessor_unsplices_under_a_seal_when_it_keeps_its_own_high_bound()
+    {
+        // Exactly what ShardRootGrain.OrphanRepair asks of the predecessor of a
+        // verified orphan: unlink it, absorbing nothing, by passing the
+        // predecessor's OWN high bound. Every leaf a reshard has ever sealed is
+        // such a predecessor, so declining here refused every orphan behind one
+        // while the audit reported it repairable.
+        var state = SealPredecessorState();
+        var grain = CreateGrain(state);
+
+        await grain.MarkSlotsMovedAwayAsync(
+            SealSlotsFor(SealAbsorbedKey),
+            SealVirtualShardCount);
+
+        var unlinked = await grain.TryUnlinkSuccessorAsync(
+            SealVictim,
+            SealBeyondVictim,
+            "m");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(unlinked, Is.EqualTo(LeafUnlinkOutcome.Unlinked),
+                "A seal forbids taking over a vacated range. An unsplice that keeps this leaf's "
+                + "own bound takes over nothing, so the seal has nothing to refuse (#5550).");
+            Assert.That(state.State.NextSibling, Is.EqualTo(SealBeyondVictim),
+                "the unsplice must actually repoint past the orphan");
+            Assert.That(state.State.HighKeyExclusive, Is.EqualTo("m"),
+                "and must not move the sealed leaf's bound");
+        });
+    }
+
+    [Test]
+    public async Task TryUnlinkSuccessor_still_declines_a_sealed_widen_to_unbounded()
+    {
+        // The narrowing must not open the absorb-null path: a null absorb
+        // widens a bounded predecessor to unbounded, which is a widen.
+        var state = SealPredecessorState();
+        var grain = CreateGrain(state);
+
+        await grain.MarkSlotsMovedAwayAsync(
+            SealSlotsFor(SealAbsorbedKey),
+            SealVirtualShardCount);
+
+        var unlinked = await grain.TryUnlinkSuccessorAsync(SealVictim, null, null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(unlinked, Is.EqualTo(LeafUnlinkOutcome.DeclinedWidenSealed));
+            Assert.That(state.State.HighKeyExclusive, Is.EqualTo("m"));
+            Assert.That(state.State.NextSibling, Is.EqualTo(SealVictim));
+        });
+    }
+
     // --- The guard: the declination must stay narrow ---
 
     [Test]
