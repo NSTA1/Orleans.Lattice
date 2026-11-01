@@ -39,7 +39,7 @@ public sealed partial class AuditorsReviewChapter
 
         await tab("Versions").ClickAsync();
         await Expect(content.GetByText("Target version", new() { Exact = true })).ToBeVisibleAsync();
-        await Expect(content.Locator(".lt-schema-heading")).ToContainTextAsync("version 2");
+        await Expect(content.Locator(".lt-schema-heading").First).ToContainTextAsync("version 2");
         await Expect(content.GetByRole(AriaRole.Button, new() { NameRegex = new Regex("^(Advance target version|Migrate stored values|Change config|Turn off versioning)") })).ToHaveCountAsync(0);
         await SnapAsync(dana, "6", "versions", "Versions: target version 2, with nothing to advance, migrate or turn off");
 
@@ -110,7 +110,7 @@ public sealed partial class AuditorsReviewChapter
 
         await content.GetByRole(AriaRole.Link, new() { Name = "Throughput", Exact = true }).ClickAsync();
         await Expect(shell.Heading).ToHaveTextAsync("Throughput");
-        await Expect(content.Locator(".lt-telemetry-board")).ToBeVisibleAsync();
+        await Expect(content.Locator(".lt-telemetry-board").First).ToBeVisibleAsync();
         await Expect(content.GetByRole(AriaRole.Heading, new() { Name = NothingOnThisBoard, Exact = true })).ToHaveCountAsync(0);
         await SnapAsync(dana, "9", "throughput", "The Throughput board, drawn for her");
         Coverage.Hit("subroute:telemetry/throughput");
@@ -126,7 +126,7 @@ public sealed partial class AuditorsReviewChapter
         await shell.GoToAreaAsync("cluster");
         await Expect(shell.Heading).ToHaveTextAsync("Cluster");
         await Expect(content.GetByRole(AriaRole.Heading, new() { Name = "Estate", Exact = true })).ToBeVisibleAsync();
-        await Expect(content.GetByText("Cluster id", new() { Exact = true })).ToBeVisibleAsync();
+        await Expect(content.GetByText("Cluster id", new() { Exact = true }).First).ToBeVisibleAsync();
         await SnapAsync(dana, "10", "cluster", "Cluster: the estate, readable through her cluster-wide Telemetry grant");
 
         await shell.GotoAsync("/cluster/trees");
