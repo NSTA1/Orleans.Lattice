@@ -60,14 +60,29 @@ public sealed partial class DataStewardJourney
         await content.GetByRole(AriaRole.Button, new() { Name = "Reconcile", Exact = true }).ClickAsync();
         confirm = await _tree.TypeConfirmationAsync("Reconcile this tag index?", Names.TagIndexes.OrderStatus);
         await confirm.GetByRole(AriaRole.Button, new() { Name = "Reconcile", Exact = true }).ClickAsync();
-        await new KnownDefect("#5613", "a tag-index reconcile by a caller with Admin on the index tree fails in its repair phase: Delete denied on tag-order-status").ReproducesAsync(async () =>
+
+        // #5613 surfaces only in some orders of the estate's grants and repair work: wait for
+        // whichever outcome arrives, assert success strictly, and record the defect only when
+        // the Delete denial actually appears.
+        var reconciled = _priya.Shell.Toasts.Filter(new() { HasTextRegex = new Regex("^Reconciled " + Regex.Escape(Names.TagIndexes.OrderStatus) + ": scanned ") });
+        var failedOperation = content.Locator("[data-lt-data-operation] .lt-operation-progress[data-lt-operation-state=Failed]");
+        await Expect(reconciled.Or(failedOperation).First).ToBeVisibleAsync(new() { Timeout = 120_000 });
+        if (await failedOperation.CountAsync() > 0)
         {
-            var operation = content.Locator("[data-lt-data-operation] .lt-operation-progress[data-lt-operation-state=Failed]");
-            await Expect(operation).ToContainTextAsync("is not authorized to perform Delete on tree 'tag-order-status'", new() { Timeout = 120_000 });
-            await Expect(_priya.Shell.Toasts.Filter(new() { HasTextRegex = Exactly($"The reconcile of {Names.TagIndexes.OrderStatus} failed.") }))
-                .Not.ToHaveCountAsync(0, new() { Timeout = 30_000 });
-        });
-        await CheckpointAsync("12", "reconcile-refused", "A tag-index reconcile fails in its repair phase: Delete denied on the index tree (#5613)");
+            await new KnownDefect("#5613", "a tag-index reconcile by a caller with Admin on the index tree fails in its repair phase: Delete denied on tag-order-status").ReproducesAsync(async () =>
+            {
+                await Expect(failedOperation).ToContainTextAsync("is not authorized to perform Delete on tree 'tag-order-status'");
+                await Expect(_priya.Shell.Toasts.Filter(new() { HasTextRegex = Exactly($"The reconcile of {Names.TagIndexes.OrderStatus} failed.") }))
+                    .Not.ToHaveCountAsync(0, new() { Timeout = 30_000 });
+            });
+            await CheckpointAsync("12", "reconcile-refused", "A tag-index reconcile fails in its repair phase: Delete denied on the index tree (#5613)");
+        }
+        else
+        {
+            await Expect(reconciled.First).ToBeVisibleAsync();
+            Coverage.Hit("use-case:data/tag-index-reconcile");
+            await CheckpointAsync("12", "reconciled", "The tag-index reconcile runs on the cluster and reports what it scanned and removed");
+        }
 
         await _tree.OpenTabAsync("Metrics", "metrics");
         var hotness = content.GetByRole(AriaRole.Table, new() { Name = "Shard hotness" });
