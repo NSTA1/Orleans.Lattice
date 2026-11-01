@@ -5,7 +5,6 @@ using Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts.Contoso;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
-using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Sessions;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 using static Microsoft.Playwright.Assertions;
@@ -62,25 +61,9 @@ internal sealed class IncidentAndRecoveryStory(ChapterContext context)
 
     private async Task DeleteArchiveAsync()
     {
+        // priya holds tree lifecycle on the archive but no cluster Telemetry: the Cluster
+        // area admits her on that grant (#5581).
         await using var priya = await Estate.SignInAsAsync(Personas.Priya);
-        await new KnownDefect("#5581", "The Cluster area hides from priya, who holds TreeLifecycle on the archive but no cluster Telemetry").ReproducesAsync(async () =>
-        {
-            await priya.Shell.GotoAsync($"cluster/trees/{Archive}?tab=lifecycle");
-            await priya.Shell.ExpectHeadingAsync("Nothing lives at this address");
-            await _steps.CaptureAsync(priya, "no-cluster", "priya's address for the archive's Lifecycle tab finds nothing: the Cluster area is hidden from her (#5581)");
-        });
-
-        // Until #5581 is fixed her rights are real but unreachable in the Explorer: she deletes
-        // the archive through her own tree-admin facade. Once it is fixed, the wrapper above
-        // fails; replace this block with DeleteArchiveInLifecycleAsync(priya).
-        var admin = ContractFacades.Of(context, Personas.Priya.Id).TreeAdmin;
-        await admin.DeleteTreeAsync(Archive);
-        await ContractWait.UntilAsync("the archive's deletion", async () => (await admin.GetTreeDeletionStatusAsync(Archive)).IsDeleted);
-    }
-
-    /// <summary>Step 1 as #5389 describes it, through the archive's Cluster Lifecycle tab (blocked by #5581).</summary>
-    private async Task DeleteArchiveInLifecycleAsync(PersonaSession priya)
-    {
         var cluster = new ClusterLifecyclePage(priya);
         await cluster.OpenLifecycleAsync(Archive);
         await Expect(cluster.State).ToHaveTextAsync("Live");
