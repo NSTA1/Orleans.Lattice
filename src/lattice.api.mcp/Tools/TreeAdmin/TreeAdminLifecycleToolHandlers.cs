@@ -238,7 +238,7 @@ internal static class TreeAdminLifecycleToolHandlers
         ILatticeTreeAdmin treeAdmin,
         [Description("The tree to restore the backup into. Must not be null, empty, or a reserved system tree id.")]
         string treeId,
-        [Description("The id of the backup to restore. Must not be null or empty.")]
+        [Description("The content-addressed id of the backup to restore. Must not be null or empty.")]
         string backupId,
         [Description("An optional idempotency key that makes a retried restore a no-op, or null to derive one from the request. Must be non-empty when supplied.")]
         string? operationId = null,

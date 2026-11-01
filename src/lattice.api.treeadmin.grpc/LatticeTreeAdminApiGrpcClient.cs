@@ -579,7 +579,7 @@ public sealed class LatticeTreeAdminApiGrpcClient
     /// whole-tree restore capability.
     /// </summary>
     /// <param name="treeId">The tree to restore into. Must not be <c>null</c> or empty.</param>
-    /// <param name="backupId">The backup id to restore. Must not be <c>null</c> or empty.</param>
+    /// <param name="backupId">The content-addressed backup id to restore. Must not be <c>null</c> or empty.</param>
     /// <param name="operationId">An optional idempotency key, or <c>null</c> to derive one. Must not be empty when supplied.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The restore outcome, including the trees needed to revert it.</returns>

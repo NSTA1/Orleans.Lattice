@@ -40,6 +40,28 @@ public sealed class BackupRetentionPlannerTests
     }
 
     [Test]
+    public void A_republished_backup_ranks_by_its_latest_capture()
+    {
+        // Republished one day ago, first captured thirty days ago: keep-last-one
+        // keeps it over a backup created two days ago, and a three-day max-age
+        // keeps it too.
+        var republished = Full("republished", Now.AddDays(-30)) with { LastCapturedAtUtc = Now.AddDays(-1) };
+        var listing = new[] { republished, Full("newer-created", Now.AddDays(-2)) };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                BackupRetentionPlanner.ComputeRetained(listing, keepLast: 1, maxAge: null, Now),
+                Is.EquivalentTo(new[] { "republished" }));
+            Assert.That(
+                BackupRetentionPlanner.ComputeRetained(listing, keepLast: null, maxAge: TimeSpan.FromDays(3), Now),
+                Is.EquivalentTo(new[] { "republished", "newer-created" }));
+            Assert.That(BackupRetentionPlanner.RankTime(republished), Is.EqualTo(Now.AddDays(-1)));
+            Assert.That(BackupRetentionPlanner.RankTime(Full("legacy", Now.AddDays(-4))), Is.EqualTo(Now.AddDays(-4)), "a manifest without the field ranks by its creation time");
+        });
+    }
+
+    [Test]
     public void Keep_last_keeps_the_newest_by_creation_time_then_ordinal_id()
     {
         var listing = new[]

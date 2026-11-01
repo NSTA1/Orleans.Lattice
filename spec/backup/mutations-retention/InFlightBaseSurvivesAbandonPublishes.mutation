@@ -9,12 +9,12 @@ PERTURBS: Abandon
 --- FIND
     /\ snk' = snk \ {cap[c].id}
     /\ arts' \in {arts, arts \ {cap[c].id}}
-    /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0]]
-    /\ UNCHANGED <<now, pol, next, meta, cat, crashes, pub>>
+    /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0, t |-> 0]]
+    /\ UNCHANGED <<now, pol, next, meta, cat, crashes, pub, lpt, reps>>
 --- REPLACE
     \* MUTATION: the abandoned increment is registered.
     /\ cat' = cat \cup {cap[c].id}
     /\ pub' = pub \cup {cap[c].id}
-    /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0]]
-    /\ UNCHANGED <<now, pol, next, meta, arts, snk, crashes>>
+    /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0, t |-> 0]]
+    /\ UNCHANGED <<now, pol, next, meta, arts, snk, crashes, lpt, reps>>
 --- END

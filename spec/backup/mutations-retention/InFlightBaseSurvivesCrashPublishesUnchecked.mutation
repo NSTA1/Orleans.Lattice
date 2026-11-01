@@ -8,14 +8,14 @@ SUMMARY: a crash after the manifest write leaves the unchecked increment registe
 PERTURBS: CaptureCrash
 
 --- FIND
-    /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0]]
+    /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0, t |-> 0]]
     /\ UNCHANGED <<now, pol, next, meta>>
     /\ UNCHANGED storeVars
 --- REPLACE
-    /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0]]
+    /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0, t |-> 0]]
     /\ UNCHANGED <<now, pol, next, meta>>
     \* MUTATION: the row was registered before the check.
     /\ cat' = IF cap[c].ph = "man" THEN cat \cup {cap[c].id} ELSE cat
     /\ pub' = IF cap[c].ph = "man" THEN pub \cup {cap[c].id} ELSE pub
-    /\ UNCHANGED <<arts, snk>>
+    /\ UNCHANGED <<arts, snk, lpt, reps>>
 --- END

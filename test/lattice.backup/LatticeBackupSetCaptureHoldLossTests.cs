@@ -213,10 +213,19 @@ public sealed class LatticeBackupSetCaptureHoldLossTests
         // membership stamp, which only the accepted attempt reaches. The members of
         // a discarded attempt are therefore registered unstamped when it is
         // discarded, as ordinary per-tree backups; otherwise they would stay in the
-        // sink with no catalog row, unlisted, once a later attempt succeeds.
+        // sink with no catalog row, unlisted, once a later attempt succeeds. Each
+        // tree changes again before the second attempt, so that attempt's members
+        // have content - and so content-addressed ids - of their own.
         var (treeA, treeB, suffix) = await SeedAsync("discarded");
         HoldLossFilter.Arm(async (mode, ordinal, token, grainFactory) =>
         {
+            if (mode == TxRegistryCaptureGateMode.Gate && ordinal == 2)
+            {
+                await grainFactory.GetGrain<ILattice>(treeA).SetAsync("k2", Bytes("second"));
+                await grainFactory.GetGrain<ILattice>(treeB).SetAsync("k2", Bytes("second"));
+                return;
+            }
+
             if (mode != TxRegistryCaptureGateMode.Gate || ordinal != 1)
                 return;
             await LoseFenceAsync(grainFactory, token, treeA, treeB);

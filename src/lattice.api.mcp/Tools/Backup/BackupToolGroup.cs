@@ -130,7 +130,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
         => McpServerTool.Create(
             (
                 RequestContext<CallToolRequestParams> context,
-                [Description("The backup id to describe.")] string backupId,
+                [Description("The content-addressed backup id to describe.")] string backupId,
                 CancellationToken cancellationToken) =>
             {
                 using var scope = McpToolCredentialScope.Stamp(context.Services!);
@@ -144,7 +144,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 Title = "Describe backup",
                 Description =
                     "Describes a single backup and its base-first restore chain. Also surfaces the backup's "
-                    + "artifacts (each with its artifactId, content hash, and byte length) so "
+                    + "content-addressed artifacts (each with its artifactId, content hash, and byte length) so "
                     + "lattice_backup_export_artifact can be driven from the returned artifactId. Reports "
                     + "found=false when no backup with the id exists. Read-only.",
                 ReadOnly = true,
@@ -318,7 +318,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
         => McpServerTool.Create(
             (
                 RequestContext<CallToolRequestParams> context,
-                [Description("The id of the backup to restore to.")] string backupId,
+                [Description("The content-addressed id of the backup to restore to.")] string backupId,
                 CancellationToken cancellationToken,
                 [Description("The tree to restore into; null restores into the captured tree.")] string? targetTreeId = null,
                 [Description(RestoreModeDescription)] string? mode = null,
@@ -347,7 +347,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
         => McpServerTool.Create(
             (
                 RequestContext<CallToolRequestParams> context,
-                [Description("The id of the backup to verify.")] string backupId,
+                [Description("The content-addressed id of the backup to verify.")] string backupId,
                 CancellationToken cancellationToken,
                 [Description("Optional idempotency id for the tracked operation; null generates one.")] string? operationId = null) =>
             {
@@ -555,7 +555,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
         => McpServerTool.Create(
             (
                 RequestContext<CallToolRequestParams> context,
-                [Description("The backup id to delete.")] string backupId,
+                [Description("The content-addressed backup id to delete.")] string backupId,
                 CancellationToken cancellationToken) =>
             {
                 using var scope = McpToolCredentialScope.Stamp(context.Services!);

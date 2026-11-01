@@ -224,8 +224,8 @@ public sealed class LatticeBackupMaintenanceOperationsIntegrationTests
 
     private async Task<string> CreateOrphanAsync()
     {
-        // Drift: capture a tree of its own, so the orphan is unrelated to the
-        // fixture's backup, then drop
+        // Drift: capture a tree of its own (backup ids are content-addressed, so a
+        // capture of the shared tree could alias the fixture's backup), then drop
         // the sink manifest while the catalog row survives, so the catalog lists a
         // backup the sink can no longer resolve.
         var treeId = "maint-orphan-" + Guid.NewGuid().ToString("N");

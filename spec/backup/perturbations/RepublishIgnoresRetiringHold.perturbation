@@ -1,0 +1,16 @@
+# A publish does not wait while a retention pass holds its id retiring, so a
+# capture of an unchanged tree republishes the id a pass is deleting: it
+# registers the row again and the pass then deletes the sink manifest it had
+# just written (#5418). Acquire(c) admits a republish only once no pass holds
+# the id.
+MODULE: BackupRetention
+ROW: Acquire(c)
+FILE: src/lattice.backup/BackupSchedulerGrain.Holds.cs
+DETECTORS: BackupRetentionConcurrencyTests.A_full_capture_of_an_unchanged_tree_during_a_pass_waits_for_the_pass_and_republishes_the_backup, BackupRepublishHoldTests.A_republish_that_meets_a_pass_retiring_its_id_waits_beyond_one_call_and_then_publishes
+SUMMARY: a republish proceeds while a retention pass is deleting its id
+
+--- FIND
+        while (_publishing.Contains(backupId) || _retiring.Contains(backupId))
+--- REPLACE
+        while (_publishing.Contains(backupId) || (!publishing && _retiring.Contains(backupId)))
+--- END

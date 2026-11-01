@@ -35,9 +35,15 @@ internal sealed class LatticeBackupCaptureService(
     IOptions<Orleans.Configuration.ClusterOptions> clusterOptions,
     ILogger<LatticeBackupCaptureService> logger,
     ITenantAdmissionController? admission = null,
-    ILatticeOriginClusterIdResolver? originClusterIdResolver = null)
+    ILatticeOriginClusterIdResolver? originClusterIdResolver = null,
+    IBackupPublicationGate? publicationGate = null)
     : ILatticeBackupCaptureService, ILatticeBackupIncrementalCaptureService
 {
+    // Every publish passes through the scope's per-id hold (issue #5418); built
+    // outside a silo, the service publishes directly.
+    private readonly IBackupPublicationGate _publicationGate =
+        publicationGate ?? new DirectBackupPublicationGate(new BackupPublisher(catalog, sink));
+
     // The id of the cluster hosting this capture engine: the vantage point that
     // authors every capture and owns the WAL cursor lineage. Stamped onto every
     // manifest (full and incremental) so a chain is bound to its capturing
@@ -350,12 +356,12 @@ internal sealed class LatticeBackupCaptureService(
                 .ConfigureAwait(false);
         }
 
-        string retiredIncrementId;
         try
         {
-            // Unique to this capture (issue #5418); the payload digest stays in the
-            // content descriptor for the restore integrity gate.
-            var backupId = BackupIdentity.Compute(request.BaseBackupId, collector.ContentHash, artifactId);
+            // The chained content address (BackupIdentity.Increment): an identical
+            // delta on the same base re-derives an existing increment's id, and the
+            // publish below republishes it in place.
+            var backupId = BackupIdentity.Increment(request.BaseBackupId, collector.ContentHash);
             var lattice = grainFactory.GetGrain<ILattice>(treeId);
             var topology = await BuildTopologyAsync(lattice, startInclusive, endExclusive, cancellationToken)
                 .ConfigureAwait(false);
@@ -395,19 +401,16 @@ internal sealed class LatticeBackupCaptureService(
                 await progress.ReportAsync(BackupOperationPhases.Cataloguing).ConfigureAwait(false);
             }
 
-            await sink.WriteManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
-
-            // The fence against a concurrent retention pass (issue #5357). The base
-            // was read once, before the drain, and a pass may have begun to prune it
-            // since. A pass removes a doomed base's catalog row before it scans the
-            // sink for increments built on it, so with this manifest already in the
-            // sink either the row is still here - and a pass that removes it later
-            // finds this manifest and keeps the base - or a pass is pruning the base
-            // and this increment must not be published over it.
-            var baseRow = await catalog.GetAsync(request.BaseBackupId, cancellationToken).ConfigureAwait(false);
-            if (BackupRetentionPlanner.MayPublishIncrement(manifest, baseRow))
+            // Published through the scope's per-id hold (issue #5418), which also
+            // runs the fence against a concurrent retention pass (issue #5357): the
+            // base was read once, before the drain, and a pass may have begun to
+            // prune it since, in which case the increment is abandoned and nothing
+            // of it stays published (BackupPublisher).
+            var published = await _publicationGate.PublishIncrementAsync(manifest, cancellationToken)
+                .ConfigureAwait(false);
+            if (published is not null)
             {
-                await catalog.RegisterAsync(manifest, cancellationToken).ConfigureAwait(false);
+                manifest = published;
 
                 // Advance the WAL pin to the increment frontier so GC can now reclaim the
                 // entries we have captured; the next increment re-pins from its own base.
@@ -434,8 +437,6 @@ internal sealed class LatticeBackupCaptureService(
 
                 return new LatticeBackupCaptureResult(backupId, manifest);
             }
-
-            retiredIncrementId = backupId;
         }
         catch (Exception ex) when (LatticeBackupMetrics.EmitCaptureFailure(
             BackupKind.Incremental, LatticeBackupMetrics.PhaseManifestCommit, ex))
@@ -443,15 +444,15 @@ internal sealed class LatticeBackupCaptureService(
             throw;
         }
 
-        // The base was pruned while the increment drained: withdraw the increment's
-        // sink manifest (and its now unreferenced artifact) so nothing - a restore
-        // by id, a catalog rebuild - can find an increment with no base, then start
-        // a fresh full backup, exactly as the other unusable-base cases do.
+        // The base was pruned while the increment drained: the publish withdrew the
+        // increment's sink manifest, under the id's hold, so nothing - a restore by
+        // id, a catalog rebuild - can find an increment with no base. This capture's
+        // own artifact, which nothing else can name, is deleted; then a fresh full
+        // backup starts, exactly as the other unusable-base cases do.
         logger.LogWarning(
             "Base backup {BaseBackupId} of tree {TreeId} was pruned by retention while the increment "
             + "drained; falling back to a full backup.",
             request.BaseBackupId, treeId);
-        await sink.DeleteManifestAsync(retiredIncrementId, cancellationToken).ConfigureAwait(false);
         await sink.DeleteArtifactAsync(artifactId, cancellationToken).ConfigureAwait(false);
         await cursorRegistry.ReportCursorAsync(
             treeId, consumerId, HybridLogicalClock.Zero, blockedAtHlc: null, cancellationToken).ConfigureAwait(false);
@@ -517,7 +518,7 @@ internal sealed class LatticeBackupCaptureService(
     {
         while (unregistered.Count > 0)
         {
-            await catalog.RegisterAsync(unregistered[0].Manifest, cancellationToken).ConfigureAwait(false);
+            await _publicationGate.RegisterAsync(unregistered[0].Manifest, cancellationToken).ConfigureAwait(false);
             unregistered.RemoveAt(0);
         }
     }
@@ -917,8 +918,7 @@ internal sealed class LatticeBackupCaptureService(
         foreach (var member in members)
         {
             var manifest = member.Manifest with { SetId = setId, SetName = setManifest.Name, SetCreatedAtUtc = setManifest.CreatedAtUtc };
-            await sink.WriteManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
-            await catalog.RegisterAsync(manifest, cancellationToken).ConfigureAwait(false);
+            manifest = await _publicationGate.RegisterAsync(manifest, cancellationToken).ConfigureAwait(false);
             unregistered.Remove(member);
             stamped.Add(new LatticeBackupCaptureResult(member.BackupId, manifest));
         }
@@ -1033,10 +1033,11 @@ internal sealed class LatticeBackupCaptureService(
                     stream,
                     cancellationToken).ConfigureAwait(false);
 
-                // The manifest id is unique to this capture (issue #5418): it folds the
-                // capture's own artifact id into the payload digest, so a capture of an
-                // unchanged tree never re-publishes an existing backup's id.
-                var backupId = BackupIdentity.Compute(null, collector.ContentHash, artifactId);
+                // The manifest id is the content address of the streamed payload, so a
+                // capture that produced identical bytes republishes the same backup.
+                // The publish below resolves the final id: scope-qualified when the bare
+                // one belongs to a backup of another scope (issue #5620).
+                var backupId = BackupIdentity.Full(collector.ContentHash);
 
                 var topology = await BuildTopologyAsync(lattice, startInclusive, endExclusive, cancellationToken)
                     .ConfigureAwait(false);
@@ -1084,13 +1085,13 @@ internal sealed class LatticeBackupCaptureService(
                     await progress.ReportAsync(BackupOperationPhases.Cataloguing).ConfigureAwait(false);
                 }
 
-                phase = LatticeBackupMetrics.PhaseSinkWrite;
-                await sink.WriteManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
-                if (register)
-                {
-                    phase = LatticeBackupMetrics.PhaseManifestCommit;
-                    await catalog.RegisterAsync(manifest, cancellationToken).ConfigureAwait(false);
-                }
+                // Written and registered through the scope's per-id hold, so a
+                // republish never interleaves with a retention pass, a delete or
+                // another publish of the same id (issue #5418).
+                phase = register ? LatticeBackupMetrics.PhaseManifestCommit : LatticeBackupMetrics.PhaseSinkWrite;
+                manifest = await _publicationGate.PublishFullAsync(manifest, register, cancellationToken)
+                    .ConfigureAwait(false);
+                backupId = manifest.Id;
 
                 LatticeBackupMetrics.RecordCaptureSuccess(
                     manifest,

@@ -4,6 +4,9 @@
 # registered the row again once every member was captured. In between, the
 # member was an ordinary listed backup, so a retention pass could prune it;
 # the stamp then listed it again over the artifact the pass had deleted.
+# A member awaiting its stamp is now also held from every pass (Busy), which
+# alone would hide the double registration, so the mutation removes that hold
+# too: it is the production behaviour before #5449, which had neither.
 MODULE: ListedRestorableStampReregisters
 TARGET: ListedRestorable
 CLASS: Invariant
@@ -12,9 +15,17 @@ PERTURBS: Register
 
 --- FIND
           \* A set member: its row waits for the stamp.
-          /\ UNCHANGED <<cat, pub>>
+          /\ UNCHANGED <<cat, pub, lpt, reps>>
 --- REPLACE
           \* MUTATION: the member is registered now, and again by the stamp.
           /\ cat' = cat \cup {cap[c].id}
           /\ pub' = pub \cup {cap[c].id}
+          /\ UNCHANGED <<lpt, reps>>
+--- END
+
+--- FIND
+Busy == {cap[c].id : c \in {d \in Caps : cap[d].ph \in Held}}
+--- REPLACE
+\* MUTATION: a member awaiting its stamp is not held from a pass.
+Busy == {cap[c].id : c \in {d \in Caps : cap[d].ph \in Held \ {"stamp"}}}
 --- END

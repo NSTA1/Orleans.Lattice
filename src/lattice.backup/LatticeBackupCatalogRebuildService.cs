@@ -12,10 +12,17 @@ namespace Orleans.Lattice.Backup;
 /// </summary>
 internal sealed class LatticeBackupCatalogRebuildService(
     ILatticeBackupSink sink,
-    ILatticeBackupCatalogStore catalog) : ILatticeBackupCatalogRebuildService
+    ILatticeBackupCatalogStore catalog,
+    IBackupPublicationGate? publicationGate = null) : ILatticeBackupCatalogRebuildService
 {
     private readonly ILatticeBackupSink _sink = sink ?? throw new ArgumentNullException(nameof(sink));
     private readonly ILatticeBackupCatalogStore _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
+
+    // Each manifest is registered under its per-id hold, and only while it is
+    // still in the sink (issue #5418): a retention pass or a delete that removed
+    // it during the walk is never undone.
+    private readonly IBackupPublicationGate _publicationGate =
+        publicationGate ?? new DirectBackupPublicationGate(new BackupPublisher(catalog!, sink!));
 
     /// <inheritdoc />
     public async Task<BackupCatalogRebuildReport> RebuildFromSinkAsync(CancellationToken cancellationToken = default)
@@ -45,13 +52,13 @@ internal sealed class LatticeBackupCatalogRebuildService(
                 // capture timestamp), so this pre-read only drives the summary
                 // counts and never changes what is stored.
                 var existing = await _catalog.GetAsync(manifest.Id, cancellationToken).ConfigureAwait(false);
-                await _catalog.RegisterAsync(manifest, cancellationToken).ConfigureAwait(false);
-
-                if (existing is null)
+                // A manifest removed from the sink since the walk read it is not listed.
+                var listed = await _publicationGate.RegisterRebuiltAsync(manifest, cancellationToken).ConfigureAwait(false);
+                if (listed && existing is null)
                 {
                     registered++;
                 }
-                else
+                else if (listed)
                 {
                     reconciled++;
                 }

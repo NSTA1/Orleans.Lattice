@@ -1,7 +1,7 @@
 namespace Orleans.Lattice.Api.Mcp;
 
 /// <summary>
-/// A compact projection of one backup artifact, with its content digest, for MCP
+/// A compact projection of one content-addressed backup artifact for MCP
 /// structured content. It surfaces the <see cref="ArtifactId"/> that
 /// <c>lattice_backup_export_artifact</c> requires to drive an export, alongside
 /// the content digest and size so an agent can pick and verify an artifact

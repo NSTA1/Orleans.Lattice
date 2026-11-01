@@ -2,8 +2,8 @@ namespace Orleans.Lattice.Backup.Tests;
 
 /// <summary>
 /// Regression coverage for <see cref="BackupManifestRegistration"/>: re-registering
-/// an already-registered backup id must preserve the immutable, index-key-determining
-/// fields from the first registration, so a re-registration never
+/// a content-addressed backup id must preserve the immutable, index-key-determining
+/// fields from the first registration, so a re-capture of identical content never
 /// re-keys the catalog index into an orphaned duplicate row (the "one backup shows
 /// as several rows" defect).
 /// </summary>
@@ -45,6 +45,37 @@ public sealed class BackupManifestRegistrationTests
         var reconciled = BackupManifestRegistration.Reconcile(existing, recaptured);
 
         Assert.That(reconciled.CreatedAtUtc, Is.EqualTo(firstSeen));
+    }
+
+    [Test]
+    public void Reconcile_records_the_latest_capture_for_retention_to_rank_by()
+    {
+        var firstSeen = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var existing = Manifest("cafef00d", firstSeen);
+        var recaptured = Manifest("cafef00d", firstSeen.AddDays(3));
+
+        var reconciled = BackupManifestRegistration.Reconcile(existing, recaptured);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reconciled.CreatedAtUtc, Is.EqualTo(firstSeen), "the first capture time is immutable");
+            Assert.That(reconciled.LastCapturedAtUtc, Is.EqualTo(firstSeen.AddDays(3)), "the latest capture is recorded");
+            Assert.That(BackupRetentionPlanner.RankTime(reconciled), Is.EqualTo(firstSeen.AddDays(3)));
+        });
+    }
+
+    [Test]
+    public void Reconcile_never_moves_the_latest_capture_back()
+    {
+        // A slower, older capture registering after a newer one must not make the
+        // backup rank as older than its latest capture.
+        var firstSeen = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var existing = Manifest("cafef00d", firstSeen) with { LastCapturedAtUtc = firstSeen.AddDays(5) };
+        var older = Manifest("cafef00d", firstSeen.AddDays(2));
+
+        var reconciled = BackupManifestRegistration.Reconcile(existing, older);
+
+        Assert.That(reconciled.LastCapturedAtUtc, Is.EqualTo(firstSeen.AddDays(5)));
     }
 
     [Test]
