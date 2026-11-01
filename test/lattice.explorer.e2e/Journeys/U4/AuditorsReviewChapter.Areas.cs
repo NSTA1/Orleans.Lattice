@@ -54,8 +54,11 @@ public sealed partial class AuditorsReviewChapter
         await tab("Remediation").ClickAsync();
         await Expect(content.GetByRole(AriaRole.Heading, new() { Name = "Start a remediation", Exact = true })).ToHaveCountAsync(0);
         await tab("Dead letters").ClickAsync();
-        await Expect(content.GetByRole(AriaRole.Heading, new() { Name = "No dead letters", Exact = true })).ToBeVisibleAsync();
-        await SnapAsync(dana, "6", "dead-letters", "Dead letters: none, and no remediation to start");
+        // A4's strict policy diverted values here; a reader loads and reads them, and can change nothing.
+        await Expect(content.Locator(".lt-schema-status")).ToHaveTextAsync(new Regex(@"^[1-9][\d,]* dead letters?\."), new() { Timeout = 30_000 });
+        await content.GetByRole(AriaRole.Button, new() { Name = "Load dead letters", Exact = true }).ClickAsync();
+        await Expect(content.GetByRole(AriaRole.Table, new() { Name = $"Dead letters of {Names.Trees.FactoryOrders}" }).Locator("tbody tr").First).ToBeVisibleAsync(new() { Timeout = 30_000 });
+        await SnapAsync(dana, "6", "dead-letters", "Dead letters: A4's diverted values, readable, and no remediation to start");
         Coverage.Hit("use-case:schema/availability");
     }
 
