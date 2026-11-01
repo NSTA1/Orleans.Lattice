@@ -10,8 +10,9 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// The orphaned-leaf repair unsplices what its audit judged repairable on a
 /// tree whose history has sealed its leaves (#5550).
 /// <para>
-/// A resize puts the tree behind an alias, and a reshard grow then splits each
-/// source shard and seals every one of its leaves with the slots it gave away.
+/// A reshard grow splits each source shard of a tree's physical copy and seals
+/// every one of its leaves with the slots it gave away, and the logical tree is
+/// then aliased onto that copy.
 /// An interrupted leaf split then leaves an orphan behind one of those sealed
 /// leaves. The audit, a dry run, reports it repairable. Before the fix the
 /// repair's unsplice asked the sealed predecessor to unlink it, and the
@@ -46,29 +47,30 @@ public sealed class OrphanRepairAfterReshardIntegrationTests
     public async Task An_orphan_behind_a_resharded_aliased_trees_sealed_leaf_is_audited_repairable_and_repaired()
     {
         var treeId = $"orphan-reshard-{Guid.NewGuid():N}";
+        var physicalId = $"{treeId}-copy";
         var tree = await _fixture.CreateTreeAsync(treeId);
+        var physical = await _fixture.CreateTreeAsync(physicalId);
         var expected = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        await WriteAsync(tree, expected, "pre", 120);
-
-        // The alias: a resize rebuilds the tree into a shadow copy and swaps
-        // the logical tree onto it.
-        var before = await tree.GetRoutingAsync(forceRefresh: true);
-        await tree.ResizeAsync(6, 4);
-        await TestPoll.UntilAsync(() => tree.IsResizeCompleteAsync(), "the resize to complete",
-            timeout: TimeSpan.FromMinutes(2));
-        var aliased = await tree.GetRoutingAsync(forceRefresh: true);
-        Assert.That(aliased.PhysicalTreeId, Is.Not.EqualTo(before.PhysicalTreeId),
-            "precondition: the resize put the tree behind an alias");
+        await WriteAsync(physical, expected, "pre", 120);
 
         // The reshard: a grow splits each source shard and seals its leaves.
-        var sourceShards = aliased.Map.GetPhysicalShardIndices().ToHashSet();
-        await tree.ReshardAsync(sourceShards.Count * 2);
-        await TestPoll.UntilAsync(() => tree.IsReshardCompleteAsync(), "the reshard to complete",
+        var before = await physical.GetRoutingAsync(forceRefresh: true);
+        var sourceShards = before.Map.GetPhysicalShardIndices().ToHashSet();
+        await physical.ReshardAsync(sourceShards.Count * 2);
+        await TestPoll.UntilAsync(() => physical.IsReshardCompleteAsync(), "the reshard to complete",
             timeout: TimeSpan.FromMinutes(3));
+
+        // The alias: the logical tree now routes to the resharded copy, as a
+        // restored tree routes to its restored physical copy.
+        await Grains.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).SetAliasAsync(treeId, physicalId);
         var routing = await tree.GetRoutingAsync(forceRefresh: true);
-        Assert.That(routing.Map.GetPhysicalShardIndices().Count(), Is.EqualTo(sourceShards.Count * 2),
-            "precondition: the reshard grew the tree");
+        Assert.Multiple(() =>
+        {
+            Assert.That(routing.PhysicalTreeId, Is.EqualTo(physicalId), "precondition: the tree is aliased");
+            Assert.That(routing.Map.GetPhysicalShardIndices().Count(), Is.EqualTo(sourceShards.Count * 2),
+                "precondition: the aliased copy was grown");
+        });
 
         await WriteAsync(tree, expected, "post", 400);
 
