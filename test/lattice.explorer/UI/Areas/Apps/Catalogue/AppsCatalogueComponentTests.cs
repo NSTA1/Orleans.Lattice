@@ -74,9 +74,20 @@ public sealed class AppsCatalogueComponentTests : AppsTestContext
         {
             Assert.That(AppsCatalogueAssets.Stylesheet, Is.EqualTo(ShellDesignAssets.ContentBasePath + "apps/catalogue.css"));
             Assert.That(classes, Is.Not.Empty);
-            Assert.That(classes.Where(name => !name.StartsWith("lt-apps-", StringComparison.Ordinal)), Is.EquivalentTo(new[] { "lt-node" }),
-                "the stylesheet defines lt-apps-* classes and only restyles the step marker's node");
+            Assert.That(classes.Where(name => !name.StartsWith("lt-apps-", StringComparison.Ordinal)), Is.EquivalentTo(new[] { "lt-node", "lt-check" }),
+                "the stylesheet defines lt-apps-* classes and only restyles the step marker's node and the ceiling's checkbox rows");
             Assert.That(css, Does.Not.Contain("@media").And.Not.Contain("@container"), "the compact form comes from the cascaded width band");
         });
+    }
+
+    [Test]
+    public void The_ceilings_checkbox_rows_are_tall_enough_to_space_their_checkboxes_24px_apart()
+    {
+        var css = File.ReadAllText(Path.Combine(HygieneRepository.FindRepoRoot(), "src", "lattice.explorer", "UI", "wwwroot", "apps", "catalogue.css"));
+
+        Assert.That(
+            Regex.IsMatch(css, @"\.lt-apps-fieldset \.lt-check\s*\{[^}]*min-block-size:\s*1\.5rem;"),
+            Is.True,
+            "The ceiling step stacks 16px checkboxes; each row needs 24px to meet the WCAG 2.2 target-size spacing exception (axe target-size, journey A5).");
     }
 }
