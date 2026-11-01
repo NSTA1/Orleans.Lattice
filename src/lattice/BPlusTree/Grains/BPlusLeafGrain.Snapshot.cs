@@ -2992,7 +2992,7 @@ internal sealed partial class BPlusLeafGrain
         // replay-gate slot, kept for the WAL GC sweep; a refusal is counted and
         // backed off rather than thrown out of this callback (issue #3575).
         var starvationPartitionCount = Math.Max(1, resolved.WalPartitions);
-        if (IsStarvedOfDurableCheckpoint(starvationPartitionCount) && starvationPartitionCount < 0)
+        if (IsStarvedOfDurableCheckpoint(starvationPartitionCount))
         {
             ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckNoDurableCheckpoint);
 

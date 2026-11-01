@@ -4156,7 +4156,7 @@ internal sealed class LatticeWalGcScheduler(
             WarnFloorBlocked(
                 treeId,
                 warnConsumerId,
-                (WalGcBlockingPinState?)null);
+                budgets.TryGetValue(warnConsumerId, out var warned) ? warned.PinState : null);
         }
 
         // Drain orphaned pins in bulk before any reactivation machinery runs
