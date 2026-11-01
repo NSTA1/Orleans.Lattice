@@ -98,6 +98,18 @@ public partial class ReplicationTreesPage
     private bool CanSubmitEnable =>
         !_busy && _enableTree.Trim().Length > 0 && EnableTreeError is null && Enum.TryParse<LatticeMergeMode>(_enableMode, out _);
 
+    /// <summary>
+    /// How the tree picker judges its value: only a tree this cluster holds, until a bootstrap
+    /// source is named - then any id, because the bootstrap is how a tree this region does not
+    /// hold yet arrives from the source cluster.
+    /// </summary>
+    internal LtComboBoxMode EnableTreeMode =>
+        _enableTreeFixed || string.IsNullOrWhiteSpace(_enableBootstrap) ? LtComboBoxMode.PickExisting : LtComboBoxMode.Suggest;
+
+    private string EnableTreeHint => EnableTreeMode == LtComboBoxMode.Suggest
+        ? "The logical tree id, such as orders. It need not exist here yet: the bootstrap brings it from the source cluster."
+        : "The logical tree id, such as orders.";
+
     /// <inheritdoc />
     public void Dispose()
     {

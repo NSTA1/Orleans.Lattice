@@ -7,7 +7,7 @@
 *@
 <form class="lt-access-form" @onsubmit="SaveAsync" novalidate>
     <LtNameInput @ref="_ruleIdBox" Label="Rule id" Value="@_draft.RuleId" ValueChanged="@(value => _draft.RuleId = value)"
-                 Existing="@(_draft.IsExisting ? null : _ruleIds)" Noun="rule"
+                 Existing="@(_draft.IsExisting ? null : RuleIds)" Noun="rule"
                  ExistingMessage="A rule with this id already governs this tree."
                  ReadOnly="_draft.IsExisting" Error="@_errors.RuleId"
                  Hint="@(_draft.IsExisting ? "A rule's id and governed tree are fixed once it exists." : "A stable id, unique within the governed tree.")" />
@@ -27,7 +27,7 @@
     <LtSelect Label="Scope" Options="ScopeOptions" Value="@_draft.ScopeKind" ValueChanged="OnScopeChanged" Disabled="_draft.IsExisting" Hint="@ScopeHint" />
     @if (_draft.NeedsTree)
     {
-        <LtComboBox @ref="_treeBox" Label="Tree" Value="@_draft.TreeId" ValueChanged="@(value => _draft.TreeId = value)" ReadOnly="_draft.IsExisting" Error="@_errors.Tree" Hint="@TreeHint" Source="@TreeSource" Noun="tree" />
+        <LtComboBox @ref="_treeBox" Label="Tree" Value="@_draft.TreeId" ValueChanged="@(value => _draft.TreeId = value)" ReadOnly="_draft.IsExisting" Error="@_errors.Tree" Hint="@TreeHint" Source="@TreeSource" Noun="tree" MissingMessage="AccessRuleFormat.MissingTreeMessage" />
     }
     @if (_draft.NeedsKeyOrPrefix)
     {

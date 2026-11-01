@@ -106,6 +106,13 @@ groups from the identity directory and those stored in the Access area, each lab
 disabling, upgrading and uninstalling are native actions with explicit confirmation;
 the palette offers `apps.upgrade.{slug}` for an app with an update and
 `apps.disable.{slug}` for an enabled one.
+A lifecycle change the cluster accepts but is still applying, such as uninstalling an
+app whose replicated trees are slow to retire, is shown as in progress rather than as
+an error, and the page follows it until the app reaches its new state or its run ends
+failed, for up to five minutes. A page opened while such a change is still running,
+including the installed-apps list, shows it as in progress (for example
+"Uninstalling...") instead of the state before it, and offers no lifecycle action until
+it settles.
 An upgrade shows what changed between the two versions. An install whose ceiling or
 bridge grants no longer cover its manifest is shown as needing re-consent.
 Reviewing the installed version manages that install rather than offering a new one:

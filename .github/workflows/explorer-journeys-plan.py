@@ -3,9 +3,10 @@
 
 Subcommands:
 
-  plan         Decide which legs a run executes and which journeys need the
-               screenshot provenance check. Writes `legs` and `provenance`
-               (JSON arrays) to GITHUB_OUTPUT and a plan table to the summary.
+  plan         Decide which legs a run executes, which contract conformance
+               shards run, and which journeys need the screenshot provenance
+               check. Writes `legs`, `conformance` and `provenance` (JSON
+               arrays) to GITHUB_OUTPUT and a plan table to the summary.
   leg-summary  Print a leg's test counts, every journey's ordered screenshot
                manifest and the leg's coverage hits to the job summary, and
                fail a leg whose filter selected none of the tests it exists for.
@@ -28,18 +29,37 @@ Legs:
                     merge commit, so a broken hand-off is caught before it lands.
   story-contoso-narrow  nightly only: the Contoso story at 390x844.
 
-Which legs run:
+Contract conformance shards (the `conformance` output, one storyline each):
+one per Contracts/<Storyline>ContractConformanceTests.cs, discovered from the
+directory. The lane's contract-conformance job is a matrix over them.
+
+Which legs run (user decision on #5401, 2026-11-01: a member pull request is
+gated on its OWN isolated legs; the stories and contract conformance are
+advisory and run at landing, nightly and on demand):
 
   pull_request edited    none (the body changed, not the code); provenance only.
-  pull_request into an integration branch (`*/epic/*`):
-      harness always; a change to anything but a journey folder, markdown,
-      docs or an unrelated workflow file runs every leg (the Explorer, the
-      harness, the hosts, a facade and the lane itself); otherwise the touched
-      journeys' isolated legs and their storylines' story legs.
-  pull_request into anything else (the bucket-to-main pull request), push,
-  workflow_dispatch: every leg.
-  schedule: every leg, plus story-contoso-narrow.
-  A pull request whose changed files could not be listed runs every leg.
+  pull_request labeled   the full set when the added label is `journeys-full`,
+                         otherwise nothing.
+  pull_request into an integration branch (`*/epic/*`), a member pull request:
+      harness always, NO story leg and NO conformance shard. Isolated legs:
+        - each journey folder the pull request touches;
+        - for a file under src/lattice.explorer/UI/Areas/<Area>/, the chapters
+          whose own sources name that area (`Schema`, `/schema`), unless the
+          file's type is used outside its area folder, which makes it shared;
+        - for any other file that can change what a journey sees (the rest of
+          the Explorer, the e2e harness, a file directly under Journeys/, the
+          hosts, test/shared, a facade, the lane itself, or a file the planner
+          does not recognise), every isolated leg, because it feeds every
+          chapter and the planner cannot tell which;
+        - markdown, docs, tools, videos, other workflows and other test
+          projects feed no chapter.
+      Every chapter a member skips still runs when the bucket lands.
+  A member pull request labelled `journeys-full`: the full set, as at landing.
+  pull_request into anything else (the bucket-to-main landing pull request),
+  push, workflow_dispatch: every leg and every conformance shard.
+  schedule: every leg and conformance shard, plus story-contoso-narrow.
+  A member pull request whose changed files could not be listed runs every
+  isolated leg (still no story and no conformance shard).
 """
 
 import argparse
@@ -80,6 +100,14 @@ LANE_FILES = frozenset(
         "playwright_apt_mirrors.py",
     )
 )
+
+# A member pull request carrying this label runs the full set, as the landing pull request does.
+FULL_LABEL = "journeys-full"
+
+EXPLORER = "src/lattice.explorer"
+AREAS = EXPLORER + "/UI/Areas"
+CONTRACTS = E2E + "/Contracts"
+CONFORMANCE_FIXTURE = re.compile(r"^([A-Z][A-Za-z]*)ContractConformanceTests\.cs$")
 
 HARNESS_FILTER = (
     "TestCategory=EndToEnd&TestCategory!=Journey&TestCategory!=Story&TestCategory!=CoverageGate&TestCategory!=ContractConformance"
@@ -171,8 +199,17 @@ def storylines_with_contracts(root):
     return found
 
 
+def conformance_shards(root):
+    """Every contract conformance storyline in the tree (Contracts/<X>ContractConformanceTests.cs), sorted."""
+    directory = Path(root) / CONTRACTS
+    if not directory.is_dir():
+        return []
+    return sorted(match.group(1) for match in (CONFORMANCE_FIXTURE.match(path.name) for path in directory.iterdir())
+                  if match)
+
+
 def classify(path):
-    """'journey:<folder>', 'neutral' or 'all' for one changed file."""
+    """'journey:<folder>', 'area:<Area>', 'neutral' or 'all' for one changed file."""
     if path.lower().endswith(".md"):
         return "neutral"
     prefix = JOURNEYS + "/"
@@ -184,7 +221,55 @@ def classify(path):
         return "all"
     if path.startswith((".github/", "docs/", "tools/", "videos/")):
         return "neutral"
+    area = AREAS + "/"
+    if path.startswith(area):
+        rest = path[len(area):]
+        return "area:" + rest.split("/", 1)[0] if "/" in rest else "all"
+    # The e2e project references no test project but test/shared (Orleans.Lattice.Testing).
+    if path.startswith("test/") and not path.startswith((E2E + "/", "test/shared/")):
+        return "neutral"
     return "all"
+
+
+def _type_name(path):
+    """The type a file declares by convention: its name up to the first dot (Foo.razor.cs -> Foo)."""
+    return Path(path).name.split(".", 1)[0]
+
+
+def area_file_is_shared(root, path, area):
+    """Whether the type an area file declares is named anywhere in the Explorer outside that area's folder.
+
+    Such a file feeds every area that uses it, so its change is attributed to every chapter.
+    """
+    name = _type_name(path)
+    if not re.match(r"^[A-Za-z_]\w*$", name):
+        return True
+    word = re.compile(rf"\b{re.escape(name)}\b")
+    explorer = Path(root) / EXPLORER
+    own = (Path(root) / AREAS / area).resolve()
+    if not explorer.is_dir():
+        return True
+    for source in explorer.rglob("*"):
+        if source.suffix not in (".cs", ".razor") or not source.is_file():
+            continue
+        parts = source.relative_to(explorer).parts
+        if parts[0] in ("bin", "obj") or own in source.resolve().parents:
+            continue
+        if word.search(source.read_text(encoding="utf-8", errors="replace")):
+            return True
+    return False
+
+
+def chapters_naming_area(root, journeys, area):
+    """The journey folders whose own sources name an Explorer area, as `Schema` or `/schema`."""
+    pattern = re.compile(rf"(?<![A-Za-z])(?:{re.escape(area)}|{re.escape(area.lower())})(?![a-z])")
+    found = []
+    for folder, _, _ in journeys:
+        directory = Path(root) / JOURNEYS / folder
+        if any(pattern.search(source.read_text(encoding="utf-8", errors="replace"))
+               for source in directory.rglob("*.cs")):
+            found.append(folder)
+    return found
 
 
 def is_integration_branch(ref):
@@ -238,11 +323,13 @@ def harness_leg():
     }
 
 
-def plan(root, event, action="", base_ref="", changed=None):
-    """The legs and provenance journeys for one run, plus the reasons, as a dict."""
+def plan(root, event, action="", base_ref="", changed=None, labels=(), label=""):
+    """The legs, conformance shards and provenance journeys for one run, plus the reasons, as a dict."""
     journeys = discover_journeys(root)
     stories = story_fixtures(root)
+    conformance = conformance_shards(root)
     by_folder = {folder: (folder, jid, storyline) for folder, jid, storyline in journeys}
+    member = event == "pull_request" and is_integration_branch(base_ref)
     notes = []
     provenance = []
 
@@ -267,9 +354,7 @@ def plan(root, event, action="", base_ref="", changed=None):
 
     touched = []
     if event == "pull_request":
-        if changed is None:
-            notes.append("The pull request's changed files could not be listed; running every leg.")
-        else:
+        if changed is not None:
             classes = {classify(path) for path in changed}
             touched = sorted(
                 {cls.split(":", 1)[1] for cls in classes if cls.startswith("journey:")} & set(by_folder),
@@ -277,40 +362,77 @@ def plan(root, event, action="", base_ref="", changed=None):
 
     if event == "pull_request" and action == "edited":
         legs = []
+        conformance = []
         notes.append("Body edit: no leg runs; the screenshot provenance check runs.")
+    elif event == "pull_request" and action == "labeled":
+        if label == FULL_LABEL:
+            legs = every_leg()
+            notes.append(f"Labelled `{FULL_LABEL}`: every leg and every conformance shard.")
+        else:
+            legs = []
+            conformance = []
+            notes.append(f"Label '{label or 'n/a'}' added: nothing runs (only `{FULL_LABEL}` runs the full set).")
     elif event == "schedule":
         legs = every_leg()
         legs += [story_leg(storyline, fixture, narrow=True) for storyline, fixture in stories
                  if storyline == "contoso"]
-        notes.append("Nightly: every leg, and the Contoso story at 390x844.")
-    elif event != "pull_request" or not is_integration_branch(base_ref):
+        notes.append("Nightly: every leg and conformance shard, and the Contoso story at 390x844.")
+    elif not member:
         legs = every_leg()
-        notes.append(f"{event} into '{base_ref or 'n/a'}': every leg.")
-    elif changed is None or not changed:
+        notes.append(f"{event} into '{base_ref or 'n/a'}': every leg and every conformance shard.")
+    elif FULL_LABEL in labels:
         legs = every_leg()
-        if changed is not None:
-            notes.append("The pull request lists no changed file; running every leg.")
-    elif "all" in {classify(path) for path in changed}:
-        legs = every_leg()
-        widening = sorted(path for path in changed if classify(path) == "all")
-        notes.append("A change outside the journey folders runs every leg: " + ", ".join(widening[:10])
-                     + (f" (and {len(widening) - 10} more)" if len(widening) > 10 else ""))
+        notes.append(f"Member pull request labelled `{FULL_LABEL}`: every leg and every conformance shard.")
     else:
-        legs = [harness_leg()] + [isolated_leg(*by_folder[folder]) for folder in touched]
-        storylines = {by_folder[folder][2] for folder in touched}
-        legs += [story_leg(storyline, fixture) for storyline, fixture in stories if storyline in storylines]
-        notes.append("Journey-scoped pull request: " + (", ".join(touched) if touched else "no journey") + ".")
+        conformance = []
+        notes.append("Member pull request: no story leg and no contract conformance shard (advisory; they run on "
+                     f"the landing pull request into main, nightly, on workflow_dispatch, or with `{FULL_LABEL}`).")
+        chosen = member_chapters(root, journeys, touched, changed, notes)
+        legs = [harness_leg()] + [isolated_leg(*by_folder[folder]) for folder in chosen]
 
     if event == "pull_request" and is_integration_branch(base_ref) and touched:
         if action in ("edited", "reopened"):
             provenance = [by_folder[folder][1] for folder in touched]
-        else:
+        elif action != "labeled":
             notes.append(
                 "Screenshot provenance: after this run, paste the screenshot section "
                 "(tools/Get-JourneyScreenshots.ps1) into the pull request body; the edit runs the check for "
                 + ", ".join(by_folder[folder][1] for folder in touched) + ".")
 
-    return {"legs": legs, "provenance": provenance, "notes": notes}
+    return {"legs": legs, "conformance": conformance, "provenance": provenance, "notes": notes}
+
+
+def member_chapters(root, journeys, touched, changed, notes):
+    """The journey folders a member pull request runs isolated legs for (see the module docstring)."""
+    every = [folder for folder, _, _ in journeys]
+    if changed is None:
+        notes.append("The pull request's changed files could not be listed; every isolated leg runs.")
+        return every
+    if not changed:
+        notes.append("The pull request lists no changed file; every isolated leg runs.")
+        return every
+    widening = []
+    fed = set(touched)
+    for path in changed:
+        cls = classify(path)
+        if cls == "all":
+            widening.append(path)
+        elif cls.startswith("area:"):
+            area = cls.split(":", 1)[1]
+            if area_file_is_shared(root, path, area):
+                widening.append(path)
+                continue
+            chapters = chapters_naming_area(root, journeys, area)
+            fed.update(chapters)
+            notes.append(f"{path} feeds the chapters naming the {area} area: "
+                         + (", ".join(chapters) if chapters else "none in this tree") + ".")
+    if widening:
+        notes.append("A shared file feeds every chapter, so every isolated leg runs: " + ", ".join(sorted(widening)[:10])
+                     + (f" (and {len(widening) - 10} more)" if len(widening) > 10 else ""))
+        return every
+    chosen = [folder for folder in every if folder in fed]
+    notes.append("Journey-scoped member pull request: " + (", ".join(chosen) if chosen else "no journey") + ".")
+    return chosen
 
 
 def plan_markdown(result):
@@ -322,6 +444,11 @@ def plan_markdown(result):
                          f"`{leg['filter'].replace('|', chr(92) + '|')}` |")
     else:
         lines.append("No leg runs.")
+    lines.append("")
+    if result.get("conformance"):
+        lines.append("Contract conformance shards: " + ", ".join(f"`{s}`" for s in result["conformance"]))
+    else:
+        lines.append("No contract conformance shard runs.")
     lines.append("")
     if result["provenance"]:
         lines.append("Screenshot provenance is checked for: " + ", ".join(f"`{j}`" for j in result["provenance"]))
@@ -427,6 +554,17 @@ def probe_verdict(trx, exit_code):
     return problems
 
 
+def parse_labels(text):
+    """Label names from a JSON array; an absent or non-array value (no pull request) is no label."""
+    if not text:
+        return []
+    try:
+        value = json.loads(text)
+    except ValueError as error:
+        raise PlanError(f"--labels is not JSON: {error}") from error
+    return [str(name) for name in value] if isinstance(value, list) else []
+
+
 def append(path_variable, text):
     target = os.environ.get(path_variable)
     if target:
@@ -443,6 +581,8 @@ def main(argv=None):
     p.add_argument("--action", default="")
     p.add_argument("--base-ref", default="")
     p.add_argument("--changed-files")
+    p.add_argument("--labels", default="", help="the pull request's label names, as a JSON array")
+    p.add_argument("--label", default="", help="the label a `labeled` event added")
     s = sub.add_parser("leg-summary")
     s.add_argument("--leg", required=True)
     s.add_argument("--trx", required=True)
@@ -459,13 +599,15 @@ def main(argv=None):
             changed = [line.strip() for line in Path(args.changed_files).read_text(encoding="utf-8").splitlines()
                        if line.strip()]
         try:
-            result = plan(args.root, args.event, args.action, args.base_ref, changed)
+            labels = parse_labels(args.labels)
+            result = plan(args.root, args.event, args.action, args.base_ref, changed, labels, args.label)
         except PlanError as error:
             print(f"::error::{error}")
             return 1
         print(plan_markdown(result))
         append("GITHUB_STEP_SUMMARY", plan_markdown(result))
         append("GITHUB_OUTPUT", "legs=" + json.dumps(result["legs"], separators=(",", ":")) + "\n")
+        append("GITHUB_OUTPUT", "conformance=" + json.dumps(result["conformance"], separators=(",", ":")) + "\n")
         append("GITHUB_OUTPUT", "provenance=" + json.dumps(result["provenance"], separators=(",", ":")) + "\n")
         return 0
 

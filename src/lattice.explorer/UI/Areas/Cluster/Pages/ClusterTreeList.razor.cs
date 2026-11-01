@@ -115,7 +115,20 @@ public partial class ClusterTreeList : IDisposable
     private IReadOnlyList<ClusterTreeEntry> Filtered(IReadOnlyList<ClusterTreeEntry> trees) =>
         string.IsNullOrWhiteSpace(_filter)
             ? trees
-            : [.. trees.Where(tree => tree.TreeId.Contains(_filter.Trim(), StringComparison.OrdinalIgnoreCase))];
+            : [.. trees.Where(tree => Matches(tree, _filter.Trim()))];
+
+    /// <summary>
+    /// Whether the filter text names the tree: a part of its logical name (which carries its
+    /// tenant and app), of its owner as the Owner column reads it, or of its state as the State
+    /// column reads it (so "deleted" or "aliased" narrows the list to those trees).
+    /// </summary>
+    /// <param name="tree">The tree.</param>
+    /// <param name="text">The filter text.</param>
+    /// <returns>Whether the tree is listed.</returns>
+    internal static bool Matches(ClusterTreeEntry tree, string text) =>
+        tree.TreeId.Contains(text, StringComparison.OrdinalIgnoreCase)
+        || (tree.Name.Ownership?.Contains(text, StringComparison.OrdinalIgnoreCase) ?? false)
+        || StateText(tree).Contains(text, StringComparison.OrdinalIgnoreCase);
 
     private void OnCommand(string commandId)
     {

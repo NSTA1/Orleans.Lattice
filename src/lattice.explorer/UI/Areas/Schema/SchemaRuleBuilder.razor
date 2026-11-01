@@ -134,7 +134,7 @@
                             }
                             @if (SchemaCardCompiler.IsPredicate(card.Kind))
                             {
-                                <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => AddAlternative(at)" aria-label="@($"Add an alternative to rule {number}")">Or...</LtButton>
+                                <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => AddAlternative(at)" aria-label="@($"Or: add an alternative to rule {number}")">Or...</LtButton>
                             }
                             <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => MoveRule(at, -1)" Disabled="@(at == 0)" aria-label="@($"Move rule {number} up")">Up</LtButton>
                             <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => MoveRule(at, 1)" Disabled="@(at == _cards.Count - 1)" aria-label="@($"Move rule {number} down")">Down</LtButton>

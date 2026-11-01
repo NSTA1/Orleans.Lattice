@@ -79,8 +79,16 @@ public sealed class ClusterOverviewTests : ClusterTestContext
 
         var cut = RenderAt("/cluster");
 
-        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-cluster-error").Select(error => error.TextContent),
-            Is.EqualTo(new[] { "The cluster did not answer in time.", "You do not have permission to do this." })));
+        // #5581: a caller admitted by a tree grant, refused the estate-wide figures, is
+        // told what they need rather than shown an error.
+        cut.WaitUntil(() => Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll(".lt-cluster-error").Select(error => error.TextContent),
+                Is.EqualTo(new[] { "The cluster did not answer in time." }));
+            Assert.That(cut.Find("[data-lt-cluster='usage-denied']").TextContent,
+                Is.EqualTo("Estate-wide storage figures need the cluster-wide Telemetry capability. Open a tree you administer from the tree list."));
+            Assert.That(cut.Find("[data-lt-cluster='usage-denied']").HasAttribute("role"), Is.False, "a missing grant is not an alert");
+        }));
     }
 
     [Test]

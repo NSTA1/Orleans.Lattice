@@ -22,13 +22,23 @@ public sealed class ResetPageTests : ShellDesignTestContext
     [Test]
     public void The_page_is_routed_at_reset()
     {
-        var route = typeof(ResetPage).GetCustomAttribute<RouteAttribute>();
+        var templates = typeof(ResetPage).GetCustomAttributes<RouteAttribute>().Select(static route => route.Template).ToArray();
 
         Assert.Multiple(() =>
         {
-            Assert.That(route?.Template, Is.EqualTo("/reset"));
-            Assert.That(ResetPage.Href, Is.EqualTo(route!.Template.TrimStart('/')), "links resolve against the document base");
+            Assert.That(templates, Does.Contain("/reset"));
+            Assert.That(ResetPage.Href, Is.EqualTo("/reset".TrimStart('/')), "links resolve against the document base");
         });
+    }
+
+    [Test]
+    public void The_page_also_answers_under_a_tenant_root()
+    {
+        // The Explorer roots addresses at /t/{tenant} even with tenancy off, so a typed
+        // /t/default/reset must reach the escape rather than a server 404.
+        var templates = typeof(ResetPage).GetCustomAttributes<RouteAttribute>().Select(static route => route.Template);
+
+        Assert.That(templates, Does.Contain("/t/{tenant}/reset"));
     }
 
     [Test]

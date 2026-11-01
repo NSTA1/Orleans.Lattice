@@ -238,7 +238,10 @@ public partial class AccessRulesPage : IDisposable
             var page = await Catalog.ListRulesAsync(scope, new AuthPageRequest { PageSize = PageSize, PageToken = _next }, load).ConfigureAwait(true);
             if (!load.IsCancellationRequested)
             {
-                _rules = [.. _rules, .. page.Entries];
+                // A rule saved since the first page was read is already listed (it is put
+                // first on save), so a later page that carries it again adds nothing.
+                var listed = _rules.Select(static rule => (rule.Scope.TreeId, rule.RuleId)).ToHashSet();
+                _rules = [.. _rules, .. page.Entries.Where(rule => !listed.Contains((rule.Scope.TreeId, rule.RuleId)))];
                 RememberTenantRules(page);
                 _next = page.NextPageToken;
             }
