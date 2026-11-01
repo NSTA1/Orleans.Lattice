@@ -66,12 +66,6 @@ public sealed class GoingMultiRegionJourney : JourneyChapter
             await Expect(westEstate.PeerNode(JourneyEstate.East)).ToHaveAttributeAsync("aria-current", "true");
             Coverage.Hit("query:replication.region");
             await west.SubstepAsync(recorder, "1", "filter-region", "A7.1 - Filtered to the links with east");
-
-            await westEstate.FilterAsync(westEstate.AppFilter, Names.Apps.TaskBoard, "app", Names.Apps.TaskBoard);
-            await Expect(westEstate.LinkRows(A5TaskBoardTree, westCompact).First).ToBeVisibleAsync();
-            Coverage.Hit("query:replication.app");
-            Coverage.Hit("use-case:replication/filters");
-            await west.SubstepAsync(recorder, "1", "filter-app", "A7.1 - Filtered to the task board's links with east");
             step.Complete();
         }
 
@@ -96,6 +90,15 @@ public sealed class GoingMultiRegionJourney : JourneyChapter
             }
 
             await west.SubstepAsync(recorder, "2", "app-owned", "A7.2 - The task board's tree is enrolled by its app, and managed from it");
+
+            // The App filter lists the apps that own an enrolled tree here. The estate page's lists
+            // only apps whose trees have reported a link, which an idle app tree may not have yet.
+            await westEstate.FilterAsync(westEstate.AppFilter, Names.Apps.TaskBoard, "app", Names.Apps.TaskBoard);
+            await Expect(taskBoard).ToBeVisibleAsync();
+            Coverage.Hit("query:replication.app");
+            Coverage.Hit("use-case:replication/filters");
+            await west.SubstepAsync(recorder, "2", "filter-app", "A7.2 - Filtered to the trees the task board owns");
+            await westEstate.FilterAsync(westEstate.AppFilter, "Any app", "app", null);
 
             await Expect(east.Shell.Heading).ToBeVisibleAsync();
             await east.SubstepAsync(recorder, "2", "east-console", "A7.2 - olivia signed in to the east console, under /console on the east gateway");
