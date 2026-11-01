@@ -35,16 +35,17 @@ public interface ILatticeReplicationControl
     /// <paramref name="mode"/>, after authorizing the tree fail-closed for the
     /// <see cref="LatticeOperation.Replication"/> capability. The merge mode is
     /// fixed at enable time: enabling an already-enabled tree under a different
-    /// mode is rejected (disable then re-enable to change a mode). When the tree
-    /// already holds data and <paramref name="bootstrapSourceClusterId"/> is
-    /// supplied, a snapshot bootstrap is requested so a peer converges on the
-    /// pre-existing rows the change feed will not carry.
+    /// mode is rejected (disable then re-enable to change a mode). When
+    /// <paramref name="bootstrapSourceClusterId"/> is supplied, a snapshot
+    /// bootstrap is requested whether or not the local tree holds rows, so this
+    /// cluster converges on the source's pre-existing rows the change feed will
+    /// not carry. Enable the source cluster first.
     /// </summary>
     /// <param name="treeId">The target tree id to enable. Must not be <c>null</c> or empty.</param>
     /// <param name="mode">The wire merge mode to fix for the tree when first enabled.</param>
     /// <param name="bootstrapSourceClusterId">
-    /// Optional id of the cluster to pull an initial snapshot from when the tree
-    /// already holds data. <c>null</c> or empty skips the bootstrap.
+    /// Optional id of the cluster to pull an initial snapshot from.
+    /// <c>null</c> or empty skips the bootstrap.
     /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The outcome, including the fixed mode and whether a bootstrap was requested.</returns>
@@ -63,8 +64,8 @@ public interface ILatticeReplicationControl
     /// tear down an already-active shipper; if it keeps shipping, peers that resolve
     /// no mode drop those entries while acknowledging the batch. It never purges
     /// already-replicated peer data and keeps the tree's fixed merge mode. A later
-    /// re-enable requests a snapshot bootstrap only when a source cluster is
-    /// supplied and the tree already holds data. Idempotent.
+    /// re-enable requests a snapshot bootstrap whenever a source cluster is
+    /// supplied. Idempotent.
     /// </summary>
     /// <param name="treeId">The target tree id to disable. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancellation token.</param>

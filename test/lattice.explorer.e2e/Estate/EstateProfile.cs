@@ -17,7 +17,8 @@ public static class EstateProfile
     /// console replicas under <c>/console</c> sharing a Blob-persisted key ring, and
     /// <c>factory-lines</c> enrolled statically), the two peered over replication, Prometheus
     /// scraping every silo, and the <c>contoso-kiosk</c> head seeded with the platform
-    /// operator's credential.
+    /// operator's credential. Its Explorer heads import files of at most
+    /// <see cref="ContosoMaxImportBytes"/>.
     /// </summary>
     public static JourneyEstateOptions Contoso => new()
     {
@@ -29,7 +30,14 @@ public static class EstateProfile
         {
             ["factory-lines"] = LatticeMergeMode.LwwRegister,
         },
+        ExplorerMaxImportBytes = ContosoMaxImportBytes,
     };
+
+    /// <summary>
+    /// Contoso's import limit, 64 MiB: above every file the story imports (U1's 500,000-line
+    /// history is about 45 MB) and low enough for A3 to refuse an oversize file.
+    /// </summary>
+    public const long ContosoMaxImportBytes = 64L * 1024 * 1024;
 
     /// <summary>
     /// Fabrikam Cloud, a tenanted hosting provider: west and east regions shaped as Contoso's,
