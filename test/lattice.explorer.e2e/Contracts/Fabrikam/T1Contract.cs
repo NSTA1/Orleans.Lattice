@@ -6,7 +6,8 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts.Fabrikam;
 
 /// <summary>
 /// Tenant onboarding (T1, #5393), established as hal. Produces <c>acme</c> (admin ada; quotas
-/// <see cref="FabrikamAccess.AcmeQuotas"/>; allowed west and east; resident and Online in west)
+/// <see cref="FabrikamAccess.AcmeQuotas"/>; allowed west and east; resident and Online in west;
+/// hal a delegated-access member entry, not an admin)
 /// and <c>globex</c> (admin gus; <see cref="FabrikamAccess.GlobexQuotas"/>; allowed and resident
 /// in west), the platform rules <see cref="FabrikamAccess.T1Rules"/>, and each tenant admin's
 /// tenant-tier rule <see cref="FabrikamAccess.T1TenantRules"/>, authored by that admin (a
@@ -21,6 +22,14 @@ public sealed class T1Contract() : ChapterContract("T1")
         var tenants = facades.TenantAdmin;
         await OnboardAsync(tenants, Names.Tenants.Acme, Cast.Personas.Ada.Id, FabrikamAccess.AcmeQuotas, [FabrikamAccess.West, FabrikamAccess.East]);
         await OnboardAsync(tenants, Names.Tenants.Globex, Cast.Personas.Gus.Id, FabrikamAccess.GlobexQuotas, [FabrikamAccess.West]);
+
+        // hal joins acme as a delegated-access member entry (not an admin), so he can act in
+        // the tenant he supports: install its apps (T7) and visit it (T4).
+        var members = await tenants.ListMembersAsync(Names.Tenants.Acme, new());
+        if (!members.Entries.Any(member => member.SubjectId == Cast.Personas.Hal.Id))
+        {
+            await tenants.AddMemberAsync(Names.Tenants.Acme, Cast.Personas.Hal.Id);
+        }
         foreach (var rule in FabrikamAccess.T1Rules)
         {
             await ContractCalls.PutRuleAsync(facades.Auth, rule);
@@ -40,6 +49,12 @@ public sealed class T1Contract() : ChapterContract("T1")
         var moved = context.IsProduced("T5");
 
         await VerifyTenantAsync(tenants, Names.Tenants.Acme, Cast.Personas.Ada.Id, FabrikamAccess.AcmeQuotas);
+        Require(
+            (await tenants.ListMembersAsync(Names.Tenants.Acme, new())).Entries.Any(member => member.SubjectId == Cast.Personas.Hal.Id),
+            "hal is an acme member entry");
+        Require(
+            !(await tenants.ListTenantAdminSubjectsAsync(Names.Tenants.Acme)).Subjects.Contains(Cast.Personas.Hal.Id),
+            "hal is not an acme admin subject");
         if (!moved)
         {
             var acme = await tenants.GetTenantRegionStatusAsync(Names.Tenants.Acme);

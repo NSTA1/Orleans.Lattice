@@ -58,6 +58,13 @@ public sealed class T2Contract() : ChapterContract("T2")
             "acme-analysts reads every acme tree");
         RequireEqual(await ContractCalls.CountPrefixAsync(ada.Data, Names.Trees.AcmeInventory, "item/"), FabrikamAccess.InventoryRows, "acme-inventory holds the inventory");
 
+        // Membership confers no data rights of its own: ari is an acme member whose only rule is
+        // acme-analysts' read, so a write to acme's trees is refused. (hal, also a member, can't
+        // prove this: as a bootstrap administrator every operation is allowed to him by design,
+        // before membership is consulted.)
+        var ari = ContractFacades.Of(context, Personas.Ari.Id, region, acme).Data;
+        Require(await WriteRefusedAsync(ari), "ari, an acme member with a read rule only, may not write acme-inventory");
+
         Require(await AtQuotaAsync(context), "acme is at its 5-tree quota");
     }
 
@@ -82,6 +89,19 @@ public sealed class T2Contract() : ChapterContract("T2")
     }
 
     private static readonly TimeSpan MeterPatience = TimeSpan.FromMinutes(2);
+
+    private static async Task<bool> WriteRefusedAsync(Orleans.Lattice.Api.Data.Grpc.LatticeDataApiGrpcClient data)
+    {
+        try
+        {
+            await ContractCalls.SetManyAsync(data, Names.Trees.AcmeInventory, [new StoryEntry("probe/membership-write", "{}")]);
+            return false;
+        }
+        catch (Grpc.Core.RpcException ex) when (ex.StatusCode == Grpc.Core.StatusCode.PermissionDenied)
+        {
+            return true;
+        }
+    }
 
     /// <summary>
     /// T2's consume: acme's existing use - four trees acme already holds
