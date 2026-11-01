@@ -259,8 +259,8 @@ public sealed class A12ClusterInDepth : JourneyChapter
 
         // #5550: on this resharded, aliased tree the repair unsplices nothing the audit judged
         // repairable. When it is fixed, drive orphans.RepairAsync() (the audit after it reads
-        // clean), shoot "clean", hit use-case:cluster/orphan-audit-and-repair, and remove its
-        // coverage exemption.
+        // clean), shoot "clean", and hit use-case:cluster/orphan-audit-and-repair, which stays
+        // owed to the coverage gate until then.
         await new KnownDefect("#5550", "Orphaned-leaf repair unsplices nothing its audit judged repairable, on a resharded aliased tree")
             .ReproducesAsync(orphans.RepairUnsplicesNothingAsync);
         await Shot(olivia, recorder, 6, "repair-refused", "Known defect #5550: the repair unspliced nothing, and the audit after it still finds the leaf");
