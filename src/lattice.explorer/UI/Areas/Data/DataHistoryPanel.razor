@@ -127,6 +127,10 @@
                                 {
                                     <span class="lt-data-timeline__meta">@DataValueRendering.Size(row.ValueLength)</span>
                                 }
+                                @if (row.SchemaVersion > 0)
+                                {
+                                    <span class="lt-data-timeline__meta">schema version @row.SchemaVersion</span>
+                                }
                             </span>
                             @RenderBody(row)
                         </li>

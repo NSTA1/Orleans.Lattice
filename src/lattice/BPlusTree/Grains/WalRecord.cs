@@ -522,7 +522,14 @@ public readonly record struct WalRecord
     /// an older decoder skips the unknown id, and a record without it decodes as
     /// <see langword="null"/>.
     /// </summary>
-    [Id(30)] internal IReadOnlyDictionary<string, long>? CrossTreeDecisionStamps { get; init; }
+    /// <remarks>
+    /// Internal, so the JSON grain-storage serializer would skip it without
+    /// <c>[JsonProperty]</c>; a parked record in replication grain state lost it
+    /// on every reload from Azure Table storage (issue #5579).
+    /// </remarks>
+    [Id(30)]
+    [Newtonsoft.Json.JsonProperty]
+    internal IReadOnlyDictionary<string, long>? CrossTreeDecisionStamps { get; init; }
 
     /// <summary>
     /// The decision sequences of the cross-tree write a shipped terminal belongs
@@ -530,6 +537,9 @@ public readonly record struct WalRecord
     /// same way: on the wire copy only. A receiver keeps its decided tombstone
     /// for the operation until the origin's purge frontier passes them.
     /// </summary>
-    [Id(31)] internal IReadOnlyDictionary<string, long>? CrossTreeDecisionSequences { get; init; }
+    /// <remarks>Carries <c>[JsonProperty]</c> for the same reason as <see cref="CrossTreeDecisionStamps"/>.</remarks>
+    [Id(31)]
+    [Newtonsoft.Json.JsonProperty]
+    internal IReadOnlyDictionary<string, long>? CrossTreeDecisionSequences { get; init; }
 }
 

@@ -147,25 +147,21 @@ internal sealed partial class LatticeAppCatalog : ILatticeAppCatalog
                     : null;
 
             AppLifecycleState state;
+            AppLifecycleState? pending = null;
             if (matching is null)
             {
                 state = AppLifecycleState.NotInstalled;
             }
-            else if (matching.State == AppRegistryLifecycleState.Uninstalled)
-            {
-                state = AppLifecycleState.Uninstalled;
-            }
             else
             {
-                var status = await _pipeline.GetStatusAsync(tenant, slug, cancellationToken).ConfigureAwait(false);
-                state = AppsControlMapping.ToWireState(matching.State, status);
+                (state, pending) = await AppsLiveState.ReadAsync(_pipeline, tenant, matching, cancellationToken).ConfigureAwait(false);
             }
 
             var live = matching is { State: not AppRegistryLifecycleState.Uninstalled } ? matching : null;
             var conflicts = await _registry.GetTreeOwnershipConflictsAsync(
                     tenant, manifest, AppsControlMapping.OwnershipProbeProvenance(live, provenance), cancellationToken)
                 .ConfigureAwait(false);
-            return AppsControlMapping.ToDescriptor(manifest, provenance, state, live, conflicts);
+            return AppsControlMapping.ToDescriptor(manifest, provenance, state, live, conflicts) with { PendingState = pending };
         }
         catch (Exception ex) when (AppsControlExceptionSanitizer.TryRewrite(ex, appSlug, out var sanitized))
         {
