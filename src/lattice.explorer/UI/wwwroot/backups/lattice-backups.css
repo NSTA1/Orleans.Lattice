@@ -88,15 +88,6 @@
   color: var(--lt-link-hover);
 }
 
-/* A link alone on its line (not inside a sentence) is a target in its own right, so it
-   gets a control's height to meet the 24px minimum target size (WCAG 2.5.8). */
-
-.lt-backups-link--standalone {
-  display: inline-flex;
-  align-items: center;
-  min-height: var(--lt-op-control-height);
-}
-
 .lt-backups-mono {
   font-family: var(--lt-font-mono);
   font-variant-ligatures: none;
@@ -246,9 +237,11 @@
   padding-inline-start: var(--lt-space-5);
 }
 
-/* A stacked link is at least 24px tall, so neighbouring links sit 24px apart
-   and meet the WCAG 2.2 target-size minimum. */
-.lt-backups-list .lt-backups-link {
+/* A stacked link, or a link alone on its line rather than inside a sentence, is a
+   target in its own right: it is at least 24px tall, so it meets the WCAG 2.2
+   target-size minimum and neighbouring links sit 24px apart. */
+.lt-backups-list .lt-backups-link,
+.lt-backups-link--standalone {
   display: inline-flex;
   align-items: center;
   min-block-size: 1.5rem;
