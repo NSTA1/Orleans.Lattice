@@ -142,7 +142,7 @@ internal static class SampleSeeder
         }
     }
 
-    /// <summary>How long seeding waits for the peer to learn an enrolment before carrying on.</summary>
+    /// <summary>How long seeding waits for the peer to learn an enrolment before carrying on (CI probe for #5600).</summary>
     public static TimeSpan EnrolmentBudget { get; } = TimeSpan.FromSeconds(20);
 
     /// <summary>
