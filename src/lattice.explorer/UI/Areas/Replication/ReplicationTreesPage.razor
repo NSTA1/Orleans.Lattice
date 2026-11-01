@@ -141,7 +141,7 @@ else
                     ExistingMessage="A region this cluster knows."
                     Value="@_enableBootstrap"
                     ValueChanged="OnEnableBootstrapChanged"
-                    Hint="When the tree already holds data, name the cluster to pull an initial snapshot from. Leave empty to skip." />
+                    Hint="Name the cluster to pull an initial snapshot from; enable it there first. Leave empty to skip." />
         <div class="lt-dialog__actions">
             <LtButton Variant="LtButtonVariant.Quiet" OnClick="CloseEnableAsync">Cancel</LtButton>
             <LtButton Type="LtButtonType.Submit" Disabled="@(!CanSubmitEnable)">@(_busy ? "Enabling" : "Enable replication")</LtButton>
