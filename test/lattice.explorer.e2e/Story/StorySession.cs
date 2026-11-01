@@ -13,6 +13,7 @@ public sealed class StorySession
 {
     private static readonly AsyncLocal<ImmutableStack<string>?> Establishing = new();
     private readonly IReadOnlyDictionary<string, IReadOnlyList<string>> _graph;
+    private readonly Dictionary<string, int> _storyPosition;
     private readonly ConcurrentDictionary<string, Lazy<Task>> _established = new(StringComparer.Ordinal);
     private readonly JourneyEstate? _estate;
 
@@ -42,6 +43,9 @@ public sealed class StorySession
         _estate = estate;
         Contracts = contracts;
         _graph = graph;
+        _storyPosition = StoryPlan.Order(graph.Select(entry => new StoryPlanEntry(entry.Key, entry.Value, null)))
+            .Select((entry, index) => (entry.Id, index))
+            .ToDictionary(pair => pair.Id, pair => pair.index, StringComparer.Ordinal);
         ArtifactsDirectory = artifactsDirectory;
         CancellationToken = cancellationToken;
     }
@@ -77,6 +81,31 @@ public sealed class StorySession
         _graph.TryGetValue(chapter, out var after)
             ? after
             : throw new ArgumentException($"Chapter {chapter} is not in the {Storyline} storyline.", nameof(chapter));
+
+    /// <summary>
+    /// Every chapter <paramref name="chapter"/> consumes, directly or through another, in story
+    /// order: the order the story itself produces them, so an isolated run establishes them in
+    /// the same order (a later chapter's seeder can depend on an earlier one having run first,
+    /// beyond what the consumes graph states).
+    /// </summary>
+    /// <param name="chapter">The chapter id.</param>
+    public IReadOnlyList<string> EstablishmentOrderOf(string chapter)
+    {
+        var closure = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Stack<string>(ConsumesOf(chapter));
+        while (pending.TryPop(out var next))
+        {
+            if (closure.Add(next))
+            {
+                foreach (var consume in ConsumesOf(next))
+                {
+                    pending.Push(consume);
+                }
+            }
+        }
+
+        return [.. closure.OrderBy(id => _storyPosition[id])];
+    }
 
     /// <summary>The context a chapter, or its contract, runs with.</summary>
     /// <param name="chapter">The chapter id.</param>
@@ -129,7 +158,7 @@ public sealed class StorySession
     private async Task EstablishCoreAsync(string chapter)
     {
         Establishing.Value = (Establishing.Value ?? ImmutableStack<string>.Empty).Push(chapter);
-        foreach (var consume in ConsumesOf(chapter))
+        foreach (var consume in EstablishmentOrderOf(chapter))
         {
             await EstablishAsync(consume);
         }

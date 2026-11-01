@@ -102,7 +102,9 @@ internal static class ReplicationSourceLineageGate
     ///   <item>Once the tree frontier's epoch has moved past the drain - the
     ///   tree's contents were replaced since - the drain no longer describes
     ///   the tree, so every stamped batch is refused until the source is
-    ///   drained again.</item>
+    ///   drained again. The exception is the drain's own shadow-copy cutover,
+    ///   which moves the epoch before it records it (#5534): a batch stamped
+    ///   with the drained lineage is refused transiently until it has.</item>
     ///   <item>Otherwise a batch stamped with any lineage but the drained one is
     ///   refused, <see cref="Guid.Empty"/> (the sender cannot tell) included.</item>
     /// </list>
@@ -151,6 +153,16 @@ internal static class ReplicationSourceLineageGate
         string? reason = null;
         if (epoch != record.FrontierEpoch)
         {
+            if (record.CutoverPending && stamped == record.Lineage)
+            {
+                // The tree is publishing the copy it drained from this source and
+                // has not yet recorded the epoch the cutover minted (#5534). Refusing
+                // for the lineage would take this receiver off the sender's log and
+                // force another re-seed; refuse for now, so the sender re-sends once
+                // the handoff has recorded the epoch.
+                return Verdict.RefuseTransient;
+            }
+
             reason = LatticeReplicationMetrics.SourceLineageRefusedReplaced;
         }
         else if (stamped != record.Lineage)
