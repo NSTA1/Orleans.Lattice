@@ -1533,6 +1533,40 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
             faults);
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// With <see cref="AzureTableWalStorageOptions.PipelinePhaseTwoCommits"/>
+    /// (the default) an append returns before its own phase-2 manifest commit,
+    /// and <see cref="ReadAsync"/> / <see cref="ReadEncodedAsync"/> stream only
+    /// batches the manifest records. This waits for the shard's phase-2 commits
+    /// accepted before the call to settle, then for the shard's most recent
+    /// pipelined commit, so a phase-2 fault that left a durable batch out of the
+    /// manifest is rethrown rather than reported as visible. Unlike
+    /// <see cref="FlushPhaseTwoAsync"/> it is scoped to one shard and does not
+    /// wait on appends issued after the call. A shard this instance never
+    /// appended to completes at once.
+    /// </remarks>
+    public async Task WaitForAppendVisibilityAsync(
+        string treeId,
+        int shardIndex,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+        ThrowIfDisposed();
+
+        var manifestPartitionKey = BuildManifestPartitionKey(treeId, shardIndex);
+        if (_phaseTwoWorkers.TryGetValue(manifestPartitionKey, out var worker))
+        {
+            await worker.WhenAcceptedCommitsSettledAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (_pipelinedPhaseTwoTasks.TryGetValue(manifestPartitionKey, out var latest))
+        {
+            await latest.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     /// <summary>
     /// Writes one trim-candidate manifest row. The write is made idempotent
     /// via <see cref="TableUpdateMode.Replace"/> on the upsert so a

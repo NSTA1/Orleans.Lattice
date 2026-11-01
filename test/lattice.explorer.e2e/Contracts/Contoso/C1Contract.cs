@@ -4,7 +4,6 @@ using Orleans.Lattice.Api.Data.Grpc;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
-using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 using Names = Orleans.Lattice.Explorer.EndToEnd.Tests.Story.StoryNames.Contoso;
 
@@ -53,26 +52,7 @@ public sealed class C1Contract() : ChapterContract("C1")
         var backup = olivia.Backup;
         var restore = await backup.StartRestoreAsync(new LatticeRestoreRequest(
             context.Recall(StoryKeys.OrdersBaselineBackup), Names.Trees.FactoryOrders, mode: LatticeRestoreMode.ShadowCutover));
-        try
-        {
-            await ContractWait.SucceededAsync("the orders-baseline restore", () => backup.GetBackupOperationStatusAsync(restore.OperationId), OperationPatience);
-        }
-        catch (InvalidOperationException ex) when (ex.Message.Contains("CrossClusterSagaCoordinatorGrain", StringComparison.Ordinal) && ex.Message.Contains("did not arrive on time", StringComparison.Ordinal))
-        {
-            // Tolerant: the saga can commit after the driver's call to it timed out, and the
-            // operation then reads Failed although both regions cut over. Confirm the cutover
-            // by the alias in both regions and carry on; any other outcome fails here.
-            await new KnownDefect("#5506", "A coordinated restore reports Failed after its saga committed").ReproducesAsync(async () =>
-            {
-                foreach (var region in new[] { JourneyEstate.West, JourneyEstate.East })
-                {
-                    var admin = ContractFacades.Of(context, region: region).TreeAdmin;
-                    await ContractWait.UntilAsync($"factory-orders to cut over to the restored copy in {region}", async () =>
-                        (await admin.ResolveTreeAliasAsync(Names.Trees.FactoryOrders)).PhysicalTreeId.Contains("-bkprestore-", StringComparison.Ordinal),
-                        TimeSpan.FromMinutes(3));
-                }
-            });
-        }
+        await ContractWait.SucceededAsync("the orders-baseline restore", () => backup.GetBackupOperationStatusAsync(restore.OperationId), OperationPatience);
 
         var priya = ContractFacades.Of(context, Personas.Priya.Id).Data;
         foreach (var correction in StoryData.Corrections)

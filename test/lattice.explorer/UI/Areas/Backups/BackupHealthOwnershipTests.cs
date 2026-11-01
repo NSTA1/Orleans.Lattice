@@ -153,6 +153,33 @@ public sealed class BackupHealthOwnershipTests : BackupsTestContext
         Assert.That(cut.FindAll("a").Any(a => a.GetAttribute("href")?.Contains("health.current.", StringComparison.Ordinal) == true), Is.True);
     }
 
+    [Test]
+    public async Task Focus_discards_a_superseded_monitoring_read()
+    {
+        Backups.HealthAvailable = () => Task.FromResult(true);
+        Seed(FakeBackupControl.Manifest("old"), FakeBackupControl.Manifest("current"));
+        Backups.HealthConfigs["current"] = new BackupHealthConfig(true, TimeSpan.FromHours(2));
+        var pending = new TaskCompletionSource<BackupHealthConfig?>();
+        Backups.GetHealthConfig = id => id == "old"
+            ? pending.Task
+            : Task.FromResult<BackupHealthConfig?>(Backups.HealthConfigs[id]);
+        var cut = RenderAt<BackupHealthPage>("backups/health?backup=old");
+        cut.WaitUntil(() => Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.GetBackupHealthConfigAsync)), Is.EqualTo(1)));
+
+        Navigate(cut, "backups/health?backup=current");
+        cut.WaitUntil(() => Assert.That(cut.FindAll("form.lt-backups-form input").Select(input => input.GetAttribute("value")), Is.EqualTo(new[] { "2", "0" })));
+
+        // Completed on the renderer's own context, so the old read's continuation runs inline before the redraw.
+        await cut.InvokeAsync(() => pending.SetResult(new BackupHealthConfig(false, TimeSpan.FromHours(9))));
+        cut.Render();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.Find("button[role=switch]").GetAttribute("aria-checked"), Is.EqualTo("true"));
+            Assert.That(cut.FindAll("form.lt-backups-form input").Select(input => input.GetAttribute("value")), Is.EqualTo(new[] { "2", "0" }));
+        });
+    }
+
     [TestCase(false)]
     [TestCase(true)]
     public async Task Monitoring_discards_a_superseded_save_or_fault(bool fault)
