@@ -139,6 +139,36 @@ public sealed partial class ReplicationTreesPageTests
     }
 
     [Test]
+    public void Closing_the_dialog_mid_enable_leaves_the_enable_running_and_its_result_still_reported()
+    {
+        UseTrees();
+        Control.ChangeGate = new TaskCompletionSource();
+        var cut = RenderAt<ReplicationTreesPage>("replication/trees");
+        cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr"), Has.Count.EqualTo(6)));
+
+        cut.FindAll("button").Single(button => button.TextContent.Trim() == "Enable replication for a tree").Click();
+        cut.FindAll("form.lt-replication-form input")[0].Input("inventory");
+        cut.FindAll("form.lt-replication-form input")[1].Input("eu-north");
+        cut.Find("form.lt-replication-form").Submit();
+        cut.WaitUntil(() => Assert.That(cut.FindAll("form.lt-replication-form [role=\"status\"]"), Has.Count.EqualTo(1)));
+
+        cut.FindAll("form.lt-replication-form button").Single(button => button.TextContent.Trim() == "Cancel").Click();
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll("form.lt-replication-form"), Is.Empty, "the dialog closes");
+            Assert.That(ToastService.Toasts, Is.Empty, "the enable has not finished yet");
+        });
+
+        cut.InvokeAsync(() => Control.ChangeGate.SetResult());
+        cut.WaitUntil(() =>
+        {
+            Assert.That(Control.Enables, Is.EqualTo(new[] { ("inventory", LatticeMergeMode.LwwRegister, (string?)"eu-north") }));
+            Assert.That(ToastService.Toasts.Single().Message, Is.EqualTo("Replication enabled for inventory (LWW register). A snapshot bootstrap was requested."));
+            Assert.That(cut.FindAll("tbody tr").Select(row => row.Children[0].TextContent.Trim()), Does.Contain("inventory"));
+        });
+    }
+
+    [Test]
     public void While_a_bootstrapped_enable_is_in_flight_the_dialog_says_it_waits_for_the_source()
     {
         UseTrees();
@@ -156,7 +186,7 @@ public sealed partial class ReplicationTreesPageTests
             cut.Find("form.lt-replication-form [role=\"status\"]").TextContent.Trim(),
             Is.EqualTo("Enabling replication for inventory and asking eu-north for a snapshot. "
                 + "This waits for eu-north to answer, which can take a minute or more. "
-                + "You can close this dialog: a message reports the result.")));
+                + "You can close this dialog; stay on this page and a message reports the result.")));
 
         cut.InvokeAsync(() => Control.ChangeGate.SetResult());
         cut.WaitUntil(() =>

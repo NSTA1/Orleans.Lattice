@@ -564,8 +564,9 @@ mode and optional bootstrap source
 cluster (a picker that suggests the known regions and accepts any id); app-owned ids are rejected because their
 enrolment follows the app install. While an enable is in flight the dialog says
 what it is waiting for: with a bootstrap source, the enable returns only once
-that cluster has answered, which can take a minute or more, and the dialog can be
-closed while a message reports the result. Disabling is a destructive confirmation: it
+that cluster has answered, which can take a minute or more. The dialog can be
+closed meanwhile: the enable keeps running while you stay on the page, and a
+message reports the result (leaving the page abandons the wait). Disabling is a destructive confirmation: it
 stops new changes from replicating, leaves peer data in place, and keeps the
 merge mode for a later enable. Static-only enrolments cannot be toggled here.
 

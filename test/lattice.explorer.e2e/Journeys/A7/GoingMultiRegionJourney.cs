@@ -146,6 +146,19 @@ public sealed class GoingMultiRegionJourney : JourneyChapter
             var enableStarted = System.Diagnostics.Stopwatch.StartNew();
             await eastTrees.EnableButton.ClickAsync();
 
+            // While the enable waits on west, the dialog says so. The enable can finish before the
+            // note is drawn, so the in-flight picture is taken only when the note is up.
+            var inFlight = eastTrees.EnableDialog.GetByRole(AriaRole.Status).Filter(new() { HasText = $"asking {JourneyEstate.West} for a snapshot" });
+            try
+            {
+                await inFlight.WaitForAsync(new() { Timeout = 5_000 });
+                await east.SubstepAsync(recorder, "3", "east-in-flight", "A7.3 - While the enable waits on west, the dialog says what it is waiting for");
+            }
+            catch (TimeoutException)
+            {
+                TestContext.Progress.WriteLine($"A7.3: the enable finished before its in-flight note was drawn ({enableStarted.Elapsed.TotalSeconds:0.0} s)");
+            }
+
             // Regression (#5379): east does not hold factory-orders yet; with a bootstrap source
             // named, the picker accepts it rather than refusing a tree only the bootstrap brings.
             // The enable returns only once west has answered the bootstrap request, which can take

@@ -115,7 +115,7 @@ public partial class ReplicationTreesPage
         ? $"Enabling replication for {_enableTree.Trim()}. Waiting for the cluster to record the enrolment."
         : $"Enabling replication for {_enableTree.Trim()} and asking {_enableBootstrap.Trim()} for a snapshot. "
           + $"This waits for {_enableBootstrap.Trim()} to answer, which can take a minute or more. "
-          + "You can close this dialog: a message reports the result.";
+          + "You can close this dialog; stay on this page and a message reports the result.";
 
     private string EnableTreeHint => EnableTreeMode == LtComboBoxMode.Suggest
         ? "The logical tree id, such as orders. It need not exist here yet: the bootstrap brings it from the source cluster."
