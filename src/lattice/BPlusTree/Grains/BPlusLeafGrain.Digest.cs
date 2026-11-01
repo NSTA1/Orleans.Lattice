@@ -363,7 +363,8 @@ internal sealed partial class BPlusLeafGrain
     private void EnsureProjectionHashInitialized()
     {
         if (state.State.ProjectionHash is null
-            || state.State.ProjectionHash.Length != ProjectionHashSize)
+            || state.State.ProjectionHash.Length != ProjectionHashSize
+            || state.State.ProjectionHashVersion != LeafProjectionDigest.CurrentVersion)
         {
             var stale = state.State.ProjectionHash is not null;
             state.State.ProjectionHash = ComputeFullProjectionHashFromState();
@@ -608,17 +609,6 @@ internal sealed partial class BPlusLeafGrain
         scratch[12] = lww.IsTombstone ? (byte)1 : (byte)0;
         BinaryPrimitives.WriteInt64LittleEndian(scratch[13..EntryFieldBlockBytes], lww.ExpiresAtTicks);
         hasher.Append(scratch[..EntryFieldBlockBytes]);
-
-        // RED PROOF ONLY: the origin is still hashed.
-        if (lww.OriginClusterId is null)
-        {
-            BinaryPrimitives.WriteInt32LittleEndian(scratch[..LengthPrefixBytes], -1);
-            hasher.Append(scratch[..LengthPrefixBytes]);
-        }
-        else
-        {
-            FeedString(hasher, lww.OriginClusterId, scratch);
-        }
 
         // (vector-clock fingerprint) - sorted (replicaId, hlc) pairs.
         FeedVectorClock(hasher, lww.VectorClock, scratch);
