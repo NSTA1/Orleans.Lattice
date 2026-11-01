@@ -1248,7 +1248,7 @@ internal sealed partial class BPlusLeafGrain
             Timestamp = mutation.Timestamp,
             IsTombstone = mutation.IsTombstone,
             ExpiresAtTicks = mutation.ExpiresAtTicks,
-            OriginClusterId = RowOrigin(mutation.OriginClusterId),
+            OriginClusterId = mutation.OriginClusterId, // RED-PROOF: pre-#5525 behaviour, reverted in the next commit
             VectorClock = mutation.VectorClock,
             IsMigrated = mutation.IsMigrated,
         };
