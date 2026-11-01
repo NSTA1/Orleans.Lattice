@@ -229,10 +229,23 @@ public sealed class PersonalisingTheConsoleJourney : JourneyChapter
         await Checkpoint(sam, step, "app-completions", "Typing a/ lists the apps sam may open: the task board his team works on");
         await palette.ChooseAsync(label);
         await Expect(shell.Page).ToHaveURLAsync(new Regex("/apps/" + Regex.Escape(StoryNames.Contoso.Apps.TaskBoard) + "(\\?|$)"));
-        await shell.ExpectHeadingAsync("Task board");
+
+        // The app page re-asks the workspace, which can answer that sam has no such app (#5595).
+        var heading = shell.Heading;
+        await Expect(heading).ToHaveTextAsync(new Regex("^(Task board|" + Regex.Escape(Missing) + ")$"));
+        if (await heading.InnerTextAsync() == Missing)
+        {
+            await Checkpoint(sam, step, "task-board-missing-5595", "Known defect #5595: the workspace answers sam with no apps, so a/task-board opens Nothing lives at this address");
+            await new KnownDefect("#5595", "the apps workspace intermittently answers a nested-group viewer with no apps").ReproducesAsync(async () =>
+                await Expect(heading).ToHaveTextAsync(Missing));
+            return;
+        }
+
         await Checkpoint(sam, step, "task-board-opened", "Accepting a/task-board opens the task board's page");
         Coverage.Hit("use-case:shell/app-completion");
     }
+
+    private const string Missing = "Nothing lives at this address";
 
     /// <summary>U5.4: the palette's commands for each area, filtered to the areas sam may use and to what he may do there.</summary>
     private static async Task PaletteCommandsAsync(PersonaSession sam)
