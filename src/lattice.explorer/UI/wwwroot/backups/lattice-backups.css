@@ -88,6 +88,15 @@
   color: var(--lt-link-hover);
 }
 
+/* A link alone on its line (not inside a sentence) is a target in its own right, so it
+   gets a control's height to meet the 24px minimum target size (WCAG 2.5.8). */
+
+.lt-backups-link--standalone {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--lt-op-control-height);
+}
+
 .lt-backups-mono {
   font-family: var(--lt-font-mono);
   font-variant-ligatures: none;
