@@ -2992,6 +2992,15 @@ internal sealed partial class BPlusLeafGrain
         // replay-gate slot, kept for the WAL GC sweep; a refusal is counted and
         // backed off rather than thrown out of this callback (issue #3575).
         var starvationPartitionCount = Math.Max(1, resolved.WalPartitions);
+
+        // Issue #5572. A leaf's own live writes advance its checkpoint here,
+        // without a replay, whenever that is safe (BPlusLeafGrain.LiveCheckpoint.cs).
+        // Running first is what keeps a live-written leaf off the starved arm
+        // below: once a partition is checkpointed the leaf is no longer starved,
+        // and the bank step persists the advance, captures over it and publishes
+        // a usable pin.
+        await TryAdvanceLiveCheckpointAsync();
+
         if (IsStarvedOfDurableCheckpoint(starvationPartitionCount))
         {
             ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckNoDurableCheckpoint);

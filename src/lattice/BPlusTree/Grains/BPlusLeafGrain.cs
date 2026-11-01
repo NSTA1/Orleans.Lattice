@@ -1308,6 +1308,8 @@ internal sealed partial class BPlusLeafGrain(
         // state untouched and the foreground caller observes the WAL error.
         var walStartTicks = Stopwatch.GetTimestamp();
         var writer = ResolveCommitLogWriter();
+        WalRecord? appendedEntry = null;
+        long appendedOffset = -1;
         if (writer is not null)
         {
             var entry = WalRecordBuilder.ForSet(
@@ -1316,7 +1318,8 @@ internal sealed partial class BPlusLeafGrain(
                 key,
                 newEntry,
                 isPrepared) with { PrepareStampOriginal = stampOriginal };
-            await writer.AppendAsync(entry);
+            appendedOffset = await writer.AppendAsync(entry);
+            appendedEntry = entry;
         }
         RecordCommitStep("wal", walStartTicks);
 
@@ -1368,6 +1371,10 @@ internal sealed partial class BPlusLeafGrain(
             {
                 splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys, options.MaxLeafBytes);
             }
+        }
+        if (appendedEntry is { } applied)
+        {
+            MarkLiveAppendApplied(applied, appendedOffset);
         }
         RecordCommitStep("apply", applyStartTicks);
 
@@ -1891,6 +1898,7 @@ internal sealed partial class BPlusLeafGrain(
         // to the caller, exactly matching the per-key path's contract.
         var walStartTicks = Stopwatch.GetTimestamp();
         var writer = ResolveCommitLogWriter();
+        IReadOnlyList<long>? appendedOffsets = null;
         if (writer is not null)
         {
             // ArraySegment<T> implements IReadOnlyList<T>, so the
@@ -1903,7 +1911,7 @@ internal sealed partial class BPlusLeafGrain(
             // pool path replaces.
             try
             {
-                await writer.AppendManyAsync(new ArraySegment<WalRecord>(walEntries, 0, count));
+                appendedOffsets = await writer.AppendManyAsync(new ArraySegment<WalRecord>(walEntries, 0, count));
             }
             catch (WalStampBelowFloorException refusal) when (AbsorbClockFloorRefusalAndRethrow(refusal))
             {
@@ -1982,6 +1990,10 @@ internal sealed partial class BPlusLeafGrain(
                     splitResult,
                     await RelocateStrandedAsync(stranded, isCrossShardMigration: false));
             }
+        }
+        if (appendedOffsets is not null)
+        {
+            MarkLiveAppendApplied(walEntries, count, appendedOffsets);
         }
         RecordCommitStep("apply", applyStartTicks);
 
@@ -2217,6 +2229,8 @@ internal sealed partial class BPlusLeafGrain(
         // step 1 (wal)
         var walStartTicks = Stopwatch.GetTimestamp();
         var writer = ResolveCommitLogWriter();
+        WalRecord? deleteEntry = null;
+        long deleteOffset = -1;
         if (writer is not null)
         {
             var entry = new WalRecord
@@ -2238,7 +2252,8 @@ internal sealed partial class BPlusLeafGrain(
                 IsMigrated = tombstone.IsMigrated,
                 ShardIndex = state.State.ShardIndex ?? 0,
             };
-            await writer.AppendAsync(entry);
+            deleteOffset = await writer.AppendAsync(entry);
+            deleteEntry = entry;
         }
         RecordCommitStep("wal", walStartTicks);
 
@@ -2272,6 +2287,10 @@ internal sealed partial class BPlusLeafGrain(
                 relocatedSplit = await RelocateStrandedAsync(
                     stranded, isCrossShardMigration: false, completeInterruptedSplit: tracked);
             }
+        }
+        if (deleteEntry is { } appliedDelete)
+        {
+            MarkLiveAppendApplied(appliedDelete, deleteOffset);
         }
         RecordCommitStep("apply", applyStartTicks);
 
@@ -2375,6 +2394,8 @@ internal sealed partial class BPlusLeafGrain(
         // step 1 (wal)
         var walStartTicks = Stopwatch.GetTimestamp();
         var writer = ResolveCommitLogWriter();
+        WalRecord? rangeEntry = null;
+        long rangeOffset = -1;
         if (writer is not null)
         {
             // Stamp the leaf's owning chain-shard index; see SetAsync
@@ -2391,7 +2412,8 @@ internal sealed partial class BPlusLeafGrain(
                 endExclusive,
                 tombstone,
                 predicate is null ? null : keysToDelete);
-            await writer.AppendAsync(entry);
+            rangeOffset = await writer.AppendAsync(entry);
+            rangeEntry = entry;
         }
         RecordCommitStep("wal", walStartTicks);
 
@@ -2416,6 +2438,10 @@ internal sealed partial class BPlusLeafGrain(
         if (stranded is not null)
         {
             relocatedSplit = await RelocateStrandedAsync(stranded, isCrossShardMigration: false);
+        }
+        if (rangeEntry is { } appliedRange)
+        {
+            MarkLiveAppendApplied(appliedRange, rangeOffset);
         }
         RecordCommitStep("apply", applyStartTicks);
 
@@ -2743,6 +2769,10 @@ internal sealed partial class BPlusLeafGrain(
 
         // See SetNextSiblingAsync above for the gate rationale.
         var treeIdJustSet = false;
+        // Read before the persist below, which may complete the owed reset: a leaf
+        // re-created from a purge's clear is not a birth for the live checkpoint
+        // advance, since its purged entries may still be readable (issue #5572).
+        var reCreatedFromPurge = _purgeMarkResetOwed;
         await _splitGate.WaitAsync().ConfigureAwait(true);
         try
         {
@@ -2754,6 +2784,7 @@ internal sealed partial class BPlusLeafGrain(
             {
                 await PersistAsync();
                 treeIdJustSet = true;
+                _liveAdvanceBorn = !reCreatedFromPurge;
             }
             catch
             {
@@ -3397,9 +3428,10 @@ internal sealed partial class BPlusLeafGrain(
                     };
 
                     var walStartTicks = Stopwatch.GetTimestamp();
+                    long reapOffset;
                     try
                     {
-                        await writer.AppendAsync(entry);
+                        reapOffset = await writer.AppendAsync(entry);
                     }
                     finally
                     {
@@ -3409,9 +3441,15 @@ internal sealed partial class BPlusLeafGrain(
                             LatticeMetrics.KindCompact,
                             LatticeTenantLabel.ForTree(treeId));
                     }
+
+                    RemoveEntry(key);
+                    MarkLiveAppendApplied(entry, reapOffset);
+                }
+                else
+                {
+                    RemoveEntry(key);
                 }
 
-                RemoveEntry(key);
                 entriesRemoved++;
                 if (wasExpired) expiredRemoved++; else tombstonesRemoved++;
 
@@ -3738,6 +3776,7 @@ internal sealed partial class BPlusLeafGrain(
         WalRecord[]? walEntries = null;
         var walCount = 0;
         var walRented = false;
+        var mergeAppended = false;
         if (writer is not null && entries.Count > 0)
         {
             walRented = entries.Count >= CommitSetManyPoolThreshold;
@@ -3790,7 +3829,9 @@ internal sealed partial class BPlusLeafGrain(
             var walStartTicks = Stopwatch.GetTimestamp();
             try
             {
-                await writer!.AppendManyAsync(new ArraySegment<WalRecord>(walEntries!, 0, walCount));
+                var mergeOffsets = await writer!.AppendManyAsync(new ArraySegment<WalRecord>(walEntries!, 0, walCount));
+                NoteLiveAppendOffsets(walEntries!, walCount, mergeOffsets);
+                mergeAppended = true;
             }
             finally
             {
@@ -3831,6 +3872,11 @@ internal sealed partial class BPlusLeafGrain(
         foreach (var (key, incoming) in entries)
         {
             StoreEntry(key, incoming with { IsMigrated = true });
+        }
+
+        if (mergeAppended)
+        {
+            ReleaseLiveAppendApplied();
         }
 
         // Publish a Version advance so LeafCacheGrain delta checks detect
@@ -4349,7 +4395,7 @@ internal sealed partial class BPlusLeafGrain(
             }
         }
 
-        var stranded = await MergeIntoStateAsync(entries, isCrossShardMigration);
+        var (stranded, mergeAppended) = await MergeIntoStateAsync(entries, isCrossShardMigration);
 
         SplitResult? splitResult = null;
         var mergeOptions = await GetOptionsAsync();
@@ -4365,6 +4411,12 @@ internal sealed partial class BPlusLeafGrain(
                 await RelocateStrandedAsync(stranded, isCrossShardMigration));
         }
 
+        // The batch is applied, its stranded rows relocated (issue #5572).
+        if (mergeAppended)
+        {
+            ReleaseLiveAppendApplied();
+        }
+
         return SplitResult.Combine(recovered, SplitResult.Combine(splitResult, forwardedSplit));
     }
 
@@ -4372,9 +4424,11 @@ internal sealed partial class BPlusLeafGrain(
     /// Durably commits and applies a merge batch. Returns the entries a split
     /// interleaved with the WAL append has since moved out of this leaf's
     /// declared span, or <see langword="null"/> when there are none. The
-    /// caller must hand them to <see cref="RelocateStrandedAsync"/>.
+    /// caller must hand them to <see cref="RelocateStrandedAsync"/>, and, when
+    /// the batch was appended, then release its live-append count
+    /// (<see cref="ReleaseLiveAppendApplied"/>).
     /// </summary>
-    private async Task<Dictionary<string, LwwValue<byte[]>>?> MergeIntoStateAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration)
+    private async Task<(Dictionary<string, LwwValue<byte[]>>? Stranded, bool Appended)> MergeIntoStateAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration)
     {
         // Track the high-water timestamp of the incoming batch so we can
         // (a) advance state.State.Clock past it (audit bug #3), and (b)
@@ -4425,6 +4479,7 @@ internal sealed partial class BPlusLeafGrain(
         WalRecord[]? walEntries = null;
         var walCount = 0;
         var walRented = false;
+        var appended = false;
         List<KeyValuePair<string, LwwValue<byte[]>>>? accepted = null;
         if (writer is not null && entries.Count > 0)
         {
@@ -4549,7 +4604,9 @@ internal sealed partial class BPlusLeafGrain(
             var walStartTicks = Stopwatch.GetTimestamp();
             try
             {
-                await writer!.AppendManyAsync(new ArraySegment<WalRecord>(walEntries!, 0, walCount));
+                var mergeOffsets = await writer!.AppendManyAsync(new ArraySegment<WalRecord>(walEntries!, 0, walCount));
+                NoteLiveAppendOffsets(walEntries!, walCount, mergeOffsets);
+                appended = true;
             }
             finally
             {
@@ -4658,7 +4715,7 @@ internal sealed partial class BPlusLeafGrain(
         // merge is a structural apply - bypass the c2-xxviii
         // coalescing window.
         await PublishDigestUpwardInlineAsync();
-        return stranded;
+        return (stranded, appended);
     }
 
     /// <summary>

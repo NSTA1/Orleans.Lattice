@@ -25,20 +25,20 @@ exhaustively within the TLC budget.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `WalDurability` | 11 | 5 | 27 | 47 | 41 | 400,000 |
+| `WalDurability` | 11 | 5 | 27 | 47 | 41 | 381,426 |
 | `WalMove` | 5 | 2 | 13 | 18 | 18 | 1,617 |
 | `WalPinRetirement` | 3 | 3 | 25 | 31 | 30 | 284,019 |
 
 `Actions` counts the disjuncts of `Next`, including `WalMove`'s non-behavioural
 `Stutter`. `Behaviour rows` counts the action rows of the module's refinement note,
 excluding non-behavioural actions, plus its property rows. `Distinct states` is
-TLC's count for the module's own cfg. `WalDurability` searches to depth 35 and
-`WalMove` to depth 16, with tla2tools v1.7.4.
+TLC's count for the module's own cfg. `WalMove` searches to depth 16, with
+tla2tools v1.7.4.
 
 `WalDurability` has a two-fault variant configuration, `WalDurability.TwoFaults.cfg`
 (see "Variant configurations" in [`../README.md`](../README.md)). It checks every
 invariant and both action properties with a budget of two faults instead of one:
-1,310,600 distinct states to depth 42. The liveness properties stay at one fault,
+2,958,083 distinct states. The liveness properties stay at one fault,
 because at two the full configuration takes about ten minutes, past the TLC budget.
 
 Its second variant, `WalDurability.SnapshotLoss.cfg`, lets the environment destroy a
@@ -47,19 +47,23 @@ leaf's durable snapshot (`SnapshotVanish`, issue #4634) or its state row
 faults so a snapshot and a row can both vanish. Destroyed data is outside the durability
 properties by construction, so it checks the properties that say the loss is never
 silent - `ReadPositionHonest` above all, carved out only for the writes a purge
-deleted (issue #4700) - with the other safety invariants that still apply: 6,402,166
-distinct states to depth 42. A purge marks a leaf before clearing it, and recovery re-creates only
+deleted (issue #4700) - with the other safety invariants that still apply: 14,500,000
+distinct states. A purge marks a leaf before clearing it, and recovery re-creates only
 a marked leaf (`MarkPurge`, `PurgeClear`, `Recover`); the lifecycle resumes once
 recovery has reset every marker.
 
 The `WalDurability.WarmLeaf.cfg` variant checks every property without faults:
 17,041 distinct states to depth 28. Replay requires a scheduled request, consumed
-by each bounded read slice; foreground writes cannot arm it. Weak fairness belongs
+by each bounded read slice; foreground writes cannot arm it, though a leaf born in
+this activation advances over its own applied writes without a read (`LiveAdvance`,
+issue #5572). Weak fairness belongs
 to the timer/GC scheduling trigger and then the requested read, assuming eventual
 admission and responsive storage. The #3314 mutation
 `ReclamationEventuallyAdvancesWarmLeafNeedsCheckpoint` reproduces the circular
 birth-time registration gate: a warm foreground-only leaf needs a checkpoint
-before its timer can schedule the read that earns that checkpoint. The production
+before its timer can schedule the read that earns that checkpoint. The live advance
+now discharges that starvation for a born leaf, so the mutant also restores the
+world #3314 lived in: no leaf is born and the live advance never arms. The production
 regression uses the actual timer, loads accepted snapshot coverage and performs
 real GC without deactivation or checkpoint hints.
 
@@ -110,6 +114,7 @@ distinct states to depth 21, about fifteen seconds on two workers.
 | `PublishedPinWithinPersistedBelief` | Action | A newly published pin never exceeds the persisted checkpoint. |
 | `EveryAckedWriteMaterialised` | Liveness | Every acknowledged write is eventually held by its owner's projection. |
 | `ReclamationEventuallyAdvances` | Liveness | Everything appended is eventually reclaimed from storage, and no append or abandoned call is left outstanding. |
+| `NewbornPinEventuallyUsable` | Liveness | A leaf born holding live writes eventually publishes a usable pin through the live checkpoint advance, without waiting for a scheduled replay. |
 
 `WalMove`:
 
@@ -166,7 +171,18 @@ reproduced before its fix and each fixed:
 | #4669 | A cold leaf's checkpoint flush tail releases a partition its replay has not read. **Fixed by #4677**: no empty release before the replay barrier latches. | `WalPartitionReleaseCoyoteTests.An_empty_release_published_before_the_partition_is_replayed_trims_an_unread_write` |
 | #4641 | A write stamped below an empty release's frontier is trimmed by every stamp-based GC arm. **Fixed by #4679**: a durable override hold the GC reads as a block until coverage lands. | `WalPartitionReleaseCoyoteTests.Skipping_the_override_hold_lets_the_gc_trim_an_override_stamped_write_issue_4641` |
 
-The last three rows of that table depend on HLC stamps and on several partitions,
+The Explorer journey estate found one more, which the model did not: its
+`Checkpoint` was taken by a replay, and the liveness checks assumed a replay is
+eventually scheduled for every leaf. Production schedules a live-written leaf's
+replay only on a timer or a GC touch against a bounded permit share, which a
+freshly written estate saturates. The model now withholds that fairness from such
+a leaf and checks that its pin becomes usable anyway:
+
+| Issue | Defect | Check |
+|-------|--------|-------|
+| #5570, #5572 | A live write never advanced the leaf's checkpoint, so a live-written leaf published the block pin until a replay of every partition from `-1`; on a freshly written estate every tree's WAL floor stayed blocked while the replays starved each other. **Fixed**: the leaf advances its checkpoint over the appends it issued itself once each is applied (`LiveAdvance`), when it was born through a create path or its replay has reached its first own append, and never while an own append failed or a saga prepare is pending. | `NewbornPinEventuallyUsableNoLiveAdvance`, with `TrimCoveredBySnapshotLiveAdvancePastUnappliedAppend`, `ReadPositionHonestLiveAdvanceUnarmed` and `ReadPositionHonestStopKeepsBirth` for the advance's safety |
+
+The last three rows of the earlier table depend on HLC stamps and on several partitions,
 which `WalDurability.tla` abstracts away; `WalPartitionReleaseModel`, a Coyote
 model over the production pin and trim cores, checks them (see the refinement note's
 abstraction gaps).
@@ -275,8 +291,8 @@ holds, the in-memory cursor registry, late delivery of a lost silo's removal
 message or a duplicate activation's, the order of the steps inside a purge's
 tree-level tail (the pin-store clear before the registry frees the id, issue #5416,
 pinned by tests), a resized tree's logical purge completion (pinned by tests), how
-long a write to an id created again waits while a purge's tail is owed, how long a
-live leaf's pin stays at the block value before its first WAL replay, or
+long a write to an id created again waits while a purge's tail is owed, which way
+a live leaf's checkpoint advances (`WalDurability`'s `LiveAdvance`), or
 the sweep's floor-holder census and budgets; the refinement note's
 abstraction gaps list them. Coverage of this module is not coverage of the trim
 itself, which is `WalDurability`'s.

@@ -24,11 +24,11 @@ One WAL partition of three offsets is shared by two leaves. Every write belongs 
 position. A budget of one fault - a shard crash, a leaf stop, a failed persist or a
 failed capture - bounds the environment; the two fault-free intended-design stutters
 (`ActivateLoadFail`, `ActivateRowless`, `ReplayFaultRearm`) cost nothing. The base model
-checks 226,592 distinct states to depth 35 with every safety and liveness property.
+checks 381,426 distinct states with every safety and liveness property.
 The `TwoFaults` variant (`WalDurability.TwoFaults.cfg`) checks every safety invariant
-with a budget of two faults: 1,310,600 distinct states to depth 42. The `SnapshotLoss`
+with a budget of two faults: 2,958,083 distinct states. The `SnapshotLoss`
 variant lets the environment destroy a leaf's snapshot or its row, and the operator
-purge a tree, at two faults: 6,402,166 distinct states to depth 42. The `WarmLeaf` variant has no
+purge a tree, at two faults: 14,500,000 distinct states. The `WarmLeaf` variant has no
 faults: 17,041 distinct states to depth 28, with every property checked.
 
 ## Polling dispatch refinements
@@ -212,6 +212,10 @@ the spec's fairness intact, are `EveryAckedWriteMaterialisedColdStartResumesFrom
 leaf active with no faults: a populated cache cannot schedule replay before a
 checkpoint exists. This reproduces birth-time timer registration being deferred
 until the first checkpoint, not a read-watermark or capture-safety relaxation.
+Because the live advance now discharges that starvation for a born leaf, the
+mutant also starts every leaf unborn and disarms `LiveArmed`, the world #3314
+lived in. Scheduling fairness stays intact, since `ReplayDriven` holds for an
+unborn leaf.
 `NewbornPinEventuallyUsableNoLiveAdvance` (#5572) is the live advance's liveness
 pairing: with the advance off, a born live-written leaf has no fair route to a
 usable pin. `TrimCoveredBySnapshotLiveAdvancePastUnappliedAppend`,

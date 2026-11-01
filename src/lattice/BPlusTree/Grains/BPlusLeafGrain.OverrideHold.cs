@@ -208,6 +208,10 @@ internal sealed partial class BPlusLeafGrain
         /// <inheritdoc />
         public Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken = default)
         {
+            // Counted before anything can fail, so no append escapes the live
+            // checkpoint tracker (issue #5572).
+            leaf.NoteLiveAppendIssued();
+
             // The common case (a freshly ticked write) raises nothing, so it adds
             // no state machine to the append.
             var raise = leaf.RaiseOverrideHoldsForAsync(entry, cancellationToken);
@@ -219,6 +223,7 @@ internal sealed partial class BPlusLeafGrain
         /// <inheritdoc />
         public Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken = default)
         {
+            leaf.NoteLiveAppendIssued();
             var raise = leaf.RaiseOverrideHoldsForAsync(entries, cancellationToken);
             return raise.IsCompletedSuccessfully
                 ? inner.AppendManyAsync(entries, cancellationToken)
