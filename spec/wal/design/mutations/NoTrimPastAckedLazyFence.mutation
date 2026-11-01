@@ -6,39 +6,51 @@ MODULE: NoTrimPastAckedLazyFence
 TARGET: NoTrimPastAcked
 CLASS: Invariant
 SUMMARY: the claim does not raise the WAL shard's entry; the activation's first append does
-PERTURBS: Claim, OwnAlloc
+PERTURBS: ClaimWrite, ClaimRaise, OwnAlloc
 
 --- FIND
-        /\ fence' = Max2(fence, e)
-        /\ memFence' = Max2(fence, e)
+    /\ fence' = Max2(fence, epoch[a])
+    /\ cstage' = [cstage EXCEPT ![a] = 2]
 --- REPLACE
-\* MUTATION: the claim leaves the shard's entry alone.
-        /\ fence' = fence
-        /\ memFence' = memFence
+\* MUTATION: the claim leaves the durable entry alone.
+    /\ fence' = fence
+    /\ cstage' = [cstage EXCEPT ![a] = 2]
+--- END
+
+--- FIND
+    /\ memFence' = epoch[a]
+    /\ claimHead' = [claimHead EXCEPT ![a] = next]
+--- REPLACE
+\* MUTATION: the claim leaves the loaded entry alone.
+    /\ memFence' = memFence
+    /\ claimHead' = [claimHead EXCEPT ![a] = next]
 --- END
 
 --- FIND
     /\ memFence > 0
     /\ epoch[a] >= memFence
+    /\ epoch[a] > retired
     /\ next < MaxOff
     /\ next' = next + 1
     /\ author' = [author EXCEPT ![next] = a]
     /\ inflight' = inflight \cup {next}
-    /\ staleAccepted' = (staleAccepted \/ epoch[a] < maxClaimed)
+    /\ staleAccepted' = (staleAccepted \/ epoch[a] < maxClaimed \/ epoch[a] <= retired)
     /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
-    /\ UNCHANGED <<lastU, oldUsed, durable, acked, floor, leafVars, epochVars, handVars, viewVars,
-                   envVars, wghosts>>
+    /\ UNCHANGED <<lastU, oldUsed, durable, acked, floor, leafVars, epochVars, handVars, gateVars,
+                   viewVars, envVars, oldRejected, wghosts>>
 --- REPLACE
     /\ epoch[a] >= memFence
+    /\ epoch[a] > retired
     /\ next < MaxOff
     /\ next' = next + 1
     /\ author' = [author EXCEPT ![next] = a]
     /\ inflight' = inflight \cup {next}
-    /\ staleAccepted' = (staleAccepted \/ epoch[a] < maxClaimed)
+    /\ staleAccepted' = (staleAccepted \/ epoch[a] < maxClaimed \/ epoch[a] <= retired)
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
 \* MUTATION: the first append raises the entry instead.
     /\ fence' = Max2(fence, epoch[a])
     /\ memFence' = Max2(memFence, epoch[a])
-    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
-    /\ UNCHANGED <<lastU, oldUsed, durable, acked, floor, leafVars, rowEpoch, seen, epoch, claimHead,
-                   retired, maxClaimed, handVars, viewVars, envVars, wghosts>>
+    /\ UNCHANGED <<lastU, oldUsed, durable, acked, floor, leafVars, rowEpoch, seen, epoch, cstage,
+                   claimHead, retired, maxClaimed, handVars, gateVars, viewVars, envVars,
+                   oldRejected, wghosts>>
 --- END

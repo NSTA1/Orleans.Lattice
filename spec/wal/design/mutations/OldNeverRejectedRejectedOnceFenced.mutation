@@ -6,7 +6,7 @@ TARGET: OldNeverRejected
 CLASS: Invariant
 SUMMARY: the shard rejects an unstamped append once the partition holds an epoch entry
 PERTURBS: OldAlloc
-BOUNDS: WithMixedVersion = TRUE
+BOUNDS: WithMixedVersion = TRUE, WithBatch = FALSE, MaxWindows = 1
 
 --- FIND
 UnstampedAdmitted == TRUE

@@ -6,10 +6,12 @@ TARGET: ReadPositionHonest
 CLASS: Invariant
 SUMMARY: the activation arms without reading past the highest reported unstamped append
 PERTURBS: LiveAdvance
-BOUNDS: WithMixedVersion = TRUE
+BOUNDS: WithMixedVersion = TRUE, WithBatch = FALSE, MaxWindows = 1
 
 --- FIND
+    /\ rp[a] >= MarkerClosedAt(a) - 1
     /\ rp[a] >= seenU[a]
 --- REPLACE
+    /\ rp[a] >= MarkerClosedAt(a) - 1
 \* MUTATION: reported unstamped appends are not waited for.
 --- END

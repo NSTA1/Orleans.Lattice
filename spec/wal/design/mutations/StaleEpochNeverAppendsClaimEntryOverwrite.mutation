@@ -1,0 +1,19 @@
+# The claim's durable entry write is a plain write, refused only against the
+# loaded entry. Two overlapping claims write out of order, the lower epoch lands
+# last, and after a WAL shard restart the entry reloads below the epoch the
+# newer claim raised, readmitting the superseded activation.
+MODULE: StaleEpochNeverAppendsClaimEntryOverwrite
+TARGET: StaleEpochNeverAppends
+CLASS: Invariant
+SUMMARY: the claim overwrites the durable entry instead of max-merging it
+PERTURBS: ClaimWrite
+BOUNDS: WithRestart = TRUE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+    /\ epoch[a] > Max2(Max2(fence, memFence), retired)
+    /\ fence' = Max2(fence, epoch[a])
+--- REPLACE
+\* MUTATION: a plain write, checked against the loaded entry only.
+    /\ epoch[a] > Max2(memFence, retired)
+    /\ fence' = epoch[a]
+--- END

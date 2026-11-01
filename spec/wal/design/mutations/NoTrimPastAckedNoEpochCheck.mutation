@@ -7,11 +7,11 @@ SUMMARY: the WAL shard accepts an append from an epoch below its entry
 PERTURBS: OwnAlloc
 
 --- FIND
-    /\ memFence > 0
     /\ epoch[a] >= memFence
+    /\ epoch[a] > retired
     /\ next < MaxOff
 --- REPLACE
-    /\ memFence > 0
-\* MUTATION: the shard does not check the epoch.
+\* MUTATION: the shard does not check the epoch against its entry.
+    /\ epoch[a] > retired
     /\ next < MaxOff
 --- END

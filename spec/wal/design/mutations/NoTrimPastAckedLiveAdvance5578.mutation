@@ -10,6 +10,8 @@ PERTURBS: LiveAdvance, OwnAlloc
 
 --- FIND
 Armed(a) ==
+    /\ cstage[a] = 3
+    /\ mInit
     /\ rp[a] >= claimHead[a] - 1
     /\ ~MarkerOpen(a)
     /\ rp[a] >= MarkerClosedAt(a) - 1
@@ -23,9 +25,10 @@ Armed(a) ==
 --- END
 
 --- FIND
-    /\ epoch[a] > 0
+    /\ cstage[a] = 3
     /\ memFence > 0
     /\ epoch[a] >= memFence
+    /\ epoch[a] > retired
     /\ next < MaxOff
     /\ next' = next + 1
     /\ author' = [author EXCEPT ![next] = a]

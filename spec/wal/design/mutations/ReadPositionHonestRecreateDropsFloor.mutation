@@ -6,7 +6,7 @@ TARGET: ReadPositionHonest
 CLASS: Invariant
 SUMMARY: retiring an epoch entry does not raise the partition's retired floor
 PERTURBS: Recreate
-BOUNDS: WithRecreate = TRUE
+BOUNDS: WithRecreate = TRUE, WithBatch = FALSE, MaxWindows = 1
 
 --- FIND
     /\ retired' = Max2(retired, fence)

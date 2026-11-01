@@ -1,0 +1,16 @@
+# The routing-generation entry is kept in memory only. A WAL shard restart
+# loses the fence a close raised, so a write admitted before the close is
+# allocated above the recorded head, and the owner passes it.
+MODULE: ReadPositionHonestGenerationNotDurable
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a WAL shard restart loses the routing-generation entry
+PERTURBS: Restart
+BOUNDS: WithRestart = TRUE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+    /\ UNCHANGED fFence
+--- REPLACE
+\* MUTATION: the generation entry is not durable.
+    /\ fFence' = 1
+--- END

@@ -6,14 +6,14 @@ MODULE: ReadPositionHonestClaimReadableHead
 TARGET: ReadPositionHonest
 CLASS: Invariant
 SUMMARY: the claim returns the shard's readable head, not its allocator's next offset
-PERTURBS: Claim
+PERTURBS: ClaimRaise
 
 --- FIND
-        /\ claimHead' = [claimHead EXCEPT ![a] = next]
+    /\ claimHead' = [claimHead EXCEPT ![a] = next]
 --- REPLACE
 \* MUTATION: the readable head.
-        /\ claimHead' = [claimHead EXCEPT ![a] =
-                IF \E o \in 0..(next - 1) : o \notin durable
-                THEN Min({o \in 0..(next - 1) : o \notin durable})
-                ELSE next]
+    /\ claimHead' = [claimHead EXCEPT ![a] =
+            IF \E o \in 0..(next - 1) : o \notin durable
+            THEN Min({o \in 0..(next - 1) : o \notin durable})
+            ELSE next]
 --- END
