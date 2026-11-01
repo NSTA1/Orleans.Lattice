@@ -270,6 +270,13 @@ public sealed class TaskBoardTeamJourney : JourneyChapter
         {
             context.Record(StoryKeys.TaskBoardTasks, (IReadOnlyList<string>)[.. tasks.Select(task => ids[task.Title])]);
         }
+        else
+        {
+            // The board never loaded (KnownDefect #5595), so priya's cards were not written
+            // through it. Produce what later chapters build on through U3's own contract,
+            // the same API path an isolated run of a later chapter takes.
+            await new U3Contract().EstablishAsync(context);
+        }
     }
 
     private static Task Capture(PersonaSession session, string step, string substep, string title) =>
