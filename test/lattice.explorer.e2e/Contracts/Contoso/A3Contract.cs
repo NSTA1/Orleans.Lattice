@@ -1,8 +1,6 @@
 using System.Text;
 using System.Text.Json;
-using Grpc.Core;
 using Orleans.Lattice.Api.TreeAdmin;
-using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 using Names = Orleans.Lattice.Explorer.EndToEnd.Tests.Story.StoryNames.Contoso;
 
@@ -93,26 +91,9 @@ public sealed class A3Contract() : ChapterContract("A3")
 
         if (!context.IsProduced("C3"))
         {
-            TreeViewStatus? view = null;
-            try
-            {
-                view = await admin.GetViewStatusAsync(Names.Views.OrdersByStatus);
-            }
-            catch (RpcException ex) when (ContractWait.IsTransient(ex.StatusCode))
-            {
-                // #5519: while the maintainer rebuilds after a source swap (U2's remediation) it
-                // answers no status read, even after the logged retries. Tolerant: the view's
-                // registration still proves what it projects.
-                await new KnownDefect("#5519", "A view maintainer rebuilding after a source swap answers no status read").ReproducesAsync(() => Task.CompletedTask);
-                var listed = (await admin.ListViewsAsync()).Views.SingleOrDefault(candidate => candidate.ViewName == Names.Views.OrdersByStatus);
-                Require(listed?.SourceTreeId == Names.Trees.FactoryOrders, "orders-by-status is registered over factory-orders");
-            }
-
-            if (view is not null)
-            {
-                RequireEqual(view.SourceTreeId, Names.Trees.FactoryOrders, "orders-by-status projects factory-orders");
-                Require(!string.IsNullOrEmpty(view.ActiveTreeId), "orders-by-status is ready");
-            }
+            var view = await admin.GetViewStatusAsync(Names.Views.OrdersByStatus);
+            RequireEqual(view.SourceTreeId, Names.Trees.FactoryOrders, "orders-by-status projects factory-orders");
+            Require(!string.IsNullOrEmpty(view.ActiveTreeId), "orders-by-status is ready");
         }
 
         var index = await admin.GetTagIndexStatusAsync(Names.TagIndexes.OrderStatus);
