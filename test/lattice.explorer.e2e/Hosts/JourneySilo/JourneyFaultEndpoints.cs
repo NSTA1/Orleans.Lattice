@@ -1,3 +1,4 @@
+using Orleans.Lattice.Explorer.EndToEnd.HostContract;
 using Orleans.Runtime;
 
 namespace Orleans.Lattice.Explorer.EndToEnd.Hosts.Silo;
@@ -17,6 +18,9 @@ internal static class JourneyFaultEndpoints
     /// <param name="app">The silo's web application.</param>
     public static void MapJourneyFaultEndpoints(this WebApplication app)
     {
+        // What the silo holds after a forced collection: the bounded-memory proof's reading.
+        app.MapJourneyMemoryProbe();
+
         // Which silo hosts an activation, through the Orleans management grain, so a
         // journey can kill the silo running an operation and assert it did.
         app.MapGet(Prefix + "/activation", async (string grainType, string key, IGrainFactory grains) =>

@@ -41,6 +41,13 @@ internal sealed class SessionSignInOptions
     public const string RefusedNoticeValue = "refused";
 
     /// <summary>
+    /// The form field the server password form carries the address the user signed
+    /// in from in: a rooted path with its query, which the server sign-in endpoint
+    /// redirects back to only when it is a local path under the Explorer's base href.
+    /// </summary>
+    public const string ReturnPathFieldName = "returnUrl";
+
+    /// <summary>
     /// Whether the password form posts to <see cref="LoginPath"/> (the default) or
     /// signs in inside the circuit.
     /// </summary>

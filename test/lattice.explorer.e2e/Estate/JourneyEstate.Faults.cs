@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
 using Azure;
+using Orleans.Lattice.Explorer.EndToEnd.HostContract;
 
 namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
 
@@ -111,6 +112,25 @@ public sealed partial class JourneyEstate
 
             await Task.Delay(100);
         }
+    }
+
+    /// <summary>
+    /// Forces a full, blocking, compacting collection in the journey host serving
+    /// <paramref name="root"/> and reads what it holds afterwards (#5475): its live managed
+    /// heap, the memory its collector keeps committed, and its working set. With
+    /// <paramref name="settle"/> the collection is the aggressive mode, which also returns
+    /// free memory to the operating system. Requires the fault and diagnostic seams.
+    /// </summary>
+    /// <param name="root">The host's root address: a silo's internal HTTP port, or an Explorer head.</param>
+    /// <param name="settle">Whether to settle the host's memory rather than only collect it.</param>
+    /// <param name="cancellationToken">Cancels the probe.</param>
+    internal async Task<JourneyMemoryReading> ReadMemoryAsync(Uri root, bool settle, CancellationToken cancellationToken = default)
+    {
+        using var response = await _probe.PostAsync(
+            new Uri(root, JourneyMemoryProbe.Path.TrimStart('/') + (settle ? "?settle=true" : string.Empty)), content: null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<JourneyMemoryReading>(cancellationToken)
+            ?? throw new InvalidOperationException($"{root} answered its memory probe with nothing.");
     }
 
     /// <summary>

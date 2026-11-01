@@ -39,6 +39,7 @@ public sealed class ShellBackupControlTransportTests : ShellTransportAdapterCont
         new("IsHealthMonitoringAvailableAsync", Service + "IsHealthMonitoringAvailable", (f, ct) => f.IsHealthMonitoringAvailableAsync(ct)),
         new("GetBackupHealthAsync", Service + "GetBackupHealth", (f, ct) => f.GetBackupHealthAsync("b1", ct)),
         new("ConfigureBackupHealthAsync", Service + "ConfigureBackupHealth", (f, ct) => f.ConfigureBackupHealthAsync("b1", new BackupHealthConfig(true, TimeSpan.FromHours(1)), ct)),
+        new("GetBackupHealthConfigAsync", Service + "GetBackupHealthConfig", (f, ct) => f.GetBackupHealthConfigAsync("b1", ct)),
     ];
 
     internal override void ScriptSuccess(ShellTransportPeer peer)
@@ -94,6 +95,7 @@ public sealed class ShellBackupControlTransportTests : ShellTransportAdapterCont
             Assert.That(() => control.ProbeCapabilitiesAsync(null!), Throws.ArgumentNullException);
             Assert.That(() => control.GetBackupHealthAsync(string.Empty), Throws.ArgumentException);
             Assert.That(() => control.ConfigureBackupHealthAsync("b1", null!), Throws.ArgumentNullException);
+            Assert.That(() => control.GetBackupHealthConfigAsync(string.Empty), Throws.ArgumentException);
             Assert.That(circuit.Peer.Requests, Is.Empty);
         });
     }

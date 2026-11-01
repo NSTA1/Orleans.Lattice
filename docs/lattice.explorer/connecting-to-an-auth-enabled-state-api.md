@@ -52,9 +52,16 @@ native server form posts:
 
 - `POST auth/login` validates an antiforgery token, reads `username` and
   `password`, signs in through the auth session, and redirects back to the
-  Explorer base href. When the cluster refuses the username and password, no
-  session is established and no credential cookie is written: the redirect
-  carries `?signin=refused`, and the next document reopens the sign-in dialog
+  address the sign-in dialog was opened on, which the form carries in its
+  `returnUrl` field. That field is honoured only when it is a plain local path
+  under the Explorer base href: an absolute or scheme-relative URL, a
+  backslash, a raw whitespace, control or non-ASCII character, a `.` or `..`
+  segment, or a path whose percent-decoded form starts `//` or carries a
+  backslash, control character or dot segment sends the redirect to the base
+  href instead, so the endpoint is not an open redirect. When the cluster refuses the
+  username and password, no session is established and no credential cookie is
+  written: the redirect, to the same address, carries `?signin=refused`, and the
+  next document reopens the sign-in dialog
   saying "The cluster did not accept this username and password." before
   dropping the notice from the address. The notice carries neither the user
   name nor the password.

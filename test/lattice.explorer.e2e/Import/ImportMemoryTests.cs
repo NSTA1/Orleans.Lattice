@@ -14,17 +14,44 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Import;
 /// <summary>
 /// The bounded-memory proof for the streaming import (#5365): on the out-of-process estate, a
 /// 200 MB NDJSON file is imported through the Explorer's own Import dialog, once as a seed and
-/// once as an upsert, while the working set of the Explorer head and of every west silo is
-/// sampled. Each must grow less than <see cref="CeilingBytes"/> above its pre-import baseline,
-/// which no process could do if any hop - the browser upload, the Explorer's reader and
-/// channel, the gateway, or a silo's streaming handler - held the file.
+/// once as an upsert, while the memory of the Explorer head and of every west silo is watched.
+/// No process's live managed heap may peak more than <see cref="ImportMemoryBudget.InFlightCeilingBytes"/>
+/// above the heap it settles to before and after the import, which no process could manage if
+/// any hop - the browser upload, the Explorer's reader and channel, the gateway, or a silo's
+/// streaming handler - held the file, or any fixed fraction of it above a sixth; and none may
+/// keep more than <see cref="ImportMemoryBudget.KeptCeilingBytes"/> across the warm-up and the
+/// import together (see <see cref="ImportMemoryBudget"/>).
 /// </summary>
 /// <remarks>
 /// <para>
+/// <b>What is measured (#5475).</b> The live heap is read through each host's memory probe,
+/// straight after a forced full compacting collection: once settled (an aggressive collection
+/// that also returns free memory to the operating system) before the import, about once a
+/// second while it runs, and settled again after it. It is what the process references at
+/// that instant, so it does not depend on when the garbage collector last ran. The working
+/// set is not the gate: under the server collector it also carries the allocation budgets the
+/// collector keeps committed, which its dynamic adaptation resizes with load, and which it
+/// returns to the operating system only when it chooses. The first version of this proof
+/// gated on working-set growth above a baseline read five seconds after the warm-up, and the
+/// readings CI recorded showed what that measured: whether the collector had returned memory
+/// in those five seconds. A silo whose working set the warm-up took to 498.6 MB had dropped
+/// to a 399.9 MB baseline and then peaked at 516.4 MB, and was charged with 116.5 MB.
+/// </para>
+/// <para>
+/// The working set is still bounded, as a sanity bound: its peak may not rise more than
+/// <see cref="WorkingSetCeilingBytes"/> - half the file - above the larger of its baseline and
+/// the peak the same process reached during the warm-up's quarter-size file. A process holding
+/// the file would add at least the 150 MB the two files differ by; over fourteen CI readings
+/// before #5475 the largest rise of a silo above its warm-up peak was 72 MB, the collector's
+/// budgets rather than the file.
+/// </para>
+/// <para>
 /// Each import is preceded by a warm-up import of a quarter of the size through the same
-/// path, and the baseline is taken after it. The warm-up brings the code JIT-compiled and each
-/// process's server-GC heaps to their working size, so the measured growth is what the file's
-/// size adds, not what any first import costs.
+/// path. The warm-up brings the code JIT-compiled and each process's activations, pools and
+/// collector budgets toward their working size. It does not always finish the job: a silo
+/// can still build part of the state the upsert path keeps during the measured import
+/// (#5558), which is why what the process keeps is bounded across both imports rather than
+/// charged to the measured one.
 /// </para>
 /// <para>
 /// The files are shaped so that a silo's growth measures what it streamed rather than what it
@@ -44,8 +71,17 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Import;
 [Category("EndToEnd")]
 public sealed class ImportMemoryTests
 {
-    /// <summary>How far any measured process may grow above its baseline during an import.</summary>
-    public const long CeilingBytes = 64L * 1024 * 1024;
+    /// <summary>
+    /// How far any measured process's live heap may peak above both its settled readings while
+    /// an import streams. The import's own budget is far smaller - the Explorer's channel of
+    /// 1,024 entries, and a batch of 256 upsert records (1 MB) or a chunk of 1,000 seed entries
+    /// in flight per hop - so the ceiling leaves room for a few batches queued on each hop,
+    /// while staying a sixth of the file.
+    /// </summary>
+    public const long LiveHeapCeilingBytes = ImportMemoryBudget.InFlightCeilingBytes;
+
+    /// <summary>How far any measured process's working set may rise above the larger of its baseline and its warm-up peak: half the file.</summary>
+    public const long WorkingSetCeilingBytes = FileBytes / 2;
 
     private const string JourneyId = "g1-import-memory";
     private const long FileBytes = 200L * 1024 * 1024;
@@ -64,7 +100,8 @@ public sealed class ImportMemoryTests
     [OneTimeSetUp]
     public async Task StartEstateAsync()
     {
-        _estate = await JourneyEstate.StartAsync();
+        // No line feed: nothing but the imports writes to the silos while they are measured.
+        _estate = await JourneyEstate.StartAsync(new JourneyEstateOptions { LineFeed = false });
         _files = Path.Combine(Path.GetTempPath(), "lattice-import-memory-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(_files);
 
@@ -112,16 +149,16 @@ public sealed class ImportMemoryTests
 
         var dialog = await OpenSeedAsync(olivia, SeedWarmUpTree);
         await ChooseAsync(dialog, warmUp, "bulk/{/id}", "/n");
-        var warmUpPeaks = await WarmUpAsync(dialog, "Seed tree", warmUpLines);
+        var warmUpReadings = await WarmUpAsync(dialog, "Seed tree", warmUpLines);
 
         dialog = await OpenSeedAsync(olivia, SeedTree);
         await ChooseAsync(dialog, file, "bulk/{/id}", "/n");
         await olivia.SubstepAsync("file-chosen", "A 200 MB NDJSON file is chosen; the key comes from /id and the value from /n");
 
         var growth = await MeasureAsync(olivia, dialog, "Seed tree", lines, "seed-progress", "The seed streams the file: the pre-flight pass checks its order before anything is written");
-        await olivia.SubstepAsync("succeeded", $"Seeded {ImportFiles.Count(lines)} entries; no process grew by 64 MB");
+        await olivia.SubstepAsync("succeeded", $"Seeded {ImportFiles.Count(lines)} entries; no process held 32 MB of the file in flight");
 
-        growth = await WithWarmUpAndSettledAsync(growth, warmUpPeaks);
+        growth = WithWarmUp(growth, warmUpReadings);
         var (found, missing) = await FindEveryKeyAsync(SeedTree, Enumerable.Range(0, lines).Select(line => $"bulk/{line:D8}"));
         var scanned = await CountKeysAsync(SeedTree);
         var stats = await LatticeTreeAdminApiGrpcClient.Create(_estate.Invoker(), JourneyEstate.Serialization).GetTreeStatsAsync(SeedTree);
@@ -129,10 +166,28 @@ public sealed class ImportMemoryTests
             $"A point read of every one of the file's {ImportFiles.Count(lines)} keys finds {ImportFiles.Count(found)}"
             + (missing.Count > 0 ? $" (missing, for example: {string.Join(", ", missing)})" : string.Empty)
             + $". A paged range scan of the tree reads {ImportFiles.Count(scanned)} keys, and its tree stats report {ImportFiles.Count(stats.TotalLiveKeys)} live keys.");
+
+        // Issue #5460: the tree a seed builds is exact through every read path, not only point
+        // reads - the header's count and a scan that reaches the file's last key.
+        await dialog.GetByRole(AriaRole.Button, new() { Name = "Done", Exact = true }).ClickAsync();
+        var header = olivia.Shell.Content.GetByText(new System.Text.RegularExpressions.Regex(@"^[\d,]+ live keys?$"));
+        await Expect(header).ToBeVisibleAsync(new() { Timeout = 30_000 });
+        await olivia.SubstepAsync("tree-header", $"The tree header counts the seeded tree's live keys: {ImportFiles.Count(lines)} are expected");
+        var headerText = await header.InnerTextAsync();
+
+        var lastKey = $"bulk/{lines - 1:D8}";
+        await olivia.Shell.GotoAsync($"/data/{SeedTree}?prefix={Uri.EscapeDataString(lastKey[..^1])}");
+        var lastRow = olivia.Shell.Content.GetByRole(AriaRole.Link, new() { Name = lastKey, Exact = true });
+        await Expect(lastRow).ToBeVisibleAsync(new() { Timeout = 30_000 });
+        await olivia.SubstepAsync("keys-tail", $"A prefix scan of the Keys panel reaches the file's last key, {lastKey}");
+
         Assert.Multiple(() =>
         {
             AssertUnderCeiling("seed", growth);
             Assert.That(found, Is.EqualTo(lines), "every line of the file is a key of the tree");
+            Assert.That(scanned, Is.EqualTo(lines), "a paged range scan reads every key once");
+            Assert.That(stats.TotalLiveKeys, Is.EqualTo(lines), "the tree statistics count every key once");
+            Assert.That(headerText, Is.EqualTo($"{ImportFiles.Count(lines)} live keys"), "the tree header counts every key once");
         });
     }
 
@@ -154,16 +209,16 @@ public sealed class ImportMemoryTests
 
         var dialog = await OpenUpsertAsync(olivia, UpsertTree);
         await ChooseAsync(dialog, warmUp, "order/{/id}", valuePointer: null);
-        var warmUpPeaks = await WarmUpAsync(dialog, "Import", warmUpLines);
+        var warmUpReadings = await WarmUpAsync(dialog, "Import", warmUpLines);
 
         dialog = await OpenUpsertAsync(olivia, UpsertTree);
         await ChooseAsync(dialog, file, "order/{/id}", valuePointer: null);
         await olivia.SubstepAsync("file-chosen", "A 200 MB NDJSON file of whole order records is chosen for an upsert");
 
         var growth = await MeasureAsync(olivia, dialog, "Import", lines, "upsert-progress", "The upsert streams every record through the gateway to the silos, a batch at a time");
-        await olivia.SubstepAsync("succeeded", $"Wrote {ImportFiles.Count(lines)} records; no process grew by 64 MB");
+        await olivia.SubstepAsync("succeeded", $"Wrote {ImportFiles.Count(lines)} records; no process held 32 MB of the file in flight");
 
-        growth = await WithWarmUpAndSettledAsync(growth, warmUpPeaks);
+        growth = WithWarmUp(growth, warmUpReadings);
         var (found, _) = await FindEveryKeyAsync(UpsertTree, Enumerable.Range(0, UpsertKeys).Select(key => $"order/{key:D6}"));
         var scanned = await CountKeysAsync(UpsertTree);
         Report("Upsert", growth, $"A point read of each of the {UpsertKeys} keys finds {found}; a range scan of the tree reads {ImportFiles.Count(scanned)} keys.");
@@ -208,39 +263,28 @@ public sealed class ImportMemoryTests
         }
     }
 
-    /// <summary>Runs the warm-up import, returning the working-set peak each process reached during it.</summary>
+    /// <summary>Runs the warm-up import, returning what each process's memory did during it.</summary>
     private async Task<IReadOnlyList<WorkingSetGrowth>> WarmUpAsync(ILocator dialog, string start, long lines)
     {
-        await using var sampler = await WorkingSetSampler.StartAsync(MeasuredProcesses());
+        await using var sampler = await StartSamplerAsync();
         await dialog.GetByRole(AriaRole.Button, new() { Name = start, Exact = true }).ClickAsync();
         await ExpectSucceededAsync(dialog, lines);
-        var peaks = await sampler.StopAsync();
+        var readings = await sampler.StopAsync();
         await dialog.GetByRole(AriaRole.Button, new() { Name = "Done", Exact = true }).ClickAsync();
-        return peaks;
+        return readings;
     }
 
-    /// <summary>
-    /// Adds the warm-up's peaks and, after the import has had time to settle, each silo's live
-    /// heap: a heap that returns to its baseline held work in flight, not the file.
-    /// </summary>
-    private async Task<IReadOnlyList<WorkingSetGrowth>> WithWarmUpAndSettledAsync(IReadOnlyList<WorkingSetGrowth> growth, IReadOnlyList<WorkingSetGrowth> warmUp)
-    {
-        await Task.Delay(TimeSpan.FromSeconds(20));
-        using var heap = new ManagedHeapReader();
-        var processes = MeasuredProcesses();
-        var settled = new List<WorkingSetGrowth>(growth.Count);
-        for (var i = 0; i < growth.Count; i++)
+    /// <summary>Adds the warm-up's working-set peak and live-heap growth to each process's reading.</summary>
+    private static List<WorkingSetGrowth> WithWarmUp(IReadOnlyList<WorkingSetGrowth> growth, IReadOnlyList<WorkingSetGrowth> warmUp) =>
+        [.. growth.Select((reading, i) => reading with
         {
-            settled.Add(growth[i] with
-            {
-                WarmUpPeak = warmUp[i].Peak,
-                WarmUpHeapPeak = warmUp[i].HeapPeak,
-                HeapAfter = processes[i].MetricsPort is { } port ? await heap.ReadAsync(port) : null,
-            });
-        }
+            WarmUpPeak = warmUp[i].Peak,
+            WarmUpLiveGrowth = warmUp[i].LiveGrowth,
+            WarmUpLiveBaseline = warmUp[i].LiveBaseline,
+        })];
 
-        return settled;
-    }
+    private async Task<WorkingSetSampler> StartSamplerAsync() =>
+        await WorkingSetSampler.StartAsync(MeasuredProcesses(), (process, settle) => _estate.ReadMemoryAsync(process.ProbeRoot, settle));
 
     /// <summary>Reads every one of <paramref name="keys"/> by a point read, returning how many exist and a few that do not.</summary>
     private async Task<(int Found, IReadOnlyList<string> Missing)> FindEveryKeyAsync(string tree, IEnumerable<string> keys)
@@ -273,21 +317,19 @@ public sealed class ImportMemoryTests
         await Expect(dialog.Locator("[data-lt-import-refused]")).ToHaveAttributeAsync("data-lt-import-refused", "0");
     }
 
-    /// <summary>Takes the baseline, runs the import, and returns each process's growth.</summary>
+    /// <summary>Settles and baselines each process, runs the import, and returns each process's readings.</summary>
     private async Task<IReadOnlyList<WorkingSetGrowth>> MeasureAsync(
         PersonaSession session, ILocator dialog, string start, long lines, string progressSubstep, string progressTitle)
     {
-        // Let the warm-up's work settle before the baseline is read.
-        await Task.Delay(TimeSpan.FromSeconds(5));
-        await using var sampler = await WorkingSetSampler.StartAsync(MeasuredProcesses());
+        await using var sampler = await StartSamplerAsync();
 
         await dialog.GetByRole(AriaRole.Button, new() { Name = start, Exact = true }).ClickAsync();
         await Expect(dialog.GetByRole(AriaRole.Progressbar)).ToBeVisibleAsync();
         await session.SubstepAsync(progressSubstep, progressTitle);
         await ExpectSucceededAsync(dialog, lines);
 
-        // A late burst (the last batch's acknowledgement, the commit) is still sampled.
-        await Task.Delay(TimeSpan.FromSeconds(2));
+        // Stopping settles each process once more: whatever the import left behind is in the
+        // live heap that settled collection reads.
         return await sampler.StopAsync();
     }
 
@@ -297,11 +339,13 @@ public sealed class ImportMemoryTests
         var explorer = region.ExplorerProcesses[0];
         var processes = new List<MeasuredProcess>
         {
-            new(explorer.Name, explorer.ProcessId ?? throw new InvalidOperationException("The Explorer head is not running."), MetricsPort: null),
+            new(explorer.Name, explorer.ProcessId ?? throw new InvalidOperationException("The Explorer head is not running."),
+                new Uri(region.ExplorerUri.GetLeftPart(UriPartial.Authority) + "/")),
         };
         foreach (var silo in region.Silos)
         {
-            processes.Add(new(silo.Process.Name, silo.Process.ProcessId ?? throw new InvalidOperationException($"{silo.Process.Name} is not running."), silo.HttpPort));
+            processes.Add(new(silo.Process.Name, silo.Process.ProcessId ?? throw new InvalidOperationException($"{silo.Process.Name} is not running."),
+                new Uri($"http://127.0.0.1:{silo.HttpPort}/")));
         }
 
         return processes;
@@ -337,9 +381,12 @@ public sealed class ImportMemoryTests
     {
         foreach (var reading in growth)
         {
-            Assert.That(reading.Samples, Is.GreaterThan(4), $"{reading.Process} was sampled while the import ran");
-            Assert.That(reading.Growth, Is.LessThan(CeilingBytes),
-                $"{reading.Process} grew {WorkingSetGrowth.Mb(reading.Growth)} above its {WorkingSetGrowth.Mb(reading.Baseline)} baseline during a {mode} of a {WorkingSetGrowth.Mb(FileBytes)} file");
+            Assert.That(reading.Samples, Is.GreaterThan(4), $"{reading.Process}'s working set was sampled while the import ran");
+            Assert.That(reading.LiveSamples, Is.GreaterThan(2), $"{reading.Process}'s live heap was read while the import ran");
+            Assert.That(ImportMemoryBudget.Violations(reading, mode, FileBytes), Is.Empty,
+                $"{reading.Process}'s live heap stays within the import's memory budget during a {mode} of a {WorkingSetGrowth.Mb(FileBytes)} file");
+            Assert.That(reading.Growth, Is.LessThan(WorkingSetCeilingBytes),
+                $"{reading.Process}'s working set rose {WorkingSetGrowth.Mb(reading.Growth)} above the larger of its {WorkingSetGrowth.Mb(reading.Baseline)} baseline and its {WorkingSetGrowth.Mb(reading.WarmUpPeak ?? 0)} warm-up peak during a {mode} of a {WorkingSetGrowth.Mb(FileBytes)} file");
         }
     }
 }

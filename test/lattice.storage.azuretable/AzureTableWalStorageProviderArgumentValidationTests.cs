@@ -214,6 +214,39 @@ public class AzureTableWalStorageProviderArgumentValidationTests
     }
 
     [Test]
+    public async Task WaitForAppendVisibilityAsync_completes_without_io_for_a_shard_never_appended_to()
+    {
+        await using var sut = CreateProvider();
+
+        // Issue #5470: the barrier waits only on phase-2 commits this instance
+        // has in flight, so a shard it never wrote is readable already and the
+        // call returns without touching the (unreachable) table.
+        IWalStorageProvider provider = sut;
+        Assert.DoesNotThrowAsync(() => provider.WaitForAppendVisibilityAsync(TreeId, ShardIndex, CancellationToken.None));
+    }
+
+    [Test]
+    public async Task WaitForAppendVisibilityAsync_rejects_a_null_tree_id()
+    {
+        await using var sut = CreateProvider();
+
+        Assert.That(
+            () => sut.WaitForAppendVisibilityAsync(null!, ShardIndex, CancellationToken.None),
+            Throws.TypeOf<ArgumentNullException>());
+    }
+
+    [Test]
+    public async Task WaitForAppendVisibilityAsync_throws_after_disposal()
+    {
+        var sut = CreateProvider();
+        await sut.DisposeAsync();
+
+        Assert.That(
+            () => sut.WaitForAppendVisibilityAsync(TreeId, ShardIndex, CancellationToken.None),
+            Throws.TypeOf<ObjectDisposedException>());
+    }
+
+    [Test]
     public async Task AppendBatchAsync_throws_after_disposal()
     {
         var sut = CreateProvider();

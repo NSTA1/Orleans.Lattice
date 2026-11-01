@@ -70,6 +70,10 @@ public partial class AddressLine : IDisposable
     [CascadingParameter(Name = LtBreakpointCascade.Name)]
     internal LtBreakpoint? Breakpoint { get; set; }
 
+    // True inside the layout until it has measured its width: both forms are drawn then.
+    [CascadingParameter(Name = LtBreakpointCascade.PendingName)]
+    internal bool BandPending { get; set; }
+
     [Inject]
     internal ExplorerNavigator Navigator { get; set; } = default!;
 
@@ -99,6 +103,20 @@ public partial class AddressLine : IDisposable
     private bool IsListOpen => _groups.Count > 0;
 
     private bool IsCompact => Breakpoint == LtBreakpoint.Compact;
+
+    private bool DrawsCompactForm => IsCompact || BandPending;
+
+    private bool DrawsWideForm => !IsCompact;
+
+    private string FormClass(bool compact, bool tagged = true) => BandPending && tagged
+        ? compact ? "lt-shell-address-line__form lt-only-compact" : "lt-shell-address-line__form lt-medium-up"
+        : "lt-shell-address-line__form";
+
+    private string HintClass(bool compact) => BandPending
+        ? compact ? "lt-shell-address-line__hint lt-only-compact" : "lt-shell-address-line__hint lt-medium-up"
+        : "lt-shell-address-line__hint";
+
+    private string KeyClass => BandPending ? "lt-kbd lt-medium-up" : "lt-kbd";
 
     // Below the small breakpoint the command palette takes the whole screen.
     private string EditingClass =>
@@ -221,7 +239,7 @@ public partial class AddressLine : IDisposable
     /// <inheritdoc />
     protected override void OnParametersSet()
     {
-        if (!IsCompact)
+        if (!DrawsCompactForm)
         {
             _chainOpen = false;
         }
