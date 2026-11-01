@@ -274,7 +274,8 @@ public sealed class TaskBoardTeamJourney : JourneyChapter
         {
             // The board never loaded (KnownDefect #5595), so priya's cards were not written
             // through it. Produce what later chapters build on through U3's own contract,
-            // the same API path an isolated run of a later chapter takes.
+            // the same API path an isolated run of a later chapter takes. Disclosed: an off-UI action.
+            TestContext.Out.WriteLine("OFF-UI ACTION (disclosed): the task board never loaded (KnownDefect #5595), so U3 writes priya's three tasks through U3Contract.EstablishAsync (the Data API, as priya) instead of through the board.");
             await new U3Contract().EstablishAsync(context);
         }
     }
