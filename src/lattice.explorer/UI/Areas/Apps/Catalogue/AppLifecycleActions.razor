@@ -8,7 +8,7 @@
 *@
 @if (Installed is { } installed)
 {
-    var (role, text) = AppsPresentation.LifecycleState(_state ?? installed.State, installed.Version);
+    var (role, text) = AppsPresentation.LifecycleState(_state ?? installed.State, installed.Version, _state is null ? _observed : null);
     var name = AppsPresentation.DisplayName(installed.Presentation ?? Flow!.Descriptor?.Presentation, installed.Slug);
 
     <section class="lt-apps-section" aria-labelledby="lt-apps-lifecycle">
@@ -22,6 +22,12 @@
         {
             <p role="status" data-lt-app-lifecycle-pending="@pending.ToString().ToLowerInvariant()">@PendingText(pending, name)</p>
         }
+        else if (_observed is { } observed)
+        {
+            <p role="status" data-lt-app-lifecycle-pending="@ObservedKey(installed.State, observed)">@ObservedText(installed.State, observed, name)</p>
+        }
+        @if (!InFlight)
+        {
         <div class="lt-apps-actions">
             @if (CanEnable)
             {
@@ -36,6 +42,7 @@
                 <LtButton Variant="LtButtonVariant.Destructive" OnClick="() => Ask(AppLifecycleVerb.Uninstall)" Disabled="_busy">Uninstall</LtButton>
             }
         </div>
+        }
     </section>
 
     <LtDialog Open="@(_asking is AppLifecycleVerb.Enable or AppLifecycleVerb.Disable)"
@@ -82,6 +89,7 @@
     private readonly CancellationTokenSource _lifetime = new();
     private AppLifecycleVerb? _asking;
     private AppLifecycleVerb? _pending;
+    private AppLifecycleState? _observed;
     private AppLifecycleState? _state;
     private string? _error;
     private bool _busy;
@@ -115,6 +123,9 @@
 
     private AppLifecycleState CurrentState => _state ?? Installed!.State;
 
+    /// <summary>Whether a lifecycle change is still being applied, so no other is offered.</summary>
+    private bool InFlight => _pending is not null || _observed is not null;
+
     private bool CanEnable => Access.Current?.Control.CanEnable == true && CurrentState is AppLifecycleState.Installed or AppLifecycleState.Disabled or AppLifecycleState.Failed;
 
     private bool CanDisable => Access.Current?.Control.CanDisable == true && CurrentState == AppLifecycleState.Enabled;
@@ -131,7 +142,72 @@
     protected override void OnInitialized() => Intents.Posted += OnPosted;
 
     /// <inheritdoc />
-    protected override void OnParametersSet() => TakeIntent();
+    protected override void OnParametersSet()
+    {
+        TakeIntent();
+        FollowObserved();
+    }
+
+    /// <inheritdoc />
+    protected override void OnAfterRender(bool firstRender)
+    {
+        // The flow can load the install after the last parameter pass; pick a change in flight up then.
+        if (!_busy && _state is null && Installed is { PendingState: not null })
+        {
+            FollowObserved();
+            if (_observed is not null)
+            {
+                StateHasChanged();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Follows a change already in flight when the page loaded (issue #5482): the described install
+    /// carries the state its run is moving it to. The change is badged and no other is offered until
+    /// it settles.
+    /// </summary>
+    private void FollowObserved()
+    {
+        if (_busy || _state is not null || Installed is not { PendingState: { } target } installed || Facades.Control is not { } control)
+        {
+            return;
+        }
+
+        _busy = true;
+        _observed = target;
+        _asking = null;
+        _ = FollowObservedAsync(installed, target, control);
+    }
+
+    private async Task FollowObservedAsync(AppDescriptor installed, AppLifecycleState target, ILatticeAppsControl control)
+    {
+        var name = AppsPresentation.DisplayName(installed.Presentation ?? Flow!.Descriptor?.Presentation, installed.Slug);
+        var change = ObservedKey(installed.State, target);
+        try
+        {
+            var accepted = new AppLifecycleResult { Slug = installed.Slug, Version = installed.Version, State = installed.State, Pending = true };
+            var result = await AppLifecycleFollow.FollowAsync(control, accepted, target, Time, _lifetime.Token);
+            _observed = null;
+            await ReportAsync(change, installed, name, result);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+            // The page was left while the change was still running.
+            return;
+        }
+        catch (Exception error)
+        {
+            _observed = null;
+            _error = AppsFailureMessages.Describe(error, change, name);
+        }
+        finally
+        {
+            _busy = false;
+        }
+
+        StateHasChanged();
+    }
 
     private void OnPosted() => _ = InvokeAsync(() =>
     {
@@ -157,6 +233,11 @@
 
     private void Ask(AppLifecycleVerb verb)
     {
+        if (InFlight)
+        {
+            return;
+        }
+
         _error = null;
         _asking = verb;
     }
@@ -188,25 +269,7 @@
                 _pending = null;
             }
 
-            if (result.Pending)
-            {
-                _state = result.State;
-                _error = $"The {verb.ToString().ToLowerInvariant()} of {name} is still running after {AppLifecycleFollow.Limit.TotalMinutes:0} minutes. Reload the page later to see its outcome.";
-            }
-            else if (result.State == AppLifecycleState.Failed)
-            {
-                _state = result.State;
-                _error = $"The {verb.ToString().ToLowerInvariant()} of {name} failed. Its status records why.";
-            }
-            else
-            {
-                _state = result.State;
-                Toasts.Show($"{name} is {result.State.ToString().ToLowerInvariant()}.", LtToastTone.Success);
-            }
-
-            Access.Invalidate(installed.Slug);
-            Directory.Invalidate();
-            await OnChanged.InvokeAsync();
+            await ReportAsync(verb.ToString().ToLowerInvariant(), installed, name, result);
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
         {
@@ -222,6 +285,40 @@
             _busy = false;
         }
     }
+
+    /// <summary>Reports the outcome of a change this page started or followed, and has the page reload.</summary>
+    private async Task ReportAsync(string change, AppDescriptor installed, string name, AppLifecycleResult result)
+    {
+        _state = result.State;
+        if (result.Pending)
+        {
+            _error = $"The {change} of {name} is still running after {AppLifecycleFollow.Limit.TotalMinutes:0} minutes. Reload the page later to see its outcome.";
+        }
+        else if (result.State == AppLifecycleState.Failed)
+        {
+            _error = $"The {change} of {name} failed. Its status records why.";
+        }
+        else
+        {
+            Toasts.Show($"{name} is {result.State.ToString().ToLowerInvariant()}.", LtToastTone.Success);
+        }
+
+        Access.Invalidate(installed.Slug);
+        Directory.Invalidate();
+        await OnChanged.InvokeAsync();
+    }
+
+    /// <summary>The change a run in flight is making, from the state before it and its target.</summary>
+    private static string ObservedKey(AppLifecycleState state, AppLifecycleState target) => target switch
+    {
+        AppLifecycleState.Uninstalled => "uninstall",
+        AppLifecycleState.Disabled when state != AppLifecycleState.Disabled => "disable",
+        AppLifecycleState.Enabled when state != AppLifecycleState.Enabled => "enable",
+        _ => "reconcile",
+    };
+
+    private static string ObservedText(AppLifecycleState state, AppLifecycleState target, string name) =>
+        $"{AppsPresentation.PendingLifecycleText(state, target).TrimEnd('.')} {name}. A change started earlier is still being applied; this page updates when it finishes.";
 
     private static string PendingText(AppLifecycleVerb verb, string name) => verb switch
     {

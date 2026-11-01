@@ -139,7 +139,7 @@ public sealed partial class AppReviewPageTests
         {
             Assert.That(toasts.Toasts, Is.Empty, "nothing is reported done while the change runs");
             Assert.That(cut.FindAll("section[aria-labelledby=lt-apps-lifecycle] [role=alert]"), Is.Empty, "a running change is not an error");
-            Assert.That(cut.FindAll("section[aria-labelledby=lt-apps-lifecycle] button").All(button => button.HasAttribute("disabled")), Is.True);
+            Assert.That(cut.FindAll("section[aria-labelledby=lt-apps-lifecycle] button"), Is.Empty, "no other change is offered while one runs");
         });
 
         Control.Settle("task-board", AppLifecycleState.Uninstalled);
@@ -149,7 +149,50 @@ public sealed partial class AppReviewPageTests
         Assert.That(cut.FindAll("[data-lt-app-lifecycle-pending]"), Is.Empty);
     }
 
-    private IRenderedComponent<AppReviewPage> RenderInstalled(AppLifecycleState state, bool adopted = false, string? conflict = null)
+    [Test]
+    public void A_page_loaded_while_an_uninstall_runs_badges_it_offers_no_actions_and_follows_it_to_its_end()
+    {
+        // The uninstall was started elsewhere (another tab, or a reload) and is still running.
+        var toasts = Services.GetRequiredService<LtToastService>();
+
+        var cut = RenderInstalled(AppLifecycleState.Disabled, inFlight: AppLifecycleState.Uninstalled);
+
+        // The status is drawn once the follow has armed its first wait, so the advance below cannot overtake it.
+        cut.WaitUntil(() => Assert.That(cut.Find("[data-lt-app-lifecycle-pending=uninstall]").TextContent,
+            Does.StartWith("Uninstalling Task board. A change started earlier is still being applied")));
+        var section = cut.Find("section[aria-labelledby=lt-apps-lifecycle]");
+        Assert.Multiple(() =>
+        {
+            Assert.That(section.TextContent, Does.Contain("Uninstalling..."), "the state pill shows the change, not the stale state");
+            Assert.That(section.TextContent, Does.Not.Contain("Disabled"));
+            Assert.That(cut.FindAll("section[aria-labelledby=lt-apps-lifecycle] button"), Is.Empty, "no lifecycle action is offered until it settles");
+            Assert.That(cut.FindAll("section[aria-labelledby=lt-apps-lifecycle] [role=alert]"), Is.Empty);
+            Assert.That(Control.Calls, Is.Empty, "following a change starts none");
+        });
+
+        Control.Settle("task-board", AppLifecycleState.Uninstalled);
+        cut.InvokeAsync(() => Time.Advance(AppLifecycleFollow.PollInterval));
+
+        cut.WaitUntil(() => Assert.That(toasts.Toasts.Single().Message, Is.EqualTo("Task board is uninstalled.")));
+        Assert.That(cut.FindAll("[data-lt-app-lifecycle-pending]"), Is.Empty);
+    }
+
+    [Test]
+    public void A_page_loaded_while_a_run_ends_failed_reports_the_failure_and_offers_the_actions_again()
+    {
+        var cut = RenderInstalled(AppLifecycleState.Disabled, inFlight: AppLifecycleState.Enabled);
+        cut.WaitUntil(() => Assert.That(cut.FindAll("[data-lt-app-lifecycle-pending=enable]"), Has.Count.EqualTo(1)));
+
+        Control.Settle("task-board", AppLifecycleState.Failed);
+        cut.InvokeAsync(() => Time.Advance(AppLifecycleFollow.PollInterval));
+
+        cut.WaitUntil(() => Assert.That(cut.Find("section[aria-labelledby=lt-apps-lifecycle] [role=alert]").TextContent,
+            Is.EqualTo("The enable of Task board failed. Its status records why.")));
+        Assert.That(cut.FindAll("[data-lt-app-lifecycle-pending]"), Is.Empty);
+        Assert.That(Button(cut, "Enable"), Is.Not.Null, "a failed install can be enabled again");
+    }
+
+    private IRenderedComponent<AppReviewPage> RenderInstalled(AppLifecycleState state, bool adopted = false, string? conflict = null, AppLifecycleState? inFlight = null)
     {
         var app = AppsTestData.TaskBoard(adopted: adopted);
         if (conflict is not null)
@@ -165,6 +208,10 @@ public sealed partial class AppReviewPageTests
             Ceiling = AppConsentDraft.Requested(app).ToCeiling(),
             BridgeGrants = app.Ui!.Bridge,
         });
+        if (inFlight is { } target)
+        {
+            Control.InFlight(app.Slug, target);
+        }
 
         var cut = RenderReady(Review);
         cut.WaitUntil(() => Assert.That(cut.FindAll("section[aria-labelledby=lt-apps-lifecycle]"), Has.Count.EqualTo(1)));

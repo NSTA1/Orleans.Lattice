@@ -42,6 +42,25 @@ internal sealed class FakeAppsControl : ILatticeAppsControl, ILatticeAppRoleBind
     /// <summary>Lifecycle verbs the cluster accepts but has not finished: they return a pending result and change nothing.</summary>
     public HashSet<string> Pending { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>Marks a lifecycle run started elsewhere as in flight towards <paramref name="target"/>.</summary>
+    /// <param name="slug">The app.</param>
+    /// <param name="target">The state the run is moving it to.</param>
+    public void InFlight(string slug, AppLifecycleState target)
+    {
+        if (Installed.TryGetValue(slug, out var installed))
+        {
+            Installed[slug] = installed with { PendingState = target };
+        }
+
+        for (var i = 0; i < Listed.Count; i++)
+        {
+            if (Listed[i].Slug == slug)
+            {
+                Listed[i] = Listed[i] with { PendingState = target };
+            }
+        }
+    }
+
     /// <summary>Moves an installed app to <paramref name="state"/>, as a pending change finishing would.</summary>
     /// <param name="slug">The app.</param>
     /// <param name="state">The state it reaches.</param>
