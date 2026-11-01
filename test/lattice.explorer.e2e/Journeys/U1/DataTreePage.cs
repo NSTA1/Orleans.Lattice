@@ -115,7 +115,11 @@ internal sealed class DataTreePage(PersonaSession session)
         Coverage.Hit("query:shell.prefix");
     }
 
-    /// <summary>Chooses a page size and waits for the first page at that size.</summary>
+    /// <summary>
+    /// Chooses a page size and waits for the first page at that size. The scope must hold at
+    /// least <paramref name="size"/> keys: the page is already "Page 1" before the reload, so
+    /// only the row count tells the new page from the old one.
+    /// </summary>
     /// <param name="size">The page size.</param>
     public async Task SetPageSizeAsync(int size)
     {
@@ -123,7 +127,7 @@ internal sealed class DataTreePage(PersonaSession session)
         await PageSize.SelectOptionAsync(text);
         await Expect(PageSize).ToHaveValueAsync(text);
         await Expect(PagePosition).ToHaveTextAsync("Page 1");
-        await WaitForKeysAsync();
+        await Expect(KeyLinks).ToHaveCountAsync(size, new() { Timeout = 30_000 });
     }
 
     /// <summary>Chooses the scan mode (<c>Live</c> or <c>Snapshot</c>) and waits for the first page.</summary>
