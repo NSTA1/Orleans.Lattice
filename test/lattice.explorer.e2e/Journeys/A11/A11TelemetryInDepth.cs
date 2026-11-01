@@ -247,7 +247,9 @@ public sealed class A11TelemetryInDepth : JourneyChapter
         {
             _pinnedTable = await _telemetry.ReadValuesTableAsync(WriteChart);
             Assert.That(_pinnedTable.Columns.FirstOrDefault(), Is.EqualTo("Time (UTC)"));
-            Assert.That(_pinnedTable.Rows, Has.Length.GreaterThan(2), "the pinned hour has a row per minute");
+            // A fresh isolated estate has only minutes of history inside the pinned hour: a row
+            // per minute with samples, so at least two.
+            Assert.That(_pinnedTable.Rows, Has.Length.GreaterThanOrEqualTo(2), "the pinned hour has a row per scraped minute");
             Assert.Multiple(() =>
             {
                 foreach (var entry in _pinnedLegend)
@@ -275,21 +277,23 @@ public sealed class A11TelemetryInDepth : JourneyChapter
         await Expect(readout).ToHaveTextAsync(TelemetryBoardPage.ReadoutHint);
         await ShotAsync("focused", "Tab reaches the Write operations chart; its readout says how to read it");
 
+        // The rows the keys reach, clamped to the window as the chart clamps its selection.
         var last = (_pinnedTable?.Rows.Length ?? 0) - 1;
+        int At(int row) => Math.Clamp(row, 0, Math.Max(0, last));
         await _olivia.Page.Keyboard.PressAsync("End");
         await ExpectReadoutAsync(last);
         await ShotAsync("last-point", "End: the readout announces every drawn series at the last minute, as the table read it");
 
         await _olivia.Page.Keyboard.PressAsync("ArrowLeft");
-        await ExpectReadoutAsync(last - 1);
+        await ExpectReadoutAsync(At(last - 1));
         await _olivia.Page.Keyboard.PressAsync("ArrowLeft");
-        await ExpectReadoutAsync(last - 2);
+        await ExpectReadoutAsync(At(last - 2));
         await ShotAsync("stepped-back", "Left arrow twice: the readout steps back a minute at a time");
 
         await _olivia.Page.Keyboard.PressAsync("Home");
         await ExpectReadoutAsync(0);
         await _olivia.Page.Keyboard.PressAsync("ArrowRight");
-        await ExpectReadoutAsync(1);
+        await ExpectReadoutAsync(At(1));
         await ShotAsync("first-points", "Home, then right arrow: the readout announces the first minutes of the window");
 
         await _olivia.Page.Keyboard.PressAsync("Escape");
