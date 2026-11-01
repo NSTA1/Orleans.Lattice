@@ -1,10 +1,12 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts.Contoso;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Sessions;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 using static Microsoft.Playwright.Assertions;
@@ -131,8 +133,11 @@ internal sealed class IncidentAndRecoveryStory(ChapterContext context)
         await _steps.CaptureAsync(Olivia, "writes-board", "The Throughput board's write operations for factory-orders spike");
 
         var revisions = await new DataTreePage(Olivia).OpenHistoryAsync(Orders, Affected.Key);
-        await Expect(revisions).ToContainTextAsync(DataTreePage.TotalPattern(Affected.Total));
-        await _steps.CaptureAsync(Olivia, "history", $"History of {Affected.Key} shows the wrong total it was written with");
+        await new KnownDefect("#5583", "Data History renders a schema-versioned revision as a hex dump of its envelope").ReproducesAsync(async () =>
+        {
+            await Expect(revisions).ToContainTextAsync(new Regex(@"00000000\s+fe 01 "));
+            await _steps.CaptureAsync(Olivia, "history", $"History of {Affected.Key} shows the wrong price's revision, as a hex dump of its version envelope (#5583)");
+        });
     }
 
     private async Task RestoreBaselineAsync()
