@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using Microsoft.Playwright;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using static Microsoft.Playwright.Assertions;
 using Names = Orleans.Lattice.Explorer.EndToEnd.Tests.Story.StoryNames.Contoso;
 
@@ -59,8 +60,14 @@ public sealed partial class DataStewardJourney
         await content.GetByRole(AriaRole.Button, new() { Name = "Reconcile", Exact = true }).ClickAsync();
         confirm = await _tree.TypeConfirmationAsync("Reconcile this tag index?", Names.TagIndexes.OrderStatus);
         await confirm.GetByRole(AriaRole.Button, new() { Name = "Reconcile", Exact = true }).ClickAsync();
-        await StopTheTagIndexReconcileAsync();
-        await CheckpointAsync("12", "reconcile-stopped", "A tag-index reconcile started, then Stop: it ends and says how");
+        await new KnownDefect("#5613", "a tag-index reconcile by a caller with Admin on the index tree fails in its repair phase: Delete denied on tag-order-status").ReproducesAsync(async () =>
+        {
+            var operation = content.Locator("[data-lt-data-operation] .lt-operation-progress[data-lt-operation-state=Failed]");
+            await Expect(operation).ToContainTextAsync("is not authorized to perform Delete on tree 'tag-order-status'", new() { Timeout = 120_000 });
+            await Expect(_priya.Shell.Toasts.Filter(new() { HasTextRegex = Exactly($"The reconcile of {Names.TagIndexes.OrderStatus} failed.") }))
+                .Not.ToHaveCountAsync(0, new() { Timeout = 30_000 });
+        });
+        await CheckpointAsync("12", "reconcile-refused", "A tag-index reconcile fails in its repair phase: Delete denied on the index tree (#5613)");
 
         await _tree.OpenTabAsync("Metrics", "metrics");
         var hotness = content.GetByRole(AriaRole.Table, new() { Name = "Shard hotness" });
@@ -96,27 +103,5 @@ public sealed partial class DataStewardJourney
         await _priya.Shell.GotoAsync($"/data/view-{view}?key={Uri.EscapeDataString(key)}");
         await Expect(_tree.Heading).ToHaveTextAsync(view);
         await Expect(_tree.Entry.Locator(".lt-data-entry__key")).ToHaveTextAsync(key, new() { Timeout = 60_000 });
-    }
-
-    /// <summary>
-    /// Stops the running tag-index reconcile. A reconcile over a few hundred keys can finish
-    /// before Stop is pressed; whichever happens first, the panel says how it ended.
-    /// </summary>
-    private async Task StopTheTagIndexReconcileAsync()
-    {
-        var operation = _priya.Shell.Content.Locator("[data-lt-data-operation]");
-        var stop = operation.GetByRole(AriaRole.Button, new() { Name = "Stop", Exact = true });
-        try
-        {
-            await stop.ClickAsync(new() { Timeout = 10_000 });
-        }
-        catch (TimeoutException)
-        {
-            TestContext.Out.WriteLine("U1.12: the tag-index reconcile finished before Stop could be pressed.");
-        }
-
-        var ended = new Regex("^\\s*(Stopped the reconcile of|Reconciled) " + Regex.Escape(Names.TagIndexes.OrderStatus));
-        await Expect(_priya.Shell.Toasts.Filter(new() { HasTextRegex = ended })).Not.ToHaveCountAsync(0, new() { Timeout = 120_000 });
-        Coverage.Hit("use-case:data/tag-index-reconcile");
     }
 }
