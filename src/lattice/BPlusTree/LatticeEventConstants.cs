@@ -588,6 +588,16 @@ public static class LatticeEventConstants
     internal const string BootstrapShadowPhysicalTreeRequestContextKey = "ol.bstr.p";
 
     /// <summary>
+    /// Request-context key marking an apply as part of a receiver bootstrap
+    /// drain. Set by the replication package's bootstrap coordinator for the
+    /// lifetime of a drain. The core reads it only to judge a drained
+    /// last-writer-wins row at the write interceptor (issue #5551), which a
+    /// steady-state plain replicated write is not, so the mark can only add
+    /// enforcement, never remove it.
+    /// </summary>
+    internal const string BootstrapApplyRequestContextKey = "ol.bootapp";
+
+    /// <summary>
     /// Orleans <c>RequestContext</c> key that carries the caller's active
     /// <see cref="TenantId"/> from the client edge down to the silo so a
     /// tenant-aware choke point can scope the operation to the tenant's
