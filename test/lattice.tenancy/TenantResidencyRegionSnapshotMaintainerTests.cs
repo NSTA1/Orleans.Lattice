@@ -145,11 +145,31 @@ public sealed class TenantResidencyRegionSnapshotMaintainerTests
     }
 
     [Test]
-    public void LocalRegionId_falls_back_to_default_when_cluster_id_is_empty()
+    public void An_unresolved_local_region_fails_closed_without_a_default_region()
     {
-        var maintainer = Maintainer(Substitute.For<ITenantRegistry>(), regionId: "");
+        var replication = Substitute.For<ILatticeReplicationContext>();
+        replication.IsReplicationEnabled.Returns(true);
+        replication.LocalReplicaId.Returns(string.Empty);
+        var registry = Substitute.For<ITenantRegistry>();
+        registry.ListAsync(Arg.Any<CancellationToken>()).Returns(_ => Stream(new[]
+        {
+            Configured(TenantId.Parse("acme"), "default", TenantRegionStatus.Online),
+        }));
+        var maintainer = new TenantResidencySnapshotMaintainer(
+            registry,
+            new TenantLocalRegion(
+                Microsoft.Extensions.Options.Options.Create(new Orleans.Configuration.ClusterOptions { ClusterId = "estate-west" }),
+                replication),
+            Array.Empty<ITenantRegionStatusChangeListener>(),
+            TimeProvider.System,
+            NullLogger<TenantResidencySnapshotMaintainer>.Instance);
 
-        Assert.That(maintainer.LocalRegionId, Is.EqualTo("default"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => maintainer.LocalRegionId, Throws.InvalidOperationException);
+            Assert.That(async () => await maintainer.RebuildNowAsync(), Throws.InvalidOperationException);
+        });
+        Assert.That(maintainer.CurrentEpoch, Is.Zero, "a rebuild that cannot resolve the region publishes nothing");
     }
 
     [Test]
