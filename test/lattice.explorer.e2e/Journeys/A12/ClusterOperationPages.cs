@@ -22,11 +22,16 @@ internal sealed class ClusterOperationPages(ShellPage shell)
     /// <summary>Waits for the reshard page of <paramref name="tree"/> to show it idle at <paramref name="shards"/> physical shards.</summary>
     /// <param name="tree">The tree.</param>
     /// <param name="shards">Its physical shard count.</param>
+    /// <remarks>
+    /// The idle sentence is awaited first: a shrink reaches its target shard count before it
+    /// completes (it still releases the retired shards' storage), and the staging form only
+    /// renders once no reshard is in progress.
+    /// </remarks>
     public async Task ExpectReshardIdleAsync(string tree, int shards)
     {
-        await Expect(shell.Content.GetByLabel("Target physical shards")).ToBeVisibleAsync();
-        await Expect(ClusterParts.Term(shell, "Physical shards")).ToHaveTextAsync(Count(shards), ClusterParts.Patiently);
         await Expect(Stage).ToContainTextAsync("No reshard is running.", ClusterParts.PatientlyContaining);
+        await Expect(ClusterParts.Term(shell, "Physical shards")).ToHaveTextAsync(Count(shards), ClusterParts.Patiently);
+        await Expect(shell.Content.GetByLabel("Target physical shards")).ToBeVisibleAsync();
         await Expect(shell.Content).ToContainTextAsync(tree);
         Coverage.Hit("subroute:cluster/trees/{tree}/reshard");
     }
@@ -70,7 +75,7 @@ internal sealed class ClusterOperationPages(ShellPage shell)
     public async Task OpenSnapshotAsync(string tree)
     {
         await shell.GotoAsync($"/cluster/trees/{tree}/snapshot");
-        await Expect(Stage).ToContainTextAsync("No snapshot is running.");
+        await Expect(Stage).ToContainTextAsync("No snapshot is running.", ClusterParts.PatientlyContaining);
         await Expect(shell.Content.GetByLabel("Destination tree")).ToBeVisibleAsync();
         Coverage.Hit("subroute:cluster/trees/{tree}/snapshot");
     }
