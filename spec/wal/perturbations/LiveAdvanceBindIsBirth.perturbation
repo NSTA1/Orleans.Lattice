@@ -1,0 +1,13 @@
+# Issue #5593 (B1): the #5572 rule. An adopted row, a #1744 re-bind and a recovery
+# all bind a leaf another activation created.
+MODULE: WalDurability
+ROW: LiveAdvance(l)
+FILE: src/lattice/BPlusTree/Grains/BPlusLeafGrain.LiveCheckpoint.cs
+DETECTORS: BPlusLeafGrainTests.A_re_bind_of_an_unbound_leaf_is_not_born, BPlusLeafGrainTests.Recovering_the_binding_of_an_unbound_row_is_not_born, BPlusLeafGrainTests.An_activation_admitted_by_adopting_a_recorded_row_is_not_born, BPlusLeafGrainTests.An_activation_that_adopts_a_concurrently_created_row_is_not_born
+SUMMARY: every first binding of the tree id is decided as a birth, the rule before #5593
+
+--- FIND
+_liveAdvanceBorn = _liveAdvanceCleanCreate && _liveAdvanceCreatedRow;
+--- REPLACE
+_liveAdvanceBorn = true;
+--- END

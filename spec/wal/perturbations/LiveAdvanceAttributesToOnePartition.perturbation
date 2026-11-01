@@ -1,0 +1,13 @@
+# Issue #5593 (review S2): an offset attributed to the wrong partition stamps that
+# partition past entries it does not hold.
+MODULE: WalDurability
+ROW: LiveAdvance(l)
+FILE: src/lattice/BPlusTree/Grains/BPlusLeafGrain.LiveCheckpoint.cs
+DETECTORS: BPlusLeafGrainTests.Each_partition_advances_to_its_own_highest_offset
+SUMMARY: every own offset is attributed to partition 0
+
+--- FIND
+        var partition = OverrideHoldPartitionOf(entry, partitionCount);
+--- REPLACE
+        var partition = 0;
+--- END

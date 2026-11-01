@@ -1,0 +1,13 @@
+# Issue #5572: the advance must reach the highest own applied offset, or the leaf's
+# pin never covers its newest write without a replay.
+MODULE: WalDurability
+ROW: LiveAdvance(l)
+FILE: src/lattice/BPlusTree/Grains/BPlusLeafGrain.LiveCheckpoint.cs
+DETECTORS: BPlusLeafGrainTests.A_live_written_newborn_leaf_advances_its_checkpoint_without_a_replay
+SUMMARY: the live advance stamps one below the highest own offset
+
+--- FIND
+            await StampCheckpointHintAsync(p, target);
+--- REPLACE
+            await StampCheckpointHintAsync(p, target - 1);
+--- END

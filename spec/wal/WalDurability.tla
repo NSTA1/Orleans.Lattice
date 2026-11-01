@@ -55,6 +55,12 @@ MaxFaults == 1
 \* base; the SnapshotLoss variant configuration sets it.
 SnapshotLoss == FALSE
 
+\* Whether every leaf's first activation created it (issue #5593). The base
+\* checks a born world; WalDurability.WarmLeaf.cfg sets it FALSE, so populated
+\* leaves there rely on the timer-scheduled replay, and the #3314 mutant restores
+\* that world through its BOUNDS.
+BornAtInit == TRUE
+
 \* The "no snapshot" sentinel for snapshot coverage; -1 is a real coverage
 \* claim ("a snapshot exists and covers no offset").
 NoSnap == -2
@@ -131,10 +137,12 @@ Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 (*            been allocated - abandoned, or lost to a shard crash - so the *)
 (*            tracker's count never returns to zero and the live advance  *)
 (*            is off for the rest of the activation.                       *)
-(*  born[l]   this activation bound the leaf's tree id for the first time *)
-(*            through a create path, which names a leaf that does not      *)
-(*            exist yet (issue #4654). A re-creation after a purge cleared  *)
-(*            the leaf (issue #4700) is not a birth.                       *)
+(*  born[l]   this activation created the leaf (issue #5593): a create    *)
+(*            intent named it, nothing showed an earlier row, and its own   *)
+(*            write created the first row. Only a leaf's first activation  *)
+(*            can be born; every later binding - an adopted row (#1557), a *)
+(*            re-bind (#1744), a recovery, a re-creation after a purge     *)
+(*            (#4700) - is Activate, which never sets it.                  *)
 (***************************************************************************)
 VARIABLES next, inflight, durable, tail, acked, orphans,
           up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale, replayRequested,
@@ -268,8 +276,9 @@ Init ==
     /\ faults = 0
     /\ own = [l \in Leaves |-> {}]
     /\ poison = [l \in Leaves |-> FALSE]
-    \* Every modelled leaf is born active: this activation bound its tree id.
-    /\ born = [l \in Leaves |-> TRUE]
+    \* Every modelled leaf is active in its first activation, born unless the
+    \* configuration models a world where that activation did not create it.
+    /\ born = [l \in Leaves |-> BornAtInit]
 
 (***************************************************************************)
 (* Append: the allocator hands the next offset to a new write              *)
@@ -435,19 +444,26 @@ ReadStep(l) ==
 (***************************************************************************)
 (* LiveAdvance(l): an active leaf advances its read position over the      *)
 (* appends it issued itself in this activation, without reading the       *)
-(* stream (issue #5572). A live write carries the offset its append        *)
+(* stream (issues #5572, #5593). A live write carries the offset its append *)
 (* returned, so a leaf that has applied every append it issued knows it    *)
 (* holds every entry it owns up to the highest of them - provided no entry *)
-(* it owns there came from anywhere else. Two production conditions        *)
-(* establish that. Either this activation bound the leaf's tree id         *)
-(* (born): a create path named it before it existed, so nothing it must   *)
-(* apply predates it. Or its read position is                              *)
-(* already within one of the lowest offset it issued: an append is         *)
-(* allocated in offset order, so every entry it owns from before this      *)
-(* activation lies below that offset and has been read. The advance runs   *)
-(* only when every own append has been applied (the tracker's count is    *)
-(* zero), none failed (poison), and no replay is in flight; it never       *)
-(* reads, so it is shown nothing and needs no watermark.                   *)
+(* it owns there came from anywhere else. For entries from before the      *)
+(* activation's first own append, two production conditions establish     *)
+(* that. Either this activation created the leaf (born), so nothing it     *)
+(* must apply predates it. Or its read position is already within one of  *)
+(* the lowest offset it issued: an append is allocated in offset order, so *)
+(* every entry it owns from before this activation lies below that offset *)
+(* and has been read. Production tests the second against its current     *)
+(* checkpoint, which may be a persisted one above rp; it is safe there     *)
+(* because the advance also waits for the activation replay to converge,   *)
+(* which the model's ~replayRequested does not capture, so the model tests *)
+(* rp. For entries between its own, the model has one author: Owner gives  *)
+(* every offset to l1, which appends its own. The refinement note's gap    *)
+(* register states the foreign authors and duplicate activations this     *)
+(* leaves out. The advance runs only when every own append has been        *)
+(* applied (the tracker's count is zero), none failed (poison), and no     *)
+(* replay is in flight; it never reads, so it is shown nothing and needs   *)
+(* no watermark.                                                           *)
 (***************************************************************************)
 OwnUnapplied(l) == own[l] \cap (inflight \cup orphans)
 
@@ -710,6 +726,8 @@ Activate(l) ==
     /\ UNCHANGED faults
     /\ own' = [own EXCEPT ![l] = {}]
     /\ poison' = [poison EXCEPT ![l] = FALSE]
+    \* A reactivation never creates the leaf: an adopted row, a re-bind and a
+    \* recovery all bind a leaf another activation created (issue #5593).
     /\ UNCHANGED born
 
 (***************************************************************************)
@@ -991,6 +1009,12 @@ Next ==
 \* advance must make it usable. A leaf that is not born, that holds nothing (the
 \* GC drives an empty floor holder), or whose own append failed (the tracker is
 \* off, so the timer's drive is the remedy) keeps the replay it has always had.
+\* This is a premise split, not a uniform admission assumption: under uniform
+\* replay fairness the design before #5572 satisfies NewbornPinEventuallyUsable
+\* through replay. The defect is latency - one replay per leaf over the WAL,
+\* starving a bounded permit share - which issue #2321 records is not
+\* expressible as liveness; withholding admission from exactly the leaves
+\* production no longer drives is how this module expresses it.
 ReplayDriven(l) == ~born[l] \/ poison[l] \/ cache[l] = {}
 
 Spec ==

@@ -244,11 +244,13 @@ them; the other two (#5416, #5459) are pinned by tests:
 The Explorer journey estate found one more, outside the model's reach until it was
 extended: the model's liveness assumed every leaf's replay is eventually scheduled,
 while production schedules a live-written leaf's replay only on a timer or a GC
-touch against a bounded permit share.
+touch against a bounded permit share. Its independent review found two more in
+the fix.
 
 | Issue | Defect |
 |-------|--------|
-| #5570, #5572 | A live write never advanced the leaf's checkpoint, so a live-written leaf held its tree's WAL floor until a replay of every partition from `-1`, and on a freshly written estate those replays starved each other. Fixed: the leaf advances its checkpoint over its own applied appends without reading the WAL, and `WalDurability.tla` checks that a born, live-written leaf's pin becomes usable with no scheduled replay. |
+| #5570, #5572 | A live write never advanced the leaf's checkpoint, so a live-written leaf held its tree's WAL floor until a replay of every partition from `-1`, and on a freshly written estate those replays starved each other. Fixed: the leaf advances its checkpoint over its own applied appends without reading the WAL when this activation created it, or once its checkpoint has reached its first own append, and `WalDurability.tla` checks that a born, live-written leaf's pin becomes usable with no scheduled replay. The advance holds while a saga prepare is pending, after an own append fails, and on a stale partition; such a leaf still waits for a replay. |
+| #5593 | The fix decided a leaf was born on any first binding of its tree id, including an activation that adopted a duplicate's row in the first-create race, a #1744 re-bind and a recovery, so its live advance could pass the other activation's acknowledged writes unread. And it never reached a bulk-loaded, append-grafted, snapshot or restored leaf, which still waited for a replay from `-1`. Fixed: birth is decided at admission (a create intent naming the leaf, no earlier row, and this activation's own write created the first row), and bulk-load and graft leaves are born by the same rule. `ReadPositionHonestRebindIsBirth` reproduces the first half. |
 
 **What is covered:** one WAL partition shared by two leaves, with two faults per
 behaviour for safety and one for liveness, and a variant with snapshot and row loss
@@ -273,7 +275,10 @@ stamps and a retention TTL (`WalPartitionReleaseModel`).
   model checks no liveness for re-creation (the refinement note bounds the wait);
 - how soon a live leaf's pin leaves the block value: `WalDurability` shows that a
   newborn leaf's eventually does (`NewbornPinEventuallyUsable`), not within a time
-  bound, and the pin-retirement model lets a checkpoint cover live writes at any time.
+  bound, and the pin-retirement model lets a checkpoint cover live writes at any time;
+- records another writer appends for a key a leaf owns, and duplicate activations of
+  a leaf: each leaf appends only its own entries in the model, so what the live
+  advance passes unread there is the refinement note's gap register's to state.
 
 Coverage of the leaf lifecycle does not imply coverage of any of those. Each module's
 refinement note lists its gaps in full.

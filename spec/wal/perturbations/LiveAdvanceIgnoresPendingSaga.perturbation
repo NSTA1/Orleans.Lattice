@@ -1,0 +1,14 @@
+# Issue #5572: a terminal is appended to the partition its shard index names, so a
+# per-partition clamp alone lets another partition advance past it.
+MODULE: WalDurability
+ROW: LiveAdvance(l)
+FILE: src/lattice/BPlusTree/LeafLiveAdvanceCore.cs
+DETECTORS: BPlusLeafGrainTests.A_pending_saga_prepare_holds_the_live_advance, BPlusLeafGrainTests.A_prepare_pending_on_one_partition_holds_every_partition
+SUMMARY: the live advance runs while a saga prepare is pending, leaving only the projection seam's per-partition clamp
+
+--- FIND
+            && !replayInFlight
+            && !sagaPending;
+--- REPLACE
+            && !replayInFlight;
+--- END

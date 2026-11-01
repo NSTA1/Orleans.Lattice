@@ -1,0 +1,13 @@
+# Issue #5572: entries below the activation's first own append may be the leaf's own
+# from an earlier activation; passing them unread loses them.
+MODULE: WalDurability
+ROW: LiveAdvance(l)
+FILE: src/lattice/BPlusTree/LeafLiveAdvanceCore.cs
+DETECTORS: BPlusLeafGrainTests.A_reactivated_leaf_does_not_live_advance_past_entries_it_has_not_read, LeafLiveAdvanceCoreTests.An_unborn_leaf_is_armed_only_once_its_checkpoint_reaches_its_first_own_offset
+SUMMARY: an unborn leaf advances before its checkpoint reaches its first own append
+
+--- FIND
+        return born || current >= ownLow - 1 ? ownHigh : -1L;
+--- REPLACE
+        return born || current >= -1 ? ownHigh : -1L;
+--- END

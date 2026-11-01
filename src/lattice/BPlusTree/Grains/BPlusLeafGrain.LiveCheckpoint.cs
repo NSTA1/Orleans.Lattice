@@ -29,21 +29,33 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// allocation and no grain call.
 /// </para>
 /// <para>
-/// <b>When an advance is safe.</b> Advancing partition <c>p</c> to the highest
-/// own offset <c>H</c> claims the leaf has applied every entry it owns at or
-/// below <c>H</c>. Every own append of this activation is applied once the count
-/// is zero. An entry the leaf owns from anywhere else must already be behind the
-/// checkpoint, and two conditions establish that. Either this activation bound
-/// the leaf's tree id through a create path, which names a leaf that does not
-/// exist yet (issue #4654), so nothing it must apply predates it - a leaf
-/// re-created from a purge's clear is excluded, since its purged entries may
-/// still be readable. Or the checkpoint is already within one of the lowest own
-/// offset: offsets are allocated in order, so an entry the leaf owns from before
-/// this activation lies below that offset, and the replay has read it. A saga
+/// <b>When an advance is safe.</b> The decision is <see cref="LeafLiveAdvanceCore"/>.
+/// Advancing partition <c>p</c> to the highest own offset <c>H</c> claims the
+/// leaf has applied every entry it must apply at or below <c>H</c>. Every own
+/// append of this activation is applied once the count is zero. Any other entry
+/// the leaf must apply has to be behind the checkpoint already, and two
+/// conditions establish that for entries from before this activation's first own
+/// append. Either this activation created the leaf (born, decided at admission:
+/// <see cref="DecideLiveAdvanceBirth"/>), so nothing it must apply predates it.
+/// Or the checkpoint is already within one of the lowest own offset: offsets are
+/// allocated in order, so an entry from before that offset has been read. A saga
 /// terminal is appended to the partition its shard index names, not the
 /// prepare's, so the advance holds on every partition while any prepare is
-/// pending. It also holds while another replay or a warm rescue is in flight,
-/// so it never moves a checkpoint under a replay that is still advancing it.
+/// pending. It also holds while another replay or a warm rescue is in flight, so
+/// it never moves a checkpoint under a replay that is still advancing it.
+/// </para>
+/// <para>
+/// <b>What it assumes.</b> Replay ownership is by key range and shard map, not by
+/// author, so a record another writer appends between this leaf's own appends,
+/// for a key this leaf owns, is passed over unread. No acknowledged write takes
+/// that path on one activation: a split's relocation and shadow-forward, a fold's
+/// move and a sibling's range delete each finish on this leaf before they are
+/// acknowledged, and terminals are held by the prepare clamp. What can take it is
+/// a record whose author appended it and then failed before finishing that hand-off
+/// (never acknowledged), a duplicate activation of this leaf, and a point write
+/// interleaved with a bulk load or append into the range a bulk leaf takes over.
+/// <c>spec/wal/Refinement.md</c>'s gap "Foreign-authored owned entries and
+/// duplicate activations" states each.
 /// </para>
 /// <para>
 /// The advance only records a pending checkpoint through the projection seam.
@@ -62,8 +74,39 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>Set when the tracker can no longer vouch for every own append; per activation.</summary>
     private bool _liveAdvancePoisoned;
 
-    /// <summary>Whether this activation bound the leaf's tree id through a create path.</summary>
+    /// <summary>
+    /// Whether this activation created the leaf (issue #5593): see
+    /// <see cref="DecideLiveAdvanceBirth"/>.
+    /// </summary>
     private bool _liveAdvanceBorn;
+
+    /// <summary>
+    /// Set when this activation's create intent was admitted with no evidence the
+    /// leaf ever had a row: no row record, no snapshot and no purge mark.
+    /// </summary>
+    private bool _liveAdvanceCleanCreate;
+
+    /// <summary>
+    /// Set when one of this activation's writes created the leaf's first row
+    /// rather than adopting a row another activation committed.
+    /// </summary>
+    private bool _liveAdvanceCreatedRow;
+
+    /// <summary>
+    /// Decides, as the leaf's tree id is bound, whether this activation is the
+    /// leaf's birth (issue #5593). It is only when this activation created the
+    /// leaf: a create intent naming it was admitted with no row record, snapshot
+    /// or purge mark to show an earlier row (<see cref="AdmitCreateIntentAsync"/>),
+    /// and its own write then created the first row instead of adopting one a
+    /// duplicate activation committed in the first-create race (#1557, #1566).
+    /// Every other binding is not a birth: an adopted row, the #1744 re-bind of
+    /// an existing unbound leaf (no create intent at all), a purge re-creation
+    /// (whose purged entries may still be readable), and a split sibling (whose
+    /// range was its donor's). A leaf that is not born may still advance once
+    /// armed by its replay.
+    /// </summary>
+    private void DecideLiveAdvanceBirth() =>
+        _liveAdvanceBorn = _liveAdvanceCleanCreate && _liveAdvanceCreatedRow;
 
     /// <summary>The partition count the tracker's arrays were sized for.</summary>
     private int _liveAppendPartitionCount;
@@ -178,8 +221,9 @@ internal sealed partial class BPlusLeafGrain
 
     private void RecordLiveAppendOffset(WalRecord entry, long offset)
     {
-        // The options were resolved before any append; an unresolved or changed
-        // partition count means the offsets cannot be attributed, so stop.
+        // The options were resolved before any append, so the count is known here.
+        // They are cached for the activation, so it cannot change under the
+        // tracker; an unresolved count means the offsets cannot be attributed.
         var partitionCount = _options is { } options ? Math.Max(1, options.WalPartitions) : 0;
         if (partitionCount == 0
             || offset < 0
@@ -220,21 +264,20 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="_starvationDriveInFlight"/> and has not started its replay.
     /// </param>
     private bool IsLiveAdvanceQuiescent(bool withinDrive) =>
-        !_liveAdvancePoisoned
-        && _liveAppendsUnapplied == 0
-        && _liveOwnHigh is not null
+        _liveOwnHigh is not null
         && state.State.TreeId is { Length: > 0 }
-        // The barrier a data operation would wait on is clear: the replay has
-        // completed, or none was ever armed - in a silo the activation hook
-        // always arms one, so the second case is a directly constructed grain.
-        // AwaitReplayBarrierAsync applies the same rule; a retired barrier is not
-        // treated as clear here.
-        && (_replayBarrierSatisfied || !_replayBarrierArmed)
-        && !_replayBarrierRetired
-        && (withinDrive || !_starvationDriveInFlight)
-        && !_warmRescueInFlight
-        && (_pendingTx is null || _pendingTx.Count == 0)
-        && (_pendingTxDeltas is null || _pendingTxDeltas.Count == 0);
+        && LeafLiveAdvanceCore.IsQuiescent(
+            poisoned: _liveAdvancePoisoned,
+            unappliedAppends: _liveAppendsUnapplied,
+            // The barrier a data operation would wait on is clear: the replay has
+            // completed, or none was ever armed - in a silo the activation hook
+            // always arms one, so the second case is a directly constructed grain.
+            // AwaitReplayBarrierAsync applies the same rule; a retired barrier is
+            // not treated as clear here.
+            replayBarrierClear: (_replayBarrierSatisfied || !_replayBarrierArmed) && !_replayBarrierRetired,
+            replayInFlight: (!withinDrive && _starvationDriveInFlight) || _warmRescueInFlight,
+            sagaPending: (_pendingTx is not null && _pendingTx.Count != 0)
+                || (_pendingTxDeltas is not null && _pendingTxDeltas.Count != 0));
 
     /// <summary>
     /// Advances each partition's checkpoint to the highest offset this activation's
@@ -256,15 +299,13 @@ internal sealed partial class BPlusLeafGrain
                 return advanced;
             }
 
-            var target = _liveOwnHigh[p];
-            if (target < 0 || IsPartitionStaleLatched(p))
-            {
-                continue;
-            }
-
-            var current = GetCurrentCheckpointForPartition(p);
-            if (target <= current
-                || (!_liveAdvanceBorn && current < _liveOwnLow![p] - 1))
+            var target = LeafLiveAdvanceCore.TargetFor(
+                born: _liveAdvanceBorn,
+                ownLow: _liveOwnLow![p],
+                ownHigh: _liveOwnHigh[p],
+                current: GetCurrentCheckpointForPartition(p),
+                staleLatched: IsPartitionStaleLatched(p));
+            if (target < 0)
             {
                 continue;
             }

@@ -1,0 +1,16 @@
+# Issue #5593 (S6): the #5572 fix did not reach bulk-loaded, grafted, snapshot or
+# restored leaves, which still waited for a replay from -1.
+MODULE: WalDurability
+ROW: LiveAdvance(l)
+FILE: src/lattice/BPlusTree/Grains/BPlusLeafGrain.cs
+DETECTORS: BPlusLeafGrainTests.A_bulk_loaded_leaf_is_born_and_a_split_sibling_is_not, BPlusLeafGrainTests.A_bulk_loaded_leaf_advances_past_other_leaves_offsets_without_a_replay
+SUMMARY: a bulk-load or append-graft leaf is never decided as born
+
+--- FIND
+                    if (treeIdBinding && init.BulkBirth)
+                    {
+                        DecideLiveAdvanceBirth();
+                    }
+--- REPLACE
+                    _ = treeIdBinding;
+--- END

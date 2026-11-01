@@ -293,6 +293,8 @@ internal sealed partial class ShardRootGrain
                     HighKeyExclusive = null,
                     PrevSibling = slot > 0 ? leafIds[slot - 1] : null,
                     NextSibling = slot + 1 < leafIds.Count ? leafIds[slot + 1] : null,
+                    // Its data arrives only through its own appends below (issue #5593).
+                    BulkBirth = true,
                 });
 
                 var start = slot * maxLeafKeys;
@@ -507,6 +509,8 @@ internal sealed partial class ShardRootGrain
                     ShardIndex = MyShardIndex,
                     PrevSibling = leafIndex > 0 ? newLeafIds[leafIndex - 1] : null,
                     NextSibling = leafIndex + 1 < newLeafCount ? newLeafIds[leafIndex + 1] : null,
+                    // Its data arrives only through its own appends below (issue #5593).
+                    BulkBirth = true,
                 });
             }
             await newLeaf.MergeEntriesAsync(batch);

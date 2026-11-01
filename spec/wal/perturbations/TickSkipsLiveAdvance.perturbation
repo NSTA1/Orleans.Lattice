@@ -1,0 +1,13 @@
+# Issue #5572 (review S1): the drive needs a replay permit, the scarce resource of
+# #5569 and #5570; the tick must make the pin usable without taking the starved arm.
+MODULE: WalDurability
+ROW: NewbornPinEventuallyUsable
+FILE: src/lattice/BPlusTree/Grains/BPlusLeafGrain.Snapshot.cs
+DETECTORS: BPlusLeafGrainTests.The_coverage_lag_tick_makes_a_live_written_leafs_pin_usable_without_a_replay, BPlusLeafGrainTests.The_coverage_lag_tick_makes_a_born_bulk_leafs_pin_usable_without_a_replay
+SUMMARY: the coverage-lag tick does not run the live advance, leaving a live-written leaf to the starvation drive
+
+--- FIND
+        var liveAdvanced = await TryAdvanceLiveCheckpointAsync();
+--- REPLACE
+        var liveAdvanced = false;
+--- END

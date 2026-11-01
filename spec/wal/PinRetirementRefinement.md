@@ -291,21 +291,28 @@ the purge has removed its registry row, and refuses the write until then.
   Production symbols: `TreeDeletionGrain.HoldsDeletionAsync`, `ShardRootGrain.PrepareForPurgedCopyAsync`, `TreeDeletionGrain.SettleRegistryEntryAsync`, `TreeDeletionGrain.BeginPurgeStateAsync`, `TreeDeletionGrain.PurgeNowAsync`, `TreeDeletionGrain.PurgePhysicalAsync`, `LatticeTreeAdmin.CreateTreeAsync`.
 - **When a live leaf's checkpoint advances.** `Checkpoint` is enabled whenever the
   incarnation has writes, so the model lets a live leaf's checkpoint cover them at
-  any time. Production advances it two ways. A leaf whose tree id this activation
-  bound advances over the writes it appended and applied itself, without a read
+  any time. Production advances it two ways. A leaf advances over the writes it
+  appended and applied itself, without a read
   (`BPlusLeafGrain.TryAdvanceLiveCheckpointAsync`, from the coverage-lag tick
-  `BPlusLeafGrain.OnCoverageLagTimerTickAsync` and the starvation drive). Any
-  other leaf advances only by a replay, whose first read of each partition starts
-  at `-1`; until then it publishes the block value (`LeafDurablePinCore.Resolve`).
+  `BPlusLeafGrain.OnCoverageLagTimerTickAsync` and the starvation drive), when
+  this activation created it (born) or once its checkpoint has reached one below
+  its first own append (armed). Otherwise it advances by a replay, which reads
+  each partition from its persisted checkpoint: `-1` for a leaf that has never
+  checkpointed, its birth heads for a split sibling. Until one of the two lands,
+  a leaf holding live rows publishes the block value (`LeafDurablePinCore.Resolve`).
   The over-approximation is sound for the safety properties, which hold over every
-  time `Checkpoint` could fire. Which way a leaf advances, and that a newborn
-  leaf's pin eventually leaves the block value, is the leaf lifecycle model's
-  concern: its `LiveAdvance` action and `NewbornPinEventuallyUsable` property.
-  Neither model bounds the wait in time; it is at most one coverage-lag period
-  (`LatticeOptions.LeafSnapshotMaxCoverageLagSeconds`). The replay path is pinned by
+  time `Checkpoint` could fire. Which way a leaf advances, and that a born leaf's
+  pin eventually leaves the block value, is the leaf lifecycle model's concern: its
+  `LiveAdvance` action and `NewbornPinEventuallyUsable` property. Neither model
+  bounds the wait in time. Through the live advance it is one coverage-lag period
+  (`LatticeOptions.LeafSnapshotMaxCoverageLagSeconds`); it falls back to the
+  permit-bound replay while a saga prepare is pending on the leaf, after an own
+  append fails (the tracker stays off for the activation), on a partition latched
+  stale, and for a leaf neither born nor armed. The replay path is pinned by
   `BPlusLeafGrainTests.A_live_written_leafs_pin_carries_a_usable_offset_after_its_first_coverage_lag_tick`,
   the live advance by
-  `BPlusLeafGrainTests.The_coverage_lag_tick_makes_a_live_written_leafs_pin_usable_without_a_replay`,
+  `BPlusLeafGrainTests.The_coverage_lag_tick_makes_a_live_written_leafs_pin_usable_without_a_replay`
+  and `BPlusLeafGrainTests.The_coverage_lag_tick_makes_a_born_bulk_leafs_pin_usable_without_a_replay`,
   and the blocked warning names the pin's category
   (`LatticeWalGcSchedulerCadenceTests.The_blocked_warning_names_a_never_checkpointed_pin_and_what_clears_it`).
   Production symbols: `BPlusLeafGrain.TryAdvanceLiveCheckpointAsync`, `BPlusLeafGrain.OnCoverageLagTimerTickAsync`, `LatticeOptions.LeafSnapshotMaxCoverageLagSeconds`, `LeafDurablePinCore.Resolve`.

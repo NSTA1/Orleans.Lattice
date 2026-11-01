@@ -1,0 +1,13 @@
+# Issue #5572: the advance claims an offset whose append has not returned or was
+# never applied, so a capture over it can miss the entry and the GC trim it.
+MODULE: WalDurability
+ROW: LiveAdvance(l)
+FILE: src/lattice/BPlusTree/LeafLiveAdvanceCore.cs
+DETECTORS: BPlusLeafGrainTests.A_live_advance_waits_until_every_issued_append_is_applied, BPlusLeafGrainTests.A_failed_append_turns_the_live_advance_off_for_the_activation
+SUMMARY: the live advance runs while an own append is issued but not yet applied
+
+--- FIND
+            && unappliedAppends == 0
+--- REPLACE
+            && unappliedAppends >= 0
+--- END

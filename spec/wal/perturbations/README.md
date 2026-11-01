@@ -23,13 +23,58 @@ is seeded on the rows issue #5358 broke: `Decide(p, c, k)` and `NoTrimPastLiveNe
 `PurgeTailRemove`, the row issue #5417 broke (the purge tail's re-drive acting on a tree id),
 and on `Recreate`, the row issue #5458 broke (a purged shard admitting a write while the
 purge still held the tree's registry entry).
-`WalDurability` and `WalMove` have no perturbations yet, so the gate does not
-require their rows to be listed.
+`WalDurability` ([`Refinement.md`](../Refinement.md)) is seeded on the live
+checkpoint advance (issues #5572, #5593): `LiveAdvance(l)` - its unapplied-append
+count, its leaf-wide saga clamp, its arming rule, its stamp target, its partition
+attribution, and the born rule for an adopted row, a re-bind and a bulk-load leaf -
+and `NewbornPinEventuallyUsable` (the coverage-lag tick running the advance rather
+than the starvation drive). Each perturbation names only the detectors that target
+it, so a run proves each one red on its own. `WalMove` has no perturbations yet, so
+the gate does not require its rows to be listed.
 
 ## Unseeded rows
 
 | Module | Row | Reason |
 |--------|-----|--------|
+| WalDurability | Append | Its detectors were proven red by perturbing production when the row was written (#4432 and the fix named in the row); not on the live advance path this module seeds. |
+| WalDurability | FlushAck(o) | Its detectors were proven red by perturbing production when the row was written (#4432 and the fix named in the row); not on the live advance path this module seeds. |
+| WalDurability | ShardCrash | An environment event with no production code path of its own to perturb; its detectors are the fault-handling tests the row cites. |
+| WalDurability | ScheduleReplay(l) | Its detectors were proven red by perturbing production when the row was written (#4432 and the fix named in the row); not on the live advance path this module seeds. |
+| WalDurability | ReadStep(l) | Its detectors were proven red by perturbing production when the row was written (#4432 and the fix named in the row); not on the live advance path this module seeds. |
+| WalDurability | Abandon(o) | An environment event with no production code path of its own to perturb; its detectors are the fault-handling tests the row cites. |
+| WalDurability | LateLand(o) | An environment event with no production code path of its own to perturb; its detectors are the fault-handling tests the row cites. |
+| WalDurability | SettleHole(o) | Its detectors were proven red by perturbing production when the row was written (#4432 and the fix named in the row); not on the live advance path this module seeds. |
+| WalDurability | PersistCheckpoint(l) | Its detectors were proven red by perturbing production when the row was written (#4432 and the fix named in the row); not on the live advance path this module seeds. |
+| WalDurability | PersistFail(l) | An environment event with no production code path of its own to perturb; its detectors are the fault-handling tests the row cites. |
+| WalDurability | Capture(l) | Its detectors were proven red by perturbing production when the row was written (#4432 and the fix named in the row); not on the live advance path this module seeds. |
+| WalDurability | CaptureFail(l) | An environment event with no production code path of its own to perturb; its detectors are the fault-handling tests the row cites. |
+| WalDurability | PublishPin(l) | Its detectors were proven red by perturbing production when the row was written (#4432 and the fix named in the row); not on the live advance path this module seeds. |
+| WalDurability | GcTrim | Its detectors were proven red by perturbing production when the row was written (#4432 and the fix named in the row); not on the live advance path this module seeds. |
+| WalDurability | LeafStop(l) | An environment event with no production code path of its own to perturb; its detectors are the fault-handling tests the row cites. |
+| WalDurability | Activate(l) | Its birth half is seeded through LiveAdvance(l): the born rule is decided where an activation binds the leaf, and LiveAdvanceBindIsBirth perturbs it. Its detectors were proven red by perturbing production when the row was written (#4432 and the fix named in the row); not on the live advance path this module seeds. |
+| WalDurability | ActivateLoadFail(l) | Its detectors were proven red by perturbing production when the row was written (#4432 and the fix named in the row); not on the live advance path this module seeds. |
+| WalDurability | SnapshotVanish(l) | An environment event with no production code path of its own to perturb; its detectors are the fault-handling tests the row cites. |
+| WalDurability | ActivateRowless(l) | Its detectors were proven red by perturbing production when the row was written (#4432 and the fix named in the row); not on the live advance path this module seeds. |
+| WalDurability | LeafRowVanish(l) | An environment event with no production code path of its own to perturb; its detectors are the fault-handling tests the row cites. |
+| WalDurability | PinRetire(l) | Its detectors were proven red by perturbing production when the row was written (#4432 and the fix named in the row); not on the live advance path this module seeds. |
+| WalDurability | MarkPurge(l) | Its detectors were proven red by perturbing production when the row was written (#4432 and the fix named in the row); not on the live advance path this module seeds. |
+| WalDurability | PurgeClear(l) | Its detectors were proven red by perturbing production when the row was written (#4432 and the fix named in the row); not on the live advance path this module seeds. |
+| WalDurability | Recover(l) | Its detectors were proven red by perturbing production when the row was written (#4432 and the fix named in the row); not on the live advance path this module seeds. |
+| WalDurability | ReplayFaultRearm(l) | Its detectors were proven red by perturbing production when the row was written (#4432 and the fix named in the row); not on the live advance path this module seeds. |
+| WalDurability | AckedWriteDurable | Broken by the same edits as the action rows that establish it; those rows are detected as the refinement note records. |
+| WalDurability | TrimCoveredBySnapshot | Broken by the seeded LiveAdvanceIgnoresUnappliedCount edit as well as by the action rows that establish it. |
+| WalDurability | ReadPositionHonest | Broken by the seeded LiveAdvanceUnarmed and LiveAdvanceBindIsBirth edits as well as by the action rows that establish it. |
+| WalDurability | ClearRecorded | Broken by the same edits as the action rows that establish it; those rows are detected as the refinement note records. |
+| WalDurability | ShippingNeverSkips | Broken by the same edits as the action rows that establish it; those rows are detected as the refinement note records. |
+| WalDurability | LogPrefixApplied | Broken by the same edits as the action rows that establish it; those rows are detected as the refinement note records. |
+| WalDurability | OffsetContiguity | Broken by the same edits as the action rows that establish it; those rows are detected as the refinement note records. |
+| WalDurability | RecoveryNeverFallsOffLog | Broken by the same edits as the action rows that establish it; those rows are detected as the refinement note records. |
+| WalDurability | PersistedBeliefHonest | Broken by the same edits as the action rows that establish it; those rows are detected as the refinement note records. |
+| WalDurability | ReleaseBackedBySnapshot | Broken by the same edits as the action rows that establish it; those rows are detected as the refinement note records. |
+| WalDurability | SnapshotCoverageMonotonic | Broken by the same edits as the action rows that establish it; those rows are detected as the refinement note records. |
+| WalDurability | PublishedPinWithinPersistedBelief | Broken by the same edits as the action rows that establish it; those rows are detected as the refinement note records. |
+| WalDurability | EveryAckedWriteMaterialised | A liveness row: no single anchored edit breaks it without also breaking a safety row; ReadPositionHonest subsumes its protocol-defect pairing. |
+| WalDurability | ReclamationEventuallyAdvances | A liveness row: its production detectors measure reclamation through the real timer and GC, which no single anchored edit breaks without also breaking ScheduleReplay(l) or PublishPin(l). |
 | WalPinRetirement | Write | The birth-seed ordering belongs to the leaf (`BPlusLeafGrain.SetTreeIdAsync`); this area seeds the GC retirement path the defect was in. The leaf ordering is covered by its detectors and by `NoTrimPastLiveNeedWriteBeforeSeed` in the model. |
 | WalPinRetirement | Checkpoint | WalDurability's checkpoint discipline (#3476), whose detectors are cited by that note; not on the retirement path. |
 | WalPinRetirement | Publish | WalDurability's publication rule, as for Checkpoint. |

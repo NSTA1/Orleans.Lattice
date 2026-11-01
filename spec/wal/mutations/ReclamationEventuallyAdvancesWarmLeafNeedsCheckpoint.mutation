@@ -3,16 +3,17 @@
 # The timer asks for a checkpoint before scheduling the read that earns one.
 # Activation and scheduling fairness stay intact. With no stop required,
 # an active leaf retains its acknowledged WAL forever.
-# The live advance (#5572) now discharges this starvation for a born leaf,
-# so the mutant restores the world #3314 lived in: no leaf is born and the
-# live advance never arms. Every leaf then relies on the fair timer replay,
-# and only the eligibility guard below can starve it.
+# The live advance (#5572) discharges that starvation for any leaf it can
+# advance, so this mutant runs in the world #3314 lived in: no leaf is born
+# (BOUNDS), so every populated leaf has the timer replay's fairness, and the
+# live advance is removed (the second edit, declared). It is classified in the
+# refinement note as removing an action.
 MODULE: ReclamationEventuallyAdvancesWarmLeafNeedsCheckpoint
 TARGET: ReclamationEventuallyAdvances
 CLASS: Temporal
 SUMMARY: a warm leaf needs a persisted checkpoint before its timer is registered to schedule replay
-PERTURBS: ScheduleReplay
-BOUNDS: MaxFaults = 0
+PERTURBS: ScheduleReplay, LiveAdvance
+BOUNDS: MaxFaults = 0, BornAtInit = FALSE
 
 --- FIND
     /\ cache[l] # {} \/ (cache[l] = {} /\ pinOff[l] < MaxOff - 1)
@@ -21,15 +22,8 @@ BOUNDS: MaxFaults = 0
 --- END
 
 --- FIND
-    /\ born = [l \in Leaves |-> TRUE]
---- REPLACE
-\* MUTATION: before #5572 no activation advanced on its own writes.
-    /\ born = [l \in Leaves |-> FALSE]
---- END
-
---- FIND
-LiveArmed(l) == born[l] \/ rp[l] >= Min(own[l]) - 1
+    /\ LiveArmed(l)
 --- REPLACE
 \* MUTATION: the live advance does not exist.
-LiveArmed(l) == FALSE
+    /\ FALSE
 --- END

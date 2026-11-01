@@ -215,7 +215,14 @@ internal sealed partial class BPlusLeafGrain
             // empty/empty guard restricts the adopt to a genuine insert-vs-insert
             // race; a stale-state conflict on an existing row still surfaces,
             // preserving the #1560 fail-loud contract.
-            await TopologySeedPersist.WriteAdoptingBenignFirstCreateRaceAsync(state, ResolveLogger(), context.GrainId);
+            var creatingRow = !state.RecordExists;
+            var adopted = await TopologySeedPersist.WriteAdoptingBenignFirstCreateRaceAsync(state, ResolveLogger(), context.GrainId);
+            if (creatingRow && !adopted)
+            {
+                // This activation's write created the leaf's first row, rather than
+                // adopting one another activation committed (issue #5593).
+                _liveAdvanceCreatedRow = true;
+            }
         }
         finally
         {

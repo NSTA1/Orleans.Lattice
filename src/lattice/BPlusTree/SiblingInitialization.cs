@@ -135,4 +135,15 @@ internal readonly record struct SiblingInitialization
     /// sibling, which never sees that terminal.
     /// </summary>
     [Id(10)] public AppliedTerminalWitness[]? TerminalWitnesses { get; init; }
+
+    /// <summary>
+    /// Whether this sibling is a leaf a bulk load or a bulk append graft creates
+    /// (issue #5593), rather than a split sibling. Such a leaf receives its data
+    /// only through its own appends, so when its admission and first row write
+    /// show this activation created it, its live checkpoint advance treats it as
+    /// born. A split sibling is never born: its range was the donor's, whose
+    /// entries for it are in the WAL. <see langword="false"/> from an older
+    /// caller, which keeps the leaf unborn.
+    /// </summary>
+    [Id(11)] public bool BulkBirth { get; init; }
 }

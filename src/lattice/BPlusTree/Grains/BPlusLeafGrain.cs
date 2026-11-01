@@ -2769,10 +2769,6 @@ internal sealed partial class BPlusLeafGrain(
 
         // See SetNextSiblingAsync above for the gate rationale.
         var treeIdJustSet = false;
-        // Read before the persist below, which may complete the owed reset: a leaf
-        // re-created from a purge's clear is not a birth for the live checkpoint
-        // advance, since its purged entries may still be readable (issue #5572).
-        var reCreatedFromPurge = _purgeMarkResetOwed;
         await _splitGate.WaitAsync().ConfigureAwait(true);
         try
         {
@@ -2784,7 +2780,7 @@ internal sealed partial class BPlusLeafGrain(
             {
                 await PersistAsync();
                 treeIdJustSet = true;
-                _liveAdvanceBorn = !reCreatedFromPurge;
+                DecideLiveAdvanceBirth();
             }
             catch
             {
@@ -3120,10 +3116,15 @@ internal sealed partial class BPlusLeafGrain(
                 // A split sibling is a topology seed: an unbound donor (#1744) mints
                 // it with TreeId null and no row, then moves entries onto it, so the
                 // #4419 rowless-unbound persist refusal must not apply here.
+                var treeIdBinding = prevTreeId is null && state.State.TreeId is not null;
                 _seedingSibling = true;
                 try
                 {
                     await PersistAsync();
+                    if (treeIdBinding && init.BulkBirth)
+                    {
+                        DecideLiveAdvanceBirth();
+                    }
                 }
                 catch
                 {

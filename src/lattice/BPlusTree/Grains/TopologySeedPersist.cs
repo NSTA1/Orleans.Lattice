@@ -92,7 +92,13 @@ internal static class TopologySeedPersist
     /// <see langword="null"/>.
     /// </param>
     /// <param name="grainId">The grain id, for the convergence debug line.</param>
-    public static async Task WriteAdoptingBenignFirstCreateRaceAsync<TState>(
+    /// <returns>
+    /// <see langword="true"/> when the write lost a first-create race and adopted
+    /// the row another activation committed; <see langword="false"/> when this
+    /// write landed. A leaf's live checkpoint advance needs the difference: an
+    /// activation that adopted a row did not create it (issue #5593).
+    /// </returns>
+    public static async Task<bool> WriteAdoptingBenignFirstCreateRaceAsync<TState>(
         IPersistentState<TState> state,
         ILogger? logger,
         GrainId grainId)
@@ -107,6 +113,7 @@ internal static class TopologySeedPersist
         try
         {
             await state.WriteStateAsync();
+            return false;
         }
         catch (InconsistentStateException ex)
             when (creatingRow
@@ -117,6 +124,7 @@ internal static class TopologySeedPersist
             logger?.LogDebug(
                 "Topology grain {GrainId} converged a benign first-create write race (#1557/#1566) by adopting the concurrently-committed row.",
                 grainId);
+            return true;
         }
     }
 }

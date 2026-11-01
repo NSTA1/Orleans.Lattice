@@ -63,7 +63,7 @@ are covered by the `WalLogSubscriberTests` idle-read-elision cases.
 | `replayRequested[l]` | A scheduled bounded replay slice | Activation arms replay; a populated resident leaf's timer or an empty floor-holder's GC drive schedules another slice. Foreground appends do not schedule replay. This abstracts successful timer registration after durable identity seeding, finite stall thresholds and eventual admission. |
 | `own[l]` | Offsets of the appends this activation issued itself (issue #5572) | The leaf's live-append tracker. `BPlusLeafGrain.OverrideHoldCommitLogWriter` counts every append before it is issued (`BPlusLeafGrain.NoteLiveAppendIssued`), and each append site records the offsets its append returned once its apply - including any relocation of stranded rows - has completed (`BPlusLeafGrain.MarkLiveAppendApplied`). Production keeps the lowest and highest own offset per WAL partition; the model's single partition keeps the set. Per activation. |
 | `poison[l]` | An own append failed, so the tracker is off for the activation | An append that throws, or an apply that throws after it, never reaches `BPlusLeafGrain.MarkLiveAppendApplied`, so the tracker's count of unapplied appends never returns to zero; a release with no matching issue, or a partition count that changed, latches the tracker off. Per activation. |
-| `born[l]` | This activation bound the leaf's tree id for the first time through a create path | Set by `BPlusLeafGrain.SetTreeIdAsync` when it binds the tree id, unless the activation was admitted by re-creating a leaf a purge cleared (`BPlusLeafGrain.AdmitPurgeClearedRemnantsAsync`, issue #4700), whose purged entries may still be readable. A create path names a leaf that does not exist yet (issue #4654), so nothing the leaf must apply predates its binding. Per activation. |
+| `born[l]` | This activation created the leaf (issue #5593) | `BPlusLeafGrain.DecideLiveAdvanceBirth`, as `BPlusLeafGrain.SetTreeIdAsync` binds the tree id, or `BPlusLeafGrain.InitializeSiblingAsync` binds a bulk-load or append-graft leaf (`SiblingInitialization.BulkBirth`). Born only when `BPlusLeafGrain.AdmitCreateIntentAsync` admitted a create intent naming the leaf with no row record, snapshot or purge mark to show an earlier row, and the activation's own write then created the first row instead of adopting one a duplicate committed (`TopologySeedPersist.WriteAdoptingBenignFirstCreateRaceAsync`, #1557, #1566). An adopted row, a #1744 re-bind (no create intent), `BPlusLeafGrain.RecoverBindingAsync`, a purge re-creation (`BPlusLeafGrain.AdmitPurgeClearedRemnantsAsync`, #4700) and a split sibling are never born. The model's first activation of a leaf is born when `BornAtInit` holds; every later binding is `Activate`, which never sets it. Per activation. |
 | `rp[l]` | The leaf's read position (pending or persisted) | The pending checkpoint map in `BPlusLeafGrain.Projection` (`_pendingCheckpointOffsetsByPartition`) over the persisted slot; `max(rp, stCp)` is `BPlusLeafGrain.GetCurrentCheckpointForPartition`. It is a READ position: `BPlusLeafGrain.ReplayPartitionAsync` advances it over entries it skips as another leaf's work (#2270). |
 | `stCp[l]` | The activation's belief about its persisted checkpoint | `LeafNodeState.ProjectionCheckpointOffset` / `LeafNodeState.ProjectionCheckpointOffsetsByPartition` in `state.State`, read through `BPlusLeafGrain.GetPersistedCheckpointForPartition`. |
 | `durCp[l]` | What grain storage holds | The checkpoint carried by the last successful `WriteStateAsync` of the leaf's state. |
@@ -90,7 +90,7 @@ are covered by the `WalLogSubscriberTests` idle-read-elision cases.
 | `ShardCrash` | WAL shard activation lost | Unflushed appends are lost with the activation; the next activation recovers the allocator from the provider's highest stored offset through `WalOffsetAllocationCore.RecoveredNextOffset`. An abandoned provider call does not survive to land below a reader: the in-memory and file providers' writes die with the process, and the Azure Table provider commits phase 2 in offset order and rolls a late phase-1 row forward in order or back (`ReconcileAsync`), so it lands only at or above the committed tail. **Over-approximation:** the crash may happen between any two actions. | Yes: `WalOffsetAllocationCoreTests.A_recovered_allocator_resumes_one_past_the_highest_stored_offset` and `WalShardGrainTests.AppendAsync_recovers_offset_counter_from_provider_on_initialization`, which drives the same core through the grain's test seam. |
 | `ScheduleReplay(l)` | Schedule bounded replay independently of a prior checkpoint | `BPlusLeafGrain.EnsureCoverageLagTimerAsync` registers the existing timer after durable identity seeding in `BPlusLeafGrain.SetTreeIdAsync` and `BPlusLeafGrain.InitializeSiblingAsync`, as well as on seeded activation and checkpoint persist. The callback `BPlusLeafGrain.OnCoverageLagTimerTickAsync` routes never-checkpointed and stalled populated leaves through `BPlusLeafGrain.DriveStarvedCheckpointFromTimerAsync`; empty floor holders use the GC starvation drive. No foreground append offset is treated as a processed prefix. | Yes: `WarmLeafCheckpointProgressIntegrationTests.Foreground_only_warm_leaf_banks_loadable_coverage_and_reclaims_its_wal` and `WarmLeafCheckpointProgressIntegrationTests.Sibling_birth_arms_progress_before_any_checkpoint` (actual runtime timer and accepted snapshot load, with real GC on the root-leaf arm; both red without their birth-time registration). |
 | `ReadStep(l)` | Read the next entry of the shared stream | Activation replay and the starvation drive, both through `BPlusLeafGrain.ReplayPartitionAsync`: shown only offsets below the durable-contiguous watermark (`WalShippingWatermark.IsOffsetExposable`), which is also bounded by every unsettled abandoned call and by one past the highest stored offset (`WalShardGrain.GetReadableHeadAsync`, issue #4621), folding owned entries and advancing the read position over every entry read (#2270). A read below the tail returns the surviving suffix. | Yes: `BPlusLeafGrainTests.ProjectionCheckpointOffset_advances_over_entries_the_leaf_skips`, `WalShippingWatermarkCoyoteTests.Watermark_never_ships_an_offset_above_a_prefix_hole` and `WalShippingWatermarkTests.The_first_in_flight_offset_is_never_exposable_and_the_one_below_it_is`; the head bound by `WalShardGrainTests.A_trailing_hole_is_not_exposed_when_the_post_failure_resync_fails` (red only when the `_highestStored` clamp is removed: the failure handler's resync rewinds the allocator before the call settles, so the clamp carries the bound only when that resync fails, and this test fails it), and the reader's use of that head by `WalShardGrainTests.A_head_a_reader_resumes_from_never_passes_an_offset_a_recovered_allocator_can_reissue`. |
-| `LiveAdvance(l)` | Advance the read position over the leaf's own applied appends, without reading (issue #5572) | `BPlusLeafGrain.TryAdvanceLiveCheckpointAsync`, from `BPlusLeafGrain.OnCoverageLagTimerTickAsync` and from `BPlusLeafGrain.DriveStarvedCheckpointCoreAsync` before its replay. Per partition it stamps the highest own offset through the projection seam (`ILeafProjection.SetCheckpointOffsetAsync`) when the tracker's count is zero and it is not latched off, no saga prepare is pending on the leaf, no other replay or warm rescue is in flight, the replay barrier is satisfied, and either the leaf is born or its current checkpoint is within one of the lowest own offset. Nothing reaches the WAL shard: the offsets are the ones its own appends returned. Each caller then persists the advance outside the coalescing window (the model's `PersistCheckpoint`). **Over-approximation:** the model may advance between any two steps; production advances on a tick or a drive. | Yes: `BPlusLeafGrainTests.A_live_written_newborn_leaf_advances_its_checkpoint_without_a_replay`, `BPlusLeafGrainTests.A_live_advance_waits_until_every_issued_append_is_applied`, `BPlusLeafGrainTests.A_failed_apply_turns_the_live_advance_off_for_the_activation`, `BPlusLeafGrainTests.A_pending_saga_prepare_holds_the_live_advance`, `BPlusLeafGrainTests.A_reactivated_leaf_does_not_live_advance_past_entries_it_has_not_read` and `BPlusLeafGrainTests.A_leaf_re_created_from_a_purge_is_not_born`. |
+| `LiveAdvance(l)` | Advance the read position over the leaf's own applied appends, without reading (issue #5572) | `BPlusLeafGrain.TryAdvanceLiveCheckpointAsync`, from `BPlusLeafGrain.OnCoverageLagTimerTickAsync` and from `BPlusLeafGrain.DriveStarvedCheckpointCoreAsync` before its replay. Per partition it stamps the highest own offset through the projection seam (`ILeafProjection.SetCheckpointOffsetAsync`) when the tracker's count is zero and it is not latched off, no saga prepare is pending on the leaf, no other replay or warm rescue is in flight, the replay barrier is satisfied, and either the leaf is born or its current checkpoint is within one of the lowest own offset (the decision is `LeafLiveAdvanceCore.IsQuiescent` and `LeafLiveAdvanceCore.TargetFor`). The model's arming tests `rp`; production tests its current checkpoint, which a persisted checkpoint can hold above `rp`, and is safe there only because it also waits for the activation replay to converge, which the model's `~replayRequested` does not capture. Nothing reaches the WAL shard: the offsets are the ones its own appends returned. Each caller then persists the advance outside the coalescing window (the model's `PersistCheckpoint`). **Over-approximation:** the model may advance between any two steps; production advances on a tick or a drive. | Yes: `BPlusLeafGrainTests.A_live_written_newborn_leaf_advances_its_checkpoint_without_a_replay`, `BPlusLeafGrainTests.A_live_advance_waits_until_every_issued_append_is_applied`, `BPlusLeafGrainTests.A_failed_append_turns_the_live_advance_off_for_the_activation`, `BPlusLeafGrainTests.A_pending_saga_prepare_holds_the_live_advance`, `BPlusLeafGrainTests.A_prepare_pending_on_one_partition_holds_every_partition`, `BPlusLeafGrainTests.Each_partition_advances_to_its_own_highest_offset`, `BPlusLeafGrainTests.A_reactivated_leaf_does_not_live_advance_past_entries_it_has_not_read`, `BPlusLeafGrainTests.A_leaf_re_created_from_a_purge_is_not_born`, `BPlusLeafGrainTests.An_activation_that_adopts_a_concurrently_created_row_is_not_born`, `BPlusLeafGrainTests.An_activation_admitted_by_adopting_a_recorded_row_is_not_born`, `BPlusLeafGrainTests.A_re_bind_of_an_unbound_leaf_is_not_born`, `BPlusLeafGrainTests.Recovering_the_binding_of_an_unbound_row_is_not_born`, `BPlusLeafGrainTests.A_bulk_loaded_leaf_is_born_and_a_split_sibling_is_not`, `BPlusLeafGrainTests.A_bulk_loaded_leaf_advances_past_other_leaves_offsets_without_a_replay`, `LeafLiveAdvanceCoreTests.An_unborn_leaf_is_armed_only_once_its_checkpoint_reaches_its_first_own_offset` and `LeafLiveAdvanceCoreTests.An_advance_never_passes_an_offset_the_leaf_has_not_read_or_written`. |
 | `Abandon(o)` | A flush misses its deadline, or the drain budget expires under it | `WalShardGrain` faults the append's acknowledgement (an unknown outcome to its caller) and registers the still-running provider call in `WalAbandonedFlushRegistry`, process-wide and keyed by provider, tree and shard, so a reactivation in the same process sees it too. Until the call settles, `WalShardGrain.DurableContiguousTailOffset` exposes nothing at or above it (issue #4621). Costs a fault. | Yes: `WalShardGrainTests.ReadAsync_never_exposes_an_offset_above_an_abandoned_flush_that_can_still_land` and `WalShardGrainTests.A_reactivated_shard_is_held_below_its_predecessors_abandoned_flush_until_it_settles`, red when the watermark ignores an abandoned window or the registry is per activation. |
 | `LateLand(o)` | An abandoned call lands | The provider writes the entry. Every provider refuses a write at an occupied offset and at or below its trim watermark (`InMemoryWalStorageProvider`, `FileWalShard`, the Azure Table provider's transactional `Add`), so it lands only in a gap no reader has passed. | Yes: `WalShardGrainTests.ReadAsync_never_exposes_an_offset_above_an_abandoned_flush_that_can_still_land` (the entry is shown in order once it lands) and `InMemoryWalStorageProviderTrimWatermarkTests.An_append_at_or_below_the_watermark_is_refused_and_allocation_stays_above_it`. |
 | `SettleHole(o)` | An abandoned call settles without landing | The registry retires the window and the offset is a permanent hole; readers pass it, and the provider's trim watermark (`IWalStorageProvider.GetLowestOffsetAsync`, raised durably before any delete) tells it from a trim. **Over-approximation:** production's `HandleFlushFailureAsync` resyncs the allocator to one past the highest stored offset when the window settles, so the hole is never trailing; the model keeps the allocator where it was, and bounds the watermark by `RecoveredNext` instead. | Yes: `WalShardGrainTests.ReadAsync_releases_a_hole_once_the_abandoned_flush_settles_without_landing`, `WalShardGrainTests.A_hole_directly_above_the_trim_watermark_is_not_a_fall_off_for_the_leaf_or_the_subscriber` and `CrossClusterAtomicVisibilityTests.Shipper_tells_a_hole_above_the_trim_point_from_a_trim` (a hole is not a trim), `WalShardGrainTests.A_trim_past_a_readers_position_is_still_a_fall_off_with_the_trim_watermark` (a trim still is), and `WalShardGrainTests.Without_a_trusted_trim_watermark_a_reader_treats_the_hole_above_a_trim_point_as_trimmed` (until every silo writes the watermark). |
@@ -131,7 +131,7 @@ are covered by the `WalLogSubscriberTests` idle-read-elision cases.
 | `PublishedPinWithinPersistedBelief` | A newly published pin never exceeds the persisted checkpoint (#3476). | Yes: `LeafDurablePinCoreTests.A_pending_checkpoint_never_reaches_the_pin_issue_3476` and `BPlusLeafGrainTests.Batched_pin_flush_over_an_unpersisted_advance_publishes_no_pin_past_the_persisted_checkpoint`. |
 | `EveryAckedWriteMaterialised` | Every acknowledged write is eventually held by its owner's projection. | Yes: `LeafReplayStartPolicyTests.An_absent_snapshot_over_an_empty_cache_replays_cold` and the bounded-progress assertion of `WalDurabilityLifecycleCoyoteTests.The_lifecycle_loses_no_acknowledged_write_under_crash_anywhere_recovery`, which reports `WalDurabilityLifecycleCoyoteTests.Removing_one_fix_is_caught_by_the_assertion_it_protects` with a replay that stops at the persisted checkpoint (`ReplayStopsAtPersistedCheckpoint`). |
 | `ReclamationEventuallyAdvances` | Once every write is in and the pins can release, everything appended is reclaimed from storage and no append or abandoned call is left outstanding. Stated over storage rather than the tail: a settled hole at the end of the bounded instance holds the tail below the stream's end only because the model has no later write (issue #4621). | Yes: `BPlusLeafGrainTests.Failed_checkpoint_persist_retains_the_pending_advance_for_the_next_flush` (a failed persist does not strand the advance) and `BPlusLeafGrainTests.ProjectionCheckpointOffset_advances_over_entries_the_leaf_skips` (a leaf that owns nothing still advances); at the model level `WalDurabilityLifecycleCoyoteTests.Removing_the_read_position_over_foreign_entries_is_caught_by_the_reclamation_assertion` (issue #2270, reported by `[ReclamationEventuallyAdvances]`). |
-| `NewbornPinEventuallyUsable` | A leaf born holding live writes eventually publishes a usable durable pin, unless it stops, latches stale or an own append fails (issue #5572). `Spec` withholds replay fairness from such a leaf (`ReplayDriven`): production schedules its replay only on a coverage-lag tick or a WAL GC touch admitted against a bounded permit share that refuses under load (issues #5569, #5570), so its pin must not wait on one. | Yes: `BPlusLeafGrainTests.The_coverage_lag_tick_makes_a_live_written_leafs_pin_usable_without_a_replay` and `BPlusLeafGrainTests.A_live_written_newborn_leaf_advances_its_checkpoint_without_a_replay`. |
+| `NewbornPinEventuallyUsable` | A leaf born holding live writes eventually publishes a usable durable pin, unless it stops, latches stale or an own append fails (issue #5572). `Spec` withholds replay fairness from such a leaf (`ReplayDriven`): production schedules its replay only on a coverage-lag tick or a WAL GC touch admitted against a bounded permit share that refuses under load (issues #5569, #5570), so its pin must not wait on one. | Yes: `BPlusLeafGrainTests.The_coverage_lag_tick_makes_a_born_bulk_leafs_pin_usable_without_a_replay` (a born leaf end to end: checkpoint, capture and published pin on one tick, with no drive and no read), `BPlusLeafGrainTests.The_coverage_lag_tick_makes_a_live_written_leafs_pin_usable_without_a_replay` (an unborn leaf armed at offset 0, likewise, asserting the tick never takes the starved arm) and `BPlusLeafGrainTests.A_live_written_newborn_leaf_advances_its_checkpoint_without_a_replay`. |
 
 ## Excluded properties
 
@@ -144,7 +144,7 @@ are covered by the `WalLogSubscriberTests` idle-read-elision cases.
 Every property above is made to fire by a mutation. Classified by what the
 mutation does:
 
-- **Perturbs an existing action.** Every mutation but four. For these the
+- **Perturbs an existing action.** Every mutation but five. For these the
   property holds because a guard in the modelled protocol prevents its violation,
   and the mutation is the evidence that the guard is load-bearing.
 - **Splices a transition into a stutter.** `ActivateLoadFail` and
@@ -158,6 +158,10 @@ mutation does:
   guard inside an existing step is load-bearing. The mutation-coverage gate is
   satisfied for those two rows by construction; the fixes are pinned by the
   production tests in the rows' Detector column.
+- **Removes an action.** `ReclamationEventuallyAdvancesWarmLeafNeedsCheckpoint`
+  (#3314) disables `LiveAdvance` alongside its `ScheduleReplay` edit, both declared
+  under `PERTURBS:`, and runs with no leaf born (`BOUNDS: BornAtInit = FALSE`). See
+  below.
 
 Two properties are classified differently:
 
@@ -212,17 +216,29 @@ the spec's fairness intact, are `EveryAckedWriteMaterialisedColdStartResumesFrom
 leaf active with no faults: a populated cache cannot schedule replay before a
 checkpoint exists. This reproduces birth-time timer registration being deferred
 until the first checkpoint, not a read-watermark or capture-safety relaxation.
-Because the live advance now discharges that starvation for a born leaf, the
-mutant also starts every leaf unborn and disarms `LiveArmed`, the world #3314
-lived in. Scheduling fairness stays intact, since `ReplayDriven` holds for an
-unborn leaf.
+The live advance discharges that starvation for any leaf it can advance, so the
+mutant cannot be the single `ScheduleReplay` edit in the current world: it runs in
+the world #3314 lived in, with no leaf born (its `BOUNDS`), so every populated leaf
+has the timer replay's fairness (`ReplayDriven` holds for an unborn leaf), and with
+the live advance removed (its second edit). It therefore removes an action, as
+classified above; its evidence is that the timer replay's own eligibility guard is
+load-bearing wherever the live advance cannot reach.
 `NewbornPinEventuallyUsableNoLiveAdvance` (#5572) is the live advance's liveness
 pairing: with the advance off, a born live-written leaf has no fair route to a
-usable pin. `TrimCoveredBySnapshotLiveAdvancePastUnappliedAppend`,
-`ReadPositionHonestLiveAdvanceUnarmed` and `ReadPositionHonestStopKeepsBirth` are
-its safety pairings: an advance past an own append not yet applied, an advance
-before the replay reached the activation's first own append, and a born flag that
-outlives its activation each lose an acknowledged write.
+usable pin. That red is conditional on `ReplayDriven`'s premise split: under a
+uniform replay admission assumption the design before #5572 satisfies the
+property through replay. The defect itself is latency - one replay per leaf over
+the WAL, starving a bounded permit share - and latency is not expressible as
+liveness (#2321). The model expresses it by withholding admission from exactly the
+leaves production no longer drives; the production detectors, which assert that
+the tick takes no drive and reads nothing, are the evidence that the latency is
+gone. `TrimCoveredBySnapshotLiveAdvancePastUnappliedAppend`,
+`ReadPositionHonestLiveAdvanceUnarmed`, `ReadPositionHonestStopKeepsBirth` and
+`ReadPositionHonestRebindIsBirth` are its safety pairings: an advance past an own
+append not yet applied, an advance before the replay reached the activation's
+first own append, a born flag that outlives its activation, and a reactivation
+that binds an existing leaf (an adopted row, a re-bind, a recovery; #5593) decided
+as a birth each lose an acknowledged write.
 
 ## Detectors
 
@@ -251,6 +267,7 @@ to the old behaviour, and green on the fix:
 | `ReadPositionHonestRowlessActivationStartsCold` | A rowless leaf activates with no create intent at all. | #4654 | the `ActivateRowless` row's |
 | `ShippingNeverSkipsTrailingHoleExposed` | A trailing hole is exposed; after a crash the recovered allocator reissues it below the reader that passed it. Two faults. | #4621 | the `ReadStep` row's head-bound detector |
 | `NewbornPinEventuallyUsableNoLiveAdvance` | A live write never advances the read position, so a live-written leaf holds its block pin until a replay of every partition from `-1`, and on a freshly written estate every tree's floor stays blocked. | #5572 | the `LiveAdvance` and `NewbornPinEventuallyUsable` rows' |
+| `ReadPositionHonestRebindIsBirth` | Any binding of a leaf's tree id was decided as a birth, including an activation that adopted a duplicate's row, a #1744 re-bind and a recovery, so its live advance passed the earlier activation's acknowledged writes unread. | #5593 | the `LiveAdvance` row's born-rule detectors |
 
 ## Retention TTL
 
@@ -284,7 +301,9 @@ from this specification.**
   A born, live-written leaf whose append tracker is intact is not given that
   fairness at all (`ReplayDriven`, issue #5572): its pin must become usable
   through the live advance, so the model does not assume the replay it would
-  otherwise wait for.
+  otherwise wait for. That split is a premise, not a uniform admission
+  assumption, and it is what makes the live advance's liveness pairing red; the
+  latency it stands for is not expressible as liveness (see the classification).
   No production symbol: the gap states an environment premise of the model, not
   a production mechanism.
 - **Saga prepares and the live advance.** The model has no sagas. A saga's
@@ -294,6 +313,34 @@ from this specification.**
   the advance while any prepare is pending on the leaf, on every partition, on
   top of the projection seam's per-partition clamp.
   Production symbols: `BPlusLeafGrain.TryAdvanceLiveCheckpointAsync`, `BPlusLeafGrain.MinUnresolvedPrepareOffsetForPartition`.
+- **Foreign-authored owned entries and duplicate activations.** `Owner` gives
+  every offset to `l1`, which appends its own entries, and each leaf has one
+  activation. Production's replay ownership is by key range and shard map, not by
+  author (`BPlusLeafGrain.ShouldApplyDuringReplay`), so other writers append
+  records a leaf owns: a split donor's write it relocates later, a folded
+  neighbour's records once the leaf's range widens, an adaptive split's donor
+  shard writing a moved slot, a sibling's range delete, a coordinator's saga
+  terminal, a point write interleaved with a bulk load or append into the range a
+  bulk leaf takes over (`ShardRootGrain.BulkLoadAsync`,
+  `ShardRootGrain.BulkAppendAsync`), and a duplicate activation of the same leaf.
+  The live advance (`BPlusLeafGrain.TryAdvanceLiveCheckpointAsync`) passes such a
+  record unread when it lands between the leaf's own appends. No acknowledged
+  write takes that path on one activation outside the bulk race: the relocation,
+  the shadow forward, the fold's move and the range delete each finish on the leaf
+  before they are acknowledged, and terminals are held by the prepare clamp. A
+  record whose author appended it and then failed before finishing that hand-off
+  was never acknowledged, and is no longer applied by its owner; before #5572 the
+  owner's replay applied it. A WAL reader (a replication shipper or a view
+  maintainer) may still apply it, so the owner and that reader can disagree about
+  a write no caller was told had landed. A point write interleaved with a bulk
+  operation was acknowledged on the leaf it was routed to, which keeps it, but a
+  born bulk leaf that takes over its range does not import it; before #5572 that
+  leaf's first replay did, because a bulk leaf's range is open and it owns every
+  key of its shard. A duplicate activation can pass the other's acknowledged
+  writes either way; birth is decided at admission so that an activation that
+  adopted another's row is never born (`BPlusLeafGrain.DecideLiveAdvanceBirth`,
+  #5593), and the first-create race is the duplicate window that leaves.
+  Production symbols: `BPlusLeafGrain.ShouldApplyDuringReplay`, `ShardRootGrain.BulkLoadAsync`, `ShardRootGrain.BulkAppendAsync`, `BPlusLeafGrain.TryAdvanceLiveCheckpointAsync`, `BPlusLeafGrain.DecideLiveAdvanceBirth`.
 - **Values, keys, HLCs and CRDT merge.** A write is an offset and a projection is a
   set of offsets, so replay idempotence (applying an entry twice leaves the
   projection unchanged) is true by construction here and asserts nothing. It is the

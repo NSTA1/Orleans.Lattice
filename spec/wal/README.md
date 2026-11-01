@@ -25,7 +25,7 @@ exhaustively within the TLC budget.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `WalDurability` | 11 | 5 | 27 | 47 | 41 | 381,426 |
+| `WalDurability` | 11 | 5 | 27 | 48 | 41 | 381,426 |
 | `WalMove` | 5 | 2 | 13 | 18 | 18 | 1,617 |
 | `WalPinRetirement` | 3 | 3 | 25 | 31 | 30 | 284,019 |
 
@@ -52,18 +52,22 @@ distinct states. A purge marks a leaf before clearing it, and recovery re-create
 a marked leaf (`MarkPurge`, `PurgeClear`, `Recover`); the lifecycle resumes once
 recovery has reset every marker.
 
-The `WalDurability.WarmLeaf.cfg` variant checks every property without faults:
-17,041 distinct states to depth 28. Replay requires a scheduled request, consumed
-by each bounded read slice; foreground writes cannot arm it, though a leaf born in
-this activation advances over its own applied writes without a read (`LiveAdvance`,
+The `WalDurability.WarmLeaf.cfg` variant checks every safety invariant and the base
+model's four other liveness properties without faults: 17,041 distinct states. No
+leaf is born there (`BornAtInit = FALSE`, issue #5593), so a populated leaf relies on
+the timer-scheduled replay; `NewbornPinEventuallyUsable`, which is about born
+leaves, is the base configuration's. Replay requires a scheduled request, consumed
+by each bounded read slice; foreground writes cannot arm it, though a leaf advances
+over its own applied writes without a read when it is born or armed (`LiveAdvance`,
 issue #5572). Weak fairness belongs
 to the timer/GC scheduling trigger and then the requested read, assuming eventual
 admission and responsive storage. The #3314 mutation
 `ReclamationEventuallyAdvancesWarmLeafNeedsCheckpoint` reproduces the circular
 birth-time registration gate: a warm foreground-only leaf needs a checkpoint
 before its timer can schedule the read that earns that checkpoint. The live advance
-now discharges that starvation for a born leaf, so the mutant also restores the
-world #3314 lived in: no leaf is born and the live advance never arms. The production
+now discharges that starvation wherever it can advance, so the mutant runs in the
+world #3314 lived in: no leaf is born (its `BOUNDS`) and the live advance is removed
+(a second edit, declared under `PERTURBS:`). The production
 regression uses the actual timer, loads accepted snapshot coverage and performs
 real GC without deactivation or checkpoint hints.
 
@@ -180,7 +184,8 @@ a leaf and checks that its pin becomes usable anyway:
 
 | Issue | Defect | Check |
 |-------|--------|-------|
-| #5570, #5572 | A live write never advanced the leaf's checkpoint, so a live-written leaf published the block pin until a replay of every partition from `-1`; on a freshly written estate every tree's WAL floor stayed blocked while the replays starved each other. **Fixed**: the leaf advances its checkpoint over the appends it issued itself once each is applied (`LiveAdvance`), when it was born through a create path or its replay has reached its first own append, and never while an own append failed or a saga prepare is pending. | `NewbornPinEventuallyUsableNoLiveAdvance`, with `TrimCoveredBySnapshotLiveAdvancePastUnappliedAppend`, `ReadPositionHonestLiveAdvanceUnarmed` and `ReadPositionHonestStopKeepsBirth` for the advance's safety |
+| #5570, #5572 | A live write never advanced the leaf's checkpoint, so a live-written leaf published the block pin until a replay of every partition from `-1`; on a freshly written estate every tree's WAL floor stayed blocked while the replays starved each other. **Fixed**: the leaf advances its checkpoint over the appends it issued itself once each is applied (`LiveAdvance`), when this activation created it or its checkpoint has reached its first own append, and never while an own append failed or a saga prepare is pending; such a leaf, and one on a stale partition, still waits for a replay. | `NewbornPinEventuallyUsableNoLiveAdvance` (red under the `ReplayDriven` premise; see the refinement note), with `TrimCoveredBySnapshotLiveAdvancePastUnappliedAppend`, `ReadPositionHonestLiveAdvanceUnarmed` and `ReadPositionHonestStopKeepsBirth` for the advance's safety |
+| #5593 | The live advance decided any first binding of a tree id was a birth, including an adopted row (#1557), a #1744 re-bind and a recovery, so it could pass another activation's acknowledged writes; and it never reached bulk-load, graft, snapshot or restore leaves. **Fixed**: birth is decided at admission (a create intent naming the leaf, no earlier row, and the activation's own write created the first row), and bulk-load and graft leaves are born by that rule. | `ReadPositionHonestRebindIsBirth` |
 
 The last three rows of the earlier table depend on HLC stamps and on several partitions,
 which `WalDurability.tla` abstracts away; `WalPartitionReleaseModel`, a Coyote

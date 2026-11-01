@@ -1,0 +1,18 @@
+# Issue #5593: an activation that adopts another activation's row, re-binds an
+# existing unbound leaf, or recovers its binding is treated as a birth. Its
+# replay read nothing the earlier activation wrote, so its live advance passes
+# those owned, acknowledged entries unread.
+MODULE: ReadPositionHonestRebindIsBirth
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a reactivation that binds an existing leaf (an adopt, a re-bind, a recovery) counts as a birth
+PERTURBS: Activate
+
+--- FIND
+    \* A reactivation never creates the leaf: an adopted row, a re-bind and a
+    \* recovery all bind a leaf another activation created (issue #5593).
+    /\ UNCHANGED born
+--- REPLACE
+\* MUTATION: the binding of an existing leaf is decided as a birth.
+    /\ born' = [born EXCEPT ![l] = TRUE]
+--- END

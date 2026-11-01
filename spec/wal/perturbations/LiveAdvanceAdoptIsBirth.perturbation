@@ -1,0 +1,13 @@
+# Issue #5593 (B1): the duplicate that loses the first-create race adopts the winner's
+# row; it never read the winner's writes, so it must not be born.
+MODULE: WalDurability
+ROW: LiveAdvance(l)
+FILE: src/lattice/BPlusTree/Grains/BPlusLeafGrain.LiveCheckpoint.cs
+DETECTORS: BPlusLeafGrainTests.An_activation_that_adopts_a_concurrently_created_row_is_not_born
+SUMMARY: an activation whose write adopted a duplicate's row is decided as born
+
+--- FIND
+_liveAdvanceBorn = _liveAdvanceCleanCreate && _liveAdvanceCreatedRow;
+--- REPLACE
+_liveAdvanceBorn = _liveAdvanceCleanCreate;
+--- END

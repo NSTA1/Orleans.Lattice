@@ -273,6 +273,11 @@ internal sealed partial class BPlusLeafGrain
         }
 
         _createIntentAdmitted = true;
+
+        // Nothing shows the leaf ever had a row: no row record, no snapshot, no
+        // purge mark. Its live checkpoint advance may treat it as born once this
+        // activation's own write creates that row (issue #5593).
+        _liveAdvanceCleanCreate = true;
     }
 
     /// <summary>
