@@ -265,10 +265,10 @@ public sealed class A6BackupPostureJourney : JourneyChapter
 
                 await auth.PutRuleAsync(new AuthPutRule { Rule = DelegatedBackup(withBackup: false) });
                 await ContractWait.UntilAsync("Priya's narrowed grant", async () => !(await priyaBackup.ProbeCapabilitiesAsync(orders)).CanCapture);
-                await priyaBackups.SubmitCaptureExpectingRefusalAsync(Names.Trees.FactoryOrders, "You are not permitted to do this.");
+                var refusedAt = await priyaBackups.SubmitCaptureExpectingRefusalAsync(Names.Trees.FactoryOrders, "You are not permitted to do this.");
                 Assert.That(await ContractCalls.FindBackupAsync(backup, PriyaCapture), Is.Null, "the refused capture produced no backup");
                 Coverage.Hit("use-case:backups/server-authority");
-                await priya.SubstepAsync(Recorder, step, "priya-capture-refused", "Her grant narrowed while the form was open: the server refuses the capture at its Check access stage, and the page says so");
+                await priya.SubstepAsync(Recorder, step, "priya-capture-refused", $"Her grant narrowed while the form was open: the server refuses the capture (at {refusedAt}), and the page says so");
 
                 await auth.PutRuleAsync(new AuthPutRule { Rule = DelegatedBackup(withBackup: true) });
                 await ContractWait.UntilAsync("Priya's restored grant", async () => (await priyaBackup.ProbeCapabilitiesAsync(orders)).CanCapture);
