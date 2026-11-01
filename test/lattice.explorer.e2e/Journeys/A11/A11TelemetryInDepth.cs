@@ -297,7 +297,10 @@ public sealed class A11TelemetryInDepth : JourneyChapter
         Coverage.Hit("use-case:telemetry/chart-readout");
     }
 
-    private static string SeriesOf(string tree) => $"{Regex.Escape(tree)}( / .+)?";
+    // Playwright serialises a name regex as /.../, so a literal slash must be escaped.
+    private static string SeriesOf(string tree) => $"{PlaywrightEscape(tree)}( \\/ .+)?";
+
+    private static string PlaywrightEscape(string text) => Regex.Escape(text).Replace("/", "\\/", StringComparison.Ordinal);
 
     private ListedBoard Board(string key) =>
         _boards.FirstOrDefault(board => board.Key == key) ?? throw new AssertionException($"The {key} board is not listed.");
@@ -322,7 +325,7 @@ public sealed class A11TelemetryInDepth : JourneyChapter
 
         var time = table.Rows[row][0];
         var prefix = $"{time} UTC: ";
-        await Expect(readout).ToHaveTextAsync(new Regex($"^{Regex.Escape(prefix)}"));
+        await Expect(readout).ToHaveTextAsync(new Regex($"^{PlaywrightEscape(prefix)}"));
         var text = (await readout.TextContentAsync())!.Trim();
         var segments = text[prefix.Length..].TrimEnd('.').Split("; ");
         Assert.That(segments, Has.Length.EqualTo(_pinnedLegend.Count), $"the readout '{text}' names every drawn series");
