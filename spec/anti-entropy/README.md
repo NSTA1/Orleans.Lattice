@@ -89,6 +89,7 @@ The `Alias` variant checks 200,460 distinct states.
 - [#4859](https://github.com/NSTA1/Orleans.Lattice/issues/4859): repair-helper faults reset the circuit breaker instead of contributing a failure.
 - [#4862](https://github.com/NSTA1/Orleans.Lattice/issues/4862): scoped fallback discarded retained tombstones, leaving trimmed-WAL and below-cursor lost deletes unrepaired.
 - [#4863](https://github.com/NSTA1/Orleans.Lattice/issues/4863): targeted re-replay used the logical-name WAL instead of the physical tree resolved for localisation after an alias cutover.
+- [#5530](https://github.com/NSTA1/Orleans.Lattice/issues/5530): the per-entry digest contribution folded the row's origin, which differs between the cluster that authored a row and its peers, so two converged clusters never matched. Found by the backup retention model's confirmation review (epic #5348); the contribution now covers content only, and a persisted fold carries its contribution version so a stale fold is recomputed rather than mixed.
 
 Each repair has a production regression proved failing without the fix. The
 refinement note maps the model obligations to those detectors; this is not a

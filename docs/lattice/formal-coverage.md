@@ -605,7 +605,7 @@ area's list is the authoritative one. The separately listed interrupted-shadow d
 | Shard ownership | #4452, #4453, #4454, #4455, #4473, #4474, #4475, #4503, #4522, #4545, #4564, #4611, #4613, #4618, #4619, #4689 | [`spec/shard-ownership/`](../../spec/shard-ownership/README.md#defects-this-area-found) |
 | Cross-cluster atomic visibility | #4480, #4481, #4482, #4508, #4511, #4526, #4533, #4534, #4591, #4627, #4664, #4683, #4684, #4685 | [Verified Atomic-Commit](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | #4463, #4464, #4465, #4504, #4537, #4549, #4585, #4586, #4587, #4603, #4604, #4614, #4615, #4673, #4707 | [`spec/replication/`](../../spec/replication/README.md#production-defects-this-module-found) |
-| Backup and restore | #4485, #4490, #4589, #4593, #4686, #5357, #5412, #5418, #5449 | [`spec/backup/`](../../spec/backup/README.md#defects-the-modules-found) |
+| Backup and restore | #4485, #4490, #4589, #4593, #4686, #5357, #5412, #5418, #5449, #5529, #5531, #5532 | [`spec/backup/`](../../spec/backup/README.md#defects-the-modules-found) |
 | B+ tree topology | #4795, #4815, #4818, #4914 | [`spec/bplustree/`](../../spec/bplustree/README.md#defects-this-specification-found) |
 | Materialised-view tail and lifecycle | #4853, #4856, #4857 | [`spec/materialised-views/`](../../spec/materialised-views/README.md#defects-found) |
 | Materialised-view physical rebuild and resolved identity | #4891, #4895, #4905 | [Physical-rebind companion](../../spec/materialised-views/README.md#focused-aggregation-and-physical-rebind-companions) and [resolved identity](../../spec/view-resolved-identity/README.md) |
@@ -613,7 +613,7 @@ area's list is the authoritative one. The separately listed interrupted-shadow d
 | Materialised-view joint repair and automatic upgrade | #4876, #4897, #4898, #4899, #4902 | [Joint repair](../../spec/view-joint-repair/README.md) |
 | Interrupted-shadow regression detector | #4906 | [Exact physical generation control](../../spec/materialised-views/RefinementHorizon.md) |
 | Tree lifecycle composition | #4858 | [`spec/tree-lifecycle/`](../../spec/tree-lifecycle/README.md#defect-found) |
-| Anti-entropy remediation | #4859, #4862, #4863 | [`spec/anti-entropy/`](../../spec/anti-entropy/README.md) |
+| Anti-entropy remediation | #4859, #4862, #4863, #5530 | [`spec/anti-entropy/`](../../spec/anti-entropy/README.md) |
 | Shared alias routing and revert | #4860 | [`spec/aliasing/`](../../spec/aliasing/README.md#defect-found) |
 | Scheduling and progress | #4976, #4977, #4979, #4985, #4992 | [Scheduling defects](verified-scheduling.md#defects-found-during-the-bucket) |
 
