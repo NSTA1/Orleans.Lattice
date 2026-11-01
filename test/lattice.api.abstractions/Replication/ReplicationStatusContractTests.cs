@@ -19,6 +19,7 @@ public sealed class ReplicationStatusContractTests
     {
         Assert.That(Signatures(typeof(ILatticeReplicationControl)), Is.EqualTo(new[]
         {
+            "Task<ReplicationCapabilities> ProbeCapabilitiesAsync(String treeId, CancellationToken cancellationToken = default)",
             "Task<ReplicationConfigReport> GetReplicationConfigAsync(CancellationToken cancellationToken = default)",
             "Task<ReplicationDisableResult> DisableReplicationAsync(String treeId, CancellationToken cancellationToken = default)",
             "Task<ReplicationEnableResult> EnableReplicationAsync(String treeId, LatticeMergeMode mode, String bootstrapSourceClusterId = default, CancellationToken cancellationToken = default)",
