@@ -1678,9 +1678,11 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
             await hwm.ClearBootstrapFloorAsync(cancellationToken).ConfigureAwait(true);
             state.State.ReconcileOwedBySource[sourceClusterId] = true;
             Logger.LogWarning(
-                "Bootstrap of tree '{TreeName}' from '{SourceClusterId}': the source tree changed during the export, so the "
-                + "bootstrap drop floor is cleared and the reconcile is owed a retry",
-                treeName, sourceClusterId);
+                "Bootstrap of tree '{TreeName}' from '{SourceClusterId}': the export cannot drive the foreign-delete reconcile "
+                + "({Reason}), so the bootstrap drop floor is cleared and the reconcile is owed a retry",
+                treeName, sourceClusterId,
+                BootstrapForeignDeleteReconcile.DescribeIneligibility(
+                    snapshot.OpenFrontier, snapshot.OpenGeneration, snapshot.CloseGeneration, mergeMode));
             return;
         }
 
