@@ -105,13 +105,12 @@ public sealed class StoryRunner
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(chapter);
-        var consumes = session.ConsumesOf(id);
-        foreach (var consume in consumes)
+        foreach (var consume in session.EstablishmentOrderOf(id))
         {
             await session.EstablishAsync(consume);
         }
 
-        foreach (var consume in consumes)
+        foreach (var consume in session.ConsumesOf(id))
         {
             await session.VerifyAsync(consume);
         }

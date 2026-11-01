@@ -35,6 +35,7 @@ public sealed class C3Contract() : ChapterContract("C3")
         // acts, so the whole teardown is simply run again on such a failure.
         for (var attempt = 1; ; attempt++)
         {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 await EstablishOnceAsync(context);
@@ -42,7 +43,7 @@ public sealed class C3Contract() : ChapterContract("C3")
             }
             catch (RpcException ex) when (attempt < 3 && ex.StatusCode is StatusCode.Internal or StatusCode.Unavailable or StatusCode.DeadlineExceeded)
             {
-                TestContext.Progress.WriteLine($"C3: attempt {attempt} failed transiently ({ex.Status.Detail}); running the teardown again.");
+                ContractRetries.Record("C3's teardown", clock.Elapsed, $"{ex.StatusCode}: {ex.Status.Detail}");
                 await Task.Delay(TimeSpan.FromSeconds(10));
             }
         }
