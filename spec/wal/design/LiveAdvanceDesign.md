@@ -15,8 +15,8 @@ this design.
 (2 blocking, 9 should-fix, 5 nits), and it meets a hard requirement added since:
 no unauthorised breaking change against the shipped `lattice` 10.2.0 (tag
 `lattice-v10.2.0`). [Backward compatibility](#backward-compatibility) sets out how,
-and lists every observable behaviour change. One of them needs the user's
-authorisation before production. The last sections map every review finding to its
+and lists every observable behaviour change. One of them (change 3, option (a)) is
+pending the user's authorisation before the fencing production member. The last sections map every review finding to its
 resolution.
 
 ## Why the first attempt was withdrawn
@@ -437,7 +437,7 @@ production).
 |---|--------|-------|
 | 1 | **A stale duplicate activation's write is retried, not accepted.** With the gate open, the WAL shard rejects a stale epoch's append. `ShardActivationRetry` gains this rejection as a transient arm, beside silo churn: the stale activation deactivates, and the retry reaches the live one. The caller sees one write that succeeds, with added latency. Today the stale activation's append is accepted; under today's replay-based advance nothing is lost, but the fenced live advance relies on rejecting it. Orleans already promises a single activation, so no caller relies on duplicates. | Compatible bug fix |
 | 2 | **A write admitted before a hand-off close, and not yet allocated, is retried.** The close's fence rejects it, and the same envelope re-issues it, which span admission or the shard map now routes to the new owner. Today such a write is accepted. The caller sees success with added latency. | Compatible bug fix |
-| 3 | **The retry envelope is exhausted.** After its bounded attempts (3 today), the envelope rethrows the last fault. For changes 1 and 2 that would be `WalAppendEpochStaleException`, a type 10.2.0 never threw to a caller. That needs a pathological run of closes or claims on one key. | **Documented-behaviour change: needs authorisation.** Options: (a) surface it as the existing retryable `LatticeWalQuiescingException`, adding a cause to its documented meaning; (b) a new public typed exception in the retryable back-pressure family. |
+| 3 | **The retry envelope is exhausted.** After its bounded attempts (3 today), the envelope would rethrow the last fault, which for changes 1 and 2 is `WalAppendEpochStaleException`, a type 10.2.0 never threw to a caller. That needs a pathological run of closes or claims on one key. **Chosen: option (a).** The exhausted retry surfaces as the existing retryable `LatticeWalQuiescingException`, with a distinguishing message ("an append was fenced by a newer activation or a hand-off close; retry"). It also carries a new optional `Reason` (`LatticeWalQuiescingReason.PlacementMove`, the default and today's only cause, or `AppendFence`) at `[Id(0)]`, which a 10.2.0 deserializer skips as an unknown field. The internal exception never crosses to the caller, not even as an inner exception. The type's documentation gains the cause. | **Documented-behaviour change: pending user authorisation before the fencing production member (member 1).** |
 | 4 | **Bulk append over existing rows (#5610).** The graft relocates the rows the bulk range already holds into the new bulk leaf, instead of stranding them. Keys that were unroutable become readable, and counts and statistics become exact (#5614). No new exception: a chunk that succeeds today still succeeds. Refusing the chunk was considered and rejected, because it would fail a correct caller whose range another client wrote into. | Compatible bug fix |
 | 5 | **The live advance itself (#5572).** A leaf's checkpoint advances without a replay from -1. The WAL GC trims sooner, replay demand falls, and #5570's "carries no usable offset" warnings stop for live leaves. Existing metrics report different values; none changes name, unit or tags. | Compatible bug fix |
 | 6 | **Range deletes cost more.** Each shard's bounded walk now opens and closes a shard-level marker: two row writes and one re-claim per WAL partition. The record, its result and its feed and history output are unchanged. Clipping, the cheaper alternative, would change every consumer's view of the record, so it is not chosen. | Compatible (cost only) |
@@ -446,8 +446,7 @@ production).
 | 9 | **New storage rows** under the reserved grain types listed above appear in the host's grain storage. They are documented in the tree's storage notes. | Compatible (additive) |
 | 10 | **New public configuration.** A `LatticeOptions` switch to turn the live advance off is additive, and defaults to on once the gate opens. | Compatible (additive) |
 
-**Change 3 is the only one that needs the user's authorisation.** The others change no
-documented behaviour.
+**Change 3 is the only one that needs the user's authorisation.** Its design is chosen (option (a)), and it is pending that authorisation before member 1 lands. The others change no documented behaviour.
 
 ## The model
 
@@ -633,7 +632,7 @@ Each production member carries detectors proven red. They land in this order:
      abandoned #5596.
    - `WalLiveAdvance` then becomes a module with its refinement note.
 
-Change 3 above must be authorised before member 1 lands.
+Change 3 above, option (a), is pending user authorisation; member 1 does not land without it. Member 1 also adds LatticeWalQuiescingReason, the Reason property and the documentation of the new cause.
 
 ## Review resolution
 
@@ -670,5 +669,5 @@ Change 3 above must be authorised before member 1 lands.
 2. **Rejecting in-flight writes at a close.** The fence fails writes admitted before a
    close that have not been allocated yet, and the retry envelope re-issues them. The
    bounded wait in step (b) keeps that rare. Should the wait be mandatory?
-3. **Retry exhaustion (behaviour change 3)** is the user's decision. Does the reviewer
-   see a design that avoids it altogether?
+3. **Retry exhaustion (behaviour change 3).** Option (a) is chosen and pending user
+   authorisation. Does the reviewer see a design that avoids surfacing anything at all?
