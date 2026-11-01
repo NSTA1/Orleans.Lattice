@@ -33,6 +33,13 @@ internal sealed class JourneyGatedWalStorageProvider(IWalStorageProvider inner) 
     }
 
     /// <inheritdoc />
+    public async Task WaitForAppendVisibilityAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+    {
+        await JourneyWalTargetGate.WaitAsync(treeId, cancellationToken);
+        await inner.WaitForAppendVisibilityAsync(treeId, shardIndex, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public IAsyncEnumerable<WalEntry> ReadAsync(string treeId, int shardIndex, long fromOffsetExclusive, int maxEntries, CancellationToken cancellationToken) =>
         inner.ReadAsync(treeId, shardIndex, fromOffsetExclusive, maxEntries, cancellationToken);
 
