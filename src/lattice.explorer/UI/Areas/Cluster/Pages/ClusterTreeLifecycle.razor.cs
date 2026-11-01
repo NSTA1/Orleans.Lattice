@@ -9,7 +9,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 /// A tree's lifecycle tab: its deletion status, and delete, recover, purge and
 /// alias - each behind a typed confirmation that states its consequence, and each
 /// hidden unless the capability probe grants it (delete, recover and purge need
-/// the TreeLifecycle grant; alias needs whole-tree admin authority). Purge is
+/// the TreeLifecycle grant; alias needs whole-tree admin authority). The alias
+/// section gives the tree another name (an alias whose target is this tree), or
+/// points this tree's own name at another physical tree. Purge is
 /// accept-then-poll: a running purge is followed with its shard progress until
 /// it completes.
 /// </summary>
@@ -27,6 +29,8 @@ public partial class ClusterTreeLifecycle : IDisposable
     private bool _busy;
     private string? _aliasTarget;
     private string? _aliasError;
+    private string? _newName;
+    private string? _newNameError;
 
     private enum Verb
     {
@@ -35,6 +39,7 @@ public partial class ClusterTreeLifecycle : IDisposable
         Recover,
         Purge,
         Alias,
+        Name,
     }
 
     /// <summary>The logical tree id.</summary>
@@ -156,6 +161,70 @@ public partial class ClusterTreeLifecycle : IDisposable
 
     private Task DeleteAsync() =>
         RunAsync(ct => Facades.RequireTreeAdmin().DeleteTreeAsync(TreeId, ct), _ => "Tree deleted. It can be recovered until its window closes.");
+
+    // A new name for this tree: an alias whose target is this tree. The name must be
+    // free, because aliasing a name that holds a tree would hide that tree's data.
+    private async Task ReviewName()
+    {
+        var name = _newName?.Trim();
+        _newNameError = string.IsNullOrEmpty(name)
+            ? "Name the alias."
+            : string.Equals(name, TreeId, StringComparison.Ordinal)
+                ? "A tree cannot alias itself."
+                : ClusterTreeCreation.ValidateTreeId(name);
+        if (_newNameError is not null || name is null)
+        {
+            return;
+        }
+
+        var exists = await ClusterLoad<TreeExistenceResult>.RunAsync(
+            ct => Facades.RequireTreeAdmin().CheckTreeExistsAsync(name, ct),
+            _lifetime.Token);
+        if (_lifetime.IsLeft)
+        {
+            return;
+        }
+
+        if (exists.Value is { Exists: true })
+        {
+            _newNameError = $"A tree named {name} already exists. To point it at {TreeId}, set its alias on its own Lifecycle tab.";
+            return;
+        }
+
+        _newName = name;
+        _confirm = Verb.Name;
+    }
+
+    private async Task AddNameAsync()
+    {
+        _confirm = Verb.None;
+        _busy = true;
+        var name = _newName!;
+        var result = await ClusterLoad<TreeAliasResolution>.RunAsync(
+            ct => Facades.RequireTreeAdmin().SetTreeAliasAsync(name, TreeId, ct),
+            _lifetime.Token);
+        if (result.Value is not null)
+        {
+            TreeChanges.Changed();
+        }
+
+        if (_lifetime.IsLeft)
+        {
+            return;
+        }
+
+        _busy = false;
+
+        if (result.Value is not null)
+        {
+            _newName = null;
+            Toasts.Show($"{name} now reaches {TreeId}.", LtToastTone.Success);
+        }
+        else
+        {
+            Toasts.Show(result.Error!, LtToastTone.Danger);
+        }
+    }
 
     private Task RecoverAsync() =>
         RunAsync(ct => Facades.RequireTreeAdmin().RecoverTreeAsync(TreeId, ct), _ => "Tree recovered.");

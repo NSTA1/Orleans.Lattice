@@ -46,4 +46,11 @@ public sealed record AppDescriptor
     /// <see cref="AppInstallRequest.ExpectedManifestDigest"/> to pin the install to what was reviewed.
     /// </summary>
     [Id(15)] public string? ManifestDigest { get; init; }
+    /// <summary>
+    /// The state a lifecycle run still in flight is moving the installation to, or null when no run
+    /// is executing (and always null for a version that is not installed). While it is set,
+    /// <see cref="State"/> reports the state before the run and is never
+    /// <see cref="AppLifecycleState.Failed"/>. Null from a server that predates it.
+    /// </summary>
+    [Id(16)] public AppLifecycleState? PendingState { get; init; }
 }

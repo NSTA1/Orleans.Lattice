@@ -267,6 +267,24 @@ internal static class AppsPresentation
     /// <summary>The state pill of an installed app's lifecycle state.</summary>
     /// <param name="state">The state.</param>
     /// <param name="version">The installed version, or <see langword="null"/>.</param>
+    /// <param name="pending">The state a lifecycle run in flight is moving the app to, or <see langword="null"/>.</param>
+    public static (LtStateRole Role, string Text) LifecycleState(AppLifecycleState state, string? version, AppLifecycleState? pending) =>
+        pending is { } target ? (LtStateRole.Lagging, PendingLifecycleText(state, target)) : LifecycleState(state, version);
+
+    /// <summary>The pill text of a lifecycle run in flight (issue #5482).</summary>
+    /// <param name="state">The state before the run.</param>
+    /// <param name="target">The state the run is moving the app to.</param>
+    public static string PendingLifecycleText(AppLifecycleState state, AppLifecycleState target) => target switch
+    {
+        AppLifecycleState.Uninstalled => "Uninstalling...",
+        AppLifecycleState.Disabled when state != AppLifecycleState.Disabled => "Disabling...",
+        AppLifecycleState.Enabled when state != AppLifecycleState.Enabled => "Enabling...",
+        _ => "Re-applying...",
+    };
+
+    /// <summary>The state pill of an installed app's lifecycle state.</summary>
+    /// <param name="state">The state.</param>
+    /// <param name="version">The installed version, or <see langword="null"/>.</param>
     public static (LtStateRole Role, string Text) LifecycleState(AppLifecycleState state, string? version) => state switch
     {
         AppLifecycleState.Enabled => (LtStateRole.Enabled, "Enabled"),

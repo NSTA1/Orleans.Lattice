@@ -21,14 +21,14 @@ namespace Orleans.Lattice.Replication;
 /// mode, disable the tree and re-enable it under the new mode. Disabling removes
 /// the resolved runtime mode but does not tear down an already-active shipper; if it
 /// keeps shipping, peers that resolve no mode drop those entries while acknowledging
-/// the batch. A re-enable requests a bootstrap only when the caller supplies a
-/// bootstrap source cluster id and the tree already contains data.
+/// the batch. A re-enable requests a bootstrap whenever the caller supplies a
+/// bootstrap source cluster id.
 /// </para>
 /// <para>
-/// <b>Enabling a non-empty tree.</b> The replication change feed only carries
-/// mutations authored <i>after</i> a tree is enabled, so a tree that already
-/// holds data needs a one-off snapshot bootstrap for peers to converge on the
-/// pre-existing rows. See <see cref="EnableReplicationAsync"/> for how this
+/// <b>Pre-existing rows.</b> The replication change feed only carries
+/// mutations authored <i>after</i> a tree is enabled, and a receiver drops every
+/// entry shipped to it before its own enrollment lands, so a peer converges on
+/// the source's pre-existing rows through a one-off snapshot bootstrap. See <see cref="EnableReplicationAsync"/> for how this
 /// authority composes with the bootstrap seam and the documented limitation of
 /// that composition.
 /// </para>
@@ -62,15 +62,16 @@ public interface ILatticeReplicationConfigAuthority
     /// </para>
     /// <para>
     /// <b>Bootstrap composition.</b> When <paramref name="bootstrapSourceClusterId"/>
-    /// is supplied and the tree already holds data (the local tree yields at least
-    /// one live key - the check takes the first key rather than counting the tree),
-    /// the authority requests a snapshot re-seed
-    /// through <see cref="ILatticeReplicationAdmin.RequestSnapshotAsync"/> so a
-    /// peer converges on the pre-existing rows the change feed will not carry.
+    /// is supplied, the authority requests a snapshot re-seed through
+    /// <see cref="ILatticeReplicationAdmin.RequestSnapshotAsync"/>, whether or not
+    /// the local tree holds rows, so this cluster converges on the source's
+    /// pre-existing rows that the change feed will not carry. A receiver drops,
+    /// and acknowledges, every entry shipped to it before its own enrollment
+    /// lands, so an empty receiver depends on the snapshot most (issue #5557).
     /// <b>Limitation:</b> the bootstrap seam is receiver-driven - it pulls a
     /// snapshot into the local cluster from the named source cluster - so
     /// <paramref name="bootstrapSourceClusterId"/> names the cluster holding the
-    /// authoritative pre-existing data. When enabling on the cluster that already
+    /// authoritative pre-existing data, which should be enabled first. When enabling on the cluster that already
     /// holds the data, its own rows reach peers through each peer's receiver-side
     /// bootstrap (fall-off-triggered auto-bootstrap or an operator re-seed on that
     /// peer); this authority cannot drive a push into remote peers. Supply the
@@ -81,8 +82,8 @@ public interface ILatticeReplicationConfigAuthority
     /// <param name="treeId">The target tree id to enable. Must be non-empty.</param>
     /// <param name="mode">The wire merge mode to fix for the tree when first enabled.</param>
     /// <param name="bootstrapSourceClusterId">
-    /// Optional id of the cluster to pull an initial snapshot from when the tree
-    /// already holds data. <see langword="null"/> or empty skips the bootstrap.
+    /// Optional id of the cluster to pull an initial snapshot from.
+    /// <see langword="null"/> or empty skips the bootstrap.
     /// </param>
     /// <param name="cancellationToken">Cancels the read, write, and bootstrap hops.</param>
     /// <returns>The outcome, including the fixed mode and whether a bootstrap was requested.</returns>
