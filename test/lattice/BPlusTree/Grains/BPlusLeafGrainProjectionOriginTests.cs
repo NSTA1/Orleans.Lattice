@@ -97,4 +97,74 @@ public sealed class BPlusLeafGrainProjectionOriginTests
 
         Assert.That(RowOrigin(leaf, "own"), Is.Null);
     }
+
+    private static LatticeMutation PreparedSet(Guid txId, string key, string? origin) => new()
+    {
+        TreeId = TreeId,
+        Kind = MutationKind.Set,
+        Key = key,
+        Value = [7],
+        Timestamp = new HybridLogicalClock { WallClockTicks = 100 },
+        OriginClusterId = origin,
+        TransactionId = txId,
+        IsPrepared = true,
+        AtomicBatchSize = 1,
+        AtomicBatchIndex = 0,
+    };
+
+    private static LatticeMutation Commit(Guid txId) => new()
+    {
+        TreeId = TreeId,
+        Kind = MutationKind.TxCommit,
+        TransactionId = txId,
+        Timestamp = new HybridLogicalClock { WallClockTicks = 101 },
+    };
+
+    [Test]
+    public void A_replayed_own_saga_on_a_replicated_tree_commits_like_the_foreground_saga()
+    {
+        // Issue #5532. ApplyTxCommit preserves the prepared values' HLCs when they
+        // carry an origin (the cross-cluster apply path) and re-stamps them with
+        // the leaf clock otherwise (the foreground path). A foreground own prepare
+        // stores no origin; its WAL record, on a replicated tree, carries the local
+        // cluster id. A leaf replaying that record must still take the foreground
+        // branch, or it rebuilds the committed row with a different timestamp from
+        // the one it served.
+        var txId = Guid.NewGuid();
+
+        var replayed = CreateLeaf(new FixedOrigin("west"));
+        ((ILeafProjection)replayed).Apply(PreparedSet(txId, "k", "west"));
+        ((ILeafProjection)replayed).Apply(Commit(txId));
+
+        var foreground = CreateLeaf(new FixedOrigin("west"));
+        ((ILeafProjection)foreground).Apply(PreparedSet(txId, "k", null));
+        ((ILeafProjection)foreground).Apply(Commit(txId));
+
+        Assert.That(replayed.CacheForTest.TryPeekRow("k", out var replayedRow, out _), Is.True);
+        Assert.That(foreground.CacheForTest.TryPeekRow("k", out var foregroundRow, out _), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(replayedRow.Timestamp, Is.EqualTo(foregroundRow.Timestamp), "the replayed commit took a different stamping branch");
+            Assert.That(replayedRow.Timestamp, Is.Not.EqualTo(new HybridLogicalClock { WallClockTicks = 100 }), "an own saga must be re-stamped, not committed at its prepare's HLC");
+            Assert.That(replayedRow.OriginClusterId, Is.Null);
+        });
+    }
+
+    [Test]
+    public void A_replayed_peer_saga_keeps_its_source_hlc()
+    {
+        // The cross-cluster branch is unchanged: a prepare stamped by a peer
+        // commits at its source HLC.
+        var txId = Guid.NewGuid();
+        var leaf = CreateLeaf(new FixedOrigin("west"));
+        ((ILeafProjection)leaf).Apply(PreparedSet(txId, "k", "east"));
+        ((ILeafProjection)leaf).Apply(Commit(txId));
+
+        Assert.That(leaf.CacheForTest.TryPeekRow("k", out var row, out _), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.Timestamp, Is.EqualTo(new HybridLogicalClock { WallClockTicks = 100 }));
+            Assert.That(row.OriginClusterId, Is.EqualTo("east"));
+        });
+    }
 }

@@ -69,6 +69,10 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
     private long _byteLength;
     private int _chunkCount;
     private string? _contentHash;
+
+    // The tree's own resolved origin, as WalCommitLogWriter stamped it onto an
+    // own write's record (issue #5529).
+    private readonly string? _localOrigin;
     private HybridLogicalClock _highestHlc = HybridLogicalClock.Zero;
 
     /// <summary>Initializes a new <see cref="IncrementalDeltaCollector"/>.</summary>
@@ -84,8 +88,10 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
         BackupKeyMergeMode mergeMode,
         int batchSize,
         Func<IReadOnlyList<Guid>, CancellationToken, Task<IReadOnlyDictionary<Guid, TxStatus>>> resolveDecisions,
-        IReadOnlyList<Guid>? baseUndecided = null)
+        IReadOnlyList<Guid>? baseUndecided = null,
+        string? localOriginClusterId = null)
     {
+        _localOrigin = localOriginClusterId;
         ArgumentNullException.ThrowIfNull(resolveDecisions);
         _staging.TrackBaseUndecided(baseUndecided);
         _serializer = serializer;
@@ -210,7 +216,12 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
             return;
         }
 
-        var origin = BackupChainFrontier.NormalizeOrigin(mutation.OriginClusterId);
+        // An own write's record carries the tree's resolved origin (the local
+        // cluster id on a replicated tree), while its row - and so a full backup -
+        // stores no origin. Route it through the core's WAL-to-row seam so an
+        // increment records own writes exactly as a full backup does (#5529).
+        var origin = BackupChainFrontier.NormalizeOrigin(
+            LatticeRowOrigin.FromRecord(mutation.OriginClusterId, _localOrigin));
 
         // The WAL mutation carries the authoring merge mode per record, so the
         // incremental path reads the true per-key mode directly - no durable

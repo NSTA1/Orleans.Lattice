@@ -54,6 +54,71 @@ public sealed class BackupSchedulerOverlapTests
     }
 
     private const string FullScheduleReminder = "backup-schedule-full";
+    private const string IncrementalScheduleReminder = "backup-schedule-incremental";
+
+    [Test]
+    public async Task A_full_tick_during_an_incremental_cycle_runs_its_full_cycle_once_that_cycle_ends()
+    {
+        var (scheduler, remindable) = await ArrangeScheduledScopeAsync();
+        var scope = BackupScopeSelector.WholeTree(Tree);
+
+        // The scope has no backup yet, so the incremental cycle captures its
+        // baseline through the gated capture engine and parks there.
+        var incremental = remindable.ReceiveReminder(IncrementalScheduleReminder, default(TickStatus));
+        await _fixture.Gate.Started.WaitAsync(TimeSpan.FromSeconds(30));
+
+        // Issue #5531: the daily full tick fires while the incremental cycle is
+        // running. Coalescing it into that cycle would drop the full backup.
+        var full = remindable.ReceiveReminder(FullScheduleReminder, default(TickStatus));
+
+        _fixture.Gate.Release();
+        await Task.WhenAll(incremental, full).WaitAsync(TimeSpan.FromSeconds(60));
+        await WaitForAsync(async () => _fixture.Gate.Calls >= 2 && await scheduler.IsIdleAsync());
+
+        var names = (await _fixture.ListScopeAsync(scope)).Select(m => m.Name).ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(_fixture.Gate.Calls, Is.EqualTo(2), "the full tick should run one full cycle after the incremental one");
+            Assert.That(names.Count(n => n.StartsWith("incremental-", StringComparison.Ordinal)), Is.EqualTo(1));
+            Assert.That(names.Count(n => n.StartsWith("full-", StringComparison.Ordinal)), Is.EqualTo(1), "the full backup must not be dropped");
+        });
+    }
+
+    [Test]
+    public async Task An_incremental_tick_during_a_full_cycle_is_coalesced_into_it()
+    {
+        var (scheduler, remindable) = await ArrangeScheduledScopeAsync();
+
+        var full = remindable.ReceiveReminder(FullScheduleReminder, default(TickStatus));
+        await _fixture.Gate.Started.WaitAsync(TimeSpan.FromSeconds(30));
+
+        // A full cycle subsumes an incremental one, so this tick starts nothing.
+        var incremental = remindable.ReceiveReminder(IncrementalScheduleReminder, default(TickStatus));
+
+        _fixture.Gate.Release();
+        await Task.WhenAll(full, incremental).WaitAsync(TimeSpan.FromSeconds(60));
+        await WaitUntilIdleAsync(scheduler);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(_fixture.Gate.Calls, Is.EqualTo(1));
+            Assert.That(await _fixture.ListScopeAsync(BackupScopeSelector.WholeTree(Tree)), Has.Count.EqualTo(1));
+        });
+    }
+
+    private static async Task WaitForAsync(Func<Task<bool>> condition)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
+        while (!await condition())
+        {
+            if (DateTime.UtcNow > deadline)
+            {
+                return;
+            }
+
+            await Task.Delay(50);
+        }
+    }
 
     [Test]
     public async Task A_schedule_tick_returns_without_waiting_for_its_capture()

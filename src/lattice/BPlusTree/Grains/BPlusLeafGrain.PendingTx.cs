@@ -615,11 +615,13 @@ internal sealed partial class BPlusLeafGrain
     /// <para>
     /// The branch decision uses <see cref="Orleans.Lattice.Primitives.LwwValue{T}.OriginClusterId"/>
     /// - a deterministic, persisted signal stamped at prepare time
-    /// from <see cref="LatticeOriginContext"/>. Because the flag is
-    /// written into the WAL TxPrepare record's <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/>
-    /// payload (see
+    /// from <see cref="LatticeOriginContext"/>. The WAL TxPrepare record
+    /// carries it (see
     /// <see cref="BPlusLeafGrain.CommitSetAsync(string, byte[], long)"/>),
-    /// foreground and replay observe the same value and therefore
+    /// but with an own write's empty origin filled with the tree's resolved
+    /// origin by <c>WalCommitLogWriter</c>; replay turns that stamp back into
+    /// <see langword="null"/> through <see cref="LatticeRowOrigin"/> (issue
+    /// #5532), so foreground and replay observe the same value and therefore
     /// produce bit-identical projection states. Replay must NOT use
     /// <see cref="LatticeHlcOverrideContext"/> as the signal because
     /// that ambient is foreground-only.

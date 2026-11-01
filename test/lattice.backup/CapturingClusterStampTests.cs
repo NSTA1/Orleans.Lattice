@@ -137,13 +137,13 @@ public sealed class CapturingClusterStampTests
         // yields two backups, each with its own manifest and artifact, so neither
         // capture can overwrite the other.
         //
-        // The two artifacts hold the same entries, but not necessarily the same
-        // bytes, so their content digests are not compared (#5472). A row written
-        // locally reads back from the snapshot with a null origin before
-        // background leaf materialization and an empty one after it; both mean
-        // "unstamped" (BackupChainFrontier.NormalizeOrigin) but serialize
-        // differently, so a capture taken either side of that materialization
-        // hashes differently. The entries are compared decoded instead.
+        // The two artifacts are compared by their decoded entries, not by their
+        // content digests (#5472). Before #5524 an own row read back from a
+        // snapshot with a null origin before background leaf materialization and
+        // with the WAL's stamp ("" on a single cluster) after it, so a capture
+        // taken either side of that materialization hashed differently. An own
+        // row is now null both ways (LatticeRowOrigin), and that is pinned
+        // directly by the core's origin tests rather than by a digest here.
         var firstEntries = await DecodeAsync(first.Manifest);
         var secondEntries = await DecodeAsync(second.Manifest);
         Assert.Multiple(async () =>

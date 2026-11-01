@@ -34,7 +34,8 @@ internal sealed class LatticeBackupCaptureService(
     IWalCursorRegistry cursorRegistry,
     IOptions<Orleans.Configuration.ClusterOptions> clusterOptions,
     ILogger<LatticeBackupCaptureService> logger,
-    ITenantAdmissionController? admission = null)
+    ITenantAdmissionController? admission = null,
+    ILatticeOriginClusterIdResolver? originClusterIdResolver = null)
     : ILatticeBackupCaptureService, ILatticeBackupIncrementalCaptureService
 {
     // The id of the cluster hosting this capture engine: the vantage point that
@@ -284,7 +285,8 @@ internal sealed class LatticeBackupCaptureService(
                                     return new Dictionary<Guid, TxStatus>();
                                 }
                             },
-                            baseManifest.ConsistencyCut.UndecidedSagaIds);
+                            baseManifest.ConsistencyCut.UndecidedSagaIds,
+                            originClusterIdResolver?.Resolve(optionsResolver.GetMetricTreeId(treeId)));
 
                         // Stream the delta pages to the sink; the collector accumulates the
                         // manifest metadata and the new per-partition offset frontier as each page
