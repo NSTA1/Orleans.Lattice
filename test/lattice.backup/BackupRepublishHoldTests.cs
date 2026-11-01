@@ -191,7 +191,6 @@ public sealed class BackupRepublishHoldTests
     [Test]
     public async Task A_set_member_whose_stamp_never_comes_is_held_from_retention_only_until_its_lease_runs_out()
     {
-        RedProof.NoPendingLease = true; // RED-PROOF
         // A set's member republishes an expired backup and its capture dies before
         // the set's stamp (issue #5629): the member's hold must lapse, or the
         // backup it republished is exempt from retention for good.

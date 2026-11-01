@@ -28,7 +28,6 @@ public sealed class BackupDeleteHoldTests
     [Test]
     public async Task A_delete_whose_artifact_deletes_outlast_the_grain_response_timeout_completes()
     {
-        RedProof.DeleteInGrain = true; // RED-PROOF
         // The artifact delete takes longer than a grain call may; run inside the
         // scheduler grain, the delete would time out and report failure.
         _fixture = new SchedulerClusterFixture();
@@ -49,7 +48,6 @@ public sealed class BackupDeleteHoldTests
     [Test]
     public async Task A_delete_interrupted_after_its_row_was_removed_is_finished_by_a_retry()
     {
-        RedProof.NoResume = true; // RED-PROOF
         // The first artifact delete fails, after the row is gone. The sink manifest
         // is deleted last, so the retry finds it and finishes the delete.
         _fixture = new SchedulerClusterFixture();

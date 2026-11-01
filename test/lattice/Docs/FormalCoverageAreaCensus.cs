@@ -73,7 +73,7 @@ internal static class FormalCoverageAreaCensus
             ["Replication convergence"] =
                 ["Replication", "ReplicationCausalDelivery", "ReplicationLowWatermark", "ReplicationReBootstrap"],
             ["Backup and restore"] =
-                ["BackupCapture", "BackupCutover", "BackupIncremental", "BackupProvenance", "BackupRestore", "BackupRetention"],
+                ["BackupCapture", "BackupCutover", "BackupIdClaim", "BackupIncremental", "BackupProvenance", "BackupRestore", "BackupRetention"],
             ["B+ tree topology"] =
                 ["BPlusCascade", "BPlusReclaimRecovery", "BPlusTopology", "SplitGateCycles", "SplitLink", "SplitLinkTurns"],
             ["Materialised-view tail and lifecycle"] = ["MaterialisedViewTail"],

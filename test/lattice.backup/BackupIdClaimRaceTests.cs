@@ -28,7 +28,6 @@ public sealed class BackupIdClaimRaceTests
     [Test]
     public async Task Another_scope_cannot_take_an_id_its_owner_is_republishing_through_a_retire()
     {
-        RedProof.OwnerNoPending = true; // RED-PROOF
         _fixture = new SchedulerClusterFixture();
         await _fixture.InitializeAsync(
             o =>

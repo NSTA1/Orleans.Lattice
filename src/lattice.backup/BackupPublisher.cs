@@ -165,7 +165,6 @@ internal sealed class BackupPublisher(
         var row = await catalog.GetAsync(backupId).ConfigureAwait(false);
         if (row is null)
         {
-            if (RedProof.NoResume) { return null; } // RED-PROOF
             return await sink.ReadManifestAsync(backupId).ConfigureAwait(false);
         }
 

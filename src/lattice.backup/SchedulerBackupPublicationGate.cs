@@ -133,7 +133,6 @@ internal sealed class SchedulerBackupPublicationGate(
             }
             catch (TimeoutException ex)
             {
-                if (RedProof.NoTimeoutRetry) { throw; } // RED-PROOF
                 timedOut = ex;
             }
 

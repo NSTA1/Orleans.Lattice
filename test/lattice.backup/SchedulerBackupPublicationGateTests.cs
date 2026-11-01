@@ -19,7 +19,6 @@ public sealed class SchedulerBackupPublicationGateTests
     [Test]
     public async Task A_call_that_timed_out_is_retried_and_its_result_returned()
     {
-        RedProof.NoTimeoutRetry = true; // RED-PROOF
         var calls = 0;
 
         var result = await SchedulerBackupPublicationGate.RetryAsync(

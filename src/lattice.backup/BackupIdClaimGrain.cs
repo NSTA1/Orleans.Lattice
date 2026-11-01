@@ -36,8 +36,6 @@ internal sealed class BackupIdClaimGrain(
             return false;
         }
 
-        if (RedProof.OwnerNoPending && owner is not null) { return true; } // RED-PROOF
-
         // Recorded for the owning scope too (issue #5627): its publish may wait on
         // the scope's hold while a retention pass or a delete retires the id, and
         // the id must stay this scope's until that publish completes, or another
@@ -49,7 +47,6 @@ internal sealed class BackupIdClaimGrain(
     /// <inheritdoc />
     public Task ReleaseAsync(string scopeKey)
     {
-        if (RedProof.ReleaseClearsAll) { _pending.RemoveAll(claim => claim.ScopeKey == scopeKey); return Task.CompletedTask; } // RED-PROOF
         var index = _pending.FindIndex(claim => string.Equals(claim.ScopeKey, scopeKey, StringComparison.Ordinal));
         if (index >= 0)
         {

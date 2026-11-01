@@ -73,13 +73,15 @@ public sealed class BackupIdCollisionTests
         Assert.Multiple(async () =>
         {
             Assert.That(await claim.TryClaimAsync("scope-a"), Is.True, "the first scope claims the id");
-            Assert.That(await claim.TryClaimAsync("scope-a"), Is.True, "the claiming scope keeps it");
+            Assert.That(await claim.TryClaimAsync("scope-a"), Is.True, "the claiming scope takes a second claim");
             Assert.That(await claim.TryClaimAsync("scope-b"), Is.False, "another scope is refused while the claim is pending");
         });
 
         await claim.ReleaseAsync("scope-b");
         Assert.That(await claim.TryClaimAsync("scope-b"), Is.False, "only the claiming scope can release its claim");
 
+        // Each claim is released on its own (issue #5627).
+        await claim.ReleaseAsync("scope-a");
         await claim.ReleaseAsync("scope-a");
         Assert.That(await claim.TryClaimAsync("scope-b"), Is.True, "a released claim admits the next scope");
     }
@@ -87,7 +89,6 @@ public sealed class BackupIdCollisionTests
     [Test]
     public async Task A_scope_keeps_the_bare_id_until_its_last_claim_is_released()
     {
-        RedProof.ReleaseClearsAll = true; // RED-PROOF
         // Two publishes of one scope hold one claim each (issue #5627): the first
         // to finish must not release the other's.
         var claim = _fixture.GrainFactory.GetGrain<IBackupIdClaimGrain>("twice-claimed-id");
@@ -104,7 +105,6 @@ public sealed class BackupIdCollisionTests
     [Test]
     public async Task The_owning_scope_holds_a_claim_while_it_republishes_its_id()
     {
-        RedProof.OwnerNoPending = true; // RED-PROOF
         // The owner's own claim is recorded (issue #5627): while its publish runs,
         // and even if the id is retired meanwhile, no other scope can take it.
         var captured = await _fixture.Capture.CaptureAsync(

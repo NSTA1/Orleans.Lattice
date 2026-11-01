@@ -129,7 +129,6 @@ internal sealed partial class BackupSchedulerGrain
             // The hold becomes a lease that outlives this call: the caller deletes
             // the artifacts and the sink manifest outside the grain, then ends it.
             _deleting[backupId] = DateTimeOffset.UtcNow + DeleteLease;
-            if (RedProof.DeleteInGrain) { await Publisher.CompleteDeleteAsync(manifest); } // RED-PROOF
             return new BackupDeleteStart(BackupRetireOutcome.Removed, manifest);
         }
         finally
@@ -178,7 +177,7 @@ internal sealed partial class BackupSchedulerGrain
     private bool IsHeld(string backupId) =>
         _publishing.Contains(backupId)
         || _retiring.Contains(backupId)
-        || (RedProof.NoPendingLease ? _pendingMembers.ContainsKey(backupId) : HasLiveLease(_pendingMembers, backupId)) // RED-PROOF
+        || HasLiveLease(_pendingMembers, backupId)
         || HasLiveLease(_deleting, backupId)
         || (_publishedDuringListing?.Contains(backupId) ?? false);
 
