@@ -15,10 +15,12 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Import;
 /// The bounded-memory proof for the streaming import (#5365): on the out-of-process estate, a
 /// 200 MB NDJSON file is imported through the Explorer's own Import dialog, once as a seed and
 /// once as an upsert, while the memory of the Explorer head and of every west silo is watched.
-/// No process's live managed heap may rise more than <see cref="LiveHeapCeilingBytes"/> above
-/// its baseline at any point, which no process could manage if any hop - the browser upload,
-/// the Explorer's reader and channel, the gateway, or a silo's streaming handler - held the
-/// file, or any fixed fraction of it above a sixth.
+/// No process's live managed heap may peak more than <see cref="ImportMemoryBudget.InFlightCeilingBytes"/>
+/// above the heap it settles to before and after the import, which no process could manage if
+/// any hop - the browser upload, the Explorer's reader and channel, the gateway, or a silo's
+/// streaming handler - held the file, or any fixed fraction of it above a sixth; and none may
+/// keep more than <see cref="ImportMemoryBudget.KeptCeilingBytes"/> across the warm-up and the
+/// import together (see <see cref="ImportMemoryBudget"/>).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -46,8 +48,10 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Import;
 /// <para>
 /// Each import is preceded by a warm-up import of a quarter of the size through the same
 /// path. The warm-up brings the code JIT-compiled and each process's activations, pools and
-/// collector budgets to their working size, so what is measured is what the file's size adds,
-/// not what any first import costs.
+/// collector budgets toward their working size. It does not always finish the job: a silo
+/// can still build part of the state the upsert path keeps during the measured import
+/// (#5558), which is why what the process keeps is bounded across both imports rather than
+/// charged to the measured one.
 /// </para>
 /// <para>
 /// The files are shaped so that a silo's growth measures what it streamed rather than what it
@@ -68,13 +72,13 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Import;
 public sealed class ImportMemoryTests
 {
     /// <summary>
-    /// How far any measured process's live heap may rise above its baseline during an import.
-    /// The import's own budget is far smaller - the Explorer's channel of 1,024 entries, and a
-    /// batch of 256 upsert records (1 MB) or a chunk of 1,000 seed entries in flight per hop -
-    /// so the ceiling leaves room for a few batches queued on each hop and for the stored tree,
+    /// How far any measured process's live heap may peak above both its settled readings while
+    /// an import streams. The import's own budget is far smaller - the Explorer's channel of
+    /// 1,024 entries, and a batch of 256 upsert records (1 MB) or a chunk of 1,000 seed entries
+    /// in flight per hop - so the ceiling leaves room for a few batches queued on each hop,
     /// while staying a sixth of the file.
     /// </summary>
-    public const long LiveHeapCeilingBytes = ImportMemoryBudget.LiveHeapCeilingBytes;
+    public const long LiveHeapCeilingBytes = ImportMemoryBudget.InFlightCeilingBytes;
 
     /// <summary>How far any measured process's working set may rise above the larger of its baseline and its warm-up peak: half the file.</summary>
     public const long WorkingSetCeilingBytes = FileBytes / 2;
@@ -152,7 +156,7 @@ public sealed class ImportMemoryTests
         await olivia.SubstepAsync("file-chosen", "A 200 MB NDJSON file is chosen; the key comes from /id and the value from /n");
 
         var growth = await MeasureAsync(olivia, dialog, "Seed tree", lines, "seed-progress", "The seed streams the file: the pre-flight pass checks its order before anything is written");
-        await olivia.SubstepAsync("succeeded", $"Seeded {ImportFiles.Count(lines)} entries; no process's live heap grew by 32 MB");
+        await olivia.SubstepAsync("succeeded", $"Seeded {ImportFiles.Count(lines)} entries; no process held 32 MB of the file in flight");
 
         growth = WithWarmUp(growth, warmUpReadings);
         var (found, missing) = await FindEveryKeyAsync(SeedTree, Enumerable.Range(0, lines).Select(line => $"bulk/{line:D8}"));
@@ -212,7 +216,7 @@ public sealed class ImportMemoryTests
         await olivia.SubstepAsync("file-chosen", "A 200 MB NDJSON file of whole order records is chosen for an upsert");
 
         var growth = await MeasureAsync(olivia, dialog, "Import", lines, "upsert-progress", "The upsert streams every record through the gateway to the silos, a batch at a time");
-        await olivia.SubstepAsync("succeeded", $"Wrote {ImportFiles.Count(lines)} records; no process's live heap grew by 32 MB");
+        await olivia.SubstepAsync("succeeded", $"Wrote {ImportFiles.Count(lines)} records; no process held 32 MB of the file in flight");
 
         growth = WithWarmUp(growth, warmUpReadings);
         var (found, _) = await FindEveryKeyAsync(UpsertTree, Enumerable.Range(0, UpsertKeys).Select(key => $"order/{key:D6}"));

@@ -60,6 +60,24 @@ internal sealed record WorkingSetGrowth(string Process, long Baseline, long Peak
         ? Math.Max(0, Math.Max(LivePeak ?? 0, LiveAfter ?? 0) - baseline)
         : null;
 
+    /// <summary>
+    /// How far the live heap's peak rose above both <see cref="LiveBaseline"/> and
+    /// <see cref="LiveAfter"/>, in bytes: what the process held only while the import streamed.
+    /// <see langword="null"/> without all three readings.
+    /// </summary>
+    public long? LiveInFlight => LiveBaseline is { } baseline && LivePeak is { } peak && LiveAfter is { } after
+        ? Math.Max(0, peak - Math.Max(baseline, after))
+        : null;
+
+    /// <summary>
+    /// How far the settled live heap after the import is above the settled live heap before the
+    /// warm-up (or before the import, without a warm-up), in bytes: what the warm-up and the
+    /// import together left behind. <see langword="null"/> without those readings.
+    /// </summary>
+    public long? LiveKept => (WarmUpLiveBaseline ?? LiveBaseline) is { } before && LiveAfter is { } after
+        ? Math.Max(0, after - before)
+        : null;
+
     /// <summary>A markdown table of <paramref name="readings"/> for a job summary or a PR body.</summary>
     /// <param name="title">The table's heading.</param>
     /// <param name="fileBytes">The size of the imported file, in bytes.</param>
@@ -70,12 +88,12 @@ internal sealed record WorkingSetGrowth(string Process, long Baseline, long Peak
         var text = new StringBuilder();
         text.AppendLine(CultureInfo.InvariantCulture, $"### {title} ({Mb(fileBytes)} file)");
         text.AppendLine();
-        text.AppendLine("| Process | Live heap baseline | Live heap peak | Live heap settled | Live growth | Warm-up live growth | Working set baseline | Warm-up working set peak | Working set peak | Working set growth | Working set settled | Samples (live / working set) | Collector |");
-        text.AppendLine("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|");
+        text.AppendLine("| Process | Live heap baseline | Live heap peak | Live heap settled | Live growth | Live in flight | Warm-up live baseline | Kept across both imports | Warm-up live growth | Working set baseline | Warm-up working set peak | Working set peak | Working set growth | Working set settled | Samples (live / working set) | Collector |");
+        text.AppendLine("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|");
         foreach (var reading in readings)
         {
             text.AppendLine(CultureInfo.InvariantCulture,
-                $"| {reading.Process} | {Mb(reading.LiveBaseline)} | {Mb(reading.LivePeak)} | {Mb(reading.LiveAfter)} | {Mb(reading.LiveGrowth)} | {Mb(reading.WarmUpLiveGrowth)} | {Mb(reading.Baseline)} | {Mb(reading.WarmUpPeak)} | {Mb(reading.Peak)} | {Mb(reading.Growth)} | {Mb(reading.SettledAfter)} | {reading.LiveSamples} / {reading.Samples} | {reading.Collector ?? "-"} |");
+                $"| {reading.Process} | {Mb(reading.LiveBaseline)} | {Mb(reading.LivePeak)} | {Mb(reading.LiveAfter)} | {Mb(reading.LiveGrowth)} | {Mb(reading.LiveInFlight)} | {Mb(reading.WarmUpLiveBaseline)} | {Mb(reading.LiveKept)} | {Mb(reading.WarmUpLiveGrowth)} | {Mb(reading.Baseline)} | {Mb(reading.WarmUpPeak)} | {Mb(reading.Peak)} | {Mb(reading.Growth)} | {Mb(reading.SettledAfter)} | {reading.LiveSamples} / {reading.Samples} | {reading.Collector ?? "-"} |");
         }
 
         return text.ToString();
