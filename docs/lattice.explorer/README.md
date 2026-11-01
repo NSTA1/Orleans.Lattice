@@ -159,6 +159,7 @@ for wiring sign-in.
 - [What the Explorer remembers](what-the-explorer-remembers.md) - the preference contract: what is remembered, where, and how to reset it.
 - [Theming and density](theming-and-density.md) - the themes, the contrast axis, density, and how a choice is applied at first paint.
 - [Accessibility conformance](accessibility-conformance.md) - what the console targets, how that is verified, and the known limitations.
+- [Explorer user journeys](user-journeys.md) - the end-to-end journey series on an Azurite estate: run modes, chapter contracts, CI gating, and the known-defect policy and census.
 
 ### Hosting and administration
 
