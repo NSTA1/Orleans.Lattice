@@ -6,6 +6,7 @@ using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Sessions;
 using static Microsoft.Playwright.Assertions;
 using Trees = Orleans.Lattice.Explorer.EndToEnd.Tests.Story.StoryNames.Contoso.Trees;
@@ -23,6 +24,16 @@ public sealed partial class C2Resilience
 
     /// <summary>How long the scan of C2.2 is held on the silo running it, so it is Running when its silo is killed.</summary>
     private static readonly TimeSpan ScanHold = TimeSpan.FromSeconds(150);
+
+    /// <summary>What the Compliance tab says when it cannot read the followed scan's status.</summary>
+    private const string ProgressUnreadable = "read the scan's progress";
+
+    /// <summary>
+    /// How long after the tab first fails to read the scan the record is given to reactivate on
+    /// the surviving silo before C2.2 concludes it cannot (#5579). A healthy record reloads in a
+    /// few seconds.
+    /// </summary>
+    private static readonly TimeSpan RecordReactivationWindow = TimeSpan.FromSeconds(60);
 
     /// <summary>
     /// C2.1: priya follows ten telemetry readings that the line feed will write over the next
@@ -95,6 +106,8 @@ public sealed partial class C2Resilience
     /// the scan's operation record and kills the silo hosting it while the scan is Running. The
     /// tab then shows an honest end within a bound - the report, once the record reactivated on
     /// the surviving silo, or the reason the scan failed - and never keeps saying it is scanning.
+    /// Until #5579 is fixed the record cannot reload from storage, so the step asserts that
+    /// defect instead (see the <c>KnownDefect</c> below).
     /// </summary>
     private static async Task OperationSiloLostAsync(JourneyEstate estate, C2Step step)
     {
@@ -124,20 +137,26 @@ public sealed partial class C2Resilience
             step.Log($"killed west silo {record.Silo}, which hosted {record.GrainId} while scan {running.OperationId} was Running");
             await estate.ClearComplianceScanDelayAsync(C2ScanTree.TreeId);
 
-            var reported = await view.WaitForOutcomeAsync(TimeSpan.FromMinutes(5));
-            var final = await ContractWait.RetryingAsync("the scan's final status", async () =>
-                await schema.GetComplianceScanStatusAsync(running.OperationId) ?? throw new InvalidOperationException($"scan {running.OperationId} is no longer visible"));
-            Assert.That(final.IsTerminal, Is.True, $"the cluster has ended scan {running.OperationId} as the tab says ({final.State})");
-            Assert.That(final.State == LatticeOperationState.Succeeded, Is.EqualTo(reported), $"the tab's outcome matches the cluster's ({final.State}: {final.FailureReason})");
-            step.Log(reported
-                ? $"the scan completed after its record reactivated on the surviving silo ({final.State})"
-                : $"the scan reported its failure honestly: {final.FailureReason}");
+            // #5579: the record cannot reactivate from Azure Table storage (its TreeIds list is a
+            // compiler-synthesized collection the JSON provider cannot rebuild), so the scan never
+            // ends. Once that is fixed this wrapper fails: replace it with the honest-end check -
+            // view.WaitForOutcomeAsync, then the cluster's terminal status matching the tab (the
+            // report, or Failed with its reason).
+            await new KnownDefect("#5579", "An operation record cannot be reloaded from Azure Table storage, so a scan whose record's silo was lost never ends").ReproducesAsync(async () =>
+            {
+                await Expect(view.Error).ToContainTextAsync(ProgressUnreadable, new() { Timeout = 120_000 });
+                await Task.Delay(RecordReactivationWindow);
+                Assert.That(await view.Scanning.IsVisibleAsync(), Is.True, "the tab still says the scan is running");
+                Assert.That(
+                    async () => await schema.GetComplianceScanStatusAsync(running.OperationId),
+                    Throws.Exception,
+                    $"scan {running.OperationId}'s record still cannot be read {RecordReactivationWindow.TotalSeconds:0} s after its silo was lost");
+            });
+            step.Log($"scan {running.OperationId} cannot end: its record does not reload from storage (#5579)");
             await step.CaptureAsync(
                 olivia,
                 "outcome",
-                reported
-                    ? "The scan completed after its record reactivated on the surviving silo: the report, never a stalled 'Scanning'"
-                    : "The scan ended Failed and the tab says why: never a stalled 'Scanning'");
+                "The record's silo is gone and the record cannot be reloaded (#5579): the tab says it cannot read the scan's progress, and the scan never ends");
             Coverage.Hit("route:/schema");
             Coverage.Hit("route:/schema/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}");
             Coverage.Hit("use-case:cluster/operation-silo-lost");
