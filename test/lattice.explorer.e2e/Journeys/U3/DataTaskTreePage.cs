@@ -25,8 +25,11 @@ internal sealed class DataTaskTreePage(PersonaSession session, string tree)
     /// <summary>The tree's own link, in the row header of <see cref="DirectoryRow"/>.</summary>
     public ILocator TreeLink => DirectoryRow.Locator("th a");
 
-    /// <summary>The keys the Keys tab lists, as links whose title is the full key.</summary>
-    public ILocator Keys => session.Shell.Content.Locator("a.lt-data-key");
+    /// <summary>
+    /// The keys the Keys tab lists, as links whose title is the full key. Only a key link carries
+    /// a title: the tree header's owner link shares the lt-data-key class (#5509) and is not a key.
+    /// </summary>
+    public ILocator Keys => session.Shell.Content.Locator("a.lt-data-key[title]");
 
     /// <summary>The Keys tab's live-updates switch.</summary>
     public ILocator LiveUpdates => session.Shell.Content.GetByRole(AriaRole.Switch, new() { Name = "Live updates" });

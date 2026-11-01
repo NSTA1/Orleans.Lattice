@@ -32,6 +32,7 @@ public sealed class JourneySiloParityTests
         "POST /e2e/wal-target", // hold a WAL move's writes to its target, so a stop lands before the flip (#5382)
         "POST /e2e/wal-pin",    // plant a WAL materialiser pin of a named kind on a tree (#5382)
         "DELETE /e2e/wal-pin",  // release a planted WAL pin (#5382)
+        "POST /e2e/apps/publish", // a journey app source's publisher releasing task-board vNext into samples (#5376)
     ];
 
     /// <summary>Every registration call of the reference silo appears in the journey silo.</summary>

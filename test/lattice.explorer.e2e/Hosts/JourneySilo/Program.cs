@@ -485,6 +485,9 @@ builder.Services.AddOpenTelemetry()
 
 var app = builder.Build();
 
+// The journey app sources read what their publishers have released from a cluster-wide grain.
+JourneyAppSource.UseGrains(app.Services.GetRequiredService<IGrainFactory>());
+
 app.UseFrontDoorOriginLock(
     frontDoorId,
     "/metrics",
