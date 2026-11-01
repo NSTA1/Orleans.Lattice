@@ -69,11 +69,17 @@ public static class Personas
     /// <summary>A default-tenant user who is not an operator.</summary>
     public static Persona Dee { get; } = new("dee", "Dee Adeyemi", Password("dee"), FabrikamEstate, "Default-tenant user, not an operator", HomeTenant: "default");
 
+    /// <summary>
+    /// An acme member with no rule at all (T2), the witness that tenant membership confers no data
+    /// rights of its own: every read and write it attempts on acme's trees is refused.
+    /// </summary>
+    public static Persona Abe { get; } = new("abe", "Abe Novak", Password("abe"), FabrikamEstate, "Acme member, no rules", HomeTenant: "acme");
+
     /// <summary>The Contoso cast, in the decision record's order.</summary>
     public static IReadOnlyList<Persona> Contoso { get; } = [Olivia, Priya, Sam, Dana, Nina, LineFeed];
 
     /// <summary>The Fabrikam cast, in the decision record's order.</summary>
-    public static IReadOnlyList<Persona> Fabrikam { get; } = [Hal, Ada, Ari, Gus, Gia, Dee];
+    public static IReadOnlyList<Persona> Fabrikam { get; } = [Hal, Ada, Ari, Gus, Gia, Dee, Abe];
 
     /// <summary>Every persona in the catalogue.</summary>
     public static IReadOnlyList<Persona> All { get; } = [.. Contoso, .. Fabrikam];

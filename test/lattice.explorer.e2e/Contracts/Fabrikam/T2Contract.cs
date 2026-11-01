@@ -31,6 +31,12 @@ public sealed class T2Contract() : ChapterContract("T2")
             // Already a member.
         }
 
+        // abe: an acme member with no rule, the witness that membership alone grants nothing.
+        if (!(await tenants.ListMembersAsync(acme, new())).Entries.Any(member => member.SubjectId == Personas.Abe.Id))
+        {
+            await tenants.AddMemberAsync(acme, Personas.Abe.Id);
+        }
+
         await tenants.UpsertGroupAsync(acme, new TenantGroupDescriptor { Name = Names.Groups.AcmeAnalysts, DisplayName = "Acme analysts" });
         if (!(await tenants.ListGroupMembersAsync(acme, Names.Groups.AcmeAnalysts)).Any(member => member.MemberId == Personas.Ari.Id))
         {
@@ -64,6 +70,9 @@ public sealed class T2Contract() : ChapterContract("T2")
         // before membership is consulted.)
         var ari = ContractFacades.Of(context, Personas.Ari.Id, region, acme).Data;
         Require(await WriteRefusedAsync(ari), "ari, an acme member with a read rule only, may not write acme-inventory");
+        var abe = ContractFacades.Of(context, Personas.Abe.Id, region, acme).Data;
+        Require(await ReadRefusedAsync(abe), "abe, an acme member with no rule, may not read acme-inventory");
+        Require(await WriteRefusedAsync(abe), "abe, an acme member with no rule, may not write acme-inventory");
 
         Require(await AtQuotaAsync(context), "acme is at its 5-tree quota");
     }
@@ -89,6 +98,19 @@ public sealed class T2Contract() : ChapterContract("T2")
     }
 
     private static readonly TimeSpan MeterPatience = TimeSpan.FromMinutes(2);
+
+    private static async Task<bool> ReadRefusedAsync(Orleans.Lattice.Api.Data.Grpc.LatticeDataApiGrpcClient data)
+    {
+        try
+        {
+            await ContractCalls.GetAsync(data, Names.Trees.AcmeInventory, FabrikamAccess.Inventory[0].Key);
+            return false;
+        }
+        catch (Grpc.Core.RpcException ex) when (ex.StatusCode == Grpc.Core.StatusCode.PermissionDenied)
+        {
+            return true;
+        }
+    }
 
     private static async Task<bool> WriteRefusedAsync(Orleans.Lattice.Api.Data.Grpc.LatticeDataApiGrpcClient data)
     {

@@ -29,10 +29,10 @@ public sealed class PersonaCatalogueTests
     {
         Assert.Multiple(() =>
         {
-            Assert.That(Personas.Fabrikam.Select(persona => persona.Id), Is.EqualTo(new[] { "hal", "ada", "ari", "gus", "gia", "dee" }));
+            Assert.That(Personas.Fabrikam.Select(persona => persona.Id), Is.EqualTo(new[] { "hal", "ada", "ari", "gus", "gia", "dee", "abe" }));
             Assert.That(Personas.Fabrikam.Select(persona => persona.Estate), Has.All.EqualTo(Personas.FabrikamEstate));
             Assert.That(Personas.BootstrapAdministratorsOf(Personas.FabrikamEstate), Is.EqualTo(new[] { "hal" }));
-            Assert.That(Personas.Fabrikam.Select(persona => persona.HomeTenant), Is.EqualTo(new[] { null, "acme", "acme", "globex", "globex", "default" }));
+            Assert.That(Personas.Fabrikam.Select(persona => persona.HomeTenant), Is.EqualTo(new[] { null, "acme", "acme", "globex", "globex", "default", "acme" }));
         });
     }
 
