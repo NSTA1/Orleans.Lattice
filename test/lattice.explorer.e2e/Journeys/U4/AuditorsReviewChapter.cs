@@ -1,6 +1,7 @@
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Checkpoints;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Sessions;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 
@@ -26,6 +27,13 @@ public sealed partial class AuditorsReviewChapter : JourneyChapter
     public const string JourneyId = "u4";
 
     private static JourneyRecorder Recorder => JourneyRecorder.For(JourneyId);
+
+    /// <summary>
+    /// factory-orders keeps no durable change history, so History cannot show a key before U2's
+    /// migration: no built-in provider can create a change-history view (#5611), and one built by
+    /// the host stalls its maintainer on this busy tree (#5612).
+    /// </summary>
+    private static readonly KnownDefect HistoryWithoutAViewKeepsOnlyTheWal = new("#5612", "a change-history view over factory-orders stalls its maintainer, so History keeps only the write-ahead log's window and cannot show a key before U2's migration");
 
     /// <inheritdoc />
     public override async Task RunAsync(ChapterContext context)

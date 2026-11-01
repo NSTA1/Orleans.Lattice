@@ -89,21 +89,6 @@ public sealed class ProvisioningTheFactoryJourney : JourneyChapter
             Coverage.Hit("query:cluster.tab");
             Coverage.Hit("tab:cluster/configuration");
             await steps.SubstepAsync("retention-saved", "factory-orders keeps every revision's value");
-
-            // Full-value retention says what each revision keeps; the change-history view is
-            // what keeps the revisions beyond the write-ahead log, so it is enabled before the seed.
-            await data.OpenTreeAsync(Names.Trees.FactoryOrders, "views");
-            await data.NewViewButton.ClickAsync();
-            await Expect(data.NewViewDialog).ToBeVisibleAsync();
-            await data.NewViewDialog.Locator("select[data-lt-view-provider]").SelectOptionAsync(A3Contract.HistoryProviderKey);
-            await data.NewViewDialog.GetByLabel("View name", new() { Exact = true }).FillAsync(Names.Views.OrdersHistory);
-            await steps.SubstepAsync("history-form", "New view: the change-history provider, named orders-history, before any order is written");
-
-            await data.NewViewDialog.GetByRole(AriaRole.Button, new() { Name = "Create view", Exact = true }).ClickAsync();
-            await A3Ui.ExpectToastAsync(shell, $"Created view {Names.Views.OrdersHistory}.");
-            await Expect(data.NewViewDialog).ToBeHiddenAsync();
-            await data.WaitForCurrentAsync(Names.Views.OrdersHistory);
-            await steps.SubstepAsync("history-current", "orders-history is Current: factory-orders keeps every revision beyond the write-ahead log");
         });
 
         // 2. Import the October orders into factory-orders as a seed.
@@ -296,7 +281,6 @@ public sealed class ProvisioningTheFactoryJourney : JourneyChapter
             await Expect(data.NewViewDialog).ToBeVisibleAsync();
             await A3Ui.ExpectAddressAsync(page, "new=view");
             Coverage.Hit("query:data.new");
-            await data.NewViewDialog.Locator("select[data-lt-view-provider]").SelectOptionAsync(A3Contract.ViewProviderKey);
             await Expect(data.NewViewDialog.Locator("select[data-lt-view-provider]")).ToHaveValueAsync(A3Contract.ViewProviderKey);
             await data.NewViewDialog.GetByLabel("View name", new() { Exact = true }).FillAsync(Names.Views.OrdersByStatus);
             await steps.SubstepAsync("form", "New view: the order-status provider, named orders-by-status, its field left empty");

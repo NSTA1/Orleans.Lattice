@@ -10,8 +10,7 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts.Contoso;
 
 /// <summary>
 /// A3, provisioning the factory (#5374). Produces <c>factory-orders</c> (4 shards, full-value
-/// history retention and the <c>orders-history</c> change-history view set before any order is
-/// written, the 240
+/// history retention set before any order is written, the 240
 /// orders of <see cref="StoryData.Orders"/>, alias <c>orders</c>, publish-events on - the
 /// tunable step 6 changes - the <c>orders-by-status</c> view over the silo's
 /// <c>order-status</c> provider, the line feed attached and the <c>order-status</c> tag index
@@ -25,13 +24,6 @@ public sealed class A3Contract() : ChapterContract("A3")
 
     /// <summary>The runtime view provider <c>orders-by-status</c> is created from, and its payload.</summary>
     public const string ViewProviderKey = "order-status";
-
-    /// <summary>
-    /// The runtime view provider of the durable change history. Full-value retention says what
-    /// each revision keeps; a change-history view over the tree is what keeps the revisions beyond
-    /// the write-ahead log, so it is enabled before the seed (U4's Show as of reads the seed).
-    /// </summary>
-    public const string HistoryProviderKey = "change-history";
 
     /// <summary>The telemetry's history retention window (step 6).</summary>
     public static readonly TimeSpan TelemetryRetention = TimeSpan.FromDays(7);
@@ -53,9 +45,6 @@ public sealed class A3Contract() : ChapterContract("A3")
         // Retention is stamped per revision at write time, so it is set before the seed (U4 reads
         // an earlier value through Show as of).
         await admin.SetHistoryRetentionAsync(Names.Trees.FactoryOrders, OrdersRetentionMode, null);
-        await admin.CreateViewAsync(Names.Views.OrdersHistory, Names.Trees.FactoryOrders, HistoryProviderKey, "{}"u8.ToArray());
-        await ContractWait.UntilAsync("orders-history to be ready", async () =>
-            !string.IsNullOrEmpty((await admin.GetViewStatusAsync(Names.Views.OrdersHistory)).ActiveTreeId));
         await ContractCalls.SetManyAsync(facades.Data, Names.Trees.FactoryOrders, StoryData.Orders);
 
         await admin.CreateTreeAsync(Names.Trees.FactoryLines);
@@ -115,9 +104,6 @@ public sealed class A3Contract() : ChapterContract("A3")
         if (!context.IsProduced("C1"))
         {
             RequireEqual((await admin.GetHistoryRetentionAsync(Names.Trees.FactoryOrders)).Mode, OrdersRetentionMode, "factory-orders keeps every revision's value (full-value history)");
-            var history = await admin.GetViewStatusAsync(Names.Views.OrdersHistory);
-            RequireEqual(history.SourceTreeId, Names.Trees.FactoryOrders, "orders-history keeps factory-orders' change history");
-            Require(!string.IsNullOrEmpty(history.ActiveTreeId), "orders-history is ready");
         }
 
         if (!context.IsProduced("C3"))
