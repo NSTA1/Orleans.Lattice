@@ -239,12 +239,12 @@ public sealed class StoryRunnerSelfTests
     [Test]
     public void Only_a_tracked_failed_stand_in_is_a_known_defect()
     {
-        var known = new Dictionary<string, string>(StringComparer.Ordinal) { ["C1"] = "#5506" };
+        var known = new Dictionary<string, string>(StringComparer.Ordinal) { ["C1"] = "#1234" };
         var failed = new ChapterResult("C1", ChapterStatus.Failed, [], new TimeoutException("timed out"), TimeSpan.Zero);
 
         Assert.Multiple(() =>
         {
-            Assert.That(StoryRunFixture.KnownDefectFor(failed, isImplemented: false, known), Is.EqualTo("#5506"));
+            Assert.That(StoryRunFixture.KnownDefectFor(failed, isImplemented: false, known), Is.EqualTo("#1234"));
             Assert.That(StoryRunFixture.KnownDefectFor(failed, isImplemented: true, known), Is.Null, "a real journey's failure stays red");
             Assert.That(StoryRunFixture.KnownDefectFor(failed with { Id = "C2" }, isImplemented: false, known), Is.Null, "an untracked stand-in stays red");
             Assert.That(StoryRunFixture.KnownDefectFor(failed with { Status = ChapterStatus.StoodIn, Failure = null }, isImplemented: false, known), Is.Null);
