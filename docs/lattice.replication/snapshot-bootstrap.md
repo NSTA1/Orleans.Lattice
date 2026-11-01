@@ -139,8 +139,12 @@ before calling `AddLatticeReplication`.
   Before the drain, once the import is recorded (and once the tree is
   registered, so its lineage stamp cannot reset anything mid-drain), the
   receiver installs `(S, H)` as a durable **bootstrap drop floor** on its
-  high-water-mark grain, provided the frontier was read under the
-  export's opening lineage; otherwise it clears any earlier floor. The
+  high-water-mark grain, provided the tree merges last-writer-wins and the
+  frontier was read under the export's opening lineage; otherwise it clears
+  any earlier floor. A tree of any other merge mode (an OR-Map such as
+  `sys-replication-config`, an OR-Set, a counter) has no foreign deletes to
+  reconcile, so it installs no floor and owes no reconcile retry, and its
+  completed export answers a sender's re-seed request (#5534). The
   floor starts **provisional**: a delivery below it - a third cluster's
   write still in flight, a dead-letter replay, or a causal-buffer drain -
   is deferred (`outcome=bootstrap-floor-deferred`), not acknowledged,

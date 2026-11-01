@@ -1180,7 +1180,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         // Issue #4549. Installed before the drain, and only once the import is
         // recorded. A failed shadow import discards its copy and clears this
         // provisional floor; a failed legacy import stays fenced and re-drives.
-        var floorInstalled = await InstallBootstrapFloorAsync(treeName, sourceClusterId, snapshot, cancellationToken).ConfigureAwait(true);
+        var floorInstalled = await InstallBootstrapFloorAsync(treeName, sourceClusterId, snapshot, mergeMode, cancellationToken).ConfigureAwait(true);
 
         // Lazy-initialise the duration anchor on resume after a silo
         // failover: TryInitiateBootstrapAsync set it on kickoff, but a
@@ -1598,15 +1598,22 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
     /// after the reconcile scan. The source's own origin is never floored: its
     /// writes are re-shipped in offset order with their deletes.
     /// </para>
+    /// <para>
+    /// A tree whose merge mode is not last-writer-wins gets no floor: the floor
+    /// exists only for the foreign-delete reconcile, which never applies to a
+    /// merged tree (issue #5534).
+    /// </para>
     /// </summary>
     private async Task<bool> InstallBootstrapFloorAsync(
         string treeName,
         string sourceClusterId,
         SnapshotStream snapshot,
+        LatticeMergeMode mergeMode,
         CancellationToken cancellationToken)
     {
         var hwm = _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(treeName);
-        if (!BootstrapForeignDeleteReconcile.FrontierMatchesOpen(snapshot.OpenFrontier, snapshot.OpenGeneration))
+        if (mergeMode != LatticeMergeMode.LwwRegister
+            || !BootstrapForeignDeleteReconcile.FrontierMatchesOpen(snapshot.OpenFrontier, snapshot.OpenGeneration))
         {
             await hwm.ClearBootstrapFloorAsync(cancellationToken).ConfigureAwait(true);
             return false;
