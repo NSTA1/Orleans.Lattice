@@ -159,7 +159,10 @@ internal sealed class TelemetryBoardPage(IPage page, ShellPage shell)
     public async Task<IReadOnlyList<ChartState>> SettleAsync()
     {
         await Expect(Charts.First).ToBeVisibleAsync();
-        await Page.WaitForFunctionAsync(
+        // Polled from here rather than with WaitForFunctionAsync: the Explorer's CSP forbids
+        // 'unsafe-eval', which Playwright's in-page polling needs.
+        var deadline = DateTime.UtcNow + SettleTimeout;
+        while (!await Page.EvaluateAsync<bool>(
             """
             () => {
               const charts = [...document.querySelectorAll('main#lt-shell-content section.lt-telemetry-chart')];
@@ -167,9 +170,11 @@ internal sealed class TelemetryBoardPage(IPage page, ShellPage shell)
                 !chart.querySelector('.lt-skeleton')
                 && !!chart.querySelector('figure.lt-telemetry-figure, .lt-table-frame, .lt-table-list, .lt-table-empty, .lt-telemetry-chart__empty, .lt-telemetry-chart__problem'));
             }
-            """,
-            null,
-            new() { Timeout = (float)SettleTimeout.TotalMilliseconds, PollingInterval = 250 });
+            """))
+        {
+            Assert.That(DateTime.UtcNow, Is.LessThan(deadline), $"every chart answers within {SettleTimeout.TotalSeconds:N0} s at {Page.Url}");
+            await Task.Delay(250);
+        }
         return await Charts.EvaluateAllAsync<ChartState[]>(
             """
             charts => charts.map(chart => {
