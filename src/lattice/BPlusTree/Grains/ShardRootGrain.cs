@@ -3298,11 +3298,18 @@ internal sealed partial class ShardRootGrain(
         // purge's tail unpinned and unregistered that live leaf. The id's
         // deletion record tells the cases apart: it holds the id until the
         // purge has completed and removed the registry row, after which a row
-        // naming the id is a reuse.
-        if (await grainFactory.GetGrain<ITreeDeletionGrain>(routedLogical ?? TreeId).HoldsDeletionAsync())
+        // naming the id is a reuse. An id created again after the removal
+        // landed but before its record did is refused here until a re-drive
+        // records it - on the accepted purge's path within one deletion
+        // keepalive period, since that reminder stays armed until the tail
+        // settles - so the refusal names the purge, not a deletion.
+        var heldId = routedLogical ?? TreeId;
+        if (await grainFactory.GetGrain<ITreeDeletionGrain>(heldId).HoldsDeletionAsync())
         {
             if (!forWrite && purgedAnswersEmpty) return false;
-            throw new InvalidOperationException("This tree has been deleted and is no longer accessible.");
+            throw new InvalidOperationException(
+                $"Tree '{heldId}' is still held by a purge that has not yet released the id. "
+                + "Writes to it are refused until the purge settles; retry shortly.");
         }
 
         return await PrepareForOperationSlowAsync(forWrite, purgedAnswersEmpty);
