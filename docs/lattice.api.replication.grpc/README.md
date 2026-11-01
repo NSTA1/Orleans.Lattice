@@ -36,6 +36,7 @@ The gRPC service name is `orleans.lattice.api.replication`.
 | `DisableReplication` | unary | Disable replication for a tree without purging peer data. |
 | `GetReplicationConfig` | unary | Report the permission-scoped per-tree replication config. |
 | `DecommissionPeer` | unary | Permanently decommission a peer cluster id that is no longer in `ReplicationPeers`. |
+| `ProbeCapabilities` | unary | Report, with no side effects, whether the caller may configure replication for a tree. |
 | `GetAuthScheme` | unary (unauthenticated) | Advertise accepted auth schemes. |
 
 ### Peer status service

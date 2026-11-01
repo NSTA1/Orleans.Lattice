@@ -542,9 +542,13 @@ estate. A truncated status read says so and recommends filtering.
 
 The enrolled-trees page reads enrolment and status together. The table shows
 enabled, disabled or ambiguous state, merge mode, whether enrolment is runtime,
-static or both, app ownership and worst link health. A caller with the control
-facade and a readable enrolment report can enable replication for a new tree or
-for a disabled runtime tree. Enabling asks for the logical tree id (a picker
+static or both, app ownership and worst link health. Every listed tree is one the
+caller may manage, so a listed disabled runtime tree offers **Enable** and an
+enabled one **Disable**. **Enable replication for a tree** (a new tree) is
+offered only when the facade's capability probe says the caller holds the
+Replication grant, or the list holds a tree they manage: the report is readable
+by every caller, so an empty list proves nothing (#5478). The cluster still
+authorizes every enable and disable. Enabling asks for the logical tree id (a picker
 that accepts only a tree you can reach), merge mode and optional bootstrap source
 cluster (a picker that suggests the known regions and accepts any id); app-owned ids are rejected because their
 enrolment follows the app install. Disabling is a destructive confirmation: it
