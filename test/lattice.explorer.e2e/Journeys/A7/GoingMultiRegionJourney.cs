@@ -143,12 +143,17 @@ public sealed class GoingMultiRegionJourney : JourneyChapter
             await eastTrees.ChooseMergeModeAsync(MergeModeLabel);
             await eastTrees.NameBootstrapAsync(JourneyEstate.West);
             await east.SubstepAsync(recorder, "3", "east-composed", "A7.3 - In east: factory-orders, last-writer-wins, bootstrapped from west");
+            var enableStarted = System.Diagnostics.Stopwatch.StartNew();
             await eastTrees.EnableButton.ClickAsync();
 
             // Regression (#5379): east does not hold factory-orders yet; with a bootstrap source
             // named, the picker accepts it rather than refusing a tree only the bootstrap brings.
+            // The enable returns only once west has answered the bootstrap request, which can take
+            // well over a minute on a cold receiver (#5560), so the wait is bounded by that operation
+            // rather than by a UI timeout. Meanwhile the dialog says what it is waiting for.
             await Expect(east.Shell.Toasts.Filter(new() { HasText = $"Replication enabled for {orders} ({MergeModeLabel}). A snapshot bootstrap was requested." }))
-                .ToBeVisibleAsync(new() { Timeout = 30_000 });
+                .ToBeVisibleAsync(new() { Timeout = (float)EnableBootstrapBound.TotalMilliseconds });
+            TestContext.Progress.WriteLine($"A7.3: east's bootstrapped enable of {orders} took {enableStarted.Elapsed.TotalSeconds:0.0} s (#5560)");
             await Expect(eastTrees.EnableDialog).ToBeHiddenAsync();
             await Expect(east.Page.GetByText($"No tree is named {orders}. Choose one from the list.")).ToHaveCountAsync(0);
             var eastRow = eastTrees.Row(orders, eastCompact);
@@ -281,6 +286,9 @@ public sealed class GoingMultiRegionJourney : JourneyChapter
 
     /// <summary>The task board's replicated tree, as A5 leaves it (<c>a/{slug}/tasks</c>).</summary>
     private static string A5TaskBoardTree => A5Contract.TaskBoardTree;
+
+    /// <summary>How long a receiver's bootstrapped enable may take before the journey fails it (#5560 measured about 77 s).</summary>
+    private static readonly TimeSpan EnableBootstrapBound = TimeSpan.FromSeconds(180);
 
     /// <summary>
     /// Opens olivia's session on the east console - <c>/console</c> on the east gateway, where its

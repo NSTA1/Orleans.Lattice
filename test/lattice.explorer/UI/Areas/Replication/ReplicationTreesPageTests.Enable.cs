@@ -139,6 +139,34 @@ public sealed partial class ReplicationTreesPageTests
     }
 
     [Test]
+    public void While_a_bootstrapped_enable_is_in_flight_the_dialog_says_it_waits_for_the_source()
+    {
+        UseTrees();
+        Control.ChangeGate = new TaskCompletionSource();
+        var cut = RenderAt<ReplicationTreesPage>("replication/trees");
+        cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr"), Has.Count.EqualTo(6)));
+
+        cut.FindAll("button").Single(button => button.TextContent.Trim() == "Enable replication for a tree").Click();
+        Assert.That(cut.FindAll("form.lt-replication-form [role=\"status\"]"), Is.Empty, "nothing is in flight yet");
+        cut.FindAll("form.lt-replication-form input")[0].Input("inventory");
+        cut.FindAll("form.lt-replication-form input")[1].Input("eu-north");
+        cut.Find("form.lt-replication-form").Submit();
+
+        cut.WaitUntil(() => Assert.That(
+            cut.Find("form.lt-replication-form [role=\"status\"]").TextContent.Trim(),
+            Is.EqualTo("Enabling replication for inventory and asking eu-north for a snapshot. "
+                + "This waits for eu-north to answer, which can take a minute or more. "
+                + "You can close this dialog: a message reports the result.")));
+
+        cut.InvokeAsync(() => Control.ChangeGate.SetResult());
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.FindAll("form.lt-replication-form"), Is.Empty);
+            Assert.That(ToastService.Toasts.Single().Message, Is.EqualTo("Replication enabled for inventory (LWW register). A snapshot bootstrap was requested."));
+        });
+    }
+
+    [Test]
     public void At_the_compact_width_the_enable_flow_is_a_full_height_sheet()
     {
         UseTrees();
