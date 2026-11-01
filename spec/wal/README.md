@@ -25,7 +25,7 @@ exhaustively within the TLC budget.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `WalDurability` | 11 | 4 | 26 | 43 | 39 | 226,592 |
+| `WalDurability` | 11 | 5 | 27 | 47 | 41 | 400,000 |
 | `WalMove` | 5 | 2 | 13 | 18 | 18 | 1,617 |
 | `WalPinRetirement` | 3 | 3 | 25 | 31 | 30 | 284,019 |
 

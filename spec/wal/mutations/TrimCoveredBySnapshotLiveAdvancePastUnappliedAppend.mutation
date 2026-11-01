@@ -1,0 +1,19 @@
+# Pairs with TrimCoveredBySnapshot. The live advance moves the read position to
+# the highest offset the leaf issued while a lower own append is still in
+# flight. A capture then claims coverage over an offset the snapshot does not
+# hold, the published pin licenses the trim, and the write is trimmed with no
+# durable copy.
+MODULE: TrimCoveredBySnapshotLiveAdvancePastUnappliedAppend
+TARGET: TrimCoveredBySnapshot
+CLASS: Invariant
+SUMMARY: the live advance passes an own append that is not yet applied
+PERTURBS: LiveAdvance
+
+--- FIND
+    /\ OwnUnapplied(l) = {}
+    /\ LiveArmed(l)
+--- REPLACE
+\* MUTATION: an unapplied own append does not hold the advance.
+    /\ TRUE
+    /\ LiveArmed(l)
+--- END

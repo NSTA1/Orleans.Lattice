@@ -1,0 +1,18 @@
+# Pairs with NewbornPinEventuallyUsable, and reproduces issue #5572's production
+# shape: a live write never advances the leaf's read position, so a leaf born
+# holding live writes keeps its block pin until a replay is scheduled - which the
+# protocol cannot rely on for it - and its tree's WAL is retained meanwhile.
+MODULE: NewbornPinEventuallyUsableNoLiveAdvance
+TARGET: NewbornPinEventuallyUsable
+CLASS: Temporal
+SUMMARY: live writes never advance the read position
+PERTURBS: LiveAdvance
+
+--- FIND
+    /\ own[l] # {}
+    /\ OwnUnapplied(l) = {}
+--- REPLACE
+\* MUTATION: no live advance.
+    /\ FALSE
+    /\ OwnUnapplied(l) = {}
+--- END
