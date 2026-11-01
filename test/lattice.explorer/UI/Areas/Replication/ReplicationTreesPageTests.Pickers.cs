@@ -51,6 +51,10 @@ public sealed partial class ReplicationTreesPageTests
     {
         UseTrees();
         Services.UseTreeCatalogue("inventory", "orders");
+
+        // The enable is held so the dialog, and its Tree field, are still drawn when the picker's
+        // verdict is read: a successful enable closes the dialog and removes the field.
+        Control.ChangeGate = new TaskCompletionSource();
         var cut = RenderAt<ReplicationTreesPage>("replication/trees");
         cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr"), Has.Count.EqualTo(6)));
         cut.FindAll("button").Single(button => button.TextContent.Trim() == "Enable replication for a tree").Click();
@@ -59,10 +63,13 @@ public sealed partial class ReplicationTreesPageTests
         SuggestionFields.Box(cut, "Bootstrap from cluster (optional)").Input("west");
         cut.Find("form.lt-replication-form").Submit();
 
+        cut.WaitUntil(() => Assert.That(Control.Enables, Is.EqualTo(new[] { ("factory-orders", LatticeMergeMode.LwwRegister, (string?)"west") })));
+        Assert.That(SuggestionFields.ErrorOf(cut, "Tree"), Is.Null, "the bootstrap brings the tree, so it need not exist here yet");
+
+        cut.InvokeAsync(() => Control.ChangeGate.SetResult());
         cut.WaitUntil(() =>
         {
-            Assert.That(SuggestionFields.ErrorOf(cut, "Tree"), Is.Null, "the bootstrap brings the tree, so it need not exist here yet");
-            Assert.That(Control.Enables, Is.EqualTo(new[] { ("factory-orders", LatticeMergeMode.LwwRegister, (string?)"west") }));
+            Assert.That(cut.FindAll("form.lt-replication-form"), Is.Empty);
             Assert.That(ToastService.Toasts.Single().Message, Is.EqualTo("Replication enabled for factory-orders (LWW register). A snapshot bootstrap was requested."));
         });
     }
