@@ -13,8 +13,9 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Journeys.A12;
 /// <param name="shell">The shell of the session driving it.</param>
 internal sealed class ClusterOperationPages(ShellPage shell)
 {
-    /// <summary>The reshard page's status line, which reads "No reshard is running." once idle.</summary>
-    public ILocator Stage => shell.Content.Locator("section[aria-label=\"Reshard status\"] [aria-live=polite], section[aria-label=\"Snapshot status\"] [aria-live=polite]");
+    /// <summary>The reshard or snapshot page's status line, which reads "No reshard is running." once idle.</summary>
+    /// <remarks>The stage line only: a running operation's progress bar carries its own live region in the same section.</remarks>
+    public ILocator Stage => shell.Content.Locator("section[aria-label=\"Reshard status\"] > div.lt-cluster-stage, section[aria-label=\"Snapshot status\"] > div.lt-cluster-stage");
 
     /// <summary>The review section.</summary>
     public ILocator Review => shell.Content.GetByRole(AriaRole.Region, new() { Name = "Review" });
