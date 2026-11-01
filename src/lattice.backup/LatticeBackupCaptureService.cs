@@ -286,7 +286,7 @@ internal sealed class LatticeBackupCaptureService(
                                 }
                             },
                             baseManifest.ConsistencyCut.UndecidedSagaIds,
-                            null); // RED-PROOF: #5529 call-site argument dropped, restored in the next commit
+                            originClusterIdResolver?.Resolve(optionsResolver.GetMetricTreeId(treeId)));
 
                         // Stream the delta pages to the sink; the collector accumulates the
                         // manifest metadata and the new per-partition offset frontier as each page
