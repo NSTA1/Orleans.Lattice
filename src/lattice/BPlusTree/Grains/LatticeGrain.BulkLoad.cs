@@ -601,8 +601,7 @@ internal sealed partial class LatticeGrain
             return;
         }
 
-        if (destinationTreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal)
-            || destinationTreeId.StartsWith(LatticeConstants.SystemDataTreePrefix, StringComparison.Ordinal)
+        if (SystemTreeNamespace.IsSystemOwned(destinationTreeId)
             || (LatticeTenantTrees.IsTenantScoped(destinationTreeId) && !IsOwnedByActiveTenant(destinationTreeId)))
         {
             throw new LatticeReservedTreeNamespaceException(

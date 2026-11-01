@@ -1,0 +1,11 @@
+MODULE: SystemLaneProgressLaneWaitsForSharedPool
+TARGET: SystemLaneProgress
+CLASS: Temporal
+SUMMARY: the reserved lane is granted only while shared capacity is free, so a wedged shared pool starves system replays
+PERTURBS: LaneOpportunity
+
+--- FIND
+        /\ status[r] = "queued" /\ role[r] = "System" /\ LaneFree > 0
+--- REPLACE
+        /\ status[r] = "queued" /\ role[r] = "System" /\ LaneFree > 0 /\ free > 0
+--- END

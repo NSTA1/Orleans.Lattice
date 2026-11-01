@@ -1,0 +1,11 @@
+MODULE: LaneExclusiveAdmitsAnyWaiter
+TARGET: LaneExclusive
+CLASS: Action
+SUMMARY: the reserved lane admits any queued replay, so a user-tree replay can take the system lane
+PERTURBS: LaneOpportunity
+
+--- FIND
+        /\ status[r] = "queued" /\ role[r] = "System" /\ LaneFree > 0
+--- REPLACE
+        /\ status[r] = "queued" /\ LaneFree > 0
+--- END

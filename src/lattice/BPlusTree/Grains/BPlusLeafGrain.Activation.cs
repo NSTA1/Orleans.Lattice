@@ -603,6 +603,7 @@ internal sealed partial class BPlusLeafGrain
             _replayPermitsServed = 0;
             _replayServiceRateController = null;
             Volatile.Write(ref _queuedReplayPermitWaiters, 0);
+            Volatile.Write(ref _queuedSystemReplayLaneWaiters, 0);
             Volatile.Write(ref _replayPermitWaitEwmaTicks, 0);
             Volatile.Write(ref _replayPermitWaitSample, 0);
             Volatile.Write(ref _lastReplayPermitProgress, 0);
@@ -1624,6 +1625,14 @@ internal sealed partial class BPlusLeafGrain
         _replayAdmissionPhase = ReplayAdmissionPhase.ResolvingOptions;
         var options = await GetOptionsAsync();
         var gate = ResolveReplayConcurrencyGate(options, ResolveLogger);
+
+        // RESERVED SYSTEM LANE (issue #5569). A system-owned tree takes a free
+        // shared permit or waits on its own lane, and is never judged by the
+        // shared gate's admission arms: a wedged shared pool is precisely the
+        // condition under which those arms refuse, and it says nothing about the
+        // lane. See BPlusLeafGrain.SystemReplayLane.cs.
+        if (SystemTreeNamespace.IsSystemOwned(state.State.TreeId))
+            return await AcquireSystemReplayPermitAsync(gate, cancellationToken);
 
         // ADMISSION CONTROL (issue #3284). Read BEFORE the counter below is
         // incremented and before the wait is entered, because the whole point is
@@ -3296,7 +3305,7 @@ internal sealed partial class BPlusLeafGrain
                 // observation below, so the hold measures the replay and not
                 // the bookkeeping around it.
                 replayPermitAcquiredAt = Stopwatch.GetTimestamp();
-                replayServiceHold = BeginReplayServiceRateHold();
+                replayServiceHold = IsSystemReplayLane(replayPermit) ? -1 : BeginReplayServiceRateHold();
                 // The cold/warm discriminator is precisely the replay-start
                 // override computed at step 0.5: a -1 sentinel means neither the
                 // snapshot rehydrate nor a pre-populated cache supplied an anchor,
@@ -3404,7 +3413,9 @@ internal sealed partial class BPlusLeafGrain
             // count without a matching unreleased permit would overstate the
             // reduction - and, on recovery, return a permit the gate never lost,
             // which SemaphoreSlim would raise as SemaphoreFullException.
-            if (replayPermit is not null && IsReadMemoryPressure(ex))
+            // The reserved system lane (issue #5569) is never withheld: withholding
+            // adapts the shared ceiling, and the lane is not part of it.
+            if (replayPermit is not null && !IsSystemReplayLane(replayPermit) && IsReadMemoryPressure(ex))
                 withholdReplayPermitOnPressure = TryWithholdReplayPermitOnPressure(
                     LatticeMetrics.PermitAdaptationTriggerFault);
 
@@ -3586,9 +3597,16 @@ internal sealed partial class BPlusLeafGrain
                 // actually throws against - on a path every replay reaches
                 // whether it faults, recovers, or succeeds, so the reduction
                 // happens while there is still heap left to reduce into.
-                FinishReplayPermit(
-                    replayPermit, withholdReplayPermitOnPressure, replayCompletedCleanly,
-                    replayPermitAcquiredAt, MetricTreeId, state.State.TreeId, replayServiceHold);
+                if (IsSystemReplayLane(replayPermit))
+                {
+                    ReleaseSystemReplayLane(replayPermitAcquiredAt, MetricTreeId, state.State.TreeId);
+                }
+                else
+                {
+                    FinishReplayPermit(
+                        replayPermit, withholdReplayPermitOnPressure, replayCompletedCleanly,
+                        replayPermitAcquiredAt, MetricTreeId, state.State.TreeId, replayServiceHold);
+                }
             }
         }
 

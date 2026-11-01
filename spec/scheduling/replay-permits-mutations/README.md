@@ -1,12 +1,14 @@
 # ReplayPermits mutation catalogue
 
-The 29 anchored mutations cover every checked property, including TypeOK, and
+The 32 anchored mutations cover every checked property, including TypeOK, and
 every behavioural Next action, including environment actions. Read the
 [refinement](../ReplayPermitsRefinement.md) for the approved cold-lifetime
 correction and the explicit temporal premises. All 29 one-target pairs passed
 against source SHA-256
 `657769D201A472F5EFFF54C85EC17A2F56D0CB81F6F4844F0B91E49426BB10D0`,
 as did the complete base and both enrolled larger-bound configurations.
+The three reserved-system-lane mutations (issue #5569) were added after that
+certification and are checked by CI against the current source.
 Each file is an anchored edit against the current base, never a copied model.
 The filename and `MODULE` begin with the target property. The harness generates
 one-target configurations and carries TypeOK beside every non-TypeOK target.
@@ -52,6 +54,9 @@ edits do not claim direct action coverage.
 | `ColdDeadlineIsolationAbandonsOwner` | Anchored `ClientDeadline` perturbation directly retires/releases the shared owner without changing its cancellation membership. |
 | `TypeOKLifetimeCancellationOutsideDomain` | Anchored environment `CancelColdLifetime` perturbation introduces an unknown owner. |
 | `RestoreOwnershipStealsServiceCapacity` | Anchored `Restore` action perturbation with a service-owned baseline in mutant. |
+| `SystemLaneProgressLaneWaitsForSharedPool` | Anchored `LaneOpportunity` perturbation; the lane is granted only with free shared capacity, so a hung shared holder starves a system waiter. |
+| `LaneExclusiveAdmitsAnyWaiter` | Anchored `LaneOpportunity` perturbation; any queued replay may take the reserved lane. |
+| `PermitConservationSystemAdmissionDuplicatesCapacity` | Anchored `SystemAdmission` perturbation; a system replay takes a shared permit without consuming it. |
 
 All actual environment actions have perturbations; only `Stutter` represents
 no production behavior. The refinement records the completed pairs, scoped

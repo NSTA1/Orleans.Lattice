@@ -15,7 +15,13 @@ vars == <<holders, free, withheld, queue, status, role, observed,
           frontier, banked, checkpoint, holes, ledger, opportunity, arrivalsClosed, dispatchEpoch,
           clientActive, cancelled>>
 
-Classes == {"Interactive", "Bulk", "Drive"}
+Classes == {"Interactive", "Bulk", "Drive", "System"}
+\* The reserved system lane (#5569). A "System" role is a system-tree replay
+\* that found no free shared permit and waits off the shared queue; a "Lane"
+\* role is one holding the reserved lane permit. Neither touches shared capacity.
+LaneCapacity == 1
+OnLane == {r \in Requests : role[r] = "Lane"}
+LaneFree == LaneCapacity - Cardinality(OnLane)
 Min(a, b) == IF a < b THEN a ELSE b
 Max(a, b) == IF a > b THEN a ELSE b
 Members(q) == {q[i] : i \in 1..Len(q)}
@@ -40,7 +46,7 @@ TypeOK ==
     /\ free \in 0..Ceiling /\ withheld \in 0..Ceiling
     /\ queue \in Seq(Requests)
     /\ status \in [Requests -> {"new", "idle", "pending", "queued", "holding", "done", "refused"}]
-    /\ role \in [Requests -> {"Bulk", "Interactive", "Drive"}]
+    /\ role \in [Requests -> {"Bulk", "Interactive", "Drive", "System", "Lane"}]
     /\ observed \in [Requests -> [depth : 0..Cardinality(Requests),
           bound : 1..(DepthPerPermit * Ceiling),
           drain : {"Draining", "NoProgress", "WaitExceeded"}]]
@@ -59,11 +65,12 @@ TypeOK ==
     /\ clientActive \in [Requests -> BOOLEAN]
     /\ cancelled \subseteq Requests
 PermitConservation ==
-    /\ Cardinality(holders) + free = Circulating
+    /\ Cardinality(holders \ OnLane) + free = Circulating
     /\ holders = {r \in Requests : status[r] = "holding"}
+    /\ OnLane \subseteq holders /\ Cardinality(OnLane) <= LaneCapacity
 FloorOne == Circulating >= 1
 QueueOwnership ==
-    /\ Members(queue) = {r \in Requests : status[r] = "queued"}
+    /\ Members(queue) = {r \in Requests : status[r] = "queued" /\ role[r] # "System"}
     /\ Len(queue) = Cardinality(Members(queue))
 CoverageSound == \A p \in Partitions : banked[p] <= frontier[p]
 UnresolvedWorkDurable == holes \subseteq ledger
@@ -79,13 +86,14 @@ SmoothedWaitRefusal == [][\A r \in Requests :
 BankingMonotone == [][\A p \in Partitions :
     banked'[p] >= banked[p] /\ Gap'[p] <= Gap[p] /\ checkpoint'[p] >= checkpoint[p]]_vars
 MemoryWithholding == [][\A r \in Requests :
-    (r \in holders /\ r \notin holders' /\ pressure /\ withheld < Ceiling - 1)
+    (r \in holders /\ r \notin holders' /\ role[r] # "Lane" /\ pressure /\ withheld < Ceiling - 1)
         => withheld' = withheld + 1 /\ free' = free]_vars
 RestoreOwnership == [][withheld' < withheld =>
     withheld > ServiceWithheld /\ withheld' = withheld - 1 /\ free' = free + 1]_vars
 ClassPriority == [][
     /\ \A r \in Requests :
-        (status[r] \in {"new", "idle", "done", "refused"} /\ status'[r] = "pending" /\ role'[r] # "Drive") =>
+        (status[r] \in {"new", "idle", "done", "refused"} /\ status'[r] = "pending"
+            /\ role'[r] \notin {"Drive", "System"}) =>
             observed'[r].bound = Bound(role'[r])
     /\ \A r \in Requests :
         (status[r] = "pending" /\ role[r] = "Drive" /\ status'[r] \in {"holding", "refused"}) =>
@@ -113,6 +121,18 @@ NoSelfSustainingBacklog == [][\A r \in Requests :
         queue' = queue /\ holders' = holders /\ status' = status]_vars
 ReplayConverges ==
     ([]<>(Focal \in holders /\ Focal \notin hung)) => <>Complete
+\* Only a system-tree replay ever holds the reserved lane (#5569).
+LaneExclusive == [][\A r \in Requests :
+    (role[r] # "Lane" /\ role'[r] = "Lane") => role[r] = "System"]_vars
+\* A system waiter acquires while the SHARED pool is wedged. The premise names
+\* no shared holder, pressure or drain state: it assumes only that system
+\* replays are bounded (every lane holder eventually leaves the lane) and that
+\* the offered population is finite. See ReplayPermitsRefinement.md.
+LaneHoldersComplete == \A r \in Requests : []<>(role[r] # "Lane")
+SystemLaneProgress ==
+    (<>[]arrivalsClosed /\ LaneHoldersComplete) =>
+        \A r \in Requests :
+            (status[r] = "queued" /\ role[r] = "System") ~> (r \in holders \/ r \in cancelled)
 
 Init ==
     /\ holders = {} /\ free = Ceiling - ServiceWithheld /\ withheld = ServiceWithheld
@@ -133,7 +153,7 @@ Request(r, c) ==
     /\ status' = [status EXCEPT ![r] = "pending"]
     /\ role' = [role EXCEPT ![r] = c]
     /\ observed' = [observed EXCEPT ![r] =
-        IF c = "Drive" THEN NoObservation
+        IF c \in {"Drive", "System"} THEN NoObservation
         ELSE [depth |-> Len(queue), bound |-> Bound(c),
               drain |-> IF queue = <<>> THEN "Draining" ELSE drain]]
     /\ deadline' = [deadline EXCEPT ![r] = RequestBudget]
@@ -173,7 +193,7 @@ CancelColdLifetime(r) ==
 
 Enqueue(r) ==
     /\ status[r] = "pending" /\ ~RefuseForWait(r) /\ ~RefuseForDepth(r)
-    /\ role[r] # "Drive"
+    /\ role[r] \notin {"Drive", "System"}
     /\ queue' = Append(queue, r) /\ status' = [status EXCEPT ![r] = "queued"]
     /\ observed' = [observed EXCEPT ![r] = NoObservation]
     /\ UNCHANGED <<holders, free, withheld, role, pressure, pressurePhase,
@@ -236,6 +256,33 @@ DriveAdmission(r) ==
         hung, frontier, banked, checkpoint, holes, ledger, opportunity, arrivalsClosed, dispatchEpoch,
         cancelled>>
 
+\* A system-tree replay takes a free shared permit, else waits for the lane.
+\* It is never judged by the shared arms and never joins the shared queue.
+SystemAdmission(r) ==
+    /\ status[r] = "pending" /\ role[r] = "System"
+    /\ IF free > 0
+       THEN /\ holders' = holders \cup {r} /\ free' = free - 1
+            /\ status' = [status EXCEPT ![r] = "holding"]
+       ELSE /\ status' = [status EXCEPT ![r] = "queued"]
+            /\ UNCHANGED <<holders, free>>
+    /\ holdLeft' = [holdLeft EXCEPT ![r] = 0]
+    /\ UNCHANGED <<withheld, queue, role, observed, pressure, pressurePhase, drain,
+        hung, deadline, frontier, banked, checkpoint, holes, ledger, opportunity, arrivalsClosed, dispatchEpoch,
+        clientActive, cancelled>>
+
+\* The lane permit goes only to a waiting system-tree replay, and its
+\* availability does not depend on shared capacity.
+LaneOpportunity ==
+    \E r \in Requests :
+        /\ status[r] = "queued" /\ role[r] = "System" /\ LaneFree > 0
+        /\ holders' = holders \cup {r}
+        /\ status' = [status EXCEPT ![r] = "holding"]
+        /\ role' = [role EXCEPT ![r] = "Lane"]
+        /\ holdLeft' = [holdLeft EXCEPT ![r] = 0]
+        /\ UNCHANGED <<free, withheld, queue, observed, pressure, pressurePhase, drain,
+            hung, deadline, frontier, banked, checkpoint, holes, ledger, opportunity, arrivalsClosed, dispatchEpoch,
+            clientActive, cancelled>>
+
 \* A completed slice has durably banked its prefix. Unreached partitions
 \* retain their previous claim, not the larger applied checkpoint.
 ReplaySlice(r, p) ==
@@ -258,8 +305,9 @@ DeferTerminal(r, p) ==
 Return(r, result) ==
     /\ r \in holders
     /\ LET reduce == pressure /\ withheld < Ceiling - 1
-       IN /\ withheld' = withheld + (IF reduce THEN 1 ELSE 0)
-          /\ free' = free + (IF reduce THEN 0 ELSE 1)
+           lane == role[r] = "Lane"
+       IN /\ withheld' = withheld + (IF reduce /\ ~lane THEN 1 ELSE 0)
+          /\ free' = free + (IF reduce \/ lane THEN 0 ELSE 1)
     /\ holders' = holders \ {r} /\ hung' = hung \ {r}
     /\ status' = [status EXCEPT ![r] = result]
     /\ holdLeft' = [holdLeft EXCEPT ![r] = 0]
@@ -350,6 +398,8 @@ Next ==
     \/ \E r \in Requests : RefuseWait(r)
     \/ \E r \in Requests : RefuseDepth(r)
     \/ \E r \in Requests : DriveAdmission(r)
+    \/ \E r \in Requests : SystemAdmission(r)
+    \/ LaneOpportunity
     \/ \E r \in Requests : Release(r)
     \/ \E r \in Requests : Hang(r)
     \/ \E r \in Requests, p \in Partitions : ReplaySlice(r, p)
@@ -368,9 +418,10 @@ Spec ==
     /\ Init /\ [][Next]_vars
     /\ WF_vars(BudgetOpportunity)
     /\ WF_vars(CapacityOpportunity)
+    /\ WF_vars(LaneOpportunity)
     /\ \A r \in Requests : WF_vars(ClientDeadline(r))
     /\ \A r \in Requests : WF_vars(\E c \in Classes : Request(r, c))
-    /\ \A r \in Requests : WF_vars(Enqueue(r) \/ RefuseWait(r) \/ RefuseDepth(r) \/ DriveAdmission(r))
+    /\ \A r \in Requests : WF_vars(Enqueue(r) \/ RefuseWait(r) \/ RefuseDepth(r) \/ DriveAdmission(r) \/ SystemAdmission(r))
     \* Strong storage fairness supplies completion INSIDE some live attempt;
     \* mere eventual provider completion after every deadline is insufficient.
     /\ \A p \in Partitions : SF_vars(StorageOpportunity(p))

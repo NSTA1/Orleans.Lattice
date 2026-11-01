@@ -12,7 +12,7 @@ TurnOccupancy is a fully discovered module, not a helper exemption.
 | TurnOccupancy | 4 | 1 | 8 | 7 | 11 | 961 |
 | WalAdmission | 4 | 8 | 11 | 16 | 21 | 86496 |
 | WalBackPressure | 6 | 16 | 18 | 34 | 38 | 135464 |
-| ReplayPermits | 9 | 11 | 20 | 29 | 38 | 695064 |
+| ReplayPermits | 9 | 13 | 22 | 32 | 42 | 695064 |
 | MaterialiserDrain | 6 | 8 | 21 | 21 | 33 | 1076 |
 | SagaReadProgress | 3 | 5 | 6 | 11 | 12 | 2451 |
 | TagIndexReconcile | 3 | 6 | 12 | 15 | 19 | 2784 |
@@ -259,6 +259,11 @@ Progress needs actual returned capacity, continuation opportunities and earned
 coverage banking. Warm-drive budget expiry is not a promise to terminate an
 uncooperative provider or an intentionally shared cold owner. Permanently hung
 holders remain reachable. Fair opportunities are not bounded wall-clock service.
+
+A reserved system lane (issue #5569) gives replays of system-owned trees one
+permit outside the shared pool. `SystemLaneProgress` proves a system waiter
+acquires while every shared holder is hung, assuming only that system replays
+are bounded. `LaneExclusive` proves no other replay ever holds the lane.
 
 | Instance | Distinct states | Generated states |
 | --- | --- | --- |

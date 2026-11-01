@@ -1,0 +1,11 @@
+MODULE: PermitConservationSystemAdmissionDuplicatesCapacity
+TARGET: PermitConservation
+CLASS: Invariant
+SUMMARY: a system replay takes a shared permit without consuming shared capacity
+PERTURBS: SystemAdmission
+
+--- FIND
+       THEN /\ holders' = holders \cup {r} /\ free' = free - 1
+--- REPLACE
+       THEN /\ holders' = holders \cup {r} /\ free' = free
+--- END

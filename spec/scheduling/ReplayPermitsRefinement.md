@@ -27,7 +27,7 @@ protects the caller/owner lifetime boundary.
 
 The exact current model has completed clean base and both larger-bound checks,
 including every temporal branch at the original 1800 MB configured heap.
-All 29 one-target pairs and all 23 final harness controls have passed.
+All 29 one-target pairs that predate the reserved system lane and all 23 final harness controls have passed; the lane's three mutations are certified by CI (see "Reserved system lane" below).
 Their original and repaired run artifacts remain distinct, as detailed below.
 Obsolete draft graphs do not certify the corrected guarantee.
 
@@ -67,7 +67,7 @@ not evidence of an unconditional cold residency bound.
 | `holders`, `free` | Physical ownership and available capacity. | `BPlusLeafGrain.AcquireReplayPermitAsync`, `BPlusLeafGrain.TryAcquireStarvationDrivePermitAsync`, `BPlusLeafGrain.FinishReplayPermit`, `BPlusLeafGrain.ReleaseStarvationReplayPermit`. |
 | `withheld` | Combined withheld capacity; service-owned baseline is separate. | `BPlusLeafGrain._withheldReplayPermits`, `BPlusLeafGrain._serviceWithheldReplayPermits`, `BPlusLeafGrain.TryWithholdReplayPermitOnPressure`, `BPlusLeafGrain.TryRestoreWithheldReplayPermit`. |
 | `queue`, `status`, `observed` | Pending observation, semaphore waiter and winning outcome. | `BPlusLeafGrain.TryAdmitReplayPermitWaiter`, `BPlusLeafGrain.AcquireReplayPermitAsync`, arrival/departure accounting. |
-| `role` | Admission policy, not a work-type-specific queue. | `LatticeReplayAdmissionContext.Current`; drive share admission is separate. |
+| `role` | Admission policy, not a work-type-specific queue. `System` is a system-tree replay waiting for the reserved lane and `Lane` is one holding it (#5569); `OnLane` and `LaneFree` are derived from it. | `LatticeReplayAdmissionContext.Current`, `SystemTreeNamespace.IsSystemOwned`, `BPlusLeafGrain.AcquireSystemReplayPermitAsync`; drive share admission is separate. |
 | `pressure`, `pressurePhase` | Finite external heap-pressure episode. | `ReplayHeapPressure`, memory-fault return disposition. |
 | `drain` | Classified fresh mean wait or lack of acquisition progress. | `BPlusLeafGrain.ClassifyReplayPermitQueueDrain`. |
 | `frontier`, `banked` | Reached per-partition prefix and durable reread coverage. | `BPlusLeafGrain.TryBankColdReplayProgressAsync`, `BPlusLeafGrain.BankCancelledWarmReplayProgressAsync`, incremental snapshot capture. |
@@ -104,6 +104,8 @@ The environment, caller, provider and owner boundaries are kept distinct.
 | `ClientReplacement` | A replacement client rejoins the one live owner. | `BPlusLeafGrain.EnsureReplayStarted`, `BPlusLeafGrain.JoinReplayBarrierAsync`. | Yes: `BPlusLeafGrainTests.Caller_deadlines_and_replacements_preserve_the_live_cold_owner`. |
 | `ClientDeadline` | Settle the client without cancelling its cold owner. | `BPlusLeafGrain.JoinReplayBarrierAsync`, `BPlusLeafGrain.EnsureReplayStarted`. | Yes: `BPlusLeafGrainTests.Caller_deadlines_and_replacements_preserve_the_live_cold_owner`. |
 | `CancelColdLifetime` | Environment actually retires/cancels the independent owner lifetime. | `BPlusLeafGrain.RetireReplayBarrier`, `BPlusLeafGrain.RunReplayBarrierAsync`. | Yes: `BPlusLeafGrainTests.Cancelling_a_replay_returns_its_permit_before_uncooperative_storage_completes`. |
+| `SystemAdmission` | A system-tree replay takes a free shared permit, else waits for the reserved lane; it is never judged by the shared arms (#5569). | `BPlusLeafGrain.AcquireSystemReplayPermitAsync`, `SystemTreeNamespace.IsSystemOwned`. | Yes: `BPlusLeafGrainTests.A_system_tree_replay_takes_a_free_shared_permit_before_the_lane`, `BPlusLeafGrainTests.A_system_tree_replay_is_admitted_through_the_reserved_lane_while_the_shared_pool_is_wedged`. |
+| `LaneOpportunity` | A waiting system-tree replay acquires the reserved lane, whatever the shared pool holds (#5569). | `BPlusLeafGrain.AcquireSystemReplayPermitAsync`, `BPlusLeafGrain.ReleaseSystemReplayLane`. | Yes: `BPlusLeafGrainTests.A_system_tree_replay_is_admitted_through_the_reserved_lane_while_the_shared_pool_is_wedged`. |
 | `Stutter` | No protocol step. | No production counterpart. | Not applicable. |
 
 ## Property mapping
@@ -129,6 +131,18 @@ The environment, caller, provider and owner boundaries are kept distinct.
 | `ReplayConverges` | Durably shorter prefixes converge under recurring live-attempt storage completions. | Yes: `BPlusLeafGrainTests.Successive_interrupted_replays_advance_the_checkpoint_until_convergence` and `BPlusLeafGrainTests.Cancelled_cold_replay_banks_the_re_read_frontier_as_durable_snapshot_coverage`. |
 | `ColdCancellationReleases` | Actual owner cancellation unwinds the cold holder or waiter under continuation/banking opportunities. | Yes: `BPlusLeafGrainTests.Cancelling_a_replay_returns_its_permit_before_uncooperative_storage_completes` and `BPlusLeafGrainTests.Cancelled_queued_replay_replacements_leave_no_waiters_or_unowned_permits`. |
 | `ColdDeadlineIsolation` | Client deadlines preserve the independent cold owner, physical ownership, queue and cancellation membership. | Yes: `BPlusLeafGrainTests.Caller_deadlines_and_replacements_preserve_the_live_cold_owner`. |
+| `LaneExclusive` | Only a system-tree replay ever holds the reserved lane; a user or user-nameable tree is refused by the shared arms rather than taking a free lane (#5569). | Yes: `BPlusLeafGrainTests.A_non_system_replay_is_refused_rather_than_taking_the_free_lane`, `BPlusLeafGrainTests.A_non_system_replay_takes_a_shared_permit_and_never_needs_the_lane`, `SystemTreeNamespaceTests.IsSystemOwned_user_nameable_tree_is_rejected`. |
+| `SystemLaneProgress` | A system-tree replay acquires while every shared permit is held by a replay that never returns, provided system replays are bounded (#5569). | Yes: `BPlusLeafGrainTests.A_system_tree_replay_is_admitted_through_the_reserved_lane_while_the_shared_pool_is_wedged`. |
+
+## Reserved system lane (#5569)
+
+A schema migration on the journey estate held every shared permit with replays that read whole, untrimmed WALs from a saturated store. The shared gate's `no_progress` arm then refused the small system trees that authorization reads on every request, so one bulk operation took sign-in down for minutes. The lane gives replays of trees `SystemTreeNamespace.IsSystemOwned` accepts one permit outside the shared pool.
+
+The predicate accepts only the `_lattice_` and `sys-` namespaces, which refuse user-origin content on every path that can write rows: the public surface for `_lattice_`, and for `sys-` the user-origin write guard, bulk-load and snapshot destinations, merge sources, alias targets and tenant addressing. A view's name is caller-chosen, so `view-sys-*` is excluded. No caller outside the library can therefore make a lane replay expensive.
+
+**The assumption.** `SystemLaneProgress` assumes system replays are bounded: its premise `LaneHoldersComplete` requires every lane holder to leave the lane eventually, and nothing else. It names no shared holder, pressure or drain state, so it holds while every shared holder is hung, which is the regime the defect was. A system replay that never ends wedges the lane exactly as it would wedge a shared permit; the lane protects system trees from user-tree replays, not from themselves. The premise also asks for a finite offered population (`<>[]arrivalsClosed`), as `ClassNonStarvation` does, because selection among lane waiters is nondeterministic rather than FIFO.
+
+Lane permits take no part in memory or service-rate withholding, which adapt the shared ceiling, so `MemoryWithholding` excludes a lane holder and `PermitConservation` counts the lane separately. A lane waiter never takes a shared permit freed while it waits; it took a free shared permit on arrival if there was one.
 
 ## Excluded properties
 
