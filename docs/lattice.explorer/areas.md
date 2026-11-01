@@ -558,7 +558,9 @@ offered only when the facade's capability probe says the caller holds the
 Replication grant, or the list holds a tree they manage: the report is readable
 by every caller, so an empty list proves nothing (#5478). The cluster still
 authorizes every enable and disable. Enabling asks for the logical tree id (a picker
-that accepts only a tree you can reach), merge mode and optional bootstrap source
+that accepts only a tree you can reach until a bootstrap source is named, and then
+any id, because the bootstrap brings a tree this region does not hold yet), merge
+mode and optional bootstrap source
 cluster (a picker that suggests the known regions and accepts any id); app-owned ids are rejected because their
 enrolment follows the app install. Disabling is a destructive confirmation: it
 stops new changes from replicating, leaves peer data in place, and keeps the
@@ -570,7 +572,8 @@ shows a **Back to enrolled trees** link.
 
 The tree detail page reads one tree's links afresh, then starts a visibility
 aware refresh loop after the first browser render. While the page is visible it
-refreshes every 5 seconds; when the tab is hidden it stops; when it becomes
+refreshes every 5 seconds; when the tab is hidden it stops, and its status line
+says the refresh is paused while the page is hidden; when it becomes
 visible it refreshes immediately and resumes. If a later refresh fails, the page
 keeps the previous links and reports that the last refresh failed. If neither
 the enrolment report nor the status links name the tree, it navigates to not
