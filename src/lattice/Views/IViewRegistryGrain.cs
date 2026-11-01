@@ -41,4 +41,16 @@ internal interface IViewRegistryGrain : IGrainWithStringKey
 
     /// <summary>Returns a snapshot of every durable runtime-view registration.</summary>
     Task<IReadOnlyList<RuntimeViewRegistration>> ListAsync();
+
+    /// <summary>
+    /// Returns the registered view's aggregation kind, or null when absent,
+    /// without transferring the cluster-wide registration snapshot.
+    /// </summary>
+    Task<bool?> GetAggregationKindAsync(string viewName);
+
+    /// <summary>
+    /// Returns fresh aggregation kinds in input order for at most 32 names.
+    /// Missing registrations are represented by null.
+    /// </summary>
+    Task<bool?[]> GetAggregationKindsAsync(string[] viewNames);
 }

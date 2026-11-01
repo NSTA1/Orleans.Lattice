@@ -3,10 +3,12 @@ namespace Orleans.Lattice.Samples.Explorer.Tests;
 [TestFixture]
 public sealed class SampleRegionPlanTests
 {
+    private const string LinkSecret = "link-secret-under-test-0123456789abcdef";
+
     [Test]
     public void A_region_with_a_peer_is_part_of_the_estate()
     {
-        var plan = new SampleRegionPlan("east", 5199, 11111, 30000, new SampleRegionPeer("west", 5198), Console: null);
+        var plan = new SampleRegionPlan("east", 5199, 11111, 30000, new SampleRegionPeer("west", 5198, LinkSecret), Console: null);
 
         Assert.That(plan.IsEstate, Is.True);
         Assert.That(plan.GrpcEndpoint, Is.EqualTo(new Uri("http://localhost:5199")));
@@ -31,9 +33,28 @@ public sealed class SampleRegionPlanTests
     }
 
     [Test]
+    public void The_peer_never_prints_its_link_secret()
+    {
+        var text = new SampleRegionPeer("west", 5198, LinkSecret).ToString();
+
+        Assert.That(text, Does.Contain("west").And.Contain("5198"));
+        Assert.That(text, Does.Not.Contain(LinkSecret));
+    }
+
+    [Test]
+    public async Task The_link_secret_source_sends_and_accepts_the_run_secret()
+    {
+        var source = new SampleLinkSecretSource(LinkSecret);
+
+        Assert.That(await source.GetOutboundSecretAsync("west", CancellationToken.None), Is.EqualTo(LinkSecret));
+        Assert.That(await source.GetOutboundSecretAsync("east", CancellationToken.None), Is.EqualTo(LinkSecret));
+        Assert.That((await source.GetAcceptedSecretsAsync(CancellationToken.None)).Secrets, Is.EqualTo(new[] { LinkSecret }));
+    }
+
+    [Test]
     public void Building_an_estate_region_without_the_shared_sink_throws()
     {
-        var plan = new SampleRegionPlan("east", 1, 2, 3, new SampleRegionPeer("west", 4), Console: null);
+        var plan = new SampleRegionPlan("east", 1, 2, 3, new SampleRegionPeer("west", 4, LinkSecret), Console: null);
 
         Assert.That(() => SampleRegion.Build(plan, new ExplorerSampleOptions(), sink: null, new PeerLink()), Throws.ArgumentException);
     }

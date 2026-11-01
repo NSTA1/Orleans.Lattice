@@ -27,6 +27,8 @@ public sealed class AppsFailureMessagesTests
     [TestCase("The enable of app 'x' failed (ReplicationEnrolmentFailed).", "enrolled for replication")]
     [TestCase("The enable of app 'x' failed (MembershipNotRegistered).", "no membership service")]
     [TestCase("The enable of app 'x' failed (AuthorizationNotRegistered).", "no authorization policy store")]
+    [TestCase("The install of app 'x' failed (Ambiguous): " + Secret, "more than one source")]
+    [TestCase("", "The cluster refused the change.")]
     [TestCase("App 'x' is offered by more than one app source (a, b); name the source key to use.", "more than one source")]
     [TestCase("App 'x' is already installed at that version; update its consent instead.", "already installed")]
     [TestCase("App 'x' version '1.0.0' no longer matches the manifest that was reviewed; review it again before installing.", "Review it again")]
@@ -73,5 +75,45 @@ public sealed class AppsFailureMessagesTests
             Assert.That(AppsFailureMessages.Describe(new InvalidOperationException(), "enable", "CRM"), Does.Contain("refused"));
             Assert.That(() => AppsFailureMessages.Describe(null!, "enable", "CRM"), Throws.ArgumentNullException);
         });
+    }
+
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase(" \t")]
+    public void Describe_invalid_verb_is_rejected(string? verb)
+    {
+        Assert.That(() => AppsFailureMessages.Describe(new TimeoutException(), verb!, "CRM"),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase(" \t")]
+    public void Describe_invalid_app_name_is_rejected(string? app)
+    {
+        Assert.That(() => AppsFailureMessages.Describe(new TimeoutException(), "enable", app!),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public void Describe_exceptions_with_null_messages_use_safe_fallback_sentences()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(AppsFailureMessages.Describe(new MessageLessArgumentException(), "install", "CRM"),
+                Is.EqualTo("Could not install CRM. The request was not valid: check its role bindings and ceiling."));
+            Assert.That(AppsFailureMessages.Describe(new MessageLessInvalidOperationException(), "enable", "CRM"),
+                Is.EqualTo("Could not enable CRM. The cluster refused the change."));
+        });
+    }
+
+    private sealed class MessageLessArgumentException : ArgumentException
+    {
+        public override string Message => null!;
+    }
+
+    private sealed class MessageLessInvalidOperationException : InvalidOperationException
+    {
+        public override string Message => null!;
     }
 }

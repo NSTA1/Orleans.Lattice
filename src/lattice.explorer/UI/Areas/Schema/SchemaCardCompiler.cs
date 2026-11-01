@@ -349,7 +349,10 @@ internal static class SchemaCardCompiler
             return false;
         }
 
-        if (minimum is { } low && maximum is { } high && AsDouble(low) > AsDouble(high))
+        if (minimum is { } low && maximum is { } high
+            && (low.Kind == LatticeConstantKind.Int64 && high.Kind == LatticeConstantKind.Int64
+                ? low.Int64Value > high.Int64Value
+                : AsDouble(low) > AsDouble(high)))
         {
             error = "The smallest number is larger than the largest.";
             return false;

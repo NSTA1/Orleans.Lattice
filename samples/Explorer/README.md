@@ -321,8 +321,15 @@ the default tenant, at `/t/default`.
   single-operator loopback demo. The console's persisted configuration is a
   sample-owned file cleared on start, so it always connects to the region asked
   for.
-- Cross-region replication runs over plaintext loopback h2c with no shared
-  secret. That too is for this loopback demo only.
+- Cross-region replication runs over plaintext loopback h2c. That too is for
+  this loopback demo only. The link is still authenticated, with a shared
+  secret the sample generates for each run and never writes anywhere, because
+  tenant backfill depends on it: a region exports a tenant's snapshots only to a
+  peer whose identity the transport authenticated (`RequireAuthentication` and
+  `BindCredentialToOriginCluster`, see
+  [Transport Security](../../docs/lattice.replication/transport-security.md)).
+  Turning authentication off leaves `west` `Backfilling` for acme, and the
+  sample stops at startup.
 
 See [Running the Explorer](../../docs/lattice.explorer/running-the-explorer.md),
 [Managing access control](../../docs/lattice.explorer/managing-access.md),

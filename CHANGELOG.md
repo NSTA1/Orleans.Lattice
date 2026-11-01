@@ -32,9 +32,11 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
-- **Performance - Tree-admin status reads.** Resize status uses one coordinator call instead of five, reshard status one instead of three, and view status one maintainer call instead of two, retaining system-tree rejection and identical answers. ([#5345](https://github.com/NSTA1/Orleans.Lattice/pull/5345)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin`)
+- **Performance - Tree-admin status reads.** Resize, reshard and view status use one grain call, down from five, three and two. Tree statistics overlap diagnostics and storage reads; authorization and system-tree rejection remain. ([#5345](https://github.com/NSTA1/Orleans.Lattice/pull/5345), [#5423](https://github.com/NSTA1/Orleans.Lattice/pull/5423)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin`)
 
-- **Performance - Settlement grain calls.** Prepare handling and activation healing use fewer registry calls. Migration cleanup resolves masked verdicts inside its existing batches; local forwarded prepares combine decision and participant probes. Durability, capture gates and reader intent remain. ([#5318](https://github.com/NSTA1/Orleans.Lattice/pull/5318), [#5338](https://github.com/NSTA1/Orleans.Lattice/pull/5338)) (`Orleans.Lattice`)
+- **Performance - View sampling.** Default statistics use two calls instead of three. Catalog pages batch fresh runtime metadata and sample in settled waves of up to 32, retaining source visibility, aggregation bounds, unavailable statistics and sequential custom factories. ([#5423](https://github.com/NSTA1/Orleans.Lattice/pull/5423), [#5461](https://github.com/NSTA1/Orleans.Lattice/pull/5461)) (`Orleans.Lattice`, `Orleans.Lattice.Api.State`)
+
+- **Performance - Settlement grain calls.** Prepare handling and activation healing use fewer registry calls. Cleanup batches masked verdicts; local forwarded prepares combine probes and avoid sorted participant snapshots for existence checks. Durability, capture gates and reader intent remain. ([#5318](https://github.com/NSTA1/Orleans.Lattice/pull/5318), [#5338](https://github.com/NSTA1/Orleans.Lattice/pull/5338), [#5461](https://github.com/NSTA1/Orleans.Lattice/pull/5461)) (`Orleans.Lattice`)
 
 - **Internal - Orphaned grain methods removed.** Internal grain-interface methods that no production code has called since 10.2.0, left behind by the call elisions above and in 10.2.0, are deleted or reduced to internal cores of the combined calls that replaced them. A rolling upgrade from 10.2.0 is unaffected; one straight from an earlier release would fail calls to the removed methods, so upgrade through 10.2.0. ([#5217](https://github.com/NSTA1/Orleans.Lattice/pull/5217)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
 
@@ -63,6 +65,10 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 - **Performance - Structural seeding.** Internal construction combines tree binding and initialization; leaf and internal child adoption combine parent binding and digest reads. Durable writes, replay barriers, gate ordering and recovery behavior are unchanged. ([#5133](https://github.com/NSTA1/Orleans.Lattice/pull/5133), [#5260](https://github.com/NSTA1/Orleans.Lattice/pull/5260)) (`Orleans.Lattice`)
 
 ### Fixed
+
+- **Explorer - Schema validation.** Rule cards reject reversed large-integer bounds without rounding valid constants. Semantic-version cards reject empty identifiers and leading-zero numeric prereleases; saved patterns remain unchanged when reopened. ([#5347](https://github.com/NSTA1/Orleans.Lattice/issues/5347)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - Telemetry charts.** Finite readings retain finite SVG paths, axis ticks and labels even at very large or subnormal magnitudes. ([#5347](https://github.com/NSTA1/Orleans.Lattice/issues/5347)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Schema suggestions.** Case-colliding members resolve exact names before case-insensitive matches. Suggested text prefixes preserve complete Unicode characters, and allowed-value cards retain strings named true or false. ([#5339](https://github.com/NSTA1/Orleans.Lattice/issues/5339)) (`Orleans.Lattice.Explorer.UI`)
 

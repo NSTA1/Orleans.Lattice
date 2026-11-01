@@ -121,9 +121,7 @@ public sealed partial class VectorIndex
     private int SearchPartitions(ReadOnlySpan<float> query, float queryNorm, Span<VectorSearchResult> results)
     {
         var wanted = Math.Min(_probes, _partitionCount);
-        var scale = _metric == VectorDistanceMetric.Cosine
-            ? queryNorm == 0f ? 0f : 1f / queryNorm
-            : 1f;
+        var scale = ScaleFor(queryNorm);
 
         int[]? rentedIds = null;
         float[]? rentedAffinity = null;
@@ -181,7 +179,7 @@ public sealed partial class VectorIndex
             for (var i = 0; i < count; i++)
             {
                 var dot = TensorPrimitives.Dot(query, new ReadOnlySpan<float>(vectors, i * dimensions, dimensions));
-                Offer(results, ref found, keys[i], VectorSimilarity.Scale(dot, norms[i], queryNorm));
+                InsertRankedResult(results, ref found, keys[i], VectorSimilarity.Scale(dot, norms[i], queryNorm));
             }
 
             return;
@@ -190,7 +188,7 @@ public sealed partial class VectorIndex
         for (var i = 0; i < count; i++)
         {
             var dot = TensorPrimitives.Dot(query, new ReadOnlySpan<float>(vectors, i * dimensions, dimensions));
-            Offer(results, ref found, keys[i], dot);
+            InsertRankedResult(results, ref found, keys[i], dot);
         }
     }
 
@@ -203,7 +201,7 @@ public sealed partial class VectorIndex
         for (var partition = 0; partition < _partitionCount; partition++)
         {
             var centroid = new ReadOnlySpan<float>(centroids, partition * _dimensions, _dimensions);
-            var score = (2f * TensorPrimitives.Dot(query, centroid) * scale) - _centroidSquaredNorms[partition];
+            var score = CentroidAffinity(TensorPrimitives.Dot(query, centroid), scale, _centroidSquaredNorms[partition]);
 
             if (found == wanted &&
                 (score < affinity[wanted - 1] ||
@@ -241,6 +239,12 @@ public sealed partial class VectorIndex
     private int NearestPartition(ReadOnlySpan<float> vector, float scale) =>
         NearestCentroid(vector, scale, _centroids, _centroidSquaredNorms, _partitionCount, _dimensions, out _);
 
+    // Compute the dot product at the call site so the norm is not kept live
+    // across the tensor call, which would add register spills in the probe loop.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static float CentroidAffinity(float dotProduct, float scale, float centroidSquaredNorm) =>
+        (2f * dotProduct * scale) - centroidSquaredNorm;
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int NearestCentroid(
         ReadOnlySpan<float> vector,
@@ -256,7 +260,7 @@ public sealed partial class VectorIndex
         for (var partition = 0; partition < partitionCount; partition++)
         {
             var centroid = new ReadOnlySpan<float>(centroids, partition * dimensions, dimensions);
-            var affinity = (2f * TensorPrimitives.Dot(vector, centroid) * scale) - centroidSquaredNorms[partition];
+            var affinity = CentroidAffinity(TensorPrimitives.Dot(vector, centroid), scale, centroidSquaredNorms[partition]);
             if (affinity > bestAffinity)
             {
                 bestAffinity = affinity;
@@ -272,16 +276,16 @@ public sealed partial class VectorIndex
     // fail the first comparison, so this beats a heap and, unlike a sort, needs
     // no scratch at all.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void Offer(Span<VectorSearchResult> results, ref int found, long key, float score)
+    private static void InsertRankedResult(Span<VectorSearchResult> results, ref int found, long key, float score)
     {
         var k = results.Length;
-        if (found == k && !IsBetter(score, key, results[k - 1]))
+        if (found == k && !RanksBefore(score, key, results[k - 1]))
         {
             return;
         }
 
         var i = found < k ? found : k - 1;
-        while (i > 0 && IsBetter(score, key, results[i - 1]))
+        while (i > 0 && RanksBefore(score, key, results[i - 1]))
         {
             results[i] = results[i - 1];
             i--;
@@ -302,7 +306,7 @@ public sealed partial class VectorIndex
     // order the vectors were scanned: offered early it pins rank 0 above every
     // real match, offered late it evicts the k-th one.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool IsBetter(float score, long key, in VectorSearchResult other) =>
+    private static bool RanksBefore(float score, long key, in VectorSearchResult other) =>
         score > other.Score
         || (score == other.Score && key < other.Key)
         || (float.IsNaN(other.Score) && (!float.IsNaN(score) || key < other.Key));

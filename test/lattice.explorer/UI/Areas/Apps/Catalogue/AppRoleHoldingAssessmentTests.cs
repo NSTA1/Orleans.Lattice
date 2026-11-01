@@ -119,4 +119,82 @@ public sealed class AppRoleHoldingAssessmentTests
             Assert.That(() => InOperators.Of(null!), Throws.ArgumentNullException);
         });
     }
+
+    [Test]
+    public void Assess_no_roles_reports_no_bindings_and_known_empty_membership()
+    {
+        var assessment = AppRoleHoldingAssessment.Assess(Array.Empty<(string Role, string? Group)>(), InOperators);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(assessment.BindingsText, Is.EqualTo("no role"));
+            Assert.That(assessment.HoldsAny, Is.False);
+            Assert.That(assessment.Lines, Is.Empty);
+            Assert.That(assessment.HeldRoles, Is.Empty);
+            Assert.That(assessment.BoundGroups, Is.Empty);
+            Assert.That(assessment.MemberGroups, Is.Empty);
+            Assert.That(assessment.MissingGroups, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void Assess_duplicate_bindings_deduplicate_roles_and_groups_in_first_seen_order()
+    {
+        var caller = new AppsCallerGroups("alice", ["operators", "leads"]);
+        var assessment = AppRoleHoldingAssessment.Assess(
+            [("editor", "operators"), ("editor", "leads"), ("viewer", "operators"), ("editor", "operators"),
+                ("auditor", "missing"), ("viewer", "missing"), ("Editor", "leads")], caller);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(assessment.HeldRoles, Is.EqualTo(new[] { "editor", "viewer", "Editor" }));
+            Assert.That(assessment.MemberGroups, Is.EqualTo(new[] { "operators", "leads" }));
+            Assert.That(assessment.MissingGroups, Is.EqualTo(new[] { "missing" }));
+            Assert.That(assessment.BoundGroups, Is.EqualTo(new[] { "operators", "leads", "missing" }));
+            Assert.That(assessment.Lines, Has.Length.EqualTo(7), "presentation retains every binding even when summary lists deduplicate");
+        });
+    }
+
+    [Test]
+    public void Assess_default_role_array_reports_no_roles_even_with_recorded_bindings()
+    {
+        var app = AppsTestData.TaskBoard() with
+        {
+            Roles = default,
+            RoleBindings = [new AppRoleBindingDescriptor { RoleName = "viewer", GroupId = "operators" }],
+        };
+
+        var assessment = AppRoleHoldingAssessment.Assess(app, InOperators);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(assessment.BindingsText, Is.EqualTo("no role"));
+            Assert.That(assessment.Lines, Is.Empty);
+            Assert.That(assessment.HoldsAny, Is.False);
+        });
+    }
+
+    [Test]
+    public void Assess_default_binding_array_reports_each_declared_role_as_unbound()
+    {
+        var app = AppsTestData.TaskBoard() with
+        {
+            Roles = [new AppRoleDescriptor { Name = "editor" }, new AppRoleDescriptor { Name = "viewer" }],
+            RoleBindings = default,
+        };
+
+        var assessment = AppRoleHoldingAssessment.Assess(app, InOperators);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(assessment.Lines, Is.EqualTo(new[]
+            {
+                new AppRoleHoldingLine("editor", null, AppGroupMembership.Unbound),
+                new AppRoleHoldingLine("viewer", null, AppGroupMembership.Unbound),
+            }));
+            Assert.That(assessment.HoldsAny, Is.False);
+            Assert.That(assessment.BoundGroups, Is.Empty);
+            Assert.That(assessment.BindingsText, Is.EqualTo("editor to no group, viewer to no group"));
+        });
+    }
 }
