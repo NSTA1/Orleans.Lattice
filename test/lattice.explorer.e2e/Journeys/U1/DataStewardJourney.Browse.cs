@@ -115,14 +115,14 @@ public sealed partial class DataStewardJourney
         await _tree.NextPage.ClickAsync();
         await Expect(_tree.PagePosition).ToHaveTextAsync("Page 2");
         await Expect(_tree.KeyLinks.First).Not.ToHaveTextAsync(first[0]);
+        await Expect(_tree.RangeStatus).ToHaveTextAsync(new Regex("^26-"));
         var second = await _tree.KeysAsync();
         Assert.That(string.CompareOrdinal(second[0], first[^1]), Is.GreaterThan(0), "page 2 continues after page 1");
         await CheckpointAsync("2", "next-page", "Next page continues the scan");
 
         await _tree.PreviousPage.ClickAsync();
         await Expect(_tree.PagePosition).ToHaveTextAsync("Page 1");
-        await Expect(_tree.KeyLinks.First).ToHaveTextAsync(first[0]);
-        Assert.That(await _tree.KeysAsync(), Is.EqualTo(first));
+        await Expect(_tree.KeyLinks).ToHaveTextAsync([.. first]);
 
         await _tree.SetPageSizeAsync(50);
         Assert.That(await _tree.KeysAsync(), Has.Count.EqualTo(50));
@@ -132,7 +132,7 @@ public sealed partial class DataStewardJourney
         var live = await _tree.KeysAsync();
         await _tree.SetScanModeAsync("Snapshot");
         await Expect(_tree.LiveUpdates).ToBeDisabledAsync();
-        Assert.That(await _tree.KeysAsync(), Is.EqualTo(live), "the snapshot reads the same orders");
+        await Expect(_tree.KeyLinks).ToHaveTextAsync([.. live]);
         await CheckpointAsync("2", "snapshot-scan", "A snapshot scan; live updates follow live scans only");
 
         await _tree.SetScanModeAsync("Live");
@@ -180,8 +180,7 @@ public sealed partial class DataStewardJourney
 
         await _tree.RestartFromFirstPage.ClickAsync();
         await Expect(_tree.PagePosition).ToHaveTextAsync("Page 1");
-        await _tree.WaitForKeysAsync();
-        Assert.That((await _tree.KeysAsync())[0], Is.EqualTo(Names.Orders.Key(1)));
+        await Expect(_tree.KeyLinks.First).ToHaveTextAsync(Names.Orders.Key(1), new() { Timeout = 60_000 });
         Coverage.Hit("use-case:data/cursor-expiry");
         await CheckpointAsync("3", "restarted", "Restart from the first page recovers the scan");
     }

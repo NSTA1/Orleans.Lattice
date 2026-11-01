@@ -102,6 +102,7 @@ internal sealed class DataTreePage(PersonaSession session)
         await PrefixInput.FillAsync(prefix);
         await PrefixInput.PressAsync("Enter");
         await Expect(Page).ToHaveURLAsync(new Regex("[?&]prefix=" + Regex.Escape(Uri.EscapeDataString(prefix)) + "(&|$)"));
+        await Expect(RangeStatus).ToContainTextAsync(expectKeys ? "under prefix" : "No keys", new() { Timeout = 30_000 });
         if (expectKeys)
         {
             await WaitForKeysAsync();
@@ -128,6 +129,7 @@ internal sealed class DataTreePage(PersonaSession session)
         await Expect(PageSize).ToHaveValueAsync(text);
         await Expect(PagePosition).ToHaveTextAsync("Page 1");
         await Expect(KeyLinks).ToHaveCountAsync(size, new() { Timeout = 30_000 });
+        await Expect(RangeStatus).ToHaveTextAsync(new Regex($"^1-{size}( |$)"), new() { Timeout = 30_000 });
     }
 
     /// <summary>Chooses the scan mode (<c>Live</c> or <c>Snapshot</c>) and waits for the first page.</summary>
@@ -137,6 +139,7 @@ internal sealed class DataTreePage(PersonaSession session)
         await ScanMode.SelectOptionAsync(mode);
         await Expect(ScanMode).ToHaveValueAsync(mode);
         await Expect(PagePosition).ToHaveTextAsync("Page 1");
+        await Expect(RangeStatus).ToHaveTextAsync(new Regex("^1-"), new() { Timeout = 30_000 });
         await WaitForKeysAsync();
     }
 

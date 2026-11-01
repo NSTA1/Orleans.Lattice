@@ -87,7 +87,8 @@ public sealed partial class DataStewardJourney
         await _priya.Shell.GotoAsync("/data/" + Names.Trees.FactoryTelemetry);
         await Expect(_tree.Heading).ToHaveTextAsync(Names.Trees.FactoryTelemetry);
         await _tree.WaitForKeysAsync();
-        var reading = (await _tree.KeysAsync())[0];
+        // Not reading/latest, which the line feed overwrites twice a second.
+        var reading = (await _tree.KeysAsync()).First(key => key != "reading/latest");
         await _tree.OpenEntryAsync(Names.Trees.FactoryTelemetry, reading);
         await CheckpointAsync("5", "binary-reading", "A telemetry reading: eight bytes, a little-endian double");
 
@@ -176,7 +177,7 @@ public sealed partial class DataStewardJourney
         await _tree.HistoryOfKey.ClickAsync();
         var kinds = _priya.Shell.Content.Locator(".lt-data-timeline__kind");
         await Expect(kinds.First).ToHaveTextAsync("Deleted", new() { Timeout = 30_000 });
-        Assert.That(await kinds.CountAsync(), Is.GreaterThanOrEqualTo(2), "the create and the deletion");
+        await Expect(kinds.Nth(1)).ToBeVisibleAsync();
         Coverage.Hit("use-case:data/entry-new-and-delete");
         await CheckpointAsync("7", "tombstone", "History keeps the deletion as a tombstone");
 

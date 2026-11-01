@@ -36,8 +36,7 @@ public sealed partial class DataStewardJourney
 
         await import.Done.ClickAsync();
         await Expect(import.Dialog).ToHaveCountAsync(0);
-        await _tree.WaitForKeysAsync();
-        Assert.That((await _tree.KeysAsync())[0], Is.EqualTo(StoryData.Archive[0].Key));
+        await Expect(_tree.KeyLinks.First).ToHaveTextAsync(StoryData.Archive[0].Key, new() { Timeout = 60_000 });
         Coverage.Hit("use-case:data/import-csv-new-tree");
         await CheckpointAsync("8", "archive-keys", "The new tree holds the October orders");
     }
@@ -74,8 +73,8 @@ public sealed partial class DataStewardJourney
         }
         else
         {
-            await _tree.WaitForKeysAsync();
-            Assert.That((await _tree.KeysAsync())[0], Is.EqualTo(Names.Orders.Key(1)), "what was committed is the file's head");
+            // What was committed is the file's head.
+            await Expect(_tree.KeyLinks.First).ToHaveTextAsync(Names.Orders.Key(1), new() { Timeout = 60_000 });
         }
 
         Coverage.Hit("use-case:data/import-cancel");
