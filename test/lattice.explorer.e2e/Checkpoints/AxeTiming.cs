@@ -51,8 +51,11 @@ internal static class AxeTiming
     /// <summary>A subtree this small is not bisected further.</summary>
     public const int BisectionMinimumElements = 8;
 
-    /// <summary>How long a slow rule's DOM bisection may spend.</summary>
-    public static readonly TimeSpan BisectionBudget = TimeSpan.FromMinutes(3);
+    /// <summary>How long a slow rule's DOM bisection may spend walking down the subtrees.</summary>
+    public static readonly TimeSpan BisectionBudget = TimeSpan.FromSeconds(90);
+
+    /// <summary>How long the bisection may then spend timing the deepest subtree's targets one at a time.</summary>
+    public static readonly TimeSpan TargetBudget = TimeSpan.FromMinutes(4);
 
     // Times each rule alone, in the order given, with nothing but violations collected so a
     // rule's own work dominates its time. A rule axe refuses is reported with its error.
@@ -82,7 +85,7 @@ internal static class AxeTiming
     // levels, at minElements elements, or when the time budget is spent.
     private const string BisectScript =
         """
-        async ([id, rootMs, maxDepth, minElements, budgetMs]) => {
+        async ([id, rootMs, maxDepth, minElements, budgetMs, targetBudgetMs]) => {
           const started = performance.now();
           const targetSelector = 'a[href],area[href],button,input:not([type=hidden]),select,textarea,summary,[tabindex],[contenteditable],[role=button],[role=link],[role=checkbox],[role=radio],[role=switch],[role=tab],[role=option],[role=menuitem],[role=combobox],[role=slider],[role=spinbutton],[role=treeitem]';
           const count = el => ({
@@ -112,7 +115,7 @@ internal static class AxeTiming
           let depth = 0;
           let exhausted = false;
           const path = [{ selector, ms: rootMs, ...count(node) }];
-          while (depth < maxDepth && path[path.length - 1].elements > minElements) {
+          while (!exhausted && depth < maxDepth && path[path.length - 1].elements > minElements) {
             const children = [...node.children].map(el => ({ el, ...count(el) })).filter(c => c.targets > 0).sort((a, b) => b.targets - a.targets);
             if (children.length === 0) { break; }
             let best = null;
@@ -134,7 +137,22 @@ internal static class AxeTiming
             path.push({ selector, ms: best.ms, elements: best.elements, targets: best.targets });
             if (exhausted) { break; }
           }
-          return { path, exhausted };
+          // The walk's deepest subtree still holds many targets; time the rule on each of them
+          // alone, so the slowest single target is named even when the walk stopped early.
+          const targets = [];
+          const owner = node === document.body ? document.body : node;
+          const candidates = [...owner.querySelectorAll(targetSelector)];
+          const deepest = path[path.length - 1].ms ?? lastTimed;
+          const targetStarted = performance.now();
+          for (const el of candidates) {
+            if (performance.now() - targetStarted >= targetBudgetMs) { break; }
+            const ms = await time(el);
+            const html = el.outerHTML.replace(/\s+/g, ' ');
+            targets.push({ selector: segment(el), ms, html: html.length > 160 ? html.slice(0, 157) + '...' : html });
+            if (ms >= deepest * 0.5) { break; }
+          }
+          targets.sort((a, b) => b.ms - a.ms);
+          return { path, exhausted, targets: targets.slice(0, 5), targetsTimed: targets.length, targetsTotal: candidates.length };
         }
         """;
 
@@ -201,21 +219,28 @@ internal static class AxeTiming
     /// <param name="page">The page, with axe injected and no axe run in progress.</param>
     /// <param name="rule">The slow rule and its time on the whole page.</param>
     /// <param name="budget">The time budget; <see cref="BisectionBudget"/> unless a self-test changes it.</param>
-    /// <returns>The path from <c>body</c> to the slowest subtree; empty when the walk itself did not return within <see cref="DrainBound"/>.</returns>
-    public static async Task<IReadOnlyList<AxeBisectionStep>> BisectAsync(IPage page, AxeRuleTiming rule, TimeSpan? budget = null)
+    /// <param name="targetBudget">The per-target time budget; <see cref="TargetBudget"/> unless a self-test changes it.</param>
+    /// <returns>
+    /// The path from <c>body</c> to the slowest subtree, then the slowest of that subtree's targets timed alone
+    /// (<see cref="AxeBisectionStep.IsTarget"/>); empty when the walk itself did not return in time.
+    /// </returns>
+    public static async Task<IReadOnlyList<AxeBisectionStep>> BisectAsync(IPage page, AxeRuleTiming rule, TimeSpan? budget = null, TimeSpan? targetBudget = null)
     {
         ArgumentNullException.ThrowIfNull(page);
         ArgumentNullException.ThrowIfNull(rule);
+        var walkBudget = budget ?? BisectionBudget;
+        var perTarget = targetBudget ?? TargetBudget;
         var walk = page.EvaluateAsync<JsonElement>(
             BisectScript,
-            new object[] { rule.RuleId, rule.Duration.TotalMilliseconds, BisectionDepth, BisectionMinimumElements, (budget ?? BisectionBudget).TotalMilliseconds });
-        if (await Task.WhenAny(walk, Task.Delay(DrainBound)).ConfigureAwait(false) != walk)
+            new object[] { rule.RuleId, rule.Duration.TotalMilliseconds, BisectionDepth, BisectionMinimumElements, walkBudget.TotalMilliseconds, perTarget.TotalMilliseconds });
+        if (await Task.WhenAny(walk, Task.Delay(walkBudget + perTarget + DrainBound)).ConfigureAwait(false) != walk)
         {
             return [];
         }
 
+        var result = await walk.ConfigureAwait(false);
         var steps = new List<AxeBisectionStep>();
-        foreach (var step in (await walk.ConfigureAwait(false)).GetProperty("path").EnumerateArray())
+        foreach (var step in result.GetProperty("path").EnumerateArray())
         {
             var ms = step.GetProperty("ms");
             steps.Add(new AxeBisectionStep(
@@ -225,10 +250,20 @@ internal static class AxeTiming
                 step.GetProperty("targets").GetInt32()));
         }
 
+        foreach (var target in result.GetProperty("targets").EnumerateArray())
+        {
+            steps.Add(new AxeBisectionStep(
+                target.GetProperty("selector").GetString()!,
+                TimeSpan.FromMilliseconds(target.GetProperty("ms").GetDouble()),
+                1,
+                1,
+                target.GetProperty("html").GetString()!));
+        }
+
         return steps;
     }
 
-    /// <summary>A slow rule's bisection, one level per line, slowest subtree last.</summary>
+    /// <summary>A slow rule's bisection, one level per line, slowest subtree last, then its slowest targets.</summary>
     /// <param name="steps">The bisection.</param>
     /// <param name="ruleId">The rule.</param>
     /// <param name="surface">What was swept.</param>
@@ -236,16 +271,26 @@ internal static class AxeTiming
     {
         if (steps.Count == 0)
         {
-            return $"axe's {ruleId} on {surface} could not be bisected by DOM within {Seconds(DrainBound)}.";
+            return $"axe's {ruleId} on {surface} could not be bisected by DOM in time.";
         }
 
         var report = new StringBuilder($"axe's {ruleId} on {surface}, bisected by DOM (slowest subtree last):");
-        foreach (var step in steps)
+        foreach (var step in steps.Where(step => !step.IsTarget))
         {
             report.AppendLine().Append("    ")
                 .Append(step.Duration is { } duration ? Seconds(duration) : "(only child with targets)")
                 .Append(" - ").Append(step.Elements.ToString(CultureInfo.InvariantCulture)).Append(" elements, ")
                 .Append(step.Targets.ToString(CultureInfo.InvariantCulture)).Append(" targets: ").Append(step.Selector);
+        }
+
+        var targets = steps.Where(step => step.IsTarget).ToList();
+        if (targets.Count > 0)
+        {
+            report.AppendLine().Append("  its slowest targets, each checked alone:");
+            foreach (var target in targets)
+            {
+                report.AppendLine().Append("    ").Append(Seconds(target.Duration!.Value)).Append(" - ").Append(target.Selector).Append(": ").Append(target.Html);
+            }
         }
 
         return report.ToString();

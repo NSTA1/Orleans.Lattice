@@ -5,4 +5,9 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Checkpoints;
 /// <param name="Duration">How long the rule took on this subtree alone, or <see langword="null"/> when it was the only child holding targets and was not timed separately.</param>
 /// <param name="Elements">How many elements the subtree holds, itself included.</param>
 /// <param name="Targets">How many of them could be pointer targets (links, buttons, form controls, widget roles, tabindex).</param>
-internal sealed record AxeBisectionStep(string Selector, TimeSpan? Duration, int Elements, int Targets);
+/// <param name="Html">For one target timed alone, the start of its markup; otherwise <see langword="null"/>.</param>
+internal sealed record AxeBisectionStep(string Selector, TimeSpan? Duration, int Elements, int Targets, string? Html = null)
+{
+    /// <summary>Whether this is one target timed alone under the walk's deepest subtree, rather than a level of the walk.</summary>
+    public bool IsTarget => Html is not null;
+}

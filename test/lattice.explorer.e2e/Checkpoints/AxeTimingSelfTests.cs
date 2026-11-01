@@ -123,7 +123,10 @@ public sealed class AxeTimingSelfTests
             Assert.That(steps[2].Selector, Is.EqualTo("body > main > section#crowded"), "the crowded region is the slower one");
             Assert.That(steps[2].Duration, Is.Not.Null);
             Assert.That((grid?.Elements, grid?.Targets), Is.EqualTo(((int?)CrowdedTargets + 1, (int?)CrowdedTargets)), "the grid step holds the crowded buttons");
-            Assert.That(steps.Count(step => step.Duration is not null), Is.LessThanOrEqualTo(AxeTiming.BisectionDepth + 1), "bounded in depth");
+            Assert.That(steps.Count(step => !step.IsTarget && step.Duration is not null), Is.LessThanOrEqualTo(AxeTiming.BisectionDepth + 1), "bounded in depth");
+            Assert.That(steps.Where(step => step.IsTarget), Is.Not.Empty, "the deepest subtree's targets are timed one at a time");
+            Assert.That(steps.Where(step => step.IsTarget).Select(step => step.Html), Has.All.StartsWith("<button"));
+            Assert.That(report, Does.Contain("its slowest targets, each checked alone:"));
             Assert.That(report, Does.Contain("targets: body > main > section#crowded"));
         });
     }
@@ -135,9 +138,9 @@ public sealed class AxeTimingSelfTests
         await _page.SetContentAsync(CrowdedPage);
         await AxeTiming.RunAsync(_page, "the crowded page", AxeConformance.RunOptions);
 
-        var steps = await AxeTiming.BisectAsync(_page, new AxeRuleTiming("target-size", TimeSpan.FromHours(1), null), budget: TimeSpan.Zero);
+        var steps = await AxeTiming.BisectAsync(_page, new AxeRuleTiming("target-size", TimeSpan.FromHours(1), null), budget: TimeSpan.Zero, targetBudget: TimeSpan.Zero);
 
-        Assert.That(steps.Select(step => step.Selector), Is.EqualTo(new[] { "body", "body > main" }));
+        Assert.That(steps.Select(step => step.Selector), Is.EqualTo(new[] { "body", "body > main" }), "a spent budget times neither another level nor a single target");
     }
 
     private const int CrowdedTargets = 40;
