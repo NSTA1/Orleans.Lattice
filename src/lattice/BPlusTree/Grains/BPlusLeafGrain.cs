@@ -4002,8 +4002,20 @@ internal sealed partial class BPlusLeafGrain(
             LeafTreeTag(),
             new KeyValuePair<string, object?>(LatticeMetrics.TagOperation, "keys"),
             LeafTenantTag());
+#if LATTICE_DIAG
+        DiagLeafRead("keys", startInclusive, endExclusive, afterExclusive, keys.Count, keys.Count > 0 ? keys[0] : null, keys.Count > 0 ? keys[^1] : null, pendingKeys.Count);
+#endif
         return keys;
     }
+
+#if LATTICE_DIAG
+    // Issue #5607: what a leaf answered a range read with, against what it
+    // declares and holds, and whether its replay had settled.
+    private void DiagLeafRead(string kind, string? startInclusive, string? endExclusive, string? afterExclusive, int rows, string? first, string? last, int pending)
+    {
+        DiagSink.Write($"[DIAG leaf-{kind}-read] tree={state.State.TreeId} leaf={context.GrainId} range=[{state.State.LowKeyInclusive ?? "-"},{state.State.HighKeyExclusive ?? "-"}) start={startInclusive ?? "-"} end={endExclusive ?? "-"} after={afterExclusive ?? "-"} rows={rows} first={first ?? "-"} last={last ?? "-"} cache={Cache.Count} pending={pending} replaySatisfied={_replayBarrierSatisfied} replayRetired={_replayBarrierRetired} replayArmed={_replayBarrierArmed} coldPending={_coldRebuildPending} unanchored={_cacheUnanchored} splitInFlight={state.State.SplitInFlight}");
+    }
+#endif
 
     public async Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, LatticePredicateNode? predicate = null)
     {
@@ -4113,6 +4125,9 @@ internal sealed partial class BPlusLeafGrain(
             LeafTreeTag(),
             new KeyValuePair<string, object?>(LatticeMetrics.TagOperation, "entries"),
             LeafTenantTag());
+#if LATTICE_DIAG
+        DiagLeafRead("entries", startInclusive, endExclusive, afterExclusive, entries.Count, entries.Count > 0 ? entries[0].Key : null, entries.Count > 0 ? entries[^1].Key : null, pendingKeys.Count);
+#endif
         return entries;
     }
 
