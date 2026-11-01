@@ -194,7 +194,12 @@ public sealed partial class DataStewardJourney
     {
         for (var attempt = 1; attempt <= 4; attempt++)
         {
-            var position = (await _tree.PagePosition.InnerTextAsync()).Trim();
+            if (await _tree.CursorExpired.IsVisibleAsync())
+            {
+                return;
+            }
+
+            var position = await TextNowAsync(_tree.PagePosition);
             await Task.Delay(CursorIdle);
             await _tree.NextPage.ClickAsync();
             var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
@@ -212,9 +217,22 @@ public sealed partial class DataStewardJourney
                         + await _priya.Shell.Content.InnerTextAsync());
                 }
 
-                if (await _tree.PagePosition.IsVisibleAsync() && (await _tree.PagePosition.InnerTextAsync()).Trim() != position)
+                // The pager's label moves on the click, before the page loads; only a loaded
+                // page fills the status line, and the expired state can still replace it.
+                if (await _tree.KeyLinks.First.IsVisibleAsync()
+                    && Regex.IsMatch(await TextNowAsync(_tree.RangeStatus), "^\\d")
+                    && await TextNowAsync(_tree.PagePosition) is { Length: > 0 } now && now != position)
                 {
-                    break;
+                    await Task.Delay(TimeSpan.FromSeconds(2));
+                    if (await _tree.CursorExpired.IsVisibleAsync())
+                    {
+                        return;
+                    }
+
+                    if (await _tree.PagePosition.IsVisibleAsync() && Regex.IsMatch(await TextNowAsync(_tree.RangeStatus), "^\\d"))
+                    {
+                        break;
+                    }
                 }
 
                 await Task.Delay(250);
@@ -224,6 +242,19 @@ public sealed partial class DataStewardJourney
         }
 
         await Expect(_tree.CursorExpired).ToBeVisibleAsync();
+    }
+
+    /// <summary>The trimmed text of <paramref name="locator"/> now, or empty when it is not on the page.</summary>
+    private static async Task<string> TextNowAsync(ILocator locator)
+    {
+        try
+        {
+            return await locator.IsVisibleAsync() ? (await locator.InnerTextAsync(new() { Timeout = 1_000 })).Trim() : string.Empty;
+        }
+        catch (TimeoutException)
+        {
+            return string.Empty;
+        }
     }
 
     /// <summary>
