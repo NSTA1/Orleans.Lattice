@@ -35,10 +35,12 @@ public partial class PublicApiContractTests
             _treeId = treeId;
             _listener = MeterListening.StartForMeter(LatticeMetrics.Meter, listener =>
             {
+                // Counters are summed, so a series primed with Add(0) does not
+                // read as an event; histogram samples are counted.
                 listener.SetMeasurementEventCallback<long>(
-                    (instrument, _, tags, _) => Record(instrument, tags));
+                    (instrument, value, tags, _) => Record(instrument, value, tags));
                 listener.SetMeasurementEventCallback<double>(
-                    (instrument, _, tags, _) => Record(instrument, tags));
+                    (instrument, _, tags, _) => Record(instrument, 1, tags));
             });
         }
 
@@ -49,9 +51,9 @@ public partial class PublicApiContractTests
 
         public void Dispose() => _listener.Dispose();
 
-        private void Record(Instrument instrument, ReadOnlySpan<KeyValuePair<string, object?>> tags)
+        private void Record(Instrument instrument, long value, ReadOnlySpan<KeyValuePair<string, object?>> tags)
         {
-            if (!instrument.Name.Contains(".scan", StringComparison.Ordinal))
+            if (value == 0 || !instrument.Name.Contains(".scan", StringComparison.Ordinal))
             {
                 return;
             }
@@ -72,7 +74,7 @@ public partial class PublicApiContractTests
 
             if (string.Equals(tree, _treeId, StringComparison.Ordinal))
             {
-                _counts.AddOrUpdate(label.ToString(), 1, (_, count) => count + 1);
+                _counts.AddOrUpdate(label.ToString(), value, (_, count) => count + value);
             }
         }
     }
