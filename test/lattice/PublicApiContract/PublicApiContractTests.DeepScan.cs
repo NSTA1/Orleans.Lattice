@@ -154,7 +154,9 @@ public partial class PublicApiContractTests
     public async Task ScanKeysAsync_returns_all_keys_when_depth_two_tree_is_scanned_with_cold_routing_cache()
     {
         var treeId = "pac-deepscan-cold-" + Guid.NewGuid().ToString("N")[..8];
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         await CreateDepthTwoTreeAsync(treeId);
+        var buildElapsed = stopwatch.Elapsed;
 
         // Restart the cluster so the shard-root activation (and its
         // _routingTableCache) starts cold and every internal / leaf grain
@@ -165,15 +167,25 @@ public partial class PublicApiContractTests
             shardCount: 1,
             maxLeafKeys: DeepScanLeafKeys,
             maxInternalChildren: DeepScanInternalChildren);
+        var restartElapsed = stopwatch.Elapsed - buildElapsed;
 
         var keys = new List<string>();
-        await foreach (var k in rehydrated.ScanKeysAsync())
+        using (var signals = new DeepScanSignals(treeId))
         {
-            keys.Add(k);
-        }
+            await foreach (var k in rehydrated.ScanKeysAsync())
+            {
+                keys.Add(k);
+            }
 
-        var expected = Enumerable.Range(0, DeepScanKeyCount).Select(DeepScanKey).ToArray();
-        Assert.That(keys, Is.EqualTo(expected));
+            var scanElapsed = stopwatch.Elapsed - buildElapsed - restartElapsed;
+            var expected = Enumerable.Range(0, DeepScanKeyCount).Select(DeepScanKey).ToArray();
+            if (!keys.SequenceEqual(expected, StringComparer.Ordinal))
+            {
+                var stages = $"build {buildElapsed.TotalSeconds:F1}s, restart {restartElapsed.TotalSeconds:F1}s, "
+                    + $"scan {scanElapsed.TotalSeconds:F1}s";
+                Assert.Fail(await DescribeDeepScanMissAsync(rehydrated, keys, expected, stages, signals));
+            }
+        }
     }
 
     [Test]
