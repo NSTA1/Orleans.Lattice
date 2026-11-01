@@ -1714,6 +1714,12 @@ a.lt-chain__text:hover {
   margin: 0;
 }
 
+/* While the confirmed action runs: the confirmation stays open until it returns. */
+.lt-confirm__pending {
+  margin: 0;
+  color: var(--lt-ink-2);
+}
+
 .lt-confirm__name {
   padding: 0.1em 0.35em;
   border-radius: var(--lt-radius-sm);
