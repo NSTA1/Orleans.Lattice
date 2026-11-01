@@ -99,6 +99,18 @@ public sealed partial class LatticeAdminGrainWalMoveTests
 
         public IReadOnlyCollection<long> Offsets => _offsets;
 
+        /// <summary>The visibility-barrier and highest-offset calls on this provider, in order.</summary>
+        public List<string> Calls { get; } = new();
+
+        /// <summary>When set, the visibility barrier fails with this.</summary>
+        public Exception? VisibilityFault { get; set; }
+
+        public Task WaitForAppendVisibilityAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+        {
+            Calls.Add("barrier");
+            return VisibilityFault is { } fault ? Task.FromException(fault) : Task.CompletedTask;
+        }
+
         public Task AppendBatchAsync(
             string treeId, int shardIndex, IReadOnlyList<WalEntry> entries, CancellationToken cancellationToken)
             => Task.CompletedTask;
@@ -159,9 +171,12 @@ public sealed partial class LatticeAdminGrainWalMoveTests
         }
 
         public Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
-            => Task.FromResult(HighestOverrides.Count > 0
+        {
+            Calls.Add("highest");
+            return Task.FromResult(HighestOverrides.Count > 0
                 ? HighestOverrides.Dequeue()
                 : _highWater);
+        }
 
         public Task<long> GetLowestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
             => Task.FromResult(_offsets.Count == 0 ? -1 : _offsets.Min);

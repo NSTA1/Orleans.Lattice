@@ -324,6 +324,16 @@ with schema versioning, a rebuild projects exactly the input incremental
 maintenance did (see
 [Projection input on a versioned source](#projection-input-on-a-versioned-source)).
 
+A rebuild runs inside the maintainer, which handles one maintenance call at a
+time, so a long rebuild delays the next drain, rebuild or delete until it
+finishes. Status reads do not wait for it: `GetLagAsync`, the active-tree lookup
+behind every view read, and the tree-administration view status are answered
+while a drain or a rebuild is in progress, and report the state at the moment of
+the read. Until a view has rebuilt from a swapped source, its lag counts every
+entry of the new physical copy and is never zero. The maintainer's keepalive
+reminder is also acknowledged at once, and its drain runs after the current one
+finishes.
+
 ## Deleting a view
 
 `ILatticeViewFactory.DeleteAsync` tears a runtime-created view down completely:
