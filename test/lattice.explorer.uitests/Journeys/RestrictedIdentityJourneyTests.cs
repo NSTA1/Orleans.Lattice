@@ -12,7 +12,9 @@ namespace Orleans.Lattice.Explorer.UiTests.Journeys;
 [Category("UI")]
 public sealed class RestrictedIdentityJourneyTests : UiTestBase
 {
-    private static readonly string[] HiddenFromAlice = ["access", "schema", "tenancy", "telemetry", "cluster"];
+    // Alice reads and writes the editors' and operators' trees, so she reads their schema:
+    // Schema is hers too, while access, tenancy, telemetry and the cluster are not.
+    private static readonly string[] HiddenFromAlice = ["access", "tenancy", "telemetry", "cluster"];
 
     [Test]
     public async Task A_restricted_user_sees_only_their_stops_and_cannot_reach_a_hidden_area()
@@ -22,7 +24,7 @@ public sealed class RestrictedIdentityJourneyTests : UiTestBase
         await Expect(Shell.Stop(page, "data")).ToBeVisibleAsync();
 
         var stops = await Shell.Directory(page).Locator("a[data-lt-command]").EvaluateAllAsync<string[]>("links => links.map(l => l.getAttribute('data-lt-command'))");
-        Assert.That(stops, Is.EqualTo(new[] { "go.home", "go.data", "go.apps", "go.replication", "go.backups" }),
+        Assert.That(stops, Is.EqualTo(new[] { "go.home", "go.data", "go.apps", "go.schema", "go.replication", "go.backups" }),
             "The directory shows a restricted user exactly the areas they may use, in directory order.");
 
         // The palette offers nothing in a hidden area.
@@ -30,7 +32,7 @@ public sealed class RestrictedIdentityJourneyTests : UiTestBase
         await Shell.AddressInput(page).FillAsync(">");
         await Expect(Shell.Suggestions(page).Filter(new() { HasText = "Go to Data" })).ToHaveCountAsync(1);
         var commands = await Shell.Suggestions(page).AllInnerTextsAsync();
-        foreach (var hidden in new[] { "Access", "Schema", "Tenancy", "Telemetry", "Cluster", "access rule", "Create a group", "Reshard", "compliance", "WAL" })
+        foreach (var hidden in new[] { "Access", "Tenancy", "Telemetry", "Cluster", "access rule", "Create a group", "Reshard", "WAL" })
         {
             Assert.That(commands, Has.None.Contains(hidden), $"The palette offers a restricted user '{hidden}'.");
         }

@@ -54,6 +54,38 @@ public sealed class SchemaAreaTests : SchemaTestContext
     }
 
     [Test]
+    public async Task A_reader_of_named_trees_sees_the_area_though_the_cluster_wide_probe_grants_nothing()
+    {
+        // U4: dana reads factory-orders' schema, but her grants name trees, so the
+        // reserved sentinel alone hid the whole area from her.
+        Auth.SignIn("dana");
+        Schema.DefaultCapabilities = FakeSchemaControl.None;
+        UseTrees("audit", "orders");
+        Schema.Capabilities["orders"] = FakeSchemaControl.ReadOnly;
+
+        Assert.That(await Area.GetAvailabilityAsync(CancellationToken.None), Is.EqualTo(AreaAvailability.Visible));
+    }
+
+    [Test]
+    public async Task No_listed_tree_granting_anything_or_one_the_cluster_did_not_answer_admits_nothing()
+    {
+        Auth.SignIn("nina");
+        Schema.DefaultCapabilities = FakeSchemaControl.None;
+        UseTrees("audit", "orders");
+        var none = await Area.GetAvailabilityAsync(CancellationToken.None);
+
+        Schema.Capabilities["orders"] = _ => throw new ShellTransportException("unavailable", isTransient: true, new InvalidOperationException("inner"));
+        Auth.SignIn("dana");
+        var unanswered = await Area.GetAvailabilityAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(none, Is.EqualTo(AreaAvailability.Hidden));
+            Assert.That(unanswered, Is.EqualTo(AreaAvailability.Unchecked), "no answer is not a refusal, and never admits");
+        });
+    }
+
+    [Test]
     public async Task An_anonymous_caller_the_probe_grants_nothing_is_asked_to_sign_in()
     {
         Schema.DefaultCapabilities = FakeSchemaControl.None;

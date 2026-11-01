@@ -94,6 +94,78 @@ public sealed class AxeTimingSelfTests
         });
     }
 
+    /// <summary>
+    /// A slow rule is bisected by DOM: the walk follows the region holding the crowded targets
+    /// down from <c>body</c>, records each level's element and target counts, and the report
+    /// names the path.
+    /// </summary>
+    [Test]
+    public async Task A_slow_rule_is_bisected_down_to_the_subtree_it_spends_its_time_on()
+    {
+        await _page.SetContentAsync(CrowdedPage);
+
+        var run = await AxeTiming.RunAsync(_page, "the crowded page", AxeConformance.RunOptions, slowThreshold: TimeSpan.Zero, ruleBisectThreshold: TimeSpan.Zero);
+        TestContext.Out.WriteLine(AxeTiming.DescribeBisection(run.Bisection, run.Rules[0].RuleId, "the crowded page"));
+
+        // A root time far above the real one makes every child at each level timed, so the
+        // walk follows the genuinely slowest child rather than the first past half.
+        var steps = await AxeTiming.BisectAsync(_page, new AxeRuleTiming("target-size", TimeSpan.FromHours(1), null));
+        var report = AxeTiming.DescribeBisection(steps, "target-size", "the crowded page");
+        TestContext.Out.WriteLine(report);
+
+        var grid = steps.SingleOrDefault(step => step.Selector.EndsWith("div#grid", StringComparison.Ordinal));
+        Assert.Multiple(() =>
+        {
+            Assert.That(run.Bisection, Is.Not.Empty, "the slowest rule was at the bisect threshold, so it was bisected");
+            Assert.That(run.Bisection[0].Selector, Is.EqualTo("body"));
+            Assert.That(steps[0].Selector, Is.EqualTo("body"));
+            Assert.That(steps[1], Is.EqualTo(new AxeBisectionStep("body > main", null, CrowdedTargets + 7, CrowdedTargets + 2)), "the lone child holding every target is followed untimed");
+            Assert.That(steps[2].Selector, Is.EqualTo("body > main > section#crowded"), "the crowded region is the slower one");
+            Assert.That(steps[2].Duration, Is.Not.Null);
+            Assert.That((grid?.Elements, grid?.Targets), Is.EqualTo(((int?)CrowdedTargets + 1, (int?)CrowdedTargets)), "the grid step holds the crowded buttons");
+            Assert.That(steps.Count(step => !step.IsTarget && step.Duration is not null), Is.LessThanOrEqualTo(AxeTiming.BisectionDepth + 1), "bounded in depth");
+            Assert.That(steps.Where(step => step.IsTarget), Is.Not.Empty, "the deepest subtree's targets are timed one at a time");
+            Assert.That(steps.Where(step => step.IsTarget).Select(step => step.Html), Has.All.StartsWith("<button"));
+            Assert.That(report, Does.Contain("its slowest targets, each checked alone:"));
+            Assert.That(report, Does.Contain("targets: body > main > section#crowded"));
+        });
+    }
+
+    /// <summary>A spent budget stops the walk at the first branching level, keeping the path so far.</summary>
+    [Test]
+    public async Task A_spent_budget_stops_the_bisection_where_it_is()
+    {
+        await _page.SetContentAsync(CrowdedPage);
+        await AxeTiming.RunAsync(_page, "the crowded page", AxeConformance.RunOptions);
+
+        var steps = await AxeTiming.BisectAsync(_page, new AxeRuleTiming("target-size", TimeSpan.FromHours(1), null), budget: TimeSpan.Zero, targetBudget: TimeSpan.Zero);
+
+        Assert.That(steps.Select(step => step.Selector), Is.EqualTo(new[] { "body", "body > main" }), "a spent budget times neither another level nor a single target");
+    }
+
+    private const int CrowdedTargets = 40;
+
+    private static string CrowdedPage =>
+        $$"""
+        <!doctype html>
+        <html lang="en">
+        <head><title>Axe bisection self-test</title>
+        <style>
+          body { font-family: sans-serif; margin: 24px; }
+          #grid { display: flex; flex-wrap: wrap; width: 200px; }
+          #grid button { width: 12px; height: 12px; padding: 0; margin: 0; border: 1px solid #000; background: #fff; }
+          #sparse button { min-width: 44px; min-height: 44px; }
+        </style></head>
+        <body>
+          <main>
+            <h1>Crowded and sparse</h1>
+            <section id="sparse"><button type="button">One</button><button type="button">Two</button></section>
+            <section id="crowded"><div id="grid">{{string.Concat(Enumerable.Range(1, CrowdedTargets).Select(index => $"<button type=\"button\" aria-label=\"Cell {index}\"></button>"))}}</div></section>
+          </main>
+        </body>
+        </html>
+        """;
+
     private static string Readout(bool wrapAnywhere) =>
         $"""
         <div class="regex">
