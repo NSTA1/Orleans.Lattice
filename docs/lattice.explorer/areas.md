@@ -196,7 +196,10 @@ time, newest first by default, with value diffs, CRDT member changes, retention
 boundary notes and a live tail. A revision whose value the tree's history
 retention did not keep, only its size and hash, reads "Set - value not kept", and
 the timeline explains once, rather than under each such revision, that it is still
-a write to the key and not a metadata change. Copies that resizing, resharding or
+a write to the key and not a metadata change. A revision of a
+[versioned](managing-schema.md) tree shows its body, as the Keys tab does, with
+the schema version it was stamped with beside its size; the body is shown in
+the shape it was written in, not upgraded to the tree's current version. Copies that resizing, resharding or
 replication make of a revision are not shown as revisions of their own. The **As of** field is a
 [date and time field](theming-and-density.md#dates-times-and-durations) in UTC.
 It starts empty, which means the latest, and refuses a time in the future;
@@ -212,7 +215,8 @@ seconds, in place, until it reaches zero. When detail metrics are paused, the af
 covers only part of it (a prefix-scoped rule, for example) is told they need
 read access to the whole tree; the tree's summary line then omits its key
 count, and the connection indicator stays Connected. The Dead letters tab reads a count and then pages strict-mode dead
-letters 50 at a time, with source, key, reason and clipped details. Both tabs
+letters 50 at a time, with source, key, reason and clipped details; a dead
+letter's value, like a versioned revision's, is shown without its version envelope. Both tabs
 show fixed sentences when the state API is unavailable, denied or faulted.
 
 The Tag indexes tab lists indexes covering the tree, their reconcile state and

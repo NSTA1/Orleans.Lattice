@@ -75,7 +75,7 @@
 @code {
     private RenderFragment RenderInspection(DeadLetterEntry entry) => __builder =>
     {
-        var rendered = DataValueRendering.Render(entry.Value, entry.Truncated, DataValueRenderer.Auto);
+        var rendered = DataValueRendering.Render(DataValueEnvelope.Body(entry.Value), entry.Truncated, DataValueRenderer.Auto);
         <LtDefinitionList>
             <LtDefinition Term="Key" Mono="true">@entry.Key</LtDefinition>
             <LtDefinition Term="Reason">@entry.Reason</LtDefinition>
