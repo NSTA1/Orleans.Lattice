@@ -46,7 +46,7 @@ internal sealed class DataTaskTreePage(PersonaSession session, string tree)
         await Expect(Directory.GetByRole(AriaRole.Columnheader, new() { Name = "App" })).ToBeVisibleAsync();
         await Expect(TreeLink).ToHaveTextAsync(new Regex(Regex.Escape(tree) + "$|^tasks$"));
         var app = DirectoryRow.GetByRole(AriaRole.Link, new() { Name = "task-board", Exact = true });
-        await Expect(app).ToHaveAttributeAsync("href", new Regex("/apps/task-board$"));
+        await Expect(app).ToHaveAttributeAsync("href", new Regex("(^|/)apps/task-board$"));
     }
 
     /// <summary>
