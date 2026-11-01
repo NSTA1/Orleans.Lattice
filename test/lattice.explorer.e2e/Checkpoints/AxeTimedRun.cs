@@ -8,4 +8,8 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Checkpoints;
 /// <param name="WithinBound">Whether it finished within the bound.</param>
 /// <param name="Rules">Each rule's time run alone, slowest first; empty unless the run was slow.</param>
 /// <param name="Failure">Why the checkpoint fails on the bound, or <see langword="null"/>.</param>
-internal sealed record AxeTimedRun(AxeResult? Result, TimeSpan Elapsed, bool WithinBound, IReadOnlyList<AxeRuleTiming> Rules, string? Failure);
+internal sealed record AxeTimedRun(AxeResult? Result, TimeSpan Elapsed, bool WithinBound, IReadOnlyList<AxeRuleTiming> Rules, string? Failure)
+{
+    /// <summary>The slowest rule's path down the DOM to the subtree it spent the most time on; empty unless that rule was slow.</summary>
+    public IReadOnlyList<AxeBisectionStep> Bisection { get; init; } = [];
+}
