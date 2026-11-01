@@ -271,6 +271,9 @@ public sealed class InstallingTheTaskBoard : JourneyChapter
             await Expect(sections.Panel).ToContainTextAsync("tasks");
             await run.ShotAsync("trees", "Trees: its one tree, tasks");
 
+            // The ledger entry later chapters read the app's tree from, as A5's contract records it.
+            context.Record(StoryKeys.TaskBoardTree, A5Contract.TaskBoardTree);
+
             await sections.ChooseTabAsync(Apps.TaskBoard, TaskBoard, "Roles");
             await Expect(sections.Panel).ToContainTextAsync(Groups.DataStewards);
             await Expect(sections.Panel).ToContainTextAsync(ContosoAccess.TaskBoardViewers.GroupId);
