@@ -12,11 +12,29 @@ namespace Orleans.Lattice.Backup;
 /// written nothing, and this gate retries it across calls, for up to
 /// <see cref="LatticeBackupOptions.PublishHoldTimeout"/>.
 /// </summary>
+/// <remarks>
+/// <para>
+/// A call that times out at the caller may still have completed in the grain - a
+/// slow sink write, say. Every call is idempotent, so the gate retries a grain
+/// response timeout exactly as it retries a busy call: a publish republishes the
+/// same content-addressed id in place, a registration re-registers it, and a
+/// delete finds what is left and finishes it. A capture whose publish completed
+/// after its caller's first attempt timed out therefore returns that backup.
+/// </para>
+/// <para>
+/// An operator delete runs its short first step - removing the catalog row and
+/// reserving the id - in the grain, and deletes the artifacts and sink manifest
+/// here, outside any grain call, so a large backup cannot outlast the grain
+/// response timeout (issue #5628).
+/// </para>
+/// </remarks>
 /// <param name="grainFactory">Reaches the scheduler grains.</param>
 /// <param name="options">The backup options.</param>
+/// <param name="publisher">Runs the steps of a delete that happen outside the grain.</param>
 internal sealed class SchedulerBackupPublicationGate(
     IGrainFactory grainFactory,
-    IOptions<LatticeBackupOptions> options) : IBackupPublicationGate
+    IOptions<LatticeBackupOptions> options,
+    BackupPublisher publisher) : IBackupPublicationGate
 {
     /// <inheritdoc />
     public async Task<BackupManifest> PublishFullAsync(BackupManifest manifest, bool register, CancellationToken cancellationToken) =>
@@ -43,51 +61,104 @@ internal sealed class SchedulerBackupPublicationGate(
     {
         ArgumentNullException.ThrowIfNull(row);
         var scheduler = grainFactory.GetGrain<ILatticeBackupSchedulerGrain>(BackupScopeKey.For(row.Scope));
-        var outcome = await RetryWhileBusyAsync(
-                () => scheduler.RetireAsync(row.Id, kind),
-                o => o == BackupRetireOutcome.Busy,
+        if (kind == BackupRetireKind.OrphanRow)
+        {
+            var outcome = await RetryAsync(
+                    () => scheduler.RetireAsync(row.Id, kind),
+                    o => o == BackupRetireOutcome.Busy,
+                    row.Id,
+                    options.Value,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return outcome == BackupRetireOutcome.Removed;
+        }
+
+        var start = await RetryAsync(
+                () => scheduler.BeginDeleteAsync(row.Id),
+                s => s.Outcome == BackupRetireOutcome.Busy,
                 row.Id,
+                options.Value,
                 cancellationToken)
             .ConfigureAwait(false);
-        return outcome == BackupRetireOutcome.Removed;
+        if (start.Outcome != BackupRetireOutcome.Removed || start.Manifest is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            await publisher.CompleteDeleteAsync(start.Manifest).ConfigureAwait(false);
+        }
+        finally
+        {
+            await scheduler.EndDeleteAsync(row.Id).ConfigureAwait(false);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Runs <paramref name="call"/> until it returns a result that is not busy,
+    /// retrying a busy result and a grain response timeout - both of which leave
+    /// an idempotent call safe to repeat - every
+    /// <see cref="LatticeBackupOptions.PublishHoldRetryDelay"/>, for up to
+    /// <see cref="LatticeBackupOptions.PublishHoldTimeout"/>.
+    /// </summary>
+    /// <typeparam name="T">The call's result.</typeparam>
+    /// <param name="call">The idempotent grain call.</param>
+    /// <param name="busy">Whether a result says the id was held and nothing was done.</param>
+    /// <param name="backupId">The backup id, for the failure message.</param>
+    /// <param name="settings">The backup options.</param>
+    /// <param name="cancellationToken">Cancels the pause between retries.</param>
+    /// <returns>The first result that is not busy.</returns>
+    /// <exception cref="TimeoutException">The call stayed busy, or timing out, past <see cref="LatticeBackupOptions.PublishHoldTimeout"/>.</exception>
+    internal static async Task<T> RetryAsync<T>(
+        Func<Task<T>> call,
+        Func<T, bool> busy,
+        string backupId,
+        LatticeBackupOptions settings,
+        CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow + settings.PublishHoldTimeout;
+        while (true)
+        {
+            TimeoutException? timedOut = null;
+            try
+            {
+                var result = await call().ConfigureAwait(false);
+                if (!busy(result))
+                {
+                    return result;
+                }
+            }
+            catch (TimeoutException ex)
+            {
+                if (RedProof.NoTimeoutRetry) { throw; } // RED-PROOF
+                timedOut = ex;
+            }
+
+            if (DateTimeOffset.UtcNow >= deadline)
+            {
+                throw new TimeoutException(
+                    $"Backup '{backupId}' stayed held by a retention pass, a delete or another publish, or its call kept "
+                    + $"timing out, for longer than {settings.PublishHoldTimeout}. Retry the operation.",
+                    timedOut);
+            }
+
+            await Task.Delay(settings.PublishHoldRetryDelay, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private async Task<BackupPublishResult> PublishAsync(BackupPublishRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request.Manifest);
         var scheduler = grainFactory.GetGrain<ILatticeBackupSchedulerGrain>(BackupScopeKey.For(request.Manifest.Scope));
-        return await RetryWhileBusyAsync(
+        return await RetryAsync(
                 () => scheduler.PublishAsync(request),
                 r => r.Outcome == BackupPublishOutcome.Busy,
                 request.Manifest.Id,
+                options.Value,
                 cancellationToken)
             .ConfigureAwait(false);
-    }
-
-    private async Task<T> RetryWhileBusyAsync<T>(
-        Func<Task<T>> call,
-        Func<T, bool> busy,
-        string backupId,
-        CancellationToken cancellationToken)
-    {
-        var settings = options.Value;
-        var deadline = DateTimeOffset.UtcNow + settings.PublishHoldTimeout;
-        while (true)
-        {
-            var result = await call().ConfigureAwait(false);
-            if (!busy(result))
-            {
-                return result;
-            }
-
-            if (DateTimeOffset.UtcNow >= deadline)
-            {
-                throw new TimeoutException(
-                    $"Backup '{backupId}' stayed held by a retention pass, a delete or another publish for longer than "
-                    + $"{settings.PublishHoldTimeout}; nothing was written. Retry the operation.");
-            }
-
-            await Task.Delay(settings.PublishHoldRetryDelay, cancellationToken).ConfigureAwait(false);
-        }
     }
 }

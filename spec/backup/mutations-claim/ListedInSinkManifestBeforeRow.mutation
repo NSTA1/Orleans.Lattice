@@ -1,0 +1,16 @@
+# Pairs with ListedInSink. A retire deletes the sink manifest while the row is
+# still listed.
+MODULE: ListedInSinkManifestBeforeRow
+TARGET: ListedInSink
+CLASS: Invariant
+SUMMARY: a retire deletes the manifest before the row
+PERTURBS: RetireMan
+
+--- FIND
+    /\ ret = "rowgone"
+    /\ man' = "none"
+--- REPLACE
+    \* MUTATION: the manifest may go first.
+    /\ ret \in {"held", "rowgone"}
+    /\ man' = "none"
+--- END

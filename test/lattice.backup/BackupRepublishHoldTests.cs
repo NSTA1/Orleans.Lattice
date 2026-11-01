@@ -188,6 +188,29 @@ public sealed class BackupRepublishHoldTests
         });
     }
 
+    [Test]
+    public async Task A_set_member_whose_stamp_never_comes_is_held_from_retention_only_until_its_lease_runs_out()
+    {
+        RedProof.NoPendingLease = true; // RED-PROOF
+        // A set's member republishes an expired backup and its capture dies before
+        // the set's stamp (issue #5629): the member's hold must lapse, or the
+        // backup it republished is exempt from retention for good.
+        var (scope, expired) = await DeployWithExpiredBackupAsync(o => o.PendingStampLease = TimeSpan.FromSeconds(1));
+        var published = await _fixture.Scheduler(scope).PublishAsync(
+            new BackupPublishRequest(expired.Manifest, BackupPublishMode.Full, Register: false));
+        Assert.That(published.Outcome, Is.EqualTo(BackupPublishOutcome.Published), "precondition: the member is written");
+
+        var held = await _fixture.Scheduler(scope).PruneAsync(scope);
+        await Task.Delay(TimeSpan.FromSeconds(1.5));
+        var lapsed = await _fixture.Scheduler(scope).PruneAsync(scope);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(held.PrunedBackupIds, Is.Empty, "a member awaiting its stamp is held from the pass");
+            Assert.That(lapsed.PrunedBackupIds, Is.EqualTo(new[] { expired.BackupId }), "the hold lapses with its lease");
+        });
+    }
+
     private async Task<(BackupScopeSelector Scope, LatticeBackupCaptureResult Expired)> DeployWithExpiredBackupAsync(
         Action<LatticeBackupOptions>? configureBackup = null)
     {

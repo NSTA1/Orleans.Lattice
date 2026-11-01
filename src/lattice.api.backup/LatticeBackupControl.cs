@@ -337,7 +337,11 @@ internal sealed partial class LatticeBackupControl : ILatticeBackupControl, ILat
     {
         ArgumentException.ThrowIfNullOrEmpty(backupId);
 
-        var manifest = await _catalog.GetAsync(backupId, cancellationToken).ConfigureAwait(false);
+        // A delete interrupted after it removed the catalog row leaves the sink
+        // manifest behind, removed last, so a retry finds it there and finishes the
+        // delete (issue #5334).
+        var manifest = await _catalog.GetAsync(backupId, cancellationToken).ConfigureAwait(false)
+            ?? await _sink.ReadManifestAsync(backupId, cancellationToken).ConfigureAwait(false);
         if (manifest is null)
         {
             return false;
@@ -346,9 +350,10 @@ internal sealed partial class LatticeBackupControl : ILatticeBackupControl, ILat
         // Manifest-derived scope: already effective, never re-composed.
         await _authorizer.AuthorizeBackupAsync(manifest.Scope, cancellationToken).ConfigureAwait(false);
 
-        // The row, the sink manifest and this backup's unshared artifacts are
-        // removed under the id's hold, from the row as it stands then (a capture
-        // may have republished the id since it was read here).
+        // The row is removed and the id reserved in the scope's scheduler grain,
+        // from the row as it stands then (a capture may have republished the id
+        // since it was read here); the unshared artifacts and then the sink
+        // manifest are deleted outside the grain (issue #5628).
         if (!await _publicationGate.RetireAsync(manifest, BackupRetireKind.Delete, cancellationToken).ConfigureAwait(false))
         {
             return false;

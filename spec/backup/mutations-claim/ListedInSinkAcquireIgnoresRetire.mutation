@@ -1,0 +1,15 @@
+# Pairs with ListedInSink. A publish does not wait while its own scope retires
+# the id: it registers a row the retire then deletes the manifest of (#5418).
+MODULE: ListedInSinkAcquireIgnoresRetire
+TARGET: ListedInSink
+CLASS: Invariant
+SUMMARY: a publish does not wait for its scope's retire of the id
+PERTURBS: Acquire
+
+--- FIND
+       /\ held[s] = "free"
+       /\ held' = [held EXCEPT ![s] = "pub"]
+--- REPLACE
+       \* MUTATION: no wait on the scope's hold.
+       /\ held' = [held EXCEPT ![s] = IF @ = "ret" THEN "ret" ELSE "pub"]
+--- END

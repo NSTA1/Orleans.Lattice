@@ -110,4 +110,20 @@ public sealed class LatticeBackupOptions
 
     /// <summary>The pause between the publication gate's retries of a busy call.</summary>
     internal TimeSpan PublishHoldRetryDelay { get; set; } = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>
+    /// How long a set member written ahead of its set's membership stamp stays
+    /// held from retention (issue #5629). The stamp, or the member's unstamped
+    /// registration when the set fails, releases it at once; the lease bounds the
+    /// hold when the capturing silo is lost before either runs.
+    /// </summary>
+    internal TimeSpan PendingStampLease { get; set; } = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// How long an operator delete keeps its backup id reserved while it deletes
+    /// the backup's artifacts and sink manifest outside the scheduler grain (issue
+    /// #5628). The delete releases it when it finishes or fails; the lease bounds
+    /// the reservation when the caller is lost part-way.
+    /// </summary>
+    internal TimeSpan DeleteLease { get; set; } = TimeSpan.FromMinutes(30);
 }

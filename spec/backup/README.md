@@ -1,16 +1,17 @@
 # TLA+ specifications of backup and restore against in-flight sagas
 
-This directory holds six TLA+ modules that check the backup and restore
+This directory holds seven TLA+ modules that check the backup and restore
 protocols where they meet concurrent atomic sagas, replication, captures and
 failures. Four are the deliverable of issue #4440, part of the formal-coverage
-epic #4430; `BackupIncremental` was added by its fix for #4589, and
-`BackupRetention` by issue #5350 of epic #5348.
+epic #4430; `BackupIncremental` was added by its fix for #4589,
+`BackupRetention` by issue #5350 of epic #5348, and `BackupIdClaim` by that
+epic's fix for #5627.
 Each module has its own TLC configuration, manifest, mutation directory and
 refinement note. The layout every module follows, how to run TLC, and why TLC
 runs in CI are described in [`spec/README.md`](../README.md); this README covers
 only what is particular to the backup area.
 
-## The six modules, and why six
+## The seven modules, and why seven
 
 The area splits along the seam where the state each part needs stops
 overlapping, which also keeps every module's TLC run small:
@@ -22,7 +23,8 @@ overlapping, which also keeps every module's TLC run small:
 | [`BackupProvenance`](BackupProvenance.tla) | What a chain records: per-origin provenance, the #2621 empty-origin rule, and the chain's HLC frontier (#3758). | A local and a replicated origin, three writes, a chain of three links. |
 | [`BackupRestore`](BackupRestore.tla) | A coordinated restore across two regions, its per-record admission, and the replication that resumes after it, with delivery split into a cached-gate admission and a later landing, a causal-apply buffer, and the restored copy's receive fence (#4593). | Two clusters, two copies each, a backup with one admitted and one foreign record, two application writes, one saga (receive-fence epochs 0 and 1). |
 | [`BackupCutover`](BackupCutover.tla) | A local shadow-cutover restore and its revert: the alias and shard map that move together, the redirects that heal stale routing, the alias reservation, and a crash with a retry. | One tree, two copies, one stale routing cache, one crash. |
-| [`BackupRetention`](BackupRetention.tla) | Retention pruning racing full and incremental captures of the same scope: the keep set and its base closure, the pass's row-first delete and dependent scan, the increment's base re-check, tip-first deletion, one pass at a time with its listing read under the guard, capture-unique backup ids, a set member listed only once it is stamped, and a crash at any step (#5357, #5412, #5418, #5449). | Three backup ids, two capture slots, one retention pass (two in the `TwoPasses` variant), a clock of two ticks, one crash, keep-last of at most one and max-age of one tick. |
+| [`BackupRetention`](BackupRetention.tla) | Retention pruning racing full and incremental captures of the same scope: the keep set and its base closure, the pass's row-first delete and dependent scan, the increment's base re-check, tip-first deletion, one pass at a time with its listing read under the guard, a content-addressed id republished under a per-id hold with a refreshed ranking, a set member listed only once it is stamped, and a crash at any step (#5357, #5412, #5418, #5449). |
+| [`BackupIdClaim`](BackupIdClaim.tla) | Which scope owns a full backup's bare content-addressed id: the claim grain's per-capture claims, each scope's per-id hold, and a retire of the id by its owning scope, so no publish replaces another scope's backup under it (#5620, #5627). | Two scopes, three captures of identical content (two in one scope), one retire. | Three backup ids, two capture slots, one retention pass (two in the `TwoPasses` variant), a clock of two ticks, one crash, keep-last of at most one and max-age of one tick. |
 
 An increment needs the WAL's partitions and offsets, which no other capture
 question does, so it is a module of its own rather than a third capture kind in
@@ -32,7 +34,10 @@ as one value, and whether that image is whole is the capture module's question.
 Coordinated restore and the local cutover split for the same reason: the first
 is about clusters and replication, the second about one cluster's routing.
 Retention needs none of the saga, WAL or routing state, only manifests, their
-base links, the sink and the catalog, so it is a module of its own too.
+base links, the sink and the catalog, so it is a module of its own too. Who owns a
+bare content-addressed id is a question across scopes, while retention is one
+scope's; modelled together, a second scope would multiply retention's already
+large state space, so `BackupIdClaim` checks it alone, over one id.
 
 ### Retention pruning
 
@@ -78,6 +83,9 @@ fixed in the anti-entropy digest); it checks every fix it models. See
 | | `InFlightBaseSurvives` | Action | An increment is published only while its base is restorable. |
 | | `KeepPolicyHonoured` | Action | Nothing the policy keeps is pruned. |
 | | `ExpiredEventuallyPruned` | Liveness | A listed backup outside the policy that nothing builds on is eventually pruned. |
+| `BackupIdClaim` | `ListedInSink` | Invariant | A retire never deletes the manifest of a row its scope's publish registered meanwhile. |
+| | `ScopeAgreement` | Invariant | The bare id's catalog row and sink manifest name one scope. |
+| | `NoForeignOverwrite` | Action | No publish replaces another scope's backup under the bare id. |
 | `BackupCutover` | `RestoreNeverTorn` | Invariant | A reader never pairs one copy with another copy's shard map. |
 | | `CutoverServesRestored` | Invariant | Once a restore returns, every reader is served the restored copy. |
 | | `RevertNeverServesRestored` | Invariant | Once a revert returns, no reader is served the restored copy. |
@@ -206,8 +214,29 @@ refinement note's rows:
   origin. The origin seam above removed the cause; found by the module's
   confirmation review (#5352), and now pinned by a regression test shown red in
   CI against the earlier behaviour. It lies outside the backup modules.
+- **#5627** (`BackupIdClaim`, fixed): the claim grain admitted the scope that
+  owned a bare id without recording a claim. A capture of that scope resolved the
+  id and waited on its hold while the scope's own retention pass or delete
+  removed it; another scope's capture of identical content took the ownerless id,
+  and the waiting capture then published over it, so the other scope's caller
+  held an id that listed and restored as the first scope's. Found by the
+  confirmation review (#5352). The fix records one claim per admitted capture,
+  the owner's included, released one at a time; `NoForeignOverwriteOwnerUnclaimed`
+  and `NoForeignOverwriteReleaseClearsAll` reproduce production before it.
+- **#5628** (`BackupRetention` gap, fixed): an operator delete ran its catalog
+  scan and its chunked artifact deletes inside one scheduler grain call, so a
+  large delete timed out and skipped its health cleanup. The grain now removes the
+  row and reserves the id by a lease, and the artifacts and then the sink
+  manifest are deleted outside it; the manifest goes last, so a retry finishes an
+  interrupted delete (which also fixes #5334). Pinned by regression tests shown
+  red in CI before the fix.
+- **#5629** (`BackupRetention`, fixed): a set member's pending-stamp hold was
+  never released if its capture died, exempting the backup it republished from
+  retention for as long as the scheduler activation lived. The hold is now a
+  lease, as the model's crash already releases it. Pinned by a regression test
+  shown red in CI before the fix.
 
-All twelve fixes have landed, so the reproducing mutations now stand as
+All fifteen fixes have landed, so the reproducing mutations now stand as
 regression checks: each must keep firing, and each has a code analogue that turns
 the fix's regression tests red.
 ## Saga abstraction
@@ -255,3 +284,4 @@ notes and TLC's own state counts.
 | `BackupRestore` | 5 | 1 | 16 | 20 | 20 | 22,700 |
 | `BackupCutover` | 5 | 2 | 10 | 12 | 16 | 39 |
 | `BackupRetention` | 5 | 3 | 18 | 28 | 24 | 2,680,648 |
+| `BackupIdClaim` | 3 | 1 | 8 | 9 | 10 | 174 |

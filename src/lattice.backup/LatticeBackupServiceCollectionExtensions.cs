@@ -97,7 +97,10 @@ public static class LatticeBackupServiceCollectionExtensions
             sp.GetRequiredService<ILatticeBackupCatalogStore>(),
             sp.GetRequiredService<ILatticeBackupSink>(),
             sp.GetRequiredService<IGrainFactory>()));
-        builder.Services.TryAddSingleton<IBackupPublicationGate, SchedulerBackupPublicationGate>();
+        builder.Services.TryAddSingleton<IBackupPublicationGate>(sp => new SchedulerBackupPublicationGate(
+            sp.GetRequiredService<IGrainFactory>(),
+            sp.GetRequiredService<IOptions<LatticeBackupOptions>>(),
+            sp.GetRequiredService<BackupPublisher>()));
         builder.Services.TryAddSingleton<ILatticeBackupSetResolver, LatticeBackupSetResolver>();
 
         // Periodic backup-health verification: the store that persists the latest

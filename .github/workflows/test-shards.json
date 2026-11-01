@@ -287,7 +287,14 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardBackup"],
-        "note": "The mutants of every Backup* module, with every Backup* base but BackupCapture co-located (#5161). 75 cases, 16.5 case-minutes in a 4.19-minute item in the receipt-free bucket push run 40909619830 (#5166)."
+        "note": "The mutants of every Backup* module but BackupRetention, with every Backup* base but BackupCapture and BackupRetention co-located (#5161), and BackupIdClaim's 174-state base added at creation (#5627). Before BackupRetention left it, 75 cases took 16.5 case-minutes in a 4.19-minute item in run 40909619830 (#5166); with BackupRetention's 28 mutants each launching a full-bound control of the 2,680,648-state base it took 41 minutes in run 41352018291 (#5352)."
+      },
+      {
+        "shard": "formal-tlc-backup-retention",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardBackupRetention"],
+        "note": "BackupRetention's base, TwoPasses variant and 28 mutants (#5352), co-located so the base serves the mutants' full-bound controls. Measured locally on four TLC workers: the base 6 m 52 s with liveness, the variant 75 s, and every mutant under 5 minutes in all; estimated at 12 minutes in test-durations.tsv until measured on its member pull request's CI leg."
       },
       {
         "shard": "formal-tlc-bplus-cascade",
