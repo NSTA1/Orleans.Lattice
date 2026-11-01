@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Linq;
+using Microsoft.Extensions.DependencyInjection;
 using System.Text;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
@@ -15,10 +17,49 @@ public partial class PublicApiContractTests
     public async Task Repro_5607_cold_restart_scan_loses_no_key()
     {
         var expected = Enumerable.Range(0, DeepScanKeyCount).Select(DeepScanKey).ToArray();
+        var clock = Stopwatch.StartNew();
+        long totalTrimmed = 0;
+        var gcPasses = 0;
+        var gcFaults = 0;
         for (var iteration = 0; iteration < Repro5607Iterations; iteration++)
         {
             var treeId = "pac-repro5607-" + Guid.NewGuid().ToString("N")[..8];
+
+            // Run WAL GC passes concurrently with the writes and splits, as a
+            // long-lived fixture cluster's startup GC pass can (issue #5607).
+            var gc = PublicApiContractClusterFixture.SiloServices!.GetRequiredService<ILatticeWalGc>();
+            using var stopGc = new CancellationTokenSource();
+            var gcLoop = Task.Run(async () =>
+            {
+                while (!stopGc.IsCancellationRequested)
+                {
+                    try
+                    {
+                        var r = await gc.RunOnceAsync(treeId);
+                        Interlocked.Add(ref totalTrimmed, r.EntriesTrimmed);
+                        Interlocked.Increment(ref gcPasses);
+                    }
+                    catch (Exception)
+                    {
+                        Interlocked.Increment(ref gcFaults);
+                    }
+
+                    await Task.Delay(5);
+                }
+            });
             await CreateDepthTwoTreeAsync(treeId);
+            stopGc.Cancel();
+            await gcLoop;
+            try
+            {
+                var last = await gc.RunOnceAsync(treeId);
+                totalTrimmed += last.EntriesTrimmed;
+            }
+            catch (Exception)
+            {
+                gcFaults++;
+            }
+
             await _fixture.RestartClusterAsync();
             var tree = await _fixture.CreateSmallTreeAsync(
                 treeId,
@@ -104,8 +145,13 @@ public partial class PublicApiContractTests
                 }
             }
 
+            report.AppendLine($"gc passes {gcPasses}, faults {gcFaults}, trimmed {totalTrimmed}");
             TestContext.Progress.WriteLine(report.ToString());
             Assert.Fail(report.ToString());
         }
+
+        Assert.Fail(
+            $"REPRO5607 no miss in {Repro5607Iterations} iterations ({clock.Elapsed.TotalSeconds:F0} s); "
+            + $"gc passes {gcPasses}, faults {gcFaults}, entries trimmed {totalTrimmed}.");
     }
 }
