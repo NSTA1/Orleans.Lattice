@@ -28,14 +28,20 @@ name: Explorer Journeys
 #                      runs that leg; a change to the Explorer, the harness, the
 #                      hosts, a facade or this lane runs every leg.
 #   story-contoso, story-fabrikam
-#                      the storyline run in order on one estate. A member pull
-#                      request runs its journeys' storylines on its MERGE commit
-#                      (the pull_request checkout), so a broken hand-off is caught
-#                      before it lands; the bucket-to-main pull request and the
-#                      nightly run run both. Planned once the tree holds a
-#                      chapter contract (F6, #5364): without one a story fails
-#                      at its first chapter by construction.
+#                      the storyline run in order on one estate. ADVISORY and
+#                      NOT run on a member pull request (user decision on
+#                      #5401, 2026-11-01): they run on the bucket-to-main
+#                      landing pull request, nightly, on workflow_dispatch, and
+#                      on a member pull request labelled `journeys-full`.
+#                      Planned once the tree holds a chapter contract (F6,
+#                      #5364): without one a story fails at its first chapter
+#                      by construction.
 #   story-contoso-narrow  nightly only: the Contoso story at 390x844.
+# A member pull request runs the harness and the isolated legs of the chapters
+# it touches (plus, for an Explorer area file, the chapters naming that area;
+# a shared file runs every isolated leg). The planner's docstring has the rule.
+# `contract-conformance` is a matrix over the planner's `conformance` output,
+# so it follows the same gating as the story legs.
 # After the legs, `coverage-gate` unions every leg's coverage hits. On a body
 # edit of a member pull request, `provenance` checks the `## Journey
 # screenshots` section against the run its markers name.
@@ -53,8 +59,9 @@ on:
     # Branch list mirrors ci.yml and ui-tests.yml. `edited` re-runs the lane
     # when a pull request body changes, which is when the screenshot
     # provenance check has something new to check; the planner runs no leg on
-    # it.
-    types: [opened, synchronize, reopened, edited]
+    # it. `labeled` lets `journeys-full` start the full set on a member pull
+    # request; any other label plans nothing.
+    types: [opened, synchronize, reopened, edited, labeled]
     branches: [main, '*/epic/**', 'release/**']
     paths:
       - 'test/lattice.explorer.e2e/**'
@@ -126,13 +133,17 @@ on:
   schedule:
     - cron: '17 2 * * *'
 
+  # On demand: every leg and every conformance shard on the chosen ref.
+  workflow_dispatch:
+
 permissions:
   contents: read
 
-# A body edit gets a group of its own, so checking the screenshot section never
-# cancels the legs of the push it describes.
+# A body edit and a label each get a group of their own, so checking the
+# screenshot section or adding a label never cancels the legs of the push it
+# follows.
 concurrency:
-  group: explorer-journeys-${{ github.ref }}-${{ github.event.action == 'edited' && 'body' || 'code' }}
+  group: explorer-journeys-${{ github.ref }}-${{ github.event.action == 'edited' && 'body' || github.event.action == 'labeled' && format('label-{0}', github.event.label.name) || 'code' }}
   cancel-in-progress: true
 
 env:
@@ -207,6 +218,7 @@ jobs:
       pull-requests: read
     outputs:
       legs: ${{ steps.plan.outputs.legs }}
+      conformance: ${{ steps.plan.outputs.conformance }}
       provenance: ${{ steps.plan.outputs.provenance }}
     steps:
       - uses: actions/checkout@v5
@@ -232,6 +244,17 @@ jobs:
             rm -f "$RUNNER_TEMP/changed.txt"
           fi
 
+      # Its own pull-request-only step, so the plan step (which a push runs too)
+      # reads no pull-request context. No file: the planner sees no label.
+      - name: Record the pull request's labels
+        if: github.event_name == 'pull_request'
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          LABEL: ${{ github.event.label.name }}
+        run: |
+          printf '%s' "$LABELS" > "$RUNNER_TEMP/labels.json"
+          printf '%s' "$LABEL" > "$RUNNER_TEMP/label.txt"
+
       - name: Plan the legs
         id: plan
         env:
@@ -239,8 +262,11 @@ jobs:
           ACTION: ${{ github.event.action }}
           BASE_REF: ${{ github.base_ref }}
         run: |
+          labels=$(cat "$RUNNER_TEMP/labels.json" 2>/dev/null || true)
+          label=$(cat "$RUNNER_TEMP/label.txt" 2>/dev/null || true)
           python3 .github/workflows/explorer-journeys-plan.py plan \
             --event "$EVENT" --action "$ACTION" --base-ref "$BASE_REF" \
+            --labels "$labels" --label "$label" \
             --changed-files "$RUNNER_TEMP/changed.txt"
 
   legs:
@@ -531,18 +557,18 @@ jobs:
   # The F6 contract conformance self-test (#5364): on one estate per storyline, every
   # chapter's contract establishes its produces through the facades and then verifies
   # them, in serial story order. Sharded by storyline, one leg each; the main harness
-  # job excludes it.
+  # job excludes it. ADVISORY: the planner plans no shard on a member pull request or a
+  # body edit (see the LEGS comment at the top).
   contract-conformance:
     name: Contract conformance (${{ matrix.storyline }})
-    needs: plan
-    # Not on a body edit (the screenshot section is pasted after the run it cites).
-    if: needs.plan.outputs.push_is_member != 'true' && github.event.action != 'edited'
+    needs: [plan, planner]
+    if: needs.plan.outputs.push_is_member != 'true' && needs.planner.outputs.conformance != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        storyline: [Contoso]
+        storyline: ${{ fromJSON(needs.planner.outputs.conformance) }}
 
     env:
       # Two Azurite accounts, as reference-architecture/local/docker-compose.yml

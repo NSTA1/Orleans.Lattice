@@ -208,6 +208,21 @@ internal static class AppsControlMapping
     };
 
     /// <summary>
+    /// The wire state a run of <paramref name="operation"/> moves an installation in
+    /// <paramref name="current"/> to. A reconcile re-applies the current state without changing it.
+    /// </summary>
+    /// <param name="operation">The operation of the run in flight.</param>
+    /// <param name="current">The registry state before the run.</param>
+    /// <returns>The target wire state.</returns>
+    public static AppLifecycleState ToPendingState(AppActivationOperation operation, AppRegistryLifecycleState current) => operation switch
+    {
+        AppActivationOperation.Enable => AppLifecycleState.Enabled,
+        AppActivationOperation.Disable => AppLifecycleState.Disabled,
+        AppActivationOperation.Uninstall => AppLifecycleState.Uninstalled,
+        _ => ToWireState(current),
+    };
+
+    /// <summary>
     /// The provenance whose publisher the tree ownership probe claims as. The version a live install
     /// holds is judged as that install, because its claims (taken at install and re-verified at every
     /// activation) are held under the provenance its record carries; any other version is judged as

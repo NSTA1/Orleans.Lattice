@@ -333,7 +333,7 @@ public sealed class SchemaRuleBuilderCardTests : SchemaRuleBuilderTestBase
         Kind(cut, SchemaCardKind.NumberRange);
         Type(cut, "Smallest", "0");
         Commit(cut);
-        ClickLabelled(cut, "Add an alternative to rule 1");
+        ClickLabelled(cut, "Or: add an alternative to rule 1");
         cut.WaitUntil(() => Assert.That(cut.Find(".lt-schema-composer h3").TextContent, Is.EqualTo("Add an alternative to rule 1")));
         Path(cut, "discount");
         Kind(cut, SchemaCardKind.Type);
@@ -348,6 +348,29 @@ public sealed class SchemaRuleBuilderCardTests : SchemaRuleBuilderTestBase
     }
 
     [Test]
+    public void Every_labelled_rule_action_names_its_visible_text()
+    {
+        UseTrees("scratch");
+        var cut = OpenEditor("scratch");
+        StartRule(cut);
+        Path(cut, "discount");
+        Kind(cut, SchemaCardKind.NumberRange);
+        Type(cut, "Smallest", "0");
+        Commit(cut);
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-schema-ruleset__actions button"), Is.Not.Empty));
+        Assert.Multiple(() =>
+        {
+            foreach (var button in cut.FindAll(".lt-schema-ruleset__actions button"))
+            {
+                var visible = Text(button).TrimEnd('.');
+                Assert.That(button.GetAttribute("aria-label"), Does.Contain(visible).IgnoreCase,
+                    $"The accessible name of the '{Text(button)}' button must contain its visible text (WCAG 2.5.3).");
+            }
+        });
+    }
+
+    [Test]
     public void A_pattern_card_is_not_offered_as_an_alternative()
     {
         UseTrees("scratch");
@@ -355,7 +378,7 @@ public sealed class SchemaRuleBuilderCardTests : SchemaRuleBuilderTestBase
         StartRule(cut);
         Path(cut, "a");
         Commit(cut);
-        ClickLabelled(cut, "Add an alternative to rule 1");
+        ClickLabelled(cut, "Or: add an alternative to rule 1");
 
         cut.WaitUntil(() =>
         {

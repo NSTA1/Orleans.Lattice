@@ -55,7 +55,14 @@
 {
     <section class="lt-cluster-section" aria-labelledby="lt-cluster-alias">
         <h2 class="lt-cluster-heading" id="lt-cluster-alias">Alias</h2>
-        <p class="lt-cluster-note">Point this name at another physical tree, so reads and writes routed through it reach that tree. Only one level of indirection is allowed.</p>
+        <p class="lt-cluster-note">Give this tree another name, so reads and writes routed through that name reach this tree. The name must not already belong to a tree.</p>
+        <form class="lt-cluster-form" @onsubmit="ReviewName" aria-label="Add a name">
+            <LtTextInput Label="New name" Mono="true" @bind-Value="_newName" Error="@_newNameError" Hint="@($"An alias that reaches {TreeId}, such as a stable name for applications to use.")" />
+            <div class="lt-cluster-form__actions">
+                <LtButton Type="LtButtonType.Submit" Disabled="@_busy">Add name...</LtButton>
+            </div>
+        </form>
+        <p class="lt-cluster-note">Or point this name at another physical tree, so reads and writes routed through it reach that tree. Only one level of indirection is allowed.</p>
         <form class="lt-cluster-form" @onsubmit="ReviewAlias" aria-label="Set alias">
             <LtComboBox @ref="_aliasBox" Label="Target tree" @bind-Value="_aliasTarget" Error="@_aliasError" Source="@Suggestions.ClusterTrees" Noun="tree" />
             <div class="lt-cluster-form__actions">
@@ -88,4 +95,10 @@
                       Title="Set alias" ObjectKind="tree" ObjectName="@TreeId" ConfirmText="Set alias"
                       OnConfirm="SetAliasAsync">
     <p>Reads and writes routed through <span class="lt-shell-mono">@TreeId</span> will reach <span class="lt-shell-mono">@_aliasTarget</span> instead of the tree it reaches now.</p>
+</LtConfirmDestructive>
+
+<LtConfirmDestructive Open="@(_confirm == Verb.Name)" OpenChanged="Close"
+                      Title="Add a name" ObjectKind="alias" ObjectName="@(_newName ?? string.Empty)" ConfirmText="Add name"
+                      OnConfirm="AddNameAsync">
+    <p>Reads and writes routed through <span class="lt-shell-mono">@_newName</span> will reach <span class="lt-shell-mono">@TreeId</span>.</p>
 </LtConfirmDestructive>
