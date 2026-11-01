@@ -43,24 +43,68 @@ internal static class BootstrapForeignDeleteReconcile
     }
 
     /// <summary>Whether the source tree generation is known, live and unchanged from open to close.</summary>
-    public static bool IsStable(SnapshotSourceGeneration? openGeneration, SnapshotSourceGeneration? closeGeneration)
+    public static bool IsStable(SnapshotSourceGeneration? openGeneration, SnapshotSourceGeneration? closeGeneration) =>
+        DescribeInstability(openGeneration, closeGeneration) is null;
+
+    /// <summary>
+    /// Names why <see cref="IsEligible"/> refuses the export, for the log
+    /// (issue #5534), or <see langword="null"/> when it is eligible.
+    /// </summary>
+    public static string? DescribeIneligibility(
+        SnapshotSourceFrontier? frontier,
+        SnapshotSourceGeneration? openGeneration,
+        SnapshotSourceGeneration? closeGeneration,
+        LatticeMergeMode mergeMode)
+    {
+        if (mergeMode != LatticeMergeMode.LwwRegister)
+        {
+            return $"merge mode {mergeMode} is not last-writer-wins";
+        }
+
+        if (!FrontierMatchesOpen(frontier, openGeneration))
+        {
+            return "the source frontier was not read under the export's opening lineage";
+        }
+
+        return DescribeInstability(openGeneration, closeGeneration);
+    }
+
+    private static string? DescribeInstability(SnapshotSourceGeneration? openGeneration, SnapshotSourceGeneration? closeGeneration)
     {
         if (openGeneration is not { } open || closeGeneration is not { } close)
         {
-            return false;
+            return "the export carries no opening or closing source generation";
         }
 
         if (open.PhysicalTreeId is null || open.ShardMapVersion is null || open.Lineage is null
-            || open.DeleteEpoch is null || open.IsDeleted is null || open.IsDeleted == true
-            || close.IsDeleted != false)
+            || open.DeleteEpoch is null || open.IsDeleted is null)
         {
-            return false;
+            return "the export's opening source generation is incomplete";
         }
 
-        return string.Equals(open.PhysicalTreeId, close.PhysicalTreeId, StringComparison.Ordinal)
-            && open.ShardMapVersion == close.ShardMapVersion
-            && open.Lineage == close.Lineage
-            && open.DeleteEpoch == close.DeleteEpoch;
+        if (open.IsDeleted == true || close.IsDeleted != false)
+        {
+            return "the source tree was deleted or is being purged";
+        }
+
+        if (!string.Equals(open.PhysicalTreeId, close.PhysicalTreeId, StringComparison.Ordinal))
+        {
+            return "the source tree's physical copy changed during the export";
+        }
+
+        if (open.ShardMapVersion != close.ShardMapVersion)
+        {
+            return "the source tree's shard map changed during the export";
+        }
+
+        if (open.Lineage != close.Lineage)
+        {
+            return "the source tree's lineage changed during the export";
+        }
+
+        return open.DeleteEpoch != close.DeleteEpoch
+            ? "the source tree's delete epoch changed during the export"
+            : null;
     }
 
     /// <summary>

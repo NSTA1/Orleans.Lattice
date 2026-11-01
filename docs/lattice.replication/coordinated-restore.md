@@ -325,6 +325,21 @@ A single-tree restore uses `RestoreAsync(LatticeRestoreRequest, CancellationToke
 in the same way; see the [backup package restore docs](../lattice.backup/api.md)
 for the request shape and result fields.
 
+The restore reports the saga's real outcome however long the saga runs. It
+does not hold one call to the coordinator open for the whole saga, which a large
+build would outlast (the Orleans response timeout defaults to 30 seconds) and
+which reported a committed saga as a failed restore
+([#5506](https://github.com/NSTA1/Orleans.Lattice/issues/5506)). Instead it
+records the saga with the coordinator, which advances it in turns of its own,
+and follows the saga's status until it completes: a committed saga returns the
+restore result, an aborted one throws `LatticeRestoreValidationException`, and a
+saga a participant refused, which needs operator repair, throws
+`InvalidOperationException`. A drive that stops short on a transient fault is
+retried from where it stopped, and a decided commit whose cutover fails releases
+the tree's local writes before it is redelivered, so it never leaves the tree
+write-fenced. Cancelling the restore stops the wait, not the saga, which the
+coordinator still drives to its decision.
+
 ## Enlisting your own resource in the saga
 
 The built-in restore participant is one participant among many. An application

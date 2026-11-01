@@ -1,6 +1,5 @@
 using System.Security.Cryptography;
 using System.Text;
-using Deque.AxeCore.Playwright;
 using Microsoft.Playwright;
 using Orleans.Lattice.Explorer.UiTests.Accessibility;
 
@@ -15,7 +14,9 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Checkpoints;
 /// The screenshot is taken first, so a failed checkpoint still shows the state that failed.
 /// It is full-page at the journey's fixed viewport, after fonts have loaded and motion has
 /// settled, with animations disabled, the caret hidden and every volatile region masked
-/// (<see cref="JourneyMasks"/>).
+/// (<see cref="JourneyMasks"/>). The axe run is timed and bounded (<see cref="AxeTiming"/>,
+/// #5565): its duration is logged, a slow run's rules are timed one at a time, and a run past
+/// the bound fails the checkpoint naming the slowest rules.
 /// </remarks>
 public static class JourneyCheckpoint
 {
@@ -72,17 +73,25 @@ public static class JourneyCheckpoint
         var sha256 = Convert.ToHexString(SHA256.HashData(png)).ToLowerInvariant();
 
         var surface = $"{recorder.JourneyId} {step}/{substep} ({title})";
-        var axe = await page.RunAxe(AxeConformance.RunOptions);
-        var missing = AxeConformance.MissingTags(axe);
-        if (missing.Count > 0)
+        var timed = await AxeTiming.RunAsync(page, surface, AxeConformance.RunOptions);
+        if (timed.Failure is not null)
         {
-            problems.Add(AxeConformance.DescribeVacuity(missing, surface));
+            problems.Add(timed.Failure);
         }
 
-        var blocking = AxeConformance.Blocking(axe);
-        if (blocking.Count > 0)
+        if (timed.Result is { } axe)
         {
-            problems.Add(AxeConformance.Describe(blocking, surface));
+            var missing = AxeConformance.MissingTags(axe);
+            if (missing.Count > 0)
+            {
+                problems.Add(AxeConformance.DescribeVacuity(missing, surface));
+            }
+
+            var blocking = AxeConformance.Blocking(axe);
+            if (blocking.Count > 0)
+            {
+                problems.Add(AxeConformance.Describe(blocking, surface));
+            }
         }
 
         var (consoleFailures, consoleNotes) = console.Drain();

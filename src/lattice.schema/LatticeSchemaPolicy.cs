@@ -24,8 +24,9 @@ public sealed class LatticeSchemaPolicy
     /// <param name="strictIngest">
     /// When <c>true</c>, intercepted system-origin writes are re-validated against
     /// the rules and a non-compliant item is dead-lettered rather than applied.
-    /// Replicated typed-CRDT deltas and replicated atomic-batch entries are
-    /// intercepted; a plain last-writer-wins replication apply, a backup restore and
+    /// Replicated typed-CRDT deltas, replicated atomic-batch entries and the rows a
+    /// receiver bootstrap drains from a peer's export are intercepted; a
+    /// steady-state plain last-writer-wins replication apply, a backup restore and
     /// a tree merge bypass write interception and are not governed by this flag.
     /// When <c>false</c>
     /// (the default), intercepted system-origin writes are trusted.

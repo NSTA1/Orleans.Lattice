@@ -2027,6 +2027,44 @@
       ]
     },
     {
+      "id": "probe-replication-capabilities",
+      "in_process": "ILatticeReplicationControl.ProbeCapabilitiesAsync",
+      "grpc_method": "/orleans.lattice.api.replication/ProbeCapabilities",
+      "transport_scope": "both",
+      "request": "ReplicationProbeCapabilitiesRequestMessage",
+      "response": "ReplicationCapabilitiesResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "The tree id is null or empty."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The transport authorizer refuses the call, or the asserted tenant fails resolution. A caller without the Replication capability is answered CanConfigure = false, not refused."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only, side-effect-free capability probe.",
+        "source": "src/lattice.api.replication/LatticeReplicationControl.cs#ProbeCapabilitiesAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only operation; the engine is never consulted.",
+        "source": "src/lattice.api.replication/LatticeReplicationControl.cs#ProbeCapabilitiesAsync"
+      },
+      "concurrency": {
+        "rule": "The tree id is scoped to the caller tenant and authorized through the same Replication gate enable and disable use; the flag is advisory and every real enable or disable is authorized again on attempt.",
+        "source": "src/lattice.api.replication/LatticeReplicationControl.cs#ProbeCapabilitiesAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#ProbeCapabilitiesAsync",
+        "src/lattice.api.replication/LatticeReplicationControl.cs#ProbeCapabilitiesAsync",
+        "src/lattice.api.replication.grpc/LatticeReplicationGrpcMethods.cs#ProbeCapabilitiesMethodName",
+        "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs#ProbeCapabilities"
+      ]
+    },
+    {
       "id": "pull-compression-dictionary",
       "in_process": null,
       "grpc_method": "/orleans.lattice.replication.LatticeReplication/PullCompressionDictionary",

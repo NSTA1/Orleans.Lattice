@@ -97,7 +97,10 @@ internal sealed class SessionChromeState : IDisposable
     public Task EnsureInitializedAsync(CancellationToken cancellationToken = default) =>
         _initialization ??= InitializeCoreAsync(cancellationToken);
 
-    /// <summary>Asks for the connection settings.</summary>
+    /// <summary>
+    /// Asks for the connection dialog: the editable settings, or the read-only
+    /// details on a head that refuses browser-driven endpoint configuration.
+    /// </summary>
     public void OpenConfiguration() => SetOverlay(SessionOverlayKind.Configuration);
 
     /// <summary>Asks for the sign-in dialog.</summary>
