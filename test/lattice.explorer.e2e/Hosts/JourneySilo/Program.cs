@@ -250,6 +250,14 @@ builder.Host.UseOrleans(silo =>
     silo.AddLatticeBackup();
     silo.AddLatticeBackupAzureBlob(options =>
         backupStorage.ConfigureBackupSink(options, config["Backup:ContainerName"] ?? LatticeBackupAzureBlobOptions.DefaultContainerName));
+    if (JourneyHostEnvironment.FaultsEnabled)
+    {
+        // Fault seam: the harness can hold the backup store's artifact writes, as a
+        // congested storage account would, so a capture is still running when a
+        // journey cancels it (#5377). Off unless the seams are on.
+        JourneyBackupWriteHold.Decorate(silo.Services);
+    }
+
     silo.AddLatticeBackupApi();
 
     if (backupPrimary)
