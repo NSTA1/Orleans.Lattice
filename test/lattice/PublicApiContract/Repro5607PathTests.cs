@@ -162,12 +162,10 @@ public sealed class Repro5607PathTests
     }
 
     // variant: budget | ceiling | split
-    [TestCase("budget", false)]
     [TestCase("ceiling", false)]
-    [TestCase("split", false)]
-    [TestCase("budget", true)]
+    [TestCase("ceilingtight", false)]
     [TestCase("ceiling", true)]
-    [TestCase("split", true)]
+    [TestCase("ceilingtight", true)]
     public async Task Repro_5607_forced_scan_paths(string variant, bool entries)
     {
         s_variant = variant;
@@ -175,7 +173,8 @@ public sealed class Repro5607PathTests
         _cluster = await DeployAsync();
         var signals = ListenScanSignals(out var listener);
         var failures = new StringBuilder();
-        var iterations = variant == "split" ? 25 : 12;
+        var iterations = variant == "split" ? 25 : 15;
+        var loudStalls = 0;
         var started = DateTime.UtcNow;
         try
         {
@@ -213,8 +212,20 @@ public sealed class Repro5607PathTests
                 }
 
                 tree = await RegisterAsync(treeId);
-                s_leafReadDelayMaxMs = variant == "ceiling" ? 60 : 8;
-                var scanned = entries ? await ScanEntryKeysAsync(tree) : await ScanAsync(tree);
+                s_leafReadDelayMaxMs = variant.StartsWith("ceiling", StringComparison.Ordinal) ? 60 : 8;
+                List<string> scanned;
+                try
+                {
+                    scanned = entries ? await ScanEntryKeysAsync(tree) : await ScanAsync(tree);
+                }
+                catch (ScanPageStalledException)
+                {
+                    // Loud: the stall resume budget ran out. Not the silent path.
+                    loudStalls++;
+                    s_leafReadDelayMaxMs = 0;
+                    continue;
+                }
+
                 s_leafReadDelayMaxMs = 0;
                 var missing = expected.Except(scanned, StringComparer.Ordinal).ToList();
                 if (missing.Count > 0)
@@ -234,7 +245,7 @@ public sealed class Repro5607PathTests
 
         var signalText = string.Join("; ", signals.OrderBy(s => s.Key).Select(s => $"{s.Key} x{s.Value}"));
         Assert.Fail(failures.Length == 0
-            ? $"REPRO5607-PATH {variant} {(entries ? "entries" : "keys")}: no miss in {iterations} iterations ({(DateTime.UtcNow - started).TotalSeconds:F0}s). signals: {signalText}"
+            ? $"REPRO5607-PATH {variant} {(entries ? "entries" : "keys")}: no miss in {iterations} iterations, {loudStalls} loud stalls ({(DateTime.UtcNow - started).TotalSeconds:F0}s). signals: {signalText}"
             : $"REPRO5607-PATH {variant} {(entries ? "entries" : "keys")} MISS. signals: {signalText}\n{failures}");
     }
 
@@ -280,7 +291,11 @@ public sealed class Repro5607PathTests
                         break;
                     case "ceiling":
                         opts.MaxScanPageDuration = TimeSpan.Zero;
-                        opts.MaxScanPageStallDuration = TimeSpan.FromMilliseconds(40);
+                        opts.MaxScanPageStallDuration = TimeSpan.FromMilliseconds(150);
+                        break;
+                    case "ceilingtight":
+                        opts.MaxScanPageDuration = TimeSpan.Zero;
+                        opts.MaxScanPageStallDuration = TimeSpan.FromMilliseconds(70);
                         break;
                     case "split":
                         opts.MaxScanPageDuration = TimeSpan.FromMilliseconds(3);
