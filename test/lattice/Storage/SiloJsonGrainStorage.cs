@@ -10,10 +10,10 @@ namespace Orleans.Lattice.Tests.Storage;
 /// Builds the grain-storage serializers exactly as a silo wires them for a JSON
 /// provider such as Azure Table storage: Orleans' Newtonsoft settings
 /// post-configured with its type binder and converters
-/// (<see cref="ConfigureOrleansJsonSerializerOptions"/>), the
-/// <see cref="JsonGrainStorageSerializer"/> over them, and Lattice's
-/// <see cref="LatticeGrainStorageSerializer"/> in front, which is the
-/// serializer the provider actually calls.
+/// (<see cref="ConfigureOrleansJsonSerializerOptions"/>), then Lattice's own
+/// registration (<c>AddLatticeGrainStorageSerializer</c>), which installs
+/// <see cref="LatticeGrainStorageSerializer"/> over the
+/// <see cref="JsonGrainStorageSerializer"/> and adds its JSON read converters.
 /// </summary>
 internal sealed class SiloJsonGrainStorage : IDisposable
 {
@@ -27,10 +27,11 @@ internal sealed class SiloJsonGrainStorage : IDisposable
         services.AddSingleton<GrainReferenceActivator>();
         services.AddSingleton<IPostConfigureOptions<OrleansJsonSerializerOptions>, ConfigureOrleansJsonSerializerOptions>();
         services.AddSingleton<OrleansJsonSerializer>();
+        services.AddLatticeGrainStorageSerializer();
 
         this.provider = services.BuildServiceProvider();
-        this.Json = ActivatorUtilities.CreateInstance<JsonGrainStorageSerializer>(this.provider);
-        this.Lattice = new LatticeGrainStorageSerializer(this.provider.GetRequiredService<Serializer>(), this.Json);
+        this.Lattice = (LatticeGrainStorageSerializer)this.provider.GetRequiredService<IGrainStorageSerializer>();
+        this.Json = (JsonGrainStorageSerializer)this.Lattice.Fallback;
     }
 
     /// <summary>The JSON grain-storage serializer alone.</summary>

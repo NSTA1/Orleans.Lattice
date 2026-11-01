@@ -2472,7 +2472,7 @@ the full contract.
 
 | Type | Role |
 |------|------|
-| `ILatticeBinaryPersistedState` / `LatticeGrainStorageSerializer` | The marker for a persisted state type Lattice writes through the Orleans binary serializer instead of the JSON grain-storage serializer, and the serializer `AddLattice` installs to do it (`WritesBinary(stateType)`, `Fallback`). Every other state type is delegated, unchanged, to the serializer registered before it, because the JSON path cannot write a large opaque payload without first materialising it as one contiguous string. On read it also strips the `$type` tag of a compiler-synthesized collection (`<>z__ReadOnlyArray` and its siblings), which an earlier build could persist and JSON cannot construct, so such rows stay readable. |
+| `ILatticeBinaryPersistedState` / `LatticeGrainStorageSerializer` | The marker for a persisted state type Lattice writes through the Orleans binary serializer instead of the JSON grain-storage serializer, and the serializer `AddLattice` installs to do it (`WritesBinary(stateType)`, `Fallback`). Every other state type is delegated, unchanged, to the serializer registered before it, because the JSON path cannot write a large opaque payload without first materialising it as one contiguous string. On read it also strips the `$type` tag of a compiler-synthesized collection (`<>z__ReadOnlyArray` and its siblings), which an earlier build could persist and JSON cannot construct, so such rows stay readable. `AddLattice` also adds a read-only JSON converter so read-only and immutable dictionaries in grain state read back, which Newtonsoft otherwise refuses under Orleans' reference-preserving settings. |
 
 ### Distributed lock and atomic actions
 

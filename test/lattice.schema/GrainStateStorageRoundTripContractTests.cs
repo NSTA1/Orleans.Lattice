@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Schema.Tests;
 /// Concrete guard for the <c>Orleans.Lattice.Schema</c> assembly: every grain persistent-state
 /// type it declares must round-trip through the grain-storage serializer a silo
 /// hands Azure Table storage - Orleans' post-configured JSON serializer behind
-/// <see cref="LatticeGrainStorageSerializer"/> (issue #5579). Reuses
+/// <see cref="LatticeGrainStorageSerializer"/>, installed by Lattice's own registration (issue #5579). Reuses
 /// <see cref="GrainStateStorageRoundTripContractTestsBase"/>.
 /// </summary>
 [TestFixture]
@@ -30,10 +30,9 @@ public sealed class GrainStateStorageRoundTripContractTests : GrainStateStorageR
         collection.AddSingleton<GrainReferenceActivator>();
         collection.AddSingleton<IPostConfigureOptions<OrleansJsonSerializerOptions>, ConfigureOrleansJsonSerializerOptions>();
         collection.AddSingleton<OrleansJsonSerializer>();
+        collection.AddLatticeGrainStorageSerializer();
         this.services = collection.BuildServiceProvider();
-        this.storage = new LatticeGrainStorageSerializer(
-            this.services.GetRequiredService<Serializer>(),
-            ActivatorUtilities.CreateInstance<JsonGrainStorageSerializer>(this.services));
+        this.storage = (LatticeGrainStorageSerializer)this.services.GetRequiredService<IGrainStorageSerializer>();
     }
 
     [OneTimeTearDown]
