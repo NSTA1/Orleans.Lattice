@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using Microsoft.Playwright;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using static Microsoft.Playwright.Assertions;
 using Names = Orleans.Lattice.Explorer.EndToEnd.Tests.Story.StoryNames.Contoso;
 
@@ -92,13 +93,17 @@ public sealed partial class DataStewardJourney
         await _tree.WaitForKeysAsync();
         await CheckpointAsync("2", "completed-tree", "Accepting the completion opens factory-orders");
 
-        // The alias: orders reaches the same tree.
-        await _priya.Shell.GotoAsync("/data/" + Names.Aliases.Orders);
-        await Expect(_tree.Heading).ToHaveTextAsync(new Regex($"^({Names.Aliases.Orders}|{Names.Trees.FactoryOrders})$"));
+        // The alias: orders names the same tree. Her grant names factory-orders, not orders,
+        // and the alias is filtered out of her catalogue (#5597).
+        await new KnownDefect("#5597", "a caller granted only on factory-orders cannot reach it through its alias orders").ReproducesAsync(async () =>
+        {
+            await _priya.Shell.GotoAsync("/data/" + Names.Aliases.Orders);
+            await Expect(_priya.Shell.Heading).ToHaveTextAsync("Nothing lives at this address");
+        });
+        await CheckpointAsync("2", "alias", "/data/orders reads Nothing lives at this address for her (#5597)");
+        await _priya.Shell.GotoAsync("/data/" + Names.Trees.FactoryOrders);
+        await Expect(_tree.Heading).ToHaveTextAsync(Names.Trees.FactoryOrders);
         await _tree.WaitForKeysAsync();
-        Assert.That((await _tree.KeysAsync())[0], Does.StartWith("order/"), "the alias reads the orders");
-        Coverage.Hit("use-case:data/alias-resolution");
-        await CheckpointAsync("2", "alias", "/data/orders resolves the alias to the orders");
 
         // A prefix the line feed never writes, so the pages hold still while she pages them.
         await _tree.SetPrefixAsync("order/00");
