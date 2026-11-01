@@ -1255,7 +1255,8 @@ internal sealed class LatticeWalGcScheduler(
         bool OffsetAdvanceOwed = false,
         ReactivationTerminal Terminal = ReactivationTerminal.None,
         int AdmissionRefusals = 0,
-        DateTimeOffset? AdmissionRetryAt = null);
+        DateTimeOffset? AdmissionRetryAt = null,
+        WalGcBlockingPinState? PinState = null);
 
     /// <summary>
     /// Why the reactivation sweep has stopped driving a blocking consumer for the
@@ -4061,6 +4062,7 @@ internal sealed class LatticeWalGcScheduler(
         }
 
         var budgets = observation.Budgets;
+        string? warnConsumerId = null;
 
         // Admit this pass's reported blockers. A consumer seen for the first
         // time starts its own rate limiter here rather than inheriting one: a
@@ -4112,7 +4114,7 @@ internal sealed class LatticeWalGcScheduler(
             if (!observation.WarnedBlocked)
             {
                 observation = observation with { WarnedBlocked = true };
-                WarnFloorBlocked(treeId, consumerId);
+                warnConsumerId = consumerId;
             }
         }
 
@@ -4142,6 +4144,19 @@ internal sealed class LatticeWalGcScheduler(
         {
             await ClassifyBlockingPinsAsync(treeId, blockingConsumerIds, budgets, treeTag, tenantTag, stoppingToken)
                 .ConfigureAwait(false);
+        }
+
+        // Warned after the classification rather than at admission (issue
+        // #5570), so the episode's one warning names the blocker's category -
+        // the only place a host logging at warning level learns it. A consumer
+        // the caller pre-classified, or whose read was cut short, is warned as
+        // unclassified.
+        if (warnConsumerId is not null)
+        {
+            WarnFloorBlocked(
+                treeId,
+                warnConsumerId,
+                budgets.TryGetValue(warnConsumerId, out var warned) ? warned.PinState : null);
         }
 
         // Drain orphaned pins in bulk before any reactivation machinery runs
@@ -4707,12 +4722,53 @@ internal sealed class LatticeWalGcScheduler(
     /// bounded sample of the first few identities answers only the first and
     /// re-creates this same unbounded log in miniature as the bound is raised.
     /// </para>
+    /// <para>
+    /// <b>The category is in the message (issue #5570).</b> The blocked pin's
+    /// state is classified first and named here with what clears it, because a
+    /// host logging at warning level sees nothing else: the per-pin
+    /// classification line is information-level and the state is otherwise only
+    /// a metric. The common case on a freshly written estate is
+    /// <see cref="WalGcBlockingPinState.NeverCheckpointed"/>, which is not a
+    /// defect: live writes do not advance a leaf's checkpoint, so its block
+    /// clears after its first WAL replay rather than never.
+    /// </para>
     /// </remarks>
-    private void WarnFloorBlocked(string treeId, string blockingConsumerId) =>
+    private void WarnFloorBlocked(string treeId, string blockingConsumerId, WalGcBlockingPinState? pinState) =>
         logger.LogWarning(
-            "WAL GC for tree {Tree} cannot reclaim: durable materialiser pin {Consumer} carries no usable offset, so the cursor floor is blocked and the WAL is retained without bound. The consumer id embeds the owning leaf's grain id. Other leaves on this tree may also be blocked; a pass reports a bounded number of them, so an unreported leaf is not evidence of an unblocked one. This fires once for the whole blocked episode rather than once per reported blocker, so it naming one consumer is not evidence that only one was blocking; the distinct-blocker count and both ends of the sequence are reported when the episode escalates or ends.",
+            "WAL GC for tree {Tree} cannot reclaim: durable materialiser pin {Consumer} carries no usable offset, so the cursor floor is blocked and the WAL is retained until it clears. The pin's state is {PinState}: {PinStateRemedy} The consumer id embeds the owning leaf's grain id. Other leaves on this tree may also be blocked; a pass reports a bounded number of them, so an unreported leaf is not evidence of an unblocked one. This fires once for the whole blocked episode rather than once per reported blocker, so it naming one consumer is not evidence that only one was blocking; the distinct-blocker count and both ends of the sequence are reported when the episode escalates or ends.",
             treeId,
-            blockingConsumerId);
+            blockingConsumerId,
+            DescribeBlockingPinState(pinState),
+            DescribeBlockingPinRemedy(pinState));
+
+    /// <summary>
+    /// The metric-tag spelling of a blocked pin's state - the
+    /// <see cref="BlockingPinStateTag"/> arm's value - or <c>unclassified</c>
+    /// when this path did not classify it (issue #5570).
+    /// </summary>
+    internal static string DescribeBlockingPinState(WalGcBlockingPinState? pinState) =>
+        pinState is { } state ? (string)BlockingPinStateTag(state).Value! : "unclassified";
+
+    /// <summary>
+    /// What clears a blocked pin in each state, for the blocked warning
+    /// (issue #5570).
+    /// </summary>
+    internal static string DescribeBlockingPinRemedy(WalGcBlockingPinState? pinState) => pinState switch
+    {
+        WalGcBlockingPinState.NeverCheckpointed =>
+            "the leaf holds rows but has never durably checkpointed this partition. Live writes do not advance a checkpoint, so the block clears after the leaf's first WAL replay - its coverage-lag timer's starvation drive, this sweep's reactivation, or its next activation - persists one and a snapshot covers it.",
+        WalGcBlockingPinState.CheckpointedUncovered =>
+            "the leaf has durably checkpointed this partition but no durable snapshot covers it yet, so the block clears when a snapshot capture lands.",
+        WalGcBlockingPinState.CheckpointedCoverageUnknown =>
+            "the leaf has durably checkpointed this partition and its coverage is not known here.",
+        WalGcBlockingPinState.NoDurableState =>
+            "the leaf has no durable state, so the pin is an orphan candidate for the orphan-pin sweep.",
+        WalGcBlockingPinState.Orphaned =>
+            "the leaf no longer exists, so the orphan-pin sweep retires the pin.",
+        WalGcBlockingPinState.Unreadable =>
+            "the leaf's durable state could not be read, so nothing is concluded from it.",
+        _ => "it was not classified on this path.",
+    };
 
     /// <summary>
     /// Reports the blocker churn an ending episode saw, which is where the
@@ -7162,6 +7218,11 @@ internal sealed class LatticeWalGcScheduler(
             var state = resolved
                 ? await ReadBlockingPinStateAsync(leafGrainId, partition, stoppingToken).ConfigureAwait(false)
                 : WalGcBlockingPinState.Unreadable;
+
+            // Latched on the budget so the episode's blocked warning can name
+            // the category (issue #5570): a host logging at warning level never
+            // sees the information-level line below.
+            budgets[consumerId] = budgets[consumerId] with { PinState = state };
 
             // Prime this partition's other arms before recording the one that
             // resolved, so a reader sees a measured zero on the states that did

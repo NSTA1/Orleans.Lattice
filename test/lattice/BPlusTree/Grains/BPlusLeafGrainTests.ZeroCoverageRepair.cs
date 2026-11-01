@@ -126,6 +126,11 @@ public partial class BPlusLeafGrainTests
     /// share at a known width on any machine.
     /// </param>
     /// <param name="walPartitions">The number of WAL partitions.</param>
+    /// <param name="cursorReporter">
+    /// The cursor reporter the leaf publishes its durable pins through, or
+    /// <see langword="null"/> for a substitute nothing reads. Issue #5570's
+    /// detector supplies one to read the offset the WAL GC would see.
+    /// </param>
     /// <param name="detectorDecision">The detector classification provider shared by all partitions.</param>
     private static (BPlusLeafGrain Grain,
         FakePersistentState<LeafNodeState> State,
@@ -142,7 +147,8 @@ public partial class BPlusLeafGrainTests
             Func<int, FallOffLogDecision>? detectorDecisionForPartition = null,
             int? maxConcurrentReplays = null,
             ILeafReplayCoordinatorGrain? replayCoordinator = null,
-            string? replicaId = null)
+            string? replicaId = null,
+            ILeafCursorReporter? cursorReporter = null)
     {
         var saved = new List<LeafSnapshotBlob>();
 
@@ -214,7 +220,7 @@ public partial class BPlusLeafGrainTests
 
         var sc = new ServiceCollection();
         sc.AddSingleton(Substitute.For<ICommitLogReader>());
-        sc.AddSingleton(Substitute.For<ILeafCursorReporter>());
+        sc.AddSingleton(cursorReporter ?? Substitute.For<ILeafCursorReporter>());
         sc.AddSingleton(detector);
         var services = sc.BuildServiceProvider();
 

@@ -405,7 +405,8 @@ gaps, states its full scope.
     retirement, several leaves or partitions per leaf, the pin's HLC frontier and
     override holds, the in-memory cursor registry, the order of the steps
     inside a purge's tree-level tail, and a resized tree's logical purge
-    completion (both pinned by tests instead).
+    completion (both pinned by tests instead), or how long a live leaf's pin
+    stays at the block value before its first WAL replay.
 - **Shard ownership** ([`spec/shard-ownership/`](../../spec/shard-ownership/README.md)).
   - **Covers:** who serves a key across an adaptive split, an online shard
     fold, an online reshard, an online resize and its undo, with stale routers

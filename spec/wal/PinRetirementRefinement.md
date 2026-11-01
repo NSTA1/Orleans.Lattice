@@ -289,3 +289,21 @@ the purge has removed its registry row, and refuses the write until then.
   on a resized tree's derived copy id. A caller's own purge request does not
   shorten the wait; it finds the tail finalising and polls.
   Production symbols: `TreeDeletionGrain.HoldsDeletionAsync`, `ShardRootGrain.PrepareForPurgedCopyAsync`, `TreeDeletionGrain.SettleRegistryEntryAsync`, `TreeDeletionGrain.BeginPurgeStateAsync`, `TreeDeletionGrain.PurgeNowAsync`, `TreeDeletionGrain.PurgePhysicalAsync`, `LatticeTreeAdmin.CreateTreeAsync`.
+- **When a live leaf's checkpoint advances.** `Checkpoint` is enabled whenever the
+  incarnation has writes, so the model lets a live leaf's checkpoint cover them at
+  any time. Production is narrower: a live write carries no WAL offset and never
+  advances a leaf's projection checkpoint. Only a replay does - the activation
+  replay, the coverage-lag timer's starvation drive
+  (`BPlusLeafGrain.OnCoverageLagTimerTickAsync`, first tick jittered across
+  `LatticeOptions.LeafSnapshotMaxCoverageLagSeconds`), or the WAL GC sweep's
+  reactivation - and that first replay reads each partition from `-1`. Until it
+  lands, a leaf holding live rows publishes the block value
+  (`LeafDurablePinCore.Resolve`), so its tree's cursor floor is blocked. The
+  over-approximation is sound for the safety properties, which hold over every
+  time `Checkpoint` could fire, but no property bounds how long a live leaf's pin
+  stays at the block value, so the model neither shows nor refutes that latency.
+  The path from the block to a usable offset is pinned by
+  `BPlusLeafGrainTests.A_live_written_leafs_pin_carries_a_usable_offset_after_its_first_coverage_lag_tick`,
+  and the blocked warning names the pin's category
+  (`LatticeWalGcSchedulerCadenceTests.The_blocked_warning_names_a_never_checkpointed_pin_and_what_clears_it`).
+  Production symbols: `BPlusLeafGrain.OnCoverageLagTimerTickAsync`, `LatticeOptions.LeafSnapshotMaxCoverageLagSeconds`, `LeafDurablePinCore.Resolve`.
