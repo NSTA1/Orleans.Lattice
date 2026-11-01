@@ -46,7 +46,7 @@ projections and `GrainMerkleWalkLocalTreeTests` pins the one-call adapter budget
 | `DeliverB(m)` | Own-origin drop, identity dedup, last-writer-wins apply, cursor advance | `ReplicationApplier.ApplyAsync` and `ReplicationHighWaterMarkGrain.TryAdvanceAsync`. | Yes: `ReplicationApplierTests.ApplyAsync_dedupes_duplicate_identity_tuple_without_invoking_apply_grain`, `ReplicationApplierTests.ApplyAsync_advances_hwm_after_successful_apply` and `ReplicationHighWaterMarkGrainTests.TryAdvanceAsync_returns_false_when_candidate_is_less_than_current`. |
 | `DeliverA(m)` | A applies a peer write under last-writer-wins | `ReplicationApplier.ApplyAsync`. | Yes: `CompressedReplicationApplyIntegrationTests.ApplySetAsync_older_source_hlc_does_not_overwrite_newer_local_value`. |
 | `Trim` | WAL garbage collection past a floor | The trimmed log `LeafReReplayer.ReplayAsync` classifies against the cursor. | Yes: `LeafReReplayerTests.ReplayAsync_wal_trimmed_past_cursor_skips_with_operator_alert` and `LeafReReplayerTests.ReplayAsync_trimmed_but_cursor_above_oldest_still_repairs`. |
-| `ProbeCompare` | A scheduled digest comparison records a match or a mismatch | `ReplicationDigestProbeGrain.ProcessNextPhaseAsync` and `DigestProbeComparer.Compare`. | Yes: `DigestProbeComparerTests.Compare_returns_mismatch_when_versions_match_but_hashes_differ`, `DigestProbeComparerTests.Compare_returns_match_when_versions_and_hashes_equal` and `ReplicationDigestProbeGrainTests.ProcessNextPhaseAsync_records_mismatch_when_digests_differ_same_version`. |
+| `ProbeCompare` | A scheduled digest comparison records a match or a mismatch | `ReplicationDigestProbeGrain.ProcessNextPhaseAsync` and `DigestProbeComparer.Compare`. | Yes: `DigestProbeComparerTests.Compare_returns_mismatch_when_versions_match_but_hashes_differ`, `DigestProbeComparerTests.Compare_returns_match_when_versions_and_hashes_equal` `ReplicationDigestProbeGrainTests.ProcessNextPhaseAsync_records_mismatch_when_digests_differ_same_version` and `BPlusLeafGrainTests.Digest_is_independent_of_the_origin_stamp`, which pins the content-only per-entry contribution `SameValue` assumes. |
 | `ProbeUnavailable` | The peer is unavailable, the versions skew or the digest is not maintained: no comparison | `DigestProbeComparer.Compare` and `ReplicationDigestProbeGrain.ProcessNextPhaseAsync`. | Yes: `DigestProbeComparerTests.Compare_returns_remote_unavailable_when_digest_not_available`, `ReplicationDigestProbeGrainTests.ProcessNextPhaseAsync_records_version_skew_and_no_mismatch` and `ReplicationDigestProbeGrainTests.ProcessNextPhaseAsync_skips_when_maintain_projection_digest_is_false`. |
 | `Localise` | The Merkle walk descends to the diverging leaves of a freshly resolved physical tree | `ReplicationDigestProbeGrain.TryLocaliseDriftAsync` and `MerkleWalkLocaliser.WalkAsync`. | Yes: `MerkleWalkLocaliserTests.WalkAsync_descends_to_diverging_leaf_and_prunes_matching_sibling` and `ReplicationDigestProbeGrainTests.ProcessNextPhaseAsync_localises_against_a_freshly_resolved_physical_tree`. |
 | `LocaliseAbort` | The walk aborts or localises nothing; no remediation | `MerkleWalkLocaliser.WalkAsync` and `ReplicationDigestProbeGrain.TryLocaliseDriftAsync`. | Yes: `MerkleWalkLocaliserTests.WalkAsync_aborts_on_depth_cap`, `MerkleWalkLocaliserTests.WalkAsync_aborts_on_remote_unavailable`, `MerkleWalkLocaliserTests.WalkAsync_matching_root_localises_nothing` and `ReplicationDigestProbeGrainTests.ProcessNextPhaseAsync_swallows_a_merkle_walk_localisation_fault`. |
@@ -107,6 +107,16 @@ projections and `GrainMerkleWalkLocalTreeTests` pins the one-call adapter budget
   are spent.
 - The projection digest folds each cluster's checkpoint offsets, so equal
   content may mismatch and the walk may over-localise; the model permits both.
+- `SameValue` compares a row's committed value and ignores its origin stamp,
+  because the digest's per-entry contribution does. An origin is
+  observer-relative: the author stores its own write with no origin and every
+  peer stores the author's id, so a contribution that hashed it would make
+  every authored row mismatch between two converged clusters. Production's
+  contribution hashed the origin until contribution version 1. The model
+  cannot express that defect as a violation: `ProbeCompare` already allows a
+  mismatch on equal content, and a spurious mismatch costs walks and
+  re-replays, not safety. The detector named on the `ProbeCompare` row pins the
+  content-only contribution instead.
 - `Drop` loses Sets and Deletes alike. The fallback re-ships a committed
   tombstone as a delete carrying its own clock, so a lost delete whose WAL
   entry was trimmed is still repaired. A tombstone reaped after the tombstone

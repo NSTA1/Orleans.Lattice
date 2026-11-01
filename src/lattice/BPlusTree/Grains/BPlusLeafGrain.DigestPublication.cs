@@ -209,7 +209,10 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private ChildDigestSnapshot BuildOwnChildDigestSnapshot()
     {
-        EnsureProjectionHashInitialized();
+        // The pre-slot backfill only: a snapshot reports the fold and never
+        // folds into it, and adoption must not cost the whole leaf. A mutation
+        // that publishes has already recomputed a stale-version fold.
+        EnsureProjectionHashPresent();
         var (live, tombstones) = ComputeStructuralLeafCounts();
         return new ChildDigestSnapshot
         {
