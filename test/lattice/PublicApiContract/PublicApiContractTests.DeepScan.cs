@@ -35,9 +35,12 @@ public partial class PublicApiContractTests
     private const int DeepScanInternalChildren = 4;
 
     // Enough keys into a single shard to force the shard's tree past one
-    // internal level: with 4 keys/leaf and 4 children/internal a depth-1
-    // tree tops out around 16 keys, so 256 guarantees several internal
-    // levels (64 leaves -> 16 -> 4 -> 1 root).
+    // internal level. The keys arrive in ascending 32-key batches, and a
+    // batch splits the leaf it lands on once, so the leaves end up holding
+    // 16-32 keys each rather than MaxLeafKeys (nine leaves for 256 keys in
+    // the run that diagnosed #5607, the second of them [k00016, k00040)). Nine
+    // leaves under 4 children per internal node still give the shard an
+    // internal level below the root.
     private const int DeepScanKeyCount = 256;
 
     private const int DeepScanWriteBatch = 32;
