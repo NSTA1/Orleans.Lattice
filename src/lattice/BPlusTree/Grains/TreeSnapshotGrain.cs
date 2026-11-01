@@ -382,7 +382,26 @@ internal sealed class TreeSnapshotGrain(
             state.State.DrainedPositions = prevDrainedPositions;
             throw;
         }
+
+        // A copy that is to replace its logical tree behind an alias (a resize) is
+        // re-shipped from its log start by the logical tree's replication shippers
+        // once the alias swaps to it, so its log is held while it is built
+        // (#5471). Armed before the first write to the copy.
+        await RenewCopyLogHoldAsync();
     }
+
+    /// <summary>
+    /// Arms or renews the bounded hold on the copy's WAL while a copy that backs
+    /// a logical tree is built (#5471). A snapshot to an independent destination
+    /// holds nothing. Best effort.
+    /// </summary>
+    private Task RenewCopyLogHoldAsync() =>
+        state.State.InProgress
+        && !string.IsNullOrEmpty(state.State.LogicalTreeId)
+        && !state.State.ReleasesShadowForwardOnCompletion
+        && state.State.DestinationTreeId is { } copy
+            ? WalCopyLogHold.ArmAsync(grainFactory, copy, SourcePhysicalTreeId, logger)
+            : Task.CompletedTask;
 
     /// <summary>
     /// Marks every source shard the copy reads (see
@@ -426,6 +445,8 @@ internal sealed class TreeSnapshotGrain(
     public async Task RunSnapshotPassAsync()
     {
         if (!state.State.InProgress) return;
+
+        await RenewCopyLogHoldAsync();
 
         if (state.State.Phase == SnapshotPhase.Lock)
         {
@@ -547,6 +568,8 @@ internal sealed class TreeSnapshotGrain(
         CancellationToken cancellationToken)
     {
         var sliceStart = Stopwatch.GetTimestamp();
+
+        await RenewCopyLogHoldAsync();
 
         // Always take at least one step, so a slice whose prologue already spent
         // the budget still makes progress; then keep stepping until the snapshot
@@ -1448,6 +1471,12 @@ internal sealed class TreeSnapshotGrain(
             state.State.DrainCursors = prevDrainCursors;
             state.State.DrainedPositions = prevDrainedPositions;
             throw;
+        }
+
+        // An aborted copy is never cut over: release the hold on its log (#5471).
+        if (prevDestinationTreeId is { } abortedCopy)
+        {
+            await WalCopyLogHold.ReleaseAsync(grainFactory, abortedCopy, logger);
         }
 
         await CompleteCoordinatorAsync();

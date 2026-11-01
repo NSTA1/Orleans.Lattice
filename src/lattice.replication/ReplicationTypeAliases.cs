@@ -234,6 +234,8 @@ public static class ReplicationTypeAliases
 
     /// <summary>Alias for <see cref="CrossClusterSagaDecision"/>.</summary>
     internal const string CrossClusterSagaDecision = "olr.zd";
+    /// <summary>Alias for <see cref="Replication.CrossClusterSagaStatus"/>.</summary>
+    internal const string CrossClusterSagaStatus = "olr.zt";
 
     /// <summary>Alias for the cross-cluster saga coordinator grain interface.</summary>
     internal const string ICrossClusterSagaCoordinatorGrain = "olr.zg";

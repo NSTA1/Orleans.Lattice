@@ -342,12 +342,34 @@ class BrowserInstallTests(unittest.TestCase):
             esac
             exit 0
         """), encoding="utf-8", newline="\n")
-        # Run the real GNU timeout, shortening only its clock in the test.
+        # Stand-in for the bounded supervisor with a 1-second clock. It owns
+        # the attempt's whole session and signals the process group, as
+        # run-playwright-install.py does in production. GNU timeout signalled
+        # the group too, but the coreutils on ubuntu-26.04 signals only its
+        # child, so a TERM-ignoring hang's orphaned descendant kept this test's
+        # captured pipe open past its 20-second cap.
         (tools / "timeout").write_text(textwrap.dedent("""\
             #!/bin/bash
             [ "$1" = --kill-after=10s ] && [ "$2" = 120s ] || exit 97
             shift 2
-            exec /usr/bin/timeout --kill-after=1s 1s "$@"
+            # Without job control a background child is not a group leader, so
+            # setsid execs in place and the child's pid is its session's pgid.
+            setsid "$@" &
+            pid=$!
+            settle() {
+              local tick
+              for tick in $(seq 1 20); do
+                kill -0 "$pid" 2>/dev/null || return 0
+                /usr/bin/sleep 0.05
+              done
+              return 1
+            }
+            if settle; then wait "$pid"; exit $?; fi
+            kill -TERM -- "-$pid" 2>/dev/null
+            if settle; then wait "$pid"; kill -KILL -- "-$pid" 2>/dev/null; exit 124; fi
+            kill -KILL -- "-$pid" 2>/dev/null
+            wait "$pid"
+            exit 137
         """), encoding="utf-8", newline="\n")
         (tools / "sleep").write_text("#!/bin/bash\nexit 0\n", encoding="utf-8", newline="\n")
         # These portable contract tests stub privilege/supervision. The native

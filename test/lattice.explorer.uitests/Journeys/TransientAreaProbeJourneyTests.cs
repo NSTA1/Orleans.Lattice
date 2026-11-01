@@ -12,7 +12,11 @@ namespace Orleans.Lattice.Explorer.UiTests.Journeys;
 /// </summary>
 /// <remarks>
 /// The fault is injected at the world's gRPC surface (<see cref="FacadeFaults"/>), for
-/// the Access, Replication status and Backups facades only. Each step keeps an ordered
+/// the Access, Replication (status and control) and Backups facades only. Replication
+/// is reachable through either facade: the world's Task board app enrols its
+/// <c>tasks</c> tree for replication, so the control facade's config read admits the
+/// area on its own, and a silo loss has to fail both for the area to be unchecked
+/// (issue #5478). Each step keeps an ordered
 /// screenshot under <c>screenshots/journey-d5420-transient-area-probe</c> (or
 /// <c>EXPLORER_UI_SCREENSHOTS</c>), as the epic's pull requests show them.
 /// </remarks>
@@ -37,7 +41,11 @@ public sealed class TransientAreaProbeJourneyTests : UiTestBase
 
         await ShotAsync(page, "home-before-the-silo-loss");
 
-        using (world.Faults.Fail("orleans.lattice.api.auth", "orleans.lattice.api.replication.status", "orleans.lattice.api.backup"))
+        using (world.Faults.Fail(
+            "orleans.lattice.api.auth",
+            "orleans.lattice.api.replication.status",
+            "orleans.lattice.api.replication",
+            "orleans.lattice.api.backup"))
         {
             await page.ReloadAsync();
             await Shell.WaitForInteractiveAsync(page);

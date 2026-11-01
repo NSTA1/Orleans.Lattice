@@ -130,7 +130,7 @@ public partial class BPlusLeafGrainTests
         "SetManyWherePredicateAsync", "ApplyCrdtDeltaAsync", "ApplyCrdtDeltaManyAsync",
         "DeleteAsync", "DeleteTrackedAsync", "DeleteRangeAsync", "DeleteRangeAndNextSiblingAsync",
         // Range and enumeration reads.
-        "CountAsync", "CountAndNextSiblingAsync", "GetStatsAsync", "GetStatsAndNextSiblingAsync", "GetKeysAsync", "GetKeysAndNextSiblingAsync", "GetEntriesAsync",
+        "CountAsync", "CountAndNextSiblingAsync", "GetAppendTailAsync", "GetStatsAsync", "GetStatsAndNextSiblingAsync", "GetKeysAsync", "GetKeysAndNextSiblingAsync", "GetEntriesAsync",
         "GetLiveEntriesAsync", "GetLiveRawEntriesAsync", "GetLiveRawEntriesAndNextSiblingAsync",
         "GetBootstrapCaptureAsync", "GetLiveRawEntriesAndPendingAsync",
         // Replication and delta seams.
@@ -163,7 +163,7 @@ public partial class BPlusLeafGrainTests
         // behaviour-preserving for them, because their callers already blocked on
         // activation before this change.
         "SetShardIndexAsync", "SetKeyRangeAsync", "SetTreeIdAsync", "SetBindingAsync",
-        "InitializeSiblingAsync", "SetCheckpointOffsetHintsAsync", "SetParentAsync",
+        "InitializeSiblingAsync", "SetCheckpointOffsetHintsAsync", "SetParentAsync", "NarrowHighKeyAsync",
 
         // Recovery's birth seam (issue #4700): it re-binds, or re-creates, the leaf
         // through SetTreeIdAsync and SetShardIndexAsync, gated as they are.
