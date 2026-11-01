@@ -123,7 +123,7 @@ public sealed class AccessInDepthJourney : JourneyChapter
             foreach (var member in ContosoAccess.FactoryStaff.Groups)
             {
                 var option = await groups.OfferGroupMemberAsync(member);
-                await Expect(option.Locator(".lt-combobox__detail")).ToHaveTextAsync(new Regex("stored", RegexOptions.IgnoreCase));
+                await Expect(option.Locator(".lt-combobox__detail")).ToHaveTextAsync(new Regex(@"^\s*Stored\b"));
                 if (first)
                 {
                     await steps.SubstepAsync("nest-stored-group-offered", $"The member picker offers the stored group {member}, labelled Stored");
