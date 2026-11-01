@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Transport;
 
@@ -13,12 +14,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 /// <para>
 /// The area-wide answer probes a reserved sentinel tree id, which reads and
 /// writes nothing: it is the flags the probe reports - not the fact that it
-/// completed - that admit the caller. A grant that names trees rather than the
-/// whole cluster admits nothing on the sentinel, so a signed-in caller it refuses
-/// is asked about their own trees, up to <see cref="MaximumTreeProbes"/> of them,
-/// and admitted only by a schema-administration grant there (#5385): schema read is
-/// ordinary tree read, so a reader of a tree is not thereby a schema user. Every
-/// refusal, an unserved facade, a
+/// completed - that admit the caller. Every refusal, an unserved facade, a
 /// missing registration and any other fault fail closed; a transient fault reads
 /// as not checked, which admits nothing and is asked again. An anonymous caller who
 /// is refused is told to sign in; a signed-in one who is refused sees no area.
@@ -42,17 +38,15 @@ internal sealed class SchemaAccess : IDisposable
     /// <summary>How long a tree's probed grants are reused.</summary>
     public static readonly TimeSpan GrantFreshness = TimeSpan.FromSeconds(30);
 
-    /// <summary>
-    /// The most of the caller's own trees the area-wide answer probes when the sentinel
-    /// admits nothing (#5385). A caller whose first <see cref="MaximumTreeProbes"/> trees
-    /// grant no schema administration does not see the area, however many trees remain
-    /// unasked: like every other unproven answer, the bound fails closed.
-    /// </summary>
-    public const int MaximumTreeProbes = 8;
+    /// <summary>The most catalogue trees probed for a grant when the area-wide probe grants nothing.</summary>
+    public const int MaximumTreeProbes = 64;
+
+    /// <summary>How many catalogue trees are probed at once.</summary>
+    public const int TreeProbeConcurrency = 8;
 
     private readonly SchemaFacades _facades;
-    private readonly SchemaTreeCatalog? _catalog;
     private readonly TimeProvider _time;
+    private readonly SchemaTreeCatalog? _catalog;
     private readonly ConcurrentDictionary<string, (SchemaGrants Grants, DateTimeOffset ReadAt, ShellCallerKey Caller)> _trees = new(StringComparer.Ordinal);
     private Tuple<AreaAvailability, ShellCallerKey, DateTimeOffset>? _availability;
     private long _generation;
@@ -61,9 +55,8 @@ internal sealed class SchemaAccess : IDisposable
     /// <param name="facades">The area's facades.</param>
     /// <param name="time">The clock grant freshness is measured on.</param>
     /// <param name="catalog">
-    /// The caller's trees, probed when the sentinel admits nothing so a caller whose grants
-    /// name trees rather than the whole cluster still sees the area; <see langword="null"/>
-    /// to answer from the sentinel alone.
+    /// The circuit's tree catalogue, whose trees are probed when the area-wide probe
+    /// grants nothing; <see langword="null"/> admits only on a cluster-wide grant.
     /// </param>
     public SchemaAccess(SchemaFacades facades, TimeProvider time, SchemaTreeCatalog? catalog = null)
     {
@@ -126,29 +119,25 @@ internal sealed class SchemaAccess : IDisposable
             return AreaAvailability.Hidden;
         }
 
-        AreaAvailability answer;
-        if (grants.HasAny)
+        var answer = grants.HasAny
+            ? AreaAvailability.Visible
+            : _facades.Auth is { IsAuthenticated: false }
+                ? AreaAvailability.Unavailable(SignInReason)
+                : AreaAvailability.Hidden;
+        if (answer == AreaAvailability.Hidden)
         {
-            answer = AreaAvailability.Visible;
-        }
-        else if (_facades.Auth is { IsAuthenticated: false })
-        {
-            answer = AreaAvailability.Unavailable(SignInReason);
-        }
-        else
-        {
-            // The sentinel answers for a grant over every tree. A grant that names trees
-            // (a schema owner of a few trees, #5385) admits nothing there, so ask the
-            // caller's own trees.
-            var trees = await ProbeOwnTreesAsync(cancellationToken).ConfigureAwait(false);
-            if (trees is null)
+            // The sentinel speaks only for a cluster-wide grant: a caller whose grants
+            // name trees (a reader of three trees, say) reads those trees' schema, so a
+            // tree the catalogue lists that grants anything admits the area.
+            switch (await GrantsAnyTreeAsync(cancellationToken).ConfigureAwait(false))
             {
-                return AreaAvailability.Unchecked;
+                case null:
+                    return AreaAvailability.Unchecked;
+                case true:
+                    answer = AreaAvailability.Visible;
+                    break;
             }
-
-            answer = trees.Value ? AreaAvailability.Visible : AreaAvailability.Hidden;
         }
-
         // Remembered only for the caller it was read for, and only while that is
         // still the caller.
         if (_facades.Caller != caller || Volatile.Read(ref _generation) != generation)
@@ -206,6 +195,81 @@ internal sealed class SchemaAccess : IDisposable
         return grants;
     }
 
+    /// <summary>
+    /// Whether a tree the catalogue lists (at most <see cref="MaximumTreeProbes"/>,
+    /// <see cref="TreeProbeConcurrency"/> at a time) grants the caller any schema
+    /// authority. <see langword="null"/> when the cluster did not answer and nothing
+    /// admitted the caller; a refusal or any other fault admits nothing.
+    /// </summary>
+    private async Task<bool?> GrantsAnyTreeAsync(CancellationToken cancellationToken)
+    {
+        if (_catalog is null || _facades.Schema is not { } schema)
+        {
+            return false;
+        }
+
+        string[] trees;
+        try
+        {
+            var listing = _facades.ListingTenant;
+            trees = [.. (await _catalog.GetAsync(refresh: false, cancellationToken).ConfigureAwait(false))
+                .Where(tree => ShellAssertedTenant.Lists(listing, tree))
+                .Take(MaximumTreeProbes)];
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (AreaProbeFaults.IsTransient(exception))
+        {
+            return null;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+
+        var unanswered = false;
+        for (var start = 0; start < trees.Length; start += TreeProbeConcurrency)
+        {
+            var wave = new Task<bool?>[Math.Min(TreeProbeConcurrency, trees.Length - start)];
+            for (var i = 0; i < wave.Length; i++)
+            {
+                wave[i] = ProbeTreeAsync(schema, trees[start + i], cancellationToken);
+            }
+
+            var answers = await Task.WhenAll(wave).ConfigureAwait(false);
+            if (answers.Contains(true))
+            {
+                return true;
+            }
+
+            unanswered |= answers.Contains(null);
+        }
+
+        return unanswered ? null : false;
+    }
+
+    private static async Task<bool?> ProbeTreeAsync(ILatticeSchemaControl schema, string treeId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return SchemaGrants.From(await schema.ProbeCapabilitiesAsync(treeId, cancellationToken).ConfigureAwait(false)).HasAny;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (AreaProbeFaults.IsTransient(exception))
+        {
+            return null;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
     /// <summary>Forgets every remembered answer, so the next read probes again.</summary>
     public void Forget()
     {
@@ -226,66 +290,5 @@ internal sealed class SchemaAccess : IDisposable
         {
             session.ConfigurationChanged -= Forget;
         }
-    }
-
-    /// <summary>
-    /// Whether any of the caller's own trees grants schema administration: the first
-    /// <see cref="MaximumTreeProbes"/> trees the caller lists, in order, stopping at the
-    /// first that grants. Schema read is ordinary tree read, so a read grant alone does
-    /// not admit the caller; and when the bound is reached with trees still unasked, the
-    /// answer is no, failing closed as every other unproven answer does.
-    /// </summary>
-    /// <param name="cancellationToken">Cancels the probes.</param>
-    /// <returns>
-    /// <see langword="true"/> to show the area, <see langword="false"/> to hide it, and
-    /// <see langword="null"/> when the cluster did not answer.
-    /// </returns>
-    private async Task<bool?> ProbeOwnTreesAsync(CancellationToken cancellationToken)
-    {
-        if (_catalog is null)
-        {
-            return false;
-        }
-
-        IReadOnlyList<string> trees;
-        try
-        {
-            trees = await _catalog.GetAsync(refresh: false, cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception) when (AreaProbeFaults.IsTransient(exception))
-        {
-            return null;
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-
-        var listing = _facades.ListingTenant;
-        var probed = 0;
-        foreach (var tree in trees)
-        {
-            if (!ShellAssertedTenant.Lists(listing, tree))
-            {
-                continue;
-            }
-
-            if (probed == MaximumTreeProbes)
-            {
-                return false;
-            }
-
-            probed++;
-            if ((await GetGrantsAsync(tree, refresh: false, cancellationToken).ConfigureAwait(false)).CanChangeAnything)
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 }
