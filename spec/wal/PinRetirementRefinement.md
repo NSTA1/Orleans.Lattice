@@ -267,5 +267,25 @@ the purge has removed its registry row, and refuses the write until then.
   `TreeDeletionGrainTests.A_redriven_synchronous_logical_purge_leaves_a_reused_logical_id_registered`,
   `TreeDeletionGrainTests.A_redriven_logical_purge_completion_whose_removal_landed_removes_nothing_again`
   and `TreeDeletionGrainTests.A_redriven_logical_purge_completion_still_removes_its_own_entry`,
-  not by the model.
+  not by the model. A logical purge already in flight from a build that predates
+  the record has no lineage recorded: its next attempt records the lineage of
+  whatever entry it finds, so if its removal had landed and the logical id was
+  then created again, that attempt takes the new entry for the purge's own and
+  removes it. The physical tail's legacy case, above, is the same.
   Production symbols: `TreeDeletionGrain.TryCompleteLogicalPurgeAsync`, `TreeDeletionGrain.PurgeLogicalAsync`, `TreeDeletionState.LogicalPurgedRegistryLineage`.
+- **How long a re-created id's writes wait.** The model checks no liveness for
+  `Recreate`. In production, a purge's registry removal can land while the record
+  of it stays owed. If the id is then created again (`LatticeTreeAdmin.CreateTreeAsync`
+  reports it created, under a new lineage), writes routed to the purged shards are
+  refused (`ShardRootGrain.PrepareForPurgedCopyAsync`) until a re-drive records
+  the removal. On the accepted purge's path the deletion keepalive reminder that
+  `TreeDeletionGrain.BeginPurgeStateAsync` arms stays registered until the tail
+  settles, and `TreeDeletionGrain.SettleRegistryEntryAsync` re-arms it on a throw,
+  so the wait is bounded by about one reminder period (one minute). The
+  synchronous `TreeDeletionGrain.PurgeNowAsync` and `TreeDeletionGrain.PurgePhysicalAsync`
+  re-arm it only best-effort, so a silo crash between their removal and its record
+  leaves only the soft-delete reminder. Neither is reached on an id a create can
+  reuse: `PurgeNowAsync` has no production caller, and `PurgePhysicalAsync` runs
+  on a resized tree's derived copy id. A caller's own purge request does not
+  shorten the wait; it finds the tail finalising and polls.
+  Production symbols: `TreeDeletionGrain.HoldsDeletionAsync`, `ShardRootGrain.PrepareForPurgedCopyAsync`, `TreeDeletionGrain.SettleRegistryEntryAsync`, `TreeDeletionGrain.BeginPurgeStateAsync`, `TreeDeletionGrain.PurgeNowAsync`, `TreeDeletionGrain.PurgePhysicalAsync`, `LatticeTreeAdmin.CreateTreeAsync`.

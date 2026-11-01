@@ -231,8 +231,8 @@ Since then the models have found nine more, each reproduced before its fix:
 | #5358 | The GC removed an orphaned pin by consumer id after a husk read taken in a separate step, so a purge-cleared leaf re-created in between lost the block pin its birth seeded under the same consumer id, and the trim could pass its un-checkpointed writes. Fixed: the removal is fenced by the pin grain's per-activation merge stamps, and the drive retires through the same fenced sequence. Found by `WalPinRetirement`. |
 
 The independent review of `WalPinRetirement` found four more, each reproduced by a
-test and fixed. Three are in the model, where a mutation reproduces each; the
-fourth is pinned by tests:
+test and fixed. Two (#5417, #5458) are in the model, where mutations reproduce
+them; the other two (#5416, #5459) are pinned by tests:
 
 | Issue | Defect |
 |-------|--------|
@@ -257,8 +257,11 @@ stamps and a retention TTL (`WalPartitionReleaseModel`).
 - replication consumers, beyond their effect on the trim floor;
 - liveness under two faults, or any property under three;
 - for pin retirement, several leaves or partitions per leaf, the pin's HLC frontier
-  and override holds, the in-memory cursor registry, and the order of the steps
-  inside a purge's tree-level tail (pinned by tests instead).
+  and override holds, the in-memory cursor registry, the order of the steps
+  inside a purge's tree-level tail, and a resized tree's logical purge completion
+  (both pinned by tests instead);
+- how long a write to an id created again waits while a purge's tail is owed: the
+  model checks no liveness for re-creation (the refinement note bounds the wait).
 
 Coverage of the leaf lifecycle does not imply coverage of any of those. Each module's
 refinement note lists its gaps in full.

@@ -403,8 +403,9 @@ gaps, states its full scope.
   - **Does not cover:** more than two partitions; splits, resharding and saga
     state; replication consumers, beyond their effect on the trim floor; for pin
     retirement, several leaves or partitions per leaf, the pin's HLC frontier and
-    override holds, the in-memory cursor registry, and the order of the steps
-    inside a purge's tree-level tail (pinned by tests instead).
+    override holds, the in-memory cursor registry, the order of the steps
+    inside a purge's tree-level tail, and a resized tree's logical purge
+    completion (both pinned by tests instead).
 - **Shard ownership** ([`spec/shard-ownership/`](../../spec/shard-ownership/README.md)).
   - **Covers:** who serves a key across an adaptive split, an online shard
     fold, an online reshard, an online resize and its undo, with stale routers
