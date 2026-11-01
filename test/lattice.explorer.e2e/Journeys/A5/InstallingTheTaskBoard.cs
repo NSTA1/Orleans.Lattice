@@ -124,7 +124,7 @@ public sealed class InstallingTheTaskBoard : JourneyChapter
             await run.ShotAsync("installed", "Installed v1.0.0, not enabled yet; its page is /apps/task-board");
 
             await review.ClickAsync("Enable now");
-            await review.ExpectStatusAsync("Task board v1.0.0 is enabled.");
+            await review.ExpectStatusAsync("Task board v1.0.0 is enabled.", AppReviewFlowPage.EnableTimeout);
             await run.ShotAsync("enabled", "Enable now: Task board v1.0.0 is enabled");
             Coverage.Hit("use-case:apps/install");
         });
@@ -246,13 +246,13 @@ public sealed class InstallingTheTaskBoard : JourneyChapter
             await run.ShotAsync("re-consent", "Re-consent: the ceiling now includes the one new operation, range delete", fullPage: true);
 
             await review.ClickAsync($"Upgrade to v{Apps.TaskBoardNextVersion}");
-            await review.ExpectStatusAsync($"Task board v{Apps.TaskBoardNextVersion} is");
+            await review.ExpectStatusAsync($"Task board v{Apps.TaskBoardNextVersion} is", AppReviewFlowPage.EnableTimeout);
             if (await olivia.Shell.Content.GetByRole(AriaRole.Button, new() { Name = "Enable now", Exact = true }).IsVisibleAsync())
             {
                 await review.ClickAsync("Enable now");
             }
 
-            await review.ExpectStatusAsync($"Task board v{Apps.TaskBoardNextVersion} is enabled.");
+            await review.ExpectStatusAsync($"Task board v{Apps.TaskBoardNextVersion} is enabled.", AppReviewFlowPage.EnableTimeout);
             await run.ShotAsync("upgraded", "Upgraded: Task board v1.1.0 is enabled");
             Coverage.Hit("use-case:apps/upgrade-and-re-consent");
         });

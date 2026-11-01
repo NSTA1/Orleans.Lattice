@@ -88,7 +88,14 @@ internal sealed class AppReviewFlowPage(ShellPage shell)
 
     /// <summary>Waits for the flow's status to say <paramref name="text"/>.</summary>
     /// <param name="text">The status text.</param>
-    public Task ExpectStatusAsync(string text) => Expect(Status).ToContainTextAsync(text, new() { Timeout = 90_000 });
+    /// <param name="timeout">How long to wait, in milliseconds.</param>
+    public Task ExpectStatusAsync(string text, float timeout = 90_000) => Expect(Status).ToContainTextAsync(text, new() { Timeout = timeout });
+
+    /// <summary>
+    /// How long an enable may take to report: the flow follows a pending enable for up to five
+    /// minutes (AppLifecycleFollow.Limit) before it gives up, so wait a little past that.
+    /// </summary>
+    public const float EnableTimeout = 360_000;
 
     /// <summary>The address the app's page lives at, as the flow's result shows it.</summary>
     public ILocator AppAddress => Content.Locator("[data-lt-app-address]");
