@@ -18,6 +18,12 @@ public sealed partial class AuditorsReviewChapter
     /// <summary>What a Telemetry board says when none of its charts is admitted.</summary>
     private const string NothingOnThisBoard = "Nothing on this board is available to you";
 
+    /// <summary>A page's first content after its facade read: the skeleton is drawn first, and reads are slow on a busy estate.</summary>
+    private static readonly LocatorAssertionsToBeVisibleOptions Loads = new() { Timeout = 30_000 };
+
+    /// <summary>The same wait for a text assertion.</summary>
+    private static readonly LocatorAssertionsToContainTextOptions LoadsText = new() { Timeout = 30_000 };
+
     // U4.6: the schema is readable - policy, versions, a compliance scan, dead letters - and
     // nothing in it can be changed.
     private static async Task SchemaIsReadOnlyAsync(PersonaSession dana)
