@@ -164,11 +164,19 @@ internal sealed class BackupsAreaPage(PersonaSession session)
 
     /// <summary>
     /// Submits the capture form and waits for the staged capture's status page to report it
-    /// refused at its Check access stage, with <paramref name="message"/>.
+    /// refused with <paramref name="message"/>, at its Check access stage or at its Start on the
+    /// cluster stage.
     /// </summary>
+    /// <remarks>
+    /// Which stage refuses depends on which silo answers first: the policy snapshot is
+    /// eventually consistent per silo, so the Check access probe can still see the old grant
+    /// while the start itself, on a silo that has the narrowed one, is refused. Either way the
+    /// server refuses the capture, which is what A6.8 proves.
+    /// </remarks>
     /// <param name="tree">The tree whose capture was refused.</param>
     /// <param name="message">The refusal the page shows.</param>
-    public async Task SubmitCaptureExpectingRefusalAsync(string tree, string message)
+    /// <returns>The stage that refused.</returns>
+    public async Task<string> SubmitCaptureExpectingRefusalAsync(string tree, string message)
     {
         await Content.GetByRole(AriaRole.Button, new() { Name = "Capture backup", Exact = true }).ClickAsync();
         await Expect(Page).ToHaveURLAsync(new Regex("/backups/operations/[^/?]+$"), new() { Timeout = LoadTimeout });
@@ -176,9 +184,18 @@ internal sealed class BackupsAreaPage(PersonaSession session)
         var status = Content.Locator("p.lt-backups-status");
         await Expect(status.Locator(".lt-pill")).ToHaveTextAsync("Failed", new() { Timeout = LoadTimeout });
         await Expect(status).ToContainTextAsync(message);
-        var checkAccess = Content.GetByRole(AriaRole.List, new() { Name = "Stages" }).GetByRole(AriaRole.Listitem).Filter(new() { HasText = "Check access" });
-        await Expect(checkAccess).ToContainTextAsync("Failed");
+        var stages = Content.GetByRole(AriaRole.List, new() { Name = "Stages" }).GetByRole(AriaRole.Listitem);
+        var failed = stages.Filter(new() { Has = Page.Locator(".lt-backups-stages__state", new() { HasTextRegex = new Regex("^\\s*Failed\\s*$") }) });
+        await Expect(failed).ToHaveCountAsync(1);
+        var stage = (await failed.Locator("span:not([class])").First.InnerTextAsync()).Trim();
+        Assert.That(stage, Is.AnyOf("Check access", "Start on the cluster"), "the server refuses the capture at one of its two stages");
+        if (stage != "Check access")
+        {
+            TestContext.Progress.WriteLine($"Priya's capture passed Check access on a silo still holding the old grant and was refused at '{stage}'.");
+        }
+
         await Expect(OperationProgress).ToHaveCountAsync(0);
+        return stage;
     }
 
     /// <summary>Asserts the schedules page offers the shown tree's schedules and the form to change them.</summary>
