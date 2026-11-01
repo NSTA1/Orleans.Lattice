@@ -41,6 +41,7 @@ public sealed class T2Contract() : ChapterContract("T2")
 
         await ada.TreeAdmin.CreateTreeAsync(Names.Trees.AcmeInventory);
         await ContractCalls.SetManyAsync(ada.Data, Names.Trees.AcmeInventory, FabrikamAccess.Inventory);
+        await AtQuotaAsync(context);
     }
 
     /// <inheritdoc />
@@ -57,9 +58,30 @@ public sealed class T2Contract() : ChapterContract("T2")
             "acme-analysts reads every acme tree");
         RequireEqual(await ContractCalls.CountPrefixAsync(ada.Data, Names.Trees.AcmeInventory, "item/"), FabrikamAccess.InventoryRows, "acme-inventory holds the inventory");
 
-        var usage = await ContractFacades.Of(context, Personas.Hal.Id).TenantAdmin.GetTenantQuotaUsageAsync(acme);
-        RequireEqual(usage.TreeCount.Usage, FabrikamAccess.AcmeQuotas.MaxTreeCount, "acme is at its 5-tree quota");
+        Require(await AtQuotaAsync(context), "acme is at its 5-tree quota");
     }
+
+    // Tree-count usage is a metered sample (TenantUsageAccountingOptions.MeterInterval, 30 s by
+    // default), so it trails a create by up to one interval: wait for the meter, bounded.
+    private static async Task<bool> AtQuotaAsync(ChapterContext context)
+    {
+        var tenants = ContractFacades.Of(context, Personas.Hal.Id).TenantAdmin;
+        try
+        {
+            await ContractWait.UntilAsync("acme's metered tree count to reach its quota", async () =>
+            {
+                var usage = await tenants.GetTenantQuotaUsageAsync(Names.Tenants.Acme);
+                return usage.HasUsage && usage.TreeCount.Usage == FabrikamAccess.AcmeQuotas.MaxTreeCount;
+            }, MeterPatience);
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            return false;
+        }
+    }
+
+    private static readonly TimeSpan MeterPatience = TimeSpan.FromMinutes(2);
 
     /// <summary>
     /// T2's consume: acme's existing use - four trees acme already holds
