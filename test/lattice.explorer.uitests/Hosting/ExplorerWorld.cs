@@ -310,11 +310,13 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
     }
 
     /// <summary>
-    /// The region this world serves: its cluster id. A tenant with residency is
-    /// served here only while its status in this region is Online.
+    /// The region this world serves: its replication cluster id, which is the id
+    /// tenancy identifies the local region by (issue #5575). It deliberately differs
+    /// from the Orleans cluster id here, as it does in real deployments. A tenant
+    /// with residency is served here only while its status in this region is Online.
     /// </summary>
     public string ServingRegion =>
-        Head.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<Orleans.Configuration.ClusterOptions>>().Value.ClusterId;
+        Head.Services.GetRequiredService<ILatticeReplicationContext>().LocalReplicaId;
 
     /// <summary>
     /// Makes <paramref name="tenant"/> resident and Online in <paramref name="regions"/>,

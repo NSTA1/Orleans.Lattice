@@ -60,7 +60,7 @@ internal sealed class TenantPolicyEpochTestCluster
     /// <summary>Creates a residency snapshot for region <paramref name="regionId"/> that is not yet leased.</summary>
     public TenantResidencySnapshotMaintainer AddResidencySilo(ITenantRegistry registry, string regionId = "eu") =>
         new(registry,
-            Options.Create(new ClusterOptions { ClusterId = regionId }),
+            TenantLocalRegion.ForRegion(regionId),
             [],
             Time,
             NullLogger<TenantResidencySnapshotMaintainer>.Instance);
