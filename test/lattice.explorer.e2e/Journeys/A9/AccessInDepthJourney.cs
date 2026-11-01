@@ -273,7 +273,7 @@ public sealed class AccessInDepthJourney : JourneyChapter
                 }
 
                 await editor.SaveAsync();
-                await Expect(shell.Toasts.Filter(new() { HasText = $"Rule {ScratchShared} saved." })).ToBeVisibleAsync();
+                await Expect(shell.Toasts.Filter(new() { HasText = $"Rule {ScratchShared} saved." }).Last).ToBeVisibleAsync();
             }
 
             await shell.GotoAsync($"/access/rules/{ScratchShared}");
