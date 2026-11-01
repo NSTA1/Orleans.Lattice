@@ -2,7 +2,6 @@ using System.Text.RegularExpressions;
 using Microsoft.Playwright;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
-using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Sessions;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 using static Microsoft.Playwright.Assertions;
@@ -37,7 +36,8 @@ public sealed partial class OffboardingJourney
         await Expect(disable).ToContainTextAsync("Its access rules are withdrawn at once");
         await step.ShotAsync(olivia, "confirm-disable", "Disable Task board?: its rules are withdrawn at once, its trees kept");
         await disable.GetByRole(AriaRole.Button, new() { Name = "Disable", Exact = true }).ClickAsync();
-        await Expect(olivia.Shell.Toasts.Filter(new() { HasText = $"{TaskBoardName} is disabled." })).ToHaveCountAsync(1, new() { Timeout = 60_000 });
+        // A disable may be answered pending (#5482); the page follows it and toasts when it settles.
+        await Expect(olivia.Shell.Toasts.Filter(new() { HasText = $"{TaskBoardName} is disabled." })).ToHaveCountAsync(1, new() { Timeout = (float)OperationPatience.TotalMilliseconds });
         await step.ShotAsync(olivia, "disabled", "The task board is disabled");
 
         await Expect(board.Board.Locator("#tb-refresh")).ToBeVisibleAsync();
@@ -67,16 +67,17 @@ public sealed partial class OffboardingJourney
         await step.ShotAsync(olivia, "confirm-uninstall", "Uninstall Task board?: its rules are removed and its tasks tree soft-deleted; olivia types task-board");
         await uninstall.ConfirmAsync("Uninstall");
 
-        await new KnownDefect("#5482", "Uninstalling an app with a replicated tree times out after 30 s").ReproducesAsync(async () =>
-            await Expect(olivia.Shell.Content.Locator(".lt-apps-error[role=alert]")).ToBeVisibleAsync(new() { Timeout = 90_000 }));
-        await step.ShotAsync(olivia, "uninstall-timed-out", "Known defect #5482: the uninstall request times out, though the cluster carries on with it");
-
+        // A replicated uninstall may outlast the facade's 20 s answer and come back pending (#5482);
+        // the run carries on, so follow it until the app leaves the list. An error is final.
+        var appsError = olivia.Shell.Content.Locator(".lt-apps-error[role=alert]");
         var installed = olivia.Shell.Content.GetByRole(AriaRole.Button, new() { Name = $"Uninstall {TaskBoardName}", Exact = true });
         var deadline = DateTime.UtcNow + OperationPatience;
         do
         {
+            await Expect(appsError).ToHaveCountAsync(0);
             await olivia.Shell.GotoAsync("/apps");
             await olivia.Shell.ExpectHeadingAsync("Apps");
+            await Expect(appsError).ToHaveCountAsync(0);
             await Expect(olivia.Shell.Content.GetByRole(AriaRole.Button, new() { Name = "Install app...", Exact = true })).ToBeVisibleAsync();
             if (await installed.CountAsync() == 0)
             {
