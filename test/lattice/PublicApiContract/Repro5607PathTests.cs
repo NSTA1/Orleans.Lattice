@@ -79,6 +79,17 @@ public sealed class Repro5607PathTests
         return keys;
     }
 
+    private static async Task<List<string>> ScanEntryKeysAsync(ILattice tree)
+    {
+        var keys = new List<string>();
+        await foreach (var e in tree.ScanEntriesAsync())
+        {
+            keys.Add(e.Key);
+        }
+
+        return keys;
+    }
+
     private async Task<string> DescribeAsync(ILattice tree, IReadOnlyCollection<string> missing)
     {
         var report = new StringBuilder();
@@ -151,10 +162,13 @@ public sealed class Repro5607PathTests
     }
 
     // variant: budget | ceiling | split
-    [TestCase("budget")]
-    [TestCase("ceiling")]
-    [TestCase("split")]
-    public async Task Repro_5607_forced_scan_paths(string variant)
+    [TestCase("budget", false)]
+    [TestCase("ceiling", false)]
+    [TestCase("split", false)]
+    [TestCase("budget", true)]
+    [TestCase("ceiling", true)]
+    [TestCase("split", true)]
+    public async Task Repro_5607_forced_scan_paths(string variant, bool entries)
     {
         s_variant = variant;
         s_leafReadDelayMaxMs = 0;
@@ -200,7 +214,7 @@ public sealed class Repro5607PathTests
 
                 tree = await RegisterAsync(treeId);
                 s_leafReadDelayMaxMs = variant == "ceiling" ? 60 : 8;
-                var scanned = await ScanAsync(tree);
+                var scanned = entries ? await ScanEntryKeysAsync(tree) : await ScanAsync(tree);
                 s_leafReadDelayMaxMs = 0;
                 var missing = expected.Except(scanned, StringComparer.Ordinal).ToList();
                 if (missing.Count > 0)
@@ -220,8 +234,8 @@ public sealed class Repro5607PathTests
 
         var signalText = string.Join("; ", signals.OrderBy(s => s.Key).Select(s => $"{s.Key} x{s.Value}"));
         Assert.Fail(failures.Length == 0
-            ? $"REPRO5607-PATH {variant}: no miss in {iterations} iterations ({(DateTime.UtcNow - started).TotalSeconds:F0}s). signals: {signalText}"
-            : $"REPRO5607-PATH {variant} MISS. signals: {signalText}\n{failures}");
+            ? $"REPRO5607-PATH {variant} {(entries ? "entries" : "keys")}: no miss in {iterations} iterations ({(DateTime.UtcNow - started).TotalSeconds:F0}s). signals: {signalText}"
+            : $"REPRO5607-PATH {variant} {(entries ? "entries" : "keys")} MISS. signals: {signalText}\n{failures}");
     }
 
     private sealed class LeafReadDelayFilter : IIncomingGrainCallFilter
@@ -231,7 +245,8 @@ public sealed class Repro5607PathTests
             var max = s_leafReadDelayMaxMs;
             if (max > 0
                 && context.InterfaceMethod?.DeclaringType == typeof(IBPlusLeafGrain)
-                && context.InterfaceMethod.Name.StartsWith("GetKeys", StringComparison.Ordinal))
+                && (context.InterfaceMethod.Name.StartsWith("GetKeys", StringComparison.Ordinal)
+                    || context.InterfaceMethod.Name.StartsWith("GetEntries", StringComparison.Ordinal)))
             {
                 await Task.Delay(Random.Shared.Next(0, max + 1));
             }
