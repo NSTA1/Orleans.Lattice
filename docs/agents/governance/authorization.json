@@ -2099,6 +2099,54 @@
       ]
     },
     {
+      "id": "telemetry-facade-capability-gate",
+      "nodes": [
+        {
+          "id": "cluster-wide",
+          "check": "TelemetryAccessAuthorizer.AuthorizeClusterTelemetryAsync admits the caller: system origin, no access gate registered, or an unfiltered Allow for LatticeOperation.Telemetry on LatticeScope.ClusterWideTreeId.",
+          "on_true": "allow-cluster-wide",
+          "on_false": "tenant-resolved",
+          "source": "src/lattice.api.telemetry/TelemetryAccessAuthorizer.cs#TelemetryAccessAuthorizer.AuthorizeClusterTelemetryAsync"
+        },
+        {
+          "id": "tenant-resolved",
+          "check": "ITenantContextResolver resolves the caller's validated active tenant without refusing it, and that tenant is neither the uninitialised value nor the reserved default tenant.",
+          "on_true": "tenant-capability",
+          "on_false": "deny",
+          "source": "src/lattice.api.telemetry/TelemetryTenantScopeResolver.cs#TelemetryTenantScopeResolver.AuthorizeAsync"
+        },
+        {
+          "id": "tenant-capability",
+          "check": "ILatticeAccessGate.AuthorizeAsync for LatticeOperation.Telemetry on that tenant's capability id (LatticeScope.TenantCapability, _lattice_tenant_admin_{tenant}) returns an unfiltered Allow.",
+          "on_true": "allow-tenant",
+          "on_false": "deny",
+          "source": "src/lattice.api.telemetry/TelemetryAccessAuthorizer.cs#TelemetryAccessAuthorizer.AuthorizeTenantTelemetryAsync"
+        }
+      ],
+      "terminals": [
+        {
+          "id": "allow-cluster-wide",
+          "outcome": "A cluster-wide TelemetryAccessGrant: the query is pinned to the caller's active tenant unless a validated platform operator asked to widen it."
+        },
+        {
+          "id": "allow-tenant",
+          "outcome": "A tenant-confined TelemetryAccessGrant: every query is pinned to that tenant whatever was requested, a widening request is reported as downgraded, and platform-operator validation is not consulted."
+        },
+        {
+          "id": "deny",
+          "outcome": "QueryAsync throws the cluster-wide LatticeAuthorizationDeniedException before any backend call; GetCatalogAsync returns the empty catalogue."
+        }
+      ],
+      "fail_closed": "The tenant capability id is a control-plane namespace, so an unmatched request is denied whatever the data-plane default effect, the all-trees tier never reaches it, and a grant for one tenant never matches another's id. An unattributable caller, the default tenant, a key-filtered allow and a refusal on both scopes all deny with the same cluster-wide refusal. The tenant authorized is the tenant pinned, taken from the resolver and never from a request field. The MCP telemetry tools do not use this path and stay cluster-wide only.",
+      "sources": [
+        "src/lattice.api.telemetry/TelemetryTenantScopeResolver.cs#TelemetryTenantScopeResolver.AuthorizeAsync",
+        "src/lattice.api.telemetry/TelemetryAccessAuthorizer.cs#TelemetryAccessAuthorizer.AuthorizeTenantTelemetryAsync",
+        "src/lattice.api.telemetry/TelemetryAccessAuthorizer.cs#TelemetryAccessAuthorizer.AuthorizeClusterTelemetryAsync",
+        "src/lattice.api.telemetry/LatticeTelemetry.cs#LatticeTelemetry.QueryAsync",
+        "src/lattice.auth/LatticeScope.cs#LatticeScope.TenantCapability"
+      ]
+    },
+    {
       "id": "tenancy-admission",
       "nodes": [
         {

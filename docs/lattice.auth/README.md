@@ -97,6 +97,7 @@ A `LatticeScope` names how broadly a rule applies within a tree, from broadest t
 | Tree | `LatticeScope.Tree(treeId)` | Every key in the tree. |
 | Prefix | `LatticeScope.Prefix(treeId, prefix)` | Every key that starts with the prefix. |
 | Key | `LatticeScope.Key(treeId, key)` | Exactly one key. |
+| Tenant capability | `LatticeScope.TenantCapability(tenant)` | A whole-tree scope over the tenant's control-plane capability id `_lattice_tenant_admin_{tenant}` (never the default tenant). A platform rule granting `Telemetry` here admits its subject to that one tenant's telemetry only; see [Tenant-confined telemetry grants](../lattice.api.telemetry/README.md#tenant-confined-telemetry-grants). The gate governs the id as a control-plane namespace: an unmatched request is denied whatever the default effect, the all-trees tier never reaches it, and `Admin` and `Telemetry` on it are independent. |
 | Tenant-wide | `LatticeScope.TenantWide(tenant)` | A whole-tree scope over the sentinel tree id `t/{tenant}/*`, standing for every tree the tenant owns except its app-owned trees. Authorable only on a tenant-tier rule; see [The tenant rule layer](tenant-layer.md#the-tenant-wide-scope). |
 | Cluster-wide | `LatticeScope.ClusterWide()` | A whole-tree scope over the `*` sentinel tree id, used for a capability not attached to any single tree (`LatticeOperation.Telemetry` and `LatticeOperation.AppInstall`) and, once `AllTreesGrantsEnabled` is set, for a data-plane grant or deny across every application tree (see [Precedence](#precedence)). |
 
@@ -151,7 +152,7 @@ Every type below is in the `Orleans.Lattice.Auth` namespace. The operation vocab
 |---|---|
 | `LatticeAuthServiceCollectionExtensions` | `AddLatticeAuth(configure)` installs the enforcing gate; `ConfigureLatticeAuth(configure)` layers a further `LatticeAuthOptions` delegate after registration. |
 | `LatticeAuthOptions` | Every knob; see [Configuration](configuration.md). |
-| `LatticeAuthorizationRule`, `LatticeSubjectSelector`, `LatticeScope` | A rule, its subject selector, and its scope, as described above. `LatticeScope.TenantWide(tenant)` creates the tenant-wide scope, and `IsTenantWide()` / `TryGetTenantWideTenant(out tenant)` recognise it. |
+| `LatticeAuthorizationRule`, `LatticeSubjectSelector`, `LatticeScope` | A rule, its subject selector, and its scope, as described above. `LatticeScope.TenantWide(tenant)` creates the tenant-wide scope, and `IsTenantWide()` / `TryGetTenantWideTenant(out tenant)` recognise it. `LatticeScope.TenantCapability(tenant)` creates the tenant capability scope, and `TryGetTenantCapabilityTenant(out tenant)` recognises it. |
 | `LatticeSubjectSelectorKind`, `LatticeScopeKind`, `LatticeEffect` | The discriminators: `User` or `Group`; `Tree`, `Key`, or `Prefix`; `Allow` or `Deny`. |
 | `LatticeAuthOperations` | `All`, the whole-data-plane operation mask. |
 | `ILatticeAuthorizationPolicyStore` | Durable rule storage: `PutRuleAsync`, `GetRuleAsync`, `RemoveRuleAsync`, `ListRulesForTreeAsync`, and `ListRulesAsync`. A write or delete of an app-owned rule id outside system origin throws `LatticeAppOwnedRuleException`. |

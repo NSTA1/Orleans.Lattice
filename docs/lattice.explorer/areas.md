@@ -641,6 +641,18 @@ say the cluster refused the parameters. A successful chart reports the tenant
 scope the facade actually applied; if the user asked for every tenant but the
 cluster answered for the active tenant, the board says so.
 
+Who may read telemetry, and which tenants they see, is the facade's decision.
+A caller granted Telemetry cluster-wide sees its active tenant, and a platform
+operator can widen that with `?scope=all`. A caller granted Telemetry for one
+tenant only (a rule at `LatticeScope.TenantCapability(tenant)`, authored in
+Access as **One tenant's telemetry**; see
+[Tenant telemetry in a platform rule](managing-access.md#tenant-telemetry-in-a-platform-rule))
+sees that tenant's boards on `/t/{tenant}/telemetry`, captioned for the tenant,
+and nothing anywhere else: every chart is pinned to the tenant's own series, the
+**All tenants** choice is never offered, a `?scope=all` request is answered for
+the tenant alone with the narrowed note, and under any other tenant (or the
+default tenant) the catalogue is empty.
+
 The chart view is an SVG line chart with keyboard readout. Left and right arrows
 move through points, Home and End jump to the ends, and Escape clears the pinned
 readout. Table view shows the values by time. Per-tree chart labels link to the

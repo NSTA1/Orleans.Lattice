@@ -5,8 +5,9 @@ namespace Orleans.Lattice.Api.Telemetry;
 /// <summary>
 /// The fail-closed authorization seam the telemetry facade consults: the coarse
 /// <see cref="LatticeOperation.Telemetry"/> capability that gates the surface at
-/// all, and the platform-operator validation that decides whether a caller's
-/// request to see beyond its own tenant may be honoured.
+/// all - cluster-wide, or confined to one tenant - and the platform-operator
+/// validation that decides whether a caller's request to see beyond its own tenant
+/// may be honoured.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -40,6 +41,9 @@ namespace Orleans.Lattice.Api.Telemetry;
 /// </remarks>
 public sealed class TelemetryAccessAuthorizer
 {
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> CapabilityIds =
+        new(StringComparer.Ordinal);
+
     private readonly ILatticeAccessGate? _gate;
     private readonly ILatticeMembershipContext? _membership;
 
@@ -106,6 +110,119 @@ public sealed class TelemetryAccessAuthorizer
                     + "allow does not authorize it and is refused.");
         }
     }
+
+    /// <summary>
+    /// Authorizes the caller for <see cref="LatticeOperation.Telemetry"/> confined to
+    /// one tenant: the grant <see cref="LatticeScope.TenantCapability(TenantId)"/>
+    /// authors, on the tenant's control-plane capability id
+    /// (<see cref="LatticeTenantAdminScope.TenantScopePrefix"/> plus the tenant id).
+    /// Throws when it is not granted. No other operation on that id - not even
+    /// <see cref="LatticeOperation.Admin"/>, the delegated per-tenant admin capability
+    /// it also carries - confers it.
+    /// </summary>
+    /// <remarks>
+    /// <paramref name="tenant"/> must be the caller's <em>validated</em> active tenant,
+    /// never a request field. The reserved default tenant and the uninitialised
+    /// "no tenant" value are refused, because neither has a tenant capability scope;
+    /// a key-filtered allow is refused as for the cluster-wide check.
+    /// </remarks>
+    /// <param name="tenant">The caller's validated active tenant.</param>
+    /// <param name="cancellationToken">Cancels the authorization.</param>
+    /// <returns>A task that completes when the caller may read the tenant's telemetry.</returns>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized for the tenant's telemetry.</exception>
+    public async ValueTask AuthorizeTenantTelemetryAsync(TenantId tenant, CancellationToken cancellationToken = default)
+    {
+        if (tenant.Value is null || tenant.IsDefault)
+        {
+            var anonymous = await ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
+            throw new LatticeAuthorizationDeniedException(
+                LatticeScope.ClusterWideTreeId,
+                LatticeOperation.Telemetry,
+                anonymous.SubjectId,
+                "Tenant-scoped telemetry needs a tenant other than the reserved default tenant; "
+                    + "reading this telemetry requires the cluster-wide Telemetry capability.");
+        }
+
+        if (LatticeSystemOrigin.IsActive || _gate is null)
+        {
+            return;
+        }
+
+        var scopeId = CapabilityIdOf(tenant.Value);
+        var subject = await ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
+        var request = new LatticeAccessRequest(scopeId, LatticeOperation.Telemetry, subject);
+        var decision = await _gate.AuthorizeAsync(in request, cancellationToken).ConfigureAwait(false);
+
+        if (!decision.Allowed)
+        {
+            throw new LatticeAuthorizationDeniedException(
+                scopeId,
+                LatticeOperation.Telemetry,
+                subject.SubjectId,
+                decision.Reason ?? $"Reading tenant {tenant.Value}'s telemetry requires the Telemetry capability "
+                    + "on that tenant's capability scope, or cluster-wide.");
+        }
+
+        if (decision.KeyFilter is not null)
+        {
+            throw new LatticeAuthorizationDeniedException(
+                scopeId,
+                LatticeOperation.Telemetry,
+                subject.SubjectId,
+                decision.Reason ?? "Tenant telemetry is not attached to a key, so a key-filtered "
+                    + "allow does not authorize it and is refused.");
+        }
+    }
+
+    /// <summary>
+    /// <see langword="true"/> when the cluster-wide check
+    /// (<see cref="AuthorizeClusterTelemetryAsync"/>) would admit the caller. Never
+    /// throws for a denial, so the composed decision in
+    /// <see cref="TelemetryTenantScopeResolver.AuthorizeAsync"/> pays for no exception
+    /// on the steady-state path of a tenant-confined caller.
+    /// </summary>
+    internal async ValueTask<bool> IsClusterTelemetryGrantedAsync(CancellationToken cancellationToken)
+    {
+        if (LatticeSystemOrigin.IsActive || _gate is null)
+        {
+            return true;
+        }
+
+        var subject = await ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
+        var request = new LatticeAccessRequest(
+            LatticeScope.ClusterWideTreeId, LatticeOperation.Telemetry, subject);
+        var decision = await _gate.AuthorizeAsync(in request, cancellationToken).ConfigureAwait(false);
+        return decision.Allowed && decision.KeyFilter is null;
+    }
+
+    /// <summary>
+    /// <see langword="true"/> when <see cref="AuthorizeTenantTelemetryAsync"/> would
+    /// admit the caller for <paramref name="tenant"/>. Never throws for a denial; the
+    /// default and uninitialised tenants are never granted.
+    /// </summary>
+    internal async ValueTask<bool> IsTenantTelemetryGrantedAsync(TenantId tenant, CancellationToken cancellationToken)
+    {
+        if (tenant.Value is null || tenant.IsDefault)
+        {
+            return false;
+        }
+
+        if (LatticeSystemOrigin.IsActive || _gate is null)
+        {
+            return true;
+        }
+
+        var subject = await ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
+        var request = new LatticeAccessRequest(CapabilityIdOf(tenant.Value), LatticeOperation.Telemetry, subject);
+        var decision = await _gate.AuthorizeAsync(in request, cancellationToken).ConfigureAwait(false);
+        return decision.Allowed && decision.KeyFilter is null;
+    }
+
+    // The tenant capability id, composed once per tenant for the process lifetime so a
+    // tenant-confined caller's every query does not allocate it. Bounded by the number
+    // of distinct validated tenants that have read telemetry.
+    private static string CapabilityIdOf(string tenantId) =>
+        CapabilityIds.GetOrAdd(tenantId, static id => string.Concat(LatticeTenantAdminScope.TenantScopePrefix, id));
 
     /// <summary>
     /// <see langword="true"/> when the caller validates as a platform operator -

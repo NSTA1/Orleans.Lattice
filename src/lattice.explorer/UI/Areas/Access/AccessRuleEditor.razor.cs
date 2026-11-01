@@ -70,6 +70,7 @@ public partial class AccessRuleEditor
         new(AccessRuleDraft.PrefixScope, "Key prefix in a tree"),
         new(AccessRuleDraft.KeyScope, "Single key in a tree"),
         new(AccessRuleDraft.ClusterScope, "All trees (cluster-wide)"),
+        new(AccessRuleDraft.TenantCapabilityScope, "One tenant's telemetry (tenant capability)"),
     ];
 
     private static readonly IReadOnlyList<LtSelectOption> DelegationScopeOptions =
@@ -105,6 +106,7 @@ public partial class AccessRuleEditor
             "All-trees grants are off on this cluster: a cluster-wide rule may grant App install and Telemetry, and data operations in it are refused.",
         AccessRuleDraft.ClusterScope => "Governs every tree on the cluster.",
         AccessRuleDraft.AccessAdministrationScope => "Grant Admin here to delegate access administration.",
+        AccessRuleDraft.TenantCapabilityScope => "Grants Telemetry for this one tenant's series only: never another tenant's, the platform's, or the cluster's totals.",
         _ => null,
     };
 
@@ -143,8 +145,39 @@ public partial class AccessRuleEditor
     {
         AccessRuleDraft.ClusterScope => LatticeScope.ClusterWideTreeId,
         AccessRuleDraft.AccessAdministrationScope => LatticeAuthReservedTrees.PolicyTreeId,
+        AccessRuleDraft.TenantCapabilityScope => TenantCapabilityTree,
         _ => _draft.TreeId,
     };
+
+    /// <summary>
+    /// The capability id a tenant capability rule governs, or empty while the tenant
+    /// typed is not a tenant that has one.
+    /// </summary>
+    private string TenantCapabilityTree =>
+        TenantId.TryParse(_draft.Tenant.Trim(), out var tenant) && !tenant.IsDefault
+            ? LatticeScope.TenantCapability(tenant).TreeId
+            : string.Empty;
+
+    /// <summary>
+    /// Whether the checklist offers <paramref name="option"/> for the chosen scope:
+    /// a scopeless capability only with the cluster-wide scope (Telemetry also with a
+    /// tenant capability scope), and nothing but Telemetry with a tenant capability
+    /// scope. An option already ticked stays enabled so it can be cleared.
+    /// </summary>
+    private bool IsOffered(AccessOperationOption option)
+    {
+        if (_draft.HasOperation(option.Flag))
+        {
+            return true;
+        }
+
+        if (_draft.IsTenantCapability)
+        {
+            return option.Flag == LatticeOperation.Telemetry;
+        }
+
+        return !option.IsScopeless || _draft.IsClusterWide;
+    }
 
     /// <inheritdoc />
     protected override void OnParametersSet()

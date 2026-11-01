@@ -37,6 +37,7 @@ Every option is documented in [Configuration](configuration.md).
 - **Malformed rules are refused, not stored.** The store rejects an empty rule or subject id, an out-of-range enum value, and a key or prefix that is missing from (or present on) the wrong scope kind with an `ArgumentException`. The public constructors do not validate enum values.
 - **`LatticeAuthReservedTrees.ThrowIfReserved`** throws the same error the policy store enforces for the reserved `sys-auth-*` namespace; `Prefix` is `sys-auth-` and `PolicyTreeId` is `sys-auth-policy`.
 - **`LatticeScope.ClusterWideTreeId`** is the `*` sentinel tree id used by `LatticeScope.ClusterWide()`.
+- **`LatticeScope.TenantCapability(tenant)`** is the whole-tree scope over a tenant's control-plane capability id, `_lattice_tenant_admin_{tenant}`, used to grant `Telemetry` for that one tenant; `TryGetTenantCapabilityTenant(out tenant)` recognises it.
 - **`ILatticeDecisionEngine.Evaluate`** is the policy decision only. The enforcing gate layers the bootstrap-administrator bypass, the control-plane fail-closed rule, the strict epoch fence and tenant isolation around it; see [Architecture](architecture.md#the-enforcing-gate).
 - **`ITenantGateEnforcer.EnforceAsync`** has a default interface implementation that returns the synchronous `Enforce` decision.
 
@@ -268,6 +269,8 @@ The following inventory includes directly declared public members and overloads,
 - `public static LatticeScope TenantWide(TenantId tenant)`
 - `public bool IsTenantWide()`
 - `public bool TryGetTenantWideTenant(out TenantId tenant)`
+- `public static LatticeScope TenantCapability(TenantId tenant)`
+- `public bool TryGetTenantCapabilityTenant(out TenantId tenant)`
 
 ### `Orleans.Lattice.Auth.LatticeScopeKind`
 

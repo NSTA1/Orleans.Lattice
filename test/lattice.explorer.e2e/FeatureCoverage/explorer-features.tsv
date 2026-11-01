@@ -256,6 +256,7 @@ use-case:access/rule-search	use-case	docs/lattice.explorer/managing-access.md#ru
 use-case:access/rule-tree-not-yet-created	use-case	docs/lattice.explorer/managing-access.md#rules	A new rule may govern a tree that does not exist yet, flagged rather than refused	A9
 use-case:access/server-authority	use-case	docs/lattice.explorer/managing-access.md#server-authority	The server refuses an access change the caller may not make	A9
 use-case:access/tenant-group-rule	use-case	docs/lattice.explorer/managing-access.md#tenant-groups-in-a-platform-rule	A platform operator names a tenant group in a rule, which then governs only that tenant's own trees	T3
+use-case:access/tenant-telemetry-rule	use-case	docs/lattice.explorer/managing-access.md#tenant-telemetry-in-a-platform-rule	A platform operator grants one tenant's telemetry, and nothing else, with the tenant capability scope	T7
 use-case:access/subject-picker	use-case	docs/lattice.explorer/managing-access.md#subject-picking-and-directory-validation	The subject picker's directory validation, and stored and directory groups	A2
 use-case:access/through-nested-group	use-case	docs/lattice.explorer/managing-access.md#groups	Access granted through a nested group	U4
 use-case:apps/area	use-case	docs/lattice.explorer/areas.md#apps	The Apps area lists installed apps, and shows No apps yet before any	A5

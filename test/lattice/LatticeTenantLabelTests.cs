@@ -57,6 +57,20 @@ public sealed class LatticeTenantLabelTests
         Assert.That(LatticeTenantLabel.Resolve("orders"), Is.EqualTo(LatticeTenantLabel.DefaultTenant));
     }
 
+    [TestCase("t/acme/orders")]
+    [TestCase("t/acme/globex")]
+    [TestCase("t/acme/t/globex/orders")]
+    [TestCase("t/acme/a/task-board/tasks")]
+    [TestCase("t/acme/orders/resized/2")]
+    public void ForTree_derives_the_owner_from_the_tree_id_so_an_acme_tree_can_never_carry_another_tenant(string treeId)
+    {
+        // Tenant-scoped telemetry (#5582) pins a query to tenant="acme" and relies on
+        // the label being derived here, from the tree id's owner segment, and never
+        // from anything a caller supplies. A tree whose later segments name another
+        // tenant is still acme's.
+        Assert.That(LatticeTenantLabel.Resolve(treeId), Is.EqualTo("acme"));
+    }
+
     [Test]
     public void ForTree_classifies_a_system_internal_id_as_the_platform_sentinel()
     {

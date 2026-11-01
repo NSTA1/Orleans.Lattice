@@ -49,7 +49,6 @@ public sealed class LatticeTelemetry : ILatticeTelemetry
 
     private readonly LatticeTelemetryQueryCatalog _catalog;
     private readonly TelemetryTenantScopeResolver _scopes;
-    private readonly TelemetryAccessAuthorizer _authorizer;
     private readonly IPrometheusQueryClient _backend;
     private readonly LatticeTelemetryOptions _options;
     private readonly TimeProvider _time;
@@ -59,7 +58,11 @@ public sealed class LatticeTelemetry : ILatticeTelemetry
     /// </summary>
     /// <param name="catalog">The compiled named-query catalogue.</param>
     /// <param name="scopes">The server-side tenant-scope resolver.</param>
-    /// <param name="authorizer">The fail-closed telemetry authorization seam.</param>
+    /// <param name="authorizer">
+    /// The fail-closed telemetry authorization seam. Validated for compatibility; the
+    /// facade authorizes through <paramref name="scopes"/>, which holds the same seam,
+    /// so the tenant it authorizes is the tenant it pins.
+    /// </param>
     /// <param name="backend">The read-only metrics-backend client.</param>
     /// <param name="options">The telemetry options carrying the backend address and guardrails.</param>
     /// <param name="timeProvider">
@@ -84,7 +87,6 @@ public sealed class LatticeTelemetry : ILatticeTelemetry
 
         _catalog = catalog;
         _scopes = scopes;
-        _authorizer = authorizer;
         _backend = backend;
         _options = options.Value;
         _time = timeProvider ?? TimeProvider.System;
@@ -100,7 +102,7 @@ public sealed class LatticeTelemetry : ILatticeTelemetry
 
         try
         {
-            await _authorizer.AuthorizeClusterTelemetryAsync(cancellationToken).ConfigureAwait(false);
+            await _scopes.AuthorizeAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (LatticeAuthorizationDeniedException)
         {
@@ -121,7 +123,10 @@ public sealed class LatticeTelemetry : ILatticeTelemetry
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.QueryId);
 
-        await _authorizer.AuthorizeClusterTelemetryAsync(cancellationToken).ConfigureAwait(false);
+        // Cluster-wide, or confined to the caller's validated active tenant (#5582):
+        // the grant decided here is the one the scope below is pinned by, so the
+        // tenant authorized and the tenant queried can never differ.
+        var grant = await _scopes.AuthorizeAsync(cancellationToken).ConfigureAwait(false);
 
         // A cluster with no backend configured offers no query at all, so an id that
         // exists in the catalogue is still reported as unavailable - matching the
@@ -134,7 +139,7 @@ public sealed class LatticeTelemetry : ILatticeTelemetry
         var descriptor = plan.Descriptor;
         var range = ResolveRange(descriptor, request.Range);
         var scope = await _scopes
-            .ResolveAsync(request.RequestedVisibility, request.RequestedTenantId, cancellationToken)
+            .ResolveAsync(grant, request.RequestedVisibility, request.RequestedTenantId, cancellationToken)
             .ConfigureAwait(false);
 
         var selector = BuildSelector(descriptor, scope, request.TreeId);

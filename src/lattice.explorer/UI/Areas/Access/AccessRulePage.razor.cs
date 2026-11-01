@@ -209,7 +209,7 @@ public partial class AccessRulePage : IDisposable
         var address = AccessRoutes.Explain
             .WithQuery(AccessRoutes.SubjectQuery, rule.Subject.Id)
             .WithQuery(AccessRoutes.KindQuery, AccessRuleFormat.SubjectKindLabel(rule.Subject.Kind));
-        if (!AccessRuleFormat.IsClusterWide(rule.Scope) && !AccessRuleFormat.IsAccessAdministration(rule.Scope))
+        if (!AccessRuleFormat.IsClusterWide(rule.Scope) && !AccessRuleFormat.IsAccessAdministration(rule.Scope) && !rule.Scope.TryGetTenantCapabilityTenant(out _))
         {
             address = address.WithQuery(AccessRoutes.TreeQuery, rule.Scope.TreeId);
         }

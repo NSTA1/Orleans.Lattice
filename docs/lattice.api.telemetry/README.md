@@ -233,6 +233,58 @@ response's `Scope` (a `TelemetryTenantScope`) reports what actually happened:
 A caller-supplied tenant id is never trusted. A non-operator asking for a
 different tenant is pinned to its own, and the answer is marked downgraded.
 
+## Tenant-confined telemetry grants
+
+`Telemetry` is normally granted cluster-wide, over `LatticeScope.ClusterWide()`, and
+that grant admits the caller to every tenant's series (pinned to its active tenant
+unless it is a platform operator). A platform operator can instead grant it for one
+tenant, over `LatticeScope.TenantCapability(tenant)` - the tenant's control-plane
+capability id `_lattice_tenant_admin_{tenant}`:
+
+```csharp verify
+using Orleans.Lattice;
+using Orleans.Lattice.Auth;
+
+var adaReadsAcmeTelemetry = new LatticeAuthorizationRule(
+    "acme-telemetry",
+    LatticeSubjectSelector.User("ada"),
+    LatticeScope.TenantCapability(TenantId.Parse("acme")),
+    LatticeOperation.Telemetry,
+    LatticeEffect.Allow);
+```
+
+`TelemetryTenantScopeResolver.AuthorizeAsync` makes the decision both facade methods
+open with. It tries the cluster-wide capability first. Only a caller that check
+refuses is then tried on the capability scope of its *validated* active tenant,
+resolved through the same `ITenantContextResolver` the scope comes from and never
+from a request field (`TelemetryAccessAuthorizer.AuthorizeTenantTelemetryAsync`). The
+answer is a `TelemetryAccessGrant`: cluster-wide, or confined to that one tenant.
+A confined grant pins every query to its tenant whatever the request asks for, so
+`AllTenants` and `SingleTenant` are answered for the grant's tenant and reported as
+downgraded, and platform-operator validation is never consulted. Because every
+series selector in every template carries the tenant matcher, a confined grant
+never reads another tenant's series, the platform's (`tenant="_platform_"`), or
+cluster-wide totals; the `tenant` label is derived from the tree id's owner
+segment where the series is published (`LatticeTenantLabel`), never supplied by
+a caller.
+
+The scope fails closed. The gate governs the capability id as a control-plane
+namespace, so an unmatched request is denied whatever the data-plane default
+effect, an all-trees (`Tree:*`) grant never reaches it, and a grant for one tenant
+can never match another's id. The reserved default tenant has no capability
+scope. A caller refused on both scopes, one that cannot be attributed to a tenant,
+and one whose active tenant is the default tenant all receive the same
+cluster-wide refusal. `Admin` and `Telemetry` on the capability id are independent:
+holding one confers nothing of the other. A tenant-tier rule can never carry
+`Telemetry`, so only a platform operator authors this grant.
+
+The confined grant reaches this facade only. The MCP telemetry tool group, which
+evaluates caller-supplied PromQL and lists raw metric names, still requires the
+cluster-wide capability through `AuthorizeClusterTelemetryAsync`, because a
+caller's expression cannot be pinned to a tenant.
+
+## Platform-operator validation
+
 Platform-operator validation asks the registered access gate for `Admin` on the
 reserved authorization policy tree. Without the authorization add-on, the core
 no-op gate that `AddLattice` registers allows that for every caller, so a widening
@@ -252,8 +304,9 @@ transport binding can name them without referencing this package:
 
 `QueryAsync` can also refuse the caller. Before anything else it throws
 `LatticeAuthorizationDeniedException` when a real access gate is registered and
-the caller lacks the cluster-wide `Telemetry` capability, checked by the public
-`TelemetryAccessAuthorizer` (discovery instead degrades to the empty catalogue);
+the caller lacks the `Telemetry` capability both cluster-wide and on its active
+tenant's capability scope, checked by the public `TelemetryTenantScopeResolver.AuthorizeAsync`
+through `TelemetryAccessAuthorizer` (discovery instead degrades to the empty catalogue);
 once the query id and the entry's bounds pass, it throws `LatticeTenantAccessDeniedException`
 when the caller cannot be attributed to any tenant, and `ArgumentException` when
 the tree filter of an entry that accepts one contains a control character. The Lattice refusals

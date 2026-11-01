@@ -500,7 +500,7 @@
       "errors": [
         {
           "error_id": "permission-denied",
-          "condition": "Unauthorized callers receive the empty catalogue."
+          "condition": "Callers holding Telemetry neither cluster-wide (LatticeScope.ClusterWide) nor on their validated active tenant's capability scope (LatticeScope.TenantCapability) receive the empty catalogue."
         }
       ],
       "retry": {
@@ -520,7 +520,8 @@
       "sources": [
         "src/lattice.api.abstractions/Telemetry/ILatticeTelemetry.cs#GetCatalogAsync",
         "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcMethods.cs#GetCatalogMethodName",
-        "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcService.cs#GetCatalog"
+        "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcService.cs#GetCatalog",
+        "src/lattice.api.telemetry/TelemetryTenantScopeResolver.cs#AuthorizeAsync"
       ]
     },
     {
@@ -537,7 +538,7 @@
         },
         {
           "error_id": "permission-denied",
-          "condition": "Caller is not authorized or cannot be attributed to a tenant."
+          "condition": "Caller holds Telemetry neither cluster-wide nor on its validated active tenant's capability scope, or cannot be attributed to a tenant. A tenant-confined grant never widens: AllTenants or SingleTenant requests are answered for its own tenant and reported as downgraded."
         },
         {
           "error_id": "not-found",
@@ -570,7 +571,8 @@
         "src/lattice.api.abstractions/Telemetry/ILatticeTelemetry.cs#QueryAsync",
         "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcMethods.cs#QueryMethodName",
         "src/lattice.api.telemetry.grpc/LatticeTelemetryGrpcService.cs#Query",
-        "src/lattice.api.telemetry/PromQlMetricExtractor.cs#SkipBalancedParens"
+        "src/lattice.api.telemetry/PromQlMetricExtractor.cs#SkipBalancedParens",
+        "src/lattice.api.telemetry/TelemetryTenantScopeResolver.cs#AuthorizeAsync"
       ]
     }
   ],

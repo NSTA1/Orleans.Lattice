@@ -25,8 +25,14 @@ internal sealed class AccessRuleDraft
     /// <summary>The scope-kind value for access administration (the policy tree).</summary>
     public const string AccessAdministrationScope = "access-administration";
 
+    /// <summary>The scope-kind value for one tenant's capability scope (tenant telemetry).</summary>
+    public const string TenantCapabilityScope = "tenant-capability";
+
     /// <summary>The sentence shown when a scopeless capability is paired with a narrower scope.</summary>
-    public const string ScopelessMessage = "App install and Telemetry are cluster-wide capabilities: they can only be granted with the cluster-wide scope. Choose that scope, or clear them.";
+    public const string ScopelessMessage = "App install and Telemetry are cluster-wide capabilities: they can only be granted with the cluster-wide scope (or, for Telemetry, one tenant's capability scope). Choose that scope, or clear them.";
+
+    /// <summary>The sentence shown when a tenant capability rule carries anything but Telemetry.</summary>
+    public const string TenantCapabilityMessage = "A tenant capability rule grants Telemetry for that one tenant and nothing else. Clear the other operations.";
 
     /// <summary>Whether the draft edits an existing rule, whose id and governed tree are then fixed.</summary>
     public bool IsExisting { get; private init; }
@@ -49,6 +55,9 @@ internal sealed class AccessRuleDraft
     /// <summary>The governed tree id, for a tree, prefix or key scope.</summary>
     public string TreeId { get; set; } = string.Empty;
 
+    /// <summary>The tenant id, for a tenant capability scope.</summary>
+    public string Tenant { get; set; } = string.Empty;
+
     /// <summary>The key or prefix, for a key or prefix scope.</summary>
     public string KeyOrPrefix { get; set; } = string.Empty;
 
@@ -70,6 +79,9 @@ internal sealed class AccessRuleDraft
     /// <summary>Whether the chosen scope is the cluster-wide scope.</summary>
     public bool IsClusterWide => ScopeKind == ClusterScope;
 
+    /// <summary>Whether the chosen scope is one tenant's capability scope.</summary>
+    public bool IsTenantCapability => ScopeKind == TenantCapabilityScope;
+
     /// <summary>Whether the chosen scope names a tree.</summary>
     public bool NeedsTree => ScopeKind is TreeScope or PrefixScope or KeyScope;
 
@@ -87,6 +99,7 @@ internal sealed class AccessRuleDraft
         var scope = rule.Scope;
         var kind = AccessRuleFormat.IsClusterWide(scope) ? ClusterScope
             : AccessRuleFormat.IsAccessAdministration(scope) ? AccessAdministrationScope
+            : scope.TryGetTenantCapabilityTenant(out _) ? TenantCapabilityScope
             : scope.Kind switch
             {
                 LatticeScopeKind.Key => KeyScope,
@@ -103,6 +116,7 @@ internal sealed class AccessRuleDraft
             SubjectId = rule.Subject.Id,
             ScopeKind = kind,
             TreeId = kind is TreeScope or PrefixScope or KeyScope ? scope.TreeId : string.Empty,
+            Tenant = scope.TryGetTenantCapabilityTenant(out var tenant) ? tenant.Value! : string.Empty,
             KeyOrPrefix = scope.KeyOrPrefix ?? string.Empty,
             Operations = rule.Operations,
             Condition = rule.Condition,
@@ -180,9 +194,33 @@ internal sealed class AccessRuleDraft
             errors.KeyOrPrefix = ScopeKind == KeyScope ? "Enter the key." : "Enter the prefix.";
         }
 
+        if (IsTenantCapability)
+        {
+            var tenant = Tenant.Trim();
+            if (tenant.Length == 0)
+            {
+                errors.Tenant = "Enter the tenant whose telemetry the rule grants.";
+            }
+            else if (!Orleans.Lattice.TenantId.TryParse(tenant, out var parsed))
+            {
+                errors.Tenant = $"{tenant} is not a valid tenant id.";
+            }
+            else if (parsed.IsDefault)
+            {
+                errors.Tenant = "The default tenant has no tenant capability scope. Grant its telemetry with the cluster-wide scope.";
+            }
+        }
+
         if (Operations == LatticeOperation.None)
         {
             errors.Operations = "Choose at least one operation.";
+        }
+        else if (IsTenantCapability)
+        {
+            if (Operations != LatticeOperation.Telemetry)
+            {
+                errors.Operations = TenantCapabilityMessage;
+            }
         }
         else if (!IsClusterWide && (Operations & AccessRuleFormat.ScopelessOperations) != LatticeOperation.None)
         {
@@ -244,6 +282,7 @@ internal sealed class AccessRuleDraft
         {
             ClusterScope => LatticeScope.ClusterWide(),
             AccessAdministrationScope => LatticeScope.Tree(LatticeAuthReservedTrees.PolicyTreeId),
+            TenantCapabilityScope => LatticeScope.TenantCapability(Orleans.Lattice.TenantId.Parse(Tenant.Trim())),
             KeyScope => LatticeScope.Key(TreeId.Trim(), KeyOrPrefix),
             PrefixScope => LatticeScope.Prefix(TreeId.Trim(), KeyOrPrefix),
             _ => LatticeScope.Tree(TreeId.Trim()),

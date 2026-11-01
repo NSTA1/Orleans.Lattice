@@ -25,7 +25,7 @@ Neither method takes a configure delegate or registers options validation: bind 
 | Options | `LatticeTelemetryOptions`, `LatticeTelemetryBackendAuthMode`, `LatticeTelemetryBackendCredential`, `LatticeTelemetryMetricAccessMode`, `LatticeTelemetryOptionsValidator` |
 | Catalogue | `LatticeTelemetryQueries` (the built-in definitions and their revision), `LatticeTelemetryQueryCatalog` (the deployment's offered subset) |
 | Backend proxy | `IPrometheusQueryClient`, `PrometheusQueryClient`, `PrometheusQueryResponse`, `PrometheusMetadataResponse`, `ITelemetryBackendTokenProvider` |
-| Enforcement helpers | `TelemetryAccessAuthorizer`, `TelemetryMetricAccessPolicy`, `TelemetryQueryAuthorizer`, `TelemetryRangeGuardrails`, `TelemetryTenantScopeResolver`, `PromQlMetricExtractor`, `PromQlMetricReferences` |
+| Enforcement helpers | `TelemetryAccessAuthorizer`, `TelemetryAccessGrant`, `TelemetryMetricAccessPolicy`, `TelemetryQueryAuthorizer`, `TelemetryRangeGuardrails`, `TelemetryTenantScopeResolver`, `PromQlMetricExtractor`, `PromQlMetricReferences` |
 
 The enforcement helpers exist so a binding that evaluates caller-supplied PromQL - the MCP telemetry tool group is one - can apply the facade's capability check, allow-list and range guardrails without the curated catalogue; see [The backend proxy beneath the facade](README.md#the-backend-proxy-beneath-the-facade).
 
@@ -200,13 +200,25 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.Telemetry.TelemetryAccessAuthorizer`
 
-[Source](../../src/lattice.api.telemetry/TelemetryAccessAuthorizer.cs) (line 41).
+[Source](../../src/lattice.api.telemetry/TelemetryAccessAuthorizer.cs) (line 42).
 
 `public sealed class TelemetryAccessAuthorizer`
 
 - `public TelemetryAccessAuthorizer(ILatticeAccessGate? gate = null, ILatticeMembershipContext? membership = null)`
 - `public ValueTask AuthorizeClusterTelemetryAsync(CancellationToken cancellationToken = default)`
+- `public ValueTask AuthorizeTenantTelemetryAsync(TenantId tenant, CancellationToken cancellationToken = default)`
 - `public ValueTask<bool> IsPlatformOperatorAsync(CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Api.Telemetry.TelemetryAccessGrant`
+
+[Source](../../src/lattice.api.telemetry/TelemetryAccessGrant.cs) (line 18).
+
+`public readonly record struct TelemetryAccessGrant`
+
+- `public static TelemetryAccessGrant ClusterWide`
+- `public bool IsClusterWide`
+- `public string? TenantId`
+- `public static TelemetryAccessGrant ForTenant(string tenantId)`
 
 ### `Orleans.Lattice.Api.Telemetry.TelemetryMetricAccessPolicy`
 
@@ -237,11 +249,13 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.Telemetry.TelemetryTenantScopeResolver`
 
-[Source](../../src/lattice.api.telemetry/TelemetryTenantScopeResolver.cs) (line 41).
+[Source](../../src/lattice.api.telemetry/TelemetryTenantScopeResolver.cs) (line 48).
 
 `public sealed class TelemetryTenantScopeResolver`
 
 - `public TelemetryTenantScopeResolver(ITenantContextResolver tenants, TelemetryAccessAuthorizer authorizer)`
+- `public ValueTask<TelemetryAccessGrant> AuthorizeAsync(CancellationToken cancellationToken = default)`
+- `public ValueTask<TelemetryTenantScope> ResolveAsync(TelemetryAccessGrant grant, TelemetryTenantVisibility requestedVisibility, string? requestedTenantId = null, CancellationToken cancellationToken = default)`
 - `public ValueTask<TelemetryTenantScope> ResolveAsync(TelemetryTenantVisibility requestedVisibility, string? requestedTenantId = null, CancellationToken cancellationToken = default)`
 
 ## Shared contract declaration reference

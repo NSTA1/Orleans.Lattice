@@ -124,6 +124,87 @@ public sealed record LatticeScope
         new(LatticeScopeKind.Tree, ClusterWideTreeId);
 
     /// <summary>
+    /// Creates the <b>tenant capability</b> scope for <paramref name="tenant"/>: a
+    /// whole-tree scope over the tenant's control-plane capability id
+    /// (<see cref="LatticeTenantAdminScope.TenantScopePrefix"/> followed by the tenant
+    /// id, for example <c>_lattice_tenant_admin_acme</c>). It is the tenant-bounded
+    /// analogue of <see cref="ClusterWide"/> for a scopeless capability: a
+    /// <see cref="LatticeOperation.Telemetry"/> grant written over it admits the
+    /// subject to that one tenant's telemetry only (issue #5582).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The id is a control-plane capability namespace, so the access gate governs it
+    /// fail-closed: an unmatched request is denied whatever the data-plane default
+    /// effect, the all-trees (<c>Tree:*</c>) tier never folds into it, and a rule is
+    /// matched by exact id, so a grant for one tenant can never reach another.
+    /// </para>
+    /// <para>
+    /// Each operation bit on the scope stands alone. The same id carries the delegated
+    /// per-tenant <see cref="LatticeOperation.Admin"/> capability
+    /// (<see cref="LatticeTenantAdminScope.ForTenant"/>), and holding one of
+    /// <see cref="LatticeOperation.Admin"/> and <see cref="LatticeOperation.Telemetry"/>
+    /// there confers nothing of the other. It is a platform-authored scope: a
+    /// tenant-tier rule can never name it.
+    /// </para>
+    /// </remarks>
+    /// <param name="tenant">The tenant. Must be an initialised tenant other than <see cref="TenantId.Default"/>.</param>
+    /// <returns>A whole-tree scope over the tenant's capability id.</returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="tenant"/> is the uninitialised "no tenant" value or the
+    /// reserved <see cref="TenantId.Default"/> tenant.
+    /// </exception>
+    public static LatticeScope TenantCapability(TenantId tenant)
+    {
+        if (tenant.Value is null || !TenantId.IsValid(tenant.Value.AsSpan()))
+        {
+            throw new ArgumentException(
+                "Cannot create a tenant capability scope from the uninitialised 'no tenant' value.",
+                nameof(tenant));
+        }
+
+        if (tenant.IsDefault)
+        {
+            throw new ArgumentException(
+                $"The reserved '{TenantId.DefaultId}' tenant has no tenant capability scope; grant its telemetry "
+                + "cluster-wide.",
+                nameof(tenant));
+        }
+
+        return new(LatticeScopeKind.Tree, LatticeTenantAdminScope.ForTenant(tenant).TreeScope);
+    }
+
+    /// <summary>
+    /// Returns the tenant a tenant capability scope covers: a whole-tree scope over
+    /// <c>_lattice_tenant_admin_{tenant}</c> naming a valid tenant other than
+    /// <see cref="TenantId.Default"/>, as <see cref="TenantCapability(TenantId)"/>
+    /// creates. A method rather than a property so the record's printed and
+    /// serialized member set is unchanged.
+    /// </summary>
+    /// <param name="tenant">The covered tenant when this returns <c>true</c>; otherwise <c>default</c>.</param>
+    /// <returns><c>true</c> for a tenant capability scope; otherwise <c>false</c>.</returns>
+    public bool TryGetTenantCapabilityTenant(out TenantId tenant)
+    {
+        tenant = default;
+        if (Kind != LatticeScopeKind.Tree
+            || KeyOrPrefix is not null
+            || TreeId is null
+            || !TreeId.StartsWith(LatticeTenantAdminScope.TenantScopePrefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var slice = TreeId.AsSpan(LatticeTenantAdminScope.TenantScopePrefix.Length);
+        if (!TenantId.IsValid(slice) || slice.Equals(TenantId.DefaultId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        tenant = TenantId.ForValidated(new string(slice));
+        return true;
+    }
+
+    /// <summary>
     /// The tenant-local name (<c>*</c>) of the sentinel tree a
     /// <see cref="TenantWide(TenantId)"/> scope is keyed by: the scope's
     /// <see cref="TreeId"/> is <c>t/{tenant}/*</c>.

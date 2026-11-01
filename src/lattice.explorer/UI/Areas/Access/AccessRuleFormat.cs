@@ -13,7 +13,9 @@ internal static class AccessRuleFormat
 {
     /// <summary>
     /// The capabilities that are checked against the cluster-wide scope itself and
-    /// so can only be granted by a rule at <see cref="LatticeScope.ClusterWide"/>.
+    /// so can only be granted by a rule at <see cref="LatticeScope.ClusterWide"/>,
+    /// except that Telemetry can also be granted for one tenant at
+    /// <see cref="LatticeScope.TenantCapability(TenantId)"/>.
     /// </summary>
     public const LatticeOperation ScopelessOperations = LatticeOperation.AppInstall | LatticeOperation.Telemetry;
 
@@ -156,7 +158,7 @@ internal static class AccessRuleFormat
     public static string SubjectKindLabel(LatticeSubjectSelectorKind kind) =>
         kind == LatticeSubjectSelectorKind.Group ? "group" : "user";
 
-    /// <summary>The label of a scope: <c>all trees</c>, <c>access administration</c>, or the tree with its key or prefix.</summary>
+    /// <summary>The label of a scope: <c>all trees</c>, <c>access administration</c>, a tenant capability, or the tree with its key or prefix.</summary>
     /// <param name="scope">The scope.</param>
     public static string ScopeLabel(LatticeScope scope)
     {
@@ -169,6 +171,11 @@ internal static class AccessRuleFormat
         if (IsAccessAdministration(scope))
         {
             return "access administration";
+        }
+
+        if (scope.TryGetTenantCapabilityTenant(out var tenant))
+        {
+            return $"tenant {tenant.Value} capability (telemetry)";
         }
 
         return scope.Kind switch
