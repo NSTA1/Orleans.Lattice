@@ -24,7 +24,8 @@ public sealed class A11TelemetryInDepth : JourneyChapter
 {
     private const string JourneyId = "a11";
     private const string ThroughputKey = "throughput";
-    private const string WriteChart = "Write operations";
+    // A chart is headed by its catalogue query's title, not the board's short name.
+    private const string WriteChart = "Write operations per second, by tree";
 
     private static readonly string[] BuiltInBoards = ["throughput", "latency", "storage", "pressure"];
 
