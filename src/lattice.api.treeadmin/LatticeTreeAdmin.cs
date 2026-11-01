@@ -325,6 +325,13 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
                 .IsRestoreAuthorizedAsync(effectiveTreeId, cancellationToken)
                 .ConfigureAwait(false);
 
+        // The cluster-wide Telemetry capability does not depend on the tree; it is
+        // probed through the same fail-closed gate the storage-usage read uses, so a
+        // surface can decide on estate-wide figures without paying for that read.
+        var canViewClusterTelemetry = await _authorizer
+            .IsClusterTelemetryAuthorizedAsync(cancellationToken)
+            .ConfigureAwait(false);
+
         return new LatticeTreeAdminCapabilities
         {
             TreeId = treeId,
@@ -333,6 +340,7 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
             CanViewDiagnostics = canViewDiagnostics,
             CanBulkLoad = canBulkLoad,
             CanRestore = canRestore,
+            CanViewClusterTelemetry = canViewClusterTelemetry,
             Schema = schema,
         };
     }

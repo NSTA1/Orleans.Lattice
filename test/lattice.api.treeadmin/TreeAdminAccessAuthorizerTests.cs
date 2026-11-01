@@ -62,6 +62,21 @@ public sealed class TreeAdminAccessAuthorizerTests
     }
 
     [Test]
+    public async Task IsClusterTelemetryAuthorizedAsync_reports_the_grant_without_throwing_on_a_denial()
+    {
+        var gate = new DefaultEffectAllowGate();
+        gate.Grant("operator", ClusterWideScope, LatticeOperation.Telemetry);
+        var granted = new TreeAdminAccessAuthorizer(gate, new FixedSubjectMembership(new LatticeSubject("operator")));
+        var anonymous = new TreeAdminAccessAuthorizer(gate, membership: null);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await granted.IsClusterTelemetryAuthorizedAsync(), Is.True);
+            Assert.That(await anonymous.IsClusterTelemetryAuthorizedAsync(), Is.False, "fails closed under DefaultEffect = Allow");
+        });
+    }
+
+    [Test]
     public void AuthorizeClusterTelemetryAsync_targets_the_cluster_wide_sentinel()
     {
         // Pins the scope itself, so the treeadmin half can never drift from the

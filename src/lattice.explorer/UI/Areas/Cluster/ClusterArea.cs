@@ -12,8 +12,10 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster;
 /// shows only that tenant's own trees and storage.
 /// </summary>
 /// <remarks>
-/// Visibility fails closed on the cluster-wide storage summary, the cheapest read
-/// that needs cluster telemetry authority: no tree administration facade hides the
+/// Visibility fails closed. The side-effect-free capability probe of a reserved
+/// tree id admits a caller holding the cluster-wide Telemetry capability without
+/// reading the estate (#5602); otherwise the cluster-wide storage summary, which
+/// needs that same authority, decides: no tree administration facade hides the
 /// area, and an unconfigured connection or a facade the cluster does not serve says
 /// why. A caller refused the summary is admitted only when the capability probe of
 /// one of the trees the catalogue lists reports a tree-lifecycle or tree-admin grant
@@ -42,10 +44,14 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
     /// <summary>How many catalogue trees are probed at once; the probing stops after the first wave holding a grant.</summary>
     public const int GrantProbeConcurrency = 8;
 
+    /// <summary>The reserved tree id the area-wide capability probe asks about. The probe has no side effects.</summary>
+    public const string ProbeTreeId = "__cluster_capability_probe__";
+
     private readonly ClusterFacades _facades;
     private readonly ClusterTreeCatalog _catalog;
     private AreaAvailability? _verdict;
     private ClusterStorageUsageSummary? _usage;
+    private bool _telemetry;
     private ShellCallerKey _verdictCaller;
 
     /// <summary>Creates the area for one circuit.</summary>
@@ -153,8 +159,19 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
         var denied = false;
         try
         {
-            _usage = await admin.GetStorageUsageAsync(deep: false, cancellationToken).ConfigureAwait(false);
-            answer = AreaAvailability.Visible;
+            if (await HoldsClusterTelemetryAsync(admin, cancellationToken).ConfigureAwait(false))
+            {
+                // Admitted by the capability itself: the storage summary, which on a
+                // large estate takes longer than the directory waits, is read for
+                // Home later (#5602).
+                _telemetry = true;
+                answer = AreaAvailability.Visible;
+            }
+            else
+            {
+                _usage = await admin.GetStorageUsageAsync(deep: false, cancellationToken).ConfigureAwait(false);
+                answer = AreaAvailability.Visible;
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -207,7 +224,16 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
     /// </remarks>
     public async ValueTask<string?> GetHomeStatusAsync(CancellationToken cancellationToken)
     {
-        if (CurrentUsage() is not { } usage)
+        var usage = CurrentUsage();
+        if (usage is null
+            && _telemetry
+            && _verdictCaller == _facades.Caller
+            && _facades.TreeAdmin is { } admin)
+        {
+            usage = await ReadUsageAsync(admin, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (usage is null)
         {
             return null;
         }
@@ -365,5 +391,52 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
     {
         _verdict = null;
         _usage = null;
+        _telemetry = false;
+    }
+
+    /// <summary>
+    /// Whether the side-effect-free capability probe says the caller holds cluster
+    /// telemetry. Any fault or an older cluster that does not report the flag reads
+    /// as no, so the caller falls through to the storage-summary read, which decides.
+    /// </summary>
+    private static async Task<bool> HoldsClusterTelemetryAsync(ILatticeTreeAdmin admin, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var capabilities = await admin.ProbeCapabilitiesAsync(ProbeTreeId, cancellationToken).ConfigureAwait(false);
+            return capabilities is { CanViewClusterTelemetry: true };
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Reads the storage summary for Home, for a caller admitted by the telemetry probe; <see langword="null"/> on any fault.</summary>
+    private async Task<ClusterStorageUsageSummary?> ReadUsageAsync(ILatticeTreeAdmin admin, CancellationToken cancellationToken)
+    {
+        var caller = _facades.Caller;
+        try
+        {
+            var usage = await admin.GetStorageUsageAsync(deep: false, cancellationToken).ConfigureAwait(false);
+            if (_facades.Caller == caller && _verdictCaller == caller)
+            {
+                _usage = usage;
+            }
+
+            return usage;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 }

@@ -117,18 +117,23 @@ public sealed partial class AuditorsReviewChapter
     }
 
     // U4.10: Access is hidden: no spine stop, and its address renders the not-found page. The
-    // Cluster stop never settles for her (#5602), so its address says it could not be checked.
+    // Cluster area is hers to read through the cluster-wide Telemetry capability (#5602): the
+    // estate and the tree list, with no New tree.
     private static async Task ClusterAndAccessAreWithheldAsync(PersonaSession dana)
     {
         var shell = dana.Shell;
-        await ClusterNeverSettles.ReproducesAsync(async () =>
-        {
-            await shell.GotoAsync("/cluster");
-            await Expect(shell.Heading).ToHaveTextAsync("Cluster");
-            await Expect(shell.Content.GetByRole(AriaRole.Heading, new() { Name = "Could not be checked", Exact = true })).ToBeVisibleAsync();
-            await Expect(shell.Content.Locator("[data-lt-command^=\"cluster.\"]")).ToHaveCountAsync(0);
-        });
-        await SnapAsync(dana, "10", "cluster", "Cluster: /cluster says it could not be checked, and offers nothing, while its check times out (#5602)");
+        var content = shell.Content;
+        await shell.GoToAreaAsync("cluster");
+        await Expect(shell.Heading).ToHaveTextAsync("Cluster");
+        await Expect(content.GetByRole(AriaRole.Heading, new() { Name = "Estate", Exact = true })).ToBeVisibleAsync();
+        await Expect(content.GetByText("Cluster id", new() { Exact = true })).ToBeVisibleAsync();
+        await SnapAsync(dana, "10", "cluster", "Cluster: the estate, readable through her cluster-wide Telemetry grant");
+
+        await shell.GotoAsync("/cluster/trees");
+        await Expect(shell.Heading).ToHaveTextAsync("Trees");
+        await Expect(content.GetByText(Names.Trees.FactoryOrders, new() { Exact = true }).First).ToBeVisibleAsync();
+        await Expect(content.Locator("[data-lt-command=\"cluster.create-tree\"]")).ToHaveCountAsync(0);
+        await SnapAsync(dana, "10", "cluster-trees", "Cluster trees: every tree listed, and no New tree for a reader");
 
         await shell.ExpectAreaWithheldAsync("access");
         await shell.ExpectHeadingAsync(ShellPage.NotFoundHeading);

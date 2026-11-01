@@ -257,6 +257,28 @@ internal sealed class TreeAdminAccessAuthorizer
     }
 
     /// <summary>
+    /// Probes whether the current caller holds the scopeless cluster-wide
+    /// <see cref="LatticeOperation.Telemetry"/> capability, through the same
+    /// fail-closed gate as <see cref="AuthorizeClusterTelemetryAsync"/>. Returns
+    /// <c>false</c> for a plain authorization denial; other failures propagate.
+    /// Read-only, no side effects.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the probe.</param>
+    /// <returns><c>true</c> when the caller may read cluster telemetry; otherwise <c>false</c>.</returns>
+    public async ValueTask<bool> IsClusterTelemetryAuthorizedAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await AuthorizeClusterTelemetryAsync(cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (LatticeAuthorizationDeniedException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Probes whether the current caller may perform a whole-tree <b>bulk-load</b> over
     /// <paramref name="treeId"/>, returning <c>true</c> when the distinct
     /// <see cref="LatticeOperation.BulkLoad"/> capability is granted and <c>false</c>

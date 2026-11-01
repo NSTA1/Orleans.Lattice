@@ -37,14 +37,9 @@ public sealed partial class AuditorsReviewChapter
 
             Assert.That(spine.Unavailable, Does.Contain("backups"), $"Backups is drawn, but not open, for a reader without a backup grant: {spine}");
             Assert.That(spine.Stops, Has.None.EqualTo("access"), $"Access is hidden from dana: {spine}");
+            Assert.That(spine.CanOpen("cluster"), Is.True, $"Cluster is hers through the cluster-wide Telemetry grant: {spine}");
         });
-        await ClusterNeverSettles.ReproducesAsync(async () =>
-        {
-            var reading = await dana.Shell.ReadSpineAsync();
-            Assert.That(reading.Unavailable, Does.Contain("cluster"), $"#5602: Cluster is drawn as not checked rather than settled: {reading}");
-            await Expect(dana.Shell.Stop("cluster")).ToContainTextAsync("Could not be checked");
-        });
-        await SnapAsync(dana, "1", "signed-in", "dana's console: the areas her grants open, Backups drawn but not open, no Access, and Cluster not yet checked (#5602)");
+        await SnapAsync(dana, "1", "signed-in", "dana's console: the areas her grants open, Backups drawn but not open, no Access");
     }
 
     // U4.2: History of two orders, a point in time before U2's migration, and back to the latest.

@@ -107,12 +107,12 @@ public sealed partial class ClusterAreaTests
             .Returns(call => Task.FromResult(ClusterTreeAccess.None(call.Arg<string>())));
         Grant(ids[^1], caps => caps with { CanManageTreeLifecycle = true });
         var bounded = await CreateArea().GetAvailabilityAsync(CancellationToken.None);
-        var boundedProbes = _admin.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(ILatticeTreeAdmin.ProbeCapabilitiesAsync));
+        var boundedProbes = TreeProbes();
 
         _admin.ClearReceivedCalls();
         Grant(ids[1], caps => caps with { CanAdministerTree = true });
         var early = await CreateArea().GetAvailabilityAsync(CancellationToken.None);
-        var earlyProbes = _admin.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(ILatticeTreeAdmin.ProbeCapabilitiesAsync));
+        var earlyProbes = TreeProbes();
 
         Assert.Multiple(() =>
         {
@@ -136,6 +136,11 @@ public sealed partial class ClusterAreaTests
         _admin.ProbeCapabilitiesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(async call =>
             {
+                if (call.Arg<string>() == ClusterArea.ProbeTreeId)
+                {
+                    return ClusterTreeAccess.None(ClusterArea.ProbeTreeId);
+                }
+
                 if (Interlocked.Increment(ref started) == ids.Length)
                 {
                     allStarted.SetResult();
@@ -163,6 +168,10 @@ public sealed partial class ClusterAreaTests
             Assert.That(ClusterArea.AdmitsArea(none with { CanAdministerTree = true }), Is.True);
         });
     }
+
+    private int TreeProbes() => _admin.ReceivedCalls().Count(call =>
+        call.GetMethodInfo().Name == nameof(ILatticeTreeAdmin.ProbeCapabilitiesAsync)
+        && (string)call.GetArguments()[0]! != ClusterArea.ProbeTreeId);
 
     private void RefuseSummary() =>
         _admin.GetStorageUsageAsync(false, Arg.Any<CancellationToken>()).ThrowsAsync(new LatticeAuthorizationDeniedException("denied"));

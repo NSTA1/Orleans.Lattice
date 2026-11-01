@@ -353,6 +353,11 @@
           "name": "CanRestore",
           "type": "bool",
           "required": true
+        },
+        {
+          "name": "CanViewClusterTelemetry",
+          "type": "bool",
+          "required": true
         }
       ],
       "source": "src/lattice.api.abstractions/TreeAdmin/Model/LatticeTreeAdminCapabilities.cs#LatticeTreeAdminCapabilities"
