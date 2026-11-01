@@ -927,6 +927,8 @@ From then on, the receiver refuses an entry stamped by that source in two cases:
 - the batch is stamped with any other source lineage (see [Source lineage stamp](replication-drivers.md#source-lineage-stamp));
 - the receiver's frontier epoch has moved since the drain. The receiver's own contents were then replaced, for example by a coordinated restore cutover, and the drain no longer describes the tree.
 
+The drain's own shadow-copy cutover is not such a replacement. Publishing the imported copy re-mints the frontier epoch a moment before the handoff records the new epoch against the drained lineage. A batch stamped with the drained lineage that arrives in that window is refused for now, without asking for a re-seed, and applies once the handoff has recorded the epoch ([#5534](https://github.com/NSTA1/Orleans.Lattice/issues/5534)). Refusing it for its lineage would make the sender re-seed the peer again, and that re-seed's own cutover would open the window again.
+
 A refused batch is not accepted. Its ack sets `ReplicationAck.SourceLineageRefused`, and the batch is counted on `orleans.lattice.replication.apply.source_lineage_refused`. The sender's cursor holds, so nothing is lost:
 - A sender whose binding is stale rebinds and never re-sends the old log.
 - A sender whose binding is current re-seeds the peer, and the new drain records the current lineage.
