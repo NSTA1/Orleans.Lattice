@@ -178,6 +178,51 @@ public sealed class StoryRunnerSelfTests
         Assert.That(log, Is.EqualTo(new[] { "establish S1", "establish S2", "establish S3" }));
     }
 
+    /// <summary>
+    /// Establishment follows story order, not the order a chapter lists its consumes: C1
+    /// consumes U2 before A7, but the story produces A6 and A7 before U1 and U2, so an isolated
+    /// run must too (U2 re-aliases a tree A7's replication enable expects in place).
+    /// </summary>
+    [Test]
+    public async Task Isolated_establishment_follows_story_order()
+    {
+        var log = new List<string>();
+        var graph = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+        {
+            ["A6"] = [],
+            ["A7"] = ["A6"],
+            ["U1"] = [],
+            ["U2"] = ["U1"],
+            ["C1"] = ["U2", "A7"],
+        };
+        var contracts = new ChapterContracts(graph.Keys.Select(chapter => DelegateContract.Logging(chapter, log)));
+        var session = new StorySession(StubStory.Storyline, JourneyRunMode.Isolated, null, contracts, graph, ArtifactsDirectory);
+
+        await StoryRunner.RunIsolatedAsync(session, "C1", new LoggingChapter(log));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(session.EstablishmentOrderOf("C1"), Is.EqualTo(new[] { "A6", "A7", "U1", "U2" }));
+            Assert.That(log.Where(line => line.StartsWith("establish ", StringComparison.Ordinal)), Is.EqualTo(new[] { "establish A6", "establish A7", "establish U1", "establish U2" }));
+        });
+    }
+
+    /// <summary>On the real storylines, every chapter's establishment order is a subsequence of the story outline.</summary>
+    [Test]
+    public void Real_establishment_orders_are_subsequences_of_the_outline()
+    {
+        foreach (var storyline in new[] { StoryNames.Storylines.Contoso, StoryNames.Storylines.Fabrikam })
+        {
+            var outline = StoryOutline.For(storyline).Select(chapter => chapter.Id).ToList();
+            var session = new StorySession(storyline, JourneyRunMode.Isolated, null, new ChapterContracts([]), StoryPlan.GraphFor(storyline), ArtifactsDirectory);
+            foreach (var chapter in outline)
+            {
+                var order = session.EstablishmentOrderOf(chapter);
+                Assert.That(order.Select(id => outline.IndexOf(id)), Is.Ordered, $"{storyline} {chapter}: {string.Join(", ", order)}");
+            }
+        }
+    }
+
     /// <summary>A contract that establishes its own chapter is refused instead of deadlocking.</summary>
     [Test]
     public void A_contract_establishing_its_own_chapter_is_refused()

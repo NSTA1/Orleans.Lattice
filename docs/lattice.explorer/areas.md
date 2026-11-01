@@ -209,7 +209,8 @@ disables the live tail while the point-in-time view is active.
 
 The Metrics tab shows per-tree measures: lifecycle, shards, live keys,
 tombstones, depth, shards splitting, views and view lag where the cluster
-reports them. When detail metrics are paused, the affected measures read
+reports them. While view lag is above zero the measures are re-read every two
+seconds, in place, until it reaches zero. When detail metrics are paused, the affected measures read
 "Paused". The measures count every key in the tree, so a caller whose grant
 covers only part of it (a prefix-scoped rule, for example) is told they need
 read access to the whole tree; the tree's summary line then omits its key
@@ -218,7 +219,8 @@ letters 50 at a time, with source, key, reason and clipped details. Both tabs
 show fixed sentences when the state API is unavailable, denied or faulted.
 
 The Tag indexes tab lists indexes covering the tree, their reconcile state and
-covered-tree count. Selecting an index with `?index=` shows covered trees, tags,
+covered-tree count. An index reconciling from another tab, session or caller is
+re-read every two seconds until it reads Idle. Selecting an index with `?index=` shows covered trees, tags,
 and, with `?tag=`, member keys. Member rows link only to trees the caller can
 see and say "A tree you cannot see" otherwise. The Reconcile action is shown
 only when the caller can administer the index; it opens a destructive
