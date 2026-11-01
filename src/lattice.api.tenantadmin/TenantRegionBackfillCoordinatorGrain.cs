@@ -1,6 +1,4 @@
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-using Orleans.Configuration;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Tenancy;
 using Orleans.Runtime;
@@ -21,16 +19,14 @@ internal sealed class TenantRegionBackfillCoordinatorGrain(
     IPersistentState<TenantRegionBackfillCoordinatorState> state,
     ITenantRegistry registry,
     TenantRegionBackfillService backfill,
-    IOptions<ClusterOptions> clusterOptions)
+    TenantLocalRegion localRegion)
     : CoordinatorGrain<TenantRegionBackfillCoordinatorGrain>(context, reminderRegistry, logger),
         ITenantRegionBackfillCoordinatorGrain
 {
     private const string ReminderName = "tenant-region-backfill-keepalive";
 
     private TenantId Tenant => TenantId.Parse(Context.GrainId.Key.ToString()!);
-    private string LocalRegionId => string.IsNullOrEmpty(clusterOptions.Value.ClusterId)
-        ? "default"
-        : clusterOptions.Value.ClusterId;
+    private string LocalRegionId => localRegion.RegionId;
 
     protected override string KeepaliveReminderName => ReminderName;
     protected override bool InProgress => state.State.InProgress;

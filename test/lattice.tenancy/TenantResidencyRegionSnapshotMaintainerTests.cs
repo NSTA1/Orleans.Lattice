@@ -1,8 +1,6 @@
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using NSubstitute;
-using Orleans.Configuration;
 using Orleans.Lattice.Testing;
 using Orleans.Streams;
 
@@ -74,7 +72,7 @@ public sealed class TenantResidencyRegionSnapshotMaintainerTests
         params ITenantRegionStatusChangeListener[] listeners) =>
         new(
             registry,
-            Options.Create(new ClusterOptions { ClusterId = regionId }),
+            TenantLocalRegion.ForRegion(regionId),
             listeners,
             TimeProvider.System,
             NullLogger<TenantResidencySnapshotMaintainer>.Instance);
@@ -84,14 +82,14 @@ public sealed class TenantResidencyRegionSnapshotMaintainerTests
         Assert.That(
             () => new TenantResidencySnapshotMaintainer(
                 null!,
-                Options.Create(new ClusterOptions()),
+                TenantLocalRegion.ForRegion("region-a"),
                 Array.Empty<ITenantRegionStatusChangeListener>(),
                 TimeProvider.System,
                 NullLogger<TenantResidencySnapshotMaintainer>.Instance),
             Throws.ArgumentNullException);
 
     [Test]
-    public void Ctor_null_cluster_options_throws() =>
+    public void Ctor_null_local_region_throws() =>
         Assert.That(
             () => new TenantResidencySnapshotMaintainer(
                 Substitute.For<ITenantRegistry>(),
@@ -106,7 +104,7 @@ public sealed class TenantResidencyRegionSnapshotMaintainerTests
         Assert.That(
             () => new TenantResidencySnapshotMaintainer(
                 Substitute.For<ITenantRegistry>(),
-                Options.Create(new ClusterOptions()),
+                TenantLocalRegion.ForRegion("region-a"),
                 null!,
                 TimeProvider.System,
                 NullLogger<TenantResidencySnapshotMaintainer>.Instance),
@@ -117,7 +115,7 @@ public sealed class TenantResidencyRegionSnapshotMaintainerTests
         Assert.That(
             () => new TenantResidencySnapshotMaintainer(
                 Substitute.For<ITenantRegistry>(),
-                Options.Create(new ClusterOptions()),
+                TenantLocalRegion.ForRegion("region-a"),
                 Array.Empty<ITenantRegionStatusChangeListener>(),
                 null!,
                 NullLogger<TenantResidencySnapshotMaintainer>.Instance),
@@ -128,7 +126,7 @@ public sealed class TenantResidencyRegionSnapshotMaintainerTests
         Assert.That(
             () => new TenantResidencySnapshotMaintainer(
                 Substitute.For<ITenantRegistry>(),
-                Options.Create(new ClusterOptions()),
+                TenantLocalRegion.ForRegion("region-a"),
                 Array.Empty<ITenantRegionStatusChangeListener>(),
                 TimeProvider.System,
                 null!),

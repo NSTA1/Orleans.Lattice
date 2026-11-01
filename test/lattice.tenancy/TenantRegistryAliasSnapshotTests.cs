@@ -22,7 +22,7 @@ public sealed class TenantRegistryAliasSnapshotTests
         registry.ListAsync(Arg.Any<CancellationToken>()).Returns(_ => Stream(record));
         var listener = Substitute.For<ITenantRegionStatusChangeListener>();
         var residency = new TenantResidencySnapshotMaintainer(registry,
-            Options.Create(new ClusterOptions { ClusterId = "west" }), [listener], TimeProvider.System,
+            TenantLocalRegion.ForRegion("west"), [listener], TimeProvider.System,
             NullLogger<TenantResidencySnapshotMaintainer>.Instance);
         await residency.EnsureWarmAsync();
         listener.ClearReceivedCalls();
