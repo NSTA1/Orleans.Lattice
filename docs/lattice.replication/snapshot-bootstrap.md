@@ -1373,7 +1373,11 @@ peer off the log ([forced gap](replication-drivers.md#forced-gap-a-peer-taken-of
 asks for a re-seed past an export epoch. The receiver records the
 request on its bootstrap coordinator before it starts (or joins) the
 bootstrap, and records it even with `AutoBootstrapOnFallOffLog` off,
-so an operator's bootstrap serves it. While the request is recorded
+so an operator's bootstrap serves it. The sender repeats the request on every push
+until it sees the completion, so a repeat at or below the request the
+running drain already consumed is not recorded again: re-recording it
+would withhold the completion and start another re-seed for ever
+(#5534). While the request is recorded
 the sender withholds every saga record, so a drain whose export
 postdates the request knows every pending bucket it holds from that
 sender was staged before the re-seed or re-staged by the export.

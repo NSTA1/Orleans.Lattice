@@ -309,7 +309,14 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
 
         var requests = state.State.ReseedAfterEpochs;
         var had = requests.TryGetValue(sourceClusterId, out var recorded);
-        if (!had || recorded < reseedAfterEpoch)
+        // The drain of the bootstrap in progress from this sender already served a
+        // request at or above this one: its export postdates the request and its
+        // stale-bucket clear has run, so the completion answers it (#5534).
+        var servedInFlight = state.State.InProgress
+            && string.Equals(state.State.SourceClusterId, sourceClusterId, StringComparison.Ordinal)
+            && state.State.DrainServedReseedEpoch is { } served
+            && reseedAfterEpoch <= served;
+        if (!servedInFlight && (!had || recorded < reseedAfterEpoch))
         {
             requests[sourceClusterId] = reseedAfterEpoch;
             try
@@ -405,6 +412,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         var prevUseShadowCopy = state.State.UseShadowCopy;
         var prevShadowCopyTreeId = state.State.ShadowCopyTreeId;
         var prevShadowCopyCutoverComplete = state.State.ShadowCopyCutoverComplete;
+        var prevDrainServedReseedEpoch = state.State.DrainServedReseedEpoch;
 
         state.State.InProgress = true;
         state.State.Phase = LatticeBootstrapState.RequestingSnapshot;
@@ -425,6 +433,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         state.State.UseShadowCopy = !state.State.ReadFenceArmed;
         state.State.ShadowCopyTreeId = null;
         state.State.ShadowCopyCutoverComplete = false;
+        state.State.DrainServedReseedEpoch = null;
         if (!state.State.ReadFenceArmed)
         {
             state.State.ImportApplied = false;
@@ -450,6 +459,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
             state.State.UseShadowCopy = prevUseShadowCopy;
             state.State.ShadowCopyTreeId = prevShadowCopyTreeId;
             state.State.ShadowCopyCutoverComplete = prevShadowCopyCutoverComplete;
+            state.State.DrainServedReseedEpoch = prevDrainServedReseedEpoch;
             throw;
         }
 
@@ -1417,8 +1427,11 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
 
         if (reseed)
         {
-            // Consumed; persisted with the phase transition below.
+            // Consumed; persisted with the phase transition below. Remembered so a
+            // push repeating this request before the handoff does not re-arm it
+            // (#5534).
             state.State.ReseedAfterEpochs.Remove(sourceClusterId);
+            state.State.DrainServedReseedEpoch = Math.Max(state.State.DrainServedReseedEpoch ?? long.MinValue, reseedAfter);
         }
 
         // The import settled cross-tree sub-sagas whose sibling trees may still
