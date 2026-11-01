@@ -61,4 +61,7 @@ public static class ApiReplicationTypeAliases
     /// <summary>Alias for <see cref="LatticeReplicationEngineNotHostedException"/>.</summary>
     public const string LatticeReplicationEngineNotHostedException = "oir.nh";
 
+    /// <summary>Alias for <see cref="ReplicationCapabilities"/>.</summary>
+    public const string ReplicationCapabilities = "oir.rc";
+
 }

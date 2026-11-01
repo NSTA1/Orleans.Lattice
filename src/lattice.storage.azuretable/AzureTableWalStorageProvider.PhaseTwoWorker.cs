@@ -48,6 +48,13 @@ namespace Orleans.Lattice.Storage.AzureTable;
 internal sealed class PhaseTwoWorker : IAsyncDisposable
 {
     private readonly Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task> _submit;
+
+    /// <summary>
+    /// Proves a manifest transaction that failed with 409 / 404 already committed
+    /// (see <see cref="AzureTableWalStorageProvider.IsIdempotentPhaseTwoReplayAsync"/>),
+    /// or <see langword="null"/> when a failed submit is never re-examined.
+    /// </summary>
+    private readonly Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task<bool>>? _verifyReplay;
     private readonly string _manifestPartitionKey;
     private readonly Channel<PhaseTwoCommit> _arrivals;
     private readonly Task _drainLoop;
@@ -97,6 +104,14 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     /// </para>
     /// </summary>
     private readonly SortedDictionary<long, long> _acceptedRanges = new();
+
+    /// <summary>
+    /// The completion of each batch in <see cref="_acceptedRanges"/>, keyed by
+    /// the same start offset and pruned and discarded with it, so
+    /// <see cref="WhenAcceptedCommitsSettledAsync"/> can wait for exactly the
+    /// batches that are accepted but not yet in the manifest.
+    /// </summary>
+    private readonly Dictionary<long, Task> _acceptedCommits = new();
 
     /// <summary>
     /// Cached <see cref="LatticeMetrics.TagTree"/> tag forwarded to
@@ -208,7 +223,13 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             pipelinePhaseTwoTag,
             coalescingWindow,
             commitTimeout,
-            abandonedSubmitSettleCap)
+            abandonedSubmitSettleCap,
+            async (actions, cancellationToken) =>
+            {
+                var table = await tableProvider(cancellationToken).ConfigureAwait(false);
+                return await AzureTableWalStorageProvider.IsIdempotentPhaseTwoReplayAsync(table, actions, cancellationToken)
+                    .ConfigureAwait(false);
+            })
     {
     }
 
@@ -231,14 +252,16 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
 
     /// <summary>
     /// Test-only constructor that lets a unit test choose an explicit
-    /// coalescing window in addition to substituting the submit seam.
+    /// coalescing window in addition to substituting the submit seam, and
+    /// optionally the replay proof a failed submit is re-examined with.
     /// </summary>
     internal PhaseTwoWorker(
         Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task> submit,
         string manifestPartitionKey,
         TimeSpan coalescingWindow,
         TimeSpan? commitTimeout = null,
-        TimeSpan? abandonedSubmitSettleCap = null)
+        TimeSpan? abandonedSubmitSettleCap = null,
+        Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task<bool>>? verifyReplay = null)
         : this(
             submit,
             manifestPartitionKey,
@@ -251,7 +274,8 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                 LatticeMetrics.TagPipelinePhaseTwo, false),
             coalescingWindow,
             commitTimeout,
-            abandonedSubmitSettleCap)
+            abandonedSubmitSettleCap,
+            verifyReplay)
     {
     }
 
@@ -263,9 +287,11 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         KeyValuePair<string, object?> pipelinePhaseTwoTag,
         TimeSpan coalescingWindow,
         TimeSpan? commitTimeout = null,
-        TimeSpan? abandonedSubmitSettleCap = null)
+        TimeSpan? abandonedSubmitSettleCap = null,
+        Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task<bool>>? verifyReplay = null)
     {
         _submit = submit;
+        _verifyReplay = verifyReplay;
         _manifestPartitionKey = manifestPartitionKey;
         _treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
         _tenantTag = LatticeTenantLabel.ForTree(treeId);
@@ -331,6 +357,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             // queued. A batch that failed to enqueue is faulted above
             // and must never be vouched for.
             _acceptedRanges[startOffset] = endOffsetInclusive;
+            _acceptedCommits[startOffset] = tcs.Task;
             OutstandingCommits.Enter();
         }
 
@@ -435,6 +462,22 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     }
 
     /// <summary>
+    /// Completes when every batch accepted for phase 2 at the moment of the
+    /// call has settled: committed to the manifest (so readers see it) or
+    /// faulted (the fault is rethrown). Batches accepted after the call are
+    /// not waited on, so a busy shard cannot starve the caller.
+    /// </summary>
+    internal Task WhenAcceptedCommitsSettledAsync()
+    {
+        lock (_acceptedGate)
+        {
+            return _acceptedCommits.Count == 0
+                ? Task.CompletedTask
+                : Task.WhenAll([.. _acceptedCommits.Values]);
+        }
+    }
+
+    /// <summary>
     /// Drops accepted ranges that phase 2 has now committed, so the
     /// set stays bounded by what is actually in flight.
     /// </summary>
@@ -453,6 +496,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                     break;
                 }
                 _acceptedRanges.Remove(start);
+                _acceptedCommits.Remove(start);
             }
         }
     }
@@ -485,6 +529,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         lock (_acceptedGate)
         {
             _acceptedRanges.Clear();
+            _acceptedCommits.Clear();
         }
     }
 
@@ -783,7 +828,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                     Task submitTask;
                     try
                     {
-                        submitTask = _submit(actions, submitCts.Token);
+                        submitTask = SubmitResolvingReplayAsync(actions, submitCts.Token);
                     }
                     catch
                     {
@@ -816,7 +861,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                 }
                 else
                 {
-                    await _submit(actions, cancellationToken).ConfigureAwait(false);
+                    await SubmitResolvingReplayAsync(actions, cancellationToken).ConfigureAwait(false);
                 }
             }
             finally
@@ -946,6 +991,50 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     /// that, by the settle cap, which cancels the call.
     /// </summary>
     internal WalShardWriteTracker AbandonedSubmits { get; } = new();
+
+    /// <summary>
+    /// Submits a manifest transaction, resolving a <c>409</c> / <c>404</c> as a success
+    /// when <see cref="_verifyReplay"/> proves the transaction already committed: the
+    /// SDK retry pipeline resent it after its first attempt landed and the response
+    /// was lost (issue #5520). The commit is durable, so failing it would fault every
+    /// commit in the group and the shard's appends with them. Anything not proven,
+    /// including a manifest row that records a different batch, rethrows the original
+    /// failure, so a genuine conflict still surfaces and nothing is overwritten.
+    /// </summary>
+    private async Task SubmitResolvingReplayAsync(IReadOnlyList<TableTransactionAction> actions, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _submit(actions, cancellationToken).ConfigureAwait(false);
+        }
+        catch (RequestFailedException rfe) when (_verifyReplay is not null && rfe.Status is 409 or 404)
+        {
+            bool isReplay;
+            try
+            {
+                isReplay = await _verifyReplay(actions, cancellationToken).ConfigureAwait(false);
+            }
+            catch (RequestFailedException)
+            {
+                isReplay = false;
+            }
+
+            if (!isReplay)
+            {
+                throw;
+            }
+
+            LatticeMetrics.ProviderIdempotentReplays.Add(
+                1,
+                new System.Diagnostics.TagList
+                {
+                    _treeTag,
+                    _shardTag,
+                    LatticeMetrics.PhasePhase2Tag,
+                    _tenantTag,
+                });
+        }
+    }
 
     /// <summary>
     /// Fences a submit the worker stopped waiting for: records it in

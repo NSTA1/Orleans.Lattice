@@ -10,7 +10,8 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Parity;
 /// too. A registration added to the reference silo without its journey counterpart fails
 /// here, so the journeys cannot quietly drift from what a deployment runs. The journey silo
 /// may register more (Apps, tenancy, replication status); only the Entra provider, the one
-/// CI cannot reach, is the disclosed exemption, and its calls are not in this pattern.
+/// CI cannot reach, is the disclosed exemption, and its calls are not in this pattern. The
+/// journey hosts' test-only diagnostic and fault endpoints are disclosed here too.
 /// </summary>
 [TestFixture]
 [Category("EndToEnd")]
@@ -19,6 +20,15 @@ public sealed class JourneySiloParityTests
     private static readonly Regex Registration = new(
         @"\.(?<call>(?:Add|Map|Use|Configure|Replicate)\w*(?:Lattice|Azure)\w*)\s*[<(]",
         RegexOptions.CultureInvariant);
+
+    /// <summary>The journey hosts' disclosed diagnostic and fault endpoints.</summary>
+    private static readonly string[] DisclosedDiagnosticSeams =
+    [
+        "GET /e2e/activation",  // which silo hosts an activation
+        "GET /e2e/activations", // the activations whose key contains a fragment
+        "POST /e2e/orphan",     // the state a crash mid-split leaves (#5359)
+        "POST /e2e/memory",     // the live heap after a forced collection, on silos and the Explorer head (#5475)
+    ];
 
     /// <summary>Every registration call of the reference silo appears in the journey silo.</summary>
     [Test]
@@ -67,6 +77,49 @@ public sealed class JourneySiloParityTests
             Is.EquivalentTo(new[] { "AddLatticeBackup", "AddLatticeDataApiGrpc", "UseAzureTableReminderService" }));
         Assert.That(Calls(string.Empty, "// AddLatticeBackup registers the engine\nsilo.AddEntraCredentialAuthenticator(o => {});"), Is.Empty);
     }
+
+    /// <summary>
+    /// The journey hosts' diagnostic and fault endpoints are a disclosed, test-only deviation
+    /// from the reference heads: each is listed in <see cref="DisclosedDiagnosticSeams"/>,
+    /// served under <c>/e2e</c> (on a silo, its internal port only; the Explorer head listens
+    /// on loopback only), and mapped only when
+    /// <c>LATTICE_E2E_FAULTS=1</c>, and no reference head serves any of them. A new seam fails
+    /// here until it is disclosed.
+    /// </summary>
+    [Test]
+    public void The_journey_hosts_diagnostic_seams_are_disclosed_and_mapped_only_with_the_fault_seams_on()
+    {
+        var hosts = Path.Combine(JourneyPaths.ProjectDirectory, "Hosts");
+        var faultEndpoints = File.ReadAllText(Path.Combine(hosts, "JourneySilo", "JourneyFaultEndpoints.cs"));
+        Assert.That(faultEndpoints, Does.Contain("public const string Prefix = \"/e2e\";"), "the silo's seams live under /e2e");
+        var seams = DiagnosticSeams(faultEndpoints)
+            .Concat(DiagnosticSeams(File.ReadAllText(Path.Combine(hosts, "Shared", "JourneyMemoryProbe.cs"))))
+            .ToArray();
+        Assert.That(seams, Is.EquivalentTo(DisclosedDiagnosticSeams), "every /e2e endpoint a journey host maps is disclosed here");
+
+        foreach (var (host, mapping) in new[] { ("JourneySilo", "MapJourneyFaultEndpoints"), ("JourneyExplorer", "MapJourneyMemoryProbe") })
+        {
+            var program = File.ReadAllText(Path.Combine(hosts, host, "Program.cs"));
+            var calls = Regex.Matches(program, @"\b" + mapping + @"\(\)").Count;
+            var guarded = Regex.Matches(program, @"if \(JourneyHostEnvironment\.FaultsEnabled\)\s*\{\s*app\." + mapping + @"\(\);\s*\}").Count;
+            Assert.That((calls, guarded), Is.EqualTo((1, 1)), $"{host} maps its diagnostic seams once, and only when the fault seams are enabled");
+        }
+
+        Assert.That(File.ReadAllText(Path.Combine(hosts, "JourneySilo", "Program.cs")),
+            Does.Contain("UseInternalPortEndpointGuard(httpPort, \"/metrics\", \"/lattice/scale\", JourneyFaultEndpoints.Prefix)"),
+            "the silo serves its /e2e seams on its internal port only");
+
+        foreach (var reference in new[] { "Silo", "Explorer" })
+        {
+            Assert.That(File.ReadAllText(Path.Combine(JourneyPaths.RepositoryRoot, "reference-architecture", "hosts", reference, "Program.cs")),
+                Does.Not.Contain("/e2e"), $"the reference {reference} serves no journey diagnostic seam");
+        }
+    }
+
+    private static IEnumerable<string> DiagnosticSeams(string source) =>
+        Regex.Matches(source, @"\.Map(?<verb>Get|Post|Put|Delete|Patch)\(\s*(?:Prefix\s*\+\s*""(?<suffix>[^""]+)""|(?<path>Path)\b)")
+            .Select(match => match.Groups["verb"].Value.ToUpperInvariant() + " "
+                + (match.Groups["path"].Success ? HostContract.JourneyMemoryProbe.Path : "/e2e" + match.Groups["suffix"].Value));
 
     private static HashSet<string> Calls(string path, string? source = null) =>
         Registration.Matches(source ?? File.ReadAllText(path))

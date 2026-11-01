@@ -39,6 +39,13 @@ internal sealed class ShellReplicationControlTransport(ShellTransportChannel cha
         CallAsync((object?)null, static (client, _, ct) => client.GetReplicationConfigAsync(ct), null, cancellationToken);
 
     /// <inheritdoc />
+    public Task<ReplicationCapabilities> ProbeCapabilitiesAsync(string treeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return CallAsync(treeId, static (client, state, ct) => client.ProbeCapabilitiesAsync(state, ct), null, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<ReplicationDecommissionPeerResult> DecommissionPeerAsync(string peerClusterId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(peerClusterId);
