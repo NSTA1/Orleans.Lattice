@@ -421,7 +421,7 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
             silo.Services.AddSingleton<ILatticeBackupSink>(new Orleans.Lattice.Samples.Explorer.SampleSharedBackupSink());
             silo.AddLatticeBackup();
             silo.AddLatticeBackupApi();
-            silo.AddLatticeReplication(options => options.ClusterId = "explorer-uitests");
+            silo.AddLatticeReplication(options => options.ClusterId = "explorer-uitests", enableRuntimeConfig: true);
             silo.AddLatticeReplicationApi();
             silo.AddLatticeReplicationStatusApi();
 
