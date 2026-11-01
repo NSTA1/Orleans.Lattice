@@ -288,4 +288,4 @@ the purge has removed its registry row, and refuses the write until then.
   reuse: `PurgeNowAsync` has no production caller, and `PurgePhysicalAsync` runs
   on a resized tree's derived copy id. A caller's own purge request does not
   shorten the wait; it finds the tail finalising and polls.
-  Production symbols: `TreeDeletionGrain.HoldsDeletionAsync`, `ShardRootGrain.PrepareForPurgedCopyAsync`, `TreeDeletionGrain.SettleRegistryEntryAsync`.
+  Production symbols: `TreeDeletionGrain.HoldsDeletionAsync`, `ShardRootGrain.PrepareForPurgedCopyAsync`, `TreeDeletionGrain.SettleRegistryEntryAsync`, `TreeDeletionGrain.BeginPurgeStateAsync`, `TreeDeletionGrain.PurgeNowAsync`, `TreeDeletionGrain.PurgePhysicalAsync`, `LatticeTreeAdmin.CreateTreeAsync`.

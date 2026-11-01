@@ -9,7 +9,7 @@ DETECTORS: PurgedShardWriteAdmissionIntegrationTests.A_write_to_a_tree_whose_pur
 SUMMARY: a purged shard admits a write while the purge holds the tree's entry
 
 --- FIND
-        if (await grainFactory.GetGrain<ITreeDeletionGrain>(routedLogical ?? TreeId).HoldsDeletionAsync())
+        if (await grainFactory.GetGrain<ITreeDeletionGrain>(heldId).HoldsDeletionAsync())
 --- REPLACE
         if (await Task.FromResult(false))
 --- END
