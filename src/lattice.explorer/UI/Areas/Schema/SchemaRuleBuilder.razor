@@ -607,7 +607,7 @@
         <h3 class="lt-schema-subtitle">The exact policy</h3>
         @if (ExactPolicy() is { } exact)
         {
-            <pre class="lt-schema-value lt-schema-json" aria-label="The exact policy, as JSON">@SchemaPolicyJson.Write(exact)</pre>
+            <pre class="lt-schema-value lt-schema-json" tabindex="0" aria-label="The exact policy, as JSON">@SchemaPolicyJson.Write(exact)</pre>
         }
         else
         {
