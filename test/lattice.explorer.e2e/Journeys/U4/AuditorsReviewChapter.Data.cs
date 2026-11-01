@@ -182,7 +182,8 @@ public sealed partial class AuditorsReviewChapter
         await SnapAsync(dana, "5", "tag-indexes-read-only", "Tag indexes: no Reconcile");
 
         await dana.Shell.GoToAreaAsync("data");
-        await Expect(dana.Shell.Content.GetByRole(Microsoft.Playwright.AriaRole.Link, new() { Name = Names.Trees.FactoryOrders, Exact = true })).ToBeVisibleAsync();
+        // The tree's own row links it, and so does the Source cell of each view over it.
+        await Expect(dana.Shell.Content.GetByRole(Microsoft.Playwright.AriaRole.Row, new() { NameRegex = new Regex("^" + Regex.Escape(Names.Trees.FactoryOrders) + " Tree ") })).ToBeVisibleAsync();
         await Expect(content.Locator("[data-lt-data-new-from-file]")).ToHaveCountAsync(0);
         await SnapAsync(dana, "5", "directory-read-only", "The Data directory: the trees she reads, and no New tree from file");
     }

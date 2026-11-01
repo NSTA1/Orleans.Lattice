@@ -25,7 +25,7 @@ public sealed partial class AuditorsReviewChapter
         var shell = dana.Shell;
         var content = shell.Content;
         await shell.GoToAreaAsync("schema");
-        var link = content.GetByRole(AriaRole.Link, new() { Name = Names.Trees.FactoryOrders, Exact = true });
+        var link = content.GetByRole(AriaRole.Link, new() { Name = Names.Trees.FactoryOrders, Exact = true }).First;
         await Expect(link).ToBeVisibleAsync();
         await link.ClickAsync();
         await Expect(shell.Heading).ToHaveTextAsync(Names.Trees.FactoryOrders);
