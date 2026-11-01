@@ -15,6 +15,16 @@ internal static class ClusterParts
     /// <summary>How long a structural operation (a reshard, a snapshot, an orphan pass) may take on the estate: coordinators step once per tick.</summary>
     public static readonly TimeSpan Structural = TimeSpan.FromMinutes(10);
 
+    /// <summary>
+    /// How long a confirmed operation's start call may take. The confirmation stays open, its
+    /// button disabled, until the page's start call returns; the call is bounded by the grain
+    /// response timeout (30 s by default), after which it fails and the page closes the dialog
+    /// with an error toast. So twice that is the most a start can legitimately keep it open.
+    /// </summary>
+    public static readonly TimeSpan StartCall = TimeSpan.FromSeconds(60);
+
+    private static readonly TimeSpan PromptClose = TimeSpan.FromSeconds(5);
+
     /// <summary>The value of the definition whose term reads <paramref name="term"/> exactly.</summary>
     /// <param name="shell">The shell.</param>
     /// <param name="term">The term.</param>
@@ -58,7 +68,13 @@ internal static class ClusterParts
     {
         var dialog = Confirmation(shell, title);
         await dialog.GetByRole(AriaRole.Button, new() { Name = confirmText, Exact = true }).ClickAsync();
-        await Expect(dialog).ToBeHiddenAsync();
+        var clicked = System.Diagnostics.Stopwatch.GetTimestamp();
+        await Expect(dialog).ToBeHiddenAsync(new() { Timeout = (float)StartCall.TotalMilliseconds });
+        var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(clicked);
+        if (elapsed > PromptClose)
+        {
+            TestContext.Progress.WriteLine($"SLOW '{title}' confirmation closed {elapsed.TotalSeconds:0.0} s after {confirmText}: the page's start call returned late");
+        }
     }
 
     /// <summary>A toast reading <paramref name="message"/>.</summary>
