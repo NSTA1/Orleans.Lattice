@@ -1,4 +1,5 @@
 using Orleans.Lattice.Api.State;
+using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
@@ -10,9 +11,10 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 /// </summary>
 /// <remarks>
 /// The schema facade has no "list governed trees" verb, so the tree list comes
-/// from the catalogue. Physical trees are filtered out: a resize or restore
-/// shadow appears in the registry beside the logical tree that aliases it, and the
-/// Schema area never shows a physical id. The remembered list is keyed on the
+/// from the catalogue. Physical shadows are filtered out: a resize, remediation or
+/// restore copy appears in the registry beside the logical tree that aliases it, and
+/// the Schema area never shows one (<see cref="TreeCatalogShadows"/>). A tree an
+/// operator gave a second name stays listed under its own id. The remembered list is keyed on the
 /// caller (<see cref="SchemaFacades.Caller"/>), so a sign-in, a sign-out, a new
 /// connection or a tenant switch reads the catalogue again.
 /// </remarks>
@@ -92,13 +94,10 @@ internal sealed class SchemaTreeCatalog(SchemaFacades facades, TimeProvider time
     {
         ArgumentNullException.ThrowIfNull(entries);
         var all = entries.ToList();
-        var shadows = all
-            .Where(entry => entry.IsAlias && entry.PhysicalTreeId is not null)
-            .Select(entry => entry.PhysicalTreeId!)
-            .ToHashSet(StringComparer.Ordinal);
+        var shadows = TreeCatalogShadows.Of(all);
 
         return all
-            .Where(entry => entry.RestoreShadowOfTreeId is null && !shadows.Contains(entry.TreeId))
+            .Where(entry => !shadows.Contains(entry.TreeId))
             .Select(entry => entry.TreeId)
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)

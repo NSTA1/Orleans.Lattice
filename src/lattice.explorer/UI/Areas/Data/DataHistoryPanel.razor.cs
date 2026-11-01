@@ -270,7 +270,7 @@ public partial class DataHistoryPanel : IDisposable
             _tail ??= new HistoryLiveTail(key);
             foreach (var record in response.Revisions)
             {
-                _durable.Add(HistoryRevisionRow.From(record));
+                _durable.Add(DataValueEnvelope.Revision(record));
                 _tail.MarkSeen(record.Hlc);
             }
 

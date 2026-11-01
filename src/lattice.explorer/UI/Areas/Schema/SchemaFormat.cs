@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Globalization;
 using System.Text.Unicode;
+using Orleans.Lattice.Explorer.UI.Areas.Data;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Schema;
 
@@ -140,6 +141,9 @@ internal static class SchemaFormat
             return string.Empty;
         }
 
+        // A dead letter or a remediation's offending value is the stored form, so a
+        // versioned value carries its envelope; the body is what a policy judged (#5583).
+        bytes = DataValueEnvelope.Body(bytes);
         var text = TryDecode(bytes, truncated, out var decoded) ? decoded : Convert.ToHexString(bytes);
         return text.Length > PreviewCharacters ? string.Concat(LtTextCut.Prefix(text, PreviewCharacters), "...") : text;
     }
