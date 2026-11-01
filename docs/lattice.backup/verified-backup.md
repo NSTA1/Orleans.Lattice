@@ -116,6 +116,15 @@ not to hold in production:
   retention pass in between could prune the member, and the stamp then listed a
   backup whose data was gone. A member is now listed only by the stamp. Found by
   the specification's confirmation review.
+- **A full backup could be skipped on a scope with two schedules (#5531,
+  fixed).** Once schedule ticks were coalesced so captures no longer queued, a
+  full-backup tick that fired while an incremental cycle ran was dropped. A full
+  tick now waits for the running incremental cycle and then runs. Found by the
+  specification's confirmation review; tick timing is outside the model.
+- **An incremental backup recorded the tree's own writes with a different
+  origin from a full backup (#5529, fixed).** A restored chain therefore gave the
+  same rows two origins. Every capture now records an own row's origin the same
+  way. Found by the specification's confirmation review.
 
 ## Which parts run in production code
 

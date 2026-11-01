@@ -45,7 +45,8 @@ Every capture path that can run beside a pass for the same scope is one capture
 slot: the scheduler's own, the backup API's (which may name any base), and
 another silo's; a full capture may also be a member of a multi-tree backup set,
 whose catalog row waits for the set's membership stamp. The model found #5357,
-and its reviews found #5412, #5418 and #5449; it checks every fix. See
+and its reviews found #5412, #5418, #5449, #5529, #5531 and #5532 (and #5530,
+fixed in the anti-entropy digest); it checks every fix it models. See
 [`RefinementRetention.md`](RefinementRetention.md).
 
 ## Properties checked
@@ -179,8 +180,28 @@ refinement note's rows:
   a member nothing will stamp is registered unstamped. The module models the
   stamp (`Stamp`); `ListedRestorableStampReregisters` reproduces production
   before the fix, and its code analogue turns the fix's regression test red.
+- **#5531** (`BackupRetention` gap, fixed): once schedule ticks were
+  coalesced, a full-backup tick that fired while an incremental cycle ran was
+  dropped rather than coalesced, so a scope with both schedules could skip its
+  full backup. Found by the module's confirmation review (#5352). Coalescing is
+  now per kind: such a full tick runs its cycle once the incremental one ends.
+  Tick cadence is outside the model (its gap register says so); the fix is
+  pinned by regression tests shown red in CI before it.
+- **#5529** (`BackupProvenance`, fixed): an incremental capture kept the local
+  cluster id as the origin of the tree's own writes, while a full capture and
+  the live tree store an own row's origin as null, so a restored chain gave own
+  rows two origins. Found by the module's confirmation review (#5352). The
+  incremental collector now goes through the same origin seam
+  (`LatticeRowOrigin.FromRecord`); the module already specifies an own row as
+  unstamped, and a capture-level regression test pins the call site.
+- **#5532** (fixed, pinned): on a replicated tree a replayed own saga prepare
+  took the cross-cluster preserve-HLC commit branch instead of re-stamping like
+  the foreground saga, because its rows carried the local cluster id as their
+  origin. The origin seam above removed the cause; found by the module's
+  confirmation review (#5352), and now pinned by a regression test shown red in
+  CI against the earlier behaviour. It lies outside the backup modules.
 
-All nine fixes have landed, so the reproducing mutations now stand as
+All twelve fixes have landed, so the reproducing mutations now stand as
 regression checks: each must keep firing, and each has a code analogue that turns
 the fix's regression tests red.
 ## Saga abstraction
