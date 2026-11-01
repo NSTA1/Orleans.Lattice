@@ -274,7 +274,7 @@ public sealed class A6BackupPostureJourney : JourneyChapter
                 await ContractWait.UntilAsync("Priya's restored grant", async () => (await priyaBackup.ProbeCapabilitiesAsync(orders)).CanCapture);
                 await priyaBackups.BackToCatalogueAsync();
                 await priyaBackups.GoToAsync("Schedules", "Schedules");
-                await priyaBackups.ShowSchedulesAsync(Names.Trees.FactoryOrders);
+                await priyaBackups.ShowSchedulesOnceGrantedAsync(Names.Trees.FactoryOrders, TimeSpan.FromMinutes(2));
                 await priyaBackups.ExpectSchedulesOfferedAsync();
                 await priya.SubstepAsync(Recorder, step, "priya-grant-restored", "The grant restored: the server lets Priya read and schedule factory-orders' backups again");
             }

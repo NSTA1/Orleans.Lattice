@@ -261,6 +261,47 @@ internal sealed class BackupsAreaPage(PersonaSession session)
     /// <param name="tree">The tree.</param>
     public async Task ShowSchedulesAsync(string tree)
     {
+        await OpenSchedulesOfAsync(tree);
+        await Expect(ScheduleRow("Full")).ToBeVisibleAsync(new() { Timeout = LoadTimeout });
+    }
+
+    /// <summary>
+    /// Shows a tree's schedules just after a grant to read them was restored, reloading until a
+    /// silo that serves the read has the restored policy: the policy snapshot is eventually
+    /// consistent per silo, so a read can still be refused for a moment after the grant.
+    /// </summary>
+    /// <param name="tree">The tree.</param>
+    /// <param name="timeout">How long the restored grant is given to reach every silo.</param>
+    public async Task ShowSchedulesOnceGrantedAsync(string tree, TimeSpan timeout)
+    {
+        await OpenSchedulesOfAsync(tree);
+        var full = ScheduleRow("Full");
+        var refused = Content.GetByRole(AriaRole.Alert);
+        var started = DateTimeOffset.UtcNow;
+        while (true)
+        {
+            await Expect(full.Or(refused).First).ToBeVisibleAsync(new() { Timeout = LoadTimeout });
+            if (await full.IsVisibleAsync())
+            {
+                return;
+            }
+
+            var reason = (await refused.First.InnerTextAsync()).Trim();
+            var elapsed = DateTimeOffset.UtcNow - started;
+            if (elapsed > timeout)
+            {
+                Assert.Fail($"The schedules of {tree} were still refused {timeout} after the grant was restored: '{reason}'.");
+            }
+
+            TestContext.Progress.WriteLine($"RETRY schedules of {tree} after a failed attempt of {elapsed.TotalSeconds:0} s: {reason}");
+            await Task.Delay(TimeSpan.FromSeconds(5));
+            await Page.ReloadAsync();
+            await Expect(Content.Locator("h2").Filter(new() { HasText = "Schedules of" })).ToContainTextAsync(tree, new() { Timeout = LoadTimeout });
+        }
+    }
+
+    private async Task OpenSchedulesOfAsync(string tree)
+    {
         var treeBox = Content.GetByRole(AriaRole.Combobox, new() { Name = "Tree", Exact = true });
         await treeBox.FillAsync(tree);
         await Expect(treeBox).ToHaveValueAsync(tree);
@@ -268,7 +309,6 @@ internal sealed class BackupsAreaPage(PersonaSession session)
         await Content.GetByRole(AriaRole.Button, new() { Name = "Show schedules", Exact = true }).ClickAsync();
         await Expect(Page).ToHaveURLAsync(new Regex("/backups/schedules\\?tree=" + Regex.Escape(Uri.EscapeDataString(tree)) + "$"), new() { Timeout = LoadTimeout });
         await Expect(Content.Locator("h2").Filter(new() { HasText = "Schedules of" })).ToContainTextAsync(tree, new() { Timeout = LoadTimeout });
-        await Expect(ScheduleRow("Full")).ToBeVisibleAsync(new() { Timeout = LoadTimeout });
         Coverage.Hit("query:backups.tree");
     }
 
