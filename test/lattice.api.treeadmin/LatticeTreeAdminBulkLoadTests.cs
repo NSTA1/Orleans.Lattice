@@ -333,6 +333,38 @@ public sealed partial class LatticeTreeAdminBulkLoadTests
     }
 
     [Test]
+    public async Task CommitBulkLoadAsync_drops_the_cached_diagnostics_so_statistics_read_the_load()
+    {
+        // Issue #5460: a statistics read made while the chunks landed caches the
+        // pre-commit count for DiagnosticsCacheTtl. Commit drops it, so a tree
+        // statistics read straight after commit samples the loaded shards.
+        var factory = Substitute.For<IGrainFactory>();
+        var lattice = Wire(factory);
+        lattice.CountAsync(Arg.Any<CancellationToken>()).Returns(42);
+        var stats = Substitute.For<ILatticeStats>();
+        factory.GetGrain<ILatticeStats>(Tree).Returns(stats);
+        var facade = Create(factory);
+
+        await facade.CommitBulkLoadAsync(Tree, Op);
+
+        await stats.Received(1).InvalidateAsync();
+    }
+
+    [Test]
+    public void CommitBulkLoadAsync_denied_by_gate_does_not_touch_the_diagnostics_cache()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        Wire(factory);
+        var stats = Substitute.For<ILatticeStats>();
+        factory.GetGrain<ILatticeStats>(Tree).Returns(stats);
+        var facade = Create(factory, allow: false);
+
+        Assert.That(async () => await facade.CommitBulkLoadAsync(Tree, Op),
+            Throws.TypeOf<LatticeAuthorizationDeniedException>());
+        stats.DidNotReceive().InvalidateAsync();
+    }
+
+    [Test]
     public void CommitBulkLoadAsync_denied_by_gate_throws()
     {
         var factory = Substitute.For<IGrainFactory>();

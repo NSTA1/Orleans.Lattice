@@ -42,6 +42,8 @@ public readonly record struct WalMoveOptions
     /// <summary>
     /// When <see langword="true"/> (the default), the move verifies the target
     /// tail matches the copied source range before flipping the placement pin.
+    /// With it off, a copy that cannot read the source up to the tail it
+    /// quiesced still aborts before the flip.
     /// </summary>
     [Id(2)] public bool VerifyAfterCopy { get; init; }
 

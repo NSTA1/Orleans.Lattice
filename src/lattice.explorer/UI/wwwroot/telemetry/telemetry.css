@@ -7,8 +7,8 @@
    marker paints only the point a reader is pointing at or has selected, and
    the current board and choice - each also carried by weight and a ring.
 
-   No width query lives here: the compact band is read from the layout's
-   lt-shell--compact class. Nothing animates, so reduced motion is honoured by
+   The compact band queries the Shell root's lt-viewport container at the
+   breakpoint layer's declared width. Nothing animates, so reduced motion is honoured by
    construction.
    ========================================================================== */
 
@@ -340,14 +340,18 @@
   font-size: var(--lt-text-sm);
 }
 
-/* 5. Compact band - the layout marks its root lt-shell--compact */
+/* 5. Compact band - below the breakpoint layer's small width */
 
-.lt-shell--compact .lt-telemetry-choice {
-  display: flex;
+@container lt-viewport (width < 768px) {
+  .lt-shell .lt-telemetry-choice {
+    display: flex;
+  }
 }
 
-.lt-shell--compact .lt-telemetry-legend__value {
-  margin-left: 0;
+@container lt-viewport (width < 768px) {
+  .lt-shell .lt-telemetry-legend__value {
+    margin-left: 0;
+  }
 }
 
 /* 6. Forced colours - the platform's palette replaces ours; keep every cue */

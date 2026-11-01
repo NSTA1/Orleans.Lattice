@@ -56,4 +56,10 @@ public static class GrpcReplicationTypeAliases
 
     /// <summary>Alias for <see cref="AuthSchemeAdvertisement"/>.</summary>
     public const string AuthSchemeAdvertisement = "oirg.asadv";
+
+    /// <summary>Alias for <see cref="ReplicationProbeCapabilitiesRequestMessage"/>.</summary>
+    public const string ReplicationProbeCapabilitiesRequestMessage = "oirg.pcreq";
+
+    /// <summary>Alias for <see cref="ReplicationCapabilitiesResponse"/>.</summary>
+    public const string ReplicationCapabilitiesResponse = "oirg.pcresp";
 }
