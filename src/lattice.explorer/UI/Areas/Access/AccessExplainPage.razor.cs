@@ -167,6 +167,16 @@ public partial class AccessExplainPage : IDisposable
         };
     }
 
+    /// <summary>
+    /// The flag the Tree field shows for a tree the cluster does not list yet. Rules may
+    /// govern a tree before it is created, so the question is accepted and asked as typed,
+    /// worded like <see cref="AccessRuleFormat.MissingTreeMessage"/>.
+    /// </summary>
+    /// <param name="tree">The typed tree id.</param>
+    /// <returns>The flag.</returns>
+    internal static string MissingTreeMessage(string tree) =>
+        $"No tree named {tree} exists yet. The answer is what the rules give it once it is created.";
+
     private Task ExplainAsync() => RunExplainAsync(updateAddress: true);
 
     private Task EffectivePermissionsAsync() => RunPermissionsAsync(updateAddress: true);
