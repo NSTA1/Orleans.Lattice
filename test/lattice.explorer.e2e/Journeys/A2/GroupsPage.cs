@@ -33,12 +33,24 @@ internal sealed class GroupsPage(PersonaSession session)
     /// <summary>The member picker's field error.</summary>
     public ILocator MemberError => Content.Locator("[data-lt-subject-picker] .lt-field__error");
 
-    /// <summary>Opens the group catalogue from the Access area's own navigation and waits for its first page.</summary>
+    /// <summary>
+    /// Opens the group catalogue from the Access area's own navigation and waits for its first
+    /// page. The spine opens Access at the active tenant, where Groups only says groups belong
+    /// to the whole cluster, so olivia follows its link to the cluster's Groups page.
+    /// </summary>
     public async Task OpenAsync()
     {
         await Content.GetByRole(AriaRole.Navigation, new() { Name = "Access" }).GetByRole(AriaRole.Link, new() { Name = "Groups", Exact = true }).ClickAsync();
         await Expect(Page).ToHaveURLAsync(new Regex("/access/groups$"));
-        await Expect(Count).ToBeVisibleAsync();
+        if (new Regex("/t/[^/]+/access/groups$").IsMatch(Page.Url))
+        {
+            var caveat = Content.Locator("[data-lt-cluster-wide-groups]");
+            await Expect(caveat).ToContainTextAsync("Groups belong to the whole cluster");
+            await caveat.GetByRole(AriaRole.Link, new() { Name = "the cluster's Groups page", Exact = true }).ClickAsync();
+            await Expect(Page).ToHaveURLAsync(new Regex(@"://[^/]+/access/groups$"));
+        }
+
+        await Expect(Count).ToBeVisibleAsync(new() { Timeout = 60_000 });
         Coverage.Hit("route:/access/groups");
         Coverage.Hit("subroute:access/groups");
     }
