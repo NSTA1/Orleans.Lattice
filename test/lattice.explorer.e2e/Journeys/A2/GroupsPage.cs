@@ -24,8 +24,8 @@ internal sealed class GroupsPage(PersonaSession session)
     /// <summary>The New group dialog.</summary>
     public ILocator CreateDialog => Page.GetByRole(AriaRole.Dialog, new() { Name = "New group" });
 
-    /// <summary>The group page's direct members.</summary>
-    public ILocator Members => Content.Locator("section[aria-labelledby=lt-access-group-members]").Locator(".lt-table-frame, .lt-table-list");
+    /// <summary>The group page's direct members: the table, or its empty state for a group with none.</summary>
+    public ILocator Members => Content.Locator("section[aria-labelledby=lt-access-group-members]").Locator(".lt-table-frame, .lt-table-list, .lt-table-empty");
 
     /// <summary>The member picker's id field.</summary>
     public ILocator MemberBox => Content.GetByRole(AriaRole.Combobox, new() { Name = "Member", Exact = true });
