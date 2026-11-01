@@ -69,6 +69,9 @@ internal sealed class DataTreePage(PersonaSession session)
     /// <summary>The key links of the rows on the page.</summary>
     public ILocator KeyLinks => KeysTable.Locator("tbody tr.lt-table__row a.lt-data-key");
 
+    /// <summary>What the Keys tab shows in place of the table when a scope holds no keys.</summary>
+    public ILocator EmptyKeys => Content.Locator(".lt-table-empty .lt-table__empty");
+
     /// <summary>The pager's Next page control.</summary>
     public ILocator NextPage => Content.Locator(".lt-data-pager").GetByRole(AriaRole.Button, new() { Name = "Next page", Exact = true });
 
@@ -110,7 +113,7 @@ internal sealed class DataTreePage(PersonaSession session)
         }
         else
         {
-            await Expect(KeysTable).ToContainTextAsync("No key starts with this prefix.");
+            await Expect(EmptyKeys).ToContainTextAsync("No key starts with this prefix.");
         }
 
         Coverage.Hit("query:shell.prefix");

@@ -69,7 +69,7 @@ public sealed partial class DataStewardJourney
         await Expect(import.Dialog).ToHaveCountAsync(0);
         if (committed == 0)
         {
-            await Expect(_tree.KeysTable).ToContainTextAsync("This tree holds no keys yet.", new() { Timeout = 30_000 });
+            await Expect(_tree.EmptyKeys).ToContainTextAsync("This tree holds no keys yet.", new() { Timeout = 30_000 });
         }
         else
         {
