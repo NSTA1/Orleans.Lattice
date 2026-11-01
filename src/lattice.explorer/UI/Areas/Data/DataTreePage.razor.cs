@@ -11,7 +11,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 /// address names, resolved against the caller's directory (so an address the
 /// caller cannot reach reads as not found), with its keys, history, metrics,
 /// dead letters, tag indexes and views as tabs. It owns the visible control of
-/// the <c>data.export</c> command, drawn only for a caller the export gate admits.
+/// the <c>data.export</c> command, drawn only for a caller the export gate admits,
+/// and the tree's Delete tree... and Recover tree... controls for a caller who may
+/// manage its lifecycle (issue #5477).
 /// </summary>
 public partial class DataTreePage : IDisposable
 {
@@ -110,6 +112,7 @@ public partial class DataTreePage : IDisposable
         _exportOpen = false;
         _importRights = DataImportRights.None;
         _importOpen = false;
+        ResetLifecycle();
         try
         {
             var tree = await Directory.ResolveAsync(target, token);
@@ -142,6 +145,7 @@ public partial class DataTreePage : IDisposable
         _ = OfferViewCommandAsync(_tree, token);
         _ = LoadExportGateAsync(_tree);
         _ = LoadImportGateAsync(_tree);
+        _ = LoadLifecycleGateAsync(_tree);
     }
 
     /// <summary>

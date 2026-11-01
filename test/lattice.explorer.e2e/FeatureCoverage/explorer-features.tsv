@@ -326,9 +326,9 @@ use-case:data/alias-resolution	use-case	docs/lattice.explorer/areas.md#data	An a
 use-case:data/app-column	use-case	docs/lattice.explorer/areas.md#data	The directory's App column names the app that owns a tree	U3
 use-case:data/app-data-live	use-case	docs/lattice.explorer/areas.md#data	An app's data arrives live in Data	U3
 use-case:data/cursor-expiry	use-case	docs/lattice.explorer/areas.md#data	An expired scan cursor recovers with Restart from the first page	U1
-use-case:data/dead-letters-paging	use-case	docs/lattice.explorer/areas.md#data	Dead letters list diverted writes; Load more dead letters pages through them	U1
+use-case:data/dead-letters-paging	use-case	docs/lattice.explorer/areas.md#data	Dead letters list diverted writes; Load more dead letters pages through them	C1
 use-case:data/directory-filters	use-case	docs/lattice.explorer/areas.md#data	The Data directory's text, kind and shared filters, and Refresh	U1
-use-case:data/edit-diverted	use-case	docs/lattice.explorer/areas.md#creating-editing-and-deleting-an-entry	An invalid edit saved anyway is diverted to dead letters, and the UI says so	U1
+use-case:data/edit-refused	use-case	docs/lattice.explorer/areas.md#creating-editing-and-deleting-an-entry	An invalid edit saved anyway is refused with the policy's reason, and nothing is stored or dead-lettered	U1
 use-case:data/entry-edit-binary-and-raw	use-case	docs/lattice.explorer/areas.md#creating-editing-and-deleting-an-entry	Replace a binary value, and edit a value in raw UTF-8 mode	U1
 use-case:data/entry-edit-conflict	use-case	docs/lattice.explorer/areas.md#creating-editing-and-deleting-an-entry	A concurrent change on save shows the newer value and offers reload	U1
 use-case:data/entry-edit-preview	use-case	docs/lattice.explorer/areas.md#creating-editing-and-deleting-an-entry	Edit an entry with a schema preview, and save	U1
@@ -348,6 +348,7 @@ use-case:data/metrics	use-case	docs/lattice.explorer/areas.md#data	Metrics: per-
 use-case:data/snapshot-scan	use-case	docs/lattice.explorer/areas.md#data	Switch the keys panel to a snapshot scan and back	U1
 use-case:data/tag-index-keys	use-case	docs/lattice.explorer/areas.md#data	A tag index's keys for one tag, and Load more keys	U1
 use-case:data/tag-index-reconcile	use-case	docs/lattice.explorer/areas.md#data	Reconcile a tag index, and follow it to its end	A3
+use-case:data/tree-delete-recover	use-case	docs/lattice.explorer/areas.md#deleting-and-recovering-a-tree	Delete a tree from its Data page, and recover it, with tree lifecycle but no Cluster area (#5477)	U1
 use-case:data/view-create	use-case	docs/lattice.explorer/areas.md#data	Create a view; it reaches Ready and its projection is browsable	A3
 use-case:data/view-rebuild-stop-drop	use-case	docs/lattice.explorer/areas.md#data	Rebuild a view, stop the rebuild, and drop the view	C3
 use-case:data/view-reconcile	use-case	docs/lattice.explorer/areas.md#data	Reconcile a view	U1
