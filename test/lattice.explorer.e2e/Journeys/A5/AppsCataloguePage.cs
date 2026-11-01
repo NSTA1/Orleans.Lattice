@@ -30,7 +30,7 @@ internal sealed class AppsCataloguePage(ShellPage shell)
         await shell.GotoAsync("/apps");
         await shell.ExpectHeadingAsync("Apps");
         await Expect(Content.GetByRole(AriaRole.Heading, new() { Name = "No apps yet", Exact = true })).ToBeVisibleAsync();
-        await Expect(Content).ToContainTextAsync("No app is installed yet. Install one from the catalogue.");
+        await Expect(Content).ToContainTextAsync(AppReviewFlowPage.Tenanted("No app is installed", " yet. Install one from the catalogue."));
         Coverage.Hit("route:/apps");
         Coverage.Hit("use-case:apps/area");
     }

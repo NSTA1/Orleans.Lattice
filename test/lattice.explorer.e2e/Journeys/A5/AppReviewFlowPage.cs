@@ -91,6 +91,21 @@ internal sealed class AppReviewFlowPage(ShellPage shell)
     /// <param name="timeout">How long to wait, in milliseconds.</param>
     public Task ExpectStatusAsync(string text, float timeout = 90_000) => Expect(Status).ToContainTextAsync(text, new() { Timeout = timeout });
 
+    /// <summary>Waits for the flow's status to match <paramref name="pattern"/>.</summary>
+    /// <param name="pattern">The status pattern, typically from <see cref="Tenanted"/>.</param>
+    /// <param name="timeout">How long to wait, in milliseconds.</param>
+    public Task ExpectStatusAsync(Regex pattern, float timeout = 90_000) => Expect(Status).ToContainTextAsync(pattern, new() { Timeout = timeout });
+
+    /// <summary>
+    /// A sentence the Apps area words with the tenant it acts in where one is addressed
+    /// ("is installed in tenant default and not enabled yet"): <paramref name="before"/>, the
+    /// optional tenant phrase, then <paramref name="after"/>.
+    /// </summary>
+    /// <param name="before">The text before the tenant phrase.</param>
+    /// <param name="after">The text after it.</param>
+    public static Regex Tenanted(string before, string after) =>
+        new(Regex.Escape(before) + @"(?: in tenant [^\s.,;]+)?" + Regex.Escape(after));
+
     /// <summary>
     /// How long an enable may take to report: the flow follows a pending enable for up to five
     /// minutes (AppLifecycleFollow.Limit) before it gives up, so wait a little past that.

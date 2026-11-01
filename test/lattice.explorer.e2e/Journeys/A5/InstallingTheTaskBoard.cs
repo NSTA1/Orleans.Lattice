@@ -119,12 +119,12 @@ public sealed class InstallingTheTaskBoard : JourneyChapter
             await run.ShotAsync("confirm-ceiling", "Confirm the ceiling: read, range read, write and delete, exactly what v1 requests; it would activate", fullPage: true);
 
             await review.ClickAsync("Install v1.0.0");
-            await review.ExpectStatusAsync("Task board v1.0.0 is installed and not enabled yet.");
+            await review.ExpectStatusAsync(AppReviewFlowPage.Tenanted("Task board v1.0.0 is installed", " and not enabled yet."));
             await Expect(review.AppAddress).ToHaveTextAsync(new System.Text.RegularExpressions.Regex("/apps/task-board$"));
             await run.ShotAsync("installed", "Installed v1.0.0, not enabled yet; its page is /apps/task-board");
 
             await review.ClickAsync("Enable now");
-            await review.ExpectStatusAsync("Task board v1.0.0 is enabled.", AppReviewFlowPage.EnableTimeout);
+            await review.ExpectStatusAsync(AppReviewFlowPage.Tenanted("Task board v1.0.0 is enabled", "."), AppReviewFlowPage.EnableTimeout);
             await run.ShotAsync("enabled", "Enable now: Task board v1.0.0 is enabled");
             Coverage.Hit("use-case:apps/install");
         });
@@ -161,7 +161,7 @@ public sealed class InstallingTheTaskBoard : JourneyChapter
             await run.ShotAsync("group-nested", "task-board-viewers nests auditors and schema-owners");
 
             await review.OpenAsync(Apps.SamplesSource, Apps.TaskBoard, TaskBoard);
-            await Expect(review.Lede).ToContainTextAsync("v1.0.0 is installed, from ");
+            await Expect(review.Lede).ToContainTextAsync(AppReviewFlowPage.Tenanted("v1.0.0 is installed", ", from "));
             await review.ClickAsync("Change role bindings...");
             await review.ExpectBindingStepAsync("Change role bindings");
             await Expect(review.GroupFor(Apps.ViewerRole)).ToHaveValueAsync(Groups.Auditors);
@@ -223,7 +223,7 @@ public sealed class InstallingTheTaskBoard : JourneyChapter
             await run.ShotAsync("updates", "vNext appears: the Updates filter lists the task board, 1.1.0 from samples, where 1.0.0 came from");
 
             await apps.OpenRowActionAsync("Upgrade", TaskBoard, Apps.SamplesSource);
-            await Expect(review.Lede).ToContainTextAsync("v1.0.0 is installed; ");
+            await Expect(review.Lede).ToContainTextAsync(AppReviewFlowPage.Tenanted("v1.0.0 is installed", "; "));
             await Expect(review.Lede).ToContainTextAsync("offers v1.1.0.");
             await Expect(review.UpgradeDiff).ToContainTextAsync($"Changes what the role {Apps.EditorRole} may do");
             await Expect(review.UpgradeDiff).ToContainTextAsync("Needs the ceiling to allow it to range delete");
@@ -252,7 +252,7 @@ public sealed class InstallingTheTaskBoard : JourneyChapter
                 await review.ClickAsync("Enable now");
             }
 
-            await review.ExpectStatusAsync($"Task board v{Apps.TaskBoardNextVersion} is enabled.", AppReviewFlowPage.EnableTimeout);
+            await review.ExpectStatusAsync(AppReviewFlowPage.Tenanted($"Task board v{Apps.TaskBoardNextVersion} is enabled", "."), AppReviewFlowPage.EnableTimeout);
             await run.ShotAsync("upgraded", "Upgraded: Task board v1.1.0 is enabled");
             Coverage.Hit("use-case:apps/upgrade-and-re-consent");
         });
