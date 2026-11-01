@@ -54,6 +54,7 @@ internal sealed partial class LatticeBackupControl : ILatticeBackupControl, ILat
     private readonly ITenantContextResolver _tenantResolver;
     private readonly LatticeApiBackupOptions _options;
     private readonly ILatticeViewFactory? _viewFactory;
+    private readonly IOptionsMonitor<LatticeBackupHealthOptions>? _healthOptions;
 
     /// <summary>Initializes a new <see cref="LatticeBackupControl"/>.</summary>
     /// <param name="capture">The full-capture engine. Must not be <c>null</c>.</param>
@@ -133,6 +134,7 @@ internal sealed partial class LatticeBackupControl : ILatticeBackupControl, ILat
         _tenantResolver = tenantResolver;
         _options = options.Value;
         _viewFactory = services.GetService<ILatticeViewFactory>();
+        _healthOptions = services.GetService<IOptionsMonitor<LatticeBackupHealthOptions>>();
     }
 
     /// <inheritdoc />
@@ -653,6 +655,41 @@ internal sealed partial class LatticeBackupControl : ILatticeBackupControl, ILat
         // Manifest-derived scope: already effective, never re-composed.
         await _authorizer.AuthorizeBackupAsync(manifest.Scope, cancellationToken).ConfigureAwait(false);
         await _healthStore.SetConfigAsync(backupId, config, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<BackupHealthConfig?> GetBackupHealthConfigAsync(
+        string backupId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+
+        var manifest = await _catalog.GetAsync(backupId, cancellationToken).ConfigureAwait(false);
+        if (manifest is null)
+        {
+            return null;
+        }
+
+        // Manifest-derived scope: already effective, never re-composed. The same
+        // grant as the configuration write.
+        await _authorizer.AuthorizeBackupAsync(manifest.Scope, cancellationToken).ConfigureAwait(false);
+        return await _healthStore.GetConfigAsync(backupId, cancellationToken).ConfigureAwait(false)
+            ?? DefaultHealthConfig();
+    }
+
+    /// <summary>
+    /// The configuration a backup with no stored override is monitored under,
+    /// mirroring the monitor's own fallback: enrolled whenever the cluster-wide
+    /// sweep runs, re-verified at the default interval, which the sweep never
+    /// undercuts (it is clamped up to <see cref="LatticeBackupHealthOptions.MinimumInterval"/>).
+    /// </summary>
+    private BackupHealthConfig DefaultHealthConfig()
+    {
+        var options = _healthOptions?.CurrentValue ?? new LatticeBackupHealthOptions();
+        var interval = options.DefaultInterval < LatticeBackupHealthOptions.MinimumInterval
+            ? LatticeBackupHealthOptions.MinimumInterval
+            : options.DefaultInterval;
+        return new BackupHealthConfig(options.Enabled, interval);
     }
 
     /// <summary>
