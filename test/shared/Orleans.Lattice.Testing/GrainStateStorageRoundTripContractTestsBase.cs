@@ -165,8 +165,18 @@ public abstract class GrainStateStorageRoundTripContractTestsBase
             return $"round trip threw {Describe(Unwrap(ex))}";
         }
 
-        var expected = Render(original, 0);
-        var actual = Render(reloaded, 0);
+        string expected;
+        string actual;
+        try
+        {
+            expected = Render(original, 0);
+            actual = Render(reloaded, 0);
+        }
+        catch (Exception ex)
+        {
+            return $"could not compare the states read back: {Describe(Unwrap(ex))}";
+        }
+
         return string.Equals(expected, actual, StringComparison.Ordinal)
             ? null
             : $"read back differently at {FirstDifference(expected, actual)}";
@@ -657,9 +667,14 @@ public abstract class GrainStateStorageRoundTripContractTestsBase
             case byte[] bytes:
                 return Convert.ToBase64String(bytes);
             case IDictionary dictionary:
-                return "{" + string.Join(",", dictionary.Cast<DictionaryEntry>()
-                    .Select(e => Render(e.Key, depth + 1) + "=" + Render(e.Value, depth + 1))
-                    .Order(StringComparer.Ordinal)) + "}";
+                var entries = new List<string>();
+                var enumerator = dictionary.GetEnumerator();
+                while (enumerator.MoveNext())
+                {
+                    entries.Add(Render(enumerator.Key, depth + 1) + "=" + Render(enumerator.Value, depth + 1));
+                }
+
+                return "{" + string.Join(",", entries.Order(StringComparer.Ordinal)) + "}";
         }
 
         if (type.Namespace == "Orleans.Runtime")

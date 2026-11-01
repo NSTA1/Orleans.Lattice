@@ -36,6 +36,8 @@ public sealed partial class LatticeOperationGrainTests
             Assert.That(reloaded.Result["backupId"], Is.EqualTo("b1"));
             Assert.That(reloaded.State, Is.EqualTo(LatticeOperationState.Succeeded));
             Assert.That(reloaded.RunnerSilo, Is.EqualTo(RunnerSilo));
+            Assert.That(LatticeOperationRecord.EmptyResult, Is.Empty,
+                "A read must never populate the shared empty map in place.");
         });
     }
 
