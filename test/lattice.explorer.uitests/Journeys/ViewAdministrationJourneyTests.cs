@@ -60,7 +60,7 @@ public sealed class ViewAdministrationJourneyTests : UiTestBase
         await Expect(dialog).ToBeHiddenAsync();
         var row = content.Locator("tbody tr").Filter(new() { HasText = ViewName });
         await Expect(row).ToBeVisibleAsync();
-        await content.GetByRole(AriaRole.Button, new() { Name = "Refresh", Exact = true }).ClickAsync();
+        // No Refresh: the tab follows a view that is behind until it reads Current (#5519).
         await Expect(row).ToContainTextAsync("Current", new() { Timeout = 30_000 });
         await ShotAsync(page, "created-view-is-current");
 

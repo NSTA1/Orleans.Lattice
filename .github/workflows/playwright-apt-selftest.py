@@ -438,8 +438,16 @@ class SignedAptTests(unittest.TestCase):
     def test_changed_package_hash_is_rejected_without_installing(self):
         self.mode = "hash"
         result = self.install()
-        self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertIn("Hash Sum mismatch", result.stdout + result.stderr)
+        output = result.stdout + result.stderr
+        self.assertNotEqual(0, result.returncode, output)
+        tampered = [r for r in self.requests if r["mirror"] > 0 and "fixture-z" in r["path"] and r["bytes"] > 0]
+        self.assertTrue(tampered, "precondition: a mirror served the tampered archive")
+        # apt 2 reports the rejection as "Hash Sum mismatch"; apt 3 (ubuntu-26.04)
+        # ignores the tampered mirror's copy and moves to the next mirror. Either
+        # way the rejection must name a tampering mirror, never the clean one.
+        ports = "|".join(str(server.server_port) for server, _ in self.servers[1:])
+        self.assertRegex(output,
+                         rf"Hash Sum mismatch|Ign:\d+ http://127\.0\.0\.1:(?:{ports}) \S+ \S+ fixture-z-chromium ")
         self.assertFalse((self.root / "installed/usr/share/fixture-z-chromium/payload").exists())
         self.assert_configuration_preserved()
 

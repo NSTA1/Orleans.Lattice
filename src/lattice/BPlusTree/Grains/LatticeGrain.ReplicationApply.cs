@@ -103,6 +103,16 @@ internal sealed partial class LatticeGrain
         return new CopyReceiveFencedException(TreeId, physicalTreeId, admittedBeforeRestore);
     }
 
+    /// <summary>
+    /// Whether this apply runs inside a receiver bootstrap drain (issue #5551).
+    /// The replication package marks the drain on the request context under
+    /// <see cref="LatticeEventConstants.BootstrapApplyRequestContextKey"/>. The
+    /// mark only adds a write-interceptor judgement, so a forged or missing one
+    /// can never exempt a write that is judged without it.
+    /// </summary>
+    private static bool IsBootstrapDrainApply() =>
+        Orleans.Runtime.RequestContext.Get(LatticeEventConstants.BootstrapApplyRequestContextKey) is true;
+
     /// <inheritdoc />
     public async Task ApplySetAsync(
         string key,
@@ -121,6 +131,30 @@ internal sealed partial class LatticeGrain
         // resolution it makes checks the copy's receive fence, and check it now.
         ReplicationApplyScope.Enter();
         await GetRoutingAsync();
+
+        // Issue #5551: a row a receiver bootstrap drains from the source's export
+        // is judged at the write choke point. The export carries committed state
+        // only, so it no longer records whether a row was written by a replicated
+        // atomic batch (which strict ingest judges) or by a plain write: it can be
+        // the only delivery of a saga the source withheld. Judging every drained
+        // row keeps the export from being a path past strict ingest. A steady-state
+        // plain write keeps its documented bypass.
+        if (WriteInterceptionActive && IsBootstrapDrainApply())
+        {
+            var ttl = expiresAtTicks > 0
+                ? TimeSpan.FromTicks(expiresAtTicks - DateTimeOffset.UtcNow.UtcTicks)
+                : (TimeSpan?)null;
+            if (ttl is null || ttl > TimeSpan.Zero)
+            {
+                var outcome = await InterceptWriteAsync(LatticeOperation.Write, key, value, ttl, CancellationToken.None);
+                if (!outcome.Proceed)
+                {
+                    return;
+                }
+
+                value = outcome.Value;
+            }
+        }
 
         var lww = LwwValue<byte[]>.CreateWithExpiry(value, sourceHlc, expiresAtTicks)
             with

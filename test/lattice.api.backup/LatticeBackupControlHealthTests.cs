@@ -1,4 +1,6 @@
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Orleans.Lattice;
 using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Backup;
@@ -12,7 +14,9 @@ namespace Orleans.Lattice.Api.Backup.Tests;
 /// verifies a captured backup and persists the report,
 /// <see cref="ILatticeBackupControl.GetBackupHealthAsync"/> reads it back, and
 /// <see cref="ILatticeBackupControl.ConfigureBackupHealthAsync"/> stores a per-backup
-/// override. An unknown backup id and the fail-closed denial path are also covered.
+/// override that <see cref="ILatticeBackupControl.GetBackupHealthConfigAsync"/> reads
+/// back (or the deployment default when none was stored). An unknown backup id and
+/// the fail-closed denial path are also covered.
 /// </summary>
 [Category("Integration")]
 public sealed class LatticeBackupControlHealthTests
@@ -98,6 +102,102 @@ public sealed class LatticeBackupControlHealthTests
         Assert.That(
             async () => await _fixture.Control.ConfigureBackupHealthAsync(backupId, null!),
             Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public async Task GetBackupHealthConfigAsync_reads_the_deployment_default_before_any_override()
+    {
+        await _fixture.InitializeAsync();
+        var backupId = await CaptureBackupAsync();
+
+        var config = await _fixture.Control.GetBackupHealthConfigAsync(backupId);
+
+        Assert.That(config, Is.EqualTo(new BackupHealthConfig(true, LatticeBackupHealthOptions.DefaultSweepInterval)));
+    }
+
+    [Test]
+    public async Task GetBackupHealthConfigAsync_reads_back_the_stored_override()
+    {
+        await _fixture.InitializeAsync();
+        var backupId = await CaptureBackupAsync();
+        var stored = new BackupHealthConfig(monitoringEnabled: false, TimeSpan.FromMinutes(90));
+        await _fixture.Control.ConfigureBackupHealthAsync(backupId, stored);
+
+        Assert.That(await _fixture.Control.GetBackupHealthConfigAsync(backupId), Is.EqualTo(stored));
+    }
+
+    [Test]
+    public async Task GetBackupHealthConfigAsync_default_follows_the_cluster_monitor_options()
+    {
+        await _fixture.InitializeAsync();
+        var backupId = await CaptureBackupAsync();
+        var options = new LatticeBackupHealthOptions { Enabled = false, DefaultInterval = TimeSpan.FromSeconds(30) };
+        var control = _fixture.CreateControlWith(
+            _fixture.SiloServices.GetRequiredService<BackupAccessAuthorizer>(),
+            services: new HealthOptionsServices(_fixture.SiloServices, options));
+
+        var config = await control.GetBackupHealthConfigAsync(backupId);
+
+        // Off when the sweep is off, and never shorter than the sweep's own minimum.
+        Assert.That(config, Is.EqualTo(new BackupHealthConfig(false, LatticeBackupHealthOptions.MinimumInterval)));
+    }
+
+    [Test]
+    public async Task GetBackupHealthConfigAsync_unknown_backup_returns_null()
+    {
+        await _fixture.InitializeAsync();
+
+        Assert.That(await _fixture.Control.GetBackupHealthConfigAsync("does-not-exist"), Is.Null);
+    }
+
+    [Test]
+    public async Task GetBackupHealthConfigAsync_denied_permission_fails_closed()
+    {
+        await _fixture.InitializeAsync();
+        var backupId = await CaptureBackupAsync();
+        await _fixture.Control.ConfigureBackupHealthAsync(backupId, new BackupHealthConfig(false, TimeSpan.FromHours(1)));
+        var denying = _fixture.CreateControlWith(
+            new BackupAccessAuthorizer(new DenyingAccessGate("no read grant"), membership: null));
+
+        Assert.That(
+            async () => await denying.GetBackupHealthConfigAsync(backupId),
+            Throws.InstanceOf<LatticeAuthorizationDeniedException>());
+    }
+
+    [Test]
+    public async Task GetBackupHealthConfigAsync_empty_id_throws()
+    {
+        await _fixture.InitializeAsync();
+        Assert.That(
+            async () => await _fixture.Control.GetBackupHealthConfigAsync(string.Empty),
+            Throws.ArgumentException);
+    }
+
+    /// <summary>A minimal access gate that denies every request, driving the fail-closed path.</summary>
+    private sealed class DenyingAccessGate(string reason) : ILatticeAccessGate
+    {
+        public ValueTask<LatticeAccessDecision> AuthorizeAsync(
+            in LatticeAccessRequest request,
+            CancellationToken cancellationToken = default) =>
+            new(LatticeAccessDecision.Deny(reason));
+    }
+
+    /// <summary>The silo's services, with fixed backup-health monitor options.</summary>
+    private sealed class HealthOptionsServices(IServiceProvider inner, LatticeBackupHealthOptions options) : IServiceProvider
+    {
+        public object? GetService(Type serviceType) =>
+            serviceType == typeof(IOptionsMonitor<LatticeBackupHealthOptions>)
+                ? new FixedOptionsMonitor(options)
+                : inner.GetService(serviceType);
+    }
+
+    private sealed class FixedOptionsMonitor(LatticeBackupHealthOptions value) : IOptionsMonitor<LatticeBackupHealthOptions>
+    {
+        public LatticeBackupHealthOptions CurrentValue => value;
+
+        public LatticeBackupHealthOptions Get(string? name) => value;
+
+        public IDisposable? OnChange(Action<LatticeBackupHealthOptions, string?> listener) => null;
     }
 
     private ILatticeBackupOperations Operations => (ILatticeBackupOperations)_fixture.Control;

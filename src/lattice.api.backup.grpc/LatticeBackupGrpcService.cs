@@ -80,6 +80,9 @@ internal abstract class LatticeBackupGrpcServiceBase
     /// <summary>Configures a backup's per-backup health monitor. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
     public abstract Task<BackupHealthConfigureResponse> ConfigureBackupHealth(BackupHealthConfigureRequestMessage request, ServerCallContext context);
 
+    /// <summary>Reads a backup's effective health-monitor configuration. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupHealthConfigResponse> GetBackupHealthConfig(BackupHealthConfigGetRequestMessage request, ServerCallContext context);
+
     /// <summary>Starts a tracked full capture. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
     public abstract Task<LatticeOperationHandle> StartBackup(BackupCaptureRequestMessage request, ServerCallContext context);
 
@@ -146,6 +149,7 @@ internal abstract class LatticeBackupGrpcServiceBase
             binder.AddMethod(methods.IsHealthMonitoringAvailable, (UnaryServerMethod<BackupHealthAvailabilityRequest, BackupHealthAvailabilityResponse>?)null);
             binder.AddMethod(methods.GetBackupHealth, (UnaryServerMethod<BackupHealthGetRequestMessage, BackupHealthReportResponse>?)null);
             binder.AddMethod(methods.ConfigureBackupHealth, (UnaryServerMethod<BackupHealthConfigureRequestMessage, BackupHealthConfigureResponse>?)null);
+            binder.AddMethod(methods.GetBackupHealthConfig, (UnaryServerMethod<BackupHealthConfigGetRequestMessage, BackupHealthConfigResponse>?)null);
             binder.AddMethod(methods.StartBackup, (UnaryServerMethod<BackupCaptureRequestMessage, LatticeOperationHandle>?)null);
             binder.AddMethod(methods.StartIncrementalBackup, (UnaryServerMethod<BackupIncrementalCaptureRequestMessage, LatticeOperationHandle>?)null);
             binder.AddMethod(methods.StartBackupSet, (UnaryServerMethod<BackupSetCaptureRequestMessage, LatticeOperationHandle>?)null);
@@ -174,6 +178,7 @@ internal abstract class LatticeBackupGrpcServiceBase
         binder.AddMethod(methods.IsHealthMonitoringAvailable, new UnaryServerMethod<BackupHealthAvailabilityRequest, BackupHealthAvailabilityResponse>(serviceImpl.IsHealthMonitoringAvailable));
         binder.AddMethod(methods.GetBackupHealth, new UnaryServerMethod<BackupHealthGetRequestMessage, BackupHealthReportResponse>(serviceImpl.GetBackupHealth));
         binder.AddMethod(methods.ConfigureBackupHealth, new UnaryServerMethod<BackupHealthConfigureRequestMessage, BackupHealthConfigureResponse>(serviceImpl.ConfigureBackupHealth));
+        binder.AddMethod(methods.GetBackupHealthConfig, new UnaryServerMethod<BackupHealthConfigGetRequestMessage, BackupHealthConfigResponse>(serviceImpl.GetBackupHealthConfig));
         binder.AddMethod(methods.StartBackup, new UnaryServerMethod<BackupCaptureRequestMessage, LatticeOperationHandle>(serviceImpl.StartBackup));
         binder.AddMethod(methods.StartIncrementalBackup, new UnaryServerMethod<BackupIncrementalCaptureRequestMessage, LatticeOperationHandle>(serviceImpl.StartIncrementalBackup));
         binder.AddMethod(methods.StartBackupSet, new UnaryServerMethod<BackupSetCaptureRequestMessage, LatticeOperationHandle>(serviceImpl.StartBackupSet));
@@ -599,6 +604,16 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
             var config = new BackupHealthConfig(req.MonitoringEnabled, TimeSpan.FromTicks(req.IntervalTicks));
             await control.ConfigureBackupHealthAsync(req.BackupId, config, ct).ConfigureAwait(false);
             return new BackupHealthConfigureResponse();
+        });
+
+    /// <inheritdoc />
+    public override Task<BackupHealthConfigResponse> GetBackupHealthConfig(BackupHealthConfigGetRequestMessage request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (control, req, ct) =>
+        {
+            var config = await control.GetBackupHealthConfigAsync(req.BackupId, ct).ConfigureAwait(false);
+            return config is null
+                ? new BackupHealthConfigResponse { Found = false }
+                : new BackupHealthConfigResponse { Found = true, Config = config };
         });
 
     private Task<TResponse> InvokeAsync<TRequest, TResponse>(
