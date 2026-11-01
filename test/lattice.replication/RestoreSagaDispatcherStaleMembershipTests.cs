@@ -38,7 +38,7 @@ public sealed class RestoreSagaDispatcherStaleMembershipTests
 
         Assert.That(result, Is.Not.Null, "a stale snapshot must not send a replicated tree down the local path");
         Assert.That(h.Membership.RefreshCount, Is.EqualTo(1));
-        await h.Coordinator.Received(1).RunAsync(
+        await h.Coordinator.Received(1).BeginAsync(
             Arg.Is<List<string>>(l => l.Contains(Self) && l.Contains(Peer)), TargetTree, BackupId, Self);
     }
 
@@ -118,7 +118,7 @@ public sealed class RestoreSagaDispatcherStaleMembershipTests
 
         Assert.That(result, Is.Not.Null, "a stale snapshot must not restore a replicated member uncoordinated");
         Assert.That(h.Membership.RefreshCount, Is.EqualTo(1));
-        await h.Coordinator.Received(1).RunAsync(
+        await h.Coordinator.Received(1).BeginAsync(
             Arg.Any<List<string>>(), SetId, SetId, Self, SetId);
     }
 
@@ -197,11 +197,7 @@ public sealed class RestoreSagaDispatcherStaleMembershipTests
                     new BackupSetMember("backup-2", OtherTree),
                 ]));
 
-            Coordinator.RunAsync(Arg.Any<List<string>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>())
-                .Returns(Task.FromResult(CrossClusterSagaOutcome.Committed));
-            Coordinator.RunAsync(
-                    Arg.Any<List<string>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>())
-                .Returns(Task.FromResult(CrossClusterSagaOutcome.Committed));
+            SagaCoordinatorStub.CompletesWith(Coordinator, CrossClusterSagaOutcome.Committed);
 
             var factory = Substitute.For<IGrainFactory>();
             factory.GetGrain<ICrossClusterSagaCoordinatorGrain>(Arg.Any<string>()).Returns(Coordinator);
@@ -215,7 +211,11 @@ public sealed class RestoreSagaDispatcherStaleMembershipTests
 
             Dispatcher = new RestoreSagaDispatcher(
                 Membership, topology, Engine, capacity, channel, factory, participant, options,
-                NullLogger<RestoreSagaDispatcher>.Instance, setResolver);
+                NullLogger<RestoreSagaDispatcher>.Instance, setResolver)
+            {
+                StatusPollInterval = TimeSpan.Zero,
+                RedriveInterval = TimeSpan.Zero,
+            };
         }
 
         public StaleSnapshotMembership Membership { get; } = new();

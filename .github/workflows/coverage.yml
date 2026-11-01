@@ -241,7 +241,11 @@ jobs:
     if: ${{ !cancelled() && needs.measured.outputs.measure != 'false' && needs.plan.result == 'success' && needs.plan.outputs.coverage == 'true' }}
     name: ${{ matrix.leg.pool && '[pool] ' || '' }}Coverage / ${{ matrix.leg.name }}
     # Hosted or the self-hosted pool, as runner-overflow.py decided at plan time.
-    runs-on: ${{ fromJSON(matrix.leg.runsOn || '"ubuntu-latest"') }}
+    # A hosted UI leg is pinned to ubuntu-24.04: Playwright's install-deps
+    # carries the 24.04 package list and fails with exit 100 on ubuntu-26.04,
+    # which ubuntu-latest became in November 2026.
+    # TODO: drop the pin once Microsoft.Playwright supports 26.04.
+    runs-on: ${{ fromJSON((matrix.leg.ui && (matrix.leg.runsOn || '"ubuntu-latest"') == '"ubuntu-latest"') && '"ubuntu-24.04"' || matrix.leg.runsOn || '"ubuntu-latest"') }}
     # Per-leg backstop; a hung leg cannot hold the nightly lane for six hours.
     timeout-minutes: 150
     strategy:

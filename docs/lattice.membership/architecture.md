@@ -19,7 +19,7 @@ agent_spec: "docs/agents/governance/identity-propagation.json"
 | `ILatticeIdentityDirectory` | `NullIdentityDirectory` | `AddStaticIdentityDirectory`, the [Entra Graph](../lattice.membership.entra.graph/architecture.md) package, or a host (last registration wins) |
 | `ITenantGroupClaimFilter` | An inactive filter | `Orleans.Lattice.Tenancy`, which installs an always-active filter |
 
-The resolution cache is also subscribed to the core `IMutationObserver` change feed. A repeated call layers its options delegate and skips this wiring.
+The resolution cache is also subscribed to the core `IMutationObserver` change feed, and a membership epoch synchronizer is registered as both a change-feed observer and a hosted service (see [Resolving a subject](#resolving-a-subject)). A repeated call layers its options delegate and skips this wiring.
 
 ## The directory
 
@@ -39,7 +39,7 @@ On each gated request the core asks the membership context for the current subje
 6. **Tenant-group claim filter.** When the filter is active, any claim-derived group (token-asserted, overage or projected) starting with `t/` is removed. Directory-derived groups are never filtered. With the inactive default this costs one `bool` read.
 7. **Re-expansion.** Unless the mode is `TokenOnly`, a merged set that includes token-asserted or projected seed groups is run back through the directory's transitive closure, so a token carrying only a child group still picks up its ancestors.
 
-Only a resolved identity is cached; an anonymous result never is. An entry lives for the lesser of `ResolutionCacheTtl` and the credential's own expiry, and the cache holds a bounded number of entries. It is flushed when this silo observes a `sys-membership-*` write and whenever `LatticeMembershipOptions` changes. The change feed fires only on the silo that committed the write, so another silo can serve a pre-change entry until it expires. Hits and misses are counted on the `orleans.lattice.membership` meter ([Observability](observability.md)).
+Only a resolved identity is cached; an anonymous result never is. An entry lives for the lesser of `ResolutionCacheTtl` and the credential's own expiry, and the cache holds a bounded number of entries. It is flushed when this silo observes a `sys-membership-*` write and whenever `LatticeMembershipOptions` changes. The change feed fires only on the silo that committed the write, so every other silo learns of it through a cluster-wide membership epoch: the committing silo advances the epoch, and every silo reads it about once a second and flushes its cache when it has moved, when the epoch grain has restarted, or when cluster membership has changed (a silo that died between committing a write and publishing it). A removed member therefore loses the group on every silo within about a second of the write. Each successful read also confirms the cache current for three read intervals, and a warm entry is served only while that confirmation holds, so a silo that cannot read the epoch resolves every caller afresh from the directory rather than serving pre-change groups. Hits and misses are counted on the `orleans.lattice.membership` meter ([Observability](observability.md)).
 
 ## Authenticators
 
@@ -54,6 +54,7 @@ Only a resolved identity is cached; an anonymous result never is. An entry lives
 - [Registration](../../src/lattice.membership/LatticeMembershipServiceCollectionExtensions.cs)
 - [Membership context](../../src/lattice.membership/MembershipContext.cs)
 - [Resolution cache](../../src/lattice.membership/MembershipResolutionCache.cs)
+- [Membership epoch synchronizer](../../src/lattice.membership/MembershipEpochSynchronizer.cs)
 - [Directory](../../src/lattice.membership/LatticeMembershipDirectory.cs)
 - [JWT authenticator](../../src/lattice.membership/JwtCredentialAuthenticator.cs)
 

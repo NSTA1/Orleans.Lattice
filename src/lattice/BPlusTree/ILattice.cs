@@ -645,10 +645,11 @@ public interface ILattice : IGrainWithStringKey
     /// implementation derives a per-shard operation id of the form
     /// <c>"{operationId}-{shardIndex}"</c>, and each shard records the last
     /// completed id, so re-driving the <b>same</b> chunk after a dropped
-    /// connection reapplies nothing. Because a shard only remembers its single
-    /// most-recently-completed id, a caller must resume from the last
-    /// un-acknowledged chunk and never re-drive a chunk older than one a later
-    /// chunk has already superseded on the same shard.
+    /// connection reapplies nothing. Re-driving an <b>older</b> chunk - one a
+    /// later chunk has already superseded on a shard, as a resumed stream that
+    /// re-sends its whole unacknowledged window does - is a no-op too: each shard
+    /// recognises entries at or below its highest key as already grafted and
+    /// skips them, so a re-driven chunk never grafts an entry twice.
     /// </para>
     /// <para>
     /// The entries within a chunk, and the chunks across the whole stream, must
