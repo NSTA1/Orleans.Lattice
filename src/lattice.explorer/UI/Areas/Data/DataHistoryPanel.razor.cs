@@ -64,7 +64,7 @@ public partial class DataHistoryPanel : IDisposable
         EntryHistoryBound.Truncated => DataFormat.HasTime(_earliest)
             ? $"Older revisions were trimmed; history is available from {DataFormat.Time(_earliest)}."
             : TrimmedWithNoEarliestText,
-        EntryHistoryBound.WalWindowFallback => "This tree keeps no durable history, so only changes still in the write-ahead log are shown.",
+        EntryHistoryBound.WalWindowFallback => WalWindowFallbackText,
         _ => null,
     };
 
@@ -73,6 +73,13 @@ public partial class DataHistoryPanel : IDisposable
 
     /// <summary>The history bound note when older revisions were trimmed and no earliest retained revision is known.</summary>
     internal const string TrimmedWithNoEarliestText = "Older revisions were trimmed; no earlier revision is retained.";
+
+    /// <summary>
+    /// The history bound note when the tree has no change-history view, so only the write-ahead
+    /// log's window is read. It says what is missing, because a tree's retention mode (which
+    /// decides what each revision keeps) does not by itself keep revisions beyond that window.
+    /// </summary>
+    internal const string WalWindowFallbackText = "This tree has no change-history view, so only changes still in the write-ahead log are shown; its retention setting decides what each revision keeps, not how long revisions are kept. A change-history view over the tree keeps every revision.";
 
     /// <summary>What a range deletion whose marker names no end key says, in place of the end key.</summary>
     internal const string RangeDeletedWithNoEndText = "A range of keys that included this one was deleted.";

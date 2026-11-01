@@ -133,7 +133,8 @@ public sealed partial class AuditorsReviewChapter
         await Expect(shell.Heading).ToHaveTextAsync("Trees");
         await Expect(content.GetByText(Names.Trees.FactoryOrders, new() { Exact = true }).First).ToBeVisibleAsync();
         await Expect(content.Locator("[data-lt-command=\"cluster.create-tree\"]")).ToHaveCountAsync(0);
-        await SnapAsync(dana, "10", "cluster-trees", "Cluster trees: every tree listed, and no New tree for a reader");
+        await Expect(content.Locator("[data-lt-command=\"cluster.reshard-tree\"]")).ToHaveCountAsync(0);
+        await SnapAsync(dana, "10", "cluster-trees", "Cluster trees: every tree listed, and no New tree or Reshard tree for a reader");
 
         await shell.ExpectAreaWithheldAsync("access");
         await shell.ExpectHeadingAsync(ShellPage.NotFoundHeading);

@@ -6,12 +6,20 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Hosts.Silo;
 /// <summary>
 /// The runtime view providers the journey silo registers, so the Explorer's New view dialog
 /// can build the story's views: <see cref="OrderStatus"/> projects each JSON order to its
-/// status, which is how A3 creates <c>orders-by-status</c> over <c>factory-orders</c>.
+/// status, which is how A3 creates <c>orders-by-status</c> over <c>factory-orders</c>, and
+/// <see cref="ChangeHistory"/> is the durable change history A3 enables on it before the seed.
 /// </summary>
 internal static class JourneyViewProviders
 {
     /// <summary>The provider key of the order-status projection.</summary>
     public const string OrderStatus = "order-status";
+
+    /// <summary>
+    /// The provider key of the durable per-key change history (<see cref="LatticeHistoryView"/>):
+    /// a view of this provider over a tree is what keeps every revision of every key beyond the
+    /// write-ahead log, so History can show a key as it stood at any earlier time.
+    /// </summary>
+    public const string ChangeHistory = "change-history";
 
     /// <summary>The JSON property projected when the payload names none.</summary>
     public const string DefaultField = "status";
@@ -40,6 +48,13 @@ internal static class JourneyViewProviders
                         valueSelector: value => Project(value, field),
                         valueSelectorVersion: "order-status:" + field));
             });
+
+        // The library's change-history view, offered as a runtime provider so the Explorer's
+        // New view dialog can enable durable history on a tree (A3 does, before the seed).
+        views.AddRuntimeProjectionProvider(
+            ChangeHistory,
+            new LatticeRuntimeViewProviderDescription("Keeps every revision of every key, for History and Show as of", []),
+            (services, context) => LatticeHistoryView.Definition(context.ViewName, services));
     }
 
     /// <summary>The status <paramref name="value"/> carries in <paramref name="field"/>, or <see langword="null"/> to leave the entry out.</summary>

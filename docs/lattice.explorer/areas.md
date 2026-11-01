@@ -911,7 +911,7 @@ The Cluster palette commands are:
 
 | Command id | Label | Effect |
 | --- | --- | --- |
-| `cluster.reshard-tree` | Reshard tree... | "Grow or shrink a tree's physical shard count, online." Opens the reshard chooser on `/cluster/trees`, then navigates to the chosen tree's reshard page. |
+| `cluster.reshard-tree` | Reshard tree... | "Grow or shrink a tree's physical shard count, online." Opens the reshard chooser on `/cluster/trees`, then navigates to the chosen tree's reshard page. The control is drawn only for a caller whose capability probe reports a tree-lifecycle grant (on the reserved probe tree or one of the first 64 listed trees); for anyone else the command says "Your identity holds no grant to reshard a tree on this cluster." |
 | `cluster.plan-wal-move` | Plan WAL move... | Opens the WAL move planner on `/cluster/wal`, then navigates to the query-addressed plan. |
 | `cluster.create-tree` | New tree... | "Create an empty tree with a chosen shard count and node sizes." Opens the create-tree dialog on `/cluster/trees`, then lands on the new tree's Summary. Refused, with a sentence, for a caller who may not create trees. |
 
