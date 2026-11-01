@@ -711,7 +711,9 @@ succeeds. A re-measure still running is picked up again when the overview opens.
 up the replication peer report, draws the local region and peers, marks stalled
 peers without relying on colour alone, and links to Replication.
 
-The tree list is filtered by tree name, app or tenant. It filters out restore
+The tree list's filter matches a tree's name (which carries its tenant and app), its
+owner as the Owner column reads it ("app crm, tenant acme"), or its state as the State
+column reads it, so "deleted" or "aliased" narrows the list to those trees. The list leaves out restore
 shadows and physical resize or restore targets, so rows show logical trees only.
 App and tenant ownership are parsed from `t/{tenant}/a/{app}/...` and shown as
 text. The visible `cluster.reshard-tree` control opens a dialog whose tree field
@@ -874,7 +876,9 @@ The read-only survey of every orphan key is driven batch by batch from the page
 (up to 1000 batches) and can be stopped. Repair is shown only with TreeLifecycle
 authority and repairable leaves, is behind a destructive confirmation, unsplices
 only leaves whose keys were shown readable elsewhere, and always audits again
-when repair completes.
+when repair completes. Because that audit replaces the repair's findings, the
+toast that announces it counts the leaves unspliced, any refused, and any region
+not judged.
 The Cluster palette commands are:
 
 | Command id | Label | Effect |

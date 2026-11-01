@@ -168,11 +168,14 @@ builder.Host.UseOrleans(silo =>
     {
         var secondary = new AzureTableWalStorageOptions();
         storage.ConfigureWal(secondary, (config["Wal:TableName"] ?? "OrleansLatticeWal") + "Secondary");
-        return new AzureTableWalStorageProvider(
+        IWalStorageProvider provider = new AzureTableWalStorageProvider(
             Options.Create(secondary),
             services.GetRequiredService<Orleans.Serialization.Serializer<WalRecord>>(),
             services.GetService<IWalSaturationSignal>(),
             services.GetServices<ILatticeCompressor>());
+
+        // A12 holds this provider's writes for one tree to stop a WAL move before its flip.
+        return JourneyHostEnvironment.FaultsEnabled ? new JourneyGatedWalStorageProvider(provider) : provider;
     });
 
     silo.AddLatticeReplication(options =>
