@@ -2804,6 +2804,15 @@ internal sealed partial class WalShardGrain(
                 DrainIncomplete: true);
         }
 
+        // The tail reported below is what the coordinator copies, so it must be
+        // readable, not merely durable: a provider may count a returned batch in
+        // its highest offset before it publishes the batch to readers (the Azure
+        // Table provider until the batch's manifest commit lands). Only this
+        // silo's provider instance knows what it has yet to publish (#5470).
+        await _provider
+            .WaitForAppendVisibilityAsync(_treeId, _shardIndex, cancellationToken)
+            .ConfigureAwait(true);
+
         var highest = await _provider
             .GetHighestOffsetAsync(_treeId, _shardIndex, cancellationToken)
             .ConfigureAwait(true);

@@ -51,6 +51,7 @@ internal sealed class TransientReadRetryInterceptor : Interceptor
     {
         for (var attempt = 0; ; attempt++)
         {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 using var call = continuation(request, context);
@@ -58,6 +59,7 @@ internal sealed class TransientReadRetryInterceptor : Interceptor
             }
             catch (RpcException ex) when (attempt < Backoff.Length && IsTransient(ex))
             {
+                ContractRetries.Record(context.Method.FullName, clock.Elapsed, $"{ex.StatusCode}: {ex.Status.Detail}");
                 await Task.Delay(Backoff[attempt]).ConfigureAwait(false);
             }
         }

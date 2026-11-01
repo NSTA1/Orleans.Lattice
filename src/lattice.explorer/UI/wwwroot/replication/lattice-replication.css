@@ -7,8 +7,8 @@
  * the link health - always beside the health's glyph and word, never alone.
  * Plus the area's section links, status line and row notes.
  *
- * No width query appears here: the compact band is the layout's
- * lt-shell--compact class. The marker paints only aria-current states and the
+ * The compact band queries the Shell root's lt-viewport container at the
+ * breakpoint layer's declared width. The marker paints only aria-current states and the
  * join node, always with a weight or a ring. No shadows on the page, no cards.
  *
  * Plain ASCII only: the repository's hygiene gates scan this file.
@@ -304,15 +304,21 @@
 }
 
 /* Compact: the edge's facts wrap under its direction. */
-.lt-shell--compact .lt-replication-map__peer {
-  padding-inline-start: var(--lt-space-5);
+@container lt-viewport (width < 768px) {
+  .lt-shell .lt-replication-map__peer {
+    padding-inline-start: var(--lt-space-5);
+  }
 }
 
-.lt-shell--compact .lt-replication-map__peer::after {
-  width: calc(var(--lt-space-5) - var(--lt-space-1));
+@container lt-viewport (width < 768px) {
+  .lt-shell .lt-replication-map__peer::after {
+    width: calc(var(--lt-space-5) - var(--lt-space-1));
+  }
 }
 
-.lt-shell--compact .lt-replication-map__direction {
-  flex-basis: 100%;
-  min-width: 0;
+@container lt-viewport (width < 768px) {
+  .lt-shell .lt-replication-map__direction {
+    flex-basis: 100%;
+    min-width: 0;
+  }
 }

@@ -118,7 +118,7 @@ Health appears only when the backup sink is durable and external. The Health pag
 
 A health report shows status, checked time, explanation, whether the manifest is present, missing or uncommitted artifacts, hash mismatches, and peer-cluster visibility when applicable. Focused health actions are offered only when the scope probe grants list authority for that backup.
 
-Periodic monitoring can be turned on or off per backup. Its **Verify every** field is a [duration field](theming-and-density.md#dates-times-and-durations) in hours and minutes, at least one minute; the monitor applies the config on its next sweep.
+Periodic monitoring can be turned on or off per backup. Its **Verify every** field is a [duration field](theming-and-density.md#dates-times-and-durations) in hours and minutes, at least one minute; the monitor applies the config on its next sweep. The form opens with the backup's saved settings, or with the deployment default (on, every 6 hours unless the host changes it) when none were saved; if the settings cannot be read, the page shows an alert instead of the form.
 
 Changing the Health address discards late catalogue, report, check-start and monitoring-save replies or errors from the previous address. A pending check does not disable the next backup's controls, and an accepted check still runs on the cluster after navigation.
 

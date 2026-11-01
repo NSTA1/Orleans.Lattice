@@ -15,7 +15,7 @@ namespace Orleans.Lattice.Api.Replication.Grpc;
 /// The contract is a flat set of RPCs over the transport-agnostic
 /// <see cref="Orleans.Lattice.Api.Replication.ILatticeReplicationControl"/>
 /// facade: <c>EnableReplication</c>, <c>DisableReplication</c>,
-/// <c>GetReplicationConfig</c>, and the unauthenticated discovery RPC
+/// <c>GetReplicationConfig</c>, <c>DecommissionPeer</c>, <c>ProbeCapabilities</c>, and the unauthenticated discovery RPC
 /// <c>GetAuthScheme</c>. Contract-versioning policy: fields on the wire messages
 /// are additive-only (new <c>[Id(n)]</c>); aliases and field numbers are never
 /// renumbered, so a newer response decodes cleanly under an older client.
@@ -37,6 +37,9 @@ internal sealed class LatticeReplicationGrpcMethods
     /// <summary>The unary decommission-peer RPC method name.</summary>
     public const string DecommissionPeerMethodName = "DecommissionPeer";
 
+    /// <summary>The unary replication capability-probe RPC method name.</summary>
+    public const string ProbeCapabilitiesMethodName = "ProbeCapabilities";
+
     /// <summary>The unary, unauthenticated auth-scheme advertisement RPC method name.</summary>
     public const string GetAuthSchemeMethodName = "GetAuthScheme";
 
@@ -50,6 +53,8 @@ internal sealed class LatticeReplicationGrpcMethods
         Serializer<ReplicationConfigResponse> getConfigResponseSerializer,
         Serializer<ReplicationDecommissionPeerRequestMessage> decommissionPeerRequestSerializer,
         Serializer<ReplicationDecommissionPeerResponse> decommissionPeerResponseSerializer,
+        Serializer<ReplicationProbeCapabilitiesRequestMessage> probeCapabilitiesRequestSerializer,
+        Serializer<ReplicationCapabilitiesResponse> probeCapabilitiesResponseSerializer,
         Serializer<AuthSchemeAdvertisementRequest> authSchemeRequestSerializer,
         Serializer<AuthSchemeAdvertisement> authSchemeAdvertisementSerializer)
     {
@@ -61,6 +66,8 @@ internal sealed class LatticeReplicationGrpcMethods
         ArgumentNullException.ThrowIfNull(getConfigResponseSerializer);
         ArgumentNullException.ThrowIfNull(decommissionPeerRequestSerializer);
         ArgumentNullException.ThrowIfNull(decommissionPeerResponseSerializer);
+        ArgumentNullException.ThrowIfNull(probeCapabilitiesRequestSerializer);
+        ArgumentNullException.ThrowIfNull(probeCapabilitiesResponseSerializer);
         ArgumentNullException.ThrowIfNull(authSchemeRequestSerializer);
         ArgumentNullException.ThrowIfNull(authSchemeAdvertisementSerializer);
 
@@ -92,6 +99,13 @@ internal sealed class LatticeReplicationGrpcMethods
             requestMarshaller: LatticeReplicationGrpcMarshallers.Create(decommissionPeerRequestSerializer),
             responseMarshaller: LatticeReplicationGrpcMarshallers.Create(decommissionPeerResponseSerializer));
 
+        ProbeCapabilities = new Method<ReplicationProbeCapabilitiesRequestMessage, ReplicationCapabilitiesResponse>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ProbeCapabilitiesMethodName,
+            requestMarshaller: LatticeReplicationGrpcMarshallers.Create(probeCapabilitiesRequestSerializer),
+            responseMarshaller: LatticeReplicationGrpcMarshallers.Create(probeCapabilitiesResponseSerializer));
+
         GetAuthScheme = new Method<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>(
             type: MethodType.Unary,
             serviceName: ServiceName,
@@ -111,6 +125,9 @@ internal sealed class LatticeReplicationGrpcMethods
 
     /// <summary>The unary <c>DecommissionPeer</c> RPC.</summary>
     public Method<ReplicationDecommissionPeerRequestMessage, ReplicationDecommissionPeerResponse> DecommissionPeer { get; }
+
+    /// <summary>The unary <c>ProbeCapabilities</c> RPC.</summary>
+    public Method<ReplicationProbeCapabilitiesRequestMessage, ReplicationCapabilitiesResponse> ProbeCapabilities { get; }
 
     /// <summary>The unary, unauthenticated <c>GetAuthScheme</c> advertisement RPC.</summary>
     public Method<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement> GetAuthScheme { get; }
@@ -133,6 +150,8 @@ internal sealed class LatticeReplicationGrpcMethods
             serializerProvider.GetRequiredService<Serializer<ReplicationConfigResponse>>(),
             serializerProvider.GetRequiredService<Serializer<ReplicationDecommissionPeerRequestMessage>>(),
             serializerProvider.GetRequiredService<Serializer<ReplicationDecommissionPeerResponse>>(),
+            serializerProvider.GetRequiredService<Serializer<ReplicationProbeCapabilitiesRequestMessage>>(),
+            serializerProvider.GetRequiredService<Serializer<ReplicationCapabilitiesResponse>>(),
             serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisementRequest>>(),
             serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisement>>());
     }

@@ -208,4 +208,9 @@ internal sealed partial class FakeLatticeBackupControl : ILatticeBackupControl
         BackupHealthConfig config,
         CancellationToken cancellationToken = default)
         => throw new NotSupportedException();
+
+    public Task<BackupHealthConfig?> GetBackupHealthConfigAsync(
+        string backupId,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
 }

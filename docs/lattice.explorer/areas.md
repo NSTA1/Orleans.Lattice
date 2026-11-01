@@ -100,7 +100,7 @@ The complete route inventory below contains the 70 unique `@page` route patterns
 | Area | Key and root address | Facades read or driven | Scope | Visibility probe |
 | --- | --- | --- | --- | --- |
 | Data | `data`, `/data` | State API, including `ILatticeStateClient`; `ILatticeTreeAdmin` for tag-index and view actions; `ILatticeDataApi`: its range read for **Export...**, and its writes and write-capability probe to create, edit and delete entries; `ILatticeSchemaControl` for the value editor's schema preview | Tenant-scoped | No state reader makes the area Hidden. Before a catalogue is loaded for the current caller and endpoint, a disconnected connection is Unavailable with a sign-in or connect reason; a denied catalogue probe is Hidden, and other read failures are Unavailable with a fixed, action-specific reason. A loaded catalogue keeps the area Visible until its caller-scoped memo is invalidated or refreshed. |
-| Apps | `apps`, `/apps` | `ILatticeAppWorkspace`, `ILatticeAppsControl`, `ILatticeAppCatalog`, and `ILatticeAuthAdmin` for role binding | Tenant-scoped | Probes workspace apps, catalogue capabilities and control capabilities. It is Visible when the caller has a workspace answer, can browse the catalogue, or can list installed apps. Probe faults and missing facades deny the relevant flags, so a head serving none of them is Hidden; a capability probe the cluster did not answer leaves an area that shows nothing not checked, and is not remembered. |
+| Apps | `apps`, `/apps` | `ILatticeAppWorkspace`, `ILatticeAppsControl`, `ILatticeAppCatalog`, and `ILatticeAuthAdmin` for role binding | Tenant-scoped | Probes workspace apps, catalogue capabilities and control capabilities. It is Visible when the caller has a workspace answer, can browse the catalogue, or can list installed apps. Probe faults and missing facades deny the relevant flags, so a head serving none of them is Hidden; a capability probe the cluster did not answer leaves an area that shows nothing not checked, and is not remembered. The answer is held for the circuit for ten seconds at most: the first navigation or completion after that re-reads it in the background, so an app installed, bound or granted elsewhere reaches the spine badge, Home, `a/` completions and the open Apps page without a reload. |
 | Access | `access`, `/access` and `/t/{tenant}/access` | `ILatticeAuthAdmin`; delegated tenant policy and directory facades | Mixed: `/access` is cluster-wide; `/t/{tenant}/access` is tenant-rooted and filters rules/groups for that tenant, with delegated groups, members and rules available when enabled | The smallest cluster group-catalogue page admits cluster access administrators. Only a Hidden result falls through to delegated access: a valid non-default asserted tenant with delegated access enabled can admit its administrator. Missing both surfaces or a denied/faulted tenant posture hides the area; an anonymous cluster-wide denial is Unavailable with "Sign in to administer access on this cluster."; a cluster probe the cluster did not answer is not checked and not remembered. |
 | Schema | `schema`, `/schema` | `ILatticeSchemaControl` | Tenant-scoped | Probes schema capabilities against a reserved, side-effect-free tree id. Any schema grant makes the area Visible. A refused anonymous caller sees Unavailable with "Sign in to manage schema on this cluster."; a signed-in refusal, missing facade, unserved cluster or definite fault is Hidden; a probe the cluster did not answer is not checked. |
 | Tenancy | `tenancy`, `/tenancy` and `/t/{tenant}/tenancy` | Tenant self-service, lifecycle, access, grant, region and quota facades; apps control for installed-app counts | Mixed: the directory is cluster-wide; `/t/{tenant}/tenancy` follows the active tenant | Requires tenancy to be active and the self-service facade to exist. It proves whether the caller is an operator or administers the scoped tenant. Operators and scoped tenant admins see it; refused anonymous callers see Unavailable with "Sign in to see the tenants you administer."; refused signed-in callers and other definite faults are Hidden; a probe the cluster did not answer is not checked. |
@@ -209,7 +209,8 @@ disables the live tail while the point-in-time view is active.
 
 The Metrics tab shows per-tree measures: lifecycle, shards, live keys,
 tombstones, depth, shards splitting, views and view lag where the cluster
-reports them. When detail metrics are paused, the affected measures read
+reports them. While view lag is above zero the measures are re-read every two
+seconds, in place, until it reaches zero. When detail metrics are paused, the affected measures read
 "Paused". The measures count every key in the tree, so a caller whose grant
 covers only part of it (a prefix-scoped rule, for example) is told they need
 read access to the whole tree; the tree's summary line then omits its key
@@ -218,7 +219,8 @@ letters 50 at a time, with source, key, reason and clipped details. Both tabs
 show fixed sentences when the state API is unavailable, denied or faulted.
 
 The Tag indexes tab lists indexes covering the tree, their reconcile state and
-covered-tree count. Selecting an index with `?index=` shows covered trees, tags,
+covered-tree count. An index reconciling from another tab, session or caller is
+re-read every two seconds until it reads Idle. Selecting an index with `?index=` shows covered trees, tags,
 and, with `?tag=`, member keys. Member rows link only to trees the caller can
 see and say "A tree you cannot see" otherwise. The Reconcile action is shown
 only when the caller can administer the index; it opens a destructive
@@ -227,6 +229,9 @@ rows.
 
 The Views tab lists materialised views over a tree, or the view itself when the
 current workspace is a view. It shows kind, projection version and apply lag.
+A view that is behind is re-read every two seconds until it reads Current,
+without a Refresh, because a view status answers as of now even while its
+maintainer drains or rebuilds.
 Overlapping refreshes keep the newest status rather than a late reply or fault
 from an earlier refresh.
 For callers that can administer the source tree, Reconcile compares the
@@ -566,9 +571,13 @@ estate. A truncated status read says so and recommends filtering.
 
 The enrolled-trees page reads enrolment and status together. The table shows
 enabled, disabled or ambiguous state, merge mode, whether enrolment is runtime,
-static or both, app ownership and worst link health. A caller with the control
-facade and a readable enrolment report can enable replication for a new tree or
-for a disabled runtime tree. Enabling asks for the logical tree id (a picker
+static or both, app ownership and worst link health. Every listed tree is one the
+caller may manage, so a listed disabled runtime tree offers **Enable** and an
+enabled one **Disable**. **Enable replication for a tree** (a new tree) is
+offered only when the facade's capability probe says the caller holds the
+Replication grant, or the list holds a tree they manage: the report is readable
+by every caller, so an empty list proves nothing (#5478). The cluster still
+authorizes every enable and disable. Enabling asks for the logical tree id (a picker
 that accepts only a tree you can reach), merge mode and optional bootstrap source
 cluster (a picker that suggests the known regions and accepts any id); app-owned ids are rejected because their
 enrolment follows the app install. Disabling is a destructive confirmation: it

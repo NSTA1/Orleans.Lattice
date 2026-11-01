@@ -29,6 +29,12 @@ internal sealed class ReplicationDataSource : IDisposable
     /// <summary>What the enrolment read is called in a fault sentence.</summary>
     public const string ConfigSubject = "replication enrolment";
 
+    /// <summary>
+    /// The reserved tree id the enrolment probe asks about, so the answer is whether the
+    /// caller may enable a tree it has not named yet. The probe has no side effects.
+    /// </summary>
+    public const string ProbeTreeId = "__replication_capability_probe__";
+
     private readonly IServiceProvider _services;
     private readonly TimeProvider _time;
     private readonly ReplicationOptions _options;
@@ -40,9 +46,11 @@ internal sealed class ReplicationDataSource : IDisposable
     private ShellCallerKey _memoCaller;
     private (ReplicationRead<ReplicationEstate> Read, DateTimeOffset At)? _estate;
     private (ReplicationRead<ReplicationConfigReport> Read, DateTimeOffset At)? _config;
+    private (bool CanEnable, DateTimeOffset At)? _canEnable;
     private long _generation;
     private long _estateRead;
     private long _configRead;
+    private long _probeRead;
 
     /// <summary>Creates the data source over the circuit's services.</summary>
     /// <param name="services">The circuit's service provider, which the facades are resolved from.</param>
@@ -197,6 +205,62 @@ internal sealed class ReplicationDataSource : IDisposable
         return read;
     }
 
+    /// <summary>
+    /// Whether the caller may enable replication for a tree it has not named yet: the
+    /// enrolment facade's capability probe over <see cref="ProbeTreeId"/> (issue #5478).
+    /// The enrolment report cannot answer this, because it is readable by every caller
+    /// and silently omits the trees they may not manage. Fails closed: no facade, a
+    /// refusal and any fault read as <see langword="false"/>, and only an answer the
+    /// cluster gave is remembered, as for <see cref="GetConfigAsync"/>. The answer is
+    /// presentation only; the facade authorizes every enable on attempt.
+    /// </summary>
+    /// <param name="refresh">Whether to probe afresh.</param>
+    /// <param name="cancellationToken">Cancels the probe.</param>
+    /// <returns>Whether the caller holds the Replication capability over the probe tree.</returns>
+    public async Task<bool> CanEnableAsync(bool refresh, CancellationToken cancellationToken)
+    {
+        long generation;
+        long request;
+        lock (_gate)
+        {
+            ForgetIfTheCallerChanged();
+            if (!refresh && Fresh(_canEnable?.At))
+            {
+                return _canEnable!.Value.CanEnable;
+            }
+
+            generation = _generation;
+            request = ++_probeRead;
+        }
+
+        if (Control is not { } control)
+        {
+            return false;
+        }
+
+        bool canEnable;
+        try
+        {
+            var capabilities = await control.ProbeCapabilitiesAsync(ProbeTreeId, cancellationToken).ConfigureAwait(false);
+            canEnable = capabilities?.CanConfigure == true;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return false;
+        }
+
+        lock (_gate)
+        {
+            ForgetIfTheCallerChanged();
+            if (generation == _generation && request == _probeRead && !cancellationToken.IsCancellationRequested)
+            {
+                _canEnable = (canEnable, _time.GetUtcNow());
+            }
+        }
+
+        return canEnable;
+    }
+
     /// <summary>Enables replication for a tree through the enrolment facade, then forgets the cached reads.</summary>
     /// <param name="treeId">The logical tree id.</param>
     /// <param name="mode">The merge mode to fix.</param>
@@ -250,6 +314,7 @@ internal sealed class ReplicationDataSource : IDisposable
         {
             _estate = null;
             _config = null;
+            _canEnable = null;
             _generation++;
         }
 
@@ -283,6 +348,7 @@ internal sealed class ReplicationDataSource : IDisposable
             _memoCaller = caller;
             _estate = null;
             _config = null;
+            _canEnable = null;
             _generation++;
         }
     }

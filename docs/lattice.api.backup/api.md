@@ -56,6 +56,7 @@ The facade exposes the direct-call `ILatticeBackupControl` surface and the accep
 | Is health monitoring available (`IsHealthMonitoringAvailableAsync`) | (none) | `bool` (true when the sink is durable) |
 | Get backup health (`GetBackupHealthAsync`) | takes a backup id | `BackupHealthReport?` (last stored, null when none/absent) |
 | Configure backup health (`ConfigureBackupHealthAsync`) | takes a backup id and a `BackupHealthConfig` | (void) |
+| Get backup health config (`GetBackupHealthConfigAsync`) | takes a backup id | `BackupHealthConfig?` (the stored override, else the deployment default; null when the backup is absent) |
 | Get scope status (`GetScopeStatusAsync`) | takes a `BackupScopeSelector` | `BackupScopeStatus?` (null when unknown) |
 | Probe capabilities (`ProbeCapabilitiesAsync`) | takes a `BackupScopeSelector` | `BackupScopeCapabilities` |
 | Schedule backup (`ScheduleBackupAsync`) | takes a `LatticeBackupScheduleRequest` | (void) |

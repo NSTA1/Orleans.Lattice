@@ -36,8 +36,13 @@ public sealed class ShellLayoutCompactTests : ShellLayoutTestContext
             Assert.That(cut.Find(".lt-shell-brand__prefix").ClassList, Does.Contain("lt-medium-up"));
             Assert.That(cut.FindAll("#lt-shell-directory"), Has.Count.EqualTo(1));
             Assert.That(cut.Find("#lt-shell-directory").ClassList, Does.Contain("lt-medium-up"));
-            Assert.That(cut.Find("#lt-shell-directory").ClassList, Does.Not.Contain("lt-shell-directory--rail"));
-            Assert.That(cut.Find(".lt-shell").ClassList, Does.Not.Contain("lt-shell--compact"));
+            Assert.That(cut.Find(".lt-shell").ClassList, Is.EquivalentTo(new[] { "lt-viewport", "lt-shell" }),
+                "the root carries no band class: every band style is a size-container query on it");
+            Assert.That(
+                cut.FindAll(".lt-shell-address-line__hint").Select(hint => (hint.TextContent, hint.ClassList.Contains("lt-only-compact"), hint.ClassList.Contains("lt-medium-up"))),
+                Is.EqualTo(new[] { ("Go to or search", true, false), ("Go to an address, search, or type > for a command", false, true) }),
+                "the address prompt is drawn in both forms too");
+            Assert.That(cut.FindAll(".lt-shell-address-line__edit kbd").Select(key => key.ClassList.Contains("lt-medium-up")), Is.All.True);
             Assert.That(cut.FindAll(".lt-dialog--sheet"), Is.Empty, "both sheets are closed");
         });
     }
@@ -110,16 +115,21 @@ public sealed class ShellLayoutCompactTests : ShellLayoutTestContext
     }
 
     [Test]
-    public async Task At_medium_the_spine_is_a_rail()
+    public async Task At_medium_the_spine_keeps_its_one_form_and_the_breakpoint_layer_narrows_it()
     {
+        // #5465: the rail is a size-container query on the column, so measuring the
+        // medium band changes nothing in the spine's markup and the first paint at a
+        // medium width is already the rail.
         var cut = RenderLayout();
+        var before = cut.Find("#lt-shell-directory nav").OuterHtml;
 
         await SetBandAsync(cut, 1);
 
         Assert.Multiple(() =>
         {
-            Assert.That(cut.Find("#lt-shell-directory").ClassList, Does.Contain("lt-shell-directory--rail"));
-            Assert.That(cut.Find("#lt-shell-directory nav").ClassList, Does.Contain("lt-shell-directory__nav--rail"));
+            Assert.That(cut.Find("#lt-shell-directory").ClassList, Is.EquivalentTo(new[] { "lt-shell-directory" }));
+            Assert.That(cut.Find("#lt-shell-directory nav").ClassList, Does.Not.Contain("lt-shell-directory__nav--rail"));
+            Assert.That(cut.Find("#lt-shell-directory nav").OuterHtml, Is.EqualTo(before));
         });
     }
 
@@ -135,7 +145,7 @@ public sealed class ShellLayoutCompactTests : ShellLayoutTestContext
         Assert.Multiple(() =>
         {
             Assert.That(cut.FindAll("#lt-shell-directory"), Is.Empty, "the column is gone");
-            Assert.That(cut.Find(".lt-shell").ClassList, Does.Contain("lt-shell--compact"));
+            Assert.That(cut.Find(".lt-shell").ClassList, Is.EquivalentTo(new[] { "lt-viewport", "lt-shell" }), "compact styling is a container query, not a class");
             Assert.That(toggle.GetAttribute("aria-expanded"), Is.EqualTo("false"));
             Assert.That(cut.FindAll(".lt-dialog--sheet"), Is.Empty);
         });

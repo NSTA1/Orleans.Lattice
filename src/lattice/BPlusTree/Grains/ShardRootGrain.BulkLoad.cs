@@ -42,7 +42,7 @@ internal sealed partial class ShardRootGrain
             clocks[i] = clock;
         }
 
-        await SeedBulkLoadLeavesAsync(leafIds, maxLeafKeys, sortedEntries.Count, (start, count) =>
+        await SeedBulkLoadLeavesAsync(leafIds, separators, maxLeafKeys, sortedEntries.Count, (start, count) =>
         {
             var batch = new Dictionary<string, LwwValue<byte[]>>(count);
             for (int j = 0; j < count; j++)
@@ -88,7 +88,7 @@ internal sealed partial class ShardRootGrain
         var (leafIds, separators) = PlanBulkLoadLeaves(
             shardKey, operationId, "bulkraw", maxLeafKeys, sortedEntries.Count, i => sortedEntries[i].Key);
 
-        await SeedBulkLoadLeavesAsync(leafIds, maxLeafKeys, sortedEntries.Count, (start, count) =>
+        await SeedBulkLoadLeavesAsync(leafIds, separators, maxLeafKeys, sortedEntries.Count, (start, count) =>
         {
             var batch = new Dictionary<string, LwwValue<byte[]>>(count);
             for (int j = 0; j < count; j++)
@@ -257,9 +257,20 @@ internal sealed partial class ShardRootGrain
     /// live batch set stays O(<see cref="BoundedFanOut.DefaultWidth"/>) instead of
     /// holding one dictionary per leaf for the whole load.
     /// </para>
+    /// <para>
+    /// <b>Each leaf is born declaring the range it owns</b>, from its own
+    /// separator to the next leaf's (open at the chain's two ends). The WAL
+    /// materialiser replays into a leaf every record its declared range covers,
+    /// and a leaf declaring no range covers its whole shard: these leaves used to
+    /// be born that way, so a leaf that deactivated re-materialised every later key
+    /// of its shard when it next activated - duplicate rows that over-counted, and
+    /// a leaf chain that regressed, so range scans suppressed whole leaves (issue
+    /// #5460).
+    /// </para>
     /// </remarks>
     private Task SeedBulkLoadLeavesAsync(
         List<GrainId> leafIds,
+        List<string?> separators,
         int maxLeafKeys,
         int entryCount,
         Func<int, int, Dictionary<string, LwwValue<byte[]>>> buildBatch)
@@ -287,10 +298,8 @@ internal sealed partial class ShardRootGrain
                 {
                     TreeId = treeId,
                     ShardIndex = shardIndex,
-                    // Bulk-load leaves carry no ownership range, exactly as the
-                    // serial version left them - it never called SetKeyRangeAsync.
-                    LowKeyInclusive = null,
-                    HighKeyExclusive = null,
+                    LowKeyInclusive = separators[slot],
+                    HighKeyExclusive = slot + 1 < leafIds.Count ? separators[slot + 1] : null,
                     PrevSibling = slot > 0 ? leafIds[slot - 1] : null,
                     NextSibling = slot + 1 < leafIds.Count ? leafIds[slot + 1] : null,
                 });
@@ -447,13 +456,17 @@ internal sealed partial class ShardRootGrain
             : await TraverseToRightmostLeafAsync();
 
         var rightmostLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(rightmostLeafId);
-        var existingCount = await rightmostLeaf.CountAsync();
+        var (existingCount, rightEdge) = await rightmostLeaf.GetAppendTailAsync();
+
+        // Issue #5460: entries at or below the shard's right edge were grafted by
+        // an earlier delivery of this batch, so they are skipped rather than
+        // grafted again. See SkipAlreadyGraftedAsync.
+        int idx = await SkipAlreadyGraftedAsync(operationId, sortedEntries, rightEdge);
         int space = maxLeafKeys - existingCount;
 
-        int idx = 0;
-        if (space > 0)
+        if (space > 0 && idx < sortedEntries.Count)
         {
-            int take = Math.Min(space, sortedEntries.Count);
+            int take = Math.Min(space, sortedEntries.Count - idx);
             var batch = new Dictionary<string, LwwValue<byte[]>>(take);
             for (int i = 0; i < take; i++, idx++)
             {
@@ -498,13 +511,17 @@ internal sealed partial class ShardRootGrain
             var newLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(newId);
 
             // The append creates this leaf, so its first row write carries a
-            // create intent naming it (issue #4654).
+            // create intent naming it (issue #4654). The leaf is born declaring
+            // the range it owns, up to the next appended leaf's separator and open
+            // at the tail (issue #5460; see SeedBulkLoadLeavesAsync).
             using (LatticeNewLeafIntentContext.BeginScope(newId))
             {
                 await newLeaf.InitializeSiblingAsync(new SiblingInitialization
                 {
                     TreeId = TreeId,
                     ShardIndex = MyShardIndex,
+                    LowKeyInclusive = separator,
+                    HighKeyExclusive = idx < sortedEntries.Count ? sortedEntries[idx].Key : null,
                     PrevSibling = leafIndex > 0 ? newLeafIds[leafIndex - 1] : null,
                     NextSibling = leafIndex + 1 < newLeafCount ? newLeafIds[leafIndex + 1] : null,
                 });
@@ -527,6 +544,73 @@ internal sealed partial class ShardRootGrain
 
         await CompleteBulkGraftAsync();
         await MirrorBulkAppendAsync(mirrored, sortedEntries);
+    }
+
+    /// <summary>
+    /// Returns how many leading entries of <paramref name="sortedEntries"/> sort at
+    /// or below <paramref name="rightEdge"/> - the highest live key of the shard's
+    /// rightmost leaf - and so were grafted by an earlier delivery of this batch.
+    /// The append starts from that index.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A bulk append grafts at the shard's right edge, so it is correct only for
+    /// keys above every key the shard already holds. The last-completed operation
+    /// id dedupes a retry of the batch the shard finished last, and nothing else.
+    /// A resumed bulk-load stream re-sends every unacknowledged chunk, which can
+    /// include one a later chunk has already superseded here; and a retry after a
+    /// fault part-way through an append finds the rightmost leaf already filled,
+    /// so it re-partitioned the remaining entries across the leaves the first
+    /// attempt had seeded. Either way entries were grafted a second time below
+    /// the right edge: rows duplicated across leaves, so counts and statistics
+    /// over-reported, and a leaf chain whose keys regress, so a range scan
+    /// suppressed the regressed leaves and omitted keys that point reads still
+    /// found (issue #5460).
+    /// </para>
+    /// <para>
+    /// The right edge records what was grafted whatever the operation id, so a
+    /// re-delivered entry is recognised by its key. Each skipped entry must have
+    /// a row in the shard - a tombstone counts, since a deleted key was still
+    /// grafted - or the batch is not a re-delivery but one out of order, which is
+    /// refused rather than silently dropped. The rows are read only for a
+    /// re-delivery: a fresh append skips nothing and reads nothing. They are
+    /// mirrored to an online resize's destination, as a same-operation retry's
+    /// rows are, so a crash between an apply and its mirror stays covered.
+    /// </para>
+    /// </remarks>
+    private async Task<int> SkipAlreadyGraftedAsync(
+        string operationId,
+        List<KeyValuePair<string, byte[]>> sortedEntries,
+        string? rightEdge)
+    {
+        if (rightEdge is null)
+            return 0;
+
+        var skip = 0;
+        while (skip < sortedEntries.Count && string.CompareOrdinal(sortedEntries[skip].Key, rightEdge) <= 0)
+            skip++;
+
+        if (skip == 0)
+            return 0;
+
+        var keys = new List<string>(skip);
+        for (var i = 0; i < skip; i++)
+            keys.Add(sortedEntries[i].Key);
+
+        var rows = await AppliedRowsAsync(keys);
+        foreach (var key in keys)
+        {
+            if (!rows.ContainsKey(key))
+            {
+                throw new InvalidOperationException(
+                    $"Bulk append '{operationId}' to shard {MyShardIndex} of tree '{TreeId}' carries key '{key}', "
+                    + $"which sorts at or below the shard's highest key '{rightEdge}' but was never stored here. "
+                    + "A bulk append's keys must sort after every key the shard already holds.");
+            }
+        }
+
+        await MirrorRowsAsync(rows, joinCrdt: false);
+        return skip;
     }
 
     private static void CollectMirroredRows(
@@ -567,6 +651,11 @@ internal sealed partial class ShardRootGrain
 
         var existingLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(graft.ExistingRightmostLeafId);
         var firstNewLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(graft.NewLeaves[0].LeafId);
+
+        // The rightmost leaf stops declaring the keyspace the appended leaves now
+        // own before they are linked behind it (issue #5460). Narrowing only, so a
+        // resumed graft re-runs it harmlessly.
+        await existingLeaf.NarrowHighKeyAsync(graft.NewLeaves[0].SeparatorKey);
         await existingLeaf.SetNextSiblingAsync(graft.NewLeaves[0].LeafId);
         await firstNewLeaf.SetPrevSiblingAsync(graft.ExistingRightmostLeafId);
 
