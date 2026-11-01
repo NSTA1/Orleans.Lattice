@@ -47,7 +47,7 @@ leaf's durable snapshot (`SnapshotVanish`, issue #4634) or its state row
 faults so a snapshot and a row can both vanish. Destroyed data is outside the durability
 properties by construction, so it checks the properties that say the loss is never
 silent - `ReadPositionHonest` above all, carved out only for the writes a purge
-deleted (issue #4700) - with the other safety invariants that still apply: 14,500,000
+deleted (issue #4700) - with the other safety invariants that still apply: 17,428,938
 distinct states. A purge marks a leaf before clearing it, and recovery re-creates only
 a marked leaf (`MarkPurge`, `PurgeClear`, `Recover`); the lifecycle resumes once
 recovery has reset every marker.

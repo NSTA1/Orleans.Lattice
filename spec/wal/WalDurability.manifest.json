@@ -12,7 +12,7 @@
   },
   "variants": {
     "TwoFaults": { "distinctStates": 2958083 },
-    "SnapshotLoss": { "distinctStates": 14500000 },
+    "SnapshotLoss": { "distinctStates": 17428938 },
     "WarmLeaf": { "distinctStates": 17041 }
   }
 }

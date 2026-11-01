@@ -28,7 +28,7 @@ checks 381,426 distinct states with every safety and liveness property.
 The `TwoFaults` variant (`WalDurability.TwoFaults.cfg`) checks every safety invariant
 with a budget of two faults: 2,958,083 distinct states. The `SnapshotLoss`
 variant lets the environment destroy a leaf's snapshot or its row, and the operator
-purge a tree, at two faults: 14,500,000 distinct states. The `WarmLeaf` variant has no
+purge a tree, at two faults: 17,428,938 distinct states. The `WarmLeaf` variant has no
 faults: 17,041 distinct states to depth 28, with every property checked.
 
 ## Polling dispatch refinements
