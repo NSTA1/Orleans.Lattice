@@ -74,6 +74,14 @@ public sealed class OrphanRepairAfterReshardIntegrationTests
 
         await WriteAsync(tree, expected, "post", 400);
 
+        // A grown shard keeps its split state open for a moment after the
+        // reshard reports complete, and the pass declines such a shard rather
+        // than judge it. Wait until every shard can be judged.
+        await TestPoll.UntilAsync(
+            async () => await AuditIsJudgedEverywhereAsync(tree),
+            "every shard to finish its split and be judged by the audit",
+            timeout: TimeSpan.FromMinutes(2));
+
         Assert.That(await CollectFindingsAsync(tree, repair: false), Is.Empty,
             "precondition: the tree has no orphan before one is injected");
 
@@ -112,6 +120,20 @@ public sealed class OrphanRepairAfterReshardIntegrationTests
         }
 
         await tree.SetManyAsync(batch);
+    }
+
+    private static async Task<bool> AuditIsJudgedEverywhereAsync(ILattice tree)
+    {
+        string? resume = null;
+        do
+        {
+            var report = await tree.InspectOrphanedLeavesAsync(resume);
+            if (report.Gaps.Count > 0) return false;
+            resume = report.ResumeFrom;
+        }
+        while (resume is not null);
+
+        return true;
     }
 
     private static async Task<List<OrphanedLeafFinding>> CollectFindingsAsync(ILattice tree, bool repair)
