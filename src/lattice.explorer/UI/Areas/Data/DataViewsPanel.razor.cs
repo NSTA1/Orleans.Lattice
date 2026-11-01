@@ -19,7 +19,17 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 /// </summary>
 public partial class DataViewsPanel : IDisposable
 {
+    /// <summary>
+    /// How often the tab re-reads the status of a view that is behind, until every
+    /// listed view reads Current or the tab is left. A view status answers as of now,
+    /// even while its maintainer drains or rebuilds (#5519), so one read is a snapshot.
+    /// </summary>
+    internal static readonly TimeSpan StatusFollowInterval = TimeSpan.FromSeconds(2);
+
     private readonly ComponentLifetime _lifetime = new();
+    private ITimer? _followTimer;
+    private int _followInFlight;
+    private int _refreshesInFlight;
     private readonly Dictionary<string, TreeViewStatus?> _statuses = new(StringComparer.Ordinal);
     private readonly HashSet<string> _administrable = new(StringComparer.Ordinal);
     private IReadOnlyList<DataTreeEntry> _views = [];
@@ -151,6 +161,7 @@ public partial class DataViewsPanel : IDisposable
     public void Dispose()
     {
         _lifetime.Leave();
+        StopFollow();
         _watch?.Dispose();
         GC.SuppressFinalize(this);
     }
@@ -203,18 +214,114 @@ public partial class DataViewsPanel : IDisposable
         _statuses.Clear();
         if (Gate.Admin is not { } admin)
         {
+            StopFollow();
             return;
         }
 
-        foreach (var view in _views)
+        _refreshesInFlight++;
+        try
         {
-            var status = await StatusAsync(admin, view, token);
-            if (token.IsCancellationRequested || generation != _statusGeneration)
+            foreach (var view in _views)
             {
-                return;
+                var status = await StatusAsync(admin, view, token);
+                if (token.IsCancellationRequested || generation != _statusGeneration)
+                {
+                    return;
+                }
+
+                _statuses[view.StateId] = status;
+            }
+        }
+        finally
+        {
+            _refreshesInFlight--;
+        }
+
+        UpdateFollow();
+    }
+
+    /// <summary>
+    /// Follows the views that are behind: arms the re-read cadence while any listed
+    /// view reports lag, and disarms it once every one reads Current or none can be read.
+    /// </summary>
+    private void UpdateFollow()
+    {
+        var behind = !_lifetime.IsLeft
+            && _views.Any(view => _statuses.GetValueOrDefault(view.StateId) is { ApplyLag: > 0 });
+        if (!behind)
+        {
+            StopFollow();
+            return;
+        }
+
+        _followTimer ??= Time.CreateTimer(
+            _ => _ = InvokeAsync(FollowTickAsync),
+            null,
+            StatusFollowInterval,
+            StatusFollowInterval);
+    }
+
+    private void StopFollow()
+    {
+        _followTimer?.Dispose();
+        _followTimer = null;
+    }
+
+    /// <summary>
+    /// One follow tick: re-reads only the views that are behind and replaces each
+    /// status in place, so nothing on screen blanks to unknown in between. A tick that
+    /// overlaps a Refresh, or another tick, is skipped; a refresh that starts while
+    /// the tick reads wins, and the tick's answers are dropped.
+    /// </summary>
+    private async Task FollowTickAsync()
+    {
+        if (_lifetime.IsLeft || _refreshesInFlight > 0 || Gate.Admin is not { } admin || _followInFlight != 0)
+        {
+            return;
+        }
+
+        _followInFlight = 1;
+        var token = _lifetime.Token;
+        var generation = _statusGeneration;
+        try
+        {
+            var changed = false;
+            foreach (var view in _views.ToArray())
+            {
+                if (_statuses.GetValueOrDefault(view.StateId) is not { ApplyLag: > 0 })
+                {
+                    continue;
+                }
+
+                var status = await StatusAsync(admin, view, token);
+                if (token.IsCancellationRequested || generation != _statusGeneration)
+                {
+                    return;
+                }
+
+                // A failed re-read keeps the last answer rather than flickering to unknown.
+                if (status is not null)
+                {
+                    _statuses[view.StateId] = status;
+                    changed = true;
+                }
             }
 
-            _statuses[view.StateId] = status;
+            if (changed)
+            {
+                StateHasChanged();
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            _followInFlight = 0;
+            if (!token.IsCancellationRequested && generation == _statusGeneration)
+            {
+                UpdateFollow();
+            }
         }
     }
 
@@ -510,6 +617,7 @@ public partial class DataViewsPanel : IDisposable
                             }
 
                             _statuses[view.StateId] = refreshed;
+                            UpdateFollow();
                         }
                         catch (OperationCanceledException) when (token.IsCancellationRequested)
                         {
