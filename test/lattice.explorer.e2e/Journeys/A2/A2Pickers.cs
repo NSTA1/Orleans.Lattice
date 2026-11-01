@@ -87,9 +87,12 @@ internal static class A2Pickers
         await Expect(dialog).ToBeHiddenAsync();
     }
 
-    /// <summary>Waits for a toast that says <paramref name="text"/>.</summary>
+    /// <summary>
+    /// Waits for a toast that says <paramref name="text"/>. The newest match is awaited,
+    /// because a rule recorded on several trees raises the same toast once per tree.
+    /// </summary>
     /// <param name="toasts">The shell's toast messages.</param>
     /// <param name="text">What the toast says.</param>
     public static Task ExpectToastAsync(ILocator toasts, string text) =>
-        Expect(toasts.Filter(new() { HasText = text }).First).ToBeVisibleAsync();
+        Expect(toasts.Filter(new() { HasText = text }).Last).ToBeVisibleAsync();
 }
