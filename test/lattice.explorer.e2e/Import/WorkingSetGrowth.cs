@@ -46,6 +46,9 @@ internal sealed record WorkingSetGrowth(string Process, long Baseline, long Peak
     /// <summary>The live-heap growth the same process showed during the warm-up import, in bytes.</summary>
     public long? WarmUpLiveGrowth { get; init; }
 
+    /// <summary>The settled live heap the same process had before the warm-up import, in bytes.</summary>
+    public long? WarmUpLiveBaseline { get; init; }
+
     /// <summary>The process's garbage-collector configuration, as its probe reported it.</summary>
     public string? Collector { get; init; }
 

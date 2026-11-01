@@ -74,7 +74,7 @@ public sealed class ImportMemoryTests
     /// so the ceiling leaves room for a few batches queued on each hop and for the stored tree,
     /// while staying a sixth of the file.
     /// </summary>
-    public const long LiveHeapCeilingBytes = 32L * 1024 * 1024;
+    public const long LiveHeapCeilingBytes = ImportMemoryBudget.LiveHeapCeilingBytes;
 
     /// <summary>How far any measured process's working set may rise above the larger of its baseline and its warm-up peak: half the file.</summary>
     public const long WorkingSetCeilingBytes = FileBytes / 2;
@@ -276,6 +276,7 @@ public sealed class ImportMemoryTests
         {
             WarmUpPeak = warmUp[i].Peak,
             WarmUpLiveGrowth = warmUp[i].LiveGrowth,
+            WarmUpLiveBaseline = warmUp[i].LiveBaseline,
         })];
 
     private async Task<WorkingSetSampler> StartSamplerAsync() =>
@@ -378,8 +379,8 @@ public sealed class ImportMemoryTests
         {
             Assert.That(reading.Samples, Is.GreaterThan(4), $"{reading.Process}'s working set was sampled while the import ran");
             Assert.That(reading.LiveSamples, Is.GreaterThan(2), $"{reading.Process}'s live heap was read while the import ran");
-            Assert.That(reading.LiveGrowth, Is.Not.Null.And.LessThan(LiveHeapCeilingBytes),
-                $"{reading.Process}'s live heap rose {WorkingSetGrowth.Mb(reading.LiveGrowth ?? 0)} above its {WorkingSetGrowth.Mb(reading.LiveBaseline ?? 0)} settled baseline during a {mode} of a {WorkingSetGrowth.Mb(FileBytes)} file");
+            Assert.That(ImportMemoryBudget.Violations(reading, mode, FileBytes), Is.Empty,
+                $"{reading.Process}'s live heap stays within the import's memory budget during a {mode} of a {WorkingSetGrowth.Mb(FileBytes)} file");
             Assert.That(reading.Growth, Is.LessThan(WorkingSetCeilingBytes),
                 $"{reading.Process}'s working set rose {WorkingSetGrowth.Mb(reading.Growth)} above the larger of its {WorkingSetGrowth.Mb(reading.Baseline)} baseline and its {WorkingSetGrowth.Mb(reading.WarmUpPeak ?? 0)} warm-up peak during a {mode} of a {WorkingSetGrowth.Mb(FileBytes)} file");
         }
