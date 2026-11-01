@@ -241,15 +241,6 @@ them; the other two (#5416, #5459) are pinned by tests:
 | #5458 | A purged shard admitted a write whenever the registry named the id live, and while a purge's tail is owed that is the purged tree's own entry. The write re-seeded the root leaf under the purged lineage, so the tail took the entry for its own, unpinned and unregistered the live leaf, and the acknowledged write was lost on a cold replay. Fixed: the shard asks the deletion record, which holds the id until the purge has removed its registry row. |
 | #5459 | A resized tree's logical purge re-drove its completion, which removes the logical registry entry, against a logical id a create had registered again. Fixed: the completion records the lineage of the entry it removes before the first removal, and a re-drive removes nothing once the entry is gone or carries another lineage. Outside the model, which has no data-less logical id; tests pin it. |
 
-The Explorer journey estate found one more, outside the model's reach until it was
-extended: the model's liveness assumed every leaf's replay is eventually scheduled,
-while production schedules a live-written leaf's replay only on a timer or a GC
-touch against a bounded permit share.
-
-| Issue | Defect |
-|-------|--------|
-| #5570, #5572 | A live write never advanced the leaf's checkpoint, so a live-written leaf held its tree's WAL floor until a replay of every partition from `-1`, and on a freshly written estate those replays starved each other. Fixed: the leaf advances its checkpoint over its own applied appends without reading the WAL, and `WalDurability.tla` checks that a born, live-written leaf's pin becomes usable with no scheduled replay. |
-
 **What is covered:** one WAL partition shared by two leaves, with two faults per
 behaviour for safety and one for liveness, and a variant with snapshot and row loss
 and a purge; one move with one shard crash and one coordinator crash, and a variant
@@ -271,9 +262,9 @@ stamps and a retention TTL (`WalPartitionReleaseModel`).
   (both pinned by tests instead);
 - how long a write to an id created again waits while a purge's tail is owed: the
   model checks no liveness for re-creation (the refinement note bounds the wait);
-- how soon a live leaf's pin leaves the block value: `WalDurability` shows that a
-  newborn leaf's eventually does (`NewbornPinEventuallyUsable`), not within a time
-  bound, and the pin-retirement model lets a checkpoint cover live writes at any time.
+- how long a live leaf's pin stays at the block value before its first WAL replay
+  checkpoints it: the model lets a checkpoint cover live writes at any time, while
+  production advances one only by a replay.
 
 Coverage of the leaf lifecycle does not imply coverage of any of those. Each module's
 refinement note lists its gaps in full.

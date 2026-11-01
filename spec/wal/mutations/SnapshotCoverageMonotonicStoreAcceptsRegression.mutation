@@ -37,7 +37,4 @@ PERTURBS: Capture, ActivateLoadFail
     /\ UNCHANGED <<durCp, clk, cov, snapCov, snapRows, stale>>
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
-    /\ own' = [own EXCEPT ![l] = {}]
-    /\ poison' = [poison EXCEPT ![l] = FALSE]
-    /\ UNCHANGED born
 --- END

@@ -4,15 +4,15 @@
   "nonBehaviouralActions": ["PurgeSettled"],
   "counts": {
     "invariants": 11,
-    "properties": 5,
-    "actions": 27,
-    "mutations": 47,
-    "behaviourRows": 41,
-    "distinctStates": 381426
+    "properties": 4,
+    "actions": 26,
+    "mutations": 43,
+    "behaviourRows": 39,
+    "distinctStates": 226592
   },
   "variants": {
-    "TwoFaults": { "distinctStates": 2958083 },
-    "SnapshotLoss": { "distinctStates": 17428938 },
+    "TwoFaults": { "distinctStates": 1310600 },
+    "SnapshotLoss": { "distinctStates": 6402166 },
     "WarmLeaf": { "distinctStates": 17041 }
   }
 }

@@ -2690,10 +2690,7 @@ internal sealed partial class BPlusLeafGrain
         bool advanced;
         try
         {
-            // Issue #5572: bank the leaf's own live writes first, so the replay
-            // below starts past them instead of from -1.
-            var liveAdvanced = await TryAdvanceLiveCheckpointAsync(withinDrive: true);
-            advanced = await ReplayWalSinceCheckpointAsync(null, cancellationToken) || liveAdvanced;
+            advanced = await ReplayWalSinceCheckpointAsync(null, cancellationToken);
         }
         catch (LeafProjectionStaleException)
         {

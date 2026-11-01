@@ -142,9 +142,8 @@ internal sealed partial class BPlusLeafGrain
             Timestamp = terminalTimestamp,
         });
         var writer = ResolveCommitLogWriter();
-        IReadOnlyList<long>? replayedOffsets = null;
         if (writer is not null)
-            replayedOffsets = await writer.AppendManyAsync(records);
+            await writer.AppendManyAsync(records);
 
         // The WAL append may have overlapped another split. Bucket the exact
         // typed prepares, then re-route before draining, just as on the donor.
@@ -162,11 +161,6 @@ internal sealed partial class BPlusLeafGrain
                 visibleStamp = row.Timestamp;
         PublishVersionAdvance(visibleStamp);
         ClearSagaShadow(transactionId);
-        // The re-appended records are applied (issue #5572).
-        if (replayedOffsets is not null)
-        {
-            MarkLiveAppendApplied(records, replayedOffsets);
-        }
         await PublishDigestUpwardInlineAsync();
     }
 }
