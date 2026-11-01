@@ -40,8 +40,10 @@ public partial class BackupHealthPage : IDisposable
     private OperationFollower? _check;
     private string? _reportReadFor;
     private string? _checkError;
-    private bool _monitor = true;
-    private TimeSpan? _interval = TimeSpan.FromHours(24);
+    private bool _monitor;
+    private TimeSpan? _interval;
+    private bool _monitorRead;
+    private string? _monitorReadError;
     private LtDurationInput? _intervalField;
     private string? _configureMessage;
     private string? _configureError;
@@ -207,6 +209,10 @@ public partial class BackupHealthPage : IDisposable
         _checkError = null;
         _configureMessage = null;
         _configureError = null;
+        _monitor = false;
+        _interval = null;
+        _monitorRead = false;
+        _monitorReadError = null;
         try
         {
             var description = await Control.DescribeBackupAsync(backupId, cancellationToken);
@@ -238,7 +244,45 @@ public partial class BackupHealthPage : IDisposable
 
         if (_focusAllowed)
         {
+            await ReadMonitoringAsync(backupId, cancellationToken);
             await ResumeRunningCheckAsync(backupId, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Reads the backup's stored monitoring - or the deployment default it is
+    /// monitored under when none was stored - into the form, so the form shows what
+    /// the monitor does and saving it unchanged changes nothing (#5523). A form whose
+    /// configuration cannot be read is not offered, rather than offered with values
+    /// that are not the backup's.
+    /// </summary>
+    private async Task ReadMonitoringAsync(string backupId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var config = await Control.GetBackupHealthConfigAsync(backupId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (config is null)
+            {
+                _monitorReadError = BackupsFaults.NotFound;
+                return;
+            }
+
+            _monitor = config.MonitoringEnabled;
+            _interval = config.Interval;
+            _monitorRead = true;
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            // A newer load replaced this one.
+        }
+        catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, cancellationToken))
+        {
+            _monitorReadError = BackupsFaults.Describe(exception);
+        }
+        catch (OperationCanceledException)
+        {
+            // The page went away.
         }
     }
 

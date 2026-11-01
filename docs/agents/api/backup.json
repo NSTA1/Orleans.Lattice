@@ -1738,6 +1738,50 @@
       ]
     },
     {
+      "id": "get-backup-health-config",
+      "in_process": "ILatticeBackupControl.GetBackupHealthConfigAsync",
+      "grpc_method": "/orleans.lattice.api.backup/GetBackupHealthConfig",
+      "transport_scope": "both",
+      "request": "BackupHealthConfigGetRequestMessage",
+      "response": "BackupHealthConfigResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetBackupHealthConfigAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only lookup of the stored health-monitor configuration, or the deployment default when none is stored; an unknown backup reads as not found.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetBackupHealthConfigAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetBackupHealthConfigAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetBackupHealthConfigAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#GetBackupHealthConfig"
+      ]
+    },
+    {
       "id": "get-backup-operation-status",
       "in_process": "ILatticeBackupOperations.GetOperationStatusAsync",
       "grpc_method": "/orleans.lattice.api.backup/GetBackupOperationStatus",

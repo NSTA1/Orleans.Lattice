@@ -85,22 +85,33 @@ else if (FocusedId is { } focused)
 
             <section class="lt-backups-section" aria-labelledby="lt-backups-monitor-title">
                 <h3 id="lt-backups-monitor-title" class="lt-backups-section__title">Periodic monitoring</h3>
-                <form class="lt-backups-form" @onsubmit="ConfigureAsync">
-                    <LtSwitch Label="Verify this backup periodically" Checked="@_monitor" CheckedChanged="value => _monitor = value" OnText="On" OffText="Off" />
-                    <LtDurationInput @ref="_intervalField" Label="Verify every" Value="@_interval" ValueChanged="value => _interval = value" Min="@BackupsFormat.ShortestInterval" />
-                    <p class="lt-backups-note">The monitor applies this on its next sweep.</p>
-                    @if (_configureMessage is { } configureMessage)
-                    {
-                        <p class="lt-backups-status" role="status">@configureMessage</p>
-                    }
-                    @if (_configureError is { } configureError)
-                    {
-                        <p class="lt-backups-error" role="alert">@configureError</p>
-                    }
-                    <div class="lt-backups-actions">
-                        <LtButton Type="LtButtonType.Submit">Save monitoring</LtButton>
-                    </div>
-                </form>
+                @if (_monitorReadError is { } monitorReadError)
+                {
+                    <p class="lt-backups-error" role="alert">@monitorReadError</p>
+                }
+                else if (!_monitorRead)
+                {
+                    <LtSkeleton Lines="2" Label="Loading the backup's monitoring" />
+                }
+                else
+                {
+                    <form class="lt-backups-form" @onsubmit="ConfigureAsync">
+                        <LtSwitch Label="Verify this backup periodically" Checked="@_monitor" CheckedChanged="value => _monitor = value" OnText="On" OffText="Off" />
+                        <LtDurationInput @ref="_intervalField" Label="Verify every" Value="@_interval" ValueChanged="value => _interval = value" Min="@BackupsFormat.ShortestInterval" />
+                        <p class="lt-backups-note">The monitor applies this on its next sweep.</p>
+                        @if (_configureMessage is { } configureMessage)
+                        {
+                            <p class="lt-backups-status" role="status">@configureMessage</p>
+                        }
+                        @if (_configureError is { } configureError)
+                        {
+                            <p class="lt-backups-error" role="alert">@configureError</p>
+                        }
+                        <div class="lt-backups-actions">
+                            <LtButton Type="LtButtonType.Submit">Save monitoring</LtButton>
+                        </div>
+                    </form>
+                }
             </section>
         }
     }
