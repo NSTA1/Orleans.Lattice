@@ -237,9 +237,11 @@
   padding-inline-start: var(--lt-space-5);
 }
 
-/* A stacked link is at least 24px tall, so neighbouring links sit 24px apart
-   and meet the WCAG 2.2 target-size minimum. */
-.lt-backups-list .lt-backups-link {
+/* A stacked link, or a link alone on its line rather than inside a sentence, is a
+   target in its own right: it is at least 24px tall, so it meets the WCAG 2.2
+   target-size minimum and neighbouring links sit 24px apart. */
+.lt-backups-list .lt-backups-link,
+.lt-backups-link--standalone {
   display: inline-flex;
   align-items: center;
   min-block-size: 1.5rem;
