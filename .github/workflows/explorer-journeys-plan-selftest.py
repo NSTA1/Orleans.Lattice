@@ -34,14 +34,15 @@ class Tree:
     """A temporary repository root with journey folders and story fixtures."""
 
     def __init__(self, journeys=("A1", "A10", "A3", "T2"), stories=("ContosoStoryTests", "FabrikamStoryTests"),
-                 contract=True, storylines=("A1", "T1")):
+                 contract=True, storylines=("A1", "T1"), conformance=("Contoso", "Fabrikam"), mentions=None):
         self._temporary = tempfile.TemporaryDirectory()
         self.root = Path(self._temporary.name)
         base = self.root / planner.JOURNEYS
         base.mkdir(parents=True)
+        mentions = mentions or {}
         for journey in journeys:
             (base / journey).mkdir()
-            (base / journey / f"{journey}Journey.cs").write_text("// journey\n")
+            (base / journey / f"{journey}Journey.cs").write_text("// journey\n" + mentions.get(journey, ""))
         (base / "JourneyHelpers.cs").write_text("// a shared file, not a journey\n")
         (base / "bin").mkdir()
         story = self.root / planner.E2E / "Story"
@@ -63,6 +64,16 @@ class Tree:
                 else:
                     (contracts / f"{chapter}Contract.cs").write_text(
                         f"public sealed class {chapter}Contract() : ChapterContract(\"{chapter}\")\n{{\n}}\n")
+        contracts = self.root / planner.CONTRACTS
+        contracts.mkdir(parents=True, exist_ok=True)
+        (contracts / "ContractConformanceFixture.cs").write_text("// the shared fixture, not a shard\n")
+        for storyline in conformance:
+            (contracts / f"{storyline}ContractConformanceTests.cs").write_text("// shard\n")
+
+    def write(self, path, text=""):
+        target = self.root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
 
     def close(self):
         self._temporary.cleanup()
@@ -73,43 +84,100 @@ class PlanTests(unittest.TestCase):
         self.tree = Tree()
         self.addCleanup(self.tree.close)
 
-    def plan(self, event="pull_request", action="synchronize", base=BUCKET, changed=()):
-        return planner.plan(self.tree.root, event, action, base, list(changed) if changed is not None else None)
+    def plan(self, event="pull_request", action="synchronize", base=BUCKET, changed=(), labels=(), label=""):
+        return planner.plan(self.tree.root, event, action, base, list(changed) if changed is not None else None,
+                            list(labels), label)
+
+    EVERY = ["harness", "isolated-a1", "isolated-a10", "isolated-a3", "isolated-t2", "story-contoso",
+             "story-fabrikam"]
+    EVERY_ISOLATED = ["harness", "isolated-a1", "isolated-a10", "isolated-a3", "isolated-t2"]
 
     def test_journeys_are_discovered_from_the_directory(self):
         found = planner.discover_journeys(self.tree.root)
         self.assertEqual([("A1", "a1", "contoso"), ("A10", "a10", "contoso"), ("A3", "a3", "contoso"),
                           ("T2", "t2", "fabrikam")], found)
 
-    def test_a_journey_only_pull_request_runs_its_leg_and_its_storyline(self):
+    def test_conformance_shards_are_discovered_from_the_directory(self):
+        self.assertEqual(["Contoso", "Fabrikam"], planner.conformance_shards(self.tree.root))
+
+    def test_a_member_pull_request_runs_only_its_own_isolated_leg(self):
+        # User decision on #5401 (2026-11-01): stories and conformance are advisory, at landing only.
         result = self.plan(changed=[f"{planner.JOURNEYS}/A3/A3Journey.cs"])
-        self.assertEqual(["harness", "isolated-a3", "story-contoso"], names(result))
+        self.assertEqual(["harness", "isolated-a3"], names(result))
+        self.assertEqual([], result["conformance"])
         self.assertEqual([], result["provenance"])
         self.assertTrue(any("Screenshot provenance" in note for note in result["notes"]))
+        self.assertTrue(any("no story leg and no contract conformance" in note for note in result["notes"]))
 
-    def test_a_fabrikam_journey_runs_the_fabrikam_story(self):
+    def test_a_fabrikam_member_pull_request_runs_no_story(self):
         result = self.plan(changed=[f"{planner.JOURNEYS}/T2/T2Journey.cs"])
-        self.assertEqual(["harness", "isolated-t2", "story-fabrikam"], names(result))
+        self.assertEqual(["harness", "isolated-t2"], names(result))
+        self.assertEqual([], result["conformance"])
 
-    def test_an_explorer_change_runs_every_leg(self):
-        for path in ("src/lattice.explorer/UI/Shell.razor", f"{planner.E2E}/Estate/JourneyEstate.cs",
-                     "reference-architecture/hosts/Silo/Program.cs", "src/lattice.api.data/DataApi.cs",
-                     ".github/workflows/explorer-journeys.yml", f"{planner.JOURNEYS}/JourneyHelpers.cs"):
+    def test_a_shared_change_on_a_member_runs_every_isolated_leg_and_no_story(self):
+        for path in ("src/lattice.explorer/UI/Shell.razor", "src/lattice.explorer/Core/Catalog/X.cs",
+                     f"{planner.E2E}/Estate/JourneyEstate.cs", "reference-architecture/hosts/Silo/Program.cs",
+                     "src/lattice.api.data/DataApi.cs", ".github/workflows/explorer-journeys.yml",
+                     f"{planner.JOURNEYS}/JourneyHelpers.cs", "test/shared/Orleans.Lattice.Testing/X.cs",
+                     f"{planner.AREAS}/Root.razor"):
             with self.subTest(path=path):
                 result = self.plan(changed=[f"{planner.JOURNEYS}/A3/A3Journey.cs", path])
-                self.assertEqual(["harness", "isolated-a1", "isolated-a10", "isolated-a3", "isolated-t2",
-                                  "story-contoso", "story-fabrikam"], names(result))
+                self.assertEqual(self.EVERY_ISOLATED, names(result))
+                self.assertEqual([], result["conformance"])
 
-    def test_markdown_docs_and_unrelated_workflows_run_only_the_harness(self):
-        result = self.plan(changed=["docs/lattice.explorer/areas.md", f"{planner.E2E}/README.md",
-                                    ".github/workflows/ci.yml", "tools/Get-JourneyScreenshots.ps1"])
+    def test_an_area_file_feeds_the_chapters_naming_its_area(self):
+        tree = Tree(mentions={"A1": 'Goto("/schema");\n', "A10": "new SchemaAreaPage(page);\n",
+                              "A3": "// Schemas and Schemata do not name the area\n"})
+        self.addCleanup(tree.close)
+        area_file = f"{planner.AREAS}/Schema/SchemaRuleBuilder.razor"
+        tree.write(area_file, "<div>rules</div>\n")
+        tree.write(f"{planner.AREAS}/Cluster/ClusterPage.razor", "<div>cluster</div>\n")
+        result = planner.plan(tree.root, "pull_request", "synchronize", BUCKET,
+                              [f"{planner.JOURNEYS}/T2/T2Journey.cs", area_file], [], "")
+        self.assertEqual(["harness", "isolated-a1", "isolated-a10", "isolated-t2"], names(result))
+        self.assertEqual([], result["conformance"])
+        self.assertTrue(any("feeds the chapters naming the Schema area: A1, A10" in n for n in result["notes"]))
+
+    def test_an_area_no_chapter_names_runs_only_the_touched_legs(self):
+        tree = Tree()
+        self.addCleanup(tree.close)
+        area_file = f"{planner.AREAS}/Backups/BackupList.razor"
+        tree.write(area_file)
+        result = planner.plan(tree.root, "pull_request", "opened", BUCKET, [area_file], [], "")
         self.assertEqual(["harness"], names(result))
+        self.assertTrue(any("none in this tree" in note for note in result["notes"]))
+
+    def test_an_area_file_used_outside_its_area_is_shared(self):
+        tree = Tree(mentions={"A1": 'Goto("/schema");\n'})
+        self.addCleanup(tree.close)
+        area_file = f"{planner.AREAS}/Cluster/ClusterTreeCatalog.cs"
+        tree.write(area_file, "class ClusterTreeCatalog {}\n")
+        tree.write(f"{planner.AREAS}/Schema/SchemaTreeCatalog.cs", "class S : ClusterTreeCatalog {}\n")
+        result = planner.plan(tree.root, "pull_request", "opened", BUCKET, [area_file], [], "")
+        self.assertEqual(self.EVERY_ISOLATED, names(result))
+        # Used only inside its own area folder, it is not shared.
+        tree.write(f"{planner.AREAS}/Schema/SchemaTreeCatalog.cs", "class S {}\n")
+        tree.write(f"{planner.AREAS}/Cluster/ClusterPage.razor", "@inject ClusterTreeCatalog Catalog\n")
+        self.assertFalse(planner.area_file_is_shared(tree.root, area_file, "Cluster"))
+        result = planner.plan(tree.root, "pull_request", "opened", BUCKET, [area_file], [], "")
+        self.assertEqual(["harness"], names(result))
+
+    def test_markdown_docs_unrelated_workflows_and_other_test_projects_run_only_the_harness(self):
+        result = self.plan(changed=["docs/lattice.explorer/areas.md", f"{planner.E2E}/README.md",
+                                    ".github/workflows/ci.yml", "tools/Get-JourneyScreenshots.ps1",
+                                    "test/lattice.explorer/UI/Areas/Schema/SchemaReadsTests.cs",
+                                    "test/lattice.explorer.uitests/X.cs"])
+        self.assertEqual(["harness"], names(result))
+        self.assertEqual([], result["conformance"])
 
     def test_a_body_edit_runs_no_leg_and_checks_the_touched_journeys(self):
         result = self.plan(action="edited", changed=[f"{planner.JOURNEYS}/A3/x.cs", f"{planner.JOURNEYS}/T2/y.cs"])
         self.assertEqual([], names(result))
+        self.assertEqual([], result["conformance"])
         self.assertEqual(["a3", "t2"], result["provenance"])
         self.assertEqual(["a3"], self.plan(action="reopened", changed=[f"{planner.JOURNEYS}/A3/x.cs"])["provenance"])
+        landing = self.plan(action="edited", base="main", labels=[planner.FULL_LABEL])
+        self.assertEqual(([], []), (names(landing), landing["conformance"]))
 
     def test_provenance_is_only_required_into_an_integration_branch(self):
         result = self.plan(action="edited", base="main", changed=[f"{planner.JOURNEYS}/A3/x.cs"])
@@ -120,23 +188,50 @@ class PlanTests(unittest.TestCase):
         result = self.plan(action="edited", changed=[f"{planner.JOURNEYS}/A9/gone.cs"])
         self.assertEqual([], result["provenance"])
 
-    def test_the_bucket_to_main_pull_request_and_pushes_run_every_leg(self):
-        every = ["harness", "isolated-a1", "isolated-a10", "isolated-a3", "isolated-t2", "story-contoso",
-                 "story-fabrikam"]
-        self.assertEqual(every, names(self.plan(base="main", changed=[f"{planner.JOURNEYS}/A3/x.cs"])))
-        self.assertEqual(every, names(self.plan(base="release/1.2", changed=["src/x.cs"])))
-        self.assertEqual(every, names(self.plan(event="push", action="", base="")))
+    def test_the_landing_pull_request_pushes_and_dispatch_run_the_full_set(self):
+        cases = {
+            "landing pull request": self.plan(base="main", changed=[f"{planner.JOURNEYS}/A3/x.cs"]),
+            "release pull request": self.plan(base="release/1.2", changed=["src/x.cs"]),
+            "bucket push": self.plan(event="push", action="", base=""),
+            "workflow_dispatch": self.plan(event="workflow_dispatch", action="", base=""),
+        }
+        for case, result in cases.items():
+            with self.subTest(case=case):
+                self.assertEqual(self.EVERY, names(result))
+                self.assertEqual(["Contoso", "Fabrikam"], result["conformance"])
+
+    def test_a_member_pull_request_labelled_journeys_full_runs_the_full_set(self):
+        result = self.plan(changed=[f"{planner.JOURNEYS}/A3/x.cs"], labels=["ci", planner.FULL_LABEL])
+        self.assertEqual(self.EVERY, names(result))
+        self.assertEqual(["Contoso", "Fabrikam"], result["conformance"])
+        unlabelled = self.plan(changed=[f"{planner.JOURNEYS}/A3/x.cs"], labels=["ci", "journeys-fuller"])
+        self.assertEqual(["harness", "isolated-a3"], names(unlabelled))
+
+    def test_adding_the_label_runs_the_full_set_and_any_other_label_runs_nothing(self):
+        added = self.plan(action="labeled", label=planner.FULL_LABEL, labels=[planner.FULL_LABEL],
+                          changed=[f"{planner.JOURNEYS}/A3/x.cs"])
+        self.assertEqual(self.EVERY, names(added))
+        self.assertEqual(["Contoso", "Fabrikam"], added["conformance"])
+        self.assertEqual([], added["provenance"])
+        other = self.plan(action="labeled", label="ci", labels=["ci"], changed=[f"{planner.JOURNEYS}/A3/x.cs"])
+        self.assertEqual(([], [], []), (names(other), other["conformance"], other["provenance"]))
+        self.assertFalse(any("Screenshot provenance" in note for note in other["notes"]))
 
     def test_the_nightly_run_adds_the_narrow_contoso_story(self):
         result = self.plan(event="schedule", action="", base="")
         self.assertEqual("story-contoso-narrow", names(result)[-1])
+        self.assertEqual(["Contoso", "Fabrikam"], result["conformance"])
         narrow = result["legs"][-1]
         self.assertEqual(("story", "narrow", "contoso"), (narrow["mode"], narrow["viewport"], narrow["storyline"]))
         self.assertEqual(1, sum(1 for name in names(result) if name.endswith("-narrow")))
 
-    def test_an_unlisted_or_empty_change_set_runs_every_leg(self):
-        self.assertEqual(7, len(self.plan(changed=None)["legs"]))
-        self.assertEqual(7, len(self.plan(changed=[])["legs"]))
+    def test_an_unlisted_or_empty_change_set_runs_every_isolated_leg(self):
+        for changed in (None, []):
+            with self.subTest(changed=changed):
+                result = self.plan(changed=changed)
+                self.assertEqual(self.EVERY_ISOLATED, names(result))
+                self.assertEqual([], result["conformance"])
+        self.assertEqual(self.EVERY, names(self.plan(base="main", changed=None)))
 
     def test_isolated_filters_never_select_a_longer_chapter_id(self):
         leg = next(leg for leg in self.plan(changed=[f"{planner.JOURNEYS}/A1/x.cs"])["legs"] if leg["name"] == "isolated-a1")
@@ -215,10 +310,31 @@ class CommandLineTests(unittest.TestCase):
             self.assertEqual(0, code)
             values = dict(line.split("=", 1) for line in output.read_text().splitlines())
             self.assertEqual([], json.loads(values["legs"]))
+            self.assertEqual([], json.loads(values["conformance"]))
             self.assertEqual(["a3"], json.loads(values["provenance"]))
             self.assertIn("No leg runs.", summary.read_text())
 
-    def test_a_missing_changed_files_list_runs_every_leg(self):
+    def test_the_labels_argument_drives_the_full_set(self):
+        tree = Tree()
+        self.addCleanup(tree.close)
+        with tempfile.TemporaryDirectory() as scratch:
+            changed = Path(scratch) / "changed.txt"
+            changed.write_text(f"{planner.JOURNEYS}/A3/x.cs\n")
+            for labels, legs, conformance in (('["ci","journeys-full"]', 7, ["Contoso", "Fabrikam"]),
+                                              ('["ci"]', 2, []), ("null", 2, []), ("", 2, [])):
+                with self.subTest(labels=labels):
+                    output = Path(scratch) / f"output-{legs}-{len(labels)}"
+                    code = planner_main(["plan", "--root", str(tree.root), "--event", "pull_request", "--action",
+                                         "synchronize", "--base-ref", BUCKET, "--labels", labels, "--label", "",
+                                         "--changed-files", str(changed)], {"GITHUB_OUTPUT": str(output)})
+                    self.assertEqual(0, code)
+                    values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+                    self.assertEqual(legs, len(json.loads(values["legs"])))
+                    self.assertEqual(conformance, json.loads(values["conformance"]))
+            self.assertEqual(1, planner_main(["plan", "--root", str(tree.root), "--event", "pull_request",
+                                              "--labels", "not json"], {}))
+
+    def test_a_missing_changed_files_list_runs_every_isolated_leg(self):
         tree = Tree()
         self.addCleanup(tree.close)
         with tempfile.TemporaryDirectory() as scratch:
@@ -228,7 +344,7 @@ class CommandLineTests(unittest.TestCase):
                                 {"GITHUB_OUTPUT": str(output)})
             self.assertEqual(0, code)
             values = dict(line.split("=", 1) for line in output.read_text().splitlines())
-            self.assertEqual(7, len(json.loads(values["legs"])))
+            self.assertEqual(5, len(json.loads(values["legs"])))
 
     def test_a_bad_journey_folder_fails_the_command(self):
         tree = Tree(journeys=("Q1",))
@@ -399,10 +515,28 @@ class WiringTests(unittest.TestCase):
         self.assertIn("python3 .github/workflows/journey-screenshot-provenance.py", block)
         self.assertIn("actions: read", block)
 
-    def test_body_edits_trigger_the_lane_in_their_own_concurrency_group(self):
-        self.assertIn("types: [opened, synchronize, reopened, edited]", self.text)
-        self.assertIn("github.event.action == 'edited' && 'body' || 'code'", self.text)
+    def test_body_edits_and_labels_trigger_the_lane_in_their_own_concurrency_groups(self):
+        self.assertIn("types: [opened, synchronize, reopened, edited, labeled]", self.text)
+        self.assertIn("github.event.action == 'edited' && 'body' || github.event.action == 'labeled' && "
+                      "format('label-{0}', github.event.label.name) || 'code'", self.text)
         self.assertIn("schedule:", self.text)
+        self.assertRegex(self.text, r"(?m)^  workflow_dispatch:")
+
+    def test_the_planner_receives_the_labels(self):
+        block = job(self.text, "planner")
+        self.assertIn("LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}", block)
+        self.assertIn("LABEL: ${{ github.event.label.name }}", block)
+        self.assertIn('--labels "$LABELS" --label "$LABEL"', block)
+        self.assertIn("conformance: ${{ steps.plan.outputs.conformance }}", block)
+
+    def test_contract_conformance_is_a_matrix_over_the_plan(self):
+        block = job(self.text, "contract-conformance")
+        self.assertIn("needs: [plan, planner]", block)
+        condition = re.search(r"^    if: (.*)$", block, re.MULTILINE).group(1)
+        self.assertIn("needs.plan.outputs.push_is_member != 'true'", condition)
+        self.assertIn("needs.planner.outputs.conformance != '[]'", condition)
+        self.assertIn("storyline: ${{ fromJSON(needs.planner.outputs.conformance) }}", block)
+        self.assertIn("${{ matrix.storyline }}ContractConformanceTests", block)
 
     def test_both_triggers_watch_the_lane_scripts(self):
         for name in ("explorer-journeys-plan*.py", "journey-screenshot-provenance*.py",
@@ -418,6 +552,10 @@ class WiringTests(unittest.TestCase):
         self.assertTrue((e2e / "Smoke" / "EstateSmokeTests.cs").is_file(),
                         "the fail-closed probe filters on Smoke.EstateSmokeTests")
         planner.discover_journeys(REPOSITORY)
+        # The conformance job filters on <Storyline>ContractConformanceTests; F6's Contoso shard exists.
+        self.assertIn("Contoso", planner.conformance_shards(REPOSITORY))
+        self.assertIn("ContractConformanceTests", (e2e / "Contracts" / "ContosoContractConformanceTests.cs")
+                      .read_text(encoding="utf-8"))
         # The names the legs filter on are F3's (#5361): every one must still exist as spelled.
         gate = (e2e / "FeatureCoverage" / "CoverageGateTests.cs").read_text(encoding="utf-8")
         self.assertIn('[Category("CoverageGate")]', gate)
