@@ -331,8 +331,7 @@ internal sealed partial class LatticeAppCatalog
         AppLifecycleState? state = null;
         if (joined is not null)
         {
-            var status = await _pipeline.GetStatusAsync(tenant, joined.Slug, cancellationToken).ConfigureAwait(false);
-            state = AppsControlMapping.ToWireState(joined.State, status);
+            (state, _) = await AppsLiveState.ReadAsync(_pipeline, tenant, joined, cancellationToken).ConfigureAwait(false);
         }
 
         var versions = ImmutableArray.CreateBuilder<string>(entry.Versions.Count);

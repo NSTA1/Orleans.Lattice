@@ -107,7 +107,7 @@ The complete route inventory below contains the 70 unique `@page` route patterns
 | Replication | `replication`, `/replication` | `ILatticeReplicationStatus`, `ILatticeReplicationControl` | Tenant-scoped addresses, over the caller's admitted replication view | Reads the peer-status report, or falls back to the enrolment report. Status success makes the area Visible. If status fails but enrolment names at least one manageable tree, it is Visible. Missing facades, denied reads and other definite faults are Hidden; when neither read admits and either one met no answer, the area is not checked and that read is not reused. |
 | Backups | `backups`, `/backups` | `ILatticeBackupControl` | Tenant-scoped | Probes backup capabilities against a reserved scope. `CanList` makes the area Visible. A denied or grantless caller sees Unavailable with "You do not hold a backup grant on this cluster. Ask an administrator for one."; an unserved, unconfigured or definitely faulted control facade is Hidden; a probe the cluster did not answer is not checked. |
 | Telemetry | `telemetry`, `/telemetry` | `ILatticeTelemetry` | Tenant-scoped while tenancy is on | Reads the telemetry catalogue once. Any successful catalogue read, including an empty catalogue, makes the area Visible. A refused caller, a cluster with no telemetry facade, or a definite catalogue fault is Hidden; a catalogue read the cluster did not answer is not checked and is read again. |
-| Cluster | `cluster`, `/cluster` and `/t/{tenant}/cluster` | `ILatticeTreeAdmin`, `ILatticeReplicationStatus`, and the state connection for cluster identity and tree catalogue | Mixed: `/cluster` is cluster-wide; the tenant-rooted form shows only that tenant's trees and storage | Requires a tree-admin facade and a configured cluster connection. It probes shallow storage usage. Success makes it Visible; a denied probe is Hidden; no connection is Unavailable with "Connect to a cluster to see its estate."; an unserved tree-admin operation is Unavailable; transient faults are Unavailable and are not remembered. |
+| Cluster | `cluster`, `/cluster` and `/t/{tenant}/cluster` | `ILatticeTreeAdmin`, `ILatticeReplicationStatus`, and the state connection for cluster identity and tree catalogue | Mixed: `/cluster` is cluster-wide; the tenant-rooted form shows only that tenant's trees and storage | Requires a tree-admin facade and a configured cluster connection. It probes shallow storage usage, which needs the cluster-wide Telemetry capability. Success makes it Visible. A caller refused that probe is Visible only when the capability probe of one of the first 64 trees its catalogue lists reports a tree-lifecycle or tree-admin grant; a read, diagnostics, bulk-load or restore grant does not admit it, so it is Hidden. Such a caller sees no estate-wide figures, Home status or badge, and the overview says the figures need Telemetry. No connection is Unavailable with "Connect to a cluster to see its estate."; an unserved tree-admin operation is Unavailable; transient faults are Unavailable and are not remembered. |
 
 ## Data
 
@@ -196,7 +196,10 @@ time, newest first by default, with value diffs, CRDT member changes, retention
 boundary notes and a live tail. A revision whose value the tree's history
 retention did not keep, only its size and hash, reads "Set - value not kept", and
 the timeline explains once, rather than under each such revision, that it is still
-a write to the key and not a metadata change. Copies that resizing, resharding or
+a write to the key and not a metadata change. A revision of a
+[versioned](managing-schema.md) tree shows its body, as the Keys tab does, with
+the schema version it was stamped with beside its size; the body is shown in
+the shape it was written in, not upgraded to the tree's current version. Copies that resizing, resharding or
 replication make of a revision are not shown as revisions of their own. The **As of** field is a
 [date and time field](theming-and-density.md#dates-times-and-durations) in UTC.
 It starts empty, which means the latest, and refuses a time in the future;
@@ -212,7 +215,8 @@ seconds, in place, until it reaches zero. When detail metrics are paused, the af
 covers only part of it (a prefix-scoped rule, for example) is told they need
 read access to the whole tree; the tree's summary line then omits its key
 count, and the connection indicator stays Connected. The Dead letters tab reads a count and then pages strict-mode dead
-letters 50 at a time, with source, key, reason and clipped details. Both tabs
+letters 50 at a time, with source, key, reason and clipped details; a dead
+letter's value, like a versioned revision's, is shown without its version envelope. Both tabs
 show fixed sentences when the state API is unavailable, denied or faulted.
 
 The Tag indexes tab lists indexes covering the tree, their reconcile state and
@@ -766,6 +770,10 @@ changes, so they do not ask for destructive confirmation. Lifecycle operations
 do: Delete soft-deletes the tree and schedules purge, Recover restores normal
 reads and writes, Purge permanently removes tree state and is not an app
 operation, and Set alias points the logical name at another physical tree.
+**Add name...** in the same Alias section gives the tree another name: it names
+a free alias (a name that already holds a tree is refused, with a pointer to that
+tree's own Lifecycle) and, after the alias is typed to confirm, points it at this
+tree, so `/data/{alias}` and every read and write through the alias reach it.
 **Recoverable until** is shown with the recovery deadline only while the tree can
 still be recovered. Purge is accept-then-poll: the call can return while the shard
 walk is still running, so the tab says the purge was accepted, follows it with a
