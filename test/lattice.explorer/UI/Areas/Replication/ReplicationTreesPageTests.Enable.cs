@@ -150,7 +150,7 @@ public sealed partial class ReplicationTreesPageTests
         cut.FindAll("form.lt-replication-form input")[0].Input("inventory");
         cut.FindAll("form.lt-replication-form input")[1].Input("eu-north");
         cut.Find("form.lt-replication-form").Submit();
-        cut.WaitUntil(() => Assert.That(cut.FindAll("form.lt-replication-form [role=\"status\"]"), Has.Count.EqualTo(1)));
+        cut.WaitUntil(() => Assert.That(cut.FindAll("form.lt-replication-form [data-lt-replication=\"enabling\"]"), Has.Count.EqualTo(1)));
 
         cut.FindAll("form.lt-replication-form button").Single(button => button.TextContent.Trim() == "Cancel").Click();
         Assert.Multiple(() =>
@@ -177,16 +177,17 @@ public sealed partial class ReplicationTreesPageTests
         cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr"), Has.Count.EqualTo(6)));
 
         cut.FindAll("button").Single(button => button.TextContent.Trim() == "Enable replication for a tree").Click();
-        Assert.That(cut.FindAll("form.lt-replication-form [role=\"status\"]"), Is.Empty, "nothing is in flight yet");
+        Assert.That(cut.FindAll("form.lt-replication-form [data-lt-replication=\"enabling\"]"), Is.Empty, "nothing is in flight yet");
         cut.FindAll("form.lt-replication-form input")[0].Input("inventory");
         cut.FindAll("form.lt-replication-form input")[1].Input("eu-north");
         cut.Find("form.lt-replication-form").Submit();
 
         cut.WaitUntil(() => Assert.That(
-            cut.Find("form.lt-replication-form [role=\"status\"]").TextContent.Trim(),
+            cut.Find("form.lt-replication-form [data-lt-replication=\"enabling\"]").TextContent.Trim(),
             Is.EqualTo("Enabling replication for inventory and asking eu-north for a snapshot. "
                 + "This waits for eu-north to answer, which can take a minute or more. "
                 + "You can close this dialog; stay on this page and a message reports the result.")));
+        Assert.That(cut.Find("form.lt-replication-form [data-lt-replication=\"enabling\"]").GetAttribute("role"), Is.EqualTo("status"), "assistive technology hears the wait");
 
         cut.InvokeAsync(() => Control.ChangeGate.SetResult());
         cut.WaitUntil(() =>
