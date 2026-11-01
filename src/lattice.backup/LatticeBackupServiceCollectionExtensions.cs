@@ -90,6 +90,14 @@ public static class LatticeBackupServiceCollectionExtensions
         builder.Services.TryAddSingleton<BackupInitializer>();
         builder.Services.TryAddSingleton<ILatticeBackupSink, InClusterLatticeBackupSink>();
         builder.Services.TryAddSingleton<ILatticeBackupCatalogStore, LatticeBackupCatalogStore>();
+
+        // Every publish to, and delete from, the catalog and sink runs on the
+        // backup's scope's scheduler grain, under a per-id hold (issue #5418).
+        builder.Services.TryAddSingleton(sp => new BackupPublisher(
+            sp.GetRequiredService<ILatticeBackupCatalogStore>(),
+            sp.GetRequiredService<ILatticeBackupSink>(),
+            sp.GetRequiredService<IGrainFactory>()));
+        builder.Services.TryAddSingleton<IBackupPublicationGate, SchedulerBackupPublicationGate>();
         builder.Services.TryAddSingleton<ILatticeBackupSetResolver, LatticeBackupSetResolver>();
 
         // Periodic backup-health verification: the store that persists the latest

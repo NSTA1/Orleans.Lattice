@@ -111,4 +111,27 @@ internal interface ILatticeBackupSchedulerGrain : IGrainWithStringKey
     /// <param name="incremental"><c>true</c> to check the incremental schedule, <c>false</c> for the full schedule.</param>
     [AlwaysInterleave]
     Task<bool> HasScheduleAsync(bool incremental);
+
+    /// <summary>
+    /// Publishes a manifest of this scope to the sink and the catalog under the
+    /// id's hold (issue #5418): it waits while a retention pass or a delete is
+    /// retiring the id, or another publish of it runs, and a pass never dooms the
+    /// id while it publishes. Returns <see cref="BackupPublishOutcome.Busy"/>,
+    /// having written nothing, when the id stays held beyond one call's wait
+    /// (<see cref="LatticeBackupOptions.PublishHoldWait"/>); the caller retries.
+    /// </summary>
+    /// <param name="request">The manifest and how to publish it.</param>
+    [AlwaysInterleave]
+    Task<BackupPublishResult> PublishAsync(BackupPublishRequest request);
+
+    /// <summary>
+    /// Removes a backup of this scope - an operator delete, or a catalog scrub of
+    /// an orphan row - under the id's hold, as a retention pass removes one.
+    /// Returns <see cref="BackupRetireOutcome.Busy"/>, having removed nothing, when
+    /// the id stays held beyond one call's wait; the caller retries.
+    /// </summary>
+    /// <param name="backupId">The backup to remove.</param>
+    /// <param name="kind">An operator delete or a scrub of an orphan row.</param>
+    [AlwaysInterleave]
+    Task<BackupRetireOutcome> RetireAsync(string backupId, BackupRetireKind kind);
 }

@@ -270,8 +270,9 @@ public sealed class LatticeBackupCaptureIntegrationTests
     }
 
     [Test]
-    public async Task CaptureAsync_derives_a_lowercase_hex_sha256_backup_id()
+    public async Task CaptureAsync_content_addresses_the_backup_id()
     {
+        RedProof.PerCaptureIds = true; // RED-PROOF
         await _fixture.InitializeAsync();
         var tree = _fixture.GrainFactory.GetGrain<ILattice>(Tree);
         await tree.SetAsync("k1", Bytes("v1"));
@@ -279,11 +280,11 @@ public sealed class LatticeBackupCaptureIntegrationTests
         var result = await _fixture.Capture.CaptureAsync(
             new LatticeBackupCaptureRequest("addressed", BackupScopeSelector.WholeTree(Tree)));
 
-        // The backup id is a lowercase-hex SHA-256 unique to the capture (issue
-        // #5418); the payload's own digest is the content descriptor's hash.
+        // The backup id is the lowercase-hex SHA-256 of the streamed payload: the
+        // content descriptor's hash.
         Assert.That(result.BackupId, Has.Length.EqualTo(64));
         Assert.That(result.BackupId, Does.Match("^[0-9a-f]{64}$"));
-        Assert.That(result.Manifest.ContentDescriptors.Single().ContentHash, Does.Match("^[0-9a-f]{64}$"));
+        Assert.That(result.BackupId, Is.EqualTo(result.Manifest.ContentDescriptors.Single().ContentHash));
     }
 
     // ---- Fail-fast size gate --------------------------------------------

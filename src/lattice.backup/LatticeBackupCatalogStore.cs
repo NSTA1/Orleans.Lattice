@@ -23,9 +23,9 @@ internal sealed class LatticeBackupCatalogStore(
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            // An existing backup id is re-registered only by a catalog rebuild (a
-            // set member is registered once, at its membership stamp, #5449).
-            // Reconcile against any existing registration so the immutable
+            // A backup id is a content address, so a capture of identical bytes
+            // republishes an existing id, and a catalog rebuild or a set stamp
+            // re-registers one. Reconcile against any existing registration so the immutable
             // capture timestamps (which order the catalog index) are carried forward and
             // the index is never re-keyed into an orphaned duplicate row.
             var existing = await Catalog.GetAsync<BackupManifest>(manifest.Id, cancellationToken).ConfigureAwait(false);

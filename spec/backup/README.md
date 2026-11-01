@@ -158,18 +158,24 @@ refinement note's rows:
   under the guard; `ListedRestorableListingBeforeGuard` reproduces production
   before it, and its code analogue turns the fix's regression test red.
 
-- **#5418** (`BackupRetention`, fixed): a full backup's id was the hash of its
-  payload alone, so a full capture of an unchanged tree republished an existing
-  backup's id. A pass that had listed and doomed that backup removed its row and
-  deleted its sink manifest, and the republishing capture then registered the
-  row again over a sink manifest that was gone; with the row removed later, the
-  capture's backup was lost outright and its artifact leaked. Found by the
-  module's independent review (#5352). The fix makes every backup id unique to
-  its capture: `BackupIdentity` folds the capture's own artifact id into it. The
-  module checks the fixed design, in which no capture republishes an id;
-  `ListedInSinkRepublishedId` reproduces production before it by adding that
-  republish to `Start`, and its code analogue turns the fix's regression test
-  red.
+- **#5418** (`BackupRetention`, fixed): a backup id is a content address, as
+  10.2.0 documents, so a full capture of an unchanged tree republished an
+  existing backup's id. A pass that had listed and doomed that backup removed its
+  row and deleted its sink manifest, and the republishing capture then
+  registered the row again over a sink manifest that was gone; with the row
+  removed later, the capture's backup was lost outright and its artifact leaked.
+  A republish also kept the backup's first capture time, all a pass ranked by,
+  so the next pass could prune the backup a capture had just returned. Found by
+  the module's independent review (#5352). The fix keeps 10.2.0's ids and
+  serialises per id on the scope's scheduler grain: a pass reserves every id it
+  dooms before it removes a row and never dooms one a capture holds, a publish
+  of a retiring id waits, and a publish records the latest capture time
+  (`BackupManifest.LastCapturedAtUtc`), which retention ranks by. The module
+  checks the republish under that hold; `ListedInSinkUngatedRepublish` and
+  `KeepPolicyHonouredStaleRank` reproduce production before it, and their code
+  analogues turn the fix's regression tests red. (A first fix, #5434, made every
+  id unique per capture instead; that broke 10.2.0's documented idempotent ids
+  and was reverted for this one.)
 - **#5449** (`BackupRetention`, fixed): a multi-tree backup set registered each
   member's catalog row as soon as the member was captured, and its membership
   stamp re-wrote the member's sink manifest and registered the row again once
@@ -248,4 +254,4 @@ notes and TLC's own state counts.
 | `BackupProvenance` | 5 | 0 | 4 | 5 | 8 | 2,199 |
 | `BackupRestore` | 5 | 1 | 16 | 20 | 20 | 22,700 |
 | `BackupCutover` | 5 | 2 | 10 | 12 | 16 | 39 |
-| `BackupRetention` | 5 | 3 | 17 | 25 | 23 | 256,092 |
+| `BackupRetention` | 5 | 3 | 18 | 28 | 24 | 2,680,648 |

@@ -5,12 +5,12 @@
   "counts": {
     "invariants": 5,
     "properties": 3,
-    "actions": 17,
-    "mutations": 25,
-    "behaviourRows": 23,
-    "distinctStates": 256092
+    "actions": 18,
+    "mutations": 28,
+    "behaviourRows": 24,
+    "distinctStates": 2680648
   },
   "variants": {
-    "TwoPasses": { "distinctStates": 431204 }
+    "TwoPasses": { "distinctStates": 5543895 }
   }
 }

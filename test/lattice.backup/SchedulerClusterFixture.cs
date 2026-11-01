@@ -17,6 +17,8 @@ public sealed class SchedulerClusterFixture
     private static Action<LatticeBackupScheduleOptions>? s_configure;
     private static bool s_gated;
     private static bool s_intercepted;
+    private static Action<LatticeBackupOptions>? s_configureBackup;
+    private static bool s_recordGate;
 
     /// <summary>
     /// A mutable toggle a test can flip to change the incremental-schedule setting
@@ -66,14 +68,24 @@ public sealed class SchedulerClusterFixture
     /// Deploys the cluster with the given schedule / retention configuration.
     /// When <paramref name="intercepted"/> is set, the sink is an
     /// <see cref="InterceptingBackupSink"/> over the real in-cluster sink.
+    /// <paramref name="configureBackup"/> adjusts the backup options, and
+    /// <paramref name="recordGate"/> fronts the publication gate with a
+    /// <see cref="RecordingPublicationGate"/>.
     /// </summary>
     public async Task InitializeAsync(
-        Action<LatticeBackupScheduleOptions>? configure = null, bool gated = false, bool intercepted = false)
+        Action<LatticeBackupScheduleOptions>? configure = null,
+        bool gated = false,
+        bool intercepted = false,
+        Action<LatticeBackupOptions>? configureBackup = null,
+        bool recordGate = false)
     {
         s_configure = configure;
         s_gated = gated;
         s_intercepted = intercepted;
+        s_configureBackup = configureBackup;
+        s_recordGate = recordGate;
         InterceptingBackupSink.Reset();
+        RecordingPublicationGate.Reset();
         var builder = new TestClusterBuilder(1);
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         Cluster = builder.Build();
@@ -133,6 +145,19 @@ public sealed class SchedulerClusterFixture
                 siloBuilder.Services.AddSingleton<InClusterLatticeBackupSink>();
                 siloBuilder.Services.Replace(
                     ServiceDescriptor.Singleton<ILatticeBackupSink, InterceptingBackupSink>());
+            }
+
+            if (s_configureBackup is not null)
+            {
+                siloBuilder.Services.Configure(s_configureBackup);
+            }
+
+            if (s_recordGate)
+            {
+                siloBuilder.Services.Replace(ServiceDescriptor.Singleton<IBackupPublicationGate>(sp =>
+                    new RecordingPublicationGate(new SchedulerBackupPublicationGate(
+                        sp.GetRequiredService<IGrainFactory>(),
+                        sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<LatticeBackupOptions>>()))));
             }
 
             if (s_gated)

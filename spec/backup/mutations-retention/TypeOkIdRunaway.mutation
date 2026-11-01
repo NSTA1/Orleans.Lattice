@@ -6,10 +6,8 @@ SUMMARY: a capture allocates an id past the bound
 PERTURBS: Start
 
 --- FIND
-    /\ next <= MaxIds
-    /\ k = "full" => b = 0
+    /\ \/ /\ next <= MaxIds
 --- REPLACE
     \* MUTATION: no id bound.
-    /\ next <= MaxIds + 1
-    /\ k = "full" => b = 0
+    /\ \/ /\ next <= MaxIds + 1
 --- END

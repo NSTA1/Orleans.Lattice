@@ -90,4 +90,25 @@ internal static class BackupTypeAliases
 
     /// <summary>Alias for <see cref="BackupSinkSharingReport"/>.</summary>
     internal const string BackupSinkSharingReport = "olb.sh";
+
+    /// <summary>Alias for <see cref="BackupPublishMode"/>.</summary>
+    internal const string BackupPublishMode = "olb.pm";
+
+    /// <summary>Alias for <see cref="BackupPublishOutcome"/>.</summary>
+    internal const string BackupPublishOutcome = "olb.po";
+
+    /// <summary>Alias for <see cref="BackupPublishRequest"/>.</summary>
+    internal const string BackupPublishRequest = "olb.pq";
+
+    /// <summary>Alias for <see cref="BackupPublishResult"/>.</summary>
+    internal const string BackupPublishResult = "olb.pr";
+
+    /// <summary>Alias for <see cref="BackupRetireKind"/>.</summary>
+    internal const string BackupRetireKind = "olb.rt";
+
+    /// <summary>Alias for <see cref="BackupRetireOutcome"/>.</summary>
+    internal const string BackupRetireOutcome = "olb.ro";
+
+    /// <summary>Alias for <see cref="IBackupIdClaimGrain"/>.</summary>
+    internal const string IBackupIdClaimGrain = "olb.gc";
 }

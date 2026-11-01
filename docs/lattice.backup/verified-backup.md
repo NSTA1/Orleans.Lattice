@@ -102,13 +102,17 @@ not to hold in production:
   one whose data was gone. A pass now reads its listing only once it holds the
   guard. Found by the specification's independent review.
 - **A capture of an unchanged tree could be deleted by a retention pass
-  (#5418, fixed).** A full backup's id was the hash of its bytes alone, so a
-  capture of a tree that had not changed republished an older backup's id. A
-  retention pass that had already decided to prune the older backup then deleted
-  what the new capture had just written, so the catalog could list a backup the
-  storage no longer held, or lose the new backup outright. Every capture now gets
-  its own backup id, derived from its own artifact, so no capture ever reuses
-  another backup's id. Found by the specification's independent review.
+  (#5418, fixed).** A backup's id is the hash of its bytes, so a capture of a
+  tree that had not changed republishes the existing backup, as documented since
+  10.2.0. A retention pass that had already decided to prune that backup could
+  then delete what the new capture had just written, so the catalog could list a
+  backup the storage no longer held, or lose the backup outright; and because a
+  republish kept the backup's first capture time, the next pass could prune the
+  backup a capture had just returned. Ids are unchanged. A pass and a publish of
+  the same id are now serialised on the scope's scheduler, so neither acts on an
+  id the other holds, and a republish records its capture time
+  (`BackupManifest.LastCapturedAtUtc`), which retention ranks by. Found by the
+  specification's independent review.
 - **A retention pass could prune a backup set's member before the set listed
   it, and the set then listed it again without its data (#5449, fixed).** A
   multi-tree backup set registered each member as soon as it was captured and
@@ -164,8 +168,10 @@ Coverage of one half must not be read as coverage of the other. Not covered:
 - the receiver side of cross-cluster atomic batches, which the atomic-commit
   cross-cluster module checks ([formal coverage](../lattice/formal-coverage.md));
 - an operator's explicit backup delete, which removes the named backup whatever
-  builds on it and is not coordinated with a retention pass running beside it,
-  and catalog rebuild and scrub;
+  builds on it, and catalog rebuild and scrub, which take the same per-backup
+  hold as a retention pass and a capture but are not modelled as steps;
+- identical content captured in two scopes, which takes a scope-qualified id
+  (#5620) decided outside the specification;
 - retention over a sink shared between clusters.
 
 Each refinement note under [`spec/backup/`](../../spec/backup/README.md) lists in
