@@ -156,7 +156,7 @@ public class TenantGateSnapshotBenchmarks
     {
         var maintainer = new TenantResidencySnapshotMaintainer(
             registry,
-            Options.Create(new ClusterOptions { ClusterId = Region }),
+            TenantLocalRegion.ForRegion(Region),
             [],
             TimeProvider.System,
             NullLogger<TenantResidencySnapshotMaintainer>.Instance);

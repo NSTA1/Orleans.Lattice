@@ -25,6 +25,16 @@ internal static class AccessRuleFormat
     public const string ConditionNotEvaluatedMessage =
         "Conditions are not evaluated in this version. This rule applies unconditionally, as if it had no condition.";
 
+    /// <summary>
+    /// The flag a new rule's Tree field shows when it names a tree that does not exist
+    /// yet. A rule may govern a tree before the tree is created - a write that creates
+    /// it, or a policy synced ahead of it, needs exactly that - so the name is accepted.
+    /// </summary>
+    /// <param name="tree">The tree id typed.</param>
+    /// <returns>The flag.</returns>
+    public static string MissingTreeMessage(string tree) =>
+        $"No tree named {tree} exists yet. The rule applies to it once it is created.";
+
     /// <summary>Whether <paramref name="rule"/> carries a condition.</summary>
     /// <param name="rule">The rule.</param>
     public static bool HasCondition(LatticeAuthorizationRule rule)

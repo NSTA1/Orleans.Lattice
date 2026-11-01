@@ -103,6 +103,27 @@ public sealed class ReplicationTreePageTests : ReplicationTestContext
     }
 
     [Test]
+    public void Hiding_the_page_redraws_its_status_line_as_paused_without_a_read()
+    {
+        UseEstate();
+        var cut = RenderAt<ReplicationTreePage>("replication/trees/orders");
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-replication-status").TextContent, Does.Contain("refreshing every 5 s")));
+        var before = Status.Calls;
+
+        cut.InvokeAsync(() => Visibility.Set(false));
+
+        // No cut.Render(): the page itself must redraw, because hiding it reads nothing.
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find(".lt-replication-status").TextContent, Does.Contain("paused while the page is hidden"));
+            Assert.That(Status.Calls, Is.EqualTo(before), "hiding the page reads no links");
+        });
+
+        cut.InvokeAsync(() => Visibility.Set(true));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-replication-status").TextContent, Does.Contain("refreshing every 5 s")));
+    }
+
+    [Test]
     public async Task Leaving_the_page_stops_the_cadence()
     {
         UseEstate();

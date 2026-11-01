@@ -28,6 +28,9 @@ public sealed class JourneySiloParityTests
         "GET /e2e/activations", // the activations whose key contains a fragment
         "POST /e2e/orphan",     // the state a crash mid-split leaves (#5359)
         "POST /e2e/memory",     // the live heap after a forced collection, on silos and the Explorer head (#5475)
+        "POST /e2e/wal-target", // hold a WAL move's writes to its target, so a stop lands before the flip (#5382)
+        "POST /e2e/wal-pin",    // plant a WAL materialiser pin of a named kind on a tree (#5382)
+        "DELETE /e2e/wal-pin",  // release a planted WAL pin (#5382)
     ];
 
     /// <summary>Every registration call of the reference silo appears in the journey silo.</summary>
@@ -56,6 +59,8 @@ public sealed class JourneySiloParityTests
     [
         ("AddLatticeSchemaEnforcement(options => options.StrictIngest = true)", "dead-letter feature coverage (#5389)"),
         ("AddLatticeWalStorageProvider(JourneyHostEnvironment.SecondaryWalProviderKey", "a WAL move target for the Cluster area's WAL tools (A8, A12)"),
+        ("JourneyHostEnvironment.FaultsEnabled ? new JourneyGatedWalStorageProvider(provider) : provider", "with the fault seams on, the move target's writes can be held per tree so a stop lands before the flip (A12)"),
+        ("options.AccessAdministrationDelegationEnabled = true", "delegated access administration for the server-authority journey A9 (#5373)"),
     ];
 
     /// <summary>Every disclosed deviation is still made by the journey silo, so the list cannot rot into fiction.</summary>

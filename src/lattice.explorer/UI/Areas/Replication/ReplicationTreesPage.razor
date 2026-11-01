@@ -122,12 +122,14 @@ else
         <LtComboBox @ref="_enableTreeBox"
                     Label="Tree"
                     Source="@Suggestions.Trees"
+                    Mode="@EnableTreeMode"
                     Noun="tree"
+                    ExistingMessage="@(EnableTreeMode == LtComboBoxMode.Suggest ? "A tree this cluster already holds." : null)"
                     Value="@_enableTree"
                     ValueChanged="OnEnableTreeChanged"
                     ReadOnly="@_enableTreeFixed"
                     Error="@EnableTreeError"
-                    Hint="The logical tree id, such as orders." />
+                    Hint="@EnableTreeHint" />
         <LtSelect Label="Merge mode"
                   Options="@MergeModeOptions"
                   Value="@_enableMode"

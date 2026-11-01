@@ -238,6 +238,7 @@ use-case:access/addresses	use-case	docs/lattice.explorer/managing-access.md#addr
 use-case:access/app-owned-rules	use-case	docs/lattice.explorer/managing-access.md#rules	An app's rules show read-only, attributed to the app	A5
 use-case:access/area	use-case	docs/lattice.explorer/areas.md#access	The Access area's rules, groups and explain pages	A2
 use-case:access/availability	use-case	docs/lattice.explorer/managing-access.md#availability	The Access area is hidden or read-only for a caller without access rights	U4
+use-case:access/delegated-administration	use-case	docs/lattice.explorer/managing-access.md#rules	A bootstrap administrator delegates access administration with an Admin rule on the access administration scope	A9
 use-case:access/effective-permissions	use-case	docs/lattice.explorer/managing-access.md#explain	Effective permissions	A9
 use-case:access/explain	use-case	docs/lattice.explorer/managing-access.md#explain	Explain a decision	A2
 use-case:access/group-create-rename-members	use-case	docs/lattice.explorer/managing-access.md#groups	Create and rename a group, and add and remove a member	A2
@@ -247,12 +248,13 @@ use-case:access/limits	use-case	docs/lattice.explorer/managing-access.md#limits-
 use-case:access/nested-groups	use-case	docs/lattice.explorer/managing-access.md#groups	Nested groups	A9
 use-case:access/pages-and-actions	use-case	docs/lattice.explorer/managing-access.md#pages-and-actions	Rules, groups and explain pages and their actions	A2
 use-case:access/palette	use-case	docs/lattice.explorer/managing-access.md#palette-and-address-completions	The Access area's palette commands and completions	U5
-use-case:access/posture-banner	use-case	docs/lattice.explorer/managing-access.md#access-posture-banner	The access posture banner	U4
+use-case:access/posture-banner	use-case	docs/lattice.explorer/managing-access.md#access-posture-banner	The access posture banner	A9
 use-case:access/remove-member-live	use-case	docs/lattice.explorer/managing-access.md#groups	Removing a member takes effect on their open session	C3
 use-case:access/rule-create-edit-delete	use-case	docs/lattice.explorer/managing-access.md#rules	Create, edit and delete a rule	A2
 use-case:access/rule-scopes-and-conditions	use-case	docs/lattice.explorer/managing-access.md#rules	Rule scopes (key, prefix, tree, all trees) and conditions	A9
 use-case:access/rule-search	use-case	docs/lattice.explorer/managing-access.md#rules	Rule search, the ownership filter and pagination	A9
-use-case:access/server-authority	use-case	docs/lattice.explorer/managing-access.md#server-authority	The server refuses an access change the caller may not make	U4
+use-case:access/rule-tree-not-yet-created	use-case	docs/lattice.explorer/managing-access.md#rules	A new rule may govern a tree that does not exist yet, flagged rather than refused	A9
+use-case:access/server-authority	use-case	docs/lattice.explorer/managing-access.md#server-authority	The server refuses an access change the caller may not make	A9
 use-case:access/tenant-group-rule	use-case	docs/lattice.explorer/managing-access.md#tenant-groups-in-a-platform-rule	A platform operator names a tenant group in a rule, which then governs only that tenant's own trees	T3
 use-case:access/subject-picker	use-case	docs/lattice.explorer/managing-access.md#subject-picking-and-directory-validation	The subject picker's directory validation, and stored and directory groups	A2
 use-case:access/through-nested-group	use-case	docs/lattice.explorer/managing-access.md#groups	Access granted through a nested group	U4
