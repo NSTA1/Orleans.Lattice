@@ -165,7 +165,8 @@ public sealed class A11TelemetryInDepth : JourneyChapter
         await _telemetry.ChooseRangeAsync("6h", "6 h");
         await _telemetry.ChooseStepAsync("15s");
         await ExpectDrawnAsync();
-        await _telemetry.ChooseRangeAsync("24h", "24 h");
+        // TelemetryDurations writes 24 hours as the shortest exact token, 1d, labelled "1 d".
+        await _telemetry.ChooseRangeAsync("1d", "1 d");
         await _telemetry.ExpectQueryAsync("step", "15s");
         var charts = await _telemetry.SettleAsync();
         Assert.Multiple(() =>
