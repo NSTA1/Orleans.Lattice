@@ -1,0 +1,21 @@
+# Pairs with ReadPositionHonest. The born flag outlives the activation that bound
+# the tree id, so a reactivated leaf live-advances over entries an earlier
+# activation appended and its replay has not read yet.
+MODULE: ReadPositionHonestStopKeepsBirth
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a stopped leaf keeps its born flag into its next activation
+PERTURBS: LeafStop
+
+--- FIND
+    /\ UNCHANGED pinVars
+    /\ own' = [own EXCEPT ![l] = {}]
+    /\ poison' = [poison EXCEPT ![l] = FALSE]
+    /\ born' = [born EXCEPT ![l] = FALSE]
+--- REPLACE
+    /\ UNCHANGED pinVars
+    /\ own' = [own EXCEPT ![l] = {}]
+    /\ poison' = [poison EXCEPT ![l] = FALSE]
+\* MUTATION: the stop keeps the birth.
+    /\ UNCHANGED born
+--- END

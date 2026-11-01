@@ -22,4 +22,5 @@ PERTURBS: ReplayFaultRearm
     /\ UNCHANGED <<up, cache, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale>>
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
+    /\ UNCHANGED liveVars
 --- END

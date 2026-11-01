@@ -126,6 +126,11 @@ public partial class BPlusLeafGrainTests
     /// share at a known width on any machine.
     /// </param>
     /// <param name="walPartitions">The number of WAL partitions.</param>
+    /// <param name="commitLogWriter">
+    /// The commit-log writer the leaf appends through, or <see langword="null"/>
+    /// for none (the leaf then appends nothing). Issue #5572's live checkpoint
+    /// fixtures supply one so the leaf's own appends are tracked.
+    /// </param>
     /// <param name="cursorReporter">
     /// The cursor reporter the leaf publishes its durable pins through, or
     /// <see langword="null"/> for a substitute nothing reads. Issue #5570's
@@ -148,6 +153,7 @@ public partial class BPlusLeafGrainTests
             int? maxConcurrentReplays = null,
             ILeafReplayCoordinatorGrain? replayCoordinator = null,
             string? replicaId = null,
+            ICommitLogWriter? commitLogWriter = null,
             ILeafCursorReporter? cursorReporter = null)
     {
         var saved = new List<LeafSnapshotBlob>();
@@ -221,6 +227,10 @@ public partial class BPlusLeafGrainTests
         var sc = new ServiceCollection();
         sc.AddSingleton(Substitute.For<ICommitLogReader>());
         sc.AddSingleton(cursorReporter ?? Substitute.For<ILeafCursorReporter>());
+        if (commitLogWriter is not null)
+        {
+            sc.AddSingleton(commitLogWriter);
+        }
         sc.AddSingleton(detector);
         var services = sc.BuildServiceProvider();
 

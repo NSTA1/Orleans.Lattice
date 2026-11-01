@@ -122,17 +122,33 @@ Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 (*  replayRequested[l] a bounded read slice has an activation/timer/GC     *)
 (*            trigger; a foreground acknowledgement does not supply one.  *)
 (*  faults    environment faults spent so far.                             *)
+(*                                                                         *)
+(* Live checkpoint advance (issue #5572), per leaf and per activation:     *)
+(*  own[l]    offsets of the appends this activation of l issued itself    *)
+(*            (BPlusLeafGrain's live-append tracker records each offset    *)
+(*            its append returned).                                        *)
+(*  poison[l] an own append of this activation failed after it may have    *)
+(*            been allocated - abandoned, or lost to a shard crash - so the *)
+(*            tracker's count never returns to zero and the live advance  *)
+(*            is off for the rest of the activation.                       *)
+(*  born[l]   this activation bound the leaf's tree id for the first time *)
+(*            through a create path, which names a leaf that does not      *)
+(*            exist yet (issue #4654). A re-creation after a purge cleared  *)
+(*            the leaf (issue #4700) is not a birth.                       *)
 (***************************************************************************)
 VARIABLES next, inflight, durable, tail, acked, orphans,
           up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale, replayRequested,
-          pinOff, pinHlc, hadSnap, row, purgeRec, cleared, deleted, purged, faults
+          pinOff, pinHlc, hadSnap, row, purgeRec, cleared, deleted, purged, faults,
+          own, poison, born
 
 walVars  == <<next, inflight, durable, tail, acked, orphans>>
 leafVars == <<up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale, replayRequested>>
 pinVars  == <<pinOff, pinHlc, hadSnap, row, purgeRec, cleared, deleted, purged>>
+liveVars == <<own, poison, born>>
 vars == <<next, inflight, durable, tail, acked, orphans,
           up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale, replayRequested,
-          pinOff, pinHlc, hadSnap, row, purgeRec, cleared, deleted, purged, faults>>
+          pinOff, pinHlc, hadSnap, row, purgeRec, cleared, deleted, purged, faults,
+          own, poison, born>>
 
 Pos == -1..(MaxOff - 1)
 
@@ -164,6 +180,9 @@ TypeOK ==
    /\ deleted \subseteq Offs
    /\ purged \in BOOLEAN
    /\ faults \in 0..MaxFaults
+   /\ own \in [Leaves -> SUBSET Offs]
+   /\ poison \in [Leaves -> BOOLEAN]
+   /\ born \in [Leaves -> BOOLEAN]
 
 (***************************************************************************)
 (* Derived views.                                                          *)
@@ -247,6 +266,10 @@ Init ==
     /\ deleted = {}
     /\ purged = FALSE
     /\ faults = 0
+    /\ own = [l \in Leaves |-> {}]
+    /\ poison = [l \in Leaves |-> FALSE]
+    \* Every modelled leaf is born active: this activation bound its tree id.
+    /\ born = [l \in Leaves |-> TRUE]
 
 (***************************************************************************)
 (* Append: the allocator hands the next offset to a new write              *)
@@ -262,6 +285,14 @@ Append ==
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
     /\ UNCHANGED orphans
+    /\ own' = IF up[Owner[next]] /\ ~stale[Owner[next]]
+              THEN [own EXCEPT ![Owner[next]] = @ \cup {next}]
+              ELSE own
+    \* Production has no append for a leaf that is not active: a write reaches
+    \* its leaf. The model's over-approximation of one ends the leaf's claim to
+    \* have issued every append it owns.
+    /\ born' = IF up[Owner[next]] THEN born ELSE [born EXCEPT ![Owner[next]] = FALSE]
+    /\ UNCHANGED poison
 
 (***************************************************************************)
 (* FlushAck(o): one in-flight append's flush completes - flushes complete  *)
@@ -285,6 +316,7 @@ FlushAck(o) ==
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
     /\ UNCHANGED orphans
+    /\ UNCHANGED liveVars
 
 (***************************************************************************)
 (* ShardCrash: the WAL shard's activation is lost at any step. Every       *)
@@ -305,6 +337,10 @@ ShardCrash ==
     \* commits in offset order and ReconcileAsync rolls a late phase-1 row
     \* forward in order or back), so no orphan survives to land below a reader.
     /\ orphans' = {}
+    \* An own append still in flight is lost with the shard: its call throws,
+    \* so the leaf's tracker never sees it applied.
+    /\ poison' = [l \in Leaves |-> poison[l] \/ own[l] \cap inflight # {}]
+    /\ UNCHANGED <<own, born>>
 
 (***************************************************************************)
 (* Abandon(o): an append's flush misses its deadline, or the drain budget  *)
@@ -326,6 +362,8 @@ Abandon(o) ==
     /\ UNCHANGED <<next, durable, tail, acked>>
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
+    /\ poison' = IF o \in own[Owner[o]] THEN [poison EXCEPT ![Owner[o]] = TRUE] ELSE poison
+    /\ UNCHANGED <<own, born>>
 
 LateLand(o) ==
     /\ o \in orphans
@@ -335,6 +373,7 @@ LateLand(o) ==
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
+    /\ UNCHANGED liveVars
 
 SettleHole(o) ==
     /\ o \in orphans
@@ -343,6 +382,7 @@ SettleHole(o) ==
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
+    /\ UNCHANGED liveVars
 (***************************************************************************)
 (* ReadStep(l): an active leaf reads the next entry of the shared stream   *)
 (* past its read position (activation replay and the starvation drive      *)
@@ -371,6 +411,7 @@ ScheduleReplay(l) ==
     /\ UNCHANGED <<up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale>>
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
+    /\ UNCHANGED liveVars
 
 ReadStep(l) ==
     /\ up[l]
@@ -389,6 +430,44 @@ ReadStep(l) ==
     /\ UNCHANGED <<up, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale>>
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
+    /\ UNCHANGED liveVars
+
+(***************************************************************************)
+(* LiveAdvance(l): an active leaf advances its read position over the      *)
+(* appends it issued itself in this activation, without reading the       *)
+(* stream (issue #5572). A live write carries the offset its append        *)
+(* returned, so a leaf that has applied every append it issued knows it    *)
+(* holds every entry it owns up to the highest of them - provided no entry *)
+(* it owns there came from anywhere else. Two production conditions        *)
+(* establish that. Either this activation bound the leaf's tree id         *)
+(* (born): a create path named it before it existed, so nothing it must   *)
+(* apply predates it. Or its read position is                              *)
+(* already within one of the lowest offset it issued: an append is         *)
+(* allocated in offset order, so every entry it owns from before this      *)
+(* activation lies below that offset and has been read. The advance runs   *)
+(* only when every own append has been applied (the tracker's count is    *)
+(* zero), none failed (poison), and no replay is in flight; it never       *)
+(* reads, so it is shown nothing and needs no watermark.                   *)
+(***************************************************************************)
+OwnUnapplied(l) == own[l] \cap (inflight \cup orphans)
+
+LiveArmed(l) == born[l] \/ rp[l] >= Min(own[l]) - 1
+
+LiveAdvance(l) ==
+    /\ up[l]
+    /\ ~stale[l]
+    /\ ~poison[l]
+    /\ ~replayRequested[l]
+    /\ own[l] # {}
+    /\ OwnUnapplied(l) = {}
+    /\ LiveArmed(l)
+    /\ Max(own[l]) > rp[l]
+    /\ rp' = [rp EXCEPT ![l] = Max(own[l])]
+    /\ UNCHANGED walVars
+    /\ UNCHANGED <<up, cache, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale, replayRequested>>
+    /\ UNCHANGED pinVars
+    /\ UNCHANGED faults
+    /\ UNCHANGED liveVars
 
 (***************************************************************************)
 (* PersistCheckpoint(l) / PersistFail(l): the leaf persists its pending    *)
@@ -408,6 +487,7 @@ PersistCheckpoint(l) ==
     /\ UNCHANGED <<up, cache, rp, anchor, cov, snapCov, snapRows, stale, replayRequested>>
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
+    /\ UNCHANGED liveVars
 
 PersistFail(l) ==
     /\ up[l]
@@ -419,6 +499,7 @@ PersistFail(l) ==
     /\ UNCHANGED walVars
     /\ UNCHANGED <<up, cache, rp, durCp, anchor, clk, cov, snapCov, snapRows, stale, replayRequested>>
     /\ UNCHANGED pinVars
+    /\ UNCHANGED liveVars
 
 (***************************************************************************)
 (* Capture(l) / CaptureFail(l): the leaf captures a durable snapshot of    *)
@@ -445,6 +526,7 @@ Capture(l) ==
     /\ UNCHANGED <<up, cache, rp, stCp, durCp, anchor, clk, stale, replayRequested>>
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
+    /\ UNCHANGED liveVars
 
 CaptureFail(l) ==
     /\ up[l]
@@ -456,6 +538,7 @@ CaptureFail(l) ==
     /\ UNCHANGED walVars
     /\ UNCHANGED <<up, cache, rp, stCp, durCp, anchor, clk, snapCov, snapRows, stale, replayRequested>>
     /\ UNCHANGED pinVars
+    /\ UNCHANGED liveVars
 
 (***************************************************************************)
 (* PublishPin(l): the leaf resolves and publishes its durable materialiser *)
@@ -509,6 +592,7 @@ PublishPin(l) ==
     /\ UNCHANGED walVars
     /\ UNCHANGED leafVars
     /\ UNCHANGED faults
+    /\ UNCHANGED liveVars
 
 (***************************************************************************)
 (* GcTrim: the WAL GC trims the stream's prefix. No trim at all while any  *)
@@ -534,6 +618,7 @@ GcTrim ==
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
+    /\ UNCHANGED liveVars
 
 (***************************************************************************)
 (* LeafStop(l): the leaf's activation ends at any step - a crash, a silo   *)
@@ -553,6 +638,9 @@ LeafStop(l) ==
     /\ UNCHANGED walVars
     /\ UNCHANGED <<durCp, anchor, clk, snapCov, snapRows, stale>>
     /\ UNCHANGED pinVars
+    /\ own' = [own EXCEPT ![l] = {}]
+    /\ poison' = [poison EXCEPT ![l] = FALSE]
+    /\ born' = [born EXCEPT ![l] = FALSE]
 
 (***************************************************************************)
 (* Activate(l): a stopped leaf activates. If it has a durable snapshot it   *)
@@ -620,6 +708,9 @@ Activate(l) ==
     /\ row' = [row EXCEPT ![l] = TRUE]
     /\ UNCHANGED <<pinOff, pinHlc, hadSnap, purgeRec, cleared, deleted, purged>>
     /\ UNCHANGED faults
+    /\ own' = [own EXCEPT ![l] = {}]
+    /\ poison' = [poison EXCEPT ![l] = FALSE]
+    /\ UNCHANGED born
 
 (***************************************************************************)
 (* ActivateLoadFail(l): a leaf that has a durable snapshot fails to load it *)
@@ -667,6 +758,7 @@ SnapshotVanish(l) ==
     /\ UNCHANGED walVars
     /\ UNCHANGED <<up, cache, rp, stCp, durCp, anchor, clk, cov, stale, replayRequested>>
     /\ UNCHANGED pinVars
+    /\ UNCHANGED liveVars
 
 (***************************************************************************)
 (* LeafRowVanish(l): the environment destroys a leaf's row (LeafNodeState: *)
@@ -698,6 +790,9 @@ LeafRowVanish(l) ==
     /\ UNCHANGED walVars
     /\ UNCHANGED <<snapCov, snapRows, stale>>
     /\ UNCHANGED <<pinOff, pinHlc, purgeRec, cleared, deleted, purged>>
+    /\ own' = [own EXCEPT ![l] = {}]
+    /\ poison' = [poison EXCEPT ![l] = FALSE]
+    /\ born' = [born EXCEPT ![l] = FALSE]
 
 (***************************************************************************)
 (* PinRetire(l): the WAL GC retires the pin of a leaf whose drive reports   *)
@@ -717,6 +812,7 @@ PinRetire(l) ==
     /\ UNCHANGED leafVars
     /\ UNCHANGED <<hadSnap, row, purgeRec, cleared, deleted, purged>>
     /\ UNCHANGED faults
+    /\ UNCHANGED liveVars
 
 (***************************************************************************)
 (* MarkPurge(l) / PurgeClear(l) / Recover(l): the operator's purge of a     *)
@@ -753,6 +849,7 @@ MarkPurge(l) ==
     /\ UNCHANGED walVars
     /\ UNCHANGED leafVars
     /\ UNCHANGED <<pinOff, pinHlc, hadSnap, row, cleared>>
+    /\ UNCHANGED liveVars
 
 PurgeClear(l) ==
     /\ purgeRec[l]
@@ -777,6 +874,9 @@ PurgeClear(l) ==
     /\ UNCHANGED stale
     /\ UNCHANGED <<purgeRec, deleted, purged>>
     /\ UNCHANGED faults
+    /\ own' = [own EXCEPT ![l] = {}]
+    /\ poison' = [poison EXCEPT ![l] = FALSE]
+    /\ born' = [born EXCEPT ![l] = FALSE]
 
 Recover(l) ==
     /\ purgeRec[l]
@@ -803,6 +903,11 @@ Recover(l) ==
     /\ UNCHANGED walVars
     /\ UNCHANGED <<deleted, purged>>
     /\ UNCHANGED faults
+    \* A leaf re-created from a purge's clear is admitted through its purge
+    \* marker, and production does not count that binding as a birth: its
+    \* purged incarnation's entries may still be readable, so it reads past
+    \* them rather than skipping them.
+    /\ UNCHANGED liveVars
 
 \* PurgeSettled: a modelling device. One purge per behaviour bounds the
 \* instance, so a behaviour can exhaust it after recovery with nothing left to
@@ -851,6 +956,7 @@ Next ==
     \/ ShardCrash
     \/ \E l \in Leaves : ScheduleReplay(l)
     \/ \E l \in Leaves : ReadStep(l)
+    \/ \E l \in Leaves : LiveAdvance(l)
     \/ \E l \in Leaves : PersistCheckpoint(l)
     \/ \E l \in Leaves : PersistFail(l)
     \/ \E l \in Leaves : Capture(l)
@@ -878,6 +984,15 @@ Next ==
 (* NOT fair; faults are bounded by MaxFaults, which is the assumption that *)
 (* faults do not happen for ever.                                          *)
 (***************************************************************************)
+\* Whose replay the protocol is entitled to rely on (issue #5572). A born,
+\* live-written leaf is scheduled only by its coverage-lag tick or a WAL GC
+\* touch, admitted against a bounded permit share that refuses and backs off
+\* under load (issues #5569, #5570), so its pin may not wait on one: the live
+\* advance must make it usable. A leaf that is not born, that holds nothing (the
+\* GC drives an empty floor holder), or whose own append failed (the tracker is
+\* off, so the timer's drive is the remedy) keeps the replay it has always had.
+ReplayDriven(l) == ~born[l] \/ poison[l] \/ cache[l] = {}
+
 Spec ==
     /\ Init
     /\ [][Next]_vars
@@ -885,8 +1000,9 @@ Spec ==
     /\ \A o \in Offs : WF_vars(FlushAck(o))
     /\ \A o \in Offs : WF_vars(LateLand(o) \/ SettleHole(o))
     /\ WF_vars(GcTrim)
-    /\ \A l \in Leaves : WF_vars(ScheduleReplay(l))
+    /\ \A l \in Leaves : WF_vars(ScheduleReplay(l) /\ ReplayDriven(l))
     /\ \A l \in Leaves : WF_vars(ReadStep(l))
+    /\ \A l \in Leaves : WF_vars(LiveAdvance(l))
     /\ \A l \in Leaves : WF_vars(PersistCheckpoint(l))
     /\ \A l \in Leaves : WF_vars(Capture(l))
     /\ \A l \in Leaves : WF_vars(PublishPin(l))
@@ -978,6 +1094,15 @@ PublishedPinWithinPersistedBelief ==
 EveryAckedWriteMaterialised ==
     \A o \in Offs :
         (o \in acked) ~> (up[Owner[o]] /\ o \in cache[Owner[o]])
+
+\* A leaf born in this activation that has applied a write it issued
+\* eventually publishes a usable pin, unless it stops, latches stale or an own
+\* append fails (issue #5572). Spec does not schedule such a leaf's replay
+\* fairly (ReplayDriven), so the live advance is what discharges it.
+NewbornPinEventuallyUsable ==
+    \A l \in Leaves :
+        (up[l] /\ born[l] /\ own[l] \cap cache[l] # {})
+            ~> (pinOff[l] >= 0 \/ ~up[l] \/ stale[l] \/ poison[l])
 
 \* Reclamation eventually advances over the whole stream once every write
 \* is in and every pin can be released.
