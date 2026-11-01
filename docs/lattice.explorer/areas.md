@@ -558,7 +558,9 @@ offered only when the facade's capability probe says the caller holds the
 Replication grant, or the list holds a tree they manage: the report is readable
 by every caller, so an empty list proves nothing (#5478). The cluster still
 authorizes every enable and disable. Enabling asks for the logical tree id (a picker
-that accepts only a tree you can reach), merge mode and optional bootstrap source
+that accepts only a tree you can reach until a bootstrap source is named, and then
+any id, because the bootstrap brings a tree this region does not hold yet), merge
+mode and optional bootstrap source
 cluster (a picker that suggests the known regions and accepts any id); app-owned ids are rejected because their
 enrolment follows the app install. Disabling is a destructive confirmation: it
 stops new changes from replicating, leaves peer data in place, and keeps the
@@ -570,7 +572,8 @@ shows a **Back to enrolled trees** link.
 
 The tree detail page reads one tree's links afresh, then starts a visibility
 aware refresh loop after the first browser render. While the page is visible it
-refreshes every 5 seconds; when the tab is hidden it stops; when it becomes
+refreshes every 5 seconds; when the tab is hidden it stops, and its status line
+says the refresh is paused while the page is hidden; when it becomes
 visible it refreshes immediately and resumes. If a later refresh fails, the page
 keeps the previous links and reports that the last refresh failed. If neither
 the enrolment report nor the status links name the tree, it navigates to not
@@ -708,7 +711,9 @@ succeeds. A re-measure still running is picked up again when the overview opens.
 up the replication peer report, draws the local region and peers, marks stalled
 peers without relying on colour alone, and links to Replication.
 
-The tree list is filtered by tree name, app or tenant. It filters out restore
+The tree list's filter matches a tree's name (which carries its tenant and app), its
+owner as the Owner column reads it ("app crm, tenant acme"), or its state as the State
+column reads it, so "deleted" or "aliased" narrows the list to those trees. The list leaves out restore
 shadows and physical resize or restore targets, so rows show logical trees only.
 App and tenant ownership are parsed from `t/{tenant}/a/{app}/...` and shown as
 text. The visible `cluster.reshard-tree` control opens a dialog whose tree field
@@ -871,7 +876,9 @@ The read-only survey of every orphan key is driven batch by batch from the page
 (up to 1000 batches) and can be stopped. Repair is shown only with TreeLifecycle
 authority and repairable leaves, is behind a destructive confirmation, unsplices
 only leaves whose keys were shown readable elsewhere, and always audits again
-when repair completes.
+when repair completes. Because that audit replaces the repair's findings, the
+toast that announces it counts the leaves unspliced, any refused, and any region
+not judged.
 The Cluster palette commands are:
 
 | Command id | Label | Effect |
