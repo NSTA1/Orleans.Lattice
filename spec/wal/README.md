@@ -21,6 +21,12 @@ retirement only the leaf's lifecycle, not its replay. Keeping each out of
 `WalDurability` keeps that module small enough to check its liveness properties
 exhaustively within the TLC budget.
 
+## Design drafts
+
+`design/` holds a draft that is not a module: `design/WalLiveAdvance.tla` and its
+`design/mutations/` model the fenced redesign of the live checkpoint advance
+(issues #5572, #5593), described in [`design/LiveAdvanceDesign.md`](design/LiveAdvanceDesign.md). discovery does not read it, and no TLC case runs it, until production it and it becomes the companion module `WalLiveAdvance`.
+
 ## Counts
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |

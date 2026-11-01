@@ -1,0 +1,29 @@
+# A lazy fence: the epoch is persisted eagerly but enforced only from the
+# activation's first append, so a stale duplicate appends between the claim and
+# that append, above the claim head the newer activation replays to.
+MODULE: NoTrimPastAckedLazyFence
+TARGET: NoTrimPastAcked
+CLASS: Invariant
+SUMMARY: the claim does not raise the WAL shard's fence; the activation's first append does
+PERTURBS: Claim, OwnAppend
+
+--- FIND
+    /\ shardFence' = Max2(shardFence, rowEpoch + 1)
+    /\ claimHead' = [claimHead EXCEPT ![a] = next]
+--- REPLACE
+\* MUTATION: the claim leaves the shard's table alone.
+    /\ shardFence' = shardFence
+    /\ claimHead' = [claimHead EXCEPT ![a] = next]
+--- END
+
+--- FIND
+    /\ staleAccepted' = (staleAccepted \/ epoch[a] < maxClaimed)
+    /\ UNCHANGED <<inflight, floor, up, rp, snapCov, snapRows, epochVars, handVars,
+                   envVars, maxClaimed, rejected, advanced, advancedPastForeign>>
+--- REPLACE
+    /\ staleAccepted' = (staleAccepted \/ epoch[a] < maxClaimed)
+\* MUTATION: the first append raises the table instead.
+    /\ shardFence' = Max2(shardFence, epoch[a])
+    /\ UNCHANGED <<inflight, floor, up, rp, snapCov, snapRows, rowEpoch, seen, epoch, claimHead, handVars,
+                   envVars, maxClaimed, rejected, advanced, advancedPastForeign>>
+--- END

@@ -1,0 +1,15 @@
+# Re-arm without replay: a closed hand-off re-arms the advance at once, so the
+# owner passes the foreign entries below the close head unread.
+MODULE: ReadPositionHonestRearmWithoutReplay
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the owner re-arms once the marker closes, without replaying to the recorded head
+PERTURBS: LiveAdvance
+
+--- FIND
+    /\ ~hoOpen
+    /\ rp[a] >= hoClosedAt - 1
+--- REPLACE
+    /\ ~hoOpen
+\* MUTATION: no replay to the close head.
+--- END
