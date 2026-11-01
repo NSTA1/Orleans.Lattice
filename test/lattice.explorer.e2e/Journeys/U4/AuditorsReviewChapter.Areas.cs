@@ -89,9 +89,8 @@ public sealed partial class AuditorsReviewChapter
         await Expect(shell.Heading).ToHaveTextAsync("Enrolled trees");
         await Expect(content).ToContainTextAsync("No tree you may manage is enrolled for replication.");
         await Expect(content.GetByRole(AriaRole.Button, new() { NameRegex = new Regex("^(Enable|Disable) replication for ") })).ToHaveCountAsync(0);
-        await new KnownDefect("#5478", "Enable replication for a tree is drawn for a caller with no Replication grant").ReproducesAsync(async () =>
-            await Expect(content.GetByRole(AriaRole.Button, new() { Name = "Enable replication for a tree", Exact = true })).ToBeVisibleAsync());
-        await SnapAsync(dana, "8", "enrolled-trees", "Enrolled trees: none she may manage, no per-tree Enable or Disable (the stray Enable button is #5478)");
+        await Expect(content.GetByRole(AriaRole.Button, new() { Name = "Enable replication for a tree", Exact = true })).ToHaveCountAsync(0);
+        await SnapAsync(dana, "8", "enrolled-trees", "Enrolled trees: none she may manage, and no Enable or Disable control for a caller without the Replication grant");
     }
 
     // U4.9: every Telemetry board is hers: the cluster-wide Telemetry grant and a read-all allow-list.
