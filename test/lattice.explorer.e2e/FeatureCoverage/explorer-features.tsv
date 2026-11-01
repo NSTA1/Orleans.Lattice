@@ -158,6 +158,7 @@ route:/t/{tenant}/data/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	route	DataTreePage	The
 route:/t/{tenant}/replication	route	ReplicationEstatePage	The page at /t/{tenant}/replication	T7
 route:/t/{tenant}/replication/trees	route	ReplicationTreesPage	The page at /t/{tenant}/replication/trees	T7
 route:/t/{tenant}/replication/trees/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	route	ReplicationTreePage	The page at /t/{tenant}/replication/trees/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	T7
+route:/t/{tenant}/reset	route	ResetPage	The page at /t/{tenant}/reset	A1
 route:/t/{tenant}/schema	route	SchemaDirectoryPage	The page at /t/{tenant}/schema	T7
 route:/t/{tenant}/schema/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	route	SchemaTreePage	The page at /t/{tenant}/schema/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}	T7
 route:/t/{tenant}/telemetry	route	TelemetryPage	The page at /t/{tenant}/telemetry	T7

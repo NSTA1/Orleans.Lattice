@@ -79,7 +79,10 @@ internal sealed partial class FirstContactRun
     /// </summary>
     public Task ResetViewAsync() => StepAsync("9", async () =>
     {
+        // Typed into the browser, as a bookmark would be: a fresh document at the tenant-rooted
+        // address, which used to answer 404.
         await Shell.GotoAsync("/reset");
+        await ExpectAddressAsync("/reset");
         await Shell.ExpectHeadingAsync("Reset view");
         await Expect(Shell.Content).ToContainTextAsync("the theme you chose");
         await CheckpointAsync("9", "reset-page", "/reset lists what the Explorer remembers, and changes nothing until asked");
@@ -89,6 +92,7 @@ internal sealed partial class FirstContactRun
         await Shell.ExpectSignedInAsync(Olivia.Persona.Id);
         Coverage.Hit("use-case:shell/reset-view");
         Coverage.Hit("route:/reset");
+        Coverage.Hit("route:/t/{tenant}/reset");
         await CheckpointAsync("9", "reset", "Reset view: the remembered view is forgotten, and Olivia is still signed in");
 
         await Shell.Content.GetByRole(AriaRole.Link, new() { Name = "Back to the Explorer" }).ClickAsync();
