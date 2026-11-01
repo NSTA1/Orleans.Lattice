@@ -1,5 +1,6 @@
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Explorer.UI.Areas.Access;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Access;
 
@@ -74,6 +75,27 @@ public sealed class AccessRuleFormatTests
         var ordered = AccessRuleFormat.InPrecedenceOrder(rules).Select(rule => rule.RuleId);
 
         Assert.That(ordered, Is.EqualTo(new[] { "wide-deny", "key", "long-prefix", "short-prefix", "tree-deny", "tree-allow", "wide-allow" }));
+    }
+
+    [Test]
+    public void A_saved_rule_with_a_condition_is_confirmed_with_the_not_evaluated_warning()
+    {
+        var plain = Make("plain", LatticeScope.Tree("orders"), LatticeEffect.Allow);
+        var conditional = plain with { RuleId = "eu-only", Condition = "region == \"eu\"" };
+        var empty = plain with { Condition = string.Empty };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(AccessRuleFormat.HasCondition(plain), Is.False);
+            Assert.That(AccessRuleFormat.HasCondition(empty), Is.False);
+            Assert.That(AccessRuleFormat.HasCondition(conditional), Is.True);
+            Assert.That(AccessRuleFormat.SavedMessage(plain), Is.EqualTo("Rule plain saved."));
+            Assert.That(AccessRuleFormat.SavedTone(plain), Is.EqualTo(LtToastTone.Success));
+            Assert.That(AccessRuleFormat.SavedMessage(conditional), Is.EqualTo("Rule eu-only saved. Its condition was kept as written. " + AccessRuleFormat.ConditionNotEvaluatedMessage));
+            Assert.That(AccessRuleFormat.SavedTone(conditional), Is.EqualTo(LtToastTone.Warning));
+            Assert.That(AccessRuleFormat.ConditionNotEvaluatedMessage, Does.Contain("not evaluated").And.Contain("applies unconditionally"));
+            Assert.That(() => AccessRuleFormat.HasCondition(null!), Throws.ArgumentNullException);
+        });
     }
 
     private static LatticeAuthorizationRule Make(string id, LatticeScope scope, LatticeEffect effect) =>

@@ -697,12 +697,18 @@ internal sealed class LatticeBackupRestoreService(
 
         long totalBytes = 0;
         long totalChunks = 0;
+        var sourceTreeIds = new List<string>(1);
         foreach (var manifest in chain)
         {
             foreach (var descriptor in manifest.ContentDescriptors)
             {
                 totalBytes += descriptor.ByteLength;
                 totalChunks += descriptor.ChunkCount;
+            }
+
+            if (!sourceTreeIds.Contains(manifest.Scope.TreeId, StringComparer.Ordinal))
+            {
+                sourceTreeIds.Add(manifest.Scope.TreeId);
             }
         }
 
@@ -712,7 +718,10 @@ internal sealed class LatticeBackupRestoreService(
             totalBytes,
             totalChunks,
             target.Topology.ShardCount,
-            chain.Select(m => m.Id).ToArray());
+            chain.Select(m => m.Id).ToArray())
+        {
+            SourceTreeIds = sourceTreeIds,
+        };
     }
 
     /// <inheritdoc />

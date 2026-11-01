@@ -31,6 +31,23 @@ internal sealed class SessionSignInOptions
     public const string DefaultLogoutPath = "auth/logout";
 
     /// <summary>
+    /// The query key the server sign-in endpoint adds to its redirect when the cluster
+    /// refused the posted credential, so the next document can reopen the sign-in
+    /// dialog and say so. It carries no credential and no user name.
+    /// </summary>
+    public const string NoticeQueryKey = "signin";
+
+    /// <summary>The <see cref="NoticeQueryKey"/> value for a refused username and password.</summary>
+    public const string RefusedNoticeValue = "refused";
+
+    /// <summary>
+    /// The form field the server password form carries the address the user signed
+    /// in from in: a rooted path with its query, which the server sign-in endpoint
+    /// redirects back to only when it is a local path under the Explorer's base href.
+    /// </summary>
+    public const string ReturnPathFieldName = "returnUrl";
+
+    /// <summary>
     /// Whether the password form posts to <see cref="LoginPath"/> (the default) or
     /// signs in inside the circuit.
     /// </summary>

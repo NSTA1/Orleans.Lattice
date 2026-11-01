@@ -137,7 +137,7 @@ internal sealed class AccessArea : IExplorerArea, IPlatformOperatorProbe
         }
 
         var availability = await ProbeAsync(caller.Authenticated, cancellationToken).ConfigureAwait(true);
-        if (_caller.Current == caller)
+        if (_caller.Current == caller && availability.Kind != AreaAvailabilityKind.Unchecked)
         {
             _verdict = (caller, availability);
         }
@@ -162,15 +162,18 @@ internal sealed class AccessArea : IExplorerArea, IPlatformOperatorProbe
     private async Task<AreaAvailability> ProbeAsync(bool authenticated, CancellationToken cancellationToken)
     {
         var cluster = await GetClusterAvailabilityAsync(authenticated, cancellationToken).ConfigureAwait(true);
-        if (cluster.Kind != AreaAvailabilityKind.Hidden)
+        if (cluster.Kind is AreaAvailabilityKind.Visible or AreaAvailabilityKind.Unavailable)
         {
             return cluster;
         }
 
-        // Not a cluster access administrator. A tenant admin of the active tenant
-        // still sees the area while the cluster has delegated tenant access
-        // administration on; nobody else is let in by this second question.
-        return await ProbeTenantAsync(cancellationToken).ConfigureAwait(true);
+        // Not a cluster access administrator, or the cluster did not answer. A
+        // tenant admin of the active tenant still sees the area while the cluster
+        // has delegated tenant access administration on; nobody else is let in by
+        // this second question, and an unanswered first question is never read as
+        // a refusal.
+        var tenant = await ProbeTenantAsync(cancellationToken).ConfigureAwait(true);
+        return tenant.Kind == AreaAvailabilityKind.Hidden ? cluster : tenant;
     }
 
     /// <summary>
@@ -202,7 +205,7 @@ internal sealed class AccessArea : IExplorerArea, IPlatformOperatorProbe
         }
 
         var availability = await ProbeClusterAsync(authenticated, cancellationToken).ConfigureAwait(true);
-        if (_caller.Current == caller)
+        if (_caller.Current == caller && availability.Kind != AreaAvailabilityKind.Unchecked)
         {
             _clusterVerdict = (caller, availability);
         }
@@ -225,7 +228,9 @@ internal sealed class AccessArea : IExplorerArea, IPlatformOperatorProbe
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            return AreaAvailability.Hidden;
+            // The cluster did not answer: not checked, and not remembered. Any
+            // other fault is read as a refusal.
+            return AreaProbeFaults.IsTransient(exception) ? AreaAvailability.Unchecked : AreaAvailability.Hidden;
         }
     }
 

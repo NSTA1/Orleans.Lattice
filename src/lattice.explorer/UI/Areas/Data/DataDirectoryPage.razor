@@ -48,8 +48,20 @@
         </div>
     }
     <LtButton data-lt-command="@DataArea.RefreshCommandId" OnClick="RefreshAsync">Refresh</LtButton>
+    @if (_canCreate)
+    {
+        <LtButton Variant="LtButtonVariant.Quiet" data-lt-data-new-from-file="true" OnClick="OpenCreate">New tree from file...</LtButton>
+    }
     <span class="lt-data-toolbar__status" role="status">@CountText</span>
 </div>
+
+@if (_canCreate)
+{
+    <Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages.ClusterTreeCreateDialog @bind-Open="_createOpen"
+                                                                       Title="New tree from file"
+                                                                       Created="OnTreeCreated"
+                                                                       Placement="@(Breakpoint == LtBreakpoint.Compact ? LtDialogPlacement.End : LtDialogPlacement.Center)" />
+}
 
 @if (_error is not null)
 {
@@ -105,7 +117,7 @@ else
                 <LtColumn TItem="DataTreeEntry" Context="entry" Title="App" SortBy="@(entry => entry.AppSlug)">
                     @if (entry.AppSlug is { } slug)
                     {
-                        <a class="lt-shell-mono" href="@AppHref(slug)">@slug</a>
+                        <a class="lt-shell-mono lt-data-key" href="@AppHref(slug)">@slug</a>
                     }
                 </LtColumn>
             }

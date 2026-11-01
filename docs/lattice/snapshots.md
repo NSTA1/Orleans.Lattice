@@ -33,6 +33,14 @@ Each shard follows this phased pattern:
 Shards are processed sequentially. Earlier shards become readable again before
 later shards are copied.
 
+The snapshot's coordinator drives these steps from a grain timer that ticks
+every two seconds, and each tick takes as many steps as fit in a bounded slice
+(`LatticeOptions.BackgroundDrainMaxDuration`, capped at five seconds) rather
+than one step per tick, so how long the source stays locked is set by the copy
+work, not by the timer. A tick ends early when a step fails, so the step's one
+retry waits for the next tick
+([#5455](https://github.com/NSTA1/Orleans.Lattice/issues/5455)).
+
 ### Online (`SnapshotMode.Online`)
 
 The source tree **remains available** for reads and writes during the snapshot.

@@ -192,6 +192,7 @@ Every request / response record is Orleans-serialized with a stable, compact ali
 | `AllTreesGrantsEnabled` | `bool` | The live all-trees-grants tier flag. |
 | `AccessAdministrationDelegationEnabled` | `bool` | The live access-administration-delegation tier flag. |
 | `DelegatedTenantAccessAdministrationEnabled` | `bool` | Whether delegated tenant access administration is enabled (`LatticeTenancyOptions.DelegatedAccessAdministrationEnabled`), so tenant groups, members and tenant-tier rules are in force. `false` on a cluster without the tenancy add-on, and from a server that predates the member. |
+| `DirectoryValidationRequired` | `bool` | Whether a real identity directory is active **and** `LatticeIdentityDirectoryOptions.ValidationRequired` is set, so every group and member id named in membership administration must resolve in the directory. `false` when ids are not validated on write, so a cluster group may be stored, nested and named without being in the directory; also `false` from a server that predates the member, which still refuses on write whatever it requires. |
 
 ### `AuthExplanation` (returned by `ExplainAsync`)
 

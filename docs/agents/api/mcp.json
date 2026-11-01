@@ -6213,7 +6213,7 @@
           "type": "string?",
           "required": false,
           "default": "null",
-          "notes": "Optional cluster id to pull an initial snapshot from when the tree already holds data; null skips the bootstrap."
+          "notes": "Optional cluster id to pull an initial snapshot from (enable that cluster first); null skips the bootstrap."
         },
         {
           "name": "region",

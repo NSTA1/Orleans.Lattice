@@ -25,7 +25,8 @@ namespace Orleans.Lattice.Explorer.UI.Session;
 /// Basic method reads a username and password, and every other method runs its
 /// own interactive challenge. On the web head the password form is a native post
 /// to the server (<see cref="SessionSignInOptions"/>), so the password never
-/// crosses the circuit.
+/// crosses the circuit. That form also carries the address the dialog was opened
+/// on, so the server returns the user there rather than to Home.
 /// </para>
 /// <para>
 /// Below the small breakpoint it opens as a full-screen sheet rather than a
@@ -57,6 +58,12 @@ public partial class SignInDialog
     [Inject]
     private SessionSignInOptions Options { get; set; } = default!;
 
+    [Inject]
+    private SessionChromeState State { get; set; } = default!;
+
+    [Inject]
+    private NavigationManager Navigation { get; set; } = default!;
+
     [CascadingParameter(Name = LtBreakpointCascade.Name)]
     private LtBreakpoint? Breakpoint { get; set; }
 
@@ -68,6 +75,22 @@ public partial class SignInDialog
 
     private bool ShowHeadings => _choice is { Methods.Count: > 1 };
 
+    /// <summary>
+    /// The address the server form returns to: the current address, rooted, with
+    /// its query and fragment but without the refused notice the dialog may have
+    /// been opened from. The server accepts it only as a local path under the base.
+    /// </summary>
+    private string ReturnPath
+    {
+        get
+        {
+            SessionOverlay.TryTakeRefusedNotice(Navigation.Uri, out var address);
+            return Uri.TryCreate(address, UriKind.Absolute, out var parsed)
+                ? parsed.PathAndQuery + parsed.Fragment
+                : string.Empty;
+        }
+    }
+
     private string? Description => Explorer.Current?.Endpoint is { Length: > 0 } endpoint
         ? $"Sign in to the Lattice API at {endpoint}."
         : null;
@@ -75,6 +98,10 @@ public partial class SignInDialog
     /// <inheritdoc />
     protected override async Task OnInitializedAsync()
     {
+        // Why the last sign-in did not take (the cluster refused the posted
+        // username and password), shown until the next attempt.
+        _error = State.SignInNotice;
+
         ExplorerAuthSchemeAdvertisement advertisement;
         try
         {

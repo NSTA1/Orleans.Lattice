@@ -14,8 +14,13 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster;
 /// <remarks>
 /// Visibility fails closed on the cluster-wide storage summary, the cheapest read
 /// that needs cluster telemetry authority: no tree administration facade hides the
-/// area, a denial hides it, and an unconfigured connection or a facade the cluster
-/// does not serve says why. A verdict is remembered for the caller it was read for
+/// area, and an unconfigured connection or a facade the cluster does not serve says
+/// why. A caller refused the summary is admitted only when the capability probe of
+/// one of the trees the catalogue lists reports a tree-lifecycle or tree-admin grant
+/// (#5581); a read, diagnostics or bulk-load grant admits nothing, so such a caller
+/// sees no area. Each page and verb keeps its own gate, so the estate-wide figures
+/// stay out of an admitted caller's reach. A verdict is remembered for the caller it
+/// was read for
 /// (<see cref="ClusterFacades.Caller"/>: the sign-in, the endpoint and the asserted
 /// tenant), so a sign-in, a sign-out, a new connection or a tenant switch asks
 /// again; a transient failure is not remembered.
@@ -27,6 +32,12 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
 
     /// <summary>The "Plan WAL move..." palette command's id.</summary>
     public const string PlanWalMoveCommandId = "cluster.plan-wal-move";
+
+    /// <summary>The "New tree..." palette command's id (G4, issue #5368).</summary>
+    public const string CreateTreeCommandId = "cluster.create-tree";
+
+    /// <summary>The most catalogue trees probed for a grant when the storage summary is refused.</summary>
+    public const int MaximumGrantProbes = 64;
 
     private readonly ClusterFacades _facades;
     private readonly ClusterTreeCatalog _catalog;
@@ -60,6 +71,12 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
                 Detail = "Preview moving a WAL partition to another storage provider.",
                 Target = ClusterAddresses.Wal(),
                 InvokeAsync = _ => signals.RequestAsync(PlanWalMoveCommandId),
+            },
+            new ExplorerCommand(CreateTreeCommandId, "New tree...")
+            {
+                Detail = "Create an empty tree with a chosen shard count and node sizes.",
+                Target = ClusterAddresses.Trees,
+                InvokeAsync = _ => signals.RequestAsync(CreateTreeCommandId),
             },
         ];
 
@@ -129,10 +146,12 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
             return remembered;
         }
 
+        AreaAvailability answer;
+        var denied = false;
         try
         {
             _usage = await admin.GetStorageUsageAsync(deep: false, cancellationToken).ConfigureAwait(false);
-            _verdict = AreaAvailability.Visible;
+            answer = AreaAvailability.Visible;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -140,18 +159,32 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
         }
         catch (Exception exception) when (ClusterFaults.IsDenied(exception))
         {
-            _verdict = AreaAvailability.Hidden;
+            denied = true;
+            answer = AreaAvailability.Hidden;
         }
         catch (NotSupportedException)
         {
-            _verdict = AreaAvailability.Unavailable("This cluster does not serve tree administration.");
+            answer = AreaAvailability.Unavailable("This cluster does not serve tree administration.");
         }
         catch (Exception)
         {
             return AreaAvailability.Unavailable("The cluster did not answer. Try again in a moment.");
         }
 
-        var answer = _verdict.Value;
+        if (denied)
+        {
+            // No cluster telemetry: the estate-wide figures stay out of reach, but a
+            // caller who may administer a tree still reaches that tree's pages (#5581).
+            // Hidden is the default arm: only a positive grant admits.
+            if (await AdministersAnyTreeAsync(admin, cancellationToken).ConfigureAwait(false) is not { } administers)
+            {
+                return AreaAvailability.Unavailable("The cluster did not answer. Try again in a moment.");
+            }
+
+            answer = administers ? AreaAvailability.Visible : AreaAvailability.Hidden;
+        }
+
+        _verdict = answer;
         if (_facades.Caller != caller)
         {
             // The caller changed while the probe ran: answer this caller, but
@@ -222,6 +255,79 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
 
     private ClusterStorageUsageSummary? CurrentUsage() =>
         _usage is { } usage && _verdictCaller == _facades.Caller ? usage : null;
+
+    /// <summary>
+    /// Whether a caller refused the cluster-wide storage summary may still administer
+    /// one of the trees the catalogue lists: a tree-lifecycle or tree-admin grant
+    /// admits the area. A read or diagnostics grant does not, and neither does a
+    /// bulk-load grant, which no Cluster page serves. At most
+    /// <see cref="MaximumGrantProbes"/> trees are probed, stopping at the first
+    /// grant. A catalogue or probe the cluster did not answer, when nothing else
+    /// admitted the caller, is <see langword="null"/> (not checked); a refusal or any
+    /// other fault admits nothing.
+    /// </summary>
+    private async Task<bool?> AdministersAnyTreeAsync(ILatticeTreeAdmin admin, CancellationToken cancellationToken)
+    {
+        IReadOnlyList<ClusterTreeEntry> trees;
+        try
+        {
+            trees = await _catalog.GetAsync(refresh: false, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (AreaProbeFaults.IsTransient(exception))
+        {
+            return null;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+
+        var unanswered = false;
+        var probed = 0;
+        foreach (var tree in trees)
+        {
+            if (probed++ == MaximumGrantProbes)
+            {
+                break;
+            }
+
+            LatticeTreeAdminCapabilities? capabilities;
+            try
+            {
+                capabilities = await admin.ProbeCapabilitiesAsync(tree.TreeId, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (AreaProbeFaults.IsTransient(exception))
+            {
+                unanswered = true;
+                continue;
+            }
+            catch (Exception)
+            {
+                continue;
+            }
+
+            if (capabilities is not null && AdmitsArea(capabilities))
+            {
+                return true;
+            }
+        }
+
+        return unanswered ? null : false;
+    }
+
+    /// <summary>Whether a tree's capabilities admit a caller without cluster telemetry to the area.</summary>
+    /// <param name="capabilities">The probe's answer for one tree.</param>
+    /// <returns><see langword="true"/> for a tree-lifecycle or tree-admin grant only.</returns>
+    internal static bool AdmitsArea(LatticeTreeAdminCapabilities capabilities) =>
+        capabilities.CanManageTreeLifecycle || capabilities.CanAdministerTree;
 
     // The tree list's own count, read through the circuit's remembered catalogue;
     // a failed read has no count rather than a guessed one.

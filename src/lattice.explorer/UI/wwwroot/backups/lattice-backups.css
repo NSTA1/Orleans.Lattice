@@ -3,8 +3,8 @@
  *
  * Only lt-backups-* classes. Everything else on the area's pages is a design
  * primitive (tables, fields, dialogs, pills) or chrome (page title, lede,
- * toolbar). No width query lives here: the compact form follows the Shell
- * root's lt-shell--compact class, and colour comes only from tokens.
+ * toolbar). The compact form queries the Shell root's lt-viewport container
+ * at the breakpoint layer's declared width, and colour comes only from tokens.
  */
 
 /* The area's own pages, as a row of links under the title. The current page is
@@ -152,8 +152,10 @@
   gap: var(--lt-space-3);
 }
 
-.lt-shell--compact .lt-backups-form__row {
-  grid-template-columns: minmax(0, 1fr);
+@container lt-viewport (width < 768px) {
+  .lt-shell .lt-backups-form__row {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .lt-backups-actions {
@@ -163,9 +165,11 @@
   align-items: center;
 }
 
-.lt-shell--compact .lt-backups-actions {
-  flex-direction: column;
-  align-items: stretch;
+@container lt-viewport (width < 768px) {
+  .lt-shell .lt-backups-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
 
 /* The trees a set capture includes: one line each, remove control first. */
@@ -231,6 +235,16 @@
 .lt-backups-list {
   margin: 0 0 var(--lt-space-3);
   padding-inline-start: var(--lt-space-5);
+}
+
+/* A stacked link, or a link alone on its line rather than inside a sentence, is a
+   target in its own right: it is at least 24px tall, so it meets the WCAG 2.2
+   target-size minimum and neighbouring links sit 24px apart. */
+.lt-backups-list .lt-backups-link,
+.lt-backups-link--standalone {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: 1.5rem;
 }
 
 .lt-backups-list__item {

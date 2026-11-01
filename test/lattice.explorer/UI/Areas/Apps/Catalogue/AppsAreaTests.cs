@@ -101,7 +101,7 @@ public sealed class AppsAreaTests : AppsTestContext
     }
 
     [Test]
-    public async Task A_probe_that_throws_is_a_denial_never_a_grant()
+    public async Task A_probe_that_throws_is_never_a_grant_and_one_the_cluster_did_not_answer_is_not_checked()
     {
         Catalog.CapabilitiesFailure = new TimeoutException();
         Control.Capabilities = new LatticeAppsCapabilities();
@@ -115,7 +115,24 @@ public sealed class AppsAreaTests : AppsTestContext
         {
             Assert.That(snapshot.CanBrowseCatalogue, Is.False);
             Assert.That(snapshot.WorkspaceServed, Is.False);
-            Assert.That(v0, Is.EqualTo(AreaAvailability.Hidden));
+            Assert.That(snapshot.ProbeUnanswered, Is.True);
+            Assert.That(v0, Is.EqualTo(AreaAvailability.Unchecked), "no answer is not a refusal (#5420)");
+        });
+    }
+
+    [Test]
+    public async Task A_probe_that_fails_definitely_is_a_denial_and_hides_the_area()
+    {
+        Catalog.CapabilitiesFailure = new InvalidOperationException("not configured");
+        Control.Capabilities = new LatticeAppsCapabilities();
+        Workspace.Failure = new InvalidOperationException("not configured");
+
+        var snapshot = await Services.GetRequiredService<AppsAccess>().GetAsync();
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(snapshot.ProbeUnanswered, Is.False);
+            Assert.That(await Area().GetAvailabilityAsync(default), Is.EqualTo(AreaAvailability.Hidden));
         });
     }
 

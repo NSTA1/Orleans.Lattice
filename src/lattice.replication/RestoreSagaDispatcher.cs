@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Logging;
@@ -25,9 +26,10 @@ namespace Orleans.Lattice.Replication;
 /// the target's self-describing size against the coordinator cluster's capacity
 /// and refuses an infeasible target up front, and it refuses to start unless every
 /// current peer of the target is reachable (all-or-nothing; no partial restore).
-/// It then runs the <see cref="ICrossClusterSagaCoordinatorGrain"/> over the
-/// peer set plus this cluster, and on a committed outcome returns the local
-/// cluster's restore result.
+/// It then starts the <see cref="ICrossClusterSagaCoordinatorGrain"/> over the
+/// peer set plus this cluster and follows the saga's status until it completes
+/// (never awaiting the whole saga inside one grain call, issue #5506), and on a
+/// committed outcome returns the local cluster's restore result.
 /// </para>
 /// </summary>
 internal sealed class RestoreSagaDispatcher(
@@ -42,6 +44,18 @@ internal sealed class RestoreSagaDispatcher(
     ILogger<RestoreSagaDispatcher> logger,
     ILatticeBackupSetResolver? setResolver = null) : IRestoreSagaDispatcher
 {
+    /// <summary>The default interval between reads of a running saga's status.</summary>
+    internal static readonly TimeSpan DefaultStatusPollInterval = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>The default minimum interval between drives of a saga that stopped short.</summary>
+    internal static readonly TimeSpan DefaultRedriveInterval = TimeSpan.FromSeconds(5);
+
+    /// <summary>The interval between reads of a running saga's status. Tests shorten it.</summary>
+    internal TimeSpan StatusPollInterval { get; init; } = DefaultStatusPollInterval;
+
+    /// <summary>The minimum interval between drives of a saga that stopped short. Tests shorten it.</summary>
+    internal TimeSpan RedriveInterval { get; init; } = DefaultRedriveInterval;
+
     /// <inheritdoc />
     public async Task<LatticeRestoreResult?> TryDispatchAsync(
         LatticeRestoreRequest request, CancellationToken cancellationToken = default)
@@ -58,15 +72,41 @@ internal sealed class RestoreSagaDispatcher(
             return null;
         }
 
+        // The local membership answers from a per-silo snapshot that can lag an
+        // enable committed on another silo (#5462). A stale "not replicated" would
+        // replace a replicated tree here while its peers keep the writes the
+        // replacement discards, so every decline is confirmed against a refreshed
+        // snapshot first (at most one refresh per dispatch). Only "not replicated"
+        // is confirmed: a stale "replicated" errs toward the coordinated path,
+        // whose participants refuse loudly rather than diverge.
+        var refreshed = false;
+        async Task<bool> ConfirmedNotReplicatedAsync(Func<bool> notReplicated)
+        {
+            if (!notReplicated())
+            {
+                return false;
+            }
+
+            if (refreshed || membership is not IRefreshableReplicatedTreeMembership refreshable)
+            {
+                return true;
+            }
+
+            refreshed = true;
+            await RefreshMembershipAsync(refreshable, $"restore of backup '{request.BackupId}'", cancellationToken);
+            return notReplicated();
+        }
+
         // Fast local paths that avoid any manifest I/O: an explicitly targeted
         // tree that is not replicated, or a host with no replicated trees at all,
         // always takes the plain local restore.
-        if (request.TargetTreeId is not null && !membership.IsReplicated(request.TargetTreeId))
+        if (request.TargetTreeId is { } explicitTarget
+            && await ConfirmedNotReplicatedAsync(() => !membership.IsReplicated(explicitTarget)))
         {
             return null;
         }
 
-        if (membership.ReplicatedTrees.Count == 0)
+        if (await ConfirmedNotReplicatedAsync(() => membership.ReplicatedTrees.Count == 0))
         {
             return null;
         }
@@ -77,7 +117,7 @@ internal sealed class RestoreSagaDispatcher(
         var targetTree = report.TargetTreeId;
 
         // The decision is keyed on the target tree's replication status now.
-        if (!membership.IsReplicated(targetTree))
+        if (await ConfirmedNotReplicatedAsync(() => !membership.IsReplicated(targetTree)))
         {
             return null;
         }
@@ -129,7 +169,8 @@ internal sealed class RestoreSagaDispatcher(
             request.BackupId, targetTree, sagaId, participants.Count);
 
         var coordinator = grainFactory.GetGrain<ICrossClusterSagaCoordinatorGrain>(sagaId);
-        var outcome = await coordinator.RunAsync(participants, targetTree, request.BackupId, self);
+        var outcome = await RunSagaAsync(
+            coordinator, sagaId, participants, targetTree, request.BackupId, self, setId: null, cancellationToken);
 
         if (outcome != CrossClusterSagaOutcome.Committed)
         {
@@ -183,14 +224,14 @@ internal sealed class RestoreSagaDispatcher(
         // multi-tree restore (no saga); if ANY member tree is replicated the set
         // runs one saga so it stays cross-tree atomic, with local-only members
         // riding along as local participants in the same saga.
-        var anyReplicated = false;
-        foreach (var member in members)
+        var anyReplicated = AnyMemberReplicated(members);
+
+        // A stale per-silo snapshot must not send a set holding a replicated tree
+        // down the uncoordinated local path (#5462): confirm against a refreshed one.
+        if (!anyReplicated && membership is IRefreshableReplicatedTreeMembership refreshable)
         {
-            if (membership.IsReplicated(member.TreeId))
-            {
-                anyReplicated = true;
-                break;
-            }
+            await RefreshMembershipAsync(refreshable, $"restore of backup set '{setId}'", cancellationToken);
+            anyReplicated = AnyMemberReplicated(members);
         }
 
         if (!anyReplicated)
@@ -228,7 +269,8 @@ internal sealed class RestoreSagaDispatcher(
         // every outgoing control request carries it and each participant flips the
         // set's hosted member trees as one group.
         var coordinator = grainFactory.GetGrain<ICrossClusterSagaCoordinatorGrain>(sagaId);
-        var outcome = await coordinator.RunAsync(participants, setId, setId, self, setId);
+        var outcome = await RunSagaAsync(
+            coordinator, sagaId, participants, setId, setId, self, setId, cancellationToken);
 
         if (outcome != CrossClusterSagaOutcome.Committed)
         {
@@ -260,6 +302,105 @@ internal sealed class RestoreSagaDispatcher(
         }
 
         return synthesized;
+    }
+
+    /// <summary>Whether any of <paramref name="members"/> is replicated per the current membership.</summary>
+    private bool AnyMemberReplicated(IReadOnlyList<BackupSetMember> members)
+    {
+        foreach (var member in members)
+        {
+            if (membership.IsReplicated(member.TreeId))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Brings the membership snapshot up to date before a decline, and refuses
+    /// the restore when it cannot (#5462): without a current answer this cluster
+    /// cannot tell a replicated target from an unreplicated one, and treating it
+    /// as unreplicated would replace it uncoordinated while its peers diverge.
+    /// </summary>
+    private async Task RefreshMembershipAsync(
+        IRefreshableReplicatedTreeMembership refreshable, string subject, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await refreshable.RefreshAsync(cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(ex,
+                "Coordinated restore: could not read the replication configuration to confirm whether the {Subject} "
+                + "targets a replicated tree; refusing rather than risk an uncoordinated replacement.",
+                subject);
+            throw new LatticeRestoreValidationException(
+                $"The {subject} was refused: this cluster could not read its replication configuration to establish "
+                + "whether the target is replicated, and restoring a replicated tree without coordinating its peers "
+                + "would leave them diverged. Retry once the configuration is readable.");
+        }
+    }
+
+    /// <summary>
+    /// Starts the saga on <paramref name="coordinator"/> and follows it to
+    /// completion without holding any one grain call open for its length (issue
+    /// #5506): the coordinator records the saga, advances it in one-way drives of
+    /// its own, and this loop reads its status until it completes. A saga can run
+    /// far longer than a grain call's response timeout, and awaiting it inside one
+    /// call reported a committed saga as a failed restore.
+    /// <para>
+    /// A drive that stops short (a transient prepare or finalize fault) leaves
+    /// the saga where it was; the loop asks for another drive no more often than
+    /// <see cref="RedriveInterval"/>, and the coordinator's keepalive reminder
+    /// resumes it too. The coordinator bounds a saga that cannot finish preparing
+    /// with its own prepare deadline, recording an abort. A saga a participant
+    /// refused cannot complete without operator repair and is reported as such.
+    /// Cancelling stops the wait, not the saga.
+    /// </para>
+    /// </summary>
+    private async Task<CrossClusterSagaOutcome> RunSagaAsync(
+        ICrossClusterSagaCoordinatorGrain coordinator,
+        string sagaId,
+        List<string> participants,
+        string targetTree,
+        string manifestId,
+        string self,
+        string? setId,
+        CancellationToken cancellationToken)
+    {
+        var status = await coordinator.BeginAsync(participants, targetTree, manifestId, self, setId);
+        var driven = false;
+        var lastDrive = 0L;
+        while (!status.IsComplete)
+        {
+            if (status.RequiresRepair)
+            {
+                throw new InvalidOperationException(status.Detail
+                    ?? $"Cross-cluster saga '{sagaId}' was refused by a participant and needs operator repair.");
+            }
+
+            if (!status.IsDriving && (!driven || Stopwatch.GetElapsedTime(lastDrive) >= RedriveInterval))
+            {
+                if (driven)
+                {
+                    logger.LogWarning(
+                        "Coordinated restore saga '{SagaId}' stopped in phase {Phase} ({Detail}); driving it again.",
+                        sagaId, status.Phase, status.Detail);
+                }
+
+                await coordinator.DriveAsync();
+                driven = true;
+                lastDrive = Stopwatch.GetTimestamp();
+            }
+
+            await Task.Delay(StatusPollInterval, cancellationToken);
+            status = await coordinator.GetStatusAsync();
+        }
+
+        return status.Outcome ?? CrossClusterSagaOutcome.Committed;
     }
 
     /// <summary>

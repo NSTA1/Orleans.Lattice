@@ -12,7 +12,10 @@ namespace Orleans.Lattice.Explorer.UI.Pages;
 /// </summary>
 public partial class HomePage : IDisposable
 {
-    private readonly Dictionary<string, string?> _statuses = new(StringComparer.Ordinal);
+    /// <summary>The note under an area, or a status, shown from the last answer because the latest check met no answer.</summary>
+    internal const string StaleNote = "Last known: the cluster did not answer the latest check.";
+
+    private readonly Dictionary<string, ExplorerAreaStatus?> _statuses = new(StringComparer.Ordinal);
     private readonly ComponentLifetime _lifetime = new();
     private IReadOnlyList<ExplorerAreaEntry>? _asked;
 
@@ -58,4 +61,14 @@ public partial class HomePage : IDisposable
 
     private string AreaHref(ExplorerAreaEntry entry) =>
         Navigator.Canonicalize(ExplorerAddress.ForArea(entry.Area.Key).WithTenant(Address.Tenant)).ToHref();
+
+    private ExplorerAreaStatus? StatusOf(ExplorerAreaEntry entry) =>
+        _statuses.TryGetValue(entry.Area.Key, out var status) ? status : null;
+
+    private bool AnyNeedsRecheck =>
+        CurrentLocation.Entries.Any(entry => entry.NeedsRecheck)
+        || CurrentLocation.Entries.Any(entry => entry.IsVisible && StatusOf(entry) is { NeedsRecheck: true });
+
+    private static string StateOf(ExplorerAreaEntry entry) =>
+        entry.IsUnchecked ? "unchecked" : entry.IsStale ? "stale" : "current";
 }

@@ -163,7 +163,7 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
             }
             else
             {
-                SetFaulted(Friendly(ex), IsAuthFailure(ex));
+                SetFaulted(Friendly(ex), IsAuthFailure(ex), IsCredentialRefused(ex));
             }
 
             return false;
@@ -172,6 +172,66 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
         {
             SetFaulted($"Could not reach the state API: {ex.Message}");
             return false;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<LatticeCredentialCheck> VerifyCredentialAsync(
+        LatticeConnectionSettings settings,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        if (settings.Authentication is null)
+        {
+            return LatticeCredentialCheck.Unverified;
+        }
+
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return LatticeCredentialCheck.Unverified;
+            }
+        }
+
+        // A channel of its own: the check must not disturb the shared connection,
+        // its status or the calls in flight on it, and must not apply a credential
+        // the endpoint has not yet accepted.
+        ILatticeStateClient client;
+        try
+        {
+            client = _clientFactory(WithActiveTenant(settings));
+        }
+        catch (Exception)
+        {
+            return LatticeCredentialCheck.Unverified;
+        }
+
+        try
+        {
+            await client.ListTreesAsync(new CatalogRequest { PageSize = 1 }, cancellationToken).ConfigureAwait(false);
+            return LatticeCredentialCheck.Accepted;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (RpcException ex) when (ex.StatusCode == StatusCode.Unauthenticated)
+        {
+            return LatticeCredentialCheck.Refused;
+        }
+        catch (RpcException ex) when (ex.StatusCode == StatusCode.PermissionDenied)
+        {
+            // Forbidden is the answer to a caller the endpoint recognised.
+            return LatticeCredentialCheck.Accepted;
+        }
+        catch (Exception)
+        {
+            return LatticeCredentialCheck.Unverified;
+        }
+        finally
+        {
+            DisposeClient(client);
         }
     }
 
@@ -345,9 +405,9 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
                 {
                     EnterReconnecting();
                 }
-                else
+                else if (!IsCallScopedRefusal(ex))
                 {
-                    SetFaulted(Friendly(ex), IsAuthFailure(ex));
+                    SetFaulted(Friendly(ex), IsAuthFailure(ex), IsCredentialRefused(ex));
                 }
 
                 throw new LatticeStateApiException(Friendly(ex), ex)
@@ -407,7 +467,11 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
                             break;
                         }
 
-                        SetFaulted(Friendly(ex), IsAuthFailure(ex));
+                        if (!IsCallScopedRefusal(ex))
+                        {
+                            SetFaulted(Friendly(ex), IsAuthFailure(ex), IsCredentialRefused(ex));
+                        }
+
                         throw new LatticeStateApiException(Friendly(ex), ex)
                         {
                             IsTransient = false,
@@ -556,7 +620,7 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
         }
     }
 
-    private void SetFaulted(string message, bool requiresAuth = false)
+    private void SetFaulted(string message, bool requiresAuth = false, bool credentialRefused = false)
     {
         LatticeConnectionStatus? raise;
         lock (_gate)
@@ -566,7 +630,7 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
                 return;
             }
 
-            raise = SetUnlocked(LatticeConnectionState.Faulted, _settings?.Address, message, requiresAuth);
+            raise = SetUnlocked(LatticeConnectionState.Faulted, _settings?.Address, message, requiresAuth, credentialRefused);
         }
 
         if (raise is not null)
@@ -575,9 +639,14 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
         }
     }
 
-    private LatticeConnectionStatus? SetUnlocked(LatticeConnectionState state, string? endpoint, string message, bool requiresAuth = false)
+    private LatticeConnectionStatus? SetUnlocked(
+        LatticeConnectionState state,
+        string? endpoint,
+        string message,
+        bool requiresAuth = false,
+        bool credentialRefused = false)
     {
-        var next = new LatticeConnectionStatus(state, endpoint, message, requiresAuth);
+        var next = new LatticeConnectionStatus(state, endpoint, message, requiresAuth) { CredentialRefused = credentialRefused };
         if (next == _status)
         {
             return null;
@@ -643,9 +712,44 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
                 RequiresAuthentication = false,
             };
 
+    /// <summary>
+    /// Whether a failure is a fact about the call rather than the endpoint: the
+    /// server answered, and its answer concerns only what this call asked for.
+    /// <c>PermissionDenied</c> refuses an authenticated caller this one read (a
+    /// whole-tree metrics sample under a narrowed grant, say); <c>NotFound</c>
+    /// says the tree or index is gone or no longer visible to the caller (a grant
+    /// revoked mid-session); <c>InvalidArgument</c> rejects this request, such as
+    /// a continuation whose scan cursor expired; <c>FailedPrecondition</c> refuses
+    /// it in the tree's current state, such as a change-feed position past the
+    /// retention window; <c>AlreadyExists</c> and <c>OutOfRange</c> are likewise
+    /// about the request. Each is surfaced to the caller and never moves
+    /// <see cref="Status"/>, so one tree's answer is not reported as the
+    /// connection failing. <c>Unauthenticated</c> (the session's credential was
+    /// refused) and <c>Unimplemented</c> (the endpoint has no state API) do
+    /// describe the endpoint, and still fault the connection. The connection probe
+    /// keeps its own handling, because a refused catalogue read is the one answer
+    /// that does describe the session.
+    /// </summary>
+    private static bool IsCallScopedRefusal(RpcException ex) => ex.StatusCode is
+        StatusCode.PermissionDenied or
+        StatusCode.NotFound or
+        StatusCode.InvalidArgument or
+        StatusCode.FailedPrecondition or
+        StatusCode.AlreadyExists or
+        StatusCode.OutOfRange;
+
     private static bool IsAuthFailure(RpcException ex) => ex.StatusCode is
         StatusCode.Unauthenticated or
         StatusCode.PermissionDenied;
+
+    /// <summary>
+    /// Whether the endpoint refused the credential this connection presented: an
+    /// unauthenticated answer to a call that carried one. Forbidden is not a
+    /// refusal - it is the answer to a caller the endpoint recognised - and an
+    /// unauthenticated answer to an anonymous call only asks for a sign-in.
+    /// </summary>
+    private bool IsCredentialRefused(RpcException ex) =>
+        ex.StatusCode == StatusCode.Unauthenticated && SnapshotSettings()?.Authentication is not null;
 
     private static string Friendly(RpcException ex) => ex.StatusCode switch
     {

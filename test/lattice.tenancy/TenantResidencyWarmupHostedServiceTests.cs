@@ -51,7 +51,7 @@ public sealed class TenantResidencyWarmupHostedServiceTests
     private static TenantResidencySnapshotMaintainer Maintainer(ITenantRegistry registry) =>
         new(
             registry,
-            Options.Create(new ClusterOptions { ClusterId = "region-a" }),
+            TenantLocalRegion.ForRegion("region-a"),
             Array.Empty<ITenantRegionStatusChangeListener>(),
             TimeProvider.System,
             NullLogger<TenantResidencySnapshotMaintainer>.Instance);

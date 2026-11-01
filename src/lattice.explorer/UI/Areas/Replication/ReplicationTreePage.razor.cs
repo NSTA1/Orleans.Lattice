@@ -49,6 +49,7 @@ public partial class ReplicationTreePage
     /// <inheritdoc />
     public void Dispose()
     {
+        Visibility.Changed -= OnVisibilityChanged;
         _loop?.Dispose();
         _cancellation.Leave();
     }
@@ -111,9 +112,20 @@ public partial class ReplicationTreePage
         {
             _loop = new ReplicationRefreshLoop(Time, Visibility, Options.RefreshInterval, InvokeAsync, RefreshAsync);
             await _loop.StartAsync();
+            if (_cancellation.IsLeft)
+            {
+                return;
+            }
+
+            // Subscribed after the cadence, so the status line is drawn once the cadence has
+            // stopped or resumed: hiding the page reads no links, and nothing else would
+            // redraw the line that says the refresh is paused.
+            Visibility.Changed += OnVisibilityChanged;
             StateHasChanged();
         }
     }
+
+    private void OnVisibilityChanged() => _ = InvokeAsync(StateHasChanged);
 
     private async Task RefreshAsync()
     {

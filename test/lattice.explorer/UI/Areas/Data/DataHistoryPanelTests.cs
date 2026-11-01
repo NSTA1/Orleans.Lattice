@@ -257,6 +257,7 @@ public sealed class DataHistoryPanelTests : DataTestContext
             var change = cut.Find(".lt-data-timeline__rev");
             Assert.That(change.TextContent, Does.Contain("Deleted").And.Contain("order/9"));
             Assert.That(change.QuerySelector("a")!.GetAttribute("href"), Is.EqualTo("data/orders?tab=history&prefix=order%2F&key=order%2F9"));
+            Assert.That(change.QuerySelector("a")!.ClassList, Does.Contain("lt-data-key"), "a live change's key link is a 24px target (WCAG 2.5.8)");
         });
     }
 

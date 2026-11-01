@@ -159,6 +159,10 @@ public static class LatticeExplorerWebServiceCollectionExtensions
         {
             AllowInteractiveEndpointConfiguration = options.AllowInteractiveEndpointConfiguration,
         });
+        services.TryAddSingleton(new Orleans.Lattice.Explorer.UI.Areas.Data.DataImportLimits
+        {
+            MaxImportBytes = options.MaxImportBytes,
+        });
         services.AddExplorerAuth();
 
         // The Explorer itself: chrome, session, credential-aware transport, the

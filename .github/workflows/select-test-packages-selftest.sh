@@ -792,6 +792,10 @@ while IFS= read -r docSrcFile; do
   case "$docSrcFile" in test/*) ;; *) continue ;; esac
   docOwner="${docSrcFile#test/}"
   docOwner="${docOwner%%/*}"
+  # The browser suites are not ci.yml packages: ui-tests.yml and
+  # explorer-journeys.yml own them, and explorer-journeys.yml triggers on
+  # docs/lattice.explorer/** itself (its feature catalogue cites those docs).
+  case "$docOwner" in lattice.explorer.uitests|lattice.explorer.e2e) continue ;; esac
   docExpectedPkgs["$docOwner"]=1
 done < <(grep -rlzE 'docs["'"'"']?[[:space:]]*[,/\\][[:space:]]*["'"'"']?lattice\.explorer["'"'"'/\\]' \
            --include='*.cs' --exclude-dir=bin --exclude-dir=obj test 2>/dev/null | tr '\0' '\n' | grep . || true)

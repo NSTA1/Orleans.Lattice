@@ -49,10 +49,8 @@ public sealed record BackupCatalogIndexRow
 
     /// <summary>
     /// The id of the base backup this incremental is layered on, or
-    /// <see langword="null"/> for a full backup. Lets the listing fold an
-    /// incremental chain to its tip (the most recent increment) by recognising
-    /// every id referenced as a base as an ancestor that a chain-tip row owns,
-    /// without deserialising a full manifest.
+    /// <see langword="null"/> for a full backup. Records the chain link on the
+    /// compact row; the listing lists every chain member as its own row.
     /// </summary>
     [Id(7)] public string? BaseBackupId { get; init; }
 

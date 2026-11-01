@@ -610,6 +610,21 @@ how that scoping applies to region discovery, and
 [Tenant-aware surfaces](#tenant-aware-surfaces) for what a tenant-asserting caller is
 shown today.
 
+### Region identity
+
+A region id in the allowed and resident sets is a **replication region id**: the
+`LatticeReplicationOptions.ClusterId` (`Replication:ClusterId`) of the region, the
+same id its replication peers know it by. Each silo identifies the region it serves
+the same way, so on a replicated host the local region is the replication cluster id,
+never the Orleans `ClusterOptions.ClusterId`. The two may differ (for example
+`Cluster:Id = estate-west` with `Replication:ClusterId = west`), and residency is
+then set to `west`. A single-cluster host has no replication id, so its Orleans
+cluster id is the region id. The residency gates, the snapshot each silo keeps, and
+the backfill and drain drivers all read this one value. It comes from host
+configuration only, never from a request. If it cannot be resolved (an empty
+replication cluster id on a replicated host, or an empty Orleans cluster id on a
+single-cluster host) the silo refuses to start, and no region is ever assumed.
+
 - **Allowed vs resident.** A platform operator authorizes, per tenant, the *allowed*
   region set; the tenant's delegated admin selects its *residency set* (the subset it
   actually replicates to and is served from) within that allowed set. A tenant that
@@ -675,7 +690,8 @@ promotions, and the two paths are completed differently.
 
 **The remove path completes on its own.** With the
 [tenant-admin control API](../lattice.api.tenantadmin/README.md#registration)
-registered, each silo watches its own serving region (its cluster id) and, when a
+registered, each silo watches its own serving region (its
+[region id](#region-identity)) and, when a
 tenant's status there becomes `Draining`, advances it to `Offline` and then to
 `Removed` without any caller. Nothing needs to be waited for first: a region stops
 serving a tenant and stops admitting its replicated writes the moment its status

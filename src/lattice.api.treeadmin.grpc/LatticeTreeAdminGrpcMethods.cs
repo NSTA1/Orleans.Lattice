@@ -144,6 +144,9 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary read-only runtime materialised-view listing RPC method name.</summary>
     public const string ListViewsMethodName = "ListViews";
 
+    /// <summary>The unary read-only runtime view-provider listing RPC method name.</summary>
+    public const string ListViewProvidersMethodName = "ListViewProviders";
+
     /// <summary>The unary runtime materialised-view creation RPC method name.</summary>
     public const string CreateViewMethodName = "CreateView";
 
@@ -208,6 +211,9 @@ internal sealed class LatticeTreeAdminGrpcMethods
 
     /// <summary>The unary read-only WAL reclamation (floor-holder) RPC method name.</summary>
     public const string GetWalReclamationMethodName = "GetWalReclamation";
+
+    /// <summary>The duplex streamed bulk-load RPC method name: chunks in, acknowledgements and the result out.</summary>
+    public const string StreamBulkLoadMethodName = "StreamBulkLoad";
 
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeTreeAdminGrpcMethods(
@@ -280,7 +286,10 @@ internal sealed class LatticeTreeAdminGrpcMethods
         Serializer<TreeAdminOperationStatusResponse> operationStatusResponseSerializer,
         Serializer<LatticeOperationListRequest> operationListRequestSerializer,
         Serializer<LatticeOperationPage> operationPageSerializer,
-        Serializer<TreeWalReclamationReport> walReclamationSerializer)
+        Serializer<TreeWalReclamationReport> walReclamationSerializer,
+        Serializer<TreeViewProviderCatalog> viewProviderCatalogSerializer,
+        Serializer<TreeAdminBulkLoadStreamRequest> bulkLoadStreamRequestSerializer,
+        Serializer<TreeAdminBulkLoadStreamResponse> bulkLoadStreamResponseSerializer)
     {
         ArgumentNullException.ThrowIfNull(treeRequestSerializer);
         ArgumentNullException.ThrowIfNull(capabilitiesSerializer);
@@ -755,6 +764,19 @@ internal sealed class LatticeTreeAdminGrpcMethods
             MethodType.Unary, ServiceName, GetWalReclamationMethodName,
             LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
             LatticeTreeAdminGrpcMarshallers.Create(walReclamationSerializer));
+
+        ArgumentNullException.ThrowIfNull(viewProviderCatalogSerializer);
+        ListViewProviders = new Method<TreeAdminTreeRequest, TreeViewProviderCatalog>(
+            MethodType.Unary, ServiceName, ListViewProvidersMethodName,
+            LatticeTreeAdminGrpcMarshallers.Create(treeRequestSerializer),
+            LatticeTreeAdminGrpcMarshallers.Create(viewProviderCatalogSerializer));
+
+        ArgumentNullException.ThrowIfNull(bulkLoadStreamRequestSerializer);
+        ArgumentNullException.ThrowIfNull(bulkLoadStreamResponseSerializer);
+        StreamBulkLoad = new Method<TreeAdminBulkLoadStreamRequest, TreeAdminBulkLoadStreamResponse>(
+            MethodType.DuplexStreaming, ServiceName, StreamBulkLoadMethodName,
+            LatticeTreeAdminGrpcMarshallers.Create(bulkLoadStreamRequestSerializer),
+            LatticeTreeAdminGrpcMarshallers.Create(bulkLoadStreamResponseSerializer));
     }
     /// <summary>The unary <c>ProbeCapabilities</c> capability-probe RPC.</summary>
     public Method<TreeAdminTreeRequest, LatticeTreeAdminCapabilities> ProbeCapabilities { get; }
@@ -938,6 +960,12 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary <c>GetWalReclamation</c> read-only WAL floor-holder RPC.</summary>
     public Method<TreeAdminTreeRequest, TreeWalReclamationReport> GetWalReclamation { get; }
 
+    /// <summary>The unary <c>ListViewProviders</c> read-only runtime view-provider listing RPC.</summary>
+    public Method<TreeAdminTreeRequest, TreeViewProviderCatalog> ListViewProviders { get; }
+
+    /// <summary>The duplex <c>StreamBulkLoad</c> RPC: chunks in, acknowledgements and the commit's result out.</summary>
+    public Method<TreeAdminBulkLoadStreamRequest, TreeAdminBulkLoadStreamResponse> StreamBulkLoad { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
     /// <paramref name="serializerProvider"/>. Shared by the server-side DI factory
@@ -1017,7 +1045,10 @@ internal sealed class LatticeTreeAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TreeAdminOperationStatusResponse>>(),
             serializerProvider.GetRequiredService<Serializer<LatticeOperationListRequest>>(),
             serializerProvider.GetRequiredService<Serializer<LatticeOperationPage>>(),
-            serializerProvider.GetRequiredService<Serializer<TreeWalReclamationReport>>());
+            serializerProvider.GetRequiredService<Serializer<TreeWalReclamationReport>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeViewProviderCatalog>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminBulkLoadStreamRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminBulkLoadStreamResponse>>());
     }
 }
 

@@ -12,7 +12,13 @@
         <span class="lt-data-toolbar__status" role="status">@(_sampledAt is { } at ? $"Sampled {DataFormat.Time(at)}" : string.Empty)</span>
     </div>
 
-    @if (_error is not null)
+    @if (_withheld)
+    {
+        <LtEmptyState Title="Metrics are not available to you" HeadingLevel="2">
+            <span data-lt-metrics-withheld>This tree's measures count every key in it, so they need read access to the whole tree. Your access does not cover all of it.</span>
+        </LtEmptyState>
+    }
+    else if (_error is not null)
     {
         <LtEmptyState Title="The metrics did not load" HeadingLevel="2">
             <ChildContent>@_error</ChildContent>

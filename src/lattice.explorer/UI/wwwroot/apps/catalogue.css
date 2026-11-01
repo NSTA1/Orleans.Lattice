@@ -298,6 +298,13 @@
   gap: var(--lt-space-1) var(--lt-space-4);
 }
 
+/* Each ceiling checkbox row (operations, exception scopes, UI grants) is at least 24px
+   tall, so the 16px checkboxes sit at least 24px apart and meet the WCAG 2.2
+   target-size spacing exception (axe target-size). */
+.lt-apps-fieldset .lt-check {
+  min-block-size: 1.5rem;
+}
+
 .lt-apps-binding {
   display: grid;
   gap: var(--lt-space-2);

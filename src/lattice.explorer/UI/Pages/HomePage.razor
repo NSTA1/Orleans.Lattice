@@ -26,10 +26,15 @@ else if (CurrentLocation.Entries.Count == 0)
 }
 else
 {
+    @if (AnyNeedsRecheck)
+    {
+        <AreaRecheckNotice />
+    }
     <ul class="lt-spine lt-shell-estate">
         @foreach (var entry in CurrentLocation.Entries)
         {
-            <li class="lt-spine__stop lt-shell-estate__stop" @key="entry.Area.Key">
+            var status = StatusOf(entry);
+            <li class="lt-spine__stop lt-shell-estate__stop" @key="entry.Area.Key" data-lt-area-state="@StateOf(entry)">
                 <a class="lt-spine__link lt-shell-estate__link" href="@AreaHref(entry)">
                     <LtNode Kind="LtNodeKind.Hollow" />
                     <span class="lt-shell-estate__text">
@@ -38,9 +43,14 @@ else
                         {
                             <span class="lt-shell-estate__status lt-shell-estate__status--unavailable">@entry.Availability.Reason</span>
                         }
-                        else if (_statuses.TryGetValue(entry.Area.Key, out var status) && status is not null)
+                        else if (status is not null)
                         {
-                            <span class="lt-shell-estate__status">@status</span>
+                            <span class="@(status.IsUnchecked ? "lt-shell-estate__status lt-shell-estate__status--unavailable" : "lt-shell-estate__status")"
+                                  data-lt-area-status="@(status.IsUnchecked ? "unchecked" : status.IsStale ? "stale" : "current")">@status.Text</span>
+                        }
+                        @if (entry.IsStale || status is { IsStale: true })
+                        {
+                            <span class="lt-shell-estate__status lt-shell-estate__status--stale">@StaleNote</span>
                         }
                     </span>
                 </a>

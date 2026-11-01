@@ -172,6 +172,63 @@ public sealed class LtConfirmDestructiveTests : ShellDesignTestContext
         });
     }
 
+    [Test]
+    public void While_the_confirmed_action_runs_the_dialog_says_so_and_its_action_is_busy()
+    {
+        var gate = new TaskCompletionSource();
+        var events = new List<string>();
+        var cut = Render<LtConfirmDestructive>(p => p
+            .Add(x => x.Open, true)
+            .Add(x => x.Title, "Delete tree")
+            .Add(x => x.ObjectKind, "tree")
+            .Add(x => x.ObjectName, TreeName)
+            .Add(x => x.ConfirmText, "Delete tree")
+            .Add(x => x.OnConfirm, () => gate.Task)
+            .Add(x => x.OpenChanged, (bool open) => events.Add("open:" + open)));
+
+        cut.Find("input").Input(TreeName);
+        cut.Find("form").Submit();
+
+        Assert.Multiple(() =>
+        {
+            var note = cut.Find("[data-lt-confirm=pending]");
+            Assert.That(note.GetAttribute("role"), Is.EqualTo("status"));
+            Assert.That(note.TextContent, Is.EqualTo(LtConfirmDestructive.DefaultPendingText));
+            Assert.That(Confirm(cut).GetAttribute("aria-busy"), Is.EqualTo("true"));
+            Assert.That(Confirm(cut).HasAttribute("disabled"), Is.True);
+            Assert.That(events, Is.Empty, "the dialog stays open until the action returns");
+        });
+
+        cut.InvokeAsync(() => gate.SetResult());
+
+        cut.WaitForAssertion(() => Assert.That(events, Is.EqualTo(new[] { "open:False" })));
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll("[data-lt-confirm=pending]"), Is.Empty);
+            Assert.That(Confirm(cut).HasAttribute("aria-busy"), Is.False);
+        });
+    }
+
+    [Test]
+    public void A_caller_can_say_what_the_confirmed_action_is_waiting_for()
+    {
+        var gate = new TaskCompletionSource();
+        var cut = Render<LtConfirmDestructive>(p => p
+            .Add(x => x.Open, true)
+            .Add(x => x.Title, "Snapshot tree")
+            .Add(x => x.ObjectKind, "tree")
+            .Add(x => x.ObjectName, TreeName)
+            .Add(x => x.ConfirmText, "Snapshot")
+            .Add(x => x.PendingText, "Starting the snapshot.")
+            .Add(x => x.OnConfirm, () => gate.Task));
+
+        cut.Find("input").Input(TreeName);
+        cut.Find("form").Submit();
+
+        Assert.That(cut.Find("[data-lt-confirm=pending]").TextContent, Is.EqualTo("Starting the snapshot."));
+        cut.InvokeAsync(() => gate.SetResult());
+    }
+
     private static AngleSharp.Dom.IElement Confirm(IRenderedComponent<LtConfirmDestructive> cut) =>
         cut.FindAll(".lt-dialog__actions button")[1];
 

@@ -223,6 +223,29 @@ public sealed class GrpcLatticeBackupControlTests
     }
 
     [Test]
+    public async Task GetBackupHealthConfigAsync_found_returns_config()
+    {
+        var config = new BackupHealthConfig(false, TimeSpan.FromMinutes(90));
+        var invoker = new FakeCallInvoker(_ => new BackupHealthConfigResponse { Found = true, Config = config });
+
+        var result = await Adapter(invoker).GetBackupHealthConfigAsync("bk-1");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Is.EqualTo(config));
+            Assert.That(((BackupHealthConfigGetRequestMessage)invoker.LastRequest!).BackupId, Is.EqualTo("bk-1"));
+        });
+    }
+
+    [Test]
+    public async Task GetBackupHealthConfigAsync_not_found_returns_null()
+    {
+        var result = await Adapter(new FakeCallInvoker(_ => new BackupHealthConfigResponse { Found = false }))
+            .GetBackupHealthConfigAsync("bk-1");
+        Assert.That(result, Is.Null);
+    }
+
+    [Test]
     public void GetInventoryAsync_has_no_binding_and_throws()
         => Assert.That(
             () => Adapter(new FakeCallInvoker(_ => throw new InvalidOperationException())).GetInventoryAsync(),

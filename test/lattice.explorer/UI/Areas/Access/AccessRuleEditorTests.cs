@@ -29,6 +29,48 @@ public sealed class AccessRuleEditorTests : AccessTestContext
     }
 
     [Test]
+    public void With_a_directory_a_rule_is_saved_for_a_group_stored_here()
+    {
+        Admin.WithPrincipal("alice", "Alice", DirectoryPrincipalKind.User).WithGroup("data-stewards", "Data stewards");
+        LatticeAuthorizationRule? saved = null;
+        var cut = RenderEditor(onSaved: rule => saved = rule);
+
+        Fill(cut, "stewards-factory", "data-stewards", "factory-orders");
+        cut.Find("[data-lt-operation=\"read\"]").Change(true);
+        cut.Find("form").Submit();
+
+        cut.WaitUntil(() => Assert.That(saved, Is.Not.Null));
+        Assert.That(saved!.Subject, Is.EqualTo(LatticeSubjectSelector.Group("data-stewards")));
+    }
+
+    [Test]
+    public void An_operator_saves_a_rule_for_a_tenant_group_on_that_tenants_tree_and_is_told_before_any_other()
+    {
+        TenantFacades.AsOperator().WithGroup("acme", "acme-analysts");
+        LatticeAuthorizationRule? saved = null;
+        var cut = RenderEditor(onSaved: rule => saved = rule);
+        cut.WaitUntil(() => Assert.That(cut.FindAll("select option").Select(option => option.GetAttribute("value")), Has.Member(AccessSubjectPicker.TenantGroupValue)));
+
+        AccessForms.Type(cut, "Rule id", "acme-analysts-read");
+        AccessForms.Choose(cut, "Subject kind", AccessSubjectPicker.TenantGroupValue);
+        AccessForms.Type(cut, "Subject tenant", "acme");
+        AccessForms.Type(cut, "Subject", "acme-analysts");
+        AccessForms.Choose(cut, "Scope", AccessRuleDraft.TreeScope);
+        AccessForms.Type(cut, "Tree", "t/globex/orders");
+        cut.Find("[data-lt-operation=\"read\"]").Change(true);
+        cut.Find("form").Submit();
+
+        cut.WaitUntil(() => Assert.That(AccessForms.ErrorOf(cut, "Tree"), Does.StartWith("A rule naming tenant group t/acme/acme-analysts may govern only tenant acme's own trees")));
+        Assert.That(Admin.Calls, Does.Not.Contain(nameof(FakeAuthAdmin.PutRuleAsync)));
+
+        AccessForms.Type(cut, "Tree", "t/acme/acme-inventory");
+        cut.Find("form").Submit();
+
+        cut.WaitUntil(() => Assert.That(saved, Is.Not.Null));
+        Assert.That(saved!.Subject, Is.EqualTo(LatticeSubjectSelector.Group("t/acme/acme-analysts")));
+    }
+
+    [Test]
     public void The_checklist_offers_every_operation_in_three_groups()
     {
         var cut = RenderEditor();
@@ -107,6 +149,42 @@ public sealed class AccessRuleEditorTests : AccessTestContext
             Assert.That(saved.Subject, Is.EqualTo(LatticeSubjectSelector.Group("platform")));
             Assert.That(Admin.Rules, Has.Count.EqualTo(1));
         });
+    }
+
+    [Test]
+    public void A_cluster_wide_record_may_reuse_an_id_another_tree_uses_but_not_one_the_cluster_scope_uses()
+    {
+        // Rules are keyed by (tree, id): a per-tree rule's id is free at the cluster-wide
+        // scope, whose sentinel tree is a tree of its own. A2.5 writes exactly this shape.
+        Admin.WithRule(Rule("auditors-factory-read", tree: "factory-orders", group: "auditors"));
+        LatticeAuthorizationRule? saved = null;
+        var cut = RenderEditor(onSaved: rule => saved = rule);
+        AccessForms.Type(cut, "Rule id", "auditors-factory-read");
+        AccessForms.Choose(cut, "Subject kind", "group");
+        AccessForms.Type(cut, "Subject", "auditors");
+        AccessForms.Choose(cut, "Scope", AccessRuleDraft.ClusterScope);
+        cut.Find("[data-lt-operation=\"telemetry\"]").Change(true);
+
+        cut.Find("form").Submit();
+
+        cut.WaitUntil(() => Assert.That(saved, Is.Not.Null));
+        Assert.Multiple(() =>
+        {
+            Assert.That(saved!.Scope, Is.EqualTo(LatticeScope.ClusterWide()));
+            Assert.That(Admin.Rules, Has.Count.EqualTo(2), "the per-tree record is kept beside the cluster-wide one");
+        });
+
+        var again = RenderEditor();
+        AccessForms.Type(again, "Rule id", "auditors-factory-read");
+        AccessForms.Choose(again, "Subject kind", "group");
+        AccessForms.Type(again, "Subject", "auditors");
+        AccessForms.Choose(again, "Scope", AccessRuleDraft.ClusterScope);
+        again.Find("[data-lt-operation=\"telemetry\"]").Change(true);
+
+        again.Find("form").Submit();
+
+        again.WaitUntil(() => Assert.That(AccessForms.ErrorOf(again, "Rule id"), Is.EqualTo("A rule with this id already governs this tree.")));
+        Assert.That(Admin.Rules, Has.Count.EqualTo(2), "a clashing cluster-wide id is refused before it is sent");
     }
 
     [Test]
@@ -217,6 +295,61 @@ public sealed class AccessRuleEditorTests : AccessTestContext
             Assert.That(saved!.Operations, Is.EqualTo(LatticeOperation.Read | LatticeOperation.Write));
             Assert.That(saved.Effect, Is.EqualTo(LatticeEffect.Deny));
             Assert.That(Admin.Rules.Single().Effect, Is.EqualTo(LatticeEffect.Deny));
+        });
+    }
+
+    [Test]
+    public void A_new_rule_offers_no_condition()
+    {
+        var cut = RenderEditor();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll("label").Select(label => label.TextContent), Has.None.Contains("Condition"));
+            Assert.That(cut.FindAll("[data-lt-condition-warning]"), Is.Empty);
+        });
+    }
+
+    [Test]
+    public void An_existing_rule_without_a_condition_offers_none()
+    {
+        Admin.WithRule(Rule("orders-read"));
+        var cut = RenderEditor(Rule("orders-read"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll("label").Select(label => label.TextContent), Has.None.Contains("Condition"));
+            Assert.That(cut.FindAll("[data-lt-condition-warning]"), Is.Empty);
+        });
+    }
+
+    [Test]
+    public void An_api_authored_condition_is_shown_read_only_with_the_warning_and_saved_verbatim()
+    {
+        const string condition = "  region == \"eu\" ";
+        var existing = Rule("eu-readers") with { Condition = condition };
+        Admin.WithRule(existing);
+        LatticeAuthorizationRule? saved = null;
+        var cut = RenderEditor(existing, rule => saved = rule);
+
+        var field = AccessForms.Field(cut, "Condition (not evaluated)");
+        Assert.Multiple(() =>
+        {
+            Assert.That(field.HasAttribute("readonly"), Is.True);
+            Assert.That(field.GetAttribute("value"), Is.EqualTo(condition));
+            Assert.That(cut.Find("[data-lt-condition-warning]").TextContent, Is.EqualTo(AccessRuleFormat.ConditionNotEvaluatedMessage));
+            Assert.That(cut.Find("[data-lt-condition-warning]").GetAttribute("role"), Is.EqualTo("note"));
+        });
+
+        cut.Find("[data-lt-operation=\"write\"]").Change(true);
+        cut.Find("form").Submit();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(saved, Is.Not.Null);
+            Assert.That(saved!.Condition, Is.EqualTo(condition));
+            Assert.That(Admin.Rules.Single().Condition, Is.EqualTo(condition));
+            Assert.That(Admin.Rules.Single().Operations, Is.EqualTo(LatticeOperation.Read | LatticeOperation.Write));
         });
     }
 

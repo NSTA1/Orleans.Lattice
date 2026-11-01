@@ -61,7 +61,9 @@ internal sealed class AppsArea(
     public async ValueTask<AreaAvailability> GetAvailabilityAsync(CancellationToken cancellationToken)
     {
         var snapshot = await access.GetAsync(cancellationToken).ConfigureAwait(false);
-        return snapshot.IsVisible ? AreaAvailability.Visible : AreaAvailability.Hidden;
+        return snapshot.IsVisible ? AreaAvailability.Visible
+            : snapshot.ProbeUnanswered ? AreaAvailability.Unchecked
+            : AreaAvailability.Hidden;
     }
 
     /// <inheritdoc />

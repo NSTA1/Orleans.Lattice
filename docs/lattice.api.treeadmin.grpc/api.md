@@ -29,7 +29,7 @@ Which registrations a host may pre-empt, and why the registration call must run 
 
 ## Service and RPCs
 
-The service name is `orleans.lattice.api.treeadmin`, so each method's full path is `/orleans.lattice.api.treeadmin/<RPC>`. All 61 RPCs are unary. Each row names the request record, the response record, the facade member the service calls, and the client method that drives it:
+The service name is `orleans.lattice.api.treeadmin`, so each method's full path is `/orleans.lattice.api.treeadmin/<RPC>`. Every RPC is unary except `StreamBulkLoad`, a duplex stream described below the table. Each row names the request record, the response record, the facade member the service calls, and the client method that drives it:
 
 | RPC | Request | Response | Facade member | Client method |
 |---|---|---|---|---|
@@ -55,6 +55,7 @@ The service name is `orleans.lattice.api.treeadmin`, so each method's full path 
 | `BeginBulkLoad` | `TreeAdminBulkLoadSessionRequest` | `TreeBulkLoadSession` | `ILatticeTreeAdmin.BeginBulkLoadAsync` | `BeginBulkLoadAsync` |
 | `AppendBulkLoad` | `TreeAdminBulkLoadAppendRequest` | `TreeBulkLoadChunkAck` | `ILatticeTreeAdmin.AppendBulkLoadAsync` | `AppendBulkLoadAsync` |
 | `CommitBulkLoad` | `TreeAdminBulkLoadSessionRequest` | `TreeBulkLoadResult` | `ILatticeTreeAdmin.CommitBulkLoadAsync` | `CommitBulkLoadAsync` |
+| `StreamBulkLoad` (duplex) | `TreeAdminBulkLoadStreamRequest` frames | `TreeAdminBulkLoadStreamResponse` frames | `ILatticeTreeAdmin.BeginBulkLoadAsync`, `AppendBulkLoadAsync`, `CommitBulkLoadAsync` | `BulkLoadStreamAsync` |
 | `RestoreTree` | `TreeAdminRestoreRequest` | `TreeRestoreResult` | `ILatticeTreeAdmin.RestoreTreeAsync` | `RestoreTreeAsync` |
 | `RestoreTreeSet` | `TreeAdminRestoreSetRequest` | `TreeRestoreSetResult` | `ILatticeTreeAdmin.RestoreTreeSetAsync` | `RestoreTreeSetAsync` |
 | `RevertTreeRestore` | `TreeRestoreResult` | `TreeRestoreResult` | `ILatticeTreeAdmin.RevertTreeRestoreAsync` | `RevertTreeRestoreAsync` |
@@ -72,6 +73,7 @@ The service name is `orleans.lattice.api.treeadmin`, so each method's full path 
 | `PlanWalMove` | `TreeAdminWalMovePlanRequest` | `TreeWalMovePlan` | `ILatticeTreeAdmin.PlanWalMoveAsync` | `PlanWalMoveAsync` |
 | `ReclaimMovedWalSource` | `TreeAdminWalReclaimRequest` | `TreeWalMoveReceipt` | `ILatticeTreeAdmin.ReclaimMovedWalSourceAsync` | `ReclaimMovedWalSourceAsync` |
 | `ListViews` | `TreeAdminViewListRequest` | `TreeViewCatalog` | `ILatticeTreeAdmin.ListViewsAsync` | `ListViewsAsync` |
+| `ListViewProviders` | `TreeAdminTreeRequest` | `TreeViewProviderCatalog` | `ILatticeTreeAdmin.ListViewProvidersAsync` | `ListViewProvidersAsync` |
 | `CreateView` | `TreeAdminCreateViewRequest` | `TreeViewStatus` | `ILatticeTreeAdmin.CreateViewAsync` | `CreateViewAsync` |
 | `GetViewStatus` | `TreeAdminViewRequest` | `TreeViewStatus` | `ILatticeTreeAdmin.GetViewStatusAsync` | `GetViewStatusAsync` |
 | `DropView` | `TreeAdminViewRequest` | `TreeAdminViewRequest` | `ILatticeTreeAdmin.DropViewAsync` | `DropViewAsync` |
@@ -101,6 +103,7 @@ Mapping notes:
 - `RevertTreeRestore` takes the facade's own `TreeRestoreResult` as its request and echoes it back, and `DropView` echoes its `TreeAdminViewRequest`, because both facade methods return a bare `Task`. `RestoreTreeSet` wraps the facade's member results in `TreeRestoreSetResult`.
 - `ListTreeAdminOperations` and `ListStorageUsageRefreshes` carry the shared `LatticeOperationListRequest` directly; the status and cancel RPCs wrap the facade's nullable `LatticeOperationStatus` in `TreeAdminOperationStatusResponse` or `TreeAdminStorageUsageOperationStatusResponse`.
 - The accept-then-poll operation RPCs, the storage-usage refresh RPCs and `GetWalReclamation` call optional facades. A host that registers no `ILatticeTreeAdminOperations`, `ILatticeStorageUsageOperations` or `ILatticeWalReclamation` answers the matching RPCs `Unimplemented`; `AddLatticeTreeAdminApi` registers all three.
+- `StreamBulkLoad` drives a whole bulk-load session over one duplex call. The first `TreeAdminBulkLoadStreamRequest` frame names the tree and operation id, and the server begins the session (unless the frame sets `Resume`) and answers with an `Opened` frame. Every frame then carries one strictly ascending chunk at its `ChunkIndex` and is answered with that chunk's `TreeBulkLoadChunkAck`; when the client half-closes, the server commits and sends the `TreeBulkLoadResult`. The client keeps at most `TreeBulkLoadStreamOptions.MaxUnacknowledgedChunks` chunks in flight. When the transport drops (`Unavailable`, `Aborted`, or an I/O fault), the client reopens the call with `Resume` set and resends every unacknowledged chunk, up to `MaxResumeAttempts` times; appends are idempotent per chunk index, so nothing is lost or duplicated. A source fault, a cancellation, or a refusal from the facade is never resumed. The call is admitted by the transport gate before its first frame, and every chunk is authorized by the facade as it is appended.
 - `GetAuthScheme` calls no facade. It returns the registered `ILatticeTreeAdminApiAuthSchemeSource` advertisement and is the one RPC the authorization interceptor exempts.
 
 The request records' members and the RPCs that use each one are listed under [Wire message records](README.md#wire-message-records) in the package README.
@@ -191,6 +194,8 @@ The following inventory includes directly declared public members and overloads,
 - `public const string TreeAdminPurgeRequest`
 - `public const string TreeAdminBulkLoadSessionRequest`
 - `public const string TreeAdminBulkLoadAppendRequest`
+- `public const string TreeAdminBulkLoadStreamRequest`
+- `public const string TreeAdminBulkLoadStreamResponse`
 - `public const string TreeAdminRestoreRequest`
 - `public const string TreeAdminRestoreSetRequest`
 - `public const string TreeAdminReshardRequest`
@@ -279,6 +284,7 @@ The following inventory includes directly declared public members and overloads,
 - `public Task<TreeBulkLoadSession> BeginBulkLoadAsync(string treeId, string operationId, CancellationToken cancellationToken = default)`
 - `public Task<TreeBulkLoadChunkAck> AppendBulkLoadAsync(string treeId, string operationId, long chunkIndex, IReadOnlyList<DataEntry> entries, CancellationToken cancellationToken = default)`
 - `public Task<TreeBulkLoadResult> CommitBulkLoadAsync(string treeId, string operationId, CancellationToken cancellationToken = default)`
+- `public Task<TreeBulkLoadResult> BulkLoadStreamAsync(string treeId, string operationId, IAsyncEnumerable<DataEntry> sortedEntries, IProgress<TreeBulkLoadChunkAck>? progress = null, TreeBulkLoadStreamOptions? options = null, CancellationToken cancellationToken = default)`
 - `public Task<TreeRestoreResult> RestoreTreeAsync(string treeId, string backupId, string? operationId = null, CancellationToken cancellationToken = default)`
 - `public async Task<IReadOnlyList<TreeRestoreResult>> RestoreTreeSetAsync(string setId, CancellationToken cancellationToken = default)`
 - `public async Task RevertTreeRestoreAsync(TreeRestoreResult restore, CancellationToken cancellationToken = default)`
@@ -298,6 +304,7 @@ The following inventory includes directly declared public members and overloads,
 - `public Task<TreeWalMovePlan> PlanWalMoveAsync(string treeId, int partition, string targetProviderKey, CancellationToken cancellationToken = default)`
 - `public Task<TreeWalMoveReceipt> ReclaimMovedWalSourceAsync(string treeId, int partition, string sourceProviderKey, CancellationToken cancellationToken = default)`
 - `public Task<TreeViewCatalog> ListViewsAsync(CancellationToken cancellationToken = default)`
+- `public Task<TreeViewProviderCatalog> ListViewProvidersAsync(string sourceTreeId, CancellationToken cancellationToken = default)`
 - `public Task<TreeViewStatus> CreateViewAsync(string viewName, string sourceTreeId, string providerKey, byte[] payload, CancellationToken cancellationToken = default)`
 - `public Task<TreeViewStatus> GetViewStatusAsync(string viewName, CancellationToken cancellationToken = default)`
 - `public async Task DropViewAsync(string viewName, CancellationToken cancellationToken = default)`
@@ -364,6 +371,8 @@ The following inventory includes directly declared public members and overloads,
 - `ListStorageUsageRefreshes = 18`
 - `CancelStorageUsageRefresh = 19`
 - `GetWalReclamation = 20`
+- `ListViewProviders = 21`
+- `StreamBulkLoad = 22`
 
 ### `Orleans.Lattice.Api.TreeAdmin.Grpc.TreeAdminBulkLoadAppendRequest`
 
@@ -384,6 +393,28 @@ The following inventory includes directly declared public members and overloads,
 
 - `public required string TreeId { get; init; }`
 - `public required string OperationId { get; init; }`
+
+### `Orleans.Lattice.Api.TreeAdmin.Grpc.TreeAdminBulkLoadStreamRequest`
+
+[Source](../../src/lattice.api.treeadmin.grpc/Model/TreeAdminBulkLoadStreamRequest.cs) (line 23).
+
+`public sealed record TreeAdminBulkLoadStreamRequest`
+
+- `public required string TreeId { get; init; }`
+- `public required string OperationId { get; init; }`
+- `public bool Resume { get; init; }`
+- `public long ChunkIndex { get; init; }`
+- `public IReadOnlyList<DataEntry> Entries { get; init; }`
+
+### `Orleans.Lattice.Api.TreeAdmin.Grpc.TreeAdminBulkLoadStreamResponse`
+
+[Source](../../src/lattice.api.treeadmin.grpc/Model/TreeAdminBulkLoadStreamResponse.cs) (line 12).
+
+`public sealed record TreeAdminBulkLoadStreamResponse`
+
+- `public bool Opened { get; init; }`
+- `public TreeBulkLoadChunkAck? Ack { get; init; }`
+- `public TreeBulkLoadResult? Result { get; init; }`
 
 ### `Orleans.Lattice.Api.TreeAdmin.Grpc.TreeAdminCreateRequest`
 

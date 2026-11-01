@@ -50,13 +50,12 @@ public sealed class TelemetryAreaTests
     }
 
     [Test]
-    public async Task A_refused_unserved_or_unreachable_catalogue_hides_the_area()
+    public async Task A_refused_unserved_or_failed_catalogue_hides_the_area()
     {
         foreach (var failure in new Exception[]
         {
             new UnauthorizedAccessException("denied"),
             new NotSupportedException("not served"),
-            new ShellTransportException("down", isTransient: true, new InvalidOperationException()),
             new InvalidOperationException("not configured"),
         })
         {
@@ -65,6 +64,24 @@ public sealed class TelemetryAreaTests
 
             Assert.That(await area.GetAvailabilityAsync(CancellationToken.None), Is.EqualTo(AreaAvailability.Hidden), failure.GetType().Name);
         }
+    }
+
+    [Test]
+    public async Task An_unreachable_catalogue_leaves_the_area_not_checked_and_is_read_again()
+    {
+        var (area, telemetry, _) = Create();
+        telemetry.CatalogFailure = new ShellTransportException("down", isTransient: true, new InvalidOperationException());
+
+        var during = await area.GetAvailabilityAsync(CancellationToken.None);
+        telemetry.CatalogFailure = null;
+        var after = await area.GetAvailabilityAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(during, Is.EqualTo(AreaAvailability.Unchecked));
+            Assert.That(after, Is.EqualTo(AreaAvailability.Visible), "a read the cluster did not answer is not remembered");
+            Assert.That(telemetry.CatalogReads, Is.EqualTo(2));
+        });
     }
 
     [Test]

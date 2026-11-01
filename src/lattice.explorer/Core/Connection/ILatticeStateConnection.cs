@@ -36,4 +36,21 @@ public interface ILatticeStateConnection : ILatticeStateClient, IAsyncDisposable
     /// <see cref="Status"/>. Returns <see langword="true"/> when reachable.
     /// </summary>
     Task<bool> ProbeAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Asks the endpoint named by <paramref name="settings"/> whether it accepts the
+    /// credential those settings carry, with one lightweight call on a channel of
+    /// its own. The shared connection, its <see cref="Status"/> and its channel are
+    /// left untouched, so a sign-in can be checked before it is applied.
+    /// </summary>
+    /// <remarks>
+    /// The default implementation cannot check anything and reports
+    /// <see cref="LatticeCredentialCheck.Unverified"/>, which leaves a sign-in
+    /// exactly as it behaved before the check existed.
+    /// </remarks>
+    /// <param name="settings">The endpoint, transport posture and the credential to check.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Whether the endpoint accepted, refused, or could not judge the credential.</returns>
+    Task<LatticeCredentialCheck> VerifyCredentialAsync(LatticeConnectionSettings settings, CancellationToken cancellationToken = default) =>
+        Task.FromResult(LatticeCredentialCheck.Unverified);
 }

@@ -22,7 +22,17 @@
     else if (_entry is null)
     {
         <LtEmptyState Title="No entry at this key" HeadingLevel="3">
-            <span class="lt-shell-mono">@DataKeysPanel.Clip(Key)</span> is not in this tree.
+            <ChildContent><span class="lt-shell-mono">@DataKeysPanel.Clip(Key)</span> is not in this tree.</ChildContent>
+            <Actions>
+                @if (Workspace is not null)
+                {
+                    <a class="lt-btn" href="@Workspace.Href(Workspace.ForTab(DataTabs.History))">History of this key</a>
+                }
+                @if (_rights.CanWrite)
+                {
+                    <LtButton OnClick="OpenEditor" data-lt-command="@DataEntryCommands.EditEntryId">Write a value</LtButton>
+                }
+            </Actions>
         </LtEmptyState>
     }
     else
@@ -51,7 +61,19 @@
             {
                 <a class="lt-btn" href="@Workspace.Href(Workspace.ForTab(DataTabs.History))">History of this key</a>
             }
+            @if (_rights.CanWrite && IsEditable)
+            {
+                <LtButton OnClick="OpenEditor" data-lt-command="@DataEntryCommands.EditEntryId">Edit</LtButton>
+            }
+            @if (_rights.CanDelete && !_entry.IsTombstone)
+            {
+                <LtButton Variant="LtButtonVariant.Destructive" OnClick="OpenDelete" data-lt-command="@DataEntryCommands.DeleteEntryId">Delete...</LtButton>
+            }
         </div>
+        @if (_rights.CanWrite && !IsEditable)
+        {
+            <p class="lt-data-note">A CRDT value changes through its typed operations, so it is not edited here.</p>
+        }
 
         @if (_rendered is not null)
         {
@@ -68,4 +90,16 @@
             }
         }
     }
+
+    <DataEntryEditor Open="_editing" OpenChanged="open => _editing = open" Key="@Key" OnSaved="OnSavedAsync" />
+    <LtConfirmDestructive Open="_deleting"
+                          OpenChanged="open => _deleting = open"
+                          Title="Delete this entry"
+                          ObjectKind="key"
+                          ObjectName="@Key"
+                          ConfirmText="Delete entry"
+                          OnConfirm="DeleteAsync">
+        The key and its value are removed from @(Workspace?.Tree.DisplayName). The key's history keeps the deletion, and anyone allowed to write the key can write it again.
+    </LtConfirmDestructive>
 </section>
+

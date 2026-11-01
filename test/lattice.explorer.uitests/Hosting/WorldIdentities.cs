@@ -19,13 +19,25 @@ internal static class WorldIdentities
     public const string Carol = "carol";
 
     /// <summary>
+    /// An estate observer: cluster telemetry and read over every tree, so the Cluster
+    /// area is visible, and no administration, so nothing in it may be changed.
+    /// </summary>
+    public const string Erin = "erin";
+
+    /// <summary>
     /// The administrator of tenant globex in the delegated-access world, and nothing
     /// else: not a platform operator, and named by no cluster rule.
     /// </summary>
     public const string GlobexAdmin = "globex-admin";
 
-    /// <summary>The password every identity signs in with; the world never checks it.</summary>
+    /// <summary>The password every identity signs in with; the world checks only that it is not <see cref="WrongPassword"/>.</summary>
     public const string Password = "explorer";
+
+    /// <summary>
+    /// The one password the world refuses, for any identity: a mistyped password, so
+    /// the sign-in journey can prove a refused credential is refused at sign-in.
+    /// </summary>
+    public const string WrongPassword = "not-the-password";
 
     /// <summary>The group that may read the demo tree; <see cref="Alice"/> is a member.</summary>
     public const string OperatorsGroup = "operators";

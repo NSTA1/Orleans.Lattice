@@ -788,6 +788,9 @@ internal sealed class LatticeAuthAdmin(
             // tenancy, or the flag off) reads false. This package never references
             // tenancy.
             DelegatedTenantAccessAdministrationEnabled = tenantRuleLayer?.IsActive ?? false,
+            // Mirrors ValidateDirectoryPrincipalAsync: validation runs only when a
+            // real directory is active and the option requires it.
+            DirectoryValidationRequired = DirectoryAvailable && _identityDirectoryOptions.CurrentValue.ValidationRequired,
         };
     }
 

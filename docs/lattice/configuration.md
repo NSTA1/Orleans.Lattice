@@ -35,6 +35,8 @@ Each silo checks the requirement once as it becomes active. It writes a reserved
 
 The probe cannot decide when the provider faults, throws something other than `InconsistentStateException` on the stale write, keeps losing races to other silos' probes, is not registered, or does not finish within `ProbeTimeout` (30 seconds by default). Those are not evidence the provider is unsafe, so even `Reject` only warns on them rather than turning a transient storage fault into a failed start.
 
+Providers such as Orleans' Azure Table storage log every write they reject at `Error` (for Azure Table, `Orleans.Storage.AzureTableGrainStorage` event 200107) before they throw, so the probe's deliberate stale write would otherwise leave an `Error` in a healthy silo's log on every start. `AddLattice` therefore drops the `Warning`, `Error` and `Critical` records written on the probe's own calls into the provider while the probe runs. Nothing is lost by it: each outcome of those calls becomes the verdict above, which Lattice logs itself, a provider fault reaches the log as that `Warning` with the provider's exception attached, and records from any other work in the silo, or written after the probe finishes, are never dropped. The host's logging levels and filters are otherwise unchanged.
+
 `Reject` is the default from 10.0, so the requirement fails closed: a provider that accepts a stale ETag fails silo start with an error naming the provider. Before 10.0 the default was `Warn`. If your provider does not enforce ETags and you cannot change it yet, opt out explicitly to keep the previous behaviour:
 
 ```csharp verify
@@ -2198,8 +2200,8 @@ rather than registered as silo configuration; a `null` argument uses
 | Option | Type | Default | Meaning |
 |--------|------|---------|---------|
 | `QuiesceLease` | `TimeSpan` | 30 seconds | How long the source partition stays fenced while the move copies its tail and flips the placement pin. The fence is held durably in the placement pin and renewed before every convergence re-quiesce, so it survives the loss of the fenced WAL grain; if the move coordinator dies, the next activation of the source releases the fence once this lease has passed, and the abandoned move can then no longer flip. A non-positive value uses the default. |
-| `CopyPageSize` | `int` | 256 | Entries copied per page from source to target. A non-positive value uses the default. |
-| `VerifyAfterCopy` | `bool` | `true` in `WalMoveOptions.Default` | Whether the move checks that the target tail matches the copied source range before flipping the pin. It is a plain `bool`, so `new WalMoveOptions { ... }` leaves it `false`; start from `WalMoveOptions.Default with { ... }` instead. |
+| `CopyPageSize` | `int` | 256 | Entries copied per page from source to target. A non-positive value uses the default. Each page is written to the target in appends of at most the target provider's `MaxAppendBatchEntries` (100 for Azure Table), so the page size never has to fit the target's batch cap. |
+| `VerifyAfterCopy` | `bool` | `true` in `WalMoveOptions.Default` | Whether the move checks that the target tail matches the copied source range before flipping the pin. It is a plain `bool`, so `new WalMoveOptions { ... }` leaves it `false`; start from `WalMoveOptions.Default with { ... }` instead. With it off, a copy that cannot read the source up to its quiesced tail still aborts before the flip. |
 | `MaxConcurrentPartitionMoves` | `int` | 1 | Partitions a batch move copies in parallel; ignored by the single-partition overload. A non-positive value uses the default. |
 
 See [Moving a partition to another account](wal-storage-providers.md#moving-a-partition-to-another-account)

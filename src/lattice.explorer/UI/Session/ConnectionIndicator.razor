@@ -18,7 +18,15 @@ else
     <span role="status"><LtStatusPill State="Presentation.Role" Text="@Presentation.Text" /></span>
     @if (Status.Endpoint is { Length: > 0 } endpoint)
     {
-        <code class="lt-mono-cell__value">@endpoint</code>
+        @if (OffersDetails)
+        {
+            @* The endpoint is itself the way into the read-only details, so the header gains no control of its own. *@
+            <LtButton Variant="LtButtonVariant.Quiet" aria-haspopup="dialog" data-lt-connection-details="" OnClick="OpenConfiguration"><span class="lt-visually-hidden">Connection details: </span><code class="lt-mono-cell__value">@endpoint</code></LtButton>
+        }
+        else
+        {
+            <code class="lt-mono-cell__value">@endpoint</code>
+        }
     }
     @ConnectionActions
 }
@@ -26,7 +34,7 @@ else
 @code {
     private RenderFragment ConnectionActions => __builder =>
     {
-        @if (Status.RequiresAuthentication && !Auth.IsAuthenticated)
+        @if (Status.RequiresAuthentication && (!Auth.IsAuthenticated || Status.CredentialRefused))
         {
             <LtButton OnClick="OpenSignIn">Sign in</LtButton>
         }
@@ -37,6 +45,10 @@ else
         @if (EndpointOptions.AllowInteractiveEndpointConfiguration)
         {
             <LtButton Variant="LtButtonVariant.Quiet" aria-haspopup="dialog" OnClick="OpenConfiguration">Connection settings</LtButton>
+        }
+        else if (OffersDetails && (Folded || Status.Endpoint is not { Length: > 0 }))
+        {
+            <LtButton Variant="LtButtonVariant.Quiet" aria-haspopup="dialog" OnClick="OpenConfiguration">Connection details</LtButton>
         }
     };
 }

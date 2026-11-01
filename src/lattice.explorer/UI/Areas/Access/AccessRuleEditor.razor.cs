@@ -27,6 +27,7 @@ public partial class AccessRuleEditor
     private LtComboBox? _treeBox;
     private AccessSubjectPicker? _subjectPicker;
     private AccessRuleIdSuggestionSource? _ruleIds;
+    private string? _ruleIdsTree;
 
     /// <summary>The rule to edit, or <see langword="null"/> to create one.</summary>
     [Parameter]
@@ -82,6 +83,22 @@ public partial class AccessRuleEditor
             ? DelegationScopeOptions
             : BaseScopeOptions;
 
+    /// <summary>
+    /// The tenant whose group the subject names, or <see langword="null"/>: a rule
+    /// naming a tenant group may govern only that tenant's own trees, so the Tree
+    /// field then offers those, by full id.
+    /// </summary>
+    private string? SubjectTenant =>
+        _draft.SubjectKind == LatticeSubjectSelectorKind.Group && LatticeTenantGroupId.TryParse(_draft.SubjectId.Trim(), out var group)
+            ? group.Tenant.Value
+            : null;
+
+    private ILtSuggestionSource TreeSource => SubjectTenant is { } tenant ? Suggestions.TreesOfTenant(tenant) : Suggestions.Trees;
+
+    private string TreeHint => SubjectTenant is { } tenant
+        ? $"One of tenant {tenant}'s own trees, by its full id (t/{tenant}/...)."
+        : "The logical tree id the rule governs.";
+
     private string? ScopeHint => _draft.ScopeKind switch
     {
         AccessRuleDraft.ClusterScope when Model?.AllTreesGrantsEnabled == false =>
@@ -91,8 +108,43 @@ public partial class AccessRuleEditor
         _ => null,
     };
 
-    /// <inheritdoc />
-    protected override void OnInitialized() => _ruleIds = new AccessRuleIdSuggestionSource(Catalog, () => _draft.TreeId, () => Tenant);
+    /// <summary>
+    /// The rule ids already used under the governed tree, which a new id is checked against,
+    /// or <see langword="null"/> while the governed tree is not known: an id is unique only
+    /// within its tree, so no clash can be judged before the tree is. A new source per tree
+    /// makes the id field drop a verdict reached for another tree.
+    /// </summary>
+    private AccessRuleIdSuggestionSource? RuleIds
+    {
+        get
+        {
+            var tree = GovernedTree.Trim();
+            if (tree.Length == 0)
+            {
+                return null;
+            }
+
+            if (_ruleIds is null || !string.Equals(_ruleIdsTree, tree, StringComparison.Ordinal))
+            {
+                _ruleIds = new AccessRuleIdSuggestionSource(Catalog, () => tree, () => Tenant);
+                _ruleIdsTree = tree;
+            }
+
+            return _ruleIds;
+        }
+    }
+
+    /// <summary>
+    /// The tree the drafted rule governs, which a rule id must be unique within: the
+    /// cluster-wide and access-administration scopes govern their own sentinel trees, so
+    /// an id used on another tree is free for them (rules are keyed by tree and id).
+    /// </summary>
+    private string GovernedTree => _draft.ScopeKind switch
+    {
+        AccessRuleDraft.ClusterScope => LatticeScope.ClusterWideTreeId,
+        AccessRuleDraft.AccessAdministrationScope => LatticeAuthReservedTrees.PolicyTreeId,
+        _ => _draft.TreeId,
+    };
 
     /// <inheritdoc />
     protected override void OnParametersSet()

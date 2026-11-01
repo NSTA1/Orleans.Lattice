@@ -473,6 +473,22 @@
       ],
       "source": "src/lattice.api.data.grpc/Model/DataGetRequest.cs#DataGetRequest"
     },
+    "DataProbeRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.data.grpc/Model/DataProbeRequest.cs#DataProbeRequest"
+    },
     "DataRangeDeleteRequest": {
       "kind": "record",
       "fields": [
@@ -527,6 +543,11 @@
           "name": "ContinuationToken",
           "type": "string?",
           "required": false
+        },
+        {
+          "name": "GateCoverage",
+          "type": "LatticeRangeReadGateCoverage?",
+          "required": false
         }
       ],
       "source": "src/lattice.api.abstractions/Data/Model/DataRangePage.cs#DataRangePage"
@@ -557,6 +578,11 @@
         {
           "name": "ContinuationToken",
           "type": "string?",
+          "required": false
+        },
+        {
+          "name": "IncludeGateCoverage",
+          "type": "bool",
           "required": false
         }
       ],
@@ -618,6 +644,38 @@
       "kind": "record",
       "fields": [],
       "source": "src/lattice.api.data.grpc/Model/DataSetManyResponse.cs#DataSetManyResponse"
+    },
+    "DataSetManyStreamRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Upserts",
+          "type": "IReadOnlyList<DataEntry>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.data.grpc/Model/DataSetManyStreamRequest.cs#DataSetManyStreamRequest"
+    },
+    "DataSetManyStreamResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Batch",
+          "type": "DataSetManyStreamBatch?",
+          "required": false
+        },
+        {
+          "name": "Result",
+          "type": "DataSetManyStreamResult?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.data.grpc/Model/DataSetManyStreamResponse.cs#DataSetManyStreamResponse"
     },
     "DataSetRequest": {
       "kind": "record",
@@ -752,9 +810,36 @@
         "Unknown",
         "SetMany",
         "CrdtWrite",
-        "CrdtRead"
+        "CrdtRead",
+        "ProbeCapabilities"
       ],
       "source": "src/lattice.api.data.grpc/Security/LatticeDataApiAuthorizationContext.cs#LatticeDataApiOperation"
+    },
+    "LatticeDataCapabilities": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Key",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "CanWrite",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "CanDelete",
+          "type": "bool",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Data/Model/LatticeDataCapabilities.cs#LatticeDataCapabilities"
     },
     "LatticeMergeMode": {
       "kind": "enum",
@@ -763,6 +848,15 @@
         "Crdt"
       ],
       "source": "src/lattice/BPlusTree/Grains/LatticeMergeMode.cs#LatticeMergeMode"
+    },
+    "LatticeRangeReadGateCoverage": {
+      "kind": "enum",
+      "values": [
+        "Unrestricted",
+        "Filtered",
+        "Denied"
+      ],
+      "source": "src/lattice/BPlusTree/LatticeRangeReadGateCoverage.cs#LatticeRangeReadGateCoverage"
     }
   },
   "operations": [
@@ -1153,6 +1247,83 @@
         "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#Get",
         "src/lattice.api.data.grpc/LatticeDataApiGrpcMethods.cs#GetMethodName",
         "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#GetAsync"
+      ]
+    },
+    {
+      "id": "probe-capabilities",
+      "in_process": "ILatticeDataApi.ProbeCapabilitiesAsync (default interface member: an implementer that does not override it reports no write and no delete)",
+      "grpc_method": "/orleans.lattice.api.data/ProbeCapabilities",
+      "transport_scope": "both",
+      "request": "DataProbeRequest",
+      "response": "LatticeDataCapabilities",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "crdt-shape-not-registered",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "idempotency-key-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "replication-mode-mismatch",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "reserved-tree-namespace",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Unary capability probes use no built-in client retry policy; the probe has no side effects, so a retry is safe.",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs#ProbeCapabilitiesAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "The probe reads only the access gate's decision; it neither reads nor writes the tree.",
+        "source": "src/lattice.api.data/LatticeDataApi.Capabilities.cs#ProbeCapabilitiesAsync"
+      },
+      "concurrency": {
+        "rule": "A UX affordance, not a security boundary: every real write is still authorized on attempt, so a stale answer is refused by the write path. ProbeCapabilitiesAsync is a default interface member added to the released contract; an implementer that does not override it reports CanWrite=false and CanDelete=false (fail-closed).",
+        "source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#ProbeCapabilitiesAsync"
+      },
+      "sources": [
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#ProbeCapabilities",
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcMethods.cs#ProbeCapabilitiesMethodName",
+        "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#ProbeCapabilitiesAsync"
       ]
     },
     {
@@ -1554,6 +1725,75 @@
         "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#SetManyAtomicCrossTree",
         "src/lattice.api.data.grpc/LatticeDataApiGrpcMethods.cs#SetManyAtomicCrossTreeMethodName",
         "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#SetManyAtomicCrossTreeAsync"
+      ]
+    },
+    {
+      "id": "set-many-stream",
+      "in_process": "ILatticeDataApi.SetManyStreamAsync",
+      "grpc_method": "/orleans.lattice.api.data/StreamSetMany",
+      "transport_scope": "both",
+      "request": "DataSetManyStreamRequest",
+      "response": "DataSetManyStreamResponse",
+      "errors": [
+        {
+          "error_id": "argument-invalid",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "quota-exceeded",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "reserved-tree-namespace",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "saturated",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "transport-authorization-denied",
+          "condition": "Mapped by the service or authorization interceptor."
+        },
+        {
+          "error_id": "schema-policy",
+          "condition": "A value the installed schema policy rejects is reported as a per-entry rejection with code schema; it does not end the stream."
+        }
+      ],
+      "retry": {
+        "safe": false,
+        "policy": "Not safe as a transparent retry: batches already acknowledged are written. Resume by sending only the entries after the last acknowledged batch, with FirstOrdinal set to keep ordinals stable.",
+        "source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#SetManyStreamAsync"
+      },
+      "idempotency": {
+        "idempotent": false,
+        "basis": "Each batch is a non-atomic SetMany with no idempotency key, though rewriting the same values converges.",
+        "source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#SetManyStreamAsync"
+      },
+      "concurrency": {
+        "rule": "Duplex stream: one request frame per batch, answered by that batch's outcome; the client keeps at most four batches unacknowledged. An entry refused for its own sake (denied, schema, invalid) is reported and the rest still land; any other fault ends the stream.",
+        "source": "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#SetManyStreamAsync"
+      },
+      "sources": [
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#StreamSetMany",
+        "src/lattice.api.data.grpc/LatticeDataApiGrpcMethods.cs#StreamSetManyMethodName",
+        "src/lattice.api.abstractions/Data/ILatticeDataApi.cs#SetManyStreamAsync"
       ]
     }
   ],

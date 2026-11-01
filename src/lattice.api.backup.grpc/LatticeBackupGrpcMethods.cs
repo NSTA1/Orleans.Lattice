@@ -77,6 +77,9 @@ internal sealed class LatticeBackupGrpcMethods
     /// <summary>The unary configure-backup-health RPC method name.</summary>
     public const string ConfigureBackupHealthMethodName = "ConfigureBackupHealth";
 
+    /// <summary>The unary get-backup-health-config RPC method name.</summary>
+    public const string GetBackupHealthConfigMethodName = "GetBackupHealthConfig";
+
     /// <summary>The unary accept-then-poll full-capture start RPC method name.</summary>
     public const string StartBackupMethodName = "StartBackup";
 
@@ -153,7 +156,9 @@ internal sealed class LatticeBackupGrpcMethods
         Serializer<LatticeOperationListRequest> operationListRequestSerializer,
         Serializer<LatticeOperationPage> operationPageSerializer,
         Serializer<BackupCatalogRebuildRequestMessage> catalogRebuildRequestSerializer,
-        Serializer<BackupCatalogScrubRequestMessage> catalogScrubRequestSerializer)
+        Serializer<BackupCatalogScrubRequestMessage> catalogScrubRequestSerializer,
+        Serializer<BackupHealthConfigGetRequestMessage> healthConfigGetRequestSerializer,
+        Serializer<BackupHealthConfigResponse> healthConfigResponseSerializer)
     {
         ArgumentNullException.ThrowIfNull(captureRequestSerializer);
         ArgumentNullException.ThrowIfNull(incrementalCaptureRequestSerializer);
@@ -195,6 +200,8 @@ internal sealed class LatticeBackupGrpcMethods
         ArgumentNullException.ThrowIfNull(operationStatusResponseSerializer);
         ArgumentNullException.ThrowIfNull(operationListRequestSerializer);
         ArgumentNullException.ThrowIfNull(operationPageSerializer);
+        ArgumentNullException.ThrowIfNull(healthConfigGetRequestSerializer);
+        ArgumentNullException.ThrowIfNull(healthConfigResponseSerializer);
 
 
 
@@ -299,6 +306,13 @@ internal sealed class LatticeBackupGrpcMethods
             requestMarshaller: LatticeBackupGrpcMarshallers.Create(healthConfigureRequestSerializer),
             responseMarshaller: LatticeBackupGrpcMarshallers.Create(healthConfigureResponseSerializer));
 
+        GetBackupHealthConfig = new Method<BackupHealthConfigGetRequestMessage, BackupHealthConfigResponse>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetBackupHealthConfigMethodName,
+            requestMarshaller: LatticeBackupGrpcMarshallers.Create(healthConfigGetRequestSerializer),
+            responseMarshaller: LatticeBackupGrpcMarshallers.Create(healthConfigResponseSerializer));
+
         var handleMarshaller = LatticeBackupGrpcMarshallers.Create(operationHandleSerializer);
         var operationRequestMarshaller = LatticeBackupGrpcMarshallers.Create(operationRequestSerializer);
         var operationStatusMarshaller = LatticeBackupGrpcMarshallers.Create(operationStatusResponseSerializer);
@@ -391,6 +405,9 @@ internal sealed class LatticeBackupGrpcMethods
     /// <summary>The unary <c>ConfigureBackupHealth</c> per-backup monitor-config RPC.</summary>
     public Method<BackupHealthConfigureRequestMessage, BackupHealthConfigureResponse> ConfigureBackupHealth { get; }
 
+    /// <summary>The unary <c>GetBackupHealthConfig</c> per-backup monitor-config read RPC.</summary>
+    public Method<BackupHealthConfigGetRequestMessage, BackupHealthConfigResponse> GetBackupHealthConfig { get; }
+
     /// <summary>The unary <c>StartBackup</c> accept-then-poll full-capture RPC.</summary>
     public Method<BackupCaptureRequestMessage, LatticeOperationHandle> StartBackup { get; }
 
@@ -475,7 +492,9 @@ internal sealed class LatticeBackupGrpcMethods
             serializerProvider.GetRequiredService<Serializer<LatticeOperationListRequest>>(),
             serializerProvider.GetRequiredService<Serializer<LatticeOperationPage>>(),
             serializerProvider.GetRequiredService<Serializer<BackupCatalogRebuildRequestMessage>>(),
-            serializerProvider.GetRequiredService<Serializer<BackupCatalogScrubRequestMessage>>());
+            serializerProvider.GetRequiredService<Serializer<BackupCatalogScrubRequestMessage>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupHealthConfigGetRequestMessage>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupHealthConfigResponse>>());
     }
 }
 

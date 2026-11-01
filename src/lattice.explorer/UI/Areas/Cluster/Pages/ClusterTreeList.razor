@@ -4,10 +4,19 @@
 <p class="lt-shell-page-lede">@(Scope is { } tenant ? $"Every tree of tenant {tenant} by its logical name." : "Every tree in the cluster by its logical name.") App trees name the app that owns them.</p>
 
 <div class="lt-toolbar">
-    <LtSearchInput Label="Filter trees" Placeholder="Filter by name, app or tenant" @bind-Value="_filter" />
+    <LtSearchInput Label="Filter trees" Placeholder="Filter by name, owner or state" @bind-Value="_filter" />
     <LtButton OnClick="() => LoadAsync(refresh: true)" Disabled="@_trees.IsLoading">Refresh</LtButton>
     <LtButton data-lt-command="@ClusterArea.ReshardCommandId" OnClick="OpenReshard">Reshard tree...</LtButton>
+    @if (_canCreate)
+    {
+        <LtButton data-lt-command="@ClusterArea.CreateTreeCommandId" OnClick="OpenCreate">New tree...</LtButton>
+    }
 </div>
+
+@if (_createRefusal is { } createRefusal)
+{
+    <p class="lt-cluster-note" role="status" data-lt-create-tree-hidden>@createRefusal</p>
+}
 
 @if (_trees.IsLoading)
 {
@@ -46,7 +55,7 @@ else if (_trees.Value is { } trees)
         </DetailActions>
         <EmptyContent>
             <LtEmptyState Title="@(string.IsNullOrEmpty(_filter) ? "No trees" : "No tree matches")" HeadingLevel="2">
-                @(string.IsNullOrEmpty(_filter) ? "The cluster holds no user trees yet." : "No tree's name, app or tenant contains that text.")
+                @(string.IsNullOrEmpty(_filter) ? "The cluster holds no user trees yet." : "No tree's name, owner or state contains that text.")
             </LtEmptyState>
         </EmptyContent>
     </LtTable>
@@ -70,3 +79,5 @@ else
         </div>
     </form>
 </LtDialog>
+
+<ClusterTreeCreateDialog @bind-Open="_createOpen" Placement="@SheetPlacement" />

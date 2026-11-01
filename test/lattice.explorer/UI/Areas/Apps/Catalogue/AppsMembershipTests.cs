@@ -81,6 +81,80 @@ public sealed class AppsMembershipTests
         Assert.That(async () => await membership.ReadAsync(cancelled.Token), Throws.InstanceOf<OperationCanceledException>());
     }
 
+    [TestCase("")]
+    [TestCase(" \t")]
+    public async Task ReadAsync_blank_basic_subject_is_unknown_without_a_facade_read(string subject)
+    {
+        var (membership, auth, session) = Create();
+        session.SignIn(subject);
+
+        Assert.That(await membership.ReadAsync(), Is.SameAs(AppsCallerGroups.Unknown));
+        await auth.DidNotReceive().ListSubjectGroupsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ReadAsync_null_group_response_is_known_empty_membership()
+    {
+        var (membership, auth, session) = Create();
+        session.SignIn("alice");
+        auth.ListSubjectGroupsAsync("alice", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<string>>(null!));
+
+        var groups = await membership.ReadAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(groups.IsKnown, Is.True);
+            Assert.That(groups.SubjectId, Is.EqualTo("alice"));
+            Assert.That(groups.Groups, Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task ReadAsync_membership_changes_are_read_again_and_tokens_are_forwarded()
+    {
+        var (membership, auth, session) = Create();
+        session.SignIn("alice");
+        using var cancellation = new CancellationTokenSource();
+        var returned = new List<string> { "readers" };
+        auth.ListSubjectGroupsAsync("alice", cancellation.Token)
+            .Returns(_ => Task.FromResult<IReadOnlyList<string>>(returned));
+
+        var before = await membership.ReadAsync(cancellation.Token);
+        returned.Add("operators");
+        var after = await membership.ReadAsync(cancellation.Token);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(before.Groups, Is.EquivalentTo(new[] { "readers" }), "the earlier snapshot does not alias the facade's mutable list");
+            Assert.That(after.Groups, Is.EquivalentTo(new[] { "readers", "operators" }));
+        });
+        await auth.Received(2).ListSubjectGroupsAsync("alice", cancellation.Token);
+    }
+
+    [Test]
+    public async Task ReadAsync_backend_cancellation_without_caller_cancellation_is_unknown()
+    {
+        var (membership, auth, session) = Create();
+        session.SignIn("alice");
+        auth.ListSubjectGroupsAsync("alice", Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<string>>(new OperationCanceledException()));
+
+        Assert.That(await membership.ReadAsync(), Is.SameAs(AppsCallerGroups.Unknown));
+    }
+
+    [Test]
+    public void ReadAsync_out_of_memory_is_not_disguised_as_unknown_membership()
+    {
+        var (membership, auth, session) = Create();
+        session.SignIn("alice");
+        var failure = new OutOfMemoryException("synthetic failure; no allocation pressure");
+        auth.ListSubjectGroupsAsync("alice", Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<string>>(failure));
+
+        Assert.That(async () => await membership.ReadAsync(), Throws.Exception.SameAs(failure));
+    }
+
     private static (AppsMembership Membership, ILatticeAuthAdmin Auth, FakeAuthSession Session) Create()
     {
         var auth = Substitute.For<ILatticeAuthAdmin>();

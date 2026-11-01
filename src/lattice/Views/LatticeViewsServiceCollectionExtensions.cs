@@ -18,6 +18,12 @@ public static class LatticeViewsServiceCollectionExtensions
     /// validator, and the hosted activation service, and applies any startup view
     /// declarations from <paramref name="configure"/>.
     /// <para>
+    /// It may be called more than once - several companion packages call it for
+    /// their own needs - and every call's declarations accumulate into one set, so a
+    /// host's own call is honoured whatever was registered before it. Declaring the
+    /// same runtime provider key twice throws.
+    /// </para>
+    /// <para>
     /// A view tails the per-shard write-ahead log through the commit-log reader,
     /// so the host must register a WAL-backed lattice by calling
     /// <see cref="LatticeServiceCollectionExtensions.AddLattice"/> (which registers
@@ -43,7 +49,20 @@ public static class LatticeViewsServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
 
-        var registrationBuilder = new LatticeViewRegistrationBuilder();
+        // One registration builder per service collection: several packages call
+        // AddLatticeViews() for their own needs, and every later call - typically the
+        // host's own declarations - must accumulate into the builder the first call's
+        // singletons captured, rather than be silently discarded (#5408).
+        var registrationBuilder = builder.Services
+            .FirstOrDefault(static descriptor => descriptor.ServiceType == typeof(LatticeViewRegistrationBuilder)
+                && descriptor.ImplementationInstance is LatticeViewRegistrationBuilder)
+            ?.ImplementationInstance as LatticeViewRegistrationBuilder;
+        if (registrationBuilder is null)
+        {
+            registrationBuilder = new LatticeViewRegistrationBuilder();
+            builder.Services.AddSingleton(registrationBuilder);
+        }
+
         configure?.Invoke(registrationBuilder);
 
         // The maintainer pins the source WAL GC against its applied frontier via

@@ -399,6 +399,15 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
         }
+        // The core access gate refused the caller this read - for example a
+        // whole-tree aggregate such as a metrics sample under a grant narrowed to
+        // part of the tree. An authorization outcome about this call, not a server
+        // fault: it must not fall through to Internal below, where it would be
+        // logged as an error and read by clients as a transient endpoint failure.
+        catch (LatticeAuthorizationDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
         // A fail-closed tenant resolution: the caller has no valid active tenant,
         // or may not act as the one it asserted. That is an authorization outcome,
         // not a server fault, so it must not fall through to Internal below - which
@@ -449,6 +458,15 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
         }
+        // The core access gate refused the caller this read - for example a
+        // whole-tree aggregate such as a metrics sample under a grant narrowed to
+        // part of the tree. An authorization outcome about this call, not a server
+        // fault: it must not fall through to Internal below, where it would be
+        // logged as an error and read by clients as a transient endpoint failure.
+        catch (LatticeAuthorizationDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
         // A fail-closed tenant resolution: the caller has no valid active tenant,
         // or may not act as the one it asserted. That is an authorization outcome,
         // not a server fault, so it must not fall through to Internal below - which
@@ -489,6 +507,15 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         catch (ArgumentException ex)
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+        // The core access gate refused the caller this read - for example a
+        // whole-tree aggregate such as a metrics sample under a grant narrowed to
+        // part of the tree. An authorization outcome about this call, not a server
+        // fault: it must not fall through to Internal below, where it would be
+        // logged as an error and read by clients as a transient endpoint failure.
+        catch (LatticeAuthorizationDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
         }
         // A fail-closed tenant resolution: the caller has no valid active tenant,
         // or may not act as the one it asserted. That is an authorization outcome,
@@ -571,6 +598,15 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
             throw new RpcException(new Status(
                 StatusCode.ResourceExhausted,
                 "The requested tree is busy (storage back-pressure) and the operation was refused. Retry after a short backoff."));
+        }
+        // The core access gate refused the caller this read - for example a
+        // whole-tree aggregate such as a metrics sample under a grant narrowed to
+        // part of the tree. An authorization outcome about this call, not a server
+        // fault: it must not fall through to Internal below, where it would be
+        // logged as an error and read by clients as a transient endpoint failure.
+        catch (LatticeAuthorizationDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
         }
         // A fail-closed tenant resolution: the caller has no valid active tenant,
         // or may not act as the one it asserted. That is an authorization outcome,
