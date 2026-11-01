@@ -6,12 +6,20 @@
 <div class="lt-toolbar">
     <LtSearchInput Label="Filter trees" Placeholder="Filter by name, owner or state" @bind-Value="_filter" />
     <LtButton OnClick="() => LoadAsync(refresh: true)" Disabled="@_trees.IsLoading">Refresh</LtButton>
-    <LtButton data-lt-command="@ClusterArea.ReshardCommandId" OnClick="OpenReshard">Reshard tree...</LtButton>
+    @if (_canReshard)
+    {
+        <LtButton data-lt-command="@ClusterArea.ReshardCommandId" OnClick="OpenReshard">Reshard tree...</LtButton>
+    }
     @if (_canCreate)
     {
         <LtButton data-lt-command="@ClusterArea.CreateTreeCommandId" OnClick="OpenCreate">New tree...</LtButton>
     }
 </div>
+
+@if (_reshardRefusal is { } reshardRefusal)
+{
+    <p class="lt-cluster-note" role="status" data-lt-reshard-hidden>@reshardRefusal</p>
+}
 
 @if (_createRefusal is { } createRefusal)
 {

@@ -107,20 +107,52 @@ public sealed partial class ClusterAreaTests
             .Returns(call => Task.FromResult(ClusterTreeAccess.None(call.Arg<string>())));
         Grant(ids[^1], caps => caps with { CanManageTreeLifecycle = true });
         var bounded = await CreateArea().GetAvailabilityAsync(CancellationToken.None);
-        var boundedProbes = _admin.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(ILatticeTreeAdmin.ProbeCapabilitiesAsync));
+        var boundedProbes = TreeProbes();
 
         _admin.ClearReceivedCalls();
         Grant(ids[1], caps => caps with { CanAdministerTree = true });
         var early = await CreateArea().GetAvailabilityAsync(CancellationToken.None);
-        var earlyProbes = _admin.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(ILatticeTreeAdmin.ProbeCapabilitiesAsync));
+        var earlyProbes = TreeProbes();
 
         Assert.Multiple(() =>
         {
             Assert.That(bounded, Is.EqualTo(AreaAvailability.Hidden), "a grant past the bound is never read");
             Assert.That(boundedProbes, Is.EqualTo(ClusterArea.MaximumGrantProbes));
             Assert.That(early, Is.EqualTo(AreaAvailability.Visible));
-            Assert.That(earlyProbes, Is.EqualTo(2));
+            Assert.That(earlyProbes, Is.EqualTo(ClusterArea.GrantProbeConcurrency), "the first wave holds the grant, so no second wave is probed");
         });
+    }
+
+    [Test]
+    public async Task The_fallback_probes_a_wave_of_trees_at_once()
+    {
+        // One probe after another could not answer inside the directory's
+        // availability budget for a reader on a cluster of a few dozen trees (U4).
+        RefuseSummary();
+        var ids = Enumerable.Range(0, ClusterArea.GrantProbeConcurrency).Select(i => $"tree-{i:D3}").ToArray();
+        UseTrees(ids);
+        var started = 0;
+        var allStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _admin.ProbeCapabilitiesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(async call =>
+            {
+                if (call.Arg<string>() == ClusterArea.ProbeTreeId)
+                {
+                    return ClusterTreeAccess.None(ClusterArea.ProbeTreeId);
+                }
+
+                if (Interlocked.Increment(ref started) == ids.Length)
+                {
+                    allStarted.SetResult();
+                }
+
+                await allStarted.Task;
+                return ClusterTreeAccess.None(call.Arg<string>());
+            });
+
+        var availability = await CreateArea().GetAvailabilityAsync(CancellationToken.None).AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.That(availability, Is.EqualTo(AreaAvailability.Hidden));
     }
 
     [Test]
@@ -136,6 +168,10 @@ public sealed partial class ClusterAreaTests
             Assert.That(ClusterArea.AdmitsArea(none with { CanAdministerTree = true }), Is.True);
         });
     }
+
+    private int TreeProbes() => _admin.ReceivedCalls().Count(call =>
+        call.GetMethodInfo().Name == nameof(ILatticeTreeAdmin.ProbeCapabilitiesAsync)
+        && (string)call.GetArguments()[0]! != ClusterArea.ProbeTreeId);
 
     private void RefuseSummary() =>
         _admin.GetStorageUsageAsync(false, Arg.Any<CancellationToken>()).ThrowsAsync(new LatticeAuthorizationDeniedException("denied"));

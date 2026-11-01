@@ -139,7 +139,15 @@ public sealed class StorySession
     public Task VerifyAsync(string chapter)
     {
         var contract = Contracts.Find(chapter) ?? throw new MissingChapterContractException(chapter);
-        return contract.VerifyAsync(ContextFor(chapter));
+        return LoggedVerifyAsync(chapter, contract);
+    }
+
+    private async Task LoggedVerifyAsync(string chapter, IChapterContract contract)
+    {
+        TestContext.Progress.WriteLine($"VERIFY {chapter} start");
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        await contract.VerifyAsync(ContextFor(chapter));
+        TestContext.Progress.WriteLine($"VERIFY {chapter} done in {started.Elapsed.TotalSeconds:0.0} s");
     }
 
     /// <summary>Records that <paramref name="chapter"/>'s produces already hold, because its UI steps produced them.</summary>
@@ -164,6 +172,18 @@ public sealed class StorySession
         }
 
         var contract = Contracts.Find(chapter) ?? throw new MissingChapterContractException(chapter);
-        await contract.EstablishAsync(ContextFor(chapter));
+        // One line per chapter, so a run that stalls in establishment names the contract it stalled in.
+        TestContext.Progress.WriteLine($"ESTABLISH {chapter} start");
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            await contract.EstablishAsync(ContextFor(chapter));
+            TestContext.Progress.WriteLine($"ESTABLISH {chapter} done in {started.Elapsed.TotalSeconds:0.0} s");
+        }
+        catch (Exception exception)
+        {
+            TestContext.Progress.WriteLine($"ESTABLISH {chapter} failed after {started.Elapsed.TotalSeconds:0.0} s: {exception.GetType().Name}");
+            throw;
+        }
     }
 }

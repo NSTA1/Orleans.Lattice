@@ -18,7 +18,7 @@ presents one complete surface.
 - **Capability probe.** The package exposes a fail-closed capability probe: a
   caller asks which whole-tree administration operations it may perform on a given
   tree, answered with one advisory flag per distinct grant (`CanAdministerTree`,
-  `CanManageTreeLifecycle`, `CanBulkLoad`, `CanRestore`, and `CanViewDiagnostics`)
+  `CanManageTreeLifecycle`, `CanBulkLoad`, `CanRestore`, `CanViewDiagnostics`, and `CanViewClusterTelemetry`)
   alongside the composed schema capabilities.
 - **The whole-tree operation set.** Read-only diagnostics and storage accounting;
   explicit tree creation, existence, alias, and per-tree configuration; soft-delete,

@@ -96,7 +96,7 @@ public sealed class TreeCreateJourneyTests : UiTestBase
         var content = Shell.Content(page);
         await Expect(Shell.Heading(page)).ToHaveTextAsync("Trees");
         await Expect(content.Locator("tbody")).ToContainTextAsync(ExplorerWorld.DemoTree);
-        await Expect(content.GetByRole(AriaRole.Button, new() { Name = "Reshard tree..." })).ToBeVisibleAsync();
+        await Expect(content.GetByRole(AriaRole.Button, new() { Name = "Reshard tree..." })).ToHaveCountAsync(0);
         await Expect(content.Locator("[data-lt-command=\"cluster.create-tree\"]")).ToHaveCountAsync(0);
         await ShotAsync(page, "observer-hidden");
 

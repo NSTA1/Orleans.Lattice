@@ -335,6 +335,25 @@ public sealed class DataHistoryPanelTests : DataTestContext
     }
 
     [Test]
+    public void A_tree_without_a_change_history_view_says_its_retention_does_not_keep_revisions()
+    {
+        // U4 (#5388): factory-orders held full-value retention and no change-history view, and
+        // History said only "keeps no durable history" - nothing named what was missing.
+        SeedHistory("orders", "k", "\"a\"");
+        Client.HistoryBounds[("orders", "k")] = (EntryHistoryBound.WalWindowFallback, default);
+
+        var cut = RenderAt("data/orders?tab=history&key=k");
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-data-timeline__rev"), Has.Count.EqualTo(1)));
+        var notes = cut.FindAll(".lt-data-note").Select(note => note.TextContent).ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(notes, Does.Contain(DataHistoryPanel.WalWindowFallbackText));
+            Assert.That(DataHistoryPanel.WalWindowFallbackText, Does.Contain("no change-history view").And.Contain("retention setting"));
+        });
+    }
+
+    [Test]
     public void A_trimmed_history_with_no_retained_revision_says_so_in_words_not_with_a_dash()
     {
         Client.WithTree("orders");
