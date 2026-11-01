@@ -89,6 +89,17 @@ public sealed class ScanLeafReadFaultCompletenessIntegrationTests
         Assert.That(baseline, Is.EquivalentTo(keys),
             "PRECONDITION: an unfaulted scan must yield every written key.");
 
+        // The baseline's leaf reads stay registered on the shard root, and a
+        // later read with identical arguments against a leaf that has not
+        // changed since is served from them without reaching the leaf (#2786),
+        // so the fault filter below would never see it. Rewriting every key
+        // moves each leaf's revision, which forces the faulted scan's reads to
+        // be issued afresh.
+        for (var i = 0; i < KeyCount; i++)
+        {
+            await tree.SetAsync(keys[i], Encoding.UTF8.GetBytes($"v{i}"));
+        }
+
         return (tree, keys);
     }
 
