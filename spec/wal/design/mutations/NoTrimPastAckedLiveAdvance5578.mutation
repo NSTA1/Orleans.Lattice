@@ -13,6 +13,7 @@ Armed(a) ==
     /\ rp[a] >= claimHead[a] - 1
     /\ ~MarkerOpen(a)
     /\ rp[a] >= MarkerClosedAt(a) - 1
+    /\ rp[a] >= seenU[a]
     /\ \A o \in inflight : author[o] # a
 --- REPLACE
 \* MUTATION: #5578's arming rule, with its applied-prefix tracker.

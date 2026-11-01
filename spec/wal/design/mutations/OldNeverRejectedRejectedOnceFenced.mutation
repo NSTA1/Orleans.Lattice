@@ -1,0 +1,16 @@
+# The first revision's rollout rule: once a partition is fenced, the shard rejects
+# an unstamped append. A 10.2.0 silo that is still in the cluster - or has rejoined
+# in a rollback - then has its write refused.
+MODULE: OldNeverRejectedRejectedOnceFenced
+TARGET: OldNeverRejected
+CLASS: Invariant
+SUMMARY: the shard rejects an unstamped append once the partition holds an epoch entry
+PERTURBS: OldAlloc
+BOUNDS: WithMixedVersion = TRUE
+
+--- FIND
+UnstampedAdmitted == TRUE
+--- REPLACE
+\* MUTATION: unstamped appends are rejected once the partition is fenced.
+UnstampedAdmitted == fence = 0
+--- END

@@ -8,9 +8,9 @@ SUMMARY: the activation arms while one of its own appends is allocated and not y
 PERTURBS: LiveAdvance
 
 --- FIND
-    /\ rp[a] >= MarkerClosedAt(a) - 1
+    /\ rp[a] >= seenU[a]
     /\ \A o \in inflight : author[o] # a
 --- REPLACE
-    /\ rp[a] >= MarkerClosedAt(a) - 1
+    /\ rp[a] >= seenU[a]
 \* MUTATION: own appends in flight are not waited for.
 --- END

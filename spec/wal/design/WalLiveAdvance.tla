@@ -19,8 +19,10 @@
 (*    switch. f's writes come in two kinds, point and batch. A foreign     *)
 (*    entry is acknowledged only once it is handed off to L, and the       *)
 (*    hand-off may never happen (its author crashed).                      *)
-(*  - A pre-existing writer p, whose entries were in the range before a    *)
-(*    bulk append began (#5610).                                           *)
+(*  - A pre-existing writer p, whose entries the range already held when   *)
+(*    a bulk append began (#5610).                                         *)
+(*  - An unstamped author o: a 10.2.0 silo, or any silo while the fence    *)
+(*    gate is closed (WithMixedVersion).                                   *)
 (*                                                                         *)
 (* The fences:                                                             *)
 (*  - Epoch. Before its first append an activation persists the epoch it   *)
@@ -40,7 +42,11 @@
 (*    has not been allocated it is rejected, and if it has, it lies below  *)
 (*    the allocator head the re-claim returns, which the close records.    *)
 (*    A bulk load opens the marker at the leaf's birth and records the     *)
-(*    head when it began, over a range it found empty, as the birth hint. *)
+(*    head when it began as the birth hint; rows the range already held    *)
+(*    are relocated into the leaf at its birth, as a split relocates.      *)
+(*  - Unstamped appends are always admitted, never rejected; the shard     *)
+(*    reports the highest one to every stamped append, and an activation   *)
+(*    arms only once it has read past it.                                  *)
 (*  - Armed. An activation advances over its own applied appends without   *)
 (*    reading only once it has replayed to its claim head, it sees no      *)
 (*    open marker, it has replayed to the last close's head, and every     *)
@@ -49,25 +55,29 @@
 (* Safety: no read position passes a durable entry the activation does not *)
 (* hold - acknowledged or not, because a WAL reader applies every durable  *)
 (* entry - the shared snapshot is honest, the GC never trims an            *)
-(* acknowledged entry the snapshot lacks, and no stale epoch ever appends, *)
-(* across a shard restart too.                                             *)
+(* acknowledged entry the snapshot lacks, no stale epoch ever appends,     *)
+(* across a shard restart too, and no unstamped append is ever rejected.   *)
 (*                                                                         *)
-(* Feature switches keep each check small: WithRecreate adds a purge and   *)
-(* re-creation of L, WithRestart a WAL shard restart (a reactivation or a  *)
-(* move's cutover), FrozenView makes a superseded activation keep the      *)
-(* marker state it last saw, and Ghosts enables the witness ghosts.        *)
+(* Feature switches keep each check small. WithDuplicate admits the        *)
+(* duplicate activation (on everywhere but one combined check);            *)
+(* WithRecreate adds a purge and re-creation of L; WithRestart a WAL shard *)
+(* restart (a reactivation, or a move's cutover); FrozenView makes a       *)
+(* superseded activation keep the marker state it last saw;                *)
+(* WithMixedVersion adds the unstamped author; Ghosts enables the witness  *)
+(* ghosts.                                                                 *)
 (***************************************************************************)
 EXTENDS Integers, FiniteSets
 
-CONSTANTS WithRecreate, WithRestart, FrozenView, Ghosts
+CONSTANTS WithDuplicate, WithRecreate, WithRestart, FrozenView, WithMixedVersion, Ghosts
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
 Acts == {"a1", "a2"}
 Foreign == "f"
 PreAuthor == "p"
+OldAuthor == "o"
 NoAuthor == "none"
-Authors == Acts \cup {Foreign, PreAuthor}
+Authors == Acts \cup {Foreign, PreAuthor, OldAuthor}
 Kinds == {"point", "batch"}
 MaxWindows == 2
 MaxEpoch == 3
@@ -111,10 +121,14 @@ VARIABLES
     fz,         \* each activation has been superseded and froze its marker view
     fzOpen,     \* the marker state it froze
     fzClosedAt, \* the close head it froze
+    lastU,      \* the highest offset the shard assigned to an unstamped append
+    seenU,      \* the highest unstamped offset each activation's appends reported
+    oldUsed,    \* the unstamped (old-version) author has appended
     dupUsed,
     restarted,
     recreated,
     staleAccepted,        \* an append from an epoch below maxClaimed was allocated
+    oldRejected,          \* an unstamped append was rejected
     rejected,             \* witness: a stale epoch's append was rejected
     fRejected,            \* witness: an admitted foreign write was fenced out
     advanced,             \* witness: some activation advanced live
@@ -129,11 +143,13 @@ leafVars == <<up, cache, rp, mine, snapCov, snapRows>>
 epochVars == <<rowEpoch, seen, epoch, claimHead, fence, memFence, retired, maxClaimed>>
 handVars == <<hoOpen, hoClosedAt, windows, fpend, fkind, fstamp, fEpoch, fFence>>
 viewVars == <<fz, fzOpen, fzClosedAt>>
+oldVars == <<lastU, seenU, oldUsed>>
 envVars == <<phase, hint, dupUsed, restarted, recreated>>
-wghosts == <<rejected, fRejected, advanced, advancedPastForeign, dupAdvanced,
+wghosts == <<oldRejected, rejected, fRejected, advanced, advancedPastForeign, dupAdvanced,
              trimAfterAdvance, reloaded, floorClaim>>
 
-vars == <<walVars, leafVars, epochVars, handVars, viewVars, envVars, staleAccepted, wghosts>>
+vars == <<walVars, leafVars, epochVars, handVars, viewVars, oldVars, envVars, staleAccepted,
+          wghosts>>
 
 TypeOK ==
     /\ phase \in {"pre", "window", "live"}
@@ -172,7 +188,11 @@ TypeOK ==
     /\ dupUsed \in BOOLEAN
     /\ restarted \in BOOLEAN
     /\ recreated \in BOOLEAN
+    /\ lastU \in -1..(MaxOff - 1)
+    /\ seenU \in [Acts -> -1..(MaxOff - 1)]
+    /\ oldUsed \in BOOLEAN
     /\ staleAccepted \in BOOLEAN
+    /\ oldRejected \in BOOLEAN
     /\ rejected \in BOOLEAN
     /\ fRejected \in BOOLEAN
     /\ advanced \in BOOLEAN
@@ -219,7 +239,11 @@ Init ==
     /\ dupUsed = FALSE
     /\ restarted = FALSE
     /\ recreated = FALSE
+    /\ lastU = -1
+    /\ seenU = [a \in Acts |-> -1]
+    /\ oldUsed = FALSE
     /\ staleAccepted = FALSE
+    /\ oldRejected = FALSE
     /\ rejected = FALSE
     /\ fRejected = FALSE
     /\ advanced = FALSE
@@ -231,10 +255,11 @@ Init ==
 
 (***************************************************************************)
 (* PreWrite: before a bulk append begins, an existing leaf takes a write   *)
-(* the bulk range will own. Begin: a bulk load or append begins, but only  *)
-(* over a range it finds empty (#5610) - captured in the same serial turn  *)
-(* as the birth hint, the WAL head now. The leaf it will create is born    *)
-(* with its hand-off marker open: the switch is a hand-off.                *)
+(* the bulk range will own. Begin: a bulk load or append begins; the birth *)
+(* hint is the WAL head now, captured in the same serial turn that finds   *)
+(* the rows the range already holds (#5610). The leaf it will create is    *)
+(* born holding those rows, relocated as a split relocates, and with its   *)
+(* hand-off marker open: the switch is a hand-off.                         *)
 (***************************************************************************)
 PreWrite ==
     /\ phase = "pre"
@@ -243,27 +268,28 @@ PreWrite ==
     /\ author' = [author EXCEPT ![next] = PreAuthor]
     /\ durable' = durable \cup {next}
     /\ acked' = acked \cup {next}
-    /\ UNCHANGED <<inflight, floor, leafVars, epochVars, handVars, viewVars, envVars,
+    /\ UNCHANGED <<oldVars, inflight, floor, leafVars, epochVars, handVars, viewVars, envVars,
                    staleAccepted, wghosts>>
 
 Begin ==
     /\ phase = "pre"
-    /\ next = 0
     /\ phase' = "window"
     /\ hint' = next
     /\ hoOpen' = TRUE
     /\ windows' = 1
-    /\ UNCHANGED <<walVars, leafVars, epochVars, hoClosedAt, fpend, fkind, fstamp, fEpoch,
+    /\ UNCHANGED <<oldVars, walVars, leafVars, epochVars, hoClosedAt, fpend, fkind, fstamp, fEpoch,
                    fFence, viewVars, dupUsed, restarted, recreated, staleAccepted, wghosts>>
 
-(* Create: the leaf's first activation, born at its birth hint. *)
+(* Create: the leaf's first activation, born at its birth hint, holding    *)
+(* the rows relocated into it.                                             *)
 Create ==
     /\ phase = "window"
     /\ phase' = "live"
     /\ up' = {"a1"}
+    /\ cache' = [cache EXCEPT !["a1"] = {o \in Offs : author[o] = PreAuthor}]
     /\ rp' = [rp EXCEPT !["a1"] = hint - 1]
     /\ seen' = [seen EXCEPT !["a1"] = rowEpoch]
-    /\ UNCHANGED <<hint, walVars, cache, mine, snapCov, snapRows, rowEpoch, epoch, claimHead,
+    /\ UNCHANGED <<oldVars, hint, walVars, mine, snapCov, snapRows, rowEpoch, epoch, claimHead,
                    fence, memFence, retired, maxClaimed, handVars, viewVars, dupUsed,
                    restarted, recreated, staleAccepted, wghosts>>
 
@@ -296,8 +322,8 @@ Claim(a) ==
     /\ fz' = [x \in Acts |-> fz[x] \/ Superseded(x, a)]
     /\ fzOpen' = [x \in Acts |-> IF Superseded(x, a) THEN hoOpen ELSE fzOpen[x]]
     /\ fzClosedAt' = [x \in Acts |-> IF Superseded(x, a) THEN hoClosedAt ELSE fzClosedAt[x]]
-    /\ UNCHANGED <<walVars, leafVars, seen, retired, handVars, envVars, staleAccepted,
-                   rejected, fRejected, advanced, advancedPastForeign, dupAdvanced,
+    /\ UNCHANGED <<oldVars, walVars, leafVars, seen, retired, handVars, envVars, staleAccepted,
+                   oldRejected, rejected, fRejected, advanced, advancedPastForeign, dupAdvanced,
                    trimAfterAdvance, reloaded>>
 
 ClaimConflict(a) ==
@@ -307,7 +333,7 @@ ClaimConflict(a) ==
     /\ up' = up \ {a}
     /\ cache' = [cache EXCEPT ![a] = {}]
     /\ mine' = [mine EXCEPT ![a] = {}]
-    /\ UNCHANGED <<walVars, rp, snapCov, snapRows, epochVars, handVars, viewVars, envVars,
+    /\ UNCHANGED <<oldVars, walVars, rp, snapCov, snapRows, epochVars, handVars, viewVars, envVars,
                    staleAccepted, wghosts>>
 
 (***************************************************************************)
@@ -327,8 +353,9 @@ OwnAlloc(a) ==
     /\ author' = [author EXCEPT ![next] = a]
     /\ inflight' = inflight \cup {next}
     /\ staleAccepted' = (staleAccepted \/ epoch[a] < maxClaimed)
-    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, viewVars, envVars,
-                   wghosts>>
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
+    /\ UNCHANGED <<lastU, oldUsed, durable, acked, floor, leafVars, epochVars, handVars, viewVars,
+                   envVars, wghosts>>
 
 StaleAppend(a) ==
     /\ Ghosts
@@ -339,8 +366,8 @@ StaleAppend(a) ==
     /\ epoch[a] < memFence
     /\ next < MaxOff
     /\ rejected' = TRUE
-    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, viewVars, envVars, staleAccepted,
-                   fRejected, advanced, advancedPastForeign, dupAdvanced, trimAfterAdvance,
+    /\ UNCHANGED <<oldVars, walVars, leafVars, epochVars, handVars, viewVars, envVars, staleAccepted,
+                   oldRejected, fRejected, advanced, advancedPastForeign, dupAdvanced, trimAfterAdvance,
                    reloaded, floorClaim>>
 
 Land(o) ==
@@ -351,8 +378,9 @@ Land(o) ==
        THEN /\ cache' = [cache EXCEPT ![author[o]] = @ \cup {o}]
             /\ mine' = [mine EXCEPT ![author[o]] = @ \cup {o}]
             /\ acked' = acked \cup {o}
-       ELSE UNCHANGED <<cache, mine, acked>>
-    /\ UNCHANGED <<next, author, floor, up, rp, snapCov, snapRows, epochVars, handVars,
+       ELSE /\ acked' = IF author[o] = OldAuthor THEN acked \cup {o} ELSE acked
+            /\ UNCHANGED <<cache, mine>>
+    /\ UNCHANGED <<oldVars, next, author, floor, up, rp, snapCov, snapRows, epochVars, handVars,
                    viewVars, envVars, staleAccepted, wghosts>>
 
 (***************************************************************************)
@@ -368,7 +396,7 @@ ForeignOpen ==
     /\ windows < MaxWindows
     /\ hoOpen' = TRUE
     /\ windows' = windows + 1
-    /\ UNCHANGED <<walVars, leafVars, epochVars, hoClosedAt, fpend, fkind, fstamp, fEpoch,
+    /\ UNCHANGED <<oldVars, walVars, leafVars, epochVars, hoClosedAt, fpend, fkind, fstamp, fEpoch,
                    fFence, viewVars, envVars, staleAccepted, wghosts>>
 
 ForeignAdmit(k) ==
@@ -378,7 +406,7 @@ ForeignAdmit(k) ==
     /\ fpend' = TRUE
     /\ fkind' = k
     /\ fstamp' = fEpoch
-    /\ UNCHANGED <<walVars, leafVars, epochVars, hoOpen, hoClosedAt, windows, fEpoch, fFence,
+    /\ UNCHANGED <<oldVars, walVars, leafVars, epochVars, hoOpen, hoClosedAt, windows, fEpoch, fFence,
                    viewVars, envVars, staleAccepted, wghosts>>
 
 ForeignAlloc ==
@@ -391,7 +419,7 @@ ForeignAlloc ==
     /\ next' = next + 1
     /\ author' = [author EXCEPT ![next] = Foreign]
     /\ inflight' = inflight \cup {next}
-    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, hoOpen, hoClosedAt, windows,
+    /\ UNCHANGED <<oldVars, durable, acked, floor, leafVars, epochVars, hoOpen, hoClosedAt, windows,
                    fEpoch, fFence, viewVars, envVars, staleAccepted, wghosts>>
 
 ForeignReject ==
@@ -401,8 +429,8 @@ ForeignReject ==
     /\ fkind' = "point"
     /\ fstamp' = 0
     /\ fRejected' = (fRejected \/ Ghosts)
-    /\ UNCHANGED <<walVars, leafVars, epochVars, hoOpen, hoClosedAt, windows, fEpoch, fFence,
-                   viewVars, envVars, staleAccepted, rejected, advanced, advancedPastForeign,
+    /\ UNCHANGED <<oldVars, walVars, leafVars, epochVars, hoOpen, hoClosedAt, windows, fEpoch, fFence,
+                   viewVars, envVars, staleAccepted, oldRejected, rejected, advanced, advancedPastForeign,
                    dupAdvanced, trimAfterAdvance, reloaded, floorClaim>>
 
 HandOff(o, a) ==
@@ -412,7 +440,7 @@ HandOff(o, a) ==
     /\ o \notin acked
     /\ cache' = [cache EXCEPT ![a] = @ \cup {o}]
     /\ acked' = acked \cup {o}
-    /\ UNCHANGED <<next, author, inflight, durable, floor, up, rp, mine, snapCov, snapRows,
+    /\ UNCHANGED <<oldVars, next, author, inflight, durable, floor, up, rp, mine, snapCov, snapRows,
                    epochVars, handVars, viewVars, envVars, staleAccepted, wghosts>>
 
 Close ==
@@ -423,10 +451,10 @@ Close ==
     /\ fEpoch' = fEpoch + 1
     /\ fFence' = fEpoch + 1
     /\ hoClosedAt' = next
-    /\ UNCHANGED <<walVars, leafVars, epochVars, windows, fpend, fkind, fstamp, viewVars,
+    /\ UNCHANGED <<oldVars, walVars, leafVars, epochVars, windows, fpend, fkind, fstamp, viewVars,
                    envVars, staleAccepted, wghosts>>
 
-(* Replay(a): read and apply the next durable entry; never a trimmed one. *)
+(* Replay(a): read and apply the next durable entry; never a trimmed one.  *)
 Replay(a) ==
     /\ a \in up
     /\ rp[a] + 1 < MaxOff
@@ -434,7 +462,7 @@ Replay(a) ==
     /\ rp[a] + 1 >= floor
     /\ cache' = [cache EXCEPT ![a] = @ \cup {rp[a] + 1}]
     /\ rp' = [rp EXCEPT ![a] = rp[a] + 1]
-    /\ UNCHANGED <<walVars, up, mine, snapCov, snapRows, epochVars, handVars, viewVars,
+    /\ UNCHANGED <<oldVars, walVars, up, mine, snapCov, snapRows, epochVars, handVars, viewVars,
                    envVars, staleAccepted, wghosts>>
 
 (***************************************************************************)
@@ -452,6 +480,7 @@ Armed(a) ==
     /\ rp[a] >= claimHead[a] - 1
     /\ ~MarkerOpen(a)
     /\ rp[a] >= MarkerClosedAt(a) - 1
+    /\ rp[a] >= seenU[a]
     /\ \A o \in inflight : author[o] # a
 
 LiveAdvance(a) ==
@@ -465,8 +494,8 @@ LiveAdvance(a) ==
             (advancedPastForeign \/ (Ghosts /\ \E o \in Offs : author[o] = Foreign /\ o < target))
     /\ advanced' = (advanced \/ Ghosts)
     /\ dupAdvanced' = (dupAdvanced \/ (Ghosts /\ a = "a2"))
-    /\ UNCHANGED <<walVars, up, cache, mine, snapCov, snapRows, epochVars, handVars, viewVars,
-                   envVars, staleAccepted, rejected, fRejected, trimAfterAdvance, reloaded,
+    /\ UNCHANGED <<oldVars, walVars, up, cache, mine, snapCov, snapRows, epochVars, handVars, viewVars,
+                   envVars, staleAccepted, oldRejected, rejected, fRejected, trimAfterAdvance, reloaded,
                    floorClaim>>
 
 (* Capture(a): the shared per-leaf snapshot keeps the highest coverage. *)
@@ -475,7 +504,7 @@ Capture(a) ==
     /\ rp[a] > snapCov
     /\ snapCov' = rp[a]
     /\ snapRows' = {o \in cache[a] : o <= rp[a]}
-    /\ UNCHANGED <<walVars, up, cache, rp, mine, epochVars, handVars, viewVars, envVars,
+    /\ UNCHANGED <<oldVars, walVars, up, cache, rp, mine, epochVars, handVars, viewVars, envVars,
                    staleAccepted, wghosts>>
 
 (* GcTrim: trim the next durable entry below the leaf's pin. *)
@@ -484,8 +513,8 @@ GcTrim ==
     /\ floor \in durable
     /\ floor' = floor + 1
     /\ trimAfterAdvance' = (trimAfterAdvance \/ (Ghosts /\ advanced))
-    /\ UNCHANGED <<next, author, inflight, durable, acked, leafVars, epochVars, handVars,
-                   viewVars, envVars, staleAccepted, rejected, fRejected, advanced,
+    /\ UNCHANGED <<oldVars, next, author, inflight, durable, acked, leafVars, epochVars, handVars,
+                   viewVars, envVars, staleAccepted, oldRejected, rejected, fRejected, advanced,
                    advancedPastForeign, dupAdvanced, reloaded, floorClaim>>
 
 (***************************************************************************)
@@ -501,6 +530,7 @@ GcTrim ==
 (*    the purge never reached survives.                                    *)
 (***************************************************************************)
 Duplicate ==
+    /\ WithDuplicate
     /\ phase = "live"
     /\ ~dupUsed
     /\ "a2" \notin up
@@ -509,7 +539,7 @@ Duplicate ==
     /\ cache' = [cache EXCEPT !["a2"] = snapRows]
     /\ rp' = [rp EXCEPT !["a2"] = snapCov]
     /\ seen' = [seen EXCEPT !["a2"] = rowEpoch]
-    /\ UNCHANGED <<walVars, mine, snapCov, snapRows, rowEpoch, epoch, claimHead, fence,
+    /\ UNCHANGED <<oldVars, walVars, mine, snapCov, snapRows, rowEpoch, epoch, claimHead, fence,
                    memFence, retired, maxClaimed, handVars, viewVars, phase, hint,
                    restarted, recreated, staleAccepted, wghosts>>
 
@@ -518,7 +548,8 @@ Restart ==
     /\ ~restarted
     /\ restarted' = TRUE
     /\ memFence' = -1
-    /\ UNCHANGED <<walVars, leafVars, rowEpoch, seen, epoch, claimHead, fence, retired,
+    /\ lastU' = next - 1
+    /\ UNCHANGED <<seenU, oldUsed, walVars, leafVars, rowEpoch, seen, epoch, claimHead, fence, retired,
                    maxClaimed, handVars, viewVars, phase, hint, dupUsed, recreated,
                    staleAccepted, wghosts>>
 
@@ -526,8 +557,8 @@ Reload ==
     /\ memFence = -1
     /\ memFence' = fence
     /\ reloaded' = (reloaded \/ (Ghosts /\ fence > 0))
-    /\ UNCHANGED <<walVars, leafVars, rowEpoch, seen, epoch, claimHead, fence, retired,
-                   maxClaimed, handVars, viewVars, envVars, staleAccepted, rejected,
+    /\ UNCHANGED <<oldVars, walVars, leafVars, rowEpoch, seen, epoch, claimHead, fence, retired,
+                   maxClaimed, handVars, viewVars, envVars, staleAccepted, oldRejected, rejected,
                    fRejected, advanced, advancedPastForeign, dupAdvanced, trimAfterAdvance,
                    floorClaim>>
 
@@ -540,8 +571,36 @@ Recreate ==
     /\ retired' = Max2(retired, fence)
     /\ fence' = 0
     /\ memFence' = IF memFence = -1 THEN -1 ELSE 0
-    /\ UNCHANGED <<walVars, leafVars, seen, epoch, claimHead, maxClaimed, handVars, viewVars,
+    /\ UNCHANGED <<oldVars, walVars, leafVars, seen, epoch, claimHead, maxClaimed, handVars, viewVars,
                    phase, hint, dupUsed, restarted, staleAccepted, wghosts>>
+
+(***************************************************************************)
+(* The unstamped author o: a 10.2.0 silo, or any silo while the cluster's  *)
+(* fence gate is closed, appending an entry L owns without a stamp. The    *)
+(* shard always admits an unstamped append (UnstampedAdmitted) and records *)
+(* its offset as the highest unstamped one, which it reports to every      *)
+(* stamped append after it; the reporting activation arms only once it has *)
+(* read past it. The writing silo acknowledges its own write.              *)
+(***************************************************************************)
+UnstampedAdmitted == TRUE
+
+OldAlloc ==
+    /\ WithMixedVersion
+    /\ phase = "live"
+    /\ ~oldUsed
+    /\ next < MaxOff
+    /\ oldUsed' = TRUE
+    /\ IF UnstampedAdmitted
+       THEN /\ next' = next + 1
+            /\ author' = [author EXCEPT ![next] = OldAuthor]
+            /\ inflight' = inflight \cup {next}
+            /\ lastU' = next
+            /\ UNCHANGED oldRejected
+       ELSE /\ oldRejected' = TRUE
+            /\ UNCHANGED <<next, author, inflight, lastU>>
+    /\ UNCHANGED <<seenU, durable, acked, floor, leafVars, epochVars, handVars, viewVars, envVars,
+                   staleAccepted, rejected, fRejected, advanced, advancedPastForeign, dupAdvanced,
+                   trimAfterAdvance, reloaded, floorClaim>>
 
 \* A behaviour may stop anywhere: this is a safety model.
 Done == UNCHANGED vars
@@ -555,7 +614,7 @@ Next ==
     \/ \E o \in Offs, a \in Acts : HandOff(o, a)
     \/ \E a \in Acts : Replay(a) \/ LiveAdvance(a) \/ Capture(a)
     \/ GcTrim
-    \/ Duplicate \/ Restart \/ Reload \/ Recreate
+    \/ Duplicate \/ Restart \/ Reload \/ Recreate \/ OldAlloc
     \/ Done
 
 Spec == Init /\ [][Next]_vars
@@ -581,6 +640,10 @@ NoTrimPastAcked ==
 \* across a shard restart too.
 StaleEpochNeverAppends == ~staleAccepted
 
+\* An unstamped append - a 10.2.0 silo's, or any while the gate is closed - is
+\* never rejected.
+OldNeverRejected == ~oldRejected
+
 (***************************************************************************)
 (* Witnesses: each must be VIOLATED, with Ghosts = TRUE, proving its step  *)
 (* is reachable in the instance and the clean run is not vacuous.          *)
@@ -595,4 +658,5 @@ WitnessDuplicateLiveAdvance == ~dupAdvanced
 WitnessTrimAfterLiveAdvance == ~trimAfterAdvance
 WitnessUnloadedEntryReloaded == ~reloaded
 WitnessClaimAboveRetiredFloor == ~floorClaim
+WitnessUnstampedAppendReported == \A a \in Acts : seenU[a] = -1
 ====
