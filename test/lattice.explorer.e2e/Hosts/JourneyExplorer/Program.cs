@@ -83,6 +83,13 @@ builder.Services.AddLatticeExplorerWeb(options =>
         options.ConfigureDataProtection = dataProtection =>
             dataProtection.PersistKeysToFileSystem(new DirectoryInfo(keysDirectory));
     }
+    else
+    {
+        // JourneyExplorerKeyRing.None: a ring that dies with the process. The framework default
+        // is not that on a CI runner - it persists keys to the user profile, so a restarted head
+        // would still read the cookies it issued and C2.3's lost session would not be lost.
+        options.ConfigureDataProtection = dataProtection => dataProtection.UseEphemeralDataProtectionProvider();
+    }
 });
 
 var app = builder.Build();
