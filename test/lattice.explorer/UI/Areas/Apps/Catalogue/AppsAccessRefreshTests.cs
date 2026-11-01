@@ -19,6 +19,7 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Apps.Catalogue;
 /// caller is discarded.
 /// </summary>
 [TestFixture]
+[FixtureLifeCycle(LifeCycle.InstancePerTestCase)]
 public sealed class AppsAccessRefreshTests
 {
     private static readonly TimeSpan Interval = TimeSpan.FromSeconds(10);
