@@ -42,7 +42,7 @@ public sealed partial class AuditorsReviewChapter
     }
 
     // U4.2: History of two orders, a point in time before U2's migration, and back to the latest.
-    private async Task HistoryOfTheOrdersAsync(PersonaSession dana)
+    private static async Task HistoryOfTheOrdersAsync(PersonaSession dana)
     {
         var tree = new TreeWorkspacePage(dana.Shell);
         await tree.OpenFromDirectoryAsync(Names.Trees.FactoryOrders);
@@ -70,20 +70,10 @@ public sealed partial class AuditorsReviewChapter
         var asOf = times[1].AddSeconds(1);
         Assert.That(asOf, Is.LessThanOrEqualTo(migrated), $"the seed ({times[1]:O}) and the migration ({migrated:O}) are a second apart or more, so a point in time separates them");
         await tree.ShowAsOfAsync(asOf);
+        await Expect(tree.RevisionInEffect).ToContainTextAsync("\"total\"");
+        await Expect(tree.RevisionInEffect).Not.ToContainTextAsync(Names.Orders.DefaultCurrency);
         await SnapAsync(dana, "2", "as-of-before-migration", "Show as of, before U2's migration: the marked revision holds the v1 shape, with no currency");
-        try
-        {
-            await Expect(tree.RevisionInEffect).ToContainTextAsync("\"total\"");
-            await Expect(tree.RevisionInEffect).Not.ToContainTextAsync(Names.Orders.DefaultCurrency);
-            Coverage.Hit("query:shell.at");
-        }
-        catch (PlaywrightException ex)
-        {
-            // TEMPORARY: the v1 value is shown only once A3 (#5374) pins factory-orders to
-            // FullValue history retention before seeding it. Until A3 lands this records the
-            // failure and lets the remaining steps run; the chapter still fails at its end.
-            _deferredFailures.Add($"U4.2 Show as of did not show the v1 value of {Order1} (needs A3's FullValue retention, #5374): {ex.Message}");
-        }
+        Coverage.Hit("query:shell.at");
 
         await tree.ShowLatestAsync();
         Assert.That((await tree.RevisionTimesAsync())[0], Is.EqualTo(migrated), "Latest shows the whole timeline again, U2's migration on top");
