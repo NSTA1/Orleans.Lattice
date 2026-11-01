@@ -57,18 +57,16 @@ public static class FabrikamAccess
     /// T1's platform rules, one record per governed tree. The platform refuses a tenant-wide
     /// <c>t/{tenant}/*</c> rule (tenant-wide rules belong to the tenant tier), and the tenant tier
     /// refuses Telemetry, Replication, TreeLifecycle and AppInstall (platform-only). So ada holds
-    /// TreeLifecycle and Replication on each named acme tree, and both tenant admins hold the
-    /// scopeless Telemetry capability, which can only be granted cluster-wide.
-    /// <c>dee-default-read</c> lets dee read the all-trees tier. Apps are installed into a tenant by
+    /// TreeLifecycle and Replication on each named acme tree. No tenant admin holds Telemetry: it
+    /// is authorized only on <c>*</c>, which would expose every tenant's and the platform's
+    /// telemetry (tenant-scoped telemetry is a gap, #5582). <c>dee-default-read</c> lets dee read the all-trees tier. Apps are installed into a tenant by
     /// the platform operator (T7), so no rule grants App install. globex names no trees, so gus
-    /// holds no per-tree platform rule.
+    /// holds no platform rule.
     /// </summary>
     public static IReadOnlyList<PinnedRule> T1Rules { get; } =
     [
         .. AcmeAdministeredTrees.Select(tree =>
             User(Names.Rules.AcmeAdminsPlatform, Personas.Ada.Id, Qualified(Names.Tenants.Acme, tree), PlatformTreeAdministration)),
-        User(Names.Rules.AcmeAdminsPlatform, Personas.Ada.Id, LatticeScope.ClusterWideTreeId, LatticeOperation.Telemetry),
-        User(Names.Rules.GlobexAdminsPlatform, Personas.Gus.Id, LatticeScope.ClusterWideTreeId, LatticeOperation.Telemetry),
         User(Names.Rules.DeeDefaultRead, Personas.Dee.Id, LatticeScope.ClusterWideTreeId, ContosoAccess.ReadOps),
     ];
 

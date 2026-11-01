@@ -324,11 +324,11 @@ public static class StoryNames
         {
             /// <summary>
             /// Acme's admin's platform rule (T1): one record per named acme tree for the
-            /// platform-only operations, and one on <c>*</c> for Telemetry.
+            /// platform-only operations TreeLifecycle and Replication.
             /// </summary>
             public const string AcmeAdminsPlatform = "acme-admins-platform";
 
-            /// <summary>Globex's admin's platform rule (T1): Telemetry on <c>*</c>.</summary>
+            /// <summary>Globex's admin's platform rule name (T1); globex names no trees, so it holds no record.</summary>
             public const string GlobexAdminsPlatform = "globex-admins-platform";
 
             /// <summary>Acme's tenant-tier rule (T1, authored by ada): the data-plane operations on every acme tree.</summary>
