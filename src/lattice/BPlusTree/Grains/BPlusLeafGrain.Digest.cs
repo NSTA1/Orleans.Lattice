@@ -283,8 +283,13 @@ internal sealed partial class BPlusLeafGrain
         // the shard-root wrapper to keep the full-range result byte-identical
         // to the same-cluster whole-shard digest; cross-cluster precision is
         // delivered by the peer-high-water-mark bound, not by this hash).
-        EnsureProjectionHashInitialized();
-        ScheduleRecomputedFoldPublish();
+        //
+        // Only the pre-slot backfill runs here, never the stale-version
+        // recompute: a range read folds the rows themselves and does not read
+        // the persisted fold, and recomputing a whole stale fold would make a
+        // bounded read cost the whole leaf. A stale fold is instead replaced
+        // below when this read happens to fold every row anyway.
+        EnsureProjectionHashPresent();
 
         var hash = new byte[ProjectionHashSize];
         long count = 0;
@@ -334,6 +339,21 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
+        // A read that folded every row of the leaf has just computed the
+        // whole-leaf fold under the current contribution version, so a stale
+        // persisted fold is replaced at no extra cost, and a coalesced publish
+        // carries it to the parent. The Merkle walk reads exactly the leaves
+        // under a mismatching subtree, so this is how a quiet leaf's stale fold
+        // stops making its parent's aggregate mismatch.
+        if (state.State.ProjectionHashVersion != LeafProjectionDigest.CurrentVersion
+            && count == Cache.Count)
+        {
+            state.State.ProjectionHash = (byte[])hash.Clone();
+            state.State.ProjectionHashVersion = LeafProjectionDigest.CurrentVersion;
+            MarkDigestDirty();
+            ScheduleRecomputedFoldPublish();
+        }
+
         return new ChildDigestSnapshot
         {
             Hash = hash,
@@ -362,6 +382,8 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private void EnsureProjectionHashInitialized()
     {
+        // Mutation funnels and the whole-leaf digest read call this: both need
+        // the persisted fold to be correct under the current version.
         if (state.State.ProjectionHash is null
             || state.State.ProjectionHash.Length != ProjectionHashSize
             || state.State.ProjectionHashVersion != LeafProjectionDigest.CurrentVersion)
@@ -373,6 +395,28 @@ internal sealed partial class BPlusLeafGrain
             {
                 MarkDigestDirty();
             }
+        }
+    }
+
+    /// <summary>
+    /// Backfills <c>state.State.ProjectionHash</c> only when it is absent or of
+    /// the wrong width - the pre-slot backfill every read path has always run -
+    /// and leaves a fold tagged with an older contribution version in place.
+    /// Used by the reads that must stay bounded or that only report the fold:
+    /// a range digest (which folds its own rows) and the snapshot a parent
+    /// pulls on adoption. A stale fold reported upward makes the parent's
+    /// aggregate mismatch a peer on equal content until it is recomputed, the
+    /// over-trigger the anti-entropy walk already tolerates; it is never
+    /// folded into, because every mutation goes through
+    /// <see cref="EnsureProjectionHashInitialized"/> first.
+    /// </summary>
+    private void EnsureProjectionHashPresent()
+    {
+        if (state.State.ProjectionHash is null
+            || state.State.ProjectionHash.Length != ProjectionHashSize)
+        {
+            state.State.ProjectionHash = ComputeFullProjectionHashFromState();
+            state.State.ProjectionHashVersion = LeafProjectionDigest.CurrentVersion;
         }
     }
 
