@@ -320,6 +320,11 @@ public sealed partial class JourneyEstate : IAsyncDisposable
             explorerEnvironment["Explorer__ApplicationName"] = "lattice-console";
         }
 
+        if (_options.Faults)
+        {
+            explorerEnvironment[JourneyHostEnvironment.Faults] = JourneyHostEnvironment.Enabled;
+        }
+
         switch (head.KeyRing)
         {
             case JourneyExplorerKeyRing.FileSystem:
