@@ -16,11 +16,14 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Journeys.U3;
 /// correct answer.
 /// </summary>
 /// <param name="Admin">The administrator's view of the install.</param>
-/// <param name="Listed">The persona's <c>ListMyApps</c> entry for the board.</param>
-/// <param name="Described">The persona's <c>DescribeMyApp</c> answer for the board.</param>
-/// <param name="WorkspaceRefuses">Whether the workspace answers would refuse the launch on their own.</param>
+/// <param name="Listed">The persona's <c>ListMyApps</c> entries for the board, one per sample.</param>
+/// <param name="Described">The persona's <c>DescribeMyApp</c> answers for the board, one per sample.</param>
+/// <param name="WorkspaceRefuses">Whether any sample of the workspace answers would refuse the launch on its own.</param>
 internal sealed record TaskBoardServerView(string Admin, string Listed, string Described, bool WorkspaceRefuses)
 {
+    /// <summary>How many times the persona's workspace is asked: its answers are known to vary between reads (#5595).</summary>
+    private const int Samples = 5;
+
     /// <summary>Reads the cluster's answers for <paramref name="session"/>'s persona, in its region.</summary>
     /// <param name="estate">The estate.</param>
     /// <param name="session">The persona's session.</param>
@@ -41,41 +44,53 @@ internal sealed record TaskBoardServerView(string Admin, string Listed, string D
         }
 
         var workspace = LatticeAppWorkspaceApiGrpcClient.Create(estate.Invoker(session.Persona.Id, region: session.Region), JourneyEstate.Serialization);
-        WorkspaceAppSummary? summary;
-        string listed;
-        try
+        var listed = new List<string>(Samples);
+        var described = new List<string>(Samples);
+        var refusals = 0;
+        for (var sample = 0; sample < Samples; sample++)
         {
-            var mine = await workspace.ListMyAppsAsync();
-            summary = mine.IsDefault ? null : mine.FirstOrDefault(candidate => candidate.Slug == Apps.TaskBoard);
-            listed = summary is null
-                ? $"absent ({(mine.IsDefault ? 0 : mine.Length)} app(s) listed)"
-                : $"version {summary.Version}, revision {summary.InstallRevision}, roles [{string.Join(", ", summary.Roles)}], has UI {summary.HasUi}";
-        }
-        catch (Exception exception)
-        {
-            return new(admin, "unread: " + exception.GetType().Name + ": " + exception.Message, "not read", WorkspaceRefuses: false);
+            WorkspaceAppSummary? summary = null;
+            try
+            {
+                var mine = await workspace.ListMyAppsAsync();
+                summary = mine.IsDefault ? null : mine.FirstOrDefault(candidate => candidate.Slug == Apps.TaskBoard);
+                listed.Add(summary is null
+                    ? $"absent of {(mine.IsDefault ? 0 : mine.Length)}"
+                    : $"v{summary.Version} r{summary.InstallRevision} [{string.Join(",", summary.Roles)}] ui={summary.HasUi}");
+            }
+            catch (Exception exception)
+            {
+                listed.Add("unread " + exception.GetType().Name);
+            }
+
+            try
+            {
+                var answer = await workspace.DescribeMyAppAsync(Apps.TaskBoard);
+                if (summary is null
+                    || answer is null
+                    || answer.State != AppLifecycleState.Enabled
+                    || answer.InstallRevision != summary.InstallRevision
+                    || answer.Ui is null)
+                {
+                    refusals++;
+                }
+
+                described.Add(answer is null
+                    ? "null"
+                    : $"{answer.State} v{answer.Version} r{answer.InstallRevision} ui={(answer.Ui is null ? "none" : "yes")}");
+            }
+            catch (Exception exception)
+            {
+                described.Add("unread " + exception.GetType().Name);
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(500));
         }
 
-        try
-        {
-            var described = await workspace.DescribeMyAppAsync(Apps.TaskBoard);
-            var refuses = summary is null
-                || described is null
-                || described.State != AppLifecycleState.Enabled
-                || described.InstallRevision != summary.InstallRevision
-                || described.Ui is null;
-            var text = described is null
-                ? "no grant (null)"
-                : $"{described.State}, version {described.Version}, revision {described.InstallRevision}, UI {(described.Ui is null ? "none" : "declared")}";
-            return new(admin, listed, text, refuses);
-        }
-        catch (Exception exception)
-        {
-            return new(admin, listed, "unread: " + exception.GetType().Name + ": " + exception.Message, WorkspaceRefuses: false);
-        }
+        return new(admin, string.Join(" | ", listed), string.Join(" | ", described), refusals > 0);
     }
 
     /// <inheritdoc />
     public override string ToString() =>
-        $"admin describes {Admin}; the persona's ListMyApps: {Listed}; DescribeMyApp: {Described}; the workspace {(WorkspaceRefuses ? "refuses" : "grants")} the launch";
+        $"admin describes {Admin}; the persona's ListMyApps: {Listed}; DescribeMyApp: {Described}; the workspace {(WorkspaceRefuses ? "refuses the launch in at least one sample" : "grants the launch in every sample")}";
 }

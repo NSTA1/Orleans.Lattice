@@ -3,6 +3,7 @@ using Microsoft.Playwright;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Checkpoints;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Sessions;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Shell;
 using static Microsoft.Playwright.Assertions;
 
 namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Journeys.U3;
@@ -120,16 +121,19 @@ internal sealed class TaskBoardWindow
     public async Task<bool> TryWaitForBoardAsync()
     {
         var closed = Page.GetByRole(AriaRole.Heading, new() { NameRegex = new Regex("is not open to you yet") });
+        var notFound = Page.GetByRole(AriaRole.Heading, new() { Name = ShellPage.NotFoundHeading, Exact = true });
         var refused = Host.GetByRole(AriaRole.Alert);
         for (var attempt = 0; ; attempt++)
         {
-            await Expect(Element.Or(closed).Or(refused)).ToBeVisibleAsync(new() { Timeout = 60_000 });
+            await Expect(Element.Or(closed).Or(notFound).Or(refused)).ToBeVisibleAsync(new() { Timeout = 60_000 });
             if (await Element.IsVisibleAsync())
             {
                 break;
             }
 
-            LastRefusal = (await refused.IsVisibleAsync() ? await refused.InnerTextAsync() : "is not open to you yet").ReplaceLineEndings(" ");
+            LastRefusal = (await refused.IsVisibleAsync() ? await refused.InnerTextAsync()
+                : await notFound.IsVisibleAsync() ? ShellPage.NotFoundHeading
+                : "is not open to you yet").ReplaceLineEndings(" ");
             if (_readServer is not null)
             {
                 LastServerView = await _readServer();

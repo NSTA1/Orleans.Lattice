@@ -65,13 +65,13 @@ public sealed class TaskBoardTeamJourney : JourneyChapter
                 // Every step below that needs the board loaded is not driven while this reproduces.
                 // The wrapper asserts the refusal is the server's: if the workspace grants the board
                 // while the window refuses it, the Explorer's frame gate is wrong, and this fails.
-                await new KnownDefect("#5595", "The apps workspace answers the task board's editor with no enabled grant, so its window refuses her though Your apps lists it").ReproducesAsync(() =>
+                await new KnownDefect("#5595", "The apps workspace answers the task board's editor with no enabled grant, so its window shows her a not-found page or 'This app is not available' though Your apps lists it").ReproducesAsync(() =>
                 {
                     Assert.That(board.LastServerView, Is.Not.Null, "The cluster's answers were not read at the refusal.");
                     Assert.That(board.LastServerView!.WorkspaceRefuses, Is.True, $"The window refused the board ({board.LastRefusal}) while the workspace grants it: the Explorer's frame gate is wrong. {board.LastServerView}");
                     return Task.CompletedTask;
                 });
-                await board.CaptureAsync(recorder, "u3-1", "frame-refused", "The board's window refuses priya: the apps workspace answers her with no enabled grant (#5595)");
+                await board.CaptureAsync(recorder, "u3-1", "frame-refused", "The board's window refuses priya although Your apps lists the board: the apps workspace answers her with no enabled grant (#5595)");
                 return;
             }
 
