@@ -325,6 +325,11 @@ public sealed partial class JourneyEstate : IAsyncDisposable
             explorerEnvironment["Explorer__MaxImportBytes"] = maxImportBytes.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
 
+        if (_options.Faults)
+        {
+            explorerEnvironment[JourneyHostEnvironment.Faults] = JourneyHostEnvironment.Enabled;
+        }
+
         switch (head.KeyRing)
         {
             case JourneyExplorerKeyRing.FileSystem:

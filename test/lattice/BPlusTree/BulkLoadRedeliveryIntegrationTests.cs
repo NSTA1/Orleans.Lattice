@@ -160,6 +160,61 @@ public sealed class BulkLoadRedeliveryIntegrationTests
     }
 
     [Test]
+    public async Task Tree_statistics_read_while_a_streamed_load_runs_never_count_a_key_twice()
+    {
+        // The statistics walk yields every 64 leaves and re-descends to resume. A
+        // resume that lands on a leaf an earlier batch already counted - as it
+        // does while a graft has linked appended leaves into the chain but not yet
+        // into their parent - used to count that leaf again (issue #5460). No
+        // reading may then exceed the keys appended by the time it returned. This
+        // is a coarse guard, since the window is narrow; the interleaving itself
+        // is pinned deterministically by ShardRootGrainDiagnosticsResumeTests.
+        const int keyCount = 24_000;
+        var tree = await CreateTreeAsync("bulk-stats-race");
+        var stats = _fixture.Cluster.Client.GetGrain<ILatticeStats>(tree.GetPrimaryKeyString());
+        var op = Guid.NewGuid().ToString("N");
+        var chunks = Chunks(keyCount);
+        var appended = 0;
+
+        var load = Task.Run(async () =>
+        {
+            for (var c = 0; c < chunks.Count; c++)
+            {
+                await tree.BulkAppendChunkAsync($"{op}/{c}", chunks[c]);
+                Volatile.Write(ref appended, Volatile.Read(ref appended) + chunks[c].Count);
+            }
+        });
+
+        var overCounts = new List<string>();
+        var readings = 0;
+        while (!load.IsCompleted)
+        {
+            await stats.InvalidateAsync();
+            var report = await tree.DiagnoseAsync(deep: readings % 2 == 1);
+
+            // Chunks are appended one at a time, so at most one is in flight and
+            // partly visible when the reading returns.
+            var bound = Volatile.Read(ref appended) + ChunkSize;
+            readings++;
+            if (report.TotalLiveKeys > bound)
+            {
+                overCounts.Add($"{report.TotalLiveKeys} live keys reported when at most {bound} could have been appended");
+            }
+        }
+
+        await load;
+        await stats.InvalidateAsync();
+        var final = await tree.DiagnoseAsync(deep: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(readings, Is.GreaterThan(1), "precondition: the statistics were read while the load ran");
+            Assert.That(overCounts, Is.Empty, "no reading may count a key twice");
+            Assert.That(final.TotalLiveKeys, Is.EqualTo(keyCount));
+        });
+    }
+
+    [Test]
     public async Task A_chunk_below_a_shards_right_edge_that_was_never_loaded_is_refused()
     {
         var tree = await CreateTreeAsync("bulk-out-of-order");

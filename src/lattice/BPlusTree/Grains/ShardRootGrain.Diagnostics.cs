@@ -62,6 +62,39 @@ internal sealed partial class ShardRootGrain
         };
     }
 
+    /// <summary>
+    /// Whether keys this shard holds may sit in a virtual slot it no longer owns -
+    /// split away permanently, or by an in-progress split past its swap - so a
+    /// live-key count must leave them to the owning shard, as
+    /// <see cref="IsSlotMovedAway"/> decides for scans.
+    /// </summary>
+    private bool HasMovedAwaySlotsToFilter() =>
+        (state.State.MovedAwaySlots.Count > 0 && state.State.MovedAwayVirtualShardCount is not null)
+        || state.State.SplitInProgress is { Phase: ShardSplitPhase.Swap or ShardSplitPhase.Reject or ShardSplitPhase.Complete };
+
+    /// <summary>The number of <paramref name="keys"/> in a slot this shard still owns.</summary>
+    private int CountOwnedKeys(List<string> keys)
+    {
+        var count = 0;
+        foreach (var key in keys)
+        {
+            if (!IsSlotMovedAway(key))
+                count++;
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// Whether a leaf declaring <paramref name="bounds"/> lies wholly below the
+    /// resume key of a resumed batch, and so was counted by an earlier batch. A
+    /// leaf declaring no high bound is not judged.
+    /// </summary>
+    private static bool CountedByAnEarlierBatch(in LeafKeyRange bounds, string? resumeFromInclusive) =>
+        resumeFromInclusive is not null
+        && bounds.HighKeyExclusive is { } high
+        && string.CompareOrdinal(high, resumeFromInclusive) <= 0;
+
     /// <inheritdoc />
     public Task<ShardDiagnosticsPage> GetDiagnosticsBoundedAsync(bool deep, string? resumeFromInclusive)
     {
@@ -90,6 +123,8 @@ internal sealed partial class ShardRootGrain
         var rootNodeId = state.State.RootNodeId;
         var splitInProgress = state.State.SplitInProgress is not null;
         var bulkPending = state.State.PendingBulkGraft is not null;
+
+        var filterMoved = HasMovedAwaySlotsToFilter();
 
         var depth = 1;
         long liveKeys = 0;
@@ -165,12 +200,12 @@ internal sealed partial class ShardRootGrain
                 if (deep)
                 {
                     var stats = await leaf.GetStatsAsync();
-                    liveKeys = stats.LiveKeys;
+                    liveKeys = filterMoved ? CountOwnedKeys(await leaf.GetKeysAsync()) : stats.LiveKeys;
                     tombstones = stats.Tombstones;
                 }
                 else
                 {
-                    liveKeys = await leaf.CountAsync();
+                    liveKeys = filterMoved ? CountOwnedKeys(await leaf.GetKeysAsync()) : await leaf.CountAsync();
                 }
             }
         }
@@ -231,16 +266,34 @@ internal sealed partial class ShardRootGrain
                 StandDownIfCeilingFired(scan, walk.CurrentLeafId!.Value);
                 var leaf = walk.CurrentLeaf;
                 LeafChainLink link;
+                // Issue #5460: counted exactly as CountBoundedAsync counts. A
+                // resumed batch counts only keys at or past its resume key, so a
+                // leaf an earlier batch already counted adds nothing when the
+                // resume descent lands on it - as it does while a bulk append's
+                // graft has linked an appended leaf into the chain but not yet
+                // into its parent. Keys in a slot this shard no longer owns are
+                // left to the shard that owns them.
                 if (deep)
                 {
                     var page = await leaf.GetStatsAndNextSiblingAsync();
-                    liveKeys += page.Stats.LiveKeys;
-                    tombstones += page.Stats.Tombstones;
                     link = page.Link;
+                    if (!CountedByAnEarlierBatch(link.KeyRange, resumeFromInclusive))
+                    {
+                        tombstones += page.Stats.Tombstones;
+                        liveKeys += filterMoved
+                            ? CountOwnedKeys(await leaf.GetKeysAsync(resumeFromInclusive, null))
+                            : page.Stats.LiveKeys;
+                    }
+                }
+                else if (filterMoved)
+                {
+                    var (keys, keysLink) = await leaf.GetKeysAndNextSiblingAsync(resumeFromInclusive, null);
+                    liveKeys += CountOwnedKeys(keys);
+                    link = keysLink;
                 }
                 else
                 {
-                    var page = await leaf.CountAndNextSiblingAsync(null, null);
+                    var page = await leaf.CountAndNextSiblingAsync(resumeFromInclusive, null);
                     liveKeys += page.Count;
                     link = page.Link;
                 }

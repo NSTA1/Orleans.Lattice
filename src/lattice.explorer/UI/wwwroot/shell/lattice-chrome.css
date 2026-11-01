@@ -155,6 +155,21 @@
   display: contents;
 }
 
+/* On a head whose endpoint the browser cannot change, the endpoint itself opens
+   the read-only connection details. It truncates before the brand is cut off. */
+.lt-shell-header .lt-btn[data-lt-connection-details] {
+  /* Absorbs nearly all of any shortfall, so the brand keeps its whole name. */
+  flex-shrink: 1000;
+  min-width: 0;
+  padding-inline: var(--lt-space-2);
+}
+
+.lt-shell-header .lt-btn[data-lt-connection-details] .lt-mono-cell__value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .lt-shell-menu-host {
   position: relative;
 }

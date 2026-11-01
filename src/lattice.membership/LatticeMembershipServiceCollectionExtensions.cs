@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Orleans.Hosting;
 
@@ -17,7 +18,9 @@ public static class LatticeMembershipServiceCollectionExtensions
     /// <see cref="ILatticeMembershipDirectory"/> backed by reserved
     /// <c>sys-membership-*</c> trees, the default subject mapper and anonymous
     /// authenticator, and the per-silo resolution cache (wired to the core
-    /// <see cref="IMutationObserver"/> seam for change-feed invalidation). Also
+    /// <see cref="IMutationObserver"/> seam for change-feed invalidation, and kept
+    /// current with membership writes committed on other silos through a
+    /// cluster-wide membership epoch every silo polls about once a second). Also
     /// registers the default no-op <see cref="ILatticeIdentityDirectory"/>
     /// (<see cref="NullIdentityDirectory"/>) so the identity-source seam always
     /// resolves, and ensures the view infrastructure is present so the membership
@@ -105,6 +108,17 @@ public static class LatticeMembershipServiceCollectionExtensions
         // Route the core mutation-observer seam at the same cache singleton so a
         // sys-membership-* write flushes the exact cache the context reads.
         builder.Services.AddSingleton<IMutationObserver>(sp => sp.GetRequiredService<MembershipResolutionCache>());
+
+        // The change feed fires only on the silo that committed a membership
+        // write, so every other silo learns of it through the cluster-wide
+        // membership epoch (#5518): the committing silo advances it (as a mutation
+        // observer) and every silo polls it and flushes its cache when it moves (as
+        // a hosted service). Same instance for both roles.
+        builder.Services.TryAddSingleton<MembershipEpochSynchronizer>();
+        builder.Services.AddSingleton<IMutationObserver>(
+            sp => sp.GetRequiredService<MembershipEpochSynchronizer>());
+        builder.Services.AddSingleton<IHostedService>(
+            sp => sp.GetRequiredService<MembershipEpochSynchronizer>());
 
         // Replace the core anonymous default with the real context. A plain
         // AddSingleton is last-wins for a single-service resolve, so the core

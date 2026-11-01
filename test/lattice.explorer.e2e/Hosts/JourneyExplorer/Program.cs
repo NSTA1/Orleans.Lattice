@@ -103,4 +103,11 @@ app.UseAntiforgery();
 app.MapLatticeExplorer();
 app.MapMethods("/health", ["GET", "HEAD"], () => Results.Ok("healthy")).AllowAnonymous();
 
+// A harness diagnostic, mapped only with the journey seams on: what the head holds after a
+// forced collection, the reading the import's bounded-memory proof takes (#5475).
+if (JourneyHostEnvironment.FaultsEnabled)
+{
+    app.MapJourneyMemoryProbe();
+}
+
 app.Run();
