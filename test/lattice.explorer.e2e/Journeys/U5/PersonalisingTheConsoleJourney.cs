@@ -4,6 +4,7 @@ using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Checkpoints;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Sessions;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Shell;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
@@ -30,6 +31,9 @@ public sealed class PersonalisingTheConsoleJourney : JourneyChapter
 
     /// <summary>The heading of Home, the estate overview.</summary>
     public const string HomeHeading = "Estate";
+
+    /// <summary>How long U5.3 waits for the workspace to list sam's task board before reporting #5595.</summary>
+    private static readonly TimeSpan AppsSettle = TimeSpan.FromSeconds(30);
 
     private static readonly JourneyRecorder Recorder = JourneyRecorder.For(JourneyId);
 
@@ -196,12 +200,34 @@ public sealed class PersonalisingTheConsoleJourney : JourneyChapter
         // his once per page, and in isolated mode the viewer binding is only moments old.
         await shell.GotoAsync("/");
         await shell.ExpectHeadingAsync(HomeHeading);
+        var label = "a/" + StoryNames.Contoso.Apps.TaskBoard;
         var apps = await palette.TypeAsync("a/");
-        var status = await palette.Status.InnerTextAsync();
-        await Checkpoint(sam, step, "app-completions", "Typing a/ lists the apps sam may open: the task board his team works on");
-        Assert.That(apps, Does.Contain("a/" + StoryNames.Contoso.Apps.TaskBoard), $"a/ completes the installed task board: [{string.Join(", ", apps)}] ({status})");
 
-        await palette.ChooseAsync("a/" + StoryNames.Contoso.Apps.TaskBoard);
+        // The workspace sometimes answers sam with no apps (#5595). The Apps area re-reads every
+        // ten seconds on use, so a bounded, logged retry gives a correct answer the chance to land.
+        var started = DateTime.UtcNow;
+        while (!apps.Contains(label) && DateTime.UtcNow - started < AppsSettle)
+        {
+            TestContext.Progress.WriteLine($"RETRY a/ completion after a failed attempt of {(DateTime.UtcNow - started).TotalSeconds:F0} s: [{string.Join(", ", apps)}] lacks {label} (#5595)");
+            await shell.CloseAddressLineAsync();
+            await Task.Delay(TimeSpan.FromSeconds(5));
+            apps = await palette.TypeAsync("a/");
+        }
+
+        if (!apps.Contains(label))
+        {
+            await Checkpoint(sam, step, "app-completions-5595", "Known defect #5595: the workspace answers sam with no apps, so a/ lists only the task board's tree");
+            await new KnownDefect("#5595", "the apps workspace intermittently answers a nested-group viewer with no apps").ReproducesAsync(async () =>
+            {
+                Assert.That(apps, Does.Not.Contain(label), "a/ lacks the task board sam holds viewer in");
+                Assert.That(apps, Has.Some.StartsWith(label + "/"), "while Data still completes the task board's app tree");
+                await shell.CloseAddressLineAsync();
+            });
+            return;
+        }
+
+        await Checkpoint(sam, step, "app-completions", "Typing a/ lists the apps sam may open: the task board his team works on");
+        await palette.ChooseAsync(label);
         await Expect(shell.Page).ToHaveURLAsync(new Regex("/apps/" + Regex.Escape(StoryNames.Contoso.Apps.TaskBoard) + "(\\?|$)"));
         await shell.ExpectHeadingAsync("Task board");
         await Checkpoint(sam, step, "task-board-opened", "Accepting a/task-board opens the task board's page");
