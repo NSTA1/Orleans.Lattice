@@ -34,7 +34,6 @@ public sealed class BackupMaintenanceHoldTests
     [Test]
     public async Task A_rebuild_lists_each_manifest_under_its_hold_and_never_one_removed_while_it_walks()
     {
-        RedProof.Routing = true; // RED-PROOF
         var scope = BackupScopeSelector.WholeTree(Tree);
         await SeedAsync("k1", "v1");
         var kept = await _fixture.CaptureService.CaptureAsync(new LatticeBackupCaptureRequest("kept", scope));
@@ -73,7 +72,6 @@ public sealed class BackupMaintenanceHoldTests
     [Test]
     public async Task A_scrub_keeps_an_orphan_row_a_capture_republished_after_the_scrub_found_it()
     {
-        RedProof.Routing = true; // RED-PROOF
         var scope = BackupScopeSelector.WholeTree(Tree);
         await SeedAsync("k1", "v1");
         var orphan = await _fixture.CaptureService.CaptureAsync(new LatticeBackupCaptureRequest("orphan", scope));

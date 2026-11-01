@@ -32,7 +32,6 @@ internal sealed class BackupPublisher(
     {
         ArgumentNullException.ThrowIfNull(manifest);
         var bare = manifest.Id;
-        if (RedProof.NoClaim) { return (bare, false); } // RED-PROOF
         var qualified = BackupIdentity.ScopeQualifiedFull(scopeKey, ContentHashOf(manifest));
         var qualifiedOwner = await BackupIdOwnership.OwnerScopeKeyAsync(catalog, sink, qualified).ConfigureAwait(false);
         if (string.Equals(qualifiedOwner, scopeKey, StringComparison.Ordinal))
@@ -175,7 +174,7 @@ internal sealed class BackupPublisher(
     private async Task<BackupPublishResult> PublishIncrementAsync(BackupManifest manifest)
     {
         var existing = await catalog.GetAsync(manifest.Id).ConfigureAwait(false);
-        if (!RedProof.InPlaceWithdraw && (existing is not null || await sink.ManifestExistsAsync(manifest.Id).ConfigureAwait(false))) // RED-PROOF
+        if (existing is not null || await sink.ManifestExistsAsync(manifest.Id).ConfigureAwait(false))
         {
             // The id already has a sink manifest: an identical delta on the same
             // base republishes it in place. Its base is checked first, and a base

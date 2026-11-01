@@ -53,7 +53,7 @@ internal sealed class LatticeBackupCatalogRebuildService(
                 // counts and never changes what is stored.
                 var existing = await _catalog.GetAsync(manifest.Id, cancellationToken).ConfigureAwait(false);
                 // A manifest removed from the sink since the walk read it is not listed.
-                var listed = await (RedProof.Routing ? new DirectBackupPublicationGate(new BackupPublisher(_catalog, _sink)) : _publicationGate).RegisterRebuiltAsync(manifest, cancellationToken).ConfigureAwait(false);
+                var listed = await _publicationGate.RegisterRebuiltAsync(manifest, cancellationToken).ConfigureAwait(false);
                 if (listed && existing is null)
                 {
                     registered++;

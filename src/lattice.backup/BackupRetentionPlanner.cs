@@ -218,7 +218,6 @@ internal static class BackupRetentionPlanner
     public static DateTimeOffset RankTime(BackupManifest manifest)
     {
         ArgumentNullException.ThrowIfNull(manifest);
-        if (RedProof.NoRankRefresh) { return manifest.CreatedAtUtc; } // RED-PROOF
         return manifest.LastCapturedAtUtc is { } last && last > manifest.CreatedAtUtc
             ? last
             : manifest.CreatedAtUtc;

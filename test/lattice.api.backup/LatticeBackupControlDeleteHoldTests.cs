@@ -29,7 +29,6 @@ public sealed class LatticeBackupControlDeleteHoldTests
     [Test]
     public async Task DeleteBackupAsync_removes_the_backup_under_its_per_id_hold()
     {
-        RedProof.Routing = true; // RED-PROOF
         await _fixture.GrainFactory.GetGrain<ILattice>("orders").SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
         var captured = await _fixture.SiloServices.GetRequiredService<ILatticeBackupCaptureService>()
             .CaptureAsync(new LatticeBackupCaptureRequest("delete-me", BackupScopeSelector.WholeTree("orders")));

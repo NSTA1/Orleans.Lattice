@@ -79,7 +79,7 @@ internal sealed class LatticeBackupCatalogScrubService(
                 long visited = 0;
                 foreach (var orphan in orphans)
                 {
-                    if (await (RedProof.Routing ? new DirectBackupPublicationGate(new BackupPublisher(_catalog, _sink)) : _publicationGate).RetireAsync(orphan, BackupRetireKind.OrphanRow, cancellationToken)
+                    if (await _publicationGate.RetireAsync(orphan, BackupRetireKind.OrphanRow, cancellationToken)
                             .ConfigureAwait(false))
                     {
                         removed++;

@@ -272,7 +272,6 @@ public sealed class LatticeBackupCaptureIntegrationTests
     [Test]
     public async Task CaptureAsync_content_addresses_the_backup_id()
     {
-        RedProof.PerCaptureIds = true; // RED-PROOF
         await _fixture.InitializeAsync();
         var tree = _fixture.GrainFactory.GetGrain<ILattice>(Tree);
         await tree.SetAsync("k1", Bytes("v1"));

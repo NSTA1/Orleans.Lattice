@@ -546,7 +546,7 @@ internal sealed partial class BackupSchedulerGrain(
         var doomed = new List<BackupManifest>();
         foreach (var manifest in BackupRetentionPlanner.Doomed(manifests, keep))
         {
-            if (!RedProof.BypassHolds && IsHeld(manifest.Id)) // RED-PROOF
+            if (IsHeld(manifest.Id))
             {
                 held.Add(manifest.Id);
             }

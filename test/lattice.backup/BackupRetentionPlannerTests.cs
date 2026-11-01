@@ -42,7 +42,6 @@ public sealed class BackupRetentionPlannerTests
     [Test]
     public void A_republished_backup_ranks_by_its_latest_capture()
     {
-        RedProof.NoRankRefresh = true; // RED-PROOF
         // Republished one day ago, first captured thirty days ago: keep-last-one
         // keeps it over a backup created two days ago, and a three-day max-age
         // keeps it too.

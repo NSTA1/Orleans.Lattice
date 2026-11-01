@@ -30,7 +30,6 @@ public sealed class BackupRepublishHoldTests
     [Test]
     public async Task A_pass_never_dooms_a_backup_a_capture_is_republishing()
     {
-        RedProof.BypassHolds = true; // RED-PROOF
         // The republish has written its sink manifest and not yet registered its
         // row when a pass lists the old, expired row. Were the id not held, the
         // pass would remove the row, delete the manifest the republish had just
@@ -63,7 +62,6 @@ public sealed class BackupRepublishHoldTests
     [Test]
     public async Task A_republish_that_meets_a_pass_retiring_its_id_waits_beyond_one_call_and_then_publishes()
     {
-        RedProof.NoRetry = true; // RED-PROOF
         // The pass is held deleting the doomed backup's artifact for longer than
         // one publish call may wait, as on a slow sink. The republish of that id
         // must be refused busy, retried by the publication gate, and published
@@ -102,7 +100,6 @@ public sealed class BackupRepublishHoldTests
     [Test]
     public async Task A_pass_never_dooms_a_set_member_awaiting_its_stamp()
     {
-        RedProof.BypassHolds = true; // RED-PROOF
         // The set's orders member republishes an expired plain backup: its sink
         // manifest is rewritten and its row waits for the set's membership stamp.
         // A pass in between lists the old, expired row; the member is held, so the
@@ -137,7 +134,6 @@ public sealed class BackupRepublishHoldTests
     [Test]
     public async Task A_republish_refreshes_the_ranking_so_retention_keeps_the_backup_a_capture_just_returned()
     {
-        RedProof.NoRankRefresh = true; // RED-PROOF
         // As 10.2.0 shipped it, a republish kept the backup's first capture time,
         // which is all retention ranked by: a max-age pass right after a capture
         // of an unchanged tree pruned the very backup the capture had returned.
@@ -161,7 +157,6 @@ public sealed class BackupRepublishHoldTests
     [Test]
     public async Task An_identical_increment_whose_base_row_is_gone_falls_back_without_withdrawing_the_published_one()
     {
-        RedProof.InPlaceWithdraw = true; // RED-PROOF
         // An increment is published; then its base's row is removed, as a pass
         // that crashed after removing it would leave it. A second, identical
         // increment re-derives the published one's id and must abandon - its base's

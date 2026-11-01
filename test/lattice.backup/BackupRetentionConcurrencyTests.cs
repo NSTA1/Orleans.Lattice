@@ -59,7 +59,6 @@ public sealed class BackupRetentionConcurrencyTests
     [Test]
     public async Task A_pass_before_the_increment_wrote_its_manifest_makes_the_increment_fall_back_to_a_full_backup()
     {
-        RedProof.Routing = true; // RED-PROOF
         var (scope, baseId) = await DeployWithBaseAsync(recordGate: true);
         string? newerFull = null;
         string? incrementId = null;
@@ -96,7 +95,6 @@ public sealed class BackupRetentionConcurrencyTests
     [Test]
     public async Task A_full_capture_of_an_unchanged_tree_during_a_pass_waits_for_the_pass_and_republishes_the_backup()
     {
-        RedProof.BypassHolds = true; // RED-PROOF
         // Issue #5418. A pass lists an expired full backup and removes its row;
         // at the pass's sink scan, a full capture of the unchanged tree starts. A
         // backup id is a content address, so the capture re-derives the expired
@@ -154,7 +152,6 @@ public sealed class BackupRetentionConcurrencyTests
     [Test]
     public async Task A_pass_during_a_set_capture_does_not_leave_a_member_listed_over_a_deleted_artifact()
     {
-        RedProof.Routing = true; // RED-PROOF
         // Issue #5449. A multi-tree set captures its orders member, and before the
         // items member is written a newer orders backup is captured and a pass runs,
         // which under keep-last-one dooms every older orders backup. Were the member
@@ -209,7 +206,6 @@ public sealed class BackupRetentionConcurrencyTests
     [Test]
     public async Task A_set_that_fails_after_a_member_was_captured_lists_that_member_unstamped()
     {
-        RedProof.Routing = true; // RED-PROOF
         // Issue #5449. A multi-tree set member's catalog row waits for the set's
         // membership stamp. When the set fails before the stamp - here the items
         // member's manifest write throws, after the orders member was captured -

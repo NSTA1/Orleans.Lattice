@@ -144,7 +144,6 @@ internal sealed partial class BackupSchedulerGrain
 
     private async Task<bool> TryHoldAsync(string backupId, bool publishing)
     {
-        if (RedProof.BypassHolds) { return true; } // RED-PROOF
         var wait = HoldWait;
         var started = DateTimeOffset.UtcNow;
         while (_publishing.Contains(backupId) || _retiring.Contains(backupId))

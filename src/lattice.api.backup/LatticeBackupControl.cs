@@ -349,7 +349,7 @@ internal sealed partial class LatticeBackupControl : ILatticeBackupControl, ILat
         // The row, the sink manifest and this backup's unshared artifacts are
         // removed under the id's hold, from the row as it stands then (a capture
         // may have republished the id since it was read here).
-        if (!await (RedProof.Routing ? new DirectBackupPublicationGate(new BackupPublisher(_catalog, _sink)) : _publicationGate).RetireAsync(manifest, BackupRetireKind.Delete, cancellationToken).ConfigureAwait(false)) // RED-PROOF
+        if (!await _publicationGate.RetireAsync(manifest, BackupRetireKind.Delete, cancellationToken).ConfigureAwait(false))
         {
             return false;
         }

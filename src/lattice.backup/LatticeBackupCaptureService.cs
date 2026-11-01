@@ -44,8 +44,6 @@ internal sealed class LatticeBackupCaptureService(
     private readonly IBackupPublicationGate _publicationGate =
         publicationGate ?? new DirectBackupPublicationGate(new BackupPublisher(catalog, sink));
 
-    private IBackupPublicationGate PublicationGate => RedProof.Routing ? new DirectBackupPublicationGate(new BackupPublisher(catalog, sink)) : _publicationGate; // RED-PROOF
-
     // The id of the cluster hosting this capture engine: the vantage point that
     // authors every capture and owns the WAL cursor lineage. Stamped onto every
     // manifest (full and incremental) so a chain is bound to its capturing
@@ -408,7 +406,7 @@ internal sealed class LatticeBackupCaptureService(
             // base was read once, before the drain, and a pass may have begun to
             // prune it since, in which case the increment is abandoned and nothing
             // of it stays published (BackupPublisher).
-            var published = await PublicationGate.PublishIncrementAsync(manifest, cancellationToken)
+            var published = await _publicationGate.PublishIncrementAsync(manifest, cancellationToken)
                 .ConfigureAwait(false);
             if (published is not null)
             {
@@ -520,7 +518,7 @@ internal sealed class LatticeBackupCaptureService(
     {
         while (unregistered.Count > 0)
         {
-            await PublicationGate.RegisterAsync(unregistered[0].Manifest, cancellationToken).ConfigureAwait(false);
+            await _publicationGate.RegisterAsync(unregistered[0].Manifest, cancellationToken).ConfigureAwait(false);
             unregistered.RemoveAt(0);
         }
     }
@@ -920,7 +918,7 @@ internal sealed class LatticeBackupCaptureService(
         foreach (var member in members)
         {
             var manifest = member.Manifest with { SetId = setId, SetName = setManifest.Name, SetCreatedAtUtc = setManifest.CreatedAtUtc };
-            manifest = await PublicationGate.RegisterAsync(manifest, cancellationToken).ConfigureAwait(false);
+            manifest = await _publicationGate.RegisterAsync(manifest, cancellationToken).ConfigureAwait(false);
             unregistered.Remove(member);
             stamped.Add(new LatticeBackupCaptureResult(member.BackupId, manifest));
         }
@@ -1091,7 +1089,7 @@ internal sealed class LatticeBackupCaptureService(
                 // republish never interleaves with a retention pass, a delete or
                 // another publish of the same id (issue #5418).
                 phase = register ? LatticeBackupMetrics.PhaseManifestCommit : LatticeBackupMetrics.PhaseSinkWrite;
-                manifest = await PublicationGate.PublishFullAsync(manifest, register, cancellationToken)
+                manifest = await _publicationGate.PublishFullAsync(manifest, register, cancellationToken)
                     .ConfigureAwait(false);
                 backupId = manifest.Id;
 

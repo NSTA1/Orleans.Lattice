@@ -33,7 +33,6 @@ internal static class BackupIdentity
     public static string Full(string contentHash)
     {
         ArgumentException.ThrowIfNullOrEmpty(contentHash);
-        if (RedProof.PerCaptureIds) { return BackupContentHash.Compute(System.Text.Encoding.UTF8.GetBytes(contentHash + Guid.NewGuid().ToString("N"))); } // RED-PROOF
         return contentHash;
     }
 
@@ -50,7 +49,6 @@ internal static class BackupIdentity
         ArgumentException.ThrowIfNullOrEmpty(baseBackupId);
         ArgumentException.ThrowIfNullOrEmpty(contentHash);
         var separator = (char)BackupConstants.KeySeparator;
-        if (RedProof.PerCaptureIds) { contentHash += Guid.NewGuid().ToString("N"); } // RED-PROOF
         return BackupContentHash.Compute(
             System.Text.Encoding.UTF8.GetBytes($"{baseBackupId}{separator}{contentHash}"));
     }

@@ -124,7 +124,6 @@ public sealed class CapturingClusterStampTests
     [Test]
     public async Task CaptureAsync_identical_content_republishes_the_same_backup()
     {
-        RedProof.PerCaptureIds = true; // RED-PROOF
         await _fixture.InitializeAsync();
         var tree = _fixture.GrainFactory.GetGrain<ILattice>(Tree);
         await tree.SetAsync("k1", Bytes("v1"));

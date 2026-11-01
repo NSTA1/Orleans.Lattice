@@ -50,7 +50,6 @@ public sealed class BackupManifestRegistrationTests
     [Test]
     public void Reconcile_records_the_latest_capture_for_retention_to_rank_by()
     {
-        RedProof.NoRankRefresh = true; // RED-PROOF
         var firstSeen = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
         var existing = Manifest("cafef00d", firstSeen);
         var recaptured = Manifest("cafef00d", firstSeen.AddDays(3));

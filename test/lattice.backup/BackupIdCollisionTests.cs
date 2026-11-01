@@ -34,7 +34,6 @@ public sealed class BackupIdCollisionTests
     [Test]
     public async Task Identical_content_in_two_scopes_lists_one_backup_in_each_scope()
     {
-        RedProof.NoClaim = true; // RED-PROOF
         // Two empty scopes - a prefix nothing is written under, on each of two
         // trees - capture the same, empty, payload.
         await _fixture.GrainFactory.GetGrain<ILattice>(TreeA).SetAsync("k1", Encoding.UTF8.GetBytes("v1"));

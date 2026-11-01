@@ -16,7 +16,6 @@ public sealed class BackupIdentityTests
     [Test]
     public void A_full_backup_id_is_the_10_2_0_payload_hash()
     {
-        RedProof.PerCaptureIds = true; // RED-PROOF
         // The golden vector pins the 10.2.0 derivation: the id is the lowercase-hex
         // SHA-256 of the captured payload, and nothing else.
         Assert.Multiple(() =>
@@ -29,7 +28,6 @@ public sealed class BackupIdentityTests
     [Test]
     public void An_increment_id_is_the_10_2_0_hash_of_its_base_and_payload_hash()
     {
-        RedProof.PerCaptureIds = true; // RED-PROOF
         // SHA-256 of "<base id>\u001f<payload hash>", as 10.2.0's incremental
         // collector derived it.
         Assert.That(
@@ -40,7 +38,6 @@ public sealed class BackupIdentityTests
     [Test]
     public void Identical_content_re_derives_the_same_id()
     {
-        RedProof.PerCaptureIds = true; // RED-PROOF
         Assert.Multiple(() =>
         {
             Assert.That(BackupIdentity.Full(AbcPayloadHash), Is.EqualTo(BackupIdentity.Full(AbcPayloadHash)));

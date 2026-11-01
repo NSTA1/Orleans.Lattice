@@ -80,7 +80,6 @@ internal sealed class SchedulerBackupPublicationGate(
                 return result;
             }
 
-            if (RedProof.NoRetry) { throw new TimeoutException("RED-PROOF: no retry"); } // RED-PROOF
             if (DateTimeOffset.UtcNow >= deadline)
             {
                 throw new TimeoutException(

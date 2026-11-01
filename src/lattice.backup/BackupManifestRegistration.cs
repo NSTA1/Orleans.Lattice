@@ -52,7 +52,6 @@ internal static class BackupManifestRegistration
             return incoming;
         }
 
-        if (RedProof.NoRankRefresh) { return incoming with { CreatedAtUtc = existing.CreatedAtUtc, LastCapturedAtUtc = existing.LastCapturedAtUtc }; } // RED-PROOF
         var existingRank = BackupRetentionPlanner.RankTime(existing);
         var incomingRank = BackupRetentionPlanner.RankTime(incoming);
         var latest = existingRank >= incomingRank ? existingRank : incomingRank;
