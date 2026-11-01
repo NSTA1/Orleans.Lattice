@@ -86,7 +86,7 @@ public sealed partial class TlcCiShardTests
         var expectedCounts = new Dictionary<string, int>(StringComparer.Ordinal)
         {
             [TlcCiShard.Scheduling] = 106,
-            [SchedulingWorkloadBCategory] = 86,
+            [SchedulingWorkloadBCategory] = 89,
             [ReplayTwoPartitionsCategory] = 1,
             [ShippingCategory] = 27,
             [ShippingVariantsCategory] = 1,
@@ -94,7 +94,7 @@ public sealed partial class TlcCiShardTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(cases, Has.Length.EqualTo(221), "ten-module source boundary; not an eleven-module census");
+            Assert.That(cases, Has.Length.EqualTo(224), "ten-module source boundary; not an eleven-module census");
             Assert.That(counts, Is.EquivalentTo(expectedCounts));
             foreach (var data in cases)
                 Assert.That(Categories(data), Has.Exactly(1).Items, string.Join(", ", data.Arguments));

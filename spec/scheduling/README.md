@@ -415,7 +415,7 @@ production units, paired counterexamples and cooperative Coyote boundary.
 
 All scheduling-directory bases, variants and mutations route before the broad
 Wal prefix to five deterministic-only shards, partitioning the ten-module
-population 106/86/1/27/1 (221 cases): TlcShardScheduling holds ReplayPermits
+population 106/89/1/27/1 (224 cases): TlcShardScheduling holds ReplayPermits
 base/PartialPrefix and WalBackPressure, MaterialiserDrain, WalAdmission,
 WalGcStarvationDriveWitness and TurnOccupancy; TlcShardSchedulingWorkloadB holds
 ReplayPermits mutations plus WalGcStarvationDrive, SagaReadProgress and
