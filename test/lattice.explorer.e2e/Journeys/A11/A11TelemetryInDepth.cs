@@ -273,7 +273,11 @@ public sealed class A11TelemetryInDepth : JourneyChapter
         await Expect(readout).ToHaveAttributeAsync("aria-live", "polite");
         await Expect(_telemetry.Plot(WriteChart)).ToHaveAttributeAsync("aria-describedby", (await readout.GetAttributeAsync("id"))!);
 
+        // Tabbing scrolls the page; a mouse left where the Charts click put it could end up over
+        // the plot, whose hover selects a point. Park it at the left edge, over the sidebar.
+        await _olivia.Page.Mouse.MoveAsync(0, 0);
         await _telemetry.TabToPlotAsync(WriteChart);
+        await _olivia.Page.Mouse.MoveAsync(0, 0);
         await Expect(readout).ToHaveTextAsync(TelemetryBoardPage.ReadoutHint);
         await ShotAsync("focused", "Tab reaches the Write operations chart; its readout says how to read it");
 
