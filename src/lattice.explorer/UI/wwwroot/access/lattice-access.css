@@ -166,6 +166,12 @@
   gap: var(--lt-space-1) var(--lt-space-4);
 }
 
+/* Each operation row is at least 24px tall, so the 16px checkboxes sit at least
+   24px apart and meet the WCAG 2.2 target-size spacing exception. */
+.lt-access-fieldset__options .lt-check {
+  min-block-size: 1.5rem;
+}
+
 .lt-access-form__error {
   margin: 0;
   color: var(--lt-ink);

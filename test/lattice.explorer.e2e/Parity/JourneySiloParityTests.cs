@@ -59,6 +59,7 @@ public sealed class JourneySiloParityTests
         ("AddLatticeSchemaEnforcement(options => options.StrictIngest = true)", "dead-letter feature coverage (#5389)"),
         ("AddLatticeWalStorageProvider(JourneyHostEnvironment.SecondaryWalProviderKey", "a WAL move target for the Cluster area's WAL tools (A8, A12)"),
         ("JourneyDelayedComplianceAdmin.Register(silo.Services)", "a test-only, fault-gated, bounded hold on a named tree's compliance scan (/e2e/compliance-delay), so a journey can stop a running scan (U2) or lose the silo running one (C2)"),
+        ("options.AccessAdministrationDelegationEnabled = true", "delegated access administration for the server-authority journey A9 (#5373)"),
     ];
 
     /// <summary>

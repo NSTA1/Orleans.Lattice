@@ -156,7 +156,7 @@ else
                     </LtColumn>
                     <LtColumn TItem="AppSummary" Title="Version" Mono="true" Value="app => app.Version" />
                     <LtColumn TItem="AppSummary" Title="State">
-                        <LtStatusPill State="@AppsPresentation.LifecycleState(context.State, context.Version).Role" Text="@AppsPresentation.LifecycleState(context.State, context.Version).Text" />
+                        <LtStatusPill State="@AppsPresentation.LifecycleState(context.State, context.Version, context.PendingState).Role" Text="@AppsPresentation.LifecycleState(context.State, context.Version, context.PendingState).Text" />
                     </LtColumn>
                     <LtColumn TItem="AppSummary" Title="Actions">
                         <span class="lt-apps-actions lt-apps-actions--row">@InstalledActions(context)</span>
@@ -165,7 +165,7 @@ else
                 <CompactRow>
                     <LtCompactRow>
                         <Primary>@InstalledName(context)</Primary>
-                        <Secondary>v@(context.Version) - @AppsPresentation.LifecycleState(context.State, context.Version).Text</Secondary>
+                        <Secondary>v@(context.Version) - @AppsPresentation.LifecycleState(context.State, context.Version, context.PendingState).Text</Secondary>
                     </LtCompactRow>
                 </CompactRow>
                 <DetailActions>@InstalledActions(context)</DetailActions>
