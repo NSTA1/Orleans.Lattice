@@ -68,6 +68,22 @@ internal static class JourneyFaultEndpoints
             }
         });
 
+        // Holds (or releases) this silo's backup artifact writes, as a congested backup
+        // account would, so a capture a journey starts is still running when it cancels it.
+        app.MapPost(Prefix + "/backup-writes", (bool held, int? seconds, JourneyBackupWriteHold hold) =>
+        {
+            if (held)
+            {
+                hold.Hold(TimeSpan.FromSeconds(Math.Clamp(seconds ?? 300, 1, 900)));
+            }
+            else
+            {
+                hold.Release();
+            }
+
+            return Results.Ok(new { held = hold.IsHeld });
+        });
+
         // A12: hold, or release, the writes a WAL move makes to its target (the secondary
         // provider) for one tree, on this silo. The harness calls every silo of the region.
         app.MapPost(Prefix + "/wal-target", async (string tree, bool hold, IGrainFactory grains) =>

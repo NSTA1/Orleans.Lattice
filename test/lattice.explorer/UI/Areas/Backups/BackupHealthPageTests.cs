@@ -89,6 +89,21 @@ public sealed class BackupHealthPageTests : BackupsTestContext
     }
 
     [Test]
+    public void The_way_back_to_every_backups_health_is_a_full_size_target()
+    {
+        Backups.HealthAvailable = () => Task.FromResult(true);
+        Seed(FakeBackupControl.Manifest("b1", "nightly"));
+
+        var cut = RenderAt<BackupHealthPage>("backups/health?backup=b1");
+
+        // A link alone on its line is a target in its own right (WCAG 2.5.8 target size), so it
+        // carries the modifier that gives it a control's height.
+        cut.WaitUntil(() => Assert.That(
+            cut.FindAll("a").Single(a => a.TextContent == "All backups' health").ClassList,
+            Does.Contain("lt-backups-link--standalone")));
+    }
+
+    [Test]
     public void Check_now_starts_a_cluster_check_followed_with_real_progress_until_the_fresh_report_shows()
     {
         Backups.HealthAvailable = () => Task.FromResult(true);

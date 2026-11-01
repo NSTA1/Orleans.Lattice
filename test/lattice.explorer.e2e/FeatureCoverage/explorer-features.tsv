@@ -297,7 +297,7 @@ use-case:backups/restore-replicates	use-case	docs/lattice.explorer/managing-back
 use-case:backups/schedule-cancel	use-case	docs/lattice.explorer/managing-backups.md#schedules	Cancel a schedule	C3
 use-case:backups/schedule-fires	use-case	docs/lattice.explorer/managing-backups.md#schedules	Add an hourly schedule and see it fire	A6
 use-case:backups/schedule-incremental	use-case	docs/lattice.explorer/managing-backups.md#schedules	Add an incremental schedule	A10
-use-case:backups/server-authority	use-case	docs/lattice.explorer/managing-backups.md#server-authority	The server refuses a backup operation the caller may not run	U4
+use-case:backups/server-authority	use-case	docs/lattice.explorer/managing-backups.md#server-authority	The server refuses a backup operation the caller may not run	A6
 use-case:cluster/alias	use-case	docs/lattice.explorer/areas.md#cluster	Set an alias from Lifecycle	A3
 use-case:cluster/alias-name	use-case	docs/lattice.explorer/areas.md#cluster	Add name... gives a tree another name from Lifecycle, and the alias reaches it in Data	A3
 use-case:cluster/bulk-load	use-case	docs/lattice.explorer/areas.md#cluster	Pasted bulk load: compose, review, start over, and resume after a dropped append	A3
