@@ -8,7 +8,7 @@
 *@
 @if (Installed is { } installed)
 {
-    var (role, text) = AppsPresentation.LifecycleState(_state ?? installed.State, installed.Version, _state is null ? _observed : null);
+    var (role, text) = AppsPresentation.LifecycleState(_state ?? installed.State, installed.Version, _pending is { } running ? Target(running) : _state is null ? _observed : null);
     var name = AppsPresentation.DisplayName(installed.Presentation ?? Flow!.Descriptor?.Presentation, installed.Slug);
 
     <section class="lt-apps-section" aria-labelledby="lt-apps-lifecycle">

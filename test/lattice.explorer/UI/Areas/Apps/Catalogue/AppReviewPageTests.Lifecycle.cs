@@ -149,6 +149,35 @@ public sealed partial class AppReviewPageTests
         Assert.That(cut.FindAll("[data-lt-app-lifecycle-pending]"), Is.Empty);
     }
 
+    [TestCase("Uninstall", AppLifecycleState.Disabled, "uninstall", "Uninstalling...", "Disabled")]
+    [TestCase("Disable", AppLifecycleState.Enabled, "disable", "Disabling...", "Enabled")]
+    [TestCase("Enable", AppLifecycleState.Disabled, "enable", "Enabling...", "Disabled")]
+    public void A_change_this_page_started_badges_the_state_pill_while_it_runs(string button, AppLifecycleState prior, string verb, string pill, string stale)
+    {
+        // Issue #5482: the pill read the state before the run while the status line said the change was running.
+        Control.Pending.Add(verb);
+        var cut = RenderInstalled(prior);
+
+        Button(cut, button).Click();
+        if (verb == "uninstall")
+        {
+            cut.Find("[role=alertdialog] input").Input("task-board");
+            cut.Find("[role=alertdialog] form").Submit();
+        }
+        else
+        {
+            cut.Find("[role=dialog]").QuerySelectorAll("button").Single(candidate => candidate.TextContent.Trim() == button).Click();
+        }
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll($"[data-lt-app-lifecycle-pending={verb}]"), Has.Count.EqualTo(1)));
+        var pillText = cut.Find("section[aria-labelledby=lt-apps-lifecycle] > p").TextContent.Trim();
+        Assert.Multiple(() =>
+        {
+            Assert.That(pillText, Is.EqualTo(pill), "the pill shows the change running");
+            Assert.That(cut.Find("section[aria-labelledby=lt-apps-lifecycle]").TextContent, Does.Not.Contain(stale), "never the state before the run");
+        });
+    }
+
     [Test]
     public void A_page_loaded_while_an_uninstall_runs_badges_it_offers_no_actions_and_follows_it_to_its_end()
     {
