@@ -20,7 +20,9 @@ namespace Orleans.Lattice.Explorer.UI.Design.Components;
 /// <para>
 /// In <see cref="LtComboBoxMode.PickExisting"/> only a listed value is accepted:
 /// leaving the field, or <see cref="ConfirmAsync"/> at submit, refuses a typed value
-/// that matches nothing with an inline error. In <see cref="LtComboBoxMode.Suggest"/>
+/// that matches nothing with an inline error, unless the page gives a
+/// <see cref="MissingMessage"/>, when it is accepted and flagged as not existing yet.
+/// In <see cref="LtComboBoxMode.Suggest"/>
 /// any text is accepted and a typed value that already exists is flagged. When the
 /// source cannot list its values, or fails, the field says why and accepts what is
 /// typed: a missing source never blocks the form.
@@ -129,6 +131,17 @@ public partial class LtComboBox : IAsyncDisposable
     /// </summary>
     [Parameter]
     public bool RejectExisting { get; set; }
+
+    /// <summary>
+    /// In <see cref="LtComboBoxMode.PickExisting"/>, the sentence for a typed value that
+    /// names nothing listed, given that value. When set, such a value is accepted and
+    /// flagged with it rather than refused: for a field that may name something that
+    /// does not exist yet, such as the tree a new access rule governs before the tree
+    /// is created. Listed values are still offered first, and nothing is flagged for one.
+    /// Leave <see langword="null"/> to refuse a value that names nothing.
+    /// </summary>
+    [Parameter]
+    public Func<string, string>? MissingMessage { get; set; }
 
     /// <summary>The most suggestions shown at once.</summary>
     [Parameter]
@@ -636,6 +649,12 @@ public partial class LtComboBox : IAsyncDisposable
         {
             if (!found)
             {
+                if (MissingMessage is { } missing)
+                {
+                    _flag = missing(text);
+                    return true;
+                }
+
                 _matchError = NoMatchMessage(text);
             }
 

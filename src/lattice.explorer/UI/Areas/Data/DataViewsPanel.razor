@@ -59,7 +59,7 @@
                  DetailTitle="@(view => view.DisplayName)">
             <ChildContent>
                 <LtColumn TItem="DataTreeEntry" Context="view" Title="View" RowHeader="true" Mono="true">
-                    <a href="@Workspace.Href(view.Address)">@view.DisplayName</a>
+                    <a class="lt-data-key" href="@Workspace.Href(view.Address)">@view.DisplayName</a>
                 </LtColumn>
                 <LtColumn TItem="DataTreeEntry" Title="Kind" Value="@(view => view.KindText)" />
                 <LtColumn TItem="DataTreeEntry" Title="Projection" Mono="true" Value="@(view => view.ProjectionVersion)" />

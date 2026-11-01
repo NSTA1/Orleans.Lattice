@@ -603,10 +603,21 @@ internal sealed partial class BPlusLeafGrain
             // And the declination is temporary - consolidation lifts the seal
             // through UnmarkSlotsMovedAwayAsync, after which this leaf folds
             // again. See HasWidenBlockingState.
-            if (HasWidenBlockingState()) return LeafUnlinkOutcome.DeclinedWidenSealed;
+            //
+            // ONLY WHEN THIS CALL ACTUALLY WIDENS. The hazard is the widen, not
+            // the unlink: an orphaned-leaf unsplice passes this leaf's own high
+            // bound as the absorb, which provably changes no bound, so a sealed
+            // predecessor stays the owner of exactly the range it already
+            // declared. Declining that unsplice refused every orphan behind any
+            // leaf a reshard had ever sealed, while the dry-run audit, which never
+            // reaches this method, reported the same leaf repairable (#5550).
+            var prevHigh = state.State.HighKeyExclusive;
+            var widens = prevHigh is not null
+                && (absorbHighKeyExclusive is null
+                    || string.CompareOrdinal(absorbHighKeyExclusive, prevHigh) > 0);
+            if (widens && HasWidenBlockingState()) return LeafUnlinkOutcome.DeclinedWidenSealed;
 
             var prevNext = state.State.NextSibling;
-            var prevHigh = state.State.HighKeyExclusive;
             var prevSplitKey = state.State.SplitKey;
             var prevSplitSiblingId = state.State.SplitSiblingId;
             var prevPendingSuccessorId = state.State.PendingReclaimSuccessorId;
@@ -622,9 +633,7 @@ internal sealed partial class BPlusLeafGrain
             // that the WAL materialiser filters by, so a write landing in that
             // window survives in cache and vanishes on the next projection
             // rebuild. One write, no window.
-            if (prevHigh is not null
-                && (absorbHighKeyExclusive is null
-                    || string.CompareOrdinal(absorbHighKeyExclusive, prevHigh) > 0))
+            if (widens)
             {
                 state.State.HighKeyExclusive = absorbHighKeyExclusive;
 

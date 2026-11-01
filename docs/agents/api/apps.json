@@ -380,6 +380,11 @@
           "name": "ManifestDigest",
           "type": "string?",
           "required": false
+        },
+        {
+          "name": "PendingState",
+          "type": "AppLifecycleState?",
+          "required": false
         }
       ],
       "source": "src/lattice.api.abstractions/Apps/Model/AppDescriptor.cs#AppDescriptor"
@@ -508,6 +513,11 @@
         },
         {
           "name": "Changed",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "Pending",
           "type": "bool",
           "required": false
         }
@@ -854,6 +864,11 @@
           "name": "Provenance",
           "type": "AppProvenanceDescriptor",
           "required": true
+        },
+        {
+          "name": "PendingState",
+          "type": "AppLifecycleState?",
+          "required": false
         }
       ],
       "source": "src/lattice.api.abstractions/Apps/Model/AppSummary.cs#AppSummary"
