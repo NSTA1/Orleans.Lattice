@@ -276,7 +276,8 @@ internal sealed class BackupsAreaPage(PersonaSession session)
     {
         await OpenSchedulesOfAsync(tree);
         var full = ScheduleRow("Full");
-        var refused = Content.GetByRole(AriaRole.Alert);
+        var refused = Content.GetByRole(AriaRole.Alert)
+            .Or(Content.GetByText("You may not read this tree's backup status.", new() { Exact = true }));
         var started = DateTimeOffset.UtcNow;
         while (true)
         {
