@@ -788,7 +788,8 @@ This index lists every effectively public type and each member declared directly
 - `Orleans.Lattice.Explorer.UI.Design.Components.LtCompactRow`
   - `constructors (1)`; `Mono`; `Primary`; `Secondary`; `State`
 - `Orleans.Lattice.Explorer.UI.Design.Components.LtConfirmDestructive`
-  - `constructors (1)`; `ChildContent`; `ConfirmText`; `ObjectKind`; `ObjectName`; `OnConfirm`; `Open`; `OpenChanged`; `ReturnFocus`; `Title`
+  - `constructors (1)`; `ChildContent`; `ConfirmText`; `DefaultPendingText`; `ObjectKind`; `ObjectName`; `OnConfirm`; `Open`; `OpenChanged`
+    `PendingText`; `ReturnFocus`; `Title`
 - `Orleans.Lattice.Explorer.UI.Design.Components.LtDateTimeInput`
   - `constructors (1)`; `AllowFuture`; `ConfirmAsync`; `Disabled`; `DisposeAsync`; `EmptyText`; `Error`; `FocusAsync`; `Hint`; `InputId`; `Label`
     `Max`; `Min`; `QuickPicks`; `Value`; `ValueChanged`
