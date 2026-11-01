@@ -36,7 +36,7 @@ PERTURBS: ClaimWrite, ClaimRaise, OwnAlloc
     /\ inflight' = inflight \cup {next}
     /\ staleAccepted' = (staleAccepted \/ epoch[a] < maxClaimed \/ epoch[a] <= retired)
     /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
-    /\ UNCHANGED <<lastU, oldUsed, durable, acked, floor, leafVars, epochVars, handVars, gateVars,
+    /\ UNCHANGED <<walkVars, lastU, oldUsed, durable, acked, floor, leafVars, epochVars, handVars, gateVars,
                    viewVars, envVars, oldRejected, wghosts>>
 --- REPLACE
     /\ epoch[a] >= memFence
@@ -50,7 +50,7 @@ PERTURBS: ClaimWrite, ClaimRaise, OwnAlloc
 \* MUTATION: the first append raises the entry instead.
     /\ fence' = Max2(fence, epoch[a])
     /\ memFence' = Max2(memFence, epoch[a])
-    /\ UNCHANGED <<lastU, oldUsed, durable, acked, floor, leafVars, rowEpoch, seen, epoch, cstage,
+    /\ UNCHANGED <<walkVars, lastU, oldUsed, durable, acked, floor, leafVars, rowEpoch, seen, epoch, cstage,
                    claimHead, retired, maxClaimed, handVars, gateVars, viewVars, envVars,
                    oldRejected, wghosts>>
 --- END

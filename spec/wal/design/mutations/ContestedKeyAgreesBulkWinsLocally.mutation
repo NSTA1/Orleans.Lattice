@@ -1,0 +1,17 @@
+# The bulk value wins locally: the owner ranks the bulk entry it was born with
+# above the point writes made before the switch, as 10.2.0's origin does while
+# the pre-existing row is stranded (or as dropping the superseded row would).
+# Every WAL reader applies those writes at their real versions, so the origin
+# and its replicas disagree on the key for good.
+MODULE: ContestedKeyAgreesBulkWinsLocally
+TARGET: ContestedKeyAgrees
+CLASS: Invariant
+SUMMARY: the owner resolves a contested key to the bulk value over a point write made before the switch
+PERTURBS: Create
+
+--- FIND
+OwnerRank(a) == LwwRank({o \in cache[a] : o <= rp[a]})
+--- REPLACE
+\* MUTATION: point writes made before the switch are outranked by the bulk entry.
+OwnerRank(a) == LwwRank({o \in cache[a] : o <= rp[a] /\ author[o] \notin {PreAuthor, Foreign}})
+--- END

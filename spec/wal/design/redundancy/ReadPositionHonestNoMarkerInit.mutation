@@ -1,0 +1,15 @@
+MODULE: ReadPositionHonestNoMarkerInit
+TARGET: ReadPositionHonest
+CLASS: Invariant
+EXPECT: clean (a redundancy check: the guard is implied in the model and kept for the reason in LiveAdvanceDesign.md)
+SUMMARY: an absent marker reads as closed
+PERTURBS: LiveAdvance
+BOUNDS: WithLegacyHandOff = TRUE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+    /\ cstage[a] = 3
+    /\ mInit
+
+--- REPLACE
+    /\ cstage[a] = 3
+--- END

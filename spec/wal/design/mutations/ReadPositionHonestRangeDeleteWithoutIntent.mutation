@@ -1,0 +1,20 @@
+# A range-delete walk stamped with no open tree-fence intent: a replicated or
+# shadow-forwarded range delete, or a fan-out that began before the gate opened,
+# reaches a shard root through an existing method that stamps it anyway. No
+# marker holds L, so its armed leaf passes the record.
+MODULE: ReadPositionHonestRangeDeleteWithoutIntent
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a range-delete walk is stamped although no tree-fence intent is open
+PERTURBS: GAdmit
+BOUNDS: WithTreeWalk = TRUE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+    /\ phase = "live"
+    /\ hoOpen
+    /\ gst = "idle"
+--- REPLACE
+    /\ phase = "live"
+\* MUTATION: stamped without an open intent; it should be appended unstamped.
+    /\ gst = "idle"
+--- END

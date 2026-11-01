@@ -56,7 +56,9 @@
 (* hold - acknowledged or not, because a WAL reader applies every durable  *)
 (* entry - the shared snapshot is honest, the GC never trims an            *)
 (* acknowledged entry the snapshot lacks, no stale epoch ever appends,     *)
-(* across a shard restart too, and no unstamped append is ever rejected.   *)
+(* across a shard restart too, no unstamped append is ever rejected, and   *)
+(* the owner resolves a key a bulk append contests to the value a WAL      *)
+(* reader resolves (last-writer-wins, the point write wins).               *)
 (*                                                                         *)
 (* Switches keep each check small. Instance: WithBatch (the batch write    *)
 (* kind) and MaxWindows (hand-off windows). Environment: WithDuplicate,    *)
@@ -70,7 +72,7 @@
 EXTENDS Integers, FiniteSets
 
 CONSTANTS WithBatch, MaxWindows, WithDuplicate, WithRecreate, WithRestart, FrozenView,
-          WithMixedVersion, WithGateFlip, WithLegacyHandOff, Ghosts
+          WithMixedVersion, WithGateFlip, WithLegacyHandOff, WithTreeWalk, Ghosts
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
@@ -78,8 +80,9 @@ Acts == {"a1", "a2"}
 Foreign == "f"
 PreAuthor == "p"
 OldAuthor == "o"
+TreeWalk == "g"
 NoAuthor == "none"
-Authors == Acts \cup {Foreign, PreAuthor, OldAuthor}
+Authors == Acts \cup {Foreign, PreAuthor, OldAuthor, TreeWalk}
 Kinds == IF WithBatch THEN {"point", "batch"} ELSE {"point"}
 MaxEpoch == 3
 Epochs == 0..MaxEpoch
@@ -89,6 +92,8 @@ Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 Max2(x, y) == IF x >= y THEN x ELSE y
 
 VARIABLES
+    gst,        \* another shard's range-delete walk: "idle", "pend" (admitted), "done"
+    gstamp,     \* the tree range-delete generation it was admitted under
     phase,      \* "pre" before the bulk window opens, "window", then "live"
     hint,       \* the WAL head when the bulk load began: the leaf's birth hint
     next,       \* the WAL shard's allocator: the next offset it assigns
@@ -147,6 +152,7 @@ VARIABLES
     claimRefused,         \* witness: a claim was refused at the shard
     selfReported          \* witness: an own unstamped append reported itself
 
+walkVars == <<gst, gstamp>>
 walVars == <<next, author, inflight, durable, acked, floor>>
 leafVars == <<up, cache, rp, mine, snapCov, snapRows>>
 epochVars == <<rowEpoch, seen, epoch, cstage, claimHead, fence, memFence, retired, maxClaimed>>
@@ -159,10 +165,12 @@ safeVars == <<staleAccepted, oldRejected>>
 wghosts == <<rejected, fRejected, advanced, advancedPastForeign, dupAdvanced, trimAfterAdvance,
              reloaded, floorClaim, claimRefused, selfReported>>
 
-vars == <<walVars, leafVars, epochVars, handVars, gateVars, viewVars, oldVars, envVars,
+vars == <<walkVars, walVars, leafVars, epochVars, handVars, gateVars, viewVars, oldVars, envVars,
           safeVars, wghosts>>
 
 TypeOK ==
+    /\ gst \in {"idle", "pend", "done"}
+    /\ gstamp \in Epochs
     /\ phase \in {"pre", "window", "live"}
     /\ hint \in 0..MaxOff
     /\ next \in 0..MaxOff
@@ -222,6 +230,8 @@ TypeOK ==
     /\ selfReported \in BOOLEAN
 
 Init ==
+    /\ gst = "idle"
+    /\ gstamp = 0
     /\ phase = "pre"
     /\ hint = 0
     /\ next = 0
@@ -295,7 +305,7 @@ PreWrite ==
     /\ author' = [author EXCEPT ![next] = PreAuthor]
     /\ durable' = durable \cup {next}
     /\ acked' = acked \cup {next}
-    /\ UNCHANGED <<inflight, floor, leafVars, epochVars, handVars, gateVars, viewVars, oldVars,
+    /\ UNCHANGED <<walkVars, inflight, floor, leafVars, epochVars, handVars, gateVars, viewVars, oldVars,
                    envVars, safeVars, wghosts>>
 
 Begin ==
@@ -304,7 +314,7 @@ Begin ==
     /\ hint' = next
     /\ hoOpen' = TRUE
     /\ windows' = 1
-    /\ UNCHANGED <<walVars, leafVars, epochVars, hoClosedAt, fpend, fkind, fstamp, fEpoch,
+    /\ UNCHANGED <<walkVars, walVars, leafVars, epochVars, hoClosedAt, fpend, fkind, fstamp, fEpoch,
                    fFence, gateVars, viewVars, oldVars, dupUsed, restarted, recreated, safeVars,
                    wghosts>>
 
@@ -317,7 +327,7 @@ Create ==
     /\ cache' = [cache EXCEPT !["a1"] = {o \in Offs : author[o] = PreAuthor}]
     /\ rp' = [rp EXCEPT !["a1"] = hint - 1]
     /\ seen' = [seen EXCEPT !["a1"] = rowEpoch]
-    /\ UNCHANGED <<hint, walVars, mine, snapCov, snapRows, rowEpoch, epoch, cstage, claimHead,
+    /\ UNCHANGED <<walkVars, hint, walVars, mine, snapCov, snapRows, rowEpoch, epoch, cstage, claimHead,
                    fence, memFence, retired, maxClaimed, handVars, gateVars, viewVars, oldVars,
                    dupUsed, restarted, recreated, safeVars, wghosts>>
 
@@ -357,7 +367,7 @@ ClaimRow(a) ==
     /\ fz' = [x \in Acts |-> fz[x] \/ Superseded(x, a)]
     /\ fzOpen' = [x \in Acts |-> IF Superseded(x, a) THEN hoOpen ELSE fzOpen[x]]
     /\ fzClosedAt' = [x \in Acts |-> IF Superseded(x, a) THEN hoClosedAt ELSE fzClosedAt[x]]
-    /\ UNCHANGED <<walVars, leafVars, seen, claimHead, fence, memFence, retired, maxClaimed,
+    /\ UNCHANGED <<walkVars, walVars, leafVars, seen, claimHead, fence, memFence, retired, maxClaimed,
                    handVars, gateVars, oldVars, envVars, safeVars, rejected, fRejected, advanced,
                    advancedPastForeign, dupAdvanced, trimAfterAdvance, reloaded, claimRefused,
                    selfReported>>
@@ -367,7 +377,7 @@ ClaimConflict(a) ==
     /\ cstage[a] = 0
     /\ seen[a] # rowEpoch
     /\ StopAct(a)
-    /\ UNCHANGED <<walVars, rp, snapCov, snapRows, epochVars, handVars, gateVars, viewVars,
+    /\ UNCHANGED <<walkVars, walVars, rp, snapCov, snapRows, epochVars, handVars, gateVars, viewVars,
                    oldVars, envVars, safeVars, wghosts>>
 
 ClaimWrite(a) ==
@@ -376,7 +386,7 @@ ClaimWrite(a) ==
     /\ epoch[a] > Max2(Max2(fence, memFence), retired)
     /\ fence' = Max2(fence, epoch[a])
     /\ cstage' = [cstage EXCEPT ![a] = 2]
-    /\ UNCHANGED <<walVars, leafVars, rowEpoch, seen, epoch, claimHead, memFence, retired,
+    /\ UNCHANGED <<walkVars, walVars, leafVars, rowEpoch, seen, epoch, claimHead, memFence, retired,
                    maxClaimed, handVars, gateVars, viewVars, oldVars, envVars, safeVars, wghosts>>
 
 ClaimRaise(a) ==
@@ -388,7 +398,7 @@ ClaimRaise(a) ==
     /\ claimHead' = [claimHead EXCEPT ![a] = next]
     /\ maxClaimed' = Max2(maxClaimed, epoch[a])
     /\ cstage' = [cstage EXCEPT ![a] = 3]
-    /\ UNCHANGED <<walVars, leafVars, rowEpoch, seen, epoch, fence, retired, handVars, gateVars,
+    /\ UNCHANGED <<walkVars, walVars, leafVars, rowEpoch, seen, epoch, fence, retired, handVars, gateVars,
                    viewVars, oldVars, envVars, safeVars, wghosts>>
 
 ClaimRefuse(a) ==
@@ -398,7 +408,7 @@ ClaimRefuse(a) ==
     /\ StopAct(a)
     /\ cstage' = [cstage EXCEPT ![a] = 0]
     /\ claimRefused' = (claimRefused \/ Ghosts)
-    /\ UNCHANGED <<walVars, rp, snapCov, snapRows, rowEpoch, seen, epoch, claimHead, fence,
+    /\ UNCHANGED <<walkVars, walVars, rp, snapCov, snapRows, rowEpoch, seen, epoch, claimHead, fence,
                    memFence, retired, maxClaimed, handVars, gateVars, viewVars, oldVars, envVars,
                    safeVars, rejected, fRejected, advanced, advancedPastForeign, dupAdvanced,
                    trimAfterAdvance, reloaded, floorClaim, selfReported>>
@@ -425,7 +435,7 @@ OwnAlloc(a) ==
     /\ inflight' = inflight \cup {next}
     /\ staleAccepted' = (staleAccepted \/ epoch[a] < maxClaimed \/ epoch[a] <= retired)
     /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
-    /\ UNCHANGED <<lastU, oldUsed, durable, acked, floor, leafVars, epochVars, handVars, gateVars,
+    /\ UNCHANGED <<walkVars, lastU, oldUsed, durable, acked, floor, leafVars, epochVars, handVars, gateVars,
                    viewVars, envVars, oldRejected, wghosts>>
 
 StaleAppend(a) ==
@@ -437,7 +447,7 @@ StaleAppend(a) ==
     /\ (epoch[a] < memFence \/ epoch[a] <= retired)
     /\ next < MaxOff
     /\ rejected' = TRUE
-    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, gateVars, viewVars, oldVars, envVars,
+    /\ UNCHANGED <<walkVars, walVars, leafVars, epochVars, handVars, gateVars, viewVars, oldVars, envVars,
                    safeVars, fRejected, advanced, advancedPastForeign, dupAdvanced,
                    trimAfterAdvance, reloaded, floorClaim, claimRefused, selfReported>>
 
@@ -451,7 +461,7 @@ OwnAllocUnstamped(a) ==
     /\ lastU' = next
     /\ seenU' = [seenU EXCEPT ![a] = Max2(@, next)]
     /\ selfReported' = (selfReported \/ Ghosts)
-    /\ UNCHANGED <<oldUsed, durable, acked, floor, leafVars, epochVars, handVars, gateVars,
+    /\ UNCHANGED <<walkVars, oldUsed, durable, acked, floor, leafVars, epochVars, handVars, gateVars,
                    viewVars, envVars, safeVars, rejected, fRejected, advanced,
                    advancedPastForeign, dupAdvanced, trimAfterAdvance, reloaded, floorClaim,
                    claimRefused>>
@@ -465,8 +475,8 @@ Land(o) ==
             /\ mine' = [mine EXCEPT ![author[o]] = @ \cup {o}]
             /\ acked' = acked \cup {o}
        ELSE /\ acked' = IF author[o] = OldAuthor THEN acked \cup {o} ELSE acked
-            /\ UNCHANGED <<cache, mine>>
-    /\ UNCHANGED <<next, author, floor, up, rp, snapCov, snapRows, epochVars, handVars, gateVars,
+            /\ UNCHANGED <<walkVars, cache, mine>>
+    /\ UNCHANGED <<walkVars, next, author, floor, up, rp, snapCov, snapRows, epochVars, handVars, gateVars,
                    viewVars, oldVars, envVars, safeVars, wghosts>>
 
 (***************************************************************************)
@@ -482,7 +492,7 @@ ForeignOpen ==
     /\ windows < MaxWindows
     /\ hoOpen' = TRUE
     /\ windows' = windows + 1
-    /\ UNCHANGED <<walVars, leafVars, epochVars, hoClosedAt, fpend, fkind, fstamp, fEpoch,
+    /\ UNCHANGED <<walkVars, walVars, leafVars, epochVars, hoClosedAt, fpend, fkind, fstamp, fEpoch,
                    fFence, gateVars, viewVars, oldVars, envVars, safeVars, wghosts>>
 
 ForeignAdmit(k) ==
@@ -492,7 +502,7 @@ ForeignAdmit(k) ==
     /\ fpend' = TRUE
     /\ fkind' = k
     /\ fstamp' = fEpoch
-    /\ UNCHANGED <<walVars, leafVars, epochVars, hoOpen, hoClosedAt, windows, fEpoch, fFence,
+    /\ UNCHANGED <<walkVars, walVars, leafVars, epochVars, hoOpen, hoClosedAt, windows, fEpoch, fFence,
                    gateVars, viewVars, oldVars, envVars, safeVars, wghosts>>
 
 ForeignAlloc ==
@@ -505,7 +515,7 @@ ForeignAlloc ==
     /\ next' = next + 1
     /\ author' = [author EXCEPT ![next] = Foreign]
     /\ inflight' = inflight \cup {next}
-    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, hoOpen, hoClosedAt, windows,
+    /\ UNCHANGED <<walkVars, durable, acked, floor, leafVars, epochVars, hoOpen, hoClosedAt, windows,
                    fEpoch, fFence, gateVars, viewVars, oldVars, envVars, safeVars, wghosts>>
 
 ForeignReject ==
@@ -515,19 +525,56 @@ ForeignReject ==
     /\ fkind' = "point"
     /\ fstamp' = 0
     /\ fRejected' = (fRejected \/ Ghosts)
-    /\ UNCHANGED <<walVars, leafVars, epochVars, hoOpen, hoClosedAt, windows, fEpoch, fFence,
+    /\ UNCHANGED <<walkVars, walVars, leafVars, epochVars, hoOpen, hoClosedAt, windows, fEpoch, fFence,
                    gateVars, viewVars, oldVars, envVars, safeVars, rejected, advanced,
                    advancedPastForeign, dupAdvanced, trimAfterAdvance, reloaded, floorClaim,
                    claimRefused, selfReported>>
 
-HandOff(o, a) ==
-    /\ a \in up
+(***************************************************************************)
+(* Another shard's walk of a tree-level range delete (WithTreeWalk). Its   *)
+(* record is replayed by L because range-delete records are not key-       *)
+(* scoped. It is admitted only under an open intent, which opened L's      *)
+(* marker, and is stamped with the per-tree range-delete generation that   *)
+(* f's epoch stands for: one re-claim of that generation at the partition  *)
+(* (Close) fences every shard's walk at once. A walk with no open intent   *)
+(* (a replicated or shadow-forwarded range delete, or a fan-out spanning   *)
+(* the gate opening) is appended unstamped: OldAlloc covers it.            *)
+(***************************************************************************)
+GAdmit ==
+    /\ WithTreeWalk
+    /\ phase = "live"
+    /\ hoOpen
+    /\ gst = "idle"
+    /\ gst' = "pend"
+    /\ gstamp' = fEpoch
+    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, gateVars, viewVars, oldVars, envVars,
+                   safeVars, wghosts>>
+
+GAlloc ==
+    /\ gst = "pend"
+    /\ gstamp >= fFence
+    /\ next < MaxOff
+    /\ gst' = "done"
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = TreeWalk]
+    /\ inflight' = inflight \cup {next}
+    /\ UNCHANGED <<gstamp, durable, acked, floor, leafVars, epochVars, handVars, gateVars,
+                   viewVars, oldVars, envVars, safeVars, wghosts>>
+
+GReject ==
+    /\ gst = "pend"
+    /\ gstamp < fFence
+    /\ gst' = "done"
+    /\ UNCHANGED <<gstamp, walVars, leafVars, epochVars, handVars, gateVars, viewVars, oldVars,
+                   envVars, safeVars, wghosts>>
+
+HandOff(o, a) ==    /\ a \in up
     /\ o \in durable
     /\ author[o] = Foreign
     /\ o \notin acked
     /\ cache' = [cache EXCEPT ![a] = @ \cup {o}]
     /\ acked' = acked \cup {o}
-    /\ UNCHANGED <<next, author, inflight, durable, floor, up, rp, mine, snapCov, snapRows,
+    /\ UNCHANGED <<walkVars, next, author, inflight, durable, floor, up, rp, mine, snapCov, snapRows,
                    epochVars, handVars, gateVars, viewVars, oldVars, envVars, safeVars, wghosts>>
 
 Close ==
@@ -539,7 +586,7 @@ Close ==
     /\ fFence' = fEpoch + 1
     /\ hoClosedAt' = next
     /\ hfly' = IF resumed THEN FALSE ELSE hfly
-    /\ UNCHANGED <<walVars, leafVars, epochVars, windows, fpend, fkind, fstamp, gate, resumed,
+    /\ UNCHANGED <<walkVars, walVars, leafVars, epochVars, windows, fpend, fkind, fstamp, gate, resumed,
                    mInit, legacyUsed, viewVars, oldVars, envVars, safeVars, wghosts>>
 
 (***************************************************************************)
@@ -564,13 +611,13 @@ LegacyWrite ==
     /\ author' = [author EXCEPT ![next] = Foreign]
     /\ inflight' = inflight \cup {next}
     /\ lastU' = next
-    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, gate, hfly, resumed,
+    /\ UNCHANGED <<walkVars, durable, acked, floor, leafVars, epochVars, handVars, gate, hfly, resumed,
                    mInit, viewVars, seenU, oldUsed, envVars, safeVars, wghosts>>
 
 OpenGate ==
     /\ ~gate
     /\ gate' = TRUE
-    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, hfly, resumed, mInit, legacyUsed,
+    /\ UNCHANGED <<walkVars, walVars, leafVars, epochVars, handVars, hfly, resumed, mInit, legacyUsed,
                    viewVars, oldVars, envVars, safeVars, wghosts>>
 
 Resume ==
@@ -580,7 +627,7 @@ Resume ==
     /\ phase = "live"
     /\ resumed' = TRUE
     /\ hoOpen' = TRUE
-    /\ UNCHANGED <<walVars, leafVars, epochVars, hoClosedAt, windows, fpend, fkind, fstamp,
+    /\ UNCHANGED <<walkVars, walVars, leafVars, epochVars, hoClosedAt, windows, fpend, fkind, fstamp,
                    fEpoch, fFence, gate, hfly, mInit, legacyUsed, viewVars, oldVars, envVars,
                    safeVars, wghosts>>
 
@@ -590,14 +637,14 @@ LegacyComplete ==
     /\ ~hoOpen
     /\ ~fpend
     /\ hfly' = FALSE
-    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, gate, resumed, mInit, legacyUsed,
+    /\ UNCHANGED <<walkVars, walVars, leafVars, epochVars, handVars, gate, resumed, mInit, legacyUsed,
                    viewVars, oldVars, envVars, safeVars, wghosts>>
 
 MarkInit ==
     /\ ~hfly
     /\ ~mInit
     /\ mInit' = TRUE
-    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, gate, hfly, resumed, legacyUsed,
+    /\ UNCHANGED <<walkVars, walVars, leafVars, epochVars, handVars, gate, hfly, resumed, legacyUsed,
                    viewVars, oldVars, envVars, safeVars, wghosts>>
 
 (* Replay(a): read and apply the next durable entry; never a trimmed one. *)
@@ -608,7 +655,7 @@ Replay(a) ==
     /\ rp[a] + 1 >= floor
     /\ cache' = [cache EXCEPT ![a] = @ \cup {rp[a] + 1}]
     /\ rp' = [rp EXCEPT ![a] = rp[a] + 1]
-    /\ UNCHANGED <<walVars, up, mine, snapCov, snapRows, epochVars, handVars, gateVars, viewVars,
+    /\ UNCHANGED <<walkVars, walVars, up, mine, snapCov, snapRows, epochVars, handVars, gateVars, viewVars,
                    oldVars, envVars, safeVars, wghosts>>
 
 (***************************************************************************)
@@ -641,7 +688,7 @@ LiveAdvance(a) ==
             (advancedPastForeign \/ (Ghosts /\ \E o \in Offs : author[o] = Foreign /\ o < target))
     /\ advanced' = (advanced \/ Ghosts)
     /\ dupAdvanced' = (dupAdvanced \/ (Ghosts /\ a = "a2"))
-    /\ UNCHANGED <<walVars, up, cache, mine, snapCov, snapRows, epochVars, handVars, gateVars,
+    /\ UNCHANGED <<walkVars, walVars, up, cache, mine, snapCov, snapRows, epochVars, handVars, gateVars,
                    viewVars, oldVars, envVars, safeVars, rejected, fRejected, trimAfterAdvance,
                    reloaded, floorClaim, claimRefused, selfReported>>
 
@@ -651,7 +698,7 @@ Capture(a) ==
     /\ rp[a] > snapCov
     /\ snapCov' = rp[a]
     /\ snapRows' = {o \in cache[a] : o <= rp[a]}
-    /\ UNCHANGED <<walVars, up, cache, rp, mine, epochVars, handVars, gateVars, viewVars, oldVars,
+    /\ UNCHANGED <<walkVars, walVars, up, cache, rp, mine, epochVars, handVars, gateVars, viewVars, oldVars,
                    envVars, safeVars, wghosts>>
 
 (* GcTrim: trim the next durable entry below the leaf's pin. *)
@@ -660,7 +707,7 @@ GcTrim ==
     /\ floor \in durable
     /\ floor' = floor + 1
     /\ trimAfterAdvance' = (trimAfterAdvance \/ (Ghosts /\ advanced))
-    /\ UNCHANGED <<next, author, inflight, durable, acked, leafVars, epochVars, handVars, gateVars,
+    /\ UNCHANGED <<walkVars, next, author, inflight, durable, acked, leafVars, epochVars, handVars, gateVars,
                    viewVars, oldVars, envVars, safeVars, rejected, fRejected, advanced,
                    advancedPastForeign, dupAdvanced, reloaded, floorClaim, claimRefused,
                    selfReported>>
@@ -691,7 +738,7 @@ Duplicate ==
     /\ cache' = [cache EXCEPT !["a2"] = snapRows]
     /\ rp' = [rp EXCEPT !["a2"] = snapCov]
     /\ seen' = [seen EXCEPT !["a2"] = rowEpoch]
-    /\ UNCHANGED <<walVars, mine, snapCov, snapRows, rowEpoch, epoch, cstage, claimHead, fence,
+    /\ UNCHANGED <<walkVars, walVars, mine, snapCov, snapRows, rowEpoch, epoch, cstage, claimHead, fence,
                    memFence, retired, maxClaimed, handVars, gateVars, viewVars, oldVars, phase,
                    hint, restarted, recreated, safeVars, wghosts>>
 
@@ -702,7 +749,7 @@ Restart ==
     /\ memFence' = -1
     /\ lastU' = next - 1
     /\ UNCHANGED fFence
-    /\ UNCHANGED <<walVars, leafVars, rowEpoch, seen, epoch, cstage, claimHead, fence, retired,
+    /\ UNCHANGED <<walkVars, walVars, leafVars, rowEpoch, seen, epoch, cstage, claimHead, fence, retired,
                    maxClaimed, hoOpen, hoClosedAt, windows, fpend, fkind, fstamp, fEpoch,
                    gateVars, viewVars, seenU, oldUsed, phase, hint, dupUsed, recreated, safeVars,
                    wghosts>>
@@ -711,7 +758,7 @@ Reload ==
     /\ memFence = -1
     /\ memFence' = fence
     /\ reloaded' = (reloaded \/ (Ghosts /\ fence > 0))
-    /\ UNCHANGED <<walVars, leafVars, rowEpoch, seen, epoch, cstage, claimHead, fence, retired,
+    /\ UNCHANGED <<walkVars, walVars, leafVars, rowEpoch, seen, epoch, cstage, claimHead, fence, retired,
                    maxClaimed, handVars, gateVars, viewVars, oldVars, envVars, safeVars, rejected,
                    fRejected, advanced, advancedPastForeign, dupAdvanced, trimAfterAdvance,
                    floorClaim, claimRefused, selfReported>>
@@ -725,7 +772,7 @@ Recreate ==
     /\ retired' = Max2(retired, fence)
     /\ fence' = 0
     /\ memFence' = IF memFence = -1 THEN -1 ELSE 0
-    /\ UNCHANGED <<walVars, leafVars, seen, epoch, cstage, claimHead, maxClaimed, handVars,
+    /\ UNCHANGED <<walkVars, walVars, leafVars, seen, epoch, cstage, claimHead, maxClaimed, handVars,
                    gateVars, viewVars, oldVars, phase, hint, dupUsed, restarted, safeVars, wghosts>>
 
 UnstampedAdmitted == TRUE
@@ -743,8 +790,8 @@ OldAlloc ==
             /\ lastU' = next
             /\ UNCHANGED oldRejected
        ELSE /\ oldRejected' = TRUE
-            /\ UNCHANGED <<next, author, inflight, lastU>>
-    /\ UNCHANGED <<seenU, durable, acked, floor, leafVars, epochVars, handVars, gateVars, viewVars,
+            /\ UNCHANGED <<walkVars, next, author, inflight, lastU>>
+    /\ UNCHANGED <<walkVars, seenU, durable, acked, floor, leafVars, epochVars, handVars, gateVars, viewVars,
                    envVars, staleAccepted, wghosts>>
 
 \* A behaviour may stop anywhere: this is a safety model.
@@ -757,6 +804,7 @@ Next ==
     \/ \E a \in Acts : OwnAlloc(a) \/ StaleAppend(a) \/ OwnAllocUnstamped(a)
     \/ \E o \in Offs : Land(o)
     \/ ForeignOpen \/ ForeignAlloc \/ ForeignReject \/ Close
+    \/ GAdmit \/ GAlloc \/ GReject
     \/ \E k \in Kinds : ForeignAdmit(k)
     \/ \E o \in Offs, a \in Acts : HandOff(o, a)
     \/ LegacyWrite \/ OpenGate \/ Resume \/ LegacyComplete \/ MarkInit
@@ -792,6 +840,24 @@ StaleEpochNeverAppends == ~staleAccepted
 \* never rejected.
 OldNeverRejected == ~oldRejected
 
+\* The contested key (#5610). Every entry L owns writes one key K, the
+\* contention worst case. Point and foreign entries carry real versions, which
+\* the model orders by offset; the bulk chunk's entry for K carries a version
+\* ticked from HybridLogicalClock.Zero, below every real one, and every
+\* activation of L and every WAL reader holds it. Each side resolves K
+\* last-writer-wins: the owner over the entries it holds up to its read
+\* position, a replica or view over the durable entries up to the same
+\* position. -1 is the bulk value.
+BulkRank == -1
+LwwRank(S) == IF S = {} THEN BulkRank ELSE Max(S)
+OwnerRank(a) == LwwRank({o \in cache[a] : o <= rp[a]})
+ReaderRank(a) == LwwRank({o \in durable : o <= rp[a]})
+
+\* Origin and replica agree on the contested key: the owner resolves K to the
+\* value a WAL reader resolves at the same position. A bulk append over a key
+\* the range already holds therefore returns the point write's value on the
+\* origin, as on every replica and view.
+ContestedKeyAgrees == \A a \in up : OwnerRank(a) = ReaderRank(a)
 (***************************************************************************)
 (* Witnesses: each must be VIOLATED, with Ghosts = TRUE, proving its step  *)
 (* is reachable in the instance and the clean run is not vacuous.          *)
@@ -809,5 +875,13 @@ WitnessClaimAboveRetiredFloor == ~floorClaim
 WitnessClaimRefused == ~claimRefused
 WitnessUnstampedAppendReported == \A a \in Acts : seenU[a] = -1
 WitnessOwnUnstampedReportsItself == ~selfReported
+\* The owner resolves the contested key to a point write made before the
+\* switch, over the bulk value it was born with.
+WitnessContestedKeyResolvedToPoint ==
+    ~(\E a \in up : OwnerRank(a) # BulkRank /\ author[OwnerRank(a)] \in {PreAuthor, Foreign})
+\* Another shard's walk is fenced out at L's close (WithTreeWalk).
+WitnessTreeWalkFenced == ~(gst = "pend" /\ gstamp < fFence)
+\* Another shard's walk is allocated under L's open marker (WithTreeWalk).
+WitnessTreeWalkAllocated == \A o \in Offs : author[o] # TreeWalk
 WitnessLegacyHandOffResumed == ~(resumed /\ advanced)
 ====

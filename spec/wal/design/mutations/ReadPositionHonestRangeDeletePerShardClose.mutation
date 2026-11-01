@@ -1,0 +1,21 @@
+# Range-delete walks closed per shard: each shard's walk is stamped with its own
+# shard's routing generation, so this shard's close re-claims only its own. Another
+# shard's walk, still in flight after its fan-out was abandoned, is allocated above
+# the heads this shard's close recorded, and L's leaf, which replays every
+# overlapping range-delete record, re-arms and passes it.
+MODULE: ReadPositionHonestRangeDeletePerShardClose
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: another shard's range-delete walk is not fenced by this shard's close
+PERTURBS: GAlloc
+BOUNDS: WithTreeWalk = TRUE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+    /\ gst = "pend"
+    /\ gstamp >= fFence
+    /\ next < MaxOff
+--- REPLACE
+    /\ gst = "pend"
+\* MUTATION: stamped with its own shard's generation, which L's close does not re-claim.
+    /\ next < MaxOff
+--- END
