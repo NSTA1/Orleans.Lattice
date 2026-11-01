@@ -200,6 +200,43 @@ public sealed class ClusterTreeListTests : ClusterTestContext
     }
 
     [Test]
+    public void A_reader_who_may_reshard_no_tree_has_no_control_and_the_command_is_refused()
+    {
+        // U4 (#5388): dana, a reader, was offered Reshard tree... and refused only on its page.
+        Granted = Grants.Read;
+        UseTrees(Tree("a/crm/orders"), Tree("invoices"));
+        var cut = RenderAt("/cluster/trees");
+        cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr"), Has.Count.EqualTo(2)));
+        var command = Services.GetServices<IExplorerArea>().OfType<ClusterArea>().Single().Commands
+            .Single(candidate => candidate.Id == ClusterArea.ReshardCommandId);
+
+        Assert.That(cut.FindAll($"[data-lt-command=\"{ClusterArea.ReshardCommandId}\"]"), Is.Empty);
+
+        cut.InvokeAsync(() => command.InvokeAsync!(CancellationToken.None).AsTask());
+
+        cut.WaitUntil(() => Assert.That(cut.Find("[data-lt-reshard-hidden]").TextContent, Is.EqualTo(ClusterTreeList.ReshardRefusedText)));
+        Assert.That(cut.FindAll(".lt-dialog"), Is.Empty);
+    }
+
+    [Test]
+    public void A_lifecycle_grant_on_one_listed_tree_draws_the_control()
+    {
+        Granted = Grants.Read;
+        UseTrees(Tree("a/crm/orders"), Tree("invoices"));
+        Admin.ProbeCapabilitiesAsync("invoices", Arg.Any<CancellationToken>())
+            .Returns(new Orleans.Lattice.Api.TreeAdmin.LatticeTreeAdminCapabilities
+            {
+                TreeId = "invoices",
+                Schema = new Orleans.Lattice.Api.Schema.LatticeSchemaCapabilities { TreeId = "invoices" },
+                CanManageTreeLifecycle = true,
+            });
+
+        var cut = RenderAt("/cluster/trees");
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll($"[data-lt-command=\"{ClusterArea.ReshardCommandId}\"]"), Has.Count.EqualTo(1)));
+    }
+
+    [Test]
     public void At_compact_the_picker_is_a_sheet()
     {
         var cut = RenderAt("/cluster/trees", LtBreakpoint.Compact);

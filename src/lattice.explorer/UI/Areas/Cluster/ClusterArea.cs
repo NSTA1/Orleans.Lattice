@@ -12,8 +12,10 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster;
 /// shows only that tenant's own trees and storage.
 /// </summary>
 /// <remarks>
-/// Visibility fails closed on the cluster-wide storage summary, the cheapest read
-/// that needs cluster telemetry authority: no tree administration facade hides the
+/// Visibility fails closed. The side-effect-free capability probe of a reserved
+/// tree id admits a caller holding the cluster-wide Telemetry capability without
+/// reading the estate (#5602); otherwise the cluster-wide storage summary, which
+/// needs that same authority, decides: no tree administration facade hides the
 /// area, and an unconfigured connection or a facade the cluster does not serve says
 /// why. A caller refused the summary is admitted only when the capability probe of
 /// one of the trees the catalogue lists reports a tree-lifecycle or tree-admin grant
@@ -39,10 +41,17 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
     /// <summary>The most catalogue trees probed for a grant when the storage summary is refused.</summary>
     public const int MaximumGrantProbes = 64;
 
+    /// <summary>How many catalogue trees are probed at once; the probing stops after the first wave holding a grant.</summary>
+    public const int GrantProbeConcurrency = 8;
+
+    /// <summary>The reserved tree id the area-wide capability probe asks about. The probe has no side effects.</summary>
+    public const string ProbeTreeId = "__cluster_capability_probe__";
+
     private readonly ClusterFacades _facades;
     private readonly ClusterTreeCatalog _catalog;
     private AreaAvailability? _verdict;
     private ClusterStorageUsageSummary? _usage;
+    private bool _telemetry;
     private ShellCallerKey _verdictCaller;
 
     /// <summary>Creates the area for one circuit.</summary>
@@ -150,8 +159,19 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
         var denied = false;
         try
         {
-            _usage = await admin.GetStorageUsageAsync(deep: false, cancellationToken).ConfigureAwait(false);
-            answer = AreaAvailability.Visible;
+            if (await HoldsClusterTelemetryAsync(admin, cancellationToken).ConfigureAwait(false))
+            {
+                // Admitted by the capability itself: the storage summary, which on a
+                // large estate takes longer than the directory waits, is read for
+                // Home later (#5602).
+                _telemetry = true;
+                answer = AreaAvailability.Visible;
+            }
+            else
+            {
+                _usage = await admin.GetStorageUsageAsync(deep: false, cancellationToken).ConfigureAwait(false);
+                answer = AreaAvailability.Visible;
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -204,7 +224,16 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
     /// </remarks>
     public async ValueTask<string?> GetHomeStatusAsync(CancellationToken cancellationToken)
     {
-        if (CurrentUsage() is not { } usage)
+        var usage = CurrentUsage();
+        if (usage is null
+            && _telemetry
+            && _verdictCaller == _facades.Caller
+            && _facades.TreeAdmin is { } admin)
+        {
+            usage = await ReadUsageAsync(admin, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (usage is null)
         {
             return null;
         }
@@ -261,8 +290,8 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
     /// one of the trees the catalogue lists: a tree-lifecycle or tree-admin grant
     /// admits the area. A read or diagnostics grant does not, and neither does a
     /// bulk-load grant, which no Cluster page serves. At most
-    /// <see cref="MaximumGrantProbes"/> trees are probed, stopping at the first
-    /// grant. A catalogue or probe the cluster did not answer, when nothing else
+    /// <see cref="MaximumGrantProbes"/> trees are probed, <see cref="GrantProbeConcurrency"/>
+    /// at a time, stopping after the first wave that holds a grant. A catalogue or probe the cluster did not answer, when nothing else
     /// admitted the caller, is <see langword="null"/> (not checked); a refusal or any
     /// other fault admits nothing.
     /// </summary>
@@ -286,41 +315,51 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
             return false;
         }
 
+        // Probed a wave at a time: one probe after another cannot finish inside the
+        // directory's availability budget on a cluster of a few dozen trees, so the
+        // area would read as not checked on every navigation.
         var unanswered = false;
-        var probed = 0;
-        foreach (var tree in trees)
+        var bound = Math.Min(trees.Count, MaximumGrantProbes);
+        for (var start = 0; start < bound; start += GrantProbeConcurrency)
         {
-            if (probed++ == MaximumGrantProbes)
+            var wave = new Task<bool?>[Math.Min(GrantProbeConcurrency, bound - start)];
+            for (var i = 0; i < wave.Length; i++)
             {
-                break;
+                wave[i] = ProbeTreeAsync(admin, trees[start + i].TreeId, cancellationToken);
             }
 
-            LatticeTreeAdminCapabilities? capabilities;
-            try
-            {
-                capabilities = await admin.ProbeCapabilitiesAsync(tree.TreeId, cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception exception) when (AreaProbeFaults.IsTransient(exception))
-            {
-                unanswered = true;
-                continue;
-            }
-            catch (Exception)
-            {
-                continue;
-            }
-
-            if (capabilities is not null && AdmitsArea(capabilities))
+            var answers = await Task.WhenAll(wave).ConfigureAwait(false);
+            if (answers.Contains(true))
             {
                 return true;
             }
+
+            unanswered |= answers.Contains(null);
         }
 
         return unanswered ? null : false;
+    }
+
+    /// <summary>One tree's verdict: admitted, not admitted, or <see langword="null"/> when the cluster did not answer.</summary>
+    private static async Task<bool?> ProbeTreeAsync(ILatticeTreeAdmin admin, string treeId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var capabilities = await admin.ProbeCapabilitiesAsync(treeId, cancellationToken).ConfigureAwait(false);
+            return capabilities is not null && AdmitsArea(capabilities);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (AreaProbeFaults.IsTransient(exception))
+        {
+            return null;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     /// <summary>Whether a tree's capabilities admit a caller without cluster telemetry to the area.</summary>
@@ -352,5 +391,52 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
     {
         _verdict = null;
         _usage = null;
+        _telemetry = false;
+    }
+
+    /// <summary>
+    /// Whether the side-effect-free capability probe says the caller holds cluster
+    /// telemetry. Any fault or an older cluster that does not report the flag reads
+    /// as no, so the caller falls through to the storage-summary read, which decides.
+    /// </summary>
+    private static async Task<bool> HoldsClusterTelemetryAsync(ILatticeTreeAdmin admin, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var capabilities = await admin.ProbeCapabilitiesAsync(ProbeTreeId, cancellationToken).ConfigureAwait(false);
+            return capabilities is { CanViewClusterTelemetry: true };
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Reads the storage summary for Home, for a caller admitted by the telemetry probe; <see langword="null"/> on any fault.</summary>
+    private async Task<ClusterStorageUsageSummary?> ReadUsageAsync(ILatticeTreeAdmin admin, CancellationToken cancellationToken)
+    {
+        var caller = _facades.Caller;
+        try
+        {
+            var usage = await admin.GetStorageUsageAsync(deep: false, cancellationToken).ConfigureAwait(false);
+            if (_facades.Caller == caller && _verdictCaller == caller)
+            {
+                _usage = usage;
+            }
+
+            return usage;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 }

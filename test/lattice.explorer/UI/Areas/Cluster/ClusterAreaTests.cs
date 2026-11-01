@@ -79,7 +79,7 @@ public sealed partial class ClusterAreaTests
         {
             Assert.That(first, Is.EqualTo(AreaAvailability.Hidden));
             Assert.That(second, Is.EqualTo(AreaAvailability.Hidden));
-            Assert.That(_admin.ReceivedCalls().Count(), Is.EqualTo(1));
+            Assert.That(_admin.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(ILatticeTreeAdmin.GetStorageUsageAsync)), Is.EqualTo(1));
         });
     }
 

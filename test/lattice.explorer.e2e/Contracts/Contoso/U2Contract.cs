@@ -8,8 +8,9 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts.Contoso;
 /// A schema owner's week (U2, #5384), established as sam. Produces <c>factory-orders</c>
 /// remediated (every negative total set to 0 by <see cref="ContosoSchema.NegativeTotalToZero"/>)
 /// so a compliance scan finds nothing non-compliant, the policy revised to
-/// <see cref="ContosoSchema.OrdersRevised"/>, the target advanced to version 2 and the stored
-/// values migrated; and the archive with no policy and no versioning. C1 later restores the
+/// <see cref="ContosoSchema.OrdersRevised"/> and the target advanced to version 2 (the stored
+/// values are not migrated by this stand-in, see <see cref="EstablishAsync"/>); and the archive
+/// with no policy and no versioning. C1 later restores the
 /// orders from before the remediation.
 /// </summary>
 public sealed class U2Contract() : ChapterContract("U2")
@@ -37,7 +38,9 @@ public sealed class U2Contract() : ChapterContract("U2")
             await schema.AdvanceTargetVersionAsync(orders, 2);
         }
 
-        await MigrateAsync(schema, orders, "the migration to version 2");
+        // The stored values are not migrated here: a whole-tree migration saturates the estate
+        // (#5569, its fix is in phase 2) and the one phase-1 consumer, U4, reads only the target
+        // version and the policy. U2's own journey still migrates through the UI.
 
         await schema.ClearPolicyAsync(Names.Trees.FactoryOrdersArchive);
         await schema.ClearVersionConfigAsync(Names.Trees.FactoryOrdersArchive);

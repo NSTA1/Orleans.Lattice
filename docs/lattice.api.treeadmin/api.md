@@ -241,6 +241,7 @@ The following inventory includes directly declared public members and overloads,
 - `public required LatticeSchemaCapabilities Schema { get; init; }`
 - `public bool CanBulkLoad { get; init; }`
 - `public bool CanRestore { get; init; }`
+- `public bool CanViewClusterTelemetry { get; init; }`
 
 ### `Orleans.Lattice.Api.TreeAdmin.ShardDiagnosticSnapshot`
 
