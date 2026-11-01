@@ -224,6 +224,9 @@ rows.
 
 The Views tab lists materialised views over a tree, or the view itself when the
 current workspace is a view. It shows kind, projection version and apply lag.
+A view that is behind is re-read every two seconds until it reads Current,
+without a Refresh, because a view status answers as of now even while its
+maintainer drains or rebuilds.
 Overlapping refreshes keep the newest status rather than a late reply or fault
 from an earlier refresh.
 For callers that can administer the source tree, Reconcile compares the

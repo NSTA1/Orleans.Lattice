@@ -60,7 +60,8 @@ public sealed class ViewAdministrationJourneyTests : UiTestBase
         await Expect(dialog).ToBeHiddenAsync();
         var row = content.Locator("tbody tr").Filter(new() { HasText = ViewName });
         await Expect(row).ToBeVisibleAsync();
-        await RefreshUntilCurrentAsync(content, row);
+        // No Refresh: the tab follows a view that is behind until it reads Current (#5519).
+        await Expect(row).ToContainTextAsync("Current", new() { Timeout = 30_000 });
         await ShotAsync(page, "created-view-is-current");
 
         await row.GetByRole(AriaRole.Link, new() { Name = ViewName }).ClickAsync();
@@ -113,30 +114,6 @@ public sealed class ViewAdministrationJourneyTests : UiTestBase
         await Expect(content.Locator("button[data-lt-command=\"data.create-view\"]")).ToHaveCountAsync(0);
         await Expect(page.GetByRole(AriaRole.Dialog)).ToHaveCountAsync(0);
         await ShotAsync(page, "reader-is-offered-nothing");
-    }
-
-    /// <summary>
-    /// The panel reads each view's status once per Refresh, and the maintainer answers
-    /// that read as of now, even mid-drain (#5519): a view still applying its first
-    /// entries reads "N behind" until a later Refresh. Refresh as a user would, until
-    /// the row reads Current or 30 s pass.
-    /// </summary>
-    private static async Task RefreshUntilCurrentAsync(ILocator content, ILocator row)
-    {
-        var refresh = content.GetByRole(AriaRole.Button, new() { Name = "Refresh", Exact = true });
-        var deadline = DateTime.UtcNow.AddSeconds(30);
-        while (true)
-        {
-            await refresh.ClickAsync();
-            try
-            {
-                await Expect(row).ToContainTextAsync("Current", new() { Timeout = 2_000 });
-                return;
-            }
-            catch (PlaywrightException) when (DateTime.UtcNow < deadline)
-            {
-            }
-        }
     }
 
     private async Task ShotAsync(IPage page, string step)
