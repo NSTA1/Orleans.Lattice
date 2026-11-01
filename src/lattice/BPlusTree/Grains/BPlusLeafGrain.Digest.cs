@@ -236,6 +236,7 @@ internal sealed partial class BPlusLeafGrain
         }
 
         EnsureProjectionHashInitialized();
+        ScheduleRecomputedFoldPublish();
 
         var hasher = new XxHash128();
         Span<byte> scratch = stackalloc byte[8];
@@ -283,6 +284,7 @@ internal sealed partial class BPlusLeafGrain
         // to the same-cluster whole-shard digest; cross-cluster precision is
         // delivered by the peer-high-water-mark bound, not by this hash).
         EnsureProjectionHashInitialized();
+        ScheduleRecomputedFoldPublish();
 
         var hash = new byte[ProjectionHashSize];
         long count = 0;
@@ -342,17 +344,61 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Lazily backfills <c>state.State.ProjectionHash</c> if persisted state
-    /// pre-dates the slot or carries a hash from an older algorithm whose
-    /// width no longer matches <see cref="ProjectionHashSize"/>. Cost is
-    /// one full walk over <c>Entries</c>; every subsequent mutation
-    /// maintains the field incrementally.
+    /// pre-dates the slot, carries a hash from an older algorithm whose
+    /// width no longer matches <see cref="ProjectionHashSize"/>, or carries a
+    /// fold produced by another contribution-function version
+    /// (<c>ProjectionHashVersion</c>). Cost is one full walk over
+    /// <c>Entries</c>; every subsequent mutation maintains the field
+    /// incrementally.
+    /// <para>
+    /// The version check is a correctness requirement, not an optimisation.
+    /// The fold is maintained by XOR-ing an entry's old contribution out and
+    /// its new one in, so a fold produced by version 0 (which hashed the
+    /// origin stamp) and then updated by version 1 would XOR out a
+    /// contribution it never XOR-ed in, and stay wrong for good. A recomputed
+    /// fold differs from the one the parent last folded, so the leaf is
+    /// marked dirty and its next publish carries the recomputed fold upward.
+    /// </para>
     /// </summary>
     private void EnsureProjectionHashInitialized()
     {
         if (state.State.ProjectionHash is null
             || state.State.ProjectionHash.Length != ProjectionHashSize)
         {
+            var stale = state.State.ProjectionHash is not null;
             state.State.ProjectionHash = ComputeFullProjectionHashFromState();
+            state.State.ProjectionHashVersion = LeafProjectionDigest.CurrentVersion;
+            if (stale)
+            {
+                MarkDigestDirty();
+            }
+        }
+    }
+
+    /// <summary>
+    /// After a digest read recomputed a fold produced by another
+    /// contribution-function version, schedules a coalesced publish so the
+    /// parent's chained fold picks up the recomputed fold without waiting
+    /// for the leaf's next mutation. A mutation publishes on its own, so this
+    /// only matters on a read; the Merkle walk reads exactly the leaves under
+    /// a mismatching subtree, so the leaves whose stale folds made an
+    /// aggregate mismatch are the ones that heal it.
+    /// <para>
+    /// Only the coalescing timer is used, never an inline publish: a read can
+    /// arrive from a caller the publish would call back into, and the timer
+    /// runs on its own turn. With coalescing disabled the dirty mark waits for
+    /// the next mutation's publish.
+    /// </para>
+    /// </summary>
+    private void ScheduleRecomputedFoldPublish()
+    {
+        if (_digestDirty
+            && _maintainProjectionDigest
+            && _digestCoalescingWindowMs > 0
+            && _digestPublishTimer is null
+            && state.State.ParentId is not null)
+        {
+            _ = PublishDigestUpwardAsync();
         }
     }
 
@@ -367,7 +413,7 @@ internal sealed partial class BPlusLeafGrain
     /// the parent-publication path can elide no-op publishes. A merge that
     /// produces a contribution byte-identical to the prior contribution
     /// (replay of an already-applied LWW value at the same Timestamp,
-    /// OriginClusterId, VectorClock, and value bytes) self-cancels under
+    /// VectorClock, and value bytes) self-cancels under
     /// the XOR and leaves the hash unchanged - the dirty flag stays as
     /// it was.
     /// </para>
@@ -493,8 +539,20 @@ internal sealed partial class BPlusLeafGrain
     /// entry. The contribution shape is stable wire-format: changing it
     /// changes every silo's digest. Fields are length-prefixed where they
     /// can collide and follow the historical
-    /// <c>(key, hlc, isTombstone, expiresAt, origin, vectorClock, value)</c>
+    /// <c>(key, hlc, isTombstone, expiresAt, vectorClock, value)</c>
     /// ordering established by the on-demand walk this method replaced.
+    /// <para>
+    /// The entry's origin stamp is not part of the contribution (version 1 of
+    /// <see cref="LeafProjectionDigest.CurrentVersion"/>). It is
+    /// observer-relative: the authoring cluster stores its own write with a
+    /// <see langword="null"/> origin and every peer stores the author's id, so
+    /// folding it made two clusters holding the same converged rows disagree
+    /// on every authored row, and the anti-entropy probe could never report
+    /// a match. <see cref="LwwValue{T}.Merge"/> ranks the origin last for the
+    /// same reason: two rows that agree on every other field have converged on
+    /// everything observable, and no repair could make an author and its peer
+    /// store the same origin anyway.
+    /// </para>
     /// Reuses the activation-cached <see cref="_entryHasher"/> via
     /// <c>TryGetHashAndReset</c> so the
     /// hot path allocates no hasher instance per call.
@@ -515,7 +573,7 @@ internal sealed partial class BPlusLeafGrain
     /// that takes the entry's serialised value bytes as a
     /// <see cref="ReadOnlySpan{T}"/> rather than reading them from
     /// <paramref name="lww"/>. All non-value metadata (timestamp, tombstone
-    /// flag, expiry, origin, vector clock) still comes from
+    /// flag, expiry, vector clock) still comes from
     /// <paramref name="lww"/>; only <paramref name="value"/> /
     /// <paramref name="hasValue"/> supply the value field. Used by the deferred
     /// CRDT-apply path to fold the post-merge contribution directly from a
@@ -551,8 +609,16 @@ internal sealed partial class BPlusLeafGrain
         BinaryPrimitives.WriteInt64LittleEndian(scratch[13..EntryFieldBlockBytes], lww.ExpiresAtTicks);
         hasher.Append(scratch[..EntryFieldBlockBytes]);
 
-        // (originClusterId) - null encoded as length 0xFFFFFFFF, distinct from empty string.
-        FeedNullableString(hasher, lww.OriginClusterId, scratch);
+        // RED PROOF ONLY: the origin is still hashed.
+        if (lww.OriginClusterId is null)
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(scratch[..LengthPrefixBytes], -1);
+            hasher.Append(scratch[..LengthPrefixBytes]);
+        }
+        else
+        {
+            FeedString(hasher, lww.OriginClusterId, scratch);
+        }
 
         // (vector-clock fingerprint) - sorted (replicaId, hlc) pairs.
         FeedVectorClock(hasher, lww.VectorClock, scratch);
@@ -598,7 +664,7 @@ internal sealed partial class BPlusLeafGrain
     /// sized to the key's own worst case: a variable-length <c>stackalloc</c>
     /// compiles to a real <c>localloc</c> with a stack probe on every call,
     /// which costs more than zero-filling the fixed budget it avoids, and this
-    /// runs once per key, once per origin id and once per vector-clock replica
+    /// runs once per key and once per vector-clock replica
     /// on every folded row.
     /// </para>
     /// <para>
@@ -659,17 +725,6 @@ internal sealed partial class BPlusLeafGrain
         {
             ArrayPool<byte>.Shared.Return(rented);
         }
-    }
-
-    private static void FeedNullableString(XxHash128 hasher, string? value, Span<byte> scratch)
-    {
-        if (value is null)
-        {
-            BinaryPrimitives.WriteInt32LittleEndian(scratch[..LengthPrefixBytes], -1);
-            hasher.Append(scratch[..LengthPrefixBytes]);
-            return;
-        }
-        FeedString(hasher, value, scratch);
     }
 
     /// <summary>

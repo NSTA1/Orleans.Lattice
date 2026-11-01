@@ -9,8 +9,12 @@ namespace Orleans.Lattice;
 /// <para>
 /// The leaf-level digest is computed in two phases. First, every entry's
 /// <c>(key, hlc.WallClockTicks, hlc.Counter, isTombstone, expiresAtTicks,
-/// originClusterId, vector-clock-fingerprint, value)</c> tuple is hashed
-/// to a 16-byte XxHash128 contribution; these contributions are XOR-folded
+/// vector-clock-fingerprint, value)</c> tuple is hashed to a 16-byte
+/// XxHash128 contribution. The entry's origin stamp is deliberately not
+/// part of it: an origin is observer-relative (the authoring cluster stores
+/// its own write with a <see langword="null"/> origin, every peer stores the
+/// author's id), so folding it would make two clusters holding the same
+/// converged entries disagree on every authored row; these contributions are XOR-folded
 /// into a running hash on the leaf state, updated incrementally on every
 /// mutation. Second, the public digest is the XxHash128 of
 /// <c>(running_xor || entryCount || checkpointOffset)</c>. The XOR fold is
@@ -40,8 +44,9 @@ namespace Orleans.Lattice;
 /// wire-compatibility surface: two clusters running at the same
 /// <see cref="Version"/> must produce byte-identical digests for the
 /// same applied prefix. The current shipping definition is version
-/// <see cref="CurrentVersion"/> (<c>0</c>) and is frozen for that
-/// version - any change to the contribution function or the fold
+/// <see cref="CurrentVersion"/> (<c>1</c>) and is frozen for that
+/// version. Version <c>0</c> also folded the entry's origin stamp, so a
+/// version-0 digest is never comparable with a version-1 one; any change to the contribution function or the fold
 /// algebra requires a new <see cref="Version"/> value and a negotiated
 /// upgrade across participating clusters. Future reconciliation tooling
 /// (e.g. Merkle-style range repair) negotiates the highest mutually
@@ -56,12 +61,13 @@ public readonly record struct LeafProjectionDigest
     /// <summary>
     /// The current contribution-function version stamped by this build
     /// into every <see cref="LeafProjectionDigest"/> it produces. Value
-    /// <c>0</c> is the original (and at present only) shipping shape;
-    /// future revisions of the hashing function or XOR-fold algebra
+    /// <c>1</c> excludes the observer-relative origin stamp from the
+    /// per-entry contribution; value <c>0</c>, the original shape, folded
+    /// it. Future revisions of the hashing function or XOR-fold algebra
     /// must increment this constant and the responsible producer
     /// must stamp the new value into <see cref="Version"/>.
     /// </summary>
-    public const int CurrentVersion = 0;
+    public const int CurrentVersion = 1;
 
     /// <summary>The XxHash128 hash bytes (16 bytes) of the leaf or shard projection.</summary>
     [Id(0)] public byte[] Hash { get; init; }
@@ -90,9 +96,9 @@ public readonly record struct LeafProjectionDigest
     /// same <see cref="Version"/> before treating the <see cref="Hash"/>
     /// comparison as meaningful - cross-version digests are guaranteed
     /// only to be self-consistent within a single version, not
-    /// interoperable across versions. Defaults to <c>0</c> for
-    /// backwards compatibility with persisted state that pre-dates the
-    /// field. New producers stamp <see cref="CurrentVersion"/>.
+    /// interoperable across versions. Defaults to <c>0</c>, the original
+    /// contribution function, for a digest produced before the field
+    /// existed. New producers stamp <see cref="CurrentVersion"/>.
     /// </summary>
     [Id(3)] public int Version { get; init; }
 

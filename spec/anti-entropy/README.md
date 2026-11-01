@@ -60,6 +60,12 @@ mutation disables deadlock checking or changes fairness.
 - The projection digest folds each cluster's checkpoint offsets, so equal
   content may still mismatch and the walk may over-localise. The model allows
   both; they cost traffic, not safety.
+- The digest's per-entry contribution covers a row's committed value, not its
+  observer-relative origin stamp, and the model compares rows the same way.
+  Production hashed the origin until contribution version 1, so two converged
+  clusters mismatched on every authored row. The model allows a mismatch on
+  equal content, so it cannot show that defect as a violation; a leaf-digest
+  detector pins the content-only contribution (see the refinement note).
 - The fallback stamps re-shipped rows with A's origin and the row's own
   timestamp, so a foreign-origin row can raise B's cursor for origin A. That
   widens the below-cursor blind spot for later A-origin entries; the model
