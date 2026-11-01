@@ -140,8 +140,7 @@ internal static class AxeTiming
           // The walk's deepest subtree still holds many targets; time the rule on each of them
           // alone, so the slowest single target is named even when the walk stopped early.
           const targets = [];
-          const owner = node === document.body ? document.body : node;
-          const candidates = [...owner.querySelectorAll(targetSelector)];
+          const candidates = [...(node.matches(targetSelector) ? [node] : []), ...node.querySelectorAll(targetSelector)];
           const deepest = path[path.length - 1].ms ?? lastTimed;
           const targetStarted = performance.now();
           for (const el of candidates) {
