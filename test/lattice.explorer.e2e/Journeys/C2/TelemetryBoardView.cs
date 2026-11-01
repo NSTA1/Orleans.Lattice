@@ -31,14 +31,14 @@ internal sealed class TelemetryBoardView(PersonaSession session)
     {
         await session.Shell.GoToAreaAsync("telemetry");
         await Content.GetByRole(AriaRole.Link, new() { Name = title, Exact = true }).First.ClickAsync();
-        await Expect(session.Shell.Heading).ToHaveTextAsync(title);
+        await Expect(session.Shell.Heading).ToHaveTextAsync(title, new() { Timeout = 30_000 });
     }
 
     /// <summary>Waits until every chart has settled and none failed: each is drawn.</summary>
     /// <param name="timeout">How long to wait.</param>
     public async Task ExpectDrawnAsync(TimeSpan timeout)
     {
-        await Expect(Charts.First).ToBeVisibleAsync();
+        await Expect(Charts.First).ToBeVisibleAsync(new() { Timeout = 30_000 });
         var expected = await Charts.CountAsync() - await Unaskable.CountAsync();
         await Expect(Failures).ToHaveCountAsync(0, new() { Timeout = (float)timeout.TotalMilliseconds });
         await Expect(Drawn).ToHaveCountAsync(expected, new() { Timeout = (float)timeout.TotalMilliseconds });

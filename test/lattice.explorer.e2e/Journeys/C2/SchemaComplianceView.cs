@@ -46,8 +46,12 @@ internal sealed class SchemaComplianceView(PersonaSession session)
         await Expect(Page).ToHaveURLAsync(new Regex($"/schema/{Regex.Escape(tree)}\\?(.*&)?tab=compliance"));
     }
 
-    /// <summary>Waits until the tab shows the scan running.</summary>
-    public Task ExpectScanningAsync() => Expect(Scanning).ToBeVisibleAsync();
+    /// <summary>
+    /// Waits until the tab shows the scan running. The tree's page can take several seconds to
+    /// render while the cluster settles after C2.1's silo restart, so the bound is a minute,
+    /// well inside the scan's hold.
+    /// </summary>
+    public Task ExpectScanningAsync() => Expect(Scanning).ToBeVisibleAsync(new() { Timeout = 60_000 });
 
     /// <summary>
     /// Waits until the scan the tab follows has ended - a report, or the reason it failed -

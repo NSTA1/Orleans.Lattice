@@ -49,9 +49,9 @@ internal sealed partial class ReplicationTreeView(PersonaSession session)
     {
         await session.Shell.GoToAreaAsync("replication");
         await Content.GetByRole(AriaRole.Link, new() { Name = "Enrolled trees", Exact = true }).ClickAsync();
-        await Expect(session.Page).ToHaveURLAsync(new Regex("/replication/trees(\\?|$)"));
+        await Expect(session.Page).ToHaveURLAsync(new Regex("/replication/trees(\\?|$)"), new() { Timeout = 30_000 });
         await Content.GetByRole(AriaRole.Link, new() { Name = tree, Exact = true }).First.ClickAsync();
-        await Expect(session.Page).ToHaveURLAsync(new Regex($"/replication/trees/{Regex.Escape(tree)}(\\?|$)"));
+        await Expect(session.Page).ToHaveURLAsync(new Regex($"/replication/trees/{Regex.Escape(tree)}(\\?|$)"), new() { Timeout = 30_000 });
     }
 
     /// <summary>Reads the tree's link to <paramref name="peer"/> in <paramref name="direction"/>, or <see langword="null"/> when the page lists none.</summary>

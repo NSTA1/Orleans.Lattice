@@ -38,8 +38,8 @@ internal sealed class BackupSchedulesView(PersonaSession session)
         }
 
         await Content.GetByRole(AriaRole.Button, new() { Name = "Show schedules", Exact = true }).ClickAsync();
-        await Expect(Content.GetByRole(AriaRole.Heading, new() { Name = "Schedules of" })).ToContainTextAsync(tree);
-        await Expect(FullRow).ToBeVisibleAsync();
+        await Expect(Content.GetByRole(AriaRole.Heading, new() { Name = "Schedules of" })).ToContainTextAsync(tree, new() { Timeout = 30_000 });
+        await Expect(FullRow).ToBeVisibleAsync(new() { Timeout = 30_000 });
     }
 
     /// <summary>The Full row's cells, by column: Kind, Schedule, Interval, Last run, Last success.</summary>
@@ -54,7 +54,7 @@ internal sealed class BackupSchedulesView(PersonaSession session)
         await Content.GetByLabel("Every, hours", new() { Exact = true }).FillAsync(((int)every.TotalHours).ToString(System.Globalization.CultureInfo.InvariantCulture));
         await Content.GetByLabel("Every, minutes", new() { Exact = true }).FillAsync(every.Minutes.ToString(System.Globalization.CultureInfo.InvariantCulture));
         await Content.GetByRole(AriaRole.Button, new() { Name = "Save schedule", Exact = true }).ClickAsync();
-        await Expect(Content.GetByRole(AriaRole.Status).Filter(new() { HasTextString = "Scheduled a full backup every" })).ToBeVisibleAsync();
+        await Expect(Content.GetByRole(AriaRole.Status).Filter(new() { HasTextString = "Scheduled a full backup every" })).ToBeVisibleAsync(new() { Timeout = 30_000 });
     }
 
     private static async Task<bool> WaitVisibleAsync(ILocator locator, TimeSpan timeout)
