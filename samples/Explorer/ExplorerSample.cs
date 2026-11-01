@@ -1,3 +1,5 @@
+using Orleans.Lattice.Replication;
+
 namespace Orleans.Lattice.Samples.Explorer;
 
 /// <summary>
@@ -94,13 +96,17 @@ internal sealed class ExplorerSample : IAsyncDisposable
             options.ExplorerConfigPath,
             options.SignInAs);
         var sink = new SampleSharedBackupSink();
+
+        // One credential for the link, made for this run: a tenant region's
+        // backfill needs a transport-authenticated peer (SampleLinkSecretSource).
+        var linkSecret = LatticeReplicationSharedSecret.Generate();
         var east = SampleRegion.Build(
             new SampleRegionPlan(
                 SampleIdentities.EastRegion,
                 ports.EastGrpc,
                 ports.EastSilo,
                 ports.EastGateway,
-                new SampleRegionPeer(SampleIdentities.WestRegion, ports.WestGrpc),
+                new SampleRegionPeer(SampleIdentities.WestRegion, ports.WestGrpc, linkSecret),
                 estateConsole),
             options,
             sink,
@@ -111,7 +117,7 @@ internal sealed class ExplorerSample : IAsyncDisposable
                 ports.WestGrpc,
                 ports.WestSilo,
                 ports.WestGateway,
-                new SampleRegionPeer(SampleIdentities.EastRegion, ports.EastGrpc),
+                new SampleRegionPeer(SampleIdentities.EastRegion, ports.EastGrpc, linkSecret),
                 Console: null),
             options,
             sink,

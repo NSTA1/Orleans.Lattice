@@ -79,6 +79,8 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // The settlementcalls suite models conditional registry fallback dispatch at three callers.
 // The settlementfusion suite models activation, cleanup batches and local prepare probes.
 // The adminstatus suite models the tree-admin resize, reshard and view status elisions.
+// Also recognised: adminsampling models view sample fusion, scalar lookup and tree-stat overlap.
+// The catalogsampling suite models fresh page lookup batches, settled sample waves and participant existence.
 // The bootstrapcalls suite models capture, foreign scan and per-leaf saga discard fusion.
 // The maintenanceelisions suite selects the reshard, consolidation and options
 // lanes of autonomicprobes.
@@ -95,6 +97,27 @@ var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
     if (args[i] == "--suite") { suite = args[i + 1]; break; }
+}
+
+// Page/participant paths remain opt-in, keeping the existing adminsampling suite unchanged.
+if (string.Equals(suite, "catalogsampling", StringComparison.OrdinalIgnoreCase))
+{
+    config = config.AddFilter(new SimpleFilter(benchmark =>
+        benchmark.Parameters["Path"] is AdminSamplingBenchmarks.Site.PageLookup
+            or AdminSamplingBenchmarks.Site.SampleWave
+            or AdminSamplingBenchmarks.Site.ParticipantPresence));
+    var catalogSamplingSummary = BenchmarkRunner.Run<AdminSamplingBenchmarks>(config);
+    return catalogSamplingSummary.HasCriticalValidationErrors || catalogSamplingSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
+if (string.Equals(suite, "adminsampling", StringComparison.OrdinalIgnoreCase))
+{
+    config = config.AddFilter(new SimpleFilter(benchmark =>
+        benchmark.Parameters["Path"] is AdminSamplingBenchmarks.Site.ViewSample
+            or AdminSamplingBenchmarks.Site.RuntimeLookup
+            or AdminSamplingBenchmarks.Site.TreeStats));
+    var samplingSummary = BenchmarkRunner.Run<AdminSamplingBenchmarks>(config);
+    return samplingSummary.HasCriticalValidationErrors || samplingSummary.Reports.Any(report => !report.Success) ? 1 : 0;
 }
 
 if (string.Equals(suite, "adminstatus", StringComparison.OrdinalIgnoreCase))

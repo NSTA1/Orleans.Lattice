@@ -154,6 +154,21 @@ internal sealed class LatticeView(
     public Task<long> GetLagAsync(CancellationToken cancellationToken = default) =>
         maintainer.GetLagAsync(cancellationToken);
 
+    /// <summary>
+    /// Samples lag and the active generation's count without a separate
+    /// active-tree dispatch. This is an observational sample, not an atomic snapshot.
+    /// </summary>
+    internal async Task<(long Lag, int EntryCount)> SampleStatsAsync(CancellationToken cancellationToken)
+    {
+        var status = await maintainer.GetStatusAsync(cancellationToken);
+        using var readScope = ViewReadContext.BeginScope();
+        var tree = grainFactory.GetGrain<ILattice>(status.ActiveTreeId);
+        var count = isAggregation
+            ? await tree.CountAsync(ReservedFloor, null, cancellationToken)
+            : await tree.CountAsync(cancellationToken);
+        return (status.Lag, count);
+    }
+
     /// <inheritdoc />
     public async Task RebuildAsync(CancellationToken cancellationToken = default)
     {

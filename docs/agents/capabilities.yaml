@@ -3688,7 +3688,7 @@ capabilities:
       - statement: "The package publishes and tests recall floors for clustered and unclustered corpora."
         source: "docs/lattice.vector/recall.md"
       - statement: "Results are ordered by descending score and then ascending key; a NaN score ranks below every numeric score and then by key among NaNs."
-        source: "src/lattice.vector/VectorIndex.Query.cs#VectorIndex.IsBetter"
+        source: "src/lattice.vector/VectorIndex.Query.cs#VectorIndex.RanksBefore"
       - statement: "DurableVectorIndex persists the index under a caller-chosen key prefix."
         source: "docs/lattice.vector/api.md"
       - statement: "Lazy open walks the identifier mapping, reads each partition commit record and applies only centroid chunks; a query then fetches only the vector chunks of the partitions it probes."

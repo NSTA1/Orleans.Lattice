@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using Orleans.Lattice.Views;
 
@@ -125,6 +126,34 @@ public sealed partial class LatticeStateApiEdgeCaseTests
             Assert.That(active, Is.EqualTo("view-orders#g1"));
             Assert.That(fallback, Is.EqualTo("view-orders"));
         });
+    }
+
+    [Test]
+    public async Task ListViewsAsync_samples_default_handle_through_fused_status()
+    {
+        var maintainer = Substitute.For<IViewMaintainerGrain>();
+        maintainer.GetStatusAsync(Arg.Any<CancellationToken>())
+            .Returns(new ViewMaintainerStatus(6, "view-sampled#g2"));
+        var tree = Substitute.For<ILattice>();
+        tree.CountAsync(Arg.Any<CancellationToken>()).Returns(12);
+        var grains = Substitute.For<IGrainFactory>();
+        grains.GetGrain<ILattice>("view-sampled#g2").Returns(tree);
+        var handle = new LatticeView("sampled", grains, maintainer, TimeSpan.FromSeconds(1));
+        var factory = Substitute.For<ILatticeViewFactory>();
+        factory.GetAsync("sampled", Arg.Any<CancellationToken>()).Returns(handle);
+        var services = new ServiceCollection();
+        services.AddSingleton<IViewCatalog>(new FixedViewCatalog(Registration("sampled", "source")));
+        services.AddSingleton<IReadOnlyList<StartupViewRegistration>>([]);
+        services.AddSingleton(factory);
+        var query = CreateQuery(services: services.BuildServiceProvider());
+
+        var page = await query.ListViewsAsync(new CatalogRequest { IncludeViewStats = true });
+
+        Assert.That(page.Entries.Single().Lag, Is.EqualTo(6));
+        Assert.That(page.Entries.Single().EntryCount, Is.EqualTo(12));
+        await maintainer.Received(1).GetStatusAsync(Arg.Any<CancellationToken>());
+        await maintainer.DidNotReceiveWithAnyArgs().GetActiveTreeIdAsync(default);
+        await maintainer.DidNotReceiveWithAnyArgs().GetLagAsync(default);
     }
 
     [Test]

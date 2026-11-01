@@ -528,8 +528,11 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
             };
         }
 
-        var diagnostics = await tree.DiagnoseAsync(deep: false, cancellationToken).ConfigureAwait(false);
-        var storage = await tree.GetStorageUsageAsync(cancellationToken).ConfigureAwait(false);
+        var diagnosticsTask = tree.DiagnoseAsync(deep: false, cancellationToken);
+        var storageTask = tree.GetStorageUsageAsync(cancellationToken);
+        await Task.WhenAll(diagnosticsTask, storageTask).ConfigureAwait(false);
+        var diagnostics = await diagnosticsTask.ConfigureAwait(false);
+        var storage = await storageTask.ConfigureAwait(false);
 
         return new TreeStatsReport
         {

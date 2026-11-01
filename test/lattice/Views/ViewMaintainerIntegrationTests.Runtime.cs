@@ -12,6 +12,32 @@ namespace Orleans.Lattice.Tests.Views;
 public partial class ViewMaintainerIntegrationTests
 {
     [Test]
+    public async Task GetAggregationKindsAsync_cross_silo_batch_preserves_nullable_slots_and_fresh_deletion()
+    {
+        var registry = _fixture.Cluster.Client.GetGrain<IViewRegistryGrain>(IViewRegistryGrain.SingletonKey);
+        const string name = "sampling-wire-contract";
+        await registry.RegisterAsync(new RuntimeViewRegistration
+        {
+            ViewName = name,
+            SourceTreeId = "sampling-wire-source",
+            ProjectionTypeName = typeof(ViewMaintainerIntegrationTests).FullName!,
+            ProjectionVersion = "v1",
+            IsAggregation = true,
+        });
+        try
+        {
+            Assert.That(await registry.GetAggregationKindsAsync(["missing-sampling-wire", name, name]),
+                Is.EqualTo(new bool?[] { null, true, true }));
+            await registry.UnregisterAsync(name);
+            Assert.That(await registry.GetAggregationKindsAsync([name]), Is.EqualTo(new bool?[] { null }));
+        }
+        finally
+        {
+            await registry.UnregisterAsync(name);
+        }
+    }
+
+    [Test]
     public async Task Fold_view_materialises_member_count_accumulator()
     {
         var src = _fixture.Source(ViewClusterFixture.FoldSource);

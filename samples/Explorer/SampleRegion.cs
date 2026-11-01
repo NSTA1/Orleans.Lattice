@@ -54,7 +54,9 @@ namespace Orleans.Lattice.Samples.Explorer;
 /// authorized by the cluster against the resolved caller, which the bindings
 /// read from the console's <c>Basic</c> sign-in header (see
 /// <see cref="DemoBasicAuthenticator"/>). Cross-region replication runs over
-/// plaintext loopback h2c with no shared secret, which is equally sample-only.
+/// plaintext loopback h2c, which is equally sample-only, but authenticated with
+/// a shared secret generated for each run (<see cref="SampleLinkSecretSource"/>):
+/// tenant backfill needs a peer identity the transport has authenticated.
 /// </para>
 /// </remarks>
 internal sealed class SampleRegion : IAsyncDisposable
@@ -345,7 +347,11 @@ internal sealed class SampleRegion : IAsyncDisposable
             grpc.AllowPlaintextEndpoints = true;
             grpc.LocalClusterId = plan.Id;
         });
-        silo.Services.Configure<LatticeReplicationSecurityOptions>(security => security.RequireAuthentication = false);
+        // The link is authenticated, with origin binding on (the default): a
+        // tenant's Online region exports its trees' snapshots only to a peer whose
+        // identity the transport authenticated, so a region joining acme could
+        // never finish its backfill over an unauthenticated link.
+        silo.AddLatticeReplicationSecrets(_ => new SampleLinkSecretSource(peer.LinkSecret));
     }
 
     private static void ConfigureGrpc(IServiceCollection services, SampleRegionPlan plan)

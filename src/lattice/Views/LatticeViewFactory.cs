@@ -180,16 +180,8 @@ internal sealed class LatticeViewFactory(
             return BuildHandle(viewName, startup.AggregationProjectionFactory is not null);
         }
 
-        var durable = await RegistryGrain.ListAsync();
-        for (var i = 0; i < durable.Count; i++)
-        {
-            if (string.Equals(durable[i].ViewName, viewName, StringComparison.Ordinal))
-            {
-                return BuildHandle(viewName, durable[i].IsAggregation);
-            }
-        }
-
-        return null;
+        var isAggregation = await RegistryGrain.GetAggregationKindAsync(viewName);
+        return isAggregation is { } kind ? BuildHandle(viewName, kind) : null;
     }
 
     private LatticeView BuildHandle(string viewName, bool isAggregation)
@@ -204,6 +196,71 @@ internal sealed class LatticeViewFactory(
         // (cached for cacheTtl) rather than binding a fixed tree id, so queries
         // follow a shadow-swap rebuild automatically.
         return new LatticeView(viewName, grainFactory, maintainer, cacheTtl, isAggregation);
+    }
+
+    internal async Task<ILatticeView?[]> GetManyForSamplingAsync(
+        string[] viewNames, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(viewNames);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(viewNames.Length, BoundedFanOut.DefaultWidth);
+        foreach (var name in viewNames)
+            ArgumentException.ThrowIfNullOrEmpty(name);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var handles = new ILatticeView?[viewNames.Length];
+        var remoteNames = new List<string>(viewNames.Length);
+        var remoteSlots = new List<int>(viewNames.Length);
+        for (var i = 0; i < viewNames.Length; i++)
+        {
+            var name = viewNames[i];
+            if (catalog.TryGet(name) is { } registration)
+                handles[i] = BuildSamplingHandle(name, registration.IsAggregation);
+            else if (FindStartupRegistration(name) is { } startup)
+                handles[i] = BuildSamplingHandle(name, startup.AggregationProjectionFactory is not null);
+            else
+            {
+                remoteNames.Add(name);
+                remoteSlots.Add(i);
+            }
+        }
+
+        if (remoteNames.Count == 0)
+            return handles;
+
+        bool?[] kinds;
+        try
+        {
+            // Do not reuse the earlier catalog enumeration: deletion must be
+            // visible at this fresh, bounded sampling cut.
+            kinds = await RegistryGrain.GetAggregationKindsAsync(remoteNames.ToArray());
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Catalog sampling already reports lookup failures as unavailable.
+            // Keep local/startup handles usable when only the remote lookup fails.
+            logger.LogWarning(ex, "Runtime view sampling lookup failed for {Count} views; their statistics are unavailable.",
+                remoteNames.Count);
+            return handles;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        for (var i = 0; i < kinds.Length; i++)
+            if (kinds[i] is { } kind)
+                handles[remoteSlots[i]] = BuildSamplingHandle(remoteNames[i], kind);
+        return handles;
+    }
+
+    private ILatticeView? BuildSamplingHandle(string viewName, bool isAggregation)
+    {
+        try
+        {
+            return BuildHandle(viewName, isAggregation);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "View sampling handle for {ViewName} is unavailable.", viewName);
+            return null;
+        }
     }
 
     private ILatticeView RegisterAndActivate(
