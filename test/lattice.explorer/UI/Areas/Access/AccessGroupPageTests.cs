@@ -114,6 +114,24 @@ public sealed class AccessGroupPageTests : AccessTestContext
     }
 
     [Test]
+    public void A_refused_members_error_clears_once_another_member_is_typed()
+    {
+        Admin.WithGroup("ops").WithPrincipal("alice", "Alice", DirectoryPrincipalKind.User);
+        var cut = Loaded();
+        AccessForms.Type(cut, "Member", "mallory");
+        cut.Find("section:nth-of-type(2) form").Submit();
+        cut.WaitUntil(() => Assert.That(AccessForms.ErrorOf(cut, "Member"), Does.StartWith("mallory is not a user")));
+
+        AccessForms.Type(cut, "Member", "alice");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(AccessForms.ErrorOf(cut, "Member"), Is.Null, "the refusal names the id that was refused, not the one now typed");
+            Assert.That(AccessForms.Field(cut, "Member").GetAttribute("aria-invalid"), Is.Null);
+        });
+    }
+
+    [Test]
     [TestCase(true)]
     [TestCase(false)]
     public void The_servers_directory_refusal_of_a_member_is_a_field_error(bool typed)
