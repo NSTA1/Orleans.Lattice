@@ -51,9 +51,19 @@ public sealed partial class AuditorsReviewChapter
 
         await tab("Compliance").ClickAsync();
         await Expect(content.GetByRole(AriaRole.Heading, new() { Name = "You may not scan this tree", Exact = true })).ToHaveCountAsync(0);
-        await content.GetByRole(AriaRole.Button, new() { Name = "Scan compliance", Exact = true }).ClickAsync();
+        // The panel shows the newest scan dana can see, which may be one a consumed chapter's
+        // contract ran (U2's), so the button reads Scan compliance or Scan again; either way her
+        // own scan must produce a new report.
+        var report = content.Locator(".lt-schema-result");
+        var before = await report.CountAsync() > 0 ? await report.InnerTextAsync() : null;
+        await content.GetByRole(AriaRole.Button, new() { NameRegex = new Regex("^(Scan compliance|Scan again)$") }).ClickAsync();
         await Expect(content.GetByRole(AriaRole.Heading, new() { Name = "Last scan", Exact = true })).ToBeVisibleAsync(new() { Timeout = 180_000 });
-        await Expect(content.Locator(".lt-schema-result")).ToContainTextAsync(new Regex("Compliant|Non-compliant"));
+        if (before is not null)
+        {
+            await Expect(report).Not.ToHaveTextAsync(before, new() { Timeout = 180_000 });
+        }
+
+        await Expect(report).ToContainTextAsync(new Regex("Compliant|Non-compliant"));
         await SnapAsync(dana, "6", "compliance", "Compliance: read authority is enough to scan, and the scan changes nothing");
         Coverage.Hit("tab:schema/compliance");
 
