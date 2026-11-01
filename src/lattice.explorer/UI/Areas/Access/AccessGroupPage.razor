@@ -95,9 +95,9 @@ else
         <form class="lt-access-form" @onsubmit="AddMemberAsync" novalidate>
             <AccessSubjectPicker Label="Member"
                                  Kind="_memberKind"
-                                 KindChanged="@(kind => _memberKind = kind)"
+                                 KindChanged="@(kind => { _memberKind = kind; _memberError = null; })"
                                  Id="@_memberId"
-                                 IdChanged="@(value => _memberId = value)"
+                                 IdChanged="@(value => { _memberId = value; _memberError = null; })"
                                  Error="@_memberError"
                                  DirectoryAvailable="@(_model?.DirectoryAvailable == true)"
                                  DirectoryExplanation="@_model?.DirectoryExplanation"
