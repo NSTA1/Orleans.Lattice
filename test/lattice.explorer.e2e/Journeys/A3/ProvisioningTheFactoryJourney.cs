@@ -375,10 +375,13 @@ public sealed class ProvisioningTheFactoryJourney : JourneyChapter
             await steps.SubstepAsync("reconcile-confirm", "Reconcile, confirmed with the index's name");
 
             await A3Ui.ConfirmAsync(confirm, "Reconcile");
-            await Expect(data.Operation.Locator(".lt-operation-progress")).ToHaveAttributeAsync("data-lt-operation-state", "Succeeded", new() { Timeout = 180_000 });
-            await Expect(data.Operation.Locator("h2")).ToContainTextAsync($"Reconcile of {Names.TagIndexes.OrderStatus}");
+            // A finished reconcile clears its operation view and reports the outcome in a toast.
+            await Expect(page.Locator(".lt-toast[data-lt-tone='success'] .lt-toast__message")
+                    .Filter(new() { HasTextRegex = new Regex($"^Reconciled {Regex.Escape(Names.TagIndexes.OrderStatus)}: scanned \\d+ keys? and removed \\d+ orphaned rows?\\.$") }))
+                .ToBeVisibleAsync(new() { Timeout = 180_000 });
+            await Expect(data.Operation).ToHaveCountAsync(0);
             Coverage.Hit("use-case:data/tag-index-reconcile");
-            await steps.SubstepAsync("reconciled", "The reconcile of order-status succeeded");
+            await steps.SubstepAsync("reconciled", "The reconcile of order-status succeeded, and says what it scanned");
         });
     }
 
