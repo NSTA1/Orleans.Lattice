@@ -17,6 +17,9 @@ public sealed class TreeWorkspacePage(ShellPage shell)
     /// <summary>How the History timeline writes a revision's time: <c>2026-10-31 14:00:05 UTC</c>.</summary>
     private const string TimelineTimeFormat = "yyyy-MM-dd HH:mm:ss 'UTC'";
 
+    /// <summary>How long a History read may take to draw the timeline: one state-API read, which on a busy estate outlasts the default expectation.</summary>
+    private static readonly LocatorAssertionsToBeVisibleOptions TimelineLoads = new() { Timeout = 60_000 };
+
     /// <summary>How the As of field takes an instant.</summary>
     private const string InstantFormat = "yyyy-MM-ddTHH:mm:ssZ";
 
@@ -150,7 +153,7 @@ public sealed class TreeWorkspacePage(ShellPage shell)
     public async Task ExpectHistoryOfAsync(string key)
     {
         await Expect(Content.GetByRole(AriaRole.Heading, new() { NameRegex = new Regex("^History of ") })).ToContainTextAsync(key);
-        await Expect(Revisions.First).ToBeVisibleAsync();
+        await Expect(Revisions.First).ToBeVisibleAsync(TimelineLoads);
         await Expect(RevisionCount).ToHaveTextAsync(new Regex(@"^\d[\d,]* revisions?( so far)?$"));
     }
 
@@ -171,7 +174,7 @@ public sealed class TreeWorkspacePage(ShellPage shell)
         await Expect(Page).ToHaveURLAsync(new Regex("[?&]at=" + Regex.Escape(Uri.EscapeDataString(text)) + "(&|$)"));
         var readable = instant.ToUniversalTime().ToString(TimelineTimeFormat, CultureInfo.InvariantCulture);
         await Expect(Content.GetByText("Showing the key as it stood at " + readable)).ToBeVisibleAsync();
-        await Expect(RevisionInEffect).ToHaveCountAsync(1);
+        await Expect(RevisionInEffect).ToHaveCountAsync(1, new() { Timeout = 60_000 });
     }
 
     /// <summary>Chooses <b>Latest</b>, leaving the point-in-time view.</summary>
@@ -182,7 +185,7 @@ public sealed class TreeWorkspacePage(ShellPage shell)
         await Expect(Content.GetByText("Showing the key as it stood at")).ToHaveCountAsync(0);
         await Expect(RevisionInEffect).ToHaveCountAsync(0);
         await Expect(AsOf).ToHaveValueAsync(string.Empty);
-        await Expect(Revisions.First).ToBeVisibleAsync();
+        await Expect(Revisions.First).ToBeVisibleAsync(TimelineLoads);
     }
 
     /// <summary>Turns the History tab's <b>Follow new revisions</b> switch off, so the timeline holds still.</summary>

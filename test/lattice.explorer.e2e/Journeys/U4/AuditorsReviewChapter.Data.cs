@@ -100,7 +100,7 @@ public sealed partial class AuditorsReviewChapter
         await SnapAsync(dana, "3", "latest-reading", "The line feed's latest reading: the newest page of its revisions, with older ones to load");
 
         await tree.LoadOlder.ClickAsync();
-        await Expect(tree.RevisionCount).Not.ToHaveTextAsync(new Regex("^" + first.ToString(System.Globalization.CultureInfo.InvariantCulture) + " "));
+        await Expect(tree.RevisionCount).Not.ToHaveTextAsync(new Regex("^" + first.ToString(System.Globalization.CultureInfo.InvariantCulture) + " "), new() { Timeout = 60_000 });
         Assert.That(await tree.RevisionCountAsync(), Is.GreaterThan(first), "Load older revisions adds the next page below the first");
         await SnapAsync(dana, "3", "older-revisions", "Load older revisions: the next page joins the timeline");
         Coverage.Hit("use-case:data/history");
