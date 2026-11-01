@@ -68,7 +68,7 @@ public sealed partial class AuditorsReviewChapter
         var spine = await shell.ReadSpineAsync();
         Assert.That(spine.Unavailable, Does.Contain("backups"), $"Backups is drawn but not open: {spine}");
         await shell.GoToAreaAsync("backups");
-        await Expect(shell.Content).ToContainTextAsync("Not available");
+        await Expect(shell.Content).ToContainTextAsync("Not available", LoadsText);
         await Expect(shell.Content).ToContainTextAsync(NoBackupGrant);
         await Expect(shell.Content.Locator("[data-lt-command=\"backups.capture\"]")).ToHaveCountAsync(0);
         await Expect(shell.Content.GetByRole(AriaRole.Link, new() { NameRegex = new Regex("Restore|Health|Schedules") })).ToHaveCountAsync(0);
@@ -84,12 +84,12 @@ public sealed partial class AuditorsReviewChapter
         var content = shell.Content;
         await shell.GoToAreaAsync("replication");
         await Expect(shell.Heading).ToHaveTextAsync("Replication");
-        await Expect(content).ToContainTextAsync("No peer region is linked to this region");
+        await Expect(content).ToContainTextAsync("No peer region is linked to this region", LoadsText);
         await SnapAsync(dana, "8", "estate", "Replication: no link she may see, since she holds no Replication grant");
 
         await content.Locator("[data-lt-command=\"replication.trees\"]").ClickAsync();
         await Expect(shell.Heading).ToHaveTextAsync("Enrolled trees");
-        await Expect(content).ToContainTextAsync("No tree you may manage is enrolled for replication.");
+        await Expect(content).ToContainTextAsync("No tree you may manage is enrolled for replication.", LoadsText);
         await Expect(content.GetByRole(AriaRole.Button, new() { NameRegex = new Regex("^(Enable|Disable) replication for ") })).ToHaveCountAsync(0);
         await Expect(content.GetByRole(AriaRole.Button, new() { Name = "Enable replication for a tree", Exact = true })).ToHaveCountAsync(0);
         await SnapAsync(dana, "8", "enrolled-trees", "Enrolled trees: none she may manage, and no Enable or Disable control for a caller without the Replication grant");
@@ -104,7 +104,7 @@ public sealed partial class AuditorsReviewChapter
         await Expect(shell.Heading).ToHaveTextAsync("Telemetry");
         foreach (var board in new[] { "Throughput", "Latency", "Storage", "Pressure" })
         {
-            await Expect(content.GetByRole(AriaRole.Link, new() { Name = board, Exact = true })).ToBeVisibleAsync();
+            await Expect(content.GetByRole(AriaRole.Link, new() { Name = board, Exact = true })).ToBeVisibleAsync(Loads);
         }
 
         await Expect(content.GetByText(new Regex("^Not shown: "))).ToHaveCountAsync(0);
@@ -112,7 +112,7 @@ public sealed partial class AuditorsReviewChapter
 
         await content.GetByRole(AriaRole.Link, new() { Name = "Throughput", Exact = true }).ClickAsync();
         await Expect(shell.Heading).ToHaveTextAsync("Throughput");
-        await Expect(content.Locator(".lt-telemetry-board").First).ToBeVisibleAsync();
+        await Expect(content.Locator(".lt-telemetry-board").First).ToBeVisibleAsync(Loads);
         await Expect(content.GetByRole(AriaRole.Heading, new() { Name = NothingOnThisBoard, Exact = true })).ToHaveCountAsync(0);
         await SnapAsync(dana, "9", "throughput", "The Throughput board, drawn for her");
         Coverage.Hit("subroute:telemetry/throughput");
@@ -128,12 +128,12 @@ public sealed partial class AuditorsReviewChapter
         await shell.GoToAreaAsync("cluster");
         await Expect(shell.Heading).ToHaveTextAsync("Cluster");
         await Expect(content.GetByRole(AriaRole.Heading, new() { Name = "Estate", Exact = true })).ToBeVisibleAsync();
-        await Expect(content.GetByText("Cluster id", new() { Exact = true }).First).ToBeVisibleAsync();
+        await Expect(content.GetByText("Cluster id", new() { Exact = true }).First).ToBeVisibleAsync(Loads);
         await SnapAsync(dana, "10", "cluster", "Cluster: the estate, readable through her cluster-wide Telemetry grant");
 
         await shell.GotoAsync("/cluster/trees");
         await Expect(shell.Heading).ToHaveTextAsync("Trees");
-        await Expect(content.GetByText(Names.Trees.FactoryOrders, new() { Exact = true }).First).ToBeVisibleAsync();
+        await Expect(content.GetByText(Names.Trees.FactoryOrders, new() { Exact = true }).First).ToBeVisibleAsync(Loads);
         await Expect(content.Locator("[data-lt-command=\"cluster.create-tree\"]")).ToHaveCountAsync(0);
         await Expect(content.Locator("[data-lt-command=\"cluster.reshard-tree\"]")).ToHaveCountAsync(0);
         await SnapAsync(dana, "10", "cluster-trees", "Cluster trees: every tree listed, and no New tree or Reshard tree for a reader");
@@ -161,24 +161,24 @@ public sealed partial class AuditorsReviewChapter
 
         await shell.GoToAreaAsync("data");
         await Expect(shell.Heading).ToHaveTextAsync("Data");
-        await Expect(content.GetByRole(AriaRole.Heading, new() { NameRegex = new Regex("^No trees") })).ToBeVisibleAsync();
+        await Expect(content.GetByRole(AriaRole.Heading, new() { NameRegex = new Regex("^No trees") })).ToBeVisibleAsync(Loads);
         await Expect(content).ToContainTextAsync("There is no tree or view you can reach here.");
         await Expect(content).ToContainTextAsync("you hold a grant to read it");
         await Expect(content.Locator("[data-lt-data-new-from-file]")).ToHaveCountAsync(0);
         await SnapAsync(nina, "11", "data", "Data: an empty directory that says why, and nothing to create");
 
         await shell.GoToAreaAsync("apps");
-        await Expect(content.GetByRole(AriaRole.Heading, new() { Name = "No apps yet", Exact = true })).ToBeVisibleAsync();
+        await Expect(content.GetByRole(AriaRole.Heading, new() { Name = "No apps yet", Exact = true })).ToBeVisibleAsync(Loads);
         await SnapAsync(nina, "11", "apps", "Apps: no app grants her a role yet");
 
         await shell.GoToAreaAsync("telemetry");
-        await Expect(content.GetByRole(AriaRole.Heading, new() { Name = "No metrics to show", Exact = true })).ToBeVisibleAsync();
+        await Expect(content.GetByRole(AriaRole.Heading, new() { Name = "No metrics to show", Exact = true })).ToBeVisibleAsync(Loads);
         await shell.GotoAsync("/telemetry/throughput");
-        await Expect(content.GetByRole(AriaRole.Heading, new() { Name = NothingOnThisBoard, Exact = true })).ToBeVisibleAsync();
+        await Expect(content.GetByRole(AriaRole.Heading, new() { Name = NothingOnThisBoard, Exact = true })).ToBeVisibleAsync(Loads);
         await SnapAsync(nina, "11", "telemetry-board", "Telemetry: no metric is hers, so a board says nothing on it is available to her");
 
         await shell.GoToAreaAsync("backups");
-        await Expect(content).ToContainTextAsync(NoBackupGrant);
+        await Expect(content).ToContainTextAsync(NoBackupGrant, LoadsText);
         await SnapAsync(nina, "11", "backups", "Backups: the reason, and what would change it");
         Coverage.Hit("use-case:shell/no-grants-console");
     }
