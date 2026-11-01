@@ -267,11 +267,21 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
     public Task<ReplicationDrainedLineage?> GetDrainedLineageAsync(string sourceClusterId)
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
+        // Interleaves with the handoff (#5534): between the shadow copy's alias
+        // swap, which re-mints the tree frontier epoch, and the write that records
+        // that epoch below, the recorded epoch trails the frontier although the
+        // tree holds exactly this drain.
+        var cutoverPending = state.State.InProgress
+            && state.State.Phase == LatticeBootstrapState.IncrementalHandoff
+            && state.State.UseShadowCopy
+            && !state.State.ShadowCopyCutoverComplete
+            && string.Equals(state.State.SourceClusterId, sourceClusterId, StringComparison.Ordinal);
         return Task.FromResult<ReplicationDrainedLineage?>(
             state.State.DrainedLineageBySource.TryGetValue(sourceClusterId, out var lineage)
                 ? new ReplicationDrainedLineage(
                     lineage,
-                    state.State.DrainedFrontierEpochBySource.TryGetValue(sourceClusterId, out var epoch) ? epoch : Guid.Empty)
+                    state.State.DrainedFrontierEpochBySource.TryGetValue(sourceClusterId, out var epoch) ? epoch : Guid.Empty,
+                    cutoverPending)
                 : null);
     }
 

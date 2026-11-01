@@ -16,7 +16,8 @@ public sealed class LatticeSchemaEnforcementOptions
     /// <c>true</c>, intercepted system-origin writes are inspected and a
     /// non-compliant item is dead-lettered for any tree whose policy also sets
     /// <see cref="LatticeSchemaPolicy.StrictIngest"/>. Replicated typed-CRDT
-    /// deltas and replicated atomic-batch entries reach the interceptor; a plain
+    /// deltas, replicated atomic-batch entries and the rows a receiver bootstrap
+    /// drains from a peer's export reach the interceptor; a steady-state plain
     /// last-writer-wins replication apply, a backup restore and a tree merge bypass
     /// write interception and are not made schema-checked by this switch.
     /// </summary>

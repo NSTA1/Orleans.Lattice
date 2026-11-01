@@ -133,16 +133,22 @@ queue](dead-letter-queue.md) instead of being applied, so a bad item is neither
 silently accepted nor allowed to stall the ingest stream.
 
 Strict mode only sees ingest that reaches the tree's write operations as a
-system-origin write, which in practice is two replication paths. One is the
+system-origin write, which in practice is three replication paths. One is the
 typed-CRDT path: a replicated CRDT delta (judged, like a local delta, only when
-its body parses as JSON) or a full-state CRDT row during bootstrap. The other is the
+its body parses as JSON) or a full-state CRDT row during bootstrap. Another is the
 entries of a replicated atomic batch, which the receiver stages one at a time
 through the tree's write operations until the batch's commit arrives. A
 dead-lettered entry of such a batch is left out of what the receiver stages, and
 the receiver commits the batch's other entries when the commit arrives. An entry
 is judged at the same point whether its prepare arrives before or after the
 receiver holds the batch's commit decision, so both arrival orders reach the same
-verdict: a refused entry is diverted, not applied. A plain
+verdict: a refused entry is diverted, not applied. The third is a bootstrap: every
+last-writer-wins row a receiver drains from a peer's export is judged too. An
+export carries committed state only, so it no longer records whether a row was
+written by an atomic batch or by a plain write, and it can be the only delivery of
+a batch the source withheld (for example after a coordinated restore), so the
+receiver judges every drained row rather than let the export become a way past the
+check. A steady-state plain
 (non-atomic) last-writer-wins replication apply and a backup restore merge or
 bulk-load straight into the tree's shards, so even in strict mode their values
 are stored verbatim and never dead-lettered.
