@@ -96,4 +96,24 @@ public interface ILatticeReplicationControl
     /// <returns>The permission-scoped per-tree replication config report.</returns>
     Task<ReplicationConfigReport> GetReplicationConfigAsync(
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Probes whether the current caller may configure replication for
+    /// <paramref name="treeId"/>, evaluated through the same fail-closed
+    /// <see cref="LatticeOperation.Replication"/> gate
+    /// <see cref="EnableReplicationAsync"/> and <see cref="DisableReplicationAsync"/>
+    /// use, but with <b>no side effects</b>: the engine is never consulted, and a
+    /// denial is reported as a <see langword="false"/> flag rather than thrown. The
+    /// tree need not exist or be enrolled, so a management surface can probe a
+    /// reserved placeholder id to ask whether the caller may enable a tree it has not
+    /// named yet. The flag is advisory; every real enable and disable is still
+    /// authorized on attempt.
+    /// </summary>
+    /// <param name="treeId">The tree to probe. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The caller's replication capability over <paramref name="treeId"/>.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    Task<ReplicationCapabilities> ProbeCapabilitiesAsync(
+        string treeId,
+        CancellationToken cancellationToken = default);
 }

@@ -111,7 +111,7 @@ public sealed class RestoreSagaDispatcherSetRestoreTests
         var result = await h.Dispatcher.TryDispatchSetAsync(SetId, LatticeRestoreMode.ShadowCutover);
 
         Assert.That(result, Is.Null);
-        await h.Coordinator.DidNotReceive().RunAsync(
+        await h.Coordinator.DidNotReceive().BeginAsync(
             Arg.Any<List<string>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>());
     }
 
@@ -135,8 +135,10 @@ public sealed class RestoreSagaDispatcherSetRestoreTests
             r => r.Mode == LatticeRestoreMode.ShadowCutover && r.EntriesApplied == 0));
 
         // Exactly one saga, carrying the set id on every argument that names it.
-        await h.Coordinator.Received(1).RunAsync(
+        await h.Coordinator.Received(1).BeginAsync(
             Arg.Is<List<string>>(l => l.Contains(Self) && l.Contains(Peer)), SetId, SetId, Self, SetId);
+        await h.Coordinator.DidNotReceive().RunAsync(
+            Arg.Any<List<string>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>());
     }
 
     [Test]
@@ -225,10 +227,7 @@ public sealed class RestoreSagaDispatcherSetRestoreTests
                     new BackupSetMember("backup-2", OtherTree),
                 ]));
 
-            Coordinator.RunAsync(
-                    Arg.Any<List<string>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
-                    Arg.Any<string?>())
-                .Returns(_ => Task.FromResult(outcome));
+            SagaCoordinatorStub.CompletesWith(Coordinator, outcome);
 
             var factory = Substitute.For<IGrainFactory>();
             // The saga id is derived inside the dispatcher, so capture it off the
@@ -254,7 +253,11 @@ public sealed class RestoreSagaDispatcherSetRestoreTests
                 Participant,
                 options,
                 NullLogger<RestoreSagaDispatcher>.Instance,
-                withSetResolver ? SetResolver : null);
+                withSetResolver ? SetResolver : null)
+            {
+                StatusPollInterval = TimeSpan.Zero,
+                RedriveInterval = TimeSpan.Zero,
+            };
         }
 
         public IReplicatedTreeMembership Membership { get; } = Substitute.For<IReplicatedTreeMembership>();
@@ -281,37 +284,25 @@ public sealed class RestoreSagaDispatcherSetRestoreTests
         /// the dispatcher finds a cached local result to return.
         /// </summary>
         public void PrepareLocallyDuringSaga() =>
-            Coordinator.RunAsync(
-                    Arg.Any<List<string>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
-                    Arg.Any<string?>())
-                .Returns(async _ =>
+            SagaCoordinatorStub.CompletesWith(Coordinator, CrossClusterSagaOutcome.Committed, async () =>
+                await Participant.PrepareAsync(new SagaControlRequest
                 {
-                    await Participant.PrepareAsync(new SagaControlRequest
-                    {
-                        SagaId = SagaId!,
-                        TargetTree = TargetTree,
-                        ManifestId = BackupId,
-                        CoordinatorClusterId = Self,
-                    });
-                    return CrossClusterSagaOutcome.Committed;
-                });
+                    SagaId = SagaId!,
+                    TargetTree = TargetTree,
+                    ManifestId = BackupId,
+                    CoordinatorClusterId = Self,
+                }));
 
         /// <summary>The set-restore equivalent of <see cref="PrepareLocallyDuringSaga"/>.</summary>
         public void PrepareSetLocallyDuringSaga() =>
-            Coordinator.RunAsync(
-                    Arg.Any<List<string>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
-                    Arg.Any<string?>())
-                .Returns(async _ =>
+            SagaCoordinatorStub.CompletesWith(Coordinator, CrossClusterSagaOutcome.Committed, async () =>
+                await Participant.PrepareAsync(new SagaControlRequest
                 {
-                    await Participant.PrepareAsync(new SagaControlRequest
-                    {
-                        SagaId = SagaId!,
-                        TargetTree = SetId,
-                        ManifestId = SetId,
-                        CoordinatorClusterId = Self,
-                        SetId = SetId,
-                    });
-                    return CrossClusterSagaOutcome.Committed;
-                });
+                    SagaId = SagaId!,
+                    TargetTree = SetId,
+                    ManifestId = SetId,
+                    CoordinatorClusterId = Self,
+                    SetId = SetId,
+                }));
     }
 }

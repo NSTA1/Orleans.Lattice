@@ -654,6 +654,13 @@ internal sealed class LatticeSchemaRemediationGrain(
             await grainFactory.GetLatticeRegistry().RegisterAsync(state.State.DestinationTreeId!, inherited);
         }
 
+        // The logical tree's replication shippers re-ship the destination's log from
+        // its start once the alias swaps to it, so the build holds that log (#5471).
+        // Armed before the first write and renewed on every slice; an abandoned
+        // build's hold lapses with its lease.
+        await WalCopyLogHold.ArmAsync(
+            grainFactory, state.State.DestinationTreeId!, state.State.SourcePhysicalTreeId ?? TreeId, logger);
+
         var source = grainFactory.GetGrain<ILattice>(TreeId);
         var destination = grainFactory.GetGrain<ILattice>(state.State.DestinationTreeId!);
         var compiled = CompiledPolicyOrNull();
@@ -1215,6 +1222,10 @@ internal sealed class LatticeSchemaRemediationGrain(
         // Proactively invalidate this activation's cached alias / routing so a
         // caller observes the cutover without waiting for a reactivation.
         await grainFactory.GetGrain<ILattice>(TreeId).GetRoutingAsync(forceRefresh: true);
+
+        // The shippers now rebind to the destination and register on its log, which
+        // ends the hold the build kept on it (#5471), within its grace at the latest.
+        await WalCopyLogHold.PublishAsync(grainFactory, destinationPhysical, logger);
         return true;
     }
 
@@ -1280,6 +1291,12 @@ internal sealed class LatticeSchemaRemediationGrain(
 
     private async Task DiscardDestinationAsync(ILattice destination)
     {
+        // A discarded destination is never cut over: release the hold on its log (#5471).
+        if (state.State.DestinationTreeId is { } discarded)
+        {
+            await WalCopyLogHold.ReleaseAsync(grainFactory, discarded, logger);
+        }
+
         try
         {
             await destination.DeleteTreeAsync();

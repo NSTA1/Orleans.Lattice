@@ -7,9 +7,9 @@
  * depth, booktabs tables from the primitives, one marker for "you are here"
  * and "selected" (always with a weight), no cards, no shadows.
  *
- * lt-data-* classes only. No width query appears here: below the small
- * breakpoint the layout marks its root lt-shell--compact, and the rules that
- * change there hang off that class. Plain ASCII only.
+ * lt-data-* classes only. Below the small breakpoint the rules that change
+ * query the Shell root's lt-viewport container at the breakpoint layer's
+ * declared width. Plain ASCII only.
  */
 
 /* ==========================================================================
@@ -28,8 +28,10 @@
   font-variant-numeric: tabular-nums;
 }
 
-.lt-shell--compact .lt-data-toolbar__status {
-  margin-inline-start: 0;
+@container lt-viewport (width < 768px) {
+  .lt-shell .lt-data-toolbar__status {
+    margin-inline-start: 0;
+  }
 }
 
 .lt-data-segmented {
@@ -166,8 +168,10 @@
   white-space: nowrap;
 }
 
-.lt-shell--compact .lt-data-inline {
-  max-width: none;
+@container lt-viewport (width < 768px) {
+  .lt-shell .lt-data-inline {
+    max-width: none;
+  }
 }
 
 .lt-data-pager {

@@ -16,4 +16,13 @@ internal static class LtBreakpointCascade
 {
     /// <summary>The name the width band is cascaded under.</summary>
     public const string Name = "Orleans.Lattice.Explorer.Breakpoint";
+
+    /// <summary>
+    /// The name under which the layout cascades <see langword="true"/> while it has not
+    /// measured its width yet. A chrome component whose markup differs by band draws
+    /// both forms then, marked with the breakpoint layer's <c>lt-only-compact</c> and
+    /// <c>lt-medium-up</c> utilities, so the first paint is right at any width. Nothing
+    /// is cascaded under it outside the layout, so a component outside it draws one form.
+    /// </summary>
+    public const string PendingName = "Orleans.Lattice.Explorer.BreakpointPending";
 }
