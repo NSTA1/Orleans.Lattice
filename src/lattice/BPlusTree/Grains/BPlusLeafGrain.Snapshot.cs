@@ -2999,8 +2999,7 @@ internal sealed partial class BPlusLeafGrain
         // below: once a partition is checkpointed the leaf is no longer starved,
         // and the bank step persists the advance, captures over it and publishes
         // a usable pin.
-        // PERTURBATION P5 (red-proof, reverted): the tick does not advance.
-        var liveAdvanced = false;
+        var liveAdvanced = await TryAdvanceLiveCheckpointAsync();
 
         if (IsStarvedOfDurableCheckpoint(starvationPartitionCount))
         {
