@@ -20,8 +20,8 @@ public sealed record ReplicationEnableRequestMessage
     [Id(1)] public LatticeMergeMode Mode { get; init; }
 
     /// <summary>
-    /// Optional id of the cluster to pull an initial snapshot from when the tree
-    /// already holds data. <see langword="null"/> or empty skips the bootstrap.
+    /// Optional id of the cluster to pull an initial snapshot from.
+    /// <see langword="null"/> or empty skips the bootstrap.
     /// </summary>
     [Id(2)] public string? BootstrapSourceClusterId { get; init; }
 }
