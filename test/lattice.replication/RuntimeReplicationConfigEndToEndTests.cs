@@ -80,11 +80,11 @@ public sealed class RuntimeReplicationConfigEndToEndTests
     // ── Scenario 2: enabling a non-empty tree composes a bootstrap ───────
 
     [Test]
-    public async Task Enable_on_non_empty_tree_requests_bootstrap_and_still_converges_config()
+    public async Task Enable_with_a_bootstrap_source_requests_bootstrap_and_still_converges_config()
     {
         var store = new ConvergingConfigStore();
         var admin = Substitute.For<ILatticeReplicationAdmin>();
-        var authority = CreateAuthority(store, admin: admin, probe: FixedProbe(hasContent: true));
+        var authority = CreateAuthority(store, admin: admin);
 
         var result = await authority.EnableReplicationAsync(
             Tree, LatticeMergeMode.LwwRegister, bootstrapSourceClusterId: SiteB);
@@ -334,7 +334,6 @@ public sealed class RuntimeReplicationConfigEndToEndTests
         ConvergingConfigStore store,
         string localReplicaId = SiteA,
         ILatticeReplicationAdmin? admin = null,
-        ILatticeTreeContentProbe? probe = null,
         IReadOnlyDictionary<string, LatticeMergeMode>? staticSeed = null)
     {
         var context = Substitute.For<ILatticeReplicationContext>();
@@ -343,17 +342,9 @@ public sealed class RuntimeReplicationConfigEndToEndTests
 
         var preconditions = new LatticeReplicationPreconditionValidator(context);
         admin ??= Substitute.For<ILatticeReplicationAdmin>();
-        probe ??= FixedProbe(hasContent: false);
 
         return new LatticeReplicationConfigAuthority(
-            store, preconditions, context, admin, probe, BuildMonitor(staticSeed));
-    }
-
-    private static ILatticeTreeContentProbe FixedProbe(bool hasContent)
-    {
-        var probe = Substitute.For<ILatticeTreeContentProbe>();
-        probe.HasContentAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(hasContent));
-        return probe;
+            store, preconditions, context, admin, BuildMonitor(staticSeed));
     }
 
     private static async Task<CompiledReplicationConfigSnapshotMaintainer> WarmMaintainerAsync(
