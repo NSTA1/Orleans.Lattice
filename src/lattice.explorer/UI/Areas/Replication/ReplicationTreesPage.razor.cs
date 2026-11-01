@@ -26,6 +26,7 @@ public partial class ReplicationTreesPage
     private ReplicationFault? _statusFault;
     private ReplicationFilter _filter = ReplicationFilter.None;
     private bool _loaded;
+    private bool _canEnable;
     private bool _busy;
     private readonly ComponentLifetime _cancellation = new();
     private readonly ComponentLifetime _reads = new();
@@ -60,6 +61,14 @@ public partial class ReplicationTreesPage
     /// </summary>
     internal bool CanControl => Data.HasControl && _rows is not null;
 
+    /// <summary>
+    /// Whether to offer enabling replication for a tree the caller names (issue #5478):
+    /// the facade's probe says the caller holds the Replication capability, or the
+    /// report lists a tree, which it does only for a tree the caller may manage. The
+    /// report alone proves nothing, because every caller may read it. Presentation
+    /// only; the facade authorizes every enable on attempt.
+    /// </summary>
+    internal bool CanEnableNew => CanControl && (_canEnable || _rows!.Count > 0);
     private LtDialogPlacement DialogPlacement => Breakpoint == LtBreakpoint.Compact ? LtDialogPlacement.End : LtDialogPlacement.Center;
 
     private string FaultTitle => _fault?.Kind switch
@@ -124,6 +133,12 @@ public partial class ReplicationTreesPage
                 return;
             }
 
+            var canEnable = config.Value is not null && await Data.CanEnableAsync(refresh, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
             var status = await Data.GetEstateAsync(refresh, token);
             if (token.IsCancellationRequested)
             {
@@ -131,6 +146,7 @@ public partial class ReplicationTreesPage
             }
 
             _fault = config.Fault;
+            _canEnable = canEnable;
             _statusFault = status.Fault;
             var links = status.Value?.Links ?? [];
             _rows = config.Value is { } report ? ReplicationTreeRow.Build(report, links) : null;
