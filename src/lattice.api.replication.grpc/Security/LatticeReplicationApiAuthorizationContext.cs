@@ -44,6 +44,14 @@ public enum LatticeReplicationApiOperation
     /// members' wire-stable ordinal values are preserved.
     /// </summary>
     DecommissionPeer,
+
+    /// <summary>
+    /// The read-only <c>ProbeCapabilities</c> RPC. Its
+    /// <see cref="LatticeReplicationApiAuthorizationContext.TargetId"/> is the tree
+    /// id being probed. Appended last so every earlier member's wire-stable ordinal
+    /// value is preserved.
+    /// </summary>
+    ProbeCapabilities,
 }
 
 /// <summary>

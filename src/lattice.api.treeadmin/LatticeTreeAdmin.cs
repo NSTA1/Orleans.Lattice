@@ -1049,6 +1049,15 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
         // LatticeOptions.DiagnosticsCacheTtl (default 5 s): the emptiness probe in
         // BeginBulkLoadAsync populates that cache with a zero count, so a begin/append/
         // commit sequence completing inside the TTL would otherwise report a stale 0.
+        //
+        // The cached reports are dropped as well (issue #5460): a statistics read
+        // made while the chunks landed - the Explorer polls its tree header through
+        // one - would otherwise go on answering the pre-commit count for up to the
+        // TTL, so a read straight after commit could report fewer keys than were
+        // loaded.
+        await _grainFactory.GetGrain<ILatticeStats>(effectiveTreeId)
+            .InvalidateAsync()
+            .ConfigureAwait(false);
         var liveKeys = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
             .CountAsync(cancellationToken)
             .ConfigureAwait(false);

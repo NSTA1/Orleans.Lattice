@@ -18,8 +18,9 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts;
 /// <param name="storyline">The storyline this fixture shards.</param>
 public abstract class ContractConformanceFixture(string storyline)
 {
-    private readonly List<(string Chapter, string Outcome, TimeSpan Establish, TimeSpan Verify, string? Detail)> _rows = [];
+    private readonly List<(string Chapter, string Outcome, TimeSpan Establish, TimeSpan Verify, int Retries, string? Detail)> _rows = [];
     private readonly HashSet<string> _failed = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _knownDefectBlocks = new(StringComparer.Ordinal);
     private JourneyEstate? _estate;
     private StorySession? _session;
 
@@ -59,11 +60,11 @@ public abstract class ContractConformanceFixture(string storyline)
         var report = new StringBuilder()
             .AppendLine($"### Contract conformance: {Storyline}")
             .AppendLine()
-            .AppendLine("| Chapter | Outcome | Establish | Verify | Detail |")
-            .AppendLine("|---|---|---|---|---|");
+            .AppendLine("| Chapter | Outcome | Establish | Verify | Retries | Detail |")
+            .AppendLine("|---|---|---|---|---|---|");
         foreach (var row in _rows)
         {
-            report.AppendLine($"| {row.Chapter} | {row.Outcome} | {row.Establish.TotalSeconds:0.0}s | {row.Verify.TotalSeconds:0.0}s | {Escape(row.Detail)} |");
+            report.AppendLine($"| {row.Chapter} | {row.Outcome} | {row.Establish.TotalSeconds:0.0}s | {row.Verify.TotalSeconds:0.0}s | {row.Retries} | {Escape(row.Detail)} |");
         }
 
         JobSummary.Append(report.ToString());
@@ -89,37 +90,85 @@ public abstract class ContractConformanceFixture(string storyline)
     protected async Task EstablishThenVerifyAsync(string chapter)
     {
         var session = _session ?? throw new InvalidOperationException("The estate did not start.");
+        if (string.Equals(chapter, SnapshotBefore, StringComparison.Ordinal))
+        {
+            // Photographed even when the chapter is blocked: the estate then holds every produce
+            // that did conform.
+            await SnapshotEstateAsync(chapter);
+        }
+
         var blockers = StoryOutline.Find(chapter)!.After.Where(_failed.Contains).ToList();
         if (blockers.Count > 0)
         {
             _failed.Add(chapter);
-            _rows.Add((chapter, "blocked", TimeSpan.Zero, TimeSpan.Zero, "blocked by " + string.Join(", ", blockers)));
-            Assert.Ignore($"BLOCKED, never passed: {chapter} consumes {string.Join(", ", blockers)}, which did not conform.");
+            var issues = blockers.Select(blocker => _knownDefectBlocks.GetValueOrDefault(blocker)).Where(issue => issue is not null).Distinct().ToList();
+            var known = issues.Count > 0 && blockers.All(_knownDefectBlocks.ContainsKey);
+            if (known)
+            {
+                _knownDefectBlocks[chapter] = issues[0]!;
+            }
+
+            var by = "blocked by " + string.Join(", ", blockers) + (known ? $" (known defect {string.Join(", ", issues)})" : string.Empty);
+            _rows.Add((chapter, known ? $"blocked by {string.Join(", ", issues)}" : "blocked", TimeSpan.Zero, TimeSpan.Zero, 0, by));
+            Assert.Ignore($"BLOCKED, never passed: {chapter} consumes {string.Join(", ", blockers)}, which did not conform{(known ? $" (known defect {string.Join(", ", issues)})" : string.Empty)}.");
         }
 
+        var retriesBefore = ContractRetries.Count;
         var clock = Stopwatch.StartNew();
         TimeSpan establish = TimeSpan.Zero;
-        if (string.Equals(chapter, SnapshotBefore, StringComparison.Ordinal))
-        {
-            await SnapshotEstateAsync(chapter);
-        }
-
         try
         {
             await session.EstablishAsync(chapter);
             establish = clock.Elapsed;
             clock.Restart();
             await session.VerifyAsync(chapter);
-            _rows.Add((chapter, "conforms", establish, clock.Elapsed, null));
+            _rows.Add((chapter, "conforms", establish, clock.Elapsed, ContractRetries.Count - retriesBefore, null));
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not IgnoreException)
         {
             _failed.Add(chapter);
             var phase = establish == TimeSpan.Zero ? "establish failed" : "verify failed";
-            _rows.Add((chapter, phase, establish == TimeSpan.Zero ? clock.Elapsed : establish, establish == TimeSpan.Zero ? TimeSpan.Zero : clock.Elapsed, FirstLine(ex)));
+            var elapsedEstablish = establish == TimeSpan.Zero ? clock.Elapsed : establish;
+            var elapsedVerify = establish == TimeSpan.Zero ? TimeSpan.Zero : clock.Elapsed;
+            var retries = ContractRetries.Count - retriesBefore;
+            if (KnownDefectIssues.TryGetValue(chapter, out var known))
+            {
+                // An open epic sub-issue tracks this chapter's failure: report it, with the
+                // estate's state, and block its dependents, without failing the job. Any other
+                // failure stays red. I1 (#5400) requires every such entry gone.
+                var state = await DescribeKnownDefectStateAsync(chapter);
+                _knownDefectBlocks[chapter] = known;
+                await RecordKnownDefectAsync(chapter);
+                _rows.Add((chapter, $"known defect {known}", elapsedEstablish, elapsedVerify, retries, $"{phase}: {FirstLine(ex)} State: {state}"));
+                Assert.Ignore($"KNOWN DEFECT {known}: {chapter} {phase}: {FirstLine(ex)} State: {state}");
+            }
+
+            _rows.Add((chapter, phase, elapsedEstablish, elapsedVerify, retries, FirstLine(ex)));
             throw;
         }
     }
+
+    /// <summary>
+    /// The chapters whose failure an open epic sub-issue tracks, as chapter to issue: such a
+    /// chapter is reported, its dependents are reported blocked by the issue, and neither fails
+    /// the job.
+    /// </summary>
+    protected virtual IReadOnlyDictionary<string, string> KnownDefectIssues { get; } =
+        new Dictionary<string, string>(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Records the pending wrapper for a known-defect chapter that failed (a <c>KnownDefect</c>
+    /// written with literals, as the pending-wrapper gate requires).
+    /// </summary>
+    /// <param name="chapter">The chapter.</param>
+    protected virtual Task RecordKnownDefectAsync(string chapter) => Task.CompletedTask;
+
+    /// <summary>The estate's state that bears on a known-defect chapter's failure, for the report.</summary>
+    /// <param name="chapter">The chapter.</param>
+    protected virtual Task<string> DescribeKnownDefectStateAsync(string chapter) => Task.FromResult("n/a");
+
+    /// <summary>The running estate.</summary>
+    protected JourneyEstate Estate => _estate ?? throw new InvalidOperationException("The estate did not start.");
 
     /// <summary>
     /// Photographs the Explorer, signed in as the storyline's first bootstrap administrator, on

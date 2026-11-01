@@ -30,7 +30,11 @@ namespace Orleans.Lattice.Replication.Grains;
 /// </list>
 /// Crash recovery is reminder-driven: a keepalive reminder resumes
 /// <see cref="RunCoordinatorAsync"/> from the persisted phase, and every step
-/// (prepare, decide, finalize) is idempotent. Retention cleanup reuses the
+/// (prepare, decide, finalize) is idempotent. A caller that must not hold one
+/// grain call open for the whole saga (issue #5506) records it with
+/// <see cref="BeginAsync"/>, has it advanced by the one-way
+/// <see cref="DriveAsync"/>, and follows it through the interleaved
+/// <see cref="GetStatusAsync"/>. Retention cleanup reuses the
 /// <see cref="TtlGrain{TSelf}"/> reminder lifecycle.
 /// </summary>
 internal sealed class CrossClusterSagaCoordinatorGrain(
@@ -57,6 +61,22 @@ internal sealed class CrossClusterSagaCoordinatorGrain(
 
     private readonly ISagaControlChannel _controlChannel =
         controlChannel ?? throw new ArgumentNullException(nameof(controlChannel));
+
+    /// <summary>
+    /// <c>true</c> while a turn of this activation is advancing the saga, read by
+    /// the interleaved <see cref="GetStatusAsync"/>. Drives are grain turns, so
+    /// they never overlap.
+    /// </summary>
+    private bool _driving;
+
+    /// <summary>The fault of the most recent drive, or <c>null</c> when it did not fault.</summary>
+    private string? _driveFault;
+
+    /// <summary>
+    /// <c>true</c> when the most recent finalize found a participant that refused
+    /// the decision, so the saga is split across clusters (issue #4637).
+    /// </summary>
+    private bool _requiresRepair;
 
     /// <summary>This coordinator's key (the saga id).</summary>
     private string SagaId => GrainContext.GrainId.Key.ToString()!;
@@ -88,7 +108,7 @@ internal sealed class CrossClusterSagaCoordinatorGrain(
             case CrossClusterSagaPhase.Aborted:
                 try
                 {
-                    await RunCoordinatorAsync();
+                    await DriveCoordinatorAsync();
                 }
                 catch (Exception ex)
                 {
@@ -120,20 +140,40 @@ internal sealed class CrossClusterSagaCoordinatorGrain(
         string coordinatorClusterId,
         string? setId = null)
     {
+        var begun = await BeginAsync(participantClusterIds, targetTree, manifestId, coordinatorClusterId, setId);
+        if (begun.IsComplete)
+        {
+            return begun.Outcome ?? CrossClusterSagaOutcome.Committed;
+        }
+
+        await DriveCoordinatorAsync();
+        return state.State.Outcome ?? CrossClusterSagaOutcome.Committed;
+    }
+
+    /// <inheritdoc />
+    public async Task<CrossClusterSagaStatus> BeginAsync(
+        List<string> participantClusterIds,
+        string targetTree,
+        string manifestId,
+        string coordinatorClusterId,
+        string? setId = null)
+    {
         ArgumentNullException.ThrowIfNull(participantClusterIds);
         ArgumentNullException.ThrowIfNull(targetTree);
         ArgumentNullException.ThrowIfNull(manifestId);
         ArgumentException.ThrowIfNullOrEmpty(coordinatorClusterId);
 
-        // Idempotent re-attach to an already-decided coordinator: return the
+        // Idempotent re-attach to an already-decided coordinator: report the
         // memoized verdict without re-running.
         if (state.State.Phase == CrossClusterSagaPhase.Completed)
         {
-            return state.State.Outcome ?? CrossClusterSagaOutcome.Committed;
+            return Status();
         }
 
         if (state.State.Phase == CrossClusterSagaPhase.NotStarted)
         {
+            // Every state mutation below happens before the first await, so an
+            // interleaved re-attach sees this submit's phase and fingerprint.
             var participants = BuildParticipants(participantClusterIds);
 
             // Empty participant set: vacuous commit. Nothing to prepare, decide,
@@ -152,7 +192,7 @@ internal sealed class CrossClusterSagaCoordinatorGrain(
                 // This path never registers a keepalive, so the retention TTL
                 // reminder is the only cleanup trigger.
                 await SlideTtlAsync();
-                return CrossClusterSagaOutcome.Committed;
+                return Status();
             }
 
             state.State.SagaId = SagaId;
@@ -166,25 +206,49 @@ internal sealed class CrossClusterSagaCoordinatorGrain(
             state.State.Phase = CrossClusterSagaPhase.Preparing;
             await RegisterKeepaliveAsync();
             await state.WriteStateAsync();
-        }
-        else
-        {
-            // Re-submit of an in-flight coordinator: enforce participant-set /
-            // target / manifest / set stability, mirroring the intra-cluster saga's
-            // idempotency contract.
-            var incoming = ComputeFingerprint(BuildParticipants(participantClusterIds), targetTree, manifestId, setId);
-            if (state.State.Fingerprint is not { } persisted
-                || !CryptographicOperations.FixedTimeEquals(persisted, incoming))
-            {
-                throw new InvalidOperationException(
-                    $"Cross-cluster saga '{SagaId}' was previously submitted with a different participant " +
-                    "set, target tree, manifest id, or set id; reuse of a saga id requires the exact same arguments.");
-            }
+            return Status();
         }
 
-        await RunCoordinatorAsync();
-        return state.State.Outcome ?? CrossClusterSagaOutcome.Committed;
+        // Re-submit of an in-flight coordinator: enforce participant-set /
+        // target / manifest / set stability, mirroring the intra-cluster saga's
+        // idempotency contract.
+        var incoming = ComputeFingerprint(BuildParticipants(participantClusterIds), targetTree, manifestId, setId);
+        if (state.State.Fingerprint is not { } persisted
+            || !CryptographicOperations.FixedTimeEquals(persisted, incoming))
+        {
+            throw new InvalidOperationException(
+                $"Cross-cluster saga '{SagaId}' was previously submitted with a different participant " +
+                "set, target tree, manifest id, or set id; reuse of a saga id requires the exact same arguments.");
+        }
+
+        return Status();
     }
+
+    /// <inheritdoc />
+    public async Task DriveAsync()
+    {
+        if (state.State.Phase is CrossClusterSagaPhase.NotStarted or CrossClusterSagaPhase.Completed)
+        {
+            return;
+        }
+
+        try
+        {
+            await DriveCoordinatorAsync();
+        }
+        catch (Exception ex)
+        {
+            // One-way: nobody awaits this turn, so the fault is recorded for
+            // GetStatusAsync and the saga stays where it stopped for the next
+            // drive or the keepalive reminder.
+            Logger.LogWarning(ex,
+                "Cross-cluster saga {SagaId}: drive stopped in phase {Phase}; it resumes on the next drive.",
+                SagaId, state.State.Phase);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<CrossClusterSagaStatus> GetStatusAsync() => Task.FromResult(Status());
 
     /// <inheritdoc />
     public Task<CrossClusterSagaDecision> GetDecisionAsync()
@@ -246,6 +310,46 @@ internal sealed class CrossClusterSagaCoordinatorGrain(
     /// <inheritdoc />
     public Task<bool> IsCompleteAsync() =>
         Task.FromResult(state.State.Phase is CrossClusterSagaPhase.Completed or CrossClusterSagaPhase.NotStarted);
+
+    /// <summary>
+    /// Runs <see cref="RunCoordinatorAsync"/> as this turn's drive, publishing
+    /// that a drive is running and recording its fault for
+    /// <see cref="GetStatusAsync"/>. Rethrows the fault to its caller.
+    /// </summary>
+    private async Task DriveCoordinatorAsync()
+    {
+        _driving = true;
+        _driveFault = null;
+        try
+        {
+            await RunCoordinatorAsync();
+        }
+        catch (Exception ex)
+        {
+            _driveFault = ex.Message;
+            throw;
+        }
+        finally
+        {
+            _driving = false;
+        }
+    }
+
+    /// <summary>
+    /// The saga's status as this activation currently holds it, returned as an
+    /// immutable value. It cannot be torn by a concurrent drive: the activation
+    /// runs one turn segment at a time (interleaving happens only at awaits, and
+    /// no grain code here leaves the activation's scheduler), this snapshot is
+    /// built synchronously, and every transition sets the fields it reports
+    /// together - phase with outcome, refusal with its message - before its next
+    /// await.
+    /// </summary>
+    private CrossClusterSagaStatus Status() => new(
+        state.State.Phase,
+        state.State.Outcome,
+        _driving,
+        _requiresRepair,
+        _driveFault ?? state.State.FailureMessage);
 
     /// <summary>
     /// Resumable phase machine. Each branch is idempotent so a coordinator crash
@@ -419,6 +523,7 @@ internal sealed class CrossClusterSagaCoordinatorGrain(
         // keepalive keeps re-delivering and the outcome is never reported as one.
         var expected = commit ? SagaPhase.Committed : SagaPhase.Aborted;
         List<string>? refused = null;
+        _requiresRepair = false;
         for (var i = 0; i < responses.Length; i++)
         {
             if (responses[i].Phase != expected)
@@ -434,6 +539,7 @@ internal sealed class CrossClusterSagaCoordinatorGrain(
                 "Cross-cluster saga {SagaId}: participant(s) {Refused} refused the {Decision} decision; the saga is not complete.",
                 SagaId, string.Join(", ", refused), commit ? "commit" : "abort");
             state.State.FailureMessage = message;
+            _requiresRepair = true;
             throw new InvalidOperationException(message);
         }
 

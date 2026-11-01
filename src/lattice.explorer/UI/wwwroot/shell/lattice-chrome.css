@@ -7,11 +7,12 @@
  * world (DESIGN.md): hairline depth, one marker for "you are here" and
  * "selected" (always with a weight, a ring or a bar), no cards, no shadows.
  *
- * No width query appears here. The layout measures its own root and marks it
- * lt-shell--compact below the small breakpoint; the medium band's rail is a
- * modifier class too. Until the width is measured the layout draws both the
- * compact and the wide chrome, tagged with the breakpoint layer's lt-only-compact
- * and lt-medium-up utilities, so the first paint is already right. Every
+ * The compact band (below the small breakpoint) and the medium band's rail are
+ * size-container queries against the Shell root (lt-viewport) at the widths the
+ * breakpoint layer declares, so the browser applies them before the first paint,
+ * whether or not the layout has measured its width yet. Where the chrome's markup
+ * differs by band, the layout draws both forms until it has measured, tagged with
+ * the breakpoint layer's lt-only-compact and lt-medium-up utilities. Every
  * interactive element is at least 44px in the
  * comfortable density (the --lt-op-control-height and --lt-op-row-height
  * tokens) and never below 24px in the compact one.
@@ -97,16 +98,20 @@
   border-bottom: 1px solid var(--lt-rule);
 }
 
-.lt-shell--compact .lt-shell-header {
-  gap: var(--lt-space-2);
-  padding-inline: var(--lt-space-3);
+@container lt-viewport (width < 768px) {
+  .lt-shell .lt-shell-header {
+    gap: var(--lt-space-2);
+    padding-inline: var(--lt-space-3);
+  }
 }
 
 /* Compact, the mark sits closer to a slightly smaller name, so "Lattice
    Explorer" fits whole between the two controls on a 360px screen. */
-.lt-shell--compact .lt-shell-brand {
-  gap: var(--lt-space-1);
-  font-size: var(--lt-text-sm);
+@container lt-viewport (width < 768px) {
+  .lt-shell .lt-shell-brand {
+    gap: var(--lt-space-1);
+    font-size: var(--lt-text-sm);
+  }
 }
 
 .lt-shell-brand {
@@ -148,6 +153,21 @@
    laid out as if its children sat in .lt-shell-header__end themselves. */
 .lt-shell-header__wide {
   display: contents;
+}
+
+/* On a head whose endpoint the browser cannot change, the endpoint itself opens
+   the read-only connection details. It truncates before the brand is cut off. */
+.lt-shell-header .lt-btn[data-lt-connection-details] {
+  /* Absorbs nearly all of any shortfall, so the brand keeps its whole name. */
+  flex-shrink: 1000;
+  min-width: 0;
+  padding-inline: var(--lt-space-2);
+}
+
+.lt-shell-header .lt-btn[data-lt-connection-details] .lt-mono-cell__value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .lt-shell-menu-host {
@@ -265,8 +285,10 @@
   background: var(--lt-surface-sunken);
 }
 
-.lt-shell--compact .lt-shell-address {
-  padding-inline: var(--lt-space-3);
+@container lt-viewport (width < 768px) {
+  .lt-shell .lt-shell-address {
+    padding-inline: var(--lt-space-3);
+  }
 }
 
 .lt-shell-address-line {
@@ -280,6 +302,12 @@
 .lt-shell-address-line .lt-chain-nav {
   flex: 0 1 auto;
   min-width: 0;
+}
+
+/* One band's form of the chain or the prompt, drawn beside the other's until the
+   layout has measured its width; laid out as if its children sat in the line. */
+.lt-shell-address-line__form {
+  display: contents;
 }
 
 .lt-shell-address-line__edit {
@@ -332,12 +360,16 @@
 
 /* Compact, the line holds the elision, the current node and the prompt on one
    row: the chain gives way first and clips its node's text, the prompt never. */
-.lt-shell--compact .lt-shell-address-line .lt-chain-nav {
-  flex: 1 1 auto;
+@container lt-viewport (width < 768px) {
+  .lt-shell .lt-shell-address-line .lt-chain-nav {
+    flex: 1 1 auto;
+  }
 }
 
-.lt-shell--compact .lt-shell-address-line__edit {
-  flex: 0 0 auto;
+@container lt-viewport (width < 768px) {
+  .lt-shell .lt-shell-address-line__edit {
+    flex: 0 0 auto;
+  }
 }
 
 .lt-shell-address-line__compact-chain {
@@ -486,8 +518,10 @@
   min-height: 0;
 }
 
-.lt-shell--compact .lt-shell-body {
-  grid-template-columns: minmax(0, 1fr);
+@container lt-viewport (width < 768px) {
+  .lt-shell .lt-shell-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* The main landmark always takes the last column, so a spine the breakpoint layer
@@ -505,9 +539,35 @@
   overflow: auto;
 }
 
-.lt-shell-directory--rail {
-  width: 11.5rem;
-  padding-inline: var(--lt-space-2);
+/* The medium band's rail: a narrower column that keeps every label. Its reasons and
+   badges leave the picture but stay in the stop's accessible name, and the recheck
+   notice, which needs the room, is not shown. A size-container query, so the first
+   paint at a medium width is already the rail. */
+@container lt-viewport (width < 1200px) {
+  .lt-shell .lt-shell-directory {
+    width: 11.5rem;
+    padding-inline: var(--lt-space-2);
+  }
+
+  .lt-shell .lt-shell-directory .lt-shell-directory__link {
+    font-size: var(--lt-text-sm);
+  }
+
+  .lt-shell .lt-shell-directory :is(.lt-shell-directory__reason, .lt-shell-directory__badge) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .lt-shell .lt-shell-directory .lt-shell-recheck {
+    display: none;
+  }
 }
 
 .lt-shell-directory__nav {
@@ -556,8 +616,10 @@
   padding: var(--lt-space-5) var(--lt-space-6);
 }
 
-.lt-shell--compact .lt-shell-content {
-  padding: var(--lt-space-4) var(--lt-space-3);
+@container lt-viewport (width < 768px) {
+  .lt-shell .lt-shell-content {
+    padding: var(--lt-space-4) var(--lt-space-3);
+  }
 }
 
 /*
@@ -592,8 +654,10 @@
   overflow-wrap: anywhere;
 }
 
-.lt-shell--compact .lt-shell-page-title {
-  font-size: var(--lt-text-xl);
+@container lt-viewport (width < 768px) {
+  .lt-shell .lt-shell-page-title {
+    font-size: var(--lt-text-xl);
+  }
 }
 
 .lt-shell-page-lede {
@@ -733,25 +797,33 @@
   grid-template-rows: minmax(var(--lt-op-control-height), auto);
 }
 
-.lt-shell--compact :is(.lt-toolbar, .lt-control-row) {
-  flex-direction: column;
-  align-items: stretch;
+@container lt-viewport (width < 768px) {
+  .lt-shell :is(.lt-toolbar, .lt-control-row) {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
 
 /* Stacked, the row's main axis is vertical, so an item's flex basis would be a
    height: a search field meant to take the spare width of a row would stand
    18rem tall instead. Each stacked item is as tall as its content, and none
    carries a label-row offset. */
-.lt-shell--compact :is(.lt-toolbar, .lt-control-row) > * {
-  flex: 0 0 auto;
+@container lt-viewport (width < 768px) {
+  .lt-shell :is(.lt-toolbar, .lt-control-row) > * {
+    flex: 0 0 auto;
+  }
 }
 
-.lt-shell--compact :is(.lt-toolbar, .lt-control-row) > :not(.lt-field, :has(.lt-field__label)) {
-  margin-block-start: 0;
+@container lt-viewport (width < 768px) {
+  .lt-shell :is(.lt-toolbar, .lt-control-row) > :not(.lt-field, :has(.lt-field__label)) {
+    margin-block-start: 0;
+  }
 }
 
-.lt-shell--compact :is(.lt-toolbar, .lt-control-row) > [role="status"] {
-  min-height: 0;
+@container lt-viewport (width < 768px) {
+  .lt-shell :is(.lt-toolbar, .lt-control-row) > [role="status"] {
+    min-height: 0;
+  }
 }
 
 /* ==========================================================================

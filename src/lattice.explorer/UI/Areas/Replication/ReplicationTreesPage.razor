@@ -38,7 +38,7 @@ else
 {
     <ReplicationToolbar Regions="@_regions" Apps="@_apps" />
 
-    @if (CanControl)
+    @if (CanEnableNew)
     {
         <div class="lt-replication-actions">
             <LtButton OnClick="OpenEnableForNew" Disabled="_busy">Enable replication for a tree</LtButton>

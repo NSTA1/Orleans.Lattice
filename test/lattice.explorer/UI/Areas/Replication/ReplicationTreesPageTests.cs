@@ -192,15 +192,63 @@ public sealed partial class ReplicationTreesPageTests : ReplicationTestContext
     [Test]
     public void A_restricted_identity_that_manages_no_tree_sees_an_empty_list_and_no_enable_control()
     {
+        // Issue #5478: the report is readable by every caller, so it proves nothing
+        // about the Replication grant; the facade's probe decides.
         Status.Failure = new LatticeAuthorizationDeniedException();
+        Control.MayConfigure = false;
 
         var cut = RenderAt<ReplicationTreesPage>("replication/trees");
 
         cut.WaitUntil(() =>
         {
             Assert.That(cut.Find(".lt-table__empty").TextContent.Trim(), Is.EqualTo("No tree you may manage is enrolled for replication."));
+            Assert.That(cut.FindAll("button").Select(button => button.TextContent.Trim()), Does.Not.Contain("Enable replication for a tree"),
+                "a caller without the Replication grant is not offered a control it cannot use");
+        });
+    }
+
+    [Test]
+    public void An_administrator_on_a_cluster_with_nothing_enrolled_is_offered_the_first_enrolment()
+    {
+        Control.MayConfigure = true;
+
+        var cut = RenderAt<ReplicationTreesPage>("replication/trees");
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find(".lt-table__empty").TextContent.Trim(), Is.EqualTo("No tree you may manage is enrolled for replication."));
+            Assert.That(cut.FindAll("button").Select(button => button.TextContent.Trim()), Does.Contain("Enable replication for a tree"));
+        });
+    }
+
+    [Test]
+    public void A_probe_the_cluster_does_not_answer_offers_no_enable_control()
+    {
+        Control.ProbeFailure = new TimeoutException();
+
+        var cut = RenderAt<ReplicationTreesPage>("replication/trees");
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find(".lt-table__empty").TextContent.Trim(), Is.EqualTo("No tree you may manage is enrolled for replication."));
+            Assert.That(Control.Probes, Is.EqualTo(new[] { ReplicationDataSource.ProbeTreeId }));
+            Assert.That(cut.FindAll("button").Select(button => button.TextContent.Trim()), Does.Not.Contain("Enable replication for a tree"));
+        });
+    }
+
+    [Test]
+    public void A_caller_granted_only_named_trees_is_offered_the_enable_control_by_the_trees_it_manages()
+    {
+        UseTrees();
+        Control.MayConfigure = false;
+
+        var cut = RenderAt<ReplicationTreesPage>("replication/trees");
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.FindAll("tbody tr"), Has.Count.EqualTo(6));
             Assert.That(cut.FindAll("button").Select(button => button.TextContent.Trim()), Does.Contain("Enable replication for a tree"),
-                "the enrolment report was readable, so enabling a tree the caller holds a grant for is offered");
+                "every listed tree is one the caller holds the Replication grant for");
         });
     }
 

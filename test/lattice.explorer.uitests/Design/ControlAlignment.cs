@@ -70,7 +70,10 @@ internal static class ControlAlignment
           };
           const control = sizeOf('var(--lt-op-control-height)');
           const labelLine = sizeOf('var(--lt-op-label-line-height)');
-          const compact = !!document.querySelector('.lt-shell--compact');
+          // The compact band, as the breakpoint layer decides it: the Shell root narrower than its declared medium width.
+          const shellRoot = document.querySelector('.lt-viewport');
+          const mediumWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--lt-op-breakpoint-medium'));
+          const compact = !!shellRoot && shellRoot.clientWidth < mediumWidth;
           const shown = (e) => {
             const box = e.getBoundingClientRect();
             return box.width > 0 && box.height > 0 && !e.closest('[hidden]') && getComputedStyle(e).visibility !== 'hidden';
