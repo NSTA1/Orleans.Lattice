@@ -134,4 +134,11 @@ internal sealed partial class ShellBackupControlTransport(ShellTransportChannel 
             null,
             cancellationToken);
     }
+
+    /// <inheritdoc />
+    public Task<BackupHealthConfig?> GetBackupHealthConfigAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        return CallAsync(backupId, static (client, state, ct) => client.GetBackupHealthConfigAsync(state, ct), null, cancellationToken);
+    }
 }
