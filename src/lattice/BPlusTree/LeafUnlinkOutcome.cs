@@ -51,7 +51,10 @@ internal enum LeafUnlinkOutcome
     /// This leaf carries a moved-away seal, so widening it onto the vacated
     /// range would make it the legitimate owner of keys its own read gate
     /// refuses to serve. A question about the PREDECESSOR rather than about the
-    /// successor. See issue #2143 and <c>HasWidenBlockingState</c>.
+    /// successor. See issue #2143 and <c>HasWidenBlockingState</c>. Returned only
+    /// when the call would actually widen this leaf: an unlink that keeps this
+    /// leaf's own high bound, as an orphaned-leaf unsplice does, is not declined
+    /// for a seal (#5550).
     /// </summary>
     DeclinedWidenSealed = 3,
 
