@@ -172,14 +172,14 @@ public partial class RestoreParticipantTests
     }
 
     [Test]
-    public async Task AbortAsync_after_prepare_reverts_gcs_shadow_and_lifts_fence()
+    public async Task AbortAsync_after_prepare_gcs_shadow_without_revert_and_lifts_fence()
     {
         var (participant, engine, fence) = CreateParticipant();
         await participant.PrepareAsync(Request());
 
         await participant.AbortAsync(Request());
 
-        Assert.That(engine.RevertCount, Is.EqualTo(1));
+        Assert.That(engine.RevertCount, Is.EqualTo(0), "the alias never moved, so nothing is reverted (#5443)");
         Assert.That(engine.DeleteCount, Is.GreaterThanOrEqualTo(1), "the shadow is garbage collected");
         await fence.Received(1).LiftAsync();
         Assert.That(engine.CommitCount, Is.EqualTo(0), "abort never commits");

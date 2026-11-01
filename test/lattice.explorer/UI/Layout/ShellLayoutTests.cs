@@ -263,10 +263,11 @@ public sealed class ShellLayoutTests : ShellLayoutTestContext
     }
 
     [Test]
-    public void A_navigation_re_resolves_the_location()
+    public async Task A_navigation_re_resolves_the_location()
     {
         AddArea(new FakeArea("data", "Data"));
         var cut = RenderLayout();
+        await SetBandAsync(cut, 2);
 
         NavigateAndRender(cut, "data/a/crm");
 

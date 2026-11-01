@@ -180,6 +180,21 @@ public partial class LatticeSagaGrpcServiceTests
         });
     }
 
+    [TestCase(Peer)]
+    [TestCase("")]
+    public async Task The_handler_sees_the_stamped_origin_as_the_coordinator_never_a_body_value(string bodyCoordinator)
+    {
+        // The restore participant grants a remote coordinator's saga peer authority
+        // (#5443) on the coordinator id it receives, so that id must always be the
+        // credential-bound origin - including when the body leaves it empty.
+        var handler = new RecordingHandler(new SagaControlResponse { SagaId = Saga, Phase = SagaPhase.Prepared });
+        var service = CreateService(handler, AllowAuthorizer());
+
+        await service.Prepare(Request(coordinator: bodyCoordinator), ContextWithOrigin(Peer));
+
+        Assert.That(handler.LastPrepareRequest?.CoordinatorClusterId, Is.EqualTo(Peer));
+    }
+
     [Test]
     public void Every_saga_verb_refuses_an_unstamped_call()
     {
@@ -329,12 +344,14 @@ public partial class LatticeSagaGrpcServiceTests
         public int GetStatusCalls;
         public int GetDecisionCalls;
         public SagaControlRequest? LastDecisionRequest;
+        public SagaControlRequest? LastPrepareRequest;
 
         public RecordingHandler(SagaControlResponse response) => _response = response;
 
         public Task<SagaControlResponse> PrepareAsync(SagaControlRequest request, CancellationToken cancellationToken = default)
         {
             PrepareCalls++;
+            LastPrepareRequest = request;
             return Task.FromResult(_response);
         }
 

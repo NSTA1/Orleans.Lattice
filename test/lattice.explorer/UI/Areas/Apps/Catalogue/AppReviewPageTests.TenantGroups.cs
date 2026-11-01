@@ -32,7 +32,7 @@ public sealed partial class AppReviewPageTests
         Assert.Multiple(() =>
         {
             Assert.That(offered, Is.EqualTo(new[] { "t/acme/ops", "operators" }));
-            Assert.That(OfferedDetails(cut), Is.EqualTo(new[] { "Tenant - Tenant operations", "Cluster" }));
+            Assert.That(OfferedDetails(cut), Is.EqualTo(new[] { "Tenant - Tenant operations", "Stored" }));
             Assert.That(cut.Markup, Does.Not.Contain("ops-rivals"));
         });
     }

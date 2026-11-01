@@ -203,6 +203,21 @@ public sealed partial class LatticeBackupControlTenancyTests
         AssertStoredScopesOnly(gate);
     }
 
+    [Test]
+    public async Task GetBackupHealthConfigAsync_authorizes_the_manifest_scope_verbatim()
+    {
+        await _fixture.InitializeAsync();
+        var qualified = await CaptureAsAsync(Globex, LocalName);
+        var legacy = await CaptureLegacyAsync();
+
+        var gate = new RecordingAccessGate();
+        var control = ControlFor(Acme, gate);
+        await control.GetBackupHealthConfigAsync(qualified.BackupId);
+        await control.GetBackupHealthConfigAsync(legacy.BackupId);
+
+        AssertStoredScopesOnly(gate);
+    }
+
     // ---- Enumerations: every row is gated by its own stored scope --------
 
     [Test]

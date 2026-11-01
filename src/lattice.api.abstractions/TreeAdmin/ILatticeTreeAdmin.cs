@@ -447,6 +447,59 @@ public interface ILatticeTreeAdmin
         string treeId, string operationId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Streams <paramref name="sortedEntries"/> into <paramref name="treeId"/> as one
+    /// bulk load: it opens the session, appends the entries in chunks of
+    /// <see cref="TreeBulkLoadStreamOptions.ChunkSize"/> under
+    /// <paramref name="operationId"/>, reporting each chunk's acknowledgement to
+    /// <paramref name="progress"/>, and commits once the stream ends. Each chunk is
+    /// authorized and applied exactly as <see cref="AppendBulkLoadAsync"/> applies it,
+    /// so the whole-tree <see cref="LatticeOperation.BulkLoad"/> capability is required
+    /// and the tree must start empty. Memory is bounded by the chunk size, never by the
+    /// length of the stream.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The entries must be in strictly ascending key order across the whole stream; the
+    /// first entry out of order fails the load with <see cref="BulkLoadOrderException"/>
+    /// before its chunk is sent, so every chunk already acknowledged stays durable and
+    /// nothing after it is written.
+    /// </para>
+    /// <para>
+    /// A positive <see cref="TreeBulkLoadStreamOptions.FirstChunkIndex"/> continues an
+    /// existing session instead of opening one, so a caller that kept the last
+    /// acknowledged chunk can resume after a fault by re-streaming from it; a re-sent
+    /// chunk is an idempotent no-op. A transport binding that streams the chunks over
+    /// the wire also resumes a broken stream itself, from the first unacknowledged chunk.
+    /// </para>
+    /// <para>
+    /// This member is additive with a default implementation over the chunked verbs, so
+    /// an existing implementation keeps compiling and streams without change; a binding
+    /// overrides it to stream over a single call.
+    /// </para>
+    /// </remarks>
+    /// <param name="treeId">The tree to load. Must not be <c>null</c>, empty, or reserved.</param>
+    /// <param name="operationId">The session's idempotency key. Must not be <c>null</c> or empty, and must not contain <c>'/'</c>.</param>
+    /// <param name="sortedEntries">The entries, in strictly ascending key order.</param>
+    /// <param name="progress">Receives each chunk's acknowledgement, or <see langword="null"/>.</param>
+    /// <param name="options">The chunking options, or <see langword="null"/> for <see cref="TreeBulkLoadStreamOptions.Default"/>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The committed load's result.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="operationId"/> is <c>null</c>, empty, or invalid.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="sortedEntries"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">An option is out of range.</exception>
+    /// <exception cref="BulkLoadOrderException">The stream is not in strictly ascending key order.</exception>
+    /// <exception cref="TreeNotEmptyException">The tree already contains data and the stream opens a new session.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the bulk-load capability.</exception>
+    Task<TreeBulkLoadResult> BulkLoadStreamAsync(
+        string treeId,
+        string operationId,
+        IAsyncEnumerable<DataEntry> sortedEntries,
+        IProgress<TreeBulkLoadChunkAck>? progress = null,
+        TreeBulkLoadStreamOptions? options = null,
+        CancellationToken cancellationToken = default) =>
+        TreeBulkLoadStreaming.RunAsync(this, treeId, operationId, sortedEntries, progress, options, cancellationToken);
+
+    /// <summary>
     /// Restores the captured backup <paramref name="backupId"/> into
     /// <paramref name="treeId"/>, after authorizing the whole-tree
     /// <see cref="LatticeOperation.Restore"/> capability fail-closed. Composes the
@@ -911,6 +964,27 @@ public interface ILatticeTreeAdmin
     /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the telemetry capability.</exception>
     Task<TreeViewCatalog> ListViewsAsync(
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists the runtime-view projection providers the caller may create a view with
+    /// over <paramref name="sourceTreeId"/> - every provider the cluster's host
+    /// registered, ordered by key, with its description and payload shape - after
+    /// authorizing whole-tree <see cref="LatticeOperation.Admin"/> over the source
+    /// fail-closed, the same authority <see cref="CreateViewAsync"/> requires. No
+    /// provider code runs. The library's own built-in filter provider is not listed,
+    /// because its payload is a private codec rather than something a caller supplies.
+    /// </summary>
+    /// <param name="sourceTreeId">The directly writable source tree a view would be created over. A materialised-view tree cannot be a source.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The providers; empty when the host registered none.</returns>
+    /// <exception cref="ArgumentException"><paramref name="sourceTreeId"/> is <c>null</c>, empty, reserved, or a materialised-view tree.</exception>
+    /// <exception cref="InvalidOperationException">The materialised-view subsystem is not enabled on this cluster.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks whole-tree admin authority over the source.</exception>
+    Task<TreeViewProviderCatalog> ListViewProvidersAsync(
+        string sourceTreeId,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException(
+            "This tree-administration implementation does not list runtime view providers.");
 
     /// <summary>
     /// Creates a runtime materialised view named <paramref name="viewName"/> over

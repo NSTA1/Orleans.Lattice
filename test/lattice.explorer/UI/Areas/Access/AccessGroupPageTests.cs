@@ -64,6 +64,40 @@ public sealed class AccessGroupPageTests : AccessTestContext
     }
 
     [Test]
+    public void With_a_directory_a_group_stored_here_is_nested_as_a_member()
+    {
+        Admin.WithGroup("ops").WithGroup("data-stewards", "Data stewards").WithPrincipal("alice", "Alice", DirectoryPrincipalKind.User);
+        var cut = Loaded();
+
+        AccessForms.Choose(cut, "Member kind", "group");
+        AccessForms.Type(cut, "Member", "data-st");
+        cut.WaitUntil(() => Assert.That(cut.Find("[role=option] .lt-combobox__detail").TextContent, Is.EqualTo("Stored - Data stewards")));
+        cut.Find("[role=option]").Click();
+        cut.Find("section:nth-of-type(2) form").Submit();
+
+        cut.WaitUntil(() => Assert.That(Admin.MemberKinds.GetValueOrDefault(("ops", "data-stewards")), Is.EqualTo(MembershipMemberKind.Group)));
+        Assert.That(AccessForms.ErrorOf(cut, "Member"), Is.Null);
+    }
+
+    [Test]
+    public void A_tenant_group_is_never_offered_or_accepted_as_a_member_of_a_cluster_group()
+    {
+        Admin.WithGroup("ops").WithPrincipal("alice", "Alice", DirectoryPrincipalKind.User);
+        var cut = Loaded();
+
+        AccessForms.Choose(cut, "Member kind", "group");
+        AccessForms.Type(cut, "Member", "t/acme/acme-analysts");
+        cut.Find("section:nth-of-type(2) form").Submit();
+
+        cut.WaitUntil(() => Assert.That(AccessForms.ErrorOf(cut, "Member"), Is.EqualTo(AccessPrincipalValidation.TenantGroupMessage("t/acme/acme-analysts"))));
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll("section:nth-of-type(2) form select option").Select(option => option.TextContent), Is.EqualTo(new[] { "User", "Group" }));
+            Assert.That(Admin.Calls, Does.Not.Contain(nameof(FakeAuthAdmin.AddMemberAsync)));
+        });
+    }
+
+    [Test]
     public void With_a_directory_an_unresolved_member_is_refused_on_the_field()
     {
         Admin.WithGroup("ops").WithPrincipal("alice", "Alice", DirectoryPrincipalKind.User);
@@ -76,6 +110,24 @@ public sealed class AccessGroupPageTests : AccessTestContext
         {
             Assert.That(AccessForms.ErrorOf(cut, "Member"), Is.EqualTo("mallory is not a user in the identity directory (Microsoft Entra ID)."));
             Assert.That(Admin.Calls, Does.Not.Contain(nameof(FakeAuthAdmin.AddMemberAsync)));
+        });
+    }
+
+    [Test]
+    public void A_refused_members_error_clears_once_another_member_is_typed()
+    {
+        Admin.WithGroup("ops").WithPrincipal("alice", "Alice", DirectoryPrincipalKind.User);
+        var cut = Loaded();
+        AccessForms.Type(cut, "Member", "mallory");
+        cut.Find("section:nth-of-type(2) form").Submit();
+        cut.WaitUntil(() => Assert.That(AccessForms.ErrorOf(cut, "Member"), Does.StartWith("mallory is not a user")));
+
+        AccessForms.Type(cut, "Member", "alice");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(AccessForms.ErrorOf(cut, "Member"), Is.Null, "the refusal names the id that was refused, not the one now typed");
+            Assert.That(AccessForms.Field(cut, "Member").GetAttribute("aria-invalid"), Is.Null);
         });
     }
 

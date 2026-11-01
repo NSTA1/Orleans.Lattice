@@ -26,7 +26,8 @@ public sealed class LatticeAuthAdminDirectoryTests
         bool adminAllowed = true,
         bool nullGate = false,
         IEnumerable<ILatticeCredentialAuthenticator>? authenticators = null,
-        SubjectGroupMergeMode groupMergeMode = SubjectGroupMergeMode.Union)
+        SubjectGroupMergeMode groupMergeMode = SubjectGroupMergeMode.Union,
+        bool validationRequired = false)
     {
         ILatticeAccessGate gate = nullGate ? new NullLatticeAccessGate() : new FakeAccessGate(adminAllowed);
         var authMonitor = Substitute.For<IOptionsMonitor<LatticeAuthOptions>>();
@@ -34,7 +35,7 @@ public sealed class LatticeAuthAdminDirectoryTests
         var membershipMonitor = Substitute.For<IOptionsMonitor<LatticeMembershipOptions>>();
         membershipMonitor.CurrentValue.Returns(new LatticeMembershipOptions { GroupMergeMode = groupMergeMode });
         var identityMonitor = Substitute.For<IOptionsMonitor<LatticeIdentityDirectoryOptions>>();
-        identityMonitor.CurrentValue.Returns(new LatticeIdentityDirectoryOptions());
+        identityMonitor.CurrentValue.Returns(new LatticeIdentityDirectoryOptions { ValidationRequired = validationRequired });
 
         return new LatticeAuthAdmin(
             Substitute.For<ILatticeAuthorizationPolicyStore>(),
@@ -330,6 +331,21 @@ public sealed class LatticeAuthAdminDirectoryTests
         var model = await admin.GetAccessModelAsync();
 
         Assert.That(model.RulesEnforced, Is.False);
+    }
+
+    [Test]
+    public async Task GetAccessModelAsync_reports_directory_validation_required_only_with_a_real_directory_that_requires_it()
+    {
+        var required = await CreateAdmin(new FakeIdentityDirectory(), validationRequired: true).GetAccessModelAsync();
+        var optional = await CreateAdmin(new FakeIdentityDirectory(), validationRequired: false).GetAccessModelAsync();
+        var noDirectory = await CreateAdmin(new NullIdentityDirectory(), validationRequired: true).GetAccessModelAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(required.DirectoryValidationRequired, Is.True);
+            Assert.That(optional.DirectoryValidationRequired, Is.False);
+            Assert.That(noDirectory.DirectoryValidationRequired, Is.False, "the null directory validates nothing, whatever the option says");
+        });
     }
 
     [Test]

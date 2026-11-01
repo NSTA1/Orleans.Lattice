@@ -243,6 +243,18 @@ public abstract class UiTestBase
         return await context.StorageStateAsync();
     }
 
+    /// <summary>
+    /// Captures one step of a journey as <c>screenshots/journey/{name}.png</c>, kept as a
+    /// CI artifact on success too, so a pull request can show the journey in order.
+    /// </summary>
+    /// <param name="page">The page, showing the step.</param>
+    /// <param name="name">The step's file name, ordered by a numeric prefix.</param>
+    private protected static Task CaptureJourneyStepAsync(IPage page, string name) =>
+        page.ScreenshotAsync(new PageScreenshotOptions
+        {
+            Path = Path.Combine(ArtifactDirectory(Path.Combine("screenshots", "journey")), name + ".png"),
+        });
+
     private static async Task DumpPageAsync(IPage page, string name)
     {
         try

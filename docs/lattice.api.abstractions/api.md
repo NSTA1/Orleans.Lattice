@@ -1208,6 +1208,7 @@ Implemented by [`Orleans.Lattice.Api.Auth`](../lattice.api.auth/README.md) and e
 - `public bool AllTreesGrantsEnabled { get; init; }`
 - `public bool AccessAdministrationDelegationEnabled { get; init; }`
 - `public bool DelegatedTenantAccessAdministrationEnabled { get; init; }`
+- `public bool DirectoryValidationRequired { get; init; }`
 
 ### `ApiAuthTypeAliases`
 
@@ -1395,6 +1396,7 @@ Implemented by [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/api.md) and 
 - `Task<bool> IsHealthMonitoringAvailableAsync(CancellationToken cancellationToken = default)`
 - `Task<BackupHealthReport?> GetBackupHealthAsync(string backupId, CancellationToken cancellationToken = default)`
 - `Task ConfigureBackupHealthAsync(string backupId, BackupHealthConfig config, CancellationToken cancellationToken = default)`
+- `Task<BackupHealthConfig?> GetBackupHealthConfigAsync(string backupId, CancellationToken cancellationToken = default)`
 
 ### `ILatticeBackupOperations`
 
@@ -1596,7 +1598,7 @@ Implemented by [`Orleans.Lattice.Api.Schema`](../lattice.api.schema/api.md) and 
 
 ## `Orleans.Lattice.Api.Replication`
 
-Implemented by [`Orleans.Lattice.Api.Replication`](../lattice.api.replication/api.md) and exposed remotely by [`Orleans.Lattice.Api.Replication.Grpc`](../lattice.api.replication.grpc/api.md). 17 public types.
+Implemented by [`Orleans.Lattice.Api.Replication`](../lattice.api.replication/api.md) and exposed remotely by [`Orleans.Lattice.Api.Replication.Grpc`](../lattice.api.replication.grpc/api.md). 18 public types.
 
 | Type | Kind | Summary |
 |---|---|---|
@@ -1605,6 +1607,7 @@ Implemented by [`Orleans.Lattice.Api.Replication`](../lattice.api.replication/ap
 | `ILatticeReplicationStatus` | interface | Transport-agnostic, read-only facade over the per-peer replication link status a replication-enabled cluster tracks: for each replicated tree and each peer region, in each direction, the outstanding backlog, the error streak, the time since the last successful contact, the in-flight batch count, and a derived `ReplicationLinkHealth`. |
 | `ApiReplicationTypeAliases` | static class | Centralized Orleans serialization alias constants for the replication control-API surface (the transport-agnostic contract in `Orleans.Lattice.Api.Abstractions` and the sibling gRPC / MCP bindings that reuse this registry). |
 | `LatticeReplicationEngineNotHostedException` | sealed class (exception) | Thrown by `DecommissionPeerAsync` when the caller is authorized but no replication engine is hosted in this process, so there is no `ILatticeReplicationPeerDecommissioner` to carry the decommission out. |
+| `ReplicationCapabilities` | sealed record | The read-only result of a replication capability probe (`ProbeCapabilitiesAsync`): whether the current caller may configure replication for one tree, evaluated through the same fail-closed `LatticeOperation.Replication` gate the real enable and disable use, but with no side effects. |
 | `ReplicationConfigReport` | sealed record | An operator-facing report of the effective replicated-tree set: one `ReplicationTreeConfigEntry` per enrolled tree the caller is authorized to see. |
 | `ReplicationDecommissionPeerResult` | sealed record | The transport-agnostic outcome of a `DecommissionPeerAsync` call. |
 | `ReplicationDisableResult` | sealed record | The transport-agnostic outcome of a `DisableReplicationAsync` call. |
@@ -1627,6 +1630,7 @@ Implemented by [`Orleans.Lattice.Api.Replication`](../lattice.api.replication/ap
 - `Task<ReplicationEnableResult> EnableReplicationAsync(string treeId, LatticeMergeMode mode, string? bootstrapSourceClusterId = null, CancellationToken cancellationToken = default)`
 - `Task<ReplicationDisableResult> DisableReplicationAsync(string treeId, CancellationToken cancellationToken = default)`
 - `Task<ReplicationConfigReport> GetReplicationConfigAsync(CancellationToken cancellationToken = default)`
+- `Task<ReplicationCapabilities> ProbeCapabilitiesAsync(string treeId, CancellationToken cancellationToken = default)`
 
 ### `ILatticeReplicationPeerAdmin`
 
@@ -1664,6 +1668,7 @@ Implemented by [`Orleans.Lattice.Api.Replication`](../lattice.api.replication/ap
 - `public const string ReplicationLinkStallReason`
 - `public const string ReplicationDecommissionPeerResult`
 - `public const string LatticeReplicationEngineNotHostedException`
+- `public const string ReplicationCapabilities`
 
 ### `LatticeReplicationEngineNotHostedException`
 
@@ -1674,6 +1679,16 @@ Implemented by [`Orleans.Lattice.Api.Replication`](../lattice.api.replication/ap
 - `public LatticeReplicationEngineNotHostedException()`
 - `public LatticeReplicationEngineNotHostedException(string message)`
 - `public LatticeReplicationEngineNotHostedException(string message, Exception innerException)`
+
+### `ReplicationCapabilities`
+
+[Source](../../src/lattice.api.abstractions/Replication/Model/ReplicationCapabilities.cs) (line 20).
+
+`public sealed record ReplicationCapabilities`
+
+- `public ReplicationCapabilities(string treeId, bool canConfigure)`
+- `public string TreeId { get; init; }`
+- `public bool CanConfigure { get; init; }`
 
 ### `ReplicationConfigReport`
 

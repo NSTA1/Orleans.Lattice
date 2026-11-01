@@ -26,7 +26,9 @@ namespace Orleans.Lattice.Replication;
 ///   shipping stays paused until the saga globally completes (the fence grain's
 ///   global gate), preserving cross-cluster atomic visibility.</description></item>
 ///   <item><description><b>Abort</b> reverts the alias to the pre-restore physical
-///   tree, reliably garbage collects the shadow so no storage leaks, then lifts
+///   tree when this participant had started the cutover (a saga that only
+///   prepared never moved it), reliably garbage collects the shadow so no storage
+///   leaks, then lifts
 ///   the fence. Idempotent and safe when called by the participant grain after it
 ///   learns an abort from the coordinator on fence expiry; that request carries
 ///   the persisted set id, so a backup-set restore takes the set path. Only a
@@ -49,6 +51,23 @@ namespace Orleans.Lattice.Replication;
 /// participant is inert and votes to abort any restore saga dispatched to it
 /// (no backup means nothing to restore), rather than failing to construct.
 /// </para>
+/// <para>
+/// <b>Authority.</b> The operator who starts a coordinated restore is authorized
+/// once, on the coordinator cluster. A participant acting on a remote
+/// coordinator's saga runs its restore steps with <b>peer authority</b> - a
+/// system-origin scope entered only for a current, authenticated replication
+/// peer, on trees this cluster replicates, replaying backups of trees this cluster
+/// replicates (#5443). Every other caller, this cluster's own coordinator
+/// included, runs as the ambient caller and is authorized as such - with one
+/// exception: a commit or abort that this cluster's own coordinator has durably
+/// decided, acting on the shadow this participant built in an authorized prepare,
+/// runs with that prepare's authority, because the decision can be delivered with
+/// no user identity (#5506). The decision is read from the locally persisted
+/// coordinator state, never from the request, and a commit claiming this cluster's
+/// own saga without a durable Commit decision is refused before any cutover.
+/// See <c>HasPeerAuthority</c> and <c>ResolveStepAuthorityAsync</c> for the trust
+/// arguments.
+/// </para>
 /// </summary>
 internal sealed class RestoreParticipant(
     ILatticeCoordinatedRestoreEngine? engine,
@@ -58,7 +77,8 @@ internal sealed class RestoreParticipant(
     ILogger<RestoreParticipant> logger,
     ILatticeBackupSetResolver? setResolver = null,
     IReplicatedTreeMembership? membership = null,
-    Microsoft.Extensions.Options.IOptionsMonitor<LatticeReplicationOptions>? options = null) : ISagaParticipant
+    Microsoft.Extensions.Options.IOptionsMonitor<LatticeReplicationOptions>? options = null,
+    IReplicationTopology? topology = null) : ISagaParticipant
 {
     /// <summary>
     /// Bounded retry budget for a transient capacity exhaustion mid-build. Past
@@ -74,6 +94,22 @@ internal sealed class RestoreParticipant(
     private const int CutoverFenceWindowSeconds = 0;
 
     private readonly ConcurrentDictionary<string, LatticeRestoreResult> _built =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Saga ids whose cutover this participant has started in the current run of
+    /// the saga, on this activation. An abort reverts the alias only for these: a
+    /// saga that only prepared never moved the alias, and reverting it collides
+    /// with the build's own open alias operation (#5443). The record belongs to one
+    /// run: a new prepare starts a fresh run of the deterministic saga id and drops
+    /// it, and an abort consumes it, so a later run never reverts an earlier run's
+    /// cutover. It deliberately survives a completed commit, because an operator
+    /// who resolves a participant to abort after its commit completed locally, but
+    /// before its grain recorded the Committed phase, must still have the alias
+    /// reverted. A reactivation that lost this set also lost the built cache, so the
+    /// abort takes the no-revert garbage-collect path either way.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, bool> _cutOver =
         new(StringComparer.Ordinal);
 
     /// <summary>Records a participant prepare vote on the saga vote counter, tagged by reason.</summary>
@@ -168,10 +204,359 @@ internal sealed class RestoreParticipant(
             "a coordinated restore may only target a tree this cluster is enrolled for.");
     }
 
+    /// <summary>
+    /// Whether this saga's restore steps run with <b>peer authority</b> - inside a
+    /// system-origin scope - rather than as the ambient caller (#5443).
+    /// <para>
+    /// A participant acting on a remote coordinator's saga has no user identity of
+    /// its own: the operator was authorized on the coordinator cluster, before the
+    /// saga started, and the control call that reaches this cluster carries only the
+    /// coordinator's cluster identity. Re-authorizing the engine's restore steps
+    /// against the ambient subject therefore checks <c>anonymous</c>, and on a
+    /// cluster that enforces authorization every replicated-tree restore was
+    /// compensated. The participant instead acts on the authority it does hold - the
+    /// authenticated replication peer's - and only where that authority already
+    /// reaches.
+    /// </para>
+    /// <para>
+    /// Every condition is re-derived locally; nothing the request body classifies is
+    /// trusted. Peer authority holds only when all of these are true:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><description>The membership, options and topology seams are wired. A
+    ///   missing seam is a refusal, never a pass.</description></item>
+    ///   <item><description>The coordinator is a <b>remote</b> cluster. On the
+    ///   inbound gRPC saga service <see cref="SagaControlRequest.CoordinatorClusterId"/>
+    ///   is overwritten with the transport-stamped origin, which must equal the
+    ///   cluster the presented credential is bound to, and is refused unless that
+    ///   origin is an authorized peer. A request this cluster's own coordinator loops
+    ///   back keeps the operator's ambient identity, which flows with the
+    ///   call.</description></item>
+    ///   <item><description>The coordinator is one of this cluster's
+    ///   <b>current</b> replication peers.</description></item>
+    ///   <item><description>The caller has already confined the targets to trees
+    ///   this cluster replicates (<see cref="IsHostedTarget"/>,
+    ///   <see cref="FilterHostedMembers"/>), and prepare confines every backup's
+    ///   captured source trees the same way (<see cref="SourcesEnrolled"/>).</description></item>
+    /// </list>
+    /// <para>
+    /// Within those bounds the restore grants the peer nothing its replication
+    /// stream does not already hold: an enrolled peer can already write any value
+    /// into a tree it replicates with this cluster, under system origin, and it
+    /// already receives every write to the trees whose backups it may restore.
+    /// </para>
+    /// </summary>
+    private bool HasPeerAuthority(SagaControlRequest request)
+    {
+        if (membership is null || options is null || topology is null)
+        {
+            return false;
+        }
+
+        var coordinator = request.CoordinatorClusterId;
+        if (string.IsNullOrEmpty(coordinator)
+            || string.Equals(coordinator, options.CurrentValue.ClusterId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        foreach (var peer in topology.CurrentPeers)
+        {
+            if (string.Equals(peer, coordinator, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        logger.LogWarning(
+            "Restore participant: saga '{SagaId}' names coordinator '{Coordinator}', which is not a current " +
+            "replication peer; its restore steps run as the ambient caller.",
+            request.SagaId, coordinator);
+        return false;
+    }
+
+    /// <summary>
+    /// Enters the system-origin scope that carries peer authority for
+    /// <paramref name="request"/>, or returns <c>null</c> (the ambient caller) when
+    /// <see cref="HasPeerAuthority"/> does not hold. Cold path: one restore saga
+    /// step per call, so the scope allocation is immaterial.
+    /// </summary>
+    private IDisposable? EnterPeerAuthority(SagaControlRequest request, out bool elevated)
+    {
+        elevated = HasPeerAuthority(request);
+        return elevated ? LatticeAccessGateContext.EnterSystemOrigin() : null;
+    }
+
+    /// <summary>How a commit or an abort of an already-prepared saga is authorized.</summary>
+    private enum StepAuthority
+    {
+        /// <summary>Runs as the ambient caller and is authorized as such.</summary>
+        Ambient,
+
+        /// <summary>Runs with peer authority (<see cref="HasPeerAuthority"/>).</summary>
+        Peer,
+
+        /// <summary>Runs with the authority of the prepare this participant ran, on its cached shadow.</summary>
+        Decided,
+
+        /// <summary>A commit this cluster's own coordinator has not durably decided: refused before any cutover.</summary>
+        Refused,
+    }
+
+    /// <summary>
+    /// Resolves the authority a commit (<paramref name="commit"/> <c>true</c>) or an
+    /// abort of an already-prepared saga runs under (issue #5506).
+    /// <para>
+    /// The decision to commit or compensate is delivered by the coordinator's
+    /// keepalive reminder or the participant's fence expiry as often as by the
+    /// operator's own call, so it can arrive with no user identity at all, and
+    /// re-authorizing it as <c>anonymous</c> refuses a cutover after the write fence
+    /// engaged. When <see cref="HasPeerAuthority"/> does not hold, the step can
+    /// instead borrow the authority of the prepare this participant ran - but only
+    /// on two pieces of local evidence, never on anything the request says:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><description><b>The decision.</b> This cluster's own
+    ///   <see cref="ICrossClusterSagaCoordinatorGrain"/> for the saga id has durably
+    ///   recorded the matching decision (read through its immutable status
+    ///   snapshot): Commit for a commit, Abort for an abort. A coordinator that never
+    ///   started the saga is not this cluster's, an undecided one has not decided,
+    ///   and a status read that fails proves nothing; none of them grants
+    ///   anything.</description></item>
+    ///   <item><description><b>The shadow.</b> <paramref name="preparedHere"/>: the
+    ///   cached shadow exists only because a shadow build for this saga id succeeded
+    ///   in this process, and the engine authorized that build - <c>Restore</c> over
+    ///   the target and <c>Backup</c> over every captured source - as the caller that
+    ///   ran it. The step acts only on that shadow, so it reaches nothing the
+    ///   authorized prepare did not. A participant that lost its cache rebuilds as
+    ///   the ambient caller.</description></item>
+    /// </list>
+    /// <para>
+    /// The request's <see cref="SagaControlRequest.CoordinatorClusterId"/> only
+    /// selects which check applies: a request naming this cluster claims to be its
+    /// own saga, and that claim is then tested against the persisted decision. A
+    /// commit making the claim without a durable Commit decision is
+    /// <see cref="StepAuthority.Refused"/> outright - no commit legitimately precedes
+    /// the decision, and cutting over a saga a peer may still abort would break the
+    /// cross-cluster atomicity the saga exists for. An abort without a durable
+    /// Abort decision is not refused (an operator compensating by hand is the
+    /// repair path), but it runs as the ambient caller. A missing options seam is a
+    /// refusal of elevation, never a pass.
+    /// </para>
+    /// <para>
+    /// Returns a value rather than entering the scope: the scope lives in the
+    /// request context, which an async method cannot hand back to its caller, so
+    /// the caller enters it with <see cref="EnterStepAuthority"/>. Cold path: one
+    /// grain read per restore saga step.
+    /// </para>
+    /// </summary>
+    private async Task<StepAuthority> ResolveStepAuthorityAsync(
+        SagaControlRequest request, bool preparedHere, bool commit)
+    {
+        if (HasPeerAuthority(request))
+        {
+            return StepAuthority.Peer;
+        }
+
+        var self = options?.CurrentValue.ClusterId;
+        if (string.IsNullOrEmpty(self)
+            || !string.Equals(request.CoordinatorClusterId, self, StringComparison.Ordinal))
+        {
+            return StepAuthority.Ambient;
+        }
+
+        var wanted = commit ? CrossClusterSagaDecision.Committed : CrossClusterSagaDecision.Aborted;
+        var decided = await ReadLocalDecisionAsync(request.SagaId);
+        if (decided != wanted)
+        {
+            logger.LogWarning(
+                "Restore participant: {Step} for saga '{SagaId}' names this cluster as its coordinator, but the " +
+                "coordinator's persisted decision is {Decision}; {Consequence}.",
+                commit ? "commit" : "abort", request.SagaId, decided?.ToString() ?? "unreadable",
+                commit ? "refusing it before any cutover" : "it runs as the ambient caller");
+            return commit ? StepAuthority.Refused : StepAuthority.Ambient;
+        }
+
+        return preparedHere ? StepAuthority.Decided : StepAuthority.Ambient;
+    }
+
+    /// <summary>
+    /// The decision this cluster's own coordinator has durably recorded for
+    /// <paramref name="sagaId"/>: <see cref="CrossClusterSagaDecision.InFlight"/>
+    /// while it has not decided or never started the saga, and <c>null</c> when its
+    /// state cannot be read (fail closed).
+    /// </summary>
+    private async Task<CrossClusterSagaDecision?> ReadLocalDecisionAsync(string sagaId)
+    {
+        CrossClusterSagaStatus status;
+        try
+        {
+            status = await grainFactory.GetGrain<ICrossClusterSagaCoordinatorGrain>(sagaId).GetStatusAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Restore participant: could not read the coordinator decision for saga '{SagaId}'.", sagaId);
+            return null;
+        }
+
+        return status.Phase switch
+        {
+            CrossClusterSagaPhase.Committed => CrossClusterSagaDecision.Committed,
+            CrossClusterSagaPhase.Aborted => CrossClusterSagaDecision.Aborted,
+            CrossClusterSagaPhase.Completed => status.Outcome switch
+            {
+                CrossClusterSagaOutcome.Committed => CrossClusterSagaDecision.Committed,
+                CrossClusterSagaOutcome.Aborted => CrossClusterSagaDecision.Aborted,
+                _ => CrossClusterSagaDecision.InFlight,
+            },
+            _ => CrossClusterSagaDecision.InFlight,
+        };
+    }
+
+    /// <summary>
+    /// Enters the system-origin scope for <paramref name="authority"/>, or returns
+    /// <c>null</c> (the ambient caller). Must be called synchronously by the step
+    /// itself, so the scope covers exactly that step.
+    /// </summary>
+    private static IDisposable? EnterStepAuthority(StepAuthority authority) =>
+        authority is StepAuthority.Peer or StepAuthority.Decided
+            ? LatticeAccessGateContext.EnterSystemOrigin()
+            : null;
+
+    /// <summary>The refusal of a commit this cluster's own coordinator has not durably decided.</summary>
+    private static UnauthorizedAccessException UndecidedCommit(SagaControlRequest request) =>
+        new($"Commit of restore saga '{request.SagaId}' refused: it names this cluster as its coordinator, " +
+            "which has not durably decided to commit it.");
+
+    /// <summary>
+    /// Runs the cutover <paramref name="cutover"/> inside the engaged write fence
+    /// and, if it fails, unblocks local writes before rethrowing (issue #5506). The
+    /// participant stays prepared and the decision is redelivered; a cutover that
+    /// fails must not hold the tree's writes fenced while it waits for that, and
+    /// the next delivery re-engages the fence before it swaps. Cross-cluster
+    /// shipping and receiving stay paused until the saga completes, as after a
+    /// successful local cutover.
+    /// </summary>
+    private async Task CutOverInsideFenceAsync(ISagaWriteFenceGrain fence, string sagaId, Func<Task> cutover)
+    {
+        try
+        {
+            await cutover();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Restore participant: cutover failed for saga '{SagaId}'; unblocking local writes until the commit is redelivered.",
+                sagaId);
+            try
+            {
+                await fence.UnblockWritesAsync();
+            }
+            catch (Exception unblock)
+            {
+                // The fence still self-lifts on its bounded cutover deadline.
+                logger.LogWarning(unblock,
+                    "Restore participant: could not unblock local writes for saga '{SagaId}' after a failed cutover.",
+                    sagaId);
+            }
+
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Whether every tree the backup chain in <paramref name="report"/> was captured
+    /// from is a tree a peer-authority restore may read: the target itself, or a
+    /// tree this cluster replicates. A report that names no source is unknown and
+    /// refused. Without this check a peer could name any catalogued backup -
+    /// including one of a tree kept deliberately cluster-local - and copy its
+    /// contents into a replicated tree, because the engine's captured-source
+    /// authorization is bypassed under system origin.
+    /// </summary>
+    private bool SourcesEnrolled(RestoreAdmissionReport report)
+    {
+        if (report.SourceTreeIds.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var source in report.SourceTreeIds)
+        {
+            if (!string.Equals(source, report.TargetTreeId, StringComparison.Ordinal)
+                && !membership!.IsReplicated(source))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// The single refusal a peer-coordinated prepare returns when the admission probe
+    /// fails <b>or</b> the backup's captured sources are not replicated here. The
+    /// probe runs under peer authority before the sources are known, so distinct
+    /// answers would let a peer learn whether a backup id exists, or what it holds,
+    /// for a tree it may not restore. The cause is logged locally and counted on the
+    /// vote metric; the peer sees the same text either way.
+    /// </summary>
+    private static SagaParticipantPrepareResult PeerRefusal(string backupId, string targetTree, string reason)
+    {
+        RecordVote(reason);
+        return new SagaParticipantPrepareResult(
+            SagaVote.Abort,
+            $"Backup '{backupId}' cannot be restored into tree '{targetTree}' by a peer-coordinated restore " +
+            "on this cluster.");
+    }
+
+    /// <summary>
+    /// Re-derives, at commit, that a backup a lost cache forces the participant to
+    /// rebuild from still replays only replicated trees: a source tree can stop being
+    /// replicated between prepare and commit. A probe failure is a refusal.
+    /// </summary>
+    private async Task<bool> SourcesStillEnrolledAsync(
+        string sagaId, LatticeRestoreRequest restoreRequest, CancellationToken cancellationToken)
+    {
+        RestoreAdmissionReport report;
+        try
+        {
+            report = await engine!.ProbeAdmissionAsync(restoreRequest, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Restore participant: commit re-probe failed for saga '{SagaId}' (backup '{BackupId}').",
+                sagaId, restoreRequest.BackupId);
+            return false;
+        }
+
+        return SourcesEnrolled(report);
+    }
+
+    /// <summary>Refuses a commit whose rebuild would replay a backup of a tree this cluster no longer replicates.</summary>
+    private async Task RefuseCommitAsync(SagaControlRequest request)
+    {
+        logger.LogWarning(
+            "Restore participant: refusing commit for saga '{SagaId}' - rebuilding its shadow would replay a backup " +
+            "captured from a tree this cluster does not replicate.",
+            request.SagaId);
+        RecordCommit(LatticeReplicationMetrics.SagaReasonNotReplicated);
+        await grainFactory.GetGrain<ISagaWriteFenceGrain>(request.SagaId).LiftAsync();
+    }
+
     /// <inheritdoc />
     public async Task<SagaParticipantPrepareResult> PrepareAsync(
         SagaControlRequest request, CancellationToken cancellationToken = default)
     {
+        // A prepare starts a new run of this saga id (ids are deterministic), so no
+        // cutover recorded by an earlier run may be reverted by this run's abort.
+        _cutOver.TryRemove(request.SagaId, out _);
+
         if (engine is null)
         {
             RecordVote(LatticeReplicationMetrics.SagaReasonEngineUnavailable);
@@ -195,6 +580,7 @@ internal sealed class RestoreParticipant(
         }
 
         var restoreRequest = BuildRestoreRequest(request);
+        using var authority = EnterPeerAuthority(request, out var peerAuthority);
 
         // Admission pre-flight: probe the manifest's self-describing size and
         // topology and hard-refuse an infeasible target BEFORE building anything.
@@ -212,9 +598,23 @@ internal sealed class RestoreParticipant(
             logger.LogWarning(ex,
                 "Restore participant: admission probe failed for saga '{SagaId}' (backup '{BackupId}').",
                 request.SagaId, request.ManifestId);
+            if (peerAuthority)
+            {
+                return PeerRefusal(request.ManifestId, request.TargetTree, LatticeReplicationMetrics.SagaReasonInfeasible);
+            }
+
             RecordVote(LatticeReplicationMetrics.SagaReasonInfeasible);
             return new SagaParticipantPrepareResult(
                 SagaVote.Abort, $"Admission probe failed: {ex.Message}");
+        }
+
+        if (peerAuthority && !SourcesEnrolled(report))
+        {
+            logger.LogWarning(
+                "Restore participant: refusing saga '{SagaId}' - backup '{BackupId}' was captured from a tree " +
+                "this cluster does not replicate.",
+                request.SagaId, request.ManifestId);
+            return PeerRefusal(request.ManifestId, request.TargetTree, LatticeReplicationMetrics.SagaReasonNotReplicated);
         }
 
         if (!await capacity.CanHostAsync(report, cancellationToken))
@@ -310,12 +710,29 @@ internal sealed class RestoreParticipant(
         }
 
         var restoreRequest = BuildRestoreRequest(request);
+        var preparedHere = _built.TryGetValue(request.SagaId, out var result);
+        var authority = await ResolveStepAuthorityAsync(request, preparedHere, commit: true);
+        if (authority == StepAuthority.Refused)
+        {
+            throw UndecidedCommit(request);
+        }
+
+        var peerAuthority = authority == StepAuthority.Peer;
+        using var scope = EnterStepAuthority(authority);
 
         // Reuse the prepared shadow; if a reactivation lost the in-memory cache,
         // re-derive it - BuildShadowAsync is idempotent and resumable, so this
         // resolves back to the same fully built shadow without a full rebuild.
-        if (!_built.TryGetValue(request.SagaId, out var result))
+        if (!preparedHere || result is null)
         {
+            // The rebuild replays the backup again, so its sources are re-checked
+            // against enrollment now rather than trusted from the earlier prepare.
+            if (peerAuthority && !await SourcesStillEnrolledAsync(request.SagaId, restoreRequest, cancellationToken))
+            {
+                await RefuseCommitAsync(request);
+                return;
+            }
+
             result = await engine.BuildShadowAsync(restoreRequest, cancellationToken);
             _built[request.SagaId] = result;
         }
@@ -337,8 +754,11 @@ internal sealed class RestoreParticipant(
         });
 
         // Single atomic alias swap: a reader sees whole-old or whole-new, never
-        // half.
-        await engine.CommitShadowAsync(result, cancellationToken);
+        // half. Recorded first, so an abort after a commit that faulted part-way
+        // still reverts an alias that may have moved.
+        _cutOver[request.SagaId] = true;
+        await CutOverInsideFenceAsync(fence, request.SagaId,
+            () => engine.CommitShadowAsync(result, cancellationToken));
 
         // Unblock local writes on this cluster now it has flipped. Cross-cluster
         // shipping stays paused until the saga globally completes (the fence
@@ -388,10 +808,20 @@ internal sealed class RestoreParticipant(
         // the participant grain for an abort it learned from the coordinator on
         // fence expiry, and safe when the participant never prepared.
         var restoreRequest = BuildRestoreRequest(request);
+        var preparedHere = _built.TryGetValue(request.SagaId, out var result);
+        using var scope = EnterStepAuthority(await ResolveStepAuthorityAsync(request, preparedHere, commit: false));
 
-        if (_built.TryGetValue(request.SagaId, out var result))
+        if (preparedHere && result is not null)
         {
-            await SafeRevertAsync(result, cancellationToken);
+            // Revert only an alias this participant moved. A saga that only
+            // prepared still holds the build's alias operation on the target, so a
+            // revert would collide with it and fault (#5443); deleting the shadow
+            // below releases that operation instead.
+            if (_cutOver.TryRemove(request.SagaId, out _))
+            {
+                await SafeRevertAsync(result, cancellationToken);
+            }
+
             await SafeDeleteShadowByIdAsync(result.ShadowPhysicalTreeId, cancellationToken);
             _built.TryRemove(request.SagaId, out _);
         }
@@ -482,6 +912,7 @@ internal sealed class RestoreParticipant(
         members = FilterHostedMembers(members, request);
         var requests = BuildSetRestoreRequests(members);
         var built = new List<LatticeRestoreResult>(requests.Count);
+        using var authority = EnterPeerAuthority(request, out var peerAuthority);
 
         foreach (var restoreRequest in requests)
         {
@@ -500,9 +931,26 @@ internal sealed class RestoreParticipant(
                     "Restore participant: set admission probe failed for saga '{SagaId}' (member tree '{TreeId}').",
                     request.SagaId, restoreRequest.TargetTreeId);
                 await GarbageCollectAllAsync(built, requests, cancellationToken);
+                if (peerAuthority)
+                {
+                    return PeerRefusal(
+                        restoreRequest.BackupId, restoreRequest.TargetTreeId!, LatticeReplicationMetrics.SagaReasonInfeasible);
+                }
+
                 RecordVote(LatticeReplicationMetrics.SagaReasonInfeasible);
                 return new SagaParticipantPrepareResult(
                     SagaVote.Abort, $"Set admission probe failed: {ex.Message}");
+            }
+
+            if (peerAuthority && !SourcesEnrolled(report))
+            {
+                logger.LogWarning(
+                    "Restore participant: refusing set saga '{SagaId}' - member tree '{TreeId}' would replay a " +
+                    "backup captured from a tree this cluster does not replicate.",
+                    request.SagaId, restoreRequest.TargetTreeId);
+                await GarbageCollectAllAsync(built, requests, cancellationToken);
+                return PeerRefusal(
+                    restoreRequest.BackupId, restoreRequest.TargetTreeId!, LatticeReplicationMetrics.SagaReasonNotReplicated);
             }
 
             if (!await capacity.CanHostAsync(report, cancellationToken))
@@ -562,11 +1010,34 @@ internal sealed class RestoreParticipant(
         }
 
         var requests = BuildSetRestoreRequests(members);
+        var preparedHere = _builtSets.TryGetValue(request.SagaId, out var built);
+        var authority = await ResolveStepAuthorityAsync(request, preparedHere, commit: true);
+        if (authority == StepAuthority.Refused)
+        {
+            throw UndecidedCommit(request);
+        }
+
+        var peerAuthority = authority == StepAuthority.Peer;
+        using var scope = EnterStepAuthority(authority);
 
         // Reuse the prepared group; a reactivation that lost the cache re-derives
         // every member idempotently (BuildShadowAsync is resumable).
-        if (!_builtSets.TryGetValue(request.SagaId, out var built))
+        if (!preparedHere || built is null)
         {
+            // The rebuild replays every member's backup again, so each member's
+            // sources are re-checked against enrollment before any of it is rebuilt.
+            if (peerAuthority)
+            {
+                foreach (var memberRequest in requests)
+                {
+                    if (!await SourcesStillEnrolledAsync(request.SagaId, memberRequest, cancellationToken))
+                    {
+                        await RefuseCommitAsync(request);
+                        return;
+                    }
+                }
+            }
+
             // Each build targets a DISTINCT member tree and produces that member's
             // own shadow, so no build can observe another's effect. RunAsync
             // returns the results in slot order, so `built` is still in the
@@ -601,10 +1072,11 @@ internal sealed class RestoreParticipant(
         // them shortens the write stall from N round trips to ceil(N / width)
         // without weakening the guarantee. A fault still surfaces after every
         // launched swap has settled, because ForEachAsync observes them all.
-        await BoundedFanOut.ForEachAsync(
+        _cutOver[request.SagaId] = true;
+        await CutOverInsideFenceAsync(fence, request.SagaId, () => BoundedFanOut.ForEachAsync(
             built,
             BoundedFanOut.DefaultWidth,
-            result => engine!.CommitShadowAsync(result, cancellationToken));
+            result => engine!.CommitShadowAsync(result, cancellationToken)));
 
         await fence.UnblockWritesAsync();
         RecordCommit(LatticeReplicationMetrics.SagaReasonSet);
@@ -633,8 +1105,16 @@ internal sealed class RestoreParticipant(
             return;
         }
 
-        if (_builtSets.TryGetValue(request.SagaId, out var built))
+        var preparedHere = _builtSets.TryGetValue(request.SagaId, out var built);
+        using var scope = EnterStepAuthority(await ResolveStepAuthorityAsync(request, preparedHere, commit: false));
+
+        if (preparedHere && built is not null)
         {
+            // Revert only aliases this participant moved: a group that only
+            // prepared still holds each build's alias operation, which a revert
+            // would collide with (#5443); the shadow delete releases it.
+            var cutOver = _cutOver.TryRemove(request.SagaId, out _);
+
             // Per member the revert must precede that member's shadow delete, so
             // the two steps stay serial INSIDE the body; across members there is
             // no such constraint, because each pair touches only its own tree.
@@ -646,7 +1126,11 @@ internal sealed class RestoreParticipant(
                 BoundedFanOut.DefaultWidth,
                 async result =>
                 {
-                    await SafeRevertAsync(result, cancellationToken);
+                    if (cutOver)
+                    {
+                        await SafeRevertAsync(result, cancellationToken);
+                    }
+
                     await SafeDeleteShadowByIdAsync(result.ShadowPhysicalTreeId, cancellationToken);
                 });
 

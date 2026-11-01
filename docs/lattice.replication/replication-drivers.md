@@ -959,7 +959,26 @@ The shipper is therefore also an offset-reading WAL consumer:
   partition, so it holds the whole log instead of racing the GC.
 - On an alias rebind it registers with the new physical log first and only
   then withdraws from the old one. It answers nothing for a log it no longer
-  reads.
+  reads. The registration happens at the rebind itself, not at the next
+  read, so no GC pass can run between the cursor reset and the hold
+  ([#5462](https://github.com/NSTA1/Orleans.Lattice/issues/5462)).
+- A copy that is built to replace the tree behind its alias - a schema
+  remediation or migration, or a resize - is held from its start while it is
+  built ([#5471](https://github.com/NSTA1/Orleans.Lattice/issues/5471)), so
+  the shipper that rebinds to it at the cutover re-ships it whole and the peer
+  needs no re-seed. The builder arms a bounded hold, itself a registered offset
+  consumer of the copy's log that answers 0 for every partition, before its
+  first write to the copy, and renews it as the build progresses. The hold
+  ends once every live offset consumer of the source log has registered on
+  the copy, at the latest a grace period after the cutover; an abandoned or
+  crashed build's hold lapses with its unrenewed lease, and a discarded copy's
+  is released at once. A restore copy is not held: it changes the tree's
+  lineage, which forces a re-seed anyway (see
+  [Source lineage stamp](#source-lineage-stamp)). If a hold lapses, or the
+  `WalRetention` ceiling trims past it, the shipper sees the gap on its first
+  read, takes the peer off the log, and the peer re-seeds from a snapshot
+  export (see [Forced gap](#forced-gap-a-peer-taken-off-the-log)); until it
+  does, the link reports as stalled with the `ReseedRequired` stall reason.
 
 The GC refuses every entry at or above the lowest position any registered
 consumer reports for that partition, however the HLC clauses read. Only the

@@ -61,6 +61,22 @@ public class MapLatticeExplorerTests
     }
 
     [Test]
+    public async Task MapLatticeExplorer_maps_the_download_endpoint_under_the_base_path_only()
+    {
+        await using var app = await CreateHostAsync(basePath: "/explorer");
+        using var client = app.GetTestServer().CreateClient();
+
+        var mounted = await client.PostAsync("/explorer/downloads", EmptyForm());
+        var atRoot = await client.PostAsync("/downloads", EmptyForm());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(mounted.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest), "the endpoint is mapped under the mount and refuses a post without antiforgery");
+            Assert.That(atRoot.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        });
+    }
+
+    [Test]
     public void MapLatticeExplorer_onto_a_non_pipeline_route_group_throws_rather_than_dropping_the_security_headers()
     {
         var builder = WebApplication.CreateBuilder();

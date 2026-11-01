@@ -41,7 +41,9 @@ spec.loader.exec_module(ci)
 # Also applied to retries by coverage.yml, so even a newly introduced TLC shard
 # cannot accidentally execute the external model checker in the coverage lane.
 COVERAGE_FILTER = "TestCategory!=Chaos&TestCategory!=Coyote&TestCategory!=Tlc"
-EXCLUDED_PROJECTS = {"microbench", "azure-throughput-silo"}
+# lattice.explorer.e2e drives out-of-process hosts on its own lane
+# (explorer-journeys.yml); coverlet cannot instrument a process it did not start.
+EXCLUDED_PROJECTS = {"microbench", "azure-throughput-silo", "lattice.explorer.e2e"}
 UI_PACKAGE = "lattice.explorer.uitests"
 
 # The package whose shards carry the TLA+ model checks, and the category every

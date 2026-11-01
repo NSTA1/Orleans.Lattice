@@ -38,7 +38,7 @@ else
 {
     <ReplicationToolbar Regions="@_regions" Apps="@_apps" />
 
-    @if (CanControl)
+    @if (CanEnableNew)
     {
         <div class="lt-replication-actions">
             <LtButton OnClick="OpenEnableForNew" Disabled="_busy">Enable replication for a tree</LtButton>
@@ -122,12 +122,14 @@ else
         <LtComboBox @ref="_enableTreeBox"
                     Label="Tree"
                     Source="@Suggestions.Trees"
+                    Mode="@EnableTreeMode"
                     Noun="tree"
+                    ExistingMessage="@(EnableTreeMode == LtComboBoxMode.Suggest ? "A tree this cluster already holds." : null)"
                     Value="@_enableTree"
                     ValueChanged="OnEnableTreeChanged"
                     ReadOnly="@_enableTreeFixed"
                     Error="@EnableTreeError"
-                    Hint="The logical tree id, such as orders." />
+                    Hint="@EnableTreeHint" />
         <LtSelect Label="Merge mode"
                   Options="@MergeModeOptions"
                   Value="@_enableMode"
@@ -141,7 +143,11 @@ else
                     ExistingMessage="A region this cluster knows."
                     Value="@_enableBootstrap"
                     ValueChanged="OnEnableBootstrapChanged"
-                    Hint="When the tree already holds data, name the cluster to pull an initial snapshot from. Leave empty to skip." />
+                    Hint="Name the cluster to pull an initial snapshot from; enable it there first. Leave empty to skip." />
+        @if (_busy)
+        {
+            <p class="lt-replication-note" data-lt-replication="enabling" role="status">@EnablingStatus</p>
+        }
         <div class="lt-dialog__actions">
             <LtButton Variant="LtButtonVariant.Quiet" OnClick="CloseEnableAsync">Cancel</LtButton>
             <LtButton Type="LtButtonType.Submit" Disabled="@(!CanSubmitEnable)">@(_busy ? "Enabling" : "Enable replication")</LtButton>

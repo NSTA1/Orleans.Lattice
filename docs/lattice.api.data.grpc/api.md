@@ -29,10 +29,12 @@ The silo must also register the facade itself with `AddLatticeDataApi()`; see th
 | `ReadRangeAsync` | `ReadRange` | `DataRangeRequest` (facade DTO) | `DataRangePage` (facade DTO) |
 | `DeleteRangeAsync` | `DeleteRange` | `DataRangeDeleteRequest` (facade DTO) | `DataRangeDeleteResult` (facade DTO) |
 | `SetManyAsync` | `SetMany` | `DataSetManyRequest` | `DataSetManyResponse` |
+| `SetManyStreamAsync` | `StreamSetMany` (duplex) | `DataSetManyStreamRequest` frames | `DataSetManyStreamResponse` frames |
 | `CrdtWriteAsync` | `CrdtWrite` | `CrdtWriteRequest` | `CrdtWriteResponse` |
 | `CrdtReadAsync` | `CrdtRead` | `CrdtReadRequest` | `CrdtReadResponse` |
+| `ProbeCapabilitiesAsync` | `ProbeCapabilities` | `DataProbeRequest` | `LatticeDataCapabilities` (facade DTO) |
 
-Every RPC is unary. A failed call surfaces as an `RpcException` whose status follows the binding's [status mapping](README.md#status-mapping).
+Every RPC is unary except `StreamSetMany`, a duplex stream: the client sends one `DataSetManyStreamRequest` frame per batch (at most `DataSetManyStreamOptions.MaxBatchSize` entries, every frame naming the same tree), the server answers each with a `DataSetManyStreamResponse` carrying that batch's `DataSetManyStreamBatch` - its committed count and any per-entry `DataEntryRejection`s - and, once the client half-closes, one final frame carrying the `DataSetManyStreamResult` totals. The client keeps at most four batches unacknowledged, so neither side holds more than a few batches of the stream. The call is admitted by the transport gate before its first frame, and every key is authorized by the facade as it is written, so a denied key is reported as a rejection rather than failing the stream. A failed call surfaces as an `RpcException` whose status follows the binding's [status mapping](README.md#status-mapping).
 
 ## Seams
 
@@ -84,8 +86,10 @@ The following inventory includes directly declared public members and overloads,
 - `public Task<DataRangePage> ReadRangeAsync(DataRangeRequest request, CancellationToken cancellationToken = default)`
 - `public Task<DataRangeDeleteResult> DeleteRangeAsync(DataRangeDeleteRequest request, CancellationToken cancellationToken = default)`
 - `public Task<DataSetManyResponse> SetManyAsync(DataSetManyRequest request, CancellationToken cancellationToken = default)`
+- `public Task<DataSetManyStreamResult> SetManyStreamAsync(string treeId, IAsyncEnumerable<DataEntry> upserts, IProgress<DataSetManyStreamBatch>? progress = null, DataSetManyStreamOptions? options = null, CancellationToken cancellationToken = default)`
 - `public Task<CrdtWriteResponse> CrdtWriteAsync(CrdtWriteRequest request, CancellationToken cancellationToken = default)`
 - `public Task<CrdtReadResponse> CrdtReadAsync(CrdtReadRequest request, CancellationToken cancellationToken = default)`
+- `public Task<LatticeDataCapabilities> ProbeCapabilitiesAsync(DataProbeRequest request, CancellationToken cancellationToken = default)`
 
 ### `Orleans.Lattice.Api.Data.Grpc.LatticeDataApiGrpcOptions`
 
@@ -280,6 +284,15 @@ The following inventory includes directly declared public members and overloads,
 - `public required string TreeId`
 - `public required string Key`
 
+### `Orleans.Lattice.Api.Data.Grpc.DataProbeRequest`
+
+[Source](../../src/lattice.api.data.grpc/Model/DataProbeRequest.cs) (line 12).
+
+`public sealed record DataProbeRequest`
+
+- `public required string TreeId`
+- `public string? Key`
+
 ### `Orleans.Lattice.Api.Data.Grpc.DataSetManyRequest`
 
 [Source](../../src/lattice.api.data.grpc/Model/DataSetManyRequest.cs) (line 16).
@@ -294,6 +307,24 @@ The following inventory includes directly declared public members and overloads,
 [Source](../../src/lattice.api.data.grpc/Model/DataSetManyResponse.cs) (line 12).
 
 `public sealed record DataSetManyResponse`
+
+### `Orleans.Lattice.Api.Data.Grpc.DataSetManyStreamRequest`
+
+[Source](../../src/lattice.api.data.grpc/Model/DataSetManyStreamRequest.cs) (line 15).
+
+`public sealed record DataSetManyStreamRequest`
+
+- `public required string TreeId`
+- `public IReadOnlyList<DataEntry> Upserts`
+
+### `Orleans.Lattice.Api.Data.Grpc.DataSetManyStreamResponse`
+
+[Source](../../src/lattice.api.data.grpc/Model/DataSetManyStreamResponse.cs) (line 11).
+
+`public sealed record DataSetManyStreamResponse`
+
+- `public DataSetManyStreamBatch? Batch`
+- `public DataSetManyStreamResult? Result`
 
 ### `Orleans.Lattice.Api.Data.Grpc.DataSetRequest`
 
@@ -338,6 +369,9 @@ The following inventory includes directly declared public members and overloads,
 - `public const string CrdtReadResponse`
 - `public const string CrdtVectorEntry`
 - `public const string CrdtMapField`
+- `public const string DataProbeRequest`
+- `public const string DataSetManyStreamRequest`
+- `public const string DataSetManyStreamResponse`
 
 ### `Orleans.Lattice.Api.Data.Grpc.ILatticeDataApiAuthorizer`
 
@@ -380,6 +414,8 @@ The following inventory includes directly declared public members and overloads,
 - `SetMany`
 - `CrdtWrite`
 - `CrdtRead`
+- `ProbeCapabilities`
+- `StreamSetMany`
 
 ### `Orleans.Lattice.Api.Data.Grpc.LatticeDataApiAuthorizationContext`
 

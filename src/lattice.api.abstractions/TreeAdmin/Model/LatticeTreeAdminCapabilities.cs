@@ -104,4 +104,14 @@ public sealed record LatticeTreeAdminCapabilities
     /// available, so the surface never offers a restore the cluster cannot serve.
     /// </summary>
     [Id(6)] public bool CanRestore { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when the caller holds the scopeless cluster-wide
+    /// <see cref="LatticeOperation.Telemetry"/> capability - the authority for
+    /// <see cref="ILatticeTreeAdmin.GetStorageUsageAsync"/> and the other estate-wide
+    /// observability reads. It does not depend on the probed tree, so a management
+    /// surface can decide whether to offer estate-wide figures without paying for
+    /// the storage-usage read itself.
+    /// </summary>
+    [Id(7)] public bool CanViewClusterTelemetry { get; init; }
 }

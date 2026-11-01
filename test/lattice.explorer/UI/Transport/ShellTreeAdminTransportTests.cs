@@ -67,6 +67,7 @@ public sealed class ShellTreeAdminTransportTests : ShellTransportAdapterContract
         new("PlanWalMoveAsync", Service + "PlanWalMove", (f, ct) => f.PlanWalMoveAsync("orders", 0, "cold", ct)),
         new("ReclaimMovedWalSourceAsync", Service + "ReclaimMovedWalSource", (f, ct) => f.ReclaimMovedWalSourceAsync("orders", 0, "hot", ct)),
         new("ListViewsAsync", Service + "ListViews", (f, ct) => f.ListViewsAsync(ct)),
+        new("ListViewProvidersAsync", Service + "ListViewProviders", (f, ct) => f.ListViewProvidersAsync("orders", ct)),
         new("CreateViewAsync", Service + "CreateView", (f, ct) => f.CreateViewAsync("by-customer", "orders", "customer-index", [1, 2], ct)),
         new("GetViewStatusAsync", Service + "GetViewStatus", (f, ct) => f.GetViewStatusAsync("by-customer", ct)),
         new("DropViewAsync", Service + "DropView", (f, ct) => f.DropViewAsync("by-customer", ct)),

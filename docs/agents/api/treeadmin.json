@@ -353,6 +353,11 @@
           "name": "CanRestore",
           "type": "bool",
           "required": true
+        },
+        {
+          "name": "CanViewClusterTelemetry",
+          "type": "bool",
+          "required": true
         }
       ],
       "source": "src/lattice.api.abstractions/TreeAdmin/Model/LatticeTreeAdminCapabilities.cs#LatticeTreeAdminCapabilities"
@@ -502,6 +507,58 @@
         }
       ],
       "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminBulkLoadSessionRequest.cs#TreeAdminBulkLoadSessionRequest"
+    },
+    "TreeAdminBulkLoadStreamRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "OperationId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Resume",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "ChunkIndex",
+          "type": "long",
+          "required": false
+        },
+        {
+          "name": "Entries",
+          "type": "IReadOnlyList<DataEntry>",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminBulkLoadStreamRequest.cs#TreeAdminBulkLoadStreamRequest"
+    },
+    "TreeAdminBulkLoadStreamResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Opened",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "Ack",
+          "type": "TreeBulkLoadChunkAck?",
+          "required": false
+        },
+        {
+          "name": "Result",
+          "type": "TreeBulkLoadResult?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.treeadmin.grpc/Model/TreeAdminBulkLoadStreamResponse.cs#TreeAdminBulkLoadStreamResponse"
     },
     "TreeAdminCreateRequest": {
       "kind": "record",
@@ -1765,6 +1822,17 @@
         }
       ],
       "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeViewCatalog.cs#TreeViewCatalog"
+    },
+    "TreeViewProviderCatalog": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Providers",
+          "type": "ImmutableArray<TreeViewProviderInfo>",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeViewProviderCatalog.cs#TreeViewProviderCatalog"
     },
     "TreeViewReconcileResult": {
       "kind": "record",
@@ -3946,6 +4014,55 @@
       ]
     },
     {
+      "id": "list-view-providers",
+      "in_process": "ILatticeTreeAdmin.ListViewProvidersAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/ListViewProviders",
+      "transport_scope": "both",
+      "request": "TreeAdminTreeRequest",
+      "response": "TreeViewProviderCatalog",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "The source is empty, reserved, or a materialised-view tree."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "The caller lacks whole-tree admin authority over the source."
+        },
+        {
+          "error_id": "precondition-failed",
+          "condition": "The materialised-view subsystem is not enabled on this cluster."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ListViewProvidersAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pure read with no side effects; no provider code runs.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ListViewProvidersAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ListViewProvidersAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ListViewProvidersAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#ListViewProviders",
+        "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#ListViewProvidersAsync"
+      ]
+    },
+    {
       "id": "list-views",
       "in_process": "ILatticeTreeAdmin.ListViewsAsync",
       "grpc_method": "/orleans.lattice.api.treeadmin/ListViews",
@@ -5684,6 +5801,62 @@
         "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartWalMoveAsync",
         "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#StartWalMove",
         "docs/lattice.api.treeadmin/operations.md"
+      ]
+    },
+    {
+      "id": "stream-bulk-load",
+      "in_process": "ILatticeTreeAdmin.BulkLoadStreamAsync",
+      "grpc_method": "/orleans.lattice.api.treeadmin/StreamBulkLoad",
+      "transport_scope": "both",
+      "request": "TreeAdminBulkLoadStreamRequest",
+      "response": "TreeAdminBulkLoadStreamResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed, or a frame names another tree or operation."
+        },
+        {
+          "error_id": "bulk-load-order",
+          "condition": "A chunk's keys are not strictly ascending, within the chunk or from the previous chunk's last key."
+        },
+        {
+          "error_id": "tree-not-empty",
+          "condition": "The first frame begins a session on a tree that holds a live key or tombstone."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "precondition-failed",
+          "condition": "Facade precondition failed."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "The client resumes on its own after a transport drop (Unavailable, Aborted or an I/O fault), resending every unacknowledged chunk with Resume set. Retry by hand only with the same operationId and FirstChunkIndex set to the next unacknowledged chunk.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#BulkLoadStreamAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "Appends are idempotent per chunk index under the same operationId, so a resumed stream neither loses nor duplicates a chunk.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#BulkLoadStreamAsync"
+      },
+      "concurrency": {
+        "rule": "Duplex stream over one bulk-load session: the first frame begins it unless Resume is set, each frame appends one chunk and is acknowledged, and the half-close commits. The client keeps at most MaxUnacknowledgedChunks chunks in flight.",
+        "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#BulkLoadStreamAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#BulkLoadStreamAsync",
+        "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#StreamBulkLoad"
       ]
     },
     {

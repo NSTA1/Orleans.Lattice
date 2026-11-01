@@ -7,10 +7,10 @@ namespace Orleans.Lattice.Api.Data.Grpc;
 /// <summary>
 /// Abstract base for the write-capable data-API gRPC service. Carries the
 /// <see cref="BindServiceMethodAttribute"/> that <c>Grpc.AspNetCore</c> reflects
-/// against to discover and register the ten unary RPCs (<c>Set</c>,
+/// against to discover and register the eleven unary RPCs (<c>Set</c>,
 /// <c>Delete</c>, <c>SetManyAtomic</c>, <c>SetManyAtomicCrossTree</c>,
 /// <c>Get</c>, <c>ReadRange</c>, <c>DeleteRange</c>, <c>SetMany</c>,
-/// <c>CrdtWrite</c>, <c>CrdtRead</c>).
+/// <c>CrdtWrite</c>, <c>CrdtRead</c>, <c>ProbeCapabilities</c>).
 /// </summary>
 /// <remarks>
 /// The base/derived split mirrors the codegen shape <c>Grpc.Tools</c> produces
@@ -54,6 +54,15 @@ internal abstract class LatticeDataApiGrpcServiceBase
     /// <summary>Reads a typed CRDT logical value. Implemented in <see cref="LatticeDataApiGrpcService"/>.</summary>
     public abstract Task<CrdtReadResponse> CrdtRead(CrdtReadRequest request, ServerCallContext context);
 
+    /// <summary>Probes the caller's write capabilities. Implemented in <see cref="LatticeDataApiGrpcService"/>.</summary>
+    public abstract Task<LatticeDataCapabilities> ProbeCapabilities(DataProbeRequest request, ServerCallContext context);
+
+    /// <summary>Streams non-atomic upserts: writes each batch frame through the facade, answers its outcome, and the totals on the client's half-close.</summary>
+    public abstract Task StreamSetMany(
+        IAsyncStreamReader<DataSetManyStreamRequest> requestStream,
+        IServerStreamWriter<DataSetManyStreamResponse> responseStream,
+        ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at
     /// startup with <paramref name="serviceImpl"/> set to <see langword="null"/>
@@ -83,6 +92,8 @@ internal abstract class LatticeDataApiGrpcServiceBase
             binder.AddMethod(methods.SetMany, (UnaryServerMethod<DataSetManyRequest, DataSetManyResponse>?)null);
             binder.AddMethod(methods.CrdtWrite, (UnaryServerMethod<CrdtWriteRequest, CrdtWriteResponse>?)null);
             binder.AddMethod(methods.CrdtRead, (UnaryServerMethod<CrdtReadRequest, CrdtReadResponse>?)null);
+            binder.AddMethod(methods.ProbeCapabilities, (UnaryServerMethod<DataProbeRequest, LatticeDataCapabilities>?)null);
+            binder.AddMethod(methods.StreamSetMany, (DuplexStreamingServerMethod<DataSetManyStreamRequest, DataSetManyStreamResponse>?)null);
             return;
         }
 
@@ -96,6 +107,8 @@ internal abstract class LatticeDataApiGrpcServiceBase
         binder.AddMethod(methods.SetMany, new UnaryServerMethod<DataSetManyRequest, DataSetManyResponse>(serviceImpl.SetMany));
         binder.AddMethod(methods.CrdtWrite, new UnaryServerMethod<CrdtWriteRequest, CrdtWriteResponse>(serviceImpl.CrdtWrite));
         binder.AddMethod(methods.CrdtRead, new UnaryServerMethod<CrdtReadRequest, CrdtReadResponse>(serviceImpl.CrdtRead));
+        binder.AddMethod(methods.ProbeCapabilities, new UnaryServerMethod<DataProbeRequest, LatticeDataCapabilities>(serviceImpl.ProbeCapabilities));
+        binder.AddMethod(methods.StreamSetMany, new DuplexStreamingServerMethod<DataSetManyStreamRequest, DataSetManyStreamResponse>(serviceImpl.StreamSetMany));
     }
 }
 
@@ -277,6 +290,118 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
     /// <inheritdoc />
     public override Task<CrdtReadResponse> CrdtRead(CrdtReadRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (api, req, ct) => DispatchCrdtReadAsync(api, req, ct));
+
+    /// <inheritdoc />
+    public override Task<LatticeDataCapabilities> ProbeCapabilities(DataProbeRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (api, req, ct) => api.ProbeCapabilitiesAsync(req.TreeId, req.Key, ct));
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Each frame is written through <see cref="ILatticeDataApi.SetManyStreamAsync"/> as one
+    /// batch, so per-key authorization, schema enforcement and the per-entry refusals are
+    /// exactly the facade's; the frames are processed one at a time and each is answered
+    /// before the next is read, so the server holds one batch per stream. A fault that is
+    /// not a per-entry refusal ends the call with the same status the unary RPCs map it to.
+    /// </remarks>
+    public override Task StreamSetMany(
+        IAsyncStreamReader<DataSetManyStreamRequest> requestStream,
+        IServerStreamWriter<DataSetManyStreamResponse> responseStream,
+        ServerCallContext context)
+    {
+        ArgumentNullException.ThrowIfNull(requestStream);
+        ArgumentNullException.ThrowIfNull(responseStream);
+        return InvokeAsync(
+            (Requests: requestStream, Responses: responseStream),
+            context,
+            static (api, streams, ct) => StreamSetManyAsync(api, streams.Requests, streams.Responses, ct));
+    }
+
+    private static async Task<bool> StreamSetManyAsync(
+        ILatticeDataApi api,
+        IAsyncStreamReader<DataSetManyStreamRequest> requests,
+        IServerStreamWriter<DataSetManyStreamResponse> responses,
+        CancellationToken cancellationToken)
+    {
+        string? treeId = null;
+        long batchIndex = 0;
+        long ordinal = 0;
+        long committed = 0;
+        long rejected = 0;
+        var outcome = new LastBatch();
+        while (await requests.MoveNext(cancellationToken).ConfigureAwait(false))
+        {
+            var frame = requests.Current ?? throw new ArgumentException("A set-many stream frame is empty.");
+            ArgumentException.ThrowIfNullOrEmpty(frame.TreeId);
+            treeId ??= frame.TreeId;
+            if (!string.Equals(frame.TreeId, treeId, StringComparison.Ordinal))
+            {
+                throw new ArgumentException("Every frame of a set-many stream must name the tree its first frame named.");
+            }
+
+            var upserts = frame.Upserts ?? [];
+            if (upserts.Count > DataSetManyStreamOptions.MaxBatchSize)
+            {
+                throw new ArgumentException(
+                    $"A set-many stream frame carries at most {DataSetManyStreamOptions.MaxBatchSize} entries.");
+            }
+
+            outcome.Value = null;
+            if (upserts.Count > 0)
+            {
+                await api.SetManyStreamAsync(
+                    treeId,
+                    Frame(upserts),
+                    outcome,
+                    new DataSetManyStreamOptions { BatchSize = upserts.Count, FirstOrdinal = ordinal },
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            var batch = (outcome.Value ?? new DataSetManyStreamBatch
+            {
+                TreeId = treeId,
+                BatchIndex = batchIndex,
+                FirstOrdinal = ordinal,
+                EntryCount = 0,
+                CommittedCount = 0,
+            }) with { BatchIndex = batchIndex };
+            batchIndex++;
+            ordinal += batch.EntryCount;
+            committed += batch.CommittedCount;
+            rejected += batch.Rejections.Count;
+            await responses.WriteAsync(new DataSetManyStreamResponse { Batch = batch }, cancellationToken).ConfigureAwait(false);
+        }
+
+        await responses.WriteAsync(new DataSetManyStreamResponse
+        {
+            Result = new DataSetManyStreamResult
+            {
+                TreeId = treeId ?? string.Empty,
+                EntryCount = ordinal,
+                CommittedCount = committed,
+                RejectedCount = rejected,
+                BatchCount = batchIndex,
+            },
+        }, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    private static async IAsyncEnumerable<DataEntry> Frame(IReadOnlyList<DataEntry> upserts)
+    {
+        foreach (var entry in upserts)
+        {
+            yield return entry;
+        }
+
+        await Task.CompletedTask.ConfigureAwait(false);
+    }
+
+    /// <summary>Keeps the one batch outcome a single-frame write reports, on the reporting thread.</summary>
+    private sealed class LastBatch : IProgress<DataSetManyStreamBatch>
+    {
+        public DataSetManyStreamBatch? Value { get; set; }
+
+        public void Report(DataSetManyStreamBatch value) => Value = value;
+    }
 
     private static Task DispatchCrdtWriteAsync(ILatticeDataApi api, CrdtWriteRequest req, CancellationToken ct)
         => req.Op switch

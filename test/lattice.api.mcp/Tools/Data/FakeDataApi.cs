@@ -152,6 +152,12 @@ internal sealed partial class FakeDataApi : ILatticeDataApi
         return Task.FromResult(new DataRangePage { TreeId = request.TreeId, Entries = entries });
     }
 
+    public Task<LatticeDataCapabilities> ProbeCapabilitiesAsync(string treeId, string? key = null, CancellationToken cancellationToken = default)
+    {
+        var allowed = key is null || !Denied.Contains((treeId, key));
+        return Task.FromResult(new LatticeDataCapabilities { TreeId = treeId, Key = key, CanWrite = allowed, CanDelete = allowed });
+    }
+
     public Task<DataRangeDeleteResult> DeleteRangeAsync(DataRangeDeleteRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);

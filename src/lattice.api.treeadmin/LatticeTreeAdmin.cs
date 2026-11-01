@@ -57,6 +57,7 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
     private readonly ILatticeTagIndexFactory? _tagIndexFactory;
     private readonly ITenantAdmissionController? _admission;
     private readonly LatticeOperationRunner? _operationRunner;
+    private readonly RuntimeViewProjectionProviderCatalog? _viewProviders;
 
     /// <summary>Initializes a new <see cref="LatticeTreeAdmin"/>.</summary>
     /// <param name="schemaControl">
@@ -113,6 +114,11 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
     /// throw <see cref="InvalidOperationException"/> and the deprecated blocking verbs
     /// call the engine directly instead of wrapping an operation.
     /// </param>
+    /// <param name="viewProviders">
+    /// The silo's host-registered runtime-view projection providers, registered with the
+    /// view factory by <c>AddLatticeViews</c>, or <c>null</c> when the materialised-view
+    /// subsystem is not enabled. When <c>null</c> the provider listing is empty.
+    /// </param>
     /// <exception cref="ArgumentNullException">A required dependency is <c>null</c>.</exception>
     public LatticeTreeAdmin(
         ILatticeSchemaControl schemaControl,
@@ -125,7 +131,8 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
         ILatticeViewFactory? viewFactory = null,
         ILatticeTagIndexFactory? tagIndexFactory = null,
         ITenantAdmissionController? admission = null,
-        LatticeOperationRunner? operationRunner = null)
+        LatticeOperationRunner? operationRunner = null,
+        RuntimeViewProjectionProviderCatalog? viewProviders = null)
     {
         ArgumentNullException.ThrowIfNull(schemaControl);
         ArgumentNullException.ThrowIfNull(grainFactory);
@@ -143,6 +150,7 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
         _tagIndexFactory = tagIndexFactory;
         _admission = admission;
         _operationRunner = operationRunner;
+        _viewProviders = viewProviders;
     }
 
     /// <summary>
@@ -317,6 +325,13 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
                 .IsRestoreAuthorizedAsync(effectiveTreeId, cancellationToken)
                 .ConfigureAwait(false);
 
+        // The cluster-wide Telemetry capability does not depend on the tree; it is
+        // probed through the same fail-closed gate the storage-usage read uses, so a
+        // surface can decide on estate-wide figures without paying for that read.
+        var canViewClusterTelemetry = await _authorizer
+            .IsClusterTelemetryAuthorizedAsync(cancellationToken)
+            .ConfigureAwait(false);
+
         return new LatticeTreeAdminCapabilities
         {
             TreeId = treeId,
@@ -325,6 +340,7 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
             CanViewDiagnostics = canViewDiagnostics,
             CanBulkLoad = canBulkLoad,
             CanRestore = canRestore,
+            CanViewClusterTelemetry = canViewClusterTelemetry,
             Schema = schema,
         };
     }
@@ -1044,6 +1060,15 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
         // LatticeOptions.DiagnosticsCacheTtl (default 5 s): the emptiness probe in
         // BeginBulkLoadAsync populates that cache with a zero count, so a begin/append/
         // commit sequence completing inside the TTL would otherwise report a stale 0.
+        //
+        // The cached reports are dropped as well (issue #5460): a statistics read
+        // made while the chunks landed - the Explorer polls its tree header through
+        // one - would otherwise go on answering the pre-commit count for up to the
+        // TTL, so a read straight after commit could report fewer keys than were
+        // loaded.
+        await _grainFactory.GetGrain<ILatticeStats>(effectiveTreeId)
+            .InvalidateAsync()
+            .ConfigureAwait(false);
         var liveKeys = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
             .CountAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -1544,6 +1569,63 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
         }
 
         return new TreeViewCatalog { Views = views.ToImmutable() };
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeViewProviderCatalog> ListViewProvidersAsync(
+        string sourceTreeId,
+        CancellationToken cancellationToken = default)
+    {
+        RequireViews();
+        ArgumentException.ThrowIfNullOrEmpty(sourceTreeId);
+        if (LatticeViewTrees.IsViewTree(sourceTreeId))
+        {
+            throw new ArgumentException(
+                $"Source tree '{sourceTreeId}' is itself a materialised view; a view cannot derive from another view.",
+                nameof(sourceTreeId));
+        }
+
+        var effectiveSourceTreeId =
+            await EffectiveTreeIdAsync(sourceTreeId, cancellationToken).ConfigureAwait(false);
+        ThrowIfReserved(effectiveSourceTreeId, nameof(sourceTreeId));
+
+        // The same boundary as CreateViewAsync: a caller who could not create a view
+        // over this source is not told which providers the host registered.
+        await _authorizer.AuthorizeTreeAdminAsync(effectiveSourceTreeId, cancellationToken).ConfigureAwait(false);
+
+        var registrations = _viewProviders?.HostProviders ?? [];
+        var providers = ImmutableArray.CreateBuilder<TreeViewProviderInfo>(registrations.Count);
+        foreach (var registration in registrations)
+        {
+            var described = registration.Description;
+            var fields = ImmutableArray<TreeViewProviderField>.Empty;
+            if (described is { PayloadFields.Count: > 0 })
+            {
+                var builder = ImmutableArray.CreateBuilder<TreeViewProviderField>(described.PayloadFields.Count);
+                foreach (var field in described.PayloadFields)
+                {
+                    builder.Add(new TreeViewProviderField
+                    {
+                        Name = field.Name,
+                        Label = field.Label,
+                        Description = field.Description,
+                        Required = field.Required,
+                        Kind = (TreeViewProviderFieldKind)(int)field.Kind,
+                    });
+                }
+
+                fields = builder.MoveToImmutable();
+            }
+
+            providers.Add(new TreeViewProviderInfo
+            {
+                ProviderKey = registration.ProviderKey,
+                Description = described?.Description,
+                PayloadFields = fields,
+            });
+        }
+
+        return new TreeViewProviderCatalog { Providers = providers.MoveToImmutable() };
     }
 
     /// <inheritdoc />

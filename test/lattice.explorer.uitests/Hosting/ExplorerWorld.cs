@@ -13,6 +13,8 @@ using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Api.Auth.Grpc;
 using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Api.Backup.Grpc;
+using Orleans.Lattice.Api.Data;
+using Orleans.Lattice.Api.Data.Grpc;
 using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Api.Replication.Grpc;
 using Orleans.Lattice.Api.Schema;
@@ -52,7 +54,9 @@ namespace Orleans.Lattice.Explorer.UiTests;
 /// The seeded groups follow the task-board walkthrough: <c>alice</c> edits, <c>bob</c>
 /// and <c>dave</c> view, <c>carol</c> is bound to no role. <c>bob</c> also holds a broad allow on the
 /// whole cluster, which is what the isolation fixture needs to prove a viewer's write is
-/// refused by the app's roles rather than by the viewer's own rights.
+/// refused by the app's roles rather than by the viewer's own rights. <c>erin</c> observes
+/// the whole estate - cluster telemetry and read - and administers nothing, so the Cluster
+/// area shows her what she may not change.
 /// </para>
 /// </remarks>
 internal sealed partial class ExplorerWorld : IAsyncDisposable
@@ -77,6 +81,15 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
     /// </summary>
     public const string VersionsTree = "schema-versions";
 
+    /// <summary>
+    /// A tree of its own for the view administration journey (issue #5369), so the views
+    /// it creates and drops never appear over a tree another fixture reads.
+    /// </summary>
+    public const string ViewsTree = "line-readings";
+
+    /// <summary>How many entries <see cref="ViewsTree"/> holds.</summary>
+    public const int ViewsEntryCount = 6;
+
     private readonly GrpcChannel _adminChannel;
 
     private ExplorerWorld(ExplorerHead head, string grpcEndpoint)
@@ -91,6 +104,18 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
 
     /// <summary>The <c>http://</c> (h2c) address of the world's gRPC surface.</summary>
     public string GrpcEndpoint { get; }
+
+    /// <summary>
+    /// The switch that fails the world's facade services with <c>Internal</c>, as a
+    /// silo leaving the cluster does (issue #5420). Dispose what it returns.
+    /// </summary>
+    public FacadeFaults Faults => Head.Services.GetRequiredService<FacadeFaults>();
+
+    /// <summary>
+    /// The switch that holds a tree's delete until the test releases it, as a loaded cluster
+    /// delays retiring a replicated tree (issue #5482). Dispose what it returns.
+    /// </summary>
+    public TreeDeleteHolds TreeDeletes => Head.Services.GetRequiredService<TreeDeleteHolds>();
 
     /// <summary>Starts the world and seeds its data, groups and rules.</summary>
     public static Task<ExplorerWorld> StartAsync() => StartCoreAsync(tenancy: false, delegatedAccess: false);
@@ -129,6 +154,10 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
         {
             await world.SeedTenantsAsync();
         }
+        else
+        {
+            await world.SeedObserverAsync();
+        }
 
         return world;
     }
@@ -148,6 +177,35 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
     /// </param>
     public ILatticeAppsControl AppsControl(string user = WorldIdentities.Admin, string? tenant = null) =>
         LatticeAppsApiGrpcClient.Create(Invoker(user, tenant), Head.Services);
+
+    /// <summary>
+    /// The data facade's gRPC client as <paramref name="user"/> sees it: what the
+    /// Explorer's own data transport would send on that user's behalf, used to write
+    /// behind an open editor or to forge a write the UI never offered (#5367).
+    /// </summary>
+    /// <param name="user">The caller, <see cref="WorldIdentities.Admin"/> by default.</param>
+    public LatticeDataApiGrpcClient Data(string user = WorldIdentities.Admin) =>
+        LatticeDataApiGrpcClient.Create(Invoker(user), Head.Services);
+
+    /// <summary>
+    /// A tree-administration client acting as <paramref name="user"/>, for a journey to create a tree or
+    /// read its statistics the way the facade reports them (#5365).
+    /// </summary>
+    /// <param name="user">The caller, <see cref="WorldIdentities.Admin"/> by default.</param>
+    public LatticeTreeAdminApiGrpcClient TreeAdmin(string user = WorldIdentities.Admin) =>
+        LatticeTreeAdminApiGrpcClient.Create(Invoker(user), Head.Services);
+
+    /// <summary>Sets <paramref name="treeId"/>'s schema policy as the administrator, through the schema facade the Schema area calls.</summary>
+    /// <param name="treeId">The tree.</param>
+    /// <param name="policy">The policy.</param>
+    public async Task SetPolicyAsync(string treeId, LatticeSchemaPolicy policy)
+    {
+        var token = Convert.ToBase64String(Encoding.UTF8.GetBytes(WorldIdentities.Admin + ":" + WorldIdentities.Password));
+        using (LatticeCredentialContext.Use(token, scheme: TrustedUserAuthenticator.Scheme))
+        {
+            await Head.Services.GetRequiredService<ILatticeSchemaControl>().SetPolicyAsync(treeId, policy);
+        }
+    }
 
     /// <summary>
     /// Installs the task-board app from the in-image source with the walkthrough's
@@ -252,11 +310,13 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
     }
 
     /// <summary>
-    /// The region this world serves: its cluster id. A tenant with residency is
-    /// served here only while its status in this region is Online.
+    /// The region this world serves: its replication cluster id, which is the id
+    /// tenancy identifies the local region by (issue #5575). It deliberately differs
+    /// from the Orleans cluster id here, as it does in real deployments. A tenant
+    /// with residency is served here only while its status in this region is Online.
     /// </summary>
     public string ServingRegion =>
-        Head.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<Orleans.Configuration.ClusterOptions>>().Value.ClusterId;
+        Head.Services.GetRequiredService<ILatticeReplicationContext>().LocalReplicaId;
 
     /// <summary>
     /// Makes <paramref name="tenant"/> resident and Online in <paramref name="regions"/>,
@@ -325,6 +385,7 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
             silo.UseInMemoryReminderService();
             silo.AddLattice((services, name) => services.AddMemoryGrainStorage(name));
             silo.AddLatticeStateApi();
+            silo.AddLatticeDataApi();
 
             silo.AddLatticeMembership();
             silo.AddStaticIdentityDirectory(roster => roster
@@ -333,6 +394,7 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
                 .AddUser(WorldIdentities.Bob, "Bob Ito")
                 .AddUser(WorldIdentities.Carol, "Carol Diaz")
                 .AddUser(WorldIdentities.Dave, "Dave Okafor")
+                .AddUser(WorldIdentities.Erin, "Erin Sato")
                 .AddUser(WorldIdentities.GlobexAdmin, "Globex tenant administrator")
                 .AddGroup(WorldIdentities.OperatorsGroup, "Floor Operators")
                 .AddGroup(WorldIdentities.EditorsGroup, "Task board editors")
@@ -362,18 +424,25 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
             silo.AddLatticeAppsApi();
             silo.AddLatticeAppBridgeApi();
 
+            silo.AddLatticeViews(WorldViewProviders.Register);
             silo.AddLatticeTreeAdminApi();
             silo.Services.AddSingleton<ILatticeBackupSink>(new Orleans.Lattice.Samples.Explorer.SampleSharedBackupSink());
             silo.AddLatticeBackup();
             silo.AddLatticeBackupApi();
-            silo.AddLatticeReplication(options => options.ClusterId = "explorer-uitests");
+            silo.AddLatticeReplication(options => options.ClusterId = "explorer-uitests", enableRuntimeConfig: true);
+            silo.AddLatticeReplicationApi();
             silo.AddLatticeReplicationStatusApi();
 
             silo.Services.AddSingleton<ILatticeCredentialAuthenticator, TrustedUserAuthenticator>();
+            silo.AddIncomingGrainCallFilter<TreeDeleteHoldFilter>();
         });
 
         var services = builder.Services;
+        services.AddSingleton<FacadeFaults>();
+        services.AddSingleton<TreeDeleteHolds>();
+        services.AddGrpc(options => options.Interceptors.Add<FacadeFaultInterceptor>());
         services.AddLatticeStateApiGrpc(o => { o.RequireAuthorization = false; o.CredentialScheme = TrustedUserAuthenticator.Scheme; });
+        services.AddLatticeDataApiGrpc(o => { o.RequireAuthorization = false; o.CredentialScheme = TrustedUserAuthenticator.Scheme; });
         services.AddLatticeAuthApiGrpc(o => { o.RequireAuthorization = false; o.CredentialScheme = TrustedUserAuthenticator.Scheme; });
         services.AddLatticeSchemaApiGrpc(o => { o.RequireAuthorization = false; o.CredentialScheme = TrustedUserAuthenticator.Scheme; });
 
@@ -396,6 +465,7 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
     private static void MapClusterSurface(WebApplication app, bool tenancy)
     {
         app.MapLatticeStateApiGrpc();
+        app.MapLatticeDataApiGrpc();
         app.MapLatticeAuthApiGrpc();
         app.MapLatticeSchemaApiGrpc();
         app.MapLatticeAppsApiGrpc();
@@ -404,6 +474,7 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
         app.MapLatticeAppBridgeApiGrpc();
         app.MapLatticeTreeAdminApiGrpc();
         app.MapLatticeBackupApiGrpc();
+        app.MapLatticeReplicationApiGrpc();
         app.MapLatticeReplicationStatusApiGrpc();
         if (tenancy)
         {
@@ -470,6 +541,12 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
             var membership = services.GetRequiredService<ILatticeMembershipDirectory>();
 
             await grains.GetGrain<ILattice>(VersionsTree).SetAsync("order/0001", Encoding.UTF8.GetBytes("{\"qty\":2}"));
+            var readings = grains.GetGrain<ILattice>(ViewsTree);
+            for (var i = 0; i < ViewsEntryCount; i++)
+            {
+                await readings.SetAsync($"reading-{i:D3}", Encoding.UTF8.GetBytes($"ok-{i:D3}"));
+            }
+
             // A membership edge alone makes no group: each seeded group gets its record,
             // so Access lists it and refuses its id as a new group's.
             await membership.UpsertGroupAsync(new MembershipGroup(WorldIdentities.OperatorsGroup, "Floor Operators"));
@@ -498,6 +575,27 @@ internal sealed partial class ExplorerWorld : IAsyncDisposable
                 scope: LatticeScope.ClusterWide(),
                 operations: LatticeOperation.Read | LatticeOperation.RangeRead | LatticeOperation.Write
                     | LatticeOperation.Delete | LatticeOperation.RangeDelete,
+                effect: LatticeEffect.Allow));
+        }
+
+        await SeedExportAsync();
+    }
+
+    /// <summary>
+    /// Seeds the observer of the whole estate, in the plain world only: the Cluster
+    /// area is visible to <see cref="WorldIdentities.Erin"/>, and administering a tree,
+    /// or creating one, is not. The tenancy worlds keep their single cluster-wide rule,
+    /// which the tenant-scoped Access journey counts.
+    /// </summary>
+    private async Task SeedObserverAsync()
+    {
+        using (LatticeSystemOrigin.Enter())
+        {
+            await Head.Services.GetRequiredService<ILatticeAuthorizationPolicyStore>().PutRuleAsync(new LatticeAuthorizationRule(
+                ruleId: "erin-observes-the-estate",
+                subject: LatticeSubjectSelector.User(WorldIdentities.Erin),
+                scope: LatticeScope.ClusterWide(),
+                operations: LatticeOperation.Read | LatticeOperation.RangeRead | LatticeOperation.Telemetry,
                 effect: LatticeEffect.Allow));
         }
     }

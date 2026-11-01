@@ -126,7 +126,7 @@ public sealed class TenantRegionBackfillCoordinatorGrainTests
             registry,
             new TenantRegionLifecycleDriver(registry, clusterOptions),
             Substitute.For<IGrainFactory>(),
-            clusterOptions,
+            TenantLocalRegion.ForRegion("west"),
             NullLogger<TenantRegionBackfillService>.Instance);
         var grain = new TenantRegionBackfillCoordinatorGrain(
             context,
@@ -135,7 +135,7 @@ public sealed class TenantRegionBackfillCoordinatorGrainTests
             state,
             registry,
             service,
-            clusterOptions);
+            TenantLocalRegion.ForRegion("west"));
 
         return new Harness(grain, state, reminders, timers, registry);
     }

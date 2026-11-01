@@ -1,3 +1,4 @@
+using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Replication;
@@ -10,6 +11,12 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Replication;
 /// <param name="Message">The sentence the page shows.</param>
 internal sealed record ReplicationFault(ReplicationFaultKind Kind, string Message)
 {
+    /// <summary>
+    /// Whether the cluster did not answer (<see cref="AreaProbeFaults.IsTransient"/>):
+    /// the read proved nothing, so it is neither remembered nor read as a refusal.
+    /// </summary>
+    public bool IsTransient { get; init; }
+
     /// <summary>
     /// Classifies <paramref name="exception"/> from a facade call about
     /// <paramref name="subject"/> (such as "replication status").
@@ -27,7 +34,10 @@ internal sealed record ReplicationFault(ReplicationFaultKind Kind, string Messag
                 new(ReplicationFaultKind.Bootstrapping, "This tree is finishing a legacy in-place bootstrap; reads resume when it completes."),
             UnauthorizedAccessException => new(ReplicationFaultKind.Denied, $"You are not allowed to see {subject} on this cluster."),
             NotSupportedException => NotServed(subject),
-            _ => new(ReplicationFaultKind.Failed, $"The cluster could not report {subject}. Try again in a moment."),
+            _ => new(ReplicationFaultKind.Failed, $"The cluster could not report {subject}. Try again in a moment.")
+            {
+                IsTransient = AreaProbeFaults.IsTransient(exception),
+            },
         };
     }
 

@@ -92,6 +92,26 @@ public sealed class DataDtoSerializationTests
     }
 
     [Test]
+    public void DataRangeRequest_round_trips_its_gate_coverage_flag()
+    {
+        var original = new DataRangeRequest { TreeId = "tree-a", IncludeGateCoverage = true };
+
+        Assert.That(RoundTrip(original).IncludeGateCoverage, Is.True);
+    }
+
+    [Test]
+    public void DataRangePage_round_trips_its_gate_coverage()
+    {
+        var original = new DataRangePage { TreeId = "tree-a", GateCoverage = LatticeRangeReadGateCoverage.Filtered };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(RoundTrip(original).GateCoverage, Is.EqualTo(LatticeRangeReadGateCoverage.Filtered));
+            Assert.That(RoundTrip(new DataRangePage { TreeId = "tree-a" }).GateCoverage, Is.Null);
+        });
+    }
+
+    [Test]
     public void DataRangePage_round_trips()
     {
         var original = new DataRangePage

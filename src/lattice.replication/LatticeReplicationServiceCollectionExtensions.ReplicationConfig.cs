@@ -1,6 +1,7 @@
 using System.Linq;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Orleans.Hosting;
 using Orleans.Lattice.Backup;
@@ -112,12 +113,23 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         builder.Services.AddSingleton<IMutationObserver>(
             sp => sp.GetRequiredService<CompiledReplicationConfigSnapshotMaintainer>());
 
-        // The runtime enable/disable authoring seam (and its tree-content probe)
-        // the API facade depends on to author per-tree enablement into the config
-        // OR-Map. Registered here because it composes the config store, the
-        // precondition validator, the replication context, and the bootstrap
-        // admin seam that AddLatticeReplication already installed.
-        builder.Services.TryAddSingleton<ILatticeTreeContentProbe, GrainFactoryTreeContentProbe>();
+        // The cross-silo half (#5462): the change feed above fires only on the
+        // silo hosting the committing config leaf, so a silo that observes a
+        // config write advances the cluster-wide epoch (as a mutation observer)
+        // and every silo polls it and rebuilds when it moves (as a hosted
+        // service). Same instance for both roles. Without it every other silo
+        // kept the enrollment it compiled at warm-up.
+        builder.Services.TryAddSingleton<ReplicationConfigEpochSynchronizer>();
+        builder.Services.AddSingleton<IMutationObserver>(
+            sp => sp.GetRequiredService<ReplicationConfigEpochSynchronizer>());
+        builder.Services.AddSingleton<IHostedService>(
+            sp => sp.GetRequiredService<ReplicationConfigEpochSynchronizer>());
+
+        // The runtime enable/disable authoring seam the API facade depends on to
+        // author per-tree enablement into the config OR-Map. Registered here
+        // because it composes the config store, the precondition validator, the
+        // replication context, and the bootstrap admin seam that
+        // AddLatticeReplication already installed.
         builder.Services.TryAddSingleton<ILatticeReplicationConfigAuthority, LatticeReplicationConfigAuthority>();
 
         // Swap the options-only merge-mode resolver for the snapshot-backed one

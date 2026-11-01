@@ -57,7 +57,18 @@ public partial class DataKeysPanel : IDisposable
     private string? _liveNote;
     private bool _liveRestartable;
     private readonly ComponentLifetime _follows = new();
+    private readonly ComponentLifetime _rightsLifetime = new();
     private int _entryVersion;
+    private DataWriteRights _treeRights;
+    private DataTreeEntry? _rightsFor;
+    private bool _creating;
+    private bool _listening;
+
+    [Inject]
+    internal DataWriteGate Gate { get; set; } = default!;
+
+    [Inject]
+    internal DataEntryCommands EntryCommands { get; set; } = default!;
 
     [CascadingParameter]
     internal DataWorkspace? Workspace { get; set; }
@@ -128,6 +139,17 @@ public partial class DataKeysPanel : IDisposable
             return;
         }
 
+        if (!_listening)
+        {
+            _listening = true;
+            EntryCommands.Requested += OnCommand;
+        }
+
+        if (!ReferenceEquals(_rightsFor, workspace.Tree))
+        {
+            _ = LoadTreeRightsAsync(workspace.Tree);
+        }
+
         var index = workspace.Address.GetQuery(DataTabs.IndexQuery);
         var tag = workspace.Address.GetQuery(DataTabs.TagQuery);
         var query = (workspace.Tree.StateId, workspace.Prefix, index, tag);
@@ -174,6 +196,13 @@ public partial class DataKeysPanel : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
+        EntryCommands.Requested -= OnCommand;
+        if (_rightsFor is { } tree)
+        {
+            EntryCommands.HideTree(tree);
+        }
+
+        _rightsLifetime.Leave();
         _follows.Leave();
         _scans.Leave();
         if (_pager is { } pager)
@@ -581,4 +610,67 @@ public partial class DataKeysPanel : IDisposable
 
     private static bool HistoryLiveTailCovers(StateChangeNotification change, string key) =>
         HistoryLiveTail.Covers(change, key);
+
+    /// <summary>
+    /// Asks the data facade whether the caller may write anywhere in the tree, and
+    /// publishes it for the palette. Until it answers, and whenever it cannot,
+    /// "New entry..." is not drawn.
+    /// </summary>
+    private async Task LoadTreeRightsAsync(DataTreeEntry tree)
+    {
+        var token = _rightsLifetime.Renew();
+        if (_rightsFor is { } previous)
+        {
+            EntryCommands.HideTree(previous);
+        }
+
+        _rightsFor = tree;
+        _treeRights = DataWriteRights.None;
+        EntryCommands.ShowTree(tree, DataWriteRights.None);
+        var rights = await Gate.ForTreeAsync(tree, token);
+        if (token.IsCancellationRequested || _rightsLifetime.IsLeft)
+        {
+            return;
+        }
+
+        _treeRights = rights;
+        EntryCommands.ShowTree(tree, rights);
+        if (EntryCommands.TryTake(DataEntryCommands.NewEntryId))
+        {
+            OpenCreate();
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void OnCommand(string commandId)
+    {
+        if (string.Equals(commandId, DataEntryCommands.NewEntryId, StringComparison.Ordinal))
+        {
+            _ = InvokeAsync(() =>
+            {
+                if (!_lifetime.IsLeft)
+                {
+                    OpenCreate();
+                    StateHasChanged();
+                }
+            });
+        }
+    }
+
+    private void OpenCreate()
+    {
+        if (_treeRights.CanWrite)
+        {
+            _creating = true;
+        }
+    }
+
+    private void OnCreated(string key)
+    {
+        if (Workspace is { } workspace)
+        {
+            workspace.NavigateTo(workspace.With(ExplorerAddress.KeyQuery, key));
+        }
+    }
 }

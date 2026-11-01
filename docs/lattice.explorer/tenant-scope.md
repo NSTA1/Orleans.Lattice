@@ -71,7 +71,7 @@ The reserved default tenant has no registry record, so it has no workspace root:
 
 ## The Tenancy area
 
-The Tenancy area exists only when tenancy is active and the tenant self-service facade is available. It probes the caller's standing before it appears. A platform operator sees it. A tenant admin for their own scoped tenant also sees it. An unauthenticated caller gets an unavailable area with `Sign in to see the tenants you administer.` Other refusals and faults hide the area fail-closed.
+The Tenancy area exists only when tenancy is active and the tenant self-service facade is available. It probes the caller's standing before it appears. A platform operator sees it. A tenant admin for their own scoped tenant also sees it. An unauthenticated caller gets an unavailable area with `Sign in to see the tenants you administer.` Other refusals and definite faults hide the area fail-closed; a probe the cluster did not answer leaves it not checked (see [Area availability](area-availability.md#faults-the-cluster-did-not-answer)).
 
 The area's addresses and commands:
 

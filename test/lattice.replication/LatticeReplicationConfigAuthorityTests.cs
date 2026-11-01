@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// enable/disable authoring seam. They drive the authority against an in-memory
 /// config store (mimicking OR-Map convergence via
 /// <see cref="LatticeReplicationConfigEntry.MergeFrom"/>) plus substituted
-/// context, bootstrap admin, and tree-content probe, so every case is
+/// context and bootstrap admin, so every case is
 /// deterministic with no cluster.
 /// </summary>
 [TestFixture]
@@ -23,7 +23,6 @@ public sealed partial class LatticeReplicationConfigAuthorityTests
         InMemoryConfigStore store,
         string localReplicaId = LocalReplica,
         ILatticeReplicationAdmin? admin = null,
-        ILatticeTreeContentProbe? probe = null,
         IReadOnlyDictionary<string, LatticeMergeMode>? staticTrees = null)
     {
         var context = Substitute.For<ILatticeReplicationContext>();
@@ -33,10 +32,9 @@ public sealed partial class LatticeReplicationConfigAuthorityTests
         var preconditions = new LatticeReplicationPreconditionValidator(context);
 
         admin ??= Substitute.For<ILatticeReplicationAdmin>();
-        probe ??= FixedProbe(hasContent: false);
 
         return new LatticeReplicationConfigAuthority(
-            store, preconditions, context, admin, probe, Monitor(staticTrees));
+            store, preconditions, context, admin, Monitor(staticTrees));
     }
 
     /// <summary>
@@ -54,13 +52,6 @@ public sealed partial class LatticeReplicationConfigAuthorityTests
         monitor.OnChange(Arg.Any<Action<LatticeReplicationOptions, string?>>())
             .Returns(Substitute.For<IDisposable>());
         return monitor;
-    }
-
-    private static ILatticeTreeContentProbe FixedProbe(bool hasContent)
-    {
-        var probe = Substitute.For<ILatticeTreeContentProbe>();
-        probe.HasContentAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(hasContent));
-        return probe;
     }
 
     private static SnapshotLatticeMergeModeResolver ResolverOver(
@@ -213,11 +204,11 @@ public sealed partial class LatticeReplicationConfigAuthorityTests
     }
 
     [Test]
-    public async Task EnableReplicationAsync_on_non_empty_tree_requests_bootstrap()
+    public async Task EnableReplicationAsync_with_a_source_requests_bootstrap()
     {
         var store = new InMemoryConfigStore();
         var admin = Substitute.For<ILatticeReplicationAdmin>();
-        var authority = CreateAuthority(store, admin: admin, probe: FixedProbe(hasContent: true));
+        var authority = CreateAuthority(store, admin: admin);
 
         var result = await authority.EnableReplicationAsync(
             Tree, LatticeMergeMode.OrSet, bootstrapSourceClusterId: "site-b");
@@ -227,18 +218,21 @@ public sealed partial class LatticeReplicationConfigAuthorityTests
     }
 
     [Test]
-    public async Task EnableReplicationAsync_on_empty_tree_does_not_request_bootstrap()
+    public async Task EnableReplicationAsync_on_an_empty_receiver_with_a_source_requests_bootstrap()
     {
+        // Issue #5557: a receiver drops (and acknowledges) every entry shipped
+        // before its own enrollment lands, so an empty receiver that names a
+        // source must still pull the source's pre-existing rows. The authority
+        // no longer reads the local tree at all to decide this.
         var store = new InMemoryConfigStore();
         var admin = Substitute.For<ILatticeReplicationAdmin>();
-        var authority = CreateAuthority(store, admin: admin, probe: FixedProbe(hasContent: false));
+        var authority = CreateAuthority(store, admin: admin);
 
         var result = await authority.EnableReplicationAsync(
-            Tree, LatticeMergeMode.OrSet, bootstrapSourceClusterId: "site-b");
+            Tree, LatticeMergeMode.LwwRegister, bootstrapSourceClusterId: "site-b");
 
-        Assert.That(result.BootstrapRequested, Is.False);
-        await admin.DidNotReceive().RequestSnapshotAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        Assert.That(result.BootstrapRequested, Is.True);
+        await admin.Received(1).RequestSnapshotAsync(Tree, "site-b", Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -246,7 +240,7 @@ public sealed partial class LatticeReplicationConfigAuthorityTests
     {
         var store = new InMemoryConfigStore();
         var admin = Substitute.For<ILatticeReplicationAdmin>();
-        var authority = CreateAuthority(store, admin: admin, probe: FixedProbe(hasContent: true));
+        var authority = CreateAuthority(store, admin: admin);
 
         var result = await authority.EnableReplicationAsync(Tree, LatticeMergeMode.OrSet);
 

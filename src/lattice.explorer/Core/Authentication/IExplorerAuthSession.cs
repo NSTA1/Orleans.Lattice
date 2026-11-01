@@ -79,6 +79,10 @@ public interface IExplorerAuthSession
     /// <param name="username">The credential username. Must be non-empty.</param>
     /// <param name="password">The credential password. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="ExplorerSignInRefusedException">
+    /// The cluster refused the username and password. Nothing is persisted or
+    /// applied, and the session stays as it was.
+    /// </exception>
     Task LoginAsync(string username, string password, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -90,6 +94,10 @@ public interface IExplorerAuthSession
     /// <param name="schemeId">The scheme to sign in with (an <see cref="AvailableSchemes"/> value).</param>
     /// <param name="inputs">Interactive inputs for the challenge, or <see langword="null"/> for schemes that take none.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="ExplorerSignInRefusedException">
+    /// The cluster refused the credential the challenge produced. Nothing is
+    /// persisted or applied, and the session stays as it was.
+    /// </exception>
     Task LoginWithMethodAsync(string schemeId, IReadOnlyDictionary<string, string?>? inputs = null, CancellationToken cancellationToken = default);
 
     /// <summary>

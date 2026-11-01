@@ -37,13 +37,13 @@ public sealed class ShellLayoutStandaloneTests : ShellLayoutTestContext
     }
 
     [Test]
-    public void Any_other_address_in_the_same_area_keeps_the_chrome()
+    public async Task Any_other_address_in_the_same_area_keeps_the_chrome()
     {
         AddStandaloneArea();
         Navigation.NavigateTo("data/orders");
 
         var cut = RenderLayout();
-
+        await SetBandAsync(cut, 2);
         cut.WaitUntil(() => Assert.That(cut.FindAll("main #page-body"), Has.Count.EqualTo(1)));
         Assert.Multiple(() =>
         {

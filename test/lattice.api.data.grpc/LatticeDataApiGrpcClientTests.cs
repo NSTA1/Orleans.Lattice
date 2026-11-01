@@ -176,6 +176,21 @@ public sealed class LatticeDataApiGrpcClientTests
     }
 
     [Test]
+    public async Task ProbeCapabilitiesAsync_targets_the_probe_method_and_returns_the_report()
+    {
+        var invoker = new RecordingCallInvoker(_ => new LatticeDataCapabilities { TreeId = "t", Key = "k", CanWrite = true });
+        var client = CreateClient(invoker);
+
+        var report = await client.ProbeCapabilitiesAsync(new DataProbeRequest { TreeId = "t", Key = "k" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(invoker.LastMethodName, Is.EqualTo(LatticeDataApiGrpcMethods.ProbeCapabilitiesMethodName));
+            Assert.That(report, Is.EqualTo(new LatticeDataCapabilities { TreeId = "t", Key = "k", CanWrite = true }));
+        });
+    }
+
+    [Test]
     public void SetAsync_throws_on_null_request()
     {
         var invoker = new RecordingCallInvoker(_ => new DataSetResponse());

@@ -124,6 +124,7 @@ The following inventory includes directly declared public members and overloads,
 - `public bool AllTreesGrantsEnabled { get; init; }`
 - `public bool AccessAdministrationDelegationEnabled { get; init; }`
 - `public bool DelegatedTenantAccessAdministrationEnabled { get; init; }`
+- `public bool DirectoryValidationRequired { get; init; }`
 
 ### `Orleans.Lattice.Api.Auth.ApiAuthTypeAliases`
 

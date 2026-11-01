@@ -9,9 +9,11 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 /// <summary>
 /// The groups an app role can be bound to: the installing tenant's own groups,
 /// labelled <c>Tenant</c> and offered by their full id (<c>t/{tenant}/{name}</c>),
-/// beside the cluster's groups, labelled <c>Cluster</c>. Another tenant's group is
-/// never offered: the tenant directory lists only the named tenant's groups, and
-/// every reserved tenant group id the cluster source answers with is left out.
+/// beside the cluster's groups, which carry the cluster source's own labels
+/// (<c>Directory</c>, <c>Stored</c>, or both; see
+/// <see cref="ClusterGroupSuggestionSource"/>). Another tenant's group is never
+/// offered: the tenant directory lists only the named tenant's groups, and every
+/// reserved tenant group id the cluster source answers with is left out.
 /// </summary>
 /// <remarks>
 /// It remembers nothing itself: the tenant's groups are the caller-keyed
@@ -19,7 +21,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 /// tenant's groups (no installing tenant, or delegated tenant access
 /// administration is not open to the caller) it offers the cluster's groups only.
 /// </remarks>
-/// <param name="cluster">The cluster's groups, from the identity directory or the auth store.</param>
+/// <param name="cluster">The cluster's groups, labelled by their source (directory and stored).</param>
 /// <param name="tenantAccess">The circuit's tenant access catalogue.</param>
 /// <param name="tenant">The tenant whose own groups are offered, or <see langword="null"/> to offer none.</param>
 internal sealed class AppGroupSuggestionSource(ILtSuggestionSource cluster, TenantAccessCatalog tenantAccess, string? tenant) : ILtSuggestionSource
@@ -54,7 +56,7 @@ internal sealed class AppGroupSuggestionSource(ILtSuggestionSource cluster, Tena
                 var item = shared.Items[i];
                 if (!ClusterSubjectSuggestionSource.IsTenantGroupId(item.Value))
                 {
-                    values.Add(item with { Detail = TenantGroupSuggestionSource.Describe(ClusterSubjectSuggestionSource.SourceLabel, item.Detail) });
+                    values.Add(item);
                 }
             }
         }

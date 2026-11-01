@@ -12,6 +12,45 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Access;
 public sealed class AccessRuleDraftTests
 {
     [Test]
+    [TestCase("t/acme/acme-inventory", null)]
+    [TestCase("t/globex/orders", "tree")]
+    [TestCase("orders", "tree")]
+    [TestCase("t/acme/a/task-board/tasks", "tree")]
+    [TestCase("t/acme/sys-index", "tree")]
+    public void A_rule_naming_a_tenant_group_may_govern_only_that_tenants_own_trees(string tree, string? field)
+    {
+        var draft = Valid();
+        draft.SubjectId = "t/acme/acme-analysts";
+        draft.TreeId = tree;
+
+        var errors = draft.Validate();
+
+        Assert.That(errors.Tree, field is null
+            ? Is.Null
+            : Is.EqualTo("A rule naming tenant group t/acme/acme-analysts may govern only tenant acme's own trees (t/acme/...). Choose one of them."));
+    }
+
+    [Test]
+    public void A_tenant_group_subject_is_refused_on_a_scope_without_a_tree_and_when_malformed()
+    {
+        var cluster = Valid();
+        cluster.SubjectId = "t/acme/acme-analysts";
+        cluster.ScopeKind = AccessRuleDraft.ClusterScope;
+        var malformed = Valid();
+        malformed.SubjectId = "t/acme";
+        var user = Valid();
+        user.SubjectKind = LatticeSubjectSelectorKind.User;
+        user.SubjectId = "t/acme/acme-analysts";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cluster.Validate().Subject, Does.StartWith("A rule naming tenant group t/acme/acme-analysts may govern only"));
+            Assert.That(malformed.Validate().Tree, Is.EqualTo("t/acme is not a well-formed tenant group id (t/{tenant}/{name})."));
+            Assert.That(user.Validate().HasAny, Is.False, "a user subject is not confined here; the picker refuses it");
+        });
+    }
+
+    [Test]
     public void A_complete_tree_draft_validates_and_converts()
     {
         var draft = Valid();
@@ -175,16 +214,40 @@ public sealed class AccessRuleDraftTests
     }
 
     [Test]
-    public void A_blank_condition_is_dropped_and_the_ids_are_trimmed()
+    public void A_new_draft_carries_no_condition_and_the_ids_are_trimmed()
     {
         var draft = Valid();
         draft.RuleId = "  r1 ";
         draft.SubjectId = " ops ";
-        draft.Condition = "   ";
 
         var rule = draft.ToRule();
 
-        Assert.That((rule.RuleId, rule.Subject.Id, rule.Condition), Is.EqualTo(("r1", "ops", (string?)null)));
+        Assert.Multiple(() =>
+        {
+            Assert.That(draft.HasCondition, Is.False);
+            Assert.That((rule.RuleId, rule.Subject.Id, rule.Condition), Is.EqualTo(("r1", "ops", (string?)null)));
+        });
+    }
+
+    [Test]
+    [TestCase("region == \"eu\"")]
+    [TestCase("  padded condition  ")]
+    public void An_existing_rules_condition_is_carried_through_a_save_verbatim(string condition)
+    {
+        var existing = new LatticeAuthorizationRule(
+            "r1", LatticeSubjectSelector.Group("ops"), LatticeScope.Tree("orders"), LatticeOperation.Read, LatticeEffect.Allow, condition);
+
+        var draft = AccessRuleDraft.From(existing);
+        draft.SetOperation(LatticeOperation.Write, true);
+        var rule = draft.ToRule();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(draft.HasCondition, Is.True);
+            Assert.That(draft.Condition, Is.EqualTo(condition));
+            Assert.That(rule.Condition, Is.EqualTo(condition));
+            Assert.That(rule.Operations, Is.EqualTo(LatticeOperation.Read | LatticeOperation.Write));
+        });
     }
 
     private static AccessRuleDraft Valid()

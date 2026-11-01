@@ -7,17 +7,20 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Design;
 
 /// <summary>
 /// The Shell's breakpoint gate, ported from <c>BreakpointTokenHygieneTests</c>:
-/// the layout widths are named in exactly one stylesheet and one .NET type, and
-/// nothing else in the Shell may hard-code one.
+/// the layout widths are declared in exactly one stylesheet and one .NET type,
+/// every width query in the Shell measures the Shell root's size container at
+/// one of those widths, and nothing else in the Shell may hard-code one.
 /// </summary>
 /// <remarks>
 /// <para>
 /// A width query is a width query whether it is spelled <c>@media</c> or
-/// <c>@container</c>, so both are gated. The Shell's own queries are
-/// size-container queries against its root, which is also why the older gate,
-/// which scans every Explorer stylesheet for dimensional <c>@media</c> rules and
-/// allows only the retiring design system's file, stays green: the two gates
-/// cover the two design systems until the cutover retires the old one.
+/// <c>@container</c>, so both are gated. A band's styling (the compact band's
+/// paddings and stacked toolbars, the medium band's rail) is a size-container
+/// query against the Shell root, so the browser applies it before the first paint
+/// rather than after the layout has measured its width (#5465); this gate is what
+/// keeps those queries to the declared widths and to the one container. The older
+/// gate, which scans every Explorer stylesheet for dimensional <c>@media</c> rules,
+/// stays green because no Shell query is a viewport media query.
 /// </para>
 /// </remarks>
 [TestFixture]
@@ -34,36 +37,44 @@ public sealed class ShellBreakpointHygieneTests
 
     private static readonly Regex PixelWidth = new(@"(\d+)px", RegexOptions.Compiled);
 
+    private static readonly Regex DeclaredContainerQuery = new(
+        @"^@container\s+" + LtBreakpoints.ContainerName + @"\s+\(\s*(?:width|inline-size)\s*(?:<|>=)\s*(?<width>\d+)px\s*\)\s*$",
+        RegexOptions.Compiled);
+
     [Test]
-    public void No_shell_stylesheet_outside_the_breakpoint_layer_declares_a_width_query()
+    public void Every_shell_width_query_measures_the_shell_root_at_a_declared_width()
     {
-        var allowed = ShellStylesheets.Absolute(ShellStylesheets.Breakpoints);
+        int[] declared = [LtBreakpoints.MediumMinimumWidth, LtBreakpoints.ExpandedMinimumWidth];
         var violations = new List<string>();
         var scanned = 0;
+        var queried = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var file in HygieneRepository.EnumerateFiles(ShellStylesheets.Absolute(ShellSourceRoot), "*.css"))
         {
             scanned++;
-            if (string.Equals(file, allowed, StringComparison.OrdinalIgnoreCase))
+            foreach (Match prelude in QueryPrelude.Matches(ShellStylesheets.BlankComments(File.ReadAllText(file))))
             {
-                continue;
-            }
-
-            var lines = ShellStylesheets.BlankComments(File.ReadAllText(file)).Split('\n');
-            for (var i = 0; i < lines.Length; i++)
-            {
-                if (DimensionalQuery.IsMatch(lines[i]))
+                var query = Regex.Replace(prelude.Value.Trim(), @"\s+", " ");
+                if (!DimensionalQuery.IsMatch(query))
                 {
-                    violations.Add($"{Relative(file)}:{i + 1}: {lines[i].Trim()}");
+                    continue;
+                }
+
+                queried.Add(file);
+                if (!IsDeclaredQuery(query, declared))
+                {
+                    violations.Add($"{Relative(file)}: {query}");
                 }
             }
         }
 
         Assert.That(scanned, Is.GreaterThan(2), "the scan must reach the Shell's stylesheets");
+        Assert.That(queried, Has.Count.GreaterThan(2), "the scan must reach the band queries outside the breakpoint layer");
         Assert.That(violations, Is.Empty,
-            "A width query may only appear in " + ShellStylesheets.Breakpoints
-            + ". Compose the lt-only-compact / lt-medium-up / lt-expanded-up utilities, or branch on "
-            + "LtBreakpoints.Resolve, instead of inventing a width per component."
+            $"A Shell width query must be one size-container query against the Shell root, '@container {LtBreakpoints.ContainerName} "
+            + $"(width < N)' or '(width >= N)', at a width {ShellStylesheets.Breakpoints} declares ({string.Join(" or ", declared.Select(width => width + "px"))}). "
+            + "Compose the lt-only-compact / lt-medium-up / lt-expanded-up utilities, or branch on LtBreakpoints.Resolve, "
+            + "instead of inventing a width or measuring the viewport."
             + Environment.NewLine + string.Join(Environment.NewLine, violations));
     }
 
@@ -183,8 +194,20 @@ public sealed class ShellBreakpointHygieneTests
             Assert.That(DimensionalQuery.IsMatch("@media (hover: none) {"), Is.False);
             Assert.That(ContainsStandaloneNumber("if (viewportWidth >= 768)", "768"), Is.True);
             Assert.That(ContainsStandaloneNumber("var w = 17680;", "768"), Is.False);
+
+            int[] declared = [LtBreakpoints.MediumMinimumWidth, LtBreakpoints.ExpandedMinimumWidth];
+            Assert.That(IsDeclaredQuery("@container lt-viewport (width < 768px)", declared), Is.True);
+            Assert.That(IsDeclaredQuery("@container lt-viewport (width >= 1200px)", declared), Is.True);
+            Assert.That(IsDeclaredQuery("@container lt-viewport (width < 640px)", declared), Is.False, "an invented width");
+            Assert.That(IsDeclaredQuery("@container card (width < 768px)", declared), Is.False, "another container");
+            Assert.That(IsDeclaredQuery("@media (width < 768px)", declared), Is.False, "the viewport, not the Shell root");
+            Assert.That(IsDeclaredQuery("@container lt-viewport (height < 768px)", declared), Is.False, "a height");
         });
     }
+
+    private static bool IsDeclaredQuery(string query, int[] declared) =>
+        DeclaredContainerQuery.Match(query) is { Success: true } match
+        && declared.Contains(int.Parse(match.Groups["width"].Value, CultureInfo.InvariantCulture));
 
     private static bool MentionsWidth(string line) =>
         line.Contains("width", StringComparison.OrdinalIgnoreCase)

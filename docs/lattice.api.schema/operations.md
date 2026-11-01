@@ -129,7 +129,7 @@ The tree's own remediation report (`ILatticeSchemaControl.GetRemediationStatusAs
 
 The blocking `RemediateAsync`, `AdvanceAndMigrateAsync` and `MigrateToTargetVersionAsync` calls report the same superseded case by throwing `InvalidOperationException` with that reason.
 
-A remediation never runs as one long call. The tree's coordinator records the run when it is accepted, and the work then drives it one bounded slice of values at a time from a durable cursor. A cancel therefore takes effect between two slices. Cutover is the point of no return: a cancel that arrives during cutover is declined, and the run completes. If the silo running the work is lost, the operation reads as `Failed`, as for any operation. The remediation itself stays recorded in flight at its last slice, so starting the same remediation again resumes it from there.
+A remediation never runs as one long call. The tree's coordinator records the run when it is accepted, and the work then drives it one bounded slice of values at a time from a durable cursor. Each slice also stops once it has run for 10 seconds, and a slice call that outruns the grain call timeout is retried from that cursor, so the operation stays `Running` through a slow slice; only five timeouts in a row end it `Failed`, naming the timeout. A cancel therefore takes effect between two slices. Cutover is the point of no return: a cancel that arrives during cutover is declined, and the run completes. If the silo running the work is lost, the operation reads as `Failed`, as for any operation. The remediation itself stays recorded in flight at its last slice, so starting the same remediation again resumes it from there.
 
 ## Migrating from the removed blocking scan
 

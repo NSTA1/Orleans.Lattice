@@ -84,8 +84,8 @@ internal sealed class BackupsAccess
 
     /// <summary>
     /// Whether the area may be seen: visible when the caller could list backups,
-    /// unavailable with a reason when it could not, and hidden when the
-    /// connection does not serve backup control or cannot be reached.
+    /// unavailable with a reason when it could not, not checked when the cluster did
+    /// not answer, and hidden when the connection does not serve backup control.
     /// </summary>
     /// <param name="cancellationToken">Cancelled when the directory stops waiting.</param>
     public async Task<AreaAvailability> GetAvailabilityAsync(CancellationToken cancellationToken)
@@ -116,9 +116,14 @@ internal sealed class BackupsAccess
         {
             answer = AreaAvailability.Hidden;
         }
+        catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, cancellationToken) && AreaProbeFaults.IsTransient(exception))
+        {
+            // The cluster did not answer: not checked, and asked again next time.
+            return AreaAvailability.Unchecked;
+        }
         catch (Exception exception) when (!BackupsFaults.IsCancellation(exception, cancellationToken))
         {
-            // Not configured, unreachable or faulted: hidden now, and asked again next time.
+            // Not configured or faulted: hidden now, and asked again next time.
             return AreaAvailability.Hidden;
         }
 

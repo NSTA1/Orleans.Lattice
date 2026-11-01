@@ -74,7 +74,7 @@ public sealed class ExplorerSuggestionsTests
         var hub = new ExplorerSuggestions(Throwing());
 
         var answers = await Task.WhenAll(
-            new[] { hub.Users, hub.Groups, hub.GroupsOrStoredGroups, hub.Principals }
+            new[] { hub.Users, hub.Groups, hub.ClusterGroups, hub.Principals }
                 .Select(async source => await source.SuggestAsync("a", 5, CancellationToken.None)));
 
         Assert.That(
@@ -91,7 +91,10 @@ public sealed class ExplorerSuggestionsTests
         {
             Assert.That(hub.Users, Is.SameAs(hub.Users));
             Assert.That(hub.Groups, Is.SameAs(hub.Groups));
-            Assert.That(hub.GroupsOrStoredGroups, Is.SameAs(hub.GroupsOrStoredGroups));
+            Assert.That(hub.ClusterGroups, Is.SameAs(hub.ClusterGroups));
+            Assert.That(hub.StoredGroups, Is.SameAs(hub.StoredGroups));
+            Assert.That(hub.TreesOfTenant("acme"), Is.SameAs(hub.TreesOfTenant("acme")));
+            Assert.That(() => hub.TreesOfTenant(string.Empty), Throws.ArgumentException);
             Assert.That(hub.Principals, Is.SameAs(hub.Principals));
             Assert.That(hub.Groups, Is.Not.SameAs(hub.Users), "a user field and a group field search different things");
         });

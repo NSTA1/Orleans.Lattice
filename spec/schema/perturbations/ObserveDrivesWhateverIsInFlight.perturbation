@@ -6,13 +6,20 @@ DETECTORS: LatticeSchemaRemediationGrainTests.A_joined_driver_does_not_slice_or_
 SUMMARY: the driver slices whatever remediation is in flight and never notices the followed one ended (#5267)
 
 --- FIND
-            var slice = followed is null
-                ? await grain.RunSliceAsync().ConfigureAwait(false)
-                : await grain.RunSliceAsync(followed).ConfigureAwait(false);
+                slice = followed is null
+                    ? await grain.RunSliceAsync().ConfigureAwait(false)
+                    : await grain.RunSliceAsync(followed).ConfigureAwait(false);
+--- REPLACE
+                slice = await grain.RunSliceAsync().ConfigureAwait(false);
+--- END
+
+--- FIND
             if (followed is not null && !Follows(slice.Report, followed))
             {
                 return report;
             }
+
+            report = slice.Report;
 --- REPLACE
-            var slice = await grain.RunSliceAsync().ConfigureAwait(false);
+            report = slice.Report;
 --- END

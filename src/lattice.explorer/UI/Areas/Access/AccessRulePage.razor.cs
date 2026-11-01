@@ -174,7 +174,7 @@ public partial class AccessRulePage : IDisposable
     {
         _editorOpen = false;
         _rule = rule;
-        Toasts.Show($"Rule {rule.RuleId} saved.", LtToastTone.Success);
+        Toasts.Show(AccessRuleFormat.SavedMessage(rule), AccessRuleFormat.SavedTone(rule));
     }
 
     private async Task DeleteAsync()
