@@ -55,8 +55,17 @@ internal sealed class CoordinatedRestoreClusterFixture
     /// <summary>When set, the next silo build registers an access gate that denies every anonymous caller.</summary>
     private static bool _pendingDenyAnonymous;
 
+    /// <summary>The engine faults the next silo build wraps its restore engine with, or <c>null</c> for none.</summary>
+    private static RestoreEngineFaults? _pendingEngineFaults;
+
     /// <summary>The deployed test cluster.</summary>
     public TestCluster Cluster { get; private set; } = null!;
+
+    /// <summary>
+    /// The fault controls of the restore engine the saga drives, when the fixture was
+    /// initialized with <c>injectEngineFaults</c>; <c>null</c> otherwise.
+    /// </summary>
+    public RestoreEngineFaults? EngineFaults { get; private set; }
 
     /// <summary>The primary in-process silo's service provider.</summary>
     public IServiceProvider SiloServices =>
@@ -123,15 +132,23 @@ internal sealed class CoordinatedRestoreClusterFixture
     /// under system origin. Seed and read such a cluster inside
     /// <see cref="LatticeSystemOrigin.Enter"/>.
     /// </param>
+    /// <param name="injectEngineFaults">
+    /// When <c>true</c>, wraps the coordinated restore engine the dispatcher and the
+    /// restore participant drive so a test can hold its shadow builds or fail its
+    /// cutovers through <see cref="EngineFaults"/>.
+    /// </param>
     public async Task InitializeAsync(
         bool driveThroughDispatcher = false,
         IReadOnlyCollection<string>? replicatedTrees = null,
         bool refuseCapacity = false,
-        bool denyAnonymous = false)
+        bool denyAnonymous = false,
+        bool injectEngineFaults = false)
     {
         Completion = new FakeSagaCompletionSource();
         _pendingCompletion = Completion;
         _pendingDenyAnonymous = denyAnonymous;
+        EngineFaults = injectEngineFaults ? new RestoreEngineFaults() : null;
+        _pendingEngineFaults = EngineFaults;
 
         if (driveThroughDispatcher)
         {
@@ -174,8 +191,19 @@ internal sealed class CoordinatedRestoreClusterFixture
             var replicated = _pendingReplicatedTrees;
             var refuseCapacity = _pendingRefuseCapacity;
             var denyAnonymous = _pendingDenyAnonymous;
+            var engineFaults = _pendingEngineFaults;
 
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
+
+            if (engineFaults is not null)
+            {
+                // Registered before AddLatticeBackup, whose TryAdd then keeps it: the
+                // dispatcher and the participant drive the wrapper, which delegates to
+                // the real engine (the restore service implements both seams).
+                siloBuilder.Services.AddSingleton<ILatticeCoordinatedRestoreEngine>(sp => new FaultInjectingRestoreEngine(
+                    (ILatticeCoordinatedRestoreEngine)sp.GetRequiredService<ILatticeBackupRestoreService>(),
+                    engineFaults));
+            }
             siloBuilder.UseInMemoryReminderService();
 
             if (denyAnonymous)
@@ -237,6 +265,79 @@ internal sealed class CoordinatedRestoreClusterFixture
         }
     }
 
+    /// <summary>
+    /// Fault controls for the restore engine a fixture initialized with
+    /// <c>injectEngineFaults</c> drives.
+    /// </summary>
+    internal sealed class RestoreEngineFaults
+    {
+        private int _commitFailures;
+        private volatile bool _failCommits;
+
+        /// <summary>When set, every shadow build waits at this hold before it runs.</summary>
+        public PrepareHold? BuildHold { get; set; }
+
+        /// <summary>While <c>true</c>, every cutover fails the way an unauthorized one does.</summary>
+        public bool FailCommits
+        {
+            get => _failCommits;
+            set => _failCommits = value;
+        }
+
+        /// <summary>The number of cutovers failed so far.</summary>
+        public int CommitFailures => Volatile.Read(ref _commitFailures);
+
+        /// <summary>Completes when the first cutover has been failed.</summary>
+        public TaskCompletionSource FirstCommitFailure { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal void RecordCommitFailure()
+        {
+            Interlocked.Increment(ref _commitFailures);
+            FirstCommitFailure.TrySetResult();
+        }
+    }
+
+    /// <summary>
+    /// A coordinated restore engine that delegates to the real one, holding shadow
+    /// builds and failing cutovers as its <see cref="RestoreEngineFaults"/> direct.
+    /// </summary>
+    private sealed class FaultInjectingRestoreEngine(
+        ILatticeCoordinatedRestoreEngine inner, RestoreEngineFaults faults) : ILatticeCoordinatedRestoreEngine
+    {
+        public Task<RestoreAdmissionReport> ProbeAdmissionAsync(
+            LatticeRestoreRequest request, CancellationToken cancellationToken = default) =>
+            inner.ProbeAdmissionAsync(request, cancellationToken);
+
+        public async Task<LatticeRestoreResult> BuildShadowAsync(
+            LatticeRestoreRequest request, CancellationToken cancellationToken = default)
+        {
+            if (faults.BuildHold is { } hold)
+            {
+                hold.Entered.TrySetResult();
+                await hold.Release.Task;
+            }
+
+            return await inner.BuildShadowAsync(request, cancellationToken);
+        }
+
+        public Task CommitShadowAsync(LatticeRestoreResult shadow, CancellationToken cancellationToken = default)
+        {
+            if (faults.FailCommits)
+            {
+                faults.RecordCommitFailure();
+                return Task.FromException(new LatticeAuthorizationDeniedException(
+                    $"Injected: the cutover of '{shadow.TargetTreeId}' was refused."));
+            }
+
+            return inner.CommitShadowAsync(shadow, cancellationToken);
+        }
+
+        public Task DeleteShadowAsync(string shadowPhysicalTreeId, CancellationToken cancellationToken = default) =>
+            inner.DeleteShadowAsync(shadowPhysicalTreeId, cancellationToken);
+
+        public string ResolveShadowTreeId(LatticeRestoreRequest request) => inner.ResolveShadowTreeId(request);
+    }
+
     private sealed class AllowDataTreesLwwRegisterResolver : ILatticeMergeModeResolver
     {
         public LatticeMergeMode? Resolve(string treeId) =>
@@ -293,6 +394,7 @@ internal sealed class CoordinatedRestoreClusterFixture
         private readonly List<SagaControlRequest> _committed = [];
         private readonly List<SagaControlRequest> _aborted = [];
         private IGrainFactory? _grainFactory;
+        private PrepareHold? _prepareHold;
 
         /// <summary>The prepare requests routed to the local participant, in order.</summary>
         public IReadOnlyList<SagaControlRequest> Prepared
@@ -319,11 +421,37 @@ internal sealed class CoordinatedRestoreClusterFixture
             (_grainFactory ?? throw new InvalidOperationException("The loopback control channel was not bound to a grain factory."))
                 .GetGrain<ICrossClusterSagaParticipantGrain>(request.SagaId);
 
-        /// <inheritdoc />
-        public Task<SagaControlResponse> PrepareAsync(string clusterId, SagaControlRequest request, CancellationToken cancellationToken = default)
+        /// <summary>
+        /// Holds every later prepare before it reaches the participant grain, until
+        /// the returned hold is released, so a test can keep a coordinated restore in
+        /// its prepare phase for as long as it chooses. The hold sits in the channel,
+        /// inside whatever drives the coordinator, and not in a grain call, so the
+        /// only grain call it can outlast is one the restore itself keeps open.
+        /// </summary>
+        public PrepareHold HoldPrepare()
         {
-            lock (_gate) { _prepared.Add(request); }
-            return Participant(request).PrepareAsync(request);
+            var hold = new PrepareHold();
+            lock (_gate) { _prepareHold = hold; }
+            return hold;
+        }
+
+        /// <inheritdoc />
+        public async Task<SagaControlResponse> PrepareAsync(string clusterId, SagaControlRequest request, CancellationToken cancellationToken = default)
+        {
+            PrepareHold? hold;
+            lock (_gate)
+            {
+                _prepared.Add(request);
+                hold = _prepareHold;
+            }
+
+            if (hold is not null)
+            {
+                hold.Entered.TrySetResult();
+                await hold.Release.Task;
+            }
+
+            return await Participant(request).PrepareAsync(request);
         }
 
         /// <inheritdoc />
@@ -343,6 +471,20 @@ internal sealed class CoordinatedRestoreClusterFixture
         /// <inheritdoc />
         public Task<SagaControlResponse> GetStatusAsync(string clusterId, SagaControlRequest request, CancellationToken cancellationToken = default) =>
             Participant(request).GetStatusAsync(request);
+    }
+
+    /// <summary>
+    /// A hold placed by <see cref="LoopbackSagaControlChannel.HoldPrepare"/>:
+    /// <see cref="Entered"/> completes when a prepare reaches it, and the prepare
+    /// proceeds once <see cref="Release"/> is completed.
+    /// </summary>
+    internal sealed class PrepareHold
+    {
+        /// <summary>Completes when a prepare has reached the hold.</summary>
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Complete to let every held prepare proceed.</summary>
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     /// <summary>
