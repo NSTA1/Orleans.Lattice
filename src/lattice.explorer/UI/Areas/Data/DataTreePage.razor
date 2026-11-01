@@ -41,7 +41,7 @@ else
             <LtStatusPill Text="@sharedBy" />
             <LtStatusPill Text="@_tree.AccessText" />
         }
-        @if (_canExport || _importRights.Any)
+        @if (!IsDeleted && (_canExport || _importRights.Any || _canManageLifecycle))
         {
             <span class="lt-data-heading__actions">
                 @if (_importRights.Any)
@@ -51,6 +51,10 @@ else
                 @if (_canExport)
                 {
                     <LtButton Variant="LtButtonVariant.Quiet" data-lt-command="@DataArea.ExportCommandId" OnClick="OpenExport">Export...</LtButton>
+                }
+                @if (_canManageLifecycle)
+                {
+                    <LtButton Variant="LtButtonVariant.Destructive" data-lt-data-tree-lifecycle="delete" Disabled="@_lifecycleBusy" OnClick="AskDelete">Delete tree...</LtButton>
                 }
             </span>
         }
@@ -62,7 +66,7 @@ else
         }
         @if (_tree.AppSlug is { } owner)
         {
-            <span>Owned by app <a class="lt-shell-mono" href="@_workspace.Href(ExplorerAddress.ForArea(DataArea.AppsAreaKey, owner))">@owner</a></span>
+            <span>Owned by app <a class="lt-shell-mono lt-data-key" href="@_workspace.Href(ExplorerAddress.ForArea(DataArea.AppsAreaKey, owner))">@owner</a></span>
         }
         @if (_tree.Kind == DataTreeKind.View)
         {
@@ -70,7 +74,7 @@ else
                 View of
                 @if (_source is not null)
                 {
-                    <a class="lt-shell-mono" href="@_workspace.Href(_source.Address)">@_source.LogicalId</a>
+                    <a class="lt-shell-mono lt-data-key" href="@_workspace.Href(_source.Address)">@_source.LogicalId</a>
                 }
                 else
                 {
@@ -88,16 +92,57 @@ else
         }
     </p>
 
-    <CascadingValue Value="_workspace">
-        <LtTabs Label="@($"{_tree.DisplayName} workspace")" ActiveId="@_workspace.Tab" ActiveIdChanged="OnTabChanged">
-            <LtTab Id="@DataTabs.Keys" Title="Keys"><DataKeysPanel /></LtTab>
-            <LtTab Id="@DataTabs.History" Title="History"><DataHistoryPanel /></LtTab>
-            <LtTab Id="@DataTabs.Metrics" Title="Metrics"><DataMetricsPanel /></LtTab>
-            <LtTab Id="@DataTabs.DeadLetters" Title="Dead letters"><DataDeadLettersPanel /></LtTab>
-            <LtTab Id="@DataTabs.TagIndexes" Title="Tag indexes"><DataTagIndexesPanel /></LtTab>
-            <LtTab Id="@DataTabs.Views" Title="Views"><DataViewsPanel /></LtTab>
-        </LtTabs>
-    </CascadingValue>
+    @if (_deletion is { IsDeleted: true } deletion)
+    {
+        @* A deleted tree serves no reads or writes, so its tabs give way to what can still be done with it. *@
+        <section class="lt-data-entry" data-lt-tree-deleted="@(deletion.CanRecover ? "recoverable" : "final")" aria-live="polite">
+            <LtEmptyState Title="@($"{_tree.DisplayName} is deleted")" HeadingLevel="2">
+                <ChildContent>@DeletedText(deletion)</ChildContent>
+                <Actions>
+                    @if (_canManageLifecycle && deletion.CanRecover)
+                    {
+                        <LtButton data-lt-data-tree-lifecycle="recover" Disabled="@_lifecycleBusy" OnClick="AskRecover">Recover tree...</LtButton>
+                    }
+                    <a class="lt-btn" href="@Navigator.Canonicalize(ExplorerAddress.ForArea(DataArea.AreaKey).WithTenant(_tree.Tenant)).ToHref()">Back to Data</a>
+                </Actions>
+            </LtEmptyState>
+        </section>
+    }
+    else
+    {
+        <CascadingValue Value="_workspace">
+            <LtTabs Label="@($"{_tree.DisplayName} workspace")" ActiveId="@_workspace.Tab" ActiveIdChanged="OnTabChanged">
+                <LtTab Id="@DataTabs.Keys" Title="Keys"><DataKeysPanel /></LtTab>
+                <LtTab Id="@DataTabs.History" Title="History"><DataHistoryPanel /></LtTab>
+                <LtTab Id="@DataTabs.Metrics" Title="Metrics"><DataMetricsPanel /></LtTab>
+                <LtTab Id="@DataTabs.DeadLetters" Title="Dead letters"><DataDeadLettersPanel /></LtTab>
+                <LtTab Id="@DataTabs.TagIndexes" Title="Tag indexes"><DataTagIndexesPanel /></LtTab>
+                <LtTab Id="@DataTabs.Views" Title="Views"><DataViewsPanel /></LtTab>
+            </LtTabs>
+        </CascadingValue>
+    }
+
+    @if (_canManageLifecycle)
+    {
+        <LtConfirmDestructive Open="@(_lifecycleConfirm == LifecycleVerb.Delete)"
+                              OpenChanged="CloseLifecycleConfirm"
+                              Title="Delete this tree?"
+                              ObjectKind="tree"
+                              ObjectName="@_tree.DisplayName"
+                              ConfirmText="Delete tree"
+                              OnConfirm="DeleteTreeAsync">
+            Every read and write on the tree fails at once, and a hard purge is scheduled after the cluster's soft-delete window. Until then it can be recovered.
+        </LtConfirmDestructive>
+        <LtConfirmDestructive Open="@(_lifecycleConfirm == LifecycleVerb.Recover)"
+                              OpenChanged="CloseLifecycleConfirm"
+                              Title="Recover this tree?"
+                              ObjectKind="tree"
+                              ObjectName="@_tree.DisplayName"
+                              ConfirmText="Recover tree"
+                              OnConfirm="RecoverTreeAsync">
+            Restores normal reads and writes on the tree and cancels its scheduled purge.
+        </LtConfirmDestructive>
+    }
 
     @if (_importRights.Any)
     {
