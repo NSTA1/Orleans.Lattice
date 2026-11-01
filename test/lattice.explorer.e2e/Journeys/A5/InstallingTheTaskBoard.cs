@@ -48,20 +48,20 @@ public sealed class InstallingTheTaskBoard : JourneyChapter
             await run.ShotAsync("no-apps-yet", "Apps: No apps yet - nothing is installed, and olivia may install");
 
             await apps.InstallFromPaletteAsync();
-            await run.ShotAsync("catalogue-available", "The palette's Install app... opens the catalogue on Available: 2 sources, the first 50 apps");
+            await run.ShotAsync("catalogue-available", "The palette's Install app... opens the catalogue on Available: 3 sources, the first 50 apps");
 
             await apps.LoadMoreAsync(CatalogueSize);
             await run.ShotAsync("load-more", "Load more apps lists the remaining 12: 62 apps in all");
 
             await apps.SelectSourceAsync(Apps.SamplesNextSource);
-            await Expect(apps.Count).ToHaveTextAsync("2 sources, 1 app");
+            await Expect(apps.Count).ToHaveTextAsync($"{AppsCataloguePage.SourceCount} sources, 1 app");
             await Expect(apps.Row(TaskBoard, Apps.SamplesNextSource)).ToContainTextAsync(Apps.TaskBoardNextVersion);
             await run.ShotAsync("source-samples-next", "Source samples-next offers one app: the task board's vNext, 1.1.0");
 
             await apps.SelectSourceAsync(Apps.SamplesSource);
-            await Expect(apps.Count).ToHaveTextAsync("2 sources, 50+ apps");
+            await Expect(apps.Count).ToHaveTextAsync($"{AppsCataloguePage.SourceCount} sources, 50+ apps");
             await apps.SearchAsync("task");
-            await Expect(apps.Count).ToHaveTextAsync("2 sources, 1 app");
+            await Expect(apps.Count).ToHaveTextAsync($"{AppsCataloguePage.SourceCount} sources, 1 app");
             await Expect(apps.Row(TaskBoard, Apps.SamplesSource)).ToContainTextAsync(Apps.TaskBoardVersion);
             await run.ShotAsync("search-samples", "Source samples searched for 'task': the task board 1.0.0 alone");
 
@@ -231,8 +231,11 @@ public sealed class InstallingTheTaskBoard : JourneyChapter
             await Expect(review.Integration).ToContainTextAsync($"{A5Contract.TaskBoardTree} as LwwRegister");
             await run.ShotAsync("upgrade-diff", "The upgrade diff: the editor role adds range delete, which needs re-consent; its tree stays replicated", fullPage: true);
 
-            // The palette offers the same upgrade as a command, which starts it here.
-            await olivia.Shell.RunCommandAsync($"Upgrade {Apps.TaskBoard}");
+            // The palette offers the same upgrade as a command, which starts it here. Its commands
+            // come from a snapshot re-read in the background at most every 10 s
+            // (ExplorerChromeOptions.CapabilityRefreshInterval), so it may list the update only
+            // on a later opening.
+            await RunUpgradeCommandAsync(olivia.Shell, $"Upgrade {Apps.TaskBoard}");
             await review.ExpectBindingStepAsync("Bind roles to groups");
             Coverage.Hit("use-case:apps/upgrade-command");
             await Expect(review.GroupFor(Apps.EditorRole)).ToHaveValueAsync(Groups.DataStewards);
@@ -298,6 +301,27 @@ public sealed class InstallingTheTaskBoard : JourneyChapter
             await run.ShotAsync("consent", "Consent: the consent covers 1.1.0, range delete included");
             Coverage.Hit("use-case:apps/landing");
         });
+    }
+
+    // Runs the palette command titled title, opening the palette again (up to four times, 5 s
+    // apart) while its command list still predates the update it offers.
+    private static async Task RunUpgradeCommandAsync(Shell.ShellPage shell, string title)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            var started = DateTime.UtcNow;
+            try
+            {
+                await shell.RunCommandAsync(title);
+                return;
+            }
+            catch (PlaywrightException ex) when (attempt < 4)
+            {
+                TestContext.Progress.WriteLine($"RETRY palette command '{title}' after a failed attempt of {(DateTime.UtcNow - started).TotalSeconds:F0} s: the palette did not offer it yet ({ex.Message.Split('\n')[0]})");
+                await shell.CloseAddressLineAsync();
+                await shell.Page.WaitForTimeoutAsync(5_000);
+            }
+        }
     }
 
     /// <summary>The journey's steps: a coverage scope per step, and its checkpoints filed under it.</summary>

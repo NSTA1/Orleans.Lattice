@@ -112,5 +112,5 @@ internal sealed class AccessForAppsPage(ShellPage shell)
     }
 
     /// <summary>The rows of the direct members table.</summary>
-    public ILocator DirectMembers => Content.GetByRole(AriaRole.Region, new() { Name = "Direct members" }).Locator("table tbody tr");
+    public ILocator DirectMembers => Content.Locator("section[aria-labelledby=lt-access-group-members] table tbody tr");
 }

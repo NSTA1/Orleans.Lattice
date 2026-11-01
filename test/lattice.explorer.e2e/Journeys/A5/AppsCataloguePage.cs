@@ -18,6 +18,13 @@ internal sealed class AppsCataloguePage(ShellPage shell)
 
     private ILocator Content => shell.Content;
 
+    /// <summary>
+    /// The sources the count line counts: every configured source, whatever is selected. The
+    /// journey silo's <c>AddLatticeApps</c> registers the in-image source (it lists no app
+    /// there) beside <c>samples</c> and <c>samples-next</c>.
+    /// </summary>
+    public const int SourceCount = 3;
+
     /// <summary>The catalogue's count line: "{n} sources, {m}[+] apps".</summary>
     public ILocator Count => Content.GetByRole(AriaRole.Status).Filter(new() { HasTextRegex = new Regex(@"\d+ sources?, \d+\+? apps?") });
 
@@ -51,7 +58,7 @@ internal sealed class AppsCataloguePage(ShellPage shell)
     private async Task ExpectAvailableFilterAsync()
     {
         await Expect(FilterButton("Available")).ToHaveAttributeAsync("aria-pressed", "true");
-        await Expect(Count).ToHaveTextAsync("2 sources, 50+ apps");
+        await Expect(Count).ToHaveTextAsync($"{SourceCount} sources, 50+ apps");
         await Expect(Rows).ToHaveCountAsync(50);
         Coverage.Hit("query-value:apps.filter=available");
     }
@@ -61,7 +68,7 @@ internal sealed class AppsCataloguePage(ShellPage shell)
     public async Task LoadMoreAsync(int total)
     {
         await Content.GetByRole(AriaRole.Button, new() { Name = "Load more apps", Exact = true }).ClickAsync();
-        await Expect(Count).ToHaveTextAsync($"2 sources, {total} apps");
+        await Expect(Count).ToHaveTextAsync($"{SourceCount} sources, {total} apps");
         await Expect(Rows).ToHaveCountAsync(total);
         await Expect(Content.GetByRole(AriaRole.Button, new() { Name = "Load more apps", Exact = true })).ToHaveCountAsync(0);
     }
@@ -133,7 +140,8 @@ internal sealed class AppsCataloguePage(ShellPage shell)
     {
         await shell.GotoAsync("/apps");
         await shell.ExpectHeadingAsync("Apps");
-        var installed = Content.GetByRole(AriaRole.Region, new() { Name = "Installed apps" });
+        // Named for the tenant it lists at a tenant-rooted address: "Installed in tenant default".
+        var installed = Content.GetByRole(AriaRole.Region, new() { NameRegex = new Regex(@"^Installed (apps|in tenant \S+)$") });
         await Expect(installed.Locator($"[data-lt-installed-app='{slug}']")).ToHaveTextAsync(displayName);
         var row = installed.Locator("tbody tr").Filter(new() { HasText = displayName });
         await Expect(row).ToContainTextAsync(version);
