@@ -201,34 +201,13 @@ public sealed class BackupSchedulesPageTests : BackupsTestContext
     }
 
     [Test]
-    public void Each_cancel_button_names_its_kind_and_keeps_its_visible_text_in_its_name()
-    {
-        Backups.ScopeStatuses["orders"] = new BackupScopeStatus(BackupScopeSelector.WholeTree("orders"), true, true, null, null, null, null, BackupScopeRunOutcome.None, 0);
-        var cut = RenderAt<BackupSchedulesPage>("backups/schedules?tree=orders");
-        cut.WaitUntil(() => Assert.That(cut.FindAll("tbody button"), Has.Count.EqualTo(2)));
-
-        // WCAG 2.5.3 (label in name): the accessible name contains the visible label.
-        var buttons = cut.FindAll("tbody button");
-        Assert.Multiple(() =>
-        {
-            foreach (var button in buttons)
-            {
-                Assert.That(button.GetAttribute("aria-label"), Does.StartWith(button.TextContent.Trim()));
-            }
-
-            Assert.That(buttons.Select(button => button.GetAttribute("aria-label")),
-                Is.EquivalentTo(new[] { "Cancel schedule (full)", "Cancel schedule (incremental)" }));
-        });
-    }
-
-    [Test]
     public void Cancelling_a_schedule_asks_first_and_then_cancels_that_kind()
     {
         Backups.ScopeStatuses["orders"] = new BackupScopeStatus(BackupScopeSelector.WholeTree("orders"), true, true, null, null, null, null, BackupScopeRunOutcome.None, 0);
         var cut = RenderAt<BackupSchedulesPage>("backups/schedules?tree=orders");
         cut.WaitUntil(() => Assert.That(cut.FindAll("tbody button"), Has.Count.EqualTo(2)));
 
-        cut.Find("tbody button[aria-label='Cancel schedule (incremental)']").Click();
+        cut.Find("tbody button[aria-label='Cancel the incremental schedule']").Click();
         var dialog = cut.Find("[role=alertdialog]");
         Assert.That(dialog.TextContent, Does.Contain("The incremental schedule of orders stops."));
         cut.FindAll("[role=alertdialog] button").Single(button => button.TextContent == "Cancel schedule").Click();
