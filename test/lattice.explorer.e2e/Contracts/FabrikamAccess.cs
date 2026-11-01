@@ -27,25 +27,59 @@ public static class FabrikamAccess
     /// <summary>globex's quotas (T1): 2 trees.</summary>
     public static TenantQuotasDescriptor GlobexQuotas { get; } = new() { MaxTreeCount = 2 };
 
-    /// <summary>What a tenant administrator's platform rule allows on its tenant's trees (T1).</summary>
-    public const LatticeOperation TenantAdministration =
+    /// <summary>
+    /// What a tenant administrator's tenant-tier rule allows on every tree of the tenant (T1): the
+    /// data-plane operations, the only ones a tenant rule may carry (<c>LatticeAuthOperations.All</c>).
+    /// </summary>
+    public const LatticeOperation TenantDataAdministration =
         LatticeOperation.Read | LatticeOperation.RangeRead | LatticeOperation.Write | LatticeOperation.Delete
         | LatticeOperation.BulkLoad | LatticeOperation.Admin | LatticeOperation.SchemaAdmin | LatticeOperation.Backup
-        | LatticeOperation.Restore | LatticeOperation.Replication | LatticeOperation.TreeLifecycle;
+        | LatticeOperation.Restore;
 
     /// <summary>
-    /// T1's platform rules, one record per governed tree: each tenant administrator's
-    /// administration of <c>t/{tenant}/*</c>, and the scopeless Telemetry capability, which can
-    /// only be granted cluster-wide; and <c>dee-default-read</c>, dee reading the all-trees tier.
-    /// Apps are installed into a tenant by the platform operator (T7), so no rule grants App install.
+    /// What a tenant administrator's platform rule allows on each named tree of the tenant (T1):
+    /// the platform-only operations a tenant rule cannot carry.
+    /// </summary>
+    public const LatticeOperation PlatformTreeAdministration = LatticeOperation.TreeLifecycle | LatticeOperation.Replication;
+
+    /// <summary>The four acme trees the harness seeds in T2, modelling acme's existing use, so acme reaches its 5-tree quota.</summary>
+    public static IReadOnlyList<string> AcmeExistingTrees { get; } = ["acme-orders", "acme-invoices", "acme-returns", "acme-suppliers"];
+
+    /// <summary>
+    /// Every acme tree a T chapter creates or administers, by acme's name: the four existing
+    /// trees, the inventory and the over-quota tree (T2). The platform names each one in its own
+    /// rule record, since a platform rule can't target <c>t/acme/*</c>.
+    /// </summary>
+    public static IReadOnlyList<string> AcmeAdministeredTrees { get; } =
+        [.. AcmeExistingTrees, Names.Trees.AcmeInventory, Names.Trees.AcmeOverQuota];
+
+    /// <summary>
+    /// T1's platform rules, one record per governed tree. The platform refuses a tenant-wide
+    /// <c>t/{tenant}/*</c> rule (tenant-wide rules belong to the tenant tier), and the tenant tier
+    /// refuses Telemetry, Replication, TreeLifecycle and AppInstall (platform-only). So ada holds
+    /// TreeLifecycle and Replication on each named acme tree, and both tenant admins hold the
+    /// scopeless Telemetry capability, which can only be granted cluster-wide.
+    /// <c>dee-default-read</c> lets dee read the all-trees tier. Apps are installed into a tenant by
+    /// the platform operator (T7), so no rule grants App install. globex names no trees, so gus
+    /// holds no per-tree platform rule.
     /// </summary>
     public static IReadOnlyList<PinnedRule> T1Rules { get; } =
     [
-        User(Names.Rules.AcmeAdminsPlatform, Personas.Ada.Id, TenantWide(Names.Tenants.Acme), TenantAdministration),
+        .. AcmeAdministeredTrees.Select(tree =>
+            User(Names.Rules.AcmeAdminsPlatform, Personas.Ada.Id, Qualified(Names.Tenants.Acme, tree), PlatformTreeAdministration)),
         User(Names.Rules.AcmeAdminsPlatform, Personas.Ada.Id, LatticeScope.ClusterWideTreeId, LatticeOperation.Telemetry),
-        User(Names.Rules.GlobexAdminsPlatform, Personas.Gus.Id, TenantWide(Names.Tenants.Globex), TenantAdministration),
         User(Names.Rules.GlobexAdminsPlatform, Personas.Gus.Id, LatticeScope.ClusterWideTreeId, LatticeOperation.Telemetry),
         User(Names.Rules.DeeDefaultRead, Personas.Dee.Id, LatticeScope.ClusterWideTreeId, ContosoAccess.ReadOps),
+    ];
+
+    /// <summary>
+    /// T1's tenant-tier rules, each authored by its tenant's own administrator: the
+    /// administrator's data-plane operations on every tree of the tenant.
+    /// </summary>
+    public static IReadOnlyList<(string Tenant, string Admin, TenantRuleDraft Rule)> T1TenantRules { get; } =
+    [
+        (Names.Tenants.Acme, Personas.Ada.Id, AdminRule(Names.Rules.AcmeAdmins, Personas.Ada.Id)),
+        (Names.Tenants.Globex, Personas.Gus.Id, AdminRule(Names.Rules.GlobexAdmins, Personas.Gus.Id)),
     ];
 
     /// <summary>T3's platform rule: the receiving user gia reads, and finally writes, acme's inventory.</summary>
@@ -62,9 +96,6 @@ public static class FabrikamAccess
         Operations = ContosoAccess.ReadOps,
         Effect = LatticeEffect.Allow,
     };
-
-    /// <summary>The four acme trees the harness seeds in T2, modelling acme's existing use, so acme reaches its 5-tree quota.</summary>
-    public static IReadOnlyList<string> AcmeExistingTrees { get; } = ["acme-orders", "acme-invoices", "acme-returns", "acme-suppliers"];
 
     /// <summary>T3's rejected offer: all of acme, read.</summary>
     public const string RejectedGrantScope = "t/" + Names.Tenants.Acme;
@@ -104,7 +135,15 @@ public static class FabrikamAccess
     /// <param name="name">The tenant-local tree name.</param>
     public static string Qualified(string tenant, string name) => $"t/{tenant}/{name}";
 
-    private static string TenantWide(string tenant) => $"t/{tenant}/*";
+    private static TenantRuleDraft AdminRule(string ruleId, string userId) => new()
+    {
+        RuleId = ruleId,
+        SubjectId = userId,
+        SubjectKind = TenantSubjectKind.User,
+        ScopeKind = TenantRuleScopeKind.TenantWide,
+        Operations = TenantDataAdministration,
+        Effect = LatticeEffect.Allow,
+    };
 
     private static PinnedRule User(string ruleId, string userId, string treeId, LatticeOperation operations) =>
         new(ruleId, LatticeSubjectSelector.User(userId), treeId, operations);

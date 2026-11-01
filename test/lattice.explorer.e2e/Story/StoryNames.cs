@@ -314,16 +314,28 @@ public static class StoryNames
 
             /// <summary>Acme's inventory as the platform names it.</summary>
             public const string AcmeInventoryQualified = "t/" + Tenants.Acme + "/" + AcmeInventory;
+
+            /// <summary>The sixth tree ada tries in T2: authorized by its platform rule, so its creation is refused in quota terms.</summary>
+            public const string AcmeOverQuota = "acme-forecasts";
         }
 
         /// <summary>Platform rules.</summary>
         public static class Rules
         {
-            /// <summary>Acme's admins' platform rule on <c>t/acme/*</c> (T1).</summary>
+            /// <summary>
+            /// Acme's admin's platform rule (T1): one record per named acme tree for the
+            /// platform-only operations, and one on <c>*</c> for Telemetry.
+            /// </summary>
             public const string AcmeAdminsPlatform = "acme-admins-platform";
 
-            /// <summary>Globex's admins' platform rule on <c>t/globex/*</c> (T1).</summary>
+            /// <summary>Globex's admin's platform rule (T1): Telemetry on <c>*</c>.</summary>
             public const string GlobexAdminsPlatform = "globex-admins-platform";
+
+            /// <summary>Acme's tenant-tier rule (T1, authored by ada): the data-plane operations on every acme tree.</summary>
+            public const string AcmeAdmins = "acme-admins";
+
+            /// <summary>Globex's tenant-tier rule (T1, authored by gus): the data-plane operations on every globex tree.</summary>
+            public const string GlobexAdmins = "globex-admins";
 
             /// <summary>The default-tenant user's read rule (T1).</summary>
             public const string DeeDefaultRead = "dee-default-read";

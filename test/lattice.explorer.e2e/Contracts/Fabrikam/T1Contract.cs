@@ -8,8 +8,9 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts.Fabrikam;
 /// Tenant onboarding (T1, #5393), established as hal. Produces <c>acme</c> (admin ada; quotas
 /// <see cref="FabrikamAccess.AcmeQuotas"/>; allowed west and east; resident and Online in west)
 /// and <c>globex</c> (admin gus; <see cref="FabrikamAccess.GlobexQuotas"/>; allowed and resident
-/// in west), and the platform rules <see cref="FabrikamAccess.T1Rules"/>. T5 moves acme east and
-/// deletes globex.
+/// in west), the platform rules <see cref="FabrikamAccess.T1Rules"/>, and each tenant admin's
+/// tenant-tier rule <see cref="FabrikamAccess.T1TenantRules"/>, authored by that admin (a
+/// tenant-wide rule belongs to the tenant tier). T5 moves acme east and deletes globex.
 /// </summary>
 public sealed class T1Contract() : ChapterContract("T1")
 {
@@ -23,6 +24,11 @@ public sealed class T1Contract() : ChapterContract("T1")
         foreach (var rule in FabrikamAccess.T1Rules)
         {
             await ContractCalls.PutRuleAsync(facades.Auth, rule);
+        }
+
+        foreach (var (tenant, admin, rule) in FabrikamAccess.T1TenantRules)
+        {
+            await ContractFacades.Of(context, admin, tenant: tenant).TenantAdmin.PutRuleAsync(tenant, rule);
         }
     }
 
@@ -48,6 +54,19 @@ public sealed class T1Contract() : ChapterContract("T1")
         foreach (var rule in FabrikamAccess.T1Rules)
         {
             Require(await ContractCalls.RuleHoldsAsync(facades.Auth, rule), $"platform rule {rule.RuleId} on {rule.TreeId} allows {rule.Operations} to {rule.Subject.Id}");
+        }
+
+        foreach (var (tenant, admin, draft) in FabrikamAccess.T1TenantRules)
+        {
+            if (moved && tenant == Names.Tenants.Globex)
+            {
+                continue;
+            }
+
+            var rule = await ContractFacades.Of(context, admin, tenant: tenant).TenantAdmin.GetRuleAsync(tenant, draft.RuleId);
+            Require(
+                rule is { ScopeKind: TenantRuleScopeKind.TenantWide } && rule.SubjectId == admin && (rule.Operations & draft.Operations) == draft.Operations,
+                $"tenant rule {draft.RuleId} in {tenant} allows {draft.Operations} to {admin} on every {tenant} tree");
         }
     }
 
