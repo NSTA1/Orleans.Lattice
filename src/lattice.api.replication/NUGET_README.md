@@ -24,7 +24,7 @@ costs nothing until it is registered.
 - **Mode fixed at enable time.** A tree's merge mode is chosen when it is first
   enabled and cannot be changed in place; the sanctioned path to change a mode is
   disable, then re-enable under the new mode (naming a bootstrap source cluster
-  re-seeds a tree that already holds data).
+  re-seeds the tree from that cluster's snapshot).
 
 ## Security
 
