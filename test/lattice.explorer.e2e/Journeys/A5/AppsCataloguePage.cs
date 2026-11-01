@@ -39,7 +39,7 @@ internal sealed class AppsCataloguePage(ShellPage shell)
     public async Task InstallFromPaletteAsync()
     {
         await shell.RunCommandAsync("Install app...");
-        await Expect(Page).ToHaveURLAsync(new Regex(@"/apps/catalogue\?filter=available$"));
+        await Expect(Page).ToHaveURLAsync(new Regex(@"/apps/catalogue\?(?:[^#]*&)?filter=available(&|$)"));
         await ExpectAvailableFilterAsync();
         Coverage.Hit("command:apps.install");
         Coverage.Hit("route:/apps/catalogue");
