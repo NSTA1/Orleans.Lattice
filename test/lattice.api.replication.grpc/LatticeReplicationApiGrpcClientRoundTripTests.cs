@@ -88,6 +88,31 @@ public sealed class LatticeReplicationApiGrpcClientRoundTripTests
     }
 
     [Test]
+    public async Task ProbeCapabilitiesAsync_round_trips_request_and_result()
+    {
+        var (client, control) = CreateClient();
+        control.ProbeCapabilitiesAsync("orders", Arg.Any<CancellationToken>())
+            .Returns(new ReplicationCapabilities("t/acme/orders", canConfigure: true));
+
+        var result = await client.ProbeCapabilitiesAsync("orders");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.TreeId, Is.EqualTo("t/acme/orders"));
+            Assert.That(result.CanConfigure, Is.True);
+        });
+        await control.Received(1).ProbeCapabilitiesAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void ProbeCapabilitiesAsync_rejects_an_empty_tree_id()
+    {
+        var (client, _) = CreateClient();
+
+        Assert.That(async () => await client.ProbeCapabilitiesAsync(string.Empty), Throws.ArgumentException);
+    }
+
+    [Test]
     public async Task GetReplicationConfigAsync_round_trips_entries_and_nullable_mode()
     {
         var (client, control) = CreateClient();

@@ -1,5 +1,6 @@
 using Bunit;
 using Orleans.Lattice.Explorer.Core.Authentication;
+using Orleans.Lattice.Explorer.Core.Connection;
 using Orleans.Lattice.Explorer.UI.Session;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Session;
@@ -104,6 +105,46 @@ public sealed class SessionOverlayTests : SessionTestContext
         {
             Assert.That(State.Overlay, Is.EqualTo(SessionOverlayKind.None));
             Assert.That(cut.FindComponents<ConnectionDialog>(), Is.Empty);
+        });
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void On_a_read_only_head_connection_details_opens_the_configured_endpoint_read_only_and_dismissable(bool escape)
+    {
+        UseReadOnlyEndpoint();
+        Explorer.Configured(RemoteConfiguration("https://cluster.example:8443"));
+        StateConnection.Seed(new LatticeConnectionStatus(LatticeConnectionState.Connected, "https://cluster.example:8443", null));
+        var overlay = Render<SessionOverlay>();
+        var indicator = Render<ConnectionIndicator>();
+
+        indicator.Find("[aria-haspopup=dialog]").Click();
+
+        var dialog = overlay.Find("[role=dialog]");
+        Assert.Multiple(() =>
+        {
+            Assert.That(overlay.FindComponent<ConnectionDialog>().Instance.AllowCancel, Is.True);
+            Assert.That(dialog.QuerySelector("h2")!.TextContent, Is.EqualTo("Cluster connection"));
+            Assert.That(dialog.QuerySelector(".lt-dl__value--mono")!.TextContent, Is.EqualTo("https://cluster.example:8443"));
+            Assert.That(dialog.QuerySelectorAll("form,input,textarea,select"), Is.Empty, "a read-only head offers nothing to edit");
+            Assert.That(dialog.QuerySelectorAll("button").Select(button => button.TextContent.Trim()), Is.EqualTo(new[] { "Close" }));
+        });
+
+        if (escape)
+        {
+            overlay.Find("[role=dialog]").KeyDown("Escape");
+        }
+        else
+        {
+            overlay.FindAll("[role=dialog] button").Single(button => button.TextContent.Trim() == "Close").Click();
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(State.Overlay, Is.EqualTo(SessionOverlayKind.None));
+            Assert.That(overlay.FindAll("[role=dialog]"), Is.Empty);
+            Assert.That(Explorer.Applied, Is.Empty, "dismissing the details never saves");
+            Assert.That(Tester.Tested, Is.Empty, "a read-only head never tests an address");
         });
     }
 

@@ -179,7 +179,19 @@ and a commit that must rebuild a lost shadow re-checks the sources first. Within
 bounds a restore grants the peer nothing its replication stream does not already
 hold. A saga this cluster coordinates itself runs as the operator, whose identity
 flows with the loopback call, and is authorized as usual
-([#5443](https://github.com/NSTA1/Orleans.Lattice/issues/5443)).
+([#5443](https://github.com/NSTA1/Orleans.Lattice/issues/5443)). Once it is decided,
+its commit or abort can be redelivered with no identity at all - by the coordinator's
+keepalive reminder or the participant's fence expiry - so a participant that built
+the saga's shadow in an authorized prepare carries that prepare's authority into the
+commit or abort, which acts only on that shadow. It does so only when this cluster's
+own coordinator has durably recorded that decision, which the participant reads
+from the coordinator's persisted state rather than from the request; one that lost
+its cached shadow rebuilds as the caller. A commit that names this cluster as its
+coordinator before that coordinator has decided to commit - or when its decision
+cannot be read - is refused before any cutover, whoever sends it. A cutover that
+fails releases the tree's local writes
+before the decision is redelivered, so it never leaves the tree write-fenced
+([#5506](https://github.com/NSTA1/Orleans.Lattice/issues/5506)).
 
 Turning off authentication or origin binding does not authorize these identity-sensitive
 operations: tenant snapshot and saga RPCs remain denied. An mTLS-only setup below

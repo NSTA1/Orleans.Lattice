@@ -92,4 +92,65 @@ public sealed partial class AddressLineTests
 
         Assert.That(cut.Find("[role='search']").ClassList, Does.Not.Contain("lt-shell-address-line--sheet"));
     }
+
+    [Test]
+    public void Until_the_band_is_measured_both_forms_render_for_the_breakpoint_layer_to_choose()
+    {
+        // #5465: the prerender and the live circuit's first renders do not know the band,
+        // so a phone must not paint the wide chain and prompt, nor a desktop the compact ones.
+        var cut = RenderLine(Location("/data/a/crm/orders"), pending: true);
+
+        var forms = cut.FindAll(".lt-shell-address-line__form");
+        Assert.Multiple(() =>
+        {
+            Assert.That(forms, Has.Count.EqualTo(2));
+            Assert.That(forms[0].ClassList, Does.Contain("lt-only-compact"));
+            Assert.That(forms[0].QuerySelector(".lt-shell-address-line__compact-chain"), Is.Not.Null);
+            Assert.That(forms[1].ClassList, Does.Contain("lt-medium-up"));
+            Assert.That(forms[1].QuerySelectorAll(".lt-chain__text").Select(node => node.TextContent), Is.EqualTo(new[] { "Home", "data", "a", "crm", "orders" }));
+            Assert.That(
+                cut.FindAll(".lt-shell-address-line__hint").Select(hint => (hint.TextContent, hint.ClassList.Contains("lt-only-compact"), hint.ClassList.Contains("lt-medium-up"))),
+                Is.EqualTo(new[] { ("Go to or search", true, false), ("Go to an address, search, or type > for a command", false, true) }));
+            Assert.That(cut.FindAll("kbd").Select(key => key.ClassList.Contains("lt-medium-up")), Is.EqualTo(new[] { true, true }));
+        });
+    }
+
+    [Test]
+    public void Until_the_band_is_measured_a_short_address_draws_one_untagged_chain()
+    {
+        var cut = RenderLine(Location("/data"), pending: true);
+
+        var forms = cut.FindAll(".lt-shell-address-line__form");
+        Assert.Multiple(() =>
+        {
+            Assert.That(forms, Has.Count.EqualTo(1), "nothing to elide, so both bands draw the same chain");
+            Assert.That(forms[0].ClassList, Is.EquivalentTo(new[] { "lt-shell-address-line__form" }));
+            Assert.That(cut.FindAll(".lt-shell-address-line__hint"), Has.Count.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public void The_more_node_opens_the_full_chain_before_the_band_is_measured()
+    {
+        var cut = RenderLine(Location("/data/a/crm/orders"), pending: true);
+
+        cut.Find(".lt-shell-address-line__more").Click();
+
+        Assert.That(cut.Find(".lt-shell-address-line__full").QuerySelectorAll(".lt-spine__text").Select(node => node.TextContent),
+            Is.EqualTo(new[] { "Home", "data", "a", "crm", "orders" }));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void A_measured_band_draws_one_untagged_form(bool compact)
+    {
+        var cut = RenderLine(Location("/data/a/crm/orders"), compact);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll(".lt-shell-address-line__form").Select(form => form.ClassName), Is.EqualTo(new[] { "lt-shell-address-line__form" }));
+            Assert.That(cut.FindAll("[class*='lt-only-compact'], [class*='lt-medium-up']"), Is.Empty);
+            Assert.That(cut.FindAll(".lt-shell-address-line__hint"), Has.Count.EqualTo(1));
+        });
+    }
 }

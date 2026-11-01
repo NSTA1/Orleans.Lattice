@@ -78,6 +78,14 @@ public sealed partial class LatticeAdminGrainWalMoveTests
         /// <summary>When set, the append call with this 1-based number fails once, before anything lands.</summary>
         public int? FailOnAppendCall { get; set; }
 
+        /// <summary>
+        /// When set, <see cref="ReadEncodedAsync"/> serves only offsets at or below
+        /// this value, modelling a provider whose trailing batch is durable and
+        /// counted by <see cref="GetHighestOffsetAsync"/> but not yet readable, as
+        /// an Azure Table batch is until its phase-2 manifest commit lands.
+        /// </summary>
+        public long? ReadableThrough { get; set; }
+
         private int _appendCalls;
 
         public void Seed(params long[] offsets)
@@ -90,6 +98,18 @@ public sealed partial class LatticeAdminGrainWalMoveTests
         }
 
         public IReadOnlyCollection<long> Offsets => _offsets;
+
+        /// <summary>The visibility-barrier and highest-offset calls on this provider, in order.</summary>
+        public List<string> Calls { get; } = new();
+
+        /// <summary>When set, the visibility barrier fails with this.</summary>
+        public Exception? VisibilityFault { get; set; }
+
+        public Task WaitForAppendVisibilityAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+        {
+            Calls.Add("barrier");
+            return VisibilityFault is { } fault ? Task.FromException(fault) : Task.CompletedTask;
+        }
 
         public Task AppendBatchAsync(
             string treeId, int shardIndex, IReadOnlyList<WalEntry> entries, CancellationToken cancellationToken)
@@ -132,7 +152,8 @@ public sealed partial class LatticeAdminGrainWalMoveTests
             string treeId, int shardIndex, long fromOffsetExclusive, int maxEntries,
             IWalRecordEncoder encoder, CancellationToken cancellationToken)
         {
-            var page = _offsets.Where(o => o > fromOffsetExclusive).Take(maxEntries).ToArray();
+            var readable = ReadableThrough ?? long.MaxValue;
+            var page = _offsets.Where(o => o > fromOffsetExclusive && o <= readable).Take(maxEntries).ToArray();
             var segments = page.Select(_ => new ArraySegment<byte>([1])).ToArray();
             return Task.FromResult(new WalShardEncodedPage
             {
@@ -150,9 +171,12 @@ public sealed partial class LatticeAdminGrainWalMoveTests
         }
 
         public Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
-            => Task.FromResult(HighestOverrides.Count > 0
+        {
+            Calls.Add("highest");
+            return Task.FromResult(HighestOverrides.Count > 0
                 ? HighestOverrides.Dequeue()
                 : _highWater);
+        }
 
         public Task<long> GetLowestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
             => Task.FromResult(_offsets.Count == 0 ? -1 : _offsets.Min);

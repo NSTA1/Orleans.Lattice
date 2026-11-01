@@ -139,8 +139,12 @@ before calling `AddLatticeReplication`.
   Before the drain, once the import is recorded (and once the tree is
   registered, so its lineage stamp cannot reset anything mid-drain), the
   receiver installs `(S, H)` as a durable **bootstrap drop floor** on its
-  high-water-mark grain, provided the frontier was read under the
-  export's opening lineage; otherwise it clears any earlier floor. The
+  high-water-mark grain, provided the tree merges last-writer-wins and the
+  frontier was read under the export's opening lineage; otherwise it clears
+  any earlier floor. A tree of any other merge mode (an OR-Map such as
+  `sys-replication-config`, an OR-Set, a counter) has no foreign deletes to
+  reconcile, so it installs no floor and owes no reconcile retry, and its
+  completed export answers a sender's re-seed request (#5534). The
   floor starts **provisional**: a delivery below it - a third cluster's
   write still in flight, a dead-letter replay, or a causal-buffer drain -
   is deferred (`outcome=bootstrap-floor-deferred`), not acknowledged,
@@ -687,6 +691,14 @@ Failed -> IncrementalHandoff (automatic retry after a shadow copy was published
   pivots to `Failed` as the terminal outcome. Set
   `BootstrapTransientRetry.MaxAttempts = 1` to disable retries
   entirely (fail-fast).
+- **A source redirected mid-export is retried, not failed.** An export
+  reads the one physical copy the tree resolved to when it opened. If a
+  restore, resize or other alias move fences that copy while the export
+  streams, the sender ends the export with the same transient deferral
+  (gRPC `Unavailable`) the cross-tree export gate uses, rather than an
+  `Internal` fault, so the drain's bounded retry re-opens a fresh export
+  that resolves the tree's current copy
+  ([#5537](https://github.com/NSTA1/Orleans.Lattice/issues/5537)).
 - **A deferred entry is never skipped.** The applier can defer an entry
   (`ApplyResult.Deferred`): a cross-cluster restore saga's receive fence
   has paused inbound apply for the tree, or the entry duplicates one still
@@ -1369,7 +1381,11 @@ peer off the log ([forced gap](replication-drivers.md#forced-gap-a-peer-taken-of
 asks for a re-seed past an export epoch. The receiver records the
 request on its bootstrap coordinator before it starts (or joins) the
 bootstrap, and records it even with `AutoBootstrapOnFallOffLog` off,
-so an operator's bootstrap serves it. While the request is recorded
+so an operator's bootstrap serves it. The sender repeats the request on every push
+until it sees the completion, so a repeat at or below the request the
+running drain already consumed is not recorded again: re-recording it
+would withhold the completion and start another re-seed for ever
+(#5534). While the request is recorded
 the sender withholds every saga record, so a drain whose export
 postdates the request knows every pending bucket it holds from that
 sender was staged before the re-seed or re-staged by the export.
