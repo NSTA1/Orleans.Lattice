@@ -242,6 +242,24 @@ public partial class ClusterOrphansPage : IDisposable
 
     private void OnWatchChanged() => _ = InvokeAsync(StateHasChanged);
 
+    // The re-audit that follows replaces the repair's findings on the page, so the toast is
+    // the only place a refused leaf or an unjudged region is ever reported to the operator.
+    internal static string RepairFinishedMessage(ClusterOrphanOperationResult totals)
+    {
+        var message = $"Repair finished: {ClusterFormat.Plural(totals.Repaired, "leaf", "leaves")} unspliced";
+        if (totals.Refused > 0)
+        {
+            message += $", {ClusterFormat.Count(totals.Refused)} refused";
+        }
+
+        if (totals.Gaps > 0)
+        {
+            message += $", {ClusterFormat.Plural(totals.Gaps, "region", "regions")} not judged";
+        }
+
+        return message + ". Auditing again.";
+    }
+
     private void OnWatchFinished(LatticeOperationStatus status) => _ = InvokeAsync(async () =>
     {
         if (_lifetime.IsLeft)
@@ -257,7 +275,7 @@ public partial class ClusterOrphansPage : IDisposable
                 _watch.Clear();
                 if (repair)
                 {
-                    Toasts.Show($"Repair finished: {ClusterFormat.Plural(_totals.Repaired, "leaf", "leaves")} unspliced. Auditing again.", LtToastTone.Success);
+                    Toasts.Show(RepairFinishedMessage(_totals), _totals is { Refused: 0, Gaps: 0 } ? LtToastTone.Success : LtToastTone.Warning);
                     StateHasChanged();
                     await StartOperationAsync(repair: false);
                 }

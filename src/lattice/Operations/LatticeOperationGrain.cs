@@ -497,8 +497,16 @@ internal sealed class LatticeOperationGrain(
     // collection a caller hands in: a same-silo call skips the [Immutable] copy,
     // and the record must not share an instance the sender could still change,
     // nor hand readers one they could write into.
+    //
+    // It must also be a type every grain-storage serializer can rebuild. A
+    // collection expression ([.. values]) typed as IReadOnlyList<string> is a
+    // compiler-synthesized <>z__ReadOnlyArray (or <>z__ReadOnlySingleElementList
+    // for one element), whose type name the JSON storage serializer records and
+    // then cannot construct, so the record became unreadable after any
+    // deactivation (issue #5579). ReadOnlyCollection<T> is read-only and is
+    // rebuilt by both the JSON and the Orleans serializers.
     private static IReadOnlyList<string> Copy(IReadOnlyList<string> values) =>
-        values.Count == 0 ? [] : [.. values];
+        values.Count == 0 ? Array.Empty<string>() : Array.AsReadOnly(values.ToArray());
 
     private static bool SameScope(LatticeOperationRecord existing, LatticeOperationBeginRequest request)
     {

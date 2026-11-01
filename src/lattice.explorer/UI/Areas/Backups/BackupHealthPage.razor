@@ -75,7 +75,7 @@ else if (FocusedId is { } focused)
             {
                 <div class="lt-backups-last-run" role="status" aria-live="polite">
                     <LtOperationProgress Status="@check" Label="Health check progress" PhaseName="BackupClusterOperation.PhaseName" />
-                    <p class="lt-backups-note"><a class="lt-backups-link" href="@Href(BackupsAddresses.Operation(check.OperationId))">Open the check's page</a></p>
+                    <p class="lt-backups-note"><a class="lt-backups-link lt-backups-link--standalone" href="@Href(BackupsAddresses.Operation(check.OperationId))">Open the check's page</a></p>
                 </div>
             }
             @if (_checkError is { } checkError)
@@ -115,7 +115,7 @@ else if (FocusedId is { } focused)
             </section>
         }
     }
-    <p class="lt-backups-note"><a class="lt-backups-link" href="@Href(BackupsAddresses.Health)">All backups' health</a></p>
+    <p class="lt-backups-note"><a class="lt-backups-link lt-backups-link--standalone" href="@Href(BackupsAddresses.Health)">All backups' health</a></p>
 }
 else if (_listError is { } listError)
 {

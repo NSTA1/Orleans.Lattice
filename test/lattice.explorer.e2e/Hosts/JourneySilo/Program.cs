@@ -168,11 +168,14 @@ builder.Host.UseOrleans(silo =>
     {
         var secondary = new AzureTableWalStorageOptions();
         storage.ConfigureWal(secondary, (config["Wal:TableName"] ?? "OrleansLatticeWal") + "Secondary");
-        return new AzureTableWalStorageProvider(
+        IWalStorageProvider provider = new AzureTableWalStorageProvider(
             Options.Create(secondary),
             services.GetRequiredService<Orleans.Serialization.Serializer<WalRecord>>(),
             services.GetService<IWalSaturationSignal>(),
             services.GetServices<ILatticeCompressor>());
+
+        // A12 holds this provider's writes for one tree to stop a WAL move before its flip.
+        return JourneyHostEnvironment.FaultsEnabled ? new JourneyGatedWalStorageProvider(provider) : provider;
     });
 
     silo.AddLatticeReplication(options =>
@@ -237,6 +240,14 @@ builder.Host.UseOrleans(silo =>
     silo.AddLatticeBackup();
     silo.AddLatticeBackupAzureBlob(options =>
         backupStorage.ConfigureBackupSink(options, config["Backup:ContainerName"] ?? LatticeBackupAzureBlobOptions.DefaultContainerName));
+    if (JourneyHostEnvironment.FaultsEnabled)
+    {
+        // Fault seam: the harness can hold the backup store's artifact writes, as a
+        // congested storage account would, so a capture is still running when a
+        // journey cancels it (#5377). Off unless the seams are on.
+        JourneyBackupWriteHold.Decorate(silo.Services);
+    }
+
     silo.AddLatticeBackupApi();
 
     if (backupPrimary)

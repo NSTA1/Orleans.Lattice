@@ -1,6 +1,7 @@
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.UI.Areas.Backups;
 using Orleans.Lattice.Explorer.UI.Transport;
+using Orleans.Lattice.Testing.Hygiene;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Backups;
 
@@ -170,5 +171,36 @@ public sealed class BackupsHelperTests
             Assert.That(() => BackupsInterop.FileNameFor("", "a"), Throws.ArgumentException);
             Assert.That(() => BackupsInterop.FileNameFor("b", ""), Throws.ArgumentException);
         });
+    }
+
+    [Test]
+    public void A_stacked_list_of_links_is_tall_enough_to_space_its_targets_24px_apart()
+    {
+        var css = File.ReadAllText(Path.Combine(HygieneRepository.FindRepoRoot(), "src", "lattice.explorer", "UI", "wwwroot", "backups", "lattice-backups.css"));
+
+        Assert.That(
+            DeclaresInSomeRule(css, ".lt-backups-list .lt-backups-link", @"min-block-size:\s*1\.5rem;"),
+            Is.True,
+            "An operation's result links stack in a list, so each needs a 24px row to meet WCAG 2.2 target size (axe target-size).");
+    }
+
+    [Test]
+    public void A_link_alone_on_its_line_is_a_24px_target()
+    {
+        var css = File.ReadAllText(Path.Combine(HygieneRepository.FindRepoRoot(), "src", "lattice.explorer", "UI", "wwwroot", "backups", "lattice-backups.css"));
+
+        Assert.That(
+            DeclaresInSomeRule(css, ".lt-backups-link--standalone", @"min-block-size:\s*1\.5rem;"),
+            Is.True,
+            "A link alone on its line is not inline in a sentence, so axe holds it to the 24px target size (WCAG 2.2).");
+    }
+
+    // True when a rule whose selector list names exactly selector declares a match of declaration.
+    private static bool DeclaresInSomeRule(string css, string selector, string declaration)
+    {
+        var uncommented = System.Text.RegularExpressions.Regex.Replace(css, @"/\*.*?\*/", string.Empty, System.Text.RegularExpressions.RegexOptions.Singleline);
+        return System.Text.RegularExpressions.Regex.Matches(uncommented, @"([^{}]+)\{([^}]*)\}")
+            .Any(rule => rule.Groups[1].Value.Split(',').Select(part => part.Trim()).Contains(selector)
+                && System.Text.RegularExpressions.Regex.IsMatch(rule.Groups[2].Value, declaration));
     }
 }

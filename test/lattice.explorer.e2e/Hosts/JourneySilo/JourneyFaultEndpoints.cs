@@ -1,3 +1,5 @@
+using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Explorer.EndToEnd.HostContract;
 using Orleans.Runtime;
 
@@ -64,6 +66,58 @@ internal static class JourneyFaultEndpoints
                 // The shard has no leaf holding rows to split; the harness tries the next one.
                 return Results.Conflict(new { reason = ex.Message });
             }
+        });
+
+        // Holds (or releases) this silo's backup artifact writes, as a congested backup
+        // account would, so a capture a journey starts is still running when it cancels it.
+        app.MapPost(Prefix + "/backup-writes", (bool held, int? seconds, JourneyBackupWriteHold hold) =>
+        {
+            if (held)
+            {
+                hold.Hold(TimeSpan.FromSeconds(Math.Clamp(seconds ?? 300, 1, 900)));
+            }
+            else
+            {
+                hold.Release();
+            }
+
+            return Results.Ok(new { held = hold.IsHeld });
+        });
+
+        // A12: hold, or release, the writes a WAL move makes to its target (the secondary
+        // provider) for one tree, on this silo. The harness calls every silo of the region.
+        app.MapPost(Prefix + "/wal-target", async (string tree, bool hold, IGrainFactory grains) =>
+        {
+            var physical = await grains.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).ResolveAsync(tree);
+            if (hold)
+            {
+                JourneyWalTargetGate.HoldTree(physical);
+            }
+            else
+            {
+                JourneyWalTargetGate.Release(physical);
+            }
+
+            return Results.Ok(new { tree = physical, held = JourneyWalTargetGate.IsHeld(physical) });
+        });
+
+        // A12: plant a WAL materialiser pin of one kind on a tree, or release one.
+        app.MapPost(Prefix + "/wal-pin", async (string tree, string kind, IGrainFactory grains) =>
+        {
+            try
+            {
+                return Results.Ok(new { consumerId = await grains.GetGrain<IJourneyWalPinGrain>(tree).PlantAsync(kind) });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { reason = ex.Message });
+            }
+        });
+
+        app.MapDelete(Prefix + "/wal-pin", async (string tree, string consumerId, IGrainFactory grains) =>
+        {
+            await grains.GetGrain<IJourneyWalPinGrain>(tree).ReleaseAsync(consumerId);
+            return Results.NoContent();
         });
     }
 }

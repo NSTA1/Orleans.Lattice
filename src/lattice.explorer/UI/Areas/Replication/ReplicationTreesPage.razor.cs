@@ -98,6 +98,29 @@ public partial class ReplicationTreesPage
     private bool CanSubmitEnable =>
         !_busy && _enableTree.Trim().Length > 0 && EnableTreeError is null && Enum.TryParse<LatticeMergeMode>(_enableMode, out _);
 
+    /// <summary>
+    /// How the tree picker judges its value: only a tree this cluster holds, until a bootstrap
+    /// source is named - then any id, because the bootstrap is how a tree this region does not
+    /// hold yet arrives from the source cluster.
+    /// </summary>
+    internal LtComboBoxMode EnableTreeMode =>
+        _enableTreeFixed || string.IsNullOrWhiteSpace(_enableBootstrap) ? LtComboBoxMode.PickExisting : LtComboBoxMode.Suggest;
+
+    /// <summary>
+    /// What the dialog says while an enable is in flight. A bootstrap waits for the source cluster
+    /// to answer, which can take a minute or more (#5560), so the page says so rather than leaving
+    /// a disabled button as the only sign of work.
+    /// </summary>
+    internal string EnablingStatus => string.IsNullOrWhiteSpace(_enableBootstrap)
+        ? $"Enabling replication for {_enableTree.Trim()}. Waiting for the cluster to record the enrolment."
+        : $"Enabling replication for {_enableTree.Trim()} and asking {_enableBootstrap.Trim()} for a snapshot. "
+          + $"This waits for {_enableBootstrap.Trim()} to answer, which can take a minute or more. "
+          + "You can close this dialog; stay on this page and a message reports the result.";
+
+    private string EnableTreeHint => EnableTreeMode == LtComboBoxMode.Suggest
+        ? "The logical tree id, such as orders. It need not exist here yet: the bootstrap brings it from the source cluster."
+        : "The logical tree id, such as orders.";
+
     /// <inheritdoc />
     public void Dispose()
     {

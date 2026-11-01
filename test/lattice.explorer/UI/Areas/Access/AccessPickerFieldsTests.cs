@@ -13,26 +13,45 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Access;
 /// Issue #3949: every Access field that names an existing tree, principal or
 /// rule is a type-ahead picker that offers the existing values, and a
 /// pick-existing field refuses a value that names nothing before anything is
-/// sent.
+/// sent - except a Tree field, which flags a tree not created yet and accepts it.
 /// </summary>
 [TestFixture]
 [FixtureLifeCycle(LifeCycle.InstancePerTestCase)]
 public sealed class AccessPickerFieldsTests : AccessTestContext
 {
     [Test]
-    public void Explain_offers_the_catalogues_trees_and_refuses_one_that_does_not_exist()
+    public void Explain_offers_the_catalogues_trees_and_asks_about_one_not_created_yet_with_a_flag()
     {
+        // Rules may govern a tree before it is created, so whether a subject may write
+        // the tree that creates it is a real question: it is asked, not refused.
         Services.UseTreeCatalogue("orders", "orders-archive", "billing");
         var cut = RenderAt<AccessExplainPage>("access/explain");
 
         Assert.That(SuggestionFields.Offers(cut, "Tree", "ord"), Is.EqualTo(new[] { "orders", "orders-archive" }));
 
         AccessForms.Type(cut, "Subject", "alice");
-        SuggestionFields.Box(cut, "Tree").Input("ordrs");
+        SuggestionFields.Box(cut, "Tree").Input("factory-orders");
+        SuggestionFields.Box(cut, "Tree").Blur();
+        cut.WaitUntil(() => Assert.That(SuggestionFields.FlagOf(cut, "Tree"), Is.EqualTo(AccessExplainPage.MissingTreeMessage("factory-orders"))));
+        Assert.That(SuggestionFields.ErrorOf(cut, "Tree"), Is.Null, "a tree not created yet is flagged, not refused");
+
         cut.Find("form.lt-access-form").Submit();
 
-        cut.WaitUntil(() => Assert.That(SuggestionFields.ErrorOf(cut, "Tree"), Is.EqualTo("No tree is named ordrs. Choose one from the list.")));
-        Assert.That(Admin.Calls, Does.Not.Contain(nameof(FakeAuthAdmin.ExplainAsync)));
+        cut.WaitUntil(() => Assert.That(Admin.Calls, Does.Contain(nameof(FakeAuthAdmin.ExplainAsync))));
+        Assert.That(Navigation.Uri, Does.Contain("tree=factory-orders"));
+    }
+
+    [Test]
+    public void Explain_flags_nothing_for_a_tree_that_exists()
+    {
+        Services.UseTreeCatalogue("orders", "billing");
+        var cut = RenderAt<AccessExplainPage>("access/explain");
+
+        SuggestionFields.Box(cut, "Tree").Input("billing");
+        SuggestionFields.Box(cut, "Tree").Blur();
+
+        cut.WaitUntil(() => Assert.That(SuggestionFields.ErrorOf(cut, "Tree"), Is.Null));
+        Assert.That(SuggestionFields.FlagOf(cut, "Tree"), Is.Null);
     }
 
     [Test]
