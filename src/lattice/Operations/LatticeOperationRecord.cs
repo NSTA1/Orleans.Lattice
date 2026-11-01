@@ -81,6 +81,14 @@ internal sealed record LatticeOperationRecord
     public bool IsTerminal => State is not (LatticeOperationState.Queued or LatticeOperationState.Running);
 
     /// <summary>The shared empty result map.</summary>
+    /// <remarks>
+    /// Read-only on purpose: the JSON grain-storage serializer populates a
+    /// member's existing value in place when that value is a mutable
+    /// collection, so a shared mutable default would be written into by every
+    /// read, and two members holding it would collide on its reference id and
+    /// fail the read (issue #5579).
+    /// </remarks>
     internal static readonly IReadOnlyDictionary<string, string> EmptyResult =
-        new Dictionary<string, string>(0, StringComparer.Ordinal);
+        new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(
+            new Dictionary<string, string>(0, StringComparer.Ordinal));
 }
