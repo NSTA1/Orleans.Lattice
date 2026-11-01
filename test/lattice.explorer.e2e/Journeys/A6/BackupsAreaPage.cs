@@ -275,7 +275,13 @@ internal sealed class BackupsAreaPage(PersonaSession session)
     /// <summary>The schedules table's row (or compact row) for a kind.</summary>
     /// <param name="kind">Full or Incremental.</param>
     public ILocator ScheduleRow(string kind) =>
-        Content.Locator("tr.lt-table__row, li.lt-table-list__row").Filter(new() { HasTextRegex = new Regex("^\\s*" + Regex.Escape(kind) + "\\b") });
+        // Anchored on the row header (or the compact row's primary text): a row's text runs its
+        // cells together with no separator ("FullNone-NeverNever"), so a word boundary after the
+        // kind never matches the whole row.
+        Content.Locator("tr.lt-table__row, li.lt-table-list__row").Filter(new()
+        {
+            Has = Page.Locator("th[scope='row'], .lt-compact-row__primary", new() { HasTextRegex = new Regex("^\\s*" + Regex.Escape(kind) + "\\s*$") }),
+        });
 
     /// <summary>Registers or changes a schedule of the shown tree, and waits for the page to confirm it.</summary>
     /// <param name="kind">Full or Incremental.</param>
