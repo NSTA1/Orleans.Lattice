@@ -2784,7 +2784,7 @@ internal sealed partial class BPlusLeafGrain(
             {
                 await PersistAsync();
                 treeIdJustSet = true;
-                _liveAdvanceBorn = !reCreatedFromPurge;
+                _liveAdvanceBorn = true /* PERTURBATION P4 (red-proof, reverted) */;
             }
             catch
             {

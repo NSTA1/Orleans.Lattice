@@ -221,7 +221,7 @@ internal sealed partial class BPlusLeafGrain
     /// </param>
     private bool IsLiveAdvanceQuiescent(bool withinDrive) =>
         !_liveAdvancePoisoned
-        && _liveAppendsUnapplied == 0
+        // PERTURBATION P1 (red-proof, reverted): the unapplied-count guard is gone.
         && _liveOwnHigh is not null
         && state.State.TreeId is { Length: > 0 }
         // The barrier a data operation would wait on is clear: the replay has
@@ -232,9 +232,8 @@ internal sealed partial class BPlusLeafGrain
         && (_replayBarrierSatisfied || !_replayBarrierArmed)
         && !_replayBarrierRetired
         && (withinDrive || !_starvationDriveInFlight)
-        && !_warmRescueInFlight
-        && (_pendingTx is null || _pendingTx.Count == 0)
-        && (_pendingTxDeltas is null || _pendingTxDeltas.Count == 0);
+        && !_warmRescueInFlight;
+        // PERTURBATION P2 (red-proof, reverted): the pending-prepare guard is gone.
 
     /// <summary>
     /// Advances each partition's checkpoint to the highest offset this activation's
@@ -263,13 +262,14 @@ internal sealed partial class BPlusLeafGrain
             }
 
             var current = GetCurrentCheckpointForPartition(p);
-            if (target <= current
-                || (!_liveAdvanceBorn && current < _liveOwnLow![p] - 1))
+            // PERTURBATION P3 (red-proof, reverted): the arming check is gone.
+            if (target <= current)
             {
                 continue;
             }
 
-            await StampCheckpointHintAsync(p, target);
+            // PERTURBATION P6 (red-proof, reverted): the stamp lands one short.
+            await StampCheckpointHintAsync(p, target - 1);
             advanced = true;
         }
     }
