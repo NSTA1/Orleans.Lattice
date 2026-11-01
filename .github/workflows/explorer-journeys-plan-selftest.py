@@ -524,9 +524,14 @@ class WiringTests(unittest.TestCase):
 
     def test_the_planner_receives_the_labels(self):
         block = job(self.text, "planner")
-        self.assertIn("LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}", block)
-        self.assertIn("LABEL: ${{ github.event.label.name }}", block)
-        self.assertIn('--labels "$LABELS" --label "$LABEL"', block)
+        record = block[block.index("- name: Record the pull request's labels"):block.index("- name: Plan the legs")]
+        # Pull-request context is read only behind the event guard (CiIntegrationBranchTriggerTests).
+        self.assertIn("if: github.event_name == 'pull_request'", record)
+        self.assertIn("LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}", record)
+        self.assertIn("LABEL: ${{ github.event.label.name }}", record)
+        plan = block[block.index("- name: Plan the legs"):]
+        self.assertNotIn("github.event.pull_request", plan)
+        self.assertIn('--labels "$labels" --label "$label"', plan)
         self.assertIn("conformance: ${{ steps.plan.outputs.conformance }}", block)
 
     def test_contract_conformance_is_a_matrix_over_the_plan(self):

@@ -244,18 +244,29 @@ jobs:
             rm -f "$RUNNER_TEMP/changed.txt"
           fi
 
+      # Its own pull-request-only step, so the plan step (which a push runs too)
+      # reads no pull-request context. No file: the planner sees no label.
+      - name: Record the pull request's labels
+        if: github.event_name == 'pull_request'
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          LABEL: ${{ github.event.label.name }}
+        run: |
+          printf '%s' "$LABELS" > "$RUNNER_TEMP/labels.json"
+          printf '%s' "$LABEL" > "$RUNNER_TEMP/label.txt"
+
       - name: Plan the legs
         id: plan
         env:
           EVENT: ${{ github.event_name }}
           ACTION: ${{ github.event.action }}
           BASE_REF: ${{ github.base_ref }}
-          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-          LABEL: ${{ github.event.label.name }}
         run: |
+          labels=$(cat "$RUNNER_TEMP/labels.json" 2>/dev/null || true)
+          label=$(cat "$RUNNER_TEMP/label.txt" 2>/dev/null || true)
           python3 .github/workflows/explorer-journeys-plan.py plan \
             --event "$EVENT" --action "$ACTION" --base-ref "$BASE_REF" \
-            --labels "$LABELS" --label "$LABEL" \
+            --labels "$labels" --label "$label" \
             --changed-files "$RUNNER_TEMP/changed.txt"
 
   legs:
