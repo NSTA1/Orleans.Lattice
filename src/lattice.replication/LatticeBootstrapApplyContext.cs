@@ -58,11 +58,11 @@ namespace Orleans.Lattice.Replication;
 internal static class LatticeBootstrapApplyContext
 {
     /// <summary>
-    /// RequestContext key used to propagate the flag. Internal to the
-    /// replication package; the core library is unaware of the
-    /// bootstrap protocol.
+    /// RequestContext key used to propagate the flag. Shared with the core
+    /// library, which reads it only to judge a drained last-writer-wins row
+    /// at the write interceptor (issue #5551).
     /// </summary>
-    internal const string RequestContextKey = "ol.bootapp";
+    internal const string RequestContextKey = LatticeEventConstants.BootstrapApplyRequestContextKey;
 
     /// <summary>
     /// <see langword="true"/> when a bootstrap-drain scope is active
