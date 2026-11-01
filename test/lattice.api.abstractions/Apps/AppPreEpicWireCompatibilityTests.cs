@@ -60,6 +60,13 @@ public sealed class AppPreEpicWireCompatibilityTests
     private static readonly HashSet<string> ExtendedTypes =
         ["AppDescriptor", "AppInstallRequest", "AppConsentUpdate", "AppConsentReport"];
 
+    // DTOs extended later, additively, by issue #5482: AppLifecycleResult.Pending,
+    // AppSummary.PendingState, and so AppCatalog, whose summaries now carry one more field.
+    // Every added field is again written just before an end-of-object marker (nested, for a
+    // catalog), so every pre-epic byte survives in order and a pre-epic reader skips the rest.
+    private static readonly HashSet<string> NestedExtendedTypes =
+        ["AppSummary", "AppCatalog", "AppLifecycleResult"];
+
     private ServiceProvider _services = null!;
     private Serializer _serializer = null!;
 
@@ -104,6 +111,12 @@ public sealed class AppPreEpicWireCompatibilityTests
                     "Every pre-epic field must be written exactly as a pre-epic peer wrote it.");
                 Assert.That(rewritten[^1], Is.EqualTo(payload[^1]));
             }
+            else if (NestedExtendedTypes.Contains(typeName))
+            {
+                Assert.That(rewritten.Length, Is.GreaterThan(payload.Length));
+                Assert.That(InsertsOnlyBeforeEndMarkers(payload, rewritten), Is.True,
+                    "Every pre-epic byte must be written in order, with added fields only before an end-of-object marker.");
+            }
             else
             {
                 Assert.That(rewritten, Is.EqualTo(payload),
@@ -128,7 +141,62 @@ public sealed class AppPreEpicWireCompatibilityTests
             Assert.That(install.SourceKey, Is.Null);
             Assert.That(update.BridgeGrants, Is.Null);
             Assert.That(report.BridgeGrants, Is.Null);
+            Assert.That(descriptor.PendingState, Is.Null);
+            Assert.That(Read<AppSummary>("AppSummary").PendingState, Is.Null);
+            Assert.That(Read<AppCatalog>("AppCatalog").Apps.Single().PendingState, Is.Null);
+            Assert.That(Read<AppLifecycleResult>("AppLifecycleResult").Pending, Is.False);
         });
+    }
+
+    [Test]
+    public void The_insertion_check_accepts_only_fields_added_before_an_end_marker()
+    {
+        byte[] payload = [0x10, 0x20, 0xE0, 0xE0];
+        Assert.Multiple(() =>
+        {
+            Assert.That(InsertsOnlyBeforeEndMarkers(payload, [0x10, 0x20, 0x21, 0x00, 0xE0, 0xE0]), Is.True, "inner object extended");
+            Assert.That(InsertsOnlyBeforeEndMarkers(payload, [0x10, 0x20, 0xE0, 0x21, 0x00, 0xE0]), Is.True, "outer object extended");
+            Assert.That(InsertsOnlyBeforeEndMarkers(payload, [0x10, 0x21, 0x20, 0xE0, 0xE0]), Is.False, "a byte inserted mid-object");
+            Assert.That(InsertsOnlyBeforeEndMarkers(payload, [0x10, 0x20, 0xE0]), Is.False, "a pre-epic byte dropped");
+        });
+    }
+
+    /// <summary>
+    /// Whether <paramref name="rewritten"/> is <paramref name="payload"/> with bytes inserted
+    /// only immediately before an end-of-object marker (0xE0), as a field added at the end of an
+    /// object, nested or not, is written.
+    /// </summary>
+    private static bool InsertsOnlyBeforeEndMarkers(byte[] payload, byte[] rewritten)
+    {
+        const byte EndObject = 0xE0;
+        var j = 0;
+        foreach (var expected in payload)
+        {
+            if (j < rewritten.Length && rewritten[j] == expected)
+            {
+                j++;
+                continue;
+            }
+
+            if (expected != EndObject)
+            {
+                return false;
+            }
+
+            while (j < rewritten.Length && rewritten[j] != EndObject)
+            {
+                j++;
+            }
+
+            if (j == rewritten.Length)
+            {
+                return false;
+            }
+
+            j++;
+        }
+
+        return j == rewritten.Length;
     }
 
     [Test]

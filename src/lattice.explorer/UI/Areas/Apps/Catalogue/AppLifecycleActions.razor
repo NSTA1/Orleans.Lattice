@@ -289,21 +289,22 @@
     private async Task ReportAsync(string change, AppDescriptor installed, string name, AppLifecycleResult result)
     {
         _state = result.State;
+        Access.Invalidate(installed.Slug);
+        Directory.Invalidate();
         if (result.Pending)
         {
             _error = $"The {change} of {name} is still running after {AppLifecycleFollow.Limit.TotalMinutes:0} minutes. Reload the page later to see its outcome.";
-        }
-        else if (result.State == AppLifecycleState.Failed)
-        {
-            _error = $"The {change} of {name} failed. Its status records why.";
-        }
-        else
-        {
-            Toasts.Show($"{name} is {result.State.ToString().ToLowerInvariant()}.", LtToastTone.Success);
+            return;
         }
 
-        Access.Invalidate(installed.Slug);
-        Directory.Invalidate();
+        if (result.State == AppLifecycleState.Failed)
+        {
+            // Not reloaded: the page reload remounts this section, which would drop the error.
+            _error = $"The {change} of {name} failed. Its status records why.";
+            return;
+        }
+
+        Toasts.Show($"{name} is {result.State.ToString().ToLowerInvariant()}.", LtToastTone.Success);
         await OnChanged.InvokeAsync();
     }
 
