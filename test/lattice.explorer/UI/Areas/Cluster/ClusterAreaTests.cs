@@ -23,7 +23,7 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Cluster;
 /// </summary>
 [TestFixture]
 [FixtureLifeCycle(LifeCycle.InstancePerTestCase)]
-public sealed class ClusterAreaTests
+public sealed partial class ClusterAreaTests
 {
     private readonly FakeExplorerSession _session = new FakeExplorerSession(new FakeStateConnection()).Configured(SessionTestContext.RemoteConfiguration());
     private readonly ILatticeTreeAdmin _admin = Substitute.For<ILatticeTreeAdmin>();
