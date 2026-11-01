@@ -96,6 +96,38 @@ public sealed class LatticeBackupApiGrpcClientUnitTests
     }
 
     [Test]
+    public async Task GetBackupHealthConfigAsync_sends_the_id_and_returns_the_config_when_found()
+    {
+        var config = new BackupHealthConfig(false, TimeSpan.FromMinutes(90));
+        var invoker = new UnaryResponseCallInvoker(new BackupHealthConfigResponse { Found = true, Config = config });
+        var client = LatticeBackupApiGrpcClient.Create(invoker, _services);
+
+        var result = await client.GetBackupHealthConfigAsync("b5");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Is.EqualTo(config));
+            Assert.That(((BackupHealthConfigGetRequestMessage)invoker.LastRequest!).BackupId, Is.EqualTo("b5"));
+        });
+    }
+
+    [Test]
+    public async Task GetBackupHealthConfigAsync_returns_null_when_not_found()
+    {
+        var client = ClientReturning(new BackupHealthConfigResponse { Found = false });
+
+        Assert.That(await client.GetBackupHealthConfigAsync("missing"), Is.Null);
+    }
+
+    [Test]
+    public void GetBackupHealthConfigAsync_empty_id_throws()
+    {
+        var client = ClientReturning(new BackupHealthConfigResponse());
+
+        Assert.That(async () => await client.GetBackupHealthConfigAsync(string.Empty), Throws.ArgumentException);
+    }
+
+    [Test]
     public async Task CancelScheduleAsync_sends_the_scope_and_completes()
     {
         var invoker = new UnaryResponseCallInvoker(new BackupCancelScheduleResponse());

@@ -1396,6 +1396,7 @@ Implemented by [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/api.md) and 
 - `Task<bool> IsHealthMonitoringAvailableAsync(CancellationToken cancellationToken = default)`
 - `Task<BackupHealthReport?> GetBackupHealthAsync(string backupId, CancellationToken cancellationToken = default)`
 - `Task ConfigureBackupHealthAsync(string backupId, BackupHealthConfig config, CancellationToken cancellationToken = default)`
+- `Task<BackupHealthConfig?> GetBackupHealthConfigAsync(string backupId, CancellationToken cancellationToken = default)`
 
 ### `ILatticeBackupOperations`
 

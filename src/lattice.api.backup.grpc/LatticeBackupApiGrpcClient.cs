@@ -524,6 +524,29 @@ public sealed class LatticeBackupApiGrpcClient
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Reads the effective per-backup health-monitor configuration for the backup
+    /// identified by <paramref name="backupId"/>: its stored override, or the
+    /// server's deployment default when none was stored. Returns
+    /// <see langword="null"/> when the server reports no such backup.
+    /// </summary>
+    /// <param name="backupId">The backup id. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The effective configuration, or <see langword="null"/> when the backup does not exist.</returns>
+    /// <exception cref="ArgumentException"><paramref name="backupId"/> is <c>null</c> or empty.</exception>
+    public async Task<BackupHealthConfig?> GetBackupHealthConfigAsync(
+        string backupId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        var response = await UnaryAsync(
+            _methods.GetBackupHealthConfig,
+            new BackupHealthConfigGetRequestMessage { BackupId = backupId },
+            cancellationToken).ConfigureAwait(false);
+
+        return response.Found ? response.Config : null;
+    }
+
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,
         TRequest request,
