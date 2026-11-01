@@ -3307,9 +3307,10 @@ internal sealed partial class ShardRootGrain(
         if (await grainFactory.GetGrain<ITreeDeletionGrain>(heldId).HoldsDeletionAsync())
         {
             if (!forWrite && purgedAnswersEmpty) return false;
-            throw new InvalidOperationException(
+            throw new LatticeTreePurgeSettlingException(
                 $"Tree '{heldId}' is still held by a purge that has not yet released the id. "
-                + "Writes to it are refused until the purge settles; retry shortly.");
+                + "Writes to it are refused until the purge settles; retry after about a minute.",
+                heldId);
         }
 
         return await PrepareForOperationSlowAsync(forWrite, purgedAnswersEmpty);

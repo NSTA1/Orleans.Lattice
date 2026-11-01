@@ -142,6 +142,9 @@ public sealed class PurgedShardWriteAdmissionIntegrationTests
             }
 
             Assert.That(refused, Is.Not.Null, "a write to a tree whose purge still holds it must be refused");
+            Assert.That(refused, Is.InstanceOf<LatticeTreePurgeSettlingException>(),
+                "the refusal is the typed, retryable purge-settling refusal, not a bare InvalidOperationException");
+            Assert.That((refused as LatticeTreePurgeSettlingException)?.TreeId, Is.EqualTo(treeId));
             Assert.That(c, Is.EqualTo("3"), "a write after the purge has finished reuses the id and keeps its data");
         });
     }
