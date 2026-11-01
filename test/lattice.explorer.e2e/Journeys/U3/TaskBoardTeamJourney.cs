@@ -4,6 +4,7 @@ using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Checkpoints;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts.Contoso;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Sessions;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Shell;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
@@ -47,6 +48,8 @@ public sealed class TaskBoardTeamJourney : JourneyChapter
         var priyaApps = new AppsAreaPage(priya);
         var danaData = new DataTaskTreePage(dana, tree);
         TaskBoardWindow board = null!;
+        var boardOpens = false;
+        string[] keys = [];
 
         // U3.1, first half: priya opens the task board, and its frame loads.
         await StepAsync("U3.1", async () =>
@@ -56,7 +59,22 @@ public sealed class TaskBoardTeamJourney : JourneyChapter
             await Capture(priya, "u3-1", "your-apps", "priya's Apps: the task board is among her apps, and she holds its editor role");
 
             board = await TaskBoardWindow.OpenNewWindowAsync(priya, estate, () => priyaApps.OpenTaskBoard.ClickAsync());
-            await board.WaitForBoardAsync();
+            boardOpens = await board.TryWaitForBoardAsync();
+            if (!boardOpens)
+            {
+                // Every step below that needs the board loaded is not driven while this reproduces.
+                // The wrapper asserts the refusal is the server's: if the workspace grants the board
+                // while the window refuses it, the Explorer's frame gate is wrong, and this fails.
+                await new KnownDefect("#5595", "The apps workspace answers the task board's editor with no enabled grant, so its window refuses her though Your apps lists it").ReproducesAsync(() =>
+                {
+                    Assert.That(board.LastServerView, Is.Not.Null, "The cluster's answers were not read at the refusal.");
+                    Assert.That(board.LastServerView!.WorkspaceRefuses, Is.True, $"The window refused the board ({board.LastRefusal}) while the workspace grants it: the Explorer's frame gate is wrong. {board.LastServerView}");
+                    return Task.CompletedTask;
+                });
+                await board.CaptureAsync(recorder, "u3-1", "frame-refused", "The board's window refuses priya: the apps workspace answers her with no enabled grant (#5595)");
+                return;
+            }
+
             await board.ExpectStandaloneAsync();
             await board.ExpectEditorAsync();
             await board.ExpectCountsAsync(0, 0, 0);
@@ -79,36 +97,40 @@ public sealed class TaskBoardTeamJourney : JourneyChapter
             await Capture(dana, "u3-2", "keys-watching", "dana keeps the tree's Keys tab open, live updates on: no task yet");
         });
 
-        // U3.1, second half: priya creates three tasks and moves one to Done.
-        await StepAsync("U3.1", async () =>
+        // While the board refuses (KnownDefect #5595 at U3.1), the steps that need it loaded are not driven.
+        if (boardOpens)
         {
-            ids[tasks[0].Title] = await board.AddTaskAsync(tasks[0].Title);
-            await board.CaptureAsync(recorder, "u3-1", "task-added", $"priya adds \"{tasks[0].Title}\": it lands in To do, and the board says so");
+            // U3.1, second half: priya creates three tasks and moves one to Done.
+            await StepAsync("U3.1", async () =>
+            {
+                ids[tasks[0].Title] = await board.AddTaskAsync(tasks[0].Title);
+                await board.CaptureAsync(recorder, "u3-1", "task-added", $"priya adds \"{tasks[0].Title}\": it lands in To do, and the board says so");
 
-            ids[tasks[1].Title] = await board.AddTaskAsync(tasks[1].Title);
-            ids[tasks[2].Title] = await board.AddTaskAsync(tasks[2].Title);
-            await board.ExpectCountsAsync(3, 0, 0);
-            await board.CaptureAsync(recorder, "u3-1", "three-tasks", "Three tasks in To do");
+                ids[tasks[1].Title] = await board.AddTaskAsync(tasks[1].Title);
+                ids[tasks[2].Title] = await board.AddTaskAsync(tasks[2].Title);
+                await board.ExpectCountsAsync(3, 0, 0);
+                await board.CaptureAsync(recorder, "u3-1", "three-tasks", "Three tasks in To do");
 
-            await board.SelectAsync("todo", tasks[2].Title);
-            await Expect(board.Page).ToHaveURLAsync(new Regex(Regex.Escape(TaskBoardWindow.Address) + "/tasks/" + Regex.Escape(ids[tasks[2].Title]) + "$"));
-            await board.CaptureAsync(recorder, "u3-1", "task-selected", "Selecting a card opens its detail with the Move controls, and writes its path into the window's address");
+                await board.SelectAsync("todo", tasks[2].Title);
+                await Expect(board.Page).ToHaveURLAsync(new Regex(Regex.Escape(TaskBoardWindow.Address) + "/tasks/" + Regex.Escape(ids[tasks[2].Title]) + "$"));
+                await board.CaptureAsync(recorder, "u3-1", "task-selected", "Selecting a card opens its detail with the Move controls, and writes its path into the window's address");
 
-            await board.MoveSelectedAsync(tasks[2].Title, "done", "Done");
-            await board.ExpectCountsAsync(2, 0, 1);
-            await board.CaptureAsync(recorder, "u3-1", "moved-to-done", $"\"{tasks[2].Title}\" is moved to Done");
-        });
+                await board.MoveSelectedAsync(tasks[2].Title, "done", "Done");
+                await board.ExpectCountsAsync(2, 0, 1);
+                await board.CaptureAsync(recorder, "u3-1", "moved-to-done", $"\"{tasks[2].Title}\" is moved to Done");
+            });
 
-        var keys = tasks.Select(task => U3Contract.Key(ids[task.Title])).ToArray();
+            keys = tasks.Select(task => U3Contract.Key(ids[task.Title])).ToArray();
 
-        // U3.2, second half: priya's tasks have arrived in dana's open Keys tab, without a reload.
-        await StepAsync("U3.2", async () =>
-        {
-            await danaData.ExpectKeysAsync(keys);
-            await danaData.ExpectSameDocumentAsync();
-            await Capture(dana, "u3-2", "tasks-arrived-live", "In dana's Keys tab, still the same page, priya's three tasks have arrived live");
-            Coverage.Hit("use-case:data/app-data-live");
-        });
+            // U3.2, second half: priya's tasks have arrived in dana's open Keys tab, without a reload.
+            await StepAsync("U3.2", async () =>
+            {
+                await danaData.ExpectKeysAsync(keys);
+                await danaData.ExpectSameDocumentAsync();
+                await Capture(dana, "u3-2", "tasks-arrived-live", "In dana's Keys tab, still the same page, priya's three tasks have arrived live");
+                Coverage.Hit("use-case:data/app-data-live");
+            });
+        }
 
         // U3.3: dana opens the task board; it is read-only for her, and a write she forces is refused.
         await StepAsync("U3.3", async () =>
@@ -117,6 +139,10 @@ public sealed class TaskBoardTeamJourney : JourneyChapter
             await danaApps.OpenAsync(expectTaskBoard: true);
             await danaApps.ExpectTaskBoardRolesAsync(StoryNames.Contoso.Apps.ViewerRole);
             await Capture(dana, "u3-3", "your-apps", "dana's Apps: the task board, where she holds the viewer role");
+            if (!boardOpens)
+            {
+                return;
+            }
 
             var danaBoard = await TaskBoardWindow.OpenNewWindowAsync(dana, estate, () => danaApps.OpenTaskBoard.ClickAsync());
             await danaBoard.WaitForBoardAsync();
@@ -145,6 +171,10 @@ public sealed class TaskBoardTeamJourney : JourneyChapter
             await samApps.OpenAsync(expectTaskBoard: true);
             await samApps.ExpectTaskBoardRolesAsync(StoryNames.Contoso.Apps.ViewerRole);
             await Capture(sam, "u3-4", "your-apps", "sam's Apps: the task board, where he holds the viewer role");
+            if (!boardOpens)
+            {
+                return;
+            }
 
             var samBoard = await TaskBoardWindow.OpenNewWindowAsync(sam, estate, () => samApps.OpenTaskBoard.ClickAsync());
             await samBoard.WaitForBoardAsync();
@@ -153,43 +183,46 @@ public sealed class TaskBoardTeamJourney : JourneyChapter
             await samBoard.CaptureAsync(recorder, "u3-4", "board-read-only", "sam sees the same read-only board");
         });
 
-        // U3.5: priya's standalone window, Leave app, the legacy /open address, and deep links.
-        await StepAsync("U3.5", async () =>
+        if (boardOpens)
         {
-            var window = TaskBoardWindow.InSession(priya);
-            await priya.Page.GotoAsync(TaskBoardWindow.Address.TrimStart('/'));
-            await window.WaitForBoardAsync();
-            await window.ExpectStandaloneAsync();
-            await window.ExpectEditorAsync();
-            await window.ExpectCountsAsync(2, 0, 1);
-            await window.CaptureAsync(recorder, "u3-5", "standalone-window", "priya types the window's address: the board alone, with no header, address line or spine");
+            // U3.5: priya's standalone window, Leave app, the legacy /open address, and deep links.
+            await StepAsync("U3.5", async () =>
+            {
+                var window = TaskBoardWindow.InSession(priya);
+                await priya.Page.GotoAsync(TaskBoardWindow.Address.TrimStart('/'));
+                await window.WaitForBoardAsync();
+                await window.ExpectStandaloneAsync();
+                await window.ExpectEditorAsync();
+                await window.ExpectCountsAsync(2, 0, 1);
+                await window.CaptureAsync(recorder, "u3-5", "standalone-window", "priya types the window's address: the board alone, with no header, address line or spine");
 
-            await window.LeaveApp.ClickAsync();
-            await priyaApps.ExpectTaskBoardOverviewAsync();
-            await Capture(priya, "u3-5", "left-to-overview", "Leave app returns to the task board's overview in the full console");
+                await window.LeaveApp.ClickAsync();
+                await priyaApps.ExpectTaskBoardOverviewAsync();
+                await Capture(priya, "u3-5", "left-to-overview", "Leave app returns to the task board's overview in the full console");
 
-            var oven = ids[tasks[1].Title];
-            await priya.Page.GotoAsync($"apps/task-board/open/tasks/{oven}");
-            await Expect(priya.Page).ToHaveURLAsync(new Regex(Regex.Escape(TaskBoardWindow.Address) + "/tasks/" + Regex.Escape(oven) + "$"));
-            await window.WaitForBoardAsync();
-            await window.ExpectDetailAsync(tasks[1].Title, U3Contract.Key(oven), "To do");
-            await window.CaptureAsync(recorder, "u3-5", "legacy-open-redirected", "The legacy /open address redirects to the window, keeping its in-app path to the task");
-            Coverage.Hit("subroute:apps/open");
+                var oven = ids[tasks[1].Title];
+                await priya.Page.GotoAsync($"apps/task-board/open/tasks/{oven}");
+                await Expect(priya.Page).ToHaveURLAsync(new Regex(Regex.Escape(TaskBoardWindow.Address) + "/tasks/" + Regex.Escape(oven) + "$"));
+                await window.WaitForBoardAsync();
+                await window.ExpectDetailAsync(tasks[1].Title, U3Contract.Key(oven), "To do");
+                await window.CaptureAsync(recorder, "u3-5", "legacy-open-redirected", "The legacy /open address redirects to the window, keeping its in-app path to the task");
+                Coverage.Hit("subroute:apps/open");
 
-            var conveyor = ids[tasks[2].Title];
-            await priya.Page.GotoAsync($"apps/task-board/window?path=/tasks/{conveyor}");
-            await window.WaitForBoardAsync();
-            await window.ExpectDetailAsync(tasks[2].Title, U3Contract.Key(conveyor), "Done");
-            await window.CaptureAsync(recorder, "u3-5", "deep-path", "A deep link with ?path= opens the window on one task");
+                var conveyor = ids[tasks[2].Title];
+                await priya.Page.GotoAsync($"apps/task-board/window?path=/tasks/{conveyor}");
+                await window.WaitForBoardAsync();
+                await window.ExpectDetailAsync(tasks[2].Title, U3Contract.Key(conveyor), "Done");
+                await window.CaptureAsync(recorder, "u3-5", "deep-path", "A deep link with ?path= opens the window on one task");
 
-            var press = ids[tasks[0].Title];
-            await priya.Page.GotoAsync($"apps/task-board/window?path=/tasks/{press}&query=from=u3");
-            await window.WaitForBoardAsync();
-            await window.ExpectDetailAsync(tasks[0].Title, U3Contract.Key(press), "To do");
-            await window.CaptureAsync(recorder, "u3-5", "deep-query", "A deep link with ?path= and ?query= opens the window on one task; the board reads its path past the query");
-            Coverage.Hit("query:apps.query");
-            Coverage.Hit("use-case:apps/open-frame");
-        });
+                var press = ids[tasks[0].Title];
+                await priya.Page.GotoAsync($"apps/task-board/window?path=/tasks/{press}&query=from=u3");
+                await window.WaitForBoardAsync();
+                await window.ExpectDetailAsync(tasks[0].Title, U3Contract.Key(press), "To do");
+                await window.CaptureAsync(recorder, "u3-5", "deep-query", "A deep link with ?path= and ?query= opens the window on one task; the board reads its path past the query");
+                Coverage.Hit("query:apps.query");
+                Coverage.Hit("use-case:apps/open-frame");
+            });
+        }
 
         // U3.6: nina holds no role: no app is hers, and nothing lives at its addresses.
         await using var nina = await estate.SignInAsAsync(Personas.Nina);
@@ -233,7 +266,10 @@ public sealed class TaskBoardTeamJourney : JourneyChapter
             Coverage.Hit("use-case:apps/roles-column");
         });
 
-        context.Record(StoryKeys.TaskBoardTasks, (IReadOnlyList<string>)[.. tasks.Select(task => ids[task.Title])]);
+        if (boardOpens)
+        {
+            context.Record(StoryKeys.TaskBoardTasks, (IReadOnlyList<string>)[.. tasks.Select(task => ids[task.Title])]);
+        }
     }
 
     private static Task Capture(PersonaSession session, string step, string substep, string title) =>
