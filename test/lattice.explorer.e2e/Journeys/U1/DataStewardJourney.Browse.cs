@@ -28,7 +28,9 @@ public sealed partial class DataStewardJourney
         Assert.Multiple(() =>
         {
             Assert.That(spine.CanOpen("data"), Is.True, $"stewards-factory lets priya open Data: {spine}");
-            Assert.That(spine.CanOpen("cluster"), Is.False, $"priya holds no cluster telemetry, so Cluster is not hers: {spine}");
+            // #5588: her tree lifecycle grant on the archive and history trees admits Cluster,
+            // though she holds no cluster telemetry.
+            Assert.That(spine.CanOpen("cluster"), Is.True, $"priya's tree lifecycle grant admits Cluster (#5588): {spine}");
             Assert.That(spine.CanOpen("access"), Is.False, $"priya administers no access: {spine}");
         });
         await CheckpointAsync("1", "spine", "priya is signed in; the spine offers what stewards-factory permits");

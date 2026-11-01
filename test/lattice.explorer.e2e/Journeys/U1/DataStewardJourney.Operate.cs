@@ -74,9 +74,13 @@ public sealed partial class DataStewardJourney
 
     private async Task SeeWhatIsNotOfferedAsync()
     {
-        // Resize lives in the Cluster area, which needs cluster telemetry she does not hold.
-        await _priya.Shell.ExpectAreaWithheldAsync("cluster");
-        await CheckpointAsync("13", "no-cluster", "Cluster, where trees are resized, is not hers");
+        // Cluster admits her on her archive lifecycle grant (#5588), but she holds no tree
+        // lifecycle on the orders, so their resize page explains why and offers no Resize.
+        await _priya.Shell.GotoAsync($"/cluster/trees/{Names.Trees.FactoryOrders}/resize");
+        await Expect(_priya.Shell.Content.GetByText("Resizing needs the TreeLifecycle grant, which your identity does not hold over this tree."))
+            .ToBeVisibleAsync(new() { Timeout = 60_000 });
+        await Expect(_priya.Shell.Content.GetByRole(AriaRole.Button, new() { NameRegex = new Regex("^Resize") })).ToHaveCountAsync(0);
+        await CheckpointAsync("13", "no-resize", "Cluster offers her no resize of the orders");
 
         // Backups: whatever she may see there, nothing offers her a restore.
         await _priya.Shell.GotoAsync("/backups");
