@@ -242,8 +242,10 @@ premises, not conclusions supplied by fairness.
 `ReplayPermits` adds twenty-nine paired mutations and thirty-eight behaviour
 rows. Its sixteen distinct detector methods do not overlap the prior six-module
 set, so the seven-module aggregate is 133 mutations/172 rows/91 methods.
-The three full configurations retain all temporal branches at 695064,
-2762408 and 1038664 distinct states. The
+The three full configurations retained all temporal branches at 695064,
+2762408 and 1038664 distinct states. The #5569 reserved system lane later added
+three mutations and four behaviour rows, and the configurations now explore
+1058056, TWOPART_RAW and 1582264 distinct states. The
 [area description](../../spec/scheduling/README.md#replay-permits) states the
 physical-owner, warm-drive and earned-prefix progress premises without imposing
 an unconditional lifetime bound on shared cold work.

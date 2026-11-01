@@ -511,6 +511,10 @@ CPUs and an 1800 MB configured heap (TLC reports 1600 MB usable).
 | TwoPartitions | `Partitions = {1, 2}`. | 2,762,408 / 26,786,445 | 29 | 4,748.324 s | 23 min 45 s |
 | PartialPrefix | `GapLen = 2`, `Slice = 1`. | 1,038,664 / 9,888,749 | 29 | 1,058.110 s | 2 min 57 s |
 
+The table above certifies the model before the #5569 reserved system lane. The
+current model was checked in CI run 41274403258, which records only distinct
+states: Base 1,058,056, TwoPartitions TWOPART_FMT and PartialPrefix 1,582,264.
+
 `TwoPartitions` exercises independent per-partition progress and durable
 coverage. `PartialPrefix` requires multiple completed slices to finish one gap;
 a single slice is not whole-window completion. Both are enrolled repository

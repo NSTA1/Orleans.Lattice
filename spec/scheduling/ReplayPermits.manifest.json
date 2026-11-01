@@ -10,14 +10,14 @@
     "actions": 22,
     "mutations": 32,
     "behaviourRows": 42,
-    "distinctStates": 695064
+    "distinctStates": 1058056
   },
   "variants": {
     "TwoPartitions": {
       "distinctStates": 2762408
     },
     "PartialPrefix": {
-      "distinctStates": 1038664
+      "distinctStates": 1582264
     }
   }
 }

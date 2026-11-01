@@ -12,7 +12,7 @@ TurnOccupancy is a fully discovered module, not a helper exemption.
 | TurnOccupancy | 4 | 1 | 8 | 7 | 11 | 961 |
 | WalAdmission | 4 | 8 | 11 | 16 | 21 | 86496 |
 | WalBackPressure | 6 | 16 | 18 | 34 | 38 | 135464 |
-| ReplayPermits | 9 | 13 | 22 | 32 | 42 | 695064 |
+| ReplayPermits | 9 | 13 | 22 | 32 | 42 | 1058056 |
 | MaterialiserDrain | 6 | 8 | 21 | 21 | 33 | 1076 |
 | SagaReadProgress | 3 | 5 | 6 | 11 | 12 | 2451 |
 | TagIndexReconcile | 3 | 6 | 12 | 15 | 19 | 2784 |
@@ -267,15 +267,20 @@ are bounded. `LaneExclusive` proves no other replay ever holds the lane.
 
 | Instance | Distinct states | Generated states |
 | --- | --- | --- |
-| Base | 695,064 | 6,628,373 |
-| TwoPartitions | 2,762,408 | 26,786,445 |
-| PartialPrefix | 1,038,664 | 9,888,749 |
+| Base | 1,058,056 | Not recorded |
+| TwoPartitions | TWOPART_FMT | Not recorded |
+| PartialPrefix | 1,582,264 | Not recorded |
 
-All three configurations retain all nine invariants, eleven properties and five
+These distinct counts are from the #5569 model in CI run 41274403258, which
+prints only the distinct count. The pre-lane model explored 695,064 / 6,628,373,
+2,762,408 / 26,786,445 and 1,038,664 / 9,888,749 distinct / generated states.
+
+All three configurations retain all nine invariants, thirteen properties and six
 temporal branches. PartialPrefix requires multiple completed slices to finish
-one coverage gap. Twenty-nine one-target paired experiments cover the checked
-clauses and environment steps; Stutter alone is non-behavioural. The thirty-eight
-behaviour rows map to sixteen distinct production methods. The actual-gate
+one coverage gap. Thirty-two one-target paired experiments cover the checked
+clauses and environment steps; Stutter alone is non-behavioural. Before the
+#5569 lane, the thirty-eight behaviour rows mapped to sixteen distinct production
+methods; the lane adds four rows. The actual-gate
 Coyote fixture lives in the core package's BPlusTree/Coyote directory.
 
 The unchanged 1,800MB/two-worker periodic policy completed the three full
