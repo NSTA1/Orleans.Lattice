@@ -116,13 +116,19 @@ public sealed partial class AuditorsReviewChapter
         Coverage.Hit("subroute:telemetry/throughput");
     }
 
-    // U4.10: Cluster and Access are hidden: no spine stop, and their addresses render the not-found page.
+    // U4.10: Access is hidden: no spine stop, and its address renders the not-found page. The
+    // Cluster stop never settles for her (#5602), so its address says it could not be checked.
     private static async Task ClusterAndAccessAreWithheldAsync(PersonaSession dana)
     {
         var shell = dana.Shell;
-        await shell.ExpectAreaWithheldAsync("cluster");
-        await shell.ExpectHeadingAsync(ShellPage.NotFoundHeading);
-        await SnapAsync(dana, "10", "cluster", "Cluster: no stop on her spine, and /cluster is nothing that lives here");
+        await ClusterNeverSettles.ReproducesAsync(async () =>
+        {
+            await shell.GotoAsync("/cluster");
+            await Expect(shell.Heading).ToHaveTextAsync("Cluster");
+            await Expect(shell.Content.GetByRole(AriaRole.Heading, new() { Name = "Could not be checked", Exact = true })).ToBeVisibleAsync();
+            await Expect(shell.Content.Locator("[data-lt-command^=\"cluster.\"]")).ToHaveCountAsync(0);
+        });
+        await SnapAsync(dana, "10", "cluster", "Cluster: /cluster says it could not be checked, and offers nothing, while its check times out (#5602)");
 
         await shell.ExpectAreaWithheldAsync("access");
         await shell.ExpectHeadingAsync(ShellPage.NotFoundHeading);

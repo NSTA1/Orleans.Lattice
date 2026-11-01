@@ -1,6 +1,7 @@
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Checkpoints;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Sessions;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 
@@ -26,6 +27,9 @@ public sealed partial class AuditorsReviewChapter : JourneyChapter
     public const string JourneyId = "u4";
 
     private static JourneyRecorder Recorder => JourneyRecorder.For(JourneyId);
+
+    /// <summary>The Cluster area's availability check times out for dana, so its stop never settles.</summary>
+    private static readonly KnownDefect ClusterNeverSettles = new("#5602", "the Cluster area's availability check times out for a Telemetry-holding reader and never settles");
 
     /// <inheritdoc />
     public override async Task RunAsync(ChapterContext context)
