@@ -101,10 +101,13 @@ public sealed class T2Contract() : ChapterContract("T2")
 
     private static async Task<bool> ReadRefusedAsync(Orleans.Lattice.Api.Data.Grpc.LatticeDataApiGrpcClient data)
     {
+        // A denied read is not an error: a point read of a hidden key reports it absent, and a
+        // range read prunes to the authorized subset (Orleans.Lattice.Api.Data). The key exists
+        // (ada reads all of the inventory), so absent and an empty range mean refused.
         try
         {
-            await ContractCalls.GetAsync(data, Names.Trees.AcmeInventory, FabrikamAccess.Inventory[0].Key);
-            return false;
+            return await ContractCalls.GetAsync(data, Names.Trees.AcmeInventory, FabrikamAccess.Inventory[0].Key) is null
+                && await ContractCalls.CountPrefixAsync(data, Names.Trees.AcmeInventory, "item/") == 0;
         }
         catch (Grpc.Core.RpcException ex) when (ex.StatusCode == Grpc.Core.StatusCode.PermissionDenied)
         {
