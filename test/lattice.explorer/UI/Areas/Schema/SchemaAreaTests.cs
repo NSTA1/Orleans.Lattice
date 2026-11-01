@@ -92,17 +92,30 @@ public sealed class SchemaAreaTests : SchemaTestContext
     }
 
     [Test]
-    public async Task Past_the_probe_bound_with_trees_unasked_the_area_is_shown_not_hidden()
+    public async Task A_reader_of_a_tree_who_administers_no_schema_sees_no_area()
     {
-        // Hiding the area from a caller who holds a grant is the worse failure: each tree's
-        // page answers for itself, and the cluster enforces every call.
+        // Schema read is ordinary tree read: alice reads factory-lines but owns no schema,
+        // so the tree fallback (#5385) must not admit her.
+        Auth.SignIn("alice");
+        UseTrees("factory-lines", "scratch");
+        Schema.DefaultCapabilities = FakeSchemaControl.None;
+        Schema.Capabilities["factory-lines"] = FakeSchemaControl.ReadOnly;
+
+        Assert.That(await Area.GetAvailabilityAsync(CancellationToken.None), Is.EqualTo(AreaAvailability.Hidden));
+    }
+
+    [Test]
+    public async Task Past_the_probe_bound_with_trees_unasked_the_area_stays_hidden()
+    {
+        // The bound fails closed, like every other unproven answer: a reader of many trees
+        // is not shown the area because none of the first trees proved a grant.
         Auth.SignIn("dana");
         UseTrees([.. Enumerable.Range(1, SchemaAccess.MaximumTreeProbes + 1).Select(index => $"tree-{index:D2}")]);
         Schema.DefaultCapabilities = FakeSchemaControl.None;
 
         Assert.Multiple(async () =>
         {
-            Assert.That(await Area.GetAvailabilityAsync(CancellationToken.None), Is.EqualTo(AreaAvailability.Visible));
+            Assert.That(await Area.GetAvailabilityAsync(CancellationToken.None), Is.EqualTo(AreaAvailability.Hidden));
             Assert.That(Schema.CountOf("ProbeCapabilities"), Is.EqualTo(1 + SchemaAccess.MaximumTreeProbes), "the bound is explicit");
         });
     }

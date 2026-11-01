@@ -333,7 +333,7 @@ public sealed class SchemaRuleBuilderCardTests : SchemaRuleBuilderTestBase
         Kind(cut, SchemaCardKind.NumberRange);
         Type(cut, "Smallest", "0");
         Commit(cut);
-        ClickLabelled(cut, "Add an alternative to rule 1");
+        ClickLabelled(cut, "Or: add an alternative to rule 1");
         cut.WaitUntil(() => Assert.That(cut.Find(".lt-schema-composer h3").TextContent, Is.EqualTo("Add an alternative to rule 1")));
         Path(cut, "discount");
         Kind(cut, SchemaCardKind.Type);
@@ -348,6 +348,39 @@ public sealed class SchemaRuleBuilderCardTests : SchemaRuleBuilderTestBase
     }
 
     [Test]
+    public void Every_rule_action_names_itself_with_its_visible_text()
+    {
+        // #5385: "Or..." was named "Add an alternative to rule 1", which axe reports as
+        // label-content-name-mismatch: a speech user saying the word they see finds nothing.
+        UseTrees("scratch");
+        var cut = OpenEditor("scratch");
+        StartRule(cut);
+        Path(cut, "discount");
+        Kind(cut, SchemaCardKind.NumberRange);
+        Type(cut, "Smallest", "0");
+        Commit(cut);
+
+        cut.WaitUntil(() =>
+        {
+            var buttons = cut.FindAll(".lt-schema-ruleset__actions button");
+            Assert.That(buttons, Is.Not.Empty);
+            Assert.Multiple(() =>
+            {
+                foreach (var button in buttons)
+                {
+                    var visible = Words(button.TextContent);
+                    var name = Words(button.GetAttribute("aria-label") ?? button.TextContent);
+                    Assert.That(name, Does.Contain(visible), $"'{button.GetAttribute("aria-label")}' does not contain its visible text '{button.TextContent.Trim()}'.");
+                }
+            });
+        });
+
+        static string Words(string text) =>
+            string.Join(' ', new string([.. text.Where(c => char.IsLetterOrDigit(c) || char.IsWhiteSpace(c))])
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries)).ToLowerInvariant();
+    }
+
+    [Test]
     public void A_pattern_card_is_not_offered_as_an_alternative()
     {
         UseTrees("scratch");
@@ -355,7 +388,7 @@ public sealed class SchemaRuleBuilderCardTests : SchemaRuleBuilderTestBase
         StartRule(cut);
         Path(cut, "a");
         Commit(cut);
-        ClickLabelled(cut, "Add an alternative to rule 1");
+        ClickLabelled(cut, "Or: add an alternative to rule 1");
 
         cut.WaitUntil(() =>
         {

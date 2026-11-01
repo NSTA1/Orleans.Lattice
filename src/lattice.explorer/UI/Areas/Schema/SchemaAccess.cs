@@ -15,8 +15,10 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 /// writes nothing: it is the flags the probe reports - not the fact that it
 /// completed - that admit the caller. A grant that names trees rather than the
 /// whole cluster admits nothing on the sentinel, so a signed-in caller it refuses
-/// is asked about their own trees, up to <see cref="MaximumTreeProbes"/> of them
-/// (#5385). Every refusal, an unserved facade, a
+/// is asked about their own trees, up to <see cref="MaximumTreeProbes"/> of them,
+/// and admitted only by a schema-administration grant there (#5385): schema read is
+/// ordinary tree read, so a reader of a tree is not thereby a schema user. Every
+/// refusal, an unserved facade, a
 /// missing registration and any other fault fail closed; a transient fault reads
 /// as not checked, which admits nothing and is asked again. An anonymous caller who
 /// is refused is told to sign in; a signed-in one who is refused sees no area.
@@ -43,8 +45,8 @@ internal sealed class SchemaAccess : IDisposable
     /// <summary>
     /// The most of the caller's own trees the area-wide answer probes when the sentinel
     /// admits nothing (#5385). A caller whose first <see cref="MaximumTreeProbes"/> trees
-    /// all grant nothing, with more trees beyond them, sees the area: each tree's page then
-    /// answers for itself, and the cluster still enforces every call.
+    /// grant no schema administration does not see the area, however many trees remain
+    /// unasked: like every other unproven answer, the bound fails closed.
     /// </summary>
     public const int MaximumTreeProbes = 8;
 
@@ -227,11 +229,11 @@ internal sealed class SchemaAccess : IDisposable
     }
 
     /// <summary>
-    /// Whether any of the caller's own trees grants schema read or management: the first
+    /// Whether any of the caller's own trees grants schema administration: the first
     /// <see cref="MaximumTreeProbes"/> trees the caller lists, in order, stopping at the
-    /// first that grants. When that bound is reached with trees still unasked, the answer
-    /// is yes, because hiding the area from a caller who holds a grant is the worse
-    /// failure: its pages answer for each tree, and the cluster enforces every call.
+    /// first that grants. Schema read is ordinary tree read, so a read grant alone does
+    /// not admit the caller; and when the bound is reached with trees still unasked, the
+    /// answer is no, failing closed as every other unproven answer does.
     /// </summary>
     /// <param name="cancellationToken">Cancels the probes.</param>
     /// <returns>
@@ -274,11 +276,11 @@ internal sealed class SchemaAccess : IDisposable
 
             if (probed == MaximumTreeProbes)
             {
-                return true;
+                return false;
             }
 
             probed++;
-            if ((await GetGrantsAsync(tree, refresh: false, cancellationToken).ConfigureAwait(false)).HasAny)
+            if ((await GetGrantsAsync(tree, refresh: false, cancellationToken).ConfigureAwait(false)).CanChangeAnything)
             {
                 return true;
             }

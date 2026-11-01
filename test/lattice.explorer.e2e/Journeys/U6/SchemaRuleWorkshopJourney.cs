@@ -242,7 +242,7 @@ public sealed class SchemaRuleWorkshopJourney : JourneyChapter
     {
         var page = run.Page;
         const int startsWith = 9;
-        await page.Button($"Add an alternative to rule {startsWith}").ClickAsync();
+        await page.Button($"Or: add an alternative to rule {startsWith}").ClickAsync();
         await Expect(page.Composer.GetByRole(AriaRole.Heading, new() { Name = $"Add an alternative to rule {startsWith}", Exact = true })).ToBeVisibleAsync();
         await page.ChooseMemberAsync("line");
         await page.ChooseCardAsync("TextMatch");
@@ -323,7 +323,7 @@ public sealed class SchemaRuleWorkshopJourney : JourneyChapter
         await Expect(custom).ToContainTextAsync("kept as it is");
         await Expect(custom).ToContainTextAsync("Reported as: " + ContosoSchema.LinesPipelineRule.Description);
         await Expect(page.Button("Edit rule 1")).ToHaveCountAsync(0);
-        await Expect(page.Button("Add an alternative to rule 1")).ToHaveCountAsync(0);
+        await Expect(page.Button("Or: add an alternative to rule 1")).ToHaveCountAsync(0);
         await Expect(page.Button("Move rule 1 up")).ToBeDisabledAsync();
         await Expect(page.Button("Move rule 1 down")).ToBeEnabledAsync();
         await Expect(page.Button("Remove rule 1")).ToBeEnabledAsync();
