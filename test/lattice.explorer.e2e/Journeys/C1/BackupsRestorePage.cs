@@ -44,7 +44,7 @@ internal sealed class BackupsRestorePage(PersonaSession session)
         await tree.PressAsync("Tab");
         await Expect(tree).ToHaveValueAsync(target);
         await Page.GetByLabel("Restore mode", new() { Exact = true }).SelectOptionAsync(new SelectOptionValue { Label = PointInTimeMode });
-        await Expect(Page.GetByText("Every write made after the backup was taken is dropped.", new() { Exact = false }).First).ToBeVisibleAsync();
+        await Expect(Page.GetByText("Replaces the tree with exactly the backup's contents; later writes are dropped.", new() { Exact = false }).First).ToBeVisibleAsync();
     }
 
     /// <summary>Asks to restore and returns <b>Restore this backup?</b>, not yet confirmed.</summary>
@@ -53,6 +53,7 @@ internal sealed class BackupsRestorePage(PersonaSession session)
         await Page.GetByRole(AriaRole.Button, new() { Name = "Restore...", Exact = true }).ClickAsync();
         var confirmation = Page.GetByRole(AriaRole.Alertdialog, new() { Name = "Restore this backup?", Exact = true });
         await Expect(confirmation).ToBeVisibleAsync();
+        await Expect(confirmation).ToContainTextAsync("Every write made after the backup was taken is dropped.");
         return confirmation;
     }
 
