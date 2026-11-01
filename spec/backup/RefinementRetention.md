@@ -258,7 +258,9 @@ a regression check, and each has an executed production analogue above.
   schedule: a capture may start at any time in any slot, and a pass may follow
   any capture. Production's reminder tick now dispatches its cycle (capture,
   then retention) onto an interleaved grain timer and returns, and a tick that
-  fires while a reminder-driven cycle is still running starts nothing. That
+  fires while a reminder-driven cycle is still running starts nothing, except a
+  full tick during an incremental cycle, which runs one full cycle when that
+  cycle ends. That
   only removes interleavings the model already explores - two scheduled cycles
   overlapping each other - while a capture through the backup API or another
   silo still overlaps a pass, as the capture slots model; the one-pass guard is

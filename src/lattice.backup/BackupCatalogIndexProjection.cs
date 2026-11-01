@@ -21,7 +21,8 @@ namespace Orleans.Lattice.Backup;
 /// <para>
 /// <b>Re-registration is idempotent.</b> A standalone backup's capture time is
 /// held immutable by <see cref="BackupManifestRegistration"/> when its id is
-/// re-registered (a set stamp, a catalog rebuild), so a re-registration re-keys to
+/// re-registered (only a catalog rebuild does; a set member is registered once,
+/// at its membership stamp, issue #5449), so a re-registration re-keys to
 /// the same index key and upserts in place rather than leaving an orphaned
 /// duplicate row behind. Each capture has its own id (issue #5418), so a capture
 /// never re-registers another capture's backup. A row left behind by

@@ -44,7 +44,14 @@ internal sealed class BackupSchedulerGrain(
     // and a tick that arrives while one is still running is coalesced into it.
     // Activation-local, like the guards below.
     private bool _tickCycleInFlight;
+    private bool _tickCycleIncremental;
     private IGrainTimer? _tickCycle;
+
+    // A full tick that arrived while an incremental reminder cycle was running
+    // (issue #5531). An incremental cycle does not subsume a full one, so the
+    // full tick is not coalesced into it: it runs one full cycle when the
+    // incremental cycle ends. Several such ticks collapse into one.
+    private bool _pendingFullTick;
 
     // Activation-local retention guard (issue #5357): one retention pass at a time.
     // Not persisted, for the same reason as the capture guard.
@@ -235,8 +242,14 @@ internal sealed class BackupSchedulerGrain(
     /// Instead the tick dispatches the cycle onto an interleaved, keep-alive
     /// one-shot grain timer and returns, and a tick that arrives while a
     /// reminder-driven cycle is still running is coalesced into it: it starts
-    /// nothing and is recorded as an overrun. With no grain runtime (a unit-test
-    /// harness, where <c>RegisterGrainTimer</c> throws) the cycle runs inline.
+    /// nothing and is recorded as an overrun. Coalescing is per kind (issue
+    /// #5531): a full cycle subsumes an incremental one, so an incremental tick
+    /// is coalesced into any running cycle, but a full tick arriving during an
+    /// incremental cycle is deferred instead - recorded as an overrun, not a
+    /// skip - and runs one full cycle as soon as the incremental one ends, so a
+    /// scope with both schedules never loses its full backup. With no grain
+    /// runtime (a unit-test harness, where <c>RegisterGrainTimer</c> throws) the
+    /// cycle runs inline.
     /// </para>
     /// </remarks>
     public async Task ReceiveReminder(string reminderName, TickStatus status)
@@ -247,6 +260,17 @@ internal sealed class BackupSchedulerGrain(
         }
 
         var incremental = reminderName == IncrementalScheduleReminderName;
+        if (_tickCycleInFlight && !incremental && _tickCycleIncremental)
+        {
+            LatticeBackupMetrics.RecordSchedulerOverrun(ScopeKey);
+            _pendingFullTick = true;
+            logger.LogInformation(
+                "Backup scope {Scope}: a full schedule tick arrived while an incremental scheduled cycle was "
+                + "running; the full cycle runs when that cycle ends.",
+                ScopeKey);
+            return;
+        }
+
         if (_tickCycleInFlight)
         {
             LatticeBackupMetrics.RecordSchedulerOverrun(ScopeKey);
@@ -259,7 +283,13 @@ internal sealed class BackupSchedulerGrain(
             return;
         }
 
+        await StartTickCycleAsync(incremental);
+    }
+
+    private async Task StartTickCycleAsync(bool incremental)
+    {
         _tickCycleInFlight = true;
+        _tickCycleIncremental = incremental;
         try
         {
             // The callback cannot run before this assignment: it is queued on the
@@ -295,6 +325,12 @@ internal sealed class BackupSchedulerGrain(
         {
             _tickCycleInFlight = false;
             Interlocked.Exchange(ref _tickCycle, null)?.Dispose();
+        }
+
+        if (_pendingFullTick)
+        {
+            _pendingFullTick = false;
+            await StartTickCycleAsync(incremental: false);
         }
     }
 

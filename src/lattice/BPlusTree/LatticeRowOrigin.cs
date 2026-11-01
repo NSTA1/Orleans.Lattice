@@ -17,10 +17,16 @@ namespace Orleans.Lattice.BPlusTree;
 /// two representations, depending on whether it was applied live or rebuilt from
 /// its record (issue #5524). Every row rebuilt from a record routes its origin
 /// through <see cref="FromRecord"/>, so an own row is <see langword="null"/>
-/// however it was produced. A peer's id is kept verbatim. No reader classifies an
-/// own row differently: every comparison of a row's origin is against a peer or
-/// source id, or treats <see langword="null"/>, <see cref="string.Empty"/> and the
-/// local id alike as own.
+/// however it was produced. A peer's id is kept verbatim. Every reader that
+/// compares a row's origin with a peer or source id, or treats
+/// <see langword="null"/>, <see cref="string.Empty"/> and the local id alike as
+/// own, is unaffected. One reader did change, and that change is the point:
+/// <c>BPlusLeafGrain.ApplyTxCommit</c> preserves the prepared values' HLCs when
+/// they carry an origin and re-stamps them otherwise, so on a replicated tree a
+/// replayed own saga used to commit through the cross-cluster preserve branch
+/// while the same saga in the foreground was re-stamped (issue #5532); it now
+/// takes the foreground branch on both paths. The incremental backup collector
+/// routes its WAL records through this seam too (issue #5529).
 /// </remarks>
 internal static class LatticeRowOrigin
 {
