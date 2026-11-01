@@ -308,7 +308,7 @@ public sealed class BackupHealthPageTests : BackupsTestContext
         {
             Assert.That(cut.Find("section.lt-backups-section [role=alert]").TextContent, Is.EqualTo(BackupsFaults.NotPermitted));
             Assert.That(cut.FindAll("form"), Is.Empty);
-            Assert.That(cut.FindAll("button").Where(button => button.TextContent == "Check now"), Has.Count.EqualTo(1));
+            Assert.That(cut.FindAll("button").Count(button => button.TextContent == "Check now"), Is.EqualTo(1));
         });
 
         Backups.GetHealthConfig = _ => Task.FromResult<BackupHealthConfig?>(null);
