@@ -227,18 +227,20 @@ public sealed partial class LatticeReplicationConfigAuthorityTests
     }
 
     [Test]
-    public async Task EnableReplicationAsync_on_empty_tree_does_not_request_bootstrap()
+    public async Task EnableReplicationAsync_on_an_empty_receiver_with_a_source_requests_bootstrap()
     {
+        // Issue #5557: a receiver drops (and acknowledges) every entry shipped
+        // before its own enrollment lands, so an empty receiver that names a
+        // source must still pull the source's pre-existing rows.
         var store = new InMemoryConfigStore();
         var admin = Substitute.For<ILatticeReplicationAdmin>();
         var authority = CreateAuthority(store, admin: admin, probe: FixedProbe(hasContent: false));
 
         var result = await authority.EnableReplicationAsync(
-            Tree, LatticeMergeMode.OrSet, bootstrapSourceClusterId: "site-b");
+            Tree, LatticeMergeMode.LwwRegister, bootstrapSourceClusterId: "site-b");
 
-        Assert.That(result.BootstrapRequested, Is.False);
-        await admin.DidNotReceive().RequestSnapshotAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        Assert.That(result.BootstrapRequested, Is.True);
+        await admin.Received(1).RequestSnapshotAsync(Tree, "site-b", Arg.Any<CancellationToken>());
     }
 
     [Test]
