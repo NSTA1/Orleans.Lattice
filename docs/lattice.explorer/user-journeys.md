@@ -223,10 +223,11 @@ At phase 1's landing the journeys carry no `KnownGap` wrappers and the following
 | [#5595](https://github.com/NSTA1/Orleans.Lattice/issues/5595) | `Journeys/U3/TaskBoardTeamJourney.cs` | U3.1 | The apps workspace answers the task board's editor with no apps, so its window shows a not-found page. |
 | [#5595](https://github.com/NSTA1/Orleans.Lattice/issues/5595) | `Journeys/U5/PersonalisingTheConsoleJourney.cs` (2 sites) | U5 step 3 | The apps workspace answers a nested-group viewer with no apps, so `a/` completions omit the task board. |
 | [#5597](https://github.com/NSTA1/Orleans.Lattice/issues/5597) | `Journeys/U1/DataStewardJourney.Browse.cs` | U1 step 2 | A caller granted only on `factory-orders` cannot reach it through its alias `orders`. |
-| [#5613](https://github.com/NSTA1/Orleans.Lattice/issues/5613) | `Journeys/U1/DataStewardJourney.Operate.cs` | U1 step 12 | A tag-index reconcile by a caller with Admin on the index tree fails in its repair phase. |
+| [#5613](https://github.com/NSTA1/Orleans.Lattice/issues/5613) | `Journeys/U1/DataStewardJourney.Operate.cs` | U1 step 12 | A tag-index reconcile by a caller with Admin on the index tree fails in its repair phase. The step waits for either outcome and wraps only a failed reconcile, because the defect does not reproduce on every run. |
+| [#5612](https://github.com/NSTA1/Orleans.Lattice/issues/5612) | `Journeys/U4/AuditorsReviewChapter.cs`, used in `AuditorsReviewChapter.Data.cs` | U4 step 2 | History keeps only the write-ahead log's window, because a change-history view over a busy tree stalls its maintainer. The step also cites [#5611](https://github.com/NSTA1/Orleans.Lattice/issues/5611): no built-in provider can create such a view. |
 | [#5534](https://github.com/NSTA1/Orleans.Lattice/issues/5534) | `Story/ContosoStoryTests.cs`, `Contracts/ContosoContractConformanceTests.cs` | C1 stand-in | A coordinated restore causes repeated re-seeds, and C1's withheld east batch bypasses strict-ingest diversion. C1 is phase 2 work. |
 
-That is nine wrapper sites over five open issues. The authoritative list for any
+That is ten wrapper sites over six open issues. The authoritative list for any
 run is the one `PendingWrapperGateTests` publishes in that run's job summary.
 
 ## Phase 2

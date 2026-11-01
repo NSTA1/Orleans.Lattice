@@ -33,7 +33,7 @@ public sealed partial class AuditorsReviewChapter : JourneyChapter
     /// migration: no built-in provider can create a change-history view (#5611), and one built by
     /// the host stalls its maintainer on this busy tree (#5612).
     /// </summary>
-    private static readonly KnownDefect HistoryWithoutAViewKeepsOnlyTheWal = new("#5612", "a change-history view over factory-orders stalls its maintainer, so History keeps only the write-ahead log's window and cannot show a key before U2's migration");
+    private static readonly KnownDefect HistoryWithoutAViewKeepsOnlyTheWal = new KnownDefect("#5612", "a change-history view over factory-orders stalls its maintainer, so History keeps only the write-ahead log's window and cannot show a key before U2's migration");
 
     /// <inheritdoc />
     public override async Task RunAsync(ChapterContext context)
