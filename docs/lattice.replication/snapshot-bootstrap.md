@@ -687,6 +687,14 @@ Failed -> IncrementalHandoff (automatic retry after a shadow copy was published
   pivots to `Failed` as the terminal outcome. Set
   `BootstrapTransientRetry.MaxAttempts = 1` to disable retries
   entirely (fail-fast).
+- **A source redirected mid-export is retried, not failed.** An export
+  reads the one physical copy the tree resolved to when it opened. If a
+  restore, resize or other alias move fences that copy while the export
+  streams, the sender ends the export with the same transient deferral
+  (gRPC `Unavailable`) the cross-tree export gate uses, rather than an
+  `Internal` fault, so the drain's bounded retry re-opens a fresh export
+  that resolves the tree's current copy
+  ([#5537](https://github.com/NSTA1/Orleans.Lattice/issues/5537)).
 - **A deferred entry is never skipped.** The applier can defer an entry
   (`ApplyResult.Deferred`): a cross-cluster restore saga's receive fence
   has paused inbound apply for the tree, or the entry duplicates one still
