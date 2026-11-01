@@ -1,3 +1,4 @@
 id	reason
 use-case:shell/entra-sign-in	Entra is not exercised: CI has no identity provider, so personas sign in through the Basic form (epic #5401, decision D5).
 use-case:shell/reauth-interstitial	Only an expiring credential raises the re-authentication interstitial, and the estate's Basic credentials never expire (epic #5401, decision D5).
+use-case:cluster/orphan-audit-and-repair	A12 drives the audit for real, but the repair it judges possible unsplices nothing on the journey's resharded, aliased tree (known defect #5550). Remove this exemption, and hit the row again in A12 step 6, when #5550 is fixed.

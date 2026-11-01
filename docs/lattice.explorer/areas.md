@@ -856,7 +856,9 @@ The read-only survey of every orphan key is driven batch by batch from the page
 (up to 1000 batches) and can be stopped. Repair is shown only with TreeLifecycle
 authority and repairable leaves, is behind a destructive confirmation, unsplices
 only leaves whose keys were shown readable elsewhere, and always audits again
-when repair completes.
+when repair completes. Because that audit replaces the repair's findings, the
+toast that announces it counts the leaves unspliced, any refused, and any region
+not judged.
 The Cluster palette commands are:
 
 | Command id | Label | Effect |

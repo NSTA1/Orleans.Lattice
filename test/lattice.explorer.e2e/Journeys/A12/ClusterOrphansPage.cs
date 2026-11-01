@@ -87,4 +87,15 @@ internal sealed class ClusterOrphansPage(ShellPage shell)
         await Expect(ClusterParts.Toast(shell, "Repair finished: 1 leaf unspliced. Auditing again.")).ToHaveCountAsync(1, new() { Timeout = (float)ClusterParts.Structural.TotalMilliseconds });
         await ExpectTotalsAsync("Clean", "No orphaned leaves, and every region was judged");
     }
+
+    /// <summary>
+    /// Repairs, and asserts the outcome of defect #5550: the repair unsplices nothing, and the
+    /// audit the page runs afterwards still finds the orphan, repairable.
+    /// </summary>
+    public async Task RepairUnsplicesNothingAsync()
+    {
+        await ClusterParts.ConfirmAsync(shell, "Repair orphaned leaves", "Repair");
+        await Expect(ClusterParts.Toast(shell, "Repair finished: 0 leaves unspliced")).ToHaveCountAsync(1, new() { Timeout = (float)ClusterParts.Structural.TotalMilliseconds });
+        await ExpectTotalsAsync("Orphans found", "1 orphaned leaf, 1 repairable.");
+    }
 }

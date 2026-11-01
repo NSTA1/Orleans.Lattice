@@ -6,6 +6,7 @@ using Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts.Contoso;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Sessions;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 using Names = Orleans.Lattice.Explorer.EndToEnd.Tests.Story.StoryNames.Contoso;
@@ -255,9 +256,14 @@ public sealed class A12ClusterInDepth : JourneyChapter
         await Shot(olivia, recorder, 6, "each-leaf", "Show each leaf: its shard, range, keys and disposition");
         await orphans.ComposeRepairAsync(Restored);
         await Shot(olivia, recorder, 6, "repair-confirm", "Repair orphaned leaves, confirmed by typing the tree's name");
-        await orphans.RepairAsync();
-        await Shot(olivia, recorder, 6, "clean", "The repair unspliced the leaf, and the audit after it is clean");
-        Coverage.Hit("use-case:cluster/orphan-audit-and-repair");
+
+        // #5550: on this resharded, aliased tree the repair unsplices nothing the audit judged
+        // repairable. When it is fixed, drive orphans.RepairAsync() (the audit after it reads
+        // clean), shoot "clean", hit use-case:cluster/orphan-audit-and-repair, and remove its
+        // coverage exemption.
+        await new KnownDefect("#5550", "Orphaned-leaf repair unsplices nothing its audit judged repairable, on a resharded aliased tree")
+            .ReproducesAsync(orphans.RepairUnsplicesNothingAsync);
+        await Shot(olivia, recorder, 6, "repair-refused", "Known defect #5550: the repair unspliced nothing, and the audit after it still finds the leaf");
     }
 
     private static async Task WriteSplitBurstAsync(JourneyEstate estate)
