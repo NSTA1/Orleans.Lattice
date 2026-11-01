@@ -46,10 +46,12 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// so it never moves a checkpoint under a replay that is still advancing it.
 /// </para>
 /// <para>
-/// The advance only records a pending checkpoint through the projection seam;
-/// persisting it, capturing the covering snapshot and publishing the pin follow
-/// the ordinary checkpoint flush, unchanged. <c>WalDurability.tla</c>'s
-/// <c>LiveAdvance</c> is the model of this rule.
+/// The advance only records a pending checkpoint through the projection seam.
+/// Its caller persists it at once, outside the coalescing window - the
+/// coverage-lag tick through its bank step, the starvation drive through its own
+/// flush - because the pin is bounded by the persisted checkpoint; capturing the
+/// covering snapshot and publishing the pin follow that flush, unchanged.
+/// <c>WalDurability.tla</c>'s <c>LiveAdvance</c> is the model of this rule.
 /// </para>
 /// </summary>
 internal sealed partial class BPlusLeafGrain

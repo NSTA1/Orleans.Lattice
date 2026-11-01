@@ -2999,7 +2999,7 @@ internal sealed partial class BPlusLeafGrain
         // below: once a partition is checkpointed the leaf is no longer starved,
         // and the bank step persists the advance, captures over it and publishes
         // a usable pin.
-        await TryAdvanceLiveCheckpointAsync();
+        var liveAdvanced = await TryAdvanceLiveCheckpointAsync();
 
         if (IsStarvedOfDurableCheckpoint(starvationPartitionCount))
         {
@@ -3082,7 +3082,14 @@ internal sealed partial class BPlusLeafGrain
         // nothing and coalescing is intact. The commit persists only an advance
         // an apply already banked - no replay, no permit - and the pin it makes
         // bankable stays clamped by coverage exactly as above.
-        var flushPending = IsResidualPendingCheckpointPersistDue(resolved);
+        //
+        // A live advance this tick made is persisted regardless of the window,
+        // as the starvation drive persists its replay's advance (issue #3476):
+        // the pin is bounded by the persisted checkpoint, so an advance left
+        // pending would move nothing until the window closed - an hour, under a
+        // long MaterialiserCheckpointInterval. It costs at most one persist per
+        // tick, in place of the drive this advance replaces (issue #5572).
+        var flushPending = liveAdvanced || IsResidualPendingCheckpointPersistDue(resolved);
         using (AwaitDiagnostics.Begin(
             "leaf.timer.coverage-lag", context.GrainId, AwaitDiagnostics.Enabled ? "arm=bank-pin flush=" + flushPending : null))
         {
