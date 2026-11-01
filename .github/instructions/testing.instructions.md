@@ -380,6 +380,9 @@ silently proves less than the original while looking identical at the call site.
   names what it waited for; `TryUntilAsync` is for negative assertions only.
 - **`MeterListening`** - meter and instrument listeners that take the target as a
   parameter, so the unsafe declaration ordering is not expressible.
+- **`SiloResponseTimeout`** - reads and changes a running silo's grain-call
+  response timeout, so a fixture can shorten it for the section under test and
+  keep the default for its setup.
 
 Several private copies predate this library and have not been migrated yet. Issue
 #3147 inventories nine hand-written `TimeProvider` fakes under four different

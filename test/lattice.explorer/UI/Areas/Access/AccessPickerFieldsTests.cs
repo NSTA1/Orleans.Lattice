@@ -45,19 +45,39 @@ public sealed class AccessPickerFieldsTests : AccessTestContext
     }
 
     [Test]
-    public void The_rule_editor_offers_trees_and_refuses_one_that_does_not_exist()
+    public void The_rule_editor_offers_trees_and_accepts_one_that_does_not_exist_yet_with_a_flag()
     {
+        // A rule may govern a tree before it is created: a write that creates the tree
+        // needs its grant first, and a policy pipeline syncs rules ahead of the trees.
         Services.UseTreeCatalogue("orders", "billing");
-        var cut = RenderEditor();
+        LatticeAuthorizationRule? saved = null;
+        var cut = Render<AccessRuleEditor>(parameters => parameters.Add(editor => editor.OnSaved, rule => saved = rule));
 
         Assert.That(SuggestionFields.Offers(cut, "Tree", "bil"), Is.EqualTo(new[] { "billing" }));
 
         AccessRuleEditorTests.Fill(cut, "readers", "ops", "nowhere");
+        SuggestionFields.Box(cut, "Tree").Blur();
+        cut.WaitUntil(() => Assert.That(SuggestionFields.FlagOf(cut, "Tree"), Is.EqualTo(AccessRuleFormat.MissingTreeMessage("nowhere"))));
+        Assert.That(SuggestionFields.ErrorOf(cut, "Tree"), Is.Null, "a tree that does not exist yet is flagged, not refused");
+
         cut.Find("[data-lt-operation=\"read\"]").Change(true);
         cut.Find("form.lt-access-form").Submit();
 
-        cut.WaitUntil(() => Assert.That(SuggestionFields.ErrorOf(cut, "Tree"), Is.EqualTo("No tree is named nowhere. Choose one from the list.")));
-        Assert.That(Admin.Rules, Is.Empty, "nothing is written for a tree that does not exist");
+        cut.WaitUntil(() => Assert.That(saved, Is.Not.Null));
+        Assert.That(saved!.Scope, Is.EqualTo(LatticeScope.Tree("nowhere")));
+    }
+
+    [Test]
+    public void The_rule_editor_flags_nothing_for_a_tree_that_exists()
+    {
+        Services.UseTreeCatalogue("orders", "billing");
+        var cut = RenderEditor();
+
+        AccessRuleEditorTests.Fill(cut, "readers", "ops", "billing");
+        SuggestionFields.Box(cut, "Tree").Blur();
+
+        cut.WaitUntil(() => Assert.That(SuggestionFields.ErrorOf(cut, "Tree"), Is.Null));
+        Assert.That(SuggestionFields.FlagOf(cut, "Tree"), Is.Null);
     }
 
     [Test]
@@ -75,6 +95,26 @@ public sealed class AccessPickerFieldsTests : AccessTestContext
 
         cut.WaitUntil(() => Assert.That(SuggestionFields.ErrorOf(cut, "Rule id"), Is.EqualTo("A rule with this id already governs this tree.")));
         Assert.That(Admin.Rules, Has.Count.EqualTo(1), "the existing rule is not overwritten");
+    }
+
+    [Test]
+    public void A_rule_id_used_under_another_tree_is_not_refused_before_or_after_the_tree_is_chosen()
+    {
+        Services.UseTreeCatalogue("orders", "billing");
+        Admin.WithRule(Rule("readers", tree: "orders"));
+        LatticeAuthorizationRule? saved = null;
+        var cut = Render<AccessRuleEditor>(parameters => parameters.Add(editor => editor.OnSaved, rule => saved = rule));
+
+        SuggestionFields.NameBox(cut, "Rule id").Input("readers");
+        SuggestionFields.NameBox(cut, "Rule id").Blur();
+        Assert.That(SuggestionFields.ErrorOf(cut, "Rule id"), Is.Null, "no clash is judged before the rule's tree is known");
+
+        AccessRuleEditorTests.Fill(cut, "readers", "ops", "billing");
+        cut.Find("[data-lt-operation=\"read\"]").Change(true);
+        cut.Find("form.lt-access-form").Submit();
+
+        cut.WaitUntil(() => Assert.That(saved, Is.Not.Null));
+        Assert.That(Admin.Rules.Select(rule => rule.Scope.TreeId), Is.EquivalentTo(new[] { "orders", "billing" }));
     }
 
     [Test]

@@ -152,6 +152,42 @@ public sealed class AccessRuleEditorTests : AccessTestContext
     }
 
     [Test]
+    public void A_cluster_wide_record_may_reuse_an_id_another_tree_uses_but_not_one_the_cluster_scope_uses()
+    {
+        // Rules are keyed by (tree, id): a per-tree rule's id is free at the cluster-wide
+        // scope, whose sentinel tree is a tree of its own. A2.5 writes exactly this shape.
+        Admin.WithRule(Rule("auditors-factory-read", tree: "factory-orders", group: "auditors"));
+        LatticeAuthorizationRule? saved = null;
+        var cut = RenderEditor(onSaved: rule => saved = rule);
+        AccessForms.Type(cut, "Rule id", "auditors-factory-read");
+        AccessForms.Choose(cut, "Subject kind", "group");
+        AccessForms.Type(cut, "Subject", "auditors");
+        AccessForms.Choose(cut, "Scope", AccessRuleDraft.ClusterScope);
+        cut.Find("[data-lt-operation=\"telemetry\"]").Change(true);
+
+        cut.Find("form").Submit();
+
+        cut.WaitUntil(() => Assert.That(saved, Is.Not.Null));
+        Assert.Multiple(() =>
+        {
+            Assert.That(saved!.Scope, Is.EqualTo(LatticeScope.ClusterWide()));
+            Assert.That(Admin.Rules, Has.Count.EqualTo(2), "the per-tree record is kept beside the cluster-wide one");
+        });
+
+        var again = RenderEditor();
+        AccessForms.Type(again, "Rule id", "auditors-factory-read");
+        AccessForms.Choose(again, "Subject kind", "group");
+        AccessForms.Type(again, "Subject", "auditors");
+        AccessForms.Choose(again, "Scope", AccessRuleDraft.ClusterScope);
+        again.Find("[data-lt-operation=\"telemetry\"]").Change(true);
+
+        again.Find("form").Submit();
+
+        again.WaitUntil(() => Assert.That(AccessForms.ErrorOf(again, "Rule id"), Is.EqualTo("A rule with this id already governs this tree.")));
+        Assert.That(Admin.Rules, Has.Count.EqualTo(2), "a clashing cluster-wide id is refused before it is sent");
+    }
+
+    [Test]
     public void Missing_fields_are_each_named_and_nothing_is_sent()
     {
         var cut = RenderEditor();
