@@ -20,6 +20,7 @@ namespace Orleans.Lattice.Backup.Tests;
 public sealed class CaptureClusterFixture
 {
     private static long s_maxSnapshotReplayEntries = 10_000_000L;
+    private static string? s_localOriginClusterId;
 
     /// <summary>The deployed test cluster.</summary>
     public TestCluster Cluster { get; private set; } = null!;
@@ -53,10 +54,16 @@ public sealed class CaptureClusterFixture
     public string LocalClusterId =>
         SiloServices.GetRequiredService<IOptions<Orleans.Configuration.ClusterOptions>>().Value.ClusterId;
 
-    /// <summary>Deploys the cluster with the given per-shard snapshot replay budget.</summary>
-    public async Task InitializeAsync(long maxSnapshotReplayEntries = 10_000_000L)
+    /// <summary>
+    /// Deploys the cluster with the given per-shard snapshot replay budget. A
+    /// non-null <paramref name="localOriginClusterId"/> replaces the core's empty
+    /// origin resolver with one that returns that id for every tree, so own
+    /// writes reach the WAL stamped with it, as on a replicated host.
+    /// </summary>
+    public async Task InitializeAsync(long maxSnapshotReplayEntries = 10_000_000L, string? localOriginClusterId = null)
     {
         s_maxSnapshotReplayEntries = maxSnapshotReplayEntries;
+        s_localOriginClusterId = localOriginClusterId;
         var builder = new TestClusterBuilder(1);
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         Cluster = builder.Build();
@@ -79,6 +86,11 @@ public sealed class CaptureClusterFixture
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.ConfigureLattice(o => o.MaxSnapshotReplayEntries = s_maxSnapshotReplayEntries);
+            if (s_localOriginClusterId is { } localOrigin)
+            {
+                siloBuilder.Services.AddSingleton<ILatticeOriginClusterIdResolver>(new FixedOriginClusterIdResolver(localOrigin));
+            }
+
             siloBuilder.UseInMemoryReminderService();
             siloBuilder.AddLatticeBackup(o =>
             {
@@ -112,4 +124,9 @@ public sealed class CaptureClusterFixture
             SiloServices.GetRequiredService<IWalCursorRegistry>(),
             SiloServices.GetRequiredService<IOptions<Orleans.Configuration.ClusterOptions>>(),
             SiloServices.GetRequiredService<ILoggerFactory>().CreateLogger<LatticeBackupCaptureService>());
+
+    private sealed class FixedOriginClusterIdResolver(string originClusterId) : ILatticeOriginClusterIdResolver
+    {
+        public string Resolve(string treeId) => originClusterId;
+    }
 }
