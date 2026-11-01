@@ -275,7 +275,8 @@ holds, the in-memory cursor registry, late delivery of a lost silo's removal
 message or a duplicate activation's, the order of the steps inside a purge's
 tree-level tail (the pin-store clear before the registry frees the id, issue #5416,
 pinned by tests), a resized tree's logical purge completion (pinned by tests), how
-long a write to an id created again waits while a purge's tail is owed, or
+long a write to an id created again waits while a purge's tail is owed, how long a
+live leaf's pin stays at the block value before its first WAL replay, or
 the sweep's floor-holder census and budgets; the refinement note's
 abstraction gaps list them. Coverage of this module is not coverage of the trim
 itself, which is `WalDurability`'s.

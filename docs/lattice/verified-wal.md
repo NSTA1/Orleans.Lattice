@@ -261,7 +261,10 @@ stamps and a retention TTL (`WalPartitionReleaseModel`).
   inside a purge's tree-level tail, and a resized tree's logical purge completion
   (both pinned by tests instead);
 - how long a write to an id created again waits while a purge's tail is owed: the
-  model checks no liveness for re-creation (the refinement note bounds the wait).
+  model checks no liveness for re-creation (the refinement note bounds the wait);
+- how long a live leaf's pin stays at the block value before its first WAL replay
+  checkpoints it: the model lets a checkpoint cover live writes at any time, while
+  production advances one only by a replay.
 
 Coverage of the leaf lifecycle does not imply coverage of any of those. Each module's
 refinement note lists its gaps in full.
