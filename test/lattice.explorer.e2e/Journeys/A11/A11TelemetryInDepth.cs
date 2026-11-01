@@ -192,7 +192,9 @@ public sealed class A11TelemetryInDepth : JourneyChapter
         await _telemetry.ExpectQueryAsync("step", null);
         await ExpectDrawnAsync();
         var series = SeriesOf(tree);
-        await _telemetry.Chart(WriteChart).GetByRole(Microsoft.Playwright.AriaRole.Link, new() { NameRegex = new Regex($"^{series}, narrow the board to this tree$") }).First.ClickAsync();
+        // The hidden ", narrow ..." span is absolutely positioned, hence a block, so the
+        // computed name may carry a space before its comma.
+        await _telemetry.Chart(WriteChart).GetByRole(Microsoft.Playwright.AriaRole.Link, new() { NameRegex = new Regex($"^{series}\\s*, narrow the board to this tree$") }).First.ClickAsync();
         await _telemetry.ExpectQueryAsync("tree", tree);
         await Expect(_telemetry.TreeFilter).ToContainTextAsync($"Narrowed to tree {tree}.");
         await ExpectDrawnAsync();
