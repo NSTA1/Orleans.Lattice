@@ -86,7 +86,7 @@
 }
 
 @code {
-    private readonly CancellationTokenSource _lifetime = new();
+    private readonly ComponentLifetime _lifetime = new();
     private AppLifecycleVerb? _asking;
     private AppLifecycleVerb? _pending;
     private AppLifecycleState? _observed;
@@ -134,8 +134,7 @@
     public void Dispose()
     {
         Intents.Posted -= OnPosted;
-        _lifetime.Cancel();
-        _lifetime.Dispose();
+        _lifetime.Leave();
     }
 
     /// <inheritdoc />
@@ -191,7 +190,7 @@
             _observed = null;
             await ReportAsync(change, installed, name, result);
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
             // The page was left while the change was still running.
             return;
@@ -271,7 +270,7 @@
 
             await ReportAsync(verb.ToString().ToLowerInvariant(), installed, name, result);
         }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
             // The page was left while a change it started was still running.
         }
