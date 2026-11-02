@@ -1,0 +1,15 @@
+# A delete removes the bare id's row even when another scope has since taken
+# the id. DelBegin(d) leaves an id another scope owns alone.
+MODULE: BackupIdClaim
+ROW: DelBegin(d)
+FILE: src/lattice.backup/BackupPublisher.cs
+DETECTORS: BackupDeleteOverlapTests.A_delete_of_an_id_another_scope_has_since_taken_leaves_that_scopes_backup
+SUMMARY: a delete removes the id's row whichever scope it names
+
+--- FIND
+        if (!IsOfScope(row, scopeKey))
+        {
+            return null;
+        }
+--- REPLACE
+--- END

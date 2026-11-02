@@ -1,0 +1,18 @@
+# Pairs with ListedRestorable. A rebuild does not wait for a delete's lease:
+# it re-lists the backup the delete has just unlisted, and the delete then
+# deletes the listed backup's artifacts.
+MODULE: ListedRestorableRebuildIgnoresDelete
+TARGET: ListedRestorable
+CLASS: Invariant
+SUMMARY: a rebuild re-lists a backup while a delete of it holds a live lease
+PERTURBS: Rebuild
+
+--- FIND
+    /\ held["A"] = "free"
+    /\ ~Leased
+    /\ row = "none"
+--- REPLACE
+    /\ held["A"] = "free"
+    \* MUTATION: no wait on a delete's lease.
+    /\ row = "none"
+--- END

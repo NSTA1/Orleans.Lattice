@@ -94,7 +94,16 @@ internal sealed class BackupPublisher(
                 // Re-read under the hold and registered only while it is still in the
                 // sink: a pass or a delete that removed it first is never undone by a
                 // rebuild, and a capture that republished it since is registered as
-                // it now stands, not as the rebuild's walk read it.
+                // it now stands, not as the rebuild's walk read it. And only while it
+                // restores (issue #5637): an operator delete removes the artifacts
+                // before the sink manifest, so a delete interrupted part-way leaves a
+                // manifest whose artifacts are partly gone, which must stay unlisted
+                // until a retry of the delete finishes it.
+                if (!(await sink.ProbeAsync(manifest.Id).ConfigureAwait(false)).IsResolvable)
+                {
+                    return new BackupPublishResult(BackupPublishOutcome.Skipped, null);
+                }
+
                 var current = await sink.ReadManifestAsync(manifest.Id).ConfigureAwait(false);
                 if (current is null)
                 {
@@ -203,7 +212,11 @@ internal sealed class BackupPublisher(
     /// references the artifacts this deletes. Idempotent.
     /// </summary>
     /// <param name="manifest">The manifest <see cref="BeginDeleteAsync"/> returned.</param>
-    public async Task DeleteArtifactsAsync(BackupManifest manifest)
+    /// <param name="beforeEachArtifact">
+    /// Run before each artifact delete; throws to stop the delete when its caller
+    /// no longer holds the id (issue #5637). <see langword="null"/> for none.
+    /// </param>
+    public async Task DeleteArtifactsAsync(BackupManifest manifest, Action? beforeEachArtifact = null)
     {
         ArgumentNullException.ThrowIfNull(manifest);
 
@@ -227,6 +240,7 @@ internal sealed class BackupPublisher(
         {
             if (!stillReferenced.Contains(descriptor.ArtifactId))
             {
+                beforeEachArtifact?.Invoke();
                 await sink.DeleteArtifactAsync(descriptor.ArtifactId).ConfigureAwait(false);
             }
         }

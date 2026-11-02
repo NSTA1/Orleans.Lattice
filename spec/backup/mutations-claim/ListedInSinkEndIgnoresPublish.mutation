@@ -9,10 +9,10 @@ PERTURBS: DelEnd
 
 --- FIND
 DelEnd(d) ==
-    /\ del[d] = "begun"
+    /\ del[d] = "art"
     /\ held["A"] = "free"
 --- REPLACE
 DelEnd(d) ==
-    /\ del[d] = "begun"
+    /\ del[d] = "art"
     \* MUTATION: the end does not take the hold.
 --- END

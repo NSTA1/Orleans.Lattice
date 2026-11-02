@@ -1,4 +1,6 @@
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Storage;
 
 namespace Orleans.Lattice.Backup.Tests;
 
@@ -103,6 +105,20 @@ public sealed class BackupIdCollisionTests
     }
 
     [Test]
+    public async Task A_bare_id_claim_leaves_no_stored_record_once_released()
+    {
+        // One grain, and so one stored record, per bare id: the record must go
+        // when the last claim does, or every content id ever captured leaves one.
+        var claim = _fixture.GrainFactory.GetGrain<IBackupIdClaimGrain>("released-id");
+        Assert.That(await claim.TryClaimAsync("scope-a"), Is.True);
+        Assert.That(await StoredClaimRecordExistsAsync(claim), Is.True, "precondition: the claim is stored");
+
+        await claim.ReleaseAsync("scope-a");
+
+        Assert.That(await StoredClaimRecordExistsAsync(claim), Is.False, "the released claim's record is cleared");
+    }
+
+    [Test]
     public async Task The_owning_scope_holds_a_claim_while_it_republishes_its_id()
     {
         // The owner's own claim is recorded (issue #5627): while its publish runs,
@@ -118,5 +134,13 @@ public sealed class BackupIdCollisionTests
 
         Assert.That(await claim.TryClaimAsync("another-scope"), Is.False, "the owner's claim keeps the ownerless id");
         await claim.ReleaseAsync(ownerScope);
+    }
+
+    private async Task<bool> StoredClaimRecordExistsAsync(IBackupIdClaimGrain claim)
+    {
+        var storage = _fixture.SiloServices.GetRequiredKeyedService<IGrainStorage>(LatticeOptions.StorageProviderName);
+        var state = new GrainState<BackupIdClaimState>();
+        await storage.ReadStateAsync("backup-id-claim", claim.GetGrainId(), state);
+        return state.RecordExists;
     }
 }

@@ -30,7 +30,11 @@ internal sealed class BackupIdClaimGrain(
         ArgumentException.ThrowIfNullOrEmpty(scopeKey);
         var backupId = context.GrainId.Key.ToString()!;
         var now = DateTimeOffset.UtcNow;
-        Claims.RemoveAll(claim => claim.Until <= now);
+        if (Claims.RemoveAll(claim => claim.Until <= now) > 0)
+        {
+            await PersistAsync();
+        }
+
         if (Claims.Exists(claim => !string.Equals(claim.ScopeKey, scopeKey, StringComparison.Ordinal)))
         {
             return false;
@@ -45,9 +49,21 @@ internal sealed class BackupIdClaimGrain(
         // Recorded for the owning scope too (issue #5627): its publish may wait on
         // the scope's hold while a retention pass or a delete retires the id, and
         // the id must stay this scope's until that publish completes, or another
-        // scope could take the ownerless id and have it overwritten.
-        Claims.Add(new BackupIdPendingClaim { ScopeKey = scopeKey, Until = now + PendingClaimLifetime });
-        await state.WriteStateAsync();
+        // scope could take the ownerless id and have it overwritten. Granted only
+        // once it is stored: a claim whose write fails is taken back, and the
+        // capture fails and is retried.
+        var claim = new BackupIdPendingClaim { ScopeKey = scopeKey, Until = now + PendingClaimLifetime };
+        Claims.Add(claim);
+        try
+        {
+            await PersistAsync();
+        }
+        catch
+        {
+            Claims.Remove(claim);
+            throw;
+        }
+
         return true;
     }
 
@@ -57,8 +73,15 @@ internal sealed class BackupIdClaimGrain(
         var index = Claims.FindIndex(claim => string.Equals(claim.ScopeKey, scopeKey, StringComparison.Ordinal));
         if (index >= 0)
         {
+            // A release whose write fails leaves the claim in storage, so a later
+            // activation may bring it back; it then refuses other scopes until it
+            // lapses, which errs on the safe side.
             Claims.RemoveAt(index);
-            await state.WriteStateAsync();
+            await PersistAsync();
         }
     }
+
+    // The last claim released clears the record, so a bare id leaves nothing in
+    // storage once no publish of it is in flight.
+    private Task PersistAsync() => Claims.Count == 0 ? state.ClearStateAsync() : state.WriteStateAsync();
 }

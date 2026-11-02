@@ -2,15 +2,14 @@
   "mutations": "mutations-claim",
   "refinement": "RefinementClaim.md",
   "nonBehaviouralActions": [
-    "Stutter",
-    "DelLapse"
+    "Stutter"
   ],
   "counts": {
-    "invariants": 4,
-    "properties": 2,
-    "actions": 11,
-    "mutations": 16,
-    "behaviourRows": 14,
-    "distinctStates": 1928
+    "invariants": 5,
+    "properties": 3,
+    "actions": 13,
+    "mutations": 22,
+    "behaviourRows": 19,
+    "distinctStates": 6824
   }
 }

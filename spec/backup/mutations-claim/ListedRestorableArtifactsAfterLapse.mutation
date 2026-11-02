@@ -1,0 +1,19 @@
+# Pairs with ListedRestorable. The other half of production before the fix of
+# #5637: the delete's lease was never renewed while it deleted artifacts, so
+# it could run out first; a rebuild then re-listed the still-whole backup, and
+# the delete went on to delete the artifacts of the listed backup.
+MODULE: ListedRestorableArtifactsAfterLapse
+TARGET: ListedRestorable
+CLASS: Invariant
+SUMMARY: a delete deletes artifacts after its lease ran out
+PERTURBS: DelArt
+
+--- FIND
+    /\ del[d] = "begun"
+    /\ lease[d] = "live"
+    /\ art' = IF gen = dgen[d] THEN FALSE ELSE art
+--- REPLACE
+    /\ del[d] = "begun"
+    \* MUTATION: artifacts are deleted whether or not the lease is live.
+    /\ art' = IF gen = dgen[d] THEN FALSE ELSE art
+--- END

@@ -1,7 +1,8 @@
-# Production perturbations: backup retention
+# Production perturbations: backup
 
 Each `.perturbation` file here is a production-perturbation experiment for one
-behaviour row of [`RefinementRetention.md`](../RefinementRetention.md): an
+behaviour row of [`RefinementRetention.md`](../RefinementRetention.md) or
+[`RefinementClaim.md`](../RefinementClaim.md): an
 anchored edit to one file under `src/` that breaks the behaviour the row
 describes, and the detectors the row cites, at least one of which must go red
 when the edit is applied. The format, the gate and the runner are described in
@@ -27,8 +28,16 @@ stamp that #5449 made a member's only registration (`Stamp(c)`); and at the
 per-id hold that serialises a republished content-addressed id against a pass
 (#5418): a republish waits while a pass retires its id (`Acquire(c)`), a pass
 never dooms an id a capture is publishing (`ListedInSink`), and a republish
-refreshes the backup's ranking time (`KeepPolicyHonoured`). No other backup
-module has a perturbation yet.
+refreshes the backup's ranking time (`KeepPolicyHonoured`).
+
+`BackupIdClaim` is seeded at the claim grain's two #5627 decisions - the owning
+scope's claim is recorded (`Resolve(c)`) and a release drops one claim
+(`PubRow(c)`) - and at every step of an operator delete the confirmation review
+found a defect in: the scope check at its start (`DelBegin(d)`), the stop at a
+refused lease renewal (`DelArt(d)`, #5637), the row check at its end
+(`DelEnd(d)`, #5631), a lease's own expiry (`DelLapse(d)`) and its own end
+(`DeleteFence`, #5631); and at the rebuild's artifact probe (`Rebuild`, #5637).
+No other backup module has a perturbation yet.
 
 ## Unseeded rows
 
@@ -47,4 +56,15 @@ module has a perturbation yet.
 | BackupRetention | PruneCrash(p) | An environment action: a fault is injected by the detectors' stores. The guard's release after a fault is a `finally`, whose removal leaves the guard set and fails `BackupSchedulerGrainUnitTests.A_faulted_retention_pass_does_not_wedge_the_scope`. |
 | BackupRetention | RetainedRestorable | Its production edits are the seeded rows' edits: the pass's scan and the increment's re-check. |
 | BackupRetention | InFlightBaseSurvives | Its production edit is the publish check, which `IncrementPublishesWithoutBaseRecheck` seeds against the same detector. |
+| BackupIdClaim | Acquire(c) | The per-id hold a publish waits on is `BackupRetention`'s `Acquire(c)`, seeded there by `RepublishIgnoresRetiringHold` against the same code. |
+| BackupIdClaim | PubMan(c) | The manifest write is the publisher's, common to every capture; dropping it fails every capture test, not the claim detectors specifically. |
+| BackupIdClaim | RetireStart | A pass's doom decision is `BackupRetention`'s, seeded there by `PassDoomsPublishingId`. |
+| BackupIdClaim | RetireRow | A pass's row removal is `BackupRetention`'s, seeded there by `PassKeepsNothingBuiltOn` and `PassDeletesInListingOrder`. |
+| BackupIdClaim | RetireMan | A pass's manifest delete is `BackupRetention`'s, seeded there by `PassDeletesInListingOrder`. |
+| BackupIdClaim | ListedInSink | Its production edits are the per-id hold's, seeded at `BackupRetention`'s `ListedInSink`, and the delete's end, seeded here at `DelEnd(d)`. |
+| BackupIdClaim | ListedRestorable | Its production edits are the rebuild's probe and the delete's stop at a refused renewal, seeded here at `Rebuild` and `DelArt(d)`. |
+| BackupIdClaim | ScopeAgreement | Its production edit is the claim decision, seeded here at `Resolve(c)`. |
+| BackupIdClaim | NoForeignOverwrite | Its production edits are the claim decision and the release, seeded here at `Resolve(c)` and `PubRow(c)`. |
+| BackupIdClaim | NoForeignDelete | Its production edit is the delete's scope check, seeded here at `DelBegin(d)`. |
+| BackupIdClaim | LeaseEventuallyEnds | Liveness. Its production edit is a lease's expiry, seeded here at `DelLapse(d)`. |
 | BackupRetention | ExpiredEventuallyPruned | Liveness. A wedged scope is the guard's `finally` missing; a never-pruning plan yields an assertion only against a named keep set, which the safety rows' detectors already make. |

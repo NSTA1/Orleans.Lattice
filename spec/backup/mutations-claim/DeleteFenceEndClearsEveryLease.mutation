@@ -9,9 +9,9 @@ PERTURBS: DelEnd
 
 --- FIND
     /\ lease' = [lease EXCEPT ![d] = "none"]
-    /\ UNCHANGED <<row, pend, held, cap, ret>>
+    /\ UNCHANGED <<row, pend, held, cap, ret, art, gen, dgen>>
 --- REPLACE
     \* MUTATION: the end drops every lease of the id, not its own.
     /\ lease' = [e \in Dels |-> "none"]
-    /\ UNCHANGED <<row, pend, held, cap, ret>>
+    /\ UNCHANGED <<row, pend, held, cap, ret, art, gen, dgen>>
 --- END

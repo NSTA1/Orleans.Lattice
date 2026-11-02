@@ -120,14 +120,19 @@ public sealed class LatticeBackupOptions
     internal TimeSpan PendingStampLease { get; set; } = TimeSpan.FromMinutes(30);
 
     /// <summary>
-    /// How long an operator delete keeps its backup id reserved while it deletes
-    /// the backup's artifacts outside the scheduler grain (issue #5628). The delete
-    /// releases it when it finishes or fails; the lease bounds the reservation when
-    /// the caller is lost part-way. Shorter than
-    /// <see cref="PublishHoldTimeout"/>, so a capture that waits on a lost
-    /// delete's lease outlasts it rather than failing. A lease that runs out while
-    /// its delete still runs is safe: the delete deletes the sink manifest under
-    /// the id's hold, and keeps it when a capture has republished the id (#5631).
+    /// How long an operator delete keeps its backup id reserved without a renewal
+    /// while it deletes the backup's artifacts outside the scheduler grain (issue
+    /// #5628). The caller renews it every third of this throughout the artifact
+    /// deletes and releases it when it finishes or fails, so the lease runs out
+    /// only when the caller is lost, or cannot reach the grain, for a whole lease.
+    /// Shorter than <see cref="PublishHoldTimeout"/>, so a capture that waits on a
+    /// lost delete's lease outlasts it rather than failing. Once it has run out a
+    /// catalog rebuild may re-list the backup, so the caller deletes no further
+    /// artifact after a refused renewal (issue #5637), a rebuild re-lists only a
+    /// backup whose every artifact is still in the sink, and the sink manifest is
+    /// deleted under the id's hold only while no row lists the id (#5631). An
+    /// artifact delete already in flight when the lease runs out is the one
+    /// residual window.
     /// </summary>
     internal TimeSpan DeleteLease { get; set; } = TimeSpan.FromMinutes(10);
 }

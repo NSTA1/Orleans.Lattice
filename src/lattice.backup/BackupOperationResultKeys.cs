@@ -60,6 +60,9 @@ public static class BackupOperationResultKeys
     /// <summary>The number of manifests a catalog rebuild reconciled in place.</summary>
     public const string ReconciledCount = "reconciledCount";
 
+    /// <summary>The number of manifests a catalog rebuild skipped because they no longer restore.</summary>
+    public const string SkippedCount = "skippedCount";
+
     /// <summary>The number of orphan rows a scrub found.</summary>
     public const string OrphanCount = "orphanCount";
 

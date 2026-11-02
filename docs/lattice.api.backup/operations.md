@@ -55,7 +55,7 @@ A succeeded operation's `ResultReference` is the captured backup id, the set id,
 | Set capture | `setId` when the set spans multiple scopes, plus `memberBackupIds` (comma-separated, in scope order; read with `BackupOperationResults.ReadMemberBackupIds`). |
 | Restores | `backupId`, `targetTreeId`, `mode`, `restoreOperationId`, `manifestChain`, `entriesApplied`, `deadLetteredCrossTenant`, `deadLetteredOverQuota`, and for a shadow cutover `shadowPhysicalTreeId` and `previousPhysicalTreeId`. `BackupOperationResults.TryReadRestoreResult` rebuilds the `LatticeRestoreResult`, for example to pass to `RevertRestoreAsync`. |
 | Health check | `backupId`, `healthStatus` (a `BackupHealthStatus` name), `missingArtifactCount` and `hashMismatchArtifactCount`. The result reference is the backup id; read the full report with `GetBackupHealthAsync`. |
-| Catalog rebuild | `scannedCount`, `registeredCount` and `reconciledCount`. `BackupOperationResults.TryReadCatalogRebuildReport` rebuilds the `BackupCatalogRebuildReport`. No result reference. |
+| Catalog rebuild | `scannedCount`, `registeredCount`, `reconciledCount` and `skippedCount` (manifests not listed because they no longer restore; absent from results recorded before it existed). `BackupOperationResults.TryReadCatalogRebuildReport` rebuilds the `BackupCatalogRebuildReport`. No result reference. |
 | Catalog scrub | `scannedCount`, `orphanCount`, `removedCount`, `pruned` and `orphanBackupIds` (comma-separated). `BackupOperationResults.TryReadCatalogScrubReport` rebuilds the `BackupCatalogScrubReport`. No result reference. |
 
 A failed operation's `FailureReason` names the engine's exception type and message, for example `LatticeRestoreValidationException: No backup with id '...' exists in the catalog or sink.`

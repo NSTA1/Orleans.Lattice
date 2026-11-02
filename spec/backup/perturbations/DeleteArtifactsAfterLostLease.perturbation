@@ -1,0 +1,17 @@
+# A delete whose lease renewal was refused goes on deleting artifacts and ends,
+# as before #5637. DelArt(d) deletes artifacts only under a live lease.
+MODULE: BackupIdClaim
+ROW: DelArt(d)
+FILE: src/lattice.backup/SchedulerBackupPublicationGate.cs
+DETECTORS: BackupDeleteLeaseTests.A_delete_that_loses_its_lease_deletes_no_further_artifact
+SUMMARY: a delete goes on deleting artifacts after a renewal is refused
+
+--- FIND
+        if (lost.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+--- REPLACE
+        if (lost.IsCancellationRequested && string.IsNullOrEmpty(backupId))
+        {
+            throw new TimeoutException(
+--- END

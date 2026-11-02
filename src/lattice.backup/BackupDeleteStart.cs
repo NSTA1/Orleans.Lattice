@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Backup;
 /// <param name="Token">
 /// The delete's own lease on the id (issue #5631), which
 /// <see cref="ILatticeBackupSchedulerGrain.EndDeleteAsync"/> ends: an overlapping
-/// delete of the same id holds a lease of its own.
+/// delete of the same id holds a lease of its own. The token the caller passed.
 /// </param>
 [GenerateSerializer]
 [Alias(BackupTypeAliases.BackupDeleteStart)]

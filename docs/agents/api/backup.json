@@ -236,6 +236,11 @@
           "name": "ReconciledCount",
           "type": "long",
           "required": true
+        },
+        {
+          "name": "SkippedCount",
+          "type": "long",
+          "required": false
         }
       ],
       "source": "src/lattice.backup/BackupCatalogRebuildReport.cs#BackupCatalogRebuildReport"

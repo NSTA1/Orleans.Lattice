@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Lattice.Operations;
 
 namespace Orleans.Lattice.Backup;
@@ -13,8 +15,11 @@ namespace Orleans.Lattice.Backup;
 internal sealed class LatticeBackupCatalogRebuildService(
     ILatticeBackupSink sink,
     ILatticeBackupCatalogStore catalog,
-    IBackupPublicationGate? publicationGate = null) : ILatticeBackupCatalogRebuildService
+    IBackupPublicationGate? publicationGate = null,
+    ILogger<LatticeBackupCatalogRebuildService>? logger = null) : ILatticeBackupCatalogRebuildService
 {
+    private readonly ILogger _logger = logger ?? NullLogger<LatticeBackupCatalogRebuildService>.Instance;
+
     private readonly ILatticeBackupSink _sink = sink ?? throw new ArgumentNullException(nameof(sink));
     private readonly ILatticeBackupCatalogStore _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
 
@@ -30,6 +35,7 @@ internal sealed class LatticeBackupCatalogRebuildService(
         long scanned = 0;
         long registered = 0;
         long reconciled = 0;
+        long skipped = 0;
 
         // Tracked-operation progress (#4125). The sink's manifests are streamed, so
         // their count is unknown until the walk ends and no total is invented.
@@ -52,7 +58,8 @@ internal sealed class LatticeBackupCatalogRebuildService(
                 // capture timestamp), so this pre-read only drives the summary
                 // counts and never changes what is stored.
                 var existing = await _catalog.GetAsync(manifest.Id, cancellationToken).ConfigureAwait(false);
-                // A manifest removed from the sink since the walk read it is not listed.
+                // A manifest removed from the sink since the walk read it is not listed,
+                // nor one whose artifacts are not all in the sink (issue #5637).
                 var listed = await _publicationGate.RegisterRebuiltAsync(manifest, cancellationToken).ConfigureAwait(false);
                 if (listed && existing is null)
                 {
@@ -61,6 +68,15 @@ internal sealed class LatticeBackupCatalogRebuildService(
                 else if (listed)
                 {
                     reconciled++;
+                }
+                else
+                {
+                    skipped++;
+                    _logger.LogWarning(
+                        "Catalog rebuild skipped backup {BackupId}: its manifest left the sink during the rebuild, or an "
+                            + "artifact it references is missing, so it would not restore. A delete interrupted part-way "
+                            + "leaves such a manifest; retry the delete to remove it.",
+                        manifest.Id);
                 }
 
                 if (progress is not null)
@@ -72,6 +88,6 @@ internal sealed class LatticeBackupCatalogRebuildService(
             }
         }
 
-        return new BackupCatalogRebuildReport(scanned, registered, reconciled);
+        return new BackupCatalogRebuildReport(scanned, registered, reconciled) { SkippedCount = skipped };
     }
 }

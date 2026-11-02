@@ -368,7 +368,10 @@ an executed production analogue above.
   delete finds the sink manifest and finishes (#5334). While any delete's lease
   holds, no pass dooms the id and no publish of it proceeds; `BackupIdClaim`
   models two overlapping deletes. A rebuild registers through the publish path, re-reading the
-  manifest and listing it only while it is still in the sink. A delete therefore
+  manifest and listing it only while it is still in the sink with every artifact
+  it references, so it never lists a backup a delete half removed; a delete
+  renews its lease while it deletes artifacts and stops at a refused renewal
+  (#5637), and `BackupIdClaim` models both. A delete therefore
   no longer races a pass on the same id, a rebuild no longer re-lists a row a pass
   or a delete has emptied, and a member a rebuild lists before its stamp is still
   held from every pass. A pass interrupted after removing rows still leaves
