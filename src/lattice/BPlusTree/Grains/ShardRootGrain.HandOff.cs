@@ -389,11 +389,6 @@ internal sealed partial class ShardRootGrain
             return cached;
         }
 
-        // RED-PROOF M18: the catch-up runs on every activation's first marker load, not only on the tombstone lift.
-        if ((await grainFactory.GetLatticeRegistry().GetEntryAsync(TreeId))?.Lineage is { } m18Lineage)
-        {
-            await RetirePredatingHandOffMarkerAsync(m18Lineage);
-        }
         var row = await HandOffMarkerRows.ReadShardAsync(HandOffStorage(), TreeId, ShardIndex);
         NoteHandOffMarkerRead(row);
         return _handOffMarker = row.State;
@@ -467,7 +462,7 @@ internal sealed partial class ShardRootGrain
             return;
         }
 
-        var stamped = false && reseedLineage is not null; // RED-PROOF M15: infer predates, ignore the re-seed stamp
+        var stamped = reseedLineage is not null;
         var self = WalRoutingInitiator.ShardRoot(ShardIndex);
         await _handOffGate.WaitAsync();
         try
