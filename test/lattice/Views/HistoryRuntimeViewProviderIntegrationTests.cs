@@ -90,6 +90,35 @@ public class HistoryRuntimeViewProviderIntegrationTests
     }
 
     [Test]
+    public async Task A_history_read_on_a_silo_whose_catalog_never_saw_the_view_still_reads_the_view()
+    {
+        const string sourceTreeId = "hist-provider-remote-src";
+        const string viewName = "hist-provider-remote";
+        var factory = SiloServices.GetRequiredService<ILatticeViewFactory>();
+        var source = _cluster.Client.GetGrain<ILattice>(sourceTreeId);
+
+        await factory.CreateAsync(source, viewName, LatticeHistoryView.Descriptor);
+        var maintainer = _cluster.Client.GetGrain<IViewMaintainerGrain>(viewName);
+        await maintainer.EnsureActiveAsync();
+        await source.SetAsync("k", [1]);
+        await source.SetAsync("k", [2]);
+        await maintainer.WaitForSourceHeadAsync(TimeSpan.FromSeconds(30));
+
+        // A runtime view lives in the catalog of the silo that created it; another silo's
+        // catalog has no entry for it until its maintainer re-hydrates there. Model that
+        // silo by dropping the local entry: the durable registry still holds the view.
+        SiloServices.GetRequiredService<IViewCatalog>().Remove(viewName);
+        var page = await source.ScanEntryHistoryAsync("k", null, null, 10, null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.Source, Is.EqualTo(EntryHistorySource.View),
+                "the read finds the history view through the durable registry, not only the local catalog");
+            Assert.That(page.Revisions, Has.Count.EqualTo(2));
+        });
+    }
+
+    [Test]
     public void Creating_with_a_payload_that_carries_settings_is_refused()
     {
         var factory = SiloServices.GetRequiredService<ILatticeViewFactory>();
