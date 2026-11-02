@@ -122,7 +122,7 @@ internal sealed class WalAppendFenceSweeper(
 
         var now = _time.GetUtcNow().UtcTicks;
         var claim = await WalAppendFenceRows.ReadSweepAsync(storage, treeId).ConfigureAwait(false);
-        if (false) // RED-PROOF: claim row ignored
+        if (claim.RecordExists && now - claim.State.LastStartedUtcTicks < Interval.Ticks)
         {
             return false;
         }
@@ -162,7 +162,10 @@ internal sealed class WalAppendFenceSweeper(
         var examined = 0;
         foreach (var (leaf, (newest, listedAt)) in listings)
         {
-            // RED-PROOF: grace ignored
+            if (newest >= cutoff)
+            {
+                continue;
+            }
 
             if (examined++ >= MaxLeavesPerSweep)
             {
@@ -174,14 +177,14 @@ internal sealed class WalAppendFenceSweeper(
             {
                 var snapshot = await WalFloorHolderReader.ReadLeafCheckpointSnapshotAsync(
                     storage, GrainId.Create(leafType, GrainIdKeyExtensions.CreateGuidKey(leaf))).ConfigureAwait(false);
-                if (false && snapshot.RecordExists) // RED-PROOF: existence check ignored
+                if (snapshot.RecordExists && snapshot.HasTreeId)
                 {
                     LatticeMetrics.WalAppendFenceSweeps.Add(1, treeTag, tenantTag, LatticeMetrics.AppendFenceSweepLive);
                     continue;
                 }
 
                 await WalAppendFenceRetirement.RetireLeafAsync(
-                    grainFactory, new RowlessStorage(storage), treeId, () => ValueTask.FromResult(partitions), leaf, listedAt).ConfigureAwait(false); // RED-PROOF: row ignored
+                    grainFactory, storage, treeId, () => ValueTask.FromResult(partitions), leaf, listedAt).ConfigureAwait(false);
                 LatticeMetrics.WalAppendFenceSweeps.Add(1, treeTag, tenantTag, LatticeMetrics.AppendFenceSweepRetired);
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
@@ -196,16 +199,6 @@ internal sealed class WalAppendFenceSweeper(
         }
 
         return true;
-    }
-
-    private sealed class RowlessStorage(IGrainStorage inner) : IGrainStorage // RED-PROOF
-    {
-        public Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
-            stateName == WalAppendFenceRows.LeafEpochGrainType ? Task.CompletedTask : inner.ReadStateAsync(stateName, grainId, grainState);
-
-        public Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) => inner.WriteStateAsync(stateName, grainId, grainState);
-
-        public Task ClearStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) => inner.ClearStateAsync(stateName, grainId, grainState);
     }
 
     private bool TryGetLeafGrainType(out GrainType leafType)

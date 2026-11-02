@@ -44,7 +44,7 @@ internal static class WalAppendEpochDirectory
     /// 24 KiB as JSON, well inside a 64 KiB Azure Table property (32K characters for a
     /// string). Unlike <see cref="Buckets"/>, it can change: pages are read whole.
     /// </summary>
-    internal const int PageCapacity = 2048; // RED-PROOF: page too large
+    internal const int PageCapacity = 384;
 
     private const int MaxAttempts = 16;
 
@@ -59,7 +59,7 @@ internal static class WalAppendEpochDirectory
         var hash = 0;
         foreach (var b in bytes)
         {
-            hash = unchecked((hash * 37) + b); // RED-PROOF: bucket function changed
+            hash = unchecked((hash * 31) + b);
         }
 
         return (hash & int.MaxValue) % Buckets;
@@ -82,12 +82,12 @@ internal static class WalAppendEpochDirectory
                         return;
                     }
 
-                    if (false && leaves.Count >= PageCapacity) // RED-PROOF: capacity unenforced
+                    if (row.RecordExists && leaves.Count >= PageCapacity)
                     {
                         continue;
                     }
 
-                    if (true) // RED-PROOF: duplicate listing
+                    if (!row.RecordExists || !await IsListedFurtherOnAsync(storage, treeId, partition, bucket, page, leafId).ConfigureAwait(true))
                     {
                         leaves.Add(leafId);
                         row.State.AddedUtcTicks.Add(addedUtcTicks);
@@ -168,8 +168,6 @@ internal static class WalAppendEpochDirectory
                     var ticks = i < added.Count ? added[i] : 0;
                     listed[leaves[i]] = listed.TryGetValue(leaves[i], out var earlier) ? Math.Min(earlier, ticks) : ticks;
                 }
-
-                break; // RED-PROOF: first page only
             }
         }
 
