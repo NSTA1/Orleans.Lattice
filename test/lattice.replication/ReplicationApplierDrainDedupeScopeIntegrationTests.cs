@@ -9,10 +9,9 @@ namespace Orleans.Lattice.Replication.Tests;
 
 /// <summary>
 /// Issue #5689. The receiver's exact-identity dedupe is scoped by path. A live
-/// re-delivery of an identity is still deduped. A bootstrap drain dedupes only
-/// within the copy it writes into, so a re-driven import into a new copy
-/// applies every row again, and a drain never consults or poisons the live
-/// cache.
+/// re-delivery of an identity is still deduped. A bootstrap drain dedupes within
+/// the copy it writes into, so a re-driven import into a new copy applies every
+/// row again, and trusts a live-cache hit only when its copy holds the row.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -122,22 +121,47 @@ public sealed class ReplicationApplierDrainDedupeScopeIntegrationTests
     }
 
     [Test]
-    public async Task A_drain_and_the_live_path_do_not_dedupe_each_other()
+    public async Task A_live_re_delivery_after_a_drain_applied_the_identity_is_deduped()
     {
-        var (tree, copyA, _) = await TreeWithCopiesAsync("dds-separate");
-        var drained = Row(tree, "drained", 1);
-        var live = Row(tree, "live", 2);
+        var (tree, copyA, _) = await TreeWithCopiesAsync("dds-drain-then-live");
+        var row = Row(tree, "k", 1);
 
-        await DrainAsync(tree, copyA, drained);
-        var liveAfterDrain = await _applier.ApplyAsync(drained);
-        await _applier.ApplyAsync(live);
-        var drainAfterLive = await DrainAsync(tree, copyA, live);
+        await DrainAsync(tree, copyA, row);
+        var live = await _applier.ApplyAsync(row);
 
-        Assert.Multiple(() =>
+        Assert.That(live.Applied, Is.False, "a drain records its identity for the live path, as before");
+    }
+
+    [Test]
+    public async Task A_drain_row_the_live_path_applied_to_another_copy_is_applied_to_this_copy()
+    {
+        var (tree, copyA, _) = await TreeWithCopiesAsync("dds-live-elsewhere");
+        var row = Row(tree, "k", 3);
+
+        await _applier.ApplyAsync(row);
+        var drained = await DrainAsync(tree, copyA, row);
+
+        Assert.Multiple(async () =>
         {
-            Assert.That(liveAfterDrain.Applied, Is.True, "a drain does not record into the live cache");
-            Assert.That(drainAfterLive.Applied, Is.True, "a drain does not consult the live cache");
+            Assert.That(drained.Applied, Is.True, "a live-cache hit the drain's copy does not hold is applied");
+            Assert.That(await _cluster.Client.GetGrain<ILattice>(copyA).GetAsync("k"), Is.EqualTo(new byte[] { 3 }));
         });
+    }
+
+    [Test]
+    public async Task A_drain_row_the_live_path_applied_to_this_copy_is_deduped()
+    {
+        var (tree, copyA, _) = await TreeWithCopiesAsync("dds-live-here");
+        var row = Row(tree, "k", 4);
+
+        // The live stream delivered the row into the held copy: recorded in the
+        // live cache, and present in the copy at the row's version.
+        await _applier.ApplyAsync(row);
+        await _cluster.Client.GetGrain<IReplicationApplyGrain>(copyA)
+            .ApplySetAsync("k", [4], row.Timestamp, Origin, sourceVectorClock: null, expiresAtTicks: 0);
+        var drained = await DrainAsync(tree, copyA, row);
+
+        Assert.That(drained.Applied, Is.False, "a live-cache hit the drain's copy confirms is not applied again");
     }
 
     private sealed class SiloConfigurator : ISiloConfigurator

@@ -560,8 +560,9 @@ internal sealed partial class ReplicationApplier(
             // bounded cache falls through to the idempotent leaf-level LWW
             // apply (a no-op for identical bytes). Range deletes bypass it
             // because one HLC identifies a range operation rather than a point write.
-            // A bootstrap drain dedupes within the copy it writes into, never
-            // against the live cache, which outlives an aborted copy (#5689).
+            // A bootstrap drain dedupes within the copy it writes into; a hit in
+            // the live cache, which outlives an aborted copy, is only a
+            // candidate that the copy itself must confirm (#5689).
             var cache = isBootstrapDrain
                 ? DrainDedupeCache(entry.TreeId, resolved.ShadowForwardDedupeCacheSize)
                 : _dedupeCaches.GetOrAdd(
@@ -587,6 +588,24 @@ internal sealed partial class ReplicationApplier(
                     return new ApplyResult { Applied = false, HighWaterMark = hwm, Deferred = true };
                 }
 
+                outcome = LatticeReplicationMetrics.OutcomeShadowForwardDedup;
+                return new ApplyResult { Applied = false, HighWaterMark = hwm };
+            }
+
+            bool alreadyInCopy;
+            try
+            {
+                alreadyInCopy = isBootstrapDrain && await IsDrainRowAlreadyInCopyAsync(entry);
+            }
+            catch
+            {
+                cache.Remove(entry);
+                throw;
+            }
+
+            if (alreadyInCopy)
+            {
+                cache.Complete(entry);
                 outcome = LatticeReplicationMetrics.OutcomeShadowForwardDedup;
                 return new ApplyResult { Applied = false, HighWaterMark = hwm };
             }
@@ -665,6 +684,10 @@ internal sealed partial class ReplicationApplier(
 
                 await ApplyPointAsync(entry);
                 cache.Complete(entry);
+                if (isBootstrapDrain)
+                {
+                    RecordDrainAppliedInLiveCache(entry, resolved.ShadowForwardDedupeCacheSize);
+                }
                 RecordApplyLag(entry);
                 RecordAppliedContentForIndex(in entry, resolved);
 
