@@ -59,9 +59,7 @@ internal sealed partial class ShardRootGrain
             return null;
         }
 
-        // RED-PROOF C: a resume captures a later hint instead of reusing the stored one.
-        var hint = await CaptureBulkBirthHeadsAsync();
-        await UpdateHandOffMarkerAsync(m => m.BulkBirthHints.Remove(operationId));
+        var hint = await ReadBulkBirthHintAsync(operationId) ?? await CaptureBulkBirthHeadsAsync();
         var token = BulkHandOffToken(operationId);
         var opened = false;
         var stored = await UpdateHandOffMarkerAsync(marker =>
@@ -118,6 +116,14 @@ internal sealed partial class ShardRootGrain
             return;
         }
 
+        if (hint is not null && relocated && leaves.Count > 0)
+        {
+            await BoundedFanOut.ForEachAsync(
+                leaves,
+                BoundedFanOut.DefaultWidth,
+                leafId => grainFactory.GetGrain<IBPlusLeafGrain>(leafId).SetCheckpointOffsetHintsAsync(hint));
+        }
+
         if (drainBatchWrites)
         {
             await DrainBatchWritesAdmittedBeforeAsync();
@@ -131,24 +137,13 @@ internal sealed partial class ShardRootGrain
         var closed = false;
         await UpdateHandOffMarkerAsync(m =>
         {
-            // RED-PROOF G: the switch's marker is never closed.
-            closed = false;
-            return m.BulkBirthHints.Remove(operationId);
+            closed = HandOffMarkerCore.Close(m, token, heads);
+            return m.BulkBirthHints.Remove(operationId) | closed;
         });
 
         if (closed)
         {
             LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindBulk, opened: false, TreeId);
-        }
-
-        // RED-PROOF A: the hint is applied although the relocation did not go through.
-        // RED-PROOF B: the hint is applied after the switch closes.
-        if (hint is not null && leaves.Count > 0)
-        {
-            await BoundedFanOut.ForEachAsync(
-                leaves,
-                BoundedFanOut.DefaultWidth,
-                leafId => grainFactory.GetGrain<IBPlusLeafGrain>(leafId).SetCheckpointOffsetHintsAsync(hint));
         }
     }
 
