@@ -299,17 +299,7 @@ internal sealed partial class ShardRootGrain
             }
 
             var partitions = await optionsResolver.GetWalPartitionsAsync(TreeId);
-            var absorbedKey = absorbedLeafId.GetGuidKey();
-            var retirements = new Task<long>[partitions];
-            for (var p = 0; p < partitions; p++)
-            {
-                retirements[p] = grainFactory
-                    .GetGrain<IWalShardGrain>(string.Concat(TreeId, "/", p.ToString(System.Globalization.CultureInfo.InvariantCulture)))
-                    .RetireAppendEpochAsync(absorbedKey, WalAppendFenceRows.RowEpochUnread, CancellationToken.None);
-            }
-
-            await Task.WhenAll(retirements);
-            var heads = await BPlusLeafGrain.CaptureAllocatorHeadsAsync(grainFactory, TreeId, partitions);
+            var heads = await RetireAbsorbedAndCaptureHeadsAsync(grainFactory, TreeId, partitions, absorbedLeafId.GetGuidKey());
             var closed = false;
             await HandOffMarkerRows.UpdateLeafAsync(storage, survivorKey, m => closed = HandOffMarkerCore.Close(m, token, heads));
             if (closed)
@@ -326,6 +316,27 @@ internal sealed partial class ShardRootGrain
                 ShardIndex,
                 survivorLeafId);
         }
+    }
+
+    /// <summary>
+    /// The reclaim close's fence: retires <paramref name="absorbedLeafId"/>'s
+    /// append-epoch entry at every WAL partition, then reads every partition's
+    /// allocator head. The heads are read only after every retirement has returned, so
+    /// each append the absorbed leaf made is either allocated below them or rejected.
+    /// Backstops the absorbed leaf's own clear, whose retirement failure is logged.
+    /// </summary>
+    internal static async Task<long[]> RetireAbsorbedAndCaptureHeadsAsync(IGrainFactory grainFactory, string treeId, int partitions, Guid absorbedLeafId)
+    {
+        var retirements = new Task<long>[partitions];
+        for (var p = 0; p < partitions; p++)
+        {
+            retirements[p] = grainFactory
+                .GetGrain<IWalShardGrain>(string.Concat(treeId, "/", p.ToString(System.Globalization.CultureInfo.InvariantCulture)))
+                .RetireAppendEpochAsync(absorbedLeafId, WalAppendFenceRows.RowEpochUnread, CancellationToken.None);
+        }
+
+        await Task.WhenAll(retirements);
+        return await BPlusLeafGrain.CaptureAllocatorHeadsAsync(grainFactory, treeId, partitions);
     }
 
     /// <summary>

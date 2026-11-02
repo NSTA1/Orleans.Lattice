@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Primitives;
 using Orleans.Storage;
 using Orleans.TestingHost;
 
@@ -126,5 +127,46 @@ public sealed class LeafHandOffFenceIntegrationTests
             Assert.That(reclaimCloses, Is.InRange(1, reclaimed), "a folded leaf's reclaim marker closes on its surviving predecessor (a survivor later folded itself takes its markers with it)");
         });
         Assert.That(await tree.CountAsync(), Is.EqualTo(60));
+    }
+
+    [Test]
+    public async Task A_reclaim_close_retires_the_absorbed_leaf_at_every_partition_before_reading_the_heads()
+    {
+        // The reclaim close's own fence, which backstops the absorbed leaf's clear: a
+        // duplicate of the absorbed leaf still holding its epoch must be refused at
+        // every partition once the close has read its heads.
+        const string Name = "handoff-reclaim-fence";
+        var (tree, _) = await NewTreeAsync(Name);
+        var partitions = await SiloServices.GetRequiredService<LatticeOptionsResolver>().GetWalPartitionsAsync(Name);
+        var absorbed = Guid.NewGuid();
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            var claim = await _cluster.GrainFactory.GetGrain<IWalShardGrain>($"{Name}/{partition}")
+                .ClaimAppendEpochAsync(absorbed, 3, CancellationToken.None);
+            Assert.That(claim.Accepted, Is.True, "precondition: the absorbed leaf holds epoch 3 everywhere");
+        }
+
+        var heads = await ShardRootGrain.RetireAbsorbedAndCaptureHeadsAsync(
+            SiloServices.GetRequiredService<IGrainFactory>(), Name, partitions, absorbed);
+
+        Assert.That(heads, Has.Length.EqualTo(partitions));
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            var duplicate = await _cluster.GrainFactory.GetGrain<IWalShardGrain>($"{Name}/{partition}").AppendStampedAsync(
+                new WalRecord
+                {
+                    TreeId = Name,
+                    Op = MutationKind.Set,
+                    Key = "late",
+                    Value = [1],
+                    Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+                },
+                WalAppendStamp.ForLeaf(absorbed, 3),
+                CancellationToken.None);
+            Assert.That(duplicate.Outcome, Is.Not.EqualTo(WalAppendFenceOutcome.Admitted),
+                $"partition {partition}: the absorbed leaf's late append is rejected, never allocated above the heads");
+        }
+
+        Assert.That(await tree.CountAsync(), Is.EqualTo(120));
     }
 }
