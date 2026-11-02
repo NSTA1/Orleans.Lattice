@@ -1324,7 +1324,8 @@ internal sealed partial class BPlusLeafGrain
                 using (AwaitDiagnostics.Begin(
                     "leaf.split.merge-batch", context.GrainId, AwaitDiagnostics.Enabled ? splitDiag + " rows=" + batch.Count : null))
                 {
-                    await newLeaf.MergeEntriesAsync(batch);
+                    await WalFenceSeamRetry.RunAsync(
+                        () => newLeaf.MergeEntriesAsync(batch), WalFenceSeamRetry.CallerLeaf, state.State.TreeId);
                 }
 
                 // Drop the batch from the donor before reading the next one, so
@@ -1405,7 +1406,8 @@ internal sealed partial class BPlusLeafGrain
                 "leaf.split.stragglers", context.GrainId, AwaitDiagnostics.Enabled ? splitDiag + " rows=" + stragglers.Count : null))
             {
                 await TransferShadowMarkersToSiblingAsync(newLeaf, stragglers.Keys);
-                await newLeaf.MergeEntriesAsync(stragglers);
+                await WalFenceSeamRetry.RunAsync(
+                    () => newLeaf.MergeEntriesAsync(stragglers), WalFenceSeamRetry.CallerLeaf, state.State.TreeId);
             }
             RemoveTransferredRows(stragglers);
             BumpLocalRevision();

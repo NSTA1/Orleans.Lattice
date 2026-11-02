@@ -465,8 +465,9 @@ internal sealed partial class BPlusLeafGrain
         _commitLogWriterResolved = true;
         var inner = context.ActivationServices?.GetService<ICommitLogWriter>();
         // Every leaf append raises the override holds its records need first
-        // (issue #4641); see BPlusLeafGrain.OverrideHold.cs.
-        _commitLogWriter = inner is null ? null : new OverrideHoldCommitLogWriter(this, inner);
+        // (issue #4641); see BPlusLeafGrain.OverrideHold.cs. Each is stamped by
+        // the activation's append fence (epic #5605); see BPlusLeafGrain.AppendEpoch.cs.
+        _commitLogWriter = inner is null ? null : new OverrideHoldCommitLogWriter(this, WithAppendFence(inner));
         return _commitLogWriter;
     }
 

@@ -140,6 +140,12 @@ public static class LatticeMetrics
     public const string TagReason = "reason";
 
     /// <summary>
+    /// Tag key for the class of caller whose seam retried a leaf write after an
+    /// append-fence rejection, on <see cref="WalAppendFenceSeamRetries"/> (epic #5605).
+    /// </summary>
+    public const string TagCaller = "caller";
+
+    /// <summary>
     /// Tag key for the write origin that reached a leaf (<c>client_write</c>,
     /// <c>merge</c>, or <c>cross_shard_migration</c>) on
     /// <see cref="LeafSpanFailOpenCommits"/>, which separates a deliberate
@@ -11309,4 +11315,107 @@ public static class LatticeMetrics
     public static readonly Counter<long> CopyReceiveFencedApplies =
         Meter.CreateCounter<long>("orleans.lattice.restore.copy_receive_fenced", unit: "{apply}",
             description: "Replication applies refused because they routed to a restored copy a coordinated restore has fenced: still closed, or admitted before the restore paused receiving.");
+
+    /// <summary>
+    /// <see cref="TagKind"/> value on <see cref="WalAppendFenceClaims"/> for a leaf's
+    /// append-epoch claim at a WAL partition (epic #5605).
+    /// </summary>
+    public const string AppendFenceKindEpoch = "epoch";
+
+    /// <summary>
+    /// <see cref="TagKind"/> value on <see cref="WalAppendFenceClaims"/> for a
+    /// shard-level initiator's routing-generation re-claim (epic #5605).
+    /// </summary>
+    public const string AppendFenceKindGeneration = "generation";
+
+    /// <summary><see cref="TagOutcome"/> value on <see cref="WalAppendFenceClaims"/> for an accepted claim.</summary>
+    public static readonly KeyValuePair<string, object?> AppendFenceClaimAccepted = new(TagOutcome, "accepted");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="WalAppendFenceClaims"/> for a
+    /// refused claim: not above the entry, or not above the partition's retired floor.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> AppendFenceClaimRefused = new(TagOutcome, "refused");
+
+    /// <summary><see cref="TagReason"/> value on <see cref="WalAppendFenceRejections"/>: the stamp's epoch was superseded.</summary>
+    public static readonly KeyValuePair<string, object?> AppendFenceRejectedStaleEpoch = new(TagReason, "stale_epoch");
+
+    /// <summary><see cref="TagReason"/> value on <see cref="WalAppendFenceRejections"/>: the leaf's entry was not loaded.</summary>
+    public static readonly KeyValuePair<string, object?> AppendFenceRejectedUnloadedEntry = new(TagReason, "unloaded_entry");
+
+    /// <summary><see cref="TagReason"/> value on <see cref="WalAppendFenceRejections"/>: the stamp's routing generation was superseded.</summary>
+    public static readonly KeyValuePair<string, object?> AppendFenceRejectedStaleGeneration = new(TagReason, "stale_generation");
+
+    /// <summary><see cref="TagReason"/> value on <see cref="WalAppendFenceRejections"/>: the initiator's generation entry was not loaded.</summary>
+    public static readonly KeyValuePair<string, object?> AppendFenceRejectedUnloadedGeneration = new(TagReason, "unloaded_generation");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value mapped from <see cref="BPlusTree.Grains.WalAppendFenceOutcome.Admitted"/>
+    /// for exhaustiveness only: an admitted append is never recorded on <see cref="WalAppendFenceRejections"/>.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> AppendFenceAdmitted = new(TagReason, "admitted");
+
+    /// <summary>The <see cref="TagReason"/> pair <see cref="WalAppendFenceRejections"/> records for <paramref name="outcome"/>.</summary>
+    internal static KeyValuePair<string, object?> AppendFenceRejectionReason(BPlusTree.Grains.WalAppendFenceOutcome outcome) => outcome switch
+    {
+        BPlusTree.Grains.WalAppendFenceOutcome.StaleEpoch => AppendFenceRejectedStaleEpoch,
+        BPlusTree.Grains.WalAppendFenceOutcome.UnloadedEntry => AppendFenceRejectedUnloadedEntry,
+        BPlusTree.Grains.WalAppendFenceOutcome.StaleGeneration => AppendFenceRejectedStaleGeneration,
+        BPlusTree.Grains.WalAppendFenceOutcome.UnloadedGeneration => AppendFenceRejectedUnloadedGeneration,
+        _ => AppendFenceAdmitted,
+    };
+
+    /// <summary>
+    /// Counter of append-epoch and routing-generation claims served by WAL
+    /// partitions (epic #5605), tagged with <see cref="TagTree"/>, the tenant,
+    /// <see cref="TagKind"/> (<c>epoch</c> or <c>generation</c>) and
+    /// <see cref="TagOutcome"/> (<c>accepted</c> or <c>refused</c>). A leaf
+    /// activation claims once per partition it writes while the append-fence gate
+    /// is open, so the accepted rate follows leaf activations, not writes. A refusal
+    /// is expected once after a leaf's retirement raises a partition's retired floor
+    /// (the next new leaf claims above it); a sustained refusal rate on one tree
+    /// means activations of the same leaf are contending.
+    /// </summary>
+    public static readonly Counter<long> WalAppendFenceClaims =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.claims", unit: "{claim}",
+            description: "Append-epoch and routing-generation claims served by WAL partitions (epic #5605), by tree, kind (epoch or generation) and outcome (accepted or refused).");
+
+    /// <summary>
+    /// Counter of stamped WAL appends the append fence rejected (epic #5605),
+    /// tagged with <see cref="TagTree"/>, the tenant and <see cref="TagReason"/>:
+    /// <c>stale_epoch</c> (a superseded activation of a leaf tried to append; it
+    /// deactivates and the write is retried against the live activation),
+    /// <c>unloaded_entry</c> (the partition restarted or moved since the leaf's
+    /// claim; the leaf re-presents its claim and retries), <c>stale_generation</c>
+    /// and <c>unloaded_generation</c> (the same for a shard-level initiator's
+    /// routing generation). Every rejection is retried at the seam that raised it,
+    /// so none reaches a caller.
+    /// </summary>
+    public static readonly Counter<long> WalAppendFenceRejections =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.rejections", unit: "{append}",
+            description: "Stamped WAL appends the append fence rejected (epic #5605), by tree and reason (stale_epoch, unloaded_entry, stale_generation, unloaded_generation); each is retried at its seam and never reaches a caller.");
+
+    /// <summary>
+    /// Counter of leaf-write retries after an append-fence rejection (epic #5605),
+    /// tagged with <see cref="TagCaller"/>, the class of caller whose seam retried.
+    /// A retry re-issues the write against the leaf's live activation until the
+    /// operation's existing deadline; a non-zero rate means stale duplicate
+    /// activations were superseded and their writes re-routed.
+    /// </summary>
+    public static readonly Counter<long> WalAppendFenceSeamRetries =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.seam_retries", unit: "{retry}",
+            description: "Leaf-write retries after an append-fence rejection (epic #5605), by the class of caller whose seam retried.");
+
+    /// <summary>
+    /// Counter of stamped WAL appends whose response reported an unstamped append
+    /// the leaf had not seen reported before (epic #5605), tagged with
+    /// <see cref="TagTree"/> and the tenant. An unstamped append comes from a saga
+    /// coordinator appending a transaction terminal, or from a silo whose view of the
+    /// append-fence gate is closed, typically one running an older build during a
+    /// rolling upgrade. It is always admitted; a leaf must read past every one
+    /// reported to it before its checkpoint may skip records.
+    /// </summary>
+    public static readonly Counter<long> WalAppendFenceUnstampedReports =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.unstamped_reports", unit: "{report}",
+            description: "Stamped WAL append responses that reported an unstamped append (a saga coordinator's transaction terminal, or an append from a silo whose append-fence gate is closed) made after the leaf's claim (epic #5605), by tree.");
 }

@@ -104,6 +104,11 @@ public static class LatticeServiceCollectionExtensions
         // The check reports every outcome of the probe itself.
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IPostConfigureOptions<LoggerFilterOptions>, GrainStorageFencingProbeLogFilter>());
+
+        // Epic #5605: fence rejections are retried for as long as the silo's
+        // response timeout lets the carrying call answer.
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<ILifecycleParticipant<ISiloLifecycle>, BPlusTree.Grains.WalFenceSeamRetryBudget>());
         builder.Services.AddSingleton<LatticeOptionsResolver>();
         builder.Services.AddOptions<Operations.LatticeOperationOptions>();
         builder.Services.TryAddSingleton<Operations.ILatticeOperationSiloLiveness, Operations.ClusterMembershipOperationSiloLiveness>();
@@ -245,6 +250,9 @@ public static class LatticeServiceCollectionExtensions
         // Issue #4586: a replicated tree's WAL partitions advance their clock
         // floor only while every active silo advertises the floor capability.
         builder.Services.TryAddSingleton<IWalClockFloorGate, ClusterManifestWalClockFloorGate>();
+        // Epic #5605: leaves claim append epochs and stamp WAL appends only while
+        // every active silo advertises the append-fence capability.
+        builder.Services.TryAddSingleton<IWalAppendFenceGate, ClusterManifestWalAppendFenceGate>();
         // Issue #4615: a tree reaps tombstones on the grace period alone unless
         // a replicating host bounds the reap on its replication frontier.
         builder.Services.TryAddSingleton<ITombstoneReapGate, UngatedTombstoneReapGate>();
