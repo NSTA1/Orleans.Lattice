@@ -1053,7 +1053,7 @@ internal sealed partial class BPlusLeafGrain
             // start above it. So every such commit applies before the division
             // begins. Nothing is persisted yet, so a drain that does not finish
             // declines the division, which the next write retries.
-            if (false && !await DrainMutationsAdmittedBeforeAsync(ownMutationScopes)) // RED-PROOF M2
+            if (!await DrainMutationsAdmittedBeforeAsync(ownMutationScopes))
             {
                 RecordSplitAttempt(LatticeMetrics.LeafSplitCommitsInFlight);
                 return null;
@@ -1150,10 +1150,6 @@ internal sealed partial class BPlusLeafGrain
         // sibling no read position, and it replays its range from the log's start,
         // and the donor keeps its own; both see every record they own.
         long[]? resolvedHeads = walHeadsAtSplit;
-        if (resolvedHeads is null && !string.IsNullOrEmpty(state.State.TreeId)) // RED-PROOF M3
-        {
-            resolvedHeads = await CaptureWalHeadsByPartitionAsync(state.State.TreeId);
-        }
 
         var oldNextId = state.State.OldNextSibling;
 
