@@ -31,6 +31,9 @@ public sealed partial class AuditorsReviewChapter
         var shell = dana.Shell;
         var content = shell.Content;
         await shell.GoToAreaAsync("schema");
+        // The address changes before the Schema page replaces the previous area's content, which
+        // also links factory-orders (to its Data workspace): wait for the Schema page first.
+        await shell.ExpectHeadingAsync("Schema");
         var link = content.GetByRole(AriaRole.Link, new() { Name = Names.Trees.FactoryOrders, Exact = true }).First;
         await Expect(link).ToBeVisibleAsync();
         await link.ClickAsync();
