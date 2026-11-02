@@ -653,6 +653,28 @@ ForeignReject ==
                    advancedPastForeign, dupAdvanced, trimAfterAdvance, reloaded, floorClaim,
                    claimRefused, selfReported>>
 
+(* StraddleRetry (#5705): the seam retry of a write the purged incarnation *)
+(* admitted, its stamp at or below the tree's routing floor. Production's  *)
+(* WAL floor refuses it at every partition, whatever the model's entry     *)
+(* says. The retry would reload the initiator's marker (absent, or the     *)
+(* re-created incarnation's) or raise it above the refusal (#5663), either *)
+(* way re-stamping at the floor plus one, a generation the re-created      *)
+(* incarnation shares. The rule: a write admitted at or below the routing  *)
+(* floor is never re-stamped; its retry surfaces the deleted-tree outcome. *)
+StraddleRetry ==
+    /\ recreated
+    /\ fpend
+    /\ fstamp <= rFloor
+    /\ fpend' = FALSE
+    /\ fkind' = "point"
+    /\ fstamp' = 0
+    /\ fFence' = fFence
+    /\ fRejected' = (fRejected \/ Ghosts)
+    /\ UNCHANGED <<walkVars, floorVars, walVars, leafVars, epochVars, hoOpen, hoClosedAt, windows, fEpoch,
+                   gateVars, viewVars, oldVars, envVars, safeVars, rejected, advanced,
+                   advancedPastForeign, dupAdvanced, trimAfterAdvance, reloaded, floorClaim,
+                   claimRefused, selfReported>>
+
 (***************************************************************************)
 (* Another shard's walk of a tree-level range delete (WithTreeWalk). Its   *)
 (* record is replayed by L because range-delete records are not key-       *)
@@ -1005,7 +1027,7 @@ Next ==
     \/ \E a \in Acts : OwnAlloc(a) \/ StaleAppend(a) \/ OwnAllocUnstamped(a)
     \/ RetireOther
     \/ \E o \in Offs : Land(o)
-    \/ ForeignOpen \/ ForeignAlloc \/ ForeignReject \/ Close
+    \/ ForeignOpen \/ ForeignAlloc \/ ForeignReject \/ Close \/ StraddleRetry
     \/ GAdmit \/ GAlloc \/ GReject \/ GRestamp \/ GUnstamped \/ OtherIntentClose
     \/ \E k \in Kinds : ForeignAdmit(k)
     \/ \E o \in Offs, a \in Acts : HandOff(o, a)

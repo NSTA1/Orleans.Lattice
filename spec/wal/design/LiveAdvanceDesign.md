@@ -833,9 +833,11 @@ they are claimed. Under that weaker WAL, two further rules are load-bearing.
 `ClaimRoutingGenerationAsync` loads the tree's routing floor once per WAL shard
 activation and refuses a claim at or below it, with the floor included in the refusal
 threshold. `RetireRoutingGenerationsAsync` raises the floor in memory and drops the
-loaded entries before deleting any row. So a straddler re-presenting its old generation
-after retirement is refused at every partition before any re-created claim, and no
-generation is admitted without a claim that meets the floor. It is strictly stronger
+loaded entries before deleting any row. So a straddler's write re-presenting its **old**
+generation after retirement is refused at every partition, and no generation is admitted
+without a claim that meets the floor. The refusal does not end the write, though: its
+seam retry would re-stamp it at a generation above the floor (the third rule below). It
+is strictly stronger
 than the model: it only adds refusals, and only of generations at or below the floor,
 which no claimant of the re-created incarnation holds, so it cannot refuse a current
 initiator. The rules below still hold, because between the purge's WAL trim and the
@@ -864,10 +866,36 @@ fence's recorded heads place those appends below the point the leaves re-arm fro
   of both head vectors as a close (token `recreate:{floor}`, the whole range), all before
   `TryInitialiseHandOffMarkerAsync`. Every step is idempotent, and a failure leaves the
   marker uninitialised.
+- **A write admitted at or below the routing floor is never re-stamped (#5705).** A write
+  admitted before the delete can still be in its shard root's seam retry when an
+  immediate purge retires the rows. Its leaf re-presents the old generation, and the WAL
+  floor refuses it. The retry then reloads the shard root's marker. If the purge deleted
+  it, #5663's refusal-driven raise re-creates it at the floor plus one, because
+  `HandOffMarkerRows.UpdateAsync` re-reads and writes an absent row rather than
+  conflicting. If the re-created incarnation's marker already exists, the reload reads
+  the floor plus one. Either way the write is re-admitted under a generation the
+  re-created incarnation shares, the #5641 shape for generations, and is admitted above
+  the heads its first initialisation recorded (`ReadPositionHonestStraddlerRaiseRecreatesMarker`,
+  16 states). So the retry of a write whose generation is at or below the floor, or that
+  meets a refusal at the floor while its marker is absent, surfaces the deleted-tree
+  outcome instead of re-admitting, and never creates a marker or generation row. In
+  production (#5703):
+  - **Writes.** `NextRoutingRetryAsync`, the one seam every shard-root retry loop calls,
+    reads the tree's routing floor before it reloads or raises anything (on the stale
+    path only). A write whose admitted generation is at or below the floor throws
+    today's deleted-tree outcome, the existing `InvalidOperationException`. A live
+    incarnation's generations are at least the floor plus one, so it never fires for one.
+  - **Marker writes,** as defence for the open and close paths, which carry no stamp. An
+    activation that has seen its marker row exist and then finds it absent at an update
+    treats it as retired by the purge, throws the same outcome, and never re-creates the
+    row, so a purged incarnation's in-flight close cannot raise above the floor.
+    `EnsureRootAsync` resets that knowledge when it re-seeds a purged tombstone, so the
+    re-created incarnation creates its marker normally.
 
-A straddling shard root's own close re-claims at most the floor plus one, fencing only
-its own writes, and its marker write meets a row the purge deleted, so its conditional
-write conflicts. The model has one foreign author, so neither is modelled.
+  In the model, `StraddleRetry` is the retry: the purged incarnation's pending write
+  fails, whether or not the model's absent entry would have admitted it. The marker-write
+  guard is not modelled separately, because the model's one foreign author has no
+  purged-incarnation close.
 
 **Shard-level marker.** The moved slots of an adaptive split or a shard fold, and the
 leaves a range delete reaches, scatter across a shard's leaves, so a per-leaf marker
@@ -1391,7 +1419,7 @@ plus `TypeOK`):
 | Configuration | Switches | Distinct states | Depth | Time |
 |---------------|----------|-----------------|-------|------|
 | `WalLiveAdvance.cfg` (base) | batch, two windows | 4,822,222 | 35 | 118 s |
-| `WalLiveAdvanceRecreate.cfg` | `WithRecreate`, `Ghosts` on | 6,748,568 | 36 | 479 s |
+| `WalLiveAdvanceRecreate.cfg` | `WithRecreate`, `Ghosts` on | 6,944,389 | 36 | 357 s |
 | `WalLiveAdvanceRestart.cfg` | `WithRestart` | 7,803,467 | 35 | 180 s |
 | `WalLiveAdvanceFrozenView.cfg` | `FrozenView` | 1,354,237 | 33 | 33 s |
 | `WalLiveAdvanceMixed.cfg` | `WithMixedVersion` | 2,525,889 | 33 | 57 s |
@@ -1420,8 +1448,9 @@ a promotion-member CI configuration, with the other combinations). Mutation trac
 vary by one state between runs. `MixedRestart` is the reviewer's Mixed+Restart+duplicate
 combination (S8) on the reduced instance. #5668 changed `Recreate` (the routing floor,
 the retired generation entry, the deleted marker) and gave `MarkInit` a branch that
-fires only after it; Recreate was re-run, clean at 6,748,568, and no other configuration
-enables `Recreate`, so they are unchanged by construction.
+fires only after it, and #5705 added `StraddleRetry`, enabled only after it; Recreate was
+re-run, clean at 6,944,389, and no other configuration enables `Recreate`, so they are
+unchanged by construction.
 
 **Combinations no configuration covers.** The reviewer's clean runs on revision 2 stand
 as evidence for now: Mixed+Restart+duplicate on the full instance (31,777,796 states),
@@ -1464,6 +1493,7 @@ in states including the initial one.
 | `ReadPositionHonestRoutingRecreatedAtOne` | The routing floor in the first generation (#5668): the re-created incarnation starts at 1, and a straddling shard root's pre-purge write carries the generation it claims | `ReadPositionHonest` | Recreate | 15 |
 | `ReadPositionHonestRoutingFloorAfterDeletes` | The floor written before the deletes (#5668): with a crash between, the re-drive reads deleted rows and never raises it | `ReadPositionHonest` | Recreate | 15 |
 | `ReadPositionHonestRoutingInitWithoutClaim` | The fence at the re-created incarnation's first initialisation (#5668): the seeded generation is not claimed, and the absent entry admits the straddling write above the recorded heads | `ReadPositionHonest` | Recreate | 15 |
+| `ReadPositionHonestStraddlerRaiseRecreatesMarker` | The straddler rule (#5705): a write refused at the routing floor is re-stamped by its seam retry at the floor plus one, which the reload or #5663's raise re-creating the deleted marker gives it, and is re-admitted under the re-created incarnation's generation | `ReadPositionHonest` | Recreate | 16 |
 | `ReadPositionHonestRoutingPurgeKeepsMarkerInit` | Rule 2 at the purge (#5668): the deleted marker still reads initialised, releasing a foreign write the open marker held | `ReadPositionHonest` | Recreate | 13 |
 | `StaleEpochNeverAppendsRecreateKeepsLoadedEntry` | Retirement removing the WAL shard's loaded entry: it deletes the rows only, with no append floor check (#5635's condition) | `StaleEpochNeverAppends` | Recreate | 9 |
 | `StaleEpochNeverAppendsUnloadedEntryAccepted` | The unloaded-entry rejection | `StaleEpochNeverAppends` | Restart | 12 |
@@ -1662,11 +1692,17 @@ Each production member carries detectors proven red. They land in this order:
 | #5702: a run shares a hint; deferred, batched closes | Section 3: a chunk's hint may be any head read before its first leaf is born, and a run reads heads only at its start. Completed append tokens close in batches by one fence and one marker write. Hand-off table updated. |
 | #5706: a resumed division cannot drain in-flight commits | Section 2: a resumed division applies no read position; the sibling replays from its own start. |
 
+### After acceptance: #5703's review, S1 (#5705)
+
+| Finding | Resolution |
+|---------|------------|
+| S1: a straddling write's seam retry re-creates the purged marker above the floor | Section 2, "Purging a tree's fence rows", corrects two claims. The WAL floor refuses only the straddler's **old** generation. And a purged incarnation's marker write does not conflict: `UpdateAsync` re-creates an absent row. New rule: a write admitted at or below the routing floor is never re-stamped, and surfaces the deleted-tree outcome. Production (#5703) applies it in `NextRoutingRetryAsync`, plus a seen-then-absent guard on marker writes. Model: `StraddleRetry`, with mutation `StraddlerRaiseRecreatesMarker` (16 states). Recreate is clean at 6,944,389. |
+
 ### After acceptance: per-tree fence rows at purge (#5668)
 
 | Finding | Resolution |
 |---------|------------|
-| #5668: the per-tree fence rows are never deleted | Section 2, "Purging a tree's fence rows": the floor is max-merged into `_lattice_tree-routing-floor` before any delete, then the rows are retired, and a re-created incarnation starts at the floor plus one. Modelling it surfaced two further rules: the deleted marker reads uninitialised, and the first initialisation after a purge claims its seeded generation at every partition before reading initialised, because in the model an absent generation entry admits any stamp. Production also keeps a WAL-side generation floor, recorded as unmodelled defence in depth; the init fence still covers a straddler's appends between the WAL trim and the retirement. `Recreate` and `MarkInit` model all of it, with four mutations (`RoutingRecreatedAtOne`, `RoutingFloorAfterDeletes`, `RoutingInitWithoutClaim`, `RoutingPurgeKeepsMarkerInit`) and the witness `WitnessRecreatedStraddleFenced`; Recreate is clean at 6,748,568. |
+| #5668: the per-tree fence rows are never deleted | Section 2, "Purging a tree's fence rows": the floor is max-merged into `_lattice_tree-routing-floor` before any delete, then the rows are retired, and a re-created incarnation starts at the floor plus one. Modelling it surfaced two further rules: the deleted marker reads uninitialised, and the first initialisation after a purge claims its seeded generation at every partition before reading initialised, because in the model an absent generation entry admits any stamp. Production also keeps a WAL-side generation floor, recorded as unmodelled defence in depth; the init fence still covers a straddler's appends between the WAL trim and the retirement. `Recreate` and `MarkInit` model all of it, with four mutations (`RoutingRecreatedAtOne`, `RoutingFloorAfterDeletes`, `RoutingInitWithoutClaim`, `RoutingPurgeKeepsMarkerInit`) and the witness `WitnessRecreatedStraddleFenced`; Recreate is clean at 6,748,568 (6,944,389 after #5705). |
 
 ### After acceptance: member 2's review (#5644), S2
 
