@@ -53,6 +53,11 @@ internal sealed class ClusterManifestWalAppendFenceGate : IWalAppendFenceGate
             var snapshot = _membership.CurrentSnapshot;
             lock (_gate)
             {
+                if (_evaluated && _open)
+                {
+                    return true; // RED-PROOF: gate ratcheted
+                }
+
                 if (_evaluated && manifest.Version == _manifestVersion && snapshot.Version == _membershipVersion)
                 {
                     return _open;

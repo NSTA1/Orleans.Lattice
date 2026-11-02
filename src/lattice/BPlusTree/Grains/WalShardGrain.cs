@@ -873,6 +873,10 @@ internal sealed partial class WalShardGrain(
                 // pairs the floor with the next offset under it.
                 refusedBelow = _floor;
             }
+            else if (!TShape.Stamped && _epochEntries is { Count: > 0 })
+            {
+                throw new WalAppendEpochStaleException(); // RED-PROOF: unstamped rejected
+            }
             else if (TShape.Stamped && (fenceOutcome = AdmitStampLocked(in stamp)) != WalAppendFenceOutcome.Admitted)
             {
                 // Epic #5605: the stamp is checked in the same locked step that
@@ -1185,8 +1189,7 @@ internal sealed partial class WalShardGrain(
                         }
                         else if (i == 0 && count > 1)
                         {
-                            RegisterStampedBatchLocked(stamp.LeafId);
-                            batchRegistered = true;
+                            // RED-PROOF: batch barrier removed
                         }
                         offsets[i] = offset;
                         _pendingSegments.Add(segments[i]);

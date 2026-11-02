@@ -149,7 +149,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 return new ValueTask<WalAppendStamp?>((WalAppendStamp?)null);
             }
 
-            if (_epoch > 0 && _partitions.TryGetValue(partition, out var claimed) && claimed.ClaimedEpoch == _epoch)
+            if (_epoch > 0 && _partitions.TryGetValue(partition, out var claimed) && claimed.ClaimedEpoch > 0) // RED-PROOF: no re-claim
             {
                 return new ValueTask<WalAppendStamp?>(WalAppendStamp.ForLeaf(_leafId, _epoch));
             }
@@ -226,7 +226,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     {
         try
         {
-            for (var round = 1; round <= MaxClaimRounds; round++)
+            for (var round = 1; round <= MaxClaimRounds * 2; round++) // RED-PROOF: round cap
             {
                 Task claim;
                 lock (_sync)
@@ -237,7 +237,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                     }
 
                     var p = PartitionLocked(partition);
-                    if (_epoch > 0 && p.ClaimedEpoch == _epoch)
+                    if (_epoch > 0 && p.ClaimedEpoch > 0) // RED-PROOF: no re-claim
                     {
                         return WalAppendStamp.ForLeaf(_leafId, _epoch);
                     }
