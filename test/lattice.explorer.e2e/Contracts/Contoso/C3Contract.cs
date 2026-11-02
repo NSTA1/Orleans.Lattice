@@ -41,7 +41,7 @@ public sealed class C3Contract() : ChapterContract("C3")
                 await EstablishOnceAsync(context);
                 return;
             }
-            catch (RpcException ex) when (attempt < 3 && ex.StatusCode is StatusCode.Internal or StatusCode.Unavailable or StatusCode.DeadlineExceeded)
+            catch (RpcException ex) when (attempt < 3 && ex.StatusCode is StatusCode.Internal or StatusCode.Unavailable or StatusCode.DeadlineExceeded or StatusCode.ResourceExhausted)
             {
                 ContractRetries.Record("C3's teardown", clock.Elapsed, $"{ex.StatusCode}: {ex.Status.Detail}");
                 await Task.Delay(TimeSpan.FromSeconds(10));
@@ -104,9 +104,16 @@ public sealed class C3Contract() : ChapterContract("C3")
         var scrub = await backup.StartCatalogScrubAsync(pruneOrphans: true);
         await ContractWait.SucceededAsync("the catalogue scrub", () => backup.GetBackupOperationStatusAsync(scrub.OperationId), OperationPatience);
 
+        // Each purge walks its tree's shards one after another, telemetry-snap-online's at least
+        // 32 of them, so all three are started before any is awaited and their walks overlap.
         foreach (var tree in SnapshotTrees)
         {
-            await ContractCalls.DeleteAndPurgeAsync(facades.TreeAdmin, tree);
+            await ContractCalls.BeginDeleteAndPurgeAsync(facades.TreeAdmin, tree);
+        }
+
+        foreach (var tree in SnapshotTrees)
+        {
+            await ContractCalls.WaitForPurgeAsync(facades.TreeAdmin, tree);
         }
 
         foreach (var view in new[] { Names.Views.OrdersByStatus, Names.Views.OrdersHistory })

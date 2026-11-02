@@ -239,6 +239,15 @@ public static class ContractCalls
     /// <param name="treeId">The tree.</param>
     public static async Task DeleteAndPurgeAsync(LatticeTreeAdminApiGrpcClient admin, string treeId)
     {
+        await BeginDeleteAndPurgeAsync(admin, treeId);
+        await WaitForPurgeAsync(admin, treeId);
+    }
+
+    /// <summary>Soft-deletes a tree and starts its purge, without waiting for it; idempotent.</summary>
+    /// <param name="admin">The TreeAdmin API.</param>
+    /// <param name="treeId">The tree.</param>
+    public static async Task BeginDeleteAndPurgeAsync(LatticeTreeAdminApiGrpcClient admin, string treeId)
+    {
         if (await TreeIsPurgedAsync(admin, treeId))
         {
             return;
@@ -250,7 +259,49 @@ public static class ContractCalls
         }
 
         await admin.PurgeTreeAsync(treeId, confirm: true);
-        await ContractWait.UntilAsync($"the purge of {treeId}", () => TreeIsPurgedAsync(admin, treeId));
+    }
+
+    /// <summary>How long a purge may go without purging another shard.</summary>
+    public static readonly TimeSpan PurgeStall = TimeSpan.FromMinutes(3);
+
+    /// <summary>The absolute deadline for one purge, however steadily it advances.</summary>
+    public static readonly TimeSpan PurgeCeiling = TimeSpan.FromMinutes(15);
+
+    /// <summary>
+    /// Waits for a started purge to complete. A purge walks the tree's shards one after another,
+    /// so its length scales with the shard count: the wait fails only when the walk stops
+    /// purging shards for <see cref="PurgeStall"/>, or runs past <see cref="PurgeCeiling"/>, and
+    /// reports the walk's trajectory (#5724).
+    /// </summary>
+    /// <param name="admin">The TreeAdmin API.</param>
+    /// <param name="treeId">The tree.</param>
+    public static async Task WaitForPurgeAsync(LatticeTreeAdminApiGrpcClient admin, string treeId)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var purged = -1;
+        var trajectory = new List<string>();
+        await ContractWait.UntilAdvancingAsync(
+            $"the purge of {treeId}",
+            async () =>
+            {
+                if (!(await admin.CheckTreeExistsAsync(treeId)).Exists)
+                {
+                    return true;
+                }
+
+                var status = await admin.GetTreeDeletionStatusAsync(treeId);
+                if (status.PurgedShardCount != purged)
+                {
+                    purged = status.PurgedShardCount;
+                    trajectory.Add($"{status.PurgedShardCount}/{status.PurgeShardCount} at {clock.Elapsed.TotalSeconds:0} s");
+                }
+
+                return status.PurgeComplete;
+            },
+            () => purged,
+            PurgeStall,
+            PurgeCeiling,
+            () => trajectory.Count == 0 ? "no status read" : string.Join(", ", trajectory));
     }
 
     /// <summary>Every catalogued backup of <paramref name="treeId"/> (or of every tree), newest first.</summary>

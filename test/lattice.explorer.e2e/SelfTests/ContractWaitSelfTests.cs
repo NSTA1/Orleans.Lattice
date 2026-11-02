@@ -1,0 +1,62 @@
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts;
+
+namespace Orleans.Lattice.Explorer.EndToEnd.Tests.SelfTests;
+
+/// <summary>
+/// The progress-aware wait's contract (#5724, #5725): it returns once the condition holds, keeps
+/// waiting past the stall window while the work advances, fails when the work stops advancing,
+/// and fails at the ceiling however steadily the work advances, naming the progress reached.
+/// </summary>
+[TestFixture]
+[Category("EndToEnd")]
+public sealed class ContractWaitSelfTests
+{
+    private static readonly TimeSpan Stall = TimeSpan.FromSeconds(2);
+
+    /// <summary>A condition that holds returns at once.</summary>
+    [Test]
+    public async Task A_condition_that_holds_returns()
+    {
+        await ContractWait.UntilAdvancingAsync("the self-test", () => Task.FromResult(true), () => 0, Stall, TimeSpan.FromMinutes(1), () => "none");
+    }
+
+    /// <summary>Work that advances on every poll outlasts the stall window until the condition holds.</summary>
+    [Test]
+    public async Task Advancing_work_outlasts_the_stall_window()
+    {
+        var progress = 0L;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        await ContractWait.UntilAdvancingAsync(
+            "the self-test",
+            () => Task.FromResult(++progress > 0 && clock.Elapsed > Stall * 2),
+            () => progress,
+            Stall,
+            TimeSpan.FromMinutes(1),
+            () => progress.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        Assert.That(clock.Elapsed, Is.GreaterThan(Stall * 2));
+    }
+
+    /// <summary>Work that stops advancing fails after the stall window, naming its progress.</summary>
+    [Test]
+    public void Stalled_work_fails_and_names_its_progress()
+    {
+        var ex = Assert.ThrowsAsync<TimeoutException>(() => ContractWait.UntilAdvancingAsync(
+            "the self-test", () => Task.FromResult(false), () => 7, Stall, TimeSpan.FromMinutes(1), () => "7 of 9"));
+
+        Assert.That(ex!.Message, Does.Contain("made no progress").And.Contain("7 of 9"));
+    }
+
+    /// <summary>Work that keeps advancing still fails at the ceiling.</summary>
+    [Test]
+    public void Advancing_work_fails_at_the_ceiling()
+    {
+        var progress = 0L;
+
+        var ex = Assert.ThrowsAsync<TimeoutException>(() => ContractWait.UntilAdvancingAsync(
+            "the self-test", () => Task.FromResult(++progress < 0), () => progress, Stall, Stall, () => "advancing"));
+
+        Assert.That(ex!.Message, Does.Contain("ceiling"));
+    }
+}
