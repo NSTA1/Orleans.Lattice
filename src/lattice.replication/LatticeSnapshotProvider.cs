@@ -237,37 +237,107 @@ internal sealed class LatticeSnapshotProvider(
     /// Runs every step of <paramref name="source"/> under a system-origin scope
     /// (issue #5683). The scope is request-context state, which an async iterator
     /// does not keep across its yields - each step resumes in its consumer's
-    /// context - so it is entered afresh around each step, and every grain call
-    /// the step makes carries it.
+    /// context - so every step is started under it, and every grain call the step
+    /// makes carries it.
     /// </summary>
+    /// <remarks>
+    /// Entering the scope writes the request context, which copies it, and
+    /// allocates the scope itself. Rather than paying that per row, the execution
+    /// context is captured once inside one scope and each step is started under
+    /// that capture, which allocates nothing (issue #5713). A host that suppressed
+    /// execution-context flow captures nothing, so it enters the scope per step.
+    /// </remarks>
     internal static async IAsyncEnumerable<SnapshotEntry> InSystemOriginAsync(
         IAsyncEnumerable<SnapshotEntry> source,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var enumerator = source.GetAsyncEnumerator(cancellationToken);
+        var steps = new SystemOriginSteps(source.GetAsyncEnumerator(cancellationToken));
         try
         {
-            while (true)
+            while (await steps.MoveNextAsync().ConfigureAwait(false))
             {
-                bool hasNext;
-                using (LatticeAccessGateContext.EnterSystemOrigin())
-                {
-                    hasNext = await enumerator.MoveNextAsync().ConfigureAwait(false);
-                }
-
-                if (!hasNext)
-                {
-                    yield break;
-                }
-
-                yield return enumerator.Current;
+                yield return steps.Current;
             }
         }
         finally
         {
+            await steps.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Starts each step of an enumerator under one execution context captured
+    /// inside a system-origin scope. Allocated once per export.
+    /// </summary>
+    private sealed class SystemOriginSteps(IAsyncEnumerator<SnapshotEntry> inner)
+    {
+        private static readonly ContextCallback StartMoveNext =
+            static state => ((SystemOriginSteps)state!).StartMoveNextCore();
+
+        private static readonly ContextCallback StartDispose =
+            static state => ((SystemOriginSteps)state!).StartDisposeCore();
+
+        private ExecutionContext? _context;
+        private bool _captured;
+        private ValueTask<bool> _move;
+        private ValueTask _dispose;
+
+        public SnapshotEntry Current => inner.Current;
+
+        public ValueTask<bool> MoveNextAsync()
+        {
+            if (Capture() is { } context)
+            {
+                ExecutionContext.Run(context, StartMoveNext, this);
+                return _move;
+            }
+
+            return MoveNextInScopeAsync();
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            if (Capture() is { } context)
+            {
+                ExecutionContext.Run(context, StartDispose, this);
+                return _dispose;
+            }
+
+            return DisposeInScopeAsync();
+        }
+
+        private ExecutionContext? Capture()
+        {
+            if (!_captured)
+            {
+                using (LatticeAccessGateContext.EnterSystemOrigin())
+                {
+                    _context = ExecutionContext.Capture();
+                }
+
+                _captured = true;
+            }
+
+            return _context;
+        }
+
+        private void StartMoveNextCore() => _move = inner.MoveNextAsync();
+
+        private void StartDisposeCore() => _dispose = inner.DisposeAsync();
+
+        private async ValueTask<bool> MoveNextInScopeAsync()
+        {
             using (LatticeAccessGateContext.EnterSystemOrigin())
             {
-                await enumerator.DisposeAsync().ConfigureAwait(false);
+                return await inner.MoveNextAsync().ConfigureAwait(false);
+            }
+        }
+
+        private async ValueTask DisposeInScopeAsync()
+        {
+            using (LatticeAccessGateContext.EnterSystemOrigin())
+            {
+                await inner.DisposeAsync().ConfigureAwait(false);
             }
         }
     }
