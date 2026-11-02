@@ -2904,7 +2904,7 @@ internal sealed partial class BPlusLeafGrain(
     }
 
     /// <inheritdoc />
-    public async Task NarrowHighKeyAsync(string highKeyExclusive)
+    public async Task<List<LwwEntry>> NarrowHighKeyAsync(string highKeyExclusive)
     {
         using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
@@ -2915,12 +2915,6 @@ internal sealed partial class BPlusLeafGrain(
         await _splitGate.WaitAsync().ConfigureAwait(true);
         try
         {
-            // Narrows only, so a re-driven graft converges rather than widening a
-            // bound a later graft has already narrowed further.
-            var prevHighKey = state.State.HighKeyExclusive;
-            if (prevHighKey is not null && string.CompareOrdinal(prevHighKey, highKeyExclusive) <= 0)
-                return;
-
             if (state.State.LowKeyInclusive is { } low && string.CompareOrdinal(highKeyExclusive, low) <= 0)
             {
                 throw new InvalidOperationException(
@@ -2928,22 +2922,65 @@ internal sealed partial class BPlusLeafGrain(
                     + $"below its low bound '{low}'.");
             }
 
-            state.State.HighKeyExclusive = highKeyExclusive;
-            try
+            // Narrows only, so a re-driven graft converges rather than widening a
+            // bound a later graft has already narrowed further.
+            var prevHighKey = state.State.HighKeyExclusive;
+            if (prevHighKey is null || string.CompareOrdinal(prevHighKey, highKeyExclusive) > 0)
             {
-                await PersistAsync();
+                state.State.HighKeyExclusive = highKeyExclusive;
+                try
+                {
+                    await PersistAsync();
+                }
+                catch
+                {
+                    // Class B revert, as SetKeyRangeAsync reverts.
+                    state.State.HighKeyExclusive = prevHighKey;
+                    throw;
+                }
             }
-            catch
-            {
-                // Class B revert, as SetKeyRangeAsync reverts.
-                state.State.HighKeyExclusive = prevHighKey;
-                throw;
-            }
+
+            // Issue #5610: hand back every row at or above the new bound, tombstones
+            // included, for the graft to relocate into the leaf that now declares
+            // it. Collected after the narrow persisted, so a failed persist strands
+            // nothing, and in one synchronous step with their removal, so a row
+            // stored concurrently is either taken here or stranded by the narrowed
+            // span and relocated by the write path itself (StoreAdmittedEntry). A
+            // re-driven graft collects whatever a crash left behind; a converged
+            // leaf returns nothing.
+            return TakeRowsAtOrAbove(state.State.HighKeyExclusive!);
         }
         finally
         {
             _splitGate.Release();
         }
+    }
+
+    /// <summary>
+    /// Removes and returns every row whose key sorts at or above
+    /// <paramref name="keyInclusive"/>, tombstones included, preserving each
+    /// row's stamp and metadata (issue #5610).
+    /// </summary>
+    private List<LwwEntry> TakeRowsAtOrAbove(string keyInclusive)
+    {
+        List<LwwEntry>? taken = null;
+        foreach (var (key, lww) in Cache.EnumerateRange(keyInclusive, null))
+        {
+            (taken ??= []).Add(new LwwEntry(key, lww));
+        }
+
+        if (taken is null)
+        {
+            return [];
+        }
+
+        foreach (var entry in taken)
+        {
+            RemoveEntry(entry.Key);
+        }
+
+        BumpLocalRevision();
+        return taken;
     }
 
     /// <inheritdoc />

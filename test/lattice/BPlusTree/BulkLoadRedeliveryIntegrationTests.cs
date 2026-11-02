@@ -215,19 +215,25 @@ public sealed class BulkLoadRedeliveryIntegrationTests
     }
 
     [Test]
-    public async Task A_chunk_below_a_shards_right_edge_that_was_never_loaded_is_refused()
+    public async Task A_chunk_below_a_shards_right_edge_that_was_never_loaded_is_merged_not_refused()
     {
+        // Issue #5610: a chunk that succeeded in 10.2.0 still succeeds. Its
+        // entries are merged into the leaves that own their keys, and every key of
+        // both chunks is counted and scanned exactly once.
         var tree = await CreateTreeAsync("bulk-out-of-order");
         var op = Guid.NewGuid().ToString("N");
-        await tree.BulkAppendChunkAsync($"{op}/0", Chunks(ChunkSize)[0]);
+        var later = Chunks(ChunkSize)[0];
+        await tree.BulkAppendChunkAsync($"{op}/0", later);
 
         var earlier = Enumerable.Range(0, 64)
             .Select(i => KeyValuePair.Create($"a/{i:D8}", Encoding.UTF8.GetBytes(i.ToString())))
             .ToList();
 
-        Assert.That(async () => await tree.BulkAppendChunkAsync($"{op}/1", earlier),
-            Throws.InstanceOf<InvalidOperationException>());
-        Assert.That(await tree.CountAsync(), Is.EqualTo(ChunkSize), "nothing out of order was grafted");
+        Assert.That(await tree.BulkAppendChunkAsync($"{op}/1", earlier), Is.EqualTo(earlier.Count));
+
+        var expected = earlier.Concat(later).Select(e => e.Key).Order(StringComparer.Ordinal).ToList();
+        Assert.That(await tree.CountAsync(), Is.EqualTo(expected.Count));
+        Assert.That(await ScanAllKeysAsync(tree), Is.EqualTo(expected));
     }
 
     private async Task<ILattice> CreateTreeAsync(string prefix)

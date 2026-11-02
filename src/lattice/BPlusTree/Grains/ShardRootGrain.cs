@@ -3459,6 +3459,26 @@ internal sealed partial class ShardRootGrain(
         // not threaded through TrackShadowForward.
         var forwardTask = TrackShadowForward(entries, static (t, s) => t.MergeManyAsync(s), static s => ShadowForwardRefusal.PerEntry(s));
 
+        await MergeRoutedAsync(entries, isCrossShardMigration);
+
+        if (!isCrossShardMigration)
+            await ForwardMergedRowsToSplitShadowIfNeededAsync(entries.Keys);
+
+        // Await forwardTask at the end - surfaces any forward failure to the
+        // caller. Without this await, the forward would only be observed
+        // asynchronously by the tracker continuation.
+        await forwardTask;
+    }
+
+    /// <summary>
+    /// Merges <paramref name="entries"/> last-writer-wins into the leaves the
+    /// current routing names for their keys, one leaf call per target leaf,
+    /// linking any split a merge produces. The routing half of
+    /// <see cref="MergeManyAsync"/>, shared with a bulk append's below-edge
+    /// entries (issue #5610).
+    /// </summary>
+    private async Task MergeRoutedAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration)
+    {
         // Root-is-leaf fast path: route the entire batch to the single leaf
         // in one grain call and one WriteStateAsync. Decided by node TYPE so a
         // corrupt RootIsLeaf flag over an internal root (issue 899) takes the
@@ -3467,9 +3487,6 @@ internal sealed partial class ShardRootGrain(
         {
             await MergeGroupAsync(entries, isCrossShardMigration,
                 Volatile.Read(ref _routingGeneration), state.State.RootNodeId);
-            if (!isCrossShardMigration)
-                await ForwardMergedRowsToSplitShadowIfNeededAsync(entries.Keys);
-            await forwardTask;
             return;
         }
 
@@ -3512,15 +3529,6 @@ internal sealed partial class ShardRootGrain(
         {
             await MergeGroupAsync(group, isCrossShardMigration, groupedAtGeneration, groupedAtRoot);
         }
-
-        if (!isCrossShardMigration)
-            await ForwardMergedRowsToSplitShadowIfNeededAsync(entries.Keys);
-
-        // Await forwardTask at the end of the grouped path - matches the
-        // root-is-leaf fast path and surfaces any forward failure to the
-        // caller. Without this await, the forward would only be observed
-        // asynchronously by the tracker continuation.
-        await forwardTask;
     }
 
     /// <summary>

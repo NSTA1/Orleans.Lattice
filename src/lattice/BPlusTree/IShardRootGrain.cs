@@ -762,20 +762,26 @@ internal interface IShardRootGrain : IGrainWithStringKey
 
     /// <summary>
     /// Appends a sorted batch of key-value pairs to the right edge of this shard's
-    /// B+ tree. All keys in <paramref name="sortedEntries"/> must be greater than
-    /// every existing key in the shard. Creates new leaves as needed and propagates
-    /// separators into internal nodes. Used by the streaming bulk-load extension method.
+    /// B+ tree. Creates new leaves as needed and propagates separators into
+    /// internal nodes. Used by the streaming bulk-load extension method.
     /// <para>
-    /// Re-delivery is a no-op whatever its operation id: entries at or below the
-    /// shard's highest key are recognised as already grafted and skipped, so a
-    /// resumed stream that re-sends a superseded batch, or a retry after a fault
-    /// part-way through an append, grafts nothing twice (issue #5460). A skipped
-    /// entry that the shard holds no row for is a batch out of order, and is
-    /// refused with <see cref="InvalidOperationException"/>.
+    /// Re-delivery is a no-op whatever its operation id: when the shard holds a row
+    /// for every entry at or below its highest key, those entries are recognised as
+    /// already grafted and skipped, so a resumed stream that re-sends a superseded
+    /// batch, or a retry after a fault part-way through an append, grafts nothing
+    /// twice (issue #5460).
+    /// </para>
+    /// <para>
+    /// Nothing is refused (issue #5610). Entries at or below the shard's highest
+    /// key that are not a re-delivery are merged into the leaves that own their
+    /// keys, and the rows the rightmost leaf holds in the appended range are moved
+    /// into the appended leaves. Every key resolves last-writer-wins on its stamp,
+    /// so the later-stamped of a bulk entry and an existing row wins, as it does on
+    /// every replica.
     /// </para>
     /// </summary>
     /// <param name="operationId">Unique ID for idempotency. Retries with the same ID are no-ops.</param>
-    /// <param name="sortedEntries">The entries to append, already sorted in ascending key order and all greater than every existing key in the shard.</param>
+    /// <param name="sortedEntries">The entries to append, sorted in ascending key order.</param>
     Task BulkAppendAsync(string operationId, List<KeyValuePair<string, byte[]>> sortedEntries);
 
     /// <summary>

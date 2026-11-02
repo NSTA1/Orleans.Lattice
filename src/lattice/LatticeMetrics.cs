@@ -11441,4 +11441,47 @@ public static class LatticeMetrics
     public static readonly Counter<long> WalAppendFenceSweeps =
         Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.sweeps", unit: "{leaf}",
             description: "Leaves the WAL append-fence sweep examined (#5634), by tree and outcome (retired, live or failed).");
+
+    /// <summary>Tag key naming where a bulk append relocated rows from (issue #5610).</summary>
+    public const string TagBulkRelocationSource = "source";
+
+    /// <summary>
+    /// <see cref="TagBulkRelocationSource"/> value on <see cref="BulkRelocatedRows"/>:
+    /// the batch's own entries that sorted at or below the shard's right edge, merged
+    /// into the leaves the routing names.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> BulkRelocationBelowEdge = new(TagBulkRelocationSource, "below_edge");
+
+    /// <summary>
+    /// <see cref="TagBulkRelocationSource"/> value on <see cref="BulkRelocatedRows"/>:
+    /// rows the old rightmost leaf held at or above the first appended separator,
+    /// moved into the appended leaves when the graft narrowed it.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> BulkRelocationRightmostLeaf = new(TagBulkRelocationSource, "rightmost_leaf");
+
+    /// <summary>
+    /// <see cref="TagBulkRelocationSource"/> value on <see cref="BulkRelocatedRows"/>:
+    /// rows a batch write stored on the root a bulk load replaced while the load
+    /// ran (issue #5642), merged into the loaded tree.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> BulkRelocationReplacedRoot = new(TagBulkRelocationSource, "replaced_root");
+
+    /// <summary>
+    /// Counter of rows a bulk load or bulk append placed somewhere other than the
+    /// leaves it created (issues #5610 and #5642), tagged with <see cref="TagTree"/>,
+    /// the tenant and <see cref="TagBulkRelocationSource"/>: <c>below_edge</c> (an
+    /// append's own entries that sorted at or below rows the shard already held,
+    /// merged last-writer-wins into the leaves the routing names),
+    /// <c>rightmost_leaf</c> (rows the old rightmost leaf held in the appended
+    /// range, tombstones included, moved into the appended leaves when the graft
+    /// narrowed it) or <c>replaced_root</c> (rows a batch write stored on the root a
+    /// bulk load replaced while the load ran, merged into the loaded tree). Zero
+    /// when a load runs on a quiet shard and every appended key sorts above the
+    /// shard's contents, which is the documented use; a sustained
+    /// <c>below_edge</c> rate means callers append out of order or into a tree that
+    /// takes concurrent writes.
+    /// </summary>
+    public static readonly Counter<long> BulkRelocatedRows =
+        Meter.CreateCounter<long>("orleans.lattice.shard_root.bulk.relocated_rows", unit: "{row}",
+            description: "Rows a bulk load or bulk append placed outside the leaves it created (issues #5610 and #5642), by tree and source: below_edge (appended entries at or below rows the shard already held, merged last-writer-wins), rightmost_leaf (rows the old rightmost leaf held in the appended range) or replaced_root (rows a batch write stored on the root a bulk load replaced).");
 }

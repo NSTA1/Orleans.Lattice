@@ -123,7 +123,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
     }
 
     [Test]
-    public void An_entry_at_or_below_the_right_edge_that_was_never_stored_is_refused()
+    public async Task Entries_below_the_right_edge_that_were_never_stored_are_merged_by_routing_not_refused()
     {
         var h = CreateHarness(maxLeafKeys: 4);
         var existing = h.AddLeaf();
@@ -132,13 +132,56 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         var tail = h.Leaf(existing);
 
         // No row for either key: an unstubbed raw read answers null. The batch is
-        // not a re-delivery but one out of order, and grafting it would break the
-        // chain, so it is refused rather than dropped.
+        // not a re-delivery but one that sorts below rows the shard holds (issue
+        // #5610). It is merged last-writer-wins into the leaf the routing names,
+        // as a merge of the same rows would be, and the append succeeds as it did
+        // in 10.2.0.
         tail.GetAppendTailAsync().Returns((1, "k0009"));
 
-        Assert.That(async () => await h.Grain.BulkAppendAsync("out-of-order", Pairs(2)),
-            Throws.InvalidOperationException.With.Message.Contains("k0000"));
-        tail.DidNotReceive().MergeEntriesAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>());
-        Assert.That(h.State.State.LastCompletedBulkOperationId, Is.Null);
+        await h.Grain.BulkAppendAsync("out-of-order", Pairs(2));
+
+        var merged = tail.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == nameof(IBPlusLeafGrain.MergeManyAsync))
+            .SelectMany(c => ((Dictionary<string, LwwValue<byte[]>>)c.GetArguments()[0]!).Keys)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(merged, Is.EqualTo(new[] { "k0000", "k0001" }));
+            Assert.That(MergedKeySets(tail), Is.Empty, "nothing is grafted at the right edge");
+            Assert.That(h.State.State.PendingBulkGraft, Is.Null);
+            Assert.That(h.State.State.LastCompletedBulkOperationId, Is.EqualTo("out-of-order"));
+        });
+    }
+
+    [Test]
+    public async Task A_batch_mixing_held_and_unheld_entries_below_the_edge_merges_all_of_them()
+    {
+        var h = CreateHarness(maxLeafKeys: 4);
+        var existing = h.AddLeaf();
+        h.State.State.RootNodeId = existing;
+        h.State.State.RootIsLeaf = true;
+        var tail = h.Leaf(existing);
+        tail.GetAppendTailAsync().Returns((2, "k0001"));
+
+        // k0001 is held (a point write landed above the first chunk), k0000 is
+        // not. Skipping the held key would keep its value here while every
+        // replica resolves it to the later-stamped bulk entry, so the two are
+        // never mixed: both are merged.
+        tail.GetRawEntryAsync("k0001").Returns(Task.FromResult<LwwEntry?>(new LwwEntry
+        {
+            Key = "k0001",
+            Value = [9],
+            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+        }));
+
+        await h.Grain.BulkAppendAsync("mixed", Pairs(2));
+
+        var merged = tail.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == nameof(IBPlusLeafGrain.MergeManyAsync))
+            .SelectMany(c => ((Dictionary<string, LwwValue<byte[]>>)c.GetArguments()[0]!).Keys)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        Assert.That(merged, Is.EqualTo(new[] { "k0000", "k0001" }));
     }
 }

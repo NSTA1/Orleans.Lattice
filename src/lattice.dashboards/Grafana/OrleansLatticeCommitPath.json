@@ -1354,6 +1354,18 @@
         { "refId": "D", "expr": "sum by (tree) (rate(orleans_lattice_wal_append_fence_unstamped_reports_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "unstamped reported {{tree}}" },
         { "refId": "E", "expr": "sum by (outcome) (increase(orleans_lattice_wal_append_fence_sweeps_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[6h]))", "legendFormat": "swept {{outcome}} (6h)" }
       ]
+    },
+    {
+      "id": 5610,
+      "title": "Bulk load and append: rows placed outside the created leaves (rate) - issues #5610, #5642",
+      "description": "Rows a bulk load or bulk append placed somewhere other than the leaves it created (orleans.lattice.shard_root.bulk.relocated_rows), by source. BELOW_EDGE: a chunk's entries that sorted at or below rows the shard already held and were not a re-delivery, merged last-writer-wins into the leaves that own their keys rather than refused. RIGHTMOST_LEAF: rows the shard's old rightmost leaf held in the appended range, deleted ones included, moved with their stamps into the appended leaves. REPLACED_ROOT: rows a batch write stored on the root a bulk load replaced while the load ran. Zero for an import into a quiet tree in ascending key order; a sustained below_edge rate means chunks arrive out of order or the tree takes writes while it loads. NOT ZERO-PRIMED, so this panel has no 'or vector(0)' and an absent line is not a measured zero.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 475 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (source) (rate(orleans_lattice_shard_root_bulk_relocated_rows_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "relocated {{source}}" }
+      ]
     }
   ]
 }

@@ -647,15 +647,20 @@ public interface ILattice : IGrainWithStringKey
     /// completed id, so re-driving the <b>same</b> chunk after a dropped
     /// connection reapplies nothing. Re-driving an <b>older</b> chunk - one a
     /// later chunk has already superseded on a shard, as a resumed stream that
-    /// re-sends its whole unacknowledged window does - is a no-op too: each shard
-    /// recognises entries at or below its highest key as already grafted and
-    /// skips them, so a re-driven chunk never grafts an entry twice.
+    /// re-sends its whole unacknowledged window does - is a no-op too: a shard that
+    /// holds a row for every entry at or below its highest key recognises them as
+    /// already grafted and skips them, so a re-driven chunk never grafts an entry
+    /// twice.
     /// </para>
     /// <para>
-    /// The entries within a chunk, and the chunks across the whole stream, must
+    /// The entries within a chunk, and the chunks across the whole stream, should
     /// be in <b>ascending key order</b>: per-shard order is preserved because
     /// hash-partitioning a globally sorted stream preserves the relative order
-    /// within each partition. This mirrors the streaming
+    /// within each partition, and that keeps every append on its shard's right
+    /// edge. A chunk whose entries sort at or below rows a shard already holds is
+    /// not refused: those entries are merged into the leaves that own their keys,
+    /// and every key resolves last-writer-wins on its stamp, as on a replica.
+    /// This mirrors the streaming
     /// <c>BulkLoadAsync(IAsyncEnumerable&lt;...&gt;, IGrainFactory, int)</c>
     /// extension, but with a caller-supplied, idempotent operation id per chunk.
     /// Enforces the whole-tree <see cref="LatticeOperation.BulkLoad"/> gate.

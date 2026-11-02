@@ -97,4 +97,35 @@ public partial class BPlusLeafGrainTests
 
         Assert.That(async () => await grain.NarrowHighKeyAsync(null!), Throws.ArgumentNullException);
     }
+
+    [Test]
+    public async Task NarrowHighKey_hands_back_and_drops_every_row_at_or_above_the_bound_tombstones_included()
+    {
+        // Issue #5610: the graft relocates these rows into the appended leaves, so
+        // a row the leaf held in the appended range is never stranded.
+        var grain = CreateGrain();
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("vb"));
+        await grain.SetAsync("m", Encoding.UTF8.GetBytes("vm"));
+        await grain.SetAsync("q", Encoding.UTF8.GetBytes("vq"));
+        await grain.SetAsync("z", Encoding.UTF8.GetBytes("vz"));
+        await grain.DeleteAsync("q");
+
+        var stranded = await grain.NarrowHighKeyAsync("m");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stranded.Select(r => r.Key), Is.EqualTo(new[] { "m", "q", "z" }));
+            Assert.That(stranded.Single(r => r.Key == "q").IsTombstone, Is.True, "a tombstone is handed back as one");
+            Assert.That(Encoding.UTF8.GetString(stranded.Single(r => r.Key == "z").Value!), Is.EqualTo("vz"));
+        });
+
+        var (count, highest) = await grain.GetAppendTailAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(count, Is.EqualTo(1), "only the row below the bound stays");
+            Assert.That(highest, Is.EqualTo("b"));
+        });
+
+        Assert.That(await grain.NarrowHighKeyAsync("m"), Is.Empty, "a re-driven narrow of a converged leaf hands back nothing");
+    }
 }

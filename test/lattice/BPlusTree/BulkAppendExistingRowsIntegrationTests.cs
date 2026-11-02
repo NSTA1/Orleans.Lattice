@@ -16,10 +16,12 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// happens when a point write lands above the maximum between two chunks, or
 /// when a chunk sorts below rows the shard already holds. The graft now
 /// relocates those rows into the bulk leaves and resolves each contested key by
-/// last-writer-wins. The acknowledged point write, versioned by a real clock,
-/// beats the bulk entry, which is versioned from a zero clock. That is the value
-/// every replica and view already returns (change 4 of the live-advance design
-/// note). Nothing is refused: a chunk that succeeded before still succeeds.
+/// last-writer-wins on its stamp. Bulk entries are stamped at the wall time of
+/// the append (<c>HybridLogicalClock.Tick</c> from zero yields the current
+/// time), so a chunk appended after a point write wins over it, and a row the
+/// chunk does not carry keeps its value. That is the value every replica and
+/// view already resolves. Nothing is refused: a chunk that succeeded before
+/// still succeeds.
 /// </para>
 /// <para>
 /// Every assertion runs twice: once on the resident leaves, and once after every
@@ -50,7 +52,7 @@ public sealed class BulkAppendExistingRowsIntegrationTests
     }
 
     [Test]
-    public async Task BulkAppend_after_a_point_write_above_the_maximum_keeps_the_point_value_and_every_chunk_key()
+    public async Task BulkAppend_after_point_writes_above_the_maximum_keeps_every_key_readable_last_writer_wins()
     {
         const string treeId = "bulk-existing-interleaved-point";
         var (shard, tree) = await SingleShardTreeAsync(treeId);
@@ -58,11 +60,15 @@ public sealed class BulkAppendExistingRowsIntegrationTests
         await shard.BulkAppendAsync("chunk-1", Entries(0, 8, "b"));
 
         // Acknowledged between the chunks, above the first chunk's maximum and
-        // inside the second chunk's range.
+        // inside the second chunk's range. The second chunk carries k0014 as well,
+        // stamped later, so its bulk value wins, as it does on every replica; it
+        // does not carry k0015, which only the point row holds.
+        await tree.SetAsync("k0014", Utf8("point"));
         await tree.SetAsync("k0015", Utf8("point"));
 
-        // The second chunk carries the contested key as well.
-        await shard.BulkAppendAsync("chunk-2", Entries(8, 12, "b"));
+        var chunk2 = Entries(8, 12, "b");
+        chunk2.RemoveAll(e => e.Key == "k0015");
+        await shard.BulkAppendAsync("chunk-2", chunk2);
 
         var expected = Expected(0, 20, "b");
         expected["k0015"] = "point";
@@ -100,7 +106,7 @@ public sealed class BulkAppendExistingRowsIntegrationTests
     }
 
     [Test]
-    public async Task BulkAppend_over_a_key_deleted_before_the_append_leaves_it_deleted()
+    public async Task BulkAppend_over_deleted_keys_resolves_each_by_its_stamp()
     {
         const string treeId = "bulk-existing-tombstone";
         var (shard, tree) = await SingleShardTreeAsync(treeId);
@@ -108,13 +114,18 @@ public sealed class BulkAppendExistingRowsIntegrationTests
         await shard.BulkAppendAsync("chunk-1", Entries(0, 8, "b"));
         await tree.SetAsync("k0013", Utf8("point"));
         await tree.DeleteAsync("k0013");
+        await tree.SetAsync("k0016", Utf8("point"));
+        await tree.DeleteAsync("k0016");
 
-        // The tombstone is versioned by a real clock, so it beats the bulk entry
-        // for the same key, as it does on every replica.
-        await shard.BulkAppendAsync("chunk-2", Entries(8, 12, "b"));
+        // The second chunk carries k0013, stamped after its tombstone, so the
+        // bulk value wins as it does on every replica. It does not carry k0016,
+        // whose tombstone, relocated with the other rows, keeps it deleted.
+        var chunk2 = Entries(8, 12, "b");
+        chunk2.RemoveAll(e => e.Key == "k0016");
+        await shard.BulkAppendAsync("chunk-2", chunk2);
 
         var expected = Expected(0, 20, "b");
-        expected.Remove("k0013");
+        expected.Remove("k0016");
 
         await AssertTreeHoldsExactlyAsync(tree, expected, "resident");
         await DeactivateEveryLeafAsync(shard);

@@ -752,9 +752,17 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// re-materialise every later key of its shard when it next activated (issue
     /// #5460). Throws <see cref="InvalidOperationException"/> when the bound is at or
     /// below the leaf's low bound.
+    /// <para>
+    /// Returns, and removes from this leaf, every row at or above the narrowed
+    /// bound, tombstones included, with its stamp and metadata (issue #5610). The
+    /// graft relocates them into the appended leaf that declares each key, so a row
+    /// the leaf held in the appended range stays readable and resolves against the
+    /// bulk entry for the same key by last-writer-wins. A converged leaf returns an
+    /// empty list.
+    /// </para>
     /// </summary>
     /// <param name="highKeyExclusive">The new exclusive high bound. Must not be <see langword="null"/>.</param>
-    Task NarrowHighKeyAsync(string highKeyExclusive);
+    Task<List<LwwEntry>> NarrowHighKeyAsync(string highKeyExclusive);
 
     /// <summary>
     /// Returns this leaf's persisted owned-key-range bounds
