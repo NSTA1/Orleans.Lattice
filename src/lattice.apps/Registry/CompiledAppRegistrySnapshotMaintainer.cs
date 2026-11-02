@@ -30,6 +30,7 @@ internal sealed class CompiledAppRegistrySnapshotMaintainer : IMutationObserver,
     private readonly IAppRegistry _registry;
     private readonly ILogger<CompiledAppRegistrySnapshotMaintainer> _logger;
     private readonly TimeProvider _time;
+    private readonly IAppRegistryEpochSource? _epochSource;
     private readonly SemaphoreSlim _rebuildLock = new(1, 1);
 
     private CompiledAppRegistrySnapshot _current = CompiledAppRegistrySnapshot.Empty;
@@ -48,17 +49,23 @@ internal sealed class CompiledAppRegistrySnapshotMaintainer : IMutationObserver,
     /// The clock used to stamp <see cref="LastRebuildUtc"/>; defaults to
     /// <see cref="TimeProvider.System"/>.
     /// </param>
+    /// <param name="epoch">
+    /// The cluster-wide registry epoch the snapshot is measured against, or null when the host has no
+    /// cluster (the snapshot is then only ever as current as this silo's change feed makes it).
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="registry"/> or <paramref name="logger"/> is <c>null</c>.</exception>
     public CompiledAppRegistrySnapshotMaintainer(
         IAppRegistry registry,
         ILogger<CompiledAppRegistrySnapshotMaintainer> logger,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IAppRegistryEpochSource? epoch = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(logger);
         _registry = registry;
         _logger = logger;
         _time = timeProvider ?? TimeProvider.System;
+        _epochSource = epoch;
     }
 
     /// <summary>The current compiled snapshot. Read without locking; swapped atomically on rebuild.</summary>
@@ -66,6 +73,15 @@ internal sealed class CompiledAppRegistrySnapshotMaintainer : IMutationObserver,
 
     /// <summary>The monotonic epoch of the current snapshot; advances on every rebuild.</summary>
     public long CurrentEpoch => Interlocked.Read(ref _epoch);
+
+    /// <summary>Whether the snapshot is measured against a cluster-wide registry epoch.</summary>
+    internal bool HasClusterEpoch => _epochSource is not null;
+
+    /// <summary>The most recently started background epoch publish, exposed so a test can await it.</summary>
+    internal Task PublishLoop => Task.CompletedTask;
+
+    /// <inheritdoc />
+    public Task EnsureCurrentAsync(CancellationToken cancellationToken = default) => EnsureWarmAsync(cancellationToken);
 
     /// <summary>
     /// The wall-clock instant the snapshot was last rebuilt, or <c>null</c> when

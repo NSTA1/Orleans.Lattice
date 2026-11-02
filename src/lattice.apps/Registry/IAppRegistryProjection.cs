@@ -30,4 +30,16 @@ public interface IAppRegistryProjection
     /// <param name="cancellationToken">Cancels this caller's wait.</param>
     /// <returns>A task that completes when the snapshot is warm.</returns>
     Task EnsureWarmAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Ensures the snapshot is current with the cluster-wide registry before it is trusted to decide
+    /// access, rebuilding it (awaited) when it is cold or when a registry write committed on any silo
+    /// since it was built. Surfaces that grant on the snapshot call this rather than
+    /// <see cref="EnsureWarmAsync"/>, because the change feed that refreshes it fires only on the silo
+    /// that committed the write (#5595).
+    /// </summary>
+    /// <param name="cancellationToken">Cancels this caller's wait.</param>
+    /// <returns>A task that completes when the snapshot is current.</returns>
+    /// <remarks>The default implementation only warms the snapshot, for projections with no cluster-wide currency.</remarks>
+    Task EnsureCurrentAsync(CancellationToken cancellationToken = default) => EnsureWarmAsync(cancellationToken);
 }
