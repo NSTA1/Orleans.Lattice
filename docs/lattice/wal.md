@@ -1478,8 +1478,9 @@ The clear deletes the epoch row, so a leaf re-created under the same id starts i
 epochs again from one; covering the row as well as the entry means neither a
 surviving duplicate nor one that has written its row but not yet its entry can share
 an epoch with it. An activation that keeps serving after its own clear claims afresh
-as the re-created leaf. The GC skips a leaf with no epoch row - one that never
-claimed, or whose clear already retired it - at the cost of one storage read. A retirement driven
+as the re-created leaf. For the GC, the partition reads the leaf's epoch row itself,
+and does nothing more for a leaf with no row - one that never claimed, or whose
+clear already retired it. A retirement driven
 by a silo running an older build during a rollback leaves the leaf's entry rows in
 place; they are inert, since only that leaf's claims read them, and are not yet
 swept ([#5634](https://github.com/NSTA1/Orleans.Lattice/issues/5634)).
@@ -1508,8 +1509,8 @@ therefore waits for about four sequential storage round trips before its append,
 latency change for cold leaves. Per leaf clear: one epoch-row read, then for a leaf
 that has claimed, one retirement call per WAL partition (a floor and an entry read,
 a floor write and an entry delete) and the epoch row's delete. A tree purge pays
-that per leaf. Per orphaned pin the WAL GC retires: one epoch-row read, and a
-retirement call only if the row exists.
+that per leaf. Per orphaned pin the WAL GC retires: one retirement call, which
+reads the leaf's epoch row at the partition and stops there when it has none.
 
 The fence's counters are `orleans.lattice.wal.append_fence.claims`,
 `.rejections`, `.seam_retries` and `.unstamped_reports`; see

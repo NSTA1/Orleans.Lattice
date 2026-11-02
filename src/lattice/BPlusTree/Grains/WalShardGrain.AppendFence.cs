@@ -173,6 +173,21 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
         EnsureInitialized();
 
         var storage = FenceStorage();
+        if (rowEpoch == WalAppendFenceRows.RowEpochUnread)
+        {
+            // The WAL GC's orphan-pin retirement (#5605 review, S4): one row read,
+            // and nothing more for a leaf that never claimed or was fully retired.
+            // A leaf writes its epoch row before it claims anywhere, and its clear
+            // deletes the row only after every partition retired its entry.
+            var row = await WalAppendFenceRows.ReadLeafEpochAsync(storage, leafId).ConfigureAwait(true);
+            if (!row.RecordExists && !HasLoadedEpochEntry(leafId))
+            {
+                return 0;
+            }
+
+            rowEpoch = row.State.Epoch;
+        }
+
         await EnsureEpochFloorLoadedAsync(storage).ConfigureAwait(true);
 
         // Serialised with this leaf's claims (#5635): a claim that read the entry
@@ -186,6 +201,14 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
         finally
         {
             ExitLeafGate(leafId);
+        }
+    }
+
+    private bool HasLoadedEpochEntry(Guid leafId)
+    {
+        lock (_stateGate)
+        {
+            return _epochEntries is not null && _epochEntries.ContainsKey(leafId);
         }
     }
 

@@ -165,7 +165,10 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// </summary>
     /// <param name="leafId">The retired leaf's grain key.</param>
     /// <param name="rowEpoch">
-    /// The value the retirement read from the leaf's epoch row; 0 when it has none.
+    /// The value the retirement read from the leaf's epoch row; 0 when it has none;
+    /// or <see cref="WalAppendFenceRows.RowEpochUnread"/> to have the partition read
+    /// the row itself and return at once, with no floor or entry I/O, when the leaf
+    /// has no row - it never claimed, or its clear already retired it.
     /// The floor must cover it as well as the entry (#5641): the clear deletes the
     /// epoch row, so a re-created incarnation starts again from 1, and a duplicate
     /// activation that wrote its row but not yet its entry here would otherwise

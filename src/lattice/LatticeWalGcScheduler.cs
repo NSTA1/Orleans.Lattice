@@ -6971,34 +6971,25 @@ internal sealed class LatticeWalGcScheduler(
     /// the pin-retirement step of the design note, and the sweep that removes an
     /// entry left by a clear that could not retire it. The partition raises its
     /// retired floor above the entry and the leaf's epoch row before deleting it.
-    /// A leaf with no epoch row never claimed, or its clear already retired every
-    /// entry and deleted the row, so it costs one storage read and no grain call.
+    /// The partition reads the epoch row itself, so the sweep issues no storage read
+    /// of its own and its leaf-read admission is unaffected; a leaf with no row -
+    /// one that never claimed, or whose clear already retired it - costs the
+    /// partition that one read and no floor or entry I/O.
     /// Best effort: a leftover entry only ever sits above a re-claim, so a failure
     /// is logged and left.
     /// </summary>
     private async Task RetireAppendEpochEntryAsync(string treeId, string consumerId, CancellationToken stoppingToken)
     {
-        if (leafStateStorage is null
-            || !TryResolveLeafGrainId(treeId, consumerId, out var leafGrainId, out var partition))
+        if (!TryResolveLeafGrainId(treeId, consumerId, out var leafGrainId, out var partition))
         {
             return;
         }
 
         try
         {
-            var leafId = leafGrainId.GetGuidKey();
-            var row = await Bounded(
-                BPlusTree.Grains.WalAppendFenceRows.ReadLeafEpochAsync(leafStateStorage, leafId),
-                OrphanSweepOperationBudget, stoppingToken)
-                .ConfigureAwait(false);
-            if (!row.RecordExists)
-            {
-                return;
-            }
-
             await Bounded(
                 grainFactory.GetGrain<BPlusTree.Grains.IWalShardGrain>($"{treeId}/{partition}")
-                    .RetireAppendEpochAsync(leafId, row.State.Epoch, CancellationToken.None),
+                    .RetireAppendEpochAsync(leafGrainId.GetGuidKey(), BPlusTree.Grains.WalAppendFenceRows.RowEpochUnread, CancellationToken.None),
                 OrphanSweepOperationBudget, stoppingToken)
                 .ConfigureAwait(false);
         }

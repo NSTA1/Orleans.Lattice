@@ -1,6 +1,7 @@
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Tests.Fakes;
+using Orleans.Runtime;
 using Orleans.Storage;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -426,6 +427,70 @@ public partial class WalShardGrainTests
             Assert.That(recreatedAbove.Accepted, Is.True, "R bumps above the floor and claims");
             Assert.That(duplicateAppend.Outcome, Is.EqualTo(WalAppendFenceOutcome.StaleEpoch), "D is fenced out");
         });
+    }
+
+    [Test]
+    public async Task An_unread_row_retirement_reads_the_epoch_row_at_the_partition()
+    {
+        // #5605 review, S4: the WAL GC passes RowEpochUnread, so the partition reads the
+        // leaf's epoch row and floors at it, exactly as for a clear that read it.
+        var storage = new EnumerableMemoryGrainStorage();
+        var row = await WalAppendFenceRows.ReadLeafEpochAsync(storage, FenceLeaf);
+        row.State.Epoch = 3;
+        await WalAppendFenceRows.WriteAsync(storage, WalAppendFenceRows.LeafEpochGrainType, WalAppendFenceRows.LeafEpochKey(FenceLeaf), row);
+        var grain = await CreateFencedGrainAsync(storage);
+
+        var floor = await grain.RetireAppendEpochAsync(FenceLeaf, WalAppendFenceRows.RowEpochUnread, CancellationToken.None);
+        var duplicate = await grain.ClaimAppendEpochAsync(FenceLeaf, 3, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(floor, Is.EqualTo(3), "the partition floored at the row it read");
+            Assert.That(duplicate.Accepted, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task An_unread_row_retirement_of_a_leaf_with_no_row_costs_one_read()
+    {
+        // #5605 review, S4: a leaf that never claimed, or whose clear already retired
+        // it, costs the partition its one row read, and no floor or entry I/O.
+        var storage = new CountingGrainStorage(new EnumerableMemoryGrainStorage());
+        var grain = await CreateFencedGrainAsync(storage);
+
+        var floor = await grain.RetireAppendEpochAsync(FenceLeaf, WalAppendFenceRows.RowEpochUnread, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(floor, Is.Zero);
+            Assert.That(storage.Reads, Is.EqualTo(1), "only the epoch row is read");
+            Assert.That(storage.Writes, Is.Zero);
+        });
+    }
+
+    private sealed class CountingGrainStorage(IGrainStorage inner) : IGrainStorage
+    {
+        public int Reads { get; private set; }
+
+        public int Writes { get; private set; }
+
+        public Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
+        {
+            Reads++;
+            return inner.ReadStateAsync(stateName, grainId, grainState);
+        }
+
+        public Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
+        {
+            Writes++;
+            return inner.WriteStateAsync(stateName, grainId, grainState);
+        }
+
+        public Task ClearStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
+        {
+            Writes++;
+            return inner.ClearStateAsync(stateName, grainId, grainState);
+        }
     }
 
     [Test]

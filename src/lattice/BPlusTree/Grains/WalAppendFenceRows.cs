@@ -34,6 +34,12 @@ internal static class WalAppendFenceRows
     /// <summary>Reserved grain type and state name of a partition's routing-generation entry for one initiator.</summary>
     internal const string GenerationGrainType = "_lattice_wal-routing-generation";
 
+    /// <summary>
+    /// The <c>rowEpoch</c> a retirement passes when it has not read the leaf's epoch
+    /// row: the partition reads it, and does nothing when the leaf has none.
+    /// </summary>
+    internal const long RowEpochUnread = -1;
+
     /// <summary>The key of a leaf's epoch row.</summary>
     [GrainKeyBuilder]
     internal static string LeafEpochKey(Guid leafId) => leafId.ToString("N", CultureInfo.InvariantCulture);
