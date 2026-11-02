@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Views;
@@ -51,13 +52,61 @@ internal sealed partial class LatticeGrain
             };
         }
 
-        var registration = TryFindHistoryView();
+        var registration = TryFindHistoryView() ?? await TryResolveDurableHistoryViewAsync(cancellationToken);
         if (registration is not null)
         {
             return await ScanHistoryViewAsync(registration, key, fromHlc, toHlc, effectiveLimit, continuation, cancellationToken);
         }
 
         return await ScanWalWindowAsync(key, fromHlc, toHlc, effectiveLimit, continuation, cancellationToken);
+    }
+
+    /// <summary>
+    /// Finds this tree's history view in the cluster-wide durable runtime-view
+    /// registry when this silo's in-memory catalog has no entry for it: a runtime
+    /// view is registered in the catalog of the silo that created it (or one where
+    /// its maintainer re-hydrated), so a history read served on any other silo
+    /// would otherwise fall back to the write-ahead-log window. The resolved
+    /// registration serves this read only and is not added to the catalog.
+    /// Returns <see langword="null"/> when views are not registered, no durable
+    /// history view sources this tree, or the registry cannot be read.
+    /// </summary>
+    private async Task<ViewRegistration?> TryResolveDurableHistoryViewAsync(CancellationToken cancellationToken)
+    {
+        if (services.GetService<IViewCatalog>() is null
+            || services.GetService<RuntimeViewProjectionProviderCatalog>() is not { } providers)
+        {
+            return null;
+        }
+
+        IReadOnlyList<RuntimeViewRegistration> records;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            records = await grainFactory.GetGrain<IViewRegistryGrain>(IViewRegistryGrain.SingletonKey).ListAsync();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Tree '{TreeId}' could not read the durable view registry for its history view; reading the write-ahead-log window instead.", TreeId);
+            return null;
+        }
+
+        foreach (var record in records)
+        {
+            if (!record.Accumulative
+                || record.IsAggregation
+                || !string.Equals(record.SourceTreeId, TreeId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (RuntimeViewRehydrator.Resolve(record, services, providers, logger) is { Projection: HistoryLatticeViewProjection } registration)
+            {
+                return registration;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

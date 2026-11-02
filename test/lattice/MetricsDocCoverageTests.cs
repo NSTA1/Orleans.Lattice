@@ -29,6 +29,7 @@ public sealed class MetricsDocCoverageTests : MetricsDocCoverageTestsBase
         {
             "orleans.lattice.events",
             "orleans.lattice.predicate.v1",
+            "orleans.lattice.history.v1",
         };
 
     // The panel-map backlog this fixture once allow-listed is closed: every core
