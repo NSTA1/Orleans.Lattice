@@ -27,8 +27,7 @@ Armed(a) ==
 --- FIND
     /\ cstage[a] = 3
     /\ memFence > 0
-    /\ epoch[a] >= memFence
-    /\ epoch[a] > retired
+    /\ AppendAdmits(a)
     /\ next < MaxOff
     /\ next' = next + 1
     /\ author' = [author EXCEPT ![next] = a]

@@ -9,11 +9,9 @@ PERTURBS: OwnAlloc
 BOUNDS: WithRestart = TRUE, WithBatch = FALSE, MaxWindows = 1
 
 --- FIND
-    /\ cstage[a] = 3
     /\ memFence > 0
-    /\ epoch[a] >= memFence
+    /\ AppendAdmits(a)
 --- REPLACE
-    /\ cstage[a] = 3
 \* MUTATION: an unloaded entry does not hold the append.
-    /\ epoch[a] >= memFence
+    /\ AppendAdmits(a)
 --- END

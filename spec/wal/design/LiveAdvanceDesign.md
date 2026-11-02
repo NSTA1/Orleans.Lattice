@@ -25,6 +25,12 @@ change. Members 3 and 4 follow member 2.
 - **The intent's deadline** takes the `SagaDecisionDeadline` form and affects liveness
   only (S1). The shard root asks the fence grain only after a rejection, never per page
   (S2). The cost of unstamped walks is stated, with a counter by source (S3).
+- **The retired floor is checked at the claim only, never on an append (#5635).** The
+  floor is one value per partition while epochs are per leaf, so an append check would
+  supersede live leaves after another leaf's retirement. Member 1 found it. The model
+  gains `RetireOther` and `CurrentNeverFenced`, with a mutation. Section 1.
+- **Member plan:** #5634's epoch-row sweep is member 5; the terminal class (member 2)
+  lands before member 4 arms any leaf.
 
 Revision 4 answered the[re-review of revision 3](https://github.com/NSTA1/Orleans.Lattice/issues/5605#issuecomment-6564904377)
 (2 blocking, 4 should-fix, 3 nits), which accepted revision 3 for production member 1
@@ -187,21 +193,65 @@ activation appends through new stamped methods; the existing methods are unchang
   coalescing writer fails only the callers whose entries were rejected, and their
   seam retries them (section 5).
 
-The shard accepts a stamped entry only if the leaf's entry is loaded, the epoch is not
-below it, and the epoch is above the retired floor. A stale epoch is rejected with
+The shard accepts a stamped entry only if the leaf's entry is loaded and the epoch is
+not below it. It does **not** check the retired floor on the append path (#5635). A
+stale epoch is rejected with
 `WalAppendEpochStaleException`, an internal exception (section 5). An entry not yet
 loaded rejects the append as unloaded (below); the leaf re-presents its claim and
 retries. The stored record does not change: the stamp is a call argument, never part
 of the record.
 
-**The retired floor at every step.** A purge and re-creation of the leaf resets its
-entry, so a claim written before the retirement and raised after it would pass an
-entry-only check. The floor is therefore checked at the entry write, at the raise and
-at the append. Dropping the raise and append checks together fails in 8 states
-(`StaleEpochNeverAppendsIgnoresRetiredFloor`). Either check alone suffices in the model
-(see [Redundancy checks](#redundancy-checks)); both are kept, so a stale claimant
-stops at its raise rather than on its first append.
+**The retired floor at the claim, not the append (#5635).** A purge and re-creation of
+the leaf resets its entry, so a claim written before the retirement and raised after it
+would pass an entry-only check. The floor is therefore checked at the claim's entry
+write and at its raise. Dropping the raise check fails in 8 states
+(`StaleEpochNeverAppendsIgnoresRetiredFloor`).
 
+The floor is **not** checked on appends. It is one value per partition, while epochs
+are per leaf: checking it on the append path would reject every live leaf of the
+partition whose epoch is at or below an epoch **another** leaf retired, superseding
+leaves that nothing superseded. Revision 4 specified that check; production member 1
+(#5633) found the over-retirement and removed it (#5635). A retired incarnation's own
+appends do not need it: retiring the leaf deletes its entry, so its appends are rejected
+as unloaded and its re-presented claim is refused by the floor.
+
+**The condition that makes the append check unnecessary.** Retirement must remove the
+WAL shard's **loaded** entry, not only its rows. It therefore goes through the WAL shard
+activation (`RetireAppendEpochAsync` in #5633), which, in order: takes the per-leaf gate,
+serialising it with that leaf's claims; raises the durable floor; deletes the entry row;
+drains any in-flight stamped batch; and removes the entry from the loaded entries under
+`_stateGate`. An unloaded entry rejects every stamped append (`UnloadedEntry`). Every
+retirement path, the leaf's clear and the WAL GC's orphan-pin retirement, goes through
+it. A retirement that only wrote rows would leave the loaded entry admitting a surviving
+activation of the retired incarnation, and would need the append check back
+(`StaleEpochNeverAppendsRecreateKeepsLoadedEntry`, 9 states). In the model,
+`AppendAdmits` is the entry check alone, `RetireOther` (`WithOtherRetire`) raises the
+shared floor above epochs L holds, and `CurrentNeverFenced` states that the
+floor never rejects an append L's own entry admits.
+`CurrentNeverFencedFloorAtAppend` puts the floor back on the append path and
+fails.
+
+**A floor-only refusal bumps and re-claims.** The claim-time checks are partition-wide
+too: a claim between its row write and its raise when another leaf is retired with a
+higher epoch is refused by the floor alone. That activation is not stale, so it does not
+stop. It persists the higher of its row and the floor plus one to its epoch row,
+conditionally on the row it wrote, and claims again, at most
+`LeafAppendEpochFence.MaxClaimRounds` (8) rounds, after which it appends unstamped
+(reported, section 4). Only a refusal by the leaf's own entry, or a moved row, means
+another activation claimed, and stops it. The model has `ClaimBump` for the floor-only
+refusal (`WitnessClaimBumped`); it bounds the rounds by `MaxEpoch` and stops a bump that
+has no room, standing for the unstamped fallback, which `WalLiveAdvanceGateFlip.cfg`
+covers. Cost: one extra claim round per claim in flight at another leaf's retirement in
+the same partition (N3, below).
+
+**One epoch per activation, across partitions.** An activation has one epoch, stamped on
+every partition it writes. A floor-only bump forced on partition P2 therefore changes the
+epoch it stamps on P1, where that epoch was never claimed. P1 admits it, because it is
+above P1's entry. That is safe: any other activation must first win the leaf's epoch row,
+and its claim on P1 then exceeds the bumped epoch. `OtherPartitionBump`
+(`WithSecondPartition`, `WalLiveAdvanceTwoPartition.cfg`) bumps a raised activation's
+epoch from another partition at any time, and every property holds
+(`WitnessOtherPartitionEpoch`).
 **Arming.** The activation is armed for the live advance on a partition only when:
 - its claim on that partition has been raised (an explicit guard; see the redundancy
   checks for why it is kept);
@@ -268,7 +318,7 @@ create-only with the reissued offset, and one side fails. So no entry lands belo
 restarted watermark unreported.
 
 **Cost.**
-- **Per append:** one dictionary lookup and two comparisons under the lock the append
+- **Per append:** one dictionary lookup and one comparison under the lock the append
   already holds, per stamp. No allocation and no grain call. A stamped entry carries 24
   more bytes on the request: leaf identity, epoch and routing generation. The response
   carries the 8-byte unstamped watermark, and a batch response the per-entry outcome.
@@ -278,7 +328,9 @@ restarted watermark unreported.
   writing P partitions costs at most N x P entry-row writes once, not O(N^2).
 - **After a retirement (N3):** the floor is one scalar per partition, so after any
   leaf's retirement every new leaf whose epoch row is older than the floor pays one
-  refused claim per partition it writes, then claims above the floor.
+  refused claim per partition it writes, then bumps and claims above the floor; and every
+  claim in flight in that partition when another leaf is retired with a higher epoch pays
+  one extra round. Appends are never affected (#5635).
 - **Per shard restart:** one extra claim round trip for each leaf that appends
   afterwards.
 - **Storage:** one entry row per (partition, live leaf that wrote it), one floor row
@@ -881,6 +933,19 @@ Only entries the leaf owns are modelled; entries other leaves own are invisible 
 replay. It reuses `WalDurability`'s abstractions: the read position as the checkpoint,
 a snapshot that keeps the highest coverage, and a pin at that coverage.
 
+**Per-partition scopes in a one-leaf model (#5635).** With one leaf, a value shared by
+every leaf of a partition and a value of L's alone are the same variable, so the model
+cannot tell them apart unless something else moves the shared one. #5635 hid there: the
+retired floor is per partition, while L's own retirements are per leaf. The model
+therefore separates them (`retired` is the partition floor, `lRetired` L's own retired
+epoch, which `StaleEpochNeverAppends` uses) and adds `RetireOther`
+(`WithOtherRetire`, `WalLiveAdvanceOtherRetire.cfg`), another leaf's retirement raising the
+partition floor to any epoch. Two further shared scopes are fine and are named for the
+refinement note: the unstamped watermark is per partition, so any writer's unstamped
+append holds every leaf writing that partition until it replays past it (over-reporting,
+safe, cost only); and the routing-generation entry is keyed by partition and initiator.
+The promoted module should put two leaves on one partition; `RetireOther` stands in until
+then.
 **Steps.**
 - **The claim is three steps** (`ClaimRow`, `ClaimWrite`, `ClaimRaise`), with
   `ClaimConflict` (the epoch row moved) and `ClaimRefuse` (refused at the write or the
@@ -910,6 +975,9 @@ a snapshot that keeps the highest coverage, and a pin at that coverage.
   state it last saw), `WithMixedVersion`, `WithGateFlip`, `WithLegacyHandOff`,
   `WithTreeWalk` (another shard's walk of a tree-level range delete, author `g`, with
   `GAdmit`, `GAlloc`, `GReject`, `GRestamp` and `GUnstamped`).
+- `WithOtherRetire`: another leaf of the partition is retired (`RetireOther`), raising the
+  shared floor (#5635). `WithSecondPartition`: a floor-only bump on another partition
+  changes a raised activation's epoch (`OtherPartitionBump`).
 - `Ghosts`: enables the witness ghosts. Safety runs keep it off.
 
 **Properties:**
@@ -918,7 +986,10 @@ a snapshot that keeps the highest coverage, and a pin at that coverage.
 - `SnapshotHonest`.
 - `NoTrimPastAcked`: no trim past an acknowledged append, whoever appended it.
 - `StaleEpochNeverAppends`: no append is ever accepted from an epoch below the highest
-  raised one, or at or below the retired floor, across a shard restart too.
+  raised one, or at or below an epoch of L's own retired incarnations (`lRetired`),
+  across a shard restart too.
+- `CurrentNeverFenced`: the partition's retired floor never rejects an append
+  L's own entry admits, so another leaf's retirement cannot supersede a live leaf (#5635).
 - `OldNeverRejected`: no unstamped append is ever rejected.
 - `ContestedKeyAgrees`: the owner resolves a contested key to the value a WAL reader
   (a replica or a view) resolves at the same read position. Every entry the leaf owns
@@ -940,9 +1011,15 @@ plus `TypeOK`):
 | `WalLiveAdvanceLegacyHandOff.cfg` | `WithLegacyHandOff` | 20,828,314 | 37 | 499 s |
 | `WalLiveAdvanceTreeWalk.cfg` | `WithTreeWalk` | 4,250,341 | 35 | 115 s |
 | `WalLiveAdvanceTreeWalkConcurrent.cfg` | `WithTreeWalk`, two windows | 23,951,016 | 38 | 711 s |
+| `WalLiveAdvanceOtherRetire.cfg` | `WithRecreate`, `WithOtherRetire` | 46,444,519 | 37 | 1,340 s |
+| `WalLiveAdvanceTwoPartition.cfg` | `WithSecondPartition` | 3,039,953 | 34 | 93 s |
 
-All ten hold every property, `ContestedKeyAgrees` included (revision 4 re-ran the first
-eight with it; adding an invariant does not change the reachable states). `MixedRestart` is the reviewer's Mixed+Restart+duplicate
+All twelve hold every property, `ContestedKeyAgrees` and `CurrentNeverFenced` included.
+Revision 5's new actions (`ClaimBump`, `OtherPartitionBump`, `RetireOther`, `FloorReject`)
+are enabled only when the floor is raised or their switch is on, so base, Recreate,
+OtherRetire and TwoPartition were re-run and the other eight are unchanged by
+construction. `WalLiveAdvanceOtherRetire.cfg` is the largest; like `LegacyHandOff` it belongs
+on a dedicated CI shard at promotion. `MixedRestart` is the reviewer's Mixed+Restart+duplicate
 combination (S8) on the reduced instance.
 
 **Combinations no configuration covers.** The reviewer's clean runs on revision 2 stand
@@ -976,7 +1053,9 @@ in states including the initial one.
 | `ReadPositionHonestBulkWithoutHint` | The birth hint | `ReadPositionHonest` | base | 6 |
 | `ReadPositionHonestBulkAppendDropsExistingRows` | The relocation of the rows the bulk range already holds (#5610) | `ReadPositionHonest` | base | 4 |
 | `ReadPositionHonestRecreateDropsFloor` | The retired floor's raise | `ReadPositionHonest` | Recreate | 17 |
-| `StaleEpochNeverAppendsIgnoresRetiredFloor` | The floor check at the raise and at the append | `StaleEpochNeverAppends` | Recreate | 8 |
+| `StaleEpochNeverAppendsIgnoresRetiredFloor` | The floor check at the claim's raise | `StaleEpochNeverAppends` | Recreate | 8 |
+| `CurrentNeverFencedFloorAtAppend` | The entry-only append check: the floor is checked on appends too (revision 4's rule, #5635) | `CurrentNeverFenced` | OtherRetire | 8 |
+| `StaleEpochNeverAppendsRecreateKeepsLoadedEntry` | Retirement removing the WAL shard's loaded entry: it deletes the rows only, with no append floor check (#5635's condition) | `StaleEpochNeverAppends` | Recreate | 9 |
 | `StaleEpochNeverAppendsUnloadedEntryAccepted` | The unloaded-entry rejection | `StaleEpochNeverAppends` | Restart | 12 |
 | `StaleEpochNeverAppendsClaimEntryOverwrite` | The max-merge: the claim overwrites the durable entry, checked against the loaded entry only (B3) | `StaleEpochNeverAppends` | Restart | 12 |
 | `ReadPositionHonestGenerationNotDurable` | The durable routing-generation entry: a restart resets it (S1) | `ReadPositionHonest` | Restart | 14 |
@@ -1011,11 +1090,11 @@ window revision 2's atomic claim did not have. `StaleEpochNeverAppendsIgnoresRet
 shows it in eight states: `Begin`, `Create`, `ClaimRow(a1)` (epoch 1), `ClaimWrite(a1)`,
 `Recreate` (the entry resets to 0; the floor rises to 1), `ClaimRaise(a1)` (1 is not
 below the reset entry), `OwnAlloc(a1)` (an epoch at the floor appends). The floor
-checks at the raise and the append close it.
+check at the raise closes it.
 
 ### Redundancy checks
 
-Five guards are kept although the model, with every other guard in place, does not
+Three guards are kept although the model, with every other guard in place, does not
 need them. Each was removed alone and the model stayed clean, so each is classed
 redundant in the model (as for #2321), with the reason it is kept:
 
@@ -1024,11 +1103,10 @@ redundant in the model (as for #2321), with the reason it is kept:
 | `ReadPositionHonestClaimAdoptsNoCas` | The epoch row's conditional write (#5593's adopt) | base | clean, 158 s | With the three-step claim, the shard's refusal at or below the durable entry catches a same-epoch claimant at the entry write. The conditional write is kept so a stale claimant stops before touching any partition, and because the production claim spans several partitions in sequence, which the model's single partition cannot show. |
 | `ReadPositionHonestArmsWithoutClaim` | The explicit claim guard in `Armed` | GateFlip | clean, 171 s | Implied by the self-report: an activation that never claimed has only unstamped own appends, each of which reports itself, so it cannot arm past them. Kept, as the review asked, because arming without a claim is meaningless and the implication depends on every unstamped path self-reporting. |
 | `ReadPositionHonestNoMarkerInit` | The "marker initialised" guard in `Armed` (B2 rule 2) | LegacyHandOff | clean, 493 s | Implied by rule 1 in the model, whose only legacy hand-off cannot admit a stamped write before `Resume` opens the marker. Kept because a resume path the census misses would otherwise read as closed. The model's `MarkInit` is stronger than production's rule: it waits until no hand-off is in flight anywhere, while production initialises an existing leaf once its shard's flag is set and it has no split in flight **as donor**, which is weaker for a split **sibling**. That is safe because rule 1 alone suffices, which is exactly what this clean result shows (review N3). |
-| `StaleEpochNeverAppendsRaiseIgnoresRetiredFloor` | The floor check at the raise only | Recreate | clean, 158 s | The append's floor check catches the straddling claim's first append. Kept so the stale claimant stops at its raise. |
-| `StaleEpochNeverAppendsAppendIgnoresRetiredFloor` | The floor check at the append only | Recreate | clean, 156 s | The raise's floor check refuses the straddling claim, and an old incarnation's raised claim is below the re-created leaf's entry. Kept as the check on the hot path that does not depend on the raise. |
 
-Together, removing both floor checks fails (`StaleEpochNeverAppendsIgnoresRetiredFloor`,
-above). The redundancy checks are committed in `redundancy/`, in the mutation format with
+Revisions 3 and 4 had two more rows, the floor check at the raise alone and at the append
+alone. With the append check removed (#5635), the raise check is required, and is the
+mutation above. The redundancy checks are committed in `redundancy/`, in the mutation format with
 an `EXPECT: clean` line, so a re-run does not depend on this note; they are kept out of
 `mutations/`, whose every file must fail.
 
@@ -1058,6 +1136,9 @@ shown, proving its step is reachable. Traces are from a single-worker breadth-fi
 | `WitnessTreeWalkFenced` | `WithTreeWalk` | `Begin`, `Create`, `GAdmit`, `Close`: L's close re-claims the tree generation and fences another shard's admitted walk |
 | `WitnessTreeWalkRestamped` | `WithTreeWalk` | `Begin`, `Create`, `GAdmit`, `Close`, `ForeignOpen`, `GReject`, `GRestamp`: a walk fenced out by one delete's close re-stamps under a second delete's open intent |
 | `WitnessTreeWalkUnstamped` | `WithTreeWalk` | `Begin`, `Create`, `GAdmit`, `Close`, `GReject`, `GUnstamped`: a walk whose intent closed goes on unstamped and reported |
+| `WitnessAppendAtOrBelowOtherFloor` | `WithOtherRetire` | `Begin`, `Create`, `ClaimRow`, `ClaimWrite`, `ClaimRaise`, `OwnAlloc`, `RetireOther`: another leaf's retirement lifts the floor to an epoch a live activation holds, and it keeps appending |
+| `WitnessClaimBumped` | `WithOtherRetire` | `Begin`, `Create`, `ClaimRow`, `RetireOther`, `ClaimBump`: a floor-only refusal bumps and re-claims |
+| `WitnessOtherPartitionEpoch` | `WithSecondPartition` | `Begin`, `Create`, `ClaimRow`, `ClaimWrite`, `ClaimRaise`, `OtherPartitionBump`: an activation stamps this partition with an epoch a bump elsewhere gave it |
 
 To run a witness, use a configuration with `Ghosts = TRUE` and the switch shown that
 checks `TypeOK` and the witness alone, for example
@@ -1071,7 +1152,7 @@ Every existing module, how the design affects it, and why:
 |-----------|--------|--------|
 | `WalDurability` | Unchanged; gains a gap entry | Its subject is the replay-based advance, which the design keeps as the fallback. Its single owner activation is always the current epoch, so `Append` never meets a rejection. Extending it would add an activation dimension to every leaf: `SnapshotLoss` is already 17,428,938 states and `TwoFaults` 2,958,083, so the fences go in the companion instead. |
 | `WalMove` | Refinement row only | The entry, floor and generation rows live in grain storage, not in the stream a move switches, so a move carries nothing new. The cutover's reactivation of the shard grain is `Restart` here, covered by `StaleEpochNeverAppends` (broken by `StaleEpochNeverAppendsUnloadedEntryAccepted` and `StaleEpochNeverAppendsClaimEntryOverwrite`), the durable generation (`ReadPositionHonestGenerationNotDurable`) and the restarted watermark (`ReadPositionHonestRestartForgetsUnstamped`). |
-| `WalPinRetirement` | New rows | Retiring a leaf's pins also retires its epoch entries under the same retirement token, raising the floor first. A re-created leaf's claim exceeds the floor, and the floor is checked at the claim's raise and at every append, so a removal cannot let a surviving duplicate or a straddling claim outrank it. |
+| `WalPinRetirement` | New rows | Retiring a leaf's pins also retires its epoch entries under the same retirement token, raising the floor first. A re-created leaf's claim exceeds the floor, and the floor is checked at the claim's entry write and raise (never on an append, #5635), so a removal cannot let a surviving duplicate or a straddling claim outrank it. |
 | `TreeLifecycle`, `TreeLifecycleAdmission` | New rows | The purge tail retires the entries of the leaves it clears, under the lineage check (#5417), raising the floor first, and deletes their epoch and marker rows. |
 | `ShardOwnership`, `ShardOwnershipCutover`, `ShardOwnershipFold`, `ShardOwnershipCrdt`, `ShardOwnershipRetention` | New rows or gaps | The adaptive split's and the shard fold's shard-level markers open around their windows (or at their resume, for one in flight across the gate) and close with a routing-generation re-claim. A marker only holds the live advance and never blocks a move, a cutover or a fold, so ownership safety is unchanged. A write rejected at a close is re-admitted at its seam. |
 | `SplitLink`, `SplitLinkTurns`, `BPlusTopology`, `BPlusReclaimRecovery`, `BPlusCascade` | New rows or gaps | The split opens the sibling's marker in its birth (or at `CompleteSplitAsync`'s resume), and the donor closes it at completion after re-claiming its epoch. That is one more call, made from the donor's completion; it waits on the WAL shard, not on another leaf. The reclaim opens the survivor's marker before widening, and retires the neighbour's entry in the retire step. |
@@ -1094,7 +1175,8 @@ Each production member carries detectors proven red. They land in this order:
    - The epoch, entry, floor and generation rows; the three-step claim with its
      conditional max-merge; `ClaimAppendEpochAsync`, `AppendStampedAsync` and
      `AppendBatchStampedAsync`; the unloaded-entry reload; the unstamped watermark and
-     the own-append self-report; the floor checks at the write, the raise and the append.
+     the own-append self-report; the floor checks at the claim's write and raise, and none on
+     the append path (#5635).
    - `WalAppendEpochStaleException` (internal) and the seam retry of section 5 for every
      caller in its table, each with a detector that the caller's 10.2.0 outcome is
      unchanged: an atomic write commits, `DeleteAsync` and a CRDT delta succeed, and
@@ -1138,7 +1220,7 @@ Each production member carries detectors proven red. They land in this order:
    violation), and **every combined configuration the reviewer named**
    (Mixed+Restart+duplicate on the full instance, own unstamped appends with the
    self-report, repeated unstamped appends, the split claim under `Restart`, and the
-   ten configurations above) **in CI, on a dedicated or measured TLC shard.** Nothing
+   twelve configurations above) **in CI, on a dedicated or measured TLC shard.** Nothing
    from phase 2 reaches `main` before this member lands.
 
 ## Review resolution
@@ -1154,6 +1236,7 @@ Each production member carries detectors proven red. They land in this order:
 | N1 `MergeEntriesAsync` line | Corrected to `BPlusLeafGrain.cs:3703`. |
 | N2 redundancy class at promotion | Member 6 (promotion) gives the catalogue a redundancy class, or keeps the files out of the gate's glob. |
 | Q1-Q4 | Per-call fences stay the default; the re-stamp rule is B1; the deadline is S1; replication apply and the shadow forward stay unstamped (S3). |
+| #5635 (from member 1), and the reviewer's [interim note](https://github.com/NSTA1/Orleans.Lattice/issues/5605#issuecomment-6566514445) | Section 1: the floor is checked at the claim's entry write and raise only, `AppendAdmits` is the entry check. (1) The condition that makes that sound, retirement removing the WAL shard's loaded entry under `_stateGate` after the batch drain, is stated, with mutation `RecreateKeepsLoadedEntry` (9 states). (2) `RetireOther` and `CurrentNeverFenced`, broken by `CurrentNeverFencedFloorAtAppend` (8 states, #5635 itself). (3) `StaleEpochNeverAppends` is narrowed to L's own retirements (`lRetired`). (4) A floor-only refusal bumps and re-claims (`ClaimBump`, `WitnessClaimBumped`), up to `MaxClaimRounds` then unstamped. (5) One epoch across partitions: `OtherPartitionBump` (`WithSecondPartition`), clean at 3,039,953. `OtherRetire` is clean at 46,444,519. The two floor redundancy rows are retired: the raise check is now required (`IgnoresRetiredFloor`). |
 | Coordinator additions | #5634: the per-partition epoch directory row and sweep, as member 5, before the bucket reaches `main` (section 1). The ordering found by member 1: the coordinator-terminal class (member 2) lands before member 4 arms any leaf. |
 
 ### Re-review of revision 3
@@ -1200,7 +1283,7 @@ Each production member carries detectors proven red. They land in this order:
 | Finding | Resolution |
 |---------|------------|
 | B1 drains | Section 2: the close is a fence (a re-claim of the initiator's epoch or routing generation), stamped at admission, on every append path. Mutations: `DrainWithoutFence`, `DrainPointOnly`, `StampAtAppend`. |
-| B2 epoch floor | Section 1, "Retiring entries": a monotone per-partition floor row, raised before an entry is deleted, checked at every claim step and append. Mutations: `RecreateDropsFloor`, `IgnoresRetiredFloor`. |
+| B2 epoch floor | Section 1, "Retiring entries": a monotone per-partition floor row, raised before an entry is deleted, checked at every claim step and append (revision 5: at the claim steps only, #5635). Mutations: `RecreateDropsFloor`, `IgnoresRetiredFloor`. |
 | S1 claim head and tracker | The claim reads `_nextOffset` in the lock section that assigns offsets; arming requires every own append applied. Mutations: `ClaimReadableHead`, `SnapshotHonestNoOwnTracker`. |
 | S2 CAS | A strict conditional write on a row only claims write. Now a redundancy row (`ClaimAdoptsNoCas`), because the three-step claim's entry write refuses a same-epoch claimant. |
 | S3 guard mutations | `NoClaimHeadReplay` and `NoOpenCheck`; `PERTURBS` fields name actions. |

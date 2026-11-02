@@ -28,29 +28,27 @@ PERTURBS: ClaimWrite, ClaimRaise, OwnAlloc
 
 --- FIND
     /\ memFence > 0
-    /\ epoch[a] >= memFence
-    /\ epoch[a] > retired
+    /\ AppendAdmits(a)
     /\ next < MaxOff
     /\ next' = next + 1
     /\ author' = [author EXCEPT ![next] = a]
     /\ inflight' = inflight \cup {next}
-    /\ staleAccepted' = (staleAccepted \/ epoch[a] < maxClaimed \/ epoch[a] <= retired)
+    /\ staleAccepted' = (staleAccepted \/ epoch[a] < maxClaimed \/ epoch[a] <= lRetired)
     /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
-    /\ UNCHANGED <<walkVars, lastU, oldUsed, durable, acked, floor, leafVars, epochVars, handVars, gateVars,
+    /\ UNCHANGED <<walkVars, floorVars, lastU, oldUsed, durable, acked, floor, leafVars, epochVars, handVars, gateVars,
                    viewVars, envVars, oldRejected, wghosts>>
 --- REPLACE
-    /\ epoch[a] >= memFence
-    /\ epoch[a] > retired
+    /\ AppendAdmits(a)
     /\ next < MaxOff
     /\ next' = next + 1
     /\ author' = [author EXCEPT ![next] = a]
     /\ inflight' = inflight \cup {next}
-    /\ staleAccepted' = (staleAccepted \/ epoch[a] < maxClaimed \/ epoch[a] <= retired)
+    /\ staleAccepted' = (staleAccepted \/ epoch[a] < maxClaimed \/ epoch[a] <= lRetired)
     /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
 \* MUTATION: the first append raises the entry instead.
     /\ fence' = Max2(fence, epoch[a])
     /\ memFence' = Max2(memFence, epoch[a])
-    /\ UNCHANGED <<walkVars, lastU, oldUsed, durable, acked, floor, leafVars, rowEpoch, seen, epoch, cstage,
+    /\ UNCHANGED <<walkVars, floorVars, lastU, oldUsed, durable, acked, floor, leafVars, rowEpoch, seen, epoch, cstage,
                    claimHead, retired, maxClaimed, handVars, gateVars, viewVars, envVars,
                    oldRejected, wghosts>>
 --- END
