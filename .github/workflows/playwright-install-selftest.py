@@ -497,6 +497,28 @@ class PrivilegedInstallerTests(unittest.TestCase):
             {"uid": os.geteuid(), "args": ["install", "chromium", "firefox", "webkit"]},
         ], self.calls())
 
+    def test_an_image_with_baked_dependencies_skips_only_their_privileged_install(self):
+        self.env["LATTICE_PLAYWRIGHT_SYSTEM_DEPS"] = "chromium"
+        result = self.install("pass", "", "chromium")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("skipping install-deps", result.stdout)
+        self.assertEqual([{"uid": os.geteuid(), "args": ["install", "chromium"]}], self.calls())
+
+        (self.root / "calls").write_text("")
+        result = self.install("pass", "", "chromium", "firefox")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual([
+            {"uid": 0, "args": ["install-deps", "chromium", "firefox"]},
+            {"uid": os.geteuid(), "args": ["install", "chromium", "firefox"]},
+        ], self.calls(), "a browser the image does not name still gets its dependencies")
+
+        (self.root / "calls").write_text("")
+        self.env["LATTICE_PLAYWRIGHT_SYSTEM_DEPS"] = "chromium-headless"
+        result = self.install("pass", "true", "chromium")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual([{"uid": 0, "args": ["install-deps", "chromium"]}], self.calls(),
+                         "a name is matched whole, never as a prefix")
+
     def test_non_timeout_failure_exhausts_without_download_and_preserves_exit(self):
         result = self.install("fail", "false")
         self.assertEqual(7, result.returncode, result.stdout + result.stderr)

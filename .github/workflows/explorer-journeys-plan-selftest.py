@@ -6,6 +6,7 @@ Pure Python, a few seconds. Run by the lane's `planner` job before it plans.
 
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -287,6 +288,9 @@ class PlanTests(unittest.TestCase):
             self.assertIsInstance(leg["timeout"], int)
             self.assertGreater(leg["timeout"], 0)
             self.assertTrue(leg["expect"])
+            # runner-overflow.py sends the longest legs to the pool first, by `estimate`.
+            self.assertEqual(leg["timeout"], leg["estimate"], leg["name"])
+            self.assertNotIn("runsOn", leg, "the planner plans; the lane's routing step routes")
 
     def test_story_legs_need_their_fixture(self):
         bare = Tree(stories=())
@@ -385,6 +389,45 @@ class CommandLineTests(unittest.TestCase):
                     self.assertEqual(legs, len(json.loads(values["legs"])))
                     self.assertEqual(conformance, json.loads(values["conformance"]))
 
+    def test_the_legs_file_holds_the_legs_the_router_routes(self):
+        tree = Tree()
+        self.addCleanup(tree.close)
+        with tempfile.TemporaryDirectory() as scratch:
+            output = Path(scratch) / "output"
+            legs_file = Path(scratch) / "legs.json"
+            code = planner_main(["plan", "--root", str(tree.root), "--event", "workflow_dispatch",
+                                 "--legs-file", str(legs_file)], {"GITHUB_OUTPUT": str(output)})
+            self.assertEqual(0, code)
+            values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+            legs = json.loads(legs_file.read_text(encoding="utf-8"))
+            self.assertEqual(json.loads(values["legs"]), legs)
+            self.assertEqual(7, len(legs))
+
+            # The lane routes that file as CI routes its matrix, with ubuntu-24.04 as the
+            # hosted label: unset RUNNER_POOL keeps every leg hosted.
+            env = {key: value for key, value in os.environ.items() if key != "RUNNER_POOL"}
+            subprocess.run([sys.executable, str(REPOSITORY / ".github/workflows/runner-overflow.py"),
+                            "--matrix", str(legs_file), "--hosted", "ubuntu-24.04"],
+                           check=True, capture_output=True, env=env)
+            routed = json.loads(legs_file.read_text(encoding="utf-8"))
+            self.assertEqual([leg["name"] for leg in legs], [leg["name"] for leg in routed])
+            self.assertTrue(all(json.loads(leg["runsOn"]) == "ubuntu-24.04" and leg["pool"] is False
+                                for leg in routed))
+
+    def test_routing_sends_the_longest_legs_to_the_pool_first(self):
+        overflow = load_router()
+        tree = Tree()
+        self.addCleanup(tree.close)
+        legs = planner.plan(tree.root, "workflow_dispatch", "", "", None)["legs"]
+        pool = ["self-hosted", "lattice-pool"]
+        hosted, pooled = overflow.route([legs], pool, busy=13, budget=15, hosted="ubuntu-24.04")
+        self.assertEqual((2, len(legs) - 2), (hosted, pooled))
+        kept = sorted(leg["name"] for leg in legs if not leg["pool"])
+        self.assertTrue(all(leg["name"].startswith("isolated-") for leg in legs if not leg["pool"]), kept)
+        self.assertTrue(all(leg["pool"] for leg in legs if leg["kind"] in ("story", "harness")),
+                        "the story and harness legs are the longest and overflow first")
+        self.assertTrue(all(json.loads(leg["runsOn"]) == pool for leg in legs if leg["pool"]))
+
     def test_a_missing_changed_files_list_runs_every_isolated_leg(self):
         tree = Tree()
         self.addCleanup(tree.close)
@@ -401,6 +444,14 @@ class CommandLineTests(unittest.TestCase):
         tree = Tree(journeys=("Q1",))
         self.addCleanup(tree.close)
         self.assertEqual(1, planner_main(["plan", "--root", str(tree.root), "--event", "push"], {}))
+
+
+def load_router():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("runner_overflow", REPOSITORY / ".github/workflows/runner-overflow.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def planner_main(argv, environment):
@@ -515,9 +566,64 @@ class WiringTests(unittest.TestCase):
         plan = block.index("explorer-journeys-plan.py plan")
         self.assertLess(block.index("python3 .github/workflows/explorer-journeys-plan-selftest.py"), plan)
         self.assertLess(block.index("python3 .github/workflows/journey-screenshot-provenance-selftest.py"), plan)
-        self.assertIn("legs: ${{ steps.plan.outputs.legs }}", block)
+        self.assertLess(block.index("python3 .github/workflows/runner-overflow.py --self-test"), plan)
         self.assertIn("provenance: ${{ steps.plan.outputs.provenance }}", block)
         self.assertIn("pull-requests: read", block)
+
+    def test_the_planner_routes_the_legs_as_ci_does(self):
+        block = job(self.text, "planner")
+        # The published legs are the routed ones, never the planner's raw output.
+        self.assertIn("legs: ${{ steps.route.outputs.legs }}", block)
+        self.assertNotIn("legs: ${{ steps.plan.outputs.legs }}", block)
+        self.assertIn('--legs-file "$RUNNER_TEMP/legs.json"', block)
+        route = block[block.index("- name: Route the legs"):]
+        self.assertIn("id: route", route)
+        self.assertIn("RUNNER_POOL: ${{ vars.RUNNER_POOL }}", route)
+        self.assertIn("HOSTED_RUNNER_BUDGET: ${{ inputs.hosted_budget || vars.HOSTED_RUNNER_BUDGET }}", route)
+        self.assertIn("GH_TOKEN: ${{ github.token }}", route)
+        self.assertIn('runner-overflow.py --matrix "$RUNNER_TEMP/legs.json" --hosted ubuntu-24.04', route)
+        # runner-overflow.py counts the hosted jobs in flight through the Actions API.
+        self.assertIn("actions: read", block)
+        self.assertRegex(self.text, r"(?m)^      hosted_budget:\n")
+
+    def test_a_leg_runs_where_it_was_routed(self):
+        block = job(self.text, "legs")
+        self.assertIn("runs-on: ${{ fromJSON(matrix.runsOn || '\"ubuntu-24.04\"') }}", block)
+        self.assertIn("name: ${{ matrix.pool && '[pool] ' || '' }}${{ matrix.name }}", block)
+        self.assertNotRegex(block, r"(?m)^    (services|container):")
+
+    def test_a_pool_leg_runs_on_what_the_pool_image_bakes_in(self):
+        block = job(self.text, "legs")
+        start = block[block.index("- name: Start Azurite"):block.index("- name: Wait for Azurite")]
+        self.assertIn("POOL: ${{ matrix.pool }}", start)
+        self.assertIn("nohup azurite", start)
+        for ports in ("start azurite 10000 10001 10002", "start azurite-backup 11000 11001 11002",
+                      "start azurite-east 12000 12001 12002"):
+            self.assertIn(ports, start)
+        self.assertIn("mcr.microsoft.com/azure-storage/azurite:3.36.0", start)
+        self.assertIn("LATTICE_E2E_PROMETHEUS_BINARY: ${{ matrix.pool && '/opt/prometheus/prometheus' || '' }}", block)
+        pull = block[block.index("- name: Pull Prometheus"):block.index("- name: Setup .NET")]
+        self.assertIn("if: ${{ !matrix.pool }}", pull.split("- name: Check the pool image's Prometheus")[0])
+        self.assertIn('-x "$LATTICE_E2E_PROMETHEUS_BINARY"', pull)
+        for cache in ("- name: Cache NuGet packages\n        if: ${{ !matrix.pool }}\n",
+                      "- name: Cache Playwright browsers\n        if: ${{ !matrix.pool }}\n"):
+            self.assertIn(cache, block)
+        probe = block[block.index("Prove a stopped Azurite fails the leg"):]
+        self.assertIn('kill "$pid"', probe)
+        self.assertIn('bash "$RUNNER_TEMP/azurite.sh"', probe)
+        self.assertLess(probe.index('kill "$pid"'), probe.index("dotnet test"))
+
+    def test_the_pool_image_carries_what_a_pool_leg_uses(self):
+        dockerfile = (REPOSITORY / "tools/ci-runners/Dockerfile").read_text(encoding="utf-8")
+        prometheus = (REPOSITORY / planner.E2E / "Estate/JourneyPrometheus.cs").read_text(encoding="utf-8")
+        version = re.search(r'Image = "prom/prometheus:v([0-9.]+)"', prometheus).group(1)
+        self.assertIn(f"ARG PROMETHEUS_VERSION={version}", dockerfile, "the pool's Prometheus must match the image tag")
+        self.assertIn('"LATTICE_E2E_PROMETHEUS_BINARY"', prometheus)
+        self.assertIn("/opt/prometheus", dockerfile)
+        self.assertIn("ENV LATTICE_PLAYWRIGHT_SYSTEM_DEPS=chromium", dockerfile)
+        self.assertIn("install-deps chromium", dockerfile)
+        self.assertIn("restore/test/lattice.explorer.e2e/Orleans.Lattice.Explorer.EndToEnd.Tests.csproj", dockerfile)
+        self.assertIn("azurite@3.36.0", dockerfile)
 
     def test_legs_are_a_fail_slow_matrix_over_the_plan(self):
         block = job(self.text, "legs")
@@ -598,7 +704,7 @@ class WiringTests(unittest.TestCase):
 
     def test_both_triggers_watch_the_lane_scripts(self):
         for name in ("explorer-journeys-plan*.py", "journey-screenshot-provenance*.py",
-                     "install-playwright-browsers.sh"):
+                     "install-playwright-browsers.sh", "runner-overflow.py"):
             self.assertEqual(2, self.text.count(f"- '.github/workflows/{name}'"), name)
         for path in planner.LANE_FILES:
             self.assertTrue((REPOSITORY / path).is_file(), path)

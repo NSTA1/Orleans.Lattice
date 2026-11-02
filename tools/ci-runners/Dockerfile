@@ -15,7 +15,9 @@
 # from a container here (Container Apps runs no Docker daemon):
 # PowerShell (rig and tuning script tests), the Docker CLI with the compose v2
 # plugin (`docker compose config` needs no daemon), and Node with Azurite,
-# which a leg routed to the pool runs in place of the Azurite image.
+# which a leg routed to the pool runs in place of the Azurite image. For the
+# Explorer journey legs it adds a Prometheus binary (in place of the
+# prom/prometheus image) and Playwright's Chromium with its system packages.
 #
 # And a NuGet package snapshot in the runner's ~/.nuget/packages, restored from
 # every project in the solution (deploy.ps1 stages them under restore/). Pool
@@ -53,6 +55,33 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
  && npm cache clean --force \
  && rm -rf /var/lib/apt/lists/*
 
+# Prometheus for the Explorer journey legs (explorer-journeys.yml), whose harness
+# runs this binary where it cannot run the prom/prometheus container
+# (LATTICE_E2E_PROMETHEUS_BINARY). The version is JourneyPrometheus.Image's in
+# test/lattice.explorer.e2e; change the two together.
+ARG PROMETHEUS_VERSION=3.1.0
+ARG PROMETHEUS_SHA256=9a9d1e115d1745826b13aec3f1409780b9fcf1d4206746cb4faee46ca5add70c
+RUN curl -fsSL "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz" -o /tmp/prometheus.tgz \
+ && echo "${PROMETHEUS_SHA256}  /tmp/prometheus.tgz" | sha256sum -c - \
+ && install -d /opt/prometheus \
+ && tar -xzf /tmp/prometheus.tgz -C /opt/prometheus --strip-components=1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/prometheus" \
+ && rm /tmp/prometheus.tgz \
+ && /opt/prometheus/prometheus --version
+
+# Playwright's Chromium system packages for the journey legs, at the version the
+# end-to-end project pins (deploy.ps1 stages its project file under restore/, so
+# a new pin produces a new image tag). install-playwright-browsers.sh skips
+# install-deps for the browsers LATTICE_PLAYWRIGHT_SYSTEM_DEPS names; a leg asking
+# for another browser (the nightly coverage UI legs) still installs its own.
+COPY restore/test/lattice.explorer.e2e/Orleans.Lattice.Explorer.EndToEnd.Tests.csproj /tmp/e2e.csproj
+RUN version=$(sed -n 's/.*Include="Microsoft\.Playwright" Version="\([^"]*\)".*/\1/p' /tmp/e2e.csproj) \
+ && test -n "$version" \
+ && install -d /opt/ci-runner \
+ && echo "$version" > /opt/ci-runner/playwright-version \
+ && npx -y "playwright@${version}" install-deps chromium \
+ && rm -rf /var/lib/apt/lists/* /root/.npm /tmp/e2e.csproj
+ENV LATTICE_PLAYWRIGHT_SYSTEM_DEPS=chromium
+
 # .NET 10 SDK where actions/setup-dotnet looks, owned by the runner user so
 # setup-dotnet can add a patch band without sudo.
 ENV DOTNET_ROOT=/usr/share/dotnet \
@@ -72,3 +101,9 @@ COPY --from=nuget --chown=runner:runner /nuget-snapshot /home/runner/.nuget/pack
 
 USER runner
 WORKDIR /home/runner
+
+# That Playwright version's Chromium, in the runner's ~/.cache/ms-playwright where
+# Microsoft.Playwright looks, so a pool journey leg neither restores the browser
+# cache nor downloads it.
+RUN npx -y "playwright@$(cat /opt/ci-runner/playwright-version)" install chromium \
+ && rm -rf /home/runner/.npm
