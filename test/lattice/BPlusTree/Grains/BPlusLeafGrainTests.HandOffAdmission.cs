@@ -42,7 +42,11 @@ public partial class BPlusLeafGrainTests
 
                 return Task.FromResult<IReadOnlyList<long>>(call.ArgAt<IReadOnlyList<WalRecord>>(0).Select(_ => 1L).ToArray());
             });
-        var grain = CreateGrain(new FakePersistentState<LeafNodeState>(), commitLog: writer, fenceGate: new OpenGate());
+        var grain = CreateGrain(
+            new FakePersistentState<LeafNodeState>(),
+            replicaId: Guid.NewGuid().ToString("N"),
+            commitLog: writer,
+            fenceGate: new OpenGate());
         return (grain, routings);
     }
 
