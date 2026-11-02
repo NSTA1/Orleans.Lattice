@@ -173,6 +173,50 @@ public sealed class WalAppendFenceMixedVersionTests
         }
     }
 
+    /// <summary>
+    /// Removes <paramref name="types"/>, and every generated codec, activator and
+    /// copier whose target is one of them, from each type collection of the
+    /// manifest. Orleans formats every such target when the silo starts, so an
+    /// alias removed without its helpers fails the silo's start rather than the
+    /// call; with both gone, the silo's manifest is a 10.2.0 manifest.
+    /// </summary>
+    private static void StripMetadata(TypeManifestOptions options, IReadOnlySet<Type> types)
+    {
+        bool Targets(Type candidate) =>
+            types.Contains(candidate)
+            || candidate.GetInterfaces().Any(i => i.IsGenericType && i.GetGenericArguments().Any(types.Contains));
+
+        var removed = 0;
+        foreach (var property in typeof(TypeManifestOptions).GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (property.GetIndexParameters().Length != 0)
+            {
+                continue;
+            }
+
+            switch (property.GetValue(options))
+            {
+                case HashSet<Type> set:
+                    removed += set.RemoveWhere(Targets);
+                    break;
+                case IDictionary dictionary when property.PropertyType.IsGenericType
+                    && property.PropertyType.GetGenericArguments()[0] == typeof(Type):
+                    foreach (var key in dictionary.Keys.Cast<Type>().Where(Targets).ToList())
+                    {
+                        dictionary.Remove(key);
+                        removed++;
+                    }
+
+                    break;
+            }
+        }
+
+        if (removed == 0)
+        {
+            throw new InvalidOperationException("No generated helper of the new invokables was found in the type manifest.");
+        }
+    }
+
     private sealed class OlderBuildSiloConfigurator : ISiloConfigurator
     {
         public void Configure(ISiloBuilder siloBuilder)
@@ -180,7 +224,11 @@ public sealed class WalAppendFenceMixedVersionTests
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
             var types = InvokablesFor(NewMethods).ToHashSet();
-            siloBuilder.Services.PostConfigure<TypeManifestOptions>(options => Strip(options.CompoundTypeAliases, types));
+            siloBuilder.Services.PostConfigure<TypeManifestOptions>(options =>
+            {
+                StripMetadata(options, types);
+                Strip(options.CompoundTypeAliases, types);
+            });
         }
     }
 }
