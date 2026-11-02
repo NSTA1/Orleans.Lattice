@@ -212,15 +212,14 @@ internal sealed class TenantAccessConformanceClusterFixture
         }
     }
 
-    /// <summary>The policy tree's revision timeline for one rule, read under system origin.</summary>
-    public async Task<IReadOnlyList<EntryRevision>> RuleHistoryAsync(string treeId, string ruleId)
+    /// <summary>The policy tree's history page for one rule, read under system origin.</summary>
+    public async Task<EntryHistoryPage> RuleHistoryAsync(string treeId, string ruleId)
     {
         var key = treeId + '\u001f' + ruleId;
         using (LatticeSystemOrigin.Enter())
         {
-            var page = await Grains.GetGrain<ILattice>(LatticeAuthReservedTrees.PolicyTreeId)
+            return await Grains.GetGrain<ILattice>(LatticeAuthReservedTrees.PolicyTreeId)
                 .ScanEntryHistoryAsync(key, fromHlc: null, toHlc: null, limit: 100, continuation: null);
-            return page.Revisions;
         }
     }
 
