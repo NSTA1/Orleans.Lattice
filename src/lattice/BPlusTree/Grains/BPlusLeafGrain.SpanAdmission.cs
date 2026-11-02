@@ -357,7 +357,7 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// </summary>
     private async Task<(Dictionary<string, LwwValue<byte[]>> Local, SplitResult? ForwardedSplit)> ForwardOutOfSpanMergeAsync(
-        Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration)
+        Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration, WalRoutingStamp routing)
     {
         var local = new Dictionary<string, LwwValue<byte[]>>(entries.Count);
         Dictionary<GrainId, Dictionary<string, LwwValue<byte[]>>>? buckets = null;
@@ -429,7 +429,12 @@ internal sealed partial class BPlusLeafGrain
                 forwardedSplit = SplitResult.Combine(
                     forwardedSplit,
                     SplitResult.Forward(await WalFenceSeamRetry.RunAsync(
-                        () => sibling.MergeManyAsync(bucket, isCrossShardMigration), WalFenceSeamRetry.CallerLeaf, state.State.TreeId)));
+                        () => WalRoutedLeafCall.StampedOrPlainAsync(
+                            routing,
+                            () => sibling.MergeManyStampedAsync(bucket, isCrossShardMigration, routing),
+                            () => sibling.MergeManyAsync(bucket, isCrossShardMigration)),
+                        WalFenceSeamRetry.CallerLeaf,
+                        state.State.TreeId)));
             }
         }
 
@@ -516,7 +521,15 @@ internal sealed partial class BPlusLeafGrain
         using (AwaitDiagnostics.Begin(
             "leaf.relocate.forward", context.GrainId, AwaitDiagnostics.Enabled ? "rows=" + stranded.Count : null))
         {
-            (local, forwardedSplit) = await ForwardOutOfSpanMergeAsync(stranded, isCrossShardMigration);
+            // Epic #5605, member 2 (design owner, Q2): a relocated value was already
+            // appended here under the write's routing; the receiver appends and
+            // applies it again as its own, so it carries no routing generation. The
+            // receiver's stamped method is called only while the gate is open; with it
+            // closed, the existing method appends unstamped, as before.
+            (local, forwardedSplit) = await ForwardOutOfSpanMergeAsync(
+                stranded,
+                isCrossShardMigration,
+                IsHandOffGateOpen() ? WalRoutingStamp.None : WalRoutingStamp.Unstamped);
         }
 
         foreach (var (key, lww) in local)
@@ -554,7 +567,7 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// </summary>
     private async Task<ConditionalSetManyResult> ForwardOutOfSpanConditionalSetManyAsync(
-        List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate)
+        List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate, WalRoutingStamp routing)
     {
         var local = new List<KeyValuePair<string, byte[]>>(entries.Count);
         Dictionary<GrainId, List<KeyValuePair<string, byte[]>>>? buckets = null;
@@ -585,7 +598,7 @@ internal sealed partial class BPlusLeafGrain
         {
             // Every out-of-span entry fell open to a local commit, so the
             // matched set can still straddle the span and the re-scan stands.
-            return await SetManyWherePredicateLocalAsync(local, predicate, mayContainOutOfSpanKey: true);
+            return await SetManyWherePredicateLocalAsync(local, predicate, mayContainOutOfSpanKey: true, routing);
         }
 
         HashSet<string>? forwardWritten = null;
@@ -604,7 +617,12 @@ internal sealed partial class BPlusLeafGrain
             // The forwarded SplitResult is kept, for the reason given in
             // ForwardOutOfSpanMergeAsync (issue #3523).
             var forwarded = await WalFenceSeamRetry.RunAsync(
-                () => sibling.SetManyWherePredicateAsync(bucket, predicate), WalFenceSeamRetry.CallerLeaf, state.State.TreeId);
+                () => WalRoutedLeafCall.StampedOrPlainAsync(
+                    routing,
+                    () => sibling.SetManyWherePredicateStampedAsync(bucket, predicate, routing),
+                    () => sibling.SetManyWherePredicateAsync(bucket, predicate)),
+                WalFenceSeamRetry.CallerLeaf,
+                state.State.TreeId);
             forwardedSplit = SplitResult.Combine(forwardedSplit, SplitResult.Forward(forwarded.Split));
             var written = forwarded.WrittenKeys;
             for (var i = 0; i < written.Count; i++)
@@ -613,7 +631,7 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
-        var localResult = await SetManyWherePredicateLocalAsync(local, predicate, mayContainOutOfSpanKey: true);
+        var localResult = await SetManyWherePredicateLocalAsync(local, predicate, mayContainOutOfSpanKey: true, routing);
         if (forwardWritten is null)
         {
             return forwardedSplit is null
@@ -665,7 +683,7 @@ internal sealed partial class BPlusLeafGrain
     /// partially applied; a retry is idempotent under LWW.
     /// </para>
     /// </summary>
-    private async Task<SplitResult?> SetManyAdmittingSpanAsync(List<KeyValuePair<string, byte[]>> entries)
+    private async Task<SplitResult?> SetManyAdmittingSpanAsync(List<KeyValuePair<string, byte[]>> entries, WalRoutingStamp routing)
     {
         SplitResult? recovered = null;
         if (NeedsSplitRecovery)
@@ -699,7 +717,7 @@ internal sealed partial class BPlusLeafGrain
         }
 
         var localCommit = local.Count > 0
-            ? CommitSetManyAsync(local)
+            ? CommitSetManyAsync(local, routing)
             : Task.FromResult<SplitResult?>(null);
 
         if (buckets is not null)
@@ -717,7 +735,12 @@ internal sealed partial class BPlusLeafGrain
                 // ForwardOutOfSpanMergeAsync (issue #3523).
                 var forwardTarget = grainFactory.GetGrain<IBPlusLeafGrain>(target);
                 forwards[i] = WalFenceSeamRetry.RunAsync(
-                    () => forwardTarget.SetManyAsync(bucket), WalFenceSeamRetry.CallerLeaf, state.State.TreeId);
+                    () => WalRoutedLeafCall.StampedOrPlainAsync(
+                        routing,
+                        () => forwardTarget.SetManyStampedAsync(bucket, routing),
+                        () => forwardTarget.SetManyAsync(bucket)),
+                    WalFenceSeamRetry.CallerLeaf,
+                    state.State.TreeId);
                 parts[i] = forwards[i];
                 i++;
             }

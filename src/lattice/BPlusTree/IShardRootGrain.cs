@@ -436,6 +436,60 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<ShardRangeDeletePage> DeleteRangeBoundedAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null);
 
     /// <summary>
+    /// The fenced counterpart of <see cref="DeleteRangeBoundedAsync"/> (epic #5605,
+    /// member 2): one page of a range delete whose intent is open at the tree's
+    /// range-delete fence. Every leaf record the walk appends is stamped with the
+    /// tree's range-delete generation the <paramref name="ticket"/> carries, trusted as
+    /// given. A record rejected because a close re-claimed the generation is re-stamped
+    /// only while the walk's own intent is still open (rule 3), and otherwise appended
+    /// unstamped. The existing method stays unfenced and appends unstamped (B2).
+    /// </summary>
+    /// <remarks>Called only while the caller's append-fence gate is open.</remarks>
+    Task<ShardRangeDeletePage> DeleteRangeBoundedStampedAsync(
+        string startInclusive,
+        string endExclusive,
+        LatticePredicateNode? predicate,
+        Grains.RangeDeleteFenceTicket ticket);
+
+    /// <summary>
+    /// Reads this shard root's hand-off marker fresh from storage (epic #5605, member
+    /// 2): whether its state is initialised, the open shard-level hand-offs with their
+    /// ranges, the recent closes with their fence heads, and the routing generation. A
+    /// leaf reads it before any live advance, after the last own append it would
+    /// advance over.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="AlwaysInterleaveAttribute"/> and <see cref="ReadOnlyAttribute"/>: it
+    /// is a new leaf-to-shard-root wait-for edge, and a serial shard-root turn that
+    /// calls the leaf must not deadlock against it.
+    /// </remarks>
+    [AlwaysInterleave]
+    [ReadOnly]
+    Task<State.ShardHandOffState> GetHandOffMarkerAsync();
+
+    /// <summary>
+    /// Opens a shard-level hand-off marker <paramref name="token"/> over
+    /// <c>[low, high)</c>, idempotently (epic #5605, member 2). Called by the tree's
+    /// range-delete fence for every shard of the tree.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="AlwaysInterleaveAttribute"/>: the range-delete fence calls it while
+    /// a walk of this shard root may itself be waiting on that fence. Marker updates
+    /// are serialised by the shard root itself.
+    /// </remarks>
+    [AlwaysInterleave]
+    Task OpenHandOffMarkerAsync(string token, string? lowInclusive, string? highExclusive);
+
+    /// <summary>
+    /// Records the close of shard-level hand-off marker <paramref name="token"/> with the
+    /// heads its fence returned, indexed by WAL partition (epic #5605, member 2).
+    /// Idempotent.
+    /// </summary>
+    /// <remarks><see cref="AlwaysInterleaveAttribute"/>, as for <see cref="OpenHandOffMarkerAsync"/>.</remarks>
+    [AlwaysInterleave]
+    Task CloseHandOffMarkerAsync(string token, long[] heads);
+
+    /// <summary>
     /// Work-bounded probe for a range delete's issue stamp (issue #4530): walks
     /// the same leaves <see cref="DeleteRangeBoundedAsync"/> would for
     /// [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) and

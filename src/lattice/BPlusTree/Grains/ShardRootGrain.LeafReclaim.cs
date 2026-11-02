@@ -794,6 +794,10 @@ internal sealed partial class ShardRootGrain
             return false;
         }
 
+        // Epic #5605, member 2: the reclaim's hand-off marker opens on the survivor
+        // before its range widens onto this leaf's.
+        await OpenReclaimHandOffAsync(prevId, currentId);
+
         // Unlink and widen in one compare-and-swap. A false return means a
         // split moved the predecessor underneath us and inserted a leaf
         // between it and this one; the fold is abandoned with nothing
@@ -861,7 +865,15 @@ internal sealed partial class ShardRootGrain
             }
 
             if (mayAbandonRetirement)
+            {
                 await leaf.AbandonRetirementAsync();
+
+                // The survivor never widened: nothing of this leaf's is foreign to
+                // it, so its marker closes at once (member 2). A pending reclaim
+                // keeps its marker open until that reclaim completes.
+                await CloseReclaimHandOffAsync(prevId, currentId);
+            }
+
             return false;
         }
 
@@ -914,6 +926,9 @@ internal sealed partial class ShardRootGrain
         // owed first, and a failure is retried from that record.
         if (await ClearRemovedLeafAsync(currentId, "folded"))
         {
+            // Member 2: the folded leaf's entries are retired and its marker on the
+            // survivor closes with the heads read after the retirement.
+            await CloseReclaimHandOffAsync(prevId, currentId);
             await ResolveLeafGrain(prevId).CompletePendingReclaimAsync(currentId);
         }
         else
@@ -1004,6 +1019,7 @@ internal sealed partial class ShardRootGrain
             clearedPendingLeaves.Add(retiredLeafId);
         }
 
+        await CloseReclaimHandOffAsync(predecessorId, retiredLeafId);
         await ResolveLeafGrain(predecessorId).CompletePendingReclaimAsync(retiredLeafId);
         _leafGrains.TryRemove(retiredLeafId, out _);
         return true;

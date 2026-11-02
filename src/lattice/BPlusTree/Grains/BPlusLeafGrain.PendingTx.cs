@@ -2490,6 +2490,12 @@ internal sealed partial class BPlusLeafGrain
         // backstop to the leaf that declares it rather than stored here,
         // where it would duplicate that leaf's row in the shard's chain.
         Dictionary<GrainId, Dictionary<string, byte[]>>? forwarded = null;
+
+        // #5664 (a): admitted against this activation's hand-off closes before the span
+        // check below. The forwards are awaited before the local backstop appends, so a
+        // split can narrow this leaf in between; a backstop for a key it then no longer
+        // owns is self-fenced at dispatch, never appended under the close's raised epoch.
+        var backstopAdmission = StampedRouting(WalRoutingStamp.None);
         if (missingKeys is { Count: > 0 } && HasDeclaredSpan)
         {
             List<KeyValuePair<string, byte[]>>? local = null;
@@ -2792,7 +2798,7 @@ internal sealed partial class BPlusLeafGrain
                     var walStartTicks = Stopwatch.GetTimestamp();
                     try
                     {
-                        await writer.AppendAsync(entry);
+                        await AppendRoutedAsync(writer, entry, backstopAdmission);
                     }
                     finally
                     {

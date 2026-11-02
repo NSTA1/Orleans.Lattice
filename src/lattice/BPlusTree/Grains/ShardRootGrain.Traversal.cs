@@ -1353,7 +1353,7 @@ internal sealed partial class ShardRootGrain
         }
     }
 
-    private async Task<SplitResult?> TraverseForWriteAsync(string key, byte[] value)
+    private async Task<SplitResult?> TraverseForWriteAsync(string key, byte[] value, WalRoutingStamp routing)
     {
         var path = StackPool.Get();
         try
@@ -1361,7 +1361,7 @@ internal sealed partial class ShardRootGrain
             var leafId = await ResolveWriteLeafAsync(key, path);
             var leafGrain = ResolveLeafGrain(leafId);
             await RecordAffectedLeafIfPreparedAsync(leafId);
-            var splitResult = await leafGrain.SetAsync(key, value);
+            var splitResult = await LeafSetAsync(leafGrain, key, value, 0L, withExpiry: false, routing);
 
             return await PropagateSplitAsync(splitResult, path);
         }
@@ -1376,7 +1376,7 @@ internal sealed partial class ShardRootGrain
     ///. Identical to <see cref="TraverseForWriteAsync"/> except the
     /// final leaf write carries an absolute expiry.
     /// </summary>
-    private async Task<SplitResult?> TraverseForWriteWithExpiryAsync(string key, byte[] value, long expiresAtTicks)
+    private async Task<SplitResult?> TraverseForWriteWithExpiryAsync(string key, byte[] value, long expiresAtTicks, WalRoutingStamp routing)
     {
         var path = StackPool.Get();
         try
@@ -1384,7 +1384,7 @@ internal sealed partial class ShardRootGrain
             var leafId = await ResolveWriteLeafAsync(key, path);
             var leafGrain = ResolveLeafGrain(leafId);
             await RecordAffectedLeafIfPreparedAsync(leafId);
-            var splitResult = await leafGrain.SetAsync(key, value, expiresAtTicks);
+            var splitResult = await LeafSetAsync(leafGrain, key, value, expiresAtTicks, withExpiry: true, routing);
 
             return await PropagateSplitAsync(splitResult, path);
         }
@@ -1394,14 +1394,14 @@ internal sealed partial class ShardRootGrain
         }
     }
 
-    private async Task<GetOrSetResult> TraverseForGetOrSetAsync(string key, byte[] value)
+    private async Task<GetOrSetResult> TraverseForGetOrSetAsync(string key, byte[] value, WalRoutingStamp routing)
     {
         var path = StackPool.Get();
         try
         {
             var leafId = await ResolveWriteLeafAsync(key, path);
             var leafGrain = ResolveLeafGrain(leafId);
-            var result = await leafGrain.GetOrSetAsync(key, value);
+            var result = await LeafGetOrSetAsync(leafGrain, key, value, routing);
 
             // If the key was already live, no write occurred - no splits to propagate.
             if (result.ExistingValue is not null)
@@ -1420,14 +1420,14 @@ internal sealed partial class ShardRootGrain
         }
     }
 
-    private async Task<CasResult> TraverseForSetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion)
+    private async Task<CasResult> TraverseForSetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion, WalRoutingStamp routing)
     {
         var path = StackPool.Get();
         try
         {
             var leafId = await ResolveWriteLeafAsync(key, path);
             var leafGrain = ResolveLeafGrain(leafId);
-            var result = await leafGrain.SetIfVersionAsync(key, value, expectedVersion);
+            var result = await LeafSetIfVersionAsync(leafGrain, key, value, expectedVersion, routing);
 
             // If CAS failed, no write occurred - no splits to propagate.
             if (!result.Success)
@@ -1451,7 +1451,7 @@ internal sealed partial class ShardRootGrain
         }
     }
 
-    private async Task<CrdtApplyResult> TraverseForCrdtApplyAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks)
+    private async Task<CrdtApplyResult> TraverseForCrdtApplyAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks, WalRoutingStamp routing)
     {
         var path = StackPool.Get();
         try
@@ -1459,7 +1459,7 @@ internal sealed partial class ShardRootGrain
             var leafId = await ResolveWriteLeafAsync(key, path);
             var leafGrain = ResolveLeafGrain(leafId);
             var result = await ApplyCrdtDeltaRebindingUnboundLeafAsync(
-                leafGrain, leafId, key, mode, deltaBytes, expiresAtTicks);
+                leafGrain, leafId, key, mode, deltaBytes, expiresAtTicks, routing);
 
             // Propagate splits up the tree.
             var splitResult = await PropagateSplitAsync(result.Split, path);
@@ -1515,11 +1515,12 @@ internal sealed partial class ShardRootGrain
         string key,
         LatticeMergeMode mode,
         byte[] deltaBytes,
-        long expiresAtTicks)
+        long expiresAtTicks,
+        WalRoutingStamp routing)
     {
         try
         {
-            return await leafGrain.ApplyCrdtDeltaAsync(key, mode, deltaBytes, expiresAtTicks);
+            return await LeafApplyCrdtDeltaAsync(leafGrain, key, mode, deltaBytes, expiresAtTicks, routing);
         }
         catch (LatticeCrdtShapeNotRegisteredException ex) when (ex.TreeId.Length == 0)
         {
@@ -1539,7 +1540,7 @@ internal sealed partial class ShardRootGrain
             // Single-shot. A second failure is a genuine fault (the shape really
             // is unregistered, or the binding write did not stick) and must stay
             // fail-closed, so it propagates to the caller unaltered.
-            return await leafGrain.ApplyCrdtDeltaAsync(key, mode, deltaBytes, expiresAtTicks);
+            return await LeafApplyCrdtDeltaAsync(leafGrain, key, mode, deltaBytes, expiresAtTicks, routing);
         }
     }
 

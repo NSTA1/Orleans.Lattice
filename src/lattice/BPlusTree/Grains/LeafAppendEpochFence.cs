@@ -76,6 +76,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     private Task? _bump;
     private bool _stale;
     private long _gateClosedUntilTicks;
+    private long _handOffCloses;
 
     /// <summary>Creates the fence for one leaf activation.</summary>
     /// <param name="leafId">The leaf's grain key.</param>
@@ -206,6 +207,32 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         }
     }
 
+    /// <summary>
+    /// How many hand-off closes have raised this activation's epoch. A write captures
+    /// it at admission (<see cref="WalRoutingStamp.AdmissionMark"/>); it moves in the
+    /// same step as the close's epoch, so a stamp carrying the raised epoch is never
+    /// read alongside the old count.
+    /// </summary>
+    internal long HandOffCloses => Volatile.Read(ref _handOffCloses);
+
+    /// <inheritdoc />
+    public LeafRetiredException? OnAdmitted(long admissionMark)
+    {
+        if (admissionMark <= 0 || admissionMark - 1 == Volatile.Read(ref _handOffCloses))
+        {
+            return null;
+        }
+
+        long epoch;
+        lock (_sync)
+        {
+            epoch = _epoch;
+        }
+
+        LatticeMetrics.WalAppendFenceSelfFenced.Add(1, _treeTag, _tenantTag);
+        return LeafRetiredException.ForSupersededActivation(_leafId, epoch);
+    }
+
     /// <inheritdoc />
     public void OnUnloaded(int partition, WalAppendStamp stamp)
     {
@@ -221,8 +248,130 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     /// <inheritdoc />
     public LeafRetiredException OnStale(WalAppendStamp stamp)
     {
+        bool selfFenced;
+        lock (_sync)
+        {
+            // Member 2 (design owner, Q1): a stamp below this activation's own current
+            // epoch was taken before this activation raised its epoch itself - a
+            // hand-off close's bump, or a bump after a floor refusal - so it was fenced
+            // by this activation, not superseded by another. The write is retried by
+            // its caller's seam and re-admitted under the current epoch (span
+            // admission forwards a key a split moved); the activation keeps serving.
+            // A genuine supersession still meets its next, current-epoch append.
+            // Its caller retries on this same live activation, so a path that applied
+            // before appending (the batched CRDT apply) applies again: safe only for
+            // idempotent applies (review N1; see ApplyCrdtDeltaManyCoreAsync).
+            selfFenced = !_stale && stamp.Epoch > 0 && stamp.Epoch < _epoch;
+        }
+
+        if (selfFenced)
+        {
+            LatticeMetrics.WalAppendFenceSelfFenced.Add(1, _treeTag, _tenantTag);
+            return LeafRetiredException.ForSupersededActivation(_leafId, stamp.Epoch);
+        }
+
         MarkStale();
         return LeafRetiredException.ForSupersededActivation(_leafId, stamp.Epoch);
+    }
+
+    /// <summary>
+    /// A hand-off close's fence for a leaf initiator (epic #5605, member 2; design owner
+    /// Q1): raises this activation's epoch to the row's plus one, conditionally on the
+    /// ETag it last wrote, then re-claims the raised epoch at every partition it had
+    /// claimed in this activation - including one whose claim an unloaded rejection reset
+    /// after a WAL shard restart (#5664 (b)) - and returns the claim heads indexed by
+    /// partition (<c>-1</c> only for a partition this activation never claimed, where
+    /// none of its appends was stamped). Every append stamped with the old epoch was
+    /// allocated below those heads or is rejected, self-fenced, and re-admitted by its
+    /// caller; a write admitted before the close and dispatched after it is self-fenced
+    /// at dispatch (<see cref="OnAdmitted"/>, #5664 (a)).
+    /// </summary>
+    /// <param name="shardFor">The WAL shard grain of a partition.</param>
+    /// <param name="partitionCount">The tree's WAL partition count.</param>
+    /// <param name="cancellationToken">The close's cancellation.</param>
+    /// <returns>
+    /// The heads, or <see langword="null"/> when the activation has stamped nothing: its
+    /// appends were unstamped, and the watermark reports them.
+    /// </returns>
+    /// <exception cref="LeafRetiredException">The activation was found superseded.</exception>
+    /// <exception cref="InvalidOperationException">A partition could not be re-claimed, or the gate view is closed while this activation has stamped (#5664 (c)); the caller leaves its marker open.</exception>
+    internal async Task<long[]?> BumpAndReclaimAsync(Func<int, IWalShardGrain> shardFor, int partitionCount, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(shardFor);
+        long raised;
+        int[] claimed;
+        Task closeBump;
+        while (true)
+        {
+            Task? pending;
+            lock (_sync)
+            {
+                pending = _bump ?? (_rowClaim is { IsCompleted: false } rowClaim ? rowClaim : null);
+                if (pending is null)
+                {
+                    if (_stale)
+                    {
+                        throw LeafRetiredException.ForSupersededActivation(_leafId, _epoch);
+                    }
+
+                    if (_epoch == 0 || _row is null)
+                    {
+                        return null;
+                    }
+
+                    claimed = _partitions.Where(p => p.Value.EverClaimed).Select(p => p.Key).ToArray();
+                    if (!IsGateOpenLocked())
+                    {
+                        // #5664 (c): with the gate view closed the close cannot bump, but an
+                        // append this activation stamped may still be in flight. Only an
+                        // activation that never stamped may close on unfenced heads; this one
+                        // leaves the marker open for a later, fenced close.
+                        if (claimed.Length > 0)
+                        {
+                            throw new InvalidOperationException(
+                                $"Leaf {_leafId:N} has stamped appends that may be in flight and its view of the append-fence gate is closed; the hand-off stays open until a fenced close.");
+                        }
+
+                        return null;
+                    }
+
+                    // #5662: the close's row write is this activation's bump, installed in
+                    // the step that read the epoch. A floor refusal concurrent with it joins
+                    // it rather than writing the same row beside it, which would conflict on
+                    // the activation's own ETag and read as a supersession (the #5643
+                    // class); its epoch check then sends it to claim under the raised epoch.
+                    raised = _epoch + 1;
+                    closeBump = WriteCloseBumpAsync(_row, raised);
+                    if (!closeBump.IsCompleted)
+                    {
+                        _bump = closeBump;
+                    }
+
+                    break;
+                }
+            }
+
+            await pending.ConfigureAwait(false);
+        }
+
+        await closeBump.ConfigureAwait(false);
+
+        var heads = new long[partitionCount];
+        Array.Fill(heads, -1L);
+        foreach (var partition in claimed)
+        {
+            if (partition >= partitionCount)
+            {
+                continue;
+            }
+
+            var stamp = await StampForAsync(shardFor(partition), partition, cancellationToken).ConfigureAwait(false);
+            var head = stamp is { } s && s.Epoch >= raised ? ClaimHead(partition) : null;
+            heads[partition] = head ?? throw new InvalidOperationException(
+                $"Leaf {_leafId:N} could not re-claim its raised append epoch at WAL partition {partition}; the hand-off stays open.");
+        }
+
+        return heads;
     }
 
     /// <inheritdoc />
@@ -343,6 +492,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 if (_epoch == epoch)
                 {
                     partition.ClaimedEpoch = epoch;
+                    partition.EverClaimed = true;
                     partition.Head = result.Head;
                 }
             }
@@ -439,6 +589,33 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         }
     }
 
+    /// <summary>
+    /// The hand-off close's row write (<see cref="BumpAndReclaimAsync"/>). The row is
+    /// written before the in-memory epoch moves, so an append admitted in between is
+    /// stamped with the old epoch and rejected, never accepted above the heads (cost
+    /// only).
+    /// </summary>
+    private async Task WriteCloseBumpAsync(GrainState<LeafAppendEpochState> row, long raised)
+    {
+        try
+        {
+            row.State.Epoch = raised;
+            await WriteRowOrSupersedeAsync(row).ConfigureAwait(false);
+            lock (_sync)
+            {
+                _epoch = Math.Max(_epoch, raised);
+                Volatile.Write(ref _handOffCloses, _handOffCloses + 1);
+            }
+        }
+        finally
+        {
+            lock (_sync)
+            {
+                _bump = null;
+            }
+        }
+    }
+
     private async Task BumpAsync(long epoch, long refusal)
     {
         try
@@ -518,6 +695,13 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     {
         /// <summary>The epoch whose claim was raised here; 0 when none, or invalidated by an unloaded rejection.</summary>
         public long ClaimedEpoch;
+
+        /// <summary>
+        /// Whether this activation has claimed here at all. Unlike <see cref="ClaimedEpoch"/>,
+        /// an unloaded rejection does not reset it: the activation may have stamped appends
+        /// here before the partition restarted, so a hand-off close must re-claim here (#5664 (b)).
+        /// </summary>
+        public bool EverClaimed;
 
         /// <summary>The allocator head the accepted claim returned.</summary>
         public long Head;

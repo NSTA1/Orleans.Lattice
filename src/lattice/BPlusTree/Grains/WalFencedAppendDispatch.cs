@@ -45,6 +45,7 @@ internal static class WalFencedAppendDispatch
     /// <param name="batched">Use the interleaving batched overloads, as the writer's point path does.</param>
     /// <param name="partition">The partition index.</param>
     /// <param name="fence">The leaf activation's fence.</param>
+    /// <param name="routing">The shard-level generation the write was admitted under, or <see cref="WalRoutingStamp.None"/>.</param>
     /// <param name="waitForDeadline">
     /// Also abandon each shard call when <paramref name="cancellationToken"/> fires,
     /// whether or not the callee honours it, exactly as the writer's bounded
@@ -62,13 +63,21 @@ internal static class WalFencedAppendDispatch
         bool batched,
         int partition,
         ILeafAppendFence fence,
+        WalRoutingStamp routing,
         bool waitForDeadline,
         CancellationToken cancellationToken)
     {
         for (var attempt = 0; ; attempt++)
         {
-            var stamp = await fence.StampForAsync(grain, partition, cancellationToken).ConfigureAwait(false);
-            if (stamp is null)
+            var leafStamp = await fence.StampForAsync(grain, partition, cancellationToken).ConfigureAwait(false);
+            if (leafStamp is not null && !routing.ForcesUnstamped && fence.OnAdmitted(routing.AdmissionMark) is { } admittedBeforeClose)
+            {
+                // #5664 (a): admitted before a hand-off close this activation has since
+                // made; never appended under the raised epoch.
+                throw admittedBeforeClose;
+            }
+
+            if (leafStamp is null || routing.ForcesUnstamped)
             {
                 long offset;
                 if (batched)
@@ -85,6 +94,7 @@ internal static class WalFencedAppendDispatch
                 return offset;
             }
 
+            WalAppendStamp? stamp = routing.Apply(leafStamp.Value);
             WalAppendFenceOutcome outcome;
             long admitted;
             long watermark;
@@ -117,6 +127,11 @@ internal static class WalFencedAppendDispatch
                 return admitted;
             }
 
+            if (await IsGenerationRejectionRetriedAsync(grain, stamp.Value, outcome, attempt, cancellationToken).ConfigureAwait(false))
+            {
+                continue;
+            }
+
             HandleRejection(fence, partition, stamp.Value, outcome, attempt);
         }
     }
@@ -126,6 +141,7 @@ internal static class WalFencedAppendDispatch
     /// <param name="entries">The partition's slice.</param>
     /// <param name="partition">The partition index.</param>
     /// <param name="fence">The leaf activation's fence.</param>
+    /// <param name="routing">The shard-level generation the write was admitted under, or <see cref="WalRoutingStamp.None"/>.</param>
     /// <param name="waitForDeadline">As for <see cref="AppendPointAsync"/>.</param>
     /// <param name="cancellationToken">The dispatch's cancellation, or its deadline.</param>
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
@@ -134,13 +150,21 @@ internal static class WalFencedAppendDispatch
         IReadOnlyList<WalRecord> entries,
         int partition,
         ILeafAppendFence fence,
+        WalRoutingStamp routing,
         bool waitForDeadline,
         CancellationToken cancellationToken)
     {
         for (var attempt = 0; ; attempt++)
         {
-            var stamp = await fence.StampForAsync(grain, partition, cancellationToken).ConfigureAwait(false);
-            if (stamp is null)
+            var leafStamp = await fence.StampForAsync(grain, partition, cancellationToken).ConfigureAwait(false);
+            if (leafStamp is not null && !routing.ForcesUnstamped && fence.OnAdmitted(routing.AdmissionMark) is { } admittedBeforeClose)
+            {
+                // #5664 (a): admitted before a hand-off close this activation has since
+                // made; never appended under the raised epoch.
+                throw admittedBeforeClose;
+            }
+
+            if (leafStamp is null || routing.ForcesUnstamped)
             {
                 var offsets = await Bound(grain.AppendBatchAsync(entries, cancellationToken), waitForDeadline, cancellationToken).ConfigureAwait(false);
                 if (offsets.Count > 0)
@@ -151,6 +175,7 @@ internal static class WalFencedAppendDispatch
                 return offsets;
             }
 
+            WalAppendStamp? stamp = routing.Apply(leafStamp.Value);
             WalStampedBatchResult result;
             try
             {
@@ -170,8 +195,69 @@ internal static class WalFencedAppendDispatch
 
             // A partially admitted batch is a stale one: an unloaded entry is only
             // ever met before the first allocation.
+            if (await IsGenerationRejectionRetriedAsync(grain, stamp.Value, result.Outcome, attempt, cancellationToken).ConfigureAwait(false))
+            {
+                continue;
+            }
+
             HandleRejection(fence, partition, stamp.Value, result.Outcome, attempt);
         }
+    }
+
+    /// <summary>
+    /// Handles a routing-generation outcome (member 2). A stale generation means a
+    /// hand-off close re-claimed it after the write was admitted: nothing was
+    /// allocated, and the write must be re-admitted by its initiator under the current
+    /// routing, never re-stamped here (design note section 5), so it throws
+    /// <see cref="WalRoutingGenerationStaleException"/>. An unloaded generation means
+    /// the partition restarted or moved since the initiator claimed it: the same
+    /// generation is re-presented, which reloads it if it is still current (the
+    /// claim's <c>AlreadyDurable</c> case) and is refused if a close has re-claimed it
+    /// since, which is then the stale case. Returns <see langword="true"/> when the
+    /// append should be retried; <see langword="false"/> for any other outcome.
+    /// </summary>
+    private static async ValueTask<bool> IsGenerationRejectionRetriedAsync(
+        IWalShardGrain grain,
+        WalAppendStamp stamp,
+        WalAppendFenceOutcome outcome,
+        int attempt,
+        CancellationToken cancellationToken)
+    {
+        if (outcome == WalAppendFenceOutcome.StaleGeneration)
+        {
+            // #5663: read the threshold the write was refused at, on the rejection path
+            // only; a refused claim writes nothing. The initiator decides whether its
+            // own generation is behind it.
+            long refusal = 0;
+            try
+            {
+                var probe = await grain.ClaimRoutingGenerationAsync(stamp.Initiator, stamp.Generation, cancellationToken).ConfigureAwait(false);
+                refusal = probe.Accepted ? 0 : probe.Refusal;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+            }
+
+            throw new WalRoutingGenerationStaleException(stamp.Initiator, stamp.Generation, refusal);
+        }
+
+        if (outcome != WalAppendFenceOutcome.UnloadedGeneration)
+        {
+            return false;
+        }
+
+        if (attempt >= MaxUnloadedRetries)
+        {
+            throw new WalRoutingGenerationStaleException(stamp.Initiator, stamp.Generation);
+        }
+
+        var represented = await grain.ClaimRoutingGenerationAsync(stamp.Initiator, stamp.Generation, cancellationToken).ConfigureAwait(false);
+        if (!represented.Accepted)
+        {
+            throw new WalRoutingGenerationStaleException(stamp.Initiator, stamp.Generation, represented.Refusal);
+        }
+
+        return true;
     }
 
     private static Task<T> Bound<T>(Task<T> call, bool waitForDeadline, CancellationToken cancellationToken) =>

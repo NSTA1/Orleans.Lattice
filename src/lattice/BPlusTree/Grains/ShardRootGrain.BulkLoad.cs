@@ -219,7 +219,9 @@ internal sealed partial class ShardRootGrain
                 if (delta.Entries.Count > 0)
                 {
                     var rows = new Dictionary<string, LwwValue<byte[]>>(delta.Entries, StringComparer.Ordinal);
-                    await MergeRoutedAsync(rows, isCrossShardMigration: false);
+                    // Epic #5605: no phase check admitted these rows, so they carry no
+                    // routing generation and are appended unstamped (S3).
+                    await MergeRoutedAsync(rows, isCrossShardMigration: false, WalRoutingStamp.Unstamped);
                     RecordBulkRelocation(rows.Count, LatticeMetrics.BulkRelocationReplacedRoot);
                 }
             }
@@ -773,7 +775,8 @@ internal sealed partial class ShardRootGrain
         // is deliberately not made: BulkAppendChunkAsync does not re-route a
         // refused shard, so the caller would see a refusal for a chunk 10.2.0
         // accepted; the above-edge graft checks no slot ownership either.
-        await MergeRoutedAsync(batch, isCrossShardMigration: false);
+        // Epic #5605: no phase check, so no routing generation; appended unstamped (S3).
+        await MergeRoutedAsync(batch, isCrossShardMigration: false, WalRoutingStamp.Unstamped);
         await ForwardMergedRowsToSplitShadowIfNeededAsync(batch.Keys);
         CollectMirroredRows(mirrored, batch);
         RecordBulkRelocation(belowEdge, LatticeMetrics.BulkRelocationBelowEdge);

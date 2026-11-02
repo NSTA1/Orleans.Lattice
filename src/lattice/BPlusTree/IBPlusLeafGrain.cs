@@ -269,6 +269,82 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// </summary>
     Task<LeafRangeDeletePage> DeleteRangeAndNextSiblingAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null);
 
+    /// <summary>
+    /// The stamped counterpart of <see cref="DeleteRangeAndNextSiblingAsync"/> (epic
+    /// #5605, member 2): the range-delete record is appended under
+    /// <paramref name="routing"/>, the tree's range-delete generation the walk's open
+    /// intent handed out, so that intent's close fences every page of the walk. A walk
+    /// whose append is rejected because the generation was re-claimed fails with an
+    /// internal stale-generation exception, before anything is applied, which the shard
+    /// root's walk step handles. The existing method stays unstamped (S3).
+    /// </summary>
+    /// <remarks>Called only while the caller's append-fence gate is open.</remarks>
+    Task<LeafRangeDeletePage> DeleteRangeAndNextSiblingStampedAsync(
+        string startInclusive,
+        string endExclusive,
+        LatticePredicateNode? predicate,
+        Grains.WalRoutingStamp routing);
+
+    // Stamped leaf write methods (epic #5605, member 2; design note section 2, "Stamped
+    // at admission"). Each is the counterpart of an existing write method, called by
+    // new code only: the routing stamp is the shard root's routing generation captured
+    // in the same step as its phase check, or WalRoutingStamp.None for a leaf-to-leaf
+    // hand-off whose receiver appends and applies the write as its own. The existing
+    // methods stay unstamped (S3): a write reaching the leaf through one of them was
+    // admitted under no routing generation, so it is appended unstamped and reported,
+    // never under the leaf's epoch alone. A write rejected because its generation was
+    // re-claimed fails with an internal stale-generation exception before anything is
+    // applied, which the shard root retries through its phase check.
+
+    /// <summary>The stamped counterpart of <see cref="SetAsync(string, byte[], long)"/>; <paramref name="expiresAtTicks"/> 0 means no expiry.</summary>
+    [AlwaysInterleave]
+    Task<SplitResult?> SetStampedAsync(string key, byte[] value, long expiresAtTicks, Grains.WalRoutingStamp routing);
+
+    /// <summary>The stamped counterpart of <see cref="GetOrSetAsync"/>.</summary>
+    Task<GetOrSetResult> GetOrSetStampedAsync(string key, byte[] value, Grains.WalRoutingStamp routing);
+
+    /// <summary>The stamped counterpart of <see cref="SetIfVersionAsync"/>.</summary>
+    Task<CasResult> SetIfVersionStampedAsync(string key, byte[] value, HybridLogicalClock expectedVersion, Grains.WalRoutingStamp routing);
+
+    /// <summary>The stamped counterpart of <see cref="SetManyAsync"/>.</summary>
+    [AlwaysInterleave]
+    Task<SplitResult?> SetManyStampedAsync(List<KeyValuePair<string, byte[]>> entries, Grains.WalRoutingStamp routing);
+
+    /// <summary>The stamped counterpart of <see cref="SetManyWherePredicateAsync"/>.</summary>
+    [AlwaysInterleave]
+    Task<ConditionalSetManyResult> SetManyWherePredicateStampedAsync(
+        List<KeyValuePair<string, byte[]>> entries,
+        LatticePredicateNode predicate,
+        Grains.WalRoutingStamp routing);
+
+    /// <summary>The stamped counterpart of <see cref="DeleteAsync"/>.</summary>
+    [AlwaysInterleave]
+    Task<bool> DeleteStampedAsync(string key, Grains.WalRoutingStamp routing);
+
+    /// <summary>The stamped counterpart of <see cref="DeleteTrackedAsync"/>.</summary>
+    [AlwaysInterleave]
+    Task<LeafDeleteResult> DeleteTrackedStampedAsync(string key, Grains.WalRoutingStamp routing);
+
+    /// <summary>The stamped counterpart of <see cref="ApplyCrdtDeltaAsync(string, LatticeMergeMode, byte[], long)"/>.</summary>
+    Task<CrdtApplyResult> ApplyCrdtDeltaStampedAsync(
+        string key,
+        LatticeMergeMode mode,
+        byte[] deltaBytes,
+        long expiresAtTicks,
+        Grains.WalRoutingStamp routing);
+
+    /// <summary>The stamped counterpart of <see cref="ApplyCrdtDeltaManyAsync"/>.</summary>
+    Task<SplitResult?> ApplyCrdtDeltaManyStampedAsync(
+        List<KeyValuePair<string, byte[]>> deltas,
+        LatticeMergeMode mode,
+        Grains.WalRoutingStamp routing);
+
+    /// <summary>The stamped counterpart of <see cref="MergeManyAsync"/>.</summary>
+    Task<SplitResult?> MergeManyStampedAsync(
+        Dictionary<string, LwwValue<byte[]>> entries,
+        bool isCrossShardMigration,
+        Grains.WalRoutingStamp routing);
+
     /// <summary>Returns the number of live (non-tombstoned) keys in this leaf.</summary>
     Task<int> CountAsync();
 

@@ -113,6 +113,19 @@ internal static class WalAppendFenceCore
     public static bool IsGenerationAdmitted(long generation, long loaded) =>
         loaded != Unloaded && generation >= loaded;
 
+    /// <summary>
+    /// Whether a record carried under the coordinator-terminal stamp class is
+    /// excluded from the partition's unstamped watermark (epic #5605, member 2;
+    /// review S2 of revision 3). Only a <c>TxCommit</c> or <c>TxAbort</c> record is:
+    /// it carries only its transaction id and no row data, and the leaf-wide prepare
+    /// clamp holds the live advance while the prepare it resolves is pending, so
+    /// passing it unread changes nothing. Any other record sent with the class is
+    /// admitted unstamped and reported.
+    /// </summary>
+    /// <param name="op">The record's mutation kind.</param>
+    public static bool IsCoordinatorTerminalOp(MutationKind op) =>
+        op is MutationKind.TxCommit or MutationKind.TxAbort;
+
     /// <summary>The value a refused claim must exceed.</summary>
     public static long ClaimThreshold(long loaded, long durable, long floor) =>
         Math.Max(Math.Max(loaded, durable), floor);

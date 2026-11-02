@@ -42,6 +42,16 @@ internal interface ILeafAppendFence
     LeafRetiredException OnStale(WalAppendStamp stamp);
 
     /// <summary>
+    /// The refusal for a write admitted before this activation's latest hand-off close
+    /// (#5664 (a)), or <see langword="null"/> to append it. <paramref name="admissionMark"/>
+    /// is <see cref="WalRoutingStamp.AdmissionMark"/>: 0 when the write's admission was
+    /// not captured. Read after the stamp was taken, so a close that raised the stamp's
+    /// epoch is always seen. The refusal is a self-fence: the caller re-admits the write,
+    /// and span admission forwards a key the close's split moved.
+    /// </summary>
+    LeafRetiredException? OnAdmitted(long admissionMark);
+
+    /// <summary>
     /// A stamped method failed with the definite "method unknown" failure of a
     /// silo running an older build: the activation closes its own view of the
     /// gate, and the writer re-issues the append unstamped.

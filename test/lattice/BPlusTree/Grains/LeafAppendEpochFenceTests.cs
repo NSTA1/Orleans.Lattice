@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// append, and the own-append self-report.
 /// </summary>
 [TestFixture]
-public sealed class LeafAppendEpochFenceTests
+public sealed partial class LeafAppendEpochFenceTests
 {
     private static readonly Guid Leaf = new("1e1e1e1e-0000-0000-0000-000000000001");
 
@@ -233,7 +233,7 @@ public sealed class LeafAppendEpochFenceTests
         shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(41L));
 
         var offset = await WalFencedAppendDispatch.AppendPointAsync(
-            shard, new WalRecord(), batched: false, partition: 0, h.Fence, waitForDeadline: false, CancellationToken.None);
+            shard, new WalRecord(), batched: false, partition: 0, h.Fence, WalRoutingStamp.None, waitForDeadline: false, CancellationToken.None);
 
         Assert.Multiple(() =>
         {

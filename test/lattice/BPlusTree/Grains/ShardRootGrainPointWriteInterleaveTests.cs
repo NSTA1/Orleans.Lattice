@@ -215,7 +215,7 @@ public sealed class ShardRootGrainPointWriteInterleaveTests
         private static bool IsGatedLeafSet(IInvokable request) =>
             _key is { } key
             && request.GetInterfaceType() == typeof(IBPlusLeafGrain)
-            && request.GetMethodName() == nameof(IBPlusLeafGrain.SetAsync)
+            && request.GetMethodName() is nameof(IBPlusLeafGrain.SetAsync) or nameof(IBPlusLeafGrain.SetStampedAsync)
             && request.GetArgumentCount() > 0
             && request.GetArgument(0) is string argument
             && string.Equals(argument, key, StringComparison.Ordinal);

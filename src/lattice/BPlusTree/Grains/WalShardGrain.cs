@@ -853,6 +853,7 @@ internal sealed partial class WalShardGrain(
         bool fenced = false;
         HybridLogicalClock refusedBelow = default;
         var fenceOutcome = WalAppendFenceOutcome.Admitted;
+        var terminalMisuse = false;
         long unstampedWatermark;
         lock (_stateGate)
         {
@@ -882,9 +883,10 @@ internal sealed partial class WalShardGrain(
             else
             {
                 var offset = WalOffsetAllocationCore.Assign(ref _nextOffset);
-                if (!TShape.Stamped)
+                if (RaisesUnstampedWatermark(TShape.Stamped, in stamp, in entry))
                 {
                     _unstampedWatermark = offset;
+                    terminalMisuse = TShape.Stamped;
                 }
                 _pendingSegments.Add(segment);
                 _pendingOffsets.Add(offset);
@@ -940,6 +942,10 @@ internal sealed partial class WalShardGrain(
             ReturnSegment(segment);
             RecordFenceRejection(fenceOutcome);
             return TShape.Rejected(fenceOutcome, unstampedWatermark);
+        }
+        if (terminalMisuse)
+        {
+            RecordTerminalClassMisuse(1);
         }
         LatticeMetrics.WalAppendQueueDepth.Record(
             queueDepth,
@@ -1091,6 +1097,7 @@ internal sealed partial class WalShardGrain(
         // retirement back until every entry has been assigned, so no claim raise
         // can fall between two of its entries and leave a partially admitted batch.
         var batchRegistered = false;
+        var terminalMisuses = 0;
         try
         {
             for (var i = 0; i < count; i++)
@@ -1179,13 +1186,18 @@ internal sealed partial class WalShardGrain(
                     {
                         admittedAgainst = _floor;
                         var offset = WalOffsetAllocationCore.Assign(ref _nextOffset);
-                        if (!TShape.Stamped)
+                        if (RaisesUnstampedWatermark(TShape.Stamped, in stamp, entries[i]))
                         {
                             _unstampedWatermark = offset;
+                            if (TShape.Stamped)
+                            {
+                                terminalMisuses++;
+                            }
                         }
-                        else if (i == 0 && count > 1)
+                        else if (i == 0 && count > 1 && !stamp.IsCoordinatorTerminal)
                         {
-                            RegisterStampedBatchLocked(stamp.LeafId);
+                            // A terminal-class batch has no leaf entry to hold back.
+                            RegisterStampedBatchLocked(in stamp);
                             batchRegistered = true;
                         }
                         offsets[i] = offset;
@@ -1293,7 +1305,12 @@ internal sealed partial class WalShardGrain(
         {
             if (batchRegistered)
             {
-                ReleaseStampedBatch(stamp.LeafId);
+                ReleaseStampedBatch(in stamp);
+            }
+
+            if (terminalMisuses > 0)
+            {
+                RecordTerminalClassMisuse(terminalMisuses);
             }
         }
 

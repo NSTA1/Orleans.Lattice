@@ -18,4 +18,17 @@ internal interface IFencedCommitLogWriter : ICommitLogWriter
     /// slice through <paramref name="fence"/>'s stamp when its view of the gate is open.
     /// </summary>
     Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<WalRecord> entries, ILeafAppendFence fence, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// <see cref="AppendAsync(WalRecord, ILeafAppendFence, CancellationToken)"/>, with
+    /// the leaf's stamp extended by <paramref name="routing"/>, the shard-level
+    /// generation the write was admitted under (epic #5605, member 2).
+    /// </summary>
+    Task<long> AppendAsync(WalRecord entry, ILeafAppendFence fence, WalRoutingStamp routing, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// <see cref="AppendManyAsync(IReadOnlyList{WalRecord}, ILeafAppendFence, CancellationToken)"/>,
+    /// with the leaf's stamp extended by <paramref name="routing"/> (epic #5605, member 2).
+    /// </summary>
+    Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<WalRecord> entries, ILeafAppendFence fence, WalRoutingStamp routing, CancellationToken cancellationToken);
 }
