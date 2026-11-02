@@ -38,6 +38,11 @@ public sealed class BulkLoadRedeliveryIntegrationTests
     {
         _fixture = new FourShardClusterFixture();
         await _fixture.InitializeAsync();
+
+        // Re-delivery is recognised from the right edge only while every silo
+        // serves the leaf methods that read it; otherwise the append takes the
+        // 10.2.0 path.
+        await _fixture.Cluster.WaitForAppendFenceGateAsync();
     }
 
     [OneTimeTearDown]

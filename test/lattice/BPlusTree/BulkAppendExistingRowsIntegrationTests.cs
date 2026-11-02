@@ -1,5 +1,7 @@
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Runtime;
 using Orleans.TestingHost;
@@ -43,6 +45,10 @@ public sealed class BulkAppendExistingRowsIntegrationTests
         _fixture = new SmallLeafClusterFixture();
         await _fixture.InitializeAsync();
         _cluster = _fixture.Cluster;
+
+        // The relocation runs only while every silo serves the bulk-graft leaf
+        // methods; otherwise the append takes the 10.2.0 path.
+        await _cluster.WaitForAppendFenceGateAsync();
     }
 
     [OneTimeTearDown]

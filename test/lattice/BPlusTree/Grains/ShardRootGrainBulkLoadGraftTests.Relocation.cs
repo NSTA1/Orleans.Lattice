@@ -1,5 +1,6 @@
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -102,5 +103,47 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
             Assert.That(merged.Single()["k0001"].Timestamp, Is.EqualTo(stamp), "with its own stamp");
         });
         await seededLeaf.Received(1).ClearGrainStateAsync();
+    }
+
+    [Test]
+    public async Task While_an_older_silo_may_host_a_leaf_the_append_takes_the_10_2_0_path()
+    {
+        // GetAppendTailAsync and NarrowHighKeyAsync are new leaf methods. While the
+        // append-fence gate is closed some silo runs an older build, and a leaf it
+        // hosts would fail them with an unknown-method fault, failing an append that
+        // succeeded in 10.2.0. So the append fills by count and grafts unnarrowed.
+        var gate = Substitute.For<IWalAppendFenceGate>();
+        gate.IsOpen.Returns(false);
+        var h = CreateHarness(maxLeafKeys: 2, appendFenceGate: gate);
+        var existing = h.AddLeaf();
+        h.State.State.RootNodeId = existing;
+        h.State.State.RootIsLeaf = true;
+        var tail = h.Leaf(existing);
+        tail.CountAsync().Returns(2);
+
+        await h.Grain.BulkAppendAsync("mixed-version", Pairs(5));
+
+        await tail.DidNotReceive().GetAppendTailAsync();
+        await tail.DidNotReceive().NarrowHighKeyAsync(Arg.Any<string>());
+        await tail.Received().CountAsync();
+        Assert.That(h.State.State.LastCompletedBulkOperationId, Is.EqualTo("mixed-version"));
+    }
+
+    [Test]
+    public async Task With_every_silo_on_this_build_the_append_reads_the_tail_and_narrows()
+    {
+        var gate = Substitute.For<IWalAppendFenceGate>();
+        gate.IsOpen.Returns(true);
+        var h = CreateHarness(maxLeafKeys: 2, appendFenceGate: gate);
+        var existing = h.AddLeaf();
+        h.State.State.RootNodeId = existing;
+        h.State.State.RootIsLeaf = true;
+        var tail = h.Leaf(existing);
+        tail.GetAppendTailAsync().Returns((2, "a"));
+
+        await h.Grain.BulkAppendAsync("same-version", Pairs(5));
+
+        await tail.Received().GetAppendTailAsync();
+        await tail.Received(1).NarrowHighKeyAsync("k0000");
     }
 }

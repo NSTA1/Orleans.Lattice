@@ -545,13 +545,20 @@ internal sealed partial class ShardRootGrain
             : await TraverseToRightmostLeafAsync();
 
         var rightmostLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(rightmostLeafId);
-        var (existingCount, rightEdge) = await rightmostLeaf.GetAppendTailAsync();
+
+        // GetAppendTailAsync and NarrowHighKeyAsync are new leaf methods, so while an
+        // older silo may host the leaf the append takes the 10.2.0 path: fill by count,
+        // graft without narrowing, relocate nothing. See BulkGraftSeamsAvailable.
+        var graftSeams = BulkGraftSeamsAvailable;
+        var (existingCount, rightEdge) = graftSeams
+            ? await rightmostLeaf.GetAppendTailAsync()
+            : (await rightmostLeaf.CountAsync(), null);
 
         // Entries the right edge cannot take: at or below the shard's highest key,
         // or below the rightmost leaf's own low bound. Either they were grafted by
         // an earlier delivery of this batch (issue #5460) or the batch sorts below
         // rows the shard already holds (issue #5610). See ResolveBelowEdgeAsync.
-        var lowBound = RootIsLeafTyped
+        var lowBound = RootIsLeafTyped || !graftSeams
             ? null
             : (await rightmostLeaf.GetKeyRangeAndNextSiblingAsync()).KeyRange.LowKeyInclusive;
         var belowEdge = CountBelowEdge(sortedEntries, rightEdge, lowBound);
@@ -810,10 +817,13 @@ internal sealed partial class ShardRootGrain
         // own before they are linked behind it (issue #5460). Narrowing only, so a
         // resumed graft re-runs it harmlessly. The rows it held in that keyspace
         // come back and are relocated into the appended leaves (issue #5610).
-        var stranded = await existingLeaf.NarrowHighKeyAsync(graft.NewLeaves[0].SeparatorKey);
-        if (stranded is { Count: > 0 })
+        if (BulkGraftSeamsAvailable)
         {
-            await RelocateIntoGraftedLeavesAsync(graft, stranded);
+            var stranded = await existingLeaf.NarrowHighKeyAsync(graft.NewLeaves[0].SeparatorKey);
+            if (stranded is { Count: > 0 })
+            {
+                await RelocateIntoGraftedLeavesAsync(graft, stranded);
+            }
         }
 
         await existingLeaf.SetNextSiblingAsync(graft.NewLeaves[0].LeafId);
@@ -934,6 +944,19 @@ internal sealed partial class ShardRootGrain
         await WriteShardStateAsync();
     }
 
+    /// <summary>
+    /// Whether every silo that may host a leaf serves the bulk-graft leaf methods
+    /// <c>GetAppendTailAsync</c> and <c>NarrowHighKeyAsync</c>. A 10.2.0 silo has
+    /// neither, so a call to a leaf it hosts fails with an unknown-method fault and
+    /// the append, which succeeded in 10.2.0, would fail. The append-fence gate
+    /// (epic #5605) is open only while every active silo runs a build that has them,
+    /// and closes by itself when an older silo joins, so while it is closed the
+    /// append takes the 10.2.0 path. A host with no gate registered runs a single
+    /// build.
+    /// </summary>
+    private bool BulkGraftSeamsAvailable =>
+        context.ActivationServices?.GetService(typeof(IWalAppendFenceGate)) is not IWalAppendFenceGate gate
+        || gate.IsOpen;
     /// <summary>
     /// Merges the rows the old rightmost leaf held at or above the first appended
     /// separator into the appended leaf whose range declares each one, preserving
