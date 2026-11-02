@@ -523,8 +523,13 @@ internal sealed partial class BPlusLeafGrain
         {
             // Epic #5605, member 2 (design owner, Q2): a relocated value was already
             // appended here under the write's routing; the receiver appends and
-            // applies it again as its own, so it carries no routing generation.
-            (local, forwardedSplit) = await ForwardOutOfSpanMergeAsync(stranded, isCrossShardMigration, WalRoutingStamp.None);
+            // applies it again as its own, so it carries no routing generation. The
+            // receiver's stamped method is called only while the gate is open; with it
+            // closed, the existing method appends unstamped, as before.
+            (local, forwardedSplit) = await ForwardOutOfSpanMergeAsync(
+                stranded,
+                isCrossShardMigration,
+                IsHandOffGateOpen() ? WalRoutingStamp.None : WalRoutingStamp.Unstamped);
         }
 
         foreach (var (key, lww) in local)
