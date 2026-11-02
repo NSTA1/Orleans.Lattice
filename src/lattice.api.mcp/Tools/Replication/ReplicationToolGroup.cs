@@ -123,7 +123,9 @@ internal sealed class ReplicationToolGroup : ILatticeApiMcpToolGroup
                     "Enables cross-cluster replication for a tree under a fixed merge mode, authoring config that "
                     + "converges across the enrolled peer set. Egresses data to a peer: subject to the fail-closed "
                     + "replication access gate. Changing the mode of an already-enabled tree is rejected (disable "
-                    + "then re-enable). Requires replication control to be enabled on the server.",
+                    + "then re-enable). Naming a bootstrap source requests its snapshot even when the tree is already "
+                    + "enabled here, unless a bootstrap from that source is already in flight. Requires "
+                    + "replication control to be enabled on the server.",
                 ReadOnly = false,
                 Destructive = true,
                 UseStructuredContent = true,

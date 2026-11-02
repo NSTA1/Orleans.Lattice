@@ -121,10 +121,6 @@ public sealed class GoingMultiRegionJourney : JourneyChapter
             step.Complete();
         }
 
-        // Whether east's enable requested the bootstrap (the healthy order) or found the tree
-        // already enrolled by convergence from west (#5594); A7.3 decides, A7.7 follows it.
-        var eastBootstrapped = false;
-
         // ----- 3. Enable replication for factory-orders, west then east -----
         using (var step = Coverage.BeginScope("A7.3"))
         {
@@ -154,31 +150,21 @@ public sealed class GoingMultiRegionJourney : JourneyChapter
             // Regression (#5379): with a bootstrap source named, the picker accepts a tree this
             // cluster does not hold rather than refusing it. West's enrolment converges to east
             // within seconds, so east may already be enrolled when this enable lands. Either order
-            // is legitimate. When east enables first it requests the snapshot of west's existing
-            // rows. When the converged enrolment wins, the enable takes the idempotent path and
-            // drops the bootstrap request (#5594), so that order is recorded as the known defect.
+            // is legitimate, and either way the named source's snapshot is requested (#5594).
             // A bootstrapped enable may take over a minute on a cold receiver (#5560), so the wait
             // is bounded by that operation rather than by a UI timeout.
             var enabled = $"Replication enabled for {orders} ({MergeModeLabel}). A snapshot bootstrap was requested.";
-            var already = $"Replication was already enabled for {orders} ({MergeModeLabel}).";
+            var already = $"Replication was already enabled for {orders} ({MergeModeLabel}). A snapshot bootstrap was requested.";
             var eastToast = east.Shell.Toasts.Filter(new() { HasTextRegex = new Regex(Regex.Escape(enabled) + "|" + Regex.Escape(already)) });
             await Expect(eastToast).ToBeVisibleAsync(new() { Timeout = (float)EnableBootstrapBound.TotalMilliseconds });
-            eastBootstrapped = (await eastToast.First.InnerTextAsync()).Contains("A snapshot bootstrap was requested", StringComparison.Ordinal);
-            TestContext.Progress.WriteLine($"A7.3: east's enable of {orders} with bootstrap source {JourneyEstate.West} took {enableStarted.Elapsed.TotalSeconds:0.0} s; bootstrapped: {eastBootstrapped} (#5560, #5594)");
-            if (!eastBootstrapped)
-            {
-                await new KnownDefect("#5594", "an enable of an already-enrolled tree ignores its bootstrap source").ReproducesAsync(async () =>
-                    await Expect(east.Shell.Toasts.Filter(new() { HasText = already })).ToBeVisibleAsync());
-            }
+            TestContext.Progress.WriteLine($"A7.3: east's enable of {orders} with bootstrap source {JourneyEstate.West} took {enableStarted.Elapsed.TotalSeconds:0.0} s (#5560)");
             await Expect(eastTrees.EnableDialog).ToBeHiddenAsync();
             await Expect(east.Page.GetByText($"No tree is named {orders}. Choose one from the list.")).ToHaveCountAsync(0);
             var eastRow = eastTrees.Row(orders, eastCompact);
             await Expect(eastRow).ToContainTextAsync("Enabled", new() { Timeout = 30_000 });
             await Expect(eastRow).ToContainTextAsync(MergeModeLabel);
             Coverage.Hit("use-case:replication/enrol");
-            await east.SubstepAsync(recorder, "3", "east-enabled", eastBootstrapped
-                ? "A7.3 - factory-orders enabled in east, a snapshot bootstrap from west requested"
-                : "A7.3 - factory-orders enrolled in east; its bootstrap request was dropped (#5594)");
+            await east.SubstepAsync(recorder, "3", "east-enabled", "A7.3 - factory-orders enabled in east, a snapshot bootstrap from west requested");
             step.Complete();
         }
 
@@ -272,51 +258,31 @@ public sealed class GoingMultiRegionJourney : JourneyChapter
                 await west.SubstepAsync(recorder, "7", "west-live-keys", "A7.7 - West's factory-orders and its live-key count");
 
                 // East converges on west's live keys, the seeded orders included, once the bootstrap
-                // A7.3 asked for has run. Without it (#5594), only orders written after the enable
-                // reach east, so east holds fewer than the seeded orders - or no factory-orders at all.
+                // A7.3 asked for has run (#5594).
                 await eastData.OpenDirectoryAsync();
-                if (eastBootstrapped)
+                await eastData.OpenTreeAsync(orders);
+                long eastKeys = -1;
+                var deadline = DateTime.UtcNow + Convergence;
+                while (true)
                 {
-                    await eastData.OpenTreeAsync(orders);
-                    long eastKeys = -1;
-                    var deadline = DateTime.UtcNow + Convergence;
-                    while (true)
+                    westKeys = await westData.LiveKeyCountAsync();
+                    eastKeys = await eastData.LiveKeyCountAsync();
+                    if (westKeys == eastKeys || DateTime.UtcNow > deadline)
                     {
-                        westKeys = await westData.LiveKeyCountAsync();
-                        eastKeys = await eastData.LiveKeyCountAsync();
-                        if (westKeys == eastKeys || DateTime.UtcNow > deadline)
-                        {
-                            break;
-                        }
-
-                        await Task.Delay(TimeSpan.FromSeconds(5));
-                        await westData.ReloadAsync();
-                        await eastData.ReloadAsync();
+                        break;
                     }
 
-                    Assert.That(eastKeys, Is.EqualTo(westKeys), "east's factory-orders holds as many live keys as west's");
-                    Assert.That(eastKeys, Is.GreaterThanOrEqualTo(Names.Orders.SeededCount), "east holds at least the 240 seeded orders");
+                    await Task.Delay(TimeSpan.FromSeconds(5));
+                    await westData.ReloadAsync();
+                    await eastData.ReloadAsync();
                 }
-                else
-                {
-                    await new KnownDefect("#5594", "east never receives west's pre-enable orders, because its bootstrap request was dropped").ReproducesAsync(async () =>
-                    {
-                        long eastKeys = 0;
-                        if (await WaitForTreeAsync(eastData, orders, TimeSpan.FromSeconds(30)))
-                        {
-                            await eastData.OpenTreeAsync(orders);
-                            eastKeys = await eastData.LiveKeyCountAsync();
-                        }
 
-                        TestContext.Progress.WriteLine($"A7.7: west holds {westKeys} live keys in {orders}, east {eastKeys} (#5594)");
-                        Assert.That(eastKeys, Is.LessThan(Names.Orders.SeededCount), "east lacks west's pre-enable orders");
-                    });
-                }
+                TestContext.Progress.WriteLine($"A7.7: west holds {westKeys} live keys in {orders}, east {eastKeys}");
+                Assert.That(eastKeys, Is.EqualTo(westKeys), "east's factory-orders holds as many live keys as west's");
+                Assert.That(eastKeys, Is.GreaterThanOrEqualTo(Names.Orders.SeededCount), "east holds at least the 240 seeded orders");
 
                 Coverage.Hit("use-case:replication/east-console");
-                await east.SubstepAsync(recorder, "7", "east-live-keys", eastBootstrapped
-                    ? "A7.7 - East's factory-orders holds the same live-key count as west"
-                    : "A7.7 - East holds only the orders written after its enrolment (#5594)");
+                await east.SubstepAsync(recorder, "7", "east-live-keys", "A7.7 - East's factory-orders holds the same live-key count as west");
                 step.Complete();
             }
         }
@@ -331,20 +297,6 @@ public sealed class GoingMultiRegionJourney : JourneyChapter
 
     /// <summary>How long a receiver's bootstrapped enable may take before the journey fails it (#5560 measured about 77 s).</summary>
     private static readonly TimeSpan EnableBootstrapBound = TimeSpan.FromSeconds(180);
-
-    /// <summary>Whether the Data directory lists <paramref name="treeId"/> within <paramref name="timeout"/>.</summary>
-    private static async Task<bool> WaitForTreeAsync(DataTreeScreen data, string treeId, TimeSpan timeout)
-    {
-        try
-        {
-            await data.TreeLink(treeId).WaitForAsync(new() { Timeout = (float)timeout.TotalMilliseconds });
-            return true;
-        }
-        catch (TimeoutException)
-        {
-            return false;
-        }
-    }
 
     /// <summary>
     /// Opens olivia's session on the east console - <c>/console</c> on the east gateway, where its

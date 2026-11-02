@@ -106,6 +106,27 @@ public sealed partial class ReplicationTreesPageTests
     }
 
     [Test]
+    public void Enabling_an_already_enabled_tree_with_a_source_reports_the_requested_bootstrap()
+    {
+        // #5594: enrolment converges from the region that enabled first, so the named
+        // source's snapshot is still requested for an already-enabled tree.
+        UseTrees();
+        var cut = RenderAt<ReplicationTreesPage>("replication/trees");
+        cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr"), Has.Count.EqualTo(6)));
+
+        cut.FindAll("button").Single(button => button.TextContent.Trim() == "Enable replication for a tree").Click();
+        cut.FindAll("form.lt-replication-form input")[0].Input("orders");
+        cut.FindAll("form.lt-replication-form input")[1].Input("eu-north");
+        cut.Find("form.lt-replication-form").Submit();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(ToastService.Toasts.Single().Message, Is.EqualTo("Replication was already enabled for orders (LWW register). A snapshot bootstrap was requested."));
+            Assert.That(ToastService.Toasts.Single().Tone, Is.EqualTo(LtToastTone.Info));
+        });
+    }
+
+    [Test]
     public void While_a_change_is_in_flight_the_controls_are_held_and_cancel_closes_the_dialog()
     {
         UseTrees();
