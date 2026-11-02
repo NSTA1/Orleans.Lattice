@@ -298,7 +298,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                     raised = _epoch + 1;
                     claimed = _partitions.Where(p => p.Value.ClaimedEpoch > 0).Select(p => p.Key).ToArray();
                     closeBump = WriteCloseBumpAsync(_row, raised);
-                    if (!closeBump.IsCompleted)
+                    if (closeBump.IsCompleted && !closeBump.IsCompleted)
                     {
                         _bump = closeBump;
                     }
