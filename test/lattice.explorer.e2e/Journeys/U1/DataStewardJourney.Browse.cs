@@ -93,14 +93,15 @@ public sealed partial class DataStewardJourney
         await _tree.WaitForKeysAsync();
         await CheckpointAsync("2", "completed-tree", "Accepting the completion opens factory-orders");
 
-        // The alias: orders names the same tree. Her grant names factory-orders, not orders,
-        // and the alias is filtered out of her catalogue (#5597).
-        await new KnownDefect("#5597", "a caller granted only on factory-orders cannot reach it through its alias orders").ReproducesAsync(async () =>
-        {
-            await _priya.Shell.GotoAsync("/data/" + Names.Aliases.Orders);
-            await Expect(_priya.Shell.Heading).ToHaveTextAsync("Nothing lives at this address");
-        });
-        await CheckpointAsync("2", "alias", "/data/orders reads Nothing lives at this address for her (#5597)");
+        // The alias: orders names the same tree. A read is authorized on the name it addresses,
+        // so stewards-factory grants her orders as well as factory-orders (#5597).
+        await _priya.Shell.GotoAsync("/data/" + Names.Aliases.Orders);
+        await Expect(_tree.Heading).ToHaveTextAsync(Names.Aliases.Orders);
+        await _tree.WaitForKeysAsync();
+        await _tree.SetPrefixAsync("order/00");
+        Assert.That(await _tree.KeysAsync(), Has.Count.EqualTo(25), "the orders alias reads the seeded factory-orders keys");
+        Coverage.Hit("use-case:data/alias-resolution");
+        await CheckpointAsync("2", "alias", "/data/orders reaches factory-orders through the alias");
         await _priya.Shell.GotoAsync("/data/" + Names.Trees.FactoryOrders);
         await Expect(_tree.Heading).ToHaveTextAsync(Names.Trees.FactoryOrders);
         await _tree.WaitForKeysAsync();
