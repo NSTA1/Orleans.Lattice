@@ -33,7 +33,6 @@ public sealed class SchedulerBackupPublicationGateDeleteTests
     [Test]
     public async Task A_delete_whose_lease_was_lost_before_its_first_artifact_deletes_no_artifact()
     {
-        RedProof.NoSyncRenew = true; // RED-PROOF
         // The scheduler's activation was lost during the delete's catalog walk,
         // and its leases with it: the first renewal is refused.
         _scheduler.RenewDeleteAsync("x", Arg.Any<Guid>()).Returns(false);
@@ -48,7 +47,6 @@ public sealed class SchedulerBackupPublicationGateDeleteTests
     [Test]
     public async Task A_delete_that_cannot_confirm_its_lease_deletes_no_artifact()
     {
-        RedProof.RenewErrorProceeds = true; // RED-PROOF
         // The scheduler cannot be reached: the delete must not go on unconfirmed.
         _scheduler.RenewDeleteAsync("x", Arg.Any<Guid>()).ThrowsAsync(new TimeoutException("grain response timeout"));
 
@@ -61,7 +59,6 @@ public sealed class SchedulerBackupPublicationGateDeleteTests
     [Test]
     public async Task A_delete_renews_its_lease_before_each_artifact_it_deletes()
     {
-        RedProof.NoSyncRenew = true; // RED-PROOF
         _scheduler.RenewDeleteAsync("x", Arg.Any<Guid>()).Returns(true);
         _scheduler.EndDeleteAsync("x", Arg.Any<Guid>(), true).Returns(BackupRetireOutcome.Removed);
 
@@ -78,7 +75,6 @@ public sealed class SchedulerBackupPublicationGateDeleteTests
     [Test]
     public async Task A_delete_whose_end_keeps_the_manifest_of_a_listed_backup_reports_it_not_deleted()
     {
-        RedProof.EndKeptReportsDeleted = true; // RED-PROOF
         // The delete's lease ran out and a capture, or a rebuild, listed the
         // backup again: the end keeps its manifest, and the backup is not deleted.
         _scheduler.RenewDeleteAsync("x", Arg.Any<Guid>()).Returns(true);

@@ -123,7 +123,7 @@ internal sealed class SchedulerBackupPublicationGate(
         // The end keeps the manifest of a backup a row lists again - a capture
         // republished it, or a rebuild re-listed it, once this delete's lease had
         // run out - and that backup was not deleted (issue #5639).
-        return RedProof.EndKeptReportsDeleted || ended != BackupRetireOutcome.Unchanged || !await publisher.IsListedAsync(row.Id).ConfigureAwait(false); // RED-PROOF
+        return ended != BackupRetireOutcome.Unchanged || !await publisher.IsListedAsync(row.Id).ConfigureAwait(false);
     }
 
     // Deletes the artifacts under the delete's lease (issues #5637 and #5639).
@@ -157,7 +157,6 @@ internal sealed class SchedulerBackupPublicationGate(
 
     private static async Task ConfirmLeaseAsync(ILatticeBackupSchedulerGrain scheduler, string backupId, Guid token)
     {
-        if (RedProof.NoSyncRenew) { return; } // RED-PROOF
         bool renewed;
         try
         {
@@ -165,7 +164,6 @@ internal sealed class SchedulerBackupPublicationGate(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            if (RedProof.RenewErrorProceeds) { return; } // RED-PROOF
             throw LostLease(backupId, ex);
         }
 

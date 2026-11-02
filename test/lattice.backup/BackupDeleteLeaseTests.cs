@@ -169,7 +169,6 @@ public sealed class BackupDeleteLeaseTests
     [Test]
     public async Task A_lease_that_has_run_out_is_not_renewed()
     {
-        RedProof.RenewRevives = true; // RED-PROOF
         // A rebuild or a capture may have acted on the id once the lease ran out,
         // so a renewal must not revive it (issue #5639).
         await StartAsync(o => o.DeleteLease = TimeSpan.FromSeconds(1));

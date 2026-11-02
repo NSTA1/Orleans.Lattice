@@ -151,7 +151,6 @@ internal sealed partial class BackupSchedulerGrain
             return Task.FromResult(false);
         }
 
-        if (RedProof.RenewRevives) { leases[token] = DateTimeOffset.UtcNow + DeleteLease; return Task.FromResult(true); } // RED-PROOF
         if (until <= DateTimeOffset.UtcNow)
         {
             // Ran out: a rebuild or a capture may have acted on the id since, so the
