@@ -3005,8 +3005,7 @@ internal sealed partial class BPlusLeafGrain(
             // nothing drops it again and counts and scans include it twice.
             try
             {
-                // RED-PROOF S1: the drop is held in memory only.
-                await Task.CompletedTask;
+                await PersistAsync();
             }
             catch
             {
