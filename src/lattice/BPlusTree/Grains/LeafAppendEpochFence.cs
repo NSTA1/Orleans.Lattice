@@ -221,8 +221,109 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     /// <inheritdoc />
     public LeafRetiredException OnStale(WalAppendStamp stamp)
     {
+        bool selfFenced;
+        lock (_sync)
+        {
+            // Member 2 (design owner, Q1): a stamp below this activation's own current
+            // epoch was taken before this activation raised its epoch itself - a
+            // hand-off close's bump, or a bump after a floor refusal - so it was fenced
+            // by this activation, not superseded by another. The write is retried by
+            // its caller's seam and re-admitted under the current epoch (span
+            // admission forwards a key a split moved); the activation keeps serving.
+            // A genuine supersession still meets its next, current-epoch append.
+            selfFenced = !_stale && stamp.Epoch > 0 && stamp.Epoch < _epoch;
+        }
+
+        if (selfFenced)
+        {
+            LatticeMetrics.WalAppendFenceSelfFenced.Add(1, _treeTag, _tenantTag);
+            return LeafRetiredException.ForSupersededActivation(_leafId, stamp.Epoch);
+        }
+
         MarkStale();
         return LeafRetiredException.ForSupersededActivation(_leafId, stamp.Epoch);
+    }
+
+    /// <summary>
+    /// A hand-off close's fence for a leaf initiator (epic #5605, member 2; design owner
+    /// Q1): raises this activation's epoch to the row's plus one, conditionally on the
+    /// ETag it last wrote, then re-claims the raised epoch at every partition it had
+    /// claimed, and returns the claim heads indexed by partition (<c>-1</c> for a
+    /// partition it never claimed, where none of its appends was stamped). Every append
+    /// stamped with the old epoch was allocated below those heads or is rejected,
+    /// self-fenced, and re-admitted by its caller.
+    /// </summary>
+    /// <param name="shardFor">The WAL shard grain of a partition.</param>
+    /// <param name="partitionCount">The tree's WAL partition count.</param>
+    /// <param name="cancellationToken">The close's cancellation.</param>
+    /// <returns>
+    /// The heads, or <see langword="null"/> when the activation has stamped nothing
+    /// (no epoch, or its view of the gate is closed): its appends were unstamped, and
+    /// the watermark reports them.
+    /// </returns>
+    /// <exception cref="LeafRetiredException">The activation was found superseded.</exception>
+    /// <exception cref="InvalidOperationException">A partition could not be re-claimed; the caller leaves its marker open.</exception>
+    internal async Task<long[]?> BumpAndReclaimAsync(Func<int, IWalShardGrain> shardFor, int partitionCount, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(shardFor);
+        Task? pending;
+        lock (_sync)
+        {
+            pending = _bump ?? (Task?)_rowClaim;
+        }
+
+        if (pending is not null)
+        {
+            await pending.ConfigureAwait(false);
+        }
+
+        GrainState<LeafAppendEpochState> row;
+        long epoch;
+        int[] claimed;
+        lock (_sync)
+        {
+            if (_stale)
+            {
+                throw LeafRetiredException.ForSupersededActivation(_leafId, _epoch);
+            }
+
+            if (_epoch == 0 || _row is null || !IsGateOpenLocked())
+            {
+                return null;
+            }
+
+            row = _row;
+            epoch = _epoch;
+            claimed = _partitions.Where(p => p.Value.ClaimedEpoch > 0).Select(p => p.Key).ToArray();
+        }
+
+        // The row is written before the in-memory epoch moves, so an append admitted in
+        // between is stamped with the old epoch and rejected, never accepted above the
+        // heads (cost only).
+        var raised = epoch + 1;
+        row.State.Epoch = raised;
+        await WriteRowOrSupersedeAsync(row).ConfigureAwait(false);
+        lock (_sync)
+        {
+            _epoch = Math.Max(_epoch, raised);
+        }
+
+        var heads = new long[partitionCount];
+        Array.Fill(heads, -1L);
+        foreach (var partition in claimed)
+        {
+            if (partition >= partitionCount)
+            {
+                continue;
+            }
+
+            var stamp = await StampForAsync(shardFor(partition), partition, cancellationToken).ConfigureAwait(false);
+            var head = stamp is { } s && s.Epoch >= raised ? ClaimHead(partition) : null;
+            heads[partition] = head ?? throw new InvalidOperationException(
+                $"Leaf {_leafId:N} could not re-claim its raised append epoch at WAL partition {partition}; the hand-off stays open.");
+        }
+
+        return heads;
     }
 
     /// <inheritdoc />

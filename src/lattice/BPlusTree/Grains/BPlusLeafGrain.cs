@@ -4966,6 +4966,9 @@ internal sealed partial class BPlusLeafGrain(
             // orphan-pin retirement retires what a failed clear left.
             await RetireAppendEpochAsync(fenceTreeId);
 
+            // Its hand-off marker row goes with it too (epic #5605, member 2).
+            await ClearHandOffMarkerAsync();
+
             // The row record goes last of all (issue #4654): until it is deleted, a
             // rowless activation of this leaf fails closed, so an interrupted clear
             // never leaves a leaf that reads as empty while its snapshot survives.

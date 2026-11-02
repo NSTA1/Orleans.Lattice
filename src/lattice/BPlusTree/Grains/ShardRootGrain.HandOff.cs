@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Storage;
 
@@ -152,6 +153,100 @@ internal sealed partial class ShardRootGrain
     /// <summary><see langword="true"/> while this silo's append-fence gate is open.</summary>
     private bool IsAppendFenceGateOpen() =>
         context.ActivationServices?.GetService<IWalAppendFenceGate>() is { IsOpen: true };
+
+    /// <summary>The token a reclaim of <paramref name="absorbedLeafId"/> opens on its survivor's marker.</summary>
+    internal static string ReclaimHandOffToken(GrainId absorbedLeafId) =>
+        string.Concat("reclaim:", absorbedLeafId.GetGuidKey().ToString("N"));
+
+    /// <summary>
+    /// Opens the reclaim hand-off on <paramref name="survivorLeafId"/>'s marker before
+    /// its range widens onto <paramref name="absorbedLeafId"/>'s (epic #5605, member 2;
+    /// the hand-off table's leaf reclaim row). A no-op while the gate is closed; a
+    /// failure is logged and the fold goes ahead, since the survivor then has an
+    /// unchanged, possibly uninitialised marker, which never reads as closed.
+    /// </summary>
+    private async Task OpenReclaimHandOffAsync(GrainId survivorLeafId, GrainId absorbedLeafId)
+    {
+        if (!IsAppendFenceGateOpen() || WalAppendFenceStorage.Resolve(context.ActivationServices) is not { } storage)
+        {
+            return;
+        }
+
+        try
+        {
+            var token = ReclaimHandOffToken(absorbedLeafId);
+            var opened = false;
+            await HandOffMarkerRows.UpdateLeafAsync(storage, survivorLeafId.GetGuidKey(), marker => opened = HandOffMarkerCore.Open(marker, token, null, null));
+            if (opened)
+            {
+                LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindReclaim, opened: true, TreeId);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Shard root {TreeId}/{ShardIndex}: could not open the reclaim marker on survivor {Survivor} (epic #5605).",
+                TreeId,
+                ShardIndex,
+                survivorLeafId);
+        }
+    }
+
+    /// <summary>
+    /// Closes the reclaim hand-off on <paramref name="survivorLeafId"/> by fence: retires
+    /// <paramref name="absorbedLeafId"/>'s append-epoch entry at every WAL partition, so
+    /// its later stamped appends are rejected, then records the allocator heads read
+    /// after the retirement. Idempotent; a no-op when the marker is not open. A failure
+    /// leaves the marker open, which only holds the survivor on the replay-based advance;
+    /// the reclaim's pending marker re-drives the completion.
+    /// </summary>
+    private async Task CloseReclaimHandOffAsync(GrainId survivorLeafId, GrainId absorbedLeafId)
+    {
+        if (WalAppendFenceStorage.Resolve(context.ActivationServices) is not { } storage)
+        {
+            return;
+        }
+
+        var token = ReclaimHandOffToken(absorbedLeafId);
+        var survivorKey = survivorLeafId.GetGuidKey();
+        try
+        {
+            var marker = await HandOffMarkerRows.ReadLeafAsync(storage, survivorKey);
+            if (!marker.State.Open.ContainsKey(token))
+            {
+                return;
+            }
+
+            var partitions = await optionsResolver.GetWalPartitionsAsync(TreeId);
+            var absorbedKey = absorbedLeafId.GetGuidKey();
+            var retirements = new Task<long>[partitions];
+            for (var p = 0; p < partitions; p++)
+            {
+                retirements[p] = grainFactory
+                    .GetGrain<IWalShardGrain>(string.Concat(TreeId, "/", p.ToString(System.Globalization.CultureInfo.InvariantCulture)))
+                    .RetireAppendEpochAsync(absorbedKey, WalAppendFenceRows.RowEpochUnread, CancellationToken.None);
+            }
+
+            await Task.WhenAll(retirements);
+            var heads = await BPlusLeafGrain.CaptureAllocatorHeadsAsync(grainFactory, TreeId, partitions);
+            var closed = false;
+            await HandOffMarkerRows.UpdateLeafAsync(storage, survivorKey, m => closed = HandOffMarkerCore.Close(m, token, heads));
+            if (closed)
+            {
+                LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindReclaim, opened: false, TreeId);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Shard root {TreeId}/{ShardIndex}: could not close the reclaim marker on survivor {Survivor}; it stays on the replay-based advance until the reclaim completion is re-driven (epic #5605).",
+                TreeId,
+                ShardIndex,
+                survivorLeafId);
+        }
+    }
 
     /// <summary>
     /// Counts a range-delete record a leaf appended unstamped by design while the gate

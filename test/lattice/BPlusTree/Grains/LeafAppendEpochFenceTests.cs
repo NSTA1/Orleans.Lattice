@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// append, and the own-append self-report.
 /// </summary>
 [TestFixture]
-public sealed class LeafAppendEpochFenceTests
+public sealed partial class LeafAppendEpochFenceTests
 {
     private static readonly Guid Leaf = new("1e1e1e1e-0000-0000-0000-000000000001");
 

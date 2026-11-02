@@ -11528,6 +11528,18 @@ public static class LatticeMetrics
     /// <summary><see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a leaf split onto its sibling.</summary>
     public const string HandOffKindSplit = "split";
 
+    /// <summary>
+    /// Counter of stamped leaf appends rejected because the leaf's own activation had
+    /// raised its epoch since the stamp was taken (epic #5605, member 2): a hand-off
+    /// close's bump, or a bump after a retired-floor refusal. Tagged with
+    /// <see cref="TagTree"/> and the tenant. The activation is not superseded and keeps
+    /// serving; the write is retried by its caller's seam and re-admitted under the
+    /// current epoch. A rate tracks splits and reclaims, not writes.
+    /// </summary>
+    public static readonly Counter<long> WalAppendFenceSelfFenced =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.self_fenced", unit: "{append}",
+            description: "Stamped leaf appends rejected because the leaf's own activation raised its epoch since (a hand-off close or a floor bump); retried at the caller's seam, the activation keeps serving (epic #5605), by tree.");
+
     /// <summary><see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a leaf reclaim onto its survivor.</summary>
     public const string HandOffKindReclaim = "reclaim";
 

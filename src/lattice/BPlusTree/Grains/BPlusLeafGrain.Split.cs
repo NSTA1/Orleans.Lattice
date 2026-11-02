@@ -861,6 +861,10 @@ internal sealed partial class BPlusLeafGrain
                 return;
             }
 
+            // Epic #5605, member 2: re-drives a split marker close that failed at
+            // completion. A no-op (one marker read) when the close already landed.
+            await CloseSplitHandOffAsync(siblingId);
+
             state.State.UnlinkedSplitSiblingId = null;
             state.State.UnlinkedSplitKey = null;
             await PersistAsync();
@@ -1195,6 +1199,14 @@ internal sealed partial class BPlusLeafGrain
             TerminalWitnesses = CollectTerminalWitnessesForSibling(splitKey),
         };
 
+        // Epic #5605, member 2: the split's hand-off marker opens on the sibling
+        // before its birth, so the sibling is held from its first moment; a resume
+        // re-runs this, which opens a marker a split begun with the gate closed lacks.
+        using (AwaitDiagnostics.Begin("leaf.split.open-marker", context.GrainId, splitDiag))
+        {
+            await OpenSplitHandOffAsync(siblingId);
+        }
+
         // The sibling is being created here, so its first row write carries a
         // create intent naming it (issue #4654).
         using (LatticeNewLeafIntentContext.BeginScope(siblingId))
@@ -1486,6 +1498,15 @@ internal sealed partial class BPlusLeafGrain
         using (AwaitDiagnostics.Begin("leaf.split.persist-final", context.GrainId, splitDiag))
         {
             await PersistAsync();
+        }
+
+        // Epic #5605, member 2: the span has narrowed, so admission of the moved
+        // keys has stopped; the donor's epoch bump fences what it admitted before,
+        // and the sibling's marker closes with the heads (design owner, Q1). A
+        // failure leaves the marker open and is re-driven by the link acknowledgement.
+        using (AwaitDiagnostics.Begin("leaf.split.close-marker", context.GrainId, splitDiag))
+        {
+            await CloseSplitHandOffAsync(siblingId);
         }
 
         return new SplitResult
