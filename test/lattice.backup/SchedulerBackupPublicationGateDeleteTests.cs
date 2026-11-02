@@ -17,14 +17,20 @@ namespace Orleans.Lattice.Backup.Tests;
 [TestFixture]
 public sealed class SchedulerBackupPublicationGateDeleteTests
 {
-    private readonly ILatticeBackupSchedulerGrain _scheduler = Substitute.For<ILatticeBackupSchedulerGrain>();
-    private readonly ILatticeBackupCatalogStore _catalog = Substitute.For<ILatticeBackupCatalogStore>();
-    private readonly ILatticeBackupSink _sink = Substitute.For<ILatticeBackupSink>();
     private readonly BackupManifest _manifest = BackupManifestModelTests.Sample(id: "x");
+
+    // Fresh per test: NUnit shares one fixture instance across its tests, so a
+    // substitute held from construction would carry calls and stubs over.
+    private ILatticeBackupSchedulerGrain _scheduler = null!;
+    private ILatticeBackupCatalogStore _catalog = null!;
+    private ILatticeBackupSink _sink = null!;
 
     [SetUp]
     public void SetUp()
     {
+        _scheduler = Substitute.For<ILatticeBackupSchedulerGrain>();
+        _catalog = Substitute.For<ILatticeBackupCatalogStore>();
+        _sink = Substitute.For<ILatticeBackupSink>();
         _catalog.ListAsync(Arg.Any<CancellationToken>()).Returns(_ => Empty());
         _scheduler.BeginDeleteAsync("x", Arg.Any<Guid>())
             .Returns(new BackupDeleteStart(BackupRetireOutcome.Removed, _manifest));
