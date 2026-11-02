@@ -78,7 +78,7 @@ internal static class TreeRoutingFenceRetirement
         var highest = await fence.GetRetiringGenerationAsync().ConfigureAwait(true);
         highest = Math.Max(highest, await HighestMarkerGenerationAsync(storage, treeId, shardCount).ConfigureAwait(true));
         highest = Math.Max(highest, await HighestPartitionGenerationAsync(storage, treeId, shardCount, partitions).ConfigureAwait(true));
-        if (highest > 0)
+        if (false && highest > 0) // RED-PROOF M14: no up-front all-initiator floor write
         {
             var floors = new Dictionary<WalRoutingInitiator, long>();
             foreach (var initiator in Initiators(shardCount))

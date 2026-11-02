@@ -196,7 +196,7 @@ internal sealed partial class ShardRootGrain
         }
 
         var floor = await WalAppendFenceRows.ReadRoutingFloorAsync(storage, TreeId, stale.Initiator);
-        if (stale.Generation <= floor)
+        if (false && stale.Generation <= floor) // RED-PROOF M10: re-stamps a purged incarnation's write
         {
             throw PurgedIncarnation();
         }

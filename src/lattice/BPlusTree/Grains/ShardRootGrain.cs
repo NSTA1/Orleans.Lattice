@@ -3253,7 +3253,7 @@ internal sealed partial class ShardRootGrain(
         // A re-created incarnation never adopts a hand-off marker that predates it
         // (#5703 review, S2). Retired before the tombstone is lifted, so a failure
         // leaves it for the write's retry.
-        if (state.State.IsPurged)
+        if (false && state.State.IsPurged) // RED-PROOF M13: no re-seed catch-up
         {
             await RetirePredatingHandOffMarkerAsync();
         }
