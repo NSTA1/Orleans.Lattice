@@ -85,14 +85,25 @@ internal sealed partial class ShardRootGrain
     internal async Task<long[]> CloseShardMarkerAsync(string token)
     {
         ArgumentException.ThrowIfNullOrEmpty(token);
+        var heads = await RaiseAndReclaimRoutingGenerationAsync();
+        await UpdateHandOffMarkerAsync(marker => HandOffMarkerCore.Close(marker, token, heads));
+        return heads;
+    }
+
+    /// <summary>
+    /// The shard-level close fence: raises this shard root's routing generation
+    /// durably, then re-claims it at every WAL partition and returns the claim heads.
+    /// Every write admitted under the old generation was either allocated below the
+    /// heads or is rejected when it arrives.
+    /// </summary>
+    private async Task<long[]> RaiseAndReclaimRoutingGenerationAsync()
+    {
         var raised = await UpdateHandOffMarkerAsync(marker =>
         {
             marker.RoutingGeneration++;
             return true;
         });
-        var heads = await ClaimRoutingGenerationEverywhereAsync(raised.RoutingGeneration);
-        await UpdateHandOffMarkerAsync(marker => HandOffMarkerCore.Close(marker, token, heads));
-        return heads;
+        return await ClaimRoutingGenerationEverywhereAsync(raised.RoutingGeneration);
     }
 
     /// <summary>Reads bulk operation <paramref name="operationId"/>'s stored birth hint, or <see langword="null"/>.</summary>
@@ -211,12 +222,7 @@ internal sealed partial class ShardRootGrain
         long[] heads;
         if (IsAppendFenceGateOpen())
         {
-            var raised = await UpdateHandOffMarkerAsync(marker =>
-            {
-                marker.RoutingGeneration++;
-                return true;
-            });
-            heads = await ClaimRoutingGenerationEverywhereAsync(raised.RoutingGeneration);
+            heads = await RaiseAndReclaimRoutingGenerationAsync();
         }
         else
         {

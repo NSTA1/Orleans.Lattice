@@ -96,6 +96,14 @@ public sealed class TreeRangeDeleteFenceGrainTests
         await harness.Grain.OpenIntentAsync(intent, "a", "b", long.MaxValue, [0]);
         harness.Claimed.Clear();
         harness.ClaimGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var writtenClosing = false;
+        harness.State.OnWriteState = s =>
+        {
+            if (s.Intents.TryGetValue(intent, out var written) && written.Closing)
+            {
+                Volatile.Write(ref writtenClosing, true);
+            }
+        };
 
         var close = harness.Grain.CloseIntentAsync(intent);
         var deadline = DateTime.UtcNow.AddSeconds(10);
@@ -106,7 +114,8 @@ public sealed class TreeRangeDeleteFenceGrainTests
 
         // The close is between its first re-claim and its marker close.
         var openCheck = await harness.Grain.GetOpenIntentGenerationAsync(intent);
-        var persistedClosing = harness.State.State.Intents[intent].Closing;
+        // Durably: a write carrying the closing intent landed before the re-claim.
+        var persistedClosing = Volatile.Read(ref writtenClosing);
         harness.ClaimGate.SetResult();
         await close;
 
