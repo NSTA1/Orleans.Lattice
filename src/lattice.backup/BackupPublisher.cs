@@ -214,9 +214,10 @@ internal sealed class BackupPublisher(
     /// <param name="manifest">The manifest <see cref="BeginDeleteAsync"/> returned.</param>
     /// <param name="beforeEachArtifact">
     /// Run before each artifact delete; throws to stop the delete when its caller
-    /// no longer holds the id (issue #5637). <see langword="null"/> for none.
+    /// cannot confirm it still holds the id (issues #5637 and #5639).
+    /// <see langword="null"/> for none.
     /// </param>
-    public async Task DeleteArtifactsAsync(BackupManifest manifest, Action? beforeEachArtifact = null)
+    public async Task DeleteArtifactsAsync(BackupManifest manifest, Func<Task>? beforeEachArtifact = null)
     {
         ArgumentNullException.ThrowIfNull(manifest);
 
@@ -240,7 +241,11 @@ internal sealed class BackupPublisher(
         {
             if (!stillReferenced.Contains(descriptor.ArtifactId))
             {
-                beforeEachArtifact?.Invoke();
+                if (beforeEachArtifact is not null)
+                {
+                    await beforeEachArtifact().ConfigureAwait(false);
+                }
+
                 await sink.DeleteArtifactAsync(descriptor.ArtifactId).ConfigureAwait(false);
             }
         }
@@ -274,6 +279,12 @@ internal sealed class BackupPublisher(
         await sink.DeleteManifestAsync(backupId).ConfigureAwait(false);
         return true;
     }
+
+    /// <summary>Whether a catalog row lists <paramref name="backupId"/>.</summary>
+    /// <param name="backupId">The backup id.</param>
+    /// <returns><see langword="true"/> when the catalog lists it.</returns>
+    public async Task<bool> IsListedAsync(string backupId) =>
+        await catalog.GetAsync(backupId).ConfigureAwait(false) is not null;
 
     private static bool IsOfScope(BackupManifest manifest, string? scopeKey) =>
         scopeKey is null || string.Equals(BackupScopeKey.For(manifest.Scope), scopeKey, StringComparison.Ordinal);

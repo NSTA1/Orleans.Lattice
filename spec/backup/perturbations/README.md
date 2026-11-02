@@ -34,7 +34,8 @@ refreshes the backup's ranking time (`KeepPolicyHonoured`).
 scope's claim is recorded (`Resolve(c)`) and a release drops one claim
 (`PubRow(c)`) - and at every step of an operator delete the confirmation review
 found a defect in: the scope check at its start (`DelBegin(d)`), the stop at a
-refused lease renewal (`DelArt(d)`, #5637), the row check at its end
+refused or unconfirmed lease renewal (`DelArt(d)`, #5637 and #5639), a renewal
+never reviving a lease that ran out (`DelRenew(d)`), the row check at its end
 (`DelEnd(d)`, #5631), a lease's own expiry (`DelLapse(d)`) and its own end
 (`DeleteFence`, #5631); and at the rebuild's artifact probe (`Rebuild`, #5637).
 No other backup module has a perturbation yet.

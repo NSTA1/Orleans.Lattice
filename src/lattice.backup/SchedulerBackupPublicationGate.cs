@@ -112,21 +112,28 @@ internal sealed class SchedulerBackupPublicationGate(
         }
 
         // The sink manifest is deleted in the grain, under the id's hold (#5631).
-        await RetryAsync(
+        var ended = await RetryAsync(
                 () => scheduler.EndDeleteAsync(row.Id, token, finish: true),
                 o => o == BackupRetireOutcome.Busy,
                 row.Id,
                 options.Value,
                 cancellationToken)
             .ConfigureAwait(false);
-        return true;
+
+        // The end keeps the manifest of a backup a row lists again - a capture
+        // republished it, or a rebuild re-listed it, once this delete's lease had
+        // run out - and that backup was not deleted (issue #5639).
+        return RedProof.EndKeptReportsDeleted || ended != BackupRetireOutcome.Unchanged || !await publisher.IsListedAsync(row.Id).ConfigureAwait(false); // RED-PROOF
     }
 
-    // Deletes the artifacts while renewing the delete's lease in the background
-    // (issue #5637): a lease left to run out would let a catalog rebuild re-list
-    // the backup, and the delete would go on deleting the listed backup's
-    // artifacts. Once a renewal is refused - the caller could not reach the
-    // grain for a whole lease - no further artifact is deleted.
+    // Deletes the artifacts under the delete's lease (issues #5637 and #5639).
+    // Before each artifact delete the lease is renewed synchronously, and the
+    // delete stops - keeping the sink manifest, so a retry resumes it - unless
+    // the grain confirms it: a refused renewal (the lease ran out, or the
+    // scheduler's activation was lost with its leases) and an unreachable grain
+    // both stop it, because a catalog rebuild may since have re-listed the
+    // backup. A background renewal keeps the lease alive while one artifact
+    // delete runs longer than the lease.
     private async Task DeleteArtifactsUnderLeaseAsync(
         ILatticeBackupSchedulerGrain scheduler,
         BackupManifest manifest,
@@ -134,13 +141,12 @@ internal sealed class SchedulerBackupPublicationGate(
     {
         var lease = options.Value.DeleteLease;
         var interval = TimeSpan.FromTicks(Math.Max(TimeSpan.TicksPerMillisecond, lease.Ticks / 3));
-        using var lost = new CancellationTokenSource();
         using var stop = new CancellationTokenSource();
-        var heartbeat = RenewWhileDeletingAsync(scheduler, manifest.Id, token, interval, lost, stop.Token);
+        var heartbeat = RenewWhileDeletingAsync(scheduler, manifest.Id, token, interval, stop.Token);
         try
         {
-            await publisher.DeleteArtifactsAsync(manifest, () => ThrowIfLost(lost, manifest.Id)).ConfigureAwait(false);
-            ThrowIfLost(lost, manifest.Id);
+            await publisher.DeleteArtifactsAsync(manifest, () => ConfirmLeaseAsync(scheduler, manifest.Id, token))
+                .ConfigureAwait(false);
         }
         finally
         {
@@ -149,12 +155,41 @@ internal sealed class SchedulerBackupPublicationGate(
         }
     }
 
+    private static async Task ConfirmLeaseAsync(ILatticeBackupSchedulerGrain scheduler, string backupId, Guid token)
+    {
+        if (RedProof.NoSyncRenew) { return; } // RED-PROOF
+        bool renewed;
+        try
+        {
+            renewed = await scheduler.RenewDeleteAsync(backupId, token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            if (RedProof.RenewErrorProceeds) { return; } // RED-PROOF
+            throw LostLease(backupId, ex);
+        }
+
+        if (!renewed)
+        {
+            throw LostLease(backupId, null);
+        }
+    }
+
+    private static TimeoutException LostLease(string backupId, Exception? inner) =>
+        new(
+            $"The delete of backup '{backupId}' could not confirm its reservation of the id before deleting an "
+                + "artifact: its lease ran out, or the scope's scheduler could not be reached. The backup's sink "
+                + "manifest is kept; retry the delete.",
+            inner);
+
+    // Best effort: keeps the lease alive while a single artifact delete outlasts
+    // it. Whether the delete may go on is decided before each artifact, never
+    // here.
     private static async Task RenewWhileDeletingAsync(
         ILatticeBackupSchedulerGrain scheduler,
         string backupId,
         Guid token,
         TimeSpan interval,
-        CancellationTokenSource lost,
         CancellationToken stop)
     {
         try
@@ -162,38 +197,19 @@ internal sealed class SchedulerBackupPublicationGate(
             while (true)
             {
                 await Task.Delay(interval, stop).ConfigureAwait(false);
-                bool renewed;
                 try
                 {
-                    renewed = await scheduler.RenewDeleteAsync(backupId, token).ConfigureAwait(false);
+                    await scheduler.RenewDeleteAsync(backupId, token).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    // Unreachable for now; the lease outlasts several attempts, and a
-                    // later refusal says whether it ran out meanwhile.
-                    continue;
-                }
-
-                if (!renewed)
-                {
-                    await lost.CancelAsync().ConfigureAwait(false);
-                    return;
+                    // The next artifact's own renewal decides.
                 }
             }
         }
         catch (OperationCanceledException)
         {
             // The artifact deletes are over.
-        }
-    }
-
-    private static void ThrowIfLost(CancellationTokenSource lost, string backupId)
-    {
-        if (lost.IsCancellationRequested)
-        {
-            throw new TimeoutException(
-                $"The delete of backup '{backupId}' lost its reservation of the id before it finished deleting "
-                + "artifacts: its lease ran out. The backup's sink manifest is kept; retry the delete.");
         }
     }
 

@@ -64,10 +64,12 @@ Owners == Scopes \cup {"none"}
 (*          every write streams artifacts of its own.                      *)
 (*  dgen    the manifest write each operator delete began from, so its     *)
 (*          artifact deletes touch only that write's artifacts.            *)
+(*  seen    each operator delete's caller's last confirmation of its       *)
+(*          lease: what a background renewal last reported (issue #5639).  *)
 (***************************************************************************)
-VARIABLES row, man, pend, held, cap, ret, del, lease, art, gen, dgen
+VARIABLES row, man, pend, held, cap, ret, del, lease, art, gen, dgen, seen
 
-vars == <<row, man, pend, held, cap, ret, del, lease, art, gen, dgen>>
+vars == <<row, man, pend, held, cap, ret, del, lease, art, gen, dgen, seen>>
 
 CapPhases == {"idle", "wait", "man", "row", "done"}
 RetPhases == {"idle", "held", "rowgone", "done"}
@@ -89,6 +91,7 @@ TypeOK ==
     /\ art \in BOOLEAN
     /\ gen \in 0..Cardinality(Caps)
     /\ dgen \in [Dels -> 0..Cardinality(Caps)]
+    /\ seen \in [Dels -> {"none", "live", "lapsed"}]
 
 \* Scope A has already published the bare id.
 Init ==
@@ -103,6 +106,7 @@ Init ==
     /\ art = TRUE
     /\ gen = 0
     /\ dgen = [d \in Dels |-> 0]
+    /\ seen = [d \in Dels |-> "none"]
 
 \* The id's owner, read from durable state as BackupIdOwnership reads it: the
 \* catalog row's scope, or else the sink manifest's.
@@ -125,7 +129,7 @@ Resolve(c) ==
                /\ UNCHANGED pend
           ELSE /\ pend' = [pend EXCEPT ![s] = @ + 1]
                /\ cap' = [cap EXCEPT ![c] = [ph |-> "wait", id |-> "X"]]
-       /\ UNCHANGED <<row, man, held, ret, del, lease, art, gen, dgen>>
+       /\ UNCHANGED <<row, man, held, ret, del, lease, art, gen, dgen, seen>>
 
 \* The publish waits for its scope's hold on the id, which a retire of that
 \* scope holds while it removes the id, and for every live lease of an
@@ -137,7 +141,7 @@ Acquire(c) ==
        /\ s = "A" => ~Leased
        /\ held' = [held EXCEPT ![s] = "pub"]
        /\ cap' = [cap EXCEPT ![c].ph = "man"]
-       /\ UNCHANGED <<row, man, pend, ret, del, lease, art, gen, dgen>>
+       /\ UNCHANGED <<row, man, pend, ret, del, lease, art, gen, dgen, seen>>
 
 \* The publish writes the sink manifest under the bare id, with artifacts of
 \* its own that it has streamed whole ...
@@ -147,7 +151,7 @@ PubMan(c) ==
     /\ art' = TRUE
     /\ gen' = gen + 1
     /\ cap' = [cap EXCEPT ![c].ph = "row"]
-    /\ UNCHANGED <<row, pend, held, ret, del, lease, dgen>>
+    /\ UNCHANGED <<row, pend, held, ret, del, lease, dgen, seen>>
 
 \* ... and then registers the catalog row, releases the hold and releases one
 \* claim of its scope (a release with none is a no-op, as in production).
@@ -158,7 +162,7 @@ PubRow(c) ==
        /\ held' = [held EXCEPT ![s] = "free"]
        /\ pend' = [pend EXCEPT ![s] = IF @ > 0 THEN @ - 1 ELSE 0]
        /\ cap' = [cap EXCEPT ![c].ph = "done"]
-       /\ UNCHANGED <<man, ret, del, lease, art, gen, dgen>>
+       /\ UNCHANGED <<man, ret, del, lease, art, gen, dgen, seen>>
 
 (***************************************************************************)
 (* Scope A's retention pass dooms its own backup under the bare id once -  *)
@@ -173,20 +177,20 @@ RetireStart ==
     /\ ~Leased
     /\ held' = [held EXCEPT !["A"] = "ret"]
     /\ ret' = "held"
-    /\ UNCHANGED <<row, man, pend, cap, del, lease, art, gen, dgen>>
+    /\ UNCHANGED <<row, man, pend, cap, del, lease, art, gen, dgen, seen>>
 
 RetireRow ==
     /\ ret = "held"
     /\ row' = "none"
     /\ ret' = "rowgone"
-    /\ UNCHANGED <<man, pend, held, cap, del, lease, art, gen, dgen>>
+    /\ UNCHANGED <<man, pend, held, cap, del, lease, art, gen, dgen, seen>>
 
 RetireMan ==
     /\ ret = "rowgone"
     /\ man' = "none"
     /\ held' = [held EXCEPT !["A"] = "free"]
     /\ ret' = "done"
-    /\ UNCHANGED <<row, pend, cap, del, lease, art, gen, dgen>>
+    /\ UNCHANGED <<row, pend, cap, del, lease, art, gen, dgen, seen>>
 
 (***************************************************************************)
 (* An operator delete of scope A's backup under the bare id (issues #5628  *)
@@ -208,19 +212,22 @@ DelBegin(d) ==
             /\ del' = [del EXCEPT ![d] = "begun"]
             /\ lease' = [lease EXCEPT ![d] = "live"]
             /\ dgen' = [dgen EXCEPT ![d] = gen]
+            /\ seen' = [seen EXCEPT ![d] = "live"]
             /\ UNCHANGED man
        ELSE /\ del' = [del EXCEPT ![d] = "done"]
-            /\ UNCHANGED <<row, man, lease, dgen>>
+            /\ UNCHANGED <<row, man, lease, dgen, seen>>
     /\ UNCHANGED <<pend, held, cap, ret, art, gen>>
 
-\* The artifact deletes, outside the grain, under a live lease. They touch
-\* only the artifacts of the manifest write the delete began from.
+\* The artifact deletes, outside the grain, each straight after the grain has
+\* confirmed the delete's lease (issue #5639): under a live lease, not merely
+\* one the caller last saw live. They touch only the artifacts of the manifest
+\* write the delete began from.
 DelArt(d) ==
     /\ del[d] = "begun"
     /\ lease[d] = "live"
     /\ art' = IF gen = dgen[d] THEN FALSE ELSE art
     /\ del' = [del EXCEPT ![d] = "art"]
-    /\ UNCHANGED <<row, man, pend, held, cap, ret, lease, gen, dgen>>
+    /\ UNCHANGED <<row, man, pend, held, cap, ret, lease, gen, dgen, seen>>
 
 DelEnd(d) ==
     /\ del[d] = "art"
@@ -228,6 +235,7 @@ DelEnd(d) ==
     /\ man' = IF row = "none" /\ man = "A" THEN "none" ELSE man
     /\ del' = [del EXCEPT ![d] = "done"]
     /\ lease' = [lease EXCEPT ![d] = "none"]
+    /\ seen' = [seen EXCEPT ![d] = "none"]
     /\ UNCHANGED <<row, pend, held, cap, ret, art, gen, dgen>>
 
 \* A delete's lease runs out: its caller was lost, or could not reach the
@@ -238,7 +246,14 @@ DelLapse(d) ==
     /\ del[d] \in {"begun", "art"}
     /\ lease[d] = "live"
     /\ lease' = [lease EXCEPT ![d] = "lapsed"]
-    /\ UNCHANGED <<row, man, pend, held, cap, ret, del, art, gen, dgen>>
+    /\ UNCHANGED <<row, man, pend, held, cap, ret, del, art, gen, dgen, seen>>
+
+\* A background renewal while the delete runs: it extends a live lease, never
+\* revives one that has run out, and tells the caller what it found.
+DelRenew(d) ==
+    /\ del[d] \in {"begun", "art"}
+    /\ seen' = [seen EXCEPT ![d] = lease[d]]
+    /\ UNCHANGED <<row, man, pend, held, cap, ret, del, lease, art, gen, dgen>>
 
 (***************************************************************************)
 (* A catalog rebuild re-lists scope A's sink manifest under A's hold,      *)
@@ -252,7 +267,7 @@ Rebuild ==
     /\ man = "A"
     /\ art
     /\ row' = "A"
-    /\ UNCHANGED <<man, pend, held, cap, ret, del, lease, art, gen, dgen>>
+    /\ UNCHANGED <<man, pend, held, cap, ret, del, lease, art, gen, dgen, seen>>
 
 \* Natural termination once every capture and the retire are done.
 Stutter == UNCHANGED vars
@@ -269,6 +284,7 @@ Next ==
     \/ \E d \in Dels : DelArt(d)
     \/ \E d \in Dels : DelEnd(d)
     \/ \E d \in Dels : DelLapse(d)
+    \/ \E d \in Dels : DelRenew(d)
     \/ Rebuild
     \/ Stutter
 
@@ -304,12 +320,14 @@ NoForeignOverwrite ==
     [][/\ (row # "none" /\ row' # "none") => row' = row
        /\ (man # "none" /\ man' # "none") => man' = man]_vars
 
-\* Scope A's retires and deletes never remove scope B's backup under the bare
-\* id: B never retires it here, so once written B's row and manifest stay.
 \* Every delete's lease ends: a delete whose caller is lost does not keep the
-\* id reserved, and captures of identical content out, for good.
+\* id reserved, and captures of identical content out, for good. Under the weak
+\* fairness of DelLapse this holds exactly when no step of a delete disables its
+\* own lease's expiry, which is what it checks.
 LeaseEventuallyEnds == \A d \in Dels : lease[d] = "live" ~> lease[d] # "live"
 
+\* Scope A's retires and deletes never remove scope B's backup under the bare
+\* id: B never retires it here, so once written B's row and manifest stay.
 NoForeignDelete ==
     [][/\ row = "B" => row' = "B"
        /\ man = "B" => man' = "B"]_vars

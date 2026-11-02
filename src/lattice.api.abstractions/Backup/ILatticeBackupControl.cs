@@ -95,9 +95,14 @@ public interface ILatticeBackupControl
     /// deletes only the artifacts it owns that are not shared with any other
     /// retained manifest. Authorizes the backup's scope fail-closed before
     /// deleting anything. Returns <see langword="true"/> when a backup was
-    /// removed, <see langword="false"/> when none existed. The catalog row goes
-    /// first and the sink manifest last, so a retry of a delete that was
-    /// interrupted part-way finds the sink manifest and finishes it.
+    /// removed, <see langword="false"/> when none existed, or when the backup was
+    /// listed again before the delete finished - a capture of identical content
+    /// or a catalog rebuild, once the delete's reservation of the id had run out -
+    /// and so was kept. The catalog row goes first and the sink manifest last, so
+    /// a retry of a delete that was interrupted part-way finds the sink manifest
+    /// and finishes it; a delete that cannot confirm its reservation of the id
+    /// with the scope's scheduler stops with a <see cref="TimeoutException"/> and
+    /// is retried the same way.
     /// </summary>
     /// <param name="backupId">The backup id. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
