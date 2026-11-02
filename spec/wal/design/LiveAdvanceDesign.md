@@ -462,7 +462,13 @@ Every foreign-author path follows one protocol:
    rejected as stale. With its row ETag still held and the stamp below its own current
    epoch, that rejection is a distinct internal outcome: the activation does not
    deactivate, and its seam retry re-admits the write under the current epoch, where span
-   admission forwards a key the narrow moved and a key it still owns re-appends. The
+   admission forwards a key the narrow moved and a key it still owns re-appends. On the
+   wire it stays the existing `LeafRetiredException` with `ActivationSuperseded` set and no
+   new field: a 10.2.0 shard root calling this leaf across a gate race deserializes it and
+   retries until its deadline, and every new seam already retries it. A genuine
+   supersession still meets the next current-epoch append and deactivates. The self-fence
+   has its own counter (change 7). It also covers a floor bump's own in-flight appends
+   (#5643). The
    order is narrow (a), then bump (c), then close (d); the in-memory epoch moves only
    after the row's conditional write succeeds. The initiator's own claim heads move too,
    so it is disarmed until it replays to them (N3).
@@ -809,8 +815,10 @@ keys only the pre-existing rows hold become readable again, and counts and scans
 become exact. This is a **compatible bug fix** (change 4): it fixes the
 origin-versus-replica divergence and needs no authorisation. The model states it as
 `ContestedKeyAgrees`: the owner resolves the contested key to the value a WAL reader
-resolves at the same position, with the bulk entry versioned when the bulk load begins,
-between the writes before it and those after it.
+resolves at the same position. A bulk entry is versioned on the shard root's clock
+when its chunk is appended, so its order against a concurrent write is arbitrary; the
+model fixes it between the writes before the bulk began and those after, and the
+reviewer's runs with every other placement are clean too.
 `ContestedKeyAgreesStrandedValueKept`, where the owner keeps a stranded or skipped value
 over a later-stamped write made before the switch (10.2.0's stranded origin read),
 fails in seven states.
@@ -1052,7 +1060,7 @@ production).
 | 4 | **Bulk append over existing rows (#5610, #5614).** The graft relocates the rows the bulk range already holds into the new bulk leaf, instead of stranding them. No new exception: a chunk that succeeds today still succeeds. A key both the bulk chunk and another write hold resolves last-writer-wins by HLC stamp, the later-stamped write winning, as 10.2.0 already resolves it on every replica and view, for every free-space key, and on the origin after a replay. Only the origin's pre-replay reads change: keys only the pre-existing rows hold become readable, a later-stamped stranded write is no longer hidden, and counts and scans become exact (#5614). A chunk below the right edge is skipped as a re-delivery only when every key it carries there is already held. | Compatible bug fix (fixes an origin-versus-replica divergence) |
 | 5 | **The live advance itself (#5572).** A leaf's checkpoint advances without a replay from -1. The WAL GC trims sooner, replay demand falls, and #5570's "carries no usable offset" warnings stop for live leaves. Existing metrics report different values; none changes name, unit or tags. | Compatible bug fix |
 | 6 | **Range deletes cost more.** Each `DeleteRangeAsync` call opens an intent at the tree's fence grain, opens and closes a range-scoped marker on every shard of the tree, re-claims the tree's range-delete generation once per WAL partition, and disarms every overlapping leaf of the tree for the call's duration. The shard root adds no per-page call: it trusts the generation it is given and asks the fence grain only after a rejection. Stepped range deletes pay this per step (section 2). A range-delete walk that stays unstamped (replication apply, a shadow forward, a gate-spanning fan-out, a 10.2.0 caller, or a page after the intent's deadline) costs every armed leaf on the partitions it reaches a tail replay past it. The record, its result and its feed and history output are unchanged. | Compatible (cost only) |
-| 7 | **New metrics.** New instruments only, on the existing meter: claims, refusals and rejections by reason, seam retries by caller class, live advances by arming outcome, open markers, and unstamped reports by source (replication apply, shadow forward, gate-spanning fan-out, 10.2.0 caller, census-unstamped, and a range-delete page past its intent's deadline). No existing instrument gains a tag, a tag value, or a new unit. | Compatible (additive) |
+| 7 | **New metrics.** New instruments only, on the existing meter: claims, refusals and rejections by reason, seam retries by caller class, self-fences (`orleans.lattice.wal.append_fence.self_fenced`), live advances by arming outcome, open markers, and unstamped reports by source (replication apply, shadow forward, gate-spanning fan-out, 10.2.0 caller, census-unstamped, and a range-delete page past its intent's deadline). No existing instrument gains a tag, a tag value, or a new unit. | Compatible (additive) |
 | 8 | **New log lines.** A deactivation warning for a stale activation, and a debug line when a partition disarms on an unstamped report. #5571's blocked-pin warning keeps its categories. | Compatible (additive) |
 | 9 | **New storage rows** under the reserved grain types listed above, and the `TreeRangeDeleteFenceGrain` state, appear in the host's grain storage, and a sweep removes orphaned ones. The fence grain's reminder adds one reminder-table row per tree while it has an open intent. They are documented in the tree's storage notes. | Compatible (additive) |
 | 10 | **New public configuration.** A `LatticeOptions` switch to turn the live advance off is additive, and defaults to on once the gate opens. | Compatible (additive) |
@@ -1149,8 +1157,9 @@ then.
 - `ContestedKeyAgrees`: the owner resolves a contested key to the value a WAL reader
   (a replica or a view) resolves at the same read position, last-writer-wins by version.
   Every entry the leaf owns writes one key, the contention worst case; every write has a
-  real version, ordered by time, and the bulk entry is versioned when the bulk load begins,
-  between the writes allocated before it and those allocated after it.
+  real version, ordered by time. The bulk entry is versioned when its chunk is appended,
+  in arbitrary order against concurrent writes; the model places it between the writes
+  allocated before the bulk began and those after, and every placement is clean.
 
 **Checked locally** (tla2tools v1.7.4, `-workers 2`, safety only, all six properties
 plus `TypeOK`):

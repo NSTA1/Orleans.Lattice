@@ -1022,10 +1022,11 @@ OnlySupersededRefused == ~wrongRefusal
 
 \* The contested key (#5610). Every entry L owns writes one key K, the
 \* contention worst case. Every write carries a real HLC version, which the
-\* model orders by time: the entry at offset o has version Ver(o), and the bulk
-\* chunk's entry for K is stamped when the bulk load begins (HLC.Tick reads the
-\* wall clock), so it falls between the writes allocated before Begin and those
-\* allocated after it. Every activation of L and every WAL reader holds the bulk
+\* model orders by time: the entry at offset o has version Ver(o). The bulk
+\* chunk's entry for K is stamped on the shard root's clock when its chunk is
+\* appended (HLC.Tick reads the wall clock), so its order against a concurrent
+\* write is arbitrary; the model fixes it between the writes allocated before
+\* Begin and those after, and ContestedKeyAgrees holds for every placement. Every activation of L and every WAL reader holds the bulk
 \* entry. Each side resolves K last-writer-wins by version: the owner over the
 \* entries it holds up to its read position, a replica or view over the durable
 \* entries up to the same position. Top is the winning offset, -1 the bulk value.
@@ -1039,7 +1040,9 @@ ReaderRank(a) == Top({o \in durable : o <= rp[a]})
 \* value a WAL reader resolves at the same position, whichever write is stamped
 \* later. A bulk append over a key the range already holds therefore returns the
 \* later-stamped value on the origin, as on every replica and view.
-ContestedKeyAgrees == \A a \in up : OwnerRank(a) = ReaderRank(a)(***************************************************************************)
+ContestedKeyAgrees == \A a \in up : OwnerRank(a) = ReaderRank(a)
+
+(***************************************************************************)
 (* Witnesses: each must be VIOLATED, with Ghosts = TRUE, proving its step  *)
 (* is reachable in the instance and the clean run is not vacuous.          *)
 (***************************************************************************)
