@@ -459,7 +459,7 @@ internal sealed partial class ShardRootGrain
                     break;
                 }
 
-                var floor = WalAppendFenceRows.FloorOf(await WalAppendFenceRows.RaiseRoutingFloorsAsync(storage, TreeId, TreeRoutingFenceRetirement.Initiators(ShardIndex + 2).ToDictionary(i => i, _ => row.State.RoutingGeneration)), self); // RED-PROOF M12: catch-up raises other initiators
+                var floor = await WalAppendFenceRows.RaiseRoutingFloorAsync(storage, TreeId, self, row.State.RoutingGeneration);
                 var stored = await HandOffMarkerRows.UpdateShardAsync(storage, TreeId, ShardIndex, m =>
                 {
                     if (!Predates(m) || m.RoutingGeneration > floor)
@@ -521,7 +521,7 @@ internal sealed partial class ShardRootGrain
                 // incarnation's marker is never re-created: a re-created incarnation
                 // re-seeds the root first, which forgets the reads.
                 stored = await HandOffMarkerRows.UpdateExistingShardAsync(HandOffStorage(), TreeId, ShardIndex, mutate)
-                    ?? (false && await IsRetiredByPurgeAsync() // RED-PROOF M11: re-creates a retired marker
+                    ?? (await IsRetiredByPurgeAsync()
                         ? throw PurgedIncarnation()
                         : await HandOffMarkerRows.UpdateShardAsync(HandOffStorage(), TreeId, ShardIndex, mutate));
             }
