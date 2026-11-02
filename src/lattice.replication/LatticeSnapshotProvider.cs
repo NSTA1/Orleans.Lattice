@@ -240,7 +240,7 @@ internal sealed class LatticeSnapshotProvider(
     /// context - so it is entered afresh around each step, and every grain call
     /// the step makes carries it.
     /// </summary>
-    private static async IAsyncEnumerable<SnapshotEntry> InSystemOriginAsync(
+    internal static async IAsyncEnumerable<SnapshotEntry> InSystemOriginAsync(
         IAsyncEnumerable<SnapshotEntry> source,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
