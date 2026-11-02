@@ -183,9 +183,7 @@ internal sealed partial class BackupSchedulerGrain
 
         try
         {
-            return await Publisher.FinishDeleteAsync(backupId, ScopeKey)
-                ? BackupRetireOutcome.Removed
-                : BackupRetireOutcome.Unchanged;
+            return await Publisher.FinishDeleteAsync(backupId, ScopeKey);
         }
         finally
         {

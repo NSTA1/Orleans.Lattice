@@ -84,12 +84,27 @@ public sealed class SchedulerBackupPublicationGateDeleteTests
         // The delete's lease ran out and a capture, or a rebuild, listed the
         // backup again: the end keeps its manifest, and the backup is not deleted.
         _scheduler.RenewDeleteAsync("x", Arg.Any<Guid>()).Returns(true);
+        _scheduler.EndDeleteAsync("x", Arg.Any<Guid>(), true).Returns(BackupRetireOutcome.Kept);
+
+        var deleted = await Gate().RetireAsync(_manifest, BackupRetireKind.Delete, CancellationToken.None);
+
+        Assert.That(deleted, Is.False, "a backup that is listed again was not deleted");
+    }
+
+    [Test]
+    public async Task A_delete_whose_backup_is_republished_after_it_ends_reports_it_deleted()
+    {
+        // An overlapping delete already removed the manifest, so this end finds
+        // nothing to delete; its release lets a waiting capture republish the id
+        // before the caller looks. This delete still finished: the republish is
+        // a new backup, listed after it. Only the end decides, under the hold.
+        _scheduler.RenewDeleteAsync("x", Arg.Any<Guid>()).Returns(true);
         _scheduler.EndDeleteAsync("x", Arg.Any<Guid>(), true).Returns(BackupRetireOutcome.Unchanged);
         _catalog.GetAsync("x", Arg.Any<CancellationToken>()).Returns(_manifest);
 
         var deleted = await Gate().RetireAsync(_manifest, BackupRetireKind.Delete, CancellationToken.None);
 
-        Assert.That(deleted, Is.False, "a backup that is listed again was not deleted");
+        Assert.That(deleted, Is.True, "a backup republished after the delete ended does not undo it");
     }
 
     private SchedulerBackupPublicationGate Gate()

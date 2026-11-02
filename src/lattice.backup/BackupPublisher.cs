@@ -261,30 +261,29 @@ internal sealed class BackupPublisher(
     /// </summary>
     /// <param name="backupId">The deleted backup.</param>
     /// <param name="scopeKey">The deleting scope's key, or <see langword="null"/> to skip the scope check.</param>
-    /// <returns>Whether the manifest was deleted.</returns>
-    public async Task<bool> FinishDeleteAsync(string backupId, string? scopeKey = null)
+    /// <returns>
+    /// <see cref="BackupRetireOutcome.Removed"/> when the manifest was deleted;
+    /// <see cref="BackupRetireOutcome.Kept"/> when a row lists the id, so its
+    /// backup was kept; otherwise <see cref="BackupRetireOutcome.Unchanged"/>: the
+    /// manifest is already gone, or is another scope's.
+    /// </returns>
+    public async Task<BackupRetireOutcome> FinishDeleteAsync(string backupId, string? scopeKey = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(backupId);
         if (await catalog.GetAsync(backupId).ConfigureAwait(false) is not null)
         {
-            return false;
+            return BackupRetireOutcome.Kept;
         }
 
         var manifest = await sink.ReadManifestAsync(backupId).ConfigureAwait(false);
         if (manifest is null || !IsOfScope(manifest, scopeKey))
         {
-            return false;
+            return BackupRetireOutcome.Unchanged;
         }
 
         await sink.DeleteManifestAsync(backupId).ConfigureAwait(false);
-        return true;
+        return BackupRetireOutcome.Removed;
     }
-
-    /// <summary>Whether a catalog row lists <paramref name="backupId"/>.</summary>
-    /// <param name="backupId">The backup id.</param>
-    /// <returns><see langword="true"/> when the catalog lists it.</returns>
-    public async Task<bool> IsListedAsync(string backupId) =>
-        await catalog.GetAsync(backupId).ConfigureAwait(false) is not null;
 
     private static bool IsOfScope(BackupManifest manifest, string? scopeKey) =>
         scopeKey is null || string.Equals(BackupScopeKey.For(manifest.Scope), scopeKey, StringComparison.Ordinal);

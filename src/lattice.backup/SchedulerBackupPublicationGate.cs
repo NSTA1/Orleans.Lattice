@@ -122,8 +122,10 @@ internal sealed class SchedulerBackupPublicationGate(
 
         // The end keeps the manifest of a backup a row lists again - a capture
         // republished it, or a rebuild re-listed it, once this delete's lease had
-        // run out - and that backup was not deleted (issue #5639).
-        return ended != BackupRetireOutcome.Unchanged || !await publisher.IsListedAsync(row.Id).ConfigureAwait(false);
+        // run out - and that backup was not deleted (issue #5639). Decided by the
+        // end, under the hold: a capture the end's own release lets in lists the
+        // id only after this delete has finished, and does not undo it.
+        return ended != BackupRetireOutcome.Kept;
     }
 
     // Deletes the artifacts under the delete's lease (issues #5637 and #5639).

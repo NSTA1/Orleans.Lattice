@@ -9,7 +9,7 @@ SUMMARY: a delete's end deletes the sink manifest while a row lists the id
 --- FIND
         if (await catalog.GetAsync(backupId).ConfigureAwait(false) is not null)
         {
-            return false;
+            return BackupRetireOutcome.Kept;
         }
 
         var manifest = await sink.ReadManifestAsync(backupId).ConfigureAwait(false);
