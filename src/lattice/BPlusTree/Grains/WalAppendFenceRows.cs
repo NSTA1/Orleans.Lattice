@@ -17,8 +17,9 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// Every key is composed by a <see cref="GrainKeyBuilderAttribute"/> method with
 /// <c>~</c> separators, never <c>/</c>, so it is safe as an Azure Table
 /// partition and row key. A composed key is unambiguous because its suffix has a
-/// fixed shape (a decimal partition, then a 32-digit leaf id or a one-letter
-/// initiator tag and its index), which is parsed from the end.
+/// fixed shape (a decimal partition, then a 32-digit leaf id, a one-letter
+/// initiator tag and its index, or a directory bucket and page), which is parsed
+/// from the end.
 /// </remarks>
 internal static class WalAppendFenceRows
 {
@@ -33,6 +34,12 @@ internal static class WalAppendFenceRows
 
     /// <summary>Reserved grain type and state name of a partition's routing-generation entry for one initiator.</summary>
     internal const string GenerationGrainType = "_lattice_wal-routing-generation";
+
+    /// <summary>Reserved grain type and state name of a page of a partition's append-epoch directory (#5634).</summary>
+    internal const string DirectoryPageGrainType = "_lattice_wal-append-epoch-dir";
+
+    /// <summary>Reserved grain type and state name of a tree's append-fence sweep claim (#5634).</summary>
+    internal const string SweepGrainType = "_lattice_wal-append-fence-sweep";
 
     /// <summary>
     /// The <c>rowEpoch</c> a retirement passes when it has not read the leaf's epoch
@@ -67,6 +74,20 @@ internal static class WalAppendFenceRows
         return string.Concat(FloorKey(treeId, partition), "~", tag, index.ToString(CultureInfo.InvariantCulture));
     }
 
+    /// <summary>The key of one page of a WAL partition's append-epoch directory bucket.</summary>
+    [GrainKeyBuilder]
+    internal static string DirectoryPageKey(string treeId, int partition, int bucket, int page) =>
+        string.Concat(
+            FloorKey(treeId, partition),
+            "~d",
+            bucket.ToString(CultureInfo.InvariantCulture),
+            "~",
+            page.ToString(CultureInfo.InvariantCulture));
+
+    /// <summary>The key of a tree's append-fence sweep claim row.</summary>
+    [GrainKeyBuilder]
+    internal static string SweepKey(string treeId) => treeId;
+
     /// <summary>The grain id a row of <paramref name="grainType"/> under <paramref name="key"/> is stored at.</summary>
     internal static GrainId RowId(string grainType, string key) =>
         GrainId.Create(GrainType.Create(grainType), IdSpan.Create(key));
@@ -88,6 +109,15 @@ internal static class WalAppendFenceRows
         IGrainStorage storage, string treeId, int partition, WalRoutingInitiator initiator) =>
         ReadAsync<WalRoutingGenerationState>(
             storage, GenerationGrainType, GenerationKey(treeId, partition, initiator.Kind, initiator.Index));
+
+    /// <summary>Reads one page of a partition's append-epoch directory bucket.</summary>
+    internal static Task<GrainState<WalAppendEpochDirectoryPageState>> ReadDirectoryPageAsync(
+        IGrainStorage storage, string treeId, int partition, int bucket, int page) =>
+        ReadAsync<WalAppendEpochDirectoryPageState>(storage, DirectoryPageGrainType, DirectoryPageKey(treeId, partition, bucket, page));
+
+    /// <summary>Reads a tree's append-fence sweep claim row.</summary>
+    internal static Task<GrainState<WalAppendFenceSweepState>> ReadSweepAsync(IGrainStorage storage, string treeId) =>
+        ReadAsync<WalAppendFenceSweepState>(storage, SweepGrainType, SweepKey(treeId));
 
     /// <summary>
     /// Writes <paramref name="row"/> conditionally on the ETag it carries: a row

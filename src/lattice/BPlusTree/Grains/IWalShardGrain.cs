@@ -159,7 +159,8 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// <summary>
     /// Retires leaf <paramref name="leafId"/>'s epoch entry at this partition (epic
     /// #5605): raises the partition's durable retired floor to at least the higher of
-    /// the entry and <paramref name="rowEpoch"/>, then deletes the entry row. Called
+    /// the entry and <paramref name="rowEpoch"/>, then deletes the entry row and
+    /// delists the leaf from the partition's append-epoch directory (#5634). Called
     /// when the leaf is retired, whether or not the fence gate is open; idempotent,
     /// and a no-op for a leaf with neither an entry nor an epoch row.
     /// </summary>

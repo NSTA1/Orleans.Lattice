@@ -963,4 +963,10 @@ internal static class TypeAliases
 
     /// <summary>Alias for the append-fence capability marker grain interface.</summary>
     internal const string IWalAppendFenceCapable = "ol.xfk";
+
+    /// <summary>Alias for a page of a WAL partition's append-epoch directory (#5634).</summary>
+    internal const string WalAppendEpochDirectoryPageState = "ol.xfd";
+
+    /// <summary>Alias for a tree's append-fence sweep claim row (#5634).</summary>
+    internal const string WalAppendFenceSweepState = "ol.xfw";
 }
