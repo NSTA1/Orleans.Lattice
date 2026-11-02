@@ -513,7 +513,11 @@ self-fence (section 2) and re-admitted, where span admission forwards a moved ke
 raised epoch therefore never stamps a write admitted before the close, which is all
 `ReadPositionHonestStampAtAppend` requires. It refuses fewer writes than a captured
 epoch value, because a claim or a floor-refusal bump is not a close. Mark `0` means
-"not captured" and is never carried by a stamped entry. A path that appends with mark `0`
+"not captured" and is never carried by a stamped entry. The fence that counts the closes
+must therefore exist at admission, not be created lazily at the activation's first append.
+Otherwise a write admitted before that first append reads "no fence yet" as mark `0`, a
+close lands before it is dispatched, and it is stamped with the raised epoch above the
+heads. A path that appends with mark `0`
 stamps at dispatch, so it must not append a key the initiator may have narrowed away:
 it captures its own mark before its span check, as the tx-terminal backstop does (the
 census, below).
@@ -1507,7 +1511,7 @@ Each production member carries detectors proven red. They land in this order:
 | Finding | Resolution |
 |---------|------------|
 | S2 close heads bound only appends stamped before the bump | Section 2, "What the close heads must bound": three guards, each load-bearing in the model. Stamp at admission (`StampAtAppend`), re-claim every partition claimed in the activation (new `CloseHeadUnderstated`), and no unfenced close while a stamped append may be in flight (`DrainWithoutFence`). The span re-check and receiver-own transfer argument is stated, and why it fails when the initiator's forward never happens. Production departs on all three at #5644's head, so the fix is filed as #5664, a sub-issue of #5605, which blocks member 4. |
-| #5664 (a) mechanism | Section 2, "Stamped at admission": member 2 carries an admission mark (close count plus one) and refuses at dispatch any write whose mark predates a close. Equivalent for `StampAtAppend`, with fewer spurious retries. Mark `0` is reserved for uncaptured paths. The tx-terminal backstop awaited its forwards between its span check and its local appends, so a moved local key could append under the raised epoch; it now captures its mark before the span check (census row). |
+| #5664 (a) mechanism | Section 2, "Stamped at admission": member 2 carries an admission mark (close count plus one) and refuses at dispatch any write whose mark predates a close. Equivalent for `StampAtAppend`, with fewer spurious retries. Mark `0` is reserved for uncaptured paths, so the fence is resolved at admission, not lazily at the first append, which would leave a write admitted before the activation's first append unmarked (found by member 2, fixed in #5644). The tx-terminal backstop awaited its forwards between its span check and its local appends, so a moved local key could append under the raised epoch; it now captures its mark before the span check (census row). |
 
 ### After acceptance: member 3's review (#5646)
 
