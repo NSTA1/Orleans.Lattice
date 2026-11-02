@@ -343,14 +343,19 @@ public partial class BPlusLeafGrainTests
         siblingMock.SetPrevSiblingAsync(Arg.Any<GrainId?>()).Returns(Task.CompletedTask);
         factory.GetGrain<IBPlusLeafGrain>(siblingId).Returns(siblingMock);
 
-        // CompleteSplitAsync is the recovery-path entry; with a null
-        // walHeadsAtSplit argument it fans out per-partition head
-        // reads itself, which is the contract we want to pin.
+        // The forward path captures the per-partition heads and hands them to
+        // CompleteSplitAsync; drive both seams. The recovery path (a null
+        // walHeadsAtSplit) applies no heads at all (issue #5706).
+        var captureHeads = typeof(BPlusLeafGrain).GetMethod(
+            "CaptureWalHeadsByPartitionAsync",
+            System.Reflection.BindingFlags.NonPublic
+                | System.Reflection.BindingFlags.Instance)!;
+        var heads = await (Task<long[]>)captureHeads.Invoke(donor, new object?[] { MultiPartitionTreeId })!;
         var completeSplit = typeof(BPlusLeafGrain).GetMethod(
             "CompleteSplitAsync",
             System.Reflection.BindingFlags.NonPublic
                 | System.Reflection.BindingFlags.Instance)!;
-        await (Task<SplitResult>)completeSplit.Invoke(donor, new object?[] { null })!;
+        await (Task<SplitResult>)completeSplit.Invoke(donor, new object?[] { heads })!;
 
         // The sibling must have been hinted with every per-partition
         // head in a single batched round-trip - the

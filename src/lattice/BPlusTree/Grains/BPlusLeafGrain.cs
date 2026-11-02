@@ -1395,7 +1395,7 @@ internal sealed partial class BPlusLeafGrain(
             }
             else if (IsLeafOverCapacity(options.MaxLeafKeys, options.MaxLeafBytes))
             {
-                splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys, options.MaxLeafBytes);
+                splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys, options.MaxLeafBytes, ownMutationScopes: 1);
             }
         }
         RecordCommitStep("apply", applyStartTicks);
@@ -2020,7 +2020,7 @@ internal sealed partial class BPlusLeafGrain(
             }
             if (IsLeafOverCapacity(options.MaxLeafKeys, options.MaxLeafBytes))
             {
-                splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys, options.MaxLeafBytes);
+                splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys, options.MaxLeafBytes, ownMutationScopes: 1);
             }
             if (stranded is not null)
             {
@@ -3004,6 +3004,18 @@ internal sealed partial class BPlusLeafGrain(
         _warmCacheTopologyChanged = true;
         await AwaitReplayBarrierAsync();
         ArgumentNullException.ThrowIfNull(highKeyExclusive);
+
+        // Issue #5706: the graft captured the appended leaves' birth hint before it
+        // called here, so every commit this leaf admitted before now may hold a
+        // record below the hint. Each must have applied before the bound narrows,
+        // or a death in between leaves its record unapplied by every leaf. Drained
+        // outside the split gate, which a mutation may itself be waiting for.
+        if (!await DrainMutationsAdmittedBeforeAsync(allowance: 0))
+        {
+            throw new TimeoutException(
+                $"Leaf {context.GrainId} could not narrow its high bound: commits it admitted earlier were still "
+                + "unapplied after the drain deadline. The bulk graft is resumed by the next operation on the shard.");
+        }
 
         // See SetNextSiblingAsync above for the gate rationale.
         await _splitGate.WaitAsync().ConfigureAwait(true);
@@ -4601,7 +4613,7 @@ internal sealed partial class BPlusLeafGrain(
         var mergeOptions = await GetOptionsAsync();
         if (IsLeafOverCapacity(mergeOptions.MaxLeafKeys, mergeOptions.MaxLeafBytes))
         {
-            splitResult = await SplitIfNeededUnderGateAsync(mergeOptions.MaxLeafKeys, mergeOptions.MaxLeafBytes);
+            splitResult = await SplitIfNeededUnderGateAsync(mergeOptions.MaxLeafKeys, mergeOptions.MaxLeafBytes, ownMutationScopes: 1);
         }
 
         if (stranded is not null)

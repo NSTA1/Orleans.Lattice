@@ -339,4 +339,51 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
             Assert.That(marker.BulkBirthHints, Is.Empty);
         });
     }
+
+    [Test]
+    public async Task The_next_bulk_operation_closes_a_switch_an_abandoned_append_left_open_without_applying_its_hint()
+    {
+        // Review N1 of #5702: an append that opened its switch and stopped before it
+        // recorded its graft, and was never re-driven, would hold its range on the
+        // replay-based advance for good. The next bulk operation on the shard closes it.
+        var rig = CreateHintRig();
+        SeedAppendTail(rig.H);
+        await HandOffMarkerRows.UpdateShardAsync(rig.Storage, TreeId, 0, m =>
+            m.BulkBirthHints.TryAdd("abandoned", [BirthHead]) | HandOffMarkerCore.Open(m, "bulk:abandoned", "j", null));
+
+        await rig.H.Grain.BulkAppendAsync("op-next", Pairs(5));
+
+        var marker = await ShardMarkerAsync(rig);
+        Assert.Multiple(() =>
+        {
+            Assert.That(marker.Open, Is.Empty, "the abandoned switch and the new one are both closed");
+            Assert.That(marker.Closes.Select(c => c.Token), Is.SupersetOf(new[] { "bulk:abandoned", "bulk:op-next" }));
+            Assert.That(marker.BulkBirthHints, Is.Empty, "the abandoned hint is removed with its close");
+        });
+    }
+
+    [Test]
+    public async Task The_next_bulk_operation_leaves_the_switch_of_a_graft_still_pending_open()
+    {
+        var rig = CreateHintRig();
+        SeedAppendTail(rig.H);
+        rig.H.State.State.PendingBulkGraft = new PendingBulkGraft
+        {
+            OperationId = "pending",
+            ExistingRightmostLeafId = rig.H.State.State.RootNodeId!.Value,
+            NewLeaves = [],
+            RootWasLeaf = true,
+        };
+        await HandOffMarkerRows.UpdateShardAsync(rig.Storage, TreeId, 0, m =>
+            m.BulkBirthHints.TryAdd("pending", [BirthHead]) | HandOffMarkerCore.Open(m, "bulk:pending", "j", null));
+
+        await rig.H.Grain.BeginBulkSwitchForTestingAsync("op-next", "k");
+
+        var marker = await ShardMarkerAsync(rig);
+        Assert.Multiple(() =>
+        {
+            Assert.That(marker.Open, Does.ContainKey("bulk:pending"), "a pending graft still owns its switch");
+            Assert.That(marker.BulkBirthHints, Does.ContainKey("pending"));
+        });
+    }
 }

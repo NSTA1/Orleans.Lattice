@@ -4758,7 +4758,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> LeafSplitAttempts =
         Meter.CreateCounter<long>("orleans.lattice.leaf.split_attempts", unit: "{attempt}",
-            description: "Leaf divisions sought on an over-capacity leaf, tagged by tree and outcome (divided/recovered/gate_contended/already_under_capacity/no_admissible_pivot/faulted, the last also tagged failure_class as unaffordable/timeout/other). Read alongside leaf bisect refusals, which is uninterpretable at zero without it.");
+            description: "Leaf divisions sought on an over-capacity leaf, tagged by tree and outcome (divided/recovered/gate_contended/already_under_capacity/no_admissible_pivot/commits_in_flight/faulted, the last also tagged failure_class as unaffordable/timeout/other). Read alongside leaf bisect refusals, which is uninterpretable at zero without it.");
 
     /// <summary>Canonical name of <see cref="LeafSplitAttempts"/>.</summary>
     public const string LeafSplitAttemptsName = "orleans.lattice.leaf.split_attempts";
@@ -4822,6 +4822,16 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly KeyValuePair<string, object?> LeafSplitNoAdmissiblePivot =
         new(TagOutcome, "no_admissible_pivot");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>commits_in_flight</c> on
+    /// <see cref="LeafSplitAttempts"/>: the division was declined because commits the
+    /// leaf admitted before capturing the sibling's read position had still not applied
+    /// after the drain deadline (issue #5706). Nothing was persisted; the next write
+    /// retries the division.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> LeafSplitCommitsInFlight =
+        new(TagOutcome, "commits_in_flight");
 
     /// <summary>
     /// <see cref="TagOutcome"/> = <c>faulted</c> on

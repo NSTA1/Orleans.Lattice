@@ -59,6 +59,8 @@ internal sealed partial class ShardRootGrain
             return null;
         }
 
+        await CloseAbandonedBulkSwitchesAsync(operationId);
+
         var hint = await ReadBulkBirthHintAsync(operationId) ?? await CaptureBulkBirthHeadsAsync();
         var token = BulkHandOffToken(operationId);
         var opened = false;
@@ -144,6 +146,50 @@ internal sealed partial class ShardRootGrain
         if (closed)
         {
             LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindBulk, opened: false, TreeId);
+        }
+    }
+
+    /// <summary>Test seam: opens bulk operation <paramref name="operationId"/>'s switch.</summary>
+    internal Task<long[]?> BeginBulkSwitchForTestingAsync(string operationId, string? lowInclusive) =>
+        BeginBulkSwitchAsync(operationId, lowInclusive);
+
+    /// <summary>
+    /// Closes, without applying their hints, the bulk switches a previous operation
+    /// opened on this shard and never finished (review N1 of #5702): an append that
+    /// stored its hint and opened its marker, then stopped before it recorded its graft
+    /// and was never re-driven. Its marker would otherwise hold the leaves it covers on
+    /// the replay-based advance for good. Called from the next bulk operation's serial
+    /// turn, which no other bulk operation on this shard can overlap; the operation
+    /// <paramref name="currentOperationId"/> and a graft still pending are left alone.
+    /// No hint is applied: the leaves an abandoned append seeded were never grafted,
+    /// and a later re-drive of the same operation captures a fresh hint and re-merges
+    /// every entry above it.
+    /// </summary>
+    private async Task CloseAbandonedBulkSwitchesAsync(string currentOperationId)
+    {
+        var marker = await LoadHandOffMarkerAsync();
+        List<string>? abandoned = null;
+        foreach (var token in marker.Open.Keys)
+        {
+            if (!token.StartsWith("bulk:", StringComparison.Ordinal))
+                continue;
+
+            var operationId = token["bulk:".Length..];
+            if (string.Equals(operationId, currentOperationId, StringComparison.Ordinal)
+                || string.Equals(operationId, state.State.PendingBulkGraft?.OperationId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            (abandoned ??= []).Add(operationId);
+        }
+
+        if (abandoned is null)
+            return;
+
+        foreach (var operationId in abandoned)
+        {
+            await FinishBulkSwitchAsync(operationId, [], relocated: false, drainBatchWrites: false);
         }
     }
 

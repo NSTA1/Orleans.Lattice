@@ -57,7 +57,7 @@ public partial class LeafCacheGrainTests
                 + "and driving it directly is what isolates the transfer from a triggering "
                 + "write. If it has been renamed, update this helper.");
 
-        await (Task<SplitResult>)split.Invoke(leaf, [])!;
+        await (Task<SplitResult>)split.Invoke(leaf, [0])!;
     }
 
     /// <summary>
