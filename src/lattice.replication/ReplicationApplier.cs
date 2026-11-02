@@ -560,10 +560,14 @@ internal sealed partial class ReplicationApplier(
             // bounded cache falls through to the idempotent leaf-level LWW
             // apply (a no-op for identical bytes). Range deletes bypass it
             // because one HLC identifies a range operation rather than a point write.
-            var cache = _dedupeCaches.GetOrAdd(
-                entry.TreeId,
-                static (_, capacity) => new RecentApplyCache(capacity),
-                resolved.ShadowForwardDedupeCacheSize);
+            // A bootstrap drain dedupes within the copy it writes into, never
+            // against the live cache, which outlives an aborted copy (#5689).
+            var cache = isBootstrapDrain
+                ? DrainDedupeCache(entry.TreeId, resolved.ShadowForwardDedupeCacheSize)
+                : _dedupeCaches.GetOrAdd(
+                    entry.TreeId,
+                    static (_, capacity) => new RecentApplyCache(capacity),
+                    resolved.ShadowForwardDedupeCacheSize);
             if (!cache.TryAdd(entry, out var duplicateInFlight))
             {
                 if (duplicateInFlight)

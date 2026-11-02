@@ -10,7 +10,7 @@ using Orleans.TestingHost;
 namespace Orleans.Lattice.Replication.Tests;
 
 /// <summary>
-/// Issue #5684, the source half. A bootstrap import stages on a shadow copy of the
+/// Issues #5684 and #5689, the source half. A bootstrap import stages on a shadow copy of the
 /// receiver's tree and then replaces the tree with that copy. Unlike the merge the
 /// replication models assume (ReplicationReBootstrap's <c>ExportRow</c>), a cutover
 /// keeps the receiver's own committed writes only if the copy carries them. That
@@ -93,19 +93,21 @@ public sealed class BootstrapShadowCopyLocalBatchIntegrationTests
             [.. entries.Select(e => new KeyValuePair<string, byte[]>(e.Key, V(e.Value)))],
             "scb-batch-" + Guid.NewGuid().ToString("N"));
 
-    private async Task WaitLiveAsync(string tree, string source)
+    private async Task<int> WaitLiveAsync(string tree, string source)
     {
+        var failedAttempts = 0;
         var deadline = DateTime.UtcNow + Patience;
         while (true)
         {
             var status = await Coordinator.GetStatusAsync(tree);
             if (status.Phase == LatticeBootstrapState.LiveIncremental)
             {
-                return;
+                return failedAttempts;
             }
 
             if (status.Phase == LatticeBootstrapState.Failed)
             {
+                failedAttempts++;
                 // A failed attempt (an export whose source moved under it) is
                 // re-driven, as the sender's re-seed request re-drives it.
                 await Coordinator.BootstrapAsync(tree, source);
@@ -187,6 +189,26 @@ public sealed class BootstrapShadowCopyLocalBatchIntegrationTests
     }
 
     [Test]
+    public async Task Sequential_mutual_re_seeds_keep_each_sides_local_atomic_batch_on_both_sides()
+    {
+        var west = await AliasedTreeAsync("scb-seq-west", ("order/shared", "west-remediated"));
+        var east = await AliasedTreeAsync("scb-seq-east", ("order/shared", "east-restored"));
+        await CommitBatchAsync(east, ("order/shared", "east-batch"), ("order/east", "east-batch"));
+        await CommitBatchAsync(west, ("order/west", "west-batch"));
+
+        Source.FromPeer(west, peerTree: east, gate: false);
+        Source.FromPeer(east, peerTree: west, gate: false);
+        await Coordinator.BootstrapAsync(east, Peer);
+        await WaitLiveAsync(east, Peer);
+        await Coordinator.BootstrapAsync(west, Peer);
+        await WaitLiveAsync(west, Peer);
+
+        var expected = new[] { ("order/shared", "east-batch"), ("order/east", "east-batch"), ("order/west", "west-batch") };
+        await AssertCarriesAsync(east, expected);
+        await AssertCarriesAsync(west, expected);
+    }
+
+    [Test]
     public async Task Concurrent_mutual_re_seeds_keep_each_sides_local_atomic_batch_on_both_sides()
     {
         // West: the shared key holds an older (remediated) value. East: aliased to a
@@ -203,12 +225,24 @@ public sealed class BootstrapShadowCopyLocalBatchIntegrationTests
         await Coordinator.BootstrapAsync(east, Peer);
         await Source.FirstRowAsync(west, Patience);
         await Source.FirstRowAsync(east, Patience);
+        var abortedCopy = await _cluster.Client.GetGrain<ITreeResizeGrain>(west).GetBootstrapCopyTreeIdAsync();
 
-        // East cuts over first; west's export from east was opened before it.
+        // East cuts over first; west's export from east was opened before it, so
+        // west's first attempt fails, its copy is aborted and the import is re-driven
+        // into a new copy (#5689).
         Source.Release(east);
         await WaitLiveAsync(east, Peer);
         Source.Release(west);
-        await WaitLiveAsync(west, Peer);
+        var westFailures = await WaitLiveAsync(west, Peer);
+        var published = await _cluster.Client.GetLatticeRegistry().ResolveAsync(west);
+        Assert.Multiple(() =>
+        {
+            Assert.That(westFailures, Is.GreaterThanOrEqualTo(1),
+                "PRECONDITION: west's first attempt failed when east moved under its export");
+            Assert.That(abortedCopy, Is.Not.Null);
+            Assert.That(published, Is.Not.EqualTo(abortedCopy),
+                "the re-driven import publishes a new copy, never the aborted copy's id");
+        });
 
         var expected = new[] { ("order/shared", "east-batch"), ("order/east", "east-batch"), ("order/west", "west-batch") };
         await AssertCarriesAsync(east, expected);

@@ -129,6 +129,20 @@ public sealed class C1Contract() : ChapterContract("C1")
     public static async Task ReplayCapturedOrdersFromEastAsync(JourneyEstate estate)
     {
         var east = ContractFacades.Of(estate, region: JourneyEstate.East).Data;
+        var schema = ContractFacades.Of(estate).Schema;
+        var westData = ContractFacades.Of(estate).Data;
+        async Task DiagAsync(string when)
+        {
+            foreach (var key in Names.Orders.NegativeTotals)
+            {
+                var e = await ContractCalls.GetAsync(east, Names.Trees.FactoryOrders, key);
+                var w = await ContractCalls.GetAsync(westData, Names.Trees.FactoryOrders, key);
+                string Show(byte[]? v) => v is null ? "<absent>" : System.Text.Encoding.UTF8.GetString(v.Where(b => b >= 32 && b < 127).ToArray());
+                NUnit.Framework.TestContext.Progress.WriteLine($"C1 replay: {DateTime.UtcNow:HH:mm:ss.fff} {when} {key} east={Show(e)} west={Show(w)}");
+            }
+        }
+
+        await DiagAsync("before-batch");
         await east.SetManyAtomicAsync(new DataAtomicRequest
         {
             TreeId = Names.Trees.FactoryOrders,
@@ -140,9 +154,15 @@ public sealed class C1Contract() : ChapterContract("C1")
             },
         });
 
-        var schema = ContractFacades.Of(estate).Schema;
+        await DiagAsync("after-batch");
+        var polls = 0;
         await ContractWait.UntilAsync("the replayed orders to reach west's dead letters", async () =>
         {
+            if (polls++ % 20 == 0)
+            {
+                await DiagAsync("poll");
+            }
+
             var keys = new HashSet<string>(StringComparer.Ordinal);
             await foreach (var letter in schema.ListDeadLettersAsync(Names.Trees.FactoryOrders))
             {
