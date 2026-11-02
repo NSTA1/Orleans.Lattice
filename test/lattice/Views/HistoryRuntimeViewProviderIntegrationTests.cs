@@ -109,12 +109,22 @@ public class HistoryRuntimeViewProviderIntegrationTests
         // silo by dropping the local entry: the durable registry still holds the view.
         SiloServices.GetRequiredService<IViewCatalog>().Remove(viewName);
         var page = await source.ScanEntryHistoryAsync("k", null, null, 10, null);
+        var again = await source.ScanEntryHistoryAsync("k", null, null, 10, null);
+
+        // A remembered resolution must never outlive the view: once it is dropped,
+        // the next read falls back to the write-ahead-log window rather than reading
+        // a decommissioned view's empty generation.
+        await factory.DeleteAsync(viewName);
+        var dropped = await source.ScanEntryHistoryAsync("k", null, null, 10, null);
 
         Assert.Multiple(() =>
         {
             Assert.That(page.Source, Is.EqualTo(EntryHistorySource.View),
                 "the read finds the history view through the durable registry, not only the local catalog");
             Assert.That(page.Revisions, Has.Count.EqualTo(2));
+            Assert.That(again.Source, Is.EqualTo(EntryHistorySource.View), "a repeat read still finds the view");
+            Assert.That(again.Revisions, Has.Count.EqualTo(2));
+            Assert.That(dropped.Source, Is.Not.EqualTo(EntryHistorySource.View), "a dropped view is never read");
         });
     }
 

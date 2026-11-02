@@ -102,4 +102,37 @@ internal sealed class ViewRegistryGrain(
                 kinds[i] = registration.IsAggregation;
         return Task.FromResult(kinds);
     }
+
+    /// <inheritdoc />
+    public Task<RuntimeViewRegistration[]> ListAccumulativeBySourceAsync(string sourceTreeId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sourceTreeId);
+
+        // Usually zero or one match: allocate only for what is returned.
+        RuntimeViewRegistration? first = null;
+        List<RuntimeViewRegistration>? more = null;
+        foreach (var registration in state.State.Registrations.Values)
+        {
+            if (!registration.Accumulative
+                || registration.IsAggregation
+                || !string.Equals(registration.SourceTreeId, sourceTreeId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (first is null)
+            {
+                first = registration;
+            }
+            else
+            {
+                (more ??= [first]).Add(registration);
+            }
+        }
+
+        return Task.FromResult(
+            more is not null ? more.ToArray()
+            : first is not null ? [first]
+            : Array.Empty<RuntimeViewRegistration>());
+    }
 }

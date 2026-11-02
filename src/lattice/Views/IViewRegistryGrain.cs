@@ -53,4 +53,14 @@ internal interface IViewRegistryGrain : IGrainWithStringKey
     /// Missing registrations are represented by null.
     /// </summary>
     Task<bool?[]> GetAggregationKindsAsync(string[] viewNames);
+
+    /// <summary>
+    /// Returns the registrations of the accumulative, non-aggregation views whose
+    /// source is <paramref name="sourceTreeId"/> (the candidates for its change-history
+    /// view), without transferring the cluster-wide registration snapshot. Empty
+    /// when there are none.
+    /// </summary>
+    /// <param name="sourceTreeId">The source tree id.</param>
+    /// <returns>The matching registrations, in no particular order.</returns>
+    Task<RuntimeViewRegistration[]> ListAccumulativeBySourceAsync(string sourceTreeId);
 }
