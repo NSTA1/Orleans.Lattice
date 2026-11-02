@@ -95,6 +95,13 @@ public static class LatticeViewsServiceCollectionExtensions
                     (_, context) => new LatticeViewDefinition(
                         context.ViewName,
                         new PredicateLatticeViewProjection(codec.Decode(context.PayloadSpan)))));
+
+                // The built-in change-history provider (#5611), offered for operator
+                // creation so a facade or console can enable durable history on a tree.
+                providers.Add(new RuntimeViewProjectionProviderRegistration(
+                    LatticeHistoryView.ProviderKey,
+                    HistoryRuntimeViewProvider.Create,
+                    HistoryRuntimeViewProvider.Description));
                 return providers;
             });
         builder.Services.TryAddSingleton<RuntimeViewProjectionProviderCatalog>();

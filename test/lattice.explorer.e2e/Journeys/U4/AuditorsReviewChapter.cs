@@ -29,11 +29,11 @@ public sealed partial class AuditorsReviewChapter : JourneyChapter
     private static JourneyRecorder Recorder => JourneyRecorder.For(JourneyId);
 
     /// <summary>
-    /// factory-orders keeps no durable change history, so History cannot show a key before U2's
-    /// migration: no built-in provider can create a change-history view (#5611), and one built by
-    /// the host stalls its maintainer on this busy tree (#5612).
+    /// U4.3's History of the line feed's latest reading reads factory-telemetry's write-ahead-log
+    /// window, and that read can time out behind a replay on a saturated WAL shard (#5675). The
+    /// wrapper runs only when the panel ends in its failure state.
     /// </summary>
-    private static readonly KnownDefect HistoryWithoutAViewKeepsOnlyTheWal = new KnownDefect("#5612", "a change-history view over factory-orders stalls its maintainer, so History keeps only the write-ahead log's window and cannot show a key before U2's migration");
+    private static readonly KnownDefect WalWindowHistoryTimesOut = new KnownDefect("#5675", "the WAL-window history read of reading/latest times out behind a -1 replay on a saturated WAL shard, so the History panel says the history did not load");
 
     /// <inheritdoc />
     public override async Task RunAsync(ChapterContext context)

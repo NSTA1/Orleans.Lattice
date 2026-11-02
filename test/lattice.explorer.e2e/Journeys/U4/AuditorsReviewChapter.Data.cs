@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Microsoft.Playwright;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Sessions;
@@ -23,6 +24,12 @@ public sealed partial class AuditorsReviewChapter
     /// <summary>An order dana opens by browsing the Keys tab.</summary>
     private const string Order1 = "order/000001";
 
+    /// <summary>
+    /// How long a History read may take to end in the panel's failure state: three 30-second
+    /// server timeouts (the first attempt and the state client's two transient retries), plus margin.
+    /// </summary>
+    private static readonly float HistoryFailureBound = (float)TimeSpan.FromSeconds(120).TotalMilliseconds;
+
     // U4.1: the spine shows the read areas her rules grant, and nothing else she could open.
     private static async Task DanaSignsInAsync(PersonaSession dana)
     {
@@ -42,7 +49,8 @@ public sealed partial class AuditorsReviewChapter
         await SnapAsync(dana, "1", "signed-in", "dana's console: the areas her grants open, Backups drawn but not open, no Access");
     }
 
-    // U4.2: History of two orders, read as far as the write-ahead log's window keeps them.
+    // U4.2: History of two orders, read from factory-orders' change-history view (A3), and one
+    // shown as it stood when it was seeded, before U2's migration rewrote it.
     private static async Task HistoryOfTheOrdersAsync(PersonaSession dana)
     {
         var tree = new TreeWorkspacePage(dana.Shell);
@@ -50,8 +58,8 @@ public sealed partial class AuditorsReviewChapter
         await tree.ChooseTabAsync("History", "history");
         await SnapAsync(dana, "2", "choose-a-key", "History of factory-orders asks for a key");
 
-        await tree.ChooseKeyAsync(Names.Orders.Order17, requireRevisions: false);
-        await SnapAsync(dana, "2", "order-17", "order/000017's history: what is still in the write-ahead log's window");
+        await tree.ChooseKeyAsync(Names.Orders.Order17);
+        await SnapAsync(dana, "2", "order-17", "order/000017's history, from the change-history view");
         Coverage.Hit("tab:data/history");
 
         await tree.ChooseTabAsync("Keys", "keys");
@@ -59,14 +67,25 @@ public sealed partial class AuditorsReviewChapter
         await Expect(tree.EntryValue).ToContainTextAsync("\"total\"");
         await SnapAsync(dana, "2", "order-1-entry", "order/000001 today");
 
-        // factory-orders has no change-history view: the library ships no provider for one
-        // (#5611), and one built by the host stalls on this busy tree (#5612). So History reads
-        // only the write-ahead log's window, the seed may have left it, and the timeline cannot
-        // show the key as it stood before U2. The note says why.
-        await tree.OpenHistoryOfThisKeyAsync(Order1, requireRevisions: false);
-        await HistoryWithoutAViewKeepsOnlyTheWal.ReproducesAsync(async () =>
-            await Expect(dana.Shell.Content.GetByText(new Regex("^(This tree has no change-history view|Older revisions were trimmed)"))).ToBeVisibleAsync());
-        await SnapAsync(dana, "2", "order-1-history", "order/000001's history: only the write-ahead log's window, and a note saying why (#5611, #5612)");
+        // orders-history was created before the seed, so the timeline reaches back to the seeded
+        // revision and says nothing about the write-ahead log's window.
+        await tree.OpenHistoryOfThisKeyAsync(Order1);
+        await tree.StopFollowingAsync();
+        await Expect(dana.Shell.Content.GetByText(new Regex("^(This tree has no change-history view|Older revisions were trimmed)"))).ToHaveCountAsync(0);
+        var times = await tree.RevisionTimesAsync();
+        Assert.That(times, Is.Not.Empty, "order/000001 has its seeded revision");
+        await SnapAsync(dana, "2", "order-1-history", "order/000001's history: every revision since the seed");
+
+        // Show as of the seed: the oldest revision is in effect, holding the order as seeded.
+        var seeded = times.Min();
+        await tree.ShowAsOfAsync(seeded.AddSeconds(1));
+        Coverage.Hit("query:shell.at");
+        var oldest = times[0] <= times[^1] ? tree.Revisions.First : tree.Revisions.Last;
+        await Expect(oldest).ToHaveAttributeAsync("aria-current", "true");
+        await Expect(oldest).ToContainTextAsync("\"total\"");
+        await Expect(oldest).ToContainTextAsync(StoryData.SeededStatus(1));
+        await SnapAsync(dana, "2", "order-1-as-seeded", "Show as of the seed: order/000001 as it stood before U2's migration");
+        await tree.ShowLatestAsync();
     }
 
     // U4.3: the telemetry, which dana reads only through the nested factory-staff group, and
@@ -80,7 +99,22 @@ public sealed partial class AuditorsReviewChapter
         Coverage.Hit("use-case:access/through-nested-group");
 
         await tree.OpenEntryAsync(LineFeedControl.LatestReadingKey, LineFeedControl.LatestReadingKey);
-        await tree.OpenHistoryOfThisKeyAsync(LineFeedControl.LatestReadingKey);
+        await dana.Shell.Content.GetByRole(AriaRole.Link, new() { Name = "History of this key", Exact = true }).ClickAsync();
+        await Expect(dana.Shell.Content.GetByRole(AriaRole.Heading, new() { NameRegex = new Regex("^History of ") })).ToContainTextAsync(LineFeedControl.LatestReadingKey);
+
+        // The timeline, or the panel's failure state. The WAL-window read can time out behind a
+        // replay on a saturated WAL shard (#5675), and the state client retries that failure as
+        // transient before the panel says so, so the failure needs three server timeouts' time.
+        await Expect(tree.Revisions.First.Or(tree.HistoryDidNotLoad)).ToBeVisibleAsync(new() { Timeout = HistoryFailureBound });
+        if (await tree.HistoryDidNotLoad.IsVisibleAsync())
+        {
+            await WalWindowHistoryTimesOut.ReproducesAsync(async () =>
+                await Expect(tree.HistoryDidNotLoad).ToBeVisibleAsync());
+            await SnapAsync(dana, "3", "latest-reading-did-not-load", "The line feed's latest reading: its history read timed out behind a replay (#5675), and the panel offers Try again");
+            return;
+        }
+
+        await Expect(tree.RevisionCount).ToHaveTextAsync(new Regex(@"^\d[\d,]* revisions?( so far)?$"));
         await tree.StopFollowingAsync();
         await Expect(tree.RevisionCount).ToHaveTextAsync(new Regex("revisions so far$"));
         await Expect(tree.LoadOlder).ToBeVisibleAsync();

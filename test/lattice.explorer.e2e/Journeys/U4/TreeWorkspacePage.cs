@@ -64,6 +64,9 @@ public sealed class TreeWorkspacePage(ShellPage shell)
     /// <summary>The History tab's <b>As of</b> field.</summary>
     public ILocator AsOf => Content.GetByRole(AriaRole.Textbox, new() { Name = "As of", Exact = true });
 
+    /// <summary>The History panel's failure state, which offers <b>Try again</b>.</summary>
+    public ILocator HistoryDidNotLoad => Content.GetByRole(AriaRole.Heading, new() { Name = "The history did not load", Exact = true });
+
     /// <summary>Opens the tree from the Data directory, filtering it by name first.</summary>
     /// <param name="tree">The tree's logical id.</param>
     public async Task OpenFromDirectoryAsync(string tree)
