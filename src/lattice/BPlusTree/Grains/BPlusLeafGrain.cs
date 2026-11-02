@@ -2948,9 +2948,7 @@ internal sealed partial class BPlusLeafGrain(
             // span and relocated by the write path itself (StoreAdmittedEntry). A
             // re-driven graft collects whatever a crash left behind; a converged
             // leaf returns nothing.
-            // RED-PROOF M3: the narrowed leaf hands back nothing and keeps its rows.
-            _ = (Func<string, List<LwwEntry>>)TakeRowsAtOrAbove;
-            return [];
+            return TakeRowsAtOrAbove(state.State.HighKeyExclusive!);
         }
         finally
         {
