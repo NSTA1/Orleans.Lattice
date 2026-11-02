@@ -202,7 +202,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
                 // persisted its row but has not yet written its entry here must be
                 // refused at its entry write, or it would share the re-created
                 // incarnation's epoch once the clear deletes the row.
-                retired = Math.Max(row.State.Epoch, Math.Max(rowEpoch, 0));
+                retired = row.State.Epoch; // RED-PROOF: #5641 epoch row ignored
                 if (_epochEntries is not null && _epochEntries.TryGetValue(leafId, out var loaded))
                 {
                     retired = Math.Max(retired, Math.Max(loaded.Memory, loaded.DurableSeen));
@@ -241,7 +241,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
                     drain = BatchDrainLocked(leafId);
                     if (drain is null)
                     {
-                        _epochEntries?.Remove(leafId);
+                        // RED-PROOF: loaded entry left in place
                         return _epochFloor;
                     }
                 }
@@ -264,7 +264,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
             return WalAppendFenceOutcome.UnloadedEntry;
         }
 
-        if (!WalAppendFenceCore.IsEpochAdmitted(stamp.Epoch, entry.Memory))
+        if (!WalAppendFenceCore.IsEpochAdmitted(stamp.Epoch, entry.Memory) || stamp.Epoch <= _epochFloor) // RED-PROOF: #5635
         {
             return WalAppendFenceOutcome.StaleEpoch;
         }
@@ -312,7 +312,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
         for (var attempt = 1; ; attempt++)
         {
             var row = await read().ConfigureAwait(true);
-            var durable = getValue(row);
+            var durable = 0L; // RED-PROOF: durable table not carried
             WalAppendFenceCore.ClaimWriteDecision decision;
             long threshold;
             lock (_stateGate)

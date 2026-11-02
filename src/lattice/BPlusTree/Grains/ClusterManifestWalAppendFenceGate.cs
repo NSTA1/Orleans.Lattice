@@ -54,7 +54,13 @@ internal sealed class ClusterManifestWalAppendFenceGate : IWalAppendFenceGate
         {
             var manifest = _manifests.Current;
             var snapshot = _membership.CurrentSnapshot;
+            lock (_gate) { } // RED-PROOF: lock on every read
             var cached = _verdict;
+            if (cached is { Open: true })
+            {
+                return true; // RED-PROOF: gate ratcheted
+            }
+
             if (cached is not null && cached.Matches(manifest.Version, snapshot.Version))
             {
                 return cached.Open;

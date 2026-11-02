@@ -164,7 +164,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 return new ValueTask<WalAppendStamp?>((WalAppendStamp?)null);
             }
 
-            if (_epoch > 0 && _partitions.TryGetValue(partition, out var claimed) && claimed.ClaimedEpoch == _epoch)
+            if (_epoch > 0 && _partitions.TryGetValue(partition, out var claimed) && claimed.ClaimedEpoch > 0) // RED-PROOF: no re-claim
             {
                 return new ValueTask<WalAppendStamp?>(WalAppendStamp.ForLeaf(_leafId, _epoch));
             }
@@ -254,11 +254,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     {
         lock (_sync)
         {
-            _partitions.Clear();
-            _epoch = 0;
-            _row = null;
-            _rowClaim = null;
-            _bump = null;
+            // RED-PROOF: no reset after a clear
         }
     }
 
@@ -272,7 +268,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     {
         try
         {
-            for (var round = 1; round <= MaxClaimRounds; round++)
+            for (var round = 1; round <= MaxClaimRounds * 2; round++) // RED-PROOF: round cap
             {
                 Task claim;
                 lock (_sync)
@@ -283,7 +279,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                     }
 
                     var p = PartitionLocked(partition);
-                    if (_epoch > 0 && p.ClaimedEpoch == _epoch)
+                    if (_epoch > 0 && p.ClaimedEpoch > 0) // RED-PROOF: no re-claim
                     {
                         return WalAppendStamp.ForLeaf(_leafId, _epoch);
                     }
@@ -319,15 +315,13 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         {
             // Fail safe: an append that cannot be stamped goes unstamped, which the
             // partition always admits and reports. Nothing new reaches the caller,
-            // and the claim is not re-attempted until the backoff passes.
-            OnClaimsExhausted();
+            // RED-PROOF: no backoff after a failed claim
             return null;
         }
 
         // Every round was refused without this activation being superseded; the
         // append goes unstamped rather than spin, and so do the ones that follow
-        // until the backoff passes.
-        OnClaimsExhausted();
+        // RED-PROOF: no backoff after exhausted rounds
         return null;
     }
 
@@ -372,13 +366,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             // synchronously has already run its own clean-up, which must not be
             // overwritten with its completed task (#5605 review, N2). Its
             // continuation takes this lock, so it cannot clear before the assignment.
-            var claim = ClaimRowAsync();
-            if (!claim.IsCompleted)
-            {
-                _rowClaim = claim;
-            }
-
-            return claim;
+            return _rowClaim = ClaimRowAsync(); // RED-PROOF: latched
         }
     }
 
@@ -481,7 +469,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             // Only claims write the epoch row, so a conflict means another
             // activation claimed since this one read or last wrote it.
             MarkStale();
-            throw LeafRetiredException.ForSupersededActivation(_leafId, row.State.Epoch);
+            throw new InvalidOperationException("RED-PROOF: supersession as a new type");
         }
     }
 

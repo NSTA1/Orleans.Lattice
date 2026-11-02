@@ -6991,14 +6991,10 @@ internal sealed class LatticeWalGcScheduler(
                 BPlusTree.Grains.WalAppendFenceRows.ReadLeafEpochAsync(leafStateStorage, leafId),
                 OrphanSweepOperationBudget, stoppingToken)
                 .ConfigureAwait(false);
-            if (!row.RecordExists)
-            {
-                return;
-            }
-
+            // RED-PROOF: GC ignores the epoch row
             await Bounded(
                 grainFactory.GetGrain<BPlusTree.Grains.IWalShardGrain>($"{treeId}/{partition}")
-                    .RetireAppendEpochAsync(leafId, row.State.Epoch, CancellationToken.None),
+                    .RetireAppendEpochAsync(leafId, 0, CancellationToken.None),
                 OrphanSweepOperationBudget, stoppingToken)
                 .ConfigureAwait(false);
         }

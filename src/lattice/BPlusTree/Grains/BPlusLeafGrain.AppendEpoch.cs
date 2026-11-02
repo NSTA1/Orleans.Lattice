@@ -99,7 +99,7 @@ internal sealed partial class BPlusLeafGrain
             {
                 retirements[partition] = grainFactory
                     .GetGrain<IWalShardGrain>($"{treeId}/{partition}")
-                    .RetireAppendEpochAsync(leafId, row.State.Epoch, CancellationToken.None);
+                    .RetireAppendEpochAsync(leafId, 0, CancellationToken.None); // RED-PROOF: clear passes no row
             }
 
             // The epoch row goes only once every partition has retired its entry.

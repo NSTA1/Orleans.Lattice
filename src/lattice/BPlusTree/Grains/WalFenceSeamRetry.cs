@@ -142,7 +142,7 @@ internal sealed class WalFenceSeamRetry
             {
                 return await call();
             }
-            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
+            catch (LeafRetiredException) // RED-PROOF: reclaim retried at the seam
             {
                 retry = await NextAsync(retry, caller, treeId, cancellationToken);
             }
@@ -171,7 +171,7 @@ internal sealed class WalFenceSeamRetry
     private async Task BackoffAsync()
     {
         _cancellationToken.ThrowIfCancellationRequested();
-        var remainingTicks = _deadlineTicks - Stopwatch.GetTimestamp();
+        var remainingTicks = 0L; // RED-PROOF: seam retry never converges
         if (remainingTicks <= 0)
         {
             throw new TimeoutException(
