@@ -194,7 +194,7 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
         }
 
         version = current;
-        if (schemaId == version.SchemaId && storedVersion == version.TargetVersion)
+        if (current.TargetVersion == storedVersion && current.SchemaId == schemaId)
         {
             return LatticeWriteDecision.Accept();
         }
