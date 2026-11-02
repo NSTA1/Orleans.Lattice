@@ -29,17 +29,20 @@ name: Explorer Journeys
 #                      hosts, a facade or this lane runs every leg.
 #   story-contoso, story-fabrikam
 #                      the storyline run in order on one estate. ADVISORY and
-#                      NOT run on a member pull request (user decision on
-#                      #5401, 2026-11-01): they run on the bucket-to-main
-#                      landing pull request, nightly, on workflow_dispatch, and
-#                      on a member pull request labelled `journeys-full`.
+#                      NOT run on an ordinary pull request (user decision on
+#                      #5401, 2026-11-01, extended to pull requests into main
+#                      once phase 1 landed): they run on a landing pull request
+#                      (an integration branch into main), nightly, on
+#                      workflow_dispatch, and on a pull request labelled
+#                      `journeys-full`.
 #                      Planned once the tree holds a chapter contract (F6,
 #                      #5364): without one a story fails at its first chapter
 #                      by construction.
 #   story-contoso-narrow  nightly only: the Contoso story at 390x844.
-# A member pull request runs the harness and the isolated legs of the chapters
-# it touches (plus, for an Explorer area file, the chapters naming that area;
-# a shared file runs every isolated leg). The planner's docstring has the rule.
+# A member pull request, or any other pull request that is not a landing pull
+# request, runs the harness and the isolated legs of the chapters it touches
+# (plus, for an Explorer area file, the chapters naming that area; a shared
+# file runs every isolated leg). The planner's docstring has the rule.
 # `contract-conformance` is a matrix over the planner's `conformance` output,
 # so it follows the same gating as the story legs.
 # After the legs, `coverage-gate` unions every leg's coverage hits. On a body
@@ -245,15 +248,18 @@ jobs:
           fi
 
       # Its own pull-request-only step, so the plan step (which a push runs too)
-      # reads no pull-request context. No file: the planner sees no label.
-      - name: Record the pull request's labels
+      # reads no pull-request context. No file: the planner sees no label and
+      # no head branch.
+      - name: Record the pull request's labels and head branch
         if: github.event_name == 'pull_request'
         env:
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           LABEL: ${{ github.event.label.name }}
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           printf '%s' "$LABELS" > "$RUNNER_TEMP/labels.json"
           printf '%s' "$LABEL" > "$RUNNER_TEMP/label.txt"
+          printf '%s' "$HEAD_REF" > "$RUNNER_TEMP/head.txt"
 
       - name: Plan the legs
         id: plan
@@ -264,9 +270,10 @@ jobs:
         run: |
           labels=$(cat "$RUNNER_TEMP/labels.json" 2>/dev/null || true)
           label=$(cat "$RUNNER_TEMP/label.txt" 2>/dev/null || true)
+          head=$(cat "$RUNNER_TEMP/head.txt" 2>/dev/null || true)
           python3 .github/workflows/explorer-journeys-plan.py plan \
             --event "$EVENT" --action "$ACTION" --base-ref "$BASE_REF" \
-            --labels "$labels" --label "$label" \
+            --labels "$labels" --label "$label" --head-ref "$head" \
             --changed-files "$RUNNER_TEMP/changed.txt"
 
   legs:

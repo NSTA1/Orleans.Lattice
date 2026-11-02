@@ -23,6 +23,8 @@ planner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(planner)
 
 BUCKET = "test/epic/explorer-user-journeys"
+# A landing pull request's head is an integration branch; any other head is an ordinary branch.
+TOPIC = "fix/explorer-something"
 TRX_NS = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"
 
 
@@ -84,9 +86,14 @@ class PlanTests(unittest.TestCase):
         self.tree = Tree()
         self.addCleanup(self.tree.close)
 
-    def plan(self, event="pull_request", action="synchronize", base=BUCKET, changed=(), labels=(), label=""):
+    def plan(self, event="pull_request", action="synchronize", base=BUCKET, changed=(), labels=(), label="",
+             head=None):
+        if head is None:
+            # A pull request into the bucket comes from a member branch; one into anything
+            # else is a landing pull request unless a test names an ordinary head.
+            head = f"{BUCKET}-a3-item" if planner.is_integration_branch(base) else (BUCKET if base else "")
         return planner.plan(self.tree.root, event, action, base, list(changed) if changed is not None else None,
-                            list(labels), label)
+                            list(labels), label, head)
 
     EVERY = ["harness", "isolated-a1", "isolated-a10", "isolated-a3", "isolated-t2", "story-contoso",
              "story-fabrikam"]
@@ -191,7 +198,7 @@ class PlanTests(unittest.TestCase):
     def test_the_landing_pull_request_pushes_and_dispatch_run_the_full_set(self):
         cases = {
             "landing pull request": self.plan(base="main", changed=[f"{planner.JOURNEYS}/A3/x.cs"]),
-            "release pull request": self.plan(base="release/1.2", changed=["src/x.cs"]),
+            "release landing pull request": self.plan(base="release/1.2", changed=["src/x.cs"]),
             "bucket push": self.plan(event="push", action="", base=""),
             "workflow_dispatch": self.plan(event="workflow_dispatch", action="", base=""),
         }
@@ -199,6 +206,33 @@ class PlanTests(unittest.TestCase):
             with self.subTest(case=case):
                 self.assertEqual(self.EVERY, names(result))
                 self.assertEqual(["Contoso", "Fabrikam"], result["conformance"])
+
+    def test_an_ordinary_pull_request_into_main_is_gated_like_a_member(self):
+        # After phase 1 landed (#5624), only a landing pull request runs the stories: an ordinary
+        # pull request into main or a release line runs its own isolated legs, no story, no shard.
+        for base in ("main", "release/1.2"):
+            with self.subTest(base=base):
+                result = self.plan(base=base, head=TOPIC, changed=[f"{planner.JOURNEYS}/A3/A3Journey.cs"])
+                self.assertEqual(["harness", "isolated-a3"], names(result))
+                self.assertEqual([], result["conformance"])
+                self.assertTrue(any("no story leg and no contract conformance" in n for n in result["notes"]))
+                shared = self.plan(base=base, head=TOPIC, changed=["src/lattice.explorer/UI/Shell.razor"])
+                self.assertEqual(self.EVERY_ISOLATED, names(shared))
+                self.assertEqual([], shared["conformance"])
+                docs = self.plan(base=base, head=TOPIC, changed=["docs/lattice.explorer/areas.md"])
+                self.assertEqual(["harness"], names(docs))
+                self.assertEqual(self.EVERY_ISOLATED, names(self.plan(base=base, head=TOPIC, changed=None)))
+                labelled = self.plan(base=base, head=TOPIC, labels=[planner.FULL_LABEL],
+                                     changed=[f"{planner.JOURNEYS}/A3/x.cs"])
+                self.assertEqual(self.EVERY, names(labelled))
+
+    def test_only_an_integration_head_into_a_non_integration_base_is_a_landing(self):
+        self.assertTrue(planner.is_landing("pull_request", "main", BUCKET))
+        self.assertTrue(planner.is_landing("pull_request", "release/1.2", "docs/epic/guide"))
+        self.assertFalse(planner.is_landing("pull_request", "main", TOPIC))
+        self.assertFalse(planner.is_landing("pull_request", BUCKET, f"{BUCKET}-a3-item"))
+        self.assertFalse(planner.is_landing("pull_request", "main", ""))
+        self.assertFalse(planner.is_landing("push", "", BUCKET))
 
     def test_a_member_pull_request_labelled_journeys_full_runs_the_full_set(self):
         result = self.plan(changed=[f"{planner.JOURNEYS}/A3/x.cs"], labels=["ci", planner.FULL_LABEL])
@@ -333,6 +367,23 @@ class CommandLineTests(unittest.TestCase):
                     self.assertEqual(conformance, json.loads(values["conformance"]))
             self.assertEqual(1, planner_main(["plan", "--root", str(tree.root), "--event", "pull_request",
                                               "--labels", "not json"], {}))
+
+    def test_the_head_ref_argument_tells_a_landing_from_an_ordinary_pull_request_into_main(self):
+        tree = Tree()
+        self.addCleanup(tree.close)
+        with tempfile.TemporaryDirectory() as scratch:
+            changed = Path(scratch) / "changed.txt"
+            changed.write_text(f"{planner.JOURNEYS}/A3/x.cs\n")
+            for head, legs, conformance in ((BUCKET, 7, ["Contoso", "Fabrikam"]), (TOPIC, 2, []), ("", 2, [])):
+                with self.subTest(head=head):
+                    output = Path(scratch) / f"output-head-{legs}-{len(head)}"
+                    code = planner_main(["plan", "--root", str(tree.root), "--event", "pull_request", "--action",
+                                         "synchronize", "--base-ref", "main", "--head-ref", head,
+                                         "--changed-files", str(changed)], {"GITHUB_OUTPUT": str(output)})
+                    self.assertEqual(0, code)
+                    values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+                    self.assertEqual(legs, len(json.loads(values["legs"])))
+                    self.assertEqual(conformance, json.loads(values["conformance"]))
 
     def test_a_missing_changed_files_list_runs_every_isolated_leg(self):
         tree = Tree()
@@ -522,16 +573,18 @@ class WiringTests(unittest.TestCase):
         self.assertIn("schedule:", self.text)
         self.assertRegex(self.text, r"(?m)^  workflow_dispatch:")
 
-    def test_the_planner_receives_the_labels(self):
+    def test_the_planner_receives_the_labels_and_head_branch(self):
         block = job(self.text, "planner")
         record = block[block.index("- name: Record the pull request's labels"):block.index("- name: Plan the legs")]
         # Pull-request context is read only behind the event guard (CiIntegrationBranchTriggerTests).
         self.assertIn("if: github.event_name == 'pull_request'", record)
         self.assertIn("LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}", record)
         self.assertIn("LABEL: ${{ github.event.label.name }}", record)
+        self.assertIn("HEAD_REF: ${{ github.head_ref }}", record)
         plan = block[block.index("- name: Plan the legs"):]
         self.assertNotIn("github.event.pull_request", plan)
-        self.assertIn('--labels "$labels" --label "$label"', plan)
+        self.assertNotIn("github.head_ref", plan)
+        self.assertIn('--labels "$labels" --label "$label" --head-ref "$head"', plan)
         self.assertIn("conformance: ${{ steps.plan.outputs.conformance }}", block)
 
     def test_contract_conformance_is_a_matrix_over_the_plan(self):
