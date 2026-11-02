@@ -506,6 +506,18 @@ leaf-write method. If the append read the current epoch instead, a write admitte
 before the close would carry the re-claimed epoch and be accepted
 (`ReadPositionHonestStampAtAppend`).
 
+An implementation may carry an **admission mark** instead of the epoch value: the
+activation's count of hand-off closes plus one, captured in the same synchronous step
+as span admission. At dispatch, a write whose mark predates a close is refused as a
+self-fence (section 2) and re-admitted, where span admission forwards a moved key. The
+raised epoch therefore never stamps a write admitted before the close, which is all
+`ReadPositionHonestStampAtAppend` requires. It refuses fewer writes than a captured
+epoch value, because a claim or a floor-refusal bump is not a close. Mark `0` means
+"not captured" and is never carried by a stamped entry. A path that appends with mark `0`
+stamps at dispatch, so it must not append a key the initiator may have narrowed away:
+it captures its own mark before its span check, as the tx-terminal backstop does (the
+census, below).
+
 **The unstamped leaf methods stay unstamped (S3).** A write that reaches a leaf
 through an existing leaf-write method carries no routing generation: a 10.2.0 shard
 root admitted it, or a path the census missed. The leaf appends it through the
@@ -519,7 +531,8 @@ close heads and may then live-advance past anything above them, so the heads mus
 **every** record the initiator appends that the owner holds, not only those stamped before
 the bump. Three production shapes fall outside that bound unless guarded:
 - **A write admitted before the narrow but stamped after the bump.** The stamp must be
-  the epoch captured at **admission** ("Stamped at admission", above), carried to the
+  the epoch captured at **admission** ("Stamped at admission", above, which also admits
+  an admission mark), carried to the
   append. Taken at dispatch, it is the raised epoch, and the write is accepted above the
   heads (`ReadPositionHonestStampAtAppend`, 13 states).
 - **A partition whose claim was reset.** After a WAL shard restart or move resets a
@@ -560,7 +573,7 @@ from the paths that reach a leaf without shard-root admission:
 | Point, batch, CRDT apply, merge, delete | Shard root admission, then the stamped leaf-write method | Stamped with the shard's routing generation and the leaf's epoch |
 | Saga prepare | `BPlusLeafGrain.PendingTx` | Stamped at the participant's admission |
 | Stranded relocation, leaf to leaf | `BPlusLeafGrain.SpanAdmission.cs:431`, `MergeManyAsync` | Appended by the receiver: stamped with the receiver's own epoch, its own append. The donor's own earlier appends of those keys are fenced by its bump under its marker on the receiver |
-| Re-routing a terminal's stranded prepared keys, and the backstop appends | `BPlusLeafGrain.PendingTx.cs:2534`, `:2719ff` | Whichever leaf calls the append stamps with its own epoch: the sibling's re-routed appends are its own; a backstop append by the re-routing leaf for a key it no longer owns stays stamped with that leaf's epoch, under its marker on the sibling |
+| Re-routing a terminal's stranded prepared keys, and the backstop appends | `BPlusLeafGrain.PendingTx.cs:2534`, `:2719ff` | Whichever leaf calls the append stamps with its own epoch: the sibling's re-routed appends are its own; a backstop append by the re-routing leaf for a key it no longer owns stays stamped with that leaf's epoch, under its marker on the sibling. The backstop forwards keys outside its span to the owner, which appends them itself; it captures its admission mark before its span check, so a local key a split narrows away while the forwards are awaited is self-fenced and re-admitted, never appended under the raised epoch |
 | Split transfers | `BPlusLeafGrain.Split.cs`, `MergeEntriesAsync` | Appended by the sibling: stamped with the sibling's own epoch (born under the gate, it claims eagerly). The donor's pre-narrow appends of moved keys are fenced by the donor's bump under the split's marker on the sibling |
 | Adaptive split coordinator's drain | `TreeShardSplitGrain.cs:1023`, `:1037` | Under the adaptive split's shard-level marker; the donor shard's generation |
 | Bulk seeding and the resize mirror | `ShardRootGrain.BulkLoad.cs`; the resize mirror | Under the bulk switch's marker; the shard's generation |
@@ -1494,6 +1507,7 @@ Each production member carries detectors proven red. They land in this order:
 | Finding | Resolution |
 |---------|------------|
 | S2 close heads bound only appends stamped before the bump | Section 2, "What the close heads must bound": three guards, each load-bearing in the model. Stamp at admission (`StampAtAppend`), re-claim every partition claimed in the activation (new `CloseHeadUnderstated`), and no unfenced close while a stamped append may be in flight (`DrainWithoutFence`). The span re-check and receiver-own transfer argument is stated, and why it fails when the initiator's forward never happens. Production departs on all three at #5644's head, so the fix is filed as #5664, a sub-issue of #5605, which blocks member 4. |
+| #5664 (a) mechanism | Section 2, "Stamped at admission": member 2 carries an admission mark (close count plus one) and refuses at dispatch any write whose mark predates a close. Equivalent for `StampAtAppend`, with fewer spurious retries. Mark `0` is reserved for uncaptured paths. The tx-terminal backstop awaited its forwards between its span check and its local appends, so a moved local key could append under the raised epoch; it now captures its mark before the span check (census row). |
 
 ### After acceptance: member 3's review (#5646)
 
