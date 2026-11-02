@@ -183,7 +183,7 @@ public partial class BPlusLeafGrainTests
 
         await grain.SetAsync("z", Encoding.UTF8.GetBytes("vz"));
 
-        await successor.Received(1).SetAsync("z", Arg.Any<byte[]>());
+        await successor.Received(1).SetAsync("z", Arg.Any<byte[]>(), Arg.Any<long>());
         Assert.That(await grain.NarrowHighKeyAsync("m"), Is.Empty, "the write was forwarded, not stored here");
     }
 }
