@@ -1536,7 +1536,7 @@
       },
       "idempotency": {
         "idempotent": true,
-        "basis": "A missing backup returns false; a delete interrupted after its catalog row was removed is completed by a retry, which reads the backup from its surviving sink manifest.",
+        "basis": "False means nothing was deleted: the backup did not exist, or a capture or catalog rebuild listed it again while the delete ran and it was kept; re-read it and delete again if it is still listed. A delete interrupted after its catalog row was removed is completed by a retry, which reads the backup from its surviving sink manifest.",
         "source": "src/lattice.api.backup/LatticeBackupControl.cs#LatticeBackupControl.DeleteBackupAsync"
       },
       "concurrency": {
