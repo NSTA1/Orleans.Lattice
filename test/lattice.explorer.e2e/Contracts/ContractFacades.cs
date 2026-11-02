@@ -80,6 +80,9 @@ public sealed class ContractFacades
     /// <summary>Runtime replication enrolment.</summary>
     public LatticeReplicationApiGrpcClient Replication => LatticeReplicationApiGrpcClient.Create(_invoker, JourneyEstate.Serialization);
 
+    /// <summary>Per-peer replication link status.</summary>
+    public LatticeReplicationStatusGrpcClient ReplicationStatus => LatticeReplicationStatusGrpcClient.Create(_invoker, JourneyEstate.Serialization);
+
     /// <summary>App install, lifecycle, consent and role bindings.</summary>
     public LatticeAppsApiGrpcClient Apps => LatticeAppsApiGrpcClient.Create(_invoker, JourneyEstate.Serialization);
 
