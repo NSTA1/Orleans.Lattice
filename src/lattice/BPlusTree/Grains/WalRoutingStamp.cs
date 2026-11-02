@@ -19,6 +19,17 @@ internal readonly record struct WalRoutingStamp(
     [property: Id(0)] WalRoutingInitiator Initiator,
     [property: Id(1)] long Generation)
 {
+    /// <summary>
+    /// The receiving leaf's count of hand-off closes when it admitted the write, plus
+    /// one; 0 when not captured (#5664 (a)). Set only by the leaf itself, at the entry of
+    /// a stamped write method and before its span admission, and reset there for every
+    /// call: a value received from another grain is never used. A write dispatched after
+    /// a close it was admitted before is self-fenced and re-admitted, so a donor's write
+    /// admitted before its split narrowed is never appended above the close's heads.
+    /// </summary>
+    [Id(2)]
+    public long AdmissionMark { get; init; }
+
     /// <summary>No routing stamp.</summary>
     public static WalRoutingStamp None => default;
 

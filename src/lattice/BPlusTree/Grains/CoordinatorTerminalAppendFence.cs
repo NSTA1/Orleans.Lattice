@@ -95,6 +95,9 @@ internal sealed class CoordinatorTerminalAppendFence : ILeafAppendFence
     public void OnUnloaded(int partition, WalAppendStamp stamp) => CloseGateView();
 
     /// <inheritdoc />
+    public LeafRetiredException? OnAdmitted(long admissionMark) => null;
+
+    /// <inheritdoc />
     public LeafRetiredException OnStale(WalAppendStamp stamp)
     {
         // Unreachable: the terminal class is never checked against an entry.

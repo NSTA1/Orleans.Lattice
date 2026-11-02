@@ -214,6 +214,81 @@ public sealed partial class LeafAppendEpochFenceTests
     }
 
     [Test]
+    public async Task A_write_admitted_before_a_hand_off_close_and_dispatched_after_it_is_self_fenced_not_appended()
+    {
+        // #5664 (a): the stamp is decided at admission. A write admitted before the
+        // donor's split narrowed must not reach the WAL under the close's raised epoch,
+        // where it would be allocated above the heads the close records.
+        var h = new Harness();
+        await h.Fence.StampForAsync(h.Shard, partition: 0, CancellationToken.None);
+        var admittedBefore = WalRoutingStamp.None with { AdmissionMark = h.Fence.HandOffCloses + 1 };
+        await h.Fence.BumpAndReclaimAsync(_ => h.Shard, partitionCount: 1, CancellationToken.None);
+        var admittedAfter = WalRoutingStamp.None with { AdmissionMark = h.Fence.HandOffCloses + 1 };
+        h.Shard.AppendStampedAsync(Arg.Any<WalRecord>(), Arg.Any<WalAppendStamp>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new WalStampedAppendResult(9, -1, WalAppendFenceOutcome.Admitted)));
+
+        var refused = Assert.ThrowsAsync<Orleans.Lattice.LeafRetiredException>(async () =>
+            await WalFencedAppendDispatch.AppendPointAsync(
+                h.Shard, new WalRecord(), batched: false, partition: 0, h.Fence, admittedBefore, waitForDeadline: false, CancellationToken.None));
+        await h.Shard.DidNotReceiveWithAnyArgs().AppendStampedAsync(default!, default, default);
+        var appended = await WalFencedAppendDispatch.AppendPointAsync(
+            h.Shard, new WalRecord(), batched: false, partition: 0, h.Fence, admittedAfter, waitForDeadline: false, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(refused!.ActivationSuperseded, Is.True, "refused with the shape every seam re-admits");
+            Assert.That(h.Fence.IsStale, Is.False, "a self-fence, not a supersession");
+            Assert.That(h.Superseded, Is.Empty);
+            Assert.That(appended, Is.EqualTo(9), "the re-admitted write appends under the raised epoch");
+            Assert.That(h.Fence.OnAdmitted(0), Is.Null, "a write whose admission was not captured is stamped at dispatch");
+        });
+    }
+
+    [Test]
+    public async Task A_hand_off_close_re_claims_a_partition_whose_claim_a_wal_shard_restart_reset()
+    {
+        // #5664 (b): the activation stamped appends at partition 1, then the partition
+        // restarted and an unloaded rejection reset the claim. The close must still
+        // record partition 1's real head, never -1.
+        var h = new Harness();
+        var second = Substitute.For<IWalShardGrain>();
+        h.Shard.ClaimAppendEpochAsync(Leaf, Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(WalAppendFenceClaimResult.Accept(17)));
+        second.ClaimAppendEpochAsync(Leaf, Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(WalAppendFenceClaimResult.Accept(29)));
+        await h.Fence.StampForAsync(h.Shard, partition: 0, CancellationToken.None);
+        var stamped = await h.Fence.StampForAsync(second, partition: 1, CancellationToken.None);
+        h.Fence.OnUnloaded(1, stamped!.Value);
+
+        var heads = await h.Fence.BumpAndReclaimAsync(p => p == 0 ? h.Shard : second, partitionCount: 3, CancellationToken.None);
+
+        Assert.That(heads, Is.EqualTo(new long[] { 17, 29, -1 }),
+            "a partition claimed in this activation is re-claimed even after its claim was reset; -1 only where it never claimed");
+        await second.Received(1).ClaimAppendEpochAsync(Leaf, 2, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task A_hand_off_close_with_the_gate_view_closed_after_stamping_leaves_the_marker_open()
+    {
+        // #5664 (c): a stamped append may still be in flight, and the close cannot bump,
+        // so it must not return unfenced heads for the caller to close the marker on.
+        var h = new Harness();
+        await h.Fence.StampForAsync(h.Shard, partition: 0, CancellationToken.None);
+        h.Fence.OnClaimsExhausted();
+
+        Assert.ThrowsAsync<InvalidOperationException>(
+            () => h.Fence.BumpAndReclaimAsync(_ => h.Shard, partitionCount: 1, CancellationToken.None));
+
+        var neverStamped = new Harness();
+        neverStamped.Gate.IsOpen = false;
+        Assert.That(
+            await neverStamped.Fence.BumpAndReclaimAsync(_ => neverStamped.Shard, partitionCount: 1, CancellationToken.None),
+            Is.Null,
+            "only an activation that never stamped closes on unfenced heads");
+        Assert.That(h.Superseded, Is.Empty);
+    }
+
+    [Test]
     public async Task A_current_epoch_append_rejected_as_stale_still_supersedes()
     {
         var h = new Harness();

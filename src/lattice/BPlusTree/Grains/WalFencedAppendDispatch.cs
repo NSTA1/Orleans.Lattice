@@ -70,6 +70,13 @@ internal static class WalFencedAppendDispatch
         for (var attempt = 0; ; attempt++)
         {
             var leafStamp = await fence.StampForAsync(grain, partition, cancellationToken).ConfigureAwait(false);
+            if (leafStamp is not null && !routing.ForcesUnstamped && fence.OnAdmitted(routing.AdmissionMark) is { } admittedBeforeClose)
+            {
+                // #5664 (a): admitted before a hand-off close this activation has since
+                // made; never appended under the raised epoch.
+                throw admittedBeforeClose;
+            }
+
             if (leafStamp is null || routing.ForcesUnstamped)
             {
                 long offset;
@@ -150,6 +157,13 @@ internal static class WalFencedAppendDispatch
         for (var attempt = 0; ; attempt++)
         {
             var leafStamp = await fence.StampForAsync(grain, partition, cancellationToken).ConfigureAwait(false);
+            if (leafStamp is not null && !routing.ForcesUnstamped && fence.OnAdmitted(routing.AdmissionMark) is { } admittedBeforeClose)
+            {
+                // #5664 (a): admitted before a hand-off close this activation has since
+                // made; never appended under the raised epoch.
+                throw admittedBeforeClose;
+            }
+
             if (leafStamp is null || routing.ForcesUnstamped)
             {
                 var offsets = await Bound(grain.AppendBatchAsync(entries, cancellationToken), waitForDeadline, cancellationToken).ConfigureAwait(false);

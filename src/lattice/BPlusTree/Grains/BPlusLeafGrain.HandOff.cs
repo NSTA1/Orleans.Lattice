@@ -48,8 +48,12 @@ internal sealed partial class BPlusLeafGrain
     /// leaf-to-leaf hand-off passes for a write the receiver appends and applies as its
     /// own (the design owner's answer Q2). A stamped method is called only by new code;
     /// a write reaching the leaf through an existing method appends unstamped (S3).
+    /// Evaluated synchronously at the method's entry, before its span admission, it
+    /// captures this activation's hand-off closes (#5664 (a)); a value carried from the
+    /// caller is replaced.
     /// </summary>
-    private static WalRoutingStamp StampedRouting(WalRoutingStamp routing) => routing;
+    private WalRoutingStamp StampedRouting(WalRoutingStamp routing) =>
+        routing with { AdmissionMark = _appendFence is { } fence ? fence.HandOffCloses + 1 : 0 };
 
     /// <summary>
     /// Appends <paramref name="entry"/> under <paramref name="routing"/>: the leaf's

@@ -1605,6 +1605,19 @@ the sibling, without the donor deactivating. The refusal has the same wire shape
 a superseded activation's, which every caller and an older shard root already retry.
 The close's epoch raise and a raise after a floor refusal are one write: whichever
 starts second joins the first, so the two never conflict on the activation's own row.
+
+The close's heads bound every append the donor makes under its old epoch
+([#5664](https://github.com/NSTA1/Orleans.Lattice/issues/5664)):
+
+- **Admission decides the stamp.** A write is admitted against the donor's hand-off
+  closes, before its span check. If a close happens before the write reaches the WAL,
+  the write is self-fenced and re-admitted, rather than stamped with the raised epoch.
+- **Every partition is re-claimed.** The close re-claims at every partition the
+  activation claimed, including one whose claim a WAL shard restart reset. It records
+  no head (`-1`) only for a partition the activation never claimed.
+- **No fence, no close.** If the activation's view of the gate is closed after it has
+  stamped, the close cannot raise its epoch. The marker stays open until a later
+  close can.
 The same rule stops a leaf from deactivating itself after it raises its epoch above
 a retired floor ([#5643](https://github.com/NSTA1/Orleans.Lattice/issues/5643)).
 
@@ -1651,8 +1664,8 @@ The per-tree rows - each shard root's `_lattice_shard-handoff` marker, each
 partition's `_lattice_wal-routing-generation` entries for the shard roots and the
 range-delete fence, and the range-delete fence grain's own state - are not deleted
 when the tree is deleted or purged. They are bounded by the tree's shards times its
-partitions, and their sweep is tracked with the fence's other rows in
-[#5634](https://github.com/NSTA1/Orleans.Lattice/issues/5634).
+partitions, and their sweep is tracked in
+[#5668](https://github.com/NSTA1/Orleans.Lattice/issues/5668), alongside the fence's other rows in [#5634](https://github.com/NSTA1/Orleans.Lattice/issues/5634).
 
 The hand-off counters are `orleans.lattice.wal.append_fence.handoff_markers`,
 `.unstamped_appends` and `.self_fenced`; see [Metrics](metrics.md).
