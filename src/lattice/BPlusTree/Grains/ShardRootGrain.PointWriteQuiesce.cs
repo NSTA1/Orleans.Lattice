@@ -248,8 +248,7 @@ internal sealed partial class ShardRootGrain
     {
         var slot = (int)(_batchWriteEpoch & 1);
         _batchWriteEpoch++;
-        // RED-PROOF S1: the drain waits for nothing.
-        while (_batchWritesInFlightByEpoch[slot] < 0)
+        while (_batchWritesInFlightByEpoch[slot] > 0)
         {
             _batchEpochDrained ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             await _batchEpochDrained.Task;

@@ -213,8 +213,7 @@ internal sealed partial class ShardRootGrain
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             var stats = await leaf.GetStatsAsync();
-            // RED-PROOF M5: the replaced root's rows are not merged.
-            if (stats.LiveKeys < 0)
+            if (stats.LiveKeys != 0 || stats.Tombstones != 0)
             {
                 var delta = await leaf.GetDeltaSinceAsync(new VersionVector());
                 if (delta.Entries.Count > 0)
@@ -752,9 +751,8 @@ internal sealed partial class ShardRootGrain
         var redelivery = true;
         for (var i = 0; i < belowEdge && redelivery; i++)
         {
-            // RED-PROOF B2: re-delivery judged by key presence alone.
             redelivery = rows.TryGetValue(sortedEntries[i].Key, out var held)
-                && (true || HoldsIdentically(held, sortedEntries[i].Value));
+                && HoldsIdentically(held, sortedEntries[i].Value);
         }
 
         if (redelivery)
@@ -763,14 +761,9 @@ internal sealed partial class ShardRootGrain
             return (belowEdge, clock, false);
         }
 
-        // RED-PROOF M1: refuse a below-edge chunk that holds nothing.
-        if (rows.Count == 0)
-            throw new InvalidOperationException("RED-PROOF M1: below-edge chunk refused");
         var batch = new Dictionary<string, LwwValue<byte[]>>(belowEdge, StringComparer.Ordinal);
         for (var i = 0; i < belowEdge; i++)
         {
-            // RED-PROOF M2: skip held keys, merge only the rest.
-            if (rows.ContainsKey(sortedEntries[i].Key)) continue;
             clock = HybridLogicalClock.Tick(clock);
             batch[sortedEntries[i].Key] = LwwValue<byte[]>.Create(sortedEntries[i].Value, clock);
         }
@@ -1005,8 +998,9 @@ internal sealed partial class ShardRootGrain
         {
             // The gate is closed, but a first attempt with it open may have
             // narrowed the leaf already; its stranded rows must still be moved.
-            // RED-PROOF B1-gate: a resume with the gate closed abandons narrowed rows.
-            return;
+            var high = (await existingLeaf.GetKeyRangeAndNextSiblingAsync()).KeyRange.HighKeyExclusive;
+            if (high is null || string.CompareOrdinal(high, separator) > 0)
+                return;
         }
 
         List<LwwEntry>? stranded;
@@ -1024,14 +1018,14 @@ internal sealed partial class ShardRootGrain
         if (stranded is not { Count: > 0 })
             return;
 
+        await RelocateIntoGraftedLeavesAsync(graft, stranded);
+
         var relocated = new Dictionary<string, HybridLogicalClock>(stranded.Count, StringComparer.Ordinal);
         foreach (var row in stranded)
             relocated[row.Key] = row.Timestamp;
         try
         {
-            // RED-PROOF B1: the rows are dropped before they are delivered.
             await existingLeaf.DropRelocatedRowsAsync(relocated);
-            await RelocateIntoGraftedLeavesAsync(graft, stranded);
         }
         catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
         {
@@ -1049,10 +1043,16 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task<(bool Seams, int LiveCount, string? RightEdge)> ReadAppendTailAsync(IBPlusLeafGrain leaf)
     {
-        // RED-PROOF M6: the gate is ignored. RED-PROOF N2: an unknown-method fault is not caught.
+        if (BulkGraftSeamsAvailable)
         {
-            var (count, edge) = await leaf.GetAppendTailAsync();
-            return (true, count, edge);
+            try
+            {
+                var (count, edge) = await leaf.GetAppendTailAsync();
+                return (true, count, edge);
+            }
+            catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
+            {
+            }
         }
 
         return (false, await leaf.CountAsync(), null);
@@ -1076,8 +1076,7 @@ internal sealed partial class ShardRootGrain
             // or above the first, so the owner is the last leaf whose separator is
             // at or below the row's key.
             var owner = graft.NewLeaves[0].LeafId;
-            // RED-PROOF M4: every row to the first appended leaf.
-            for (var i = 1; i < 0; i++)
+            for (var i = 1; i < graft.NewLeaves.Count; i++)
             {
                 if (string.CompareOrdinal(row.Key, graft.NewLeaves[i].SeparatorKey) < 0)
                     break;

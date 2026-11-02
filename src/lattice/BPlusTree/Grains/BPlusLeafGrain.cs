@@ -2933,8 +2933,7 @@ internal sealed partial class BPlusLeafGrain(
             // here then forwards to the leaf that declares it from the moment this
             // leaf stops declaring it, instead of failing open onto this leaf
             // outside its span, where no read reaches it.
-            // RED-PROOF S2: the successor is not linked with the narrow.
-            var link = nextSibling is { } next && !Equals(prevNext, next) && false;
+            var link = nextSibling is { } next && !Equals(prevNext, next);
             if (narrow || link)
             {
                 if (narrow)
@@ -2961,11 +2960,7 @@ internal sealed partial class BPlusLeafGrain(
             // fails, or a shard root that dies before it, loses nothing: the
             // re-driven graft is handed the same rows again. Outside the declared
             // span they are invisible to range-routed reads in the meantime.
-            // RED-PROOF M3: the narrow removes the rows it hands back.
-            var copied = CopyRowsAtOrAbove(state.State.HighKeyExclusive!);
-            foreach (var row in copied)
-                RemoveEntry(row.Key);
-            return copied;
+            return CopyRowsAtOrAbove(state.State.HighKeyExclusive!);
         }
         finally
         {
@@ -2989,8 +2984,9 @@ internal sealed partial class BPlusLeafGrain(
             var dropped = false;
             foreach (var (key, stamp) in relocated)
             {
-                // RED-PROOF drop: span and stamp are ignored.
-                if (Cache.TryGetRow(key, out var current))
+                if (!DeclaresKey(key)
+                    && Cache.TryGetRow(key, out var current)
+                    && current.Timestamp == stamp)
                 {
                     RemoveEntry(key);
                     dropped = true;
