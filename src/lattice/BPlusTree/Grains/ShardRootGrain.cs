@@ -2137,15 +2137,30 @@ internal sealed partial class ShardRootGrain(
         var scan = BeginScanPage(nameof(DeleteRangeBoundedAsync));
         return GuardScanPageAsync(
             scan,
-            DeleteRangeBoundedCoreAsync(startInclusive, endExclusive, predicate, scan));
+            DeleteRangeBoundedCoreAsync(startInclusive, endExclusive, predicate, scan, ticket: null));
+    }
+
+    /// <inheritdoc />
+    public Task<ShardRangeDeletePage> DeleteRangeBoundedStampedAsync(
+        string startInclusive,
+        string endExclusive,
+        LatticePredicateNode? predicate,
+        RangeDeleteFenceTicket ticket)
+    {
+        var scan = BeginScanPage(nameof(DeleteRangeBoundedStampedAsync));
+        return GuardScanPageAsync(
+            scan,
+            DeleteRangeBoundedCoreAsync(startInclusive, endExclusive, predicate, scan, ticket.Generation > 0 ? ticket : null));
     }
 
     private async Task<ShardRangeDeletePage> DeleteRangeBoundedCoreAsync(
         string startInclusive,
         string endExclusive,
         LatticePredicateNode? predicate,
-        ScanPageWalk scan)
+        ScanPageWalk scan,
+        RangeDeleteFenceTicket? ticket)
     {
+        var fencedWalk = ticket is not null;
         EnsureInternalOrigin(LatticeOperation.RangeDelete);
         ThrowIfShuttingDown();
         if (!await PrepareForReadAsync()) return new ShardRangeDeletePage();
@@ -2217,8 +2232,32 @@ internal sealed partial class ShardRootGrain(
             {
                 try
                 {
-                    page = await leafGrain.DeleteRangeAndNextSiblingAsync(startInclusive, endExclusive, predicate);
+                    // Epic #5605, member 2: a fenced walk stamps the leaf's record with
+                    // the tree's range-delete generation its intent handed out, trusted
+                    // as given; an unfenced walk goes through the existing method and is
+                    // appended unstamped (B2).
+                    page = ticket is { } fenced
+                        ? await leafGrain.DeleteRangeAndNextSiblingStampedAsync(
+                            startInclusive, endExclusive, predicate, WalRoutingStamp.ForTreeRangeDelete(fenced.Generation))
+                        : await leafGrain.DeleteRangeAndNextSiblingAsync(startInclusive, endExclusive, predicate);
+                    if (ticket is null && page.Result.Deleted > 0)
+                    {
+                        RecordUnfencedRangeDeleteAppend(fencedWalk
+                            ? LatticeMetrics.UnstampedSourceRangeDeletePastIntent
+                            : LatticeMetrics.UnstampedSourceRangeDeleteUnfenced);
+                    }
+
                     break;
+                }
+                catch (WalRoutingGenerationStaleException) when (ticket is { } rejected)
+                {
+                    // The intent's generation was re-claimed by a close. Re-stamp only
+                    // under this walk's own intent (rule 3); once it has closed, go on
+                    // unstamped, as 10.2.0 would. Nothing was applied by the rejected call.
+                    var current = await grainFactory
+                        .GetGrain<ITreeRangeDeleteFenceGrain>(TreeId)
+                        .GetOpenIntentGenerationAsync(rejected.IntentId);
+                    ticket = current is { } generation ? rejected with { Generation = generation } : null;
                 }
                 catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
                 {

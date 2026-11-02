@@ -11484,4 +11484,94 @@ public static class LatticeMetrics
     public static readonly Counter<long> BulkRelocatedRows =
         Meter.CreateCounter<long>("orleans.lattice.shard_root.bulk.relocated_rows", unit: "{row}",
             description: "Rows a bulk load or bulk append placed outside the leaves it created (issues #5610 and #5642), by tree and source: below_edge (appended entries at or below rows the shard already held, merged last-writer-wins), rightmost_leaf (rows the old rightmost leaf held in the appended range) or replaced_root (rows a batch write stored on the root a bulk load replaced).");
+
+    /// <summary>
+    /// Tag key for the source of an append that went unstamped by design, on
+    /// <see cref="WalAppendFenceUnstampedAppends"/> (epic #5605, member 2).
+    /// </summary>
+    public const string TagUnstampedSource = "source";
+
+    /// <summary>
+    /// <see cref="TagUnstampedSource"/> value: a record sent under the
+    /// coordinator-terminal stamp class that is not a <c>TxCommit</c> or
+    /// <c>TxAbort</c>, which the WAL shard admitted unstamped and reported.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> UnstampedSourceTerminalClassMisuse = new(TagUnstampedSource, "terminal_class_misuse");
+
+    /// <summary>
+    /// <see cref="TagUnstampedSource"/> value: a range-delete walk that reached a
+    /// shard root through the existing, unfenced method (replication apply, a resize
+    /// or reshard shadow forward, a fan-out begun while the gate was closed, or an
+    /// older-build caller), appended unstamped by design.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> UnstampedSourceRangeDeleteUnfenced = new(TagUnstampedSource, "range_delete_unfenced");
+
+    /// <summary>
+    /// <see cref="TagUnstampedSource"/> value: a fenced range-delete walk whose
+    /// stamped append was rejected after its own intent closed (a walk outliving
+    /// its intent's deadline, such as a long paged drain), so it went on unstamped.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> UnstampedSourceRangeDeletePastIntent = new(TagUnstampedSource, "range_delete_past_intent");
+
+    /// <summary>
+    /// Counter of WAL appends that went unstamped by design while the append-fence
+    /// gate was open (epic #5605, member 2), tagged with <see cref="TagTree"/>, the
+    /// tenant and <see cref="TagUnstampedSource"/>. Each raises its partition's
+    /// unstamped watermark, so every leaf that later arms on that partition first
+    /// replays past it: a tail replay, never one from the log's start. The rate
+    /// makes that cost observable per source (design note, behaviour change 7).
+    /// </summary>
+    public static readonly Counter<long> WalAppendFenceUnstampedAppends =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.unstamped_appends", unit: "{append}",
+            description: "WAL appends that went unstamped by design while the append-fence gate was open (epic #5605), by tree and source; each makes leaves on its partition replay past it before they arm.");
+
+    /// <summary><see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a leaf split onto its sibling.</summary>
+    public const string HandOffKindSplit = "split";
+
+    /// <summary><see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a leaf reclaim onto its survivor.</summary>
+    public const string HandOffKindReclaim = "reclaim";
+
+    /// <summary><see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: an adaptive split onto its target shard.</summary>
+    public const string HandOffKindAdaptiveSplit = "adaptive_split";
+
+    /// <summary><see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a shard fold onto its survivor shard.</summary>
+    public const string HandOffKindFold = "fold";
+
+    /// <summary><see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a tree range delete's intent.</summary>
+    public const string HandOffKindRangeDelete = "range_delete";
+
+    /// <summary><see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a bulk load or append's switch.</summary>
+    public const string HandOffKindBulk = "bulk";
+
+    /// <summary><see cref="TagOutcome"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a hand-off marker opened.</summary>
+    public static readonly KeyValuePair<string, object?> HandOffMarkerOpened = new(TagOutcome, "opened");
+
+    /// <summary><see cref="TagOutcome"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a hand-off marker closed by its fence.</summary>
+    public static readonly KeyValuePair<string, object?> HandOffMarkerClosed = new(TagOutcome, "closed");
+
+    /// <summary>
+    /// Counter of hand-off markers opened and closed (epic #5605, member 2), tagged
+    /// with <see cref="TagTree"/>, the tenant, <see cref="TagKind"/> (<c>split</c>,
+    /// <c>reclaim</c>, <c>adaptive_split</c>, <c>fold</c>, <c>range_delete</c> or
+    /// <c>bulk</c>) and <see cref="TagOutcome"/> (<c>opened</c> or <c>closed</c>). An
+    /// open marker holds the owners it covers on the replay-based advance until its
+    /// close's fence returns heads they replay to; opened minus closed is the number
+    /// in flight, and a gap that does not close means a hand-off whose recovery has not
+    /// re-driven its close.
+    /// </summary>
+    public static readonly Counter<long> WalAppendFenceHandOffMarkers =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.handoff_markers", unit: "{marker}",
+            description: "Hand-off markers opened and closed by their fence (epic #5605), by tree, kind (split, reclaim, adaptive_split, fold, range_delete, bulk) and outcome (opened or closed).");
+
+    /// <summary>Records one hand-off marker of <paramref name="kind"/> opened or closed on <paramref name="treeId"/>.</summary>
+    internal static void RecordHandOffMarker(string kind, bool opened, string treeId) =>
+        WalAppendFenceHandOffMarkers.Add(
+            1,
+            new System.Diagnostics.TagList
+            {
+                new KeyValuePair<string, object?>(TagTree, treeId),
+                LatticeTenantLabel.ForTree(treeId),
+                new KeyValuePair<string, object?>(TagKind, kind),
+                opened ? HandOffMarkerOpened : HandOffMarkerClosed,
+            });
 }

@@ -2312,11 +2312,39 @@ internal sealed partial class BPlusLeafGrain(
     /// <inheritdoc />
     public async Task<LeafRangeDeletePage> DeleteRangeAndNextSiblingAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
     {
-        var result = await DeleteRangeAsync(startInclusive, endExclusive, predicate);
+        var result = await DeleteRangeCoreAsync(startInclusive, endExclusive, predicate, WalRoutingStamp.Unstamped);
         return new LeafRangeDeletePage { Result = result, NextSibling = state.State.NextSibling, KeyRange = CurrentKeyRange() };
     }
 
-    public async Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
+    /// <inheritdoc />
+    public async Task<LeafRangeDeletePage> DeleteRangeAndNextSiblingStampedAsync(
+        string startInclusive,
+        string endExclusive,
+        LatticePredicateNode? predicate,
+        WalRoutingStamp routing)
+    {
+        // Epic #5605, member 2: a fenced range-delete walk carries the tree's
+        // range-delete generation from its open intent; the record is appended under
+        // it, so the intent's close fences it. A walk with no generation goes
+        // unstamped, as through the existing method.
+        var result = await DeleteRangeCoreAsync(
+            startInclusive, endExclusive, predicate, routing.IsSet ? routing : WalRoutingStamp.Unstamped);
+        return new LeafRangeDeletePage { Result = result, NextSibling = state.State.NextSibling, KeyRange = CurrentKeyRange() };
+    }
+
+    public Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null) =>
+        // Epic #5605, member 2 (S3, B2): a range delete reaching the leaf through an
+        // existing method was admitted under no range-delete fence (replication
+        // apply, a shadow forward, a gate-spanning fan-out, an older-build caller),
+        // so its record is appended unstamped and reported, never under the leaf's
+        // epoch alone.
+        DeleteRangeCoreAsync(startInclusive, endExclusive, predicate, WalRoutingStamp.Unstamped);
+
+    private async Task<RangeDeleteResult> DeleteRangeCoreAsync(
+        string startInclusive,
+        string endExclusive,
+        LatticePredicateNode? predicate,
+        WalRoutingStamp routing)
     {
         // Fast-path eligibility is a property of the predicate tree alone, so it
         // is loop-invariant across every row this call folds. Resolve it once
@@ -2396,7 +2424,9 @@ internal sealed partial class BPlusLeafGrain(
                 endExclusive,
                 tombstone,
                 predicate is null ? null : keysToDelete);
-            await writer.AppendAsync(entry);
+            await (writer is IRoutingStampedCommitLogWriter routed
+                ? routed.AppendAsync(entry, routing, CancellationToken.None)
+                : writer.AppendAsync(entry));
         }
         RecordCommitStep("wal", walStartTicks);
 

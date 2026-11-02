@@ -59,6 +59,12 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
     /// <summary>Waiters for a leaf's multi-entry stamped batches to finish assigning; created on demand.</summary>
     private Dictionary<Guid, TaskCompletionSource>? _batchDrains;
 
+    /// <summary>
+    /// Waiters for an initiator's multi-entry generation-stamped batches to finish
+    /// assigning (member 2, Q4); created on demand.
+    /// </summary>
+    private Dictionary<WalRoutingInitiator, TaskCompletionSource>? _generationBatchDrains;
+
     /// <summary>Per-leaf claim/retirement gates; created on the first claim.</summary>
     private Dictionary<Guid, LeafGate>? _leafGates;
     private SemaphoreSlim?[]? _directoryGates;
@@ -121,7 +127,8 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
                 leafId,
                 epoch,
                 useFloor: true,
-                batchLeaf: leafId).ConfigureAwait(true);
+                batchLeaf: leafId,
+                batchInitiator: null).ConfigureAwait(true);
         }
         finally
         {
@@ -141,7 +148,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
         cancellationToken.ThrowIfCancellationRequested();
         EnsureInternalOrigin(LatticeOperation.Write);
         EnsureInitialized();
-        if (!initiator.IsSet)
+        if (!initiator.IsSet || initiator.Kind == WalRoutingInitiatorKind.CoordinatorTerminal)
         {
             throw new ArgumentException("A routing generation is claimed for a named initiator.", nameof(initiator));
         }
@@ -161,7 +168,8 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
             initiator,
             generation,
             useFloor: false,
-            batchLeaf: null).ConfigureAwait(true);
+            batchLeaf: null,
+            batchInitiator: initiator).ConfigureAwait(true);
         RecordFenceClaim(LatticeMetrics.AppendFenceKindGeneration, result.Accepted);
         return result;
     }
@@ -348,6 +356,14 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
     /// </summary>
     private WalAppendFenceOutcome AdmitStampLocked(in WalAppendStamp stamp)
     {
+        if (stamp.IsCoordinatorTerminal)
+        {
+            // Member 2: a coordinator's saga terminal is authored by no leaf, so no
+            // entry is checked; whether it raises the watermark is decided per record
+            // at allocation (RaisesUnstampedWatermark).
+            return WalAppendFenceOutcome.Admitted;
+        }
+
         if (_epochEntries is null
             || !_epochEntries.TryGetValue(stamp.LeafId, out var entry)
             || entry.Memory == WalAppendFenceCore.Unloaded)
@@ -397,7 +413,8 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
         TId id,
         long value,
         bool useFloor,
-        Guid? batchLeaf)
+        Guid? batchLeaf,
+        WalRoutingInitiator? batchInitiator)
         where TId : notnull
     {
         for (var attempt = 1; ; attempt++)
@@ -447,9 +464,10 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
                 }
             }
 
-            // The raise waits out any multi-entry stamped batch of this leaf that is
-            // still assigning offsets, so it never falls between two of its entries
-            // and leaves the batch partially admitted.
+            // The raise waits out any multi-entry stamped batch of this leaf, or carrying
+            // this initiator's generation (member 2, Q4), that is still assigning
+            // offsets, so it never falls between two of its entries and leaves the batch
+            // partially admitted above the head it returns.
             while (true)
             {
                 Task? drain = null;
@@ -458,6 +476,10 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
                     if (batchLeaf is { } leaf)
                     {
                         drain = BatchDrainLocked(leaf);
+                    }
+                    else if (batchInitiator is { } batchedFor)
+                    {
+                        drain = GenerationBatchDrainLocked(batchedFor);
                     }
 
                     if (drain is null)
@@ -486,37 +508,84 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
     /// offsets. Called under <see cref="_stateGate"/> in the step that admitted its
     /// first entry; no allocation.
     /// </summary>
-    private void RegisterStampedBatchLocked(Guid leafId)
+    private void RegisterStampedBatchLocked(in WalAppendStamp stamp)
     {
-        var entry = _epochEntries![leafId];
+        var entry = _epochEntries![stamp.LeafId];
         entry.InFlightBatches++;
-        _epochEntries[leafId] = entry;
+        _epochEntries[stamp.LeafId] = entry;
+        if (stamp.Initiator.IsSet)
+        {
+            // Admission found the initiator's entry loaded in this same step.
+            var generation = _generationEntries![stamp.Initiator];
+            generation.InFlightBatches++;
+            _generationEntries[stamp.Initiator] = generation;
+        }
     }
 
     /// <summary>
-    /// Ends a multi-entry stamped batch of <paramref name="leafId"/> once it has
-    /// assigned or rejected every entry, releasing a raise or retirement waiting
-    /// for it.
+    /// Ends a multi-entry stamped batch once it has assigned or rejected every
+    /// entry, releasing a raise or retirement waiting for it on the leaf, and a
+    /// generation re-claim waiting for it on its initiator.
     /// </summary>
-    private void ReleaseStampedBatch(Guid leafId)
+    private void ReleaseStampedBatch(in WalAppendStamp stamp)
     {
+        var leafId = stamp.LeafId;
         TaskCompletionSource? drained = null;
+        TaskCompletionSource? generationDrained = null;
         lock (_stateGate)
         {
+            if (stamp.Initiator.IsSet
+                && _generationEntries is not null
+                && _generationEntries.TryGetValue(stamp.Initiator, out var generation))
+            {
+                generation.InFlightBatches--;
+                _generationEntries[stamp.Initiator] = generation;
+                if (generation.InFlightBatches <= 0)
+                {
+                    _generationBatchDrains?.Remove(stamp.Initiator, out generationDrained);
+                }
+            }
+
+            var leafDone = true;
             if (_epochEntries is not null && _epochEntries.TryGetValue(leafId, out var entry))
             {
                 entry.InFlightBatches--;
                 _epochEntries[leafId] = entry;
-                if (entry.InFlightBatches > 0)
-                {
-                    return;
-                }
+                leafDone = entry.InFlightBatches <= 0;
             }
 
-            _batchDrains?.Remove(leafId, out drained);
+            if (leafDone)
+            {
+                _batchDrains?.Remove(leafId, out drained);
+            }
         }
 
         drained?.TrySetResult();
+        generationDrained?.TrySetResult();
+    }
+
+    /// <summary>
+    /// A task that completes when <paramref name="initiator"/> has no multi-entry
+    /// generation-stamped batch assigning offsets, or <see langword="null"/> when it
+    /// has none now. Called under <see cref="_stateGate"/>.
+    /// </summary>
+    private Task? GenerationBatchDrainLocked(WalRoutingInitiator initiator)
+    {
+        if (_generationEntries is null
+            || !_generationEntries.TryGetValue(initiator, out var entry)
+            || entry.InFlightBatches <= 0)
+        {
+            return null;
+        }
+
+        _generationBatchDrains ??= new Dictionary<WalRoutingInitiator, TaskCompletionSource>();
+        if (!_generationBatchDrains.TryGetValue(initiator, out var drained))
+        {
+            drained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _generationBatchDrains[initiator] = drained;
+        }
+
+        return drained.Task;
     }
 
     /// <summary>
@@ -689,6 +758,27 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
             _tenantTag,
             new KeyValuePair<string, object?>(LatticeMetrics.TagKind, kind),
             accepted ? LatticeMetrics.AppendFenceClaimAccepted : LatticeMetrics.AppendFenceClaimRefused);
+
+    /// <summary>
+    /// Whether allocating <paramref name="entry"/> under <paramref name="stamp"/>
+    /// raises the partition's unstamped watermark: every unstamped append does, and so
+    /// does a record sent under the coordinator-terminal class that is not a
+    /// <c>TxCommit</c> or <c>TxAbort</c> (member 2, review S2), which is therefore
+    /// admitted unstamped and reported. Called under <see cref="_stateGate"/>.
+    /// </summary>
+    private static bool RaisesUnstampedWatermark(bool stamped, in WalAppendStamp stamp, in WalRecord entry) =>
+        !stamped || (stamp.IsCoordinatorTerminal && !WalAppendFenceCore.IsCoordinatorTerminalOp(entry.Op));
+
+    /// <summary>
+    /// Counts records sent under the coordinator-terminal class that were not
+    /// terminals, and so were admitted unstamped and reported (member 2).
+    /// </summary>
+    private void RecordTerminalClassMisuse(int count) =>
+        LatticeMetrics.WalAppendFenceUnstampedAppends.Add(
+            count,
+            _treeTag,
+            _tenantTag,
+            LatticeMetrics.UnstampedSourceTerminalClassMisuse);
 
     private void RecordFenceRejection(WalAppendFenceOutcome outcome) =>
         LatticeMetrics.WalAppendFenceRejections.Add(

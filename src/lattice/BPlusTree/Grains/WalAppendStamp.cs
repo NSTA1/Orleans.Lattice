@@ -22,4 +22,19 @@ internal readonly record struct WalAppendStamp(
 {
     /// <summary>A stamp carrying only a leaf's epoch.</summary>
     public static WalAppendStamp ForLeaf(Guid leafId, long epoch) => new(leafId, epoch, WalRoutingInitiator.None, 0);
+
+    /// <summary>
+    /// The coordinator-terminal stamp class (epic #5605, member 2; design note section 2,
+    /// "Coordinator terminals"): carried by a saga terminal a coordinator appends,
+    /// not a leaf. The WAL shard admits it without an entry check, and excludes it
+    /// from the unstamped watermark only for a <c>TxCommit</c> or <c>TxAbort</c>
+    /// record (<see cref="WalAppendFenceCore.IsCoordinatorTerminalOp"/>); any other
+    /// record sent with it is admitted unstamped and reported, so the class can never
+    /// bypass a fence or the watermark.
+    /// </summary>
+    public static WalAppendStamp CoordinatorTerminal =>
+        new(Guid.Empty, 0, new WalRoutingInitiator(WalRoutingInitiatorKind.CoordinatorTerminal, 0), 0);
+
+    /// <summary><see langword="true"/> for the <see cref="CoordinatorTerminal"/> stamp class.</summary>
+    public bool IsCoordinatorTerminal => Initiator.Kind == WalRoutingInitiatorKind.CoordinatorTerminal;
 }

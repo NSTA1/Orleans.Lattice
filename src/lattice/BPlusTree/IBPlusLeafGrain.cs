@@ -269,6 +269,22 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// </summary>
     Task<LeafRangeDeletePage> DeleteRangeAndNextSiblingAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null);
 
+    /// <summary>
+    /// The stamped counterpart of <see cref="DeleteRangeAndNextSiblingAsync"/> (epic
+    /// #5605, member 2): the range-delete record is appended under
+    /// <paramref name="routing"/>, the tree's range-delete generation the walk's open
+    /// intent handed out, so that intent's close fences every page of the walk. A walk
+    /// whose append is rejected because the generation was re-claimed fails with an
+    /// internal stale-generation exception, before anything is applied, which the shard
+    /// root's walk step handles. The existing method stays unstamped (S3).
+    /// </summary>
+    /// <remarks>Called only while the caller's append-fence gate is open.</remarks>
+    Task<LeafRangeDeletePage> DeleteRangeAndNextSiblingStampedAsync(
+        string startInclusive,
+        string endExclusive,
+        LatticePredicateNode? predicate,
+        Grains.WalRoutingStamp routing);
+
     /// <summary>Returns the number of live (non-tombstoned) keys in this leaf.</summary>
     Task<int> CountAsync();
 

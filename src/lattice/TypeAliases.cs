@@ -969,4 +969,36 @@ internal static class TypeAliases
 
     /// <summary>Alias for a tree's append-fence sweep claim row (#5634).</summary>
     internal const string WalAppendFenceSweepState = "ol.xfw";
+
+    // Hand-off markers and fences (epic #5605, member 2).
+
+    /// <summary>Alias for one open hand-off on a marker.</summary>
+    internal const string HandOffMarkerRange = "ol.xhr";
+
+    /// <summary>Alias for one closed hand-off on a marker, with its fence heads.</summary>
+    internal const string HandOffClose = "ol.xhc";
+
+    /// <summary>Alias for a shard root's durable hand-off marker row.</summary>
+    internal const string ShardHandOffState = "ol.xhs";
+
+    /// <summary>Alias for a leaf's durable hand-off marker row.</summary>
+    internal const string LeafHandOffState = "ol.xhl";
+
+    /// <summary>Alias for the routing part of a stamped WAL append.</summary>
+    internal const string WalRoutingStamp = "ol.xhw";
+
+    /// <summary>Alias for the rejection of a write admitted under a re-claimed routing generation.</summary>
+    internal const string WalRoutingGenerationStaleException = "ol.xhx";
+
+    /// <summary>Alias for one open intent on a tree's range-delete fence.</summary>
+    internal const string TreeRangeDeleteIntent = "ol.xhi";
+
+    /// <summary>Alias for a tree's range-delete fence state.</summary>
+    internal const string TreeRangeDeleteFenceState = "ol.xhd";
+
+    /// <summary>Alias for the tree range-delete fence grain interface.</summary>
+    internal const string ITreeRangeDeleteFenceGrain = "ol.xhg";
+
+    /// <summary>Alias for what a fenced range-delete walk carries to a shard root.</summary>
+    internal const string RangeDeleteFenceTicket = "ol.xht";
 }

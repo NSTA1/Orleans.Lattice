@@ -122,7 +122,7 @@ internal sealed partial class BPlusLeafGrain
     /// The commit-log writer the leaf appends through: every append is stamped by
     /// this activation's fence (epic #5605).
     /// </summary>
-    private sealed class FencedCommitLogWriter(IFencedCommitLogWriter inner, ILeafAppendFence fence) : ICommitLogWriter
+    private sealed class FencedCommitLogWriter(IFencedCommitLogWriter inner, ILeafAppendFence fence) : IRoutingStampedCommitLogWriter
     {
         /// <inheritdoc />
         public Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken = default) =>
@@ -131,5 +131,13 @@ internal sealed partial class BPlusLeafGrain
         /// <inheritdoc />
         public Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken = default) =>
             inner.AppendManyAsync(entries, fence, cancellationToken);
+
+        /// <inheritdoc />
+        public Task<long> AppendAsync(WalRecord entry, WalRoutingStamp routing, CancellationToken cancellationToken) =>
+            inner.AppendAsync(entry, fence, routing, cancellationToken);
+
+        /// <inheritdoc />
+        public Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<WalRecord> entries, WalRoutingStamp routing, CancellationToken cancellationToken) =>
+            inner.AppendManyAsync(entries, fence, routing, cancellationToken);
     }
 }
