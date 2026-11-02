@@ -172,7 +172,7 @@ internal sealed class BackupPublisher(
             return manifest is not null && IsOfScope(manifest, scopeKey) ? manifest : null;
         }
 
-        if (!RedProof.BeginIgnoresScope && !IsOfScope(row, scopeKey)) // RED-PROOF
+        if (!IsOfScope(row, scopeKey))
         {
             return null;
         }
@@ -246,13 +246,13 @@ internal sealed class BackupPublisher(
     public async Task<bool> FinishDeleteAsync(string backupId, string? scopeKey = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(backupId);
-        if (!RedProof.EndIgnoresRow && await catalog.GetAsync(backupId).ConfigureAwait(false) is not null) // RED-PROOF
+        if (await catalog.GetAsync(backupId).ConfigureAwait(false) is not null)
         {
             return false;
         }
 
         var manifest = await sink.ReadManifestAsync(backupId).ConfigureAwait(false);
-        if (manifest is null || (!RedProof.EndIgnoresScope && !IsOfScope(manifest, scopeKey))) // RED-PROOF
+        if (manifest is null || !IsOfScope(manifest, scopeKey))
         {
             return false;
         }

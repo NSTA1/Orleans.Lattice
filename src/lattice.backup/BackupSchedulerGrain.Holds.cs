@@ -256,7 +256,6 @@ internal sealed partial class BackupSchedulerGrain
     // Ends one delete's lease; another delete of the id keeps its own.
     private void EndDeleteLease(string backupId, Guid token)
     {
-        if (RedProof.SharedDeleteLease) { if (_deleting.Remove(backupId)) { SignalHoldsChanged(); } return; } // RED-PROOF
         if (_deleting.TryGetValue(backupId, out var leases) && leases.Remove(token))
         {
             if (leases.Count == 0)

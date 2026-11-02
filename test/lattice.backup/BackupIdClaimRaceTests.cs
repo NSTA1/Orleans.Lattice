@@ -95,7 +95,6 @@ public sealed class BackupIdClaimRaceTests
     [Test]
     public async Task Another_scope_cannot_take_an_id_its_owner_is_republishing_when_the_claim_grain_is_lost()
     {
-        RedProof.ClaimsNotPersisted = true; // RED-PROOF
         _fixture = new SchedulerClusterFixture();
         await _fixture.InitializeAsync(
             o =>

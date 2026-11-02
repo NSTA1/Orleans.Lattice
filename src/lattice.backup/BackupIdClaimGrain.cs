@@ -47,7 +47,7 @@ internal sealed class BackupIdClaimGrain(
         // the id must stay this scope's until that publish completes, or another
         // scope could take the ownerless id and have it overwritten.
         Claims.Add(new BackupIdPendingClaim { ScopeKey = scopeKey, Until = now + PendingClaimLifetime });
-        if (!RedProof.ClaimsNotPersisted) { await state.WriteStateAsync(); } // RED-PROOF
+        await state.WriteStateAsync();
         return true;
     }
 

@@ -31,7 +31,6 @@ public sealed class BackupDeleteOverlapTests
     [Test]
     public async Task A_delete_overlapping_another_keeps_the_id_reserved_until_its_own_end()
     {
-        RedProof.SharedDeleteLease = true; // RED-PROOF
         _fixture = new SchedulerClusterFixture();
         await _fixture.InitializeAsync(intercepted: true, configureBackup: o => o.PublishHoldWait = TimeSpan.FromSeconds(2));
         var captured = await SeedAndCaptureTreeAsync();
@@ -63,7 +62,6 @@ public sealed class BackupDeleteOverlapTests
     [Test]
     public async Task A_delete_whose_lease_ran_out_keeps_a_backup_a_capture_republished_meanwhile()
     {
-        RedProof.EndIgnoresRow = true; // RED-PROOF
         // The lease runs out while the delete deletes artifacts, and a capture of
         // identical content republishes the id. The delete then ends: it must not
         // delete the manifest of the backup that is listed again.
@@ -97,7 +95,6 @@ public sealed class BackupDeleteOverlapTests
     [Test]
     public async Task An_overlapping_delete_never_deletes_the_manifest_another_scope_published_under_the_id()
     {
-        RedProof.EndIgnoresScope = true; // RED-PROOF
         // Two empty scopes capture the same, empty, payload: one bare id, X.
         _fixture = new SchedulerClusterFixture();
         await _fixture.InitializeAsync(intercepted: true);
@@ -131,7 +128,6 @@ public sealed class BackupDeleteOverlapTests
     [Test]
     public async Task A_delete_of_an_id_another_scope_has_since_taken_leaves_that_scopes_backup()
     {
-        RedProof.BeginIgnoresScope = true; // RED-PROOF
         _fixture = new SchedulerClusterFixture();
         await _fixture.InitializeAsync(intercepted: true);
         var (scopeA, scopeB) = await TwoEmptyScopesAsync();
