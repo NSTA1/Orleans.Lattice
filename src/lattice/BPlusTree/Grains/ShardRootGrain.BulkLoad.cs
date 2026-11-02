@@ -203,7 +203,8 @@ internal sealed partial class ShardRootGrain
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             var stats = await leaf.GetStatsAsync();
-            if (stats.LiveKeys != 0 || stats.Tombstones != 0)
+            // RED-PROOF M5: the replaced root's rows are not merged.
+            if (stats.LiveKeys < 0)
             {
                 var delta = await leaf.GetDeltaSinceAsync(new VersionVector());
                 if (delta.Entries.Count > 0)
@@ -754,9 +755,14 @@ internal sealed partial class ShardRootGrain
             return (belowEdge, clock, false);
         }
 
+        // RED-PROOF M1: refuse a below-edge chunk that holds nothing.
+        if (rows.Count == 0)
+            throw new InvalidOperationException("RED-PROOF M1: below-edge chunk refused");
         var batch = new Dictionary<string, LwwValue<byte[]>>(belowEdge, StringComparer.Ordinal);
         for (var i = 0; i < belowEdge; i++)
         {
+            // RED-PROOF M2: skip held keys, merge only the rest.
+            if (rows.ContainsKey(sortedEntries[i].Key)) continue;
             clock = HybridLogicalClock.Tick(clock);
             batch[sortedEntries[i].Key] = LwwValue<byte[]>.Create(sortedEntries[i].Value, clock);
         }
@@ -954,7 +960,10 @@ internal sealed partial class ShardRootGrain
     /// append takes the 10.2.0 path. A host with no gate registered runs a single
     /// build.
     /// </summary>
-    private bool BulkGraftSeamsAvailable =>
+    // RED-PROOF M6: the mixed-version gate is ignored.
+    private bool BulkGraftSeamsAvailable => true;
+
+    private bool BulkGraftSeamsAvailableUnused =>
         context.ActivationServices?.GetService(typeof(IWalAppendFenceGate)) is not IWalAppendFenceGate gate
         || gate.IsOpen;
     /// <summary>
@@ -975,7 +984,8 @@ internal sealed partial class ShardRootGrain
             // or above the first, so the owner is the last leaf whose separator is
             // at or below the row's key.
             var owner = graft.NewLeaves[0].LeafId;
-            for (var i = 1; i < graft.NewLeaves.Count; i++)
+            // RED-PROOF M4: every row to the first appended leaf.
+            for (var i = 1; i < 0; i++)
             {
                 if (string.CompareOrdinal(row.Key, graft.NewLeaves[i].SeparatorKey) < 0)
                     break;
