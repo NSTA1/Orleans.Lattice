@@ -11349,13 +11349,20 @@ public static class LatticeMetrics
     /// <summary><see cref="TagReason"/> value on <see cref="WalAppendFenceRejections"/>: the initiator's generation entry was not loaded.</summary>
     public static readonly KeyValuePair<string, object?> AppendFenceRejectedUnloadedGeneration = new(TagReason, "unloaded_generation");
 
+    /// <summary>
+    /// <see cref="TagReason"/> value mapped from <see cref="BPlusTree.Grains.WalAppendFenceOutcome.Admitted"/>
+    /// for exhaustiveness only: an admitted append is never recorded on <see cref="WalAppendFenceRejections"/>.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> AppendFenceAdmitted = new(TagReason, "admitted");
+
     /// <summary>The <see cref="TagReason"/> pair <see cref="WalAppendFenceRejections"/> records for <paramref name="outcome"/>.</summary>
     internal static KeyValuePair<string, object?> AppendFenceRejectionReason(BPlusTree.Grains.WalAppendFenceOutcome outcome) => outcome switch
     {
         BPlusTree.Grains.WalAppendFenceOutcome.StaleEpoch => AppendFenceRejectedStaleEpoch,
         BPlusTree.Grains.WalAppendFenceOutcome.UnloadedEntry => AppendFenceRejectedUnloadedEntry,
         BPlusTree.Grains.WalAppendFenceOutcome.StaleGeneration => AppendFenceRejectedStaleGeneration,
-        _ => AppendFenceRejectedUnloadedGeneration,
+        BPlusTree.Grains.WalAppendFenceOutcome.UnloadedGeneration => AppendFenceRejectedUnloadedGeneration,
+        _ => AppendFenceAdmitted,
     };
 
     /// <summary>

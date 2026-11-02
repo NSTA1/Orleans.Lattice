@@ -66,17 +66,19 @@ public sealed class WalAppendFenceCoreTests
     }
 
     [Test]
-    public void A_stamped_append_is_admitted_only_from_a_loaded_current_epoch_above_the_floor()
+    public void A_stamped_append_is_admitted_only_from_a_loaded_current_epoch()
     {
+        // The retired floor is not an append-time guard (issue #5635): it is one
+        // value per partition while epochs are per leaf, so checking it here would
+        // supersede every live leaf below a retired one. The claim write and raise
+        // check it, and a retired leaf's own appends meet its removed entry.
         Assert.Multiple(() =>
         {
-            Assert.That(IsEpochAdmitted(epoch: 3, loaded: 3, floor: 0), Is.True);
-            Assert.That(IsEpochAdmitted(epoch: 4, loaded: 3, floor: 0), Is.True);
-            Assert.That(IsEpochAdmitted(epoch: 2, loaded: 3, floor: 0), Is.False, "a superseded epoch is rejected");
-            Assert.That(IsEpochAdmitted(epoch: 3, loaded: Unloaded, floor: 0), Is.False,
+            Assert.That(IsEpochAdmitted(epoch: 3, loaded: 3), Is.True);
+            Assert.That(IsEpochAdmitted(epoch: 4, loaded: 3), Is.True);
+            Assert.That(IsEpochAdmitted(epoch: 2, loaded: 3), Is.False, "a superseded epoch is rejected");
+            Assert.That(IsEpochAdmitted(epoch: 3, loaded: Unloaded), Is.False,
                 "StaleEpochNeverAppendsUnloadedEntryAccepted: nothing is admitted from an unloaded entry");
-            Assert.That(IsEpochAdmitted(epoch: 3, loaded: 3, floor: 3), Is.False,
-                "StaleEpochNeverAppendsAppendIgnoresRetiredFloor: the floor is checked at every append");
         });
     }
 

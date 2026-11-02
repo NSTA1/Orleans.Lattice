@@ -1,3 +1,6 @@
+using Microsoft.Extensions.Options;
+using NSubstitute;
+using Orleans.Configuration;
 using Orleans.Lattice.BPlusTree.Grains;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -85,5 +88,39 @@ public sealed class WalFenceSeamRetryTests
         Assert.That(
             async () => await WalFenceSeamRetry.NextAsync(null, WalFenceSeamRetry.CallerShardRoot, "tree", cts.Token),
             Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    [Test]
+    [NonParallelizable]
+    public void The_deadline_is_the_silo_configured_response_timeout()
+    {
+        var configured = TimeSpan.FromSeconds(47);
+        try
+        {
+            var participant = new WalFenceSeamRetryBudget(Options.Create(new SiloMessagingOptions { ResponseTimeout = configured }));
+            participant.Participate(Substitute.For<ISiloLifecycle>());
+
+            Assert.That(WalFenceSeamRetry.Budget, Is.EqualTo(configured),
+                "a fence rejection is retried for as long as the carrying call can answer, not a fixed constant");
+
+            WalFenceSeamRetry.Budget = TimeSpan.Zero;
+            Assert.That(WalFenceSeamRetry.Budget, Is.EqualTo(WalFenceSeamRetry.DefaultBudget),
+                "a non-positive timeout falls back to the Orleans default");
+        }
+        finally
+        {
+            WalFenceSeamRetry.Budget = WalFenceSeamRetry.DefaultBudget;
+        }
+    }
+
+    [Test]
+    public void A_fence_rejection_never_counts_as_a_provider_failure()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(WalCommitLogWriter.IsExcludedFromProviderFailureCount(new WalAppendEpochStaleException()), Is.True,
+                "a superseded activation's rejection must not feed the saturation signal");
+            Assert.That(WalCommitLogWriter.IsExcludedFromProviderFailureCount(new InvalidOperationException()), Is.False);
+        });
     }
 }

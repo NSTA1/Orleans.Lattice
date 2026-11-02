@@ -290,7 +290,7 @@ internal sealed class WalCommitLogWriter(
     /// 409-Conflict bursts, transient transport errors that are not
     /// cancellation) flow through to <see cref="IncrementProviderFailureCount"/>.
     /// </summary>
-    private static bool IsExcludedFromProviderFailureCount(Exception ex)
+    internal static bool IsExcludedFromProviderFailureCount(Exception ex)
     {
         // Shutdown back-pressure - distinct regime from provider
         // saturation, has its own typed caller-detection surface.
@@ -308,6 +308,10 @@ internal sealed class WalCommitLogWriter(
         // A clock-floor refusal (issue #4586) is the partition rejecting a
         // stale stamp before any provider work, not a provider failure.
         if (ex is WalStampBelowFloorException) return true;
+        // An append-fence rejection (epic #5605) is a superseded leaf activation
+        // refused before any provider work; its seam retries it against the live
+        // activation. It must never feed a provider-health or saturation signal.
+        if (ex is WalAppendEpochStaleException) return true;
         return false;
     }
 

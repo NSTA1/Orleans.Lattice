@@ -81,14 +81,25 @@ internal static class WalAppendFenceCore
 
     /// <summary>
     /// A stamped append's epoch check, under the lock that assigns its offset. The
-    /// entry must be loaded, the epoch not below it, and the epoch above the retired
-    /// floor. The caller has already ruled out an unloaded entry.
+    /// entry must be loaded and the epoch not below it. The caller has already
+    /// ruled out an unloaded entry.
     /// </summary>
+    /// <remarks>
+    /// The partition's retired floor is deliberately not checked here (#5635). The
+    /// floor is one scalar per partition, while epochs are per leaf, so checking it
+    /// at every append would reject every live leaf whose epoch sits at or below
+    /// any other leaf's retired entry: one retirement would supersede, and
+    /// deactivate, every such leaf of the partition. The floor protects a leaf
+    /// re-created under a retired id, and for that the claim's write and raise
+    /// checks suffice (the design's redundancy row for
+    /// <c>StaleEpochNeverAppendsAppendIgnoresRetiredFloor</c>): retirement removes
+    /// the retired leaf's own entry, so its later appends meet an unloaded entry,
+    /// and a claim straddling the retirement is refused at its raise.
+    /// </remarks>
     /// <param name="epoch">The stamp's epoch.</param>
     /// <param name="loaded">The loaded in-memory entry (never <see cref="Unloaded"/>).</param>
-    /// <param name="floor">The partition's retired floor.</param>
-    public static bool IsEpochAdmitted(long epoch, long loaded, long floor) =>
-        loaded != Unloaded && epoch >= loaded && epoch > floor;
+    public static bool IsEpochAdmitted(long epoch, long loaded) =>
+        loaded != Unloaded && epoch >= loaded;
 
     /// <summary>
     /// A stamped append's routing-generation check: the initiator's entry must be

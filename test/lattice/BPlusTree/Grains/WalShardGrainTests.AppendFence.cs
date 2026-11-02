@@ -7,7 +7,9 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
 /// Detectors for the WAL shard's side of the append fence (epic #5605): stale
-/// epochs rejected, the retired floor checked at claim write, raise and append,
+/// epochs rejected, the retired floor checked at claim write and raise (never at
+/// the append, which would supersede live leaves; issue #5635), multi-entry
+/// stamped batches never split by a claim raise,
 /// unloaded entries rejected until re-presented, the durable table surviving a
 /// reactivation or a move to another provider, and unstamped appends always
 /// admitted and reported.
@@ -150,7 +152,7 @@ public partial class WalShardGrainTests
     }
 
     [Test]
-    public async Task The_retired_floor_is_checked_at_every_append()
+    public async Task Retiring_another_leaf_never_supersedes_a_live_leaf()
     {
         var storage = new EnumerableMemoryGrainStorage();
         var grain = await CreateFencedGrainAsync(storage);
@@ -159,13 +161,53 @@ public partial class WalShardGrainTests
 
         // Retiring the other leaf raises the partition's floor above FenceLeaf's epoch.
         await grain.RetireAppendEpochAsync(OtherFenceLeaf, CancellationToken.None);
-        var append = await grain.AppendStampedAsync(MakeEntry("a"), WalAppendStamp.ForLeaf(FenceLeaf, 3), CancellationToken.None);
+        var live = await grain.AppendStampedAsync(MakeEntry("a"), WalAppendStamp.ForLeaf(FenceLeaf, 3), CancellationToken.None);
+        var retired = await grain.AppendStampedAsync(MakeEntry("b"), WalAppendStamp.ForLeaf(OtherFenceLeaf, 5), CancellationToken.None);
+        var reclaimAtFloor = await grain.ClaimAppendEpochAsync(FenceLeaf, 5, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
             Assert.That(grain.EpochFloorForTesting, Is.EqualTo(5));
-            Assert.That(append.Outcome, Is.EqualTo(WalAppendFenceOutcome.StaleEpoch),
-                "StaleEpochNeverAppendsAppendIgnoresRetiredFloor: an epoch at or below the floor is rejected at the append");
+            Assert.That(live.Outcome, Is.EqualTo(WalAppendFenceOutcome.Admitted),
+                "issue #5635: the partition-wide floor must not supersede a live leaf below it");
+            Assert.That(retired.Outcome, Is.EqualTo(WalAppendFenceOutcome.UnloadedEntry),
+                "the retired leaf's own appends meet its removed entry");
+            Assert.That(reclaimAtFloor.Accepted, Is.False,
+                "StaleEpochNeverAppendsRaiseIgnoresRetiredFloor: a claim at or below the floor is refused");
+        });
+    }
+
+    [Test]
+    public async Task A_claim_raise_never_splits_a_stamped_batch()
+    {
+        // One entry per batch and one flush in flight: the batch's third entry waits
+        // for the gated first flush, leaving a window between two of its entries.
+        var gated = new GatedWalStorageProvider(new InMemoryWalStorageProvider());
+        var storage = new EnumerableMemoryGrainStorage();
+        var grain = await CreateGrainAsync(gated, new LatticeOptions { WalMaxBatchEntries = 1, WalMaxPendingBatches = 1 });
+        grain.UseFenceStorageForTesting(storage);
+        await grain.ClaimAppendEpochAsync(FenceLeaf, 1, CancellationToken.None);
+
+        var batch = grain.AppendBatchStampedAsync(
+            new[] { MakeEntry("a"), MakeEntry("b"), MakeEntry("c") }, WalAppendStamp.ForLeaf(FenceLeaf, 1), CancellationToken.None);
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (await grain.GetNextSequenceAsync(CancellationToken.None) < 2 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(5);
+        }
+
+        var raise = grain.ClaimAppendEpochAsync(FenceLeaf, 2, CancellationToken.None);
+        var raisedEarly = await Task.WhenAny(raise, Task.Delay(TimeSpan.FromMilliseconds(250))) == raise;
+        gated.Open();
+        var result = await batch;
+        var claim = await raise;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(raisedEarly, Is.False, "the raise waits until every entry of the in-flight batch is assigned");
+            Assert.That(result.Outcome, Is.EqualTo(WalAppendFenceOutcome.Admitted));
+            Assert.That(result.AdmittedCount, Is.EqualTo(3), "a stamped batch is admitted whole or rejected whole at its first entry");
+            Assert.That(claim.Accepted, Is.True);
         });
     }
 
