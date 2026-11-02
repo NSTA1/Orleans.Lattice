@@ -1,10 +1,11 @@
 # The claim's conditional write dropped, as the topology-seed persist does when
 # it adopts a benign first-create race (#5593): two activations write the same
-# epoch, both are accepted, and the second passes the first's appends.
+# epoch, both are accepted, and the second passes the first's appends. Since #5641's
+# AlreadyDurable admits a claim equal to the durable entry, the second claimant's
+# entry write no longer catches the first, so this guard is load-bearing.
 MODULE: ReadPositionHonestClaimAdoptsNoCas
 TARGET: ReadPositionHonest
 CLASS: Invariant
-EXPECT: clean (a redundancy check: the guard is implied in the model and kept for the reason in LiveAdvanceDesign.md)
 SUMMARY: the claim persists the epoch it read plus one without a conditional write, adopting a concurrent claim
 PERTURBS: ClaimRow
 

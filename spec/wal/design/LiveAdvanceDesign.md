@@ -14,7 +14,14 @@ epoch rows). The re-review of revision 4 accepted member 2, except the tree rang
 fence's re-stamp path, which waits for the reviewer to confirm this revision's model
 change. Members 3 and 4 follow member 2.
 
-**Revision.** This is the seventh revision. It supersedes revision 6 on one point,
+**Revision.** This is the eighth revision. It answers the
+[re-review of revision 7](https://github.com/NSTA1/Orleans.Lattice/issues/5605#issuecomment-6570611826):
+the epoch row's conditional write is load-bearing again, since `AlreadyDurable` relies on
+it, so `ClaimAdoptsNoCas` is a mutation (16 states) and step 2 says so (S1); the purge
+straddle text covers a duplicate's bump landing before the clear's conditional row delete
+(N1); and TreeWalk cites 22,966,529.
+
+Revision 7 superseded revision 6 on one point,
 **#5641**, which the independent review of member 1 found: production admits a claim
 equal to the durable entry (`AlreadyDurable`), and a clear deletes the epoch row, so a
 floor built from entries alone let a pre-purge duplicate and the re-created incarnation
@@ -179,8 +186,12 @@ epoch. The claim is one serialised sequence per leaf and partition, in three ste
    below the retired floor, or below the higher of the loaded and durable entries. A
    claim **equal** to the durable entry, and not below the loaded one, is admitted without
    a write (`AlreadyDurable`): it is a re-presentation after a WAL shard restart or move,
-   which then costs no re-claim. That is sound only because retirement raises the floor
-   to the leaf's epoch row as well as its entry (below, #5641). Otherwise it writes the entry row as a **conditional (ETag) max-merge**: the row
+   which then costs no re-claim. It rests on two things: the epoch row's strict
+   conditional write (step 1), which gives each epoch one holder within an incarnation,
+   so an equal claim is the same claimant (`ReadPositionHonestClaimAdoptsNoCas`, 16 states,
+   drops it); and retirement raising the floor to the leaf's epoch row as well as its
+   entry (below, #5641), so epoch values never recur across incarnations. Otherwise it
+   writes the entry row as a **conditional (ETag) max-merge**: the row
    never moves down. Two overlapping claims for one leaf can reach the shard in either
    order (claim calls interleave like appends, and a delayed write can land late), so
    a plain write could leave the durable entry below the in-memory one, and a restart
@@ -332,7 +343,11 @@ built from entries alone stays below e. D's entry write then lands after the pur
 raises and appends, and the re-created incarnation R, reading the row as absent, claims
 the same e and is admitted as `AlreadyDurable`: both hold e, neither is ever found stale,
 and R arms past D's acknowledged appends. Raising the floor to the row refuses D's
-straddling entry write; its bump meets the deleted row and stops it. Building the floor
+straddling entry write; D's bump then either meets the deleted row and stops, or lands
+before the clear's conditional row delete, which then conflicts and keeps the row (see
+"The purge straddle"). The model's `Recreate` is one atomic step; the reviewer's
+three-step clear (read the row, retire, conditional delete) is clean at 20,374,851 states,
+and the promoted module should model the clear in those three steps. Building the floor
 from entries alone fails (`ReadPositionHonestFloorFromEntryOnly`, 17 states).
 
 A re-created leaf (a purge re-creation, or an id reused by a create) starts a new
@@ -342,8 +357,12 @@ and therefore every epoch a surviving duplicate of the old incarnation holds.
 
 **The purge straddle.** A pre-purge duplicate D can write its row (epoch e) before the
 purge and its entry after it. Raising the floor to the row (above) refuses that entry
-write, since e is at or below the floor, and D's bump meets the deleted row and stops.
-So no entry is ever left above the re-created incarnation's held row. Production's
+write, since e is at or below the floor. D then bumps. The clear reads the row, retires
+the partitions, then deletes the row conditionally on what it read, so D's bump meets
+either the deleted row, and D stops, or, landing first, the row the clear read: the
+clear's conditional delete then conflicts and the row is kept with D's bumped epoch, so
+the next activation continues above it and no value recurs. Either way no entry is left
+above a held row of the re-created incarnation. Production's
 bump on any refusal while the row holds (section 1, "Any refusal bumps while the row
 holds") is therefore redundant in the model since #5641; it is kept, because it is the
 general recovery for an entry above a held row, however one arises, and it is what
@@ -1107,13 +1126,13 @@ plus `TypeOK`):
 | `WalLiveAdvanceMixedRestart.cfg` | `WithMixedVersion`, `WithRestart` | 13,948,705 | 35 | 344 s |
 | `WalLiveAdvanceGateFlip.cfg` | `WithGateFlip` | 7,609,129 | 33 | 170 s |
 | `WalLiveAdvanceLegacyHandOff.cfg` | `WithLegacyHandOff` | 20,828,314 | 37 | 499 s |
-| `WalLiveAdvanceTreeWalk.cfg` | `WithTreeWalk` | 22,966,422 (the reviewer's run with `OtherIntentClose`; not re-run locally) | - | - |
+| `WalLiveAdvanceTreeWalk.cfg` | `WithTreeWalk` | 22,966,529 (the reviewer's run with `OtherIntentClose`; not re-run locally) | - | - |
 | `WalLiveAdvanceTreeWalkConcurrent.cfg` | `WithTreeWalk`, two windows | larger than revision 6's 23,951,016 with `OtherIntentClose`; for the reviewer or CI | - | - |
 | `WalLiveAdvanceOtherRetire.cfg` | `WithOtherRetire`, `Ghosts` on | 13,817,702 | 36 | 402 s |
 | `WalLiveAdvanceTwoPartition.cfg` | `WithSecondPartition` | 3,039,953 | 34 | 93 s |
 
 All twelve hold every property, `ContestedKeyAgrees` and `OnlySupersededRefused` included.
-Revisions 6 and 7 changed only what a purge, a raised floor or a tree walk reaches:
+Revisions 6 to 8 changed only what a purge, a raised floor or a tree walk reaches:
 `rowInc` and the row floor move only on `Recreate`; `AlreadyDurable` admits an equal claim,
 which only a purge's recurring epoch value produces; the widened `ClaimBump` needs a purge
 or a raised floor; `OtherIntentClose` needs `WithTreeWalk`; and `OnlySupersededRefused` can be
@@ -1123,7 +1142,7 @@ or by the witness-gated `StaleAppend`. So base and Recreate were re-run for revi
 reviewer's #5641 count), OtherRetire and TwoPartition at revision 6, and the other
 configurations are unchanged by construction. The two TreeWalk configurations grow with
 `OtherIntentClose` beyond the small instances run locally; the reviewer's run of TreeWalk
-with it is clean at 22,966,422. `WalLiveAdvanceOtherRetire.cfg` runs without `Recreate` and
+with it is clean at 22,966,529. `WalLiveAdvanceOtherRetire.cfg` runs without `Recreate` and
 with `Ghosts` on (revision 5's Recreate-plus-OtherRetire combination, 46,444,519 states, is
 a promotion-member CI configuration, with the other combinations). Mutation trace lengths are the shortest a two-worker run found and can
 vary by one state between runs. `MixedRestart` is the reviewer's Mixed+Restart+duplicate
@@ -1165,6 +1184,7 @@ in states including the initial one.
 | `OnlySupersededRefusedFloorInAppendGuards` | The entry-only append guards: the floor is checked beside the predicate, which a definitional property would not see | `OnlySupersededRefused` | OtherRetire, Ghosts | 8 |
 | `OnlySupersededRefusedConflictWithoutMove` | The conflict check: an activation stops at its claim although its row has not moved | `OnlySupersededRefused` | base | 4 |
 | `ReadPositionHonestFloorFromEntryOnly` | The epoch row in the retirement's floor (#5641): the floor is raised from the entry alone, so a pre-purge duplicate and the re-created incarnation hold the same epoch | `ReadPositionHonest` | Recreate | 17 |
+| `ReadPositionHonestClaimAdoptsNoCas` | The epoch row's conditional write (#5593's adopt): two activations write the same epoch, and the second's entry write is admitted as `AlreadyDurable` | `ReadPositionHonest` | base | 16 |
 | `StaleEpochNeverAppendsRecreateKeepsLoadedEntry` | Retirement removing the WAL shard's loaded entry: it deletes the rows only, with no append floor check (#5635's condition) | `StaleEpochNeverAppends` | Recreate | 9 |
 | `StaleEpochNeverAppendsUnloadedEntryAccepted` | The unloaded-entry rejection | `StaleEpochNeverAppends` | Restart | 12 |
 | `StaleEpochNeverAppendsClaimEntryOverwrite` | The max-merge: the claim overwrites the durable entry, checked against the loaded entry only (B3) | `StaleEpochNeverAppends` | Restart | 12 |
@@ -1205,13 +1225,12 @@ check at the raise closes it.
 
 ### Redundancy checks
 
-Five guards are kept although the model, with every other guard in place, does not
+Four guards are kept although the model, with every other guard in place, does not
 need them. Each was removed alone and the model stayed clean, so each is classed
 redundant in the model (as for #2321), with the reason it is kept:
 
 | Check | Removes | Configuration | Result | Why it is kept |
 |-------|---------|---------------|--------|----------------|
-| `ReadPositionHonestClaimAdoptsNoCas` | The epoch row's conditional write (#5593's adopt) | base | clean, 158 s | With the three-step claim, the shard's refusal at or below the durable entry catches a same-epoch claimant at the entry write. The conditional write is kept so a stale claimant stops before touching any partition, and because the production claim spans several partitions in sequence, which the model's single partition cannot show. |
 | `ReadPositionHonestArmsWithoutClaim` | The explicit claim guard in `Armed` | GateFlip | clean, 171 s | Implied by the self-report: an activation that never claimed has only unstamped own appends, each of which reports itself, so it cannot arm past them. Kept, as the review asked, because arming without a claim is meaningless and the implication depends on every unstamped path self-reporting. |
 | `ReadPositionHonestNoMarkerInit` | The "marker initialised" guard in `Armed` (B2 rule 2) | LegacyHandOff | clean, 493 s | Implied by rule 1 in the model, whose only legacy hand-off cannot admit a stamped write before `Resume` opens the marker. Kept because a resume path the census misses would otherwise read as closed. The model's `MarkInit` is stronger than production's rule: it waits until no hand-off is in flight anywhere, while production initialises an existing leaf once its shard's flag is set and it has no split in flight **as donor**, which is weaker for a split **sibling**. That is safe because rule 1 alone suffices, which is exactly what this clean result shows (review N3). |
 | `OnlySupersededRefusedEtagByValue` | The incarnation in the row's ETag stand-in: the row is compared by epoch value | Recreate | clean against `OnlySupersededRefused`, `ReadPositionHonest` and `StaleEpochNeverAppends` | In this one-leaf instance no property separates a recurring epoch value from a new write. Kept because production compares the ETag, which a recurring value never matches, and the model should not let a pre-purge activation's compare succeed where production's fails (revision 5 review, S1). |
@@ -1339,6 +1358,15 @@ Each production member carries detectors proven red. They land in this order:
 
 ## Review resolution
 
+### Re-review of revision 7
+
+| Finding | Resolution |
+|---------|------------|
+| S1 `ClaimAdoptsNoCas` red | Moved to `mutations/` (16 states); step 2 states that `AlreadyDurable` rests on the row CAS (one holder per epoch within an incarnation) and on the row floor (no recurrence across incarnations). The redundancy table drops the row. |
+| N1 clear ordering | "The purge straddle" and "Why the row, not only the entry" cover a duplicate's bump landing before the clear's conditional delete: the delete conflicts and the row is kept, so no value recurs. A three-step `Recreate` is a promotion-member item. |
+| N2 #5633 head | Production, for member 1 (red-proof commit to revert). |
+| TreeWalk count | 22,966,529, the count for this model's `OtherIntentClose`. |
+
 ### #5641 and the reviewer's partial findings on revision 6
 
 | Finding | Resolution |
@@ -1347,7 +1375,7 @@ Each production member carries detectors proven red. They land in this order:
 | Rule 3's own case unreachable | `OtherIntentClose` (`WithTreeWalk`); `WitnessTreeWalkRestampedOwnIntent` (7 states). The note and the `GRestamp` comment now call `hoOpen` a safe over-approximation that includes re-stamps under a newer intent covering L. |
 | `ClaimConflict` not flagged | `ClaimConflict` sets `wrongRefusal` when the row is unmoved; mutation `ConflictWithoutMove` (4 states). |
 | Recreate with `Ghosts` | The Recreate configuration runs with `Ghosts` on: clean at 4,859,576. |
-| Mutation count | Corrected: 33 mutations, 5 redundancy checks. `EntryRefusalStops` is now a redundancy row, because #5641 closes the straddle. |
+| Mutation count | Corrected: 33 mutations, 5 redundancy checks (revision 8: 34 and 4, `ClaimAdoptsNoCas` moved). `EntryRefusalStops` is now a redundancy row, because #5641 closes the straddle. |
 | Note-table row (#5633 review) | Behaviour change 11: a cold leaf's first write waits for the claim; and the cost section counts retirement and a tree purge's N x P retirement calls. |
 
 ### Re-review of revision 5
@@ -1420,7 +1448,7 @@ Each production member carries detectors proven red. They land in this order:
 | B1 drains | Section 2: the close is a fence (a re-claim of the initiator's epoch or routing generation), stamped at admission, on every append path. Mutations: `DrainWithoutFence`, `DrainPointOnly`, `StampAtAppend`. |
 | B2 epoch floor | Section 1, "Retiring entries": a monotone per-partition floor row, raised before an entry is deleted, checked at every claim step and append (revision 5: at the claim steps only, #5635). Mutations: `RecreateDropsFloor`, `IgnoresRetiredFloor`. |
 | S1 claim head and tracker | The claim reads `_nextOffset` in the lock section that assigns offsets; arming requires every own append applied. Mutations: `ClaimReadableHead`, `SnapshotHonestNoOwnTracker`. |
-| S2 CAS | A strict conditional write on a row only claims write. Now a redundancy row (`ClaimAdoptsNoCas`), because the three-step claim's entry write refuses a same-epoch claimant. |
+| S2 CAS | A strict conditional write on a row only claims write. A redundancy row in revisions 4 to 6; load-bearing again since revision 7's `AlreadyDurable` (mutation `ClaimAdoptsNoCas`, 16 states). |
 | S3 guard mutations | `NoClaimHeadReplay` and `NoOpenCheck`; `PERTURBS` fields name actions. |
 | S4 overlap | Section 4's fail-safe list: slot-less, rangeless-with-siblings and suspected-orphan leaves. |
 | S5 fold vs reclaim | Separate rows in the hand-off table. |
