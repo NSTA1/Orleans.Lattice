@@ -186,4 +186,39 @@ public partial class BPlusLeafGrainTests
         await successor.Received(1).SetAsync("z", Arg.Any<byte[]>(), Arg.Any<long>());
         Assert.That(await grain.NarrowHighKeyAsync("m"), Is.Empty, "the write was forwarded, not stored here");
     }
+
+    [Test]
+    public async Task DropRelocatedRows_persists_the_drop_before_returning()
+    {
+        // Re-review S1: the graft completes once the drop returns, so a drop held
+        // only in memory would come back with an earlier snapshot, outside the
+        // span, and be counted on two leaves for good.
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+        await grain.SetAsync("z", Encoding.UTF8.GetBytes("vz"));
+        var stranded = await grain.NarrowHighKeyAsync("m");
+
+        var writesBefore = state.WriteCount;
+        await grain.DropRelocatedRowsAsync(stranded.ToDictionary(r => r.Key, r => r.Timestamp));
+
+        Assert.That(state.WriteCount, Is.GreaterThan(writesBefore), "the drop is persisted");
+    }
+
+    [Test]
+    public async Task DropRelocatedRows_restores_the_rows_when_its_persist_fails()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+        await grain.SetAsync("z", Encoding.UTF8.GetBytes("vz"));
+        var stranded = await grain.NarrowHighKeyAsync("m");
+        var failure = new IOException("persist failed");
+        state.ThrowOnWrite = failure;
+
+        Assert.That(async () => await grain.DropRelocatedRowsAsync(stranded.ToDictionary(r => r.Key, r => r.Timestamp)),
+            Throws.Exception.SameAs(failure));
+
+        var again = await grain.NarrowHighKeyAsync("m");
+        Assert.That(again.Select(r => r.Key), Is.EqualTo(new[] { "z" }),
+            "a failed drop leaves the row for the resumed graft to be handed again");
+    }
 }

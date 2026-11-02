@@ -215,6 +215,11 @@ stamp (issues #5610 and #5642):
 - **Rows the shard's rightmost leaf holds in the appended range**, deleted
   ones included, are moved with their stamps into the new leaf that owns each
   key.
+  The move copies each row before it drops it from the old leaf, so for the
+  moment between the two - or, after a crash, until the append is resumed -
+  such a row is held by both leaves, and a count or scan taken then can
+  include it twice, as a key being moved by a leaf split can. Point reads
+  return it once throughout.
 - **Rows a batch write stored during a `BulkLoadAsync`** on the root the load
   replaces are merged into the loaded tree before that root is retired.
 

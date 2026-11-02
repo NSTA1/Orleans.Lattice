@@ -2981,7 +2981,7 @@ internal sealed partial class BPlusLeafGrain(
             // Only a row this leaf no longer declares, and only at the exact stamp
             // it was handed back with: a row rewritten since, or one inside the
             // span, is not the relocated row and stays.
-            var dropped = false;
+            List<(string Key, LwwValue<byte[]> Row)>? dropped = null;
             foreach (var (key, stamp) in relocated)
             {
                 if (!DeclaresKey(key)
@@ -2989,12 +2989,33 @@ internal sealed partial class BPlusLeafGrain(
                     && current.Timestamp == stamp)
                 {
                     RemoveEntry(key);
-                    dropped = true;
+                    (dropped ??= []).Add((key, current));
                 }
             }
 
-            if (dropped)
+            if (dropped is null)
+                return;
+
+            BumpLocalRevision();
+
+            // Persisted, as the split persists after removing the rows it moved
+            // ("leaf.split.persist-final"): the graft completes once this returns,
+            // so a drop that lived only in this activation's memory would come back
+            // with a snapshot captured before it, outside the declared span, where
+            // nothing drops it again and counts and scans include it twice.
+            try
+            {
+                await PersistAsync();
+            }
+            catch
+            {
+                // Class B revert: the graft is still owed, and its resume hands
+                // these rows back again.
+                foreach (var (key, row) in dropped)
+                    StoreEntry(key, row);
                 BumpLocalRevision();
+                throw;
+            }
         }
         finally
         {
