@@ -171,10 +171,87 @@ public partial class WalShardGrainTests
             Assert.That(live.Outcome, Is.EqualTo(WalAppendFenceOutcome.Admitted),
                 "issue #5635: the partition-wide floor must not supersede a live leaf below it");
             Assert.That(retired.Outcome, Is.EqualTo(WalAppendFenceOutcome.UnloadedEntry),
-                "the retired leaf's own appends meet its removed entry");
+                "issue #5635's soundness condition: retirement removes the loaded entry, so the retired leaf's own appends meet it unloaded");
             Assert.That(reclaimAtFloor.Accepted, Is.False,
                 "StaleEpochNeverAppendsRaiseIgnoresRetiredFloor: a claim at or below the floor is refused");
         });
+    }
+
+    [Test]
+    public async Task Retirement_removes_the_loaded_entry_even_with_appends_admitted()
+    {
+        // Issue #5635: with the floor gone from the append check, the only thing that
+        // stops a surviving duplicate of a retired leaf appending at its retired epoch
+        // is that retirement removes the partition's loaded entry for it.
+        var storage = new EnumerableMemoryGrainStorage();
+        var grain = await CreateFencedGrainAsync(storage);
+        await grain.ClaimAppendEpochAsync(FenceLeaf, 4, CancellationToken.None);
+        var before = await grain.AppendStampedAsync(MakeEntry("a"), WalAppendStamp.ForLeaf(FenceLeaf, 4), CancellationToken.None);
+
+        await grain.RetireAppendEpochAsync(FenceLeaf, CancellationToken.None);
+        var atRetired = await grain.AppendStampedAsync(MakeEntry("b"), WalAppendStamp.ForLeaf(FenceLeaf, 4), CancellationToken.None);
+        var aboveRetired = await grain.AppendBatchStampedAsync(
+            new[] { MakeEntry("c") }, WalAppendStamp.ForLeaf(FenceLeaf, 9), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(before.Outcome, Is.EqualTo(WalAppendFenceOutcome.Admitted));
+            Assert.That(atRetired.Outcome, Is.EqualTo(WalAppendFenceOutcome.UnloadedEntry),
+                "the retired leaf's loaded entry is gone, so its surviving duplicate cannot append");
+            Assert.That(aboveRetired.Outcome, Is.EqualTo(WalAppendFenceOutcome.UnloadedEntry),
+                "no epoch is admitted until a claim above the floor reloads the entry");
+        });
+    }
+
+    [Test]
+    public async Task A_floor_refusal_bumps_the_activation_to_one_epoch_across_its_partitions()
+    {
+        // Two partitions of one tree, each with its own fence rows; the second has a
+        // retired floor of 5 from another leaf. The activation claims epoch 1 at the
+        // first, is refused by the floor at the second, bumps its epoch row above it,
+        // and from then on holds that one epoch everywhere: the first partition is
+        // re-claimed under it before its next append, which fences out epoch 1 there.
+        var p0 = await CreateFencedGrainAsync(new EnumerableMemoryGrainStorage());
+        var p1 = await CreateFencedGrainAsync(new EnumerableMemoryGrainStorage());
+        await p1.ClaimAppendEpochAsync(OtherFenceLeaf, 5, CancellationToken.None);
+        await p1.RetireAppendEpochAsync(OtherFenceLeaf, CancellationToken.None);
+
+        var leafStorage = new EnumerableMemoryGrainStorage();
+        var superseded = new List<long>();
+        var fence = new LeafAppendEpochFence(
+            FenceLeaf,
+            new OpenFenceGate(),
+            leafStorage,
+            superseded.Add,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            LatticeTenantLabel.ForTree(TreeId));
+
+        var first = await fence.StampForAsync(p0, partition: 0, CancellationToken.None);
+        var second = await fence.StampForAsync(p1, partition: 1, CancellationToken.None);
+        var firstAgain = await fence.StampForAsync(p0, partition: 0, CancellationToken.None);
+        var oldEpochAtP0 = await p0.AppendStampedAsync(MakeEntry("a"), WalAppendStamp.ForLeaf(FenceLeaf, 1), CancellationToken.None);
+        var liveAtP0 = await p0.AppendStampedAsync(MakeEntry("b"), firstAgain!.Value, CancellationToken.None);
+        var liveAtP1 = await p1.AppendStampedAsync(MakeEntry("c"), second!.Value, CancellationToken.None);
+        var row = (await WalAppendFenceRows.ReadLeafEpochAsync(leafStorage, FenceLeaf)).State.Epoch;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first?.Epoch, Is.EqualTo(1));
+            Assert.That(second.Value.Epoch, Is.EqualTo(6), "the floor refusal bumps the epoch row above the floor and re-claims");
+            Assert.That(firstAgain.Value.Epoch, Is.EqualTo(6), "one epoch per activation across all its partitions");
+            Assert.That(row, Is.EqualTo(6));
+            Assert.That(fence.Epoch, Is.EqualTo(6));
+            Assert.That(oldEpochAtP0.Outcome, Is.EqualTo(WalAppendFenceOutcome.StaleEpoch),
+                "the re-claim under the bumped epoch fences the old epoch out of the first partition");
+            Assert.That(liveAtP0.Outcome, Is.EqualTo(WalAppendFenceOutcome.Admitted));
+            Assert.That(liveAtP1.Outcome, Is.EqualTo(WalAppendFenceOutcome.Admitted));
+            Assert.That(superseded, Is.Empty, "a floor refusal is not a supersession");
+        });
+    }
+
+    private sealed class OpenFenceGate : IWalAppendFenceGate
+    {
+        public bool IsOpen => true;
     }
 
     [Test]
