@@ -113,9 +113,11 @@ public sealed class AppRegistrySerializationTests
         static string[] Constants(Type table) => table.GetFields(BindingFlags.Static | BindingFlags.NonPublic)
             .Where(f => f.IsLiteral).Select(f => (string)f.GetRawConstantValue()!).ToArray();
         var aliases = Constants(typeof(AppRegistryTypeAliases));
-        var owners = assembly.GetTypes().Where(t => t.GetCustomAttribute<GenerateSerializerAttribute>() is not null).ToArray();
+        var owners = assembly.GetTypes()
+            .Where(t => t.GetCustomAttribute<GenerateSerializerAttribute>() is not null || (t.IsInterface && typeof(IAddressable).IsAssignableFrom(t)))
+            .ToArray();
 
-        Assert.That(aliases, Has.Length.EqualTo(8));
+        Assert.That(aliases, Has.Length.EqualTo(10));
         Assert.That(aliases.Distinct().Count(), Is.EqualTo(aliases.Length));
         Assert.That(aliases.Intersect(Constants(typeof(AppsTypeAliases))), Is.Empty, "the two apps alias tables are disjoint");
         foreach (var alias in aliases)
