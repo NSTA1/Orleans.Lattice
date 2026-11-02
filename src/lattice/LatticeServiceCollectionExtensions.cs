@@ -739,6 +739,11 @@ public static class LatticeServiceCollectionExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, LatticeWalGcScheduler>());
 
+        // Sweeps the WAL append fence's rows that a clear on an older-build silo
+        // left behind (#5634), once per tree per interval across the cluster.
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, BPlusTree.Grains.WalAppendFenceSweeper>());
+
         // The orphan-pin sweep runs once per tree for the whole cluster on a
         // tree-keyed coordinator grain (issue #5097). The grain borrows this
         // silo's scheduler instance to run it, so the runner resolves the hosted

@@ -11418,4 +11418,27 @@ public static class LatticeMetrics
     public static readonly Counter<long> WalAppendFenceUnstampedReports =
         Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.unstamped_reports", unit: "{report}",
             description: "Stamped WAL append responses that reported an unstamped append (a saga coordinator's transaction terminal, or an append from a silo whose append-fence gate is closed) made after the leaf's claim (epic #5605), by tree.");
+
+    /// <summary><see cref="TagOutcome"/> on <see cref="WalAppendFenceSweeps"/>: the leaf was gone and its fence rows were retired.</summary>
+    public static readonly KeyValuePair<string, object?> AppendFenceSweepRetired = new(TagOutcome, "retired");
+
+    /// <summary><see cref="TagOutcome"/> on <see cref="WalAppendFenceSweeps"/>: the leaf still exists, so its rows were kept.</summary>
+    public static readonly KeyValuePair<string, object?> AppendFenceSweepLive = new(TagOutcome, "live");
+
+    /// <summary><see cref="TagOutcome"/> on <see cref="WalAppendFenceSweeps"/>: checking or retiring the leaf failed; the next sweep tries again.</summary>
+    public static readonly KeyValuePair<string, object?> AppendFenceSweepFailed = new(TagOutcome, "failed");
+
+    /// <summary>
+    /// Counter of leaves the WAL append-fence sweep examined (#5634), tagged with
+    /// <see cref="TagTree"/>, the tenant and <see cref="TagOutcome"/>:
+    /// <c>retired</c> (the leaf was gone, and its entries, its directory listings and
+    /// its epoch row were retired), <c>live</c> (the leaf still exists) or
+    /// <c>failed</c> (the next sweep tries again). Only leaves listed in a partition's
+    /// append-epoch directory for longer than the sweep's grace are examined. A
+    /// <c>retired</c> count means a retirement left rows behind, typically one run on
+    /// a silo with an older build during a rollback.
+    /// </summary>
+    public static readonly Counter<long> WalAppendFenceSweeps =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.sweeps", unit: "{leaf}",
+            description: "Leaves the WAL append-fence sweep examined (#5634), by tree and outcome (retired, live or failed).");
 }

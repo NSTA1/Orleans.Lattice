@@ -87,42 +87,16 @@ internal sealed partial class BPlusLeafGrain
 
         try
         {
-            var leafId = context.GrainId.GetGuidKey();
-            var row = await WalAppendFenceRows.ReadLeafEpochAsync(storage, leafId).ConfigureAwait(true);
-            if (!row.RecordExists)
-            {
-                return;
-            }
-
-            var partitions = await optionsResolver.GetWalPartitionsAsync(treeId);
-            var retirements = new Task[partitions];
-            for (var partition = 0; partition < partitions; partition++)
-            {
-                retirements[partition] = grainFactory
-                    .GetGrain<IWalShardGrain>($"{treeId}/{partition}")
-                    .RetireAppendEpochAsync(leafId, row.State.Epoch, CancellationToken.None);
-            }
-
-            // The epoch row goes only once every partition has retired its entry.
-            await Task.WhenAll(retirements);
-            try
-            {
-                await WalAppendFenceRows.ClearAsync(
-                    storage,
-                    WalAppendFenceRows.LeafEpochGrainType,
-                    WalAppendFenceRows.LeafEpochKey(leafId),
-                    row).ConfigureAwait(true);
-            }
-            catch (InconsistentStateException)
-            {
-                // The row moved since the read, so it is kept. Either a re-created
-                // incarnation claimed it, or the clear is not atomic and a pre-clear
-                // duplicate, refused by a floor this clear just raised, bumped it
-                // between the retirements and this delete. Both are safe: the row is
-                // kept, so epochs do not recur, and the re-created incarnation claims
-                // above the bumped value and supersedes the duplicate (#5605 re-review
-                // of revision 7, N1).
-            }
+            // The conditional row delete may conflict, when the row moved since the
+            // read: another claim moved it, a re-created incarnation or a pre-clear
+            // duplicate's bump, so it is kept (#5605 re-review of revision 7, N1).
+            await WalAppendFenceRetirement.RetireLeafAsync(
+                grainFactory,
+                storage,
+                treeId,
+                () => optionsResolver.GetWalPartitionsAsync(treeId),
+                context.GrainId.GetGuidKey(),
+                Array.Empty<int>()).ConfigureAwait(true);
         }
         catch (Exception ex)
         {

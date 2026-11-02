@@ -92,6 +92,38 @@ public sealed class WalAppendFenceRowRoundTripTests
     }
 
     [Test]
+    public void Wal_append_epoch_directory_page_round_trips_in_json_and_binary()
+    {
+        var leaves = new List<Guid> { Guid.NewGuid(), Guid.NewGuid() };
+        var row = new WalAppendEpochDirectoryPageState { Leaves = new List<Guid>(leaves), AddedUtcTicks = new List<long> { 19, 23 } };
+
+        var json = JsonRoundTrip(row);
+        var binary = BinaryRoundTrip(row);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(json.Leaves, Is.EqualTo(leaves));
+            Assert.That(json.AddedUtcTicks, Is.EqualTo(new[] { 19L, 23L }));
+            Assert.That(binary.Leaves, Is.EqualTo(leaves));
+            Assert.That(binary.AddedUtcTicks, Is.EqualTo(new[] { 19L, 23L }));
+            Assert.That(JsonRoundTrip(new WalAppendEpochDirectoryPageState()).Leaves, Is.Empty, "an empty page reads back empty, never null");
+        });
+    }
+
+    [Test]
+    public void Wal_append_fence_sweep_round_trips_in_json_and_binary()
+    {
+        var row = new WalAppendFenceSweepState { LastStartedUtcTicks = 29 };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(JsonRoundTrip(row).LastStartedUtcTicks, Is.EqualTo(29));
+            Assert.That(BinaryRoundTrip(row).LastStartedUtcTicks, Is.EqualTo(29));
+            Assert.That(JsonRoundTrip(new WalAppendFenceSweepState()).LastStartedUtcTicks, Is.Zero);
+        });
+    }
+
+    [Test]
     public void A_zero_valued_row_round_trips_as_zero_in_json()
     {
         // The JSON grain-storage serializer omits members equal to the type default
