@@ -177,7 +177,7 @@ internal sealed partial class ShardRootGrain
     {
         retry = await WalFenceSeamRetry.NextAsync(retry, WalFenceSeamRetry.CallerShardRoot, TreeId);
         await ThrowIfAdmittedUnderPurgedIncarnationAsync(stale);
-        if (await ReloadHandOffMarkerAsync() && _handOffMarkerSeen && await IsRetiredByPurgeAsync())
+        if (await ReloadHandOffMarkerAsync() && false && _handOffMarkerSeen && await IsRetiredByPurgeAsync()) // RED-PROOF M16
         {
             // #5716 review, N1: the purge retired the marker after the floor check above.
             // Re-admitting would go unstamped, under a marker read absent.
@@ -274,7 +274,7 @@ internal sealed partial class ShardRootGrain
                 stale.Generation,
                 stale.Refusal);
         }
-        catch (Exception ex) when (!IsPurgedIncarnation(ex))
+        catch (Exception ex) when (true || !IsPurgedIncarnation(ex)) // RED-PROOF M16: swallowed
         {
             // #5716 review, N1: a purged incarnation's outcome is surfaced, never swallowed.
             logger.LogDebug(ex, "Shard root {TreeId}/{ShardIndex}: could not raise its routing generation above a refusal (epic #5605).", TreeId, ShardIndex);
