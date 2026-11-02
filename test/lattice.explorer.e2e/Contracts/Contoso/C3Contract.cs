@@ -109,9 +109,12 @@ public sealed class C3Contract() : ChapterContract("C3")
             await ContractCalls.DeleteAndPurgeAsync(facades.TreeAdmin, tree);
         }
 
-        if ((await facades.TreeAdmin.ListViewsAsync()).Views.Any(view => view.ViewName == Names.Views.OrdersByStatus))
+        foreach (var view in new[] { Names.Views.OrdersByStatus, Names.Views.OrdersHistory })
         {
-            await facades.TreeAdmin.DropViewAsync(Names.Views.OrdersByStatus);
+            if ((await facades.TreeAdmin.ListViewsAsync()).Views.Any(existing => existing.ViewName == view))
+            {
+                await facades.TreeAdmin.DropViewAsync(view);
+            }
         }
     }
 
@@ -154,5 +157,6 @@ public sealed class C3Contract() : ChapterContract("C3")
         }
 
         Require(!(await facades.TreeAdmin.ListViewsAsync()).Views.Any(view => view.ViewName == Names.Views.OrdersByStatus), "orders-by-status is dropped");
+        Require(!(await facades.TreeAdmin.ListViewsAsync()).Views.Any(view => view.ViewName == Names.Views.OrdersHistory), "orders-history is dropped");
     }
 }

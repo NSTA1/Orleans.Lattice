@@ -91,9 +91,23 @@ public sealed class ProvisioningTheFactoryJourney : JourneyChapter
             await steps.SubstepAsync("retention-saved", "factory-orders keeps every revision's value");
         });
 
-        // 2. Import the October orders into factory-orders as a seed.
+        // 2. A change-history view over the empty factory-orders, then import the October orders as a seed.
         await steps.StepAsync(2, async () =>
         {
+            await data.OpenTreeAsync(Names.Trees.FactoryOrders, "views");
+            await data.NewViewButton.ClickAsync();
+            await Expect(data.NewViewDialog).ToBeVisibleAsync();
+            await data.NewViewDialog.Locator("select[data-lt-view-provider]").SelectOptionAsync(A3Contract.HistoryProviderKey);
+            await Expect(data.NewViewDialog.Locator("select[data-lt-view-provider]")).ToHaveValueAsync(A3Contract.HistoryProviderKey);
+            await data.NewViewDialog.GetByLabel("View name", new() { Exact = true }).FillAsync(Names.Views.OrdersHistory);
+            await steps.SubstepAsync("history-form", "New view: the built-in change-history provider, named orders-history, before any order is written");
+
+            await data.NewViewDialog.GetByRole(AriaRole.Button, new() { Name = "Create view", Exact = true }).ClickAsync();
+            await A3Ui.ExpectToastAsync(shell, $"Created view {Names.Views.OrdersHistory}.");
+            await Expect(data.NewViewDialog).ToBeHiddenAsync();
+            await data.WaitForCurrentAsync(Names.Views.OrdersHistory);
+            await steps.SubstepAsync("history-current", "orders-history is Current: it records every order from its first revision");
+
             await data.OpenDirectoryAsync();
             await Expect(shell.Content).ToContainTextAsync(Names.Trees.FactoryOrders);
             await data.OpenTreeAsync(Names.Trees.FactoryOrders);

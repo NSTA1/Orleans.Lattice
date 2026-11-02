@@ -17,10 +17,10 @@ public sealed partial class DataStewardJourney
     /// <summary>The trees priya reads through <c>stewards-factory</c>, as the directory lists them.</summary>
     private static readonly string[] FactoryTrees = [Names.Trees.FactoryOrders, Names.Trees.FactoryTelemetry, Names.Trees.FactoryLines];
 
-    /// <summary>A name the directory may show priya: a factory tree, the orders alias, the view over the orders, or the tag index's tree.</summary>
+    /// <summary>A name the directory may show priya: a factory tree, the orders alias, a view over the orders, or the tag index's tree.</summary>
     private static bool IsFactoryName(string name) =>
         name.StartsWith("factory-", StringComparison.Ordinal)
-        || name is Names.Aliases.Orders or Names.Views.OrdersByStatus or "tag-" + Names.TagIndexes.OrderStatus;
+        || name is Names.Aliases.Orders or Names.Views.OrdersByStatus or Names.Views.OrdersHistory or "tag-" + Names.TagIndexes.OrderStatus;
 
     private async Task SignInAndBrowseTheDirectoryAsync()
     {
@@ -43,7 +43,7 @@ public sealed partial class DataStewardJourney
             Assert.That(names, Is.SupersetOf(FactoryTrees), "the factory trees stewards-factory lets priya read");
             Assert.That(names.Where(name => !IsFactoryName(name)), Is.Empty, "only factory trees, and what reads from them, are listed");
         });
-        await CheckpointAsync("1", "directory", "The Data directory lists only the factory trees and the view over the orders");
+        await CheckpointAsync("1", "directory", "The Data directory lists only the factory trees and the views over the orders");
 
         await _directory.FilterAsync("telemetry");
         Assert.That(await _directory.NamesAsync(), Does.Contain(Names.Trees.FactoryTelemetry));
@@ -53,8 +53,9 @@ public sealed partial class DataStewardJourney
 
         await _directory.ShowAsync("Views");
         await Expect(_directory.Row(Names.Views.OrdersByStatus)).ToHaveCountAsync(1);
+        await Expect(_directory.Row(Names.Views.OrdersHistory)).ToHaveCountAsync(1);
         await Expect(_directory.Row(Names.Trees.FactoryOrders)).ToHaveCountAsync(0);
-        await CheckpointAsync("1", "views-only", "Show: Views lists the orders-by-status view alone");
+        await CheckpointAsync("1", "views-only", "Show: Views lists the views over the orders alone: orders-by-status and orders-history");
 
         await _directory.ShowAsync("Trees");
         await Expect(_directory.Row(Names.Trees.FactoryOrders)).ToHaveCountAsync(1);
