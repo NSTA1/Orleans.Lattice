@@ -141,6 +141,60 @@ public sealed class LatticeSchemaVersionDecoderTests
         Assert.That(JsonDocument.Parse(result).RootElement.GetProperty("b").GetInt32(), Is.EqualTo(2));
     }
 
+    /// <summary>
+    /// A provider caching <paramref name="stale"/> until the tree is invalidated, and
+    /// <paramref name="fresh"/> after: a silo that has not yet picked up a target
+    /// advance another silo already stamps writes at (#5711).
+    /// </summary>
+    private static ILatticeSchemaVersionProvider StaleUntilInvalidated(LatticeSchemaVersionConfig stale, LatticeSchemaVersionConfig fresh)
+    {
+        var invalidated = false;
+        var provider = Substitute.For<ILatticeSchemaVersionProvider>();
+        provider.GetConfigAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(_ => new ValueTask<LatticeSchemaVersionConfig?>(invalidated ? fresh : stale));
+        provider.When(p => p.Invalidate(Arg.Any<string>())).Do(_ => invalidated = true);
+        return provider;
+    }
+
+    /// <summary>
+    /// Regression for #5711: a value stamped at a target this silo's cache has not yet
+    /// picked up is current, not undecodable, so the decoder re-reads the tree's config
+    /// before it refuses the value.
+    /// </summary>
+    [Test]
+    public async Task DecodeAsync_value_stamped_above_a_stale_cached_target_rereads_the_config()
+    {
+        var provider = StaleUntilInvalidated(new LatticeSchemaVersionConfig(1, 1), new LatticeSchemaVersionConfig(1, 2));
+        var decoder = new LatticeSchemaVersionDecoder(provider, new LatticeSchemaRegistryBuilder().Build());
+        var body = Utf8("{\"a\":1}");
+
+        var result = await decoder.DecodeAsync("orders", LatticeSchemaEnvelope.Encode(1, 2, body), CancellationToken.None);
+
+        Assert.That(result, Is.EqualTo(body));
+        provider.Received(1).Invalidate("orders");
+    }
+
+    /// <summary>
+    /// Regression for #5711 on the remediation's re-stamp read: a value stamped at a
+    /// target this silo's cache has not yet picked up keeps its stamp.
+    /// </summary>
+    [Test]
+    public async Task DecodeForRestampAsync_value_stamped_above_a_stale_cached_target_rereads_the_config()
+    {
+        var provider = StaleUntilInvalidated(new LatticeSchemaVersionConfig(1, 1), new LatticeSchemaVersionConfig(1, 2));
+        var decoder = new LatticeSchemaVersionDecoder(provider, new LatticeSchemaRegistryBuilder().Build());
+        var body = Utf8("{\"a\":1}");
+
+        var input = await decoder.DecodeForRestampAsync("orders", LatticeSchemaEnvelope.Encode(1, 2, body), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(input.Body.ToArray(), Is.EqualTo(body));
+            Assert.That(input.Version, Is.EqualTo(2u));
+        });
+        provider.Received(1).Invalidate("orders");
+    }
+
     [Test]
     public async Task DecodeAsync_enveloped_with_no_config_strips_stored_body()
     {
