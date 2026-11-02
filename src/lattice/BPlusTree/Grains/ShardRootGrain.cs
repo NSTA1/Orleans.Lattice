@@ -3251,11 +3251,11 @@ internal sealed partial class ShardRootGrain(
         var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(deterministicId);
 
         // A re-created incarnation never adopts a hand-off marker that predates it
-        // (#5703 review, S2). Retired before the tombstone is lifted, so a failure
-        // leaves it for the write's retry.
+        // (#5703 review, S2), identified by the tombstone being lifted (#5716). Retired
+        // before the tombstone is lifted, so a failure leaves it for the write's retry.
         if (state.State.IsPurged)
         {
-            await RetirePredatingHandOffMarkerAsync();
+            await RetirePredatingHandOffMarkerAsync(state.Etag);
         }
 
         // This shard is creating its root leaf, so the leaf's first row write

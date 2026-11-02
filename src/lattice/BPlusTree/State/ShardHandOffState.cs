@@ -62,4 +62,15 @@ internal sealed class ShardHandOffState : ILatticeBinaryPersistedState, Orleans.
     /// <summary>Raised on every open and close, so a reader can tell that the marker changed.</summary>
     [Id(6)]
     public long Sequence { get; set; }
+
+    /// <summary>
+    /// The re-seed that last caught this marker up (#5716): the storage ETag of the
+    /// purge tombstone the shard root lifted. Every activation lifting the same
+    /// tombstone shares it, and a later purge writes a new one, so a duplicate
+    /// activation's catch-up recognises a marker its sibling already caught up and
+    /// seeded, and leaves it alone. <see langword="null"/> on a marker no re-seed
+    /// has caught up.
+    /// </summary>
+    [Id(7)]
+    public string? ReseedOf { get; set; }
 }
