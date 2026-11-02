@@ -91,6 +91,7 @@ on:
       - '.github/workflows/install-playwright-browsers.sh'
       - '.github/workflows/run-playwright-install.py'
       - '.github/workflows/playwright_apt_mirrors.py'
+      - '.github/workflows/runner-overflow.py'
       - '!test/lattice.explorer.e2e/**/*.md'
       - '!src/lattice.explorer/**/*.md'
       - '!reference-architecture/hosts/**/*.md'
@@ -125,6 +126,7 @@ on:
       - '.github/workflows/install-playwright-browsers.sh'
       - '.github/workflows/run-playwright-install.py'
       - '.github/workflows/playwright_apt_mirrors.py'
+      - '.github/workflows/runner-overflow.py'
       - '!test/lattice.explorer.e2e/**/*.md'
       - '!src/lattice.explorer/**/*.md'
       - '!reference-architecture/hosts/**/*.md'
@@ -137,7 +139,15 @@ on:
     - cron: '17 2 * * *'
 
   # On demand: every leg and every conformance shard on the chosen ref.
+  # `hosted_budget` overrides HOSTED_RUNNER_BUDGET for this run only: 0 sends
+  # every leg to the self-hosted pool (when RUNNER_POOL is set), which is how
+  # a change to the pool image or the pool path of a leg is proven.
   workflow_dispatch:
+    inputs:
+      hosted_budget:
+        description: 'Hosted jobs in flight before legs overflow to the pool (empty: the HOSTED_RUNNER_BUDGET variable)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -207,20 +217,22 @@ jobs:
           fi
 
   # Decides the legs and the journeys whose screenshots need a provenance
-  # check. Runs the planner's and the provenance check's self-tests first:
-  # both are pure Python, seconds, and this lane is the only one that calls
-  # them.
+  # check, then routes the legs between hosted runners and the self-hosted
+  # pool. Runs the planner's, the provenance check's and the router's
+  # self-tests first: all pure Python, seconds.
   planner:
     name: Plan legs
     needs: plan
     if: needs.plan.outputs.push_is_member != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # actions: read lets runner-overflow.py count the hosted jobs in flight.
     permissions:
       contents: read
       pull-requests: read
+      actions: read
     outputs:
-      legs: ${{ steps.plan.outputs.legs }}
+      legs: ${{ steps.route.outputs.legs }}
       conformance: ${{ steps.plan.outputs.conformance }}
       provenance: ${{ steps.plan.outputs.provenance }}
     steps:
@@ -231,6 +243,9 @@ jobs:
 
       - name: Self-test the screenshot provenance check
         run: python3 .github/workflows/journey-screenshot-provenance-selftest.py
+
+      - name: Self-test the runner router
+        run: python3 .github/workflows/runner-overflow.py --self-test
 
       # From the API rather than a git diff, so no history is fetched. A listing
       # that fails leaves no file, and the planner then runs every leg.
@@ -274,17 +289,42 @@ jobs:
           python3 .github/workflows/explorer-journeys-plan.py plan \
             --event "$EVENT" --action "$ACTION" --base-ref "$BASE_REF" \
             --labels "$labels" --label "$label" --head-ref "$head" \
-            --changed-files "$RUNNER_TEMP/changed.txt"
+            --changed-files "$RUNNER_TEMP/changed.txt" --legs-file "$RUNNER_TEMP/legs.json"
 
+      # Runner routing, as ci.yml's legs are routed (runner-overflow.py): hosted
+      # while the repository's busy hosted jobs - CI's included, so the two lanes
+      # share one headroom - stay under HOSTED_RUNNER_BUDGET, the self-hosted pool
+      # (tools/ci-runners) beyond it, longest leg first. Hosted legs run on
+      # ubuntu-24.04 (see the legs job). Unset RUNNER_POOL keeps every leg hosted.
+      - name: Route the legs
+        id: route
+        env:
+          RUNNER_POOL: ${{ vars.RUNNER_POOL }}
+          HOSTED_RUNNER_BUDGET: ${{ inputs.hosted_budget || vars.HOSTED_RUNNER_BUDGET }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 .github/workflows/runner-overflow.py --matrix "$RUNNER_TEMP/legs.json" --hosted ubuntu-24.04
+          echo "legs=$(jq -c . "$RUNNER_TEMP/legs.json")" >> "$GITHUB_OUTPUT"
+
+  # A leg runs hosted or on the self-hosted pool, as the planner's routing step
+  # decided. A pool leg's name starts with `[pool] `, and the job declares no
+  # `services:` or `container:` (Container Apps runs no Docker daemon, and the
+  # runner probes it for any services block; CiSelfHostedRunnerScopeTests).
+  # On the pool the leg uses what tools/ci-runners/Dockerfile bakes in: npm
+  # Azurite for the three accounts, a Prometheus binary of JourneyPrometheus's
+  # pinned version, Playwright's Chromium with its system dependencies, and a
+  # NuGet snapshot, so it skips the Actions caches.
   legs:
-    name: ${{ matrix.name }}
+    name: ${{ matrix.pool && '[pool] ' || '' }}${{ matrix.name }}
     needs: planner
     if: needs.planner.outputs.legs != '[]'
-    # Pinned: Playwright's install-deps carries the ubuntu-24.04 package list
-    # (libicu74, libvpx9, libx264-164, libxml2) and fails with exit 100 on
-    # ubuntu-26.04, which ubuntu-latest became in November 2026.
+    # Hosted legs are pinned: Playwright's install-deps carries the ubuntu-24.04
+    # package list (libicu74, libvpx9, libx264-164, libxml2) and fails with exit
+    # 100 on ubuntu-26.04, which ubuntu-latest became in November 2026. The pool
+    # image is ubuntu-24.04 too (the actions-runner base).
     # TODO: return to ubuntu-latest once Microsoft.Playwright supports 26.04.
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(matrix.runsOn || '"ubuntu-24.04"') }}
     timeout-minutes: ${{ matrix.timeout }}
 
     strategy:
@@ -301,6 +341,9 @@ jobs:
       LATTICE_E2E_EAST_STORAGE: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:12000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:12001/devstoreaccount1;TableEndpoint=http://127.0.0.1:12002/devstoreaccount1;
       LATTICE_E2E_REQUIRED: '1'
       LATTICE_E2E_HOSTS_DIR: ${{ github.workspace }}/.journey-hosts
+      # The pool has no Docker daemon: there the harness runs the Prometheus binary
+      # the pool image bakes in, rather than JourneyPrometheus.Image.
+      LATTICE_E2E_PROMETHEUS_BINARY: ${{ matrix.pool && '/opt/prometheus/prometheus' || '' }}
       # The commit each journey's screenshot manifest records (#5360): the PR's head, which
       # its screenshot section is checked against, not the merge commit GITHUB_SHA names.
       LATTICE_E2E_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -313,22 +356,49 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Started as containers rather than `services:` so the backup and east
-      # accounts' ports can differ from the primary's, as in ci.yml's "Start
-      # Azurite" step.
+      # Started from a step rather than `services:` so the backup and east
+      # accounts' ports can differ from the primary's, and so a pool leg can run
+      # them at all (see the job's comment). Hosted legs run the pinned image, as
+      # in ci.yml's "Start Azurite" step; pool legs run the same version from npm.
+      # On the pool each account is started by a script under RUNNER_TEMP, so the
+      # fail-closed probe can stop the primary and start it again.
       - name: Start Azurite
+        env:
+          POOL: ${{ matrix.pool }}
         run: |
           set -euo pipefail
-          start() {
-            local name="$1"; shift
-            docker run -d --name "$name" "$@" mcr.microsoft.com/azure-storage/azurite:3.36.0 \
-              azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose
-          }
-          start azurite -p 10000:10000 -p 10001:10001 -p 10002:10002
-          start azurite-backup -p 11000:10000
-          start azurite-east -p 12000:10000 -p 12001:10001 -p 12002:10002
+          if [ "$POOL" = "true" ]; then
+            start() {
+              local name="$1" blob="$2" queue="$3" table="$4"
+              mkdir -p "$RUNNER_TEMP/$name"
+              cat > "$RUNNER_TEMP/$name.sh" <<EOF
+          #!/usr/bin/env bash
+          nohup azurite --silent --location "$RUNNER_TEMP/$name" --skipApiVersionCheck --loose \\
+            --blobHost 127.0.0.1 --blobPort $blob --queueHost 127.0.0.1 --queuePort $queue \\
+            --tableHost 127.0.0.1 --tablePort $table >> "$RUNNER_TEMP/$name.log" 2>&1 &
+          echo \$! > "$RUNNER_TEMP/$name.pid"
+          EOF
+              bash "$RUNNER_TEMP/$name.sh"
+            }
+            # The backup sink is Blob only; its unused queue and table ports keep
+            # clear of the other accounts'.
+            start azurite 10000 10001 10002
+            start azurite-backup 11000 11001 11002
+            start azurite-east 12000 12001 12002
+          else
+            start() {
+              local name="$1"; shift
+              docker run -d --name "$name" "$@" mcr.microsoft.com/azure-storage/azurite:3.36.0 \
+                azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose
+            }
+            start azurite -p 10000:10000 -p 10001:10001 -p 10002:10002
+            start azurite-backup -p 11000:10000
+            start azurite-east -p 12000:10000 -p 12001:10001 -p 12002:10002
+          fi
 
       - name: Wait for Azurite
+        env:
+          POOL: ${{ matrix.pool }}
         run: |
           set -euo pipefail
           for port in 10000 10001 10002 11000 12000 12001 12002; do
@@ -339,7 +409,11 @@ jobs:
               fi
               if [ "$attempt" -eq 60 ]; then
                 echo "::error::Azurite did not open port $port within 60 seconds."
-                docker ps -a
+                if [ "$POOL" = "true" ]; then
+                  tail -n 50 "$RUNNER_TEMP"/azurite*.log || true
+                else
+                  docker ps -a
+                fi
                 exit 1
               fi
               sleep 1
@@ -349,16 +423,32 @@ jobs:
       # Each estate that runs Prometheus starts its own container from this image,
       # on the host network with a scrape-target file the harness writes as silos
       # start (their ports are allocated per run), so the lane only pulls it once.
-      # The tag is JourneyPrometheus.Image; change the two together.
+      # The tag is JourneyPrometheus.Image; change the two together (and the
+      # version tools/ci-runners/Dockerfile bakes in for pool legs).
       - name: Pull Prometheus
+        if: ${{ !matrix.pool }}
         run: docker pull prom/prometheus:v3.1.0
+
+      - name: Check the pool image's Prometheus
+        if: ${{ matrix.pool }}
+        run: |
+          set -euo pipefail
+          if [ ! -x "$LATTICE_E2E_PROMETHEUS_BINARY" ]; then
+            echo "::error::$LATTICE_E2E_PROMETHEUS_BINARY is missing: the pool image predates journey legs. Redeploy tools/ci-runners (deploy.ps1)."
+            exit 1
+          fi
+          "$LATTICE_E2E_PROMETHEUS_BINARY" --version
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
+      # Not on a pool leg: the pool image carries a NuGet package snapshot, and
+      # skipping the cache keeps a burst of pool legs off the repository's Actions
+      # cache egress limit (as ci.yml's test legs do).
       - name: Cache NuGet packages
+        if: ${{ !matrix.pool }}
         uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
@@ -377,8 +467,12 @@ jobs:
             dotnet publish "$project" --configuration Release --no-restore --output "$LATTICE_E2E_HOSTS_DIR/$host"
           done
 
-      # Keyed on the project file, which pins Microsoft.Playwright.
+      # Keyed on the project file, which pins Microsoft.Playwright. Not on a pool
+      # leg: the pool image bakes in that version's Chromium and its system
+      # dependencies (LATTICE_PLAYWRIGHT_SYSTEM_DEPS), so the install below finds
+      # both present, and fetches only what a newer pin needs.
       - name: Cache Playwright browsers
+        if: ${{ !matrix.pool }}
         id: pwcache
         uses: actions/cache@v5
         with:
@@ -456,12 +550,21 @@ jobs:
           if-no-files-found: ignore
 
       # The fail-closed proof (#5363): with the primary Azurite stopped, the
-      # estate smoke fixture must FAIL - not pass, not go inconclusive.
+      # estate smoke fixture must FAIL - not pass, not go inconclusive. On the
+      # pool the primary is the npm process "Start Azurite" recorded.
       - name: Prove a stopped Azurite fails the leg
         if: success() && matrix.kind == 'harness'
+        env:
+          POOL: ${{ matrix.pool }}
         run: |
           set -uo pipefail
-          docker stop azurite
+          if [ "$POOL" = "true" ]; then
+            pid=$(cat "$RUNNER_TEMP/azurite.pid")
+            kill "$pid"
+            while kill -0 "$pid" 2>/dev/null; do sleep 1; done
+          else
+            docker stop azurite
+          fi
           # Actions runs `bash -e`; the expected failure must not end the step
           # before the verdict.
           set +e
@@ -472,7 +575,11 @@ jobs:
             --blame-hang-timeout 10m --blame-hang-dump-type none
           code=$?
           set -e
-          docker start azurite
+          if [ "$POOL" = "true" ]; then
+            bash "$RUNNER_TEMP/azurite.sh"
+          else
+            docker start azurite
+          fi
           python3 .github/workflows/explorer-journeys-plan.py probe \
             --trx "$RESULTS/fail-closed-probe.trx" --exit-code "$code"
 

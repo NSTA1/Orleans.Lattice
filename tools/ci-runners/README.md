@@ -12,8 +12,10 @@ It scales from zero: with nothing queued for it there are no replicas and no com
 
 Every matrix lane routes its legs at plan time with
 [`.github/workflows/runner-overflow.py`](../../.github/workflows/runner-overflow.py):
-`ci.yml` (pull requests and pushes), the nightly `coverage.yml` (coverage and TLC legs)
-and `formal-receipts.yml` (TLC legs). `ci.yml`'s single Content gates job is routed the
+`ci.yml` (pull requests and pushes), the nightly `coverage.yml` (coverage and TLC legs),
+`formal-receipts.yml` (TLC legs) and `explorer-journeys.yml` (journey legs, whose hosted
+label is `ubuntu-24.04`, via `--hosted`). Every lane counts every hosted job in the
+repository, so they share one headroom. `ci.yml`'s single Content gates job is routed the
 same way by a small `route-content-gates` job, so it need not wait for the planner.
 
 - The planner counts this repository's hosted jobs that are running or queued (a queued
@@ -81,9 +83,20 @@ other legs peaked at 6.5-7 GiB; GitHub's hosted runners have 16 GiB. D4 nodes sc
 zero but take about three minutes to start cold (node plus a 1 GB image pull), against
 about forty seconds on Consumption.
 
-The image is the GitHub runner base plus what hosted runners provide and the test legs
-use: the .NET 10 SDK, Python, jq, PowerShell, the Docker CLI with compose v2 (for
-`docker compose config`; no daemon), and Node with Azurite.
+The image is the GitHub runner base (Ubuntu 24.04) plus what hosted runners provide and
+the test legs use: the .NET 10 SDK, Python, jq, PowerShell, the Docker CLI with compose v2
+(for `docker compose config`; no daemon), and Node with Azurite.
+
+For the Explorer journey legs it also carries what they would otherwise take from Docker
+or apt: a Prometheus binary (`/opt/prometheus/prometheus`, the version
+`JourneyPrometheus.Image` pins, which the harness runs when
+`LATTICE_E2E_PROMETHEUS_BINARY` names it), and Playwright's Chromium with its system
+packages, at the version the end-to-end project pins. `LATTICE_PLAYWRIGHT_SYSTEM_DEPS`
+names the browsers whose packages are baked in, so `install-playwright-browsers.sh` skips
+the privileged `install-deps` for them. A journey leg on the pool starts its three Azurite
+accounts from npm. Redeploy after a Playwright or Prometheus version change: a pool leg
+on a stale image downloads the newer browser, and fails closed on a missing Prometheus
+binary.
 
 It also carries a NuGet package snapshot in `~/.nuget/packages`, restored at build time
 from every project in the solution. Pool legs skip the GitHub Actions NuGet cache: it is

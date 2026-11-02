@@ -36,8 +36,8 @@ public sealed class CiSelfHostedRunnerScopeTests
             .Where(w => PoolReference.IsMatch(StripComments(w.Text)))
             .ToList();
 
-        Assert.That(targeting.Select(w => w.Name), Is.SupersetOf(new[] { "ci.yml", "coverage.yml", "formal-receipts.yml" }),
-            "expected the three matrix lanes to route legs through runner-overflow.py; if they no longer do, "
+        Assert.That(targeting.Select(w => w.Name), Is.SupersetOf(new[] { "ci.yml", "coverage.yml", "formal-receipts.yml", "explorer-journeys.yml" }),
+            "expected the four matrix lanes to route legs through runner-overflow.py; if they no longer do, "
             + "this fixture is guarding nothing and must be revisited");
 
         Assert.Multiple(() =>
@@ -66,6 +66,7 @@ public sealed class CiSelfHostedRunnerScopeTests
     [TestCase("ci.yml")]
     [TestCase("coverage.yml")]
     [TestCase("formal-receipts.yml")]
+    [TestCase("explorer-journeys.yml")]
     public void A_routed_leg_job_declares_no_service_or_job_container(string workflow)
     {
         var text = StripComments(File.ReadAllText(
@@ -75,6 +76,7 @@ public sealed class CiSelfHostedRunnerScopeTests
         var routed = Enumerable.Range(0, starts.Count - 1)
             .Select(i => jobs[starts[i]..starts[i + 1]])
             .Where(job => job.Contains("matrix.leg.runsOn", StringComparison.Ordinal)
+                || job.Contains("matrix.runsOn", StringComparison.Ordinal)
                 || job.Contains(".outputs.runs_on", StringComparison.Ordinal))
             .ToList();
 
@@ -96,10 +98,13 @@ public sealed class CiSelfHostedRunnerScopeTests
     /// <summary>
     /// The routed legs that run Azure-emulator tests start Azurite from a step that
     /// handles both runner kinds: the pinned image on hosted runners, npm on the pool.
+    /// The journey lane's matrix is an <c>include:</c> list, so its legs read
+    /// <c>matrix.pool</c> where the others read <c>matrix.leg.pool</c>.
     /// </summary>
-    [TestCase("ci.yml")]
-    [TestCase("coverage.yml")]
-    public void A_routed_leg_starts_Azurite_from_a_step_on_either_runner_kind(string workflow)
+    [TestCase("ci.yml", "matrix.leg.pool")]
+    [TestCase("coverage.yml", "matrix.leg.pool")]
+    [TestCase("explorer-journeys.yml", "matrix.pool")]
+    public void A_routed_leg_starts_Azurite_from_a_step_on_either_runner_kind(string workflow, string pool)
     {
         var text = File.ReadAllText(Path.Combine(HygieneRepository.FindRepoRoot(), ".github", "workflows", workflow));
 
@@ -107,9 +112,9 @@ public sealed class CiSelfHostedRunnerScopeTests
         {
             Assert.That(text, Does.Contain("- name: Start Azurite\n").Or.Contain("- name: Start Azurite\r\n"),
                 $"{workflow}: the routed leg must start Azurite from a step");
-            Assert.That(text, Does.Contain("POOL: ${{ matrix.leg.pool }}"),
-                $"{workflow}: the step must branch on matrix.leg.pool");
-            Assert.That(text, Does.Contain("docker run -d --name azurite"),
+            Assert.That(text, Does.Contain("POOL: ${{ " + pool + " }}"),
+                $"{workflow}: the step must branch on {pool}");
+            Assert.That(text, Does.Contain("docker run -d --name").And.Contain("mcr.microsoft.com/azure-storage/azurite:3.36.0"),
                 $"{workflow}: hosted legs must run the pinned Azurite image");
             Assert.That(text, Does.Contain("nohup azurite --silent"),
                 $"{workflow}: pool legs must run the Azurite baked into the pool image");
@@ -117,20 +122,21 @@ public sealed class CiSelfHostedRunnerScopeTests
     }
 
     /// <summary>
-    /// The routed ci.yml test legs skip the GitHub Actions NuGet cache on the pool: the
-    /// pool image carries a package snapshot, and an ~800 MB cache download per pool leg
-    /// pushes the repository over its cache egress limit, throttling every restore.
+    /// The routed test and journey legs skip the GitHub Actions NuGet cache on the pool:
+    /// the pool image carries a package snapshot, and an ~800 MB cache download per pool
+    /// leg pushes the repository over its cache egress limit, throttling every restore.
     /// </summary>
-    [Test]
-    public void A_pool_leg_skips_the_Actions_NuGet_cache()
+    [TestCase("ci.yml", "test", "content-gates", "matrix.leg.pool")]
+    [TestCase("explorer-journeys.yml", "legs", "coverage-gate", "matrix.pool")]
+    public void A_pool_leg_skips_the_Actions_NuGet_cache(string workflow, string job, string next, string pool)
     {
-        var text = File.ReadAllText(Path.Combine(HygieneRepository.FindRepoRoot(), ".github", "workflows", "ci.yml"))
+        var text = File.ReadAllText(Path.Combine(HygieneRepository.FindRepoRoot(), ".github", "workflows", workflow))
             .Replace("\r\n", "\n");
-        var test = text[text.IndexOf("\n  test:\n", StringComparison.Ordinal)..];
-        test = test[..test.IndexOf("\n  content-gates:\n", StringComparison.Ordinal)];
+        var block = text[text.IndexOf($"\n  {job}:\n", StringComparison.Ordinal)..];
+        block = block[..block.IndexOf($"\n  {next}:\n", StringComparison.Ordinal)];
 
-        Assert.That(test, Does.Contain("- name: Cache NuGet packages\n        if: ${{ !matrix.leg.pool }}\n"),
-            "ci.yml test job: the NuGet cache step must be skipped on a pool leg");
+        Assert.That(block, Does.Contain("- name: Cache NuGet packages\n        if: ${{ !" + pool + " }}\n"),
+            $"{workflow} {job} job: the NuGet cache step must be skipped on a pool leg");
     }
 
     /// <summary>
