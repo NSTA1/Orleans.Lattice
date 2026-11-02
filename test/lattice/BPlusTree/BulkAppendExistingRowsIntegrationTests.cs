@@ -163,6 +163,65 @@ public sealed class BulkAppendExistingRowsIntegrationTests
         await AssertTreeHoldsExactlyAsync(tree, expected, "after every leaf replayed");
     }
 
+    [Test]
+    public async Task BulkAppend_appended_leaves_start_from_the_birth_hint_and_the_switch_closes_by_fence()
+    {
+        // Epic #5605, member 3: the appended leaves read from the hint captured before
+        // they were born, so after a reactivation they replay only from there. Every
+        // key of both chunks, and the point write between them, must survive that.
+        const string treeId = "bulk-birth-hint-append";
+        var (shard, tree) = await SingleShardTreeAsync(treeId);
+
+        await shard.BulkAppendAsync("chunk-1", Entries(0, 8, "b"));
+        // Between the chunks and inside the second one, so part of it lands below the
+        // right edge and the rest is appended behind it.
+        await tree.SetAsync("k0012x", Utf8("point"));
+        await shard.BulkAppendAsync("chunk-2", Entries(8, 12, "b"));
+
+        var expected = Expected(0, 20, "b");
+        expected["k0012x"] = "point";
+
+        await AssertSwitchesClosedAsync(treeId, "bulk:chunk-1", "bulk:chunk-2");
+        await DeactivateEveryLeafAsync(shard);
+        await AssertTreeHoldsExactlyAsync(tree, expected, "after every leaf replayed from its read position");
+    }
+
+    [Test]
+    public async Task BulkLoad_leaves_start_from_the_birth_hint_and_every_key_survives_reactivation()
+    {
+        const string treeId = "bulk-birth-hint-load";
+        var (shard, tree) = await SingleShardTreeAsync(treeId);
+
+        await tree.BulkLoadAsync(Entries(0, 20, "b"));
+
+        var expected = Expected(0, 20, "b");
+        await AssertSwitchesClosedAsync(treeId);
+        await DeactivateEveryLeafAsync(shard);
+        await AssertTreeHoldsExactlyAsync(tree, expected, "after every leaf replayed from its read position");
+    }
+
+    /// <summary>
+    /// Asserts the shard's marker holds no open hand-off and no stored birth hint, and
+    /// has closed a bulk switch for each of <paramref name="tokens"/>, or at least one
+    /// when none is named.
+    /// </summary>
+    private async Task AssertSwitchesClosedAsync(string treeId, params string[] tokens)
+    {
+        var storage = ((InProcessSiloHandle)_cluster.Primary).SiloHost.Services
+            .GetRequiredKeyedService<Orleans.Storage.IGrainStorage>(LatticeOptions.StorageProviderName);
+        var marker = (await HandOffMarkerRows.ReadShardAsync(storage, treeId, 0)).State;
+        var closed = marker.Closes.Select(c => c.Token).ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(marker.Open, Is.Empty, "no bulk switch is left open");
+            Assert.That(marker.BulkBirthHints, Is.Empty, "every birth hint is removed with its close");
+            if (tokens.Length == 0)
+                Assert.That(closed, Has.Some.StartsWith("bulk:"), "the load's switch closed");
+            else
+                Assert.That(closed, Is.SupersetOf(tokens), $"every append's switch closed; closed: {string.Join(", ", closed)}");
+        });
+    }
+
     private async Task<(IShardRootGrain Shard, ILattice Tree)> SingleShardTreeAsync(string treeId)
     {
         var registry = _cluster.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);

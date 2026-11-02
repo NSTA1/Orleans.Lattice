@@ -11555,6 +11555,9 @@ public static class LatticeMetrics
     /// <summary><see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a tree range delete's intent.</summary>
     public const string HandOffKindRangeDelete = "range_delete";
 
+    /// <summary><see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a bulk load's or bulk append's switch (member 3).</summary>
+    public const string HandOffKindBulk = "bulk";
+
 
     /// <summary><see cref="TagOutcome"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a hand-off marker opened.</summary>
     public static readonly KeyValuePair<string, object?> HandOffMarkerOpened = new(TagOutcome, "opened");
@@ -11565,7 +11568,7 @@ public static class LatticeMetrics
     /// <summary>
     /// Counter of hand-off markers opened and closed (epic #5605, member 2), tagged
     /// with <see cref="TagTree"/>, the tenant, <see cref="TagKind"/> (<c>split</c>,
-    /// <c>reclaim</c>, <c>shard_migration</c> or <c>range_delete</c>) and <see cref="TagOutcome"/> (<c>opened</c> or <c>closed</c>). An
+    /// <c>reclaim</c>, <c>shard_migration</c>, <c>range_delete</c> or <c>bulk</c>) and <see cref="TagOutcome"/> (<c>opened</c> or <c>closed</c>). An
     /// open marker holds the owners it covers on the replay-based advance until its
     /// close's fence returns heads they replay to; opened minus closed is the number
     /// in flight, and a gap that does not close means a hand-off whose recovery has not
@@ -11573,7 +11576,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> WalAppendFenceHandOffMarkers =
         Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.handoff_markers", unit: "{marker}",
-            description: "Hand-off markers opened and closed by their fence (epic #5605), by tree, kind (split, reclaim, shard_migration or range_delete) and outcome (opened or closed).");
+            description: "Hand-off markers opened and closed by their fence (epic #5605), by tree, kind (split, reclaim, shard_migration, range_delete or bulk) and outcome (opened or closed).");
 
     /// <summary>Records one hand-off marker of <paramref name="kind"/> opened or closed on <paramref name="treeId"/>.</summary>
     internal static void RecordHandOffMarker(string kind, bool opened, string treeId) =>

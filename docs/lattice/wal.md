@@ -1581,6 +1581,7 @@ by an older build, or while the gate was closed, opens one when it resumes.
 | Leaf reclaim | The absorbed neighbour | The survivor's, opened before its range widens | The neighbour's entries are retired at every partition, and the allocator heads are read after the retirement |
 | Adaptive split, consolidation fold | The donor shard root | The target shard root's, opened when the migration begins | The donor raises its routing generation, after the reject phase and the drain, and re-claims it at every partition |
 | Range delete | The tree's range-delete fence | Every shard root's, range-scoped | The fence raises the tree's range-delete generation and re-claims it at every partition |
+| Bulk load, bulk append | The shard root | Its own, `bulk:{operationId}`, opened before the first leaf is created: over the whole shard for a load, from the first appended separator for an append | Once the new leaves are routable, the shard root raises its routing generation and re-claims it at every partition |
 
 **Writes are stamped at admission.** A shard root captures its routing generation
 in the same step as its phase check and passes it to the leaf through a new,
@@ -1639,6 +1640,23 @@ or reshard shadow forward, a fan-out begun while the gate was closed, an older
 caller - is appended unstamped, by design. The record, its result and its feed are
 unchanged; range-delete records are fenced, never clipped.
 
+**The bulk birth hint.** A bulk load or bulk append records every WAL partition's
+head as its **birth hint** in the shard's marker row, in the same write that opens its
+marker and before it creates its first leaf; a resume of the same operation reuses the
+stored hint. Once the switch has moved into its new leaves every row the shard held
+in their range before it - the old rightmost leaf's rows for an append, the rows a
+batch write stored on the replaced root for a load (see
+[Bulk Loading](bulk-loading.md#rows-the-append-meets)) - each new leaf's projection
+checkpoint is set to the hint, so a cold activation replays the log from there rather
+than from its start. Every row such a leaf owns was then appended after the hint. When
+that cannot be shown - the old rightmost leaf is hosted by an older build or the gate
+was closed, so its rows were not moved, or a load crashed after publishing its root -
+the hint is not applied and the new leaves replay from the log's start, as before. The
+switch then closes by fence and the hint is removed in the same write. A bulk load
+also waits, before it reads the root it replaced, for the batch writes admitted before
+it published its own; a bulk append waits likewise before its close, which only lowers
+the number of writes the fence rejects.
+
 **Coordinator terminals** carry the coordinator-terminal stamp class described in
 [Append epoch fencing](#append-epoch-fencing), so a saga does not raise the reported
 unstamped offset of every partition it touched.
@@ -1663,6 +1681,10 @@ conditional delete per fence row, and a floor write per step. Per WAL partition
 activation: one floor-row read at its first routing-generation claim. Per shard root
 of a re-created tree: one floor-row read before its marker first reads initialised,
 and, when the floor is above 0, one fence-grain call and one claim per partition.
+Per bulk load or bulk append that
+creates leaves: one read of each partition's head and one marker write to open, one
+checkpoint-hint call per new leaf, and one generation re-claim per partition and one
+marker write to close.
 
 **Purging a tree's fence rows.** The per-tree rows - each shard root's
 `_lattice_shard-handoff` marker, each partition's `_lattice_wal-routing-generation`

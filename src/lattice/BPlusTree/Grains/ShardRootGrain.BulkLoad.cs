@@ -14,11 +14,23 @@ internal sealed partial class ShardRootGrain
         ThrowIfDeleted();
         ThrowIfRetired();
         await AdmitPurgedCopyForBulkWriteAsync();
-        if (state.State.LastCompletedBulkOperationId == operationId) return;
+        if (state.State.LastCompletedBulkOperationId == operationId)
+        {
+            // A crash after the load published its root and before its switch closed
+            // leaves the marker open and the hint stored. The replaced root is no
+            // longer known, so the leaves keep reading from the log's start, which
+            // reaches any row it held; the switch is closed without the hint.
+            await FinishBulkSwitchAsync(operationId, [], relocated: false, drainBatchWrites: false);
+            return;
+        }
 
         var seededRoot = await EnsureEmptyForBulkLoadAsync(nameof(BulkLoadAsync));
 
         if (sortedEntries.Count == 0) return;
+
+        // Epic #5605, member 3: the switch's birth hint and its marker, stored before
+        // the first leaf is created.
+        await BeginBulkSwitchAsync(operationId, null);
 
         RecordWrite(sortedEntries.Count);
 
@@ -56,6 +68,10 @@ internal sealed partial class ShardRootGrain
 
         var replaced = await FinalizeBulkLoadTreeAsync(operationId, leafIds, separators, maxChildren);
         await RetireReplacedRootAsync(seededRoot, replaced);
+
+        // Every row the shard held before the switch is now in the loaded tree, so
+        // the leaves may read from the birth hint; the switch closes by fence.
+        await FinishBulkSwitchAsync(operationId, leafIds, relocated: true, drainBatchWrites: false);
     }
 
     /// <inheritdoc />
@@ -67,11 +83,23 @@ internal sealed partial class ShardRootGrain
         ThrowIfDeleted();
         ThrowIfRetired();
         await AdmitPurgedCopyForBulkWriteAsync();
-        if (state.State.LastCompletedBulkOperationId == operationId) return;
+        if (state.State.LastCompletedBulkOperationId == operationId)
+        {
+            // A crash after the load published its root and before its switch closed
+            // leaves the marker open and the hint stored. The replaced root is no
+            // longer known, so the leaves keep reading from the log's start, which
+            // reaches any row it held; the switch is closed without the hint.
+            await FinishBulkSwitchAsync(operationId, [], relocated: false, drainBatchWrites: false);
+            return;
+        }
 
         var seededRoot = await EnsureEmptyForBulkLoadAsync(nameof(BulkLoadRawAsync));
 
         if (sortedEntries.Count == 0) return;
+
+        // Epic #5605, member 3: the switch's birth hint and its marker, stored before
+        // the first leaf is created.
+        await BeginBulkSwitchAsync(operationId, null);
 
         RecordWrite(sortedEntries.Count);
 
@@ -102,6 +130,10 @@ internal sealed partial class ShardRootGrain
 
         var replaced = await FinalizeBulkLoadTreeAsync(operationId, leafIds, separators, maxChildren);
         await RetireReplacedRootAsync(seededRoot, replaced);
+
+        // Every row the shard held before the switch is now in the loaded tree, so
+        // the leaves may read from the birth hint; the switch closes by fence.
+        await FinishBulkSwitchAsync(operationId, leafIds, relocated: true, drainBatchWrites: false);
     }
 
     /// <summary>
@@ -525,11 +557,11 @@ internal sealed partial class ShardRootGrain
         {
             if (state.State.PendingBulkGraft.OperationId == operationId)
             {
-                await CompleteBulkGraftAsync();
+                await CompleteBulkGraftAsync(drainBatchWrites: true);
                 await MirrorAppliedRowsAsync(MirroredKeys(sortedEntries), joinCrdt: false);
                 return;
             }
-            await CompleteBulkGraftAsync();
+            await CompleteBulkGraftAsync(drainBatchWrites: true);
         }
 
         if (sortedEntries.Count == 0) return;
@@ -612,6 +644,11 @@ internal sealed partial class ShardRootGrain
             return;
         }
 
+        // Epic #5605, member 3: the switch's birth hint and its marker, stored before
+        // the first appended leaf is created. The marker covers the appended range
+        // only; the old rightmost leaf is narrowed to its low bound.
+        await BeginBulkSwitchAsync(operationId, sortedEntries[idx].Key);
+
         var graftEntries = new List<GraftEntry>();
         var newLeafCount = 1 + (sortedEntries.Count - idx - 1) / maxLeafKeys;
         var newLeafIds = new GrainId[newLeafCount];
@@ -670,7 +707,7 @@ internal sealed partial class ShardRootGrain
         };
         await WriteShardStateAsync();
 
-        await CompleteBulkGraftAsync();
+        await CompleteBulkGraftAsync(drainBatchWrites: true);
         await MirrorBulkAppendAsync(mirrored, sortedEntries);
     }
 
@@ -835,7 +872,12 @@ internal sealed partial class ShardRootGrain
     /// <summary>
     /// Completes (or resumes) a bulk-append graft whose intent has been persisted.
     /// </summary>
-    private async Task CompleteBulkGraftAsync()
+    /// <param name="drainBatchWrites">
+    /// Whether the switch's close first waits for the batch writes admitted before it;
+    /// see <see cref="FinishBulkSwitchAsync"/>. Only a serial turn passes
+    /// <see langword="true"/>.
+    /// </param>
+    private async Task CompleteBulkGraftAsync(bool drainBatchWrites = false)
     {
         var graft = state.State.PendingBulkGraft!;
 
@@ -850,7 +892,7 @@ internal sealed partial class ShardRootGrain
         // relocation that fails part-way is handed the same rows when the graft is
         // resumed. A resume narrows whenever the leaf was already narrowed, even
         // with the gate closed, so it never abandons rows a first attempt stranded.
-        await NarrowAndRelocateAsync(graft, existingLeaf);
+        var relocated = await NarrowAndRelocateAsync(graft, existingLeaf);
 
         // Re-asserts the link for the 10.2.0 path and for a graft resumed after the
         // narrow; a no-op persist-wise once the narrow linked it.
@@ -967,6 +1009,14 @@ internal sealed partial class ShardRootGrain
             }
         }
 
+        // The appended leaves are routable, so the switch is closed by fence; their
+        // read position becomes the birth hint only when the relocation above moved
+        // every row they own whose records predate it (epic #5605, member 3).
+        var newLeafIds = new GrainId[graft.NewLeaves.Count];
+        for (var i = 0; i < newLeafIds.Length; i++)
+            newLeafIds[i] = graft.NewLeaves[i].LeafId;
+        await FinishBulkSwitchAsync(graft.OperationId, newLeafIds, relocated, drainBatchWrites);
+
         state.State.PendingBulkGraft = null;
         state.State.LastCompletedBulkOperationId = graft.OperationId;
         await WriteShardStateAsync();
@@ -993,8 +1043,16 @@ internal sealed partial class ShardRootGrain
     /// those rows from it (issues #5610, #5654). Copy, deliver, drop: a relocation
     /// that fails, or a shard root that dies before it, leaves the rows on the old
     /// leaf for the resumed graft to be handed again.
+    /// <para>
+    /// Returns whether the old leaf was narrowed and every row it held at or above the
+    /// separator was relocated into the appended leaves, so that every row they own was
+    /// appended after the operation's birth hint was captured. Only then may the hint
+    /// become their read position (review N2 of #5646): a row left on the old leaf has
+    /// its records below the hint, and the appended leaves reach it only by replaying
+    /// from the log's start.
+    /// </para>
     /// </summary>
-    private async Task NarrowAndRelocateAsync(PendingBulkGraft graft, IBPlusLeafGrain existingLeaf)
+    private async Task<bool> NarrowAndRelocateAsync(PendingBulkGraft graft, IBPlusLeafGrain existingLeaf)
     {
         var separator = graft.NewLeaves[0].SeparatorKey;
         if (!BulkGraftSeamsAvailable)
@@ -1003,7 +1061,7 @@ internal sealed partial class ShardRootGrain
             // narrowed the leaf already; its stranded rows must still be moved.
             var high = (await existingLeaf.GetKeyRangeAndNextSiblingAsync()).KeyRange.HighKeyExclusive;
             if (high is null || string.CompareOrdinal(high, separator) > 0)
-                return;
+                return false;
         }
 
         List<LwwEntry>? stranded;
@@ -1015,11 +1073,11 @@ internal sealed partial class ShardRootGrain
         {
             // An older silo joined and hosts the leaf before the gate saw it: the
             // 10.2.0 path, which links without narrowing.
-            return;
+            return false;
         }
 
         if (stranded is not { Count: > 0 })
-            return;
+            return true;
 
         await RelocateIntoGraftedLeavesAsync(graft, stranded);
 
@@ -1036,6 +1094,8 @@ internal sealed partial class ShardRootGrain
             // no read reaches them there and its replay does not reload them; only
             // the in-memory copy on an older silo's activation is left behind.
         }
+
+        return true;
     }
 
     /// <summary>

@@ -3105,8 +3105,13 @@ internal sealed partial class BPlusLeafGrain(
             {
                 // Class B revert: the graft is still owed, and its resume hands
                 // these rows back again.
+                // Only where nothing has taken the key's place since: a write stored
+                // over it during the persist is the newer row and stays.
                 foreach (var (key, row) in dropped)
-                    StoreEntry(key, row);
+                {
+                    if (!Cache.TryGetRow(key, out _))
+                        StoreEntry(key, row);
+                }
                 BumpLocalRevision();
                 throw;
             }
