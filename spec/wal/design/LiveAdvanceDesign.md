@@ -927,14 +927,18 @@ In the model, `WithLegacyPurge` makes every purge a 10.2.0 one (`LegacyPurgeTree
 marker this incarnation seeded. A re-created leaf arms only once its shard root has
 caught up, because it exists only after the re-seed. The residue below is not modelled.
 
-**Unmodelled mixed-version residue.** Two cases remain outside the design's guarantee:
+**Unmodelled mixed-version residue.** Three cases remain outside the design's guarantee:
 - a re-seed run on a 10.2.0 silo, which runs no catch-up;
-- the range-delete fence state the purged incarnation left behind.
+- the range-delete fence state the purged incarnation left behind;
+- a cross-shard straddler spanning a 10.2.0 purge: a shard root's catch-up raises only
+  its own initiator's floor, so another shard root's straddler is fenced only once that
+  shard root re-seeds, which a re-created tree with fewer shards never does. Closing it
+  would take cross-shard catch-up calls on every re-seed, against the cost directive.
 
-For either to do harm, a straddler's seam retry must outlast its deadline across a gate
+For any of them to do harm, a straddler's seam retry must outlast its deadline across a gate
 close, the 10.2.0 purge settling, the re-creation and the gate reopening: the gate is
 closed while a 10.2.0 silo is present, so a write admitted in that window is unstamped
-and reported. The model excludes it: a cross-shard straddler does not span a 10.2.0
+and reported. The model excludes them: a cross-shard straddler does not span a 10.2.0
 purge (`LegacyPurgeTreeRows`), and every re-seed is the new build's. **Operators should
 not purge trees during a rolling upgrade from 10.2.0.**
 
@@ -1324,9 +1328,10 @@ off again if a 10.2.0 silo joins. At every moment:
   resumes, opens its marker and closes it by fence;
 - a purge that finishes on 10.2.0 leaves the tree's fence rows, and the new build's
   re-seed catches them up before the tombstone is lifted (section 2, "A purge that
-  finishes on 10.2.0"). A re-seed on a 10.2.0 silo, and the range-delete fence state the
-  purged incarnation left, are the documented residue: operators should not purge trees
-  during a rolling upgrade from 10.2.0.
+  finishes on 10.2.0"). A re-seed on a 10.2.0 silo, the range-delete fence state the
+  purged incarnation left, and a cross-shard straddler spanning the 10.2.0 purge are the
+  documented residue: operators should not purge trees during a rolling upgrade from
+  10.2.0.
 
 The model checks these with four configurations:
 - `WalLiveAdvanceMixed.cfg` and `WalLiveAdvanceMixedRestart.cfg`: an environment
