@@ -126,6 +126,11 @@ public partial class BPlusLeafGrainTests
     /// share at a known width on any machine.
     /// </param>
     /// <param name="walPartitions">The number of WAL partitions.</param>
+    /// <param name="commitLogWriter">
+    /// The commit-log writer the leaf appends through, or <see langword="null"/>
+    /// for none (the leaf then appends nothing). Issue #5572's live checkpoint
+    /// fixtures supply one so the leaf's own appends are tracked.
+    /// </param>
     /// <param name="cursorReporter">
     /// The cursor reporter the leaf publishes its durable pins through, or
     /// <see langword="null"/> for a substitute nothing reads. Issue #5570's
@@ -148,7 +153,9 @@ public partial class BPlusLeafGrainTests
             int? maxConcurrentReplays = null,
             ILeafReplayCoordinatorGrain? replayCoordinator = null,
             string? replicaId = null,
-            ILeafCursorReporter? cursorReporter = null)
+            ICommitLogWriter? commitLogWriter = null,
+            ILeafCursorReporter? cursorReporter = null,
+            LiveAdvanceRig? liveAdvance = null)
     {
         var saved = new List<LeafSnapshotBlob>();
 
@@ -217,18 +224,28 @@ public partial class BPlusLeafGrainTests
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILeafSnapshotStorageGrain>(Arg.Any<Guid>()).Returns(snapshotStub);
         grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(Arg.Any<string>()).Returns(coord);
+        liveAdvance?.Configure(grainFactory);
 
         var sc = new ServiceCollection();
         sc.AddSingleton(Substitute.For<ICommitLogReader>());
         sc.AddSingleton(cursorReporter ?? Substitute.For<ILeafCursorReporter>());
+        if (commitLogWriter is not null)
+        {
+            sc.AddSingleton(commitLogWriter);
+        }
         sc.AddSingleton(detector);
+        liveAdvance?.Register(sc);
         var services = sc.BuildServiceProvider();
 
         var context = Substitute.For<IGrainContext>();
-        context.GrainId.Returns(GrainId.Create("leaf", replicaId ?? Guid.NewGuid().ToString("N")));
+        context.GrainId.Returns(GrainId.Create("leaf", liveAdvance?.LeafId.ToString("N") ?? replicaId ?? Guid.NewGuid().ToString("N")));
         context.ActivationServices.Returns(services);
 
         var state = new FakePersistentState<LeafNodeState>();
+        if (liveAdvance is not null)
+        {
+            state.State.ShardIndex = 0;
+        }
         state.State.TreeId = treeId ?? CoverageRepairTreeId;
         state.State.ProjectionCheckpointOffset = persistedCheckpoint;
 

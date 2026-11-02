@@ -1004,4 +1004,9 @@ internal static class TypeAliases
 
     /// <summary>Alias for a tree id's routing-generation floor, written when a purge retires its fence rows (#5668).</summary>
     internal const string TreeRoutingFloorState = "ol.xrf";
+
+    // The live checkpoint advance (epic #5605, member 4).
+
+    /// <summary>Alias for a shard root's answer to a leaf's live-advance read.</summary>
+    internal const string LeafLiveAdvanceView = "ol.xlv";
 }

@@ -149,6 +149,36 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         }
     }
 
+    /// <summary>
+    /// The live advance's view of <paramref name="partition"/> (epic #5605, member 4),
+    /// read in one step: the claim head under the current epoch and the highest
+    /// unstamped offset reported to this activation there. <see langword="false"/>
+    /// when the activation cannot arm on the partition at all: it is superseded, its
+    /// view of the gate is closed, or the partition is not claimed under its current
+    /// epoch (never claimed, reset by an unloaded rejection, or awaiting a re-claim
+    /// after a bump).
+    /// </summary>
+    internal bool TryGetArmingView(int partition, out long claimHead, out long reportedUnstamped)
+    {
+        lock (_sync)
+        {
+            if (!_stale
+                && IsGateOpenLocked()
+                && _epoch > 0
+                && _partitions.TryGetValue(partition, out var p)
+                && p.ClaimedEpoch == _epoch)
+            {
+                claimHead = p.Head;
+                reportedUnstamped = p.ReportedUnstamped;
+                return true;
+            }
+        }
+
+        claimHead = -1;
+        reportedUnstamped = -1;
+        return false;
+    }
+
     /// <inheritdoc />
     public ValueTask<WalAppendStamp?> StampForAsync(IWalShardGrain shard, int partition, CancellationToken cancellationToken)
     {

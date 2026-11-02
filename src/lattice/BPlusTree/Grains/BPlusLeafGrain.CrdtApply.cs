@@ -284,6 +284,8 @@ internal sealed partial class BPlusLeafGrain
         }
 
         var treeId = LogicalTreeId(RequireBoundTreeId(key, mode, "the typed CRDT delta apply"));
+        WalRecord? crdtRecord = null;
+        long crdtOffset = -1;
         var registry = ResolveCrdtShapeRegistry();
         var shape = registry.TryGet(treeId, mode);
         if (shape is null)
@@ -426,7 +428,8 @@ internal sealed partial class BPlusLeafGrain
                     deltaBytes);
                 if (batch is null)
                 {
-                    await AppendRoutedAsync(writer, record, routing);
+                    crdtOffset = await AppendRoutedAsync(writer, record, routing);
+                    crdtRecord = record;
                 }
                 else
                 {
@@ -488,7 +491,8 @@ internal sealed partial class BPlusLeafGrain
                     deltaBytes);
                 if (batch is null)
                 {
-                    await AppendRoutedAsync(writer, record, routing);
+                    crdtOffset = await AppendRoutedAsync(writer, record, routing);
+                    crdtRecord = record;
                 }
                 else
                 {
@@ -548,6 +552,12 @@ internal sealed partial class BPlusLeafGrain
             // delivery cursor and replication ship path observe the apply.
             BumpDeliverySequenceFor(key);
             Cache.StoreTyped(key, typedState);
+        }
+
+        // The single-key append is applied on both paths (issue #5572).
+        if (crdtRecord is { } appliedRecord)
+        {
+            MarkLiveAppendApplied(appliedRecord, crdtOffset);
         }
 
         // Record the per-key merge mode so a snapshot capture of this leaf's
@@ -710,7 +720,9 @@ internal sealed partial class BPlusLeafGrain
                 // is safe; it is only the copy that was unnecessary.
                 try
                 {
-                    await AppendManyRoutedAsync(writer, walEntries, routing);
+                    // Every per-key apply landed before the batched append.
+                    var crdtOffsets = await AppendManyRoutedAsync(writer, walEntries, routing);
+                    MarkLiveAppendApplied(walEntries, crdtOffsets);
                 }
                 catch (WalStampBelowFloorException refusal) when (AbsorbClockFloorRefusalAndRethrow(refusal))
                 {

@@ -64,6 +64,19 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <inheritdoc />
+    public async Task<LeafLiveAdvanceView> GetLiveAdvanceViewAsync(GrainId leafId, string? lowKeyInclusive)
+    {
+        var marker = await GetHandOffMarkerAsync();
+
+        // Read after the marker: a leaf that descent no longer reaches (absorbed by a
+        // reclaim, or an orphan sharing a live leaf's bounds) is held either way.
+        var reachable = state.State.RootNodeId is not null
+            && !state.State.IsRetired
+            && await ResolveWalkStartLeafAsync(lowKeyInclusive) == leafId;
+        return new LeafLiveAdvanceView(marker, reachable, Volatile.Read(ref _orphanRepairInProgress) != 0);
+    }
+
+    /// <inheritdoc />
     public Task OpenHandOffMarkerAsync(string token, string? lowInclusive, string? highExclusive)
     {
         ArgumentException.ThrowIfNullOrEmpty(token);

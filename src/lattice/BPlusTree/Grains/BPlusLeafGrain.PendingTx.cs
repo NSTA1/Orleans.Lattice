@@ -2761,6 +2761,8 @@ internal sealed partial class BPlusLeafGrain
                     anyFreshStamp = true;
                 }
 
+                WalRecord? backstopEntry = null;
+                long backstopOffset = -1;
                 if (writer is not null)
                 {
                     var entry = new WalRecord
@@ -2798,7 +2800,8 @@ internal sealed partial class BPlusLeafGrain
                     var walStartTicks = Stopwatch.GetTimestamp();
                     try
                     {
-                        await AppendRoutedAsync(writer, entry, backstopAdmission);
+                        backstopOffset = await AppendRoutedAsync(writer, entry, backstopAdmission);
+                        backstopEntry = entry;
                     }
                     finally
                     {
@@ -2821,6 +2824,11 @@ internal sealed partial class BPlusLeafGrain
                 StoreEntry(kvp.Key, value);
                 if (joinCrdtState)
                     Cache.SetMergeMode(kvp.Key, backstopMode);
+                // The backstop's append is applied (issue #5572).
+                if (backstopEntry is { } appliedBackstop)
+                {
+                    MarkLiveAppendApplied(appliedBackstop, backstopOffset);
+                }
                 // A backstop at a fresh stamp, or at an original stamp minted
                 // on this shard, is a non-migration write: any prior
                 // migration-provenance marker for this key is now stale and
