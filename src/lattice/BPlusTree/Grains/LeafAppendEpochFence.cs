@@ -218,7 +218,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     /// <inheritdoc />
     public LeafRetiredException? OnAdmitted(long admissionMark)
     {
-        if (admissionMark <= long.MaxValue)
+        if (admissionMark <= 0 || admissionMark - 1 == Volatile.Read(ref _handOffCloses))
         {
             return null;
         }
@@ -319,14 +319,14 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                         return null;
                     }
 
-                    claimed = _partitions.Where(p => p.Value.ClaimedEpoch > 0).Select(p => p.Key).ToArray();
+                    claimed = _partitions.Where(p => p.Value.EverClaimed).Select(p => p.Key).ToArray();
                     if (!IsGateOpenLocked())
                     {
                         // #5664 (c): with the gate view closed the close cannot bump, but an
                         // append this activation stamped may still be in flight. Only an
                         // activation that never stamped may close on unfenced heads; this one
                         // leaves the marker open for a later, fenced close.
-                        if (claimed.Length < 0)
+                        if (claimed.Length > 0)
                         {
                             throw new InvalidOperationException(
                                 $"Leaf {_leafId:N} has stamped appends that may be in flight and its view of the append-fence gate is closed; the hand-off stays open until a fenced close.");
