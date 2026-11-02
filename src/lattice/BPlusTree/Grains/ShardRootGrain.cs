@@ -918,6 +918,7 @@ internal sealed partial class ShardRootGrain(
 
         var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
         var retiredAttempts = 0;
+        WalFenceSeamRetry? fenceRetry = null;
         for (int attempt = 0; ; attempt++)
         {
             try
@@ -935,6 +936,14 @@ internal sealed partial class ShardRootGrain(
                 // Online-resize mirror, at this copy's own stamps (issue #4522).
                 await MirrorAppliedWritesAsync(MirroredKey(key), (key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return;
+            }
+            catch (WalAppendEpochStaleException)
+            {
+                // Epic #5605: the leaf activation was superseded. Retry the whole step,
+                // re-resolving the route, until the operation's deadline; the ordinary
+                // attempt budget is not consumed.
+                fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+                attempt--;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
@@ -958,6 +967,7 @@ internal sealed partial class ShardRootGrain(
 
         var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
         var retiredAttempts = 0;
+        WalFenceSeamRetry? fenceRetry = null;
         for (int attempt = 0; ; attempt++)
         {
             try
@@ -977,6 +987,14 @@ internal sealed partial class ShardRootGrain(
                 await MirrorAppliedWritesAsync(MirroredKey(key), (key, value, expiresAtTicks), static (t, s) => t.SetAsync(s.key, s.value, s.expiresAtTicks));
                 return;
             }
+            catch (WalAppendEpochStaleException)
+            {
+                // Epic #5605: the leaf activation was superseded. Retry the whole step,
+                // re-resolving the route, until the operation's deadline; the ordinary
+                // attempt budget is not consumed.
+                fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+                attempt--;
+            }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
                 if (await BackOffIfLeafRetiredAsync(ex, retiredAttempts, retryDeadline)) { attempt--; retiredAttempts++; }
@@ -995,6 +1013,7 @@ internal sealed partial class ShardRootGrain(
 
         var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
         var retiredAttempts = 0;
+        WalFenceSeamRetry? fenceRetry = null;
         for (int attempt = 0; ; attempt++)
         {
             try
@@ -1024,6 +1043,14 @@ internal sealed partial class ShardRootGrain(
                 await MirrorAppliedWritesAsync(MirroredKey(key), (key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return null;
             }
+            catch (WalAppendEpochStaleException)
+            {
+                // Epic #5605: the leaf activation was superseded. Retry the whole step,
+                // re-resolving the route, until the operation's deadline; the ordinary
+                // attempt budget is not consumed.
+                fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+                attempt--;
+            }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
                 if (await BackOffIfLeafRetiredAsync(ex, retiredAttempts, retryDeadline)) { attempt--; retiredAttempts++; }
@@ -1045,6 +1072,7 @@ internal sealed partial class ShardRootGrain(
 
         var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
         var retiredAttempts = 0;
+        WalFenceSeamRetry? fenceRetry = null;
         for (int attempt = 0; ; attempt++)
         {
             try
@@ -1077,6 +1105,14 @@ internal sealed partial class ShardRootGrain(
                 await MirrorAppliedWritesAsync(MirroredKey(key), (key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return true;
             }
+            catch (WalAppendEpochStaleException)
+            {
+                // Epic #5605: the leaf activation was superseded. Retry the whole step,
+                // re-resolving the route, until the operation's deadline; the ordinary
+                // attempt budget is not consumed.
+                fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+                attempt--;
+            }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
                 if (await BackOffIfLeafRetiredAsync(ex, retiredAttempts, retryDeadline)) { attempt--; retiredAttempts++; }
@@ -1100,6 +1136,7 @@ internal sealed partial class ShardRootGrain(
 
         var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
         var retiredAttempts = 0;
+        WalFenceSeamRetry? fenceRetry = null;
         for (int attempt = 0; ; attempt++)
         {
             try
@@ -1119,6 +1156,14 @@ internal sealed partial class ShardRootGrain(
                 // copy's own stamp, joined there with the destination's row.
                 await MirrorAppliedRowsAsync([key]);
                 return result.Version;
+            }
+            catch (WalAppendEpochStaleException)
+            {
+                // Epic #5605: the leaf activation was superseded. Retry the whole step,
+                // re-resolving the route, until the operation's deadline; the ordinary
+                // attempt budget is not consumed.
+                fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+                attempt--;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
@@ -1504,6 +1549,28 @@ internal sealed partial class ShardRootGrain(
         List<KeyValuePair<string, byte[]>> slice,
         LatticeMergeMode mode)
     {
+        WalFenceSeamRetry? fenceRetry = null;
+        while (true)
+        {
+            try
+            {
+                return await DispatchLeafCrdtBatchOnceAsync(leaf, leafId, slice, mode);
+            }
+            catch (WalAppendEpochStaleException)
+            {
+                // Epic #5605: the leaf activation was superseded; retry against the
+                // live one until the operation's deadline.
+                fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+            }
+        }
+    }
+
+    private async Task<SplitResult?> DispatchLeafCrdtBatchOnceAsync(
+        IBPlusLeafGrain leaf,
+        GrainId leafId,
+        List<KeyValuePair<string, byte[]>> slice,
+        LatticeMergeMode mode)
+    {
         try
         {
             return await leaf.ApplyCrdtDeltaManyAsync(slice, mode);
@@ -1580,6 +1647,7 @@ internal sealed partial class ShardRootGrain(
     {
         var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
         var retiredAttempts = 0;
+        WalFenceSeamRetry? fenceRetry = null;
         for (int attempt = 0; ; attempt++)
         {
             var rpcTs = Stopwatch.GetTimestamp();
@@ -1592,6 +1660,14 @@ internal sealed partial class ShardRootGrain(
                     LatticeMetrics.OperationSetManyTag,
                     LatticeTenantLabel.ForTree(TreeId));
                 return result;
+            }
+            catch (WalAppendEpochStaleException)
+            {
+                // Epic #5605: the leaf activation was superseded. Retry the whole step,
+                // re-resolving the route, until the operation's deadline; the ordinary
+                // attempt budget is not consumed.
+                fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+                attempt--;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
@@ -1824,6 +1900,7 @@ internal sealed partial class ShardRootGrain(
     {
         var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
         var retiredAttempts = 0;
+        WalFenceSeamRetry? fenceRetry = null;
         for (int attempt = 0; ; attempt++)
         {
             var rpcTs = Stopwatch.GetTimestamp();
@@ -1836,6 +1913,14 @@ internal sealed partial class ShardRootGrain(
                     LatticeMetrics.OperationSetManyWherePredicateTag,
                     LatticeTenantLabel.ForTree(TreeId));
                 return result;
+            }
+            catch (WalAppendEpochStaleException)
+            {
+                // Epic #5605: the leaf activation was superseded. Retry the whole step,
+                // re-resolving the route, until the operation's deadline; the ordinary
+                // attempt budget is not consumed.
+                fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+                attempt--;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
@@ -1906,6 +1991,7 @@ internal sealed partial class ShardRootGrain(
 
         var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
         var retiredAttempts = 0;
+        WalFenceSeamRetry? fenceRetry = null;
         for (int attempt = 0; ; attempt++)
         {
             try
@@ -1959,6 +2045,14 @@ internal sealed partial class ShardRootGrain(
                 // post-swap cleanup restores convergence within one tree.
                 await MirrorAppliedWritesAsync(MirroredKey(key), key, static (t, s) => t.DeleteAsync(s));
                 return result;
+            }
+            catch (WalAppendEpochStaleException)
+            {
+                // Epic #5605: the leaf activation was superseded. Retry the whole step,
+                // re-resolving the route, until the operation's deadline; the ordinary
+                // attempt budget is not consumed.
+                fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+                attempt--;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
@@ -2117,7 +2211,23 @@ internal sealed partial class ShardRootGrain(
             // pointer on every leaf it does not stop at and the bounds on every
             // hop where the budget asks it to yield, all plain state reads taken
             // after the delete (and any split it caused) completed.
-            var page = await leafGrain.DeleteRangeAndNextSiblingAsync(startInclusive, endExclusive, predicate);
+            LeafRangeDeletePage page;
+            WalFenceSeamRetry? fenceRetry = null;
+            while (true)
+            {
+                try
+                {
+                    page = await leafGrain.DeleteRangeAndNextSiblingAsync(startInclusive, endExclusive, predicate);
+                    break;
+                }
+                catch (WalAppendEpochStaleException)
+                {
+                    // Epic #5605: the leaf activation was superseded; the walk step
+                    // retries against the live one until the operation's deadline.
+                    fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+                }
+            }
+
             var result = page.Result;
             totalDeleted += result.Deleted;
             scan.Budget.RecordLeafVisited();
@@ -3417,11 +3527,20 @@ internal sealed partial class ShardRootGrain(
     {
         var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
         var retiredAttempts = 0;
+        WalFenceSeamRetry? fenceRetry = null;
         for (int attempt = 0; ; attempt++)
         {
             try
             {
                 return await TraverseToLeafAsync(key);
+            }
+            catch (WalAppendEpochStaleException)
+            {
+                // Epic #5605: the leaf activation was superseded. Retry the whole step,
+                // re-resolving the route, until the operation's deadline; the ordinary
+                // attempt budget is not consumed.
+                fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+                attempt--;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
@@ -3476,6 +3595,7 @@ internal sealed partial class ShardRootGrain(
         // attempt so it does not consume the transient retry budget, and a
         // retry after that back-off must still re-group.
         var retried = false;
+        WalFenceSeamRetry? fenceRetry = null;
         for (int attempt = 0; ; attempt++)
         {
             try
@@ -3496,6 +3616,14 @@ internal sealed partial class ShardRootGrain(
                 }
 
                 return;
+            }
+            catch (WalAppendEpochStaleException)
+            {
+                // Epic #5605: the leaf activation was superseded. Retry the whole step,
+                // re-resolving the route, until the operation's deadline; the ordinary
+                // attempt budget is not consumed.
+                fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+                attempt--;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {

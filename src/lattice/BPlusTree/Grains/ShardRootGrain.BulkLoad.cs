@@ -297,7 +297,9 @@ internal sealed partial class ShardRootGrain
 
                 var start = slot * maxLeafKeys;
                 var count = Math.Min(maxLeafKeys, entryCount - start);
-                await leaf.MergeEntriesAsync(buildBatch(start, count));
+                var leafBatch = buildBatch(start, count);
+                await WalFenceSeamRetry.RunAsync(
+                    () => leaf.MergeEntriesAsync(leafBatch), WalFenceSeamRetry.CallerShardCoordinator, TreeId);
             });
     }
 
@@ -460,7 +462,8 @@ internal sealed partial class ShardRootGrain
                 clock = HybridLogicalClock.Tick(clock);
                 batch[sortedEntries[idx].Key] = LwwValue<byte[]>.Create(sortedEntries[idx].Value, clock);
             }
-            await rightmostLeaf.MergeEntriesAsync(batch);
+            await WalFenceSeamRetry.RunAsync(
+                () => rightmostLeaf.MergeEntriesAsync(batch), WalFenceSeamRetry.CallerShardCoordinator, TreeId);
             CollectMirroredRows(mirrored, batch);
         }
 
@@ -509,7 +512,8 @@ internal sealed partial class ShardRootGrain
                     NextSibling = leafIndex + 1 < newLeafCount ? newLeafIds[leafIndex + 1] : null,
                 });
             }
-            await newLeaf.MergeEntriesAsync(batch);
+            await WalFenceSeamRetry.RunAsync(
+                () => newLeaf.MergeEntriesAsync(batch), WalFenceSeamRetry.CallerShardCoordinator, TreeId);
             CollectMirroredRows(mirrored, batch);
 
             graftEntries.Add(new GraftEntry { SeparatorKey = separator, LeafId = newId });

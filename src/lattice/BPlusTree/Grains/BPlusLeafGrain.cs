@@ -1193,8 +1193,9 @@ internal sealed partial class BPlusLeafGrain(
             // persist, so none is published here. Its SplitResult is returned
             // for the shard root to link (issue #3523); see
             // SplitResult.Additional.
-            return SplitResult.Combine(recovered, SplitResult.Forward(await grainFactory.GetGrain<IBPlusLeafGrain>(spanTarget)
-                .SetAsync(key, value, expiresAtTicks)));
+            var spanSibling = grainFactory.GetGrain<IBPlusLeafGrain>(spanTarget);
+            return SplitResult.Combine(recovered, SplitResult.Forward(await WalFenceSeamRetry.RunAsync(
+                () => spanSibling.SetAsync(key, value, expiresAtTicks), WalFenceSeamRetry.CallerLeaf, state.State.TreeId)));
         }
 
         if (spanFailOpen != SpanFailOpenReason.None)
@@ -2136,10 +2137,14 @@ internal sealed partial class BPlusLeafGrain(
             var sibling = grainFactory.GetGrain<IBPlusLeafGrain>(spanTarget);
             if (!tracked)
             {
-                return new LeafDeleteResult { Deleted = await sibling.DeleteAsync(key) };
+                return new LeafDeleteResult
+                {
+                    Deleted = await WalFenceSeamRetry.RunAsync(() => sibling.DeleteAsync(key), WalFenceSeamRetry.CallerLeaf, state.State.TreeId),
+                };
             }
 
-            var forwarded = await sibling.DeleteTrackedAsync(key);
+            var forwarded = await WalFenceSeamRetry.RunAsync(
+                () => sibling.DeleteTrackedAsync(key), WalFenceSeamRetry.CallerLeaf, state.State.TreeId);
             return forwarded with { Split = SplitResult.Combine(recovered, SplitResult.Forward(forwarded.Split)) };
         }
 
@@ -4685,6 +4690,10 @@ internal sealed partial class BPlusLeafGrain(
     {
         using var routingMutation = EnterLeafRoutingMutation();
 
+        // The tree id is cleared with the row, but the append-epoch retirement
+        // below needs it to address the tree's WAL partitions (epic #5605).
+        var fenceTreeId = state.State.TreeId;
+
         // A purge commits to clearing this leaf before anything is cleared (issue
         // #4700): the mark is what lets a recovery of the tree re-create the leaf
         // empty, and tell it apart from a leaf whose row was lost. A failure here
@@ -4781,6 +4790,13 @@ internal sealed partial class BPlusLeafGrain(
             // The applied-terminal witness sidecar is keyed by the leaf too
             // (issue #4545), and goes with it on the same terms.
             await ClearTerminalWitnessSidecarAsync();
+
+            // The leaf's WAL append-epoch entries and epoch row go with it too
+            // (epic #5605), whether or not the fence gate is open. Each partition
+            // raises its retired floor above the entry before deleting it, so a
+            // surviving duplicate can never outrank a leaf re-created under this
+            // id. Idempotent, and retried with the rest of the clear.
+            await RetireAppendEpochAsync(fenceTreeId);
 
             // The row record goes last of all (issue #4654): until it is deleted, a
             // rowless activation of this leaf fails closed, so an interrupted clear

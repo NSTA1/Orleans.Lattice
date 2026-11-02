@@ -116,6 +116,10 @@ public sealed class ImmutableGrainBoundaryContractTests : ImmutableGrainBoundary
             ["Orleans.Lattice.BPlusTree.LeafPendingMutationsPage"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.Grains.WalShardPage"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.Grains.WalShardShippingPage"] = ReadModel,
+            // Epic #5605: Offsets is the stamped batch append's per-call offsets
+            // array; the WAL shard keeps no reference once it returns, and the
+            // leaf's writer only reads it, exactly as for the unstamped batch append.
+            ["Orleans.Lattice.BPlusTree.Grains.WalStampedBatchResult"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.OrphanedLeafRepairPage"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.RoutingTableSnapshot"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.ShardCountResult"] = ReadModel,

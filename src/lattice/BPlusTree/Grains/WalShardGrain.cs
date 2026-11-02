@@ -438,6 +438,9 @@ internal sealed partial class WalShardGrain(
         await _provider.ReconcileAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
         var highest = await _provider.GetHighestOffsetAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
         _nextOffset = WalOffsetAllocationCore.RecoveredNextOffset(highest);
+        // Epic #5605: everything below the recovered head may have been appended
+        // unstamped before this activation, so the watermark restarts just below it.
+        _unstampedWatermark = _nextOffset - 1;
         _highestStored = highest;
         InitializeClockFloor();
         // Construct the per-activation drain cancellation source up-front
@@ -728,7 +731,22 @@ internal sealed partial class WalShardGrain(
     }
 
     /// <inheritdoc />
-    public async Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken)
+    public Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken) =>
+        AppendCoreAsync<long, UnstampedSingleShape>(entry, default, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<WalStampedAppendResult> AppendStampedAsync(WalRecord entry, WalAppendStamp stamp, CancellationToken cancellationToken) =>
+        AppendCoreAsync<WalStampedAppendResult, StampedSingleShape>(entry, stamp, cancellationToken);
+
+    /// <summary>
+    /// The single-entry append, unstamped or stamped (epic #5605). Specialised by
+    /// <typeparamref name="TShape"/> so neither path pays a wrapper state machine:
+    /// an unstamped append raises the partition's unstamped watermark, a stamped one
+    /// is checked against the append fence in the locked step that assigns its
+    /// offset and reports the watermark.
+    /// </summary>
+    private async Task<TResult> AppendCoreAsync<TResult, TShape>(WalRecord entry, WalAppendStamp stamp, CancellationToken cancellationToken)
+        where TShape : struct, ISingleAppendShape<TResult>
     {
         cancellationToken.ThrowIfCancellationRequested();
         EnsureInternalOrigin(LatticeOperation.Write);
@@ -834,6 +852,8 @@ internal sealed partial class WalShardGrain(
         int queueDepth = 0;
         bool fenced = false;
         HybridLogicalClock refusedBelow = default;
+        var fenceOutcome = WalAppendFenceOutcome.Admitted;
+        long unstampedWatermark;
         lock (_stateGate)
         {
             // Re-check the move fence under the gate: a quiesce may have raised
@@ -853,9 +873,23 @@ internal sealed partial class WalShardGrain(
                 // pairs the floor with the next offset under it.
                 refusedBelow = _floor;
             }
+            else if (!TShape.Stamped && _epochEntries is { Count: > 0 })
+            {
+                throw new WalAppendEpochStaleException(); // RED-PROOF: unstamped rejected
+            }
+            else if (TShape.Stamped && (fenceOutcome = AdmitStampLocked(in stamp)) != WalAppendFenceOutcome.Admitted)
+            {
+                // Epic #5605: the stamp is checked in the same locked step that
+                // would assign the offset, so a claim raised before this point
+                // rejects it and one raised after it finds it below its head.
+            }
             else
             {
                 var offset = WalOffsetAllocationCore.Assign(ref _nextOffset);
+                if (!TShape.Stamped)
+                {
+                    _unstampedWatermark = offset;
+                }
                 _pendingSegments.Add(segment);
                 _pendingOffsets.Add(offset);
                 _pendingBatchSizeBytes += size;
@@ -891,6 +925,8 @@ internal sealed partial class WalShardGrain(
                 kickFlush = _inFlight.Count < maxPending;
                 queueDepth = _pendingSegments.Count;
             }
+
+            unstampedWatermark = _unstampedWatermark;
         }
         if (fenced)
         {
@@ -902,6 +938,12 @@ internal sealed partial class WalShardGrain(
         {
             ReturnSegment(segment);
             throw RefuseBelowFloor(entry.Timestamp, refusedBelow, 1);
+        }
+        if (fenceOutcome != WalAppendFenceOutcome.Admitted)
+        {
+            ReturnSegment(segment);
+            RecordFenceRejection(fenceOutcome);
+            return TShape.Rejected(fenceOutcome, unstampedWatermark);
         }
         LatticeMetrics.WalAppendQueueDepth.Record(
             queueDepth,
@@ -920,7 +962,7 @@ internal sealed partial class WalShardGrain(
 
         try
         {
-            return await tcs.Task.ConfigureAwait(true);
+            return TShape.Admitted(await tcs.Task.ConfigureAwait(true), unstampedWatermark);
         }
         finally
         {
@@ -939,7 +981,28 @@ internal sealed partial class WalShardGrain(
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<long>> AppendBatchAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken)
+    public Task<IReadOnlyList<long>> AppendBatchAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken) =>
+        AppendBatchCoreAsync<IReadOnlyList<long>, UnstampedBatchShape>(entries, default, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<WalStampedBatchResult> AppendBatchStampedAsync(
+        IReadOnlyList<WalRecord> entries,
+        WalAppendStamp stamp,
+        CancellationToken cancellationToken) =>
+        AppendBatchCoreAsync<WalStampedBatchResult, StampedBatchShape>(entries, stamp, cancellationToken);
+
+    /// <summary>
+    /// The batched append, unstamped or stamped (epic #5605), specialised by
+    /// <typeparamref name="TShape"/> as <see cref="AppendCoreAsync{TResult, TShape}"/>
+    /// is. A stamped batch checks the stamp for each entry in the locked step that
+    /// assigns that entry's offset and stops at the first rejection, so the admitted
+    /// entries are a prefix.
+    /// </summary>
+    private async Task<TResult> AppendBatchCoreAsync<TResult, TShape>(
+        IReadOnlyList<WalRecord> entries,
+        WalAppendStamp stamp,
+        CancellationToken cancellationToken)
+        where TShape : struct, IBatchAppendShape<TResult>
     {
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
@@ -949,7 +1012,7 @@ internal sealed partial class WalShardGrain(
 
         if (entries.Count == 0)
         {
-            return Array.Empty<long>();
+            return TShape.Empty();
         }
 
         // Defence-in-depth: reject a pathologically large batch before
@@ -1025,157 +1088,215 @@ internal sealed partial class WalShardGrain(
         var offsets = new long[count];
         var acks = new TaskCompletionSource<long>[count];
         var admittedAgainst = new HybridLogicalClock { WallClockTicks = -1 };
-        for (var i = 0; i < count; i++)
+        var admittedCount = count;
+        var fenceOutcome = WalAppendFenceOutcome.Admitted;
+        long unstampedWatermark = -1;
+        // Epic #5605: a multi-entry stamped batch holds its leaf's claims and
+        // retirement back until every entry has been assigned, so no claim raise
+        // can fall between two of its entries and leave a partially admitted batch.
+        var batchRegistered = false;
+        try
         {
-            var size = sizes[i];
-
-            while (true)
+            for (var i = 0; i < count; i++)
             {
-                bool needsCutover;
-                bool atCap;
-                Task? headTask = null;
-                lock (_stateGate)
+                var size = sizes[i];
+
+                while (true)
                 {
-                    needsCutover = _pendingSegments.Count > 0
-                        && (_pendingSegments.Count + 1 > maxEntries || _pendingBatchSizeBytes + size > maxBytes);
-                    if (!needsCutover)
+                    bool needsCutover;
+                    bool atCap;
+                    Task? headTask = null;
+                    lock (_stateGate)
                     {
-                        break;
+                        needsCutover = _pendingSegments.Count > 0
+                            && (_pendingSegments.Count + 1 > maxEntries || _pendingBatchSizeBytes + size > maxBytes);
+                        if (!needsCutover)
+                        {
+                            break;
+                        }
+                        atCap = _inFlight.Count >= maxPending;
+                        if (atCap)
+                        {
+                            headTask = _inFlight.First!.Value.Task;
+                        }
                     }
-                    atCap = _inFlight.Count >= maxPending;
                     if (atCap)
                     {
-                        headTask = _inFlight.First!.Value.Task;
-                    }
-                }
-                if (atCap)
-                {
-                    try { await headTask!.ConfigureAwait(true); } catch { /* surfaced via TCSs */ }
-                    if (Volatile.Read(ref _stickyFailure) is { } stickyMid)
-                    {
-                        // Failed mid-batch: return un-enqueued segments
-                        // and surface the sticky failure. Segments at
-                        // indexes < i are already owned by either the
-                        // failed in-flight flush (returned by failure
-                        // handling) or by the still-pending batch which
-                        // will fault its own TCSs.
-                        for (var j = i; j < count; j++)
+                        try { await headTask!.ConfigureAwait(true); } catch { /* surfaced via TCSs */ }
+                        if (Volatile.Read(ref _stickyFailure) is { } stickyMid)
                         {
-                            ReturnSegment(segments[j]);
+                            // Failed mid-batch: return un-enqueued segments
+                            // and surface the sticky failure. Segments at
+                            // indexes < i are already owned by either the
+                            // failed in-flight flush (returned by failure
+                            // handling) or by the still-pending batch which
+                            // will fault its own TCSs.
+                            for (var j = i; j < count; j++)
+                            {
+                                ReturnSegment(segments[j]);
+                            }
+                            throw stickyMid;
                         }
-                        throw stickyMid;
+                    }
+                    else
+                    {
+                        StartFlush();
                     }
                 }
-                else
+
+                if (Volatile.Read(ref _stickyFailure) is { } stickyPost)
+                {
+                    for (var j = i; j < count; j++)
+                    {
+                        ReturnSegment(segments[j]);
+                    }
+                    throw stickyPost;
+                }
+
+                bool kickFlush = false;
+                bool fenced = false;
+                HybridLogicalClock refusedBelow = default;
+                lock (_stateGate)
+                {
+                    // Re-check the move fence under the gate (a quiesce may have
+                    // raised it during a cutover await earlier in this batch loop).
+                    if (!WalMoveFenceCore.IsAppendAdmitted(_moveFenced))
+                    {
+                        fenced = true;
+                    }
+                    else if (_floor != admittedAgainst && !IsBatchRemainderAdmitted(entries, i))
+                    {
+                        // Issue #4586: the remainder of the batch is checked against
+                        // the floor in force when its next offset is assigned, and
+                        // again whenever a floor published during a cutover await
+                        // has moved it, so a mid-batch publication still binds every
+                        // later offset. Checking the whole remainder at once means a
+                        // refusal before the first entry splits nothing.
+                        refusedBelow = _floor;
+                    }
+                    else if (TShape.Stamped && (fenceOutcome = AdmitStampLocked(in stamp)) != WalAppendFenceOutcome.Admitted)
+                    {
+                        // Epic #5605: checked per entry in the step that would assign
+                        // its offset; the first rejection ends the batch below.
+                    }
+                    else
+                    {
+                        admittedAgainst = _floor;
+                        var offset = WalOffsetAllocationCore.Assign(ref _nextOffset);
+                        if (!TShape.Stamped)
+                        {
+                            _unstampedWatermark = offset;
+                        }
+                        else if (i == 0 && count > 1)
+                        {
+                            // RED-PROOF: batch barrier removed
+                        }
+                        offsets[i] = offset;
+                        _pendingSegments.Add(segments[i]);
+                        _pendingOffsets.Add(offset);
+                        _pendingBatchSizeBytes += size;
+
+                        var tcs = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+                        acks[i] = tcs;
+                        _pendingAcks.Add(tcs);
+
+                        // Only kick a flush mid-batch when the per-batch caps
+                        // are saturated; deferring the latency-floor trigger to
+                        // the final entry of the batch is what gives the batched
+                        // path its win - the whole batch shares a single flush
+                        // window when it fits under the caps.
+                        // The final-entry branch reproduces the AppendAsync
+                        // protocol's latency-floor guarantee (a lone entry must
+                        // not wait for a future cutover) once the entire batch
+                        // has been enqueued, and now also opens a new flush when
+                        // the chain has spare capacity below WalMaxPendingBatches
+                        // so the cap is actually reachable under steady fan-in.
+                        // With cap = 1 the outer `_inFlight.Count < maxPending`
+                        // guard collapses to `_inFlight.Count == 0`, so the
+                        // single-in-flight protocol is preserved bit-for-bit.
+                        //
+                        // #3396: the final-entry kick is suppressed once
+                        // `coalesceThreshold` flushes are already in flight, so
+                        // that a shard being fed tiny fan-out slices accumulates
+                        // them into one larger append instead of paying a provider
+                        // round trip per slice. This cannot strand the pending
+                        // batch: suppression requires inFlight >= threshold >= 1,
+                        // so a flush is necessarily outstanding, and its completion
+                        // path kicks a follow-on flush whenever a pending batch is
+                        // waiting under the cap. Below the threshold the predicate
+                        // is unchanged, which is what makes enabling it by default
+                        // safe for a quiet shard.
+                        var isLast = i == count - 1;
+                        kickFlush = _inFlight.Count < maxPending
+                            && (_pendingSegments.Count >= maxEntries
+                                || _pendingBatchSizeBytes >= maxBytes
+                                || (isLast && (coalesceThreshold <= 0 || _inFlight.Count < coalesceThreshold)));
+                    }
+
+                    if (fenceOutcome != WalAppendFenceOutcome.Admitted)
+                    {
+                        // The admitted prefix may sit in the pending batch with no
+                        // flush kicked, because the latency-floor kick is reserved for
+                        // the batch's last entry. Kick it now when the chain has room;
+                        // otherwise the head's completion kicks the follow-on.
+                        kickFlush = _pendingSegments.Count > 0 && _inFlight.Count < maxPending;
+                    }
+
+                    unstampedWatermark = _unstampedWatermark;
+                }
+                if (fenceOutcome != WalAppendFenceOutcome.Admitted)
+                {
+                    for (var j = i; j < count; j++)
+                    {
+                        ReturnSegment(segments[j]);
+                        offsets[j] = WalStampedBatchResult.Rejected;
+                    }
+
+                    admittedCount = i;
+                    if (kickFlush)
+                    {
+                        StartFlush();
+                    }
+
+                    RecordFenceRejection(fenceOutcome);
+                    break;
+                }
+                if (fenced)
+                {
+                    // Refused mid-batch: return every not-yet-enqueued segment and
+                    // surface the transient quiesce signal. Entries already enqueued
+                    // at indexes < i are owned by the pending/in-flight batches and
+                    // settle (or fault) on their own TCSs.
+                    for (var j = i; j < count; j++)
+                    {
+                        ReturnSegment(segments[j]);
+                    }
+                    throw new LatticeWalQuiescingException(
+                        $"WAL shard {_treeId}/{_shardIndex} is quiesced for a placement move; retry shortly.");
+                }
+                if (refusedBelow != HybridLogicalClock.Zero)
+                {
+                    // Refused below the clock floor: as for the fence, entries
+                    // already enqueued at indexes < i settle on their own TCSs. That
+                    // only happens when a floor was published during this batch's
+                    // cutover await and a later entry is older than the floor lag.
+                    for (var j = i; j < count; j++)
+                    {
+                        ReturnSegment(segments[j]);
+                    }
+                    throw RefuseBelowFloor(FirstRefusedStamp(entries, i), refusedBelow, count - i);
+                }
+                if (kickFlush)
                 {
                     StartFlush();
                 }
             }
-
-            if (Volatile.Read(ref _stickyFailure) is { } stickyPost)
+        }
+        finally
+        {
+            if (batchRegistered)
             {
-                for (var j = i; j < count; j++)
-                {
-                    ReturnSegment(segments[j]);
-                }
-                throw stickyPost;
-            }
-
-            bool kickFlush = false;
-            bool fenced = false;
-            HybridLogicalClock refusedBelow = default;
-            lock (_stateGate)
-            {
-                // Re-check the move fence under the gate (a quiesce may have
-                // raised it during a cutover await earlier in this batch loop).
-                if (!WalMoveFenceCore.IsAppendAdmitted(_moveFenced))
-                {
-                    fenced = true;
-                }
-                else if (_floor != admittedAgainst && !IsBatchRemainderAdmitted(entries, i))
-                {
-                    // Issue #4586: the remainder of the batch is checked against
-                    // the floor in force when its next offset is assigned, and
-                    // again whenever a floor published during a cutover await
-                    // has moved it, so a mid-batch publication still binds every
-                    // later offset. Checking the whole remainder at once means a
-                    // refusal before the first entry splits nothing.
-                    refusedBelow = _floor;
-                }
-                else
-                {
-                    admittedAgainst = _floor;
-                    var offset = WalOffsetAllocationCore.Assign(ref _nextOffset);
-                    offsets[i] = offset;
-                    _pendingSegments.Add(segments[i]);
-                    _pendingOffsets.Add(offset);
-                    _pendingBatchSizeBytes += size;
-
-                    var tcs = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
-                    acks[i] = tcs;
-                    _pendingAcks.Add(tcs);
-
-                    // Only kick a flush mid-batch when the per-batch caps
-                    // are saturated; deferring the latency-floor trigger to
-                    // the final entry of the batch is what gives the batched
-                    // path its win - the whole batch shares a single flush
-                    // window when it fits under the caps.
-                    // The final-entry branch reproduces the AppendAsync
-                    // protocol's latency-floor guarantee (a lone entry must
-                    // not wait for a future cutover) once the entire batch
-                    // has been enqueued, and now also opens a new flush when
-                    // the chain has spare capacity below WalMaxPendingBatches
-                    // so the cap is actually reachable under steady fan-in.
-                    // With cap = 1 the outer `_inFlight.Count < maxPending`
-                    // guard collapses to `_inFlight.Count == 0`, so the
-                    // single-in-flight protocol is preserved bit-for-bit.
-                    //
-                    // #3396: the final-entry kick is suppressed once
-                    // `coalesceThreshold` flushes are already in flight, so
-                    // that a shard being fed tiny fan-out slices accumulates
-                    // them into one larger append instead of paying a provider
-                    // round trip per slice. This cannot strand the pending
-                    // batch: suppression requires inFlight >= threshold >= 1,
-                    // so a flush is necessarily outstanding, and its completion
-                    // path kicks a follow-on flush whenever a pending batch is
-                    // waiting under the cap. Below the threshold the predicate
-                    // is unchanged, which is what makes enabling it by default
-                    // safe for a quiet shard.
-                    var isLast = i == count - 1;
-                    kickFlush = _inFlight.Count < maxPending
-                        && (_pendingSegments.Count >= maxEntries
-                            || _pendingBatchSizeBytes >= maxBytes
-                            || (isLast && (coalesceThreshold <= 0 || _inFlight.Count < coalesceThreshold)));
-                }
-            }
-            if (fenced)
-            {
-                // Refused mid-batch: return every not-yet-enqueued segment and
-                // surface the transient quiesce signal. Entries already enqueued
-                // at indexes < i are owned by the pending/in-flight batches and
-                // settle (or fault) on their own TCSs.
-                for (var j = i; j < count; j++)
-                {
-                    ReturnSegment(segments[j]);
-                }
-                throw new LatticeWalQuiescingException(
-                    $"WAL shard {_treeId}/{_shardIndex} is quiesced for a placement move; retry shortly.");
-            }
-            if (refusedBelow != HybridLogicalClock.Zero)
-            {
-                // Refused below the clock floor: as for the fence, entries
-                // already enqueued at indexes < i settle on their own TCSs. That
-                // only happens when a floor was published during this batch's
-                // cutover await and a later entry is older than the floor lag.
-                for (var j = i; j < count; j++)
-                {
-                    ReturnSegment(segments[j]);
-                }
-                throw RefuseBelowFloor(FirstRefusedStamp(entries, i), refusedBelow, count - i);
-            }
-            if (kickFlush)
-            {
-                StartFlush();
+                ReleaseStampedBatch(stamp.LeafId);
             }
         }
 
@@ -1184,11 +1305,11 @@ internal sealed partial class WalShardGrain(
         // one flush window); when the batch was cut over mid-stream
         // the later entries belong to later flushes and we observe
         // their independent completions here.
-        for (var i = 0; i < count; i++)
+        for (var i = 0; i < admittedCount; i++)
         {
             await acks[i].Task.ConfigureAwait(true);
         }
-        return offsets;
+        return TShape.Complete(offsets, admittedCount, unstampedWatermark, fenceOutcome);
     }
 
     /// <summary>
@@ -2887,6 +3008,9 @@ internal sealed partial class WalShardGrain(
         await provider.ReconcileAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(true);
         var highest = await provider.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(true);
         _nextOffset = WalOffsetAllocationCore.RecoveredNextOffset(highest);
+        // Epic #5605: everything below the recovered head may have been appended
+        // unstamped before this activation, so the watermark restarts just below it.
+        _unstampedWatermark = _nextOffset - 1;
         _highestStored = highest;
         InitializeClockFloor();
         // Mirror OnActivateAsync's drain-CTS construction so unit tests
