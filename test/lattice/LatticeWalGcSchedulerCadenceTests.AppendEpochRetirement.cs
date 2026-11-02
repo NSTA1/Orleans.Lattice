@@ -42,8 +42,13 @@ public partial class LatticeWalGcSchedulerCadenceTests
             await scheduler.StopAsync(CancellationToken.None);
         }
 
+        // Retirement is idempotent, and the drive re-retires on every NotDriven
+        // attempt, so the count is not pinned: every call must ask the partition to
+        // read the row, and there must be at least one.
         Assert.That(pins.RemainingPins, Is.Zero, "precondition: the pin itself was retired");
-        await shard.Received(1).RetireAppendEpochAsync(
+        await shard.Received().RetireAppendEpochAsync(
             leaf.GetGuidKey(), WalAppendFenceRows.RowEpochUnread, Arg.Any<CancellationToken>());
+        await shard.DidNotReceive().RetireAppendEpochAsync(
+            Arg.Any<Guid>(), Arg.Is<long>(value => value != WalAppendFenceRows.RowEpochUnread), Arg.Any<CancellationToken>());
     }
 }
