@@ -57,9 +57,10 @@ public sealed class LatticeViewRegistrationBuilder
         ArgumentException.ThrowIfNullOrEmpty(providerKey);
         ArgumentNullException.ThrowIfNull(provider);
         if (string.Equals(
-            providerKey,
-            PredicateRuntimeViewProjectionCodec.ProviderKey,
-            StringComparison.Ordinal))
+                providerKey,
+                PredicateRuntimeViewProjectionCodec.ProviderKey,
+                StringComparison.Ordinal)
+            || string.Equals(providerKey, LatticeHistoryView.ProviderKey, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
                 $"Runtime view projection provider key '{providerKey}' is reserved by Orleans.Lattice.");
