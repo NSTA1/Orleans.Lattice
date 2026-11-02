@@ -10,7 +10,9 @@ DETECTORS: BackupRetentionConcurrencyTests.A_full_capture_of_an_unchanged_tree_d
 SUMMARY: a republish proceeds while a retention pass is deleting its id
 
 --- FIND
-        while (_publishing.Contains(backupId) || _retiring.Contains(backupId))
+        while (_publishing.Contains(backupId)
+            || _retiring.Contains(backupId)
 --- REPLACE
-        while (_publishing.Contains(backupId) || (!publishing && _retiring.Contains(backupId)))
+        while (_publishing.Contains(backupId)
+            || (!publishing && _retiring.Contains(backupId))
 --- END

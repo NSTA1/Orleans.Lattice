@@ -10,24 +10,28 @@ namespace Orleans.Lattice.Backup;
 /// <remarks>
 /// Ownership is read from durable state - the scope of the catalog row, or else
 /// of the sink manifest, stored under the id - so nothing is persisted here. The
-/// only activation-local state is the claim of a publish that has not yet written
-/// its sink manifest, which expires if the publish never completes.
+/// only activation-local state is the claims of publishes that have not yet
+/// completed, one per publish and released one at a time, each expiring if its
+/// publish never reports back. The owning scope's publishes are claimed too
+/// (issue #5627): a publish may wait while its own scope retires the id, and the
+/// claim keeps another scope from taking the id in that window.
 /// </remarks>
 [Alias(BackupTypeAliases.IBackupIdClaimGrain)]
 internal interface IBackupIdClaimGrain : IGrainWithStringKey
 {
     /// <summary>
-    /// Claims the bare id for <paramref name="scopeKey"/>, or confirms the scope
-    /// already owns it. Returns <see langword="false"/> when a backup of another
-    /// scope holds the id or another scope's publish has claimed it.
+    /// Claims the bare id for one publish of <paramref name="scopeKey"/>, whether
+    /// the id is unowned or the scope already owns it. Returns
+    /// <see langword="false"/>, recording nothing, when a backup of another scope
+    /// holds the id or another scope's publish has a claim on it.
     /// </summary>
     /// <param name="scopeKey">The claiming scope's key (<see cref="BackupScopeKey.For"/>).</param>
     Task<bool> TryClaimAsync(string scopeKey);
 
     /// <summary>
-    /// Releases <paramref name="scopeKey"/>'s pending claim once its publish has
-    /// written the sink manifest (or failed), after which the durable state speaks
-    /// for it. A no-op when the claim is not that scope's.
+    /// Releases one of <paramref name="scopeKey"/>'s claims once its publish has
+    /// completed (or failed), after which the durable state speaks for it. Other
+    /// claims of the same scope stay. A no-op when the scope holds none.
     /// </summary>
     /// <param name="scopeKey">The scope whose claim to release.</param>
     Task ReleaseAsync(string scopeKey);

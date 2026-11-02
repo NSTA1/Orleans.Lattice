@@ -125,13 +125,32 @@ internal interface ILatticeBackupSchedulerGrain : IGrainWithStringKey
     Task<BackupPublishResult> PublishAsync(BackupPublishRequest request);
 
     /// <summary>
-    /// Removes a backup of this scope - an operator delete, or a catalog scrub of
-    /// an orphan row - under the id's hold, as a retention pass removes one.
-    /// Returns <see cref="BackupRetireOutcome.Busy"/>, having removed nothing, when
-    /// the id stays held beyond one call's wait; the caller retries.
+    /// Removes the catalog row of an orphan - a row the sink cannot resolve - for
+    /// a catalog scrub, under the id's hold, re-probing the sink there. Returns
+    /// <see cref="BackupRetireOutcome.Busy"/>, having removed nothing, when the id
+    /// stays held beyond one call's wait; the caller retries. An operator delete
+    /// uses <see cref="BeginDeleteAsync"/> instead.
     /// </summary>
-    /// <param name="backupId">The backup to remove.</param>
-    /// <param name="kind">An operator delete or a scrub of an orphan row.</param>
+    /// <param name="backupId">The backup whose orphan row to remove.</param>
+    /// <param name="kind"><see cref="BackupRetireKind.OrphanRow"/>.</param>
     [AlwaysInterleave]
     Task<BackupRetireOutcome> RetireAsync(string backupId, BackupRetireKind kind);
+
+    /// <summary>
+    /// Starts an operator delete (issue #5628): under the id's hold, removes the
+    /// catalog row and reserves the id for the delete, then returns the manifest
+    /// the rest of the delete works from. The caller deletes the backup's
+    /// artifacts and sink manifest outside the grain - so a large delete never
+    /// runs inside one grain call - and then calls <see cref="EndDeleteAsync"/>.
+    /// While reserved, no publish of the id proceeds and no pass dooms it. A retry
+    /// of an interrupted delete finds the sink manifest and finishes (#5334).
+    /// </summary>
+    /// <param name="backupId">The backup to delete.</param>
+    [AlwaysInterleave]
+    Task<BackupDeleteStart> BeginDeleteAsync(string backupId);
+
+    /// <summary>Ends an operator delete <see cref="BeginDeleteAsync"/> started, releasing the id.</summary>
+    /// <param name="backupId">The deleted backup.</param>
+    [AlwaysInterleave]
+    Task EndDeleteAsync(string backupId);
 }

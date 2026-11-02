@@ -1,0 +1,17 @@
+# Pairs with NoForeignOverwrite. Production before the fix of #5627: the
+# claim grain admitted the scope that owns the bare id without recording a
+# claim. That scope's capture then waited on its hold while its own retire
+# removed the id, the id had no owner and no claim, another scope's capture of
+# identical content took it, and the waiting capture published over it.
+MODULE: NoForeignOverwriteOwnerUnclaimed
+TARGET: NoForeignOverwrite
+CLASS: Action
+SUMMARY: the owning scope is admitted without a recorded claim
+PERTURBS: Resolve
+
+--- FIND
+          ELSE /\ pend' = [pend EXCEPT ![s] = @ + 1]
+--- REPLACE
+          \* MUTATION: the owner is admitted with no claim recorded.
+          ELSE /\ pend' = IF Owner = s THEN pend ELSE [pend EXCEPT ![s] = @ + 1]
+--- END

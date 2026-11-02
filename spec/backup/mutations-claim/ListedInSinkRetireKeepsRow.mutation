@@ -1,0 +1,16 @@
+# Pairs with ListedInSink. A retire leaves the catalog row and still deletes
+# the sink manifest, so the catalog lists a backup the sink no longer holds.
+MODULE: ListedInSinkRetireKeepsRow
+TARGET: ListedInSink
+CLASS: Invariant
+SUMMARY: a retire deletes the manifest but keeps the row
+PERTURBS: RetireRow
+
+--- FIND
+    /\ row' = "none"
+    /\ ret' = "rowgone"
+--- REPLACE
+    \* MUTATION: the row is kept.
+    /\ UNCHANGED row
+    /\ ret' = "rowgone"
+--- END

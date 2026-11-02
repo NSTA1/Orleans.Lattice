@@ -119,14 +119,13 @@ internal sealed class BackupPublisher(
     public async Task<BackupRetireOutcome> RetireAsync(string backupId, BackupRetireKind kind)
     {
         ArgumentException.ThrowIfNullOrEmpty(backupId);
-        var row = await catalog.GetAsync(backupId).ConfigureAwait(false);
-        if (row is null)
-        {
-            return BackupRetireOutcome.Unchanged;
-        }
-
         if (kind == BackupRetireKind.OrphanRow)
         {
+            if (await catalog.GetAsync(backupId).ConfigureAwait(false) is null)
+            {
+                return BackupRetireOutcome.Unchanged;
+            }
+
             // Re-probed under the hold: a capture that republished the id since the
             // scrub's read pass made the row resolvable again, and it stays.
             var resolution = await sink.ProbeAsync(backupId).ConfigureAwait(false);
@@ -140,12 +139,57 @@ internal sealed class BackupPublisher(
                 : BackupRetireOutcome.Unchanged;
         }
 
+        var reserved = await BeginDeleteAsync(backupId).ConfigureAwait(false);
+        if (reserved is null)
+        {
+            return BackupRetireOutcome.Unchanged;
+        }
+
+        await CompleteDeleteAsync(reserved).ConfigureAwait(false);
+        return BackupRetireOutcome.Removed;
+    }
+
+    /// <summary>
+    /// The short first step of an operator delete, which the caller runs under the
+    /// id's hold (issue #5628): it removes the catalog row and returns the manifest
+    /// the rest of the delete works from. With the row already gone - a delete
+    /// interrupted after this step (issue #5334) - it returns the sink manifest,
+    /// so a retry finishes the delete. Returns <see langword="null"/> when neither
+    /// remains: there is nothing left to delete.
+    /// </summary>
+    /// <param name="backupId">The backup to delete.</param>
+    /// <returns>The backup's manifest, or <see langword="null"/>.</returns>
+    public async Task<BackupManifest?> BeginDeleteAsync(string backupId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        var row = await catalog.GetAsync(backupId).ConfigureAwait(false);
+        if (row is null)
+        {
+            return await sink.ReadManifestAsync(backupId).ConfigureAwait(false);
+        }
+
+        await catalog.RemoveAsync(backupId).ConfigureAwait(false);
+        return row;
+    }
+
+    /// <summary>
+    /// The rest of an operator delete, run outside any grain call so a large
+    /// backup or catalog cannot outlast the grain response timeout (issue #5628):
+    /// it deletes the backup's unshared artifacts and then its sink manifest. The
+    /// sink manifest goes last, so an interrupted delete leaves it behind and a
+    /// retry finds it (<see cref="BeginDeleteAsync"/>) and finishes. Idempotent.
+    /// </summary>
+    /// <param name="manifest">The manifest <see cref="BeginDeleteAsync"/> returned.</param>
+    public async Task CompleteDeleteAsync(BackupManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+
         // Collect every artifact still referenced by another catalogued manifest so
         // a shared artifact is never deleted.
         var stillReferenced = new HashSet<string>(StringComparer.Ordinal);
         await foreach (var other in catalog.ListAsync().ConfigureAwait(false))
         {
-            if (string.Equals(other.Id, backupId, StringComparison.Ordinal))
+            if (string.Equals(other.Id, manifest.Id, StringComparison.Ordinal))
             {
                 continue;
             }
@@ -156,11 +200,7 @@ internal sealed class BackupPublisher(
             }
         }
 
-        // Remove the row first so no catalog entry can outlive the artifacts it
-        // points at, then the sink manifest, then this backup's unshared artifacts.
-        await catalog.RemoveAsync(backupId).ConfigureAwait(false);
-        await sink.DeleteManifestAsync(backupId).ConfigureAwait(false);
-        foreach (var descriptor in row.ContentDescriptors)
+        foreach (var descriptor in manifest.ContentDescriptors)
         {
             if (!stillReferenced.Contains(descriptor.ArtifactId))
             {
@@ -168,7 +208,7 @@ internal sealed class BackupPublisher(
             }
         }
 
-        return BackupRetireOutcome.Removed;
+        await sink.DeleteManifestAsync(manifest.Id).ConfigureAwait(false);
     }
 
     private async Task<BackupPublishResult> PublishIncrementAsync(BackupManifest manifest)

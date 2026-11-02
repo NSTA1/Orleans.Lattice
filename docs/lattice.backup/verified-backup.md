@@ -7,7 +7,7 @@ agent_spec: "docs/agents/api/backup.json"
 Backup and restore meet concurrent atomic writes, replication and failures at
 several points, and the argument that they stay consistent there was until now
 made only in prose and chaos tests. This page states what is now checked
-formally, by six TLA+ specifications under
+formally, by seven TLA+ specifications under
 [`spec/backup/`](../../spec/backup/README.md) and by Coyote models driving
 extracted production cores, and - just as importantly - what is not.
 
@@ -21,6 +21,7 @@ extracted production cores, and - just as importantly - what is not.
 | Coordinated restore | A restore of a replicated tree is all-or-nothing across regions; no pre-restore write ever reaches a restored copy; a restore never installs another tenant's records; replication resumed after a restore converges. | `BackupRestore` |
 | Local cutover and revert | A reader never pairs one physical copy with another copy's shard map; once a restore returns every reader sees the restored copy, and once a revert returns none does, however stale its routing; a tree is never deleted while its copies are in motion; a restore, or a revert, that crashes part-way still completes on retry. | `BackupCutover` |
 | Retention pruning | Every backup the catalog lists, and in particular every backup the retention policy keeps, with its whole base chain, stays restorable while full and incremental captures of the same scope run alongside the pruning and either side crashes at any step; an incremental backup is published only while its base is restorable; nothing the policy keeps is pruned; and a backup outside the policy that nothing builds on is eventually pruned. | `BackupRetention` |
+| Backup id ownership | Identical content captured in two scopes never shares one backup: a capture never publishes over another scope's backup under the content-addressed id, even while the owning scope is retiring that id, so a backup's catalog row and stored manifest always name the scope that captured it. | `BackupIdClaim` |
 
 Every property is paired with a deliberate defect (a mutation) that must make
 TLC report it, and every protocol step of each specification is perturbed by at
@@ -129,6 +130,22 @@ not to hold in production:
   origin from a full backup (#5529, fixed).** A restored chain therefore gave the
   same rows two origins. Every capture now records an own row's origin the same
   way. Found by the specification's confirmation review.
+- **A capture in one scope could overwrite another scope's backup of identical
+  content (#5627, fixed).** A capture of a scope that owned a backup id could wait
+  while that scope's own retention or delete removed the id; another scope's
+  capture of identical content then took the id, and the waiting capture
+  published over it. The owning scope's capture now holds its claim on the id for
+  as long as it publishes. Found by the confirmation review; checked by
+  `BackupIdClaim`.
+- **A large operator delete timed out (#5628, fixed).** A delete ran inside one
+  call to the scope's scheduler, which a large backup or catalog could outlast,
+  skipping the health cleanup; and a retry of an interrupted delete did not finish
+  it (#5334). The scheduler now only removes the catalog row and reserves the id;
+  the artifacts and then the stored manifest are deleted outside it, and a retry
+  finds the manifest and finishes. Found by the confirmation review.
+- **A backup set member whose capture died stayed exempt from retention
+  (#5629, fixed).** The member's hold now lapses after a lease. Found by the
+  confirmation review.
 
 ## Which parts run in production code
 
@@ -169,9 +186,11 @@ Coverage of one half must not be read as coverage of the other. Not covered:
   cross-cluster module checks ([formal coverage](../lattice/formal-coverage.md));
 - an operator's explicit backup delete, which removes the named backup whatever
   builds on it, and catalog rebuild and scrub, which take the same per-backup
-  hold as a retention pass and a capture but are not modelled as steps;
-- identical content captured in two scopes, which takes a scope-qualified id
-  (#5620) decided outside the specification;
+  hold as a retention pass and a capture but are not modelled as steps beyond
+  the retire `BackupIdClaim` checks;
+- a cluster part-way through a rolling upgrade from 10.2.0, whose old silos
+  publish and prune without the per-backup hold (see the upgrade note in
+  [configuration](configuration.md#upgrading-from-1020));
 - retention over a sink shared between clusters.
 
 Each refinement note under [`spec/backup/`](../../spec/backup/README.md) lists in

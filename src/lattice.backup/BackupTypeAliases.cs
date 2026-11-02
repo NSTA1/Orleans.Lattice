@@ -111,4 +111,7 @@ internal static class BackupTypeAliases
 
     /// <summary>Alias for <see cref="IBackupIdClaimGrain"/>.</summary>
     internal const string IBackupIdClaimGrain = "olb.gc";
+
+    /// <summary>Alias for <see cref="BackupDeleteStart"/>.</summary>
+    internal const string BackupDeleteStart = "olb.ds";
 }
