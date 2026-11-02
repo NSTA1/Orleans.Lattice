@@ -20,7 +20,7 @@ internal sealed partial class ShardRootGrain
             // leaves the marker open and the hint stored. The replaced root is no
             // longer known, so the leaves keep reading from the log's start, which
             // reaches any row it held; the switch is closed without the hint.
-            await FinishBulkSwitchAsync(operationId, [], relocated: false, drainBatchWrites: false);
+            // RED-PROOF E: an abandoned switch is left open.
             return;
         }
 
@@ -67,11 +67,9 @@ internal sealed partial class ShardRootGrain
         });
 
         var replaced = await FinalizeBulkLoadTreeAsync(operationId, leafIds, separators, maxChildren);
-        await RetireReplacedRootAsync(seededRoot, replaced);
-
-        // Every row the shard held before the switch is now in the loaded tree, so
-        // the leaves may read from the birth hint; the switch closes by fence.
+        // RED-PROOF F: the leaves read from the hint before the replaced root is drained.
         await FinishBulkSwitchAsync(operationId, leafIds, relocated: true, drainBatchWrites: false);
+        await RetireReplacedRootAsync(seededRoot, replaced);
     }
 
     /// <inheritdoc />
@@ -89,7 +87,7 @@ internal sealed partial class ShardRootGrain
             // leaves the marker open and the hint stored. The replaced root is no
             // longer known, so the leaves keep reading from the log's start, which
             // reaches any row it held; the switch is closed without the hint.
-            await FinishBulkSwitchAsync(operationId, [], relocated: false, drainBatchWrites: false);
+            // RED-PROOF E: an abandoned switch is left open.
             return;
         }
 
@@ -129,11 +127,9 @@ internal sealed partial class ShardRootGrain
         });
 
         var replaced = await FinalizeBulkLoadTreeAsync(operationId, leafIds, separators, maxChildren);
-        await RetireReplacedRootAsync(seededRoot, replaced);
-
-        // Every row the shard held before the switch is now in the loaded tree, so
-        // the leaves may read from the birth hint; the switch closes by fence.
+        // RED-PROOF F: the leaves read from the hint before the replaced root is drained.
         await FinishBulkSwitchAsync(operationId, leafIds, relocated: true, drainBatchWrites: false);
+        await RetireReplacedRootAsync(seededRoot, replaced);
     }
 
     /// <summary>
@@ -647,7 +643,8 @@ internal sealed partial class ShardRootGrain
         // Epic #5605, member 3: the switch's birth hint and its marker, stored before
         // the first appended leaf is created. The marker covers the appended range
         // only; the old rightmost leaf is narrowed to its low bound.
-        await BeginBulkSwitchAsync(operationId, sortedEntries[idx].Key);
+        // RED-PROOF D: the hint is stored after the appended leaves are born.
+        var switchLow = sortedEntries[idx].Key;
 
         var graftEntries = new List<GraftEntry>();
         var newLeafCount = 1 + (sortedEntries.Count - idx - 1) / maxLeafKeys;
@@ -697,6 +694,8 @@ internal sealed partial class ShardRootGrain
             graftEntries.Add(new GraftEntry { SeparatorKey = separator, LeafId = newId });
             leafIndex++;
         }
+
+        await BeginBulkSwitchAsync(operationId, switchLow);
 
         state.State.PendingBulkGraft = new PendingBulkGraft
         {
