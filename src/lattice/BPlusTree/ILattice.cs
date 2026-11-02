@@ -648,9 +648,9 @@ public interface ILattice : IGrainWithStringKey
     /// connection reapplies nothing. Re-driving an <b>older</b> chunk - one a
     /// later chunk has already superseded on a shard, as a resumed stream that
     /// re-sends its whole unacknowledged window does - is a no-op too: a shard that
-    /// holds a row for every entry at or below its highest key recognises them as
-    /// already grafted and skips them, so a re-driven chunk never grafts an entry
-    /// twice.
+    /// holds every entry at or below its highest live key with the identical value
+    /// recognises them as already grafted and skips them, so a re-driven chunk never
+    /// grafts an entry twice. A chunk that changes any of those values is applied.
     /// </para>
     /// <para>
     /// The entries within a chunk, and the chunks across the whole stream, should

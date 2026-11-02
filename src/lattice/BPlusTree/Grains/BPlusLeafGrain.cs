@@ -2904,7 +2904,7 @@ internal sealed partial class BPlusLeafGrain(
     }
 
     /// <inheritdoc />
-    public async Task<List<LwwEntry>> NarrowHighKeyAsync(string highKeyExclusive)
+    public async Task<List<LwwEntry>> NarrowHighKeyAsync(string highKeyExclusive, GrainId? nextSibling = null)
     {
         using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
@@ -2925,9 +2925,21 @@ internal sealed partial class BPlusLeafGrain(
             // Narrows only, so a re-driven graft converges rather than widening a
             // bound a later graft has already narrowed further.
             var prevHighKey = state.State.HighKeyExclusive;
-            if (prevHighKey is null || string.CompareOrdinal(prevHighKey, highKeyExclusive) > 0)
+            var prevNext = state.State.NextSibling;
+            var narrow = prevHighKey is null || string.CompareOrdinal(prevHighKey, highKeyExclusive) > 0;
+
+            // Issue #5654: the successor is linked in the same persist that narrows
+            // the bound. A write for a key at or above the bound that still routes
+            // here then forwards to the leaf that declares it from the moment this
+            // leaf stops declaring it, instead of failing open onto this leaf
+            // outside its span, where no read reaches it.
+            var link = nextSibling is { } next && !Equals(prevNext, next);
+            if (narrow || link)
             {
-                state.State.HighKeyExclusive = highKeyExclusive;
+                if (narrow)
+                    state.State.HighKeyExclusive = highKeyExclusive;
+                if (link)
+                    state.State.NextSibling = nextSibling;
                 try
                 {
                     await PersistAsync();
@@ -2936,19 +2948,53 @@ internal sealed partial class BPlusLeafGrain(
                 {
                     // Class B revert, as SetKeyRangeAsync reverts.
                     state.State.HighKeyExclusive = prevHighKey;
+                    state.State.NextSibling = prevNext;
                     throw;
                 }
             }
 
-            // Issue #5610: hand back every row at or above the new bound, tombstones
-            // included, for the graft to relocate into the leaf that now declares
-            // it. Collected after the narrow persisted, so a failed persist strands
-            // nothing, and in one synchronous step with their removal, so a row
-            // stored concurrently is either taken here or stranded by the narrowed
-            // span and relocated by the write path itself (StoreAdmittedEntry). A
-            // re-driven graft collects whatever a crash left behind; a converged
-            // leaf returns nothing.
-            return TakeRowsAtOrAbove(state.State.HighKeyExclusive!);
+            // Issue #5610: a copy of every row at or above the bound, tombstones
+            // included, for the graft to relocate into the leaf that declares it.
+            // The rows stay here until the graft has delivered them and drops
+            // exactly those rows (DropRelocatedRowsAsync), so a relocation that
+            // fails, or a shard root that dies before it, loses nothing: the
+            // re-driven graft is handed the same rows again. Outside the declared
+            // span they are invisible to range-routed reads in the meantime.
+            return CopyRowsAtOrAbove(state.State.HighKeyExclusive!);
+        }
+        finally
+        {
+            _splitGate.Release();
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task DropRelocatedRowsAsync(Dictionary<string, HybridLogicalClock> relocated)
+    {
+        using var routingMutation = EnterLeafRoutingMutation();
+        await AwaitReplayBarrierAsync();
+        ArgumentNullException.ThrowIfNull(relocated);
+
+        await _splitGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            // Only a row this leaf no longer declares, and only at the exact stamp
+            // it was handed back with: a row rewritten since, or one inside the
+            // span, is not the relocated row and stays.
+            var dropped = false;
+            foreach (var (key, stamp) in relocated)
+            {
+                if (!DeclaresKey(key)
+                    && Cache.TryGetRow(key, out var current)
+                    && current.Timestamp == stamp)
+                {
+                    RemoveEntry(key);
+                    dropped = true;
+                }
+            }
+
+            if (dropped)
+                BumpLocalRevision();
         }
         finally
         {
@@ -2957,32 +3003,20 @@ internal sealed partial class BPlusLeafGrain(
     }
 
     /// <summary>
-    /// Removes and returns every row whose key sorts at or above
+    /// Returns a copy of every row whose key sorts at or above
     /// <paramref name="keyInclusive"/>, tombstones included, preserving each
-    /// row's stamp and metadata (issue #5610).
+    /// row's stamp and metadata (issue #5610). Removes nothing.
     /// </summary>
-    private List<LwwEntry> TakeRowsAtOrAbove(string keyInclusive)
+    private List<LwwEntry> CopyRowsAtOrAbove(string keyInclusive)
     {
-        List<LwwEntry>? taken = null;
+        List<LwwEntry>? rows = null;
         foreach (var (key, lww) in Cache.EnumerateRange(keyInclusive, null))
         {
-            (taken ??= []).Add(new LwwEntry(key, lww));
+            (rows ??= []).Add(new LwwEntry(key, lww));
         }
 
-        if (taken is null)
-        {
-            return [];
-        }
-
-        foreach (var entry in taken)
-        {
-            RemoveEntry(entry.Key);
-        }
-
-        BumpLocalRevision();
-        return taken;
+        return rows ?? [];
     }
-
     /// <inheritdoc />
     public Task<LeafChainLink> GetKeyRangeAndNextSiblingAsync() =>
         Task.FromResult(new LeafChainLink

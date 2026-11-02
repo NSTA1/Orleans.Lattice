@@ -743,27 +743,41 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task SetKeyRangeAsync(string? lowKeyInclusive, string? highKeyExclusive);
 
     /// <summary>
-    /// Narrows this leaf's exclusive high bound to <paramref name="highKeyExclusive"/>,
-    /// persisting it, when the current bound is open or lies above it; otherwise a
-    /// no-op, so a re-driven caller converges. A shard's bulk append calls it on the
-    /// rightmost leaf before it links the leaves it appended, so the leaf stops
-    /// declaring the keyspace those leaves now own: the WAL materialiser replays into
-    /// a leaf every record its declared range covers, so a leaf left open-ended would
-    /// re-materialise every later key of its shard when it next activated (issue
-    /// #5460). Throws <see cref="InvalidOperationException"/> when the bound is at or
-    /// below the leaf's low bound.
+    /// Narrows this leaf's exclusive high bound to <paramref name="highKeyExclusive"/>
+    /// when the current bound is open or lies above it, and links
+    /// <paramref name="nextSibling"/> as its successor, both in one persist; a call
+    /// that changes neither persists nothing, so a re-driven caller converges. A
+    /// shard's bulk append calls it on the rightmost leaf before it links the
+    /// leaves it appended, so the leaf stops declaring the keyspace those leaves
+    /// now own: the WAL materialiser replays into a leaf every record its declared
+    /// range covers, so a leaf left open-ended would re-materialise every later key
+    /// of its shard when it next activated (issue #5460). Linking in the same
+    /// persist means a write for a key at or above the bound forwards to the
+    /// successor from the moment the bound narrows, rather than failing open onto
+    /// this leaf outside its span (issue #5654). Throws
+    /// <see cref="InvalidOperationException"/> when the bound is at or below the
+    /// leaf's low bound.
     /// <para>
-    /// Returns, and removes from this leaf, every row at or above the narrowed
-    /// bound, tombstones included, with its stamp and metadata (issue #5610). The
-    /// graft relocates them into the appended leaf that declares each key, so a row
-    /// the leaf held in the appended range stays readable and resolves against the
-    /// bulk entry for the same key by last-writer-wins. A converged leaf returns an
-    /// empty list.
+    /// Returns a copy of every row at or above the bound, tombstones included, with
+    /// its stamp and metadata, and removes nothing (issue #5610). The graft
+    /// relocates them into the appended leaves and then calls
+    /// <see cref="DropRelocatedRowsAsync"/>, so a relocation that fails part-way is
+    /// handed the same rows again when the graft is re-driven. A converged leaf
+    /// returns an empty list.
     /// </para>
     /// </summary>
     /// <param name="highKeyExclusive">The new exclusive high bound. Must not be <see langword="null"/>.</param>
-    Task<List<LwwEntry>> NarrowHighKeyAsync(string highKeyExclusive);
+    /// <param name="nextSibling">The successor to link with the narrowed bound, or <see langword="null"/> to leave the successor unchanged.</param>
+    Task<List<LwwEntry>> NarrowHighKeyAsync(string highKeyExclusive, GrainId? nextSibling = null);
 
+    /// <summary>
+    /// Drops the rows a bulk-append graft has relocated out of this leaf (issue
+    /// #5610): each named key whose row this leaf no longer declares and still
+    /// holds at exactly the stamp given. A row rewritten since, or one inside the
+    /// leaf's declared range, is kept. Idempotent.
+    /// </summary>
+    /// <param name="relocated">The relocated keys and the stamps they were handed back with. Must not be <see langword="null"/>.</param>
+    Task DropRelocatedRowsAsync(Dictionary<string, HybridLogicalClock> relocated);
     /// <summary>
     /// Returns this leaf's persisted owned-key-range bounds
     /// (<see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.LowKeyInclusive"/> /

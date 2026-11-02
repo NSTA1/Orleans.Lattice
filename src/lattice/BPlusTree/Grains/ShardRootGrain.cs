@@ -1177,7 +1177,7 @@ internal sealed partial class ShardRootGrain(
     {
         EnsureInternalOrigin(LatticeOperation.Write);
         ThrowIfShuttingDown();
-        BeginBatchWrite();
+        var batchSlot = BeginBatchWrite();
         try
         {
             await PrepareForWriteAsync();
@@ -1239,7 +1239,7 @@ internal sealed partial class ShardRootGrain(
         }
         finally
         {
-            EndBatchWrite();
+            EndBatchWrite(batchSlot);
         }
     }
 
@@ -1689,7 +1689,7 @@ internal sealed partial class ShardRootGrain(
         EnsureInternalOrigin(LatticeOperation.Write);
         ArgumentNullException.ThrowIfNull(entries);
         ThrowIfShuttingDown();
-        BeginBatchWrite();
+        var batchSlot = BeginBatchWrite();
         try
         {
             await PrepareForWriteAsync();
@@ -1753,7 +1753,7 @@ internal sealed partial class ShardRootGrain(
         }
         finally
         {
-            EndBatchWrite();
+            EndBatchWrite(batchSlot);
         }
     }
 

@@ -2,6 +2,7 @@ using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
+using Orleans.Runtime;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -37,7 +38,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         // append now owns: rows a concurrent batch write or a delete left above
         // its highest live key.
         var stamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
-        tail.NarrowHighKeyAsync("k0000").Returns(Task.FromResult(new List<LwwEntry>
+        tail.NarrowHighKeyAsync("k0000", Arg.Any<GrainId?>()).Returns(Task.FromResult(new List<LwwEntry>
         {
             new() { Key = "k0003", Timestamp = stamp, IsTombstone = true },
             new() { Key = "k0009", Value = [7], Timestamp = stamp },
@@ -67,6 +68,91 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
             Assert.That(relocatedTombstone.IsTombstone, Is.True, "a relocated row keeps its tombstone");
             Assert.That(relocatedTombstone.Timestamp, Is.EqualTo(stamp), "a relocated row keeps its stamp");
         });
+
+        // Issue #5654: the narrow links the first appended leaf in the same call,
+        // and precedes the separate re-assertion of the link. Issue #5610: the rows
+        // are dropped from the old leaf only after they were delivered, exactly as
+        // handed back.
+        var firstAppended = ((IGrainBase)appended["k0000"]).GrainContext.GrainId;
+        Received.InOrder(() =>
+        {
+            tail.NarrowHighKeyAsync("k0000", firstAppended);
+            appended["k0004"].MergeEntriesAsync(Arg.Is<Dictionary<string, LwwValue<byte[]>>>(b => b.ContainsKey("k0009")));
+            tail.DropRelocatedRowsAsync(Arg.Is<Dictionary<string, HybridLogicalClock>>(d =>
+                d.Count == 2 && d["k0003"] == stamp && d["k0009"] == stamp));
+            tail.SetNextSiblingAsync(firstAppended);
+        });
+    }
+
+    [Test]
+    public async Task A_relocation_that_fails_keeps_the_rows_on_the_old_leaf_and_the_resumed_graft_delivers_them()
+    {
+        // Review B1 (issue #5610): copy, deliver, then drop. A relocation call that
+        // fails must not lose the rows the narrow handed back: they stay on the old
+        // leaf, and the re-driven graft is handed them again and delivers them.
+        var h = CreateHarness(maxLeafKeys: 2);
+        var existing = h.AddLeaf();
+        h.State.State.RootNodeId = existing;
+        h.State.State.RootIsLeaf = true;
+        var tail = h.Leaf(existing);
+        tail.GetAppendTailAsync().Returns((2, "a"));
+        var stamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
+        tail.NarrowHighKeyAsync("k0000", Arg.Any<GrainId?>()).Returns(_ => Task.FromResult(new List<LwwEntry>
+        {
+            new() { Key = "k0009", Value = [7], Timestamp = stamp },
+        }));
+
+        // The first relocation into the open-ended last appended leaf faults.
+        var failure = new IOException("relocation faulted");
+        var relocations = 0;
+        h.Factory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>()).Returns(call =>
+        {
+            var key = call.ArgAt<Guid>(0);
+            var fresh = !h.Leaves.ContainsKey(key);
+            var leaf = ResolveLeaf(h.Leaves, key);
+            if (fresh)
+            {
+                leaf.MergeEntriesAsync(Arg.Is<Dictionary<string, LwwValue<byte[]>>>(b => b.ContainsKey("k0009")))
+                    .Returns(_ => Interlocked.Increment(ref relocations) == 1 ? Task.FromException(failure) : Task.CompletedTask);
+            }
+
+            return leaf;
+        });
+
+        Assert.That(async () => await h.Grain.BulkAppendAsync("op-1", Pairs(5)), Throws.Exception.SameAs(failure));
+        await tail.DidNotReceive().DropRelocatedRowsAsync(Arg.Any<Dictionary<string, HybridLogicalClock>>());
+        Assert.That(h.State.State.PendingBulkGraft, Is.Not.Null, "precondition: the graft is left to resume");
+
+        await h.Grain.BulkAppendAsync("op-1", Pairs(5));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(relocations, Is.EqualTo(2), "the resumed graft delivers the rows again");
+            Assert.That(h.State.State.PendingBulkGraft, Is.Null);
+            Assert.That(h.State.State.LastCompletedBulkOperationId, Is.EqualTo("op-1"));
+        });
+        await tail.Received(1).DropRelocatedRowsAsync(Arg.Is<Dictionary<string, HybridLogicalClock>>(d => d.ContainsKey("k0009")));
+    }
+
+    [Test]
+    public async Task A_resumed_graft_with_the_gate_closed_still_relocates_the_rows_a_narrowed_leaf_holds()
+    {
+        // Review B1, the gate variant: the first attempt narrowed with the gate
+        // open. A resume after it closed must not abandon the stranded rows.
+        var gate = Substitute.For<IWalAppendFenceGate>();
+        gate.IsOpen.Returns(false);
+        var h = CreateHarness(appendFenceGate: gate);
+        var existing = SeedPendingGraft(h, "op-1", rootWasLeaf: false);
+        var separator = h.State.State.PendingBulkGraft!.NewLeaves[0].SeparatorKey;
+        var tail = h.Leaf(existing);
+        tail.GetKeyRangeAndNextSiblingAsync().Returns(Task.FromResult(new LeafChainLink
+        {
+            KeyRange = new LeafKeyRange { HighKeyExclusive = separator },
+        }));
+
+        await h.Grain.BulkAppendAsync("op-1", Pairs(1));
+
+        await tail.Received(1).NarrowHighKeyAsync(separator, Arg.Any<GrainId?>());
     }
 
     [Test]
@@ -126,7 +212,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         await h.Grain.BulkAppendAsync("mixed-version", Pairs(5));
 
         await tail.DidNotReceive().GetAppendTailAsync();
-        await tail.DidNotReceive().NarrowHighKeyAsync(Arg.Any<string>());
+        await tail.DidNotReceive().NarrowHighKeyAsync(Arg.Any<string>(), Arg.Any<GrainId?>());
         await tail.Received().CountAsync();
         Assert.That(h.State.State.LastCompletedBulkOperationId, Is.EqualTo("mixed-version"));
     }
@@ -146,6 +232,66 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         await h.Grain.BulkAppendAsync("same-version", Pairs(5));
 
         await tail.Received().GetAppendTailAsync();
-        await tail.Received(1).NarrowHighKeyAsync("k0000");
+        await tail.Received(1).NarrowHighKeyAsync("k0000", Arg.Any<GrainId?>());
+    }
+
+    [Test]
+    public async Task An_older_silo_that_joins_before_the_gate_sees_it_takes_the_10_2_0_path_instead_of_failing()
+    {
+        // Review N2: the gate check is not atomic with the leaf call. A definite
+        // unknown-method fault from an older silo falls back to the 10.2.0 path.
+        var gate = Substitute.For<IWalAppendFenceGate>();
+        gate.IsOpen.Returns(true);
+        var h = CreateHarness(maxLeafKeys: 2, appendFenceGate: gate);
+        var existing = h.AddLeaf();
+        h.State.State.RootNodeId = existing;
+        h.State.State.RootIsLeaf = true;
+        var tail = h.Leaf(existing);
+        var unknown = new TypeLoadException(WalAppendFenceMethodProbe.UnresolvedAliasPrefix + " 'inv.lattice.leaf.tail'");
+        tail.GetAppendTailAsync().Returns(Task.FromException<(int, string?)>(unknown));
+        tail.NarrowHighKeyAsync(Arg.Any<string>(), Arg.Any<GrainId?>()).Returns(Task.FromException<List<LwwEntry>>(unknown));
+        tail.CountAsync().Returns(2);
+
+        await h.Grain.BulkAppendAsync("racing", Pairs(5));
+
+        await tail.Received().CountAsync();
+        Assert.That(h.State.State.LastCompletedBulkOperationId, Is.EqualTo("racing"));
+    }
+
+    [Test]
+    public async Task A_bulk_load_waits_for_batch_writes_admitted_before_it_published_before_draining_the_replaced_root()
+    {
+        // Review S1 (issue #5642): a batch write admitted before the publish may
+        // reach the replaced root after a read of it, so the drain waits it out
+        // before reading, and nothing lands between the read and the clear.
+        var h = CreateHarness(maxLeafKeys: 2);
+        var seeded = h.AddLeaf();
+        var seededLeaf = h.Leaf(seeded);
+        h.State.State.RootNodeId = seeded;
+        h.State.State.RootIsLeaf = true;
+        seededLeaf.GetStatsAsync().Returns(
+            Task.FromResult(new LeafStats()),
+            Task.FromResult(new LeafStats { LiveKeys = 1 }));
+        seededLeaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(Task.FromResult(new StateDelta
+        {
+            Entries = new Dictionary<string, LwwValue<byte[]>>
+            {
+                ["k0001"] = LwwValue<byte[]>.Create([9], HybridLogicalClock.Tick(HybridLogicalClock.Zero)),
+            },
+            Version = new VersionVector(),
+        }));
+
+        var inFlight = h.Grain.BeginBatchWrite();
+        var load = h.Grain.BulkLoadRawAsync("load", RawEntries(2));
+
+        Assert.That(load.IsCompleted, Is.False, "the load waits for the batch write admitted before it published");
+        await seededLeaf.DidNotReceive().GetDeltaSinceAsync(Arg.Any<VersionVector>());
+        await seededLeaf.DidNotReceive().ClearGrainStateAsync();
+
+        h.Grain.EndBatchWrite(inFlight);
+        await load;
+
+        await seededLeaf.Received(1).GetDeltaSinceAsync(Arg.Any<VersionVector>());
+        await seededLeaf.Received(1).ClearGrainStateAsync();
     }
 }

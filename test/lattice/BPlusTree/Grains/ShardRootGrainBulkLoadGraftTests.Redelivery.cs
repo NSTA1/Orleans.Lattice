@@ -17,7 +17,9 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         leaf.GetRawEntryAsync(Arg.Any<string>()).Returns(call => Task.FromResult<LwwEntry?>(new LwwEntry
         {
             Key = call.ArgAt<string>(0),
-            Value = [1],
+            // The value Pairs carries for this key, so the row is the one a
+            // delivery of it stored: an unchanged re-delivery.
+            Value = [(byte)int.Parse(call.ArgAt<string>(0).AsSpan(1))],
             Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
         }));
 
@@ -176,6 +178,36 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         }));
 
         await h.Grain.BulkAppendAsync("mixed", Pairs(2));
+
+        var merged = tail.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == nameof(IBPlusLeafGrain.MergeManyAsync))
+            .SelectMany(c => ((Dictionary<string, LwwValue<byte[]>>)c.GetArguments()[0]!).Keys)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        Assert.That(merged, Is.EqualTo(new[] { "k0000", "k0001" }));
+    }
+
+    [Test]
+    public async Task A_batch_whose_held_entries_all_carry_new_values_is_merged_not_skipped()
+    {
+        // Issue #5610, design #5604 change 4 (review B2): key presence cannot tell a
+        // re-delivery from a refresh. Every below-edge key is held, but with
+        // another value, so the chunk is applied as 10.2.0 applied it, and every
+        // reader resolves the later-stamped bulk value.
+        var h = CreateHarness(maxLeafKeys: 4);
+        var existing = h.AddLeaf();
+        h.State.State.RootNodeId = existing;
+        h.State.State.RootIsLeaf = true;
+        var tail = h.Leaf(existing);
+        tail.GetAppendTailAsync().Returns((2, "k0001"));
+        tail.GetRawEntryAsync(Arg.Any<string>()).Returns(call => Task.FromResult<LwwEntry?>(new LwwEntry
+        {
+            Key = call.ArgAt<string>(0),
+            Value = [200],
+            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+        }));
+
+        await h.Grain.BulkAppendAsync("refresh", Pairs(2));
 
         var merged = tail.ReceivedCalls()
             .Where(c => c.GetMethodInfo().Name == nameof(IBPlusLeafGrain.MergeManyAsync))

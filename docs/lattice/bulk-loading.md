@@ -169,9 +169,12 @@ Two caller obligations make it safe to re-drive:
   dropped connection reapplies nothing. Re-driving an *older* chunk - one a
   later chunk has already superseded on a shard, which is what a resumed
   stream does when it re-sends its whole unacknowledged window - is a no-op
-  as well: when a shard already holds a row (live or deleted) for every
-  entry at or below its highest key, it treats the chunk as a re-delivery and
-  skips those entries, so no entry is grafted twice (issue #5460).
+  as well: when a shard already holds every entry at or below its highest
+  live key with the identical value (live, no expiry, the same bytes), it
+  treats the chunk as a re-delivery and skips those entries, so no entry is
+  grafted twice (issue #5460). A chunk that changes any of those values is
+  not a re-delivery: it is applied, so a refresh that overwrites keys
+  reaches replicas and views as it did before.
 - **Keys should ascend**, both within a chunk and across the whole stream.
   Hash-partitioning a globally sorted stream preserves relative order within
   each partition, which is what keeps the per-shard appends on the right edge
@@ -201,11 +204,13 @@ writes), or a batch write accepted while a `BulkLoadAsync` was running on that
 shard. Those rows stay readable, and every key resolves last-writer-wins on its
 stamp (issues #5610 and #5642):
 
-- **Entries at or below the right edge** that are not a re-delivery (the shard
-  holds no row for at least one of them) are merged into the leaves that
-  already own their keys, exactly as `SetManyAsync` would route them. Nothing
-  is refused, and none of them is skipped: skipping a held key here would keep
-  a value that every replica replaces.
+- **Entries at or below the right edge** - the shard's highest live key; a
+  deleted key above it does not count - that are not a re-delivery (at least
+  one of them is missing, deleted, or held with a different value or an
+  expiry) are merged into the leaves that already own their keys, exactly as
+  `SetManyAsync` would route them, with its slot-ownership and split checks.
+  Nothing is refused for being out of order, and none of them is skipped:
+  skipping a held key here would keep a value that every replica replaces.
 - **Rows the shard's rightmost leaf holds in the appended range**, deleted
   ones included, are moved with their stamps into the new leaf that owns each
   key.

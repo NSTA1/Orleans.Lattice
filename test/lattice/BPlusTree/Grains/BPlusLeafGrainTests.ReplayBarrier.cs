@@ -164,6 +164,8 @@ public partial class BPlusLeafGrainTests
         // activation before this change.
         "SetShardIndexAsync", "SetKeyRangeAsync", "SetTreeIdAsync", "SetBindingAsync",
         "InitializeSiblingAsync", "SetCheckpointOffsetHintsAsync", "SetParentAsync", "NarrowHighKeyAsync",
+        // Drops relocated rows from the projection (issue #5610).
+        "DropRelocatedRowsAsync",
 
         // Recovery's birth seam (issue #4700): it re-binds, or re-creates, the leaf
         // through SetTreeIdAsync and SetShardIndexAsync, gated as they are.

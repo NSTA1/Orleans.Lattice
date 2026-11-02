@@ -765,9 +765,9 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// B+ tree. Creates new leaves as needed and propagates separators into
     /// internal nodes. Used by the streaming bulk-load extension method.
     /// <para>
-    /// Re-delivery is a no-op whatever its operation id: when the shard holds a row
-    /// for every entry at or below its highest key, those entries are recognised as
-    /// already grafted and skipped, so a resumed stream that re-sends a superseded
+    /// Re-delivery is a no-op whatever its operation id: when the shard holds every
+    /// entry at or below its highest live key with the identical value, those entries
+    /// are recognised as already grafted and skipped, so a resumed stream that re-sends a superseded
     /// batch, or a retry after a fault part-way through an append, grafts nothing
     /// twice (issue #5460).
     /// </para>

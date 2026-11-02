@@ -85,6 +85,31 @@ public sealed class BulkAppendExistingRowsIntegrationTests
     }
 
     [Test]
+    public async Task BulkAppend_whose_below_edge_keys_are_all_held_with_other_values_applies_the_chunk()
+    {
+        // Review B2 (design #5604 change 4): every key of the chunk at or below the
+        // right edge is held, so key presence alone would class it a re-delivery
+        // and skip it. Its values differ, so it is a refresh: 10.2.0 applied it,
+        // and every replica and view resolves the later-stamped bulk value.
+        const string treeId = "bulk-existing-all-held";
+        var (shard, tree) = await SingleShardTreeAsync(treeId);
+
+        await shard.BulkAppendAsync("chunk-1", Entries(0, 8, "b"));
+        for (var i = 8; i < 16; i++)
+        {
+            await tree.SetAsync(Key(i), Utf8("point"));
+        }
+
+        await shard.BulkAppendAsync("chunk-2", Entries(8, 12, "b"));
+
+        var expected = Expected(0, 20, "b");
+
+        await AssertTreeHoldsExactlyAsync(tree, expected, "resident");
+        await DeactivateEveryLeafAsync(shard);
+        await AssertTreeHoldsExactlyAsync(tree, expected, "after every leaf replayed");
+    }
+
+    [Test]
     public async Task BulkAppend_below_rows_the_shard_holds_relocates_them_and_refuses_nothing()
     {
         const string treeId = "bulk-existing-below";
