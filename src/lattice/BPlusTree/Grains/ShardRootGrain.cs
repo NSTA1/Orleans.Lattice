@@ -3281,7 +3281,7 @@ internal sealed partial class ShardRootGrain(
                 reseedEntry = await grainFactory.GetLatticeRegistry().GetEntryAsync(TreeId);
             }
 
-            await RetirePredatingHandOffMarkerAsync(reseedEntry?.Lineage);
+            await RetirePredatingHandOffMarkerAsync(null); // RED-PROOF M17: the re-seed passes no lineage
         }
 
         // This shard is creating its root leaf, so the leaf's first row write
