@@ -195,6 +195,87 @@ public sealed class LatticeSchemaVersionDecoderTests
         provider.Received(1).Invalidate("orders");
     }
 
+    /// <summary>A clock that moves only when told to.</summary>
+    private sealed class ManualTime : TimeProvider
+    {
+        public long Ticks { get; set; }
+
+        public override long GetTimestamp() => Ticks;
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+    }
+
+    private static LatticeSchemaVersionDecoder WithWindow(ILatticeSchemaVersionProvider provider, ManualTime time) =>
+        new(provider, new LatticeSchemaRegistryBuilder().Build(), runtimeRegistry: null,
+            Microsoft.Extensions.Options.Options.Create(new LatticeSchemaVersioningOptions { PropagationInterval = TimeSpan.FromSeconds(1) }),
+            time);
+
+    /// <summary>
+    /// #5711: decodes that find a stale cached target at the same time share one
+    /// version-store re-read rather than each starting their own.
+    /// </summary>
+    [Test]
+    public async Task DecodeAsync_concurrent_stale_decodes_share_one_reread()
+    {
+        var reread = new TaskCompletionSource<LatticeSchemaVersionConfig?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var invalidated = false;
+        var provider = Substitute.For<ILatticeSchemaVersionProvider>();
+        provider.GetConfigAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(_ => invalidated
+            ? new ValueTask<LatticeSchemaVersionConfig?>(reread.Task)
+            : new ValueTask<LatticeSchemaVersionConfig?>(new LatticeSchemaVersionConfig(1, 1)));
+        provider.When(p => p.Invalidate(Arg.Any<string>())).Do(_ => invalidated = true);
+        var decoder = WithWindow(provider, new ManualTime());
+        var body = Utf8("{\"a\":1}");
+        var stored = LatticeSchemaEnvelope.Encode(1, 2, body);
+
+        var first = decoder.DecodeAsync("orders", stored, CancellationToken.None).AsTask();
+        invalidated = false; // a second, independent re-read would see the stale answer again
+        var second = decoder.DecodeAsync("orders", stored, CancellationToken.None).AsTask();
+        Assert.That(first.IsCompleted || second.IsCompleted, Is.False, "both wait on the one re-read");
+        reread.SetResult(new LatticeSchemaVersionConfig(1, 2));
+
+        var results = await Task.WhenAll(first, second);
+
+        Assert.That(results, Has.All.EqualTo(body));
+        provider.Received(1).Invalidate("orders");
+    }
+
+    /// <summary>
+    /// #5711: a value really stamped newer than the target is still refused, and
+    /// re-reads the config at most once per tree per propagation interval.
+    /// </summary>
+    [Test]
+    public void DecodeAsync_value_newer_than_a_reread_target_rereads_at_most_once_per_window()
+    {
+        var provider = Provider(new LatticeSchemaVersionConfig(1, 1));
+        var time = new ManualTime();
+        var decoder = WithWindow(provider, time);
+        var stored = LatticeSchemaEnvelope.Encode(1, 5, Utf8("{}"));
+
+        for (var i = 0; i < 3; i++)
+        {
+            Assert.That(async () => await decoder.DecodeAsync("orders", stored, CancellationToken.None), Throws.InstanceOf<NotSupportedException>());
+        }
+
+        provider.Received(1).Invalidate("orders");
+
+        time.Ticks += TimeSpan.FromSeconds(1).Ticks;
+        Assert.That(async () => await decoder.DecodeAsync("orders", stored, CancellationToken.None), Throws.InstanceOf<NotSupportedException>());
+        provider.Received(2).Invalidate("orders");
+    }
+
+    /// <summary>The hot path never re-reads: a value at or below the cached target decodes from the cache alone.</summary>
+    [Test]
+    public async Task DecodeAsync_value_at_or_below_the_cached_target_never_rereads()
+    {
+        var provider = Provider(new LatticeSchemaVersionConfig(1, 2));
+        var decoder = WithWindow(provider, new ManualTime());
+
+        await decoder.DecodeAsync("orders", LatticeSchemaEnvelope.Encode(1, 2, Utf8("{}")), CancellationToken.None);
+
+        provider.DidNotReceive().Invalidate(Arg.Any<string>());
+    }
+
     [Test]
     public async Task DecodeAsync_enveloped_with_no_config_strips_stored_body()
     {

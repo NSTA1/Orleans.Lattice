@@ -1,3 +1,6 @@
+using System.Collections.Concurrent;
+using Microsoft.Extensions.Options;
+
 namespace Orleans.Lattice.Schema;
 
 /// <summary>
@@ -32,12 +35,30 @@ namespace Orleans.Lattice.Schema;
 /// tree's target - or one whose version cannot be upcast to the target - surfaces
 /// <see cref="NotSupportedException"/>, mirroring the unknown-compressor case.
 /// </para>
+/// <para>
+/// <b>Stale cached target (#5711).</b> A target advance reaches every other silo
+/// only within <see cref="LatticeSchemaVersioningOptions.PropagationInterval"/>, but
+/// the silo that served it stamps writes at the new target at once. So a value
+/// stamped above this silo's cached target may be current rather than newer. Before
+/// refusing it, the decoder re-reads the tree's config once. The re-read is
+/// single-flight per tree: concurrent decodes share one version-store read. After a
+/// re-read, no other re-read of that tree starts for one propagation interval, so a
+/// value that really is newer than the target costs at most one store read per tree
+/// per interval. The hot path (an un-stamped value, or one at or below the target)
+/// never takes this path.
+/// </para>
 /// </remarks>
 internal sealed class LatticeSchemaVersionDecoder(
     ILatticeSchemaVersionProvider provider,
     ILatticeSchemaRegistry registry,
-    SchemaRuntimeRegistry? runtimeRegistry = null) : ILatticeValueDecoder
+    SchemaRuntimeRegistry? runtimeRegistry = null,
+    IOptions<LatticeSchemaVersioningOptions>? options = null,
+    TimeProvider? timeProvider = null) : ILatticeValueDecoder
 {
+    private readonly ConcurrentDictionary<string, ConfigReread> _rereads = new(StringComparer.Ordinal);
+    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly TimeSpan _rereadWindow = options?.Value.PropagationInterval ?? new LatticeSchemaVersioningOptions().PropagationInterval;
+
     /// <inheritdoc />
     public bool IsActive(string treeId) => true;
 
@@ -61,6 +82,10 @@ internal sealed class LatticeSchemaVersionDecoder(
         var body = LatticeSchemaEnvelope.StripToBody(storedValue);
 
         var config = await provider.GetConfigAsync(treeId, ct).ConfigureAwait(false);
+        if (config is { } cached && cached.SchemaId == schemaId && storedVersion > cached.TargetVersion)
+        {
+            config = await RereadConfigAsync(treeId, cached).ConfigureAwait(false);
+        }
 
         // Without a matching config the target version is unknown; the value is still
         // self-describing, so return its stored-version body rather than guessing.
@@ -111,6 +136,11 @@ internal sealed class LatticeSchemaVersionDecoder(
         }
 
         var body = storedValue.AsMemory(LatticeSchemaEnvelope.HeaderLength);
+        if (config is { } cached && cached.SchemaId == schemaId && storedVersion > cached.TargetVersion)
+        {
+            config = await RereadConfigAsync(treeId, cached).ConfigureAwait(false);
+        }
+
         if (config is not { } version)
         {
             return new SchemaRestampInput(body, Stamped: false, 0, 0);
@@ -125,6 +155,67 @@ internal sealed class LatticeSchemaVersionDecoder(
             treeId, schemaId, storedVersion, version.TargetVersion, LatticeSchemaEnvelope.StripToBody(storedValue))
             .ConfigureAwait(false);
         return new SchemaRestampInput(upcast, Stamped: true, schemaId, version.TargetVersion);
+    }
+
+    /// <summary>
+    /// Re-reads <paramref name="treeId"/>'s config after a value was found stamped above
+    /// <paramref name="cached"/>'s target (see the remarks). Joins a re-read already in
+    /// flight; within the re-read window of the last one, returns its answer without a
+    /// new read. A failed re-read answers <paramref name="cached"/>, so the value is
+    /// judged exactly as it was before.
+    /// </summary>
+    private async Task<LatticeSchemaVersionConfig?> RereadConfigAsync(string treeId, LatticeSchemaVersionConfig cached)
+    {
+        while (true)
+        {
+            var now = _time.GetTimestamp();
+            if (_rereads.TryGetValue(treeId, out var last)
+                && (!last.Read.IsCompleted || _time.GetElapsedTime(last.StartedAt, now) < _rereadWindow))
+            {
+                return await last.Read.ConfigureAwait(false);
+            }
+
+            var completion = new TaskCompletionSource<LatticeSchemaVersionConfig?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var mine = new ConfigReread(completion.Task, now);
+            if (last is null)
+            {
+                if (_rereads.Count >= SchemaTreeCacheExtensions.MaxCachedTrees)
+                {
+                    _rereads.Clear();
+                }
+
+                if (!_rereads.TryAdd(treeId, mine))
+                {
+                    continue;
+                }
+            }
+            else if (!_rereads.TryUpdate(treeId, mine, last))
+            {
+                continue;
+            }
+
+            LatticeSchemaVersionConfig? config;
+            try
+            {
+                provider.Invalidate(treeId);
+                config = await provider.GetConfigAsync(treeId, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                config = cached;
+            }
+
+            completion.SetResult(config);
+            return config;
+        }
+    }
+
+    /// <summary>One re-read of a tree's config: its shared result and when it started.</summary>
+    private sealed class ConfigReread(Task<LatticeSchemaVersionConfig?> read, long startedAt)
+    {
+        public Task<LatticeSchemaVersionConfig?> Read { get; } = read;
+
+        public long StartedAt { get; } = startedAt;
     }
 
     private async ValueTask<byte[]> UpcastToTargetAsync(
