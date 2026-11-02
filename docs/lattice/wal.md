@@ -1670,37 +1670,68 @@ entries for the shard roots and the range-delete fence, and the range-delete fen
 grain's own state - are retired when the tree is purged
 ([#5668](https://github.com/NSTA1/Orleans.Lattice/issues/5668)), before the purge
 removes the tree's registry entry, which is what frees the id for re-use. A soft
-delete retires nothing, so a recovered tree keeps every row. The purge retires the
-fence's state first, then the markers, then each partition's entries, and each step
-first raises the tree id's routing-generation floor (`_lattice_tree-routing-floor`)
-durably to at least every generation it is about to delete. A failed step keeps the
-registry removal owed, and the purge's re-drive runs the retirement again. A
-partition hosted by a 10.2.0 silo answers the retirement call with the definite
-"method unknown" failure, and its rows are deleted straight from storage.
+delete retires nothing, so a recovered tree keeps every row.
 
-The floor keeps a purged incarnation's generations from recurring:
+The purge first reads every row. It then raises every initiator's routing floor
+(`_lattice_tree-routing-floor`, one floor per shard root and one for the range-delete
+fence) to the highest generation any row holds, in one write, before it deletes
+anything. It then retires the fence's state, the markers, and each partition's
+entries, in that order. A row that moved since the read is covered again before its
+delete. A failed step keeps the registry removal owed, and the purge's re-drive runs
+the retirement again. A partition hosted by a 10.2.0 silo answers the retirement
+call with the definite "method unknown" failure, and its rows are deleted straight
+from storage.
 
-- A WAL partition refuses a routing-generation claim at or below the floor, so a
-  straddling initiator of the purged incarnation is refused at every partition.
+The floors keep a purged incarnation's generations from recurring:
+
+- A WAL partition refuses a routing-generation claim at or below its initiator's
+  floor. This check is load-bearing, not an optimisation: it is the one seam every
+  generation passes before a stamped append under it is admitted.
+- A write a shard root admitted under a generation at or below that initiator's
+  floor is never re-stamped
+  ([#5705](https://github.com/NSTA1/Orleans.Lattice/issues/5705)). Its seam retry
+  surfaces the deleted-tree outcome rather than raising the generation above the
+  floor or re-admitting under the re-created tree's. A shard root that saw its marker
+  and then finds it gone under a floor covering it never re-creates it.
 - A re-created tree seeds every first generation, its shard roots' and its
-  range-delete fence's, at the floor plus one.
+  range-delete fence's, at its initiator's floor plus one.
 - A re-created shard root's first initialisation is a fence. Before its marker reads
   initialised, it has the range-delete fence claim its seeded generation at every
   partition, claims its own, and records the heads as a close. So a write the purged
   incarnation appended between the purge's log trim and the retirement lies below
-  heads the new leaves must replay past before the live advance re-arms them. A tree id never purged has floor 0 and claims
-  nothing extra.
+  heads the new leaves must replay past before the live advance re-arms them. A tree
+  id never purged has floor 0 and claims nothing extra.
 
-Two residues remain, both bounded and harmless:
+**A purge that finished on a 10.2.0 silo** retires nothing, so its markers survive.
+A shard root that re-seeds the purged root catches up before it lifts the purge
+tombstone. A marker that holds a generation or reads initialised was left by the
+earlier incarnation, since only that shard root sets either, and only after it has
+seeded. The shard root raises its own floor over that generation and resets the
+marker, so it seeds above the floor through the first-initialisation fence. It
+raises only its own floor: shards of the re-created tree re-seed one at a time while
+the tree is live, and raising any other initiator's floor could cover a generation
+that initiator already holds.
+
+Three residues remain, all bounded:
 
 - **One floor row per purged tree id.** It must outlive every row it covers.
-- **Rows a purge never retires.** That is a purge that finishes on a 10.2.0 silo,
-  whose build runs none of this. It is also a system tree's purge, or a retired
-  physical copy whose id stays registered as a live logical tree, since neither id is
-  freed for a re-created tree. Each is bounded by the tree's shards times its
-  partitions. The fence's per-leaf rows are swept separately
+- **Rows a purge never retires.** That is a purge that finishes on a 10.2.0 silo, a
+  system tree's purge, or the purge of a retired physical copy whose id stays
+  registered as a live logical tree. Neither of the last two ids is freed for a
+  re-created tree. Each is bounded by the tree's shards times its partitions. The
+  fence's per-leaf rows are swept separately
   ([#5634](https://github.com/NSTA1/Orleans.Lattice/issues/5634)).
-
+- **Mixed-version re-creation.** After a purge that finished on a 10.2.0 silo, two
+  cases are not caught up: a shard root whose re-seed itself ran on a 10.2.0 silo,
+  and the range-delete fence's state the earlier incarnation left. A re-created
+  incarnation can then reuse a generation that a straddling write or range-delete
+  walk of the purged incarnation still holds. To do harm, that straddler's seam
+  retry must outlast its operation's deadline across:
+  1. the gate closing for the 10.2.0 silo;
+  2. the purge settling on that silo;
+  3. the id's re-creation;
+  4. the gate reopening once the upgrade completes.
+  Do not purge trees while a rolling upgrade from 10.2.0 is in progress.
 The hand-off counters are `orleans.lattice.wal.append_fence.handoff_markers`,
 `.unstamped_appends` and `.self_fenced`; see [Metrics](metrics.md).
 
