@@ -17,6 +17,15 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal sealed partial class LatticeGrain
 {
+    /// <summary>
+    /// How long this activation remembers that the durable view registry holds no
+    /// history view for its tree, so a tree without one does not pay a registry call
+    /// per history read. A history view created meanwhile is found once it lapses, or
+    /// at once on a silo whose catalog already holds it.
+    /// </summary>
+    internal static readonly TimeSpan DurableHistoryViewMissTtl = TimeSpan.FromSeconds(30);
+
+    private long _durableHistoryViewMissUntil;
     /// <inheritdoc />
     public async Task<EntryHistoryPage> ScanEntryHistoryAsync(
         string key,
@@ -79,6 +88,13 @@ internal sealed partial class LatticeGrain
             return null;
         }
 
+        // Most trees have no history view: remember a miss for a while, so their history
+        // reads do not each pay a registry call.
+        if (Environment.TickCount64 < _durableHistoryViewMissUntil)
+        {
+            return null;
+        }
+
         IReadOnlyList<RuntimeViewRegistration> records;
         try
         {
@@ -106,6 +122,7 @@ internal sealed partial class LatticeGrain
             }
         }
 
+        _durableHistoryViewMissUntil = Environment.TickCount64 + (long)DurableHistoryViewMissTtl.TotalMilliseconds;
         return null;
     }
 
