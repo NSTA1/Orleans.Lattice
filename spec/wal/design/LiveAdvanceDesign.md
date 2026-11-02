@@ -514,6 +514,34 @@ would pass the leaf's own check and escape every shard-level fence unreported; a
 unstamped append is admitted and reported (section 4), which is safe and disarms the
 leaves it reaches.
 
+**What the close heads must bound (S2, #5664).** The owner re-arms after replaying to the
+close heads and may then live-advance past anything above them, so the heads must bound
+**every** record the initiator appends that the owner holds, not only those stamped before
+the bump. Three production shapes fall outside that bound unless guarded:
+- **A write admitted before the narrow but stamped after the bump.** The stamp must be
+  the epoch captured at **admission** ("Stamped at admission", above), carried to the
+  append. Taken at dispatch, it is the raised epoch, and the write is accepted above the
+  heads (`ReadPositionHonestStampAtAppend`, 13 states).
+- **A partition whose claim was reset.** After a WAL shard restart or move resets a
+  partition's loaded claim, the initiator has still stamped appends there. The close must
+  re-claim **every partition it has claimed in this activation**, and record no head
+  (`-1`) only for a partition it never claimed. A head recorded as `-1` where it did append
+  lets the owner skip them (`ReadPositionHonestCloseHeadUnderstated`, 13 states).
+- **A close while the initiator's gate view is closed.** It cannot bump. If it has claimed
+  any partition, a stamped append may be in flight, so it must **leave the marker open**,
+  and the owner keeps advancing by replay, until a later close can bump and re-claim. Only
+  an initiator that never stamped may close on unfenced heads. A close that records heads
+  without a fence is `ReadPositionHonestDrainWithoutFence`.
+
+The span re-check at apply (`StoreAdmittedEntry`) and the receiver's own forward or
+straggler transfer make each of these harmless while the initiator stays up: the moved
+row reaches the owner as the owner's own append. That argument fails when the initiator's
+record is durable but the forward never happens. It can crash between its append and its
+apply, or its reactivated replay can no longer own the key. The record is then owned by
+the owner and applied by every WAL reader, and a live advance past it diverges for good.
+The model lets a hand-off never happen for exactly this reason (`HandOff` is optional),
+so it does not rely on the forward; the three guards are what make the heads a bound.
+
 **Who stamps.** Whoever calls the WAL append stamps it with **its own** epoch (and, for a
 write admitted at a shard root, that shard's routing generation). A record appended by
 the leaf that owns it is that leaf's own append, tracked by its applied-prefix tracker,
@@ -1273,6 +1301,7 @@ in states including the initial one.
 | `SnapshotHonestNoOwnTracker` | "Every own append applied" | `SnapshotHonest` | base | 13 |
 | `ReadPositionHonestNoOpenCheck` | The open-marker guard | `ReadPositionHonest` | base | 12 |
 | `ReadPositionHonestRearmWithoutReplay` | The replay to the close heads | `ReadPositionHonest` | base | 13 |
+| `ReadPositionHonestCloseHeadUnderstated` | The heads at every partition the initiator wrote: the close records `-1` at a partition whose claim a WAL shard restart reset (#5664) | `ReadPositionHonest` | base | 13 |
 | `ReadPositionHonestDrainWithoutFence` | The close's fence; waiting for returns is equivalent | `ReadPositionHonest` | base | 13 |
 | `ReadPositionHonestDrainPointOnly` | The stamp on batch appends, so the fence covers point writes only | `ReadPositionHonest` | base | 13 |
 | `ReadPositionHonestStampAtAppend` | The stamp at admission; the append carries the current epoch | `ReadPositionHonest` | base | 13 |
@@ -1441,6 +1470,8 @@ Each production member carries detectors proven red. They land in this order:
    marker and fence.
 4. **The live advance itself.**
    - Armed only by the rules above.
+   - Arms nothing before #5664 lands: the close heads must bound every record the
+     initiator appends (section 2, "What the close heads must bound").
    - It reuses #5578's applied-prefix tracker and the core extraction from the
      abandoned #5596.
 5. **Epoch-row sweep (#5634).** The per-partition epoch directory row, bucketed or paged
@@ -1457,6 +1488,12 @@ Each production member carries detectors proven red. They land in this order:
    from phase 2 reaches `main` before this member lands.
 
 ## Review resolution
+
+### After acceptance: member 2's review (#5644), S2
+
+| Finding | Resolution |
+|---------|------------|
+| S2 close heads bound only appends stamped before the bump | Section 2, "What the close heads must bound": three guards, each load-bearing in the model. Stamp at admission (`StampAtAppend`), re-claim every partition claimed in the activation (new `CloseHeadUnderstated`), and no unfenced close while a stamped append may be in flight (`DrainWithoutFence`). The span re-check and receiver-own transfer argument is stated, and why it fails when the initiator's forward never happens. Production departs on all three at #5644's head, so the fix is filed as #5664, a sub-issue of #5605, which blocks member 4. |
 
 ### After acceptance: member 3's review (#5646)
 
