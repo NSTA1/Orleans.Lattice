@@ -107,6 +107,16 @@ public sealed class AppRegistrySerializationTests
     }
 
     [Test]
+    public void Epoch_lease_roundtrips()
+    {
+        var serializer = CreateSerializer(out var services);
+        using var _ = services;
+        var lease = new AppRegistryEpochLease(new AppRegistryEpoch(Guid.NewGuid(), 42), TimeSpan.FromSeconds(10));
+
+        Assert.That(serializer.Deserialize<AppRegistryEpochLease>(serializer.SerializeToArray(lease)), Is.EqualTo(lease));
+    }
+
+    [Test]
     public void AppRegistryTypeAliases_each_have_one_owner_and_collide_with_nothing()
     {
         var assembly = typeof(AppRegistryRecord).Assembly;
@@ -117,7 +127,7 @@ public sealed class AppRegistrySerializationTests
             .Where(t => t.GetCustomAttribute<GenerateSerializerAttribute>() is not null || (t.IsInterface && typeof(IAddressable).IsAssignableFrom(t)))
             .ToArray();
 
-        Assert.That(aliases, Has.Length.EqualTo(10));
+        Assert.That(aliases, Has.Length.EqualTo(12));
         Assert.That(aliases.Distinct().Count(), Is.EqualTo(aliases.Length));
         Assert.That(aliases.Intersect(Constants(typeof(AppsTypeAliases))), Is.Empty, "the two apps alias tables are disjoint");
         foreach (var alias in aliases)
