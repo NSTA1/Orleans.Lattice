@@ -1,6 +1,7 @@
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Checkpoints;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Sessions;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 
@@ -26,6 +27,13 @@ public sealed partial class AuditorsReviewChapter : JourneyChapter
     public const string JourneyId = "u4";
 
     private static JourneyRecorder Recorder => JourneyRecorder.For(JourneyId);
+
+    /// <summary>
+    /// U4.3's History of the line feed's latest reading reads factory-telemetry's write-ahead-log
+    /// window, and that read can time out behind a replay on a saturated WAL shard (#5675). The
+    /// wrapper runs only when the panel ends in its failure state.
+    /// </summary>
+    private static readonly KnownDefect WalWindowHistoryTimesOut = new KnownDefect("#5675", "the WAL-window history read of reading/latest times out behind a -1 replay on a saturated WAL shard, so the History panel says the history did not load");
 
     /// <inheritdoc />
     public override async Task RunAsync(ChapterContext context)
