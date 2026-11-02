@@ -99,7 +99,7 @@ public class CoordinatorTerminalAppendFenceTests
         {
             Assert.That(CoordinatorTerminalAppendFence.Resolve(null), Is.Null);
             Assert.That(CoordinatorTerminalAppendFence.Resolve(
-                new Microsoft.Extensions.DependencyInjection.ServiceCollection().BuildServiceProvider()), Is.Null);
+                Substitute.For<IServiceProvider>()), Is.Null);
         });
     }
 }

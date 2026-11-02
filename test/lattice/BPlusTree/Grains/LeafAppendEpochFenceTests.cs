@@ -233,7 +233,7 @@ public sealed class LeafAppendEpochFenceTests
         shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(41L));
 
         var offset = await WalFencedAppendDispatch.AppendPointAsync(
-            shard, new WalRecord(), batched: false, partition: 0, h.Fence, waitForDeadline: false, CancellationToken.None);
+            shard, new WalRecord(), batched: false, partition: 0, h.Fence, WalRoutingStamp.None, waitForDeadline: false, CancellationToken.None);
 
         Assert.Multiple(() =>
         {

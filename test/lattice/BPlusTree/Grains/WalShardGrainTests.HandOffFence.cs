@@ -12,9 +12,9 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </summary>
 public partial class WalShardGrainTests
 {
-    [TestCase(WalRoutingInitiatorKind.ShardRoot)]
-    [TestCase(WalRoutingInitiatorKind.TreeRangeDelete)]
-    public async Task A_generation_re_claim_never_splits_a_generation_stamped_batch(WalRoutingInitiatorKind kind)
+    [TestCase(1)]
+    [TestCase(2)]
+    public async Task A_generation_re_claim_never_splits_a_generation_stamped_batch(int kind)
     {
         // One entry per batch and one flush in flight: the batch's third entry waits
         // for the gated first flush, leaving a window between two of its entries.
@@ -22,7 +22,7 @@ public partial class WalShardGrainTests
         var storage = new EnumerableMemoryGrainStorage();
         var grain = await CreateGrainAsync(gated, new LatticeOptions { WalMaxBatchEntries = 1, WalMaxPendingBatches = 1 });
         grain.UseFenceStorageForTesting(storage);
-        var initiator = new WalRoutingInitiator(kind, 0);
+        var initiator = new WalRoutingInitiator((WalRoutingInitiatorKind)kind, 0);
         await grain.ClaimAppendEpochAsync(FenceLeaf, 1, CancellationToken.None);
         await grain.ClaimRoutingGenerationAsync(initiator, 1, CancellationToken.None);
         var stamp = new WalAppendStamp(FenceLeaf, 1, initiator, 1);
