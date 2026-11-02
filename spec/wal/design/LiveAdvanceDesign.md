@@ -1491,6 +1491,12 @@ Each production member carries detectors proven red. They land in this order:
      initiator appends (section 2, "What the close heads must bound").
    - It reuses #5578's applied-prefix tracker and the core extraction from the
      abandoned #5596.
+   - Formal work: production only. `WalDurability` stays unchanged (Formal impact) and
+     gains a gap entry naming `WalLiveAdvance` as the live advance's safety argument and
+     citing member 4's detectors; `PinRetirementRefinement.md` gains the entry-retirement
+     rows. #5578's `LiveAdvance` and `NewbornPinEventuallyUsable` are not re-landed in
+     `WalDurability`. The PR maps each production arming guard to a conjunct of
+     `Armed(a)`, so the promoted module's refinement note can cite the detectors.
 5. **Epoch-row sweep (#5634).** The per-partition epoch directory row, bucketed or paged
    within the provider's row limits, and the sweep that retires the entries of leaves
    that no longer exist, which a 10.2.0 silo's retirement leaves behind. It lands
@@ -1501,7 +1507,11 @@ Each production member carries detectors proven red. They land in this order:
    violation), and **every combined configuration the reviewer named**
    (Mixed+Restart+duplicate on the full instance, own unstamped appends with the
    self-report, repeated unstamped appends, the split claim under `Restart`, and the
-   twelve configurations above) **in CI, on a dedicated or measured TLC shard.** Nothing
+   twelve configurations above) **in CI, on a dedicated or measured TLC shard.** It also
+   adds the liveness property #5572 asked for and the draft model lacks: under weak
+   fairness of the claim, replay, apply and `LiveAdvance` steps, an armed activation's
+   newborn pin eventually becomes usable without a replay from `-1` (the successor of
+   #5578's `NewbornPinEventuallyUsable`), checked on a small configuration. Nothing
    from phase 2 reaches `main` before this member lands.
 
 ## Review resolution
