@@ -99,7 +99,9 @@ Max2(x, y) == IF x >= y THEN x ELSE y
 VARIABLES
     lRetired,      \* the highest epoch of L's own retired incarnations
     otherRetired,  \* another leaf of the partition has been retired (WithOtherRetire)
-    floorRejected, \* the floor rejected an append L's own entry admitted (#5635)
+    wrongRefusal,  \* an activation nothing superseded was refused at a claim or an append
+    rowInc,        \* L's epoch row's incarnation: with the epoch, the row's ETag stand-in
+    seenInc,       \* the incarnation each activation read the row in
     bumped,        \* witness: a floor-only claim refusal bumped the epoch and re-claimed
     gst,        \* another shard's range-delete walk: "idle", "pend" (admitted), "repend"
                 \* (re-stamped after a rejection), "rejected", "done"
@@ -164,7 +166,7 @@ VARIABLES
     claimRefused,         \* witness: a claim was refused at the shard
     selfReported          \* witness: an own unstamped append reported itself
 
-floorVars == <<lRetired, otherRetired, floorRejected, bumped>>
+floorVars == <<lRetired, otherRetired, wrongRefusal, bumped, rowInc, seenInc>>
 walkVars == <<gst, gstamp, closing>>
 walVars == <<next, author, inflight, durable, acked, floor>>
 leafVars == <<up, cache, rp, mine, snapCov, snapRows>>
@@ -184,7 +186,9 @@ vars == <<floorVars, walkVars, walVars, leafVars, epochVars, handVars, gateVars,
 TypeOK ==
     /\ lRetired \in Epochs
     /\ otherRetired \in BOOLEAN
-    /\ floorRejected \in BOOLEAN
+    /\ wrongRefusal \in BOOLEAN
+    /\ rowInc \in 0..1
+    /\ seenInc \in [Acts -> 0..1]
     /\ bumped \in BOOLEAN
     /\ gst \in {"idle", "pend", "repend", "rejected", "done"}
     /\ closing \in BOOLEAN
@@ -250,7 +254,9 @@ TypeOK ==
 Init ==
     /\ lRetired = 0
     /\ otherRetired = FALSE
-    /\ floorRejected = FALSE
+    /\ wrongRefusal = FALSE
+    /\ rowInc = 0
+    /\ seenInc = [a \in Acts |-> 0]
     /\ bumped = FALSE
     /\ gst = "idle"
     /\ gstamp = 0
@@ -350,7 +356,8 @@ Create ==
     /\ cache' = [cache EXCEPT !["a1"] = {o \in Offs : author[o] = PreAuthor}]
     /\ rp' = [rp EXCEPT !["a1"] = hint - 1]
     /\ seen' = [seen EXCEPT !["a1"] = rowEpoch]
-    /\ UNCHANGED <<walkVars, floorVars, hint, walVars, mine, snapCov, snapRows, rowEpoch, epoch, cstage, claimHead,
+    /\ seenInc' = [seenInc EXCEPT !["a1"] = rowInc]
+    /\ UNCHANGED <<walkVars, lRetired, otherRetired, wrongRefusal, bumped, rowInc, hint, walVars, mine, snapCov, snapRows, rowEpoch, epoch, cstage, claimHead,
                    fence, memFence, retired, maxClaimed, handVars, gateVars, viewVars, oldVars,
                    dupUsed, restarted, recreated, safeVars, wghosts>>
 
@@ -376,11 +383,18 @@ StopAct(a) ==
 (***************************************************************************)
 Superseded(x, a) == FrozenView /\ x # a /\ x \in up /\ ~fz[x]
 
+\* The epoch row's ETag. Within an incarnation every row write raises the epoch,
+\* so (incarnation, epoch) identifies a write; a purge deletes the row and starts
+\* a new incarnation, so an epoch value that recurs never matches an old ETag.
+\* RowUnmoved(a): the row is as a read it. RowHolds(a): the row is as a wrote it.
+RowUnmoved(a) == seen[a] = rowEpoch /\ seenInc[a] = rowInc
+RowHolds(a) == rowEpoch = epoch[a] /\ seenInc[a] = rowInc
+
 ClaimRow(a) ==
     /\ a \in up
     /\ gate
     /\ cstage[a] = 0
-    /\ seen[a] = rowEpoch
+    /\ RowUnmoved(a)
     /\ LET e == Max2(seen[a], retired) + 1 IN
         /\ e <= MaxEpoch
         /\ rowEpoch' = e
@@ -398,7 +412,7 @@ ClaimRow(a) ==
 ClaimConflict(a) ==
     /\ a \in up
     /\ cstage[a] = 0
-    /\ seen[a] # rowEpoch
+    /\ ~RowUnmoved(a)
     /\ StopAct(a)
     /\ UNCHANGED <<walkVars, floorVars, walVars, rp, snapCov, snapRows, epochVars, handVars, gateVars, viewVars,
                    oldVars, envVars, safeVars, wghosts>>
@@ -424,10 +438,12 @@ ClaimRaise(a) ==
     /\ UNCHANGED <<walkVars, floorVars, walVars, leafVars, rowEpoch, seen, epoch, fence, retired, handVars, gateVars,
                    viewVars, oldVars, envVars, safeVars, wghosts>>
 
-\* A refusal by the leaf's entry means another activation claimed: stop. A
-\* refusal by the partition's floor alone (another leaf's retirement, or L's own
-\* earlier incarnation) bumps instead: persist the higher of the row and the floor
-\* plus one, conditionally on the row this activation wrote, and claim again.
+\* Any refusal, by the leaf's entry or by the partition's floor, bumps while the row
+\* still holds this activation's write (its ETag): persist the higher of the entry,
+\* the floor and the row, plus one, conditionally on that ETag, and claim again. An
+\* entry above a held row can only be left by an incarnation the row no longer
+\* records (a pre-purge duplicate's claim straddling the purge). A moved row means
+\* another activation claimed: stop.
 \* Production bounds the rounds (LeafAppendEpochFence.MaxClaimRounds, 8) and then
 \* appends unstamped; the model bounds them by MaxEpoch, and a bump with no room,
 \* or whose row moved, stops the activation (its unstamped fallback is the
@@ -436,8 +452,14 @@ EntryRefuses(a) ==
     \/ cstage[a] = 1 /\ epoch[a] <= Max2(fence, memFence)
     \/ cstage[a] = 2 /\ epoch[a] < Max2(fence, memFence)
 FloorRefuses(a) == cstage[a] \in {1, 2} /\ ~EntryRefuses(a) /\ epoch[a] <= retired
-BumpEpoch == Max2(rowEpoch, retired) + 1
-CanBump(a) == FloorRefuses(a) /\ rowEpoch = epoch[a] /\ BumpEpoch <= MaxEpoch
+Refused(a) == EntryRefuses(a) \/ FloorRefuses(a)
+BumpEpoch == Max2(Max2(fence, memFence), Max2(retired, rowEpoch)) + 1
+CanBump(a) == Refused(a) /\ RowHolds(a) /\ BumpEpoch <= MaxEpoch
+
+\* Superseded, as production decides it: another activation has written the row
+\* since a did (its ETag no longer holds), a raised a higher epoch, or a belongs
+\* to an incarnation L retired. Anything else refused is refused wrongly.
+NotSuperseded(a) == RowHolds(a) /\ epoch[a] >= maxClaimed /\ epoch[a] > lRetired
 
 ClaimBump(a) ==
     /\ a \in up
@@ -446,7 +468,7 @@ ClaimBump(a) ==
     /\ epoch' = [epoch EXCEPT ![a] = BumpEpoch]
     /\ cstage' = [cstage EXCEPT ![a] = 1]
     /\ bumped' = (bumped \/ Ghosts)
-    /\ UNCHANGED <<lRetired, otherRetired, floorRejected, walkVars, walVars, leafVars, seen,
+    /\ UNCHANGED <<lRetired, otherRetired, wrongRefusal, rowInc, seenInc, walkVars, walVars, leafVars, seen,
                    claimHead, fence, memFence, retired, maxClaimed, handVars, gateVars, viewVars,
                    oldVars, envVars, safeVars, wghosts>>
 
@@ -459,7 +481,7 @@ OtherPartitionBump(a) ==
     /\ WithSecondPartition
     /\ a \in up
     /\ cstage[a] = 3
-    /\ rowEpoch = epoch[a]
+    /\ RowHolds(a)
     /\ \E e \in (rowEpoch + 1)..MaxEpoch :
         /\ rowEpoch' = e
         /\ epoch' = [epoch EXCEPT ![a] = e]
@@ -469,11 +491,13 @@ OtherPartitionBump(a) ==
 
 ClaimRefuse(a) ==
     /\ a \in up
-    /\ EntryRefuses(a) \/ (FloorRefuses(a) /\ ~CanBump(a))
+    /\ Refused(a)
+    /\ ~CanBump(a)
     /\ StopAct(a)
     /\ cstage' = [cstage EXCEPT ![a] = 0]
     /\ claimRefused' = (claimRefused \/ Ghosts)
-    /\ UNCHANGED <<walkVars, floorVars, walVars, rp, snapCov, snapRows, rowEpoch, seen, epoch, claimHead, fence,
+    /\ wrongRefusal' = (wrongRefusal \/ (NotSuperseded(a) /\ BumpEpoch <= MaxEpoch))
+    /\ UNCHANGED <<walkVars, lRetired, otherRetired, bumped, rowInc, seenInc, walVars, rp, snapCov, snapRows, rowEpoch, seen, epoch, claimHead, fence,
                    memFence, retired, maxClaimed, handVars, gateVars, viewVars, oldVars, envVars,
                    safeVars, rejected, fRejected, advanced, advancedPastForeign, dupAdvanced,
                    trimAfterAdvance, reloaded, floorClaim, selfReported>>
@@ -518,22 +542,10 @@ StaleAppend(a) ==
     /\ ~AppendAdmits(a)
     /\ next < MaxOff
     /\ rejected' = TRUE
-    /\ UNCHANGED <<walkVars, floorVars, walVars, leafVars, epochVars, handVars, gateVars, viewVars, oldVars, envVars,
+    /\ wrongRefusal' = (wrongRefusal \/ NotSuperseded(a))
+    /\ UNCHANGED <<walkVars, lRetired, otherRetired, bumped, rowInc, seenInc, walVars, leafVars, epochVars, handVars, gateVars, viewVars, oldVars, envVars,
                    safeVars, fRejected, advanced, advancedPastForeign, dupAdvanced,
                    trimAfterAdvance, reloaded, floorClaim, claimRefused, selfReported>>
-
-\* FloorReject(a): the shard rejects a stamped append the leaf's own entry
-\* admits. Never enabled while AppendAdmits is the entry check alone; it records
-\* the production shape #5635 removed.
-FloorReject(a) ==
-    /\ a \in up
-    /\ cstage[a] = 3
-    /\ memFence > 0
-    /\ epoch[a] >= memFence
-    /\ ~AppendAdmits(a)
-    /\ floorRejected' = TRUE
-    /\ UNCHANGED <<lRetired, otherRetired, bumped, walkVars, walVars, leafVars, epochVars, handVars,
-                   gateVars, viewVars, oldVars, envVars, safeVars, wghosts>>
 
 \* RetireOther: another leaf of the partition is retired, raising the partition's
 \* retired floor to that leaf's epoch, which may exceed every epoch L holds.
@@ -543,7 +555,7 @@ RetireOther ==
     /\ ~otherRetired
     /\ otherRetired' = TRUE
     /\ \E e \in (retired + 1)..MaxEpoch : retired' = e
-    /\ UNCHANGED <<lRetired, floorRejected, bumped, walkVars, walVars, leafVars, rowEpoch, seen, epoch,
+    /\ UNCHANGED <<lRetired, wrongRefusal, bumped, rowInc, seenInc, walkVars, walVars, leafVars, rowEpoch, seen, epoch,
                    cstage, claimHead, fence, memFence, maxClaimed, handVars, gateVars, viewVars,
                    oldVars, envVars, safeVars, wghosts>>
 
@@ -670,11 +682,12 @@ GReject ==
 (* is open. The fence grain answers from one state, in turns that do not   *)
 (* interleave with a close, and marks the intent closed before the close's *)
 (* first re-claim, so the answer is "open" only while no close is under    *)
-(* way. GRestamp: open, so the walk re-stamps with the current generation  *)
-(* (another delete's, since its own intent closed when the generation it   *)
-(* carried was re-claimed); the check reads the marker, over-approximating *)
-(* "its own intent". GUnstamped: not open, so the walk appends unstamped,  *)
-(* admitted and reported.                                                  *)
+(* way. The check asks about the walk's OWN intent, by id: markers are    *)
+(* range-scoped, so another intent's marker need not cover the leaves the  *)
+(* walk's record reaches. GRestamp: its own intent is open (another        *)
+(* delete's close re-claimed the shared generation), so the walk re-stamps *)
+(* with the current generation; L's marker (hoOpen) encodes that intent    *)
+(* exactly. GUnstamped: not open, so it appends unstamped and reported.    *)
 GRestamp ==
     /\ gst = "rejected"
     /\ hoOpen
@@ -866,7 +879,8 @@ Duplicate ==
     /\ cache' = [cache EXCEPT !["a2"] = snapRows]
     /\ rp' = [rp EXCEPT !["a2"] = snapCov]
     /\ seen' = [seen EXCEPT !["a2"] = rowEpoch]
-    /\ UNCHANGED <<walkVars, floorVars, walVars, mine, snapCov, snapRows, rowEpoch, epoch, cstage, claimHead, fence,
+    /\ seenInc' = [seenInc EXCEPT !["a2"] = rowInc]
+    /\ UNCHANGED <<walkVars, lRetired, otherRetired, wrongRefusal, bumped, rowInc, walVars, mine, snapCov, snapRows, rowEpoch, epoch, cstage, claimHead, fence,
                    memFence, retired, maxClaimed, handVars, gateVars, viewVars, oldVars, phase,
                    hint, restarted, recreated, safeVars, wghosts>>
 
@@ -899,9 +913,10 @@ Recreate ==
     /\ rowEpoch' = 0
     /\ retired' = Max2(retired, fence)
     /\ lRetired' = Max2(lRetired, fence)
+    /\ rowInc' = rowInc + 1
     /\ fence' = 0
     /\ memFence' = IF memFence = -1 THEN -1 ELSE 0
-    /\ UNCHANGED <<walkVars, otherRetired, floorRejected, bumped, walVars, leafVars, seen, epoch, cstage, claimHead, maxClaimed, handVars,
+    /\ UNCHANGED <<walkVars, otherRetired, wrongRefusal, bumped, seenInc, walVars, leafVars, seen, epoch, cstage, claimHead, maxClaimed, handVars,
                    gateVars, viewVars, oldVars, phase, hint, dupUsed, restarted, safeVars, wghosts>>
 
 UnstampedAdmitted == TRUE
@@ -930,7 +945,7 @@ Next ==
     \/ PreWrite \/ Begin \/ Create
     \/ \E a \in Acts : ClaimRow(a) \/ ClaimConflict(a) \/ ClaimWrite(a) \/ ClaimRaise(a)
                        \/ ClaimRefuse(a) \/ ClaimBump(a) \/ OtherPartitionBump(a)
-    \/ \E a \in Acts : OwnAlloc(a) \/ StaleAppend(a) \/ OwnAllocUnstamped(a) \/ FloorReject(a)
+    \/ \E a \in Acts : OwnAlloc(a) \/ StaleAppend(a) \/ OwnAllocUnstamped(a)
     \/ RetireOther
     \/ \E o \in Offs : Land(o)
     \/ ForeignOpen \/ ForeignAlloc \/ ForeignReject \/ Close
@@ -970,9 +985,11 @@ StaleEpochNeverAppends == ~staleAccepted
 \* never rejected.
 OldNeverRejected == ~oldRejected
 
-\* The partition's retired floor never rejects an append the leaf's own entry
-\* admits: another leaf's retirement cannot supersede a live leaf (#5635).
-CurrentNeverFenced == ~floorRejected
+\* Only a superseded activation is ever refused, at a claim or at an append: in
+\* particular, another leaf's retirement never refuses a live leaf (#5635), and a
+\* re-created incarnation is never stopped by a claim straddling the purge.
+\* StaleAppend is witness-gated, so the append half is checked with Ghosts on.
+OnlySupersededRefused == ~wrongRefusal
 
 \* The contested key (#5610). Every entry L owns writes one key K, the
 \* contention worst case. Point and foreign entries carry real versions, which

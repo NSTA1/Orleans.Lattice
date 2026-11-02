@@ -14,8 +14,20 @@ epoch rows). The re-review of revision 4 accepted member 2, except the tree rang
 fence's re-stamp path, which waits for the reviewer to confirm this revision's model
 change. Members 3 and 4 follow member 2.
 
-**Revision.** This is the fifth revision. It answers the
-[re-review of revision 4](https://github.com/NSTA1/Orleans.Lattice/issues/5605#issuecomment-6566046196)
+**Revision.** This is the sixth revision. It answers the
+[re-review of revision 5](https://github.com/NSTA1/Orleans.Lattice/issues/5605#issuecomment-6568413136)
+(1 blocking, 2 should-fix, 2 nits), which confirmed #5635 sound and let member 1 proceed:
+- **A rejected range-delete walk re-stamps only under its own intent** (B1, rule 3 in
+  section 2), with mutation `RestampUnderAnyIntent`.
+- **Any refusal bumps while the activation's ETag holds** (S1), as production does: an
+  entry refusal with the row unmoved is the purge straddle, now named in section 1. The
+  model gains an ETag stand-in (`rowInc`) and the widened `ClaimBump`.
+- **`OnlySupersededRefused` replaces `CurrentNeverFenced`** (S2): it is behavioural, where
+  `CurrentNeverFenced` was definitional.
+- Step 1 describes production's `ClaimRowAsync`, and production's re-claim after a bump
+  and its cost are stated (N1, N2).
+
+Revision 5 answered the[re-review of revision 4](https://github.com/NSTA1/Orleans.Lattice/issues/5605#issuecomment-6566046196)
 (1 blocking, 3 should-fix, 2 nits):
 - **The re-stamp is atomic with the close (B1).** The fence grain marks an intent closed
   before the close's first re-claim, and answers the open check and the generation from
@@ -137,9 +149,10 @@ grain-storage serializer when a host bypasses Lattice's binary serializer.
 **Claim eagerly, never lazily.** Before an activation's first append, it claims an
 epoch. The claim is one serialised sequence per leaf and partition, in three steps:
 
-1. **Persist (`ClaimRow`).** The activation writes the epoch it read plus one, raised
-   above the partition's retired floor, to its `_lattice_leaf-append-epoch` row, as a
-   strict conditional write on the ETag it read. Only claims write that row. So every
+1. **Persist (`ClaimRow`).** The activation writes the epoch it read plus one to its
+   `_lattice_leaf-append-epoch` row (`LeafAppendEpochFence.ClaimRowAsync`), as a strict
+   conditional write on the ETag it read. It learns the partition's retired floor only
+   through a refusal and a bump (below). Only claims write that row. So every
    conflict, empty-ETag included, means another activation claimed: this one is stale,
    the write fails closed and the activation deactivates. The caller's retry reaches
    the live activation (section 5).
@@ -168,16 +181,32 @@ epoch. The claim is one serialised sequence per leaf and partition, in three ste
    against the raised entry. The entry row was written before the raise, so a restart
    can never lose a raise whose head was already returned.
 
-A refusal returns the higher of the entry and the floor. The activation then persists
-that value plus one to its own epoch row, conditionally on the ETag it last wrote:
-- **The row has not moved.** The refusal came from the floor alone (a re-created leaf
-  whose epoch row is older than a retirement, cost N3), and the activation claims again
-  above it.
-- **The row moved.** Another activation has claimed since, so this one is stale: it
-  stops, and the caller's retry reaches the live one.
+**Any refusal bumps while the row holds.** A refusal, by the entry at the write or the
+raise, or by the floor, returns the higher of the entry and the floor. The activation
+then persists the higher of that and its row, plus one, to its own epoch row,
+conditionally on the ETag of its own last write (`LeafAppendEpochFence`, as #5633
+implements it):
+- **The ETag holds.** No activation has claimed since this one wrote the row, so it is
+  not stale, whatever refused it, and it claims again above the refusal, at most
+  `LeafAppendEpochFence.MaxClaimRounds` (8) rounds, after which it appends unstamped
+  (reported, section 4).
+- **The ETag conflicts.** Another activation has claimed since, so this one is stale: it
+  stops, and the caller's retry reaches the live one (`WitnessClaimRefused`).
 
-The model folds the first case into `ClaimRow`, which reads the floor directly, and
-models the second as `ClaimRefuse`, which stops the activation (`WitnessClaimRefused`).
+An entry refusal with the ETag holding is not a contradiction: it is the **purge
+straddle** (below), where the entry above this activation's epoch was left by an
+incarnation the row no longer records. The model has `ClaimBump` for the bump
+(`WitnessClaimBumped`); it bounds the rounds by `MaxEpoch` and stops a bump that has no
+room, standing for the unstamped fallback, which `WalLiveAdvanceGateFlip.cfg` covers.
+Revision 5 stopped the activation on an entry refusal; that stops a re-created
+incarnation in the straddle (`OnlySupersededRefusedEntryRefusalStops`, 9 states).
+
+**The ETag in the model.** Production compares the row's ETag; the model compares the
+pair of the row's incarnation (`rowInc`, raised by `Recreate`, the purge's delete) and its
+epoch. Within an incarnation every row write raises the epoch, so the pair identifies a
+write, and an epoch value that recurs after a purge never matches an old activation's
+write. Comparing the epoch alone would let a pre-purge activation's compare succeed
+where production's ETag fails.
 
 **The stamped append.** Once the cluster's fence gate is open (section 4), an
 activation appends through new stamped methods; the existing methods are unchanged:
@@ -226,32 +255,29 @@ it. A retirement that only wrote rows would leave the loaded entry admitting a s
 activation of the retired incarnation, and would need the append check back
 (`StaleEpochNeverAppendsRecreateKeepsLoadedEntry`, 9 states). In the model,
 `AppendAdmits` is the entry check alone, `RetireOther` (`WithOtherRetire`) raises the
-shared floor above epochs L holds, and `CurrentNeverFenced` states that the
-floor never rejects an append L's own entry admits.
-`CurrentNeverFencedFloorAtAppend` puts the floor back on the append path and
-fails.
+shared floor above epochs L holds, and `OnlySupersededRefused` states that only a
+superseded activation is ever refused, at a claim or at an append. It is behavioural:
+putting the floor back in the admission predicate (`OnlySupersededRefusedFloorAtAppend`)
+or in the append guards beside it (`OnlySupersededRefusedFloorInAppendGuards`) both fail.
 
-**A floor-only refusal bumps and re-claims.** The claim-time checks are partition-wide
+**Another leaf's retirement at the claim.** The claim-time checks are partition-wide
 too: a claim between its row write and its raise when another leaf is retired with a
-higher epoch is refused by the floor alone. That activation is not stale, so it does not
-stop. It persists the higher of its row and the floor plus one to its epoch row,
-conditionally on the row it wrote, and claims again, at most
-`LeafAppendEpochFence.MaxClaimRounds` (8) rounds, after which it appends unstamped
-(reported, section 4). Only a refusal by the leaf's own entry, or a moved row, means
-another activation claimed, and stops it. The model has `ClaimBump` for the floor-only
-refusal (`WitnessClaimBumped`); it bounds the rounds by `MaxEpoch` and stops a bump that
-has no room, standing for the unstamped fallback, which `WalLiveAdvanceGateFlip.cfg`
-covers. Cost: one extra claim round per claim in flight at another leaf's retirement in
-the same partition (N3, below).
-
+higher epoch is refused by the floor. Its ETag holds, so it bumps and re-claims (above).
+Cost: one extra claim round per claim in flight at another leaf's retirement in the same
+partition (N3, below).
 **One epoch per activation, across partitions.** An activation has one epoch, stamped on
 every partition it writes. A floor-only bump forced on partition P2 therefore changes the
-epoch it stamps on P1, where that epoch was never claimed. P1 admits it, because it is
-above P1's entry. That is safe: any other activation must first win the leaf's epoch row,
-and its claim on P1 then exceeds the bumped epoch. `OtherPartitionBump`
-(`WithSecondPartition`, `WalLiveAdvanceTwoPartition.cfg`) bumps a raised activation's
-epoch from another partition at any time, and every property holds
-(`WitnessOtherPartitionEpoch`).
+epoch it would stamp on P1. Production does not stamp P1 with an epoch it never claimed
+there: `StampForAsync` stamps only when the partition's claimed epoch equals the
+activation's, so the next append to P1 first re-claims P1 under the new epoch, and P1's
+claim head is unset until then, so P1 is disarmed until the leaf replays to the new head.
+The model checks a weaker discipline that over-approximates it: `OtherPartitionBump`
+(`WithSecondPartition`, `WalLiveAdvanceTwoPartition.cfg`) bumps a raised activation's epoch
+from another partition at any time and keeps stamping P1 without a re-claim, which P1
+admits because the epoch is above its entry; every property still holds
+(`WitnessOtherPartitionEpoch`), because any other activation must first win the leaf's
+epoch row, and its claim on P1 then exceeds the bumped epoch.
+
 **Arming.** The activation is armed for the live advance on a partition only when:
 - its claim on that partition has been raised (an explicit guard; see the redundancy
   checks for why it is kept);
@@ -286,6 +312,14 @@ A re-created leaf (a purge re-creation, or an id reused by a create) starts a ne
 epoch row. Its first claim lands in an absent entry, so it must exceed the floor,
 and therefore every epoch a surviving duplicate of the old incarnation holds.
 `ReadPositionHonestRecreateDropsFloor` removes the floor raise and fails.
+
+**The purge straddle.** The floor is built from entries, not from epoch rows. A
+pre-purge duplicate D can write its row (epoch e) before the purge and its entry after it:
+the purge raised the floor only to the old entry, below e, and deleted the row, so D's
+entry lands above the floor, and D raises and appends. The re-created incarnation R reads
+the row as absent, claims at or below e, and is refused by D's entry. The floor does not
+let R outrank D; the **bump** does: R's ETag holds, so R bumps above D's entry and wins,
+and D's next refusal meets a moved row and stops.
 
 Retirement code runs whether the gate is open or closed, so rows are retired on every
 path a new silo runs: every leaf clear (purge, reclaim, orphan repair) and the WAL GC's
@@ -330,7 +364,9 @@ restarted watermark unreported.
   leaf's retirement every new leaf whose epoch row is older than the floor pays one
   refused claim per partition it writes, then bumps and claims above the floor; and every
   claim in flight in that partition when another leaf is retired with a higher epoch pays
-  one extra round. Appends are never affected (#5635).
+  one extra round. Appends are never affected (#5635). A bump forced at one partition
+  costs one extra claim round at **every** partition the activation writes, and a re-arm
+  (a replay to the new claim head) at each.
 - **Per shard restart:** one extra claim round trip for each leaf that appends
   afterwards.
 - **Storage:** one entry row per (partition, live leaf that wrote it), one floor row
@@ -525,12 +561,25 @@ Stamping a walk with no open intent fails (`ReadPositionHonestRangeDeleteWithout
 
 **A walk outliving its intent (B1).** A walk still running after its intent closed has
 its next stamped append rejected by the re-claimed generation. The shard root's seam
-retry then asks the fence grain whether an intent is open. If one is (another delete,
-whose close re-claimed the shared generation), the walk is re-stamped with the
-generation the fence grain returns; if not, it appends unstamped, so the walk completes
-as it would in 10.2.0. Two concurrent range deletes on one tree share the generation,
-so one's close rejects the other's in-flight appends once, and each is retried this
-way.
+retry then asks the fence grain whether **its own** intent, named by id in the stamped
+call, is still open. If it is (another delete's close re-claimed the shared
+generation), the walk is re-stamped with the generation the fence grain returns; if
+not, it appends unstamped, so the walk completes as it would in 10.2.0. Two concurrent
+range deletes on one tree share the generation, so one's close rejects the other's
+in-flight appends once, and each is retried this way.
+
+**Rule 3: re-stamp only under the walk's own intent (revision 6).** Markers are
+range-scoped, and a leaf disjoint from an open marker ignores it. So another open
+intent, I2 on range R2, does not hold a leaf X that overlaps the walk's range R1 but not
+R2: X re-armed after the walk's own intent I1 closed. A walk re-stamped under I2 would
+be admitted above I1's close heads, and X would live-advance past a range-delete record
+it must replay, and never apply the delete. Re-stamping only while I1 is open is safe:
+I1's markers still hold every leaf overlapping R1. In the model, `GRestamp`'s guard is
+L's marker (`hoOpen`), which encodes "the walk's own intent covers L" exactly; dropping it
+stands for re-stamping under an intent disjoint from L
+(`ReadPositionHonestRestampUnderAnyIntent`, 15 states). Re-stamping under any
+intent whose range contains the walk's would also be sound, but needs a containment test
+for no benefit.
 
 That is sound **only if the open check is atomic with the close**. The close is not one
 instant: it re-claims the generation at every partition (several awaits), records the
@@ -946,12 +995,13 @@ append holds every leaf writing that partition until it replays past it (over-re
 safe, cost only); and the routing-generation entry is keyed by partition and initiator.
 The promoted module should put two leaves on one partition; `RetireOther` stands in until
 then.
+
 **Steps.**
 - **The claim is three steps** (`ClaimRow`, `ClaimWrite`, `ClaimRaise`), with
   `ClaimConflict` (the epoch row moved) and `ClaimRefuse` (refused at the write or the
-  raise). The model compares epochs where production compares ETags; only claims write
-  the epoch row, so the two agree. `fence` is the durable entry and `memFence` the
-  in-memory one.
+  raise), and `ClaimBump` (any refusal while the activation's ETag holds). The ETag is
+  the pair (`rowInc`, `rowEpoch`) (section 1, "The ETag in the model"). `fence` is the
+  durable entry and `memFence` the in-memory one.
 - **Own appends are two steps.** `OwnAlloc` is the shard's checks and offset assignment
   under its lock, and records the watermark it reports. `Land` makes the append durable
   and, if its author is still running, applies and acknowledges it.
@@ -988,8 +1038,12 @@ then.
 - `StaleEpochNeverAppends`: no append is ever accepted from an epoch below the highest
   raised one, or at or below an epoch of L's own retired incarnations (`lRetired`),
   across a shard restart too.
-- `CurrentNeverFenced`: the partition's retired floor never rejects an append
-  L's own entry admits, so another leaf's retirement cannot supersede a live leaf (#5635).
+- `OnlySupersededRefused`: only a superseded activation is ever refused, at a claim or at an
+  append. Superseded means its ETag no longer holds, a higher epoch was raised, or it
+  belongs to a retired incarnation of L. In particular, another leaf's retirement never
+  refuses a live leaf (#5635), and the straddle never stops a re-created incarnation. The
+  append half needs the witness-gated `StaleAppend`, so `WalLiveAdvanceOtherRetire.cfg` runs
+  with `Ghosts` on.
 - `OldNeverRejected`: no unstamped append is ever rejected.
 - `ContestedKeyAgrees`: the owner resolves a contested key to the value a WAL reader
   (a replica or a view) resolves at the same read position. Every entry the leaf owns
@@ -1002,7 +1056,7 @@ plus `TypeOK`):
 | Configuration | Switches | Distinct states | Depth | Time |
 |---------------|----------|-----------------|-------|------|
 | `WalLiveAdvance.cfg` (base) | batch, two windows | 4,822,222 | 35 | 118 s |
-| `WalLiveAdvanceRecreate.cfg` | `WithRecreate` | 6,328,225 | 34 | 149 s |
+| `WalLiveAdvanceRecreate.cfg` | `WithRecreate` | 5,641,927 | 35 | 175 s |
 | `WalLiveAdvanceRestart.cfg` | `WithRestart` | 7,803,467 | 35 | 180 s |
 | `WalLiveAdvanceFrozenView.cfg` | `FrozenView` | 1,354,237 | 33 | 33 s |
 | `WalLiveAdvanceMixed.cfg` | `WithMixedVersion` | 2,525,889 | 33 | 57 s |
@@ -1011,15 +1065,20 @@ plus `TypeOK`):
 | `WalLiveAdvanceLegacyHandOff.cfg` | `WithLegacyHandOff` | 20,828,314 | 37 | 499 s |
 | `WalLiveAdvanceTreeWalk.cfg` | `WithTreeWalk` | 4,250,341 | 35 | 115 s |
 | `WalLiveAdvanceTreeWalkConcurrent.cfg` | `WithTreeWalk`, two windows | 23,951,016 | 38 | 711 s |
-| `WalLiveAdvanceOtherRetire.cfg` | `WithRecreate`, `WithOtherRetire` | 46,444,519 | 37 | 1,340 s |
+| `WalLiveAdvanceOtherRetire.cfg` | `WithOtherRetire`, `Ghosts` on | 13,817,702 | 36 | 402 s |
 | `WalLiveAdvanceTwoPartition.cfg` | `WithSecondPartition` | 3,039,953 | 34 | 93 s |
 
-All twelve hold every property, `ContestedKeyAgrees` and `CurrentNeverFenced` included.
-Revision 5's new actions (`ClaimBump`, `OtherPartitionBump`, `RetireOther`, `FloorReject`)
-are enabled only when the floor is raised or their switch is on, so base, Recreate,
-OtherRetire and TwoPartition were re-run and the other eight are unchanged by
-construction. `WalLiveAdvanceOtherRetire.cfg` is the largest; like `LegacyHandOff` it belongs
-on a dedicated CI shard at promotion. `MixedRestart` is the reviewer's Mixed+Restart+duplicate
+All twelve hold every property, `ContestedKeyAgrees` and `OnlySupersededRefused` included.
+Revision 6 changed what only a purge or a raised floor reaches: `rowInc` moves only on
+`Recreate`, the widened `ClaimBump` fires only on a refusal while the row holds, which needs
+a purge or a raised floor, and `OnlySupersededRefused` can be set only by `ClaimRefuse`, which
+the widened bump pre-empts while the row holds, or by the witness-gated `StaleAppend`.
+So base, Recreate, OtherRetire and TwoPartition were re-run, and the other eight are
+unchanged by construction. `WalLiveAdvanceOtherRetire.cfg` now runs without `Recreate` and
+with `Ghosts` on, so that `StaleAppend` runs (revision 5's Recreate-plus-OtherRetire
+combination, 46,444,519 states, is a promotion-member CI configuration, with the other
+combinations). Mutation trace lengths are the shortest a two-worker run found and can
+vary by one state between runs. `MixedRestart` is the reviewer's Mixed+Restart+duplicate
 combination (S8) on the reduced instance.
 
 **Combinations no configuration covers.** The reviewer's clean runs on revision 2 stand
@@ -1054,7 +1113,9 @@ in states including the initial one.
 | `ReadPositionHonestBulkAppendDropsExistingRows` | The relocation of the rows the bulk range already holds (#5610) | `ReadPositionHonest` | base | 4 |
 | `ReadPositionHonestRecreateDropsFloor` | The retired floor's raise | `ReadPositionHonest` | Recreate | 17 |
 | `StaleEpochNeverAppendsIgnoresRetiredFloor` | The floor check at the claim's raise | `StaleEpochNeverAppends` | Recreate | 8 |
-| `CurrentNeverFencedFloorAtAppend` | The entry-only append check: the floor is checked on appends too (revision 4's rule, #5635) | `CurrentNeverFenced` | OtherRetire | 8 |
+| `OnlySupersededRefusedFloorAtAppend` | The entry-only admission predicate: the floor is checked in it too (revision 4's rule, #5635) | `OnlySupersededRefused` | OtherRetire, Ghosts | 9 |
+| `OnlySupersededRefusedFloorInAppendGuards` | The entry-only append guards: the floor is checked beside the predicate, which a definitional property would not see | `OnlySupersededRefused` | OtherRetire, Ghosts | 8 |
+| `OnlySupersededRefusedEntryRefusalStops` | The widened bump: an entry refusal stops the activation although its ETag holds (revision 5's rule), so the purge straddle stops the re-created incarnation | `OnlySupersededRefused` | Recreate | 9 |
 | `StaleEpochNeverAppendsRecreateKeepsLoadedEntry` | Retirement removing the WAL shard's loaded entry: it deletes the rows only, with no append floor check (#5635's condition) | `StaleEpochNeverAppends` | Recreate | 9 |
 | `StaleEpochNeverAppendsUnloadedEntryAccepted` | The unloaded-entry rejection | `StaleEpochNeverAppends` | Restart | 12 |
 | `StaleEpochNeverAppendsClaimEntryOverwrite` | The max-merge: the claim overwrites the durable entry, checked against the loaded entry only (B3) | `StaleEpochNeverAppends` | Restart | 12 |
@@ -1067,6 +1128,7 @@ in states including the initial one.
 | `ReadPositionHonestRangeDeletePerShardClose` | The per-tree range-delete generation: another shard's walk is fenced only by its own shard's close (revision 3's per-shard close) | `ReadPositionHonest` | TreeWalk | 13 |
 | `ReadPositionHonestRangeDeleteWithoutIntent` | Stamping a walk only under an open intent: a walk with none is stamped anyway | `ReadPositionHonest` | TreeWalk | 13 |
 | `ReadPositionHonestRestampDuringClose` | The intent closed atomically with the close: the close re-claims first and closes the intent and markers later, and the open check reads the marker | `ReadPositionHonest` | TreeWalk | 16 |
+| `ReadPositionHonestRestampUnderAnyIntent` | Rule 3: a rejected walk re-stamps under any open intent, not only its own | `ReadPositionHonest` | TreeWalk | 15 |
 | `ContestedKeyAgreesBulkWinsLocally` | Last-writer-wins on the owner: it ranks its born bulk entry above a point write made before the switch, 10.2.0's stranded origin read | `ContestedKeyAgrees` | base | 4 |
 
 **#5578's counterexample.** `NoTrimPastAckedLiveAdvance5578` reaches it in eleven
@@ -1094,7 +1156,7 @@ check at the raise closes it.
 
 ### Redundancy checks
 
-Three guards are kept although the model, with every other guard in place, does not
+Four guards are kept although the model, with every other guard in place, does not
 need them. Each was removed alone and the model stayed clean, so each is classed
 redundant in the model (as for #2321), with the reason it is kept:
 
@@ -1103,6 +1165,7 @@ redundant in the model (as for #2321), with the reason it is kept:
 | `ReadPositionHonestClaimAdoptsNoCas` | The epoch row's conditional write (#5593's adopt) | base | clean, 158 s | With the three-step claim, the shard's refusal at or below the durable entry catches a same-epoch claimant at the entry write. The conditional write is kept so a stale claimant stops before touching any partition, and because the production claim spans several partitions in sequence, which the model's single partition cannot show. |
 | `ReadPositionHonestArmsWithoutClaim` | The explicit claim guard in `Armed` | GateFlip | clean, 171 s | Implied by the self-report: an activation that never claimed has only unstamped own appends, each of which reports itself, so it cannot arm past them. Kept, as the review asked, because arming without a claim is meaningless and the implication depends on every unstamped path self-reporting. |
 | `ReadPositionHonestNoMarkerInit` | The "marker initialised" guard in `Armed` (B2 rule 2) | LegacyHandOff | clean, 493 s | Implied by rule 1 in the model, whose only legacy hand-off cannot admit a stamped write before `Resume` opens the marker. Kept because a resume path the census misses would otherwise read as closed. The model's `MarkInit` is stronger than production's rule: it waits until no hand-off is in flight anywhere, while production initialises an existing leaf once its shard's flag is set and it has no split in flight **as donor**, which is weaker for a split **sibling**. That is safe because rule 1 alone suffices, which is exactly what this clean result shows (review N3). |
+| `OnlySupersededRefusedEtagByValue` | The incarnation in the row's ETag stand-in: the row is compared by epoch value | Recreate | clean against `OnlySupersededRefused`, `ReadPositionHonest` and `StaleEpochNeverAppends` | In this one-leaf instance no property separates a recurring epoch value from a new write. Kept because production compares the ETag, which a recurring value never matches, and the model should not let a pre-purge activation's compare succeed where production's fails (revision 5 review, S1). |
 
 Revisions 3 and 4 had two more rows, the floor check at the raise alone and at the append
 alone. With the append check removed (#5635), the raise check is required, and is the
@@ -1225,6 +1288,16 @@ Each production member carries detectors proven red. They land in this order:
 
 ## Review resolution
 
+### Re-review of revision 5
+
+| Finding | Resolution |
+|---------|------------|
+| B1 re-stamp under any open intent | Section 2, rule 3: a rejected walk re-stamps only while its own intent, named by id, is open; otherwise it appends unstamped. The model's `hoOpen` guard encodes that exactly (comment corrected). Mutation `RestampUnderAnyIntent` (15 states). |
+| S1 refusal rule and the row compare | Section 1, "Any refusal bumps while the row holds": any refusal bumps while the activation's ETag holds, as production does; the purge straddle is named in "Retiring entries". `ClaimBump` widened to `Refused(a) /\ RowHolds(a)`, bumping to the higher of entry, floor and row, plus one. The ETag stand-in is (`rowInc`, epoch), `rowInc` raised by `Recreate`. Recreate clean at 5,641,927. Revision 5's rule is mutation `EntryRefusalStops` (9 states). The value compare is a redundancy row: no property separates it in this instance. |
+| S2 `CurrentNeverFenced` definitional | Replaced by the behavioural `OnlySupersededRefused`; `FloorReject` removed. `WalLiveAdvanceOtherRetire.cfg` runs with `Ghosts` on so the witness-gated `StaleAppend` runs: clean at 13,817,702. `FloorAtAppend` (9 states) and the new `FloorInAppendGuards` (8 states) both fail. |
+| N1 step 1 prose | Step 1 describes `ClaimRowAsync`: row plus one; the floor is learnt through a refusal and a bump. |
+| N2 re-claim after a bump | Section 1, "One epoch per activation": production re-claims each partition under the new epoch before stamping it, and the partition is disarmed until it replays to the new head; `OtherPartitionBump` is a safe over-approximation. The cost is in N3. |
+
 ### Re-review of revision 4
 
 | Finding | Resolution |
@@ -1236,7 +1309,7 @@ Each production member carries detectors proven red. They land in this order:
 | N1 `MergeEntriesAsync` line | Corrected to `BPlusLeafGrain.cs:3703`. |
 | N2 redundancy class at promotion | Member 6 (promotion) gives the catalogue a redundancy class, or keeps the files out of the gate's glob. |
 | Q1-Q4 | Per-call fences stay the default; the re-stamp rule is B1; the deadline is S1; replication apply and the shadow forward stay unstamped (S3). |
-| #5635 (from member 1), and the reviewer's [interim note](https://github.com/NSTA1/Orleans.Lattice/issues/5605#issuecomment-6566514445) | Section 1: the floor is checked at the claim's entry write and raise only, `AppendAdmits` is the entry check. (1) The condition that makes that sound, retirement removing the WAL shard's loaded entry under `_stateGate` after the batch drain, is stated, with mutation `RecreateKeepsLoadedEntry` (9 states). (2) `RetireOther` and `CurrentNeverFenced`, broken by `CurrentNeverFencedFloorAtAppend` (8 states, #5635 itself). (3) `StaleEpochNeverAppends` is narrowed to L's own retirements (`lRetired`). (4) A floor-only refusal bumps and re-claims (`ClaimBump`, `WitnessClaimBumped`), up to `MaxClaimRounds` then unstamped. (5) One epoch across partitions: `OtherPartitionBump` (`WithSecondPartition`), clean at 3,039,953. `OtherRetire` is clean at 46,444,519. The two floor redundancy rows are retired: the raise check is now required (`IgnoresRetiredFloor`). |
+| #5635 (from member 1), and the reviewer's [interim note](https://github.com/NSTA1/Orleans.Lattice/issues/5605#issuecomment-6566514445) | Section 1: the floor is checked at the claim's entry write and raise only, `AppendAdmits` is the entry check. (1) The condition that makes that sound, retirement removing the WAL shard's loaded entry under `_stateGate` after the batch drain, is stated, with mutation `RecreateKeepsLoadedEntry` (9 states). (2) `RetireOther` and `CurrentNeverFenced`, broken by `CurrentNeverFencedFloorAtAppend` (8 states, #5635 itself). (3) `StaleEpochNeverAppends` is narrowed to L's own retirements (`lRetired`). (4) A floor-only refusal bumps and re-claims (`ClaimBump`, `WitnessClaimBumped`), up to `MaxClaimRounds` then unstamped. (5) One epoch across partitions: `OtherPartitionBump` (`WithSecondPartition`), clean at 3,039,953. `OtherRetire` is clean at 46,444,519. The two floor redundancy rows are retired: the raise check is now required (`IgnoresRetiredFloor`). Revision 6 replaces `CurrentNeverFenced` with `OnlySupersededRefused` and widens `ClaimBump` (re-review of revision 5, S1, S2). |
 | Coordinator additions | #5634: the per-partition epoch directory row and sweep, as member 5, before the bucket reaches `main` (section 1). The ordering found by member 1: the coordinator-terminal class (member 2) lands before member 4 arms any leaf. |
 
 ### Re-review of revision 3

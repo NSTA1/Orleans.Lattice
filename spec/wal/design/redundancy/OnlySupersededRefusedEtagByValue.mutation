@@ -1,0 +1,21 @@
+# The ETag compared by value: the row's incarnation is ignored, so after a purge
+# an epoch value that recurs matches an old activation's write. Clean against
+# OnlySupersededRefused, ReadPositionHonest and StaleEpochNeverAppends in this
+# instance; kept because production compares the ETag, which a recurring value
+# never matches.
+MODULE: OnlySupersededRefusedEtagByValue
+TARGET: OnlySupersededRefused
+CLASS: Invariant
+EXPECT: clean (a redundancy check: the guard is implied in the model and kept for the reason in LiveAdvanceDesign.md)
+SUMMARY: the row compare ignores the incarnation
+PERTURBS: ClaimRow, ClaimBump, OtherPartitionBump
+BOUNDS: WithRecreate = TRUE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+RowUnmoved(a) == seen[a] = rowEpoch /\ seenInc[a] = rowInc
+RowHolds(a) == rowEpoch = epoch[a] /\ seenInc[a] = rowInc
+--- REPLACE
+\* MUTATION: compared by value.
+RowUnmoved(a) == seen[a] = rowEpoch
+RowHolds(a) == rowEpoch = epoch[a]
+--- END

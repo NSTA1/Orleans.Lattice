@@ -10,7 +10,7 @@ PERTURBS: ClaimRow
 
 --- FIND
     /\ cstage[a] = 0
-    /\ seen[a] = rowEpoch
+    /\ RowUnmoved(a)
     /\ LET e
 --- REPLACE
     /\ cstage[a] = 0
