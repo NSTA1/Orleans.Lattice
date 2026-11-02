@@ -153,6 +153,7 @@ VARIABLES
     dupUsed,
     restarted,
     recreated,
+    rFloor,     \* the tree's routing floor row: the highest routing generation a purge retired
     staleAccepted,        \* an append from an epoch below maxClaimed was allocated
     oldRejected,          \* an unstamped append was rejected
     rejected,             \* witness: a stale epoch's append was rejected
@@ -175,7 +176,7 @@ handVars == <<hoOpen, hoClosedAt, windows, fpend, fkind, fstamp, fEpoch, fFence>
 gateVars == <<gate, hfly, resumed, mInit, legacyUsed>>
 viewVars == <<fz, fzOpen, fzClosedAt>>
 oldVars == <<lastU, seenU, oldUsed>>
-envVars == <<phase, hint, dupUsed, restarted, recreated>>
+envVars == <<phase, hint, dupUsed, restarted, recreated, rFloor>>
 safeVars == <<staleAccepted, oldRejected>>
 wghosts == <<rejected, fRejected, advanced, advancedPastForeign, dupAdvanced, trimAfterAdvance,
              reloaded, floorClaim, claimRefused, selfReported>>
@@ -238,6 +239,7 @@ TypeOK ==
     /\ dupUsed \in BOOLEAN
     /\ restarted \in BOOLEAN
     /\ recreated \in BOOLEAN
+    /\ rFloor \in Epochs
     /\ staleAccepted \in BOOLEAN
     /\ oldRejected \in BOOLEAN
     /\ rejected \in BOOLEAN
@@ -306,6 +308,7 @@ Init ==
     /\ dupUsed = FALSE
     /\ restarted = FALSE
     /\ recreated = FALSE
+    /\ rFloor = 0
     /\ staleAccepted = FALSE
     /\ oldRejected = FALSE
     /\ rejected = FALSE
@@ -344,7 +347,7 @@ Begin ==
     /\ hoOpen' = TRUE
     /\ windows' = 1
     /\ UNCHANGED <<walkVars, floorVars, walVars, leafVars, epochVars, hoClosedAt, fpend, fkind, fstamp, fEpoch,
-                   fFence, gateVars, viewVars, oldVars, dupUsed, restarted, recreated, safeVars,
+                   fFence, gateVars, viewVars, oldVars, dupUsed, restarted, recreated, rFloor, safeVars,
                    wghosts>>
 
 (* Create: the leaf's first activation, born at its birth hint, holding the *)
@@ -359,7 +362,7 @@ Create ==
     /\ seenInc' = [seenInc EXCEPT !["a1"] = rowInc]
     /\ UNCHANGED <<walkVars, lRetired, otherRetired, wrongRefusal, bumped, rowInc, hint, walVars, mine, snapCov, snapRows, rowEpoch, epoch, cstage, claimHead,
                    fence, memFence, retired, maxClaimed, handVars, gateVars, viewVars, oldVars,
-                   dupUsed, restarted, recreated, safeVars, wghosts>>
+                   dupUsed, restarted, recreated, rFloor, safeVars, wghosts>>
 
 StopAct(a) ==
     /\ up' = up \ {a}
@@ -814,8 +817,12 @@ MarkInit ==
     /\ ~hfly
     /\ ~mInit
     /\ mInit' = TRUE
-    /\ UNCHANGED <<walkVars, floorVars, walVars, leafVars, epochVars, handVars, gate, hfly, resumed, legacyUsed,
-                   viewVars, oldVars, envVars, safeVars, wghosts>>
+    /\ IF recreated
+       THEN /\ fFence' = Max2(fFence, fEpoch)
+            /\ hoClosedAt' = next
+       ELSE UNCHANGED <<fFence, hoClosedAt>>
+    /\ UNCHANGED <<walkVars, floorVars, walVars, leafVars, epochVars, hoOpen, windows, fpend, fkind, fstamp, fEpoch,
+                   gate, hfly, resumed, legacyUsed, viewVars, oldVars, envVars, safeVars, wghosts>>
 
 (* Replay(a): read and apply the next durable entry; never a trimmed one. *)
 Replay(a) ==
@@ -893,7 +900,19 @@ GcTrim ==
 (*    Reload: a leaf re-presents its claim and the entry loads.            *)
 (*  - Recreate: L is purged and re-created; its epoch row starts again at  *)
 (*    0 and its entry is retired, raising the retired floor. A running     *)
-(*    activation of either incarnation is untouched.                       *)
+(*    activation of either incarnation is untouched. The tree's purge also *)
+(*    retires f's per-tree fence rows (#5668): it max-merges the highest   *)
+(*    routing generation into the tree's routing floor row (rFloor) before *)
+(*    any delete, then retires f's generation entry (absent, 0: a stamp    *)
+(*    re-presented to an absent entry re-creates it, so it admits any      *)
+(*    stamp) and deletes L's marker, so L's marker state is no longer      *)
+(*    initialised. The re-created incarnation's first generation is the    *)
+(*    floor plus one. A write f admitted before the purge stays pending    *)
+(*    with its old stamp: a straddling shard root of the purged            *)
+(*    incarnation. MarkInit after a re-creation is a fence: it claims the  *)
+(*    seeded generation at the partition and records the allocator head,   *)
+(*    so the straddling write is refused, or lies below the head and is    *)
+(*    replayed.                                                            *)
 (*  - OldAlloc: the unstamped author appends; the shard admits it unless   *)
 (*    UnstampedAdmitted says otherwise, and records it as the highest      *)
 (*    unstamped offset. The writing silo acknowledges its own write.       *)
@@ -911,7 +930,7 @@ Duplicate ==
     /\ seenInc' = [seenInc EXCEPT !["a2"] = rowInc]
     /\ UNCHANGED <<walkVars, lRetired, otherRetired, wrongRefusal, bumped, rowInc, walVars, mine, snapCov, snapRows, rowEpoch, epoch, cstage, claimHead, fence,
                    memFence, retired, maxClaimed, handVars, gateVars, viewVars, oldVars, phase,
-                   hint, restarted, recreated, safeVars, wghosts>>
+                   hint, restarted, recreated, rFloor, safeVars, wghosts>>
 
 Restart ==
     /\ WithRestart
@@ -922,7 +941,7 @@ Restart ==
     /\ UNCHANGED fFence
     /\ UNCHANGED <<walkVars, floorVars, walVars, leafVars, rowEpoch, seen, epoch, cstage, claimHead, fence, retired,
                    maxClaimed, hoOpen, hoClosedAt, windows, fpend, fkind, fstamp, fEpoch,
-                   gateVars, viewVars, seenU, oldUsed, phase, hint, dupUsed, recreated, safeVars,
+                   gateVars, viewVars, seenU, oldUsed, phase, hint, dupUsed, recreated, rFloor, safeVars,
                    wghosts>>
 
 Reload ==
@@ -945,8 +964,17 @@ Recreate ==
     /\ rowInc' = rowInc + 1
     /\ fence' = 0
     /\ memFence' = IF memFence = -1 THEN -1 ELSE 0
-    /\ UNCHANGED <<walkVars, otherRetired, wrongRefusal, bumped, seenInc, walVars, leafVars, seen, epoch, cstage, claimHead, maxClaimed, handVars,
-                   gateVars, viewVars, oldVars, phase, hint, dupUsed, restarted, safeVars, wghosts>>
+    /\ Max2(fEpoch, fFence) < MaxEpoch
+    /\ LET rf == Max2(rFloor, Max2(fEpoch, fFence)) IN
+        /\ rFloor' = rf
+        /\ fEpoch' = rf + 1
+    /\ fFence' = 0
+    /\ hoOpen' = FALSE
+    /\ hoClosedAt' = 0
+    /\ mInit' = FALSE
+    /\ UNCHANGED <<walkVars, otherRetired, wrongRefusal, bumped, seenInc, walVars, leafVars, seen, epoch, cstage, claimHead, maxClaimed,
+                   windows, fpend, fkind, fstamp, gate, hfly, resumed, legacyUsed, viewVars, oldVars, phase, hint,
+                   dupUsed, restarted, safeVars, wghosts>>
 
 UnstampedAdmitted == TRUE
 
@@ -1080,6 +1108,9 @@ WitnessAppendAtOrBelowOtherFloor ==
     ~(otherRetired /\ \E o \in Offs : author[o] \in up /\ epoch[author[o]] <= retired)
 \* A floor-only refusal bumps the epoch and re-claims (WithOtherRetire or WithRecreate).
 WitnessClaimBumped == ~bumped
+\* A straddling write of the purged incarnation, pending after the re-created
+\* incarnation's marker initialisation, is below the claimed generation (WithRecreate).
+WitnessRecreatedStraddleFenced == ~(recreated /\ mInit /\ fpend /\ fstamp < fFence)
 \* An activation stamps this partition with an epoch a bump on another partition
 \* gave it, above this partition's entry (WithSecondPartition).
 WitnessOtherPartitionEpoch ==

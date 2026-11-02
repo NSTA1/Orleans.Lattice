@@ -160,9 +160,10 @@ design relies on. See [Backward compatibility](#backward-compatibility).
 | `_lattice_leaf-append-epoch` | Leaf id | The leaf's append epoch | Claims only, by conditional write |
 | `_lattice_wal-append-epoch` | WAL shard key and leaf id | The partition's epoch entry for the leaf | The claim at the WAL shard (conditional max-merge), and entry retirement |
 | `_lattice_wal-append-epoch-floor` | WAL shard key | The partition's retired-epoch floor | Entry retirement only (max-merge) |
-| `_lattice_wal-routing-generation` | WAL shard key and initiator id (a shard root, or a tree for its range-delete generation) | The partition's generation entry for a shard-level initiator, or for the tree's range-delete fence | The initiator's re-claim (conditional max-merge) |
+| `_lattice_wal-routing-generation` | WAL shard key and initiator id (a shard root, or a tree for its range-delete generation) | The partition's generation entry for a shard-level initiator, or for the tree's range-delete fence | The initiator's re-claim (conditional max-merge), and retirement at the tree's purge (#5668) |
 | `_lattice_leaf-handoff` | Leaf id | The leaf's hand-off marker: initialised flag, open tokens and per-partition close heads | Hand-off initiators, and the leaf's birth |
 | `_lattice_shard-handoff` | Shard root id | The shard-level marker (initialised flag, open tokens with their key ranges, close heads), the shard's routing generation, and each in-flight bulk operation's birth hint | The shard root, and the range-delete fence |
+| `_lattice_tree-routing-floor` | Tree id | The highest routing generation the tree's purges retired (#5668) | The purge only (max-merge, before any fence row is deleted); read by every first-generation initialisation |
 | `TreeRangeDeleteFenceGrain` state (a new grain type, not a reserved-type row) | Tree id | The tree's range-delete generation, and each open range-delete intent: operation id, range, recorded deadline, and the shards whose markers it opened | The range-delete fence grain only |
 
 Each row's state type is new, carries a new stable alias, and is marked
@@ -799,6 +800,52 @@ Dropping rule 1 fails in 17 states (`ReadPositionHonestResumeWithoutMarker`). Ru
 implied by rule 1 in the model (see [Redundancy checks](#redundancy-checks)); it is
 kept because a resume path the census misses would otherwise read as closed.
 
+**Purging a tree's fence rows (#5668).** The per-tree rows (each shard root's
+`_lattice_shard-handoff` marker, every partition's `_lattice_wal-routing-generation`
+entries, and the `TreeRangeDeleteFenceGrain` state) are retired by the purge, before
+its registry removal and re-driven while `RegistryUnregisterPending`, in this order:
+1. **Floor first.** The purge reads the highest routing generation over every shard
+   root's marker, every partition's generation entries (each shard-root initiator and
+   the range-delete initiator, durable and loaded) and the fence grain's generation,
+   and max-merges it into the tree's `_lattice_tree-routing-floor` row **before any
+   delete**. Written after the deletes, a crash between them leaves a re-drive reading
+   rows that are already gone, and the floor is never raised
+   (`ReadPositionHonestRoutingFloorAfterDeletes`, 15 states).
+2. **Then retire.** It retires the generation entries (durable and loaded), deletes the
+   marker rows and clears the fence state.
+3. **Re-creation starts above the floor.** A re-created incarnation initialises every
+   first routing generation (the shard root's and the range-delete fence's) at the
+   floor plus one, on every initialisation path, including one taken while the gate is
+   closed that opens later. Starting at 1 lets generation values recur, the #5641 shape
+   applied to generations (`ReadPositionHonestRoutingRecreatedAtOne`, 15 states).
+
+The WAL keeps no generation floor, and that makes two further rules load-bearing. A
+retired entry is absent, and an absent entry admits any stamp: the leaf re-presents an
+unloaded generation and the claim max-merges with no floor
+(`WalAppendFenceCore.IsGenerationAdmitted`). So a **straddling shard root** of the
+purged incarnation, which admitted a write before the purge and dispatches it after, is
+refused only once a generation above its stamp has been claimed at that partition. New
+generations exceed every old one, but only once they are claimed.
+- **The purge leaves the marker state uninitialised.** A deleted marker is absent, and
+  rule 2 holds the leaves until their marker state is initialised again. Read as
+  closed, it releases a foreign write the open marker held
+  (`ReadPositionHonestRoutingPurgeKeepsMarkerInit`, 13 states).
+- **The re-created incarnation's first initialisation is a fence.** When the floor is
+  above 0, the marker reads initialised only after every initiator the purge retired
+  has claimed its seeded first generation at every WAL partition of the tree, with the
+  heads recorded as a close records them: each shard root its own, and the range-delete
+  fence its own, since a straddling walk carries the range-delete initiator's stamp. A
+  shard root's initialisation can drive the fence grain's, idempotently, before it
+  writes its own initialised flag. Seeding the value without claiming it admits the
+  straddling write above the recorded heads (`ReadPositionHonestRoutingInitWithoutClaim`,
+  15 states). A tree whose floor is 0 has no straddler, so its initialisation claims
+  nothing extra. Today's `EnsureRoutingGenerationSlowAsync` sets the generation to 1 and
+  claims nothing, so the #5668 member changes it on both counts.
+
+A straddling shard root's own close re-claims at most the floor plus one, fencing only
+its own writes, and its marker write meets a row the purge deleted, so its conditional
+write conflicts. The model has one foreign author, so neither is modelled.
+
 **Shard-level marker.** The moved slots of an adaptive split or a shard fold, and the
 leaves a range delete reaches, scatter across a shard's leaves, so a per-leaf marker
 would cost one call per leaf. A leaf reads its shard's marker **fresh**, after the
@@ -1321,7 +1368,7 @@ plus `TypeOK`):
 | Configuration | Switches | Distinct states | Depth | Time |
 |---------------|----------|-----------------|-------|------|
 | `WalLiveAdvance.cfg` (base) | batch, two windows | 4,822,222 | 35 | 118 s |
-| `WalLiveAdvanceRecreate.cfg` | `WithRecreate`, `Ghosts` on | 4,859,576 | 35 | 143 s |
+| `WalLiveAdvanceRecreate.cfg` | `WithRecreate`, `Ghosts` on | 6,748,568 | 36 | 479 s |
 | `WalLiveAdvanceRestart.cfg` | `WithRestart` | 7,803,467 | 35 | 180 s |
 | `WalLiveAdvanceFrozenView.cfg` | `FrozenView` | 1,354,237 | 33 | 33 s |
 | `WalLiveAdvanceMixed.cfg` | `WithMixedVersion` | 2,525,889 | 33 | 57 s |
@@ -1340,7 +1387,7 @@ which only a purge's recurring epoch value produces; the widened `ClaimBump` nee
 or a raised floor; `OtherIntentClose` needs `WithTreeWalk`; and `OnlySupersededRefused` can be
 set only by `ClaimRefuse` and `ClaimConflict`, which the bump and the row compare pre-empt,
 or by the witness-gated `StaleAppend`. So base and Recreate were re-run for revision 7
-(Recreate, with `Ghosts` on, is clean at 4,859,576; without them at 3,322,487, the
+(Recreate, with `Ghosts` on, was clean at 4,859,576; without them at 3,322,487, the
 reviewer's #5641 count), OtherRetire and TwoPartition at revision 6, and the other
 configurations are unchanged by construction. The two TreeWalk configurations grow with
 `OtherIntentClose` beyond the small instances run locally; the reviewer's run of TreeWalk
@@ -1348,7 +1395,10 @@ with it is clean at 22,966,529. `WalLiveAdvanceOtherRetire.cfg` runs without `Re
 with `Ghosts` on (revision 5's Recreate-plus-OtherRetire combination, 46,444,519 states, is
 a promotion-member CI configuration, with the other combinations). Mutation trace lengths are the shortest a two-worker run found and can
 vary by one state between runs. `MixedRestart` is the reviewer's Mixed+Restart+duplicate
-combination (S8) on the reduced instance.
+combination (S8) on the reduced instance. #5668 changed `Recreate` (the routing floor,
+the retired generation entry, the deleted marker) and gave `MarkInit` a branch that
+fires only after it; Recreate was re-run, clean at 6,748,568, and no other configuration
+enables `Recreate`, so they are unchanged by construction.
 
 **Combinations no configuration covers.** The reviewer's clean runs on revision 2 stand
 as evidence for now: Mixed+Restart+duplicate on the full instance (31,777,796 states),
@@ -1388,6 +1438,10 @@ in states including the initial one.
 | `OnlySupersededRefusedConflictWithoutMove` | The conflict check: an activation stops at its claim although its row has not moved | `OnlySupersededRefused` | base | 4 |
 | `ReadPositionHonestFloorFromEntryOnly` | The epoch row in the retirement's floor (#5641): the floor is raised from the entry alone, so a pre-purge duplicate and the re-created incarnation hold the same epoch | `ReadPositionHonest` | Recreate | 17 |
 | `ReadPositionHonestClaimAdoptsNoCas` | The epoch row's conditional write (#5593's adopt): two activations write the same epoch, and the second's entry write is admitted as `AlreadyDurable` | `ReadPositionHonest` | base | 16 |
+| `ReadPositionHonestRoutingRecreatedAtOne` | The routing floor in the first generation (#5668): the re-created incarnation starts at 1, and a straddling shard root's pre-purge write carries the generation it claims | `ReadPositionHonest` | Recreate | 15 |
+| `ReadPositionHonestRoutingFloorAfterDeletes` | The floor written before the deletes (#5668): with a crash between, the re-drive reads deleted rows and never raises it | `ReadPositionHonest` | Recreate | 15 |
+| `ReadPositionHonestRoutingInitWithoutClaim` | The fence at the re-created incarnation's first initialisation (#5668): the seeded generation is not claimed, and the absent entry admits the straddling write above the recorded heads | `ReadPositionHonest` | Recreate | 15 |
+| `ReadPositionHonestRoutingPurgeKeepsMarkerInit` | Rule 2 at the purge (#5668): the deleted marker still reads initialised, releasing a foreign write the open marker held | `ReadPositionHonest` | Recreate | 13 |
 | `StaleEpochNeverAppendsRecreateKeepsLoadedEntry` | Retirement removing the WAL shard's loaded entry: it deletes the rows only, with no append floor check (#5635's condition) | `StaleEpochNeverAppends` | Recreate | 9 |
 | `StaleEpochNeverAppendsUnloadedEntryAccepted` | The unloaded-entry rejection | `StaleEpochNeverAppends` | Restart | 12 |
 | `StaleEpochNeverAppendsClaimEntryOverwrite` | The max-merge: the claim overwrites the durable entry, checked against the loaded entry only (B3) | `StaleEpochNeverAppends` | Restart | 12 |
@@ -1474,6 +1528,7 @@ shown, proving its step is reachable. Traces are from a single-worker breadth-fi
 | `WitnessTreeWalkRestampedOwnIntent` | `WithTreeWalk` | `Begin`, `Create`, `GAdmit`, `OtherIntentClose`, `GReject`, `GRestamp`: rule 3's own case, a walk re-stamped under its still-open own intent |
 | `WitnessAppendAtOrBelowOtherFloor` | `WithOtherRetire` | `Begin`, `Create`, `ClaimRow`, `ClaimWrite`, `ClaimRaise`, `OwnAlloc`, `RetireOther`: another leaf's retirement lifts the floor to an epoch a live activation holds, and it keeps appending |
 | `WitnessClaimBumped` | `WithOtherRetire` | `Begin`, `Create`, `ClaimRow`, `RetireOther`, `ClaimBump`: a floor-only refusal bumps and re-claims |
+| `WitnessRecreatedStraddleFenced` | `WithRecreate` | `Begin`, `Create`, `ForeignAdmit`, `Recreate`, `MarkInit`: a straddling write of the purged incarnation, still pending, is below the generation the re-created incarnation's initialisation claimed (#5668) |
 | `WitnessOtherPartitionEpoch` | `WithSecondPartition` | `Begin`, `Create`, `ClaimRow`, `ClaimWrite`, `ClaimRaise`, `OtherPartitionBump`: an activation stamps this partition with an epoch a bump elsewhere gave it |
 
 To run a witness, use a configuration with `Ghosts = TRUE` and the switch shown that
@@ -1489,7 +1544,7 @@ Every existing module, how the design affects it, and why:
 | `WalDurability` | Unchanged; gains a gap entry | Its subject is the replay-based advance, which the design keeps as the fallback. Its single owner activation is always the current epoch, so `Append` never meets a rejection. Extending it would add an activation dimension to every leaf: `SnapshotLoss` is already 17,428,938 states and `TwoFaults` 2,958,083, so the fences go in the companion instead. |
 | `WalMove` | Refinement row only | The entry, floor and generation rows live in grain storage, not in the stream a move switches, so a move carries nothing new. The cutover's reactivation of the shard grain is `Restart` here, covered by `StaleEpochNeverAppends` (broken by `StaleEpochNeverAppendsUnloadedEntryAccepted` and `StaleEpochNeverAppendsClaimEntryOverwrite`), the durable generation (`ReadPositionHonestGenerationNotDurable`) and the restarted watermark (`ReadPositionHonestRestartForgetsUnstamped`). |
 | `WalPinRetirement` | New rows | Retiring a leaf's pins also retires its epoch entries under the same retirement token, raising the floor first. A re-created leaf's claim exceeds the floor, and the floor is checked at the claim's entry write and raise (never on an append, #5635), so a removal cannot let a surviving duplicate or a straddling claim outrank it. |
-| `TreeLifecycle`, `TreeLifecycleAdmission` | New rows | The purge tail retires the entries of the leaves it clears, under the lineage check (#5417), raising the floor first, and deletes their epoch and marker rows. |
+| `TreeLifecycle`, `TreeLifecycleAdmission` | New rows | The purge tail retires the entries of the leaves it clears, under the lineage check (#5417), raising the floor first, and deletes their epoch and marker rows. The tree's purge also retires its per-tree fence rows after max-merging their highest generation into the tree's routing floor (#5668). |
 | `ShardOwnership`, `ShardOwnershipCutover`, `ShardOwnershipFold`, `ShardOwnershipCrdt`, `ShardOwnershipRetention` | New rows or gaps | The adaptive split's and the shard fold's shard-level markers open around their windows (or at their resume, for one in flight across the gate) and close with a routing-generation re-claim. A marker only holds the live advance and never blocks a move, a cutover or a fold, so ownership safety is unchanged. A write rejected at a close is re-admitted at its seam. |
 | `SplitLink`, `SplitLinkTurns`, `BPlusTopology`, `BPlusReclaimRecovery`, `BPlusCascade` | New rows or gaps | The split opens the sibling's marker in its birth (or at `CompleteSplitAsync`'s resume), and the donor closes it at completion after re-claiming its epoch. That is one more call, made from the donor's completion; it waits on the WAL shard, not on another leaf. The reclaim opens the survivor's marker before widening, and retires the neighbour's entry in the retire step. |
 | `SplitGateCycles`, `TurnOccupancy` | New rows | A leaf's fresh read of the shard-level marker is a new leaf-to-shard-root wait-for edge. It is an interleaving, read-only call, so a serial shard-root turn that calls the leaf cannot deadlock against it. Both modules gain a row stating that the edge does not take the shard root's serial turn. |
@@ -1557,7 +1612,10 @@ Each production member carries detectors proven red. They land in this order:
 5. **Epoch-row sweep (#5634).** The per-partition epoch directory row, bucketed or paged
    within the provider's row limits, and the sweep that retires the entries of leaves
    that no longer exist, which a 10.2.0 silo's retirement leaves behind. It lands
-   before #5605's bucket reaches `main`, independently of members 2 to 4.
+   before #5605's bucket reaches `main`, independently of members 2 to 4. With it,
+   #5668: the purge's retirement of the per-tree fence rows behind the routing floor,
+   and the floor-seeded, fencing first initialisation (section 2, "Purging a tree's
+   fence rows").
 6. **Promotion.** `WalLiveAdvance` becomes a module with its refinement note, its
    manifest, its redundancy rows (with a redundancy class in the mutation catalogue, or
    kept out of the catalogue gate's glob, so a clean run is not reported as a missing
@@ -1580,6 +1638,12 @@ Each production member carries detectors proven red. They land in this order:
 | #5709: a reachable leaf's live advance can pass an overlapping orphan's appends | Section 4, "An unreachable leaf never stamps": orphan repair never folds rows, so the rule is at the source. A leaf proves reachability by descent before its first claim; an unreachable one appends unstamped (reported), so every leaf sharing the partition replays past its records. A sibling born under an open marker keeps its eager claim, and a tick re-check stops stamping. The model's counterexample is `ReadPositionHonestUnstampedNotReported`. The descent check is named as the orphan signal, subsuming "scan chain flagged". |
 | #5702: a run shares a hint; deferred, batched closes | Section 3: a chunk's hint may be any head read before its first leaf is born, and a run reads heads only at its start. Completed append tokens close in batches by one fence and one marker write. Hand-off table updated. |
 | #5706: a resumed division cannot drain in-flight commits | Section 2: a resumed division applies no read position; the sibling replays from its own start. |
+
+### After acceptance: per-tree fence rows at purge (#5668)
+
+| Finding | Resolution |
+|---------|------------|
+| #5668: the per-tree fence rows are never deleted | Section 2, "Purging a tree's fence rows": the floor is max-merged into `_lattice_tree-routing-floor` before any delete, then the rows are retired, and a re-created incarnation starts at the floor plus one. Modelling it surfaced two further rules: the deleted marker reads uninitialised, and the first initialisation after a purge claims its seeded generation at every partition before reading initialised, because an absent generation entry admits any stamp. `Recreate` and `MarkInit` model all of it, with four mutations (`RoutingRecreatedAtOne`, `RoutingFloorAfterDeletes`, `RoutingInitWithoutClaim`, `RoutingPurgeKeepsMarkerInit`) and the witness `WitnessRecreatedStraddleFenced`; Recreate is clean at 6,748,568. |
 
 ### After acceptance: member 2's review (#5644), S2
 

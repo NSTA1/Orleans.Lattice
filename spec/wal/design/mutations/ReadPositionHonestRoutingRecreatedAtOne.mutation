@@ -1,0 +1,19 @@
+# The re-created incarnation's first routing generation starts at 1, not at the
+# tree's routing floor plus one (#5668). Generation values then recur, the #5641
+# shape applied to generations: a straddling shard root of the purged incarnation
+# admitted a write under generation 1 before the purge; the re-created
+# incarnation's marker initialisation claims generation 1 at the partition, which
+# admits that write above the recorded head, and L arms past it.
+MODULE: ReadPositionHonestRoutingRecreatedAtOne
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a re-created tree's first routing generation starts at 1, below the purged incarnation's
+PERTURBS: Recreate
+BOUNDS: WithRecreate = TRUE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+        /\ fEpoch' = rf + 1
+--- REPLACE
+\* MUTATION: the first generation ignores the routing floor.
+        /\ fEpoch' = 1
+--- END
