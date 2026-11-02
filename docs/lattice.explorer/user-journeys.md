@@ -128,7 +128,9 @@ the run.
 The lane also reads `LATTICE_E2E_STORAGE`, `LATTICE_E2E_BACKUP_STORAGE` and
 `LATTICE_E2E_EAST_STORAGE` (connection strings to existing accounts),
 `LATTICE_E2E_HOSTS_DIR` (a directory of published hosts, as CI publishes them
-once per job), and `LATTICE_E2E_VIEWPORT`.
+once per job), `LATTICE_E2E_VIEWPORT`, and `LATTICE_E2E_PROMETHEUS_BINARY` (a
+Prometheus binary of the pinned version, run as a local process in place of
+the Prometheus container where there is no Docker daemon).
 
 ## CI gating
 
@@ -168,6 +170,16 @@ Which legs run depends on the event:
   `## Journey screenshots` section, ordered and captioned, and the check
   matches it against the run it names. `tools/Get-JourneyScreenshots.ps1 -Run
   <id> -Journey <jid>` prints that section for a run.
+
+Legs are routed between GitHub-hosted runners and the self-hosted runner pool
+as CI's legs are: the planner runs `.github/workflows/runner-overflow.py`, which
+keeps legs hosted while the repository's busy hosted jobs (CI's included) stay
+under `HOSTED_RUNNER_BUDGET`, and sends the rest to the pool, longest first. A
+pool leg's name starts with `[pool] `; it runs Azurite from npm and the
+Prometheus binary the pool image bakes in. With `RUNNER_POOL` unset every leg
+runs hosted. A `workflow_dispatch` run's `hosted_budget` input overrides the
+budget for that run, so `0` sends every leg to the pool. See
+`tools/ci-runners/README.md`.
 
 On a member pull request, or an ordinary pull request into `main`, the merge
 gates are CI (`build-and-test`), UI Tests, the pull request's own isolated

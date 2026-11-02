@@ -7,6 +7,9 @@ Subcommands:
                shards run, and which journeys need the screenshot provenance
                check. Writes `legs`, `conformance` and `provenance` (JSON
                arrays) to GITHUB_OUTPUT and a plan table to the summary.
+               With --legs-file it also writes the legs there, for
+               runner-overflow.py to route between hosted runners and the
+               self-hosted pool (the lane publishes the routed legs).
   leg-summary  Print a leg's test counts, every journey's ordered screenshot
                manifest and the leg's coverage hits to the job summary, and
                fail a leg whose filter selected none of the tests it exists for.
@@ -122,6 +125,8 @@ HARNESS_FILTER = (
 JOURNEY_FOLDER = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
 # The harness leg carries the east-region and Fabrikam estate fixtures (#5362).
 TIMEOUTS = {"harness": 60, "isolated": 45, "story": 150}
+# Each leg's `estimate` is its timeout. runner-overflow.py reads it only to send the
+# longest legs to the self-hosted pool first, so an upper bound orders them as well.
 
 
 class PlanError(Exception):
@@ -298,6 +303,7 @@ def isolated_leg(folder, jid, storyline):
         "mode": "isolated",
         "viewport": "",
         "timeout": TIMEOUTS["isolated"],
+        "estimate": TIMEOUTS["isolated"],
         # The trailing dot keeps Journeys.A1 from selecting A10, A11 and A12.
         "filter": f"FullyQualifiedName~{NAMESPACE}.Journeys.{folder}.|FullyQualifiedName~{PENDING_GATE}",
         "expect": f"{NAMESPACE}.Journeys.{folder}.",
@@ -315,6 +321,7 @@ def story_leg(storyline, fixture, narrow=False):
         "mode": "story",
         "viewport": "narrow" if narrow else "",
         "timeout": TIMEOUTS["story"],
+        "estimate": TIMEOUTS["story"],
         "filter": f"FullyQualifiedName~{NAMESPACE}.Story.{fixture}|FullyQualifiedName~{PENDING_GATE}",
         "expect": f"{NAMESPACE}.Story.{fixture}",
     }
@@ -330,6 +337,7 @@ def harness_leg():
         "mode": "isolated",
         "viewport": "",
         "timeout": TIMEOUTS["harness"],
+        "estimate": TIMEOUTS["harness"],
         "filter": HARNESS_FILTER,
         "expect": NAMESPACE + ".",
     }
@@ -600,6 +608,7 @@ def main(argv=None):
     p.add_argument("--labels", default="", help="the pull request's label names, as a JSON array")
     p.add_argument("--label", default="", help="the label a `labeled` event added")
     p.add_argument("--head-ref", default="", help="the pull request's head branch (empty off a pull request)")
+    p.add_argument("--legs-file", help="also write the legs (a JSON array) here, for runner-overflow.py")
     s = sub.add_parser("leg-summary")
     s.add_argument("--leg", required=True)
     s.add_argument("--trx", required=True)
@@ -625,6 +634,8 @@ def main(argv=None):
         print(plan_markdown(result))
         append("GITHUB_STEP_SUMMARY", plan_markdown(result))
         append("GITHUB_OUTPUT", "legs=" + json.dumps(result["legs"], separators=(",", ":")) + "\n")
+        if args.legs_file:
+            Path(args.legs_file).write_text(json.dumps(result["legs"]), encoding="utf-8")
         append("GITHUB_OUTPUT", "conformance=" + json.dumps(result["conformance"], separators=(",", ":")) + "\n")
         append("GITHUB_OUTPUT", "provenance=" + json.dumps(result["provenance"], separators=(",", ":")) + "\n")
         return 0
