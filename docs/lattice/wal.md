@@ -1433,16 +1433,24 @@ superseded.
 
 **Stamped appends.** Every append then carries the leaf's id and epoch as a call
 argument, never in the stored record. The partition checks it in the same locked
-step that assigns the offset: an epoch below the leaf's entry, or at or below the
-retired floor, is rejected and allocated nothing. An entry the partition has not
-loaded since it activated (after a restart, or a WAL move's cutover) rejects the
-append until the leaf re-presents its claim, which reloads the entry.
+step that assigns the offset: an epoch below the leaf's entry is rejected and
+allocated nothing. An entry the partition has not loaded since it activated (after
+a restart, or a WAL move's cutover) rejects the append until the leaf re-presents
+its claim, which reloads the entry. The retired floor is checked at the claim, not
+at the append: it is one value per partition while epochs are per leaf, so checking
+it at every append would let one leaf's retirement supersede every live leaf below
+it ([#5635](https://github.com/NSTA1/Orleans.Lattice/issues/5635)). A retired leaf's
+own appends meet its deleted entry instead. A multi-entry stamped batch holds its
+leaf's claims back until every entry has an offset, so it is admitted whole or
+rejected at its first entry, never split by a claim.
 
 **Rejections never reach a caller.** A rejected activation deactivates, and the
 caller of the leaf write - the shard root's leaf-call step for every `ILattice`
 write, saga prepare, replication apply, view and restore, and the leaf-to-leaf,
 bulk and compaction seams - retries against the live activation until the
-operation's existing deadline. When that deadline expires the caller sees exactly
+operation's existing deadline: its cancellation token, or else the silo's
+configured Orleans response timeout. A rejection is not a provider failure, so it
+never feeds the WAL saturation signal. When that deadline expires the caller sees exactly
 what it sees today: a `TimeoutException` or an `OperationCanceledException`.
 
 **Durable rows.** The epoch row, each partition's entries, its retired floor and
@@ -1454,7 +1462,10 @@ The rows are keyed by tree and partition, not by WAL provider, so a WAL move
 carries them unchanged. When a leaf is cleared (purge, reclaim, orphan repair) or
 the WAL GC retires an orphaned leaf's materialiser pin, each partition raises its
 retired floor to at least the leaf's entry before deleting it, so a surviving
-duplicate never outranks a leaf re-created under the same id.
+duplicate never outranks a leaf re-created under the same id. A retirement driven
+by a silo running an older build during a rollback leaves the leaf's entry rows in
+place; they are inert, since only that leaf's claims read them, and are not yet
+swept ([#5634](https://github.com/NSTA1/Orleans.Lattice/issues/5634)).
 
 **Unstamped appends are always admitted.** An append through the existing,
 unstamped methods - a saga coordinator's transaction terminal, an append from a
@@ -1466,7 +1477,7 @@ can never skip it; an activation reports its own unstamped appends to itself.
 **Rolling upgrades.** Leaves claim and stamp only while every active silo's grain
 manifest advertises the append-fence capability. The gate is not ratcheted: if a
 silo running an older build joins, or rejoins in a rollback, it closes again by
-itself and leaves append unstamped. If a newer silo reaches an older one before its
+itself and leaves appends unstamped. If a newer silo reaches an older one before its
 gate has observed the join, the older silo refuses the unknown method while
 deserialising the request; only that definite failure is re-issued unstamped.
 Any other failure keeps today's retry semantics.

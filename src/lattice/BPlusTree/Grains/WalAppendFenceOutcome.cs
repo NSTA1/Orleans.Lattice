@@ -1,8 +1,18 @@
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>The outcome of a stamped WAL append (epic #5605).</summary>
+/// <remarks>
+/// Every member maps to its own <see cref="LatticeMetrics.TagReason"/> value
+/// through <see cref="LatticeMetrics.AppendFenceRejectionReason"/>.
+/// <see cref="Admitted"/> is mapped for exhaustiveness only: an admitted append is
+/// never recorded as a rejection.
+/// </remarks>
 [GenerateSerializer]
 [Alias(TypeAliases.WalAppendFenceOutcome)]
+[InstrumentedEnum(
+    typeof(LatticeMetrics),
+    "orleans.lattice.wal.append_fence.rejections",
+    LatticeMetrics.TagReason)]
 internal enum WalAppendFenceOutcome : byte
 {
     /// <summary>Every entry was allocated an offset.</summary>

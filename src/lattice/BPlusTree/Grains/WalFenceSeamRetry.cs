@@ -26,8 +26,11 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </para>
 /// <para>
 /// <b>The deadline.</b> The operation's cancellation token when the caller has
-/// one; otherwise <see cref="DefaultBudget"/>, the Orleans response timeout that
-/// bounds the grain call carrying the operation, measured from the first rejection.
+/// one; otherwise <see cref="Budget"/>, the silo's configured Orleans response
+/// timeout, which bounds the grain call carrying the operation. It is measured from
+/// the first rejection, which is never earlier than the operation began, so the
+/// retry never gives up before the caller's own deadline does: the caller sees that
+/// deadline's outcome from Orleans itself, exactly as today.
 /// </para>
 /// </remarks>
 internal sealed class WalFenceSeamRetry
@@ -44,8 +47,20 @@ internal sealed class WalFenceSeamRetry
     /// <summary>Caller class: tree maintenance (tombstone compaction, the prepared-bucket sweep).</summary>
     public const string CallerMaintenance = "maintenance";
 
-    /// <summary>The deadline when the caller has no cancellation token: the default Orleans response timeout.</summary>
+    /// <summary>The Orleans default response timeout, used until a silo configures <see cref="Budget"/>.</summary>
     internal static readonly TimeSpan DefaultBudget = TimeSpan.FromSeconds(30);
+
+    private static long _budgetTicks = DefaultBudget.Ticks;
+
+    /// <summary>
+    /// The deadline when the caller has no cancellation token: the silo's configured
+    /// Orleans response timeout, set by <see cref="WalFenceSeamRetryBudget"/>.
+    /// </summary>
+    internal static TimeSpan Budget
+    {
+        get => TimeSpan.FromTicks(Interlocked.Read(ref _budgetTicks));
+        set => Interlocked.Exchange(ref _budgetTicks, value > TimeSpan.Zero ? value.Ticks : DefaultBudget.Ticks);
+    }
 
     /// <summary>The first backoff; it doubles per attempt up to <see cref="MaxBackoff"/>.</summary>
     internal static readonly TimeSpan InitialBackoff = TimeSpan.FromMilliseconds(10);
@@ -89,7 +104,7 @@ internal sealed class WalFenceSeamRetry
         string caller,
         string? treeId,
         CancellationToken cancellationToken = default) =>
-        NextAsync(retry, caller, treeId, cancellationToken, DefaultBudget);
+        NextAsync(retry, caller, treeId, cancellationToken, Budget);
 
     /// <summary>As <see cref="NextAsync(WalFenceSeamRetry, string, string, CancellationToken)"/>, with an explicit budget; test seam.</summary>
     internal static async Task<WalFenceSeamRetry> NextAsync(

@@ -97,6 +97,10 @@ public static class LatticeServiceCollectionExtensions
             ServiceDescriptor.Singleton<IValidateOptions<LatticeGrainStorageFencingOptions>, LatticeGrainStorageFencingOptionsValidator>());
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<ILifecycleParticipant<ISiloLifecycle>, GrainStorageFencingCheck>());
+        // Epic #5605: fence rejections are retried for as long as the silo's
+        // response timeout lets the carrying call answer.
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<ILifecycleParticipant<ISiloLifecycle>, BPlusTree.Grains.WalFenceSeamRetryBudget>());
         builder.Services.AddSingleton<LatticeOptionsResolver>();
         builder.Services.AddOptions<Operations.LatticeOperationOptions>();
         builder.Services.TryAddSingleton<Operations.ILatticeOperationSiloLiveness, Operations.ClusterMembershipOperationSiloLiveness>();

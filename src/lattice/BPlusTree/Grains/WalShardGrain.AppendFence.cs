@@ -56,6 +56,12 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
     /// <summary>Set once the durable floor row has been read into <see cref="_epochFloor"/>.</summary>
     private bool _epochFloorLoaded;
 
+    /// <summary>Waiters for a leaf's multi-entry stamped batches to finish assigning; created on demand.</summary>
+    private Dictionary<Guid, TaskCompletionSource>? _batchDrains;
+
+    /// <summary>Per-leaf claim/retirement gates; created on the first claim.</summary>
+    private Dictionary<Guid, LeafGate>? _leafGates;
+
     /// <summary>The tree's grain storage provider, resolved on first use.</summary>
     private IGrainStorage? _fenceStorage;
 
@@ -99,17 +105,28 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
         var storage = FenceStorage();
         await EnsureEpochFloorLoadedAsync(storage).ConfigureAwait(true);
         var key = WalAppendFenceRows.EntryKey(_treeId, _shardIndex, leafId);
-        var result = await ClaimCoreAsync(
-            storage,
-            WalAppendFenceRows.EntryGrainType,
-            key,
-            () => WalAppendFenceRows.ReadEntryAsync(storage, _treeId, _shardIndex, leafId),
-            static row => row.State.Epoch,
-            static (row, value) => row.State.Epoch = value,
-            EpochEntries(),
-            leafId,
-            epoch,
-            useFloor: true).ConfigureAwait(true);
+        WalAppendFenceClaimResult result;
+        await EnterLeafGateAsync(leafId).ConfigureAwait(true);
+        try
+        {
+            result = await ClaimCoreAsync(
+                storage,
+                WalAppendFenceRows.EntryGrainType,
+                key,
+                () => WalAppendFenceRows.ReadEntryAsync(storage, _treeId, _shardIndex, leafId),
+                static row => row.State.Epoch,
+                static (row, value) => row.State.Epoch = value,
+                EpochEntries(),
+                leafId,
+                epoch,
+                useFloor: true,
+                batchLeaf: leafId).ConfigureAwait(true);
+        }
+        finally
+        {
+            ExitLeafGate(leafId);
+        }
+
         RecordFenceClaim(LatticeMetrics.AppendFenceKindEpoch, result.Accepted);
         return result;
     }
@@ -142,7 +159,8 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
             GenerationEntries(),
             initiator,
             generation,
-            useFloor: false).ConfigureAwait(true);
+            useFloor: false,
+            batchLeaf: null).ConfigureAwait(true);
         RecordFenceClaim(LatticeMetrics.AppendFenceKindGeneration, result.Accepted);
         return result;
     }
@@ -156,6 +174,23 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
 
         var storage = FenceStorage();
         await EnsureEpochFloorLoadedAsync(storage).ConfigureAwait(true);
+
+        // Serialised with this leaf's claims (#5635): a claim that read the entry
+        // absent and is about to create it finishes first, so this retirement reads
+        // what it wrote and counts it in the floor.
+        await EnterLeafGateAsync(leafId).ConfigureAwait(true);
+        try
+        {
+            return await RetireUnderLeafGateAsync(storage, leafId).ConfigureAwait(true);
+        }
+        finally
+        {
+            ExitLeafGate(leafId);
+        }
+    }
+
+    private async Task<long> RetireUnderLeafGateAsync(IGrainStorage storage, Guid leafId)
+    {
         var key = WalAppendFenceRows.EntryKey(_treeId, _shardIndex, leafId);
         for (var attempt = 1; ; attempt++)
         {
@@ -192,10 +227,22 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
                 }
             }
 
-            lock (_stateGate)
+            // A multi-entry stamped batch of this leaf finishes assigning before its
+            // entry goes, so retirement never leaves it partially admitted.
+            while (true)
             {
-                _epochEntries?.Remove(leafId);
-                return _epochFloor;
+                Task? drain;
+                lock (_stateGate)
+                {
+                    drain = BatchDrainLocked(leafId);
+                    if (drain is null)
+                    {
+                        _epochEntries?.Remove(leafId);
+                        return _epochFloor;
+                    }
+                }
+
+                await drain.ConfigureAwait(true);
             }
         }
     }
@@ -213,7 +260,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
             return WalAppendFenceOutcome.UnloadedEntry;
         }
 
-        if (!WalAppendFenceCore.IsEpochAdmitted(stamp.Epoch, entry.Memory, _epochFloor))
+        if (!WalAppendFenceCore.IsEpochAdmitted(stamp.Epoch, entry.Memory))
         {
             return WalAppendFenceOutcome.StaleEpoch;
         }
@@ -254,7 +301,8 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
         Dictionary<TId, FenceEntry> table,
         TId id,
         long value,
-        bool useFloor)
+        bool useFloor,
+        Guid? batchLeaf)
         where TId : notnull
     {
         for (var attempt = 1; ; attempt++)
@@ -297,21 +345,144 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
                 }
             }
 
-            lock (_stateGate)
+            // The raise waits out any multi-entry stamped batch of this leaf that is
+            // still assigning offsets, so it never falls between two of its entries
+            // and leaves the batch partially admitted.
+            while (true)
             {
-                var entry = NoteDurableLocked(table, id, value);
-                var floor = useFloor ? _epochFloor : 0;
-                if (!WalAppendFenceCore.IsRaiseAdmitted(value, entry.Memory, entry.DurableSeen, floor))
+                Task? drain = null;
+                lock (_stateGate)
                 {
-                    return WalAppendFenceClaimResult.Refuse(
-                        WalAppendFenceCore.ClaimThreshold(entry.Memory, entry.DurableSeen, floor));
+                    if (batchLeaf is { } leaf)
+                    {
+                        drain = BatchDrainLocked(leaf);
+                    }
+
+                    if (drain is null)
+                    {
+                        var entry = NoteDurableLocked(table, id, value);
+                        var floor = useFloor ? _epochFloor : 0;
+                        if (!WalAppendFenceCore.IsRaiseAdmitted(value, entry.Memory, entry.DurableSeen, floor))
+                        {
+                            return WalAppendFenceClaimResult.Refuse(
+                                WalAppendFenceCore.ClaimThreshold(entry.Memory, entry.DurableSeen, floor));
+                        }
+
+                        entry.Memory = value;
+                        table[id] = entry;
+                        return WalAppendFenceClaimResult.Accept(_nextOffset);
+                    }
                 }
 
-                entry.Memory = value;
-                table[id] = entry;
-                return WalAppendFenceClaimResult.Accept(_nextOffset);
+                await drain.ConfigureAwait(true);
             }
         }
+    }
+
+    /// <summary>
+    /// Marks a multi-entry stamped batch of <paramref name="leafId"/> as assigning
+    /// offsets. Called under <see cref="_stateGate"/> in the step that admitted its
+    /// first entry; no allocation.
+    /// </summary>
+    private void RegisterStampedBatchLocked(Guid leafId)
+    {
+        var entry = _epochEntries![leafId];
+        entry.InFlightBatches++;
+        _epochEntries[leafId] = entry;
+    }
+
+    /// <summary>
+    /// Ends a multi-entry stamped batch of <paramref name="leafId"/> once it has
+    /// assigned or rejected every entry, releasing a raise or retirement waiting
+    /// for it.
+    /// </summary>
+    private void ReleaseStampedBatch(Guid leafId)
+    {
+        TaskCompletionSource? drained = null;
+        lock (_stateGate)
+        {
+            if (_epochEntries is not null && _epochEntries.TryGetValue(leafId, out var entry))
+            {
+                entry.InFlightBatches--;
+                _epochEntries[leafId] = entry;
+                if (entry.InFlightBatches > 0)
+                {
+                    return;
+                }
+            }
+
+            _batchDrains?.Remove(leafId, out drained);
+        }
+
+        drained?.TrySetResult();
+    }
+
+    /// <summary>
+    /// A task that completes when <paramref name="leafId"/> has no multi-entry
+    /// stamped batch assigning offsets, or <see langword="null"/> when it has none
+    /// now. Called under <see cref="_stateGate"/>.
+    /// </summary>
+    private Task? BatchDrainLocked(Guid leafId)
+    {
+        if (_epochEntries is null
+            || !_epochEntries.TryGetValue(leafId, out var entry)
+            || entry.InFlightBatches <= 0)
+        {
+            return null;
+        }
+
+        _batchDrains ??= new Dictionary<Guid, TaskCompletionSource>();
+        if (!_batchDrains.TryGetValue(leafId, out var drained))
+        {
+            drained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _batchDrains[leafId] = drained;
+        }
+
+        return drained.Task;
+    }
+
+    /// <summary>
+    /// Serialises this activation's claims and retirement of one leaf (#5635).
+    /// Different leaves claim concurrently.
+    /// </summary>
+    private async Task EnterLeafGateAsync(Guid leafId)
+    {
+        SemaphoreSlim gate;
+        lock (_stateGate)
+        {
+            _leafGates ??= new Dictionary<Guid, LeafGate>();
+            if (!_leafGates.TryGetValue(leafId, out var leafGate))
+            {
+                leafGate = new LeafGate();
+                _leafGates[leafId] = leafGate;
+            }
+
+            leafGate.Users++;
+            gate = leafGate.Gate;
+        }
+
+        await gate.WaitAsync().ConfigureAwait(true);
+    }
+
+    private void ExitLeafGate(Guid leafId)
+    {
+        lock (_stateGate)
+        {
+            var leafGate = _leafGates![leafId];
+            leafGate.Gate.Release();
+            if (--leafGate.Users == 0)
+            {
+                _leafGates.Remove(leafId);
+            }
+        }
+    }
+
+    /// <summary>One leaf's claim/retirement gate and the number of operations holding or awaiting it.</summary>
+    private sealed class LeafGate
+    {
+        public SemaphoreSlim Gate { get; } = new(1, 1);
+
+        public int Users { get; set; }
     }
 
     /// <summary>
@@ -429,7 +600,11 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
     /// (<see cref="WalAppendFenceCore.Unloaded"/> until a claim raises it), and the
     /// highest durable value this activation has read or written for it.
     /// </summary>
-    private record struct FenceEntry(long Memory, long DurableSeen);
+    private record struct FenceEntry(long Memory, long DurableSeen)
+    {
+        /// <summary>Multi-entry stamped batches of this leaf still assigning offsets.</summary>
+        public int InFlightBatches { get; set; }
+    }
 
     /// <summary>Shapes the result of the single-entry append for its caller.</summary>
     private interface ISingleAppendShape<TResult>
