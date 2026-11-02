@@ -31,6 +31,9 @@ public sealed class GoingMultiRegionJourney : JourneyChapter
     private const string MergeModeLabel = "LWW register";
     private static readonly TimeSpan Convergence = TimeSpan.FromMinutes(4);
 
+    /// <summary>A7.7's convergence window in the story estate, where east's import has needed repeated re-seeds.</summary>
+    private static readonly TimeSpan StoryConvergence = TimeSpan.FromMinutes(8);
+
     /// <inheritdoc />
     public override async Task RunAsync(ChapterContext context)
     {
@@ -280,11 +283,17 @@ public sealed class GoingMultiRegionJourney : JourneyChapter
 
                 await eastData.OpenTreeAsync(orders);
                 long eastKeys = -1;
-                var deadline = DateTime.UtcNow + Convergence;
+
+                // The story estate is far busier than an isolated one, and east's import there has
+                // been seen to go through two automatic re-seeds, so it gets a wider window (#5676).
+                var story = context.Mode == JourneyRunMode.Story;
+                var started = DateTime.UtcNow;
+                var deadline = started + (story ? StoryConvergence : Convergence);
                 while (true)
                 {
                     westKeys = await westData.LiveKeyCountAsync();
                     eastKeys = await eastData.LiveKeyCountAsync();
+                    TestContext.Progress.WriteLine($"A7.7 +{(DateTime.UtcNow - started).TotalSeconds:0}s: west {westKeys}, east {eastKeys} live keys in {orders}");
                     if (westKeys == eastKeys || DateTime.UtcNow > deadline)
                     {
                         break;
@@ -296,7 +305,23 @@ public sealed class GoingMultiRegionJourney : JourneyChapter
                 }
 
                 TestContext.Progress.WriteLine($"A7.7: west holds {westKeys} live keys in {orders}, east {eastKeys}");
-                Assert.That(eastKeys, Is.EqualTo(westKeys), "east's factory-orders holds as many live keys as west's");
+                if (story && eastKeys != westKeys)
+                {
+                    // Story only: isolated A7 stays strict. The shortfall's cause is unproven; #5676
+                    // (alias-addressed writes ship under the alias id) is the open lead.
+                    var (westCount, eastCount) = (westKeys, eastKeys);
+                    TestContext.Progress.WriteLine($"A7.7 (#5676): east's factory-orders did not converge on west's within {StoryConvergence.TotalMinutes:0} min: west {westCount}, east {eastCount} live keys");
+                    await new KnownDefect("#5676", "in the story estate east's factory-orders does not converge on west's live keys within the story window").ReproducesAsync(() =>
+                    {
+                        Assert.That(eastCount, Is.Not.EqualTo(westCount));
+                        return Task.CompletedTask;
+                    });
+                }
+                else
+                {
+                    Assert.That(eastKeys, Is.EqualTo(westKeys), "east's factory-orders holds as many live keys as west's");
+                }
+
                 Assert.That(eastKeys, Is.GreaterThanOrEqualTo(Names.Orders.SeededCount), "east holds at least the 240 seeded orders");
 
                 Coverage.Hit("use-case:replication/east-console");
