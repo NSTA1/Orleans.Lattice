@@ -53,7 +53,7 @@ internal sealed partial class BPlusLeafGrain
     /// caller is replaced.
     /// </summary>
     private WalRoutingStamp StampedRouting(WalRoutingStamp routing) =>
-        routing with { AdmissionMark = _appendFence is { } fence ? fence.HandOffCloses + 1 : 0 };
+        routing;
 
     /// <summary>
     /// Appends <paramref name="entry"/> under <paramref name="routing"/>: the leaf's
