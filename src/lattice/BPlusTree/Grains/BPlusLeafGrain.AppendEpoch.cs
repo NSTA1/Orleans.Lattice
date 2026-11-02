@@ -71,10 +71,11 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     /// <remarks>
     /// The epoch row is deleted only once every partition has retired its entry,
-    /// and conditionally on the ETag read, so a leaf re-created under the same id
-    /// that has claimed since keeps its row; its own entries then sit above every
-    /// floor this retirement raised. A failed retirement is logged and leaves the
-    /// rows in place, which is safe.
+    /// and conditionally on the ETag read, so a row that moved since the read is
+    /// kept: a re-created incarnation's claim, or a pre-clear duplicate's bump above
+    /// a floor this clear raised. Each partition floors at the row value read
+    /// (#5641). A failed retirement is logged and leaves the rows in place, which
+    /// is safe.
     /// </remarks>
     private async Task RetireAppendEpochAsync(string? treeId)
     {
@@ -114,7 +115,13 @@ internal sealed partial class BPlusLeafGrain
             }
             catch (InconsistentStateException)
             {
-                // Claimed again since the read: a re-created incarnation owns the row now.
+                // The row moved since the read, so it is kept. Either a re-created
+                // incarnation claimed it, or the clear is not atomic and a pre-clear
+                // duplicate, refused by a floor this clear just raised, bumped it
+                // between the retirements and this delete. Both are safe: the row is
+                // kept, so epochs do not recur, and the re-created incarnation claims
+                // above the bumped value and supersedes the duplicate (#5605 re-review
+                // of revision 7, N1).
             }
         }
         catch (Exception ex)
