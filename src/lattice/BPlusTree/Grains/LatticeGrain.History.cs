@@ -26,6 +26,13 @@ internal sealed partial class LatticeGrain
     internal static readonly TimeSpan DurableHistoryViewMissTtl = TimeSpan.FromSeconds(30);
 
     private long _durableHistoryViewMissUntil;
+
+    // The durable record last resolved to this tree's history view, and what it
+    // resolved to: a read whose lookup returns the same record reuses it rather
+    // than re-hydrating the projection.
+    private RuntimeViewRegistration? _durableHistoryRecord;
+    private ViewRegistration? _durableHistoryRegistration;
+
     /// <inheritdoc />
     public async Task<EntryHistoryPage> ScanEntryHistoryAsync(
         string key,
@@ -95,11 +102,15 @@ internal sealed partial class LatticeGrain
             return null;
         }
 
-        IReadOnlyList<RuntimeViewRegistration> records;
+        RuntimeViewRegistration[] records;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            records = await grainFactory.GetGrain<IViewRegistryGrain>(IViewRegistryGrain.SingletonKey).ListAsync();
+
+            // The registry filters to this tree's candidates, so the read transfers
+            // and allocates only those, not every runtime view in the cluster.
+            records = await grainFactory.GetGrain<IViewRegistryGrain>(IViewRegistryGrain.SingletonKey)
+                .ListAccumulativeBySourceAsync(TreeId);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -109,6 +120,7 @@ internal sealed partial class LatticeGrain
 
         foreach (var record in records)
         {
+            // The registry already filters; re-check, since the answer crossed the wire.
             if (!record.Accumulative
                 || record.IsAggregation
                 || !string.Equals(record.SourceTreeId, TreeId, StringComparison.Ordinal))
@@ -116,12 +128,21 @@ internal sealed partial class LatticeGrain
                 continue;
             }
 
+            if (_durableHistoryRegistration is { } cached && record.Equals(_durableHistoryRecord))
+            {
+                return cached;
+            }
+
             if (RuntimeViewRehydrator.Resolve(record, services, providers, logger) is { Projection: HistoryLatticeViewProjection } registration)
             {
+                _durableHistoryRecord = record;
+                _durableHistoryRegistration = registration;
                 return registration;
             }
         }
 
+        _durableHistoryRecord = null;
+        _durableHistoryRegistration = null;
         _durableHistoryViewMissUntil = Environment.TickCount64 + (long)DurableHistoryViewMissTtl.TotalMilliseconds;
         return null;
     }

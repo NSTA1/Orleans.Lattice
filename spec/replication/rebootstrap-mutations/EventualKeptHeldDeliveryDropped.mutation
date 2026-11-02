@@ -1,0 +1,17 @@
+# Pairs with EventualKept in ReplicationReBootstrap. A replicated apply that reaches a
+# receiver while it holds a shadow copy is acknowledged and routed to neither the copy
+# nor the tree, so a write the copy's export did not carry is lost at the cutover and
+# nothing re-ships it.
+MODULE: EventualKeptHeldDeliveryDropped
+TARGET: EventualKept
+CLASS: Temporal
+SUMMARY: a delivery during the shadow hold is acknowledged without reaching the copy, so the cutover loses it
+PERTURBS: DeliverHeld
+BOUNDS: Mutual = TRUE
+
+--- FIND
+       IN /\ cp' = [cp EXCEPT ![e[2]] = Merge(@, AsReg(w))]
+--- REPLACE
+\* MUTATION: the held delivery is acknowledged and applied nowhere.
+       IN /\ cp' = cp
+--- END

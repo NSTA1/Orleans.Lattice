@@ -117,7 +117,7 @@ public sealed class SchemaDirectoryPageTests : SchemaTestContext
 
         cut.Find("input[type=search], input").Input("aud");
 
-        Assert.That(Navigation.Uri, Does.EndWith("schema?filter=aud"));
+        cut.WaitUntil(() => Assert.That(Navigation.Uri, Does.EndWith("schema?filter=aud")));
     }
 
     [Test]
@@ -248,7 +248,7 @@ public sealed class SchemaDirectoryPageTests : SchemaTestContext
         cut.Find("select").Change("orders");
         cut.FindAll("button").Single(button => button.TextContent == "Scan").Click();
 
-        Assert.That(Navigation.Uri, Does.EndWith("schema/orders?tab=compliance&scan=start"));
+        cut.WaitUntil(() => Assert.That(Navigation.Uri, Does.EndWith("schema/orders?tab=compliance&scan=start")));
     }
 
     [Test]

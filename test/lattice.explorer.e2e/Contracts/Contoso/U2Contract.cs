@@ -71,7 +71,21 @@ public sealed class U2Contract() : ChapterContract("U2")
         {
             var scan = await schema.StartComplianceScanAsync(orders);
             var result = await ContractWait.SucceededAsync("the compliance scan", () => schema.GetComplianceScanStatusAsync(scan.OperationId), OperationPatience);
-            RequireEqual(result.Result.GetValueOrDefault(NonCompliantCount), "0", "factory-orders is compliant at scan time");
+            var nonCompliant = result.Result.GetValueOrDefault(NonCompliantCount);
+            RequireEqual(nonCompliant, "0", "factory-orders is compliant at scan time" + (nonCompliant == "0" ? string.Empty : $" ({Breakdown(result.Result)})"));
         }
+    }
+
+    /// <summary>The non-compliant breakdown of a compliance scan's result, as reason: count pairs, for a failure message.</summary>
+    /// <param name="result">The scan operation's result map.</param>
+    private static string Breakdown(IReadOnlyDictionary<string, string> result)
+    {
+        var rows = new List<string>();
+        for (var i = 0; result.TryGetValue($"rule.{i}.reason", out var reason); i++)
+        {
+            rows.Add($"{result.GetValueOrDefault($"rule.{i}.count")}x {reason}");
+        }
+
+        return rows.Count == 0 ? "no breakdown recorded" : string.Join("; ", rows);
     }
 }

@@ -141,9 +141,13 @@ version to read it. A hop whose DI `transformId` has no registered transform thr
 Advancing a tree's target version is an admin action allowed at any time. The new
 target applies to new writes on the serving silo as soon as the call returns, and on
 every other silo within `LatticeSchemaVersioningOptions.PropagationInterval` (one
-second by default); inside that window a lagging silo can still stamp at the previous
-target, and fails a read of a value stamped at the newer target with
-`NotSupportedException`. Existing values are lifted lazily at read
+second by default). Inside that window a lagging silo can still stamp at the previous
+target. A lagging silo that reads a value stamped at the newer target re-reads the
+tree's config before refusing it, so the read, and a compliance scan, serves the
+value rather than failing (#5711). That re-read is shared by concurrent reads of the
+tree on the silo, and it runs at most once per tree per propagation interval, so a
+value that really is newer than the target still fails with `NotSupportedException`
+and costs at most one store read per tree per interval. Existing values are lifted lazily at read
 time by the upcaster chain. The advance is **monotonic**: `AdvanceTargetVersionAsync`
 rejects an unversioned tree, and a target that is not strictly greater than the
 current one, with `InvalidOperationException`. (`SetVersionConfigAsync` replaces the
