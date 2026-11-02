@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.Data.Grpc;
+using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
@@ -129,6 +130,21 @@ public sealed class C1Contract() : ChapterContract("C1")
     public static async Task ReplayCapturedOrdersFromEastAsync(JourneyEstate estate)
     {
         var east = ContractFacades.Of(estate, region: JourneyEstate.East).Data;
+        var schema = ContractFacades.Of(estate).Schema;
+        var westData = ContractFacades.Of(estate).Data;
+        async Task DiagAsync(string when)
+        {
+            foreach (var key in Names.Orders.NegativeTotals)
+            {
+                var e = await ContractCalls.GetAsync(east, Names.Trees.FactoryOrders, key);
+                var w = await ContractCalls.GetAsync(westData, Names.Trees.FactoryOrders, key);
+                string Show(byte[]? v) => v is null ? "<absent>" : System.Text.Encoding.UTF8.GetString(v.Where(b => b >= 32 && b < 127).ToArray());
+                NUnit.Framework.TestContext.Progress.WriteLine($"C1 replay: {DateTime.UtcNow:HH:mm:ss.fff} {when} {key} east={Show(e)} west={Show(w)}");
+            }
+        }
+
+        await WaitForSettledReplicationAsync(estate);
+        await DiagAsync("before-batch");
         await east.SetManyAtomicAsync(new DataAtomicRequest
         {
             TreeId = Names.Trees.FactoryOrders,
@@ -140,9 +156,15 @@ public sealed class C1Contract() : ChapterContract("C1")
             },
         });
 
-        var schema = ContractFacades.Of(estate).Schema;
+        await DiagAsync("after-batch");
+        var polls = 0;
         await ContractWait.UntilAsync("the replayed orders to reach west's dead letters", async () =>
         {
+            if (polls++ % 20 == 0)
+            {
+                await DiagAsync("poll");
+            }
+
             var keys = new HashSet<string>(StringComparer.Ordinal);
             await foreach (var letter in schema.ListDeadLettersAsync(Names.Trees.FactoryOrders))
             {
@@ -151,6 +173,62 @@ public sealed class C1Contract() : ChapterContract("C1")
 
             return Names.Orders.NegativeTotals.All(keys.Contains);
         });
+    }
+
+    /// <summary>How many consecutive polls must find the replication settled.</summary>
+    private const int SettledPolls = 10;
+
+    /// <summary>
+    /// Waits until <c>factory-orders</c>' replication is settled in both directions: in each
+    /// region no link of the tree is stalled (in particular, none waits on a re-seed), every
+    /// outbound link is healthy, and the tree's physical copy has not changed, all held for
+    /// <see cref="SettledPolls"/> consecutive polls, so no import or cutover is in flight.
+    /// C1's restore and remediation re-seed both regions; a batch written while one of
+    /// them is still re-seeding is re-appended into the new copy as plain last-writer-wins rows,
+    /// which strict ingest does not judge (#5684), so the east ledger waits for the estate to settle.
+    /// </summary>
+    /// <param name="estate">The Contoso estate.</param>
+    private static async Task WaitForSettledReplicationAsync(JourneyEstate estate)
+    {
+        var regions = new[] { JourneyEstate.West, JourneyEstate.East };
+        string?[] lastPhysical = [null, null];
+        var detail = "no poll yet";
+        var stablePolls = 0;
+        try
+        {
+            await ContractWait.UntilAsync("factory-orders' replication to settle in both directions", async () =>
+            {
+                var settled = true;
+                var parts = new List<string>();
+                for (var i = 0; i < regions.Length; i++)
+                {
+                    var facades = ContractFacades.Of(estate, region: regions[i]);
+                    var page = await facades.ReplicationStatus.GetPeerStatusAsync(
+                        new ReplicationPeerStatusQuery { TreeId = Names.Trees.FactoryOrders, PageSize = ReplicationPeerStatusQuery.MaxPageSize });
+                    var links = page.Peers.Where(link => link.TreeId == Names.Trees.FactoryOrders).ToList();
+                    var physical = (await facades.TreeAdmin.ResolveTreeAliasAsync(Names.Trees.FactoryOrders)).PhysicalTreeId;
+                    var regionSettled = links.Any(link => link.Direction == ReplicationLinkDirection.Outbound)
+                        && links.All(link => link.StallReason is null
+                            && (link.Health == ReplicationLinkHealth.Healthy
+                                || (link.Health == ReplicationLinkHealth.Unknown && link.Direction == ReplicationLinkDirection.Inbound)))
+                        && physical == lastPhysical[i];
+                    settled &= regionSettled;
+                    lastPhysical[i] = physical;
+                    parts.Add($"{regions[i]}: {physical}, " + string.Join("; ", links.Select(link =>
+                        $"{link.Direction} {link.PeerRegionId} {link.Health} behind={link.EntriesBehind} inflight={link.InFlight} stall={link.StallReason}")));
+                }
+
+                detail = string.Join(" | ", parts);
+                stablePolls = settled ? stablePolls + 1 : 0;
+                return stablePolls >= SettledPolls;
+            }, OperationPatience);
+        }
+        catch (TimeoutException ex)
+        {
+            throw new TimeoutException($"{ex.Message} Last observed: {detail}", ex);
+        }
+
+        NUnit.Framework.TestContext.Progress.WriteLine($"C1 replay: settled - {detail}");
     }
 
     private static async Task<IReadOnlyList<string>> WrongPricesAsync(LatticeDataApiGrpcClient data)

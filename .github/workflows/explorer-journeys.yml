@@ -496,13 +496,14 @@ jobs:
       - name: Run the leg
         env:
           FILTER: ${{ matrix.filter }}
+          HANG: ${{ matrix.hang || 20 }}
         run: |
           dotnet test "$E2E_PROJECT" --no-build --configuration Release \
             --filter "$FILTER" \
             --results-directory "$RESULTS" \
             --logger "trx;LogFileName=$LEG.trx" \
             --logger "console;verbosity=normal" \
-            --blame-hang-timeout 20m --blame-hang-dump-type none
+            --blame-hang-timeout "${HANG}m" --blame-hang-dump-type none
 
       # The leg's counts, every journey's ordered screenshot manifest and the
       # leg's coverage hits, in the job summary; the pending-wrapper list and

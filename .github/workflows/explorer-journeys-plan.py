@@ -154,6 +154,10 @@ JOURNEY_FOLDER = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
 TIMEOUTS = {"harness": 60, "isolated": 45, "contract": 60, "story": 150}
 # Each leg's `estimate` is its timeout. runner-overflow.py reads it only to send the
 # longest legs to the self-hosted pool first, so an upper bound orders them as well.
+# Each leg's `hang` is its per-test hang budget in minutes (dotnet test
+# --blame-hang-timeout). A contract case establishes every chapter before its own
+# (C3 consumes the whole Contoso storyline), so it runs longest.
+HANGS = {"harness": 20, "isolated": 20, "contract": 30, "story": 20}
 
 
 class PlanError(Exception):
@@ -411,6 +415,7 @@ def isolated_leg(folder, jid, storyline):
         "viewport": "",
         "timeout": TIMEOUTS["isolated"],
         "estimate": TIMEOUTS["isolated"],
+        "hang": HANGS["isolated"],
         # The trailing dot keeps Journeys.A1 from selecting A10, A11 and A12.
         "filter": f"FullyQualifiedName~{NAMESPACE}.Journeys.{folder}.|FullyQualifiedName~{PENDING_GATE}",
         "expect": f"{NAMESPACE}.Journeys.{folder}.",
@@ -429,6 +434,7 @@ def contract_leg(chapter, storyline, shard):
         "viewport": "",
         "timeout": TIMEOUTS["contract"],
         "estimate": TIMEOUTS["contract"],
+        "hang": HANGS["contract"],
         # The leading underscore keeps _C1_ from selecting a C10 case.
         "filter": (f"(FullyQualifiedName~{fixture}.&FullyQualifiedName~_{chapter}{CONFORMANCE_CASE_SUFFIX})"
                    f"|FullyQualifiedName~{PENDING_GATE}"),
@@ -448,6 +454,7 @@ def story_leg(storyline, fixture, narrow=False):
         "viewport": "narrow" if narrow else "",
         "timeout": TIMEOUTS["story"],
         "estimate": TIMEOUTS["story"],
+        "hang": HANGS["story"],
         "filter": f"FullyQualifiedName~{NAMESPACE}.Story.{fixture}|FullyQualifiedName~{PENDING_GATE}",
         "expect": f"{NAMESPACE}.Story.{fixture}",
     }
@@ -464,6 +471,7 @@ def harness_leg():
         "viewport": "",
         "timeout": TIMEOUTS["harness"],
         "estimate": TIMEOUTS["harness"],
+        "hang": HANGS["harness"],
         "filter": HARNESS_FILTER,
         "expect": NAMESPACE + ".",
     }
@@ -665,6 +673,13 @@ def trx_counts(path):
     return counts, classes
 
 
+def trx_aborted(path):
+    """Whether the .trx records an aborted run: the blame collector killed a hang, or the host crashed."""
+    root = ET.parse(path).getroot()
+    texts = (element.text or "" for element in root.iter() if element.tag.rsplit("}", 1)[-1] == "Text")
+    return any("test run was aborted" in text or "inactivity time" in text for text in texts)
+
+
 def render_manifest(path):
     manifest = json.loads(Path(path).read_text(encoding="utf-8"))
     entries = manifest.get("entries") or []
@@ -695,6 +710,9 @@ def leg_summary(leg, trx, artifacts=None, expect=None):
                      f"{counts.get('failed', 0)} | {counts.get('notExecuted', 0)} |")
         if expect and not any(expect in name for name in classes):
             problems.append(
+                f"the test run was aborted (a hang or a crash; see the blame message) before any test in '{expect}' "
+                "recorded a result"
+                if trx_aborted(trx) else
                 f"the leg's filter selected no test in '{expect}': a leg that runs nothing it exists for "
                 "is a vacuous green")
     else:

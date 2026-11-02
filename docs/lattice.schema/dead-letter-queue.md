@@ -45,6 +45,12 @@ the stored, enveloped bytes, while the reason describes the body it was judged b
 A refused item is diverted once: a refused full-state CRDT row (the bootstrap form)
 is not retried as a version conflict, and an entry of a replicated atomic batch
 whose apply a bootstrap hold mirrors onto a second copy is recorded once, and that one record is committed independently of the batch.
+A bootstrap import is judged per copy it stages into. A transient retry of the
+drain into the same copy records a refused row once. If the import's copy is
+discarded and the bootstrap is started again into a new copy, every row is applied
+and judged again in the new copy, so a refused row gains one more record per
+discarded copy. A record carries no source identity, so the two cannot be merged;
+an operator reading the queue may see the same key and reason more than once.
 The source is one of:
 
 | `LatticeSchemaDeadLetterSource` | Meaning |
