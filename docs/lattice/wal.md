@@ -1504,11 +1504,17 @@ activation a deactivation and a re-claim above the raised floor, and its writes 
 retried at their seams.
 
 **Unstamped appends are always admitted.** An append through the existing,
-unstamped methods - a saga coordinator's transaction terminal, an append from a
-silo running an older build, or one from a silo whose view of the gate is closed -
-is never rejected. The partition records the highest such
-offset and reports it in every stamped response, so a later checkpoint advance
-can never skip it; an activation reports its own unstamped appends to itself.
+unstamped methods - an append from a silo running an older build, one from a silo
+whose view of the gate is closed, or a write that is unstamped by design (see
+[Hand-off fences](#hand-off-fences)) - is never rejected. The partition records the
+highest such offset and reports it in every stamped response, so a later checkpoint
+advance can never skip it; an activation reports its own unstamped appends to
+itself. A saga coordinator's `TxCommit` or `TxAbort` record carries the
+**coordinator-terminal** stamp class instead: it is admitted with no entry check and
+does not raise the reported offset, because such a record carries no row data and a
+leaf holds its advance while the prepare it resolves is pending. A record of any
+other kind sent with the class is admitted unstamped and reported, so the class
+cannot bypass a fence.
 
 **Rolling upgrades.** Leaves claim and stamp only while every active silo's grain
 manifest advertises the append-fence capability. The gate is not ratcheted: if a
@@ -1538,6 +1544,105 @@ reads per partition), then one leaf row per leaf it examines, up to 1,024.
 The fence's counters are `orleans.lattice.wal.append_fence.claims`,
 `.rejections`, `.seam_retries`, `.unstamped_reports` and `.sweeps`; see
 [Metrics](metrics.md).
+
+## Hand-off fences
+
+The epoch fence above stops a stale duplicate of a leaf. The **hand-off fences**
+stop a different author: one that appends a record a leaf will own, while handing
+keys to it ([epic #5605](https://github.com/NSTA1/Orleans.Lattice/issues/5605), the
+design note's section 2). This release builds the markers and fences only. Nothing
+reads a marker to skip records yet: every leaf's projection checkpoint still advances
+by replay, so the fences add cost and change no result.
+
+Every hand-off follows one protocol:
+
+1. **Open.** The initiator records an open marker on the owner before it admits a
+   write the owner will own.
+2. **Close by fence.** Once the initiator has stopped admitting writes for the
+   range, it re-claims its own epoch (a leaf initiator) or its routing generation (a
+   shard-level initiator) at every WAL partition, and records the claim heads in the
+   owner's marker. Every write admitted before the close was either allocated below
+   those heads, or carries the old epoch or generation and is rejected when it
+   arrives. A wait cannot replace this: a call can time out while its append is
+   still delivered later.
+3. **Re-arm by replay.** An owner holds while any marker overlapping it is open, and
+   may re-arm only after replaying to a close's heads.
+
+A marker is a row of its own under a reserved grain type: `_lattice_leaf-handoff`
+for a leaf, `_lattice_shard-handoff` for a shard root. A missing marker, or one whose
+state is not yet initialised, never reads as closed: it holds the owner. A marker is
+recorded only while the append-fence gate is open, and every resume path of an
+in-flight hand-off opens its marker before its next admission, so a hand-off begun
+by an older build, or while the gate was closed, opens one when it resumes.
+
+| Hand-off | Initiator | Marker | Fence at close |
+|----------|-----------|--------|----------------|
+| Leaf split | The donor leaf | The sibling's, opened at its birth | The donor raises its own epoch, once its span has narrowed, and re-claims it at every partition it had claimed |
+| Leaf reclaim | The absorbed neighbour | The survivor's, opened before its range widens | The neighbour's entries are retired at every partition, and the allocator heads are read after the retirement |
+| Adaptive split, consolidation fold | The donor shard root | The target shard root's, opened when the migration begins | The donor raises its routing generation, after the reject phase and the drain, and re-claims it at every partition |
+| Range delete | The tree's range-delete fence | Every shard root's, range-scoped | The fence raises the tree's range-delete generation and re-claims it at every partition |
+
+**Writes are stamped at admission.** A shard root captures its routing generation
+in the same step as its phase check and passes it to the leaf through a new,
+stamped leaf write method; the leaf appends under its own epoch and that generation.
+A write that reaches a leaf through an existing leaf method carries no generation -
+an older shard root admitted it - so it is appended **unstamped** and reported,
+never under the leaf's epoch alone. A write rejected because a close re-claimed its
+generation is retried from the shard root: the phase check runs again, which
+re-routes a key whose slot moved to another shard, and the write is re-admitted under
+the current generation. Whoever calls the WAL append stamps with its own epoch, so a
+split's transfers and a relocation, which the receiving leaf appends and applies
+itself, are that leaf's own appends.
+
+**A split close does not supersede the donor.** The donor's epoch raise rejects its
+own appends stamped before it. Those are **self-fenced**: refused for the caller to
+re-admit under the current epoch, where the narrowed span forwards a moved key to
+the sibling, without the donor deactivating. The refusal has the same wire shape as
+a superseded activation's, which every caller and an older shard root already retry.
+The same rule stops a leaf from deactivating itself after it raises its epoch above
+a retired floor ([#5643](https://github.com/NSTA1/Orleans.Lattice/issues/5643)).
+
+**Range deletes are fenced at the tree.** A range-delete record is replayed by every
+overlapping leaf of every shard, so the fence belongs to the tree. Before any shard
+appends, the range delete opens an **intent** at the tree's range-delete fence grain,
+which records the range and a deadline (the silo's response timeout less a margin),
+opens a range-scoped marker on every shard root, and hands out the tree's current
+range-delete generation. Every shard's walk is stamped with it, so the close's one
+re-claim per partition fences every walk at once. The intent closes when every walk
+has returned; a per-tree reminder closes one whose deadline passed, so a fan-out
+whose caller died is closed all the same. A walk rejected after a close re-stamps
+only while its **own** intent is still open, and otherwise goes on unstamped. The
+intent is marked closing, durably, before the close's first re-claim, and the open
+check is answered by the same non-reentrant grain, so it can never hand out the
+post-close generation to a walk the close has already fenced. A range-delete walk
+that reaches a shard root through the existing method - replication apply, a resize
+or reshard shadow forward, a fan-out begun while the gate was closed, an older
+caller - is appended unstamped, by design. The record, its result and its feed are
+unchanged; range-delete records are fenced, never clipped.
+
+**Coordinator terminals** carry the coordinator-terminal stamp class described in
+[Append epoch fencing](#append-epoch-fencing), so a saga does not raise the reported
+unstamped offset of every partition it touched.
+
+**Rolling upgrades.** Every new call - a stamped leaf or shard-root method, a marker
+call, the range-delete fence - is made only while the gate is open. A callee on an
+older build that answers with the definite "method unknown" failure is re-issued
+through the existing, unstamped method; any other failure keeps today's semantics.
+
+**Cost.** No allocation or grain call is added to a write: the routing stamp is a
+call argument, and the leaf's dispatch helpers are pooled. Per shard root: one
+marker-row write the first time it admits a write with the gate open. Per split:
+one marker write at the sibling's birth, one epoch-row write and one claim call per
+partition the donor had claimed, and one marker write at the close. Per reclaim: a
+marker write, a retirement call per partition and a marker write. Per slot
+migration: a marker call to the target at each phase, one generation re-claim per
+partition at the close. Per range delete: one fence-grain call to open and one to
+close, one marker write per shard to open and one to close, one generation re-claim
+per partition, and the reminder only while an intent is open. Every overlapping
+leaf of the tree is held for the delete's duration.
+
+The hand-off counters are `orleans.lattice.wal.append_fence.handoff_markers`,
+`.unstamped_appends` and `.self_fenced`; see [Metrics](metrics.md).
 
 ## Relationship to replication
 

@@ -11409,15 +11409,17 @@ public static class LatticeMetrics
     /// <summary>
     /// Counter of stamped WAL appends whose response reported an unstamped append
     /// the leaf had not seen reported before (epic #5605), tagged with
-    /// <see cref="TagTree"/> and the tenant. An unstamped append comes from a saga
-    /// coordinator appending a transaction terminal, or from a silo whose view of the
-    /// append-fence gate is closed, typically one running an older build during a
-    /// rolling upgrade. It is always admitted; a leaf must read past every one
-    /// reported to it before its checkpoint may skip records.
+    /// <see cref="TagTree"/> and the tenant. An unstamped append comes from a silo
+    /// whose view of the append-fence gate is closed, typically one running an older
+    /// build during a rolling upgrade, or from a write unstamped by design
+    /// (<see cref="WalAppendFenceUnstampedAppends"/>); a saga coordinator's
+    /// transaction terminal carries the coordinator-terminal stamp class and is not
+    /// reported. It is always admitted; a leaf must read past every one reported to
+    /// it before its checkpoint may skip records.
     /// </summary>
     public static readonly Counter<long> WalAppendFenceUnstampedReports =
         Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.unstamped_reports", unit: "{report}",
-            description: "Stamped WAL append responses that reported an unstamped append (a saga coordinator's transaction terminal, or an append from a silo whose append-fence gate is closed) made after the leaf's claim (epic #5605), by tree.");
+            description: "Stamped WAL append responses that reported an unstamped append (from a silo whose append-fence gate is closed, or a write unstamped by design) made after the leaf's claim (epic #5605), by tree.");
 
     /// <summary><see cref="TagOutcome"/> on <see cref="WalAppendFenceSweeps"/>: the leaf was gone and its fence rows were retired.</summary>
     public static readonly KeyValuePair<string, object?> AppendFenceSweepRetired = new(TagOutcome, "retired");
@@ -11553,8 +11555,6 @@ public static class LatticeMetrics
     /// <summary><see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a tree range delete's intent.</summary>
     public const string HandOffKindRangeDelete = "range_delete";
 
-    /// <summary><see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a bulk load or append's switch.</summary>
-    public const string HandOffKindBulk = "bulk";
 
     /// <summary><see cref="TagOutcome"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a hand-off marker opened.</summary>
     public static readonly KeyValuePair<string, object?> HandOffMarkerOpened = new(TagOutcome, "opened");
@@ -11565,7 +11565,7 @@ public static class LatticeMetrics
     /// <summary>
     /// Counter of hand-off markers opened and closed (epic #5605, member 2), tagged
     /// with <see cref="TagTree"/>, the tenant, <see cref="TagKind"/> (<c>split</c>,
-    /// <c>reclaim</c>, <c>shard_migration</c>, <c>range_delete</c> or <c>bulk</c>) and <see cref="TagOutcome"/> (<c>opened</c> or <c>closed</c>). An
+    /// <c>reclaim</c>, <c>shard_migration</c> or <c>range_delete</c>) and <see cref="TagOutcome"/> (<c>opened</c> or <c>closed</c>). An
     /// open marker holds the owners it covers on the replay-based advance until its
     /// close's fence returns heads they replay to; opened minus closed is the number
     /// in flight, and a gap that does not close means a hand-off whose recovery has not
@@ -11573,7 +11573,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> WalAppendFenceHandOffMarkers =
         Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.handoff_markers", unit: "{marker}",
-            description: "Hand-off markers opened and closed by their fence (epic #5605), by tree, kind (split, reclaim, shard_migration, range_delete, bulk) and outcome (opened or closed).");
+            description: "Hand-off markers opened and closed by their fence (epic #5605), by tree, kind (split, reclaim, shard_migration or range_delete) and outcome (opened or closed).");
 
     /// <summary>Records one hand-off marker of <paramref name="kind"/> opened or closed on <paramref name="treeId"/>.</summary>
     internal static void RecordHandOffMarker(string kind, bool opened, string treeId) =>
