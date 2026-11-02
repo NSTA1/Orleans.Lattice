@@ -258,8 +258,26 @@ public sealed class GoingMultiRegionJourney : JourneyChapter
                 await west.SubstepAsync(recorder, "7", "west-live-keys", "A7.7 - West's factory-orders and its live-key count");
 
                 // East converges on west's live keys, the seeded orders included, once the bootstrap
-                // A7.3 asked for has run (#5594).
+                // A7.3 asked for has run (#5594). East's directory is the catalogue its circuit read
+                // at sign-in, before east held factory-orders, so reload until the tree is listed.
                 await eastData.OpenDirectoryAsync();
+                var listedBy = DateTime.UtcNow + Convergence;
+                while (true)
+                {
+                    try
+                    {
+                        // The reloaded directory loads its catalogue asynchronously; give each read time to land.
+                        await eastData.TreeLink(orders).WaitForAsync(new() { Timeout = 15_000 });
+                        break;
+                    }
+                    catch (TimeoutException)
+                    {
+                        Assert.That(DateTime.UtcNow, Is.LessThan(listedBy), $"east's Data directory lists {orders} once its bootstrap has created it");
+                        await eastData.ReloadAsync();
+                        await east.Shell.ExpectHeadingAsync("Data");
+                    }
+                }
+
                 await eastData.OpenTreeAsync(orders);
                 long eastKeys = -1;
                 var deadline = DateTime.UtcNow + Convergence;
