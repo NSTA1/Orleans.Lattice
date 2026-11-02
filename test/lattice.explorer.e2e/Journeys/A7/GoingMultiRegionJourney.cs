@@ -284,8 +284,8 @@ public sealed class GoingMultiRegionJourney : JourneyChapter
                 await eastData.OpenTreeAsync(orders);
                 long eastKeys = -1;
 
-                // The story estate is far busier than an isolated one, and east's import there has
-                // been seen to go through two automatic re-seeds, so it gets a wider window (#5676).
+                // The story estate is far busier than an isolated one, and east's import there
+                // goes through automatic re-seeds, so it gets a wider window.
                 var story = context.Mode == JourneyRunMode.Story;
                 var started = DateTime.UtcNow;
                 var deadline = started + (story ? StoryConvergence : Convergence);
@@ -305,22 +305,7 @@ public sealed class GoingMultiRegionJourney : JourneyChapter
                 }
 
                 TestContext.Progress.WriteLine($"A7.7: west holds {westKeys} live keys in {orders}, east {eastKeys}");
-                if (story && eastKeys != westKeys)
-                {
-                    // Story only: isolated A7 stays strict. The shortfall's cause is unproven; #5676
-                    // (alias-addressed writes ship under the alias id) is the open lead.
-                    var (westCount, eastCount) = (westKeys, eastKeys);
-                    TestContext.Progress.WriteLine($"A7.7 (#5676): east's factory-orders did not converge on west's within {StoryConvergence.TotalMinutes:0} min: west {westCount}, east {eastCount} live keys");
-                    await new KnownDefect("#5676", "in the story estate east's factory-orders does not converge on west's live keys within the story window").ReproducesAsync(() =>
-                    {
-                        Assert.That(eastCount, Is.Not.EqualTo(westCount));
-                        return Task.CompletedTask;
-                    });
-                }
-                else
-                {
-                    Assert.That(eastKeys, Is.EqualTo(westKeys), "east's factory-orders holds as many live keys as west's");
-                }
+                Assert.That(eastKeys, Is.EqualTo(westKeys), "east's factory-orders holds as many live keys as west's");
 
                 Assert.That(eastKeys, Is.GreaterThanOrEqualTo(Names.Orders.SeededCount), "east holds at least the 240 seeded orders");
 
