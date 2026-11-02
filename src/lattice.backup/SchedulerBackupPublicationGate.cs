@@ -23,9 +23,10 @@ namespace Orleans.Lattice.Backup;
 /// </para>
 /// <para>
 /// An operator delete runs its short first step - removing the catalog row and
-/// reserving the id - in the grain, and deletes the artifacts and sink manifest
+/// reserving the id by a lease of its own - in the grain, deletes the artifacts
 /// here, outside any grain call, so a large backup cannot outlast the grain
-/// response timeout (issue #5628).
+/// response timeout (issue #5628), and ends in the grain, which deletes the sink
+/// manifest under the id's hold (issue #5631).
 /// </para>
 /// </remarks>
 /// <param name="grainFactory">Reaches the scheduler grains.</param>
@@ -87,13 +88,23 @@ internal sealed class SchedulerBackupPublicationGate(
 
         try
         {
-            await publisher.CompleteDeleteAsync(start.Manifest).ConfigureAwait(false);
+            await publisher.DeleteArtifactsAsync(start.Manifest).ConfigureAwait(false);
         }
-        finally
+        catch
         {
-            await scheduler.EndDeleteAsync(row.Id).ConfigureAwait(false);
+            // The sink manifest stays, so a retry finds it and finishes (#5334).
+            await scheduler.EndDeleteAsync(row.Id, start.Token, finish: false).ConfigureAwait(false);
+            throw;
         }
 
+        // The sink manifest is deleted in the grain, under the id's hold (#5631).
+        await RetryAsync(
+                () => scheduler.EndDeleteAsync(row.Id, start.Token, finish: true),
+                o => o == BackupRetireOutcome.Busy,
+                row.Id,
+                options.Value,
+                cancellationToken)
+            .ConfigureAwait(false);
         return true;
     }
 

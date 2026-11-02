@@ -360,18 +360,20 @@ an executed production analogue above.
   `BackupIdClaim` checks a retire of an id against publishes in two scopes. A
   scrub retires its id, so a pass never dooms it meanwhile and a publish of it
   waits, and re-probes under the hold, keeping a row a capture made resolvable
-  again. An operator delete removes the row and reserves the id by a lease in one
-  short grain call, then deletes the artifacts and finally the sink manifest
-  outside the grain, so a large delete never outlasts the grain response timeout
-  (#5628), and a retry of an interrupted delete finds the sink manifest and
-  finishes (#5334); while the lease holds, no pass dooms the id and no publish of
-  it proceeds. A rebuild registers through the publish path, re-reading the
+  again. An operator delete removes the row and reserves the id by a lease of
+  its own in one short grain call, deletes the artifacts outside the grain, so a
+  large delete never outlasts the grain response timeout (#5628), and ends in the
+  grain, under the hold, deleting the sink manifest there only while no row lists
+  the id and the manifest is still its scope's (#5631); a retry of an interrupted
+  delete finds the sink manifest and finishes (#5334). While any delete's lease
+  holds, no pass dooms the id and no publish of it proceeds; `BackupIdClaim`
+  models two overlapping deletes. A rebuild registers through the publish path, re-reading the
   manifest and listing it only while it is still in the sink. A delete therefore
   no longer races a pass on the same id, a rebuild no longer re-lists a row a pass
   or a delete has emptied, and a member a rebuild lists before its stamp is still
   held from every pass. A pass interrupted after removing rows still leaves
   backups that only a rebuild lists again.
-  Production symbols: `LatticeBackupControl.DeleteBackupAsync`, `LatticeBackupCatalogRebuildService`, `LatticeBackupCatalogScrubService`, `BackupSchedulerGrain.RetireAsync`, `BackupSchedulerGrain.BeginDeleteAsync`, `BackupSchedulerGrain.EndDeleteAsync`, `BackupPublisher.CompleteDeleteAsync`, `LatticeBackupOptions.DeleteLease`.
+  Production symbols: `LatticeBackupControl.DeleteBackupAsync`, `LatticeBackupCatalogRebuildService`, `LatticeBackupCatalogScrubService`, `BackupSchedulerGrain.RetireAsync`, `BackupSchedulerGrain.BeginDeleteAsync`, `BackupSchedulerGrain.EndDeleteAsync`, `BackupPublisher.DeleteArtifactsAsync`, `BackupPublisher.FinishDeleteAsync`, `LatticeBackupOptions.DeleteLease`.
 - **A set member's hold outlives a lost capture by a lease.** The model's
   `CaptureCrash` resets a set member awaiting its stamp, which takes it out of
   `Busy` at once. Production cannot see a capturing silo die: the member's hold

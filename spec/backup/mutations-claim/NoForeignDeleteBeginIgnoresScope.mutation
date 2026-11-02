@@ -1,0 +1,17 @@
+# Pairs with NoForeignDelete. A delete that read scope A's row, then reached
+# A's grain after B had taken the retired id, removes B's row because it does
+# not check whose backup the id now names.
+MODULE: NoForeignDeleteBeginIgnoresScope
+TARGET: NoForeignDelete
+CLASS: Action
+SUMMARY: a delete removes the id's row whichever scope it is
+PERTURBS: DelBegin
+
+--- FIND
+    /\ IF Owner = "A"
+       THEN /\ row' = IF row = "A" THEN "none" ELSE row
+--- REPLACE
+    \* MUTATION: the delete does not check whose backup the id names.
+    /\ IF Owner # "none"
+       THEN /\ row' = "none"
+--- END

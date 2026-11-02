@@ -21,7 +21,7 @@ extracted production cores, and - just as importantly - what is not.
 | Coordinated restore | A restore of a replicated tree is all-or-nothing across regions; no pre-restore write ever reaches a restored copy; a restore never installs another tenant's records; replication resumed after a restore converges. | `BackupRestore` |
 | Local cutover and revert | A reader never pairs one physical copy with another copy's shard map; once a restore returns every reader sees the restored copy, and once a revert returns none does, however stale its routing; a tree is never deleted while its copies are in motion; a restore, or a revert, that crashes part-way still completes on retry. | `BackupCutover` |
 | Retention pruning | Every backup the catalog lists, and in particular every backup the retention policy keeps, with its whole base chain, stays restorable while full and incremental captures of the same scope run alongside the pruning and either side crashes at any step; an incremental backup is published only while its base is restorable; nothing the policy keeps is pruned; and a backup outside the policy that nothing builds on is eventually pruned. | `BackupRetention` |
-| Backup id ownership | Identical content captured in two scopes never shares one backup: a capture never publishes over another scope's backup under the content-addressed id, even while the owning scope is retiring that id, so a backup's catalog row and stored manifest always name the scope that captured it. | `BackupIdClaim` |
+| Backup id ownership | Identical content captured in two scopes never shares one backup: a capture never publishes over another scope's backup under the content-addressed id, even while the owning scope is retiring that id, so a backup's catalog row and stored manifest always name the scope that captured it; and overlapping deletes of one backup never remove a backup a capture listed again meanwhile, or another scope's backup under the id. | `BackupIdClaim` |
 
 Every property is paired with a deliberate defect (a mutation) that must make
 TLC report it, and every protocol step of each specification is perturbed by at
@@ -135,8 +135,9 @@ not to hold in production:
   while that scope's own retention or delete removed the id; another scope's
   capture of identical content then took the id, and the waiting capture
   published over it. The owning scope's capture now holds its claim on the id for
-  as long as it publishes. Found by the confirmation review; checked by
-  `BackupIdClaim`.
+  as long as it publishes, and the claim is stored, so it survives the claiming
+  service being restarted or moved (#5632, fixed). Found by the confirmation
+  review; checked by `BackupIdClaim`.
 - **A large operator delete timed out (#5628, fixed).** A delete ran inside one
   call to the scope's scheduler, which a large backup or catalog could outlast,
   skipping the health cleanup; and a retry of an interrupted delete did not finish
@@ -146,6 +147,14 @@ not to hold in production:
 - **A backup set member whose capture died stayed exempt from retention
   (#5629, fixed).** The member's hold now lapses after a lease. Found by the
   confirmation review.
+- **Two overlapping deletes of one backup could leave a listed backup with no
+  stored manifest (#5631, fixed).** A retried or double-submitted delete shared
+  one reservation of the backup id with the first, which released it on
+  finishing; a capture of identical content then republished the backup, and the
+  second delete removed its stored manifest. Each delete now holds its own
+  reservation and removes the stored manifest in the scheduler, only while no
+  catalog row lists the backup and the manifest is still its scope's. Found by
+  the confirmation review; checked by `BackupIdClaim`.
 
 ## Which parts run in production code
 
@@ -185,9 +194,10 @@ Coverage of one half must not be read as coverage of the other. Not covered:
 - the receiver side of cross-cluster atomic batches, which the atomic-commit
   cross-cluster module checks ([formal coverage](../lattice/formal-coverage.md));
 - an operator's explicit backup delete, which removes the named backup whatever
-  builds on it, and catalog rebuild and scrub, which take the same per-backup
-  hold as a retention pass and a capture but are not modelled as steps beyond
-  the retire `BackupIdClaim` checks;
+  builds on it - `BackupIdClaim` checks overlapping deletes against captures, but
+  not what a delete does to increments built on the backup - and catalog rebuild
+  and scrub, which take the same per-backup hold as a retention pass and a
+  capture but are not modelled as steps;
 - a cluster part-way through a rolling upgrade from 10.2.0, whose old silos
   publish and prune without the per-backup hold (see the upgrade note in
   [configuration](configuration.md#upgrading-from-1020));

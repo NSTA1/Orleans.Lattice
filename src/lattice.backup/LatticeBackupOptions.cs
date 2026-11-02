@@ -121,9 +121,13 @@ public sealed class LatticeBackupOptions
 
     /// <summary>
     /// How long an operator delete keeps its backup id reserved while it deletes
-    /// the backup's artifacts and sink manifest outside the scheduler grain (issue
-    /// #5628). The delete releases it when it finishes or fails; the lease bounds
-    /// the reservation when the caller is lost part-way.
+    /// the backup's artifacts outside the scheduler grain (issue #5628). The delete
+    /// releases it when it finishes or fails; the lease bounds the reservation when
+    /// the caller is lost part-way. Shorter than
+    /// <see cref="PublishHoldTimeout"/>, so a capture that waits on a lost
+    /// delete's lease outlasts it rather than failing. A lease that runs out while
+    /// its delete still runs is safe: the delete deletes the sink manifest under
+    /// the id's hold, and keeps it when a capture has republished the id (#5631).
     /// </summary>
-    internal TimeSpan DeleteLease { get; set; } = TimeSpan.FromMinutes(30);
+    internal TimeSpan DeleteLease { get; set; } = TimeSpan.FromMinutes(10);
 }

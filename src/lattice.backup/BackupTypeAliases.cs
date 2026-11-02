@@ -114,4 +114,10 @@ internal static class BackupTypeAliases
 
     /// <summary>Alias for <see cref="BackupDeleteStart"/>.</summary>
     internal const string BackupDeleteStart = "olb.ds";
+
+    /// <summary>Alias for <see cref="BackupIdClaimState"/>.</summary>
+    internal const string BackupIdClaimState = "olb.ic";
+
+    /// <summary>Alias for <see cref="BackupIdPendingClaim"/>.</summary>
+    internal const string BackupIdPendingClaim = "olb.ip";
 }

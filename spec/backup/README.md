@@ -23,8 +23,8 @@ overlapping, which also keeps every module's TLC run small:
 | [`BackupProvenance`](BackupProvenance.tla) | What a chain records: per-origin provenance, the #2621 empty-origin rule, and the chain's HLC frontier (#3758). | A local and a replicated origin, three writes, a chain of three links. |
 | [`BackupRestore`](BackupRestore.tla) | A coordinated restore across two regions, its per-record admission, and the replication that resumes after it, with delivery split into a cached-gate admission and a later landing, a causal-apply buffer, and the restored copy's receive fence (#4593). | Two clusters, two copies each, a backup with one admitted and one foreign record, two application writes, one saga (receive-fence epochs 0 and 1). |
 | [`BackupCutover`](BackupCutover.tla) | A local shadow-cutover restore and its revert: the alias and shard map that move together, the redirects that heal stale routing, the alias reservation, and a crash with a retry. | One tree, two copies, one stale routing cache, one crash. |
-| [`BackupRetention`](BackupRetention.tla) | Retention pruning racing full and incremental captures of the same scope: the keep set and its base closure, the pass's row-first delete and dependent scan, the increment's base re-check, tip-first deletion, one pass at a time with its listing read under the guard, a content-addressed id republished under a per-id hold with a refreshed ranking, a set member listed only once it is stamped, and a crash at any step (#5357, #5412, #5418, #5449). |
-| [`BackupIdClaim`](BackupIdClaim.tla) | Which scope owns a full backup's bare content-addressed id: the claim grain's per-capture claims, each scope's per-id hold, and a retire of the id by its owning scope, so no publish replaces another scope's backup under it (#5620, #5627). | Two scopes, three captures of identical content (two in one scope), one retire. | Three backup ids, two capture slots, one retention pass (two in the `TwoPasses` variant), a clock of two ticks, one crash, keep-last of at most one and max-age of one tick. |
+| [`BackupRetention`](BackupRetention.tla) | Retention pruning racing full and incremental captures of the same scope: the keep set and its base closure, the pass's row-first delete and dependent scan, the increment's base re-check, tip-first deletion, one pass at a time with its listing read under the guard, a content-addressed id republished under a per-id hold with a refreshed ranking, a set member listed only once it is stamped, and a crash at any step (#5357, #5412, #5418, #5449). | Three backup ids, two capture slots, one retention pass (two in the `TwoPasses` variant), a clock of two ticks, one crash, keep-last of at most one and max-age of one tick. |
+| [`BackupIdClaim`](BackupIdClaim.tla) | Which scope owns a full backup's bare content-addressed id: the claim grain's persisted per-capture claims, each scope's per-id hold, a retention pass of the id by its owning scope, and overlapping operator deletes of it, each with a lease of its own and a fenced, scope-checked manifest delete, so no publish replaces another scope's backup under it and no delete removes a backup a publish listed or another scope owns (#5620, #5627, #5631, #5632). | Two scopes, three captures of identical content (two in one scope), one retention pass and two operator deletes in the owning scope. |
 
 An increment needs the WAL's partitions and offsets, which no other capture
 question does, so it is a module of its own rather than a third capture kind in
@@ -83,9 +83,11 @@ fixed in the anti-entropy digest); it checks every fix it models. See
 | | `InFlightBaseSurvives` | Action | An increment is published only while its base is restorable. |
 | | `KeepPolicyHonoured` | Action | Nothing the policy keeps is pruned. |
 | | `ExpiredEventuallyPruned` | Liveness | A listed backup outside the policy that nothing builds on is eventually pruned. |
-| `BackupIdClaim` | `ListedInSink` | Invariant | A retire never deletes the manifest of a row its scope's publish registered meanwhile. |
+| `BackupIdClaim` | `ListedInSink` | Invariant | A retire or a delete never deletes the manifest of a row a publish registered meanwhile. |
 | | `ScopeAgreement` | Invariant | The bare id's catalog row and sink manifest name one scope. |
+| | `DeleteFence` | Invariant | While a delete of the id is in progress and its lease is live, no publish of the id in its scope runs. |
 | | `NoForeignOverwrite` | Action | No publish replaces another scope's backup under the bare id. |
+| | `NoForeignDelete` | Action | No delete in one scope removes another scope's backup under the bare id. |
 | `BackupCutover` | `RestoreNeverTorn` | Invariant | A reader never pairs one copy with another copy's shard map. |
 | | `CutoverServesRestored` | Invariant | Once a restore returns, every reader is served the restored copy. |
 | | `RevertNeverServesRestored` | Invariant | Once a revert returns, no reader is served the restored copy. |
@@ -235,8 +237,25 @@ refinement note's rows:
   retention for as long as the scheduler activation lived. The hold is now a
   lease, as the model's crash already releases it. Pinned by a regression test
   shown red in CI before the fix.
+- **#5631** (`BackupIdClaim`, fixed): overlapping operator deletes of one id - a
+  retry after a timeout, a double submission - shared one lease, which the first
+  to end removed, and each deleted the sink manifest outside the grain,
+  unconditionally. A capture of identical content republished the id as soon as
+  the first delete ended, and the second then deleted the republished manifest,
+  leaving a listed backup with nothing in the sink; a single delete whose lease
+  ran out reached the same state. Found by the confirmation review (#5352). Each
+  delete now holds a lease of its own and deletes the sink manifest in the grain,
+  under the hold, only while no row lists the id and the manifest is still its
+  scope's; a delete that reaches an id another scope has since taken leaves it
+  alone. `ListedInSinkJoinedDeleteSharedLease` and `DeleteFenceEndClearsEveryLease`
+  reproduce production before it.
+- **#5632** (`BackupIdClaim`, fixed): the claim grain kept its claims in
+  activation memory only, so losing its activation while an owning scope's
+  capture waited on its hold reopened #5627. The claims are now persisted. Pinned
+  by a regression test, shown red in CI before the fix, that deactivates the claim
+  grain mid-publish.
 
-All fifteen fixes have landed, so the reproducing mutations now stand as
+All seventeen fixes have landed, so the reproducing mutations now stand as
 regression checks: each must keep firing, and each has a code analogue that turns
 the fix's regression tests red.
 ## Saga abstraction
@@ -284,4 +303,4 @@ notes and TLC's own state counts.
 | `BackupRestore` | 5 | 1 | 16 | 20 | 20 | 22,700 |
 | `BackupCutover` | 5 | 2 | 10 | 12 | 16 | 39 |
 | `BackupRetention` | 5 | 3 | 18 | 28 | 24 | 2,680,648 |
-| `BackupIdClaim` | 3 | 1 | 8 | 9 | 10 | 174 |
+| `BackupIdClaim` | 4 | 2 | 11 | 16 | 14 | 1,928 |

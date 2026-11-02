@@ -8,8 +8,10 @@ PERTURBS: Acquire
 
 --- FIND
        /\ held[s] = "free"
+       /\ s = "A" => ~Leased
        /\ held' = [held EXCEPT ![s] = "pub"]
 --- REPLACE
        \* MUTATION: no wait on the scope's hold.
+       /\ s = "A" => ~Leased
        /\ held' = [held EXCEPT ![s] = IF @ = "ret" THEN "ret" ELSE "pub"]
 --- END

@@ -1535,7 +1535,7 @@
         "source": "src/lattice.api.backup/LatticeBackupControl.cs#LatticeBackupControl.DeleteBackupAsync"
       },
       "concurrency": {
-        "rule": "Delete removes the catalog row and reserves the backup id in the scope's scheduler grain, so no retention pass or capture acts on that id until it finishes; it then deletes the backup's unshared artifacts, keeping every artifact still referenced by another catalogued manifest, and finally the sink manifest, outside the grain.",
+        "rule": "Delete removes the catalog row and reserves the backup id in the scope's scheduler grain, so no retention pass or capture acts on that id until it finishes; overlapping deletes of one id each hold their own reservation. It then deletes the backup's unshared artifacts outside the grain, keeping every artifact still referenced by another catalogued manifest, and finally deletes the sink manifest in the grain, only while no catalog row lists the id and the manifest is still the deleting scope's.",
         "source": "src/lattice.api.backup/LatticeBackupControl.cs#LatticeBackupControl.DeleteBackupAsync"
       },
       "sources": [
