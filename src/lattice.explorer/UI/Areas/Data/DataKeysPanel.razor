@@ -38,7 +38,12 @@
                       Hint="@(_mode != EntryScanMode.Live ? "A snapshot never changes, so live updates follow live scans only." : null)" />
         }
         <span class="lt-data-toolbar__status" role="status">@RangeText</span>
+        @if (_treeRights.CanWrite)
+        {
+            <LtButton OnClick="OpenCreate" data-lt-command="@DataEntryCommands.NewEntryId">New entry...</LtButton>
+        }
     </div>
+    <DataEntryEditor Open="_creating" OpenChanged="open => _creating = open" OnSaved="OnCreated" />
 
     @if (_liveNote is not null)
     {

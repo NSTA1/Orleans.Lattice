@@ -57,7 +57,7 @@ public sealed class ApiBackupClusterFixture
     /// An optional <paramref name="tenantResolver"/> substitutes the silo's
     /// registered resolver so tenant composition can be driven without hosting the
     /// tenancy add-on. An optional <paramref name="services"/> substitutes the
-    /// silo's service provider, so a test can front a silo service.
+    /// silo service provider the facade resolves its optional seams from.
     /// </summary>
     internal ILatticeBackupControl CreateControlWith(
         BackupAccessAuthorizer authorizer,

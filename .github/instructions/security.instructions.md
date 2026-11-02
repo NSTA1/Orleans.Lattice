@@ -169,6 +169,46 @@ gate will tell you if you forget.
   `PermissionDenied`, compared in constant time. An estate running an asymmetric
   per-peer secret scheme must set it to `false`, and must then not rely on a claimed
   origin for any security decision.
+- A coordinated-restore participant acting on a **remote** coordinator's saga runs
+  its restore steps under system origin (peer authority), because the operator was
+  authorized on the coordinator cluster and the saga carries no user identity
+  (#5443). `RestoreParticipant.HasPeerAuthority` grants it only when every seam is
+  wired, the received coordinator id - the credential-bound origin the saga service
+  stamped, never a body value - is a remote cluster in the current replication
+  topology, the target (or each set member) is locally enrolled, and every tree the
+  backup chain was captured from is the target or a locally replicated tree
+  (`RestoreAdmissionReport.SourceTreeIds`; an empty list is unknown and refused).
+  A failed elevated probe and an unreplicated source return the same refusal text to
+  the peer, so the elevated probe is not an existence oracle, and a commit that must
+  rebuild a lost shadow re-checks the sources before replaying anything.
+  Anything else runs as the ambient caller and is authorized as such, including this
+  cluster's own coordinator - with one exception (#5506): a commit or abort of this
+  cluster's **own** saga runs under system origin
+  (`RestoreParticipant.ResolveStepAuthorityAsync`) only on two pieces of local
+  evidence, never on a request field. The first is the decision: this cluster's own
+  `CrossClusterSagaCoordinatorGrain` for the saga id has durably recorded the matching
+  decision (Commit for a commit, Abort for an abort), read from its immutable status
+  snapshot; a coordinator that never started the saga, an undecided one, and a
+  status read that fails all grant nothing. The second is the cached shadow: only a
+  shadow build that succeeded in this process, authorized as its caller (`Restore`
+  over the target and `Backup` over every captured source), puts it there, and the
+  elevated step acts only on that shadow, never on a tree or backup the request
+  names. The request's `CoordinatorClusterId` only selects which check applies, and
+  a commit that names this cluster without a durable Commit decision is refused
+  (`UnauthorizedAccessException`) before any fence or swap, whatever identity it
+  arrives with, because no commit legitimately precedes the decision and cutting
+  over a saga a peer may still abort breaks cross-cluster atomicity. An abort
+  without a durable Abort decision is not refused (an operator compensating is the
+  repair path) but runs as the ambient caller. The exception exists because the
+  decision is redelivered by the coordinator's keepalive reminder or the
+  participant's fence expiry with no user identity, and refusing it as anonymous
+  after the write fence engaged left the tree fenced with the saga unable to finish.
+  A participant that lost the cache rebuilds as the ambient caller; a missing
+  options seam is a refusal. A failed cutover unblocks the
+  tree's local writes before the failure propagates, so the decision is redelivered
+  without the tree staying fenced. Do not widen it to other saga participants, or
+  move it to the saga service or participant grain, where it would elevate
+  host-registered participants too.
 
 ### Identity-directory validation (`src/lattice.membership`, `src/lattice.api.auth`)
 - Administrative membership-reference create paths (`UpsertGroupAsync`,

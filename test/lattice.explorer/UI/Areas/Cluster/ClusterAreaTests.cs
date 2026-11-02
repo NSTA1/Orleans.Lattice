@@ -23,7 +23,7 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Cluster;
 /// </summary>
 [TestFixture]
 [FixtureLifeCycle(LifeCycle.InstancePerTestCase)]
-public sealed class ClusterAreaTests
+public sealed partial class ClusterAreaTests
 {
     private readonly FakeExplorerSession _session = new FakeExplorerSession(new FakeStateConnection()).Configured(SessionTestContext.RemoteConfiguration());
     private readonly ILatticeTreeAdmin _admin = Substitute.For<ILatticeTreeAdmin>();
@@ -79,7 +79,7 @@ public sealed class ClusterAreaTests
         {
             Assert.That(first, Is.EqualTo(AreaAvailability.Hidden));
             Assert.That(second, Is.EqualTo(AreaAvailability.Hidden));
-            Assert.That(_admin.ReceivedCalls().Count(), Is.EqualTo(1));
+            Assert.That(_admin.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(ILatticeTreeAdmin.GetStorageUsageAsync)), Is.EqualTo(1));
         });
     }
 

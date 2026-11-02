@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// an unreachable peer, and the committed / aborted saga outcomes.
 /// </summary>
 [TestFixture]
-public class RestoreSagaDispatcherTests
+public partial class RestoreSagaDispatcherTests
 {
     private const string TargetTree = "orders";
     private const string BackupId = "backup-1";
@@ -64,8 +64,7 @@ public class RestoreSagaDispatcherTests
         }
 
         var coordinator = Substitute.For<ICrossClusterSagaCoordinatorGrain>();
-        coordinator.RunAsync(Arg.Any<List<string>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>())
-            .Returns(Task.FromResult(outcome));
+        SagaCoordinatorStub.CompletesWith(coordinator, outcome);
 
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<ICrossClusterSagaCoordinatorGrain>(Arg.Any<string>()).Returns(coordinator);
@@ -79,7 +78,11 @@ public class RestoreSagaDispatcherTests
 
         var dispatcher = new RestoreSagaDispatcher(
             membership, topology, engine, capacity, channel, factory, participant, options,
-            NullLogger<RestoreSagaDispatcher>.Instance);
+            NullLogger<RestoreSagaDispatcher>.Instance)
+        {
+            StatusPollInterval = TimeSpan.Zero,
+            RedriveInterval = TimeSpan.Zero,
+        };
 
         return new Harness
         {
@@ -100,7 +103,7 @@ public class RestoreSagaDispatcherTests
 
         Assert.That(result, Is.Null, "an unreplicated target takes the local path");
         Assert.That(h.Engine.ProbeCount, Is.EqualTo(0), "the fast local path avoids manifest I/O");
-        await h.Coordinator.DidNotReceive().RunAsync(
+        await h.Coordinator.DidNotReceive().BeginAsync(
             Arg.Any<List<string>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>());
     }
 
@@ -127,7 +130,7 @@ public class RestoreSagaDispatcherTests
         Assert.That(result, Is.Not.Null);
         Assert.That(result!.TargetTreeId, Is.EqualTo(TargetTree));
         Assert.That(result.Mode, Is.EqualTo(LatticeRestoreMode.ShadowCutover));
-        await h.Coordinator.Received(1).RunAsync(
+        await h.Coordinator.Received(1).BeginAsync(
             Arg.Is<List<string>>(l => l.Contains(Self) && l.Contains(Peer)),
             TargetTree, BackupId, Self);
     }
@@ -144,7 +147,7 @@ public class RestoreSagaDispatcherTests
 
         Assert.That(result, Is.Not.Null);
         Assert.That(h.Engine.ProbeCount, Is.GreaterThanOrEqualTo(1));
-        await h.Coordinator.Received(1).RunAsync(
+        await h.Coordinator.Received(1).BeginAsync(
             Arg.Any<List<string>>(), TargetTree, BackupId, Self);
     }
 
@@ -156,7 +159,7 @@ public class RestoreSagaDispatcherTests
 
         Assert.That(async () => await h.Dispatcher.TryDispatchAsync(request),
             Throws.InstanceOf<LatticeRestoreValidationException>());
-        h.Coordinator.DidNotReceive().RunAsync(
+        h.Coordinator.DidNotReceive().BeginAsync(
             Arg.Any<List<string>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>());
     }
 
@@ -193,7 +196,7 @@ public class RestoreSagaDispatcherTests
 
         Assert.That(async () => await h.Dispatcher.TryDispatchAsync(request),
             Throws.InstanceOf<LatticeRestoreValidationException>());
-        h.Coordinator.DidNotReceive().RunAsync(
+        h.Coordinator.DidNotReceive().BeginAsync(
             Arg.Any<List<string>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>());
     }
 

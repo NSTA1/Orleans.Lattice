@@ -1,4 +1,5 @@
 using Bunit;
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Explorer.UI.Layout;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
@@ -42,7 +43,7 @@ public sealed class ShellPagesTests : ShellChromeTestContext
     }
 
     [Test]
-    public void Home_statuses_arrive_independently_and_a_slow_one_is_dropped_at_its_timeout()
+    public void Home_statuses_arrive_independently_and_a_slow_one_says_it_could_not_be_checked()
     {
         var slow = new TaskCompletionSource<string?>();
         var data = new FakeArea("data", "Data", 1) { HomeStatus = _ => new ValueTask<string?>(slow.Task) };
@@ -55,10 +56,50 @@ public sealed class ShellPagesTests : ShellChromeTestContext
             TenancyActive: false)));
 
         cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-shell-estate__status").Select(status => status.TextContent), Is.EqualTo(new[] { "4 installed" })));
+        Assert.That(cut.FindAll("[data-lt-area-recheck]"), Is.Empty, "nothing is waiting to be checked yet");
 
         cut.InvokeAsync(() => Time.Advance(new ExplorerChromeOptions().HomeStatusTimeout));
 
-        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-shell-estate__status"), Has.Count.EqualTo(1)));
+        cut.WaitUntil(() =>
+        {
+            Assert.That(
+                cut.FindAll(".lt-shell-estate__status").Select(status => status.TextContent),
+                Is.EqualTo(new[] { ExplorerAreaStatus.UncheckedText, "4 installed" }));
+            Assert.That(cut.Find("[data-lt-area-status=unchecked]").ClassList, Does.Contain("lt-shell-estate__status--unavailable"));
+            Assert.That(cut.Find("[data-lt-area-recheck]").GetAttribute("role"), Is.EqualTo("status"));
+        });
+    }
+
+    [Test]
+    public void Home_keeps_an_area_it_could_not_check_listed_says_so_and_offers_to_check_again()
+    {
+        var access = new FakeArea("access", "Access", 1);
+        var replication = new FakeArea("replication", "Replication", 2) { HomeStatus = _ => ValueTask.FromResult<string?>("2 peer regions, 4 links") };
+        var directory = Services.GetRequiredService<ExplorerAreaDirectory>();
+        var changed = 0;
+        directory.Changed += () => changed++;
+
+        var cut = Render<HomePage>(parameters => parameters.AddCascadingValue(new ExplorerLocation(
+            ExplorerAddress.Home,
+            [new(access, AreaAvailability.Unchecked), new(replication, AreaAvailability.Visible) { IsStale = true }],
+            EntriesLoaded: true,
+            TenancyActive: false)));
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.FindAll(".lt-shell-estate__name").Select(name => name.TextContent), Is.EqualTo(new[] { "Access", "Replication" }));
+            Assert.That(cut.FindAll("li[data-lt-area-state]").Select(stop => stop.GetAttribute("data-lt-area-state")), Is.EqualTo(new[] { "unchecked", "stale" }));
+            Assert.That(cut.FindAll(".lt-shell-estate__status").Select(status => status.TextContent), Is.EqualTo(new[]
+            {
+                AreaAvailability.UncheckedReason,
+                "2 peer regions, 4 links",
+                HomePage.StaleNote,
+            }));
+        });
+
+        cut.Find("[data-lt-area-recheck] button").Click();
+
+        Assert.That(changed, Is.EqualTo(1), "Check again asks every area again at once");
     }
 
     [Test]

@@ -74,6 +74,14 @@ internal sealed class SessionChromeState : IDisposable
     public SessionOverlayKind Overlay { get; private set; }
 
     /// <summary>
+    /// The notice the sign-in dialog opens with - why the last sign-in did not take,
+    /// for example that the cluster did not accept the username and password - or
+    /// <see langword="null"/> when it opens without one. Cleared when the overlay
+    /// closes or another surface opens.
+    /// </summary>
+    public string? SignInNotice { get; private set; }
+
+    /// <summary>
     /// Whether the current sign-in can no longer be renewed silently and the
     /// operator must sign in again. It outranks every other session surface.
     /// </summary>
@@ -89,11 +97,38 @@ internal sealed class SessionChromeState : IDisposable
     public Task EnsureInitializedAsync(CancellationToken cancellationToken = default) =>
         _initialization ??= InitializeCoreAsync(cancellationToken);
 
-    /// <summary>Asks for the connection settings.</summary>
+    /// <summary>
+    /// Asks for the connection dialog: the editable settings, or the read-only
+    /// details on a head that refuses browser-driven endpoint configuration.
+    /// </summary>
     public void OpenConfiguration() => SetOverlay(SessionOverlayKind.Configuration);
 
     /// <summary>Asks for the sign-in dialog.</summary>
     public void OpenSignIn() => SetOverlay(SessionOverlayKind.SignIn);
+
+    /// <summary>
+    /// Asks for the sign-in dialog, opening with <paramref name="notice"/> - why the
+    /// last sign-in did not take.
+    /// </summary>
+    /// <param name="notice">The notice to open with. Must not carry the credential.</param>
+    /// <exception cref="ArgumentException"><paramref name="notice"/> is null, empty or whitespace.</exception>
+    public void OpenSignInWithNotice(string notice)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(notice);
+        if (Overlay == SessionOverlayKind.SignIn && string.Equals(SignInNotice, notice, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (Overlay != SessionOverlayKind.SignIn)
+        {
+            OverlayOpening?.Invoke(SessionOverlayKind.SignIn);
+        }
+
+        SignInNotice = notice;
+        Overlay = SessionOverlayKind.SignIn;
+        Changed?.Invoke();
+    }
 
     /// <summary>Closes whichever session surface is open.</summary>
     public void CloseOverlay() => SetOverlay(SessionOverlayKind.None);
@@ -125,6 +160,7 @@ internal sealed class SessionChromeState : IDisposable
             OverlayOpening?.Invoke(overlay);
         }
 
+        SignInNotice = null;
         Overlay = overlay;
         Changed?.Invoke();
     }

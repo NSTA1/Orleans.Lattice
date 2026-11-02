@@ -234,6 +234,8 @@ public static class ReplicationTypeAliases
 
     /// <summary>Alias for <see cref="CrossClusterSagaDecision"/>.</summary>
     internal const string CrossClusterSagaDecision = "olr.zd";
+    /// <summary>Alias for <see cref="Replication.CrossClusterSagaStatus"/>.</summary>
+    internal const string CrossClusterSagaStatus = "olr.zt";
 
     /// <summary>Alias for the cross-cluster saga coordinator grain interface.</summary>
     internal const string ICrossClusterSagaCoordinatorGrain = "olr.zg";
@@ -380,4 +382,14 @@ public static class ReplicationTypeAliases
 
     /// <summary>Alias for <see cref="LatticeBootstrapSourceMismatchException"/>.</summary>
     internal const string LatticeBootstrapSourceMismatchException = "olr.bm";
+
+    // The cluster-wide runtime replication-configuration epoch (#5462): advanced
+    // after a sys-replication-config write so every silo's compiled snapshot
+    // follows a write committed on another silo.
+
+    /// <summary>Alias for the cluster-wide replication-configuration epoch grain interface.</summary>
+    internal const string IReplicationConfigEpochGrain = "olr.eg";
+
+    /// <summary>Alias for <see cref="Replication.ReplicationConfigEpoch"/>.</summary>
+    internal const string ReplicationConfigEpoch = "olr.ey";
 }

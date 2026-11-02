@@ -139,6 +139,19 @@ internal sealed class LatticeReplicationControl : ILatticeReplicationControl, IL
     }
 
     /// <inheritdoc />
+    public async Task<ReplicationCapabilities> ProbeCapabilitiesAsync(
+        string treeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+
+        // The same effective tree an enable or disable of this name would authorize.
+        treeId = await _tenantResolver.ResolveEffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var canConfigure = await _authorizer.IsAuthorizedAsync(treeId, cancellationToken).ConfigureAwait(false);
+        return new ReplicationCapabilities(treeId, canConfigure);
+    }
+
+    /// <inheritdoc />
     public async Task<ReplicationDecommissionPeerResult> DecommissionPeerAsync(
         string peerClusterId,
         CancellationToken cancellationToken = default)

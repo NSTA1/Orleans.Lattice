@@ -123,8 +123,8 @@ public class CoordinatedRestoreConvergenceChaosTests
             {
                 Assert.That(cluster.Engine.CommitCount, Is.EqualTo(0),
                     $"iteration {iteration}: a lost coordinator never commits");
-                Assert.That(cluster.Engine.RevertCount, Is.EqualTo(1),
-                    $"iteration {iteration}: every prepared cluster is reverted");
+                Assert.That(cluster.Engine.RevertCount, Is.EqualTo(0),
+                    $"iteration {iteration}: a prepared cluster never cut over, so nothing is reverted");
                 Assert.That(cluster.Engine.DeleteCount, Is.GreaterThanOrEqualTo(1),
                     $"iteration {iteration}: every prepared cluster garbage collects its shadow");
             }

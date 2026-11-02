@@ -106,6 +106,25 @@ public sealed class AuthGrpcDataTests
     }
 
     [Test]
+    public async Task probe_over_the_wire_answers_for_the_callers_own_grants()
+    {
+        const string tree = "grpc-probe";
+        await _fixture.RegisterTreeAsync(tree);
+        await _fixture.GrantAsync(AllowTree(Writer, tree, WriteOps), AllowTree(Reader, tree, ReadOps));
+
+        var writer = await CallAsync(_host.Methods.ProbeCapabilities, new DataProbeRequest { TreeId = tree, Key = "k1" }, Writer);
+        var reader = await CallAsync(_host.Methods.ProbeCapabilities, new DataProbeRequest { TreeId = tree, Key = "k1" }, Reader);
+        var anonymous = await CallAsync(_host.Methods.ProbeCapabilities, new DataProbeRequest { TreeId = tree }, subject: null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(writer.CanWrite && writer.CanDelete, Is.True);
+            Assert.That(reader.CanWrite || reader.CanDelete, Is.False);
+            Assert.That(anonymous.CanWrite || anonymous.CanDelete, Is.False);
+        });
+    }
+
+    [Test]
     public async Task unauthorized_set_over_the_wire_is_permission_denied_with_trailers()
     {
         const string tree = "grpc-set-denied";

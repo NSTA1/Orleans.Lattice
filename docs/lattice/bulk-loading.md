@@ -166,10 +166,13 @@ Two caller obligations make it safe to re-drive:
 - **`operationId` must be stable per chunk.** The implementation derives a
   per-shard operation id of the form `"{operationId}-{shardIndex}"`, and each
   shard records the last completed id, so re-driving the *same* chunk after a
-  dropped connection reapplies nothing. Because a shard remembers only its
-  single most-recently-completed id, resume from the last un-acknowledged chunk
-  and never re-drive a chunk that a later chunk has already superseded on the
-  same shard.
+  dropped connection reapplies nothing. Re-driving an *older* chunk - one a
+  later chunk has already superseded on a shard, which is what a resumed
+  stream does when it re-sends its whole unacknowledged window - is a no-op
+  as well: each shard treats entries at or below its highest key as already
+  grafted and skips them, so no entry is grafted twice (issue #5460). A
+  skipped entry the shard holds no row for means the chunk is out of order,
+  and the append is refused with `InvalidOperationException`.
 - **Keys must ascend**, both within a chunk and across the whole stream.
   Hash-partitioning a globally sorted stream preserves relative order within
   each partition, which is what keeps the per-shard appends on the right edge

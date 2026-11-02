@@ -134,6 +134,25 @@ public sealed class GrpcLatticeReplicationControlTests
     }
 
     [Test]
+    public async Task ProbeCapabilitiesAsync_forwards_request_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new ReplicationCapabilitiesResponse
+        {
+            TreeId = "orders",
+            CanConfigure = true,
+        });
+
+        var result = await Adapter(invoker).ProbeCapabilitiesAsync("orders");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(((ReplicationProbeCapabilitiesRequestMessage)invoker.LastRequest!).TreeId, Is.EqualTo("orders"));
+            Assert.That(result.TreeId, Is.EqualTo("orders"));
+            Assert.That(result.CanConfigure, Is.True);
+        });
+    }
+
+    [Test]
     public async Task GetReplicationConfigAsync_empty_report_projects_no_entries()
     {
         var report = await Adapter(new FakeCallInvoker(_ => new ReplicationConfigResponse()))

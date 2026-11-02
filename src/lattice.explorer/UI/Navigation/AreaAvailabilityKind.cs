@@ -11,4 +11,11 @@ internal enum AreaAvailabilityKind
 
     /// <summary>The area is shown, demoted, with the reason it cannot be opened now.</summary>
     Unavailable = 2,
+
+    /// <summary>
+    /// The area is shown, demoted, and cannot be opened, because the cluster did
+    /// not answer whether this caller may see it (a transient fault or no answer in
+    /// time). It is checked again; it is never an answer that admits the caller.
+    /// </summary>
+    Unchecked = 3,
 }

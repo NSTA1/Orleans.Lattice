@@ -52,7 +52,7 @@ public sealed partial class TenantRegionBackfillServiceTests
         deadLetters.ListAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<DeadLetterEntry>>([]));
         var service = new TenantRegionBackfillService(
-            registry, new TenantRegionLifecycleDriver(registry, options), factory, options,
+            registry, new TenantRegionLifecycleDriver(registry, options), factory, TenantLocalRegion.ForRegion("west"),
             Substitute.For<ILogger<TenantRegionBackfillService>>(),
             bootstrap, deadLetters, replicationContext: context);
 

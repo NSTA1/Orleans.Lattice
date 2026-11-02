@@ -59,6 +59,7 @@ else
         <section class="lt-cluster-section" aria-labelledby="lt-cluster-bulk">
             <h2 class="lt-cluster-heading" id="lt-cluster-bulk">Bulk load</h2>
             <p class="lt-cluster-note">Streams entries into an empty tree in ascending chunks. A tree that already holds keys or tombstones is refused.</p>
+            <p class="lt-cluster-note">Seeding from a file? <a href="@SeedFromFileHref" data-lt-bulk-from-file="true">Seed it from an NDJSON, CSV or exported file</a> through the Data area's import, which streams the file and checks its key order before anything is written.</p>
             @switch (_bulk)
             {
                 case BulkStage.Compose:

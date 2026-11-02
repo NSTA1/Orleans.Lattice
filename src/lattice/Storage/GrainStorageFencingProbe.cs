@@ -18,6 +18,14 @@ namespace Orleans.Lattice;
 /// sequence is retried from a fresh read. The stale write itself is race-free:
 /// a provider that enforces ETags rejects it whoever wrote last, and one that
 /// does not accepts it regardless.
+/// <para>
+/// The probe runs inside a <see cref="GrainStorageFencingProbeLogSuppression"/>
+/// scope, because a provider that enforces ETags typically logs the rejection the
+/// probe provokes at Error, and a healthy silo start must not log an Error
+/// (issue #5442). The scope drops only records written on the probe's own calls,
+/// and every outcome of those calls is returned as a verdict for the caller to
+/// report.
+/// </para>
 /// </remarks>
 internal static class GrainStorageFencingProbe
 {
@@ -44,6 +52,8 @@ internal static class GrainStorageFencingProbe
     {
         ArgumentNullException.ThrowIfNull(storage);
 
+        using var suppression = GrainStorageFencingProbeLogSuppression.Enter();
+        InconsistentStateException? lostRace = null;
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
             string? staleETag;
@@ -60,9 +70,10 @@ internal static class GrainStorageFencingProbe
                 current.State.Sequence++;
                 await storage.WriteStateAsync(StateName, ProbeGrainId, current).ConfigureAwait(false);
             }
-            catch (InconsistentStateException)
+            catch (InconsistentStateException ex)
             {
                 // Another silo's probe wrote between this read and write.
+                lostRace = ex;
                 continue;
             }
             catch (Exception ex)
@@ -104,6 +115,7 @@ internal static class GrainStorageFencingProbe
 
         return new GrainStorageFencingProbeResult(
             GrainStorageFencingVerdict.Inconclusive,
-            $"every one of {MaxAttempts} attempts lost a race to a concurrent probe write");
+            $"every one of {MaxAttempts} attempts lost a race to a concurrent probe write",
+            lostRace);
     }
 }

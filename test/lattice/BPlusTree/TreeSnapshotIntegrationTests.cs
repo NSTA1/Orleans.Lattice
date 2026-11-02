@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 
 [TestFixture]
 [Category("Integration")]
-public class TreeSnapshotIntegrationTests
+public partial class TreeSnapshotIntegrationTests
 {
     private SmallLeafClusterFixture _fixture = null!;
     private TestCluster _cluster = null!;

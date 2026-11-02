@@ -104,7 +104,7 @@ public sealed class ClusterOrphansPageTests : ClusterTestContext
 
         cut.WaitUntil(() =>
         {
-            Assert.That(Toasts, Does.Contain("Repair finished: 1 leaf unspliced. Auditing again."));
+            Assert.That(Toasts, Does.Contain("Repair finished: 1 leaf unspliced, 1 refused. Auditing again."));
             Assert.That(Tracked.Started.Select(Kind), Is.EqualTo(new[] { "audit", "repair", "audit" }));
             Assert.That(cut.Markup, Does.Contain("Audit: 10 leaves walked."));
         });

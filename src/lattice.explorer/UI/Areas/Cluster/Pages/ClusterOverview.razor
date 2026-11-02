@@ -69,6 +69,10 @@
             }
         </div>
     }
+    else if (_usage.Denied)
+    {
+        <p class="lt-cluster-note" data-lt-cluster="usage-denied">Estate-wide storage figures need the cluster-wide Telemetry capability. Open a tree you administer from the tree list.</p>
+    }
     else
     {
         <p class="lt-cluster-error" role="alert">@_usage.Error</p>

@@ -21,6 +21,9 @@ preconditions:
   - id: tenant-registration-order
     check: "For tenancy only, register AddLattice, AddLatticeMembership and AddLatticeAuth before AddLatticeTenancy, then AddLatticeTenantAdminApi. Do not register tenancy merely to bootstrap a non-tenant tree."
     source: "src/lattice.tenancy/LatticeTenancyServiceCollectionExtensions.cs"
+  - id: tenant-region-identity
+    check: "For tenancy only, name regions by their replication cluster id (Replication:ClusterId), not the Orleans cluster id; the two may differ. Each silo serves the region named by its own replication cluster id, and a tenancy silo whose region id cannot be resolved refuses to start."
+    source: "src/lattice.tenancy/TenantLocalRegion.cs"
   - id: replication-enrolled
     check: "Every target tree must have an unambiguous replication merge mode at source and receiver. For tenants the configured and registered tenant trees, including configured aliases, are discovered; an unenrolled tenant tree blocks Online promotion."
     source: "src/lattice.api.tenantadmin/TenantRegionBackfillService.cs#GetTenantTreesAsync"

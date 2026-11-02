@@ -58,6 +58,20 @@ public sealed class ClusterReadingTests
     }
 
     [Test]
+    public void The_catalogue_keeps_a_tree_an_operator_gave_a_second_name()
+    {
+        var projected = ClusterTreeCatalog.Project(
+        [
+            ClusterTestContext.Tree("orders") with { IsAlias = true, PhysicalTreeId = "factory-orders" },
+            ClusterTestContext.Tree("factory-orders"),
+            ClusterTestContext.Tree("audit") with { IsAlias = true, PhysicalTreeId = "audit/remediated/2" },
+            ClusterTestContext.Tree("audit/remediated/2"),
+        ]);
+
+        Assert.That(projected.Select(tree => tree.TreeId), Is.EqualTo(new[] { "audit", "factory-orders", "orders" }));
+    }
+
+    [Test]
     public void Peers_roll_up_by_region_and_are_stalled_only_when_every_link_is()
     {
         var peers = ClusterRegionPicture.RollUp(

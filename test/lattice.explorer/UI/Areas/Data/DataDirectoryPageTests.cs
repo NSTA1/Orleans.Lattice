@@ -182,6 +182,10 @@ public sealed class DataDirectoryPageTests : DataTestContext
         Client.CatalogGate.SetResult();
 
         cut.WaitUntil(() => Assert.That(cut.Find(".lt-empty h2").TextContent, Is.EqualTo("No trees yet")));
+
+        // An empty catalogue is also what a caller with no read grant gets on a busy cluster
+        // (U4, #5388), so the sentence names the grant rather than promising an empty cluster.
+        Assert.That(cut.Find(".lt-empty").TextContent, Does.Contain("you hold a grant to read it").And.Not.Contain("as soon as something writes to it"));
     }
 
     [Test]

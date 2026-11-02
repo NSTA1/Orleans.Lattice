@@ -41,6 +41,33 @@ public class BootstrapForeignDeleteReconcileTests
     }
 
     [Test]
+    public void DescribeIneligibility_names_the_actual_reason_an_export_cannot_drive_the_reconcile()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(BootstrapForeignDeleteReconcile.DescribeIneligibility(
+                Frontier(), Stable, Stable, LatticeMergeMode.LwwRegister), Is.Null);
+            Assert.That(BootstrapForeignDeleteReconcile.DescribeIneligibility(
+                Frontier(), Stable, Stable, LatticeMergeMode.OrMap), Does.Contain("merge mode OrMap"),
+                "a stable OR-Map export must not be reported as a source that changed during the export (#5534)");
+            Assert.That(BootstrapForeignDeleteReconcile.DescribeIneligibility(
+                Frontier(Guid.NewGuid()), Stable, Stable, LatticeMergeMode.LwwRegister), Does.Contain("opening lineage"));
+            Assert.That(BootstrapForeignDeleteReconcile.DescribeIneligibility(
+                Frontier(), Stable, null, LatticeMergeMode.LwwRegister), Does.Contain("no opening or closing"));
+            Assert.That(BootstrapForeignDeleteReconcile.DescribeIneligibility(
+                Frontier(), Stable, Stable with { IsDeleted = true }, LatticeMergeMode.LwwRegister), Does.Contain("deleted"));
+            Assert.That(BootstrapForeignDeleteReconcile.DescribeIneligibility(
+                Frontier(), Stable, Stable with { PhysicalTreeId = "tree-2" }, LatticeMergeMode.LwwRegister), Does.Contain("physical copy"));
+            Assert.That(BootstrapForeignDeleteReconcile.DescribeIneligibility(
+                Frontier(), Stable, Stable with { ShardMapVersion = 4 }, LatticeMergeMode.LwwRegister), Does.Contain("shard map"));
+            Assert.That(BootstrapForeignDeleteReconcile.DescribeIneligibility(
+                Frontier(), Stable, Stable with { DeleteEpoch = 1 }, LatticeMergeMode.LwwRegister), Does.Contain("delete epoch"));
+            Assert.That(BootstrapForeignDeleteReconcile.DescribeIneligibility(
+                Frontier(), Stable with { ShardMapVersion = null }, Stable, LatticeMergeMode.LwwRegister), Does.Contain("incomplete"));
+        });
+    }
+
+    [Test]
     public void IsEligible_needs_a_stable_live_known_generation_and_a_last_writer_wins_tree()
     {
         var frontier = Frontier();

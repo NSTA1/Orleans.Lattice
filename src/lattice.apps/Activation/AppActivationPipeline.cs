@@ -56,6 +56,13 @@ internal sealed class AppActivationPipeline : IAppActivationPipeline
         return _statusStore.GetAsync(tenant, slug, cancellationToken);
     }
 
+    public Task<AppActivationOperation?> GetRunningOperationAsync(TenantId tenant, AppSlug slug, CancellationToken cancellationToken = default)
+    {
+        var key = AppRegistryTreeNames.ComposeKey(tenant, slug);
+        cancellationToken.ThrowIfCancellationRequested();
+        return _grainFactory.GetGrain<IAppActivationGrain>(key).GetRunningOperationAsync();
+    }
+
     private Task<AppActivationOutcome> RunAsync(
         AppActivationOperation operation,
         TenantId tenant,

@@ -160,6 +160,22 @@ internal abstract class CoordinatorGrain<TSelf>(
     protected internal abstract Task ProcessNextPhaseAsync();
 
     /// <summary>
+    /// The work one grain-timer tick performs. Defaults to a single
+    /// <see cref="ProcessNextPhaseAsync"/> step, so the coordinator advances at
+    /// most one step per <see cref="PhaseTimerPeriod"/>.
+    /// <para>
+    /// A coordinator whose saga is many short steps overrides this to take as many
+    /// steps as fit in a bounded slice; otherwise its wall clock is set by the
+    /// timer period rather than by its work. An offline snapshot of a 96-shard
+    /// tree is a lock, a copy and an unlock per shard, and a completion - nearly
+    /// two hundred steps - so one step per two-second tick held the source locked
+    /// for over six minutes (issue #5455). Exceptions are handled exactly as for
+    /// <see cref="ProcessNextPhaseAsync"/>.
+    /// </para>
+    /// </summary>
+    protected internal virtual Task ProcessPhaseTickAsync() => ProcessNextPhaseAsync();
+
+    /// <summary>
     /// The cancellation token of the phase tick currently executing, or
     /// <see cref="CancellationToken.None"/> when no tick is in flight.
     /// <para>
@@ -386,7 +402,7 @@ internal abstract class CoordinatorGrain<TSelf>(
         PhaseTickToken = ct;
         try
         {
-            await ProcessNextPhaseAsync();
+            await ProcessPhaseTickAsync();
             _consecutiveTickFailures = 0;
             RecordPhaseTickRun();
         }

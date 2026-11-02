@@ -60,6 +60,7 @@ else
 
     <LtConfirmDestructive @bind-Open="_confirm"
                           Title="Snapshot tree" ObjectKind="tree" ObjectName="@TreeId" ConfirmText="Snapshot"
+                          PendingText="Starting the snapshot. The dialog closes once the cluster has accepted it."
                           OnConfirm="StartAsync">
         <p>@(IsOffline ? "The source tree stops serving reads and writes until the copy finishes." : "The source keeps serving while every live entry is copied.") The copy survives silo restarts.</p>
     </LtConfirmDestructive>

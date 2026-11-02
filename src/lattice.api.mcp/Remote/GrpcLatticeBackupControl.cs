@@ -88,4 +88,8 @@ internal sealed class GrpcLatticeBackupControl : ILatticeBackupControl
     /// <inheritdoc />
     public Task ConfigureBackupHealthAsync(string backupId, BackupHealthConfig config, CancellationToken cancellationToken = default)
         => _client.ConfigureBackupHealthAsync(backupId, config, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<BackupHealthConfig?> GetBackupHealthConfigAsync(string backupId, CancellationToken cancellationToken = default)
+        => _client.GetBackupHealthConfigAsync(backupId, cancellationToken);
 }

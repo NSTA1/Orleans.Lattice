@@ -338,7 +338,22 @@ internal sealed partial class AppInstallFlow
         Move(AppInstallStage.Enabling);
         try
         {
-            Result = await control.EnableAsync(Key.Slug, cancellationToken);
+            var result = await control.EnableAsync(Key.Slug, cancellationToken);
+            if (result.Pending)
+            {
+                // Accepted but still running: stay on Enabling and follow it to its end.
+                result = await AppLifecycleFollow.FollowAsync(control, result, AppLifecycleState.Enabled, _facades.Time, cancellationToken);
+            }
+
+            if (result.Pending || result.State != AppLifecycleState.Enabled)
+            {
+                Fail(AppInstallStage.Installed, result.Pending
+                    ? $"Enabling {DisplayName} is still running after {AppLifecycleFollow.Limit.TotalMinutes:0} minutes. Reload the page later to see its outcome."
+                    : $"Could not enable {DisplayName}. Its activation failed; its status records why.");
+                return;
+            }
+
+            Result = result;
             Move(AppInstallStage.Enabled);
         }
         catch (Exception error) when (error is not OutOfMemoryException)

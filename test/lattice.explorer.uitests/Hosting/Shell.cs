@@ -272,23 +272,7 @@ internal static class Shell
     /// <param name="page">The page.</param>
     public static async Task WaitForMotionToSettleAsync(IPage page)
     {
-        var moving = await page.EvaluateAsync<int>(
-            """
-            async () => {
-              const deadline = performance.now() + 10000;
-              const running = () => document.getAnimations().filter(a => a.playState === 'running'
-                && a.effect !== null && Number.isFinite(a.effect.getComputedTiming().endTime));
-              for (let now = running(); now.length > 0; now = running()) {
-                const left = deadline - performance.now();
-                if (left <= 0) { return now.length; }
-                await Promise.race([
-                  Promise.all(now.map(a => a.finished.catch(() => undefined))),
-                  new Promise(resolve => setTimeout(resolve, left)),
-                ]);
-              }
-              return 0;
-            }
-            """);
+        var moving = await Accessibility.AxeConformance.WaitForMotionToSettleAsync(page);
 
         Assert.That(moving, Is.Zero, $"{moving} animation(s) were still running ten seconds after the page was asked to settle.");
     }

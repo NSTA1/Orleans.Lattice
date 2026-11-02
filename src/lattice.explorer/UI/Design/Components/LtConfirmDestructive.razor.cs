@@ -57,6 +57,21 @@ public partial class LtConfirmDestructive
     [Parameter]
     public ElementReference? ReturnFocus { get; set; }
 
+    /// <summary>
+    /// What the confirmation says while <see cref="OnConfirm"/> runs, such as "Starting the snapshot.".
+    /// Defaults to <see cref="DefaultPendingText"/>. The confirmation stays open until the action
+    /// returns, so this says the action is under way rather than leaving a disabled button as the
+    /// only sign of work.
+    /// </summary>
+    [Parameter]
+    public string? PendingText { get; set; }
+
+    /// <summary>The in-flight note shown when no <see cref="PendingText"/> is given.</summary>
+    public const string DefaultPendingText = "Waiting for the server to accept this. The dialog closes once it has.";
+
+    /// <summary>Whether the confirmed action is still running.</summary>
+    internal bool Pending { get; private set; }
+
     /// <summary>Whether what has been typed matches <see cref="ObjectName"/> exactly.</summary>
     internal bool Matches => ObjectName.Length > 0 && string.Equals(_typed, ObjectName, StringComparison.Ordinal);
 
@@ -97,13 +112,22 @@ public partial class LtConfirmDestructive
 
     private async Task ConfirmAsync()
     {
-        if (!Matches)
+        if (!Matches || Pending)
         {
             return;
         }
 
         _typed = string.Empty;
-        await OnConfirm.InvokeAsync();
+        Pending = true;
+        try
+        {
+            await OnConfirm.InvokeAsync();
+        }
+        finally
+        {
+            Pending = false;
+        }
+
         await OpenChanged.InvokeAsync(false);
     }
 }

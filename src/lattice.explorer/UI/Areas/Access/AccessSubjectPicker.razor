@@ -1,33 +1,47 @@
 @*
     The subject picker: a kind choice and the id as a type-ahead combobox,
     listing matching principals by id with their display name (rendered as text)
-    beside it. Cluster-wide the kinds are User and Group, over the identity
-    directory; with a directory only a listed principal is accepted, and without
-    one the picker is a plain id box and says the id is not validated. On a
+    beside it. Cluster-wide the kinds are User and Group: users come from the
+    identity directory, groups from the directory and from the groups stored in
+    Access, each labelled; with a directory only a listed principal is accepted,
+    and without one a user id is used as typed and the field says it is not
+    validated. Where allowed, a platform operator also sees Tenant group: a tenant
+    and one of its groups, verified against that tenant's stored groups. On a
     tenant page the kinds are three labelled sources - the tenant's own groups,
-    and the cluster's groups and users - and a chosen group's provenance is shown
-    with its full id.
+    and the cluster's groups and users. A chosen group's provenance is shown with
+    its full id.
 *@
-<div class="lt-access-form__row">
+<div class="lt-access-form__row" data-lt-subject-picker="@(IsTenantMode ? "tenant" : "cluster")">
     @if (AllowKindChange)
     {
         <LtSelect Label="@($"{Label} kind")" Options="Options" Value="@KindValue" ValueChanged="OnKindChangedAsync" />
     }
+    @if (IsClusterTenantGroup)
+    {
+        <LtComboBox Label="@($"{Label} tenant")"
+                    Value="@_groupTenant"
+                    ValueChanged="OnGroupTenantChangedAsync"
+                    Source="@Suggestions.Tenants"
+                    Mode="LtComboBoxMode.PickExisting"
+                    Noun="tenant"
+                    Hint="The tenant that owns the group."
+                    Disabled="Disabled" />
+    }
     <LtComboBox @ref="_box"
                 Label="@Label"
-                Value="@Id"
-                ValueChanged="OnIdChangedAsync"
+                Value="@BoxValue"
+                ValueChanged="@((string value) => IsClusterTenantGroup ? OnGroupNameChangedAsync(value) : OnIdChangedAsync(value))"
                 OnChoose="OnChooseAsync"
                 Source="@Source"
                 Mode="@Mode"
                 Noun="@KindWord"
                 Error="@(_sourceError ?? Error)"
                 Hint="@IdHint"
-                Disabled="Disabled" />
+                Disabled="@(Disabled || (IsClusterTenantGroup && _groupTenant.Trim().Length == 0))" />
 </div>
 @if (Provenance is { } provenance)
 {
-    <p class="lt-access-provenance" data-lt-provenance="@(IsTenantGroup ? "tenant" : "cluster")">
+    <p class="lt-access-provenance" data-lt-provenance="@provenance.Kind">
         <span class="lt-access-provenance__source">@provenance.Source</span>
         <span class="lt-access-provenance__id">@provenance.FullId</span>
     </p>

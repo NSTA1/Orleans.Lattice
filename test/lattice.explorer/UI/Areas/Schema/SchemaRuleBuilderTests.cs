@@ -227,6 +227,7 @@ public sealed class SchemaRuleBuilderTests : SchemaRuleBuilderTestBase
             var json = cut.Find(".lt-schema-json").TextContent;
             Assert.That(json, Does.Contain("\"strictIngest\": true"));
             Assert.That(json, Does.Contain("\"member\": \"currency\""));
+            Assert.That(cut.Find(".lt-schema-json").GetAttribute("tabindex"), Is.EqualTo("0"), "the scrollable JSON is reachable by keyboard (axe scrollable-region-focusable, #5385)");
             Assert.That(cut.FindAll(".lt-schema-rules__item"), Has.Count.EqualTo(1));
         });
 

@@ -408,7 +408,7 @@ public sealed partial class AddressLineTests : ShellChromeTestContext
     private static ExplorerLocation Location(string address, params ExplorerAreaEntry[] entries) =>
         new(ExplorerAddress.Parse(address), entries, EntriesLoaded: true, TenancyActive: false);
 
-    private IRenderedComponent<AddressLine> RenderLine(ExplorerLocation location, bool compact = false)
+    private IRenderedComponent<AddressLine> RenderLine(ExplorerLocation location, bool compact = false, bool pending = false)
     {
         JSInterop.SetupModule(ShellChromeAssets.ModuleSpecifier).Mode = JSRuntimeMode.Loose;
         return Render<AddressLine>(parameters =>
@@ -419,6 +419,11 @@ public sealed partial class AddressLineTests : ShellChromeTestContext
                 parameters.AddCascadingValue(
                     Orleans.Lattice.Explorer.UI.Design.Components.LtBreakpointCascade.Name,
                     Orleans.Lattice.Explorer.UI.Design.Tokens.LtBreakpoint.Compact);
+            }
+
+            if (pending)
+            {
+                parameters.AddCascadingValue(Orleans.Lattice.Explorer.UI.Design.Components.LtBreakpointCascade.PendingName, true);
             }
         });
     }

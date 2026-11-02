@@ -68,6 +68,30 @@ public sealed partial class LtComboBoxTests
     }
 
     [Test]
+    public async Task Pick_existing_with_a_missing_message_accepts_a_value_that_names_nothing_and_flags_it()
+    {
+        var cut = RenderBox(new FakeSuggestionSource(Trees), p => p.Add(x => x.MissingMessage, value => $"No tree named {value} exists yet."));
+
+        cut.Find("input").Input("crm/next");
+        Assert.That(cut.FindAll(".lt-combobox__flag"), Is.Empty, "nothing is flagged while typing");
+        var accepted = await cut.InvokeAsync(cut.Instance.ConfirmAsync);
+
+        var flag = cut.Find(".lt-combobox__flag");
+        Assert.Multiple(() =>
+        {
+            Assert.That(accepted, Is.True);
+            Assert.That(flag.TextContent, Is.EqualTo("No tree named crm/next exists yet."));
+            Assert.That(cut.FindAll(".lt-field__error"), Is.Empty, "a value that does not exist yet is not an error");
+            Assert.That(cut.Find("input").GetAttribute("aria-describedby"), Does.Contain(flag.Id));
+            Assert.That(cut.Find("input").HasAttribute("aria-invalid"), Is.False);
+        });
+
+        cut.Find("input").Input("crm/orders");
+        Assert.That(await cut.InvokeAsync(cut.Instance.ConfirmAsync), Is.True);
+        Assert.That(cut.FindAll(".lt-combobox__flag"), Is.Empty, "a listed value is not flagged");
+    }
+
+    [Test]
     public void Suggest_mode_accepts_new_text_and_flags_a_value_that_exists()
     {
         var cut = RenderBox(new FakeSuggestionSource(Trees), p => p.Add(x => x.Mode, LtComboBoxMode.Suggest));

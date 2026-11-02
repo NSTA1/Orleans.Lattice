@@ -274,9 +274,7 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
         await EnsurePeerMayExportAsync(treeName, authenticatedRequesterClusterId, cancellationToken).ConfigureAwait(false);
         ExportGate?.EnsureMayExport(treeName);
 
-        var stream = await _provider
-            .ExportAsync(treeName, fromAsOfHlc, cancellationToken)
-            .ConfigureAwait(false);
+        var stream = await OpenExportAsync(treeName, fromAsOfHlc, cancellationToken).ConfigureAwait(false);
 
         _logger.LogDebug(
             "Captured snapshot metadata for tree '{TreeName}' from cluster '{SourceClusterId}' at AsOfHlc={AsOfHlc}.",
@@ -312,7 +310,18 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
     /// <param name="authenticatedRequesterClusterId">The transport-authenticated requesting peer, or <c>null</c> when unavailable.</param>
     /// <param name="cancellationToken">Cancels the export.</param>
     /// <returns>The authorized entry stream.</returns>
-    public async IAsyncEnumerable<SnapshotEntry> RequestSnapshotAsync(
+    public IAsyncEnumerable<SnapshotEntry> RequestSnapshotAsync(
+        string treeName,
+        string sourceClusterId,
+        HybridLogicalClock fromAsOfHlc,
+        string? authenticatedRequesterClusterId,
+        CancellationToken cancellationToken) =>
+        DeferOnRedirectAsync(
+            treeName,
+            RequestSnapshotCoreAsync(treeName, sourceClusterId, fromAsOfHlc, authenticatedRequesterClusterId, cancellationToken),
+            cancellationToken);
+
+    private async IAsyncEnumerable<SnapshotEntry> RequestSnapshotCoreAsync(
         string treeName,
         string sourceClusterId,
         HybridLogicalClock fromAsOfHlc,
@@ -326,9 +335,7 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
         await EnsurePeerMayExportAsync(treeName, authenticatedRequesterClusterId, cancellationToken).ConfigureAwait(false);
         ExportGate?.EnsureMayExport(treeName);
 
-        var stream = await _provider
-            .ExportAsync(treeName, fromAsOfHlc, cancellationToken)
-            .ConfigureAwait(false);
+        var stream = await OpenExportAsync(treeName, fromAsOfHlc, cancellationToken).ConfigureAwait(false);
 
         _logger.LogDebug(
             "Streaming snapshot for tree '{TreeName}' to cluster '{SourceClusterId}' at AsOfHlc={AsOfHlc}.",
@@ -359,7 +366,112 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
     /// <param name="authenticatedRequesterClusterId">The transport-authenticated requesting peer, or <c>null</c> when unavailable.</param>
     /// <param name="cancellationToken">Cancels the export.</param>
     /// <returns>The authorized snapshot stream.</returns>
-    public async IAsyncEnumerable<RemoteSnapshotStreamItem> RequestSnapshotItemsAsync(
+    public IAsyncEnumerable<RemoteSnapshotStreamItem> RequestSnapshotItemsAsync(
+        string treeName,
+        string sourceClusterId,
+        HybridLogicalClock fromAsOfHlc,
+        string? authenticatedRequesterClusterId,
+        CancellationToken cancellationToken) =>
+        DeferOnRedirectAsync(
+            treeName,
+            RequestSnapshotItemsCoreAsync(treeName, sourceClusterId, fromAsOfHlc, authenticatedRequesterClusterId, cancellationToken),
+            cancellationToken);
+
+    /// <summary>
+    /// Re-raises a source redirect met while an export runs (issue #5537) as a
+    /// transient <see cref="LatticeSnapshotExportDeferredException"/>. An export
+    /// reads the one physical copy the tree resolved to when it opened, so once a
+    /// resize or restore moves the alias and fences that copy, every later read
+    /// throws <see cref="StaleTreeRoutingException"/>. Continuing on the new copy
+    /// would mix two copies in one export, so the export ends and the receiver's
+    /// bootstrap retries it; the fresh export resolves the current copy.
+    /// </summary>
+    private async IAsyncEnumerable<T> DeferOnRedirectAsync<T>(
+        string treeName,
+        IAsyncEnumerable<T> source,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var enumerator = source.GetAsyncEnumerator(cancellationToken);
+        try
+        {
+            while (true)
+            {
+                bool hasNext;
+                try
+                {
+                    hasNext = await enumerator.MoveNextAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex) when (FindRedirect(ex) is { } redirect)
+                {
+                    throw Deferred(treeName, redirect, ex);
+                }
+
+                if (!hasNext)
+                {
+                    yield break;
+                }
+
+                yield return enumerator.Current;
+            }
+        }
+        finally
+        {
+            await enumerator.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    private async Task<SnapshotStream> OpenExportAsync(
+        string treeName, HybridLogicalClock fromAsOfHlc, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _provider.ExportAsync(treeName, fromAsOfHlc, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (FindRedirect(ex) is { } redirect)
+        {
+            throw Deferred(treeName, redirect, ex);
+        }
+    }
+
+    private LatticeSnapshotExportDeferredException Deferred(
+        string treeName, StaleTreeRoutingException redirect, Exception observed)
+    {
+        _logger.LogWarning(observed,
+            "Snapshot export of tree '{TreeName}' ended because physical copy '{StalePhysicalTreeId}' was redirected "
+            + "to '{DestinationPhysicalTreeId}' during the export; the receiver retries with a fresh export.",
+            treeName, redirect.StalePhysicalTreeId, redirect.DestinationPhysicalTreeId);
+        return new LatticeSnapshotExportDeferredException(
+            $"Tree '{treeName}' was redirected to another physical copy during the snapshot export; "
+            + "retry so the export reads the current copy.");
+    }
+
+    internal static StaleTreeRoutingException? FindRedirect(Exception? exception)
+    {
+        for (var depth = 0; exception is not null && depth < 16; depth++)
+        {
+            switch (exception)
+            {
+                case StaleTreeRoutingException redirect:
+                    return redirect;
+                case AggregateException aggregate:
+                    foreach (var inner in aggregate.Flatten().InnerExceptions)
+                    {
+                        if (FindRedirect(inner) is { } found)
+                        {
+                            return found;
+                        }
+                    }
+
+                    return null;
+            }
+
+            exception = exception.InnerException;
+        }
+
+        return null;
+    }
+
+    private async IAsyncEnumerable<RemoteSnapshotStreamItem> RequestSnapshotItemsCoreAsync(
         string treeName,
         string sourceClusterId,
         HybridLogicalClock fromAsOfHlc,
@@ -373,9 +485,7 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
         await EnsurePeerMayExportAsync(treeName, authenticatedRequesterClusterId, cancellationToken).ConfigureAwait(false);
         ExportGate?.EnsureMayExport(treeName);
 
-        var stream = await _provider
-            .ExportAsync(treeName, fromAsOfHlc, cancellationToken)
-            .ConfigureAwait(false);
+        var stream = await OpenExportAsync(treeName, fromAsOfHlc, cancellationToken).ConfigureAwait(false);
 
         HashSet<string>? participantTrees = stream.CrossTreeParticipantsComplete ? new(StringComparer.Ordinal) : null;
         await foreach (var entry in stream.Entries

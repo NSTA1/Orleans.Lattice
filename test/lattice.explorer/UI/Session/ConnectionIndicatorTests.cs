@@ -10,7 +10,8 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Session;
 /// <summary>
 /// The connection indicator: the endpoint and its state in words and a health
 /// role, Reconnect when down, Sign in after an authentication refusal, and the
-/// way into the connection settings.
+/// way into the connection settings - or, on a head that refuses browser-driven
+/// configuration, into the read-only connection details.
 /// </summary>
 [TestFixture]
 [FixtureLifeCycle(LifeCycle.InstancePerTestCase)]
@@ -121,24 +122,86 @@ public sealed class ConnectionIndicatorTests : SessionTestContext
         Assert.That(State.Overlay, Is.EqualTo(SessionOverlayKind.Configuration));
     }
 
-    [TestCase(false)]
-    [TestCase(true)]
-    public void A_read_only_head_offers_no_connection_settings(bool configured)
+    [Test]
+    public void A_read_only_head_with_no_endpoint_offers_nothing_because_the_first_run_gate_explains_it()
     {
         UseReadOnlyEndpoint();
-        if (configured)
-        {
-            Explorer.Configured(RemoteConfiguration(Endpoint));
-            StateConnection.Seed(new LatticeConnectionStatus(LatticeConnectionState.Faulted, Endpoint, "Unavailable"));
-        }
 
         var cut = Render<ConnectionIndicator>();
 
         Assert.Multiple(() =>
         {
-            Assert.That(Buttons(cut), Has.No.Member("Connection settings"));
+            Assert.That(Buttons(cut), Is.Empty);
             Assert.That(cut.FindAll("[aria-haspopup=dialog]"), Is.Empty);
-            Assert.That(Buttons(cut), configured ? Is.EqualTo(new[] { "Reconnect" }) : Is.Empty);
+        });
+    }
+
+    [TestCase(LatticeConnectionState.Connected, new string[0])]
+    [TestCase(LatticeConnectionState.Faulted, new[] { "Reconnect" })]
+    public void Inline_a_configured_read_only_head_makes_the_endpoint_itself_open_connection_details(LatticeConnectionState state, string[] others)
+    {
+        UseReadOnlyEndpoint();
+        Explorer.Configured(RemoteConfiguration(Endpoint));
+        StateConnection.Seed(new LatticeConnectionStatus(state, Endpoint, "message"));
+
+        var cut = Render<ConnectionIndicator>();
+
+        var details = cut.FindAll("[aria-haspopup=dialog]");
+        Assert.Multiple(() =>
+        {
+            Assert.That(details, Has.Count.EqualTo(1), "one way into the details, and no second control beside the endpoint");
+            Assert.That(details[0].TextContent, Is.EqualTo("Connection details: " + Endpoint), "the accessible name leads with what it opens");
+            Assert.That(details[0].QuerySelector(".lt-visually-hidden")!.TextContent, Is.EqualTo("Connection details: "));
+            Assert.That(details[0].QuerySelector("code")!.TextContent, Is.EqualTo(Endpoint));
+            Assert.That(details[0].HasAttribute("data-lt-connection-details"), Is.True);
+            Assert.That(cut.FindAll("code"), Has.Count.EqualTo(1), "the endpoint is drawn once");
+            Assert.That(Buttons(cut).Where(text => !text.StartsWith("Connection details", StringComparison.Ordinal)), Is.EqualTo(others));
+            Assert.That(Buttons(cut), Has.No.Member("Connection settings"));
+        });
+    }
+
+    [Test]
+    public void Inline_a_read_only_head_that_has_no_endpoint_to_show_yet_offers_connection_details_as_words()
+    {
+        UseReadOnlyEndpoint();
+        Explorer.Configured(RemoteConfiguration(Endpoint));
+        StateConnection.Seed(new LatticeConnectionStatus(LatticeConnectionState.Connecting, null, null));
+
+        var cut = Render<ConnectionIndicator>();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll("code"), Is.Empty);
+            Assert.That(cut.FindAll("[aria-haspopup=dialog]").Select(button => button.TextContent), Is.EqualTo(new[] { "Connection details" }));
+        });
+    }
+
+    [Test]
+    public void Connection_details_opens_the_connection_dialog_which_a_read_only_head_draws_read_only()
+    {
+        UseReadOnlyEndpoint();
+        Explorer.Configured(RemoteConfiguration(Endpoint));
+        StateConnection.Seed(new LatticeConnectionStatus(LatticeConnectionState.Connected, Endpoint, null));
+        var cut = Render<ConnectionIndicator>();
+
+        cut.Find("[aria-haspopup=dialog]").Click();
+
+        Assert.That(State.Overlay, Is.EqualTo(SessionOverlayKind.Configuration));
+    }
+
+    [Test]
+    public void An_opted_in_head_offers_the_settings_and_not_the_read_only_details()
+    {
+        Explorer.Configured(RemoteConfiguration(Endpoint));
+        StateConnection.Seed(new LatticeConnectionStatus(LatticeConnectionState.Connected, Endpoint, null));
+
+        var cut = Render<ConnectionIndicator>();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Buttons(cut), Is.EqualTo(new[] { "Connection settings" }));
+            Assert.That(cut.FindAll("[data-lt-connection-details]"), Is.Empty);
+            Assert.That(cut.Find("code").ParentElement!.TagName, Is.Not.EqualTo("BUTTON"));
         });
     }
 

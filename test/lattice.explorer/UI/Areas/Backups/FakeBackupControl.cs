@@ -92,6 +92,15 @@ internal sealed partial class FakeBackupControl : ILatticeBackupControl
     /// <summary>The health configuration verb.</summary>
     public Func<string, BackupHealthConfig, Task> Configure { get; set; } = (_, _) => Task.CompletedTask;
 
+    /// <summary>The stored per-backup monitoring, written by a successful configuration.</summary>
+    public Dictionary<string, BackupHealthConfig> HealthConfigs { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>The monitoring a catalogued backup with no stored configuration reads as: on, every 6 h.</summary>
+    public BackupHealthConfig DefaultHealthConfig { get; set; } = new(true, TimeSpan.FromHours(6));
+
+    /// <summary>The monitoring read; reads <see cref="HealthConfigs"/>, then <see cref="DefaultHealthConfig"/> for a catalogued backup, by default.</summary>
+    public Func<string, Task<BackupHealthConfig?>>? GetHealthConfig { get; set; }
+
     /// <summary>A fault every artifact export throws when set.</summary>
     public Exception? ExportFault { get; set; }
 
@@ -306,10 +315,26 @@ internal sealed partial class FakeBackupControl : ILatticeBackupControl
     }
 
     /// <inheritdoc />
-    public Task ConfigureBackupHealthAsync(string backupId, BackupHealthConfig config, CancellationToken cancellationToken = default)
+    public async Task ConfigureBackupHealthAsync(string backupId, BackupHealthConfig config, CancellationToken cancellationToken = default)
     {
         Calls.Add((nameof(ConfigureBackupHealthAsync), (backupId, config)));
-        return Configure(backupId, config);
+        await Configure(backupId, config);
+        HealthConfigs[backupId] = config;
+    }
+
+    /// <inheritdoc />
+    public Task<BackupHealthConfig?> GetBackupHealthConfigAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        Calls.Add((nameof(GetBackupHealthConfigAsync), backupId));
+        if (GetHealthConfig is { } read)
+        {
+            return read(backupId);
+        }
+
+        return Task.FromResult(
+            HealthConfigs.TryGetValue(backupId, out var config) ? config
+            : Catalogue.Exists(manifest => manifest.Id == backupId) ? DefaultHealthConfig
+            : null);
     }
 
     /// <summary>The number of calls to <paramref name="verb"/>.</summary>

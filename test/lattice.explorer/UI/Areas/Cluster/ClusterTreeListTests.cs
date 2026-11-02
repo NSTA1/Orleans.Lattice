@@ -78,6 +78,31 @@ public sealed class ClusterTreeListTests : ClusterTestContext
     }
 
     [Test]
+    public void The_filter_narrows_by_owner_and_state_as_their_columns_read()
+    {
+        UseTrees(
+            Tree("a/crm/orders") with { IsAlias = true, PhysicalTreeId = "a/crm/orders/resized/7f3a" },
+            Tree("invoices"),
+            Tree("t/acme/ledger") with { Lifecycle = TreeLifecycleState.SoftDeleted });
+        var cut = RenderAt("/cluster/trees");
+        cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr"), Has.Count.EqualTo(3)));
+
+        cut.Find("input[type=search]").Input("app crm");
+        Assert.That(cut.FindAll("tbody tr a").Select(link => link.TextContent), Is.EqualTo(new[] { "a/crm/orders" }));
+
+        cut.Find("input[type=search]").Input("deleted");
+        Assert.That(cut.FindAll("tbody tr a").Select(link => link.TextContent), Is.EqualTo(new[] { "t/acme/ledger" }));
+
+        cut.Find("input[type=search]").Input("aliased");
+        Assert.That(cut.FindAll("tbody tr a").Select(link => link.TextContent), Is.EqualTo(new[] { "a/crm/orders" }));
+
+        cut.Find("input[type=search]").Input("live");
+        Assert.That(cut.FindAll("tbody tr"), Has.Count.EqualTo(2), "Live and Live, aliased");
+
+        Assert.That(cut.Find("input[type=search]").GetAttribute("placeholder"), Is.EqualTo("Filter by name, owner or state"));
+    }
+
+    [Test]
     public void An_empty_cluster_and_a_failed_read_each_say_so()
     {
         var empty = RenderAt("/cluster/trees");
@@ -172,6 +197,43 @@ public sealed class ClusterTreeListTests : ClusterTestContext
 
         // #4254: the signalled command's dialog can still open via an async continuation.
         cut.WaitUntil(() => Assert.That(cut.Find(".lt-dialog h2").TextContent, Is.EqualTo("Reshard a tree")));
+    }
+
+    [Test]
+    public void A_reader_who_may_reshard_no_tree_has_no_control_and_the_command_is_refused()
+    {
+        // U4 (#5388): dana, a reader, was offered Reshard tree... and refused only on its page.
+        Granted = Grants.Read;
+        UseTrees(Tree("a/crm/orders"), Tree("invoices"));
+        var cut = RenderAt("/cluster/trees");
+        cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr"), Has.Count.EqualTo(2)));
+        var command = Services.GetServices<IExplorerArea>().OfType<ClusterArea>().Single().Commands
+            .Single(candidate => candidate.Id == ClusterArea.ReshardCommandId);
+
+        Assert.That(cut.FindAll($"[data-lt-command=\"{ClusterArea.ReshardCommandId}\"]"), Is.Empty);
+
+        cut.InvokeAsync(() => command.InvokeAsync!(CancellationToken.None).AsTask());
+
+        cut.WaitUntil(() => Assert.That(cut.Find("[data-lt-reshard-hidden]").TextContent, Is.EqualTo(ClusterTreeList.ReshardRefusedText)));
+        Assert.That(cut.FindAll(".lt-dialog"), Is.Empty);
+    }
+
+    [Test]
+    public void A_lifecycle_grant_on_one_listed_tree_draws_the_control()
+    {
+        Granted = Grants.Read;
+        UseTrees(Tree("a/crm/orders"), Tree("invoices"));
+        Admin.ProbeCapabilitiesAsync("invoices", Arg.Any<CancellationToken>())
+            .Returns(new Orleans.Lattice.Api.TreeAdmin.LatticeTreeAdminCapabilities
+            {
+                TreeId = "invoices",
+                Schema = new Orleans.Lattice.Api.Schema.LatticeSchemaCapabilities { TreeId = "invoices" },
+                CanManageTreeLifecycle = true,
+            });
+
+        var cut = RenderAt("/cluster/trees");
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll($"[data-lt-command=\"{ClusterArea.ReshardCommandId}\"]"), Has.Count.EqualTo(1)));
     }
 
     [Test]

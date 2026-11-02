@@ -16,4 +16,14 @@ public sealed record AppLifecycleResult
     [Id(2)] public AppLifecycleState State { get; init; }
     /// <summary>Whether this operation changed the installation.</summary>
     [Id(3)] public bool Changed { get; init; }
+    /// <summary>
+    /// Whether the operation was accepted but is still running when this result was returned.
+    /// A lifecycle run that outlasts the facade's accept window keeps running to completion and
+    /// records its outcome; <see cref="State"/> then reports the state before the run and
+    /// <see cref="Changed"/> is <see langword="false"/>. Poll
+    /// <see cref="ILatticeAppsControl.DescribeAsync"/> or <see cref="ILatticeAppsControl.ListAsync"/>:
+    /// they report the run as <see cref="AppSummary.PendingState"/> while it is in flight, and
+    /// <see cref="AppLifecycleState.Failed"/> only once it has ended failed.
+    /// </summary>
+    [Id(4)] public bool Pending { get; init; }
 }

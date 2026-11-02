@@ -1,0 +1,80 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Orleans.Lattice.Explorer.EndToEnd.Tests</RootNamespace>
+    <AssemblyName>Orleans.Lattice.Explorer.EndToEnd.Tests</AssemblyName>
+  </PropertyGroup>
+
+  <!--
+    The journey hosts live beneath this project but are projects of their own,
+    launched as real processes by the harness. Their sources are not this
+    assembly's; only the shared host contract is compiled in.
+  -->
+  <ItemGroup>
+    <Compile Remove="Hosts/**" />
+    <None Remove="Hosts/**" />
+    <Content Remove="Hosts/**" />
+    <EmbeddedResource Remove="Hosts/**" />
+    <Compile Remove="artifacts/**" />
+    <None Remove="artifacts/**" />
+    <Compile Include="Hosts\Shared\*.cs" Link="Hosts\Shared\%(Filename)%(Extension)" />
+    <!-- The UI-test suite's axe-core configuration, shared as source (#5360): every checkpoint sweeps under the same rules. -->
+    <Compile Include="..\lattice.explorer.uitests\Accessibility\AxeConformance.cs" Link="Checkpoints\Shared\AxeConformance.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
+    <PackageReference Include="NUnit" Version="4.6.1" />
+    <PackageReference Include="NUnit3TestAdapter" Version="6.2.0" />
+    <PackageReference Include="Microsoft.Playwright" Version="1.49.0" />
+    <PackageReference Include="Deque.AxeCore.Playwright" Version="4.14.0" />
+    <PackageReference Include="Azure.Data.Tables" Version="12.12.0" />
+    <PackageReference Include="Azure.Storage.Blobs" Version="12.29.1" />
+    <PackageReference Include="Grpc.Net.Client" Version="2.83.0" />
+    <PackageReference Include="coverlet.collector" Version="10.0.1">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The Explorer reflected by the feature catalogue is an ASP.NET Core library; the framework supplies its runtime packages. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="NUnit.Framework" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.data.grpc\Orleans.Lattice.Api.Data.Grpc.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.auth.grpc\Orleans.Lattice.Api.Auth.Grpc.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.treeadmin.grpc\Orleans.Lattice.Api.TreeAdmin.Grpc.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.backup.grpc\Orleans.Lattice.Api.Backup.Grpc.csproj" />
+    <!-- Reflected by the feature catalogue (Coverage/ExplorerSurface.cs, #5361); the journeys drive it out of process. -->
+    <ProjectReference Include="..\..\src\lattice.explorer\WebHosting\Orleans.Lattice.Explorer.Web.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.replication.grpc\Orleans.Lattice.Api.Replication.Grpc.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.state.grpc\Orleans.Lattice.Api.State.Grpc.csproj" />
+    <!-- Reflected by the feature catalogue (FeatureCoverage/ExplorerSurface.cs, #5361); the journeys drive it out of process. -->
+    <ProjectReference Include="..\..\src\lattice.explorer\WebHosting\Orleans.Lattice.Explorer.Web.csproj" />
+    <ProjectReference Include="..\..\src\lattice.api.replication.grpc\Orleans.Lattice.Api.Replication.Grpc.csproj" />
+  </ItemGroup>
+
+  <!--
+    Building this project builds the journey hosts, so a local `dotnet test` launches
+    what it just compiled. CI publishes them once per job instead and names the
+    published root with LATTICE_E2E_HOSTS_DIR.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="Hosts\JourneySilo\Orleans.Lattice.Explorer.EndToEnd.JourneySilo.csproj" ReferenceOutputAssembly="false" Private="false" />
+    <ProjectReference Include="Hosts\JourneyExplorer\Orleans.Lattice.Explorer.EndToEnd.JourneyExplorer.csproj" ReferenceOutputAssembly="false" Private="false" />
+    <ProjectReference Include="Hosts\JourneyGateway\Orleans.Lattice.Explorer.EndToEnd.JourneyGateway.csproj" ReferenceOutputAssembly="false" Private="false" />
+    <ProjectReference Include="Hosts\LineFeed\Orleans.Lattice.Explorer.EndToEnd.LineFeed.csproj" ReferenceOutputAssembly="false" Private="false" />
+  </ItemGroup>
+
+</Project>

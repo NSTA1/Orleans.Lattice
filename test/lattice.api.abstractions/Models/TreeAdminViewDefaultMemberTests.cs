@@ -27,6 +27,27 @@ namespace Orleans.Lattice.Api.Abstractions.Tests;
 public sealed class TreeAdminViewDefaultMemberTests
 {
     [Test]
+    public void ListViewProvidersAsync_is_a_default_member_that_refuses_on_a_legacy_implementer()
+    {
+        var declared = typeof(ILatticeTreeAdmin).GetMethod(nameof(ILatticeTreeAdmin.ListViewProvidersAsync));
+        var legacyType = LegacyContractImplementer.Compile(typeof(ILatticeTreeAdmin));
+        var legacy = (ILatticeTreeAdmin)Activator.CreateInstance(legacyType)!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(declared, Is.Not.Null);
+            Assert.That(declared!.IsAbstract, Is.False, "an abstract member would break every pre-existing implementer");
+            Assert.That(
+                legacyType.GetMethod(nameof(ILatticeTreeAdmin.ListViewProvidersAsync), BindingFlags.Public | BindingFlags.Instance),
+                Is.Null,
+                "the generated implementer must inherit the default");
+            Assert.That(
+                () => { _ = legacy.ListViewProvidersAsync("orders"); },
+                Throws.InstanceOf<NotSupportedException>().With.Message.Contains("view providers"));
+        });
+    }
+
+    [Test]
     public void CreateViewAsync_is_a_default_member_so_a_legacy_implementer_still_compiles()
     {
         var declared = typeof(ILatticeTreeAdmin).GetMethod(nameof(ILatticeTreeAdmin.CreateViewAsync));

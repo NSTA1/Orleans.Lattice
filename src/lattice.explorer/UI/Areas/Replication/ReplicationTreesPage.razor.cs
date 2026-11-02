@@ -26,6 +26,7 @@ public partial class ReplicationTreesPage
     private ReplicationFault? _statusFault;
     private ReplicationFilter _filter = ReplicationFilter.None;
     private bool _loaded;
+    private bool _canEnable;
     private bool _busy;
     private readonly ComponentLifetime _cancellation = new();
     private readonly ComponentLifetime _reads = new();
@@ -60,6 +61,14 @@ public partial class ReplicationTreesPage
     /// </summary>
     internal bool CanControl => Data.HasControl && _rows is not null;
 
+    /// <summary>
+    /// Whether to offer enabling replication for a tree the caller names (issue #5478):
+    /// the facade's probe says the caller holds the Replication capability, or the
+    /// report lists a tree, which it does only for a tree the caller may manage. The
+    /// report alone proves nothing, because every caller may read it. Presentation
+    /// only; the facade authorizes every enable on attempt.
+    /// </summary>
+    internal bool CanEnableNew => CanControl && (_canEnable || _rows!.Count > 0);
     private LtDialogPlacement DialogPlacement => Breakpoint == LtBreakpoint.Compact ? LtDialogPlacement.End : LtDialogPlacement.Center;
 
     private string FaultTitle => _fault?.Kind switch
@@ -88,6 +97,29 @@ public partial class ReplicationTreesPage
 
     private bool CanSubmitEnable =>
         !_busy && _enableTree.Trim().Length > 0 && EnableTreeError is null && Enum.TryParse<LatticeMergeMode>(_enableMode, out _);
+
+    /// <summary>
+    /// How the tree picker judges its value: only a tree this cluster holds, until a bootstrap
+    /// source is named - then any id, because the bootstrap is how a tree this region does not
+    /// hold yet arrives from the source cluster.
+    /// </summary>
+    internal LtComboBoxMode EnableTreeMode =>
+        _enableTreeFixed || string.IsNullOrWhiteSpace(_enableBootstrap) ? LtComboBoxMode.PickExisting : LtComboBoxMode.Suggest;
+
+    /// <summary>
+    /// What the dialog says while an enable is in flight. A bootstrap waits for the source cluster
+    /// to answer, which can take a minute or more (#5560), so the page says so rather than leaving
+    /// a disabled button as the only sign of work.
+    /// </summary>
+    internal string EnablingStatus => string.IsNullOrWhiteSpace(_enableBootstrap)
+        ? $"Enabling replication for {_enableTree.Trim()}. Waiting for the cluster to record the enrolment."
+        : $"Enabling replication for {_enableTree.Trim()} and asking {_enableBootstrap.Trim()} for a snapshot. "
+          + $"This waits for {_enableBootstrap.Trim()} to answer, which can take a minute or more. "
+          + "You can close this dialog; stay on this page and a message reports the result.";
+
+    private string EnableTreeHint => EnableTreeMode == LtComboBoxMode.Suggest
+        ? "The logical tree id, such as orders. It need not exist here yet: the bootstrap brings it from the source cluster."
+        : "The logical tree id, such as orders.";
 
     /// <inheritdoc />
     public void Dispose()
@@ -124,6 +156,12 @@ public partial class ReplicationTreesPage
                 return;
             }
 
+            var canEnable = config.Value is not null && await Data.CanEnableAsync(refresh, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
             var status = await Data.GetEstateAsync(refresh, token);
             if (token.IsCancellationRequested)
             {
@@ -131,6 +169,7 @@ public partial class ReplicationTreesPage
             }
 
             _fault = config.Fault;
+            _canEnable = canEnable;
             _statusFault = status.Fault;
             var links = status.Value?.Links ?? [];
             _rows = config.Value is { } report ? ReplicationTreeRow.Build(report, links) : null;

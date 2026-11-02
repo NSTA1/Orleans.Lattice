@@ -236,6 +236,8 @@ internal sealed class LatticeTreeAdminApiGrpcAuthInterceptor : Interceptor
             LatticeTreeAdminGrpcMethods.ListStorageUsageRefreshesMethodName => LatticeTreeAdminApiOperation.ListStorageUsageRefreshes,
             LatticeTreeAdminGrpcMethods.CancelStorageUsageRefreshMethodName => LatticeTreeAdminApiOperation.CancelStorageUsageRefresh,
             LatticeTreeAdminGrpcMethods.GetWalReclamationMethodName => LatticeTreeAdminApiOperation.GetWalReclamation,
+            LatticeTreeAdminGrpcMethods.ListViewProvidersMethodName => LatticeTreeAdminApiOperation.ListViewProviders,
+            LatticeTreeAdminGrpcMethods.StreamBulkLoadMethodName => LatticeTreeAdminApiOperation.StreamBulkLoad,
             _ => LatticeTreeAdminApiOperation.Unknown,
         };
 
@@ -250,6 +252,7 @@ internal sealed class LatticeTreeAdminApiGrpcAuthInterceptor : Interceptor
             TreeAdminPurgeRequest p => p.TreeId,
             TreeAdminBulkLoadSessionRequest bls => bls.TreeId,
             TreeAdminBulkLoadAppendRequest bla => bla.TreeId,
+            TreeAdminBulkLoadStreamRequest bst => bst.TreeId,
             TreeAdminRestoreRequest r => r.TreeId,
             TreeAdminReshardRequest rsh => rsh.TreeId,
             TreeAdminResizeRequest rsz => rsz.TreeId,

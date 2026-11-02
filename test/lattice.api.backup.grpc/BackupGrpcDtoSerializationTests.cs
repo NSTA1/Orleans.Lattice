@@ -449,6 +449,37 @@ public sealed class BackupGrpcDtoSerializationTests
         Assert.That(RoundTrip(new BackupHealthConfigureResponse()), Is.Not.Null);
 
     [Test]
+    public void BackupHealthConfigGetRequestMessage_round_trips() =>
+        Assert.That(RoundTrip(new BackupHealthConfigGetRequestMessage { BackupId = "b" }).BackupId, Is.EqualTo("b"));
+
+    [Test]
+    public void BackupHealthConfigResponse_round_trips_config()
+    {
+        var copy = RoundTrip(new BackupHealthConfigResponse
+        {
+            Found = true,
+            Config = new BackupHealthConfig(monitoringEnabled: false, TimeSpan.FromMinutes(90)),
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Found, Is.True);
+            Assert.That(copy.Config, Is.EqualTo(new BackupHealthConfig(false, TimeSpan.FromMinutes(90))));
+        });
+    }
+
+    [Test]
+    public void BackupHealthConfigResponse_round_trips_when_not_found()
+    {
+        var copy = RoundTrip(new BackupHealthConfigResponse { Found = false });
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Found, Is.False);
+            Assert.That(copy.Config, Is.Null);
+        });
+    }
+
+    [Test]
     public void Every_registry_alias_is_unique_and_uses_the_reserved_prefix()
     {
         var aliases = RegistryAliasValues();

@@ -20,9 +20,10 @@ Every `treeId` these operations accept is a **tenant-local name**: the facade re
 
 | Operation | Signature | Notes |
 |---|---|---|
-| Enable replication | `Task<ReplicationEnableResult> EnableReplicationAsync(string treeId, LatticeMergeMode mode, string? bootstrapSourceClusterId = null, CancellationToken cancellationToken = default)` | Authorizes the tree fail-closed, then enables it under the fixed `mode`. Rejects an in-place mode change on an already-enabled tree. When `bootstrapSourceClusterId` is supplied and the tree already holds data, requests a snapshot bootstrap; an enable that finds the tree already enabled under the same mode returns `AlreadyEnabled = true` and requests none. |
+| Enable replication | `Task<ReplicationEnableResult> EnableReplicationAsync(string treeId, LatticeMergeMode mode, string? bootstrapSourceClusterId = null, CancellationToken cancellationToken = default)` | Authorizes the tree fail-closed, then enables it under the fixed `mode`. Rejects an in-place mode change on an already-enabled tree. When `bootstrapSourceClusterId` is supplied, requests a snapshot bootstrap from that cluster whether or not the local tree holds rows; an enable that finds the tree already enabled under the same mode returns `AlreadyEnabled = true` and requests none. |
 | Disable replication | `Task<ReplicationDisableResult> DisableReplicationAsync(string treeId, CancellationToken cancellationToken = default)` | Authorizes the tree fail-closed, then disables its runtime enrollment without purging peer data. Idempotent. |
-| Get replication config | `Task<ReplicationConfigReport> GetReplicationConfigAsync(CancellationToken cancellationToken = default)` | Returns a permission-scoped report; trees the caller may not manage are omitted rather than throwing. |
+| Get replication config | `Task<ReplicationConfigReport> GetReplicationConfigAsync(CancellationToken cancellationToken = default)` | Returns a permission-scoped report; trees the caller may not manage are omitted rather than throwing. Every caller may read it, so an empty report does not mean the caller lacks the capability; ask `ProbeCapabilitiesAsync` that. |
+| Probe capabilities | `Task<ReplicationCapabilities> ProbeCapabilitiesAsync(string treeId, CancellationToken cancellationToken = default)` | Reports whether the caller holds `LatticeOperation.Replication` over the tree, through the same authorizer enable and disable use, with no side effects: the engine is never consulted and a denial is a `false` flag, not an exception. The tree need not exist, so a management surface can probe a reserved placeholder id to ask whether the caller may enable a tree it has not named yet (the Explorer does, [#5478](https://github.com/NSTA1/Orleans.Lattice/issues/5478)). Advisory only: every real enable and disable is still authorized on attempt. |
 | Decommission peer | `Task<ReplicationDecommissionPeerResult> DecommissionPeerAsync(string peerClusterId, CancellationToken cancellationToken = default)` | Authorizes against a cluster-wide replication-administration capability (there is no single tree to scope the check to), then removes `peerClusterId`'s durable enrollment from every registered tree and releases any origin-side cross-tree decision hold waiting on its acknowledgement ([#4684](https://github.com/NSTA1/Orleans.Lattice/issues/4684), [#4723](https://github.com/NSTA1/Orleans.Lattice/issues/4723)). Refuses with `LatticeReplicationPeerStillConfiguredException` while the peer is still present in `ReplicationPeers` - a configured peer's acknowledgement is still awaited via live topology regardless of enrollment, so decommissioning it first would silently fail to release anything. A re-added peer re-enrolls from a fresh bootstrap; decommission is not the same operation as a detach, which keeps the hold (see [Architecture](architecture.md)). Idempotent for an already-decommissioned peer. |
 
 ## Peer status facade
@@ -44,7 +45,7 @@ All model records live in `Orleans.Lattice.Api.Abstractions` (namespace `Orleans
 | `TreeId` | `string` | The tree that was enabled. |
 | `Mode` | `LatticeMergeMode` | The merge mode now fixed for the tree. |
 | `AlreadyEnabled` | `bool` | `true` when the tree was already enabled under the same mode (idempotent enable). |
-| `BootstrapRequested` | `bool` | `true` when a snapshot bootstrap was requested for a non-empty tree. The request goes through the operator re-seed seam (`ILatticeReplicationAdmin.RequestSnapshotAsync`), so it is still reported `true` when that seam's `OperatorReseedMinInterval` rate limit declines to start a bootstrap because one was honoured for the same tree and source cluster within the interval. |
+| `BootstrapRequested` | `bool` | `true` when a snapshot bootstrap was requested, which an enable that names a bootstrap source cluster always does. The request goes through the operator re-seed seam (`ILatticeReplicationAdmin.RequestSnapshotAsync`), so it is still reported `true` when that seam's `OperatorReseedMinInterval` rate limit declines to start a bootstrap because one was honoured for the same tree and source cluster within the interval. |
 
 ### `ReplicationDisableResult`
 
@@ -58,6 +59,13 @@ All model records live in `Orleans.Lattice.Api.Abstractions` (namespace `Orleans
 | Member | Type | Meaning |
 |---|---|---|
 | `Trees` | `IReadOnlyList<ReplicationTreeConfigEntry>` | The per-tree entries the caller is authorized to see. `ReplicationConfigReport.Empty` is the canonical empty report. |
+
+### `ReplicationCapabilities`
+
+| Member | Type | Meaning |
+|---|---|---|
+| `TreeId` | `string` | The effective tree id the probe was evaluated over (tenant-scoped under an asserted non-default tenant). |
+| `CanConfigure` | `bool` | `true` when the caller holds `LatticeOperation.Replication` over the whole tree, so an enable or disable of it would be authorized. |
 
 ### `ReplicationDecommissionPeerResult`
 

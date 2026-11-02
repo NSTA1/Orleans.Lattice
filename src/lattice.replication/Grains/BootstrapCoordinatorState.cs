@@ -313,4 +313,16 @@ internal sealed class BootstrapCoordinatorState
     /// empty map, under which a lineage-bound echo is withheld.
     /// </summary>
     [Id(37)] public Dictionary<string, Guid> CompletedExportLineages { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The re-seed request epoch (see <see cref="ReseedAfterEpochs"/>) the drain of
+    /// the bootstrap in progress consumed, or <see langword="null"/> when it served
+    /// none (issue #5534). A sender keeps stamping its pushes with the request
+    /// until it sees the completion echoed, so a push landing between the drain
+    /// and the handoff repeats a request this bootstrap already serves; recording
+    /// it again would withhold the completion and start another re-seed for ever.
+    /// Cleared when a bootstrap starts. State written before this slot decodes to
+    /// <see langword="null"/>.
+    /// </summary>
+    [Id(38)] public long? DrainServedReseedEpoch { get; set; }
 }

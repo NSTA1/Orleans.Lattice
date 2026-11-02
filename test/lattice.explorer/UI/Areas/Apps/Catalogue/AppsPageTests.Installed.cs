@@ -70,6 +70,25 @@ public sealed partial class AppsPageTests
     }
 
     [Test]
+    public void An_app_whose_uninstall_is_still_running_is_badged_and_offers_no_lifecycle_action()
+    {
+        // Issue #5482: the list is read while an uninstall started elsewhere is still being applied.
+        Control.Install(AppsTestData.TaskBoard(), AppLifecycleState.Disabled);
+        Control.InFlight("task-board", AppLifecycleState.Uninstalled);
+
+        var cut = RenderAt<AppsPage>("/apps");
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll("[data-lt-installed-app]"), Has.Count.EqualTo(1)));
+        var row = cut.Find("section[aria-labelledby=lt-apps-installed] tbody tr.lt-table__row");
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.TextContent, Does.Contain("Uninstalling...").And.Not.Contain("Disabled"));
+            Assert.That(row.QuerySelectorAll("button"), Is.Empty, "no lifecycle action is offered until the change settles");
+            Assert.That(row.QuerySelector("a[aria-label^='Manage']"), Is.Not.Null, "the manage page still shows the change");
+        });
+    }
+
+    [Test]
     public void A_disabled_app_offers_no_disable_and_a_caller_who_may_not_uninstall_sees_no_uninstall()
     {
         Control.Capabilities = Control.Capabilities with { CanUninstall = false };

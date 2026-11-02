@@ -15,6 +15,9 @@ namespace Orleans.Lattice.Explorer.UI.Layout;
 /// </remarks>
 public partial class DirectorySpine
 {
+    /// <summary>The line under a stop shown from the last answer, because the latest check met no answer.</summary>
+    internal const string StaleReason = "Last known: not rechecked yet.";
+
     /// <summary>Raised when a stop is followed, so a slide-in panel can close.</summary>
     [Parameter]
     public EventCallback OnNavigate { get; set; }
@@ -46,6 +49,14 @@ public partial class DirectorySpine
 
     private bool IsCurrent(ExplorerAreaEntry entry) =>
         string.Equals(CurrentLocation.Address.Area, entry.Area.Key, StringComparison.Ordinal);
+
+    // Home, and the page of an area that could not be checked, carry the notice
+    // themselves; the spine carries it everywhere else, so there is one live region.
+    private bool ShowsRecheckNotice =>
+        !Rail
+        && !IsHomeCurrent
+        && CurrentLocation.CurrentEntry is not { IsUnchecked: true }
+        && CurrentLocation.Entries.Any(entry => entry.NeedsRecheck);
 
     private ExplorerAddress AreaAddress(ExplorerAreaEntry entry) =>
         Navigator.Canonicalize(ExplorerAddress.ForArea(entry.Area.Key).WithTenant(CurrentLocation.Address.Tenant));

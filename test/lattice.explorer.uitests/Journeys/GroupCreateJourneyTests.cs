@@ -7,8 +7,9 @@ namespace Orleans.Lattice.Explorer.UiTests.Journeys;
 
 /// <summary>
 /// Issue #4077: a new group's id is a plain text box, not a drop-down. An id that
-/// already names a group is refused as it is typed, an id the identity directory
-/// does not list is refused by name when the field is left, and a roster group
+/// already names a group is refused as it is typed, a directory user's id is
+/// refused by name when the field is left (an id the directory does not list at
+/// all names a stored group, issue #5370), and a roster group
 /// that is not defined yet is created - with the dialog staying open, input kept,
 /// for every refusal.
 /// </summary>
@@ -35,13 +36,13 @@ public sealed class GroupCreateJourneyTests : UiTestBase
         await Expect(error).ToContainTextAsync($"A group named {WorldIdentities.OperatorsGroup} already exists.");
         await Expect(id).ToHaveAttributeAsync("aria-invalid", "true");
 
-        await id.FillAsync("not-on-the-roster");
+        await id.FillAsync(WorldIdentities.Alice);
         await dialog.GetByRole(AriaRole.Textbox, new() { Name = "Display name (optional)" }).FocusAsync();
-        await Expect(error).ToContainTextAsync("not-on-the-roster is not a group in the identity directory (static roster).");
+        await Expect(error).ToContainTextAsync($"{WorldIdentities.Alice} is a user in the identity directory (static roster), not a group.");
 
         await dialog.GetByRole(AriaRole.Button, new() { Name = "Create group" }).ClickAsync();
         await Expect(dialog).ToBeVisibleAsync();
-        await Expect(id).ToHaveValueAsync("not-on-the-roster");
+        await Expect(id).ToHaveValueAsync(WorldIdentities.Alice);
         await AxeConformance.SweepAsync(page, "the New group dialog with a refused id");
 
         await id.FillAsync(WorldIdentities.AuditorsGroup);

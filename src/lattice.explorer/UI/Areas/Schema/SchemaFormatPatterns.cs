@@ -23,6 +23,10 @@ internal static class SchemaFormatPatterns
 {
     private const string Octet = "(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])";
 
+    private const string Ipv4 = "(" + Octet + "\\.){3}" + Octet;
+
+    private const string DomainLabel = "[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?";
+
     private const string DatePart = "[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])";
 
     private const string TimePart = "([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9](\\.[0-9]+)?)?";
@@ -34,7 +38,8 @@ internal static class SchemaFormatPatterns
     private static readonly Format[] Formats =
     [
         new(SchemaTextFormat.Email, "Email address", "an email address",
-            "^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,}\\z", "dana@example.com", "dana@example"),
+            "^[A-Za-z0-9_%+-]+(\\.[A-Za-z0-9_%+-]+)*@" + DomainLabel
+            + "(\\." + DomainLabel + ")*\\.[A-Za-z]{2,}\\z", "dana@example.com", "dana@example"),
         new(SchemaTextFormat.Url, "URL", "an http or https URL",
             "^https?://[^\\s/?#]+([/?#][^\\s]*)?\\z", "https://example.com/orders?id=7", "example.com/orders"),
         new(SchemaTextFormat.Uuid, "UUID", "a UUID",
@@ -46,7 +51,7 @@ internal static class SchemaFormatPatterns
         new(SchemaTextFormat.Time, "ISO time", "an ISO time of day",
             "^" + TimePart + "\\z", "14:02:11", "2pm"),
         new(SchemaTextFormat.Ipv4, "IPv4 address", "an IPv4 address",
-            "^(" + Octet + "\\.){3}" + Octet + "\\z", "192.0.2.10", "192.0.2.300"),
+            "^" + Ipv4 + "\\z", "192.0.2.10", "192.0.2.300"),
         new(SchemaTextFormat.Ipv6, "IPv6 address", "an IPv6 address",
             "^((" + Hex + ":){7}" + Hex
             + "|(" + Hex + ":){1,7}:"
@@ -56,7 +61,14 @@ internal static class SchemaFormatPatterns
             + "|(" + Hex + ":){1,3}(:" + Hex + "){1,4}"
             + "|(" + Hex + ":){1,2}(:" + Hex + "){1,5}"
             + "|" + Hex + ":(:" + Hex + "){1,6}"
-            + "|:((:" + Hex + "){1,7}|:))\\z", "2001:db8::ff00:42:8329", "2001:db8:::1"),
+            + "|:((:" + Hex + "){1,7}|:)"
+            + "|((" + Hex + ":){6}|::(" + Hex + ":){0,5}"
+            + "|" + Hex + "::(" + Hex + ":){0,4}"
+            + "|(" + Hex + ":){1}" + Hex + "::(" + Hex + ":){0,3}"
+            + "|(" + Hex + ":){2}" + Hex + "::(" + Hex + ":){0,2}"
+            + "|(" + Hex + ":){3}" + Hex + "::(" + Hex + ":){0,1}"
+            + "|(" + Hex + ":){4}" + Hex + "::)" + Ipv4
+            + ")\\z", "2001:db8::ff00:42:8329", "2001:db8:::1"),
         new(SchemaTextFormat.Slug, "Slug", "a slug",
             "^[a-z0-9]+(-[a-z0-9]+)*\\z", "spring-sale-2026", "Spring Sale"),
         new(SchemaTextFormat.CountryCode, "Country code", "a two-letter country code",
@@ -109,7 +121,8 @@ internal static class SchemaFormatPatterns
     /// recompile to the very rule it read, so such a rule reads back as a
     /// pattern card holding the <c>$</c> form unchanged. The operator sees the
     /// real pattern and chooses the format card, which writes the <c>\z</c>
-    /// form.
+    /// form. The same exact-pattern rule preserves older email and IPv6
+    /// policies when the grammar of a format card changes.
     /// </remarks>
     /// <param name="pattern">A policy's pattern.</param>
     /// <param name="format">The format, when one matches.</param>

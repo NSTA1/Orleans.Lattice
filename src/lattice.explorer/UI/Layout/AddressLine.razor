@@ -9,45 +9,55 @@
 @if (!_editing)
 {
     var chain = Chain;
+    var elides = chain.Count > 2;
     <div class="lt-shell-address-line">
-        @if (IsCompact && chain.Count > 2)
+        @if (elides && DrawsCompactForm)
         {
             @* Compact, the chain keeps its current node on one line; "..." stands for the nodes before it (an elision, not a node) and opens them as a list. *@
-            <nav class="lt-chain-nav" aria-label="Address">
-                <ol class="lt-chain lt-chain--mono lt-shell-address-line__compact-chain">
-                    <li class="lt-chain__link">
-                        <button type="button"
-                                class="lt-chain__text lt-shell-address-line__more"
-                                aria-label="Show the full address"
-                                aria-expanded="@(_chainOpen ? "true" : "false")"
-                                aria-controls="@_chainId"
-                                @onclick="ToggleChain">...</button>
-                    </li>
-                    <li class="lt-chain__link">
-                        <LtNode Kind="LtNodeKind.Join" />
-                        <span class="lt-chain__text lt-chain__text--current" aria-current="page" title="@chain[^1].Text">@chain[^1].Text</span>
-                    </li>
-                </ol>
-            </nav>
+            <div class="@FormClass(compact: true)">
+                <nav class="lt-chain-nav" aria-label="Address">
+                    <ol class="lt-chain lt-chain--mono lt-shell-address-line__compact-chain">
+                        <li class="lt-chain__link">
+                            <button type="button"
+                                    class="lt-chain__text lt-shell-address-line__more"
+                                    aria-label="Show the full address"
+                                    aria-expanded="@(_chainOpen ? "true" : "false")"
+                                    aria-controls="@_chainId"
+                                    @onclick="ToggleChain">...</button>
+                        </li>
+                        <li class="lt-chain__link">
+                            <LtNode Kind="LtNodeKind.Join" />
+                            <span class="lt-chain__text lt-chain__text--current" aria-current="page" title="@chain[^1].Text">@chain[^1].Text</span>
+                        </li>
+                    </ol>
+                </nav>
+            </div>
         }
-        else
+        @if (!elides || DrawsWideForm)
         {
-            <LtChain Label="Address" Links="@chain" Mono="true" />
+            @* Until the band is measured, the whole chain is the wide form only when the compact one elides it. *@
+            <div class="@FormClass(compact: false, tagged: elides)">
+                <LtChain Label="Address" Links="@chain" Mono="true" />
+            </div>
         }
         <button type="button"
                 class="lt-shell-address-line__edit"
                 aria-keyshortcuts="/ Control+K"
                 @onclick="OpenFromClickAsync"
                 @ref="_trigger">
-            <span class="lt-shell-address-line__hint">@(IsCompact ? "Go to or search" : "Go to an address, search, or type > for a command")</span>
-            @if (!IsCompact)
+            @if (DrawsCompactForm)
             {
-                <kbd class="lt-kbd" aria-hidden="true">/</kbd>
-                <kbd class="lt-kbd" aria-hidden="true">Ctrl K</kbd>
+                <span class="@HintClass(compact: true)">Go to or search</span>
+            }
+            @if (DrawsWideForm)
+            {
+                <span class="@HintClass(compact: false)">Go to an address, search, or type > for a command</span>
+                <kbd class="@KeyClass" aria-hidden="true">/</kbd>
+                <kbd class="@KeyClass" aria-hidden="true">Ctrl K</kbd>
             }
         </button>
     </div>
-    @if (IsCompact && _chainOpen && chain.Count > 2)
+    @if (DrawsCompactForm && _chainOpen && elides)
     {
         <div id="@_chainId" class="lt-shell-address-line__full">
             <ol class="lt-spine" aria-label="Full address">

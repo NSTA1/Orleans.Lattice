@@ -427,6 +427,10 @@ internal sealed partial class LatticeAdminGrain
 
         // Copies source entries with offset in (fromExclusive, throughInclusive]
         // to the target, preserving offsets. Returns the new exclusive cursor.
+        // A page can hold more entries than the target accepts in one append
+        // (the Azure Table provider caps a call at its 100-action transaction),
+        // so each page is written as dense runs of at most that many entries.
+        var maxAppend = dstProvider.MaxAppendBatchEntries;
         async Task<long> CopyRangeAsync(long fromExclusive, long throughInclusive)
         {
             var cursor = fromExclusive;
@@ -436,18 +440,40 @@ internal sealed partial class LatticeAdminGrain
                     physicalTreeId, partition, cursor, opts.EffectiveCopyPageSize, encoder, cancellationToken);
                 if (page.Offsets.Length == 0)
                 {
-                    break;
+                    // The source is quiesced at throughInclusive, so it must
+                    // yield entries up to there. An empty page short of it
+                    // means the copy cannot reach the tail it is cutting over
+                    // (a suffix not yet readable from the source, or trimmed
+                    // under the copy). Fail closed here rather than lean on
+                    // the optional verification: with VerifyAfterCopy off, a
+                    // short copy would flip the pin and the target would
+                    // re-issue offsets the source already holds (#5466).
+                    throw new InvalidOperationException(
+                        $"WAL move of {physicalTreeId}/{partition} aborted: the copy reached offset {cursor} but the "
+                        + $"source returned no entries past it, short of the quiesced highest offset {throughInclusive}. "
+                        + "The pin was not flipped; the source remains live; retry.");
                 }
-                await dstProvider.AppendEncodedBatchAsync(
-                    physicalTreeId, partition, page.EncodedEntries, page.Offsets, encoder, cancellationToken);
 
-                var offsets = page.Offsets.Span;
-                if (copiedFrom < 0)
+                for (var start = 0; start < page.Offsets.Length;)
                 {
-                    copiedFrom = offsets[0];
+                    var length = WalMoveResumeCore.CopyChunkLength(page.Offsets.Span, start, maxAppend);
+                    await dstProvider.AppendEncodedBatchAsync(
+                        physicalTreeId,
+                        partition,
+                        page.EncodedEntries.Slice(start, length),
+                        page.Offsets.Slice(start, length),
+                        encoder,
+                        cancellationToken);
+
+                    var offsets = page.Offsets.Span;
+                    if (copiedFrom < 0)
+                    {
+                        copiedFrom = offsets[start];
+                    }
+                    copiedThrough = offsets[start + length - 1];
+                    start += length;
                 }
-                copiedThrough = offsets[^1];
-                cursor = offsets[^1];
+                cursor = copiedThrough;
 
                 // Units are offsets of the live tail: a resumed copy counts the
                 // prefix an earlier attempt already landed as done.
@@ -563,6 +589,10 @@ internal sealed partial class LatticeAdminGrain
             // 4. Verify the target tail before the irreversible cutover. The
             //    overshoot guard runs even when content verification is off.
             await ReportMoveProgressAsync(LatticeMaintenanceProgress.Verifying);
+            // The copy wrote the target through this silo's provider instance;
+            // wait until those appends are readable, so the verification and
+            // the target's first readers after the cutover see the whole copy.
+            await dstProvider.WaitForAppendVisibilityAsync(physicalTreeId, partition, cancellationToken);
             dstHighest = await dstProvider.GetHighestOffsetAsync(physicalTreeId, partition, cancellationToken);
             if (srcHighest >= 0 && dstHighest > srcHighest)
             {

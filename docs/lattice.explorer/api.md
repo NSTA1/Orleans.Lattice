@@ -69,7 +69,8 @@ another `IExplorerAuthMethod` registration.
 | `IExplorerAuthMethod` | `SchemeId`, `CanHandle(string advertisedScheme)`, `ChallengeAsync(ExplorerAuthChallengeContext context, CancellationToken cancellationToken = default)` | Identifies a scheme, selects advertised schemes, and performs sign-in. |
 | `ExplorerAuthChallengeContext` | `SchemeId`, `Parameters`, `Inputs`, `Endpoint`, `TimeProvider` | Carries the selected advertisement, operator inputs and endpoint into a challenge. |
 | `ExplorerAuthSignIn` | `SchemeId`, `DisplayName`, `Authentication` | Supplies the credential applied to calls after sign-in. |
-| `IExplorerAuthSession` | `IsAuthenticated`, `Username`, `CurrentScheme`, `CurrentAuthentication`, `AvailableSchemes`; `AuthenticationChanged`, `ReauthRequired`; `GetAuthenticationFor`, `InitializeAsync`, `LoginAsync`, `LoginWithMethodAsync`, `DiscoverAsync`, `LogoutAsync` | Owns per-circuit sign-in state, discovers endpoint schemes, applies credentials, and returns a credential only for the endpoint it was minted for. |
+| `IExplorerAuthSession` | `IsAuthenticated`, `Username`, `CurrentScheme`, `CurrentAuthentication`, `AvailableSchemes`; `AuthenticationChanged`, `ReauthRequired`; `GetAuthenticationFor`, `InitializeAsync`, `LoginAsync`, `LoginWithMethodAsync`, `DiscoverAsync`, `LogoutAsync` | Owns per-circuit sign-in state, discovers endpoint schemes, applies credentials, and returns a credential only for the endpoint it was minted for. A sign-in is checked against the configured endpoint before it is applied: one the cluster refuses throws `ExplorerSignInRefusedException` and nothing is persisted or applied. |
+| `ExplorerSignInRefusedException` | constructors; `PasswordRefusedMessage`, `SignInRefusedMessage` | The sign-in the cluster refused (for example a wrong password). Its message is written for the sign-in dialog and never carries the credential. A caller the cluster recognises but grants nothing is not refused. |
 | `ExplorerAccessTokenSource` | constructor; `DefaultRefreshMargin`; `ReauthRequired`; `GetAuthorizationHeaderAsync`, `RefreshAsync`, `Dispose` | Refreshes bearer tokens before expiry, coalesces concurrent refreshes and latches when silent renewal ends. |
 | `ExplorerAccessToken` | `Token`, `ExpiresOn`, `Scheme`; `ToAuthorizationHeader`, `ToString` | In-memory access-token value consumed by the refresh source; its string representation redacts the token. |
 | `LatticeCallAuthentication` | `AuthorizationHeaderName`, `Headers`, `HasHeaders`, `CredentialProvider`, `HasCredentialProvider`; `Basic`, `Bearer` | Describes the call credential; static credential headers are restricted to secure transport unless local-development h2c is explicitly enabled. |
@@ -151,6 +152,8 @@ This index lists every effectively public type and each member declared directly
   - `BuildUrl`
 - `Orleans.Lattice.Explorer.Core.Authentication.ExplorerReauthOptions`
   - `constructors (1)`; `AppendReturnUrl`; `ChallengePath`; `DefaultReturnUrlParameter`; `ReturnUrlParameter`
+- `Orleans.Lattice.Explorer.Core.Authentication.ExplorerSignInRefusedException`
+  - `constructors (3)`; `PasswordRefusedMessage`; `SignInRefusedMessage`
 - `Orleans.Lattice.Explorer.Core.Authentication.ExplorerSignOutOptions`
   - `constructors (1)`; `FederatedSignOutPath`
 - `Orleans.Lattice.Explorer.Core.Authentication.GrpcExplorerAuthSchemeProbe`
@@ -233,7 +236,7 @@ This index lists every effectively public type and each member declared directly
     `GetTreeStructureAsync`; `ListCoveredTreesAsync`; `ListDeadLettersAsync`; `ListIndexTagsAsync`; `ListTagIndexesAsync`; `ListTagValuesAsync`
     `ListTreesAsync`; `ListViewsAsync`; `ObserveChangesAsync`; `ObserveMetricsAsync`; `ScanEntriesAsync`; `ScanTagMembersAsync`
 - `Orleans.Lattice.Explorer.Core.Connection.ILatticeStateConnection`
-  - `ConfigureAsync`; `ProbeAsync`; `ReconnectAsync`; `Status`; `StatusChanged`
+  - `ConfigureAsync`; `ProbeAsync`; `ReconnectAsync`; `Status`; `StatusChanged`; `VerifyCredentialAsync`
 - `Orleans.Lattice.Explorer.Core.Connection.IReauthRequiredSource`
   - `ReauthRequired`
 - `Orleans.Lattice.Explorer.Core.Connection.LatticeCallAuthentication`
@@ -246,8 +249,10 @@ This index lists every effectively public type and each member declared directly
 - `Orleans.Lattice.Explorer.Core.Connection.LatticeConnectionState`
   - `Connected`; `Connecting`; `Disconnected`; `Faulted`; `Reconnecting`; `value__`
 - `Orleans.Lattice.Explorer.Core.Connection.LatticeConnectionStatus`
-  - `constructors (1)`; `<Clone>$`; `Deconstruct`; `Disconnected`; `Endpoint`; `Equals (2 overloads)`; `GetHashCode`; `IsDisconnected`; `IsUsable`
-    `Message`; `op_Equality`; `op_Inequality`; `RequiresAuthentication`; `State`; `ToString`
+  - `constructors (1)`; `<Clone>$`; `CredentialRefused`; `Deconstruct`; `Disconnected`; `Endpoint`; `Equals (2 overloads)`; `GetHashCode`
+    `IsDisconnected`; `IsUsable`; `Message`; `op_Equality`; `op_Inequality`; `RequiresAuthentication`; `State`; `ToString`
+- `Orleans.Lattice.Explorer.Core.Connection.LatticeCredentialCheck`
+  - `Accepted`; `Refused`; `Unverified`; `value__`
 - `Orleans.Lattice.Explorer.Core.Connection.LatticeExplorerConnectionServiceCollectionExtensions`
   - `AddLatticeStateConnection`
 - `Orleans.Lattice.Explorer.Core.Connection.LatticeGrpcChannelFactory`
@@ -259,6 +264,7 @@ This index lists every effectively public type and each member declared directly
     `GetEntryHistoryAsync`; `GetMetricsSnapshotAsync`; `GetTreeStructureAsync`; `ListCoveredTreesAsync`; `ListDeadLettersAsync`
     `ListIndexTagsAsync`; `ListTagIndexesAsync`; `ListTagValuesAsync`; `ListTreesAsync`; `ListViewsAsync`; `ObserveChangesAsync`
     `ObserveMetricsAsync`; `ProbeAsync`; `ReconnectAsync`; `ScanEntriesAsync`; `ScanTagMembersAsync`; `Status`; `StatusChanged`
+    `VerifyCredentialAsync`
 - `Orleans.Lattice.Explorer.Core.Data.DataCrdtMember`
   - `constructors (1)`; `<Clone>$`; `ElementFormat`; `ElementText`; `Equals (2 overloads)`; `From`; `GetHashCode`; `op_Equality`; `op_Inequality`
     `Ordinal`; `ReplicaId`; `ToString`
@@ -782,7 +788,8 @@ This index lists every effectively public type and each member declared directly
 - `Orleans.Lattice.Explorer.UI.Design.Components.LtCompactRow`
   - `constructors (1)`; `Mono`; `Primary`; `Secondary`; `State`
 - `Orleans.Lattice.Explorer.UI.Design.Components.LtConfirmDestructive`
-  - `constructors (1)`; `ChildContent`; `ConfirmText`; `ObjectKind`; `ObjectName`; `OnConfirm`; `Open`; `OpenChanged`; `ReturnFocus`; `Title`
+  - `constructors (1)`; `ChildContent`; `ConfirmText`; `DefaultPendingText`; `ObjectKind`; `ObjectName`; `OnConfirm`; `Open`; `OpenChanged`
+    `PendingText`; `ReturnFocus`; `Title`
 - `Orleans.Lattice.Explorer.UI.Design.Components.LtDateTimeInput`
   - `constructors (1)`; `AllowFuture`; `ConfirmAsync`; `Disabled`; `DisposeAsync`; `EmptyText`; `Error`; `FocusAsync`; `Hint`; `InputId`; `Label`
     `Max`; `Min`; `QuickPicks`; `Value`; `ValueChanged`

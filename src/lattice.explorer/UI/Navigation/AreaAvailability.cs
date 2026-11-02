@@ -1,8 +1,9 @@
 namespace Orleans.Lattice.Explorer.UI.Navigation;
 
 /// <summary>
-/// An area's answer to "may this caller see you, now?" - visible, hidden, or
-/// shown but unavailable with a reason.
+/// An area's answer to "may this caller see you, now?" - visible, hidden, shown
+/// but unavailable with a reason, or not checked because the cluster did not
+/// answer.
 /// </summary>
 /// <remarks>
 /// The default value is <see cref="Hidden"/>, so an answer that was never given
@@ -22,10 +23,21 @@ internal readonly record struct AreaAvailability
     /// <summary>The area is not shown at all.</summary>
     public static AreaAvailability Hidden { get; } = new(AreaAvailabilityKind.Hidden, null);
 
-    /// <summary>Which of the three answers this is.</summary>
+    /// <summary>What an area that could not be checked says on the spine, on Home and on its page.</summary>
+    public const string UncheckedReason = "Could not be checked: the cluster did not answer.";
+
+    /// <summary>
+    /// The area could not be checked: the probe met a transient fault, so the
+    /// question is still open. An area answers this only for a fault
+    /// <see cref="AreaProbeFaults.IsTransient"/> recognises; it is shown, demoted,
+    /// and cannot be opened.
+    /// </summary>
+    public static AreaAvailability Unchecked { get; } = new(AreaAvailabilityKind.Unchecked, UncheckedReason);
+
+    /// <summary>Which of the four answers this is.</summary>
     public AreaAvailabilityKind Kind { get; }
 
-    /// <summary>For <see cref="AreaAvailabilityKind.Unavailable"/>, the one-sentence reason; otherwise <see langword="null"/>.</summary>
+    /// <summary>For <see cref="AreaAvailabilityKind.Unavailable"/> and <see cref="AreaAvailabilityKind.Unchecked"/>, the one-sentence reason; otherwise <see langword="null"/>.</summary>
     public string? Reason { get; }
 
     /// <summary>Whether the area appears in the directory at all.</summary>

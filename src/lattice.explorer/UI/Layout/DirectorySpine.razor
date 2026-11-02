@@ -23,7 +23,7 @@
         @foreach (var entry in CurrentLocation.Entries)
         {
             var current = IsCurrent(entry);
-            <li class="lt-spine__stop" @key="entry.Area.Key">
+            <li class="lt-spine__stop" @key="entry.Area.Key" data-lt-area-state="@(entry.IsUnchecked ? "unchecked" : entry.IsStale ? "stale" : "current")">
                 <a class="@(entry.IsVisible ? "lt-spine__link lt-shell-directory__link" : "lt-spine__link lt-shell-directory__link lt-shell-directory__link--unavailable")"
                    href="@AreaAddress(entry).ToHref()"
                    aria-current="@(current ? "page" : null)"
@@ -36,9 +36,21 @@
                         {
                             <span class="lt-shell-directory__reason">@entry.Availability.Reason</span>
                         }
+                        else if (entry.IsUnchecked)
+                        {
+                            <span class="lt-visually-hidden">, could not be checked</span>
+                        }
                         else if (!entry.IsVisible)
                         {
                             <span class="lt-visually-hidden">, unavailable</span>
+                        }
+                        @if (entry.IsStale && !Rail)
+                        {
+                            <span class="lt-shell-directory__reason">@StaleReason</span>
+                        }
+                        else if (entry.IsStale)
+                        {
+                            <span class="lt-visually-hidden">, last known</span>
                         }
                     </span>
                     @if (entry.Badge is not null && !Rail)
@@ -49,6 +61,10 @@
             </li>
         }
     </ul>
+    @if (ShowsRecheckNotice)
+    {
+        <AreaRecheckNotice />
+    }
     @if (!CurrentLocation.EntriesLoaded && CurrentLocation.Entries.Count == 0)
     {
         <LtSkeleton Lines="4" Label="Loading the directory" />

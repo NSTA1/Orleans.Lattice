@@ -115,6 +115,10 @@ failure_modes:
     signal: "Coordinated restore of a replicated tree refuses to start unless every peer is reachable."
     effect: "No fleet cutover occurs."
     response: "Restore peer reachability and retry."
+  - id: replication-config-unreadable
+    signal: "LatticeRestoreValidationException saying the cluster could not read its replication configuration to establish whether the target is replicated."
+    effect: "Nothing is restored: before taking the local path for a target its snapshot reports as unreplicated, a runtime-config host re-reads the configuration, and it refuses rather than risk an uncoordinated replacement of a replicated tree."
+    response: "Restore access to the sys-replication-config tree and retry."
   - id: operation-runner-lost
     signal: "Tracked restore status becomes Failed after the accepting silo is lost or stops heartbeating."
     effect: "The background restore is not resumed."

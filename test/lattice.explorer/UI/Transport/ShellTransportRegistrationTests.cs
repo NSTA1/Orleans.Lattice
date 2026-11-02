@@ -46,6 +46,7 @@ public sealed class ShellTransportRegistrationTests
         [typeof(Orleans.Lattice.Api.Apps.ILatticeAppCatalog)] = typeof(ShellAppCatalogTransport),
         [typeof(Orleans.Lattice.Api.Apps.ILatticeAppWorkspace)] = typeof(ShellAppWorkspaceTransport),
         [typeof(Orleans.Lattice.Api.Apps.ILatticeAppRoleBindings)] = typeof(ShellAppRoleBindingsTransport),
+        [typeof(Orleans.Lattice.Api.Data.ILatticeDataApi)] = typeof(ShellDataTransport),
     };
 
     [Test]

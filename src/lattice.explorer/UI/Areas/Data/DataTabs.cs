@@ -19,6 +19,18 @@ internal static class DataTabs
     /// <summary>The query key holding the directory's filter text.</summary>
     public const string FilterQuery = "filter";
 
+    /// <summary>The query key that opens a creation dialog on the page, such as <c>?new=view</c>.</summary>
+    public const string NewQuery = "new";
+
+    /// <summary>The <see cref="NewQuery"/> value that opens the Views tab's New view dialog.</summary>
+    public const string NewViewValue = "view";
+
+    /// <summary>The query key that opens the Import dialog when the tree page loads (issue #5365).</summary>
+    public const string ImportQuery = "import";
+
+    /// <summary>The <see cref="ImportQuery"/> value that opens it on a seed, as New tree from file... does.</summary>
+    public const string ImportSeedValue = "seed";
+
     /// <summary>The key and prefix browser.</summary>
     public const string Keys = "keys";
 

@@ -2,6 +2,7 @@ using System.Globalization;
 using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Explorer.UI.Areas.Cluster;
+using Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 using static Orleans.Lattice.Explorer.Tests.UI.Operations.TreeAdminOperationScript;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Cluster;
@@ -93,5 +94,16 @@ public sealed class ClusterOrphanOperationResultTests
         var result = new ClusterOrphanOperationResult(false, 10, orphaned, 0, 0, 0, gaps);
 
         Assert.That(result.IsClean, Is.EqualTo(clean));
+    }
+
+    [TestCase(1, 0, 0, "Repair finished: 1 leaf unspliced. Auditing again.")]
+    [TestCase(0, 1, 0, "Repair finished: 0 leaves unspliced, 1 refused. Auditing again.")]
+    [TestCase(2, 3, 1, "Repair finished: 2 leaves unspliced, 3 refused, 1 region not judged. Auditing again.")]
+    [TestCase(0, 0, 2, "Repair finished: 0 leaves unspliced, 2 regions not judged. Auditing again.")]
+    public void The_repair_toast_reports_refused_leaves_and_unjudged_regions(long repaired, long refused, long gaps, string expected)
+    {
+        var totals = new ClusterOrphanOperationResult(true, 10, repaired + refused, repaired, 0, refused, gaps);
+
+        Assert.That(ClusterOrphansPage.RepairFinishedMessage(totals), Is.EqualTo(expected));
     }
 }

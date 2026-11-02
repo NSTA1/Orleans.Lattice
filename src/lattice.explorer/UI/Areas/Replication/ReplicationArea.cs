@@ -13,7 +13,8 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Replication;
 /// Visibility fails closed: the area is shown only when the caller can read the
 /// peer status report, or the enrolment report names at least one tree the caller
 /// may manage. A denial, an unserved facade, a missing registration or any other
-/// fault leaves it hidden.
+/// definite fault leaves it hidden; a read the cluster did not answer leaves it
+/// not checked, which admits nothing and is asked again.
 /// </remarks>
 internal sealed class ReplicationArea : IExplorerArea
 {
@@ -89,7 +90,16 @@ internal sealed class ReplicationArea : IExplorerArea
         }
 
         var config = await _data.GetConfigAsync(refresh: false, cancellationToken).ConfigureAwait(false);
-        return config.Value is { Trees.Count: > 0 } ? AreaAvailability.Visible : AreaAvailability.Hidden;
+        if (config.Value is { Trees.Count: > 0 })
+        {
+            return AreaAvailability.Visible;
+        }
+
+        // Neither read admitted the caller. When either one met no answer, the
+        // question is still open: not checked, rather than hidden.
+        return status.Fault is { IsTransient: true } || config.Fault is { IsTransient: true }
+            ? AreaAvailability.Unchecked
+            : AreaAvailability.Hidden;
     }
 
     /// <inheritdoc />

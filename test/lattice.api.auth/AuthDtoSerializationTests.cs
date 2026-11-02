@@ -277,6 +277,7 @@ public sealed class AuthDtoSerializationTests
             LocalMembershipEffective = true,
             AllTreesGrantsEnabled = true,
             AccessAdministrationDelegationEnabled = true,
+            DirectoryValidationRequired = true,
         };
 
         Assert.That(RoundTrip(original), Is.EqualTo(original));

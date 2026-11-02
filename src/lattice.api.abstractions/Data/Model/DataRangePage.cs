@@ -25,4 +25,14 @@ public sealed record DataRangePage
     /// when the range is fully drained.
     /// </summary>
     [Id(2)] public string? ContinuationToken { get; init; }
+
+    /// <summary>
+    /// How much of the requested range the caller's access admitted, reported
+    /// only on the first page of a scan opened with
+    /// <see cref="DataRangeRequest.IncludeGateCoverage"/> set over a tree the
+    /// caller can observe; otherwise <see langword="null"/>. It is a
+    /// classification and never a count or a list of the withheld keys, because
+    /// either would disclose data the caller may not read.
+    /// </summary>
+    [Id(3)] public LatticeRangeReadGateCoverage? GateCoverage { get; init; }
 }

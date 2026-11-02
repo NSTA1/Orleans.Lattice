@@ -107,13 +107,17 @@ the head, whatever address the visitor types. On a head anyone can reach, that
 would be a host and port probe into the head's own network.
 
 - **Not opted in (the default).** The header's connection indicator has no
-  **Connection settings** entry, and the connection dialog is read-only, titled
-  **Cluster connection**: it shows the configured endpoint and says it is set by
-  the deployment and cannot be changed from the browser. With no endpoint
-  configured, including on first run, it explains that the deployment sets one
-  through `LATTICE_EXPLORER_ENDPOINT` or a pre-provisioned configuration
-  document. There is no form, no test and no save, and the head refuses a
-  connection test even if one is asked for.
+  **Connection settings** entry. Once an endpoint is configured, the endpoint the
+  indicator shows is itself a button named **Connection details** (in the
+  compact layout, a **Connection details** button inside the **Menu** sheet),
+  which opens the connection dialog read-only, titled **Cluster
+  connection**: it shows the configured endpoint and says it is set by the
+  deployment and cannot be changed from the browser, and **Close** or Escape
+  dismisses it. With no endpoint configured, including on first run, the same
+  dialog opens by itself, cannot be dismissed, and explains that the deployment
+  sets one through `LATTICE_EXPLORER_ENDPOINT` or a pre-provisioned
+  configuration document. There is no form, no test and no save, and the head
+  refuses a connection test even if one is asked for.
 - **Opted in.** **Connection settings** opens the editable **Connect to a
   cluster** dialog: the endpoint, **Insecure loopback development mode**,
   **Allow unencrypted HTTP/2 (h2c)**, **Test connection** and **Save and
@@ -260,7 +264,9 @@ The web head maps two local form-post endpoints below the Explorer mount:
 - `POST auth/login` signs in with the submitted Basic username and password.
 - `POST auth/logout` clears the local State API credential.
 
-Both endpoints validate antiforgery tokens and redirect back to the Explorer base
+Both endpoints validate antiforgery tokens. A sign-in redirects back to the
+address it was made from when that is a local path under the Explorer base
+href, and to the base href otherwise; a sign-out always redirects to the base
 href. They are mapped by the public `AuthEndpoints.MapExplorerAuthEndpoints`
 extension, which `MapLatticeExplorer` calls with the base href as the redirect
 target. A federated provider such as the hosted-web Entra package can publish a

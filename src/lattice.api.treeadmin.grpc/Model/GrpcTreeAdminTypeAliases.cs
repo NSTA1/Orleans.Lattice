@@ -119,4 +119,10 @@ public static class GrpcTreeAdminTypeAliases
 
     /// <summary>Alias for <see cref="TreeAdminStorageUsageOperationStatusResponse"/>.</summary>
     public const string TreeAdminStorageUsageOperationStatusResponse = "oitg.suopstat";
+
+    /// <summary>Alias for <see cref="TreeAdminBulkLoadStreamRequest"/>.</summary>
+    public const string TreeAdminBulkLoadStreamRequest = "oitg.blstreq";
+
+    /// <summary>Alias for <see cref="TreeAdminBulkLoadStreamResponse"/>.</summary>
+    public const string TreeAdminBulkLoadStreamResponse = "oitg.blstres";
 }

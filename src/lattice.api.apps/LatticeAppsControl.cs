@@ -44,6 +44,16 @@ internal sealed partial class LatticeAppsControl : ILatticeAppsControl
     private readonly ILatticeAccessGate _gate;
     private readonly ITenantContextResolver _tenants;
     private readonly ILatticeMembershipContext? _membership;
+    private readonly TimeProvider _time;
+
+    /// <summary>
+    /// How long an enable, disable or uninstall call waits for its activation run before it
+    /// returns a <see cref="AppLifecycleResult.Pending"/> result. Kept well under the request
+    /// timeouts of the ingresses a facade sits behind (60 s at the reference Front Door, 100 s
+    /// at a default YARP route), so a slow run is reported as accepted rather than cut off by
+    /// a hop, which would cancel it part-way (issue #5482).
+    /// </summary>
+    internal static readonly TimeSpan DefaultAcceptWindow = TimeSpan.FromSeconds(20);
 
     /// <summary>Initializes a new <see cref="LatticeAppsControl"/>.</summary>
     /// <param name="registry">The app registry for install, upgrade, consent and listing.</param>
@@ -52,6 +62,7 @@ internal sealed partial class LatticeAppsControl : ILatticeAppsControl
     /// <param name="gate">The shared access gate every verb authorizes through.</param>
     /// <param name="tenants">The active-tenant resolver.</param>
     /// <param name="membership">The membership context resolving the caller, or null for anonymous.</param>
+    /// <param name="timeProvider">The clock the accept window is measured on; the system clock when null.</param>
     /// <exception cref="ArgumentNullException">A required dependency is null.</exception>
     public LatticeAppsControl(
         IAppRegistry registry,
@@ -59,7 +70,8 @@ internal sealed partial class LatticeAppsControl : ILatticeAppsControl
         IAppActivationPipeline pipeline,
         ILatticeAccessGate gate,
         ITenantContextResolver tenants,
-        ILatticeMembershipContext? membership = null)
+        ILatticeMembershipContext? membership = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(source);
@@ -72,7 +84,11 @@ internal sealed partial class LatticeAppsControl : ILatticeAppsControl
         _gate = gate;
         _tenants = tenants;
         _membership = membership;
+        _time = timeProvider ?? TimeProvider.System;
     }
+
+    /// <summary>The accept window of an activation verb; see <see cref="DefaultAcceptWindow"/>.</summary>
+    internal TimeSpan AcceptWindow { get; init; } = DefaultAcceptWindow;
 
     /// <inheritdoc />
     public async Task<AppLifecycleResult> EnableAsync(string appSlug, CancellationToken cancellationToken = default)
@@ -122,15 +138,56 @@ internal sealed partial class LatticeAppsControl : ILatticeAppsControl
         var tenant = await ResolveTenantAsync(cancellationToken).ConfigureAwait(false);
         await AuthorizeAsync(cancellationToken).ConfigureAwait(false);
 
-        var outcome = operation switch
+        // The run is not the caller's to cancel: once authorized it runs to completion and
+        // records its outcome, because a run stopped part-way (rules withdrawn, trees not yet
+        // retired) records nothing. The caller waits only for the accept window.
+        var run = operation switch
         {
-            AppActivationOperation.Enable => await _pipeline.EnableAsync(tenant, slug, cancellationToken).ConfigureAwait(false),
-            AppActivationOperation.Disable => await _pipeline.DisableAsync(tenant, slug, cancellationToken).ConfigureAwait(false),
-            _ => await _pipeline.UninstallAsync(tenant, slug, cancellationToken).ConfigureAwait(false),
+            AppActivationOperation.Enable => _pipeline.EnableAsync(tenant, slug, CancellationToken.None),
+            AppActivationOperation.Disable => _pipeline.DisableAsync(tenant, slug, CancellationToken.None),
+            _ => _pipeline.UninstallAsync(tenant, slug, CancellationToken.None),
         };
+
+        AppActivationOutcome outcome;
+        try
+        {
+            outcome = await run.WaitAsync(AcceptWindow, _time, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!run.IsCompleted && ex is TimeoutException or OperationCanceledException)
+        {
+            ObserveDetached(run);
+            if (ex is OperationCanceledException)
+            {
+                throw;
+            }
+
+            return await PendingAsync(tenant, slug, cancellationToken).ConfigureAwait(false);
+        }
 
         return ToLifecycleResult(slug, outcome);
     }
+
+    /// <summary>
+    /// The result of a run still in flight: the installation as it stands before the run, so a
+    /// caller polling <see cref="DescribeAsync"/> can tell when the run has moved it on.
+    /// </summary>
+    private async Task<AppLifecycleResult> PendingAsync(TenantId tenant, AppSlug slug, CancellationToken cancellationToken)
+    {
+        var record = await _registry.GetAsync(tenant, slug, cancellationToken).ConfigureAwait(false)
+            ?? throw new KeyNotFoundException($"App '{slug}' is not installed.");
+        return ToLifecycleResult(record, changed: false) with { Pending = true };
+    }
+
+    /// <summary>
+    /// Observes a run the caller stopped waiting for, so its fault is never unobserved. The
+    /// activation engine logs and records the run's outcome itself.
+    /// </summary>
+    private static void ObserveDetached(Task run) =>
+        _ = run.ContinueWith(
+            static task => _ = task.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
 
     private static AppLifecycleResult ToLifecycleResult(AppSlug slug, AppActivationOutcome outcome)
     {

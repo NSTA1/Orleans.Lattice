@@ -87,7 +87,7 @@ internal sealed class TelemetryCatalogCache : IDisposable
         Task<TelemetryQueryCatalog> read;
         lock (_gate)
         {
-            if (_read is null || _read.IsCanceled || _readCaller != caller)
+            if (_read is null || _read.IsCanceled || _readCaller != caller || FailedTransiently(_read))
             {
                 _read = ReadAsync();
                 _readCaller = caller;
@@ -133,4 +133,9 @@ internal sealed class TelemetryCatalogCache : IDisposable
     // is remembered as a faulted read like any other fault.
     private async Task<TelemetryQueryCatalog> ReadAsync() =>
         await _telemetry.GetCatalogAsync(CancellationToken.None).ConfigureAwait(false);
+
+    // A read the cluster did not answer is not an answer: it is read again on the
+    // next ask rather than standing for the caller's (issue #5420).
+    private static bool FailedTransiently(Task read) =>
+        read.IsFaulted && Navigation.AreaProbeFaults.IsTransient(read.Exception);
 }
