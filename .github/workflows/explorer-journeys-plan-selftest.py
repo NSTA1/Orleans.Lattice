@@ -661,6 +661,23 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(1, len(problems))
         self.assertIn("vacuous", problems[0])
 
+    def test_a_leg_whose_run_was_aborted_by_a_hang_says_so(self):
+        write_trx(self.trx, {"total": 0}, [planner.PENDING_GATE])
+        aborted = self.trx.read_text().replace(
+            "</ResultSummary>",
+            "<RunInfos><RunInfo outcome=\"Error\"><Text>The active test run was aborted. Reason: Test host process crashed"
+            "</Text></RunInfo></RunInfos></ResultSummary>")
+        self.trx.write_text(aborted)
+        _, problems = planner.leg_summary("contract-c3", self.trx, None, f"{planner.NAMESPACE}.Contracts.")
+        self.assertEqual(1, len(problems))
+        self.assertIn("aborted", problems[0])
+        self.assertNotIn("vacuous", problems[0])
+
+    def test_a_contract_leg_has_the_longest_hang_budget(self):
+        self.assertEqual(30, planner.HANGS["contract"])
+        self.assertTrue(all(planner.HANGS[kind] <= planner.HANGS["contract"] for kind in planner.HANGS))
+        self.assertTrue(all(planner.HANGS[kind] < planner.TIMEOUTS[kind] for kind in planner.HANGS))
+
     def test_a_longer_chapter_id_does_not_satisfy_a_shorter_one(self):
         write_trx(self.trx, {"total": 1}, [f"{planner.NAMESPACE}.Journeys.A10.Fixture"])
         _, problems = planner.leg_summary("isolated-a1", self.trx, None, f"{planner.NAMESPACE}.Journeys.A1.")
