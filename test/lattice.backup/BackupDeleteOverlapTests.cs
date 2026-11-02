@@ -79,7 +79,7 @@ public sealed class BackupDeleteOverlapTests
         Assert.Multiple(async () =>
         {
             Assert.That(republished.BackupId, Is.EqualTo(captured.BackupId), "the capture republishes the id");
-            Assert.That(ended, Is.EqualTo(BackupRetireOutcome.Unchanged), "the end deletes nothing");
+            Assert.That(ended, Is.EqualTo(BackupRetireOutcome.Kept), "the end finds the id listed again under the hold, and keeps it");
             Assert.That(await _fixture.Catalog.GetAsync(captured.BackupId), Is.Not.Null, "the republished backup is listed");
             Assert.That(await _fixture.Sink.ManifestExistsAsync(captured.BackupId), Is.True, "the listed backup's manifest is in the sink");
             Assert.That((await _fixture.Sink.ProbeAsync(captured.BackupId)).IsResolvable, Is.True);
