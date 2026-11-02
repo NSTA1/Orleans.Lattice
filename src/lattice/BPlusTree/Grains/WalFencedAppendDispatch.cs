@@ -184,7 +184,9 @@ internal static class WalFencedAppendDispatch
             fence.OnUnloaded(partition, stamp);
             if (attempt >= MaxUnloadedRetries)
             {
-                throw fence.OnStale(stamp); // RED-PROOF: unloaded exhaustion supersedes
+                // Not a supersession (#5605 review, N1): the next stamp request finds
+                // the gate view closed and the append goes unstamped.
+                fence.OnClaimsExhausted();
             }
 
             return;
