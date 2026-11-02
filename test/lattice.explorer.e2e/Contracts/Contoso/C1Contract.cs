@@ -13,12 +13,15 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts.Contoso;
 /// Incident and recovery (C1, #5389). Produces the archive recovered (deleted, then recovered,
 /// its 5,000 entries back); <c>factory-orders</c> restored from <c>orders-baseline</c> by a
 /// point-in-time replace after a burst of policy-valid wrong prices, the corrections re-applied
-/// (48 apply, 2 refused), migrated to version 2, with no wrong price, in west and, once
-/// replication converges, in east; and three dead letters. A restore writes below the
+/// (48 apply, 2 refused), remediated again, migrated to version 2, with no wrong price, in west
+/// and, once replication converges, in east; and three dead letters. <c>orders-baseline</c>
+/// predates U2's remediation, so the restore brings its three negative orders back, and a
+/// migration aborts on a value its policy rejects (#5659): sam re-runs U2's
+/// <see cref="ContosoSchema.NegativeTotalToZero"/> before migrating. A restore writes below the
 /// policy's choke point, so the dead letters come from the east ledger
 /// (<see cref="ReplayCapturedOrdersFromEastAsync"/>): it replays the three negative orders as
 /// <c>orders-baseline</c> captured them in one atomic batch to east, and west - strict - diverts
-/// each replicated entry instead of applying it, leaving both regions holding the same values.
+/// each replicated entry instead of applying it, so west keeps their remediated totals.
 /// </summary>
 public sealed class C1Contract() : ChapterContract("C1")
 {
@@ -61,6 +64,8 @@ public sealed class C1Contract() : ChapterContract("C1")
         }
 
         var schema = ContractFacades.Of(context, Personas.Sam.Id).Schema;
+        var remediation = await schema.StartRemediationAsync(Names.Trees.FactoryOrders, ContosoSchema.NegativeTotalToZero, ContosoSchema.OrdersRevised);
+        await ContractWait.SucceededAsync("the negative-total remediation of the restored orders", () => schema.GetSchemaOperationStatusAsync(remediation.OperationId), OperationPatience);
         await U2Contract.MigrateAsync(schema, Names.Trees.FactoryOrders, "the re-migration to version 2");
 
         await ReplayCapturedOrdersFromEastAsync(context.Estate);
@@ -83,6 +88,12 @@ public sealed class C1Contract() : ChapterContract("C1")
         }
 
         RequireEqual((await west.Schema.GetVersionConfigAsync(Names.Trees.FactoryOrders))?.TargetVersion, 2u, "factory-orders is migrated to version 2");
+
+        foreach (var key in Names.Orders.NegativeTotals)
+        {
+            var value = await ContractCalls.GetAsync(west.Data, Names.Trees.FactoryOrders, key);
+            Require(value is not null && A3Contract.TotalOf(value) >= 0, $"{key} keeps its remediated total in west");
+        }
 
         var letters = new List<string>();
         await foreach (var letter in west.Schema.ListDeadLettersAsync(Names.Trees.FactoryOrders))
