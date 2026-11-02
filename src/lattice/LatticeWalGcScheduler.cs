@@ -6989,7 +6989,7 @@ internal sealed class LatticeWalGcScheduler(
         {
             await Bounded(
                 grainFactory.GetGrain<BPlusTree.Grains.IWalShardGrain>($"{treeId}/{partition}")
-                    .RetireAppendEpochAsync(leafGrainId.GetGuidKey(), BPlusTree.Grains.WalAppendFenceRows.RowEpochUnread, CancellationToken.None),
+                    .RetireAppendEpochAsync(leafGrainId.GetGuidKey(), 0, CancellationToken.None), // RED-PROOF: GC passes no row
                 OrphanSweepOperationBudget, stoppingToken)
                 .ConfigureAwait(false);
         }
