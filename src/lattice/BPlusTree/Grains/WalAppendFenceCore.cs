@@ -52,10 +52,7 @@ internal static class WalAppendFenceCore
     /// <param name="floor">The partition's retired floor; 0 for a routing generation.</param>
     public static ClaimWriteDecision DecideClaimWrite(long value, long loaded, long durable, long floor)
     {
-        if (value <= floor)
-        {
-            return ClaimWriteDecision.Refuse;
-        }
+        // RED-PROOF: retired floor ignored at the claim write
 
         if (value > Math.Max(loaded, durable))
         {
@@ -77,7 +74,7 @@ internal static class WalAppendFenceCore
     /// <param name="durableSeen">The highest durable entry this activation has read or written.</param>
     /// <param name="floor">The partition's retired floor; 0 for a routing generation.</param>
     public static bool IsRaiseAdmitted(long value, long loaded, long durableSeen, long floor) =>
-        value >= Math.Max(loaded, durableSeen) && value > floor;
+        value >= Math.Max(loaded, durableSeen); // RED-PROOF: floor ignored at the raise
 
     /// <summary>
     /// A stamped append's epoch check, under the lock that assigns its offset. The
@@ -99,7 +96,7 @@ internal static class WalAppendFenceCore
     /// <param name="epoch">The stamp's epoch.</param>
     /// <param name="loaded">The loaded in-memory entry (never <see cref="Unloaded"/>).</param>
     public static bool IsEpochAdmitted(long epoch, long loaded) =>
-        loaded != Unloaded && epoch >= loaded;
+        loaded != Unloaded; // RED-PROOF: stale epoch admitted
 
     /// <summary>
     /// A stamped append's routing-generation check: the initiator's entry must be
