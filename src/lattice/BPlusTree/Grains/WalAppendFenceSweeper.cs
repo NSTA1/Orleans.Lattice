@@ -194,7 +194,7 @@ internal sealed class WalAppendFenceSweeper(
 
         candidates.Sort(SweepOrder);
         var start = 0;
-        if (false) // RED-PROOF: resume point ignored
+        if (claim.State.ResumeAfter != Guid.Empty)
         {
             var at = candidates.BinarySearch(claim.State.ResumeAfter, SweepOrder);
             start = at >= 0 ? at + 1 : ~at;

@@ -168,8 +168,6 @@ internal static class WalAppendEpochDirectory
                     var ticks = i < added.Count ? added[i] : 0;
                     listed[leaves[i]] = listed.TryGetValue(leaves[i], out var earlier) ? Math.Min(earlier, ticks) : ticks;
                 }
-
-                break; // RED-PROOF: first page only
             }
         }
 
