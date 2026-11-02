@@ -181,15 +181,11 @@ public sealed class ReplicationEstatePageTests : ReplicationTestContext
         cut.WaitUntil(() => Assert.That(cut.FindAll("select"), Has.Count.EqualTo(3)));
 
         cut.FindAll("select")[0].Change("lagging");
-        var afterHealth = Navigation.Uri;
+        cut.WaitUntil(() => Assert.That(Navigation.Uri, Does.EndWith("replication?app=crm&health=lagging")));
         cut.FindAll("select")[1].Change("ap-south");
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(afterHealth, Does.EndWith("replication?app=crm&health=lagging"));
-            Assert.That(Navigation.Uri, Does.EndWith("replication?app=crm&region=ap-south"),
-                "each select writes one key onto the page's own address");
-        });
+        cut.WaitUntil(() => Assert.That(Navigation.Uri, Does.EndWith("replication?app=crm&region=ap-south"),
+            "each select writes one key onto the page's own address"));
     }
 
     [Test]
@@ -204,7 +200,7 @@ public sealed class ReplicationEstatePageTests : ReplicationTestContext
         Assert.That(unfiltered.FindAll("button").Select(button => button.TextContent.Trim()), Does.Not.Contain("Clear filters"));
         filtered.FindAll("button").Single(button => button.TextContent.Trim() == "Clear filters").Click();
 
-        Assert.That(Navigation.Uri, Does.EndWith("/replication"));
+        filtered.WaitUntil(() => Assert.That(Navigation.Uri, Does.EndWith("/replication")));
     }
 
     [Test]

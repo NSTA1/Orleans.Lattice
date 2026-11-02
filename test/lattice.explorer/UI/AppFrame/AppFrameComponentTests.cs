@@ -6,6 +6,7 @@ using Orleans.Lattice.Api.Apps;
 using Orleans.Lattice.Explorer.UI;
 using Orleans.Lattice.Explorer.UI.Framing;
 using Orleans.Lattice.Explorer.Tests.UI.Design;
+using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using static Orleans.Lattice.Explorer.Tests.UI.Framing.AppFrameTestData;
 using Orleans.Lattice.Explorer.UI.Transport;
 
@@ -173,7 +174,7 @@ public sealed partial class AppFrameComponentTests : ShellDesignTestContext
 
         cut.Find("[data-appframe-leave=before]").Click();
 
-        Assert.That(Services.GetRequiredService<NavigationManager>().Uri, Does.EndWith("/apps/taskboard"));
+        cut.WaitUntil(() => Assert.That(Services.GetRequiredService<NavigationManager>().Uri, Does.EndWith("/apps/taskboard")));
     }
 
     [Test]
