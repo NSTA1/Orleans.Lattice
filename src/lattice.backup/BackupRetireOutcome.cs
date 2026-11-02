@@ -16,4 +16,13 @@ internal enum BackupRetireOutcome
 
     /// <summary>The id is held by a publish or another retirement beyond one call's wait; the caller retries.</summary>
     Busy = 2,
+
+    /// <summary>
+    /// An operator delete's end found a catalog row listing the id again - a
+    /// capture or a rebuild listed it once the delete's lease had run out - and
+    /// kept that backup, so the delete did not delete it (issue #5639). Decided
+    /// under the id's hold, so a capture the end itself unblocks is never
+    /// mistaken for one.
+    /// </summary>
+    Kept = 3,
 }

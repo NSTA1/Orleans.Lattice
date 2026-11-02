@@ -15,7 +15,9 @@ catalog row and then the sink manifest. Two operator deletes of A's backup
 overlap, as a retry after a timeout or a double submission does: each removes the
 row - or, the row gone, finds the sink manifest an earlier delete left - under
 A's hold and takes a lease of its own; deletes the artifacts of the manifest
-write it began from outside the grain, only while that lease is live; and ends
+write it began from outside the grain, each only straight after the grain has
+confirmed that lease - a background renewal tells the caller what it found, but
+the caller never acts on that older confirmation; and ends
 under A's hold, deleting the sink manifest only while no row lists the id and
 the manifest is still A's, then dropping its own lease. A lease can run out at
 any point - weakly fairly, so a lost delete's lease does run out - and a catalog
@@ -31,8 +33,8 @@ still publishing through its own retire never becomes another scope's, and no
 publish replaces another scope's backup under the bare id. It checks the fix of
 #5631 too: no delete's end releases another delete's lease, no delete removes a
 manifest a publish has listed or is about to list, and no delete in one scope
-removes another scope's backup. And the fix of #5637: no rebuild lists a backup
-a delete has half removed. The claim grain's claims are persisted (#5632), so
+removes another scope's backup. And the fixes of #5637 and #5639: no rebuild
+lists a backup a delete has half removed. The claim grain's claims are persisted (#5632), so
 `pend` is durable state. The cross-scope rule itself is #5620's.
 
 ## The model is the fix of #5627
@@ -84,6 +86,22 @@ renewal is refused (`SchedulerBackupPublicationGate.RetireAsync`), and registers
 a rebuilt manifest only when `ILatticeBackupSink.ProbeAsync` resolves it
 (`BackupPublisher.PublishAsync`).
 
+## The model is the fix of #5639
+
+The fix of #5637 had the delete learn of a lost lease only from its background
+renewal, which first ran a third of a lease in and swallowed a failure to reach
+the grain. When the scheduler's activation was lost - and its leases with it -
+during the delete's catalog walk, a rebuild re-listed the still-whole backup,
+and the delete, acting on its last confirmation, deleted the listed backup's
+artifacts; a caller that could not reach the grain went on deleting without
+bound. `ListedRestorableArtifactsOnHeartbeat` reproduces it. The fix renews the
+lease synchronously before each artifact delete and stops on a refusal or an
+unreachable grain (`SchedulerBackupPublicationGate.RetireAsync`), keeping the
+sink manifest for a retry; and a delete whose end keeps the manifest of a backup
+a row lists again reports that it did not delete it - decided by the end under
+the hold (`BackupRetireOutcome.Kept`), so a capture the end's own release lets
+in is never mistaken for one.
+
 ## Variable mapping
 
 | Spec variable | Protocol role | Code counterpart |
@@ -97,6 +115,7 @@ a rebuilt manifest only when `ILatticeBackupSink.ProbeAsync` resolves it
 | `del` | Each operator delete's progress | The progress of `SchedulerBackupPublicationGate.RetireAsync` for `BackupRetireKind.Delete`: between `BackupSchedulerGrain.BeginDeleteAsync` and `BackupSchedulerGrain.EndDeleteAsync`. |
 | `lease` | Each operator delete's lease on the id | The entry for the delete's token in `BackupSchedulerGrain._deleting`, live until `LatticeBackupOptions.DeleteLease` runs out without a renewal (`BackupSchedulerGrain.RenewDeleteAsync`). |
 | `art` | Whether every artifact the current sink manifest references is in the sink | `BackupSinkResolution.IsResolvable`, read by `ILatticeBackupSink.ProbeAsync`. |
+| `seen` | Each delete's caller's last confirmation of its lease | What the background renewal in `SchedulerBackupPublicationGate.RetireAsync` last got from `BackupSchedulerGrain.RenewDeleteAsync`. The fixed design never acts on it. |
 | `gen`, `dgen` | Which manifest write the current sink manifest is, and which one each delete began from | The artifact ids of a manifest's `BackupManifest.ContentDescriptors`, unique per capture: a delete deletes the artifacts of the manifest it began from. |
 
 ## Action mapping
@@ -111,8 +130,9 @@ a rebuilt manifest only when `ILatticeBackupSink.ProbeAsync` resolves it
 | `RetireRow` | The pass removes the catalog row | `ILatticeBackupCatalogStore.RemoveAsync` in `BackupSchedulerGrain.PruneUnderGuardAsync`. | Yes: `BackupSchedulerGrainUnitTests.PruneAsync_removes_the_doomed_row_before_it_scans_the_sink_then_deletes_manifest_then_artifacts`. |
 | `RetireMan` | The pass deletes the sink manifest and lets the id go | `ILatticeBackupSink.DeleteManifestAsync` in `BackupSchedulerGrain.PruneUnderGuardAsync`, then `BackupSchedulerGrain.ReleaseRetiring`. | Yes: `BackupSchedulerGrainUnitTests.PruneAsync_removes_the_doomed_row_before_it_scans_the_sink_then_deletes_manifest_then_artifacts`. |
 | `DelBegin(d)` | An operator delete takes A's hold, removes A's row - or finds the sink manifest an earlier delete left - and takes a lease of its own, under the caller's token; an id another scope now owns is left alone | `BackupSchedulerGrain.BeginDeleteAsync`, through `BackupSchedulerGrain.TryHoldAsync` and `BackupPublisher.BeginDeleteAsync`. | Yes: `LatticeBackupControlDeleteHoldTests.DeleteBackupAsync_removes_the_backup_under_its_per_id_hold`, `BackupDeleteHoldTests.A_delete_interrupted_after_its_row_was_removed_is_finished_by_a_retry`, `BackupDeleteLeaseTests.A_delete_start_retried_with_its_token_holds_one_lease` (red when a retried start takes a second lease) and `BackupDeleteOverlapTests.A_delete_of_an_id_another_scope_has_since_taken_leaves_that_scopes_backup` (red when the scope is not checked). |
-| `DelEnd(d)` | The delete ends under A's hold: it deletes the sink manifest only while no row lists the id and the manifest is A's, then drops its own lease | `BackupSchedulerGrain.EndDeleteAsync`, through `BackupSchedulerGrain.TryHoldAsync` and `BackupPublisher.FinishDeleteAsync`, after `BackupPublisher.DeleteArtifactsAsync` outside the grain. | Yes: `BackupDeleteHoldTests.A_delete_whose_artifact_deletes_outlast_the_grain_response_timeout_completes`, `BackupDeleteOverlapTests.A_delete_overlapping_another_keeps_the_id_reserved_until_its_own_end` (red when one end drops every lease), `BackupDeleteOverlapTests.A_delete_whose_lease_ran_out_keeps_a_backup_a_capture_republished_meanwhile` (red when the row is not checked) and `BackupDeleteOverlapTests.An_overlapping_delete_never_deletes_the_manifest_another_scope_published_under_the_id` (red when the scope is not checked). |
-| `DelArt(d)` | The delete deletes the artifacts of the manifest it began from, outside the grain, only while its lease is live | `BackupPublisher.DeleteArtifactsAsync` in `SchedulerBackupPublicationGate.RetireAsync`, which renews the lease in the background through `BackupSchedulerGrain.RenewDeleteAsync` and deletes no further artifact once a renewal is refused. | Yes: `BackupDeleteLeaseTests.A_delete_that_loses_its_lease_deletes_no_further_artifact` (red when a refused renewal does not stop the delete) and `BackupDeleteLeaseTests.A_delete_whose_artifact_deletes_outlast_its_lease_keeps_a_rebuild_waiting` (red when the lease is not renewed). |
+| `DelEnd(d)` | The delete ends under A's hold: it deletes the sink manifest only while no row lists the id and the manifest is A's, then drops its own lease | `BackupSchedulerGrain.EndDeleteAsync`, through `BackupSchedulerGrain.TryHoldAsync` and `BackupPublisher.FinishDeleteAsync`, after `BackupPublisher.DeleteArtifactsAsync` outside the grain. | Yes: `BackupDeleteHoldTests.A_delete_whose_artifact_deletes_outlast_the_grain_response_timeout_completes`, `BackupDeleteOverlapTests.A_delete_overlapping_another_keeps_the_id_reserved_until_its_own_end` (red when one end drops every lease), `BackupDeleteOverlapTests.A_delete_whose_lease_ran_out_keeps_a_backup_a_capture_republished_meanwhile` (red when the row is not checked) and `BackupDeleteOverlapTests.An_overlapping_delete_never_deletes_the_manifest_another_scope_published_under_the_id` (red when the scope is not checked) `SchedulerBackupPublicationGateDeleteTests.A_delete_whose_end_keeps_the_manifest_of_a_listed_backup_reports_it_not_deleted` (red when such a delete reports success) and `SchedulerBackupPublicationGateDeleteTests.A_delete_whose_backup_is_republished_after_it_ends_reports_it_deleted` (red when the report is decided outside the end's hold). |
+| `DelArt(d)` | The delete deletes the artifacts of the manifest it began from, outside the grain, each straight after the grain has confirmed its lease | `BackupPublisher.DeleteArtifactsAsync` in `SchedulerBackupPublicationGate.RetireAsync`, which renews the lease synchronously through `BackupSchedulerGrain.RenewDeleteAsync` before each artifact and stops on a refusal or an unreachable grain. | Yes: `SchedulerBackupPublicationGateDeleteTests.A_delete_whose_lease_was_lost_before_its_first_artifact_deletes_no_artifact` (red without the renewal before each artifact), `SchedulerBackupPublicationGateDeleteTests.A_delete_that_cannot_confirm_its_lease_deletes_no_artifact` (red when an unreachable grain does not stop the delete), `SchedulerBackupPublicationGateDeleteTests.A_delete_renews_its_lease_before_each_artifact_it_deletes`, `BackupDeleteLeaseTests.A_delete_that_loses_its_lease_deletes_no_further_artifact` and `BackupDeleteLeaseTests.A_delete_whose_artifact_deletes_outlast_its_lease_keeps_a_rebuild_waiting` (red when the lease is not renewed). |
+| `DelRenew(d)` | A background renewal extends a live lease, never revives one that has run out, and reports what it found | The background renewal in `SchedulerBackupPublicationGate.RetireAsync`, through `BackupSchedulerGrain.RenewDeleteAsync`, which refuses an unknown or expired token. | Yes: `BackupDeleteLeaseTests.A_lease_that_has_run_out_is_not_renewed` (red when an expired lease is revived) and `BackupDeleteLeaseTests.A_delete_whose_artifact_deletes_outlast_its_lease_keeps_a_rebuild_waiting`. |
 | `DelLapse(d)` | A delete's lease runs out: its caller was lost, or could not renew it for a whole lease; only that delete's lease, and eventually | `BackupSchedulerGrain.IsDeleting` and `BackupSchedulerGrain.RenewDeleteAsync`, which expire each delete's lease on its own once `LatticeBackupOptions.DeleteLease` passes without a renewal. | Yes: `BackupDeleteLeaseTests.A_lost_deletes_lease_runs_out_and_a_capture_then_republishes` (red when a lease never runs out) and `BackupDeleteLeaseTests.One_deletes_lease_running_out_leaves_another_deletes_lease_in_force` (red when one lease running out drops every lease of the id). |
 | `Rebuild` | A catalog rebuild re-lists scope A's sink manifest under A's hold, waiting on a live delete lease, only when every artifact it references is in the sink | `BackupPublisher.PublishAsync` for `BackupPublishMode.Rebuild`, through `BackupSchedulerGrain.PublishAsync` and `BackupSchedulerGrain.TryHoldAsync`, reached from `LatticeBackupCatalogRebuildService`. | Yes: `BackupDeleteLeaseTests.A_rebuild_after_an_interrupted_delete_leaves_the_half_deleted_backup_unlisted` (red without the probe) and `BackupDeleteLeaseTests.A_delete_whose_artifact_deletes_outlast_its_lease_keeps_a_rebuild_waiting`. |
 | `Stutter` | Natural termination | Not a protocol step. | Not applicable: not a protocol step, so there is no production behaviour to detect. |
@@ -139,8 +159,12 @@ a rebuilt manifest only when `ILatticeBackupSink.ProbeAsync` resolves it
 
 TypeOK, ListedInSink, ListedRestorable, ScopeAgreement and DeleteFence are state
 safety; NoForeignOverwrite and NoForeignDelete are action safety;
-LeaseEventuallyEnds is liveness, under weak fairness on `DelLapse` alone: a lost
-delete's lease runs out, and nothing else need ever happen. Every property is
+LeaseEventuallyEnds is liveness, under weak fairness on `DelLapse` alone. It is
+close to a restatement of that fairness: `DelLapse` is enabled in every state
+where a delete's lease is live, so the property holds exactly when no step of a
+delete disables its own lease's expiry, and that enabling condition is all it
+checks (`LeaseEventuallyEndsNeverLapses` breaks it). The production side - each
+lease expiring on its own - is pinned by its detectors. Every property is
 reached and falsifiable. Whether a refused capture ever publishes is the
 scope-qualified id's business, outside the model, and a claim's expiry is a gap
 below.
@@ -168,6 +192,8 @@ below.
 | ListedRestorableArtifactsAfterLapse | Anchored action: DelArt. Production before #5637, its lease half. |
 | ListedRestorableDeleteBeforeFix | Anchored actions: DelArt and Rebuild. Production before #5637. |
 | LeaseEventuallyEndsNeverLapses | Anchored action: DelLapse. |
+| ListedRestorableArtifactsOnHeartbeat | Anchored action: DelArt. Production before #5639. |
+| ListedRestorableRenewRevivesLapsed | Anchored action: DelRenew. |
 | DeleteFenceAcquireIgnoresLease | Anchored action: Acquire. |
 
 ## Detectors
@@ -185,7 +211,10 @@ lets a delete's lease run out under a republish, and lets another scope take the
 id between and after overlapping deletes. `BackupDeleteLeaseTests` interrupts a
 delete and rebuilds the catalog, makes a delete's artifact deletes outlast its
 lease under a rebuild, loses the scheduler's activation mid-delete, loses a
-delete's caller, and retries a delete's start.
+delete's caller, retries a delete's start, and renews a lease that has run out.
+`SchedulerBackupPublicationGateDeleteTests` drives the gate against a substituted
+scheduler: a lease lost before the first artifact, an unreachable grain, the
+renewal before each artifact, and an end that keeps a listed backup's manifest.
 
 ## Defect mutations whose fixes have landed
 
@@ -194,7 +223,7 @@ production before the fix of #5627, ScopeAgreementIgnoresOwner production before
 #5620, ListedInSinkJoinedDeleteSharedLease and DeleteFenceEndClearsEveryLease
 production before #5631, and ListedRestorableDeleteBeforeFix,
 ListedRestorableRebuildUnprobed and ListedRestorableArtifactsAfterLapse production
-before #5637. Each fix lands with this module, and each reproduction stands as a
+before #5637, and ListedRestorableArtifactsOnHeartbeat production before #5639. Each fix lands with this module, and each reproduction stands as a
 regression check with a production analogue among the detectors above.
 
 ## Deliberate abstraction gaps
@@ -226,13 +255,17 @@ regression check with a production analogue among the detectors above.
   activation may restore it until it lapses, which only refuses other scopes for
   longer. The last claim released clears the grain's stored record.
   Production symbols: `BackupIdClaimGrain.PendingClaimLifetime`, `BackupIdClaimState`.
-- **A lease renewal is not a step.** `DelArt` deletes artifacts only under a live
-  lease, as if renewal and delete were one step. Production renews in the
-  background every third of `LatticeBackupOptions.DeleteLease` and checks for a
-  refused renewal before each artifact delete, so an artifact delete already in
-  flight when the lease runs out - a caller unable to reach the grain for a whole
-  lease - can still complete after a rebuild has re-listed the backup. That one
-  window is not modelled.
+- **A confirmed renewal and its artifact delete are one step.** `DelArt` deletes
+  artifacts only under a live lease, as if the renewal and the delete were one
+  step. Production renews synchronously before each artifact delete and stops on
+  a refusal or an unreachable grain (#5639), so the caller acts only on a lease
+  the grain has just confirmed - the `seen` variable models a caller that acts on
+  an older confirmation instead, which `ListedRestorableArtifactsOnHeartbeat`
+  shows is unsafe. What is not modelled is the one artifact delete in flight
+  after its confirmation, if the lease runs out or the scheduler's activation is
+  lost before it completes and a rebuild re-lists the backup meanwhile; a
+  background renewal keeps a live caller's lease from running out during it, so
+  that takes a fault and a rebuild within one artifact delete.
   Production symbols: `SchedulerBackupPublicationGate.RetireAsync`, `BackupSchedulerGrain.RenewDeleteAsync`, `LatticeBackupOptions.DeleteLease`.
 - **A delete's two grain calls are atomic steps.** `DelBegin` and `DelEnd` each
   run in one call that holds the scope's hold across its awaits, so no publish,

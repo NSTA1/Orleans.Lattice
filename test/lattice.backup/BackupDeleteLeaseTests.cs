@@ -167,6 +167,22 @@ public sealed class BackupDeleteLeaseTests
     }
 
     [Test]
+    public async Task A_lease_that_has_run_out_is_not_renewed()
+    {
+        // A rebuild or a capture may have acted on the id once the lease ran out,
+        // so a renewal must not revive it (issue #5639).
+        await StartAsync(o => o.DeleteLease = TimeSpan.FromSeconds(1));
+        var captured = await SeedAndCaptureAsync();
+        var token = Guid.NewGuid();
+        await Scheduler.BeginDeleteAsync(captured.BackupId, token);
+        Assert.That(await Scheduler.RenewDeleteAsync(captured.BackupId, token), Is.True, "precondition: a live lease renews");
+
+        await Task.Delay(TimeSpan.FromSeconds(1.5));
+
+        Assert.That(await Scheduler.RenewDeleteAsync(captured.BackupId, token), Is.False, "a lease that ran out is refused");
+    }
+
+    [Test]
     public async Task A_delete_start_retried_with_its_token_holds_one_lease()
     {
         await StartAsync(o => o.PublishHoldTimeout = TimeSpan.FromSeconds(5));

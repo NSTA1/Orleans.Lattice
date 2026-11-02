@@ -214,9 +214,10 @@ internal sealed class BackupPublisher(
     /// <param name="manifest">The manifest <see cref="BeginDeleteAsync"/> returned.</param>
     /// <param name="beforeEachArtifact">
     /// Run before each artifact delete; throws to stop the delete when its caller
-    /// no longer holds the id (issue #5637). <see langword="null"/> for none.
+    /// cannot confirm it still holds the id (issues #5637 and #5639).
+    /// <see langword="null"/> for none.
     /// </param>
-    public async Task DeleteArtifactsAsync(BackupManifest manifest, Action? beforeEachArtifact = null)
+    public async Task DeleteArtifactsAsync(BackupManifest manifest, Func<Task>? beforeEachArtifact = null)
     {
         ArgumentNullException.ThrowIfNull(manifest);
 
@@ -240,7 +241,11 @@ internal sealed class BackupPublisher(
         {
             if (!stillReferenced.Contains(descriptor.ArtifactId))
             {
-                beforeEachArtifact?.Invoke();
+                if (beforeEachArtifact is not null)
+                {
+                    await beforeEachArtifact().ConfigureAwait(false);
+                }
+
                 await sink.DeleteArtifactAsync(descriptor.ArtifactId).ConfigureAwait(false);
             }
         }
@@ -256,23 +261,28 @@ internal sealed class BackupPublisher(
     /// </summary>
     /// <param name="backupId">The deleted backup.</param>
     /// <param name="scopeKey">The deleting scope's key, or <see langword="null"/> to skip the scope check.</param>
-    /// <returns>Whether the manifest was deleted.</returns>
-    public async Task<bool> FinishDeleteAsync(string backupId, string? scopeKey = null)
+    /// <returns>
+    /// <see cref="BackupRetireOutcome.Removed"/> when the manifest was deleted;
+    /// <see cref="BackupRetireOutcome.Kept"/> when a row lists the id, so its
+    /// backup was kept; otherwise <see cref="BackupRetireOutcome.Unchanged"/>: the
+    /// manifest is already gone, or is another scope's.
+    /// </returns>
+    public async Task<BackupRetireOutcome> FinishDeleteAsync(string backupId, string? scopeKey = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(backupId);
         if (await catalog.GetAsync(backupId).ConfigureAwait(false) is not null)
         {
-            return false;
+            return BackupRetireOutcome.Kept;
         }
 
         var manifest = await sink.ReadManifestAsync(backupId).ConfigureAwait(false);
         if (manifest is null || !IsOfScope(manifest, scopeKey))
         {
-            return false;
+            return BackupRetireOutcome.Unchanged;
         }
 
         await sink.DeleteManifestAsync(backupId).ConfigureAwait(false);
-        return true;
+        return BackupRetireOutcome.Removed;
     }
 
     private static bool IsOfScope(BackupManifest manifest, string? scopeKey) =>

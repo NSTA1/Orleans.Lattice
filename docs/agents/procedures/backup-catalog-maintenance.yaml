@@ -48,7 +48,7 @@ steps:
   - n: 2
     action: "Delete the backup by id, deleting an incremental chain tip-first."
     api: "ILatticeBackupControl.DeleteBackupAsync / DeleteBackup / lattice_backup_delete"
-    expects: "Returns true when a backup was removed and false when no catalog row existed for the id."
+    expects: "Returns true when a backup was removed, and false when nothing of it existed or when it was listed again before the delete finished (a capture or a rebuild after the delete's reservation ran out) and so was kept."
     source: "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DeleteBackupAsync"
   - n: 3
     action: "When the catalog has drifted from the sink, start a tracked catalog rebuild."
@@ -113,7 +113,7 @@ failure_modes:
   - id: partial-delete-retry
     signal: "A delete faulted after removing the catalog row; the backup is no longer listed while its sink manifest and some artifacts remain."
     effect: "Sink payload outlives the catalog row until the delete is retried. A catalog rebuild does not list the backup again once any of its artifacts is gone (#5637)."
-    response: "Delete the backup again: the retry reads it from its surviving sink manifest, deletes the remaining artifacts and then the manifest, and returns true (#5334). A delete that fails with a TimeoutException saying it lost its reservation is retried the same way."
+    response: "Delete the backup again: the retry reads it from its surviving sink manifest, deletes the remaining artifacts and then the manifest, and returns true (#5334). A delete that fails with a TimeoutException saying it could not confirm its reservation is retried the same way."
   - id: operation-runner-lost
     signal: "Tracked rebuild or scrub status becomes Failed after the accepting silo is lost or its lease lapses."
     effect: "The pass is not resumed; rows already registered or pruned stay as written."

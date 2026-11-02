@@ -122,17 +122,21 @@ public sealed class LatticeBackupOptions
     /// <summary>
     /// How long an operator delete keeps its backup id reserved without a renewal
     /// while it deletes the backup's artifacts outside the scheduler grain (issue
-    /// #5628). The caller renews it every third of this throughout the artifact
-    /// deletes and releases it when it finishes or fails, so the lease runs out
-    /// only when the caller is lost, or cannot reach the grain, for a whole lease.
-    /// Shorter than <see cref="PublishHoldTimeout"/>, so a capture that waits on a
-    /// lost delete's lease outlasts it rather than failing. Once it has run out a
-    /// catalog rebuild may re-list the backup, so the caller deletes no further
-    /// artifact after a refused renewal (issue #5637), a rebuild re-lists only a
-    /// backup whose every artifact is still in the sink, and the sink manifest is
-    /// deleted under the id's hold only while no row lists the id (#5631). An
-    /// artifact delete already in flight when the lease runs out is the one
-    /// residual window.
+    /// #5628). The caller renews it synchronously before each artifact delete, and
+    /// in the background every third of this while one artifact delete runs, and
+    /// releases it when it finishes or fails; so the lease runs out only when the
+    /// caller is lost, or cannot reach the grain, for a whole lease, or the
+    /// scheduler's activation - which holds the leases - is lost. Shorter than
+    /// <see cref="PublishHoldTimeout"/>, so a capture that waits on a lost
+    /// delete's lease outlasts it rather than failing. Once a lease has run out a
+    /// catalog rebuild may re-list the backup, so the caller deletes an artifact
+    /// only straight after the grain has confirmed its lease, and stops - keeping
+    /// the sink manifest for a retry - when the grain refuses or cannot be reached
+    /// (issues #5637 and #5639); a rebuild re-lists only a backup whose every
+    /// artifact is still in the sink; and the sink manifest is deleted under the
+    /// id's hold only while no row lists the id (#5631). The residual window is the
+    /// one artifact delete in flight between a confirmed renewal and the lease
+    /// running out or the activation being lost.
     /// </summary>
     internal TimeSpan DeleteLease { get; set; } = TimeSpan.FromMinutes(10);
 }

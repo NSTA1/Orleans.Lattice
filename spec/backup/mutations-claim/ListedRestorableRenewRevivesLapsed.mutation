@@ -1,0 +1,18 @@
+# Pairs with ListedRestorable. A renewal extends a lease that has already run
+# out, after a rebuild re-listed the backup; the delete then deletes the
+# listed backup's artifacts under the revived lease.
+MODULE: ListedRestorableRenewRevivesLapsed
+TARGET: ListedRestorable
+CLASS: Invariant
+SUMMARY: a renewal revives a lease that has run out
+PERTURBS: DelRenew
+
+--- FIND
+    /\ seen' = [seen EXCEPT ![d] = lease[d]]
+    /\ UNCHANGED <<row, man, pend, held, cap, ret, del, lease, art, gen, dgen>>
+--- REPLACE
+    \* MUTATION: a renewal revives a lease that has run out.
+    /\ seen' = [seen EXCEPT ![d] = "live"]
+    /\ lease' = [lease EXCEPT ![d] = "live"]
+    /\ UNCHANGED <<row, man, pend, held, cap, ret, del, art, gen, dgen>>
+--- END

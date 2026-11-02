@@ -144,15 +144,19 @@ The upgrade adds one kind of grain state, `backup-id-claim`, in the Lattice
 storage provider: one record per bare backup id while a capture of that id is
 publishing, holding that capture's claim on the id against other scopes. The
 last claim released clears its record, so no record outlives the publishes that
-made it, except one whose capture was lost, whose claim lapses after fifteen
-minutes and is cleared by the next claim on that id. A rollback to 10.2.0
-leaves any such records in storage unread.
+made it, except one whose capture was lost: its claim lapses after fifteen
+minutes, but the record itself is cleared only when that id is claimed again, so
+a lost capture of content never captured again leaves one record behind. A
+rollback to 10.2.0 leaves any such records in storage unread.
 
 An operator delete removes the catalog row, then the backup's artifacts, then
 its stored manifest, so a retry of a delete that failed part-way finishes it.
-While it deletes artifacts it keeps renewing its reservation of the backup id;
-a delete that cannot renew it stops and fails, keeping the stored manifest for
-a retry. A catalog rebuild lists only a backup whose every artifact is still in
+Before each artifact it deletes it renews its reservation of the backup id with
+the scope's scheduler; a delete whose reservation is refused, or that cannot
+reach the scheduler, stops and fails, keeping the stored manifest for a retry.
+A delete that finds the backup listed again when it ends - its reservation ran
+out and a capture or a rebuild listed it meanwhile - reports that it deleted
+nothing. A catalog rebuild lists only a backup whose every artifact is still in
 the sink, so it never lists a backup a delete half removed - retry that delete
 instead. This is a change from 10.2.0, whose rebuild listed every stored
 manifest, including one that would not restore: such a manifest is now skipped,

@@ -159,9 +159,10 @@ not to hold in production:
   fixed).** A delete removes the catalog row, then the artifacts, then the stored
   manifest, so a retry finishes an interrupted one; a rebuild listed any stored
   manifest, and a delete that lost its caller or outlasted its reservation left
-  one whose artifacts were partly gone. A delete now keeps renewing its
-  reservation and stops once it cannot, and a rebuild lists only a backup whose
-  every artifact is still stored. Found by the confirmation review; checked by
+  one whose artifacts were partly gone. A delete now confirms its reservation
+  with the scheduler before each artifact it deletes and stops when it cannot
+  (#5639, fixed), and a rebuild lists only a backup whose every artifact is
+  still stored. Found by the confirmation review; checked by
   `BackupIdClaim`.
 
 ## Which parts run in production code

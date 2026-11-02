@@ -172,8 +172,10 @@ internal interface ILatticeBackupSchedulerGrain : IGrainWithStringKey
     /// it takes the id's hold and deletes the sink manifest there, only while no
     /// row lists the id and the manifest is still this scope's; then it ends this
     /// delete's lease, and only this delete's. Returns
-    /// <see cref="BackupRetireOutcome.Busy"/>, having changed nothing, when the id
-    /// stays held beyond one call's wait; the caller retries.
+    /// <see cref="BackupRetireOutcome.Kept"/> when a row lists the id again, so
+    /// its backup was kept, and <see cref="BackupRetireOutcome.Busy"/>, having
+    /// changed nothing, when the id stays held beyond one call's wait; the caller
+    /// retries.
     /// </summary>
     /// <param name="backupId">The deleted backup.</param>
     /// <param name="token">The delete's lease token, as passed to <see cref="BeginDeleteAsync"/>.</param>
