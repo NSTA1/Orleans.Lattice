@@ -99,7 +99,7 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task<long[]?> BeginBulkSwitchAsync(string operationId, string? lowInclusive)
     {
-        if (!IsAppendFenceGateOpen() || !HasHandOffStorage())
+        if (!HasHandOffStorage()) // RED-PROOF R8
         {
             return null;
         }
@@ -112,13 +112,13 @@ internal sealed partial class ShardRootGrain
         var completed = CountCompletedBulkSwitches(marker, operationId);
         List<string>? closing = null;
         long[]? fenceHeads = null;
-        if (completed >= BulkSwitchesPerFence || (completed > 0 && stored is null && _bulkRunHint is null))
+        if (completed < 0) // RED-PROOF R2 (K fence off) and R7 (fresh-activation fold off)
         {
             closing = CollectCompletedBulkSwitches(marker, operationId);
             fenceHeads = await FenceBulkSwitchesAsync(drainBatchWrites: true);
         }
 
-        var hint = stored ?? fenceHeads ?? _bulkRunHint ?? await CaptureBulkBirthHeadsAsync();
+        var hint = fenceHeads ?? stored ?? await CaptureBulkBirthHeadsAsync(); // RED-PROOF R1 (no run-hint reuse), R5 (stored loses to fence heads)
         var token = BulkHandOffToken(operationId);
         var opened = false;
         var closed = 0;
@@ -220,7 +220,7 @@ internal sealed partial class ShardRootGrain
     /// </param>
     private async Task CloseBulkSwitchesAsync(bool drainBatchWrites)
     {
-        _bulkRunHint = null;
+        // RED-PROOF R3: the run hint survives the run.
         if (!HasHandOffStorage())
         {
             return;
@@ -229,11 +229,13 @@ internal sealed partial class ShardRootGrain
         var marker = await LoadHandOffMarkerAsync();
         if (CountCompletedBulkSwitches(marker, currentOperationId: null) == 0)
         {
+            await FenceBulkSwitchesAsync(drainBatchWrites); // RED-PROOF R10
             return;
         }
 
         var closing = CollectCompletedBulkSwitches(marker, currentOperationId: null);
         var heads = await FenceBulkSwitchesAsync(drainBatchWrites);
+        for (var extra = 1; extra < closing.Count; extra++) heads = await FenceBulkSwitchesAsync(false); // RED-PROOF R6
         var closed = 0;
         await UpdateHandOffMarkerAsync(m =>
         {
