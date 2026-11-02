@@ -50,22 +50,12 @@ public sealed partial class DataStewardJourney
         var revisions = _priya.Shell.Content.Locator(".lt-data-timeline__rev");
         await Expect(revisions.First).ToBeVisibleAsync(new() { Timeout = 30_000 });
         Coverage.Hit("tab:data/history");
-        if (_context.Mode == JourneyRunMode.Story)
-        {
-            // factory-orders has no change-history view, so History reads only the write-ahead
-            // log's window. In the story A3 seeded the orders long before U1, and the log may
-            // have trimmed the seed's revision since: then the timeline says so instead.
-            var trimmed = _priya.Shell.Content.GetByText(new Regex("^Older revisions were trimmed"));
-            await Expect(revisions.Nth(1).Or(trimmed).First).ToBeVisibleAsync(new() { Timeout = 30_000 });
-            await CheckpointAsync("4", "history", await revisions.CountAsync() > 1
-                ? "History shows both revisions of order/000017"
-                : "History shows her revision of order/000017; the seed's has left the write-ahead log's window, and the timeline says so");
-        }
-        else
-        {
-            await Expect(revisions.Nth(1)).ToBeVisibleAsync(new() { Timeout = 30_000 });
-            await CheckpointAsync("4", "history", "History shows both revisions of order/000017");
-        }
+
+        // A3 created orders-history before the seed, so History reads every revision from the
+        // change-history view in both modes: the seed's and priya's.
+        await Expect(revisions.Nth(1)).ToBeVisibleAsync(new() { Timeout = 30_000 });
+        await Expect(_priya.Shell.Content.GetByText(new Regex("^(This tree has no change-history view|Older revisions were trimmed)"))).ToHaveCountAsync(0);
+        await CheckpointAsync("4", "history", "History shows both revisions of order/000017");
 
         // A concurrent change: the line feed ships order 50 while priya's editor is open.
         await _tree.OpenEntryAsync(Names.Trees.FactoryOrders, Names.Orders.Order50);
