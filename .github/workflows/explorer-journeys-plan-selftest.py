@@ -37,7 +37,7 @@ class Tree:
     """A temporary repository root with journey folders and story fixtures."""
 
     def __init__(self, journeys=("A1", "A10", "A3", "T2"), stories=("ContosoStoryTests", "FabrikamStoryTests"),
-                 contract=True, storylines=("A1", "T1"), conformance=("Contoso", "Fabrikam"), mentions=None):
+                 contract=True, storylines=("A1", "T2"), conformance=("Contoso", "Fabrikam"), mentions=None):
         self._temporary = tempfile.TemporaryDirectory()
         self.root = Path(self._temporary.name)
         base = self.root / planner.JOURNEYS
@@ -330,7 +330,150 @@ class PlanTests(unittest.TestCase):
     def test_no_journey_folder_yet_plans_the_harness_and_stories(self):
         empty = Tree(journeys=())
         self.addCleanup(empty.close)
-        self.assertEqual(["harness", "story-contoso", "story-fabrikam"], names(planner.plan(empty.root, "push", "", "", None)))
+        self.assertEqual(["harness", "contract-a1", "contract-t2", "story-contoso", "story-fabrikam"],
+                         names(planner.plan(empty.root, "push", "", "", None)),
+                         "with no journey yet, every chapter with a contract is story-only")
+
+
+class ContractLegTests(unittest.TestCase):
+    """Story-only chapters (a contract, no journey) run in isolation through their conformance case (#5660)."""
+
+    OUTLINE = (
+        "Chapter(\"A1\", 1, \"Day one\"),\n"
+        "Chapter(\"A3\", 2, \"Schema \\\"rules\\\"\", \"A1\"),\n"
+        "Chapter(\"U2\", 3, \"A schema owner's week\", \"A3\"),\n"
+        "Chapter(\"C1\", 4, \"Incident\", \"A1\"),\n"
+        "Chapter(\"C10\", 5, \"Later\", \"C1\"),\n"
+        "Chapter(\"T5\", 6, \"Tenants\"),\n")
+
+    def setUp(self):
+        self.tree = Tree(journeys=("A1", "A3"), storylines=("A1",))
+        self.addCleanup(self.tree.close)
+        for chapter in ("A3", "U2", "C1", "C10"):
+            self.tree.write(f"{planner.CONTRACTS}/Contoso/{chapter}Contract.cs",
+                            f"public sealed class {chapter}Contract() : ChapterContract(\"{chapter}\")\n{{\n}}\n")
+        self.tree.write(f"{planner.CONTRACTS}/Fabrikam/T5Contract.cs",
+                        "public sealed class T5Contract() : ChapterContract(\"T5\")\n{\n}\n")
+        self.tree.write(planner.STORY_OUTLINE, self.OUTLINE)
+
+    def plan(self, event="pull_request", action="synchronize", base=BUCKET, changed=(), labels=(), label=""):
+        head = f"{BUCKET}-item" if planner.is_integration_branch(base) else (BUCKET if base else "")
+        return planner.plan(self.tree.root, event, action, base, list(changed) if changed is not None else None,
+                            list(labels), label, head)
+
+    CONTRACTS = ["contract-c1", "contract-c10", "contract-t5", "contract-u2"]
+
+    def contract_names(self, result):
+        return [name for name in names(result) if name.startswith("contract-")]
+
+    def test_story_only_chapters_are_discovered_from_the_tree(self):
+        found = planner.story_only_contracts(self.tree.root, planner.discover_journeys(self.tree.root),
+                                             planner.conformance_shards(self.tree.root), [])
+        self.assertEqual([("C1", "contoso", "Contoso"), ("C10", "contoso", "Contoso"), ("T5", "fabrikam", "Fabrikam"),
+                          ("U2", "contoso", "Contoso")], found, "A1 and A3 have journeys; the base class is no chapter")
+
+    def test_a_chapter_whose_journey_lands_loses_its_contract_leg(self):
+        self.tree.write(f"{planner.JOURNEYS}/U2/U2Journey.cs", "// journey\n")
+        result = self.plan(event="workflow_dispatch", action="", base="")
+        self.assertNotIn("contract-u2", names(result))
+        self.assertIn("isolated-u2", names(result))
+
+    def test_a_storyline_without_a_conformance_fixture_has_no_contract_leg(self):
+        tree = Tree(journeys=(), storylines=("A1", "T2"), conformance=("Contoso",))
+        self.addCleanup(tree.close)
+        result = planner.plan(tree.root, "push", "", "", None)
+        self.assertIn("contract-a1", names(result))
+        self.assertNotIn("contract-t2", names(result))
+        self.assertTrue(any("T2 has a contract and no journey, but no fabrikam" in n for n in result["notes"]))
+
+    def test_landing_nightly_dispatch_push_and_journeys_full_run_every_contract_leg(self):
+        cases = {
+            "landing": self.plan(base="main", changed=["docs/x.md"]),
+            "nightly": self.plan(event="schedule", action="", base=""),
+            "dispatch": self.plan(event="workflow_dispatch", action="", base=""),
+            "push": self.plan(event="push", action="", base=""),
+            "member labelled": self.plan(changed=["docs/x.md"], labels=[planner.FULL_LABEL]),
+            "label added": self.plan(action="labeled", label=planner.FULL_LABEL, labels=[planner.FULL_LABEL]),
+        }
+        for case, result in cases.items():
+            with self.subTest(case=case):
+                self.assertEqual(self.CONTRACTS, self.contract_names(result))
+                self.assertEqual(["harness", "isolated-a1", "isolated-a3"] + self.CONTRACTS, names(result)[:7])
+
+    def test_a_body_edit_or_another_label_runs_no_contract_leg(self):
+        self.assertEqual([], names(self.plan(action="edited", changed=[f"{planner.CONTRACTS}/Contoso/U2Contract.cs"])))
+        self.assertEqual([], names(self.plan(action="labeled", label="ci", labels=["ci"])))
+
+    def test_a_shared_change_on_a_pull_request_runs_every_contract_leg(self):
+        for path in (f"{planner.CONTRACTS}/Contoso/U2Contract.cs", f"{planner.CONTRACTS}/ContractCalls.cs",
+                     f"{planner.E2E}/Estate/JourneyEstate.cs", "src/lattice.api.backup/BackupApi.cs",
+                     "src/lattice.explorer/Core/X.cs", "test/shared/Orleans.Lattice.Testing/X.cs",
+                     ".github/workflows/explorer-journeys-plan.py", "src/lattice/Unknown.cs"):
+            for base, head in ((BUCKET, f"{BUCKET}-item"), ("main", TOPIC)):
+                with self.subTest(path=path, base=base):
+                    result = planner.plan(self.tree.root, "pull_request", "synchronize", base, [path], [], "", head)
+                    self.assertEqual(self.CONTRACTS, self.contract_names(result))
+                    self.assertEqual([], result["conformance"], "the conformance shard stays advisory")
+
+    def test_journey_docs_and_unrelated_changes_run_no_contract_leg(self):
+        result = self.plan(changed=[f"{planner.JOURNEYS}/A3/A3Journey.cs", "docs/lattice.explorer/areas.md",
+                                    f"{planner.CONTRACTS}/README.md", ".github/workflows/ci.yml",
+                                    "test/lattice/X.cs"])
+        self.assertEqual(["harness", "isolated-a3"], names(result))
+
+    def test_an_unlisted_or_empty_change_set_runs_every_contract_leg(self):
+        for changed in (None, []):
+            with self.subTest(changed=changed):
+                self.assertEqual(self.CONTRACTS, self.contract_names(self.plan(changed=changed)))
+
+    def test_an_area_file_runs_the_contracts_whose_consume_closure_names_it(self):
+        area_file = f"{planner.AREAS}/Schema/SchemaRuleBuilder.razor"
+        self.tree.write(area_file, "<div>rules</div>\n")
+        # A3's contract names the area; U2 consumes A3, C1 and T5 do not.
+        self.tree.write(f"{planner.CONTRACTS}/Contoso/A3Contract.cs",
+                        "public sealed class A3Contract() : ChapterContract(\"A3\")\n{\n  // the /schema rules\n}\n")
+        self.assertEqual(["contract-u2"], self.contract_names(self.plan(changed=[area_file])))
+        # C10 consumes C1, so naming the area in C1's contract runs both.
+        self.tree.write(f"{planner.CONTRACTS}/Contoso/C1Contract.cs",
+                        "public sealed class C1Contract() : ChapterContract(\"C1\")\n{\n  // Schema\n}\n")
+        self.assertEqual(["contract-c1", "contract-c10", "contract-u2"],
+                         self.contract_names(self.plan(changed=[area_file])))
+
+    def test_an_area_a_shared_contract_helper_names_runs_every_contract_leg(self):
+        area_file = f"{planner.AREAS}/Backups/BackupList.razor"
+        self.tree.write(area_file)
+        self.assertEqual([], self.contract_names(self.plan(changed=[area_file])))
+        self.tree.write(f"{planner.CONTRACTS}/ContosoBackups.cs", "static class ContosoBackups { /* Backups */ }\n")
+        self.assertEqual(self.CONTRACTS, self.contract_names(self.plan(changed=[area_file])))
+
+    def test_a_chapter_missing_from_the_outline_consumes_its_whole_storyline(self):
+        area_file = f"{planner.AREAS}/Schema/SchemaRuleBuilder.razor"
+        self.tree.write(area_file)
+        self.tree.write(f"{planner.CONTRACTS}/Contoso/A3Contract.cs",
+                        "public sealed class A3Contract() : ChapterContract(\"A3\")\n{\n  // Schema\n}\n")
+        self.tree.write(planner.STORY_OUTLINE, "// unreadable\n")
+        self.assertEqual(["contract-c1", "contract-c10", "contract-u2"],
+                         self.contract_names(self.plan(changed=[area_file])))
+
+    def test_a_contract_leg_runs_one_conformance_case_and_never_a_longer_chapter_id(self):
+        legs = {leg["name"]: leg for leg in self.plan(event="workflow_dispatch", action="", base="")["legs"]}
+        leg = legs["contract-c1"]
+        fixture = f"{planner.NAMESPACE}.Contracts.ContosoContractConformanceTests"
+        self.assertEqual(fixture, leg["expect"])
+        self.assertEqual(("contract", "isolated", "contoso", ""), (leg["kind"], leg["mode"], leg["storyline"], leg["jid"]))
+        self.assertEqual(
+            f"(FullyQualifiedName~{fixture}.&FullyQualifiedName~_C1{planner.CONFORMANCE_CASE_SUFFIX})"
+            f"|FullyQualifiedName~{planner.PENDING_GATE}", leg["filter"])
+        self.assertNotIn(f"_C1{planner.CONFORMANCE_CASE_SUFFIX}", f"{fixture}.20_C10{planner.CONFORMANCE_CASE_SUFFIX}")
+        self.assertIn("Fabrikam", legs["contract-t5"]["expect"])
+        self.assertEqual(planner.TIMEOUTS["contract"], leg["timeout"])
+        self.assertEqual(leg["timeout"], leg["estimate"])
+
+    def test_the_outline_closure_follows_consumes_transitively(self):
+        graph = planner.outline_graph(self.tree.root)
+        self.assertEqual(["A1"], graph["A3"])
+        self.assertEqual({"C10", "C1", "A1"}, planner.consume_closure(graph, "C10"))
+        self.assertIsNone(planner.consume_closure(graph, "Z9"))
 
 
 class CommandLineTests(unittest.TestCase):
@@ -720,6 +863,22 @@ class WiringTests(unittest.TestCase):
         self.assertIn("Contoso", planner.conformance_shards(REPOSITORY))
         self.assertIn("ContractConformanceTests", (e2e / "Contracts" / "ContosoContractConformanceTests.cs")
                       .read_text(encoding="utf-8"))
+        # A contract leg selects one conformance case by its name (#5660): `<NN>_<chapter><suffix>`.
+        fixture = (e2e / "Contracts" / "ContractConformanceFixture.cs").read_text(encoding="utf-8")
+        self.assertIn(f'SetName($"{{index + 1:D2}}_{{chapter.Id}}{planner.CONFORMANCE_CASE_SUFFIX}")', fixture)
+        self.assertIn("await session.EstablishAsync(chapter);", fixture,
+                      "a lone case establishes its consumes in story order through StorySession")
+        graph = planner.outline_graph(REPOSITORY)
+        contracts = planner.chapter_contract_sources(REPOSITORY)[0]
+        self.assertTrue(contracts, "the tree's chapter contracts are discovered")
+        self.assertEqual(set(), set(contracts) - set(graph), "every chapter contract is in the parsed outline")
+        notes = []
+        story_only = planner.story_only_contracts(REPOSITORY, planner.discover_journeys(REPOSITORY),
+                                                  planner.conformance_shards(REPOSITORY), notes)
+        self.assertEqual([], notes, "every story-only chapter has a conformance fixture to run it")
+        journeys = {folder.lower() for folder, _, _ in planner.discover_journeys(REPOSITORY)}
+        self.assertEqual(sorted(chapter for chapter in contracts if chapter.lower() not in journeys),
+                         sorted(chapter for chapter, _, _ in story_only))
         # The names the legs filter on are F3's (#5361): every one must still exist as spelled.
         gate = (e2e / "FeatureCoverage" / "CoverageGateTests.cs").read_text(encoding="utf-8")
         self.assertIn('[Category("CoverageGate")]', gate)
