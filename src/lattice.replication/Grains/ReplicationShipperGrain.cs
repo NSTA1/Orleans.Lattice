@@ -47,7 +47,9 @@ internal sealed partial class ReplicationShipperGrain(
     IReplicationDigestProbeTransport digestProbeTransport,
     CrdtShapeRegistry? crdtShapeRegistry = null,
     SharedDictionaryNegotiationState? dictionaryNegotiationState = null,
-    ILatticeCompressionDictionaryProvider? dictionaryProvider = null)
+    ILatticeCompressionDictionaryProvider? dictionaryProvider = null,
+    ILatticeReplicationContext? replicationContext = null,
+    CompiledReplicationConfigSnapshotMaintainer? runtimeReplicationConfig = null)
     : CoordinatorGrain<ReplicationShipperGrain>(context, reminderRegistry, logger),
       IReplicationShipperGrain
 {
@@ -871,6 +873,12 @@ internal sealed partial class ReplicationShipperGrain(
     protected internal override async Task ProcessNextPhaseAsync()
     {
         ParseGrainKey();
+
+        // Ahead of everything else: a stray never reads or ships (#5676).
+        if (await RetireIfStrayAsync())
+        {
+            return;
+        }
 
         // Ahead of the pause and backoff gates: releasing a covered purge hold
         // depends on neither, and a held registry blocks every decision purge.
