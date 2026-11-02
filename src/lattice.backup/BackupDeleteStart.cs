@@ -13,9 +13,15 @@ namespace Orleans.Lattice.Backup;
 /// <paramref name="Outcome"/> is <see cref="BackupRetireOutcome.Removed"/>;
 /// otherwise <see langword="null"/>.
 /// </param>
+/// <param name="Token">
+/// The delete's own lease on the id (issue #5631), which
+/// <see cref="ILatticeBackupSchedulerGrain.EndDeleteAsync"/> ends: an overlapping
+/// delete of the same id holds a lease of its own.
+/// </param>
 [GenerateSerializer]
 [Alias(BackupTypeAliases.BackupDeleteStart)]
 [Immutable]
 internal sealed record BackupDeleteStart(
     [property: Id(0)] BackupRetireOutcome Outcome,
-    [property: Id(1)] BackupManifest? Manifest);
+    [property: Id(1)] BackupManifest? Manifest,
+    [property: Id(2)] Guid Token = default);

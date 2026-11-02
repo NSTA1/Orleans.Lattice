@@ -9,8 +9,10 @@ PERTURBS: RetireStart
 
 --- FIND
     /\ held["A"] = "free"
+    /\ ~Leased
     /\ held' = [held EXCEPT !["A"] = "ret"]
 --- REPLACE
     \* MUTATION: no wait on a publish's hold.
+    /\ ~Leased
     /\ held' = [held EXCEPT !["A"] = "ret"]
 --- END

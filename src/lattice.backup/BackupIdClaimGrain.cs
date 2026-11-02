@@ -4,19 +4,25 @@ namespace Orleans.Lattice.Backup;
 internal sealed class BackupIdClaimGrain(
     IGrainContext context,
     ILatticeBackupCatalogStore catalog,
-    ILatticeBackupSink sink)
+    ILatticeBackupSink sink,
+    [PersistentState("backup-id-claim", LatticeOptions.StorageProviderName)]
+    IPersistentState<BackupIdClaimState> state)
     : IGrainBase, IBackupIdClaimGrain
 {
     // A publish's claim lapses if it never reports back, so a capture that fails
     // between its claim and its release cannot hold the id for good.
     internal static readonly TimeSpan PendingClaimLifetime = TimeSpan.FromMinutes(15);
 
-    // One entry per claim granted and not yet released: a scope can hold several
-    // at once (two captures of the same content), and each release retires one.
-    private readonly List<(string ScopeKey, DateTimeOffset Until)> _pending = [];
-
     /// <inheritdoc />
     public IGrainContext GrainContext => context;
+
+    // One entry per claim granted and not yet released: a scope can hold several
+    // at once (two captures of the same content), and each release retires one.
+    // Persisted (issue #5632): a claimant may wait on its scope's hold for minutes
+    // while a pass or a delete retires the id, and the claim must survive this
+    // grain's activation being lost meanwhile, or another scope could take the
+    // ownerless id and have it overwritten - #5627 again.
+    private List<BackupIdPendingClaim> Claims => state.State.Claims;
 
     /// <inheritdoc />
     public async Task<bool> TryClaimAsync(string scopeKey)
@@ -24,8 +30,8 @@ internal sealed class BackupIdClaimGrain(
         ArgumentException.ThrowIfNullOrEmpty(scopeKey);
         var backupId = context.GrainId.Key.ToString()!;
         var now = DateTimeOffset.UtcNow;
-        _pending.RemoveAll(claim => claim.Until <= now);
-        if (_pending.Exists(claim => !string.Equals(claim.ScopeKey, scopeKey, StringComparison.Ordinal)))
+        Claims.RemoveAll(claim => claim.Until <= now);
+        if (Claims.Exists(claim => !string.Equals(claim.ScopeKey, scopeKey, StringComparison.Ordinal)))
         {
             return false;
         }
@@ -40,19 +46,19 @@ internal sealed class BackupIdClaimGrain(
         // the scope's hold while a retention pass or a delete retires the id, and
         // the id must stay this scope's until that publish completes, or another
         // scope could take the ownerless id and have it overwritten.
-        _pending.Add((scopeKey, now + PendingClaimLifetime));
+        Claims.Add(new BackupIdPendingClaim { ScopeKey = scopeKey, Until = now + PendingClaimLifetime });
+        if (!RedProof.ClaimsNotPersisted) { await state.WriteStateAsync(); } // RED-PROOF
         return true;
     }
 
     /// <inheritdoc />
-    public Task ReleaseAsync(string scopeKey)
+    public async Task ReleaseAsync(string scopeKey)
     {
-        var index = _pending.FindIndex(claim => string.Equals(claim.ScopeKey, scopeKey, StringComparison.Ordinal));
+        var index = Claims.FindIndex(claim => string.Equals(claim.ScopeKey, scopeKey, StringComparison.Ordinal));
         if (index >= 0)
         {
-            _pending.RemoveAt(index);
+            Claims.RemoveAt(index);
+            await state.WriteStateAsync();
         }
-
-        return Task.CompletedTask;
     }
 }

@@ -9,12 +9,13 @@ namespace Orleans.Lattice.Backup;
 /// </summary>
 /// <remarks>
 /// Ownership is read from durable state - the scope of the catalog row, or else
-/// of the sink manifest, stored under the id - so nothing is persisted here. The
-/// only activation-local state is the claims of publishes that have not yet
-/// completed, one per publish and released one at a time, each expiring if its
-/// publish never reports back. The owning scope's publishes are claimed too
-/// (issue #5627): a publish may wait while its own scope retires the id, and the
-/// claim keeps another scope from taking the id in that window.
+/// of the sink manifest, stored under the id. The grain's own state is the claims
+/// of publishes that have not yet completed, one per publish and released one at
+/// a time, each expiring if its publish never reports back. The owning scope's
+/// publishes are claimed too (issue #5627): a publish may wait while its own
+/// scope retires the id, and the claim keeps another scope from taking the id in
+/// that window. The claims are persisted (issue #5632), so losing the grain's
+/// activation in that window does not drop them.
 /// </remarks>
 [Alias(BackupTypeAliases.IBackupIdClaimGrain)]
 internal interface IBackupIdClaimGrain : IGrainWithStringKey

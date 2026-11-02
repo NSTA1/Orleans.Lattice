@@ -1,0 +1,15 @@
+# Pairs with ListedInSink. A delete whose lease ran out ends after a capture
+# of identical content has republished the id, and deletes the republished
+# manifest because it does not check for the row first.
+MODULE: ListedInSinkEndIgnoresRow
+TARGET: ListedInSink
+CLASS: Invariant
+SUMMARY: a delete ends by deleting its scope's manifest even while a row lists the id
+PERTURBS: DelEnd
+
+--- FIND
+    /\ man' = IF row = "none" /\ man = "A" THEN "none" ELSE man
+--- REPLACE
+    \* MUTATION: the row is not checked.
+    /\ man' = IF man = "A" THEN "none" ELSE man
+--- END

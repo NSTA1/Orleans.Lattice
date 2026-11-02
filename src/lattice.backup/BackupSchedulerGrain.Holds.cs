@@ -14,9 +14,10 @@ namespace Orleans.Lattice.Backup;
 /// A publish holds its id for the length of its publish call; a pass holds every
 /// id it dooms as retiring from the doom decision - before it removes any row - to
 /// the moment it has deleted or restored that id; a catalog scrub holds its id as
-/// retiring too. An operator delete holds its id by a lease from the in-grain step
-/// that removes its row until the caller, having deleted the artifacts and the sink
-/// manifest outside the grain, ends it (issue #5628); a set member written ahead
+/// retiring too. An operator delete holds its id by a lease of its own from the
+/// in-grain step that removes its row until the caller, having deleted the
+/// artifacts outside the grain, ends it in the grain, under the hold, where the
+/// sink manifest is deleted (issues #5628 and #5631); a set member written ahead
 /// of its set's stamp is held by a lease until the stamp registers it (issue
 /// #5629). A lease runs out if its holder is lost. A held id is never doomed, and a
 /// publish or delete of a held id waits. The holds are activation-local: they live
@@ -42,9 +43,11 @@ internal sealed partial class BackupSchedulerGrain
 
     // Operator deletes in progress (issue #5628): the id stays reserved from the
     // short in-grain step that removes its row until the caller has deleted its
-    // artifacts and sink manifest outside the grain and released it. A lease, so a
-    // caller lost part-way cannot hold the id for good.
-    private readonly Dictionary<string, DateTimeOffset> _deleting = new(StringComparer.Ordinal);
+    // artifacts outside the grain and ended the delete. One lease per delete,
+    // keyed by its token, so overlapping deletes of one id - a retry, a double
+    // submission - each keep the id reserved until their own end (issue #5631).
+    // Leases, so a caller lost part-way cannot hold the id for good.
+    private readonly Dictionary<string, Dictionary<Guid, DateTimeOffset>> _deleting = new(StringComparer.Ordinal);
 
     // Ids published while a pass reads its listing; null outside a listing.
     private HashSet<string>? _publishedDuringListing;
@@ -57,7 +60,7 @@ internal sealed partial class BackupSchedulerGrain
 
     private TimeSpan PendingStampLease => backupOptions?.Value.PendingStampLease ?? TimeSpan.FromMinutes(30);
 
-    private TimeSpan DeleteLease => backupOptions?.Value.DeleteLease ?? TimeSpan.FromMinutes(30);
+    private TimeSpan DeleteLease => backupOptions?.Value.DeleteLease ?? TimeSpan.FromMinutes(10);
 
     /// <inheritdoc />
     public async Task<BackupPublishResult> PublishAsync(BackupPublishRequest request)
@@ -120,16 +123,17 @@ internal sealed partial class BackupSchedulerGrain
 
         try
         {
-            var manifest = await Publisher.BeginDeleteAsync(backupId);
+            var manifest = await Publisher.BeginDeleteAsync(backupId, ScopeKey);
             if (manifest is null)
             {
                 return new BackupDeleteStart(BackupRetireOutcome.Unchanged, null);
             }
 
-            // The hold becomes a lease that outlives this call: the caller deletes
-            // the artifacts and the sink manifest outside the grain, then ends it.
-            _deleting[backupId] = DateTimeOffset.UtcNow + DeleteLease;
-            return new BackupDeleteStart(BackupRetireOutcome.Removed, manifest);
+            // The hold becomes this delete's own lease, which outlives this call:
+            // the caller deletes the artifacts outside the grain, then ends it.
+            var token = Guid.NewGuid();
+            SetDeleteLease(backupId, token);
+            return new BackupDeleteStart(BackupRetireOutcome.Removed, manifest, token);
         }
         finally
         {
@@ -138,15 +142,34 @@ internal sealed partial class BackupSchedulerGrain
     }
 
     /// <inheritdoc />
-    public Task EndDeleteAsync(string backupId)
+    public async Task<BackupRetireOutcome> EndDeleteAsync(string backupId, Guid token, bool finish)
     {
         ArgumentException.ThrowIfNullOrEmpty(backupId);
-        if (_deleting.Remove(backupId))
+        if (!finish)
         {
-            SignalHoldsChanged();
+            EndDeleteLease(backupId, token);
+            return BackupRetireOutcome.Unchanged;
         }
 
-        return Task.CompletedTask;
+        // Renewed first, so no publish of the id starts while this waits for the
+        // hold; the manifest is then deleted under the hold, never outside it.
+        SetDeleteLease(backupId, token);
+        if (!await TryHoldAsync(backupId, publishing: false, joinDelete: true))
+        {
+            return BackupRetireOutcome.Busy;
+        }
+
+        try
+        {
+            return await Publisher.FinishDeleteAsync(backupId, ScopeKey)
+                ? BackupRetireOutcome.Removed
+                : BackupRetireOutcome.Unchanged;
+        }
+        finally
+        {
+            EndDeleteLease(backupId, token);
+            ReleaseHold(backupId, publishing: false, published: false);
+        }
     }
 
     /// <inheritdoc />
@@ -178,7 +201,7 @@ internal sealed partial class BackupSchedulerGrain
         _publishing.Contains(backupId)
         || _retiring.Contains(backupId)
         || HasLiveLease(_pendingMembers, backupId)
-        || HasLiveLease(_deleting, backupId)
+        || IsDeleting(backupId)
         || (_publishedDuringListing?.Contains(backupId) ?? false);
 
     private static bool HasLiveLease(Dictionary<string, DateTimeOffset> leases, string backupId)
@@ -195,6 +218,54 @@ internal sealed partial class BackupSchedulerGrain
 
         leases.Remove(backupId);
         return false;
+    }
+
+    private bool IsDeleting(string backupId)
+    {
+        if (!_deleting.TryGetValue(backupId, out var leases))
+        {
+            return false;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        foreach (var expired in leases.Where(lease => lease.Value <= now).Select(lease => lease.Key).ToList())
+        {
+            leases.Remove(expired);
+        }
+
+        if (leases.Count > 0)
+        {
+            return true;
+        }
+
+        _deleting.Remove(backupId);
+        return false;
+    }
+
+    private void SetDeleteLease(string backupId, Guid token)
+    {
+        if (!_deleting.TryGetValue(backupId, out var leases))
+        {
+            leases = [];
+            _deleting[backupId] = leases;
+        }
+
+        leases[token] = DateTimeOffset.UtcNow + DeleteLease;
+    }
+
+    // Ends one delete's lease; another delete of the id keeps its own.
+    private void EndDeleteLease(string backupId, Guid token)
+    {
+        if (RedProof.SharedDeleteLease) { if (_deleting.Remove(backupId)) { SignalHoldsChanged(); } return; } // RED-PROOF
+        if (_deleting.TryGetValue(backupId, out var leases) && leases.Remove(token))
+        {
+            if (leases.Count == 0)
+            {
+                _deleting.Remove(backupId);
+            }
+
+            SignalHoldsChanged();
+        }
     }
 
     private void ReserveRetiring(List<BackupManifest> doomed)
@@ -230,7 +301,7 @@ internal sealed partial class BackupSchedulerGrain
         // idempotent steps - so a retry is never blocked by its own earlier attempt.
         while (_publishing.Contains(backupId)
             || _retiring.Contains(backupId)
-            || (!joinDelete && HasLiveLease(_deleting, backupId)))
+            || (!joinDelete && IsDeleting(backupId)))
         {
             var remaining = wait - (DateTimeOffset.UtcNow - started);
             if (remaining <= TimeSpan.Zero)

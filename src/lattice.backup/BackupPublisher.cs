@@ -155,17 +155,26 @@ internal sealed class BackupPublisher(
     /// the rest of the delete works from. With the row already gone - a delete
     /// interrupted after this step (issue #5334) - it returns the sink manifest,
     /// so a retry finishes the delete. Returns <see langword="null"/> when neither
-    /// remains: there is nothing left to delete.
+    /// remains, or when what remains is another scope's backup - a content-
+    /// addressed id another scope took once this one's backup was gone (issue
+    /// #5631): there is nothing of this scope's left to delete.
     /// </summary>
     /// <param name="backupId">The backup to delete.</param>
+    /// <param name="scopeKey">The deleting scope's key, or <see langword="null"/> to delete whatever the id names.</param>
     /// <returns>The backup's manifest, or <see langword="null"/>.</returns>
-    public async Task<BackupManifest?> BeginDeleteAsync(string backupId)
+    public async Task<BackupManifest?> BeginDeleteAsync(string backupId, string? scopeKey = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(backupId);
         var row = await catalog.GetAsync(backupId).ConfigureAwait(false);
         if (row is null)
         {
-            return await sink.ReadManifestAsync(backupId).ConfigureAwait(false);
+            var manifest = await sink.ReadManifestAsync(backupId).ConfigureAwait(false);
+            return manifest is not null && IsOfScope(manifest, scopeKey) ? manifest : null;
+        }
+
+        if (!RedProof.BeginIgnoresScope && !IsOfScope(row, scopeKey)) // RED-PROOF
+        {
+            return null;
         }
 
         await catalog.RemoveAsync(backupId).ConfigureAwait(false);
@@ -173,14 +182,28 @@ internal sealed class BackupPublisher(
     }
 
     /// <summary>
-    /// The rest of an operator delete, run outside any grain call so a large
-    /// backup or catalog cannot outlast the grain response timeout (issue #5628):
-    /// it deletes the backup's unshared artifacts and then its sink manifest. The
-    /// sink manifest goes last, so an interrupted delete leaves it behind and a
-    /// retry finds it (<see cref="BeginDeleteAsync"/>) and finishes. Idempotent.
+    /// The rest of an operator delete outside its grain calls: deletes the
+    /// backup's unshared artifacts (<see cref="DeleteArtifactsAsync"/>), then its
+    /// sink manifest (<see cref="FinishDeleteAsync"/>). The sink manifest goes
+    /// last, so an interrupted delete leaves it behind and a retry finds it
+    /// (<see cref="BeginDeleteAsync"/>) and finishes. Idempotent.
     /// </summary>
     /// <param name="manifest">The manifest <see cref="BeginDeleteAsync"/> returned.</param>
     public async Task CompleteDeleteAsync(BackupManifest manifest)
+    {
+        await DeleteArtifactsAsync(manifest).ConfigureAwait(false);
+        await FinishDeleteAsync(manifest.Id, BackupScopeKey.For(manifest.Scope)).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The long step of an operator delete, run outside any grain call so a large
+    /// backup or catalog cannot outlast the grain response timeout (issue #5628):
+    /// deletes the backup's artifacts that no other catalogued manifest references.
+    /// Every capture streams artifacts of its own, so a republish of the id never
+    /// references the artifacts this deletes. Idempotent.
+    /// </summary>
+    /// <param name="manifest">The manifest <see cref="BeginDeleteAsync"/> returned.</param>
+    public async Task DeleteArtifactsAsync(BackupManifest manifest)
     {
         ArgumentNullException.ThrowIfNull(manifest);
 
@@ -207,9 +230,39 @@ internal sealed class BackupPublisher(
                 await sink.DeleteArtifactAsync(descriptor.ArtifactId).ConfigureAwait(false);
             }
         }
-
-        await sink.DeleteManifestAsync(manifest.Id).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// The last step of an operator delete, which the scheduler grain runs under
+    /// the id's hold (issue #5631): deletes the sink manifest only while no
+    /// catalog row lists the id and the manifest is still the deleting scope's.
+    /// A capture of identical content may have republished the id - after the
+    /// delete's lease ran out - or another scope may have taken it once an
+    /// overlapping delete removed this scope's manifest; either backup is kept.
+    /// </summary>
+    /// <param name="backupId">The deleted backup.</param>
+    /// <param name="scopeKey">The deleting scope's key, or <see langword="null"/> to skip the scope check.</param>
+    /// <returns>Whether the manifest was deleted.</returns>
+    public async Task<bool> FinishDeleteAsync(string backupId, string? scopeKey = null)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        if (!RedProof.EndIgnoresRow && await catalog.GetAsync(backupId).ConfigureAwait(false) is not null) // RED-PROOF
+        {
+            return false;
+        }
+
+        var manifest = await sink.ReadManifestAsync(backupId).ConfigureAwait(false);
+        if (manifest is null || (!RedProof.EndIgnoresScope && !IsOfScope(manifest, scopeKey))) // RED-PROOF
+        {
+            return false;
+        }
+
+        await sink.DeleteManifestAsync(backupId).ConfigureAwait(false);
+        return true;
+    }
+
+    private static bool IsOfScope(BackupManifest manifest, string? scopeKey) =>
+        scopeKey is null || string.Equals(BackupScopeKey.For(manifest.Scope), scopeKey, StringComparison.Ordinal);
 
     private async Task<BackupPublishResult> PublishIncrementAsync(BackupManifest manifest)
     {
