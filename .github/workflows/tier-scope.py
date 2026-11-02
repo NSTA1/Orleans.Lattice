@@ -312,9 +312,32 @@ class TierScopeSelfTest(unittest.TestCase):
             "spec/README.md",
             "spec/atomic-commit/perturbations/Any.perturbation",
             "tools/tlc/README.md",
+            "spec/wal/design/WalLiveAdvance.tla",
+            "spec/wal/design/WalLiveAdvanceRecreate.cfg",
+            "spec/wal/design/mutations/Any.mutation",
         ):
             with self.subTest(path=path):
                 self.assertTrue(self.skips("main", [path]))
+
+    def test_an_unmanifested_design_model_is_neutral_but_never_hides_a_module(self):
+        # A design model has no manifest, so no TLC run executes it: a change
+        # confined to it skips exhaustive TLC on both bases. A module beside it,
+        # the same model promoted out of design/, or a look-alike directory name
+        # stays a verdict input. TlcInputClassificationTests fails if a manifest
+        # ever appears under a design folder.
+        design = ["spec/wal/design/WalLiveAdvance.tla", "spec/wal/design/LiveAdvanceDesign.md"]
+        for base in ("main", self.MEMBER):
+            with self.subTest(base=base):
+                self.assertTrue(self.skips(base, design))
+        for path in (
+            "spec/wal/WalDurability.tla",
+            "spec/wal/WalLiveAdvance.tla",
+            "spec/wal/WalLiveAdvance.manifest.json",
+            "spec/wal/designer/Any.tla",
+        ):
+            for base in ("main", self.MEMBER):
+                with self.subTest(path=path, base=base):
+                    self.assertFalse(self.skips(base, [*design, path]))
 
     def test_no_or_empty_changed_list_runs_exhaustive_tlc(self):
         self.assertFalse(self.skips("main", []))

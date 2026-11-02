@@ -9,6 +9,7 @@
     "",
     "Three classes. 'neutral' and 'routing' are exclusions, checked first:",
     "- neutral: never affects a TLC run (refinement notes and READMEs TLC never reads,",
+    "  unmanifested design models under spec/<area>/design/, which no TLC run executes",
     "  Formal harness files no verdict-affecting or routing file references, workflow",
     "  files that select, route, provision and run nothing TLC checks).",
     "- routing: decides which job runs which existing TLC case, or provisions and",
@@ -73,6 +74,7 @@
   "neutral": [
     "spec/*.md",
     "spec/**/perturbations/**",
+    "spec/**/design/**",
     "tools/tlc/README.md",
     "test/lattice/Formal/RefinementDetectorResolverTests.cs",
     "test/lattice/Formal/RefinementDetectorRunnability*",
