@@ -264,12 +264,41 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
+    public async Task A_stale_latched_partition_never_live_advances()
+    {
+        // A partition whose WAL fell past its checkpoint with no snapshot covering the
+        // gap is latched stale (#3477): only an apply or an operator reset may move it.
+        var decision = FallOffLogDecision.TailReplay;
+        var rig = new LiveAdvanceRig(firstOffset: 10);
+        var (grain, _, _, _) = CreateLeafForCoverageRepair(
+            persistedCheckpoint: -1L,
+            treeId: UniqueCoverageRepairTreeId("live-advance-latched"),
+            detectorDecision: () => decision,
+            liveAdvance: rig);
+
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
+        SeedRow(grain);
+        await ((ILeafProjection)grain).SetCheckpointOffsetAsync(4, CancellationToken.None);
+        decision = FallOffLogDecision.SnapshotThenWal;
+        Assert.ThrowsAsync<LeafProjectionStaleException>(() => grain.DriveStarvedCheckpointAsync());
+        Assert.That(grain.IsProjectionStaleDriveLatched(1), Is.True, "precondition: latched");
+
+        await SetStampedAsync(grain, "a", "1");
+
+        Assert.That(await grain.TryAdvanceLiveCheckpointAsync(), Is.False);
+        Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(4L),
+            "the leaf's own append at 10 is not evidence that it holds (4, 10)");
+    }
+
+    [Test]
     public async Task A_closed_gate_view_holds_the_advance()
     {
         var (grain, rig) = await ArmedLeafWithWritesAsync("a");
         rig.FenceGate.IsOpen = false;
+        rig.ShardRoot.ClearReceivedCalls();
 
         Assert.That(await grain.TryAdvanceLiveCheckpointAsync(), Is.False);
+        await rig.ShardRoot.DidNotReceive().GetLiveAdvanceViewAsync(Arg.Any<GrainId>(), Arg.Any<string?>());
     }
 
     [Test]

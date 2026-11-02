@@ -252,7 +252,8 @@ internal sealed partial class BPlusLeafGrain
         if (!IsLiveAdvanceQuiescent(withinDrive)
             || _appendFence is not { } fence
             || !IsLiveAdvanceOverlapExcluded()
-            || SnapshotLiveAdvanceCandidates() is not { } ownHigh)
+            || SnapshotLiveAdvanceCandidates() is not { } ownHigh
+            || !AnyPartitionClaimed(fence, ownHigh.Length))
         {
             return false;
         }
@@ -294,6 +295,25 @@ internal sealed partial class BPlusLeafGrain
         }
 
         return advanced;
+    }
+
+    /// <summary>
+    /// Whether any partition holds a claim the advance could arm on. When none does - the
+    /// gate is closed, as it is throughout a rolling upgrade from a build without the
+    /// fence, or nothing has claimed yet - the tick issues no marker read and no shard-root
+    /// call, so a 10.2.0 shard root is never asked for its live-advance view.
+    /// </summary>
+    private static bool AnyPartitionClaimed(LeafAppendEpochFence fence, int partitions)
+    {
+        for (var p = 0; p < partitions; p++)
+        {
+            if (fence.TryGetArmingView(p, out _, out _))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

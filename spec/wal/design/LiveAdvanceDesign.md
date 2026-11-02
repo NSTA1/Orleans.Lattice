@@ -1,7 +1,8 @@
 # Live checkpoint advance: fenced redesign
 
-Design for issues #5572 and #5593, epic #5605. This is a design draft for review:
-no production code implements it yet. `WalLiveAdvance.tla` beside this note models
+Design for issues #5572 and #5593, epic #5605. Its production members land in the
+order [Production members](#production-members) sets; the live advance itself is
+`BPlusLeafGrain.TryAdvanceLiveCheckpointAsync`. `WalLiveAdvance.tla` beside this note models
 it, with variant configurations and its mutations in `mutations/`. A module under
 `spec/` must cite a production detector on every behaviour row, so this draft sits
 outside module discovery. It becomes the companion module `spec/wal/WalLiveAdvance`,

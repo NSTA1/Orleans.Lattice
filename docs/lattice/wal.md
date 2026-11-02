@@ -1411,8 +1411,9 @@ Orleans promises one activation per grain, but during a membership change a
 leaf can briefly run twice. A WAL partition therefore fences appends by **leaf
 activation epoch** ([epic #5605](https://github.com/NSTA1/Orleans.Lattice/issues/5605)),
 so a stale duplicate activation can never append after a newer one has claimed.
-The design note is `spec/wal/design/LiveAdvanceDesign.md`. This release only
-fences: a leaf's projection checkpoint still advances by replay, as before.
+The design note is `spec/wal/design/LiveAdvanceDesign.md`. The fence is what lets
+a leaf advance its checkpoint over its own writes without a replay; see
+[Live checkpoint advance](#live-checkpoint-advance).
 
 **The claim.** Before an activation's first append to a partition, it claims an epoch:
 
@@ -1550,9 +1551,9 @@ The fence's counters are `orleans.lattice.wal.append_fence.claims`,
 The epoch fence above stops a stale duplicate of a leaf. The **hand-off fences**
 stop a different author: one that appends a record a leaf will own, while handing
 keys to it ([epic #5605](https://github.com/NSTA1/Orleans.Lattice/issues/5605), the
-design note's section 2). This release builds the markers and fences only. Nothing
-reads a marker to skip records yet: every leaf's projection checkpoint still advances
-by replay, so the fences add cost and change no result.
+design note's section 2). A leaf reads the markers before it advances its checkpoint
+over its own writes ([Live checkpoint advance](#live-checkpoint-advance)); a hand-off
+in flight holds that advance, and the leaf's checkpoint advances by replay meanwhile.
 
 Every hand-off follows one protocol:
 
@@ -1791,6 +1792,64 @@ Three residues remain, all bounded:
   Do not purge trees while a rolling upgrade from 10.2.0 is in progress.
 The hand-off counters are `orleans.lattice.wal.append_fence.handoff_markers`,
 `.unstamped_appends` and `.self_fenced`; see [Metrics](metrics.md).
+
+## Live checkpoint advance
+
+A leaf whose WAL partition holds no record it has not read, other than its own
+writes, may advance its projection checkpoint over those writes without replaying
+them ([#5570](https://github.com/NSTA1/Orleans.Lattice/issues/5570),
+[#5572](https://github.com/NSTA1/Orleans.Lattice/issues/5572),
+[#5593](https://github.com/NSTA1/Orleans.Lattice/issues/5593); design note section 1).
+Before it, a leaf written only through the live path banked no usable durable pin
+until its coverage-lag timer had spent a replay permit reading its own writes back,
+so a fresh tree held its WAL floor for up to
+[`LeafSnapshotMaxCoverageLagSeconds`](configuration.md#leafsnapshotmaxcoveragelagseconds).
+
+**When a leaf may advance.** Per partition, the activation advances its checkpoint to
+the highest offset its own applied appends returned, and only when every one of these
+holds; otherwise the checkpoint advances by replay, as before:
+
+1. **Claimed.** The activation holds a claim at the partition under its current epoch,
+   and its view of the append-fence gate is open.
+2. **Read to the claim head.** Its checkpoint has reached the claim head minus one:
+   it has read everything allocated before it claimed, including an acknowledged write
+   of a stale duplicate activation (#5593). A new tree's first leaf claims at head `0`
+   and needs no replay; an existing leaf replays to its claim head once.
+3. **No hand-off open.** Its marker is initialised, no token is open on it, and no
+   token on its shard root's marker overlaps its key range. An existing leaf adopts its
+   shard root's initialised flag once it has no split in flight.
+4. **Read to every close.** Its checkpoint has reached the heads every closed hand-off
+   overlapping it recorded.
+5. **Read past every reported unstamped append.** Its checkpoint is at or past the
+   highest unstamped offset the partition reported to it. A write through an unstamped
+   leaf method reports itself, so it too falls back to replay.
+6. **Quiescent.** Every own append the activation issued has been applied, none failed,
+   no saga prepare is pending, and no replay is running.
+
+The advance also holds for the whole leaf when the leaf has no shard slot, when it
+covers no key range but has siblings, when the grain storage provider's ETag check
+did not report the provider fenced at silo start
+([The grain storage provider must enforce ETags](configuration.md#the-grain-storage-provider-must-enforce-etags)),
+or when it is suspected to be an orphan: the shard root's descent for its low key does
+not reach it, or orphan repair is running. The markers and the shard root's view are
+read fresh on every attempt; the shard root answers on an interleaving, read-only call,
+so a serial shard-root turn that calls the leaf cannot deadlock against it.
+
+**Where it runs.** On the coverage-lag tick and at the start of a starvation drive, so
+the tick banks a snapshot and a usable pin for a live-written leaf without taking a
+replay permit.
+
+**Bulk-loaded leaves** start with no checkpoint, so they replay to their claim head
+before they arm, until the bulk birth hint lands (#5605, member 3).
+
+**Rolling upgrades.** Nothing arms while the gate is closed, and the leaf issues no
+marker read and no shard-root call while no partition is claimed, so a shard root on an
+older build is never asked for its view.
+
+**Cost.** Nothing is added to a write: the tracker is a counter and one offset per
+partition, updated as an append completes. Per coverage-lag tick on a leaf with own
+writes above its checkpoint: one marker-row read and one shard-root call. Once per leaf,
+the marker write that adopts its shard root's flag.
 
 ## Relationship to replication
 
