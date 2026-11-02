@@ -1,0 +1,28 @@
+# Pairs with ListedRestorable. Production before the fix of #5637, both
+# halves at once: the delete deletes artifacts with no live lease, and a
+# rebuild registers whatever sink manifest it finds.
+MODULE: ListedRestorableDeleteBeforeFix
+TARGET: ListedRestorable
+CLASS: Invariant
+SUMMARY: production before #5637: no lease renewal and no rebuild probe
+PERTURBS: DelArt, Rebuild
+
+--- FIND
+    /\ del[d] = "begun"
+    /\ lease[d] = "live"
+    /\ art' = IF gen = dgen[d] THEN FALSE ELSE art
+--- REPLACE
+    /\ del[d] = "begun"
+    \* MUTATION: artifacts are deleted whether or not the lease is live.
+    /\ art' = IF gen = dgen[d] THEN FALSE ELSE art
+--- END
+
+--- FIND
+    /\ man = "A"
+    /\ art
+    /\ row' = "A"
+--- REPLACE
+    /\ man = "A"
+    \* MUTATION: no artifact probe.
+    /\ row' = "A"
+--- END

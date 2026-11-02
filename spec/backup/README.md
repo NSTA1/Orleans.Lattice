@@ -24,7 +24,7 @@ overlapping, which also keeps every module's TLC run small:
 | [`BackupRestore`](BackupRestore.tla) | A coordinated restore across two regions, its per-record admission, and the replication that resumes after it, with delivery split into a cached-gate admission and a later landing, a causal-apply buffer, and the restored copy's receive fence (#4593). | Two clusters, two copies each, a backup with one admitted and one foreign record, two application writes, one saga (receive-fence epochs 0 and 1). |
 | [`BackupCutover`](BackupCutover.tla) | A local shadow-cutover restore and its revert: the alias and shard map that move together, the redirects that heal stale routing, the alias reservation, and a crash with a retry. | One tree, two copies, one stale routing cache, one crash. |
 | [`BackupRetention`](BackupRetention.tla) | Retention pruning racing full and incremental captures of the same scope: the keep set and its base closure, the pass's row-first delete and dependent scan, the increment's base re-check, tip-first deletion, one pass at a time with its listing read under the guard, a content-addressed id republished under a per-id hold with a refreshed ranking, a set member listed only once it is stamped, and a crash at any step (#5357, #5412, #5418, #5449). | Three backup ids, two capture slots, one retention pass (two in the `TwoPasses` variant), a clock of two ticks, one crash, keep-last of at most one and max-age of one tick. |
-| [`BackupIdClaim`](BackupIdClaim.tla) | Which scope owns a full backup's bare content-addressed id: the claim grain's persisted per-capture claims, each scope's per-id hold, a retention pass of the id by its owning scope, and overlapping operator deletes of it, each with a lease of its own and a fenced, scope-checked manifest delete, so no publish replaces another scope's backup under it and no delete removes a backup a publish listed or another scope owns (#5620, #5627, #5631, #5632). | Two scopes, three captures of identical content (two in one scope), one retention pass and two operator deletes in the owning scope. |
+| [`BackupIdClaim`](BackupIdClaim.tla) | Which scope owns a full backup's bare content-addressed id: the claim grain's persisted per-capture claims, each scope's per-id hold, a retention pass of the id by its owning scope, overlapping operator deletes of it, each with a lease of its own renewed while it deletes artifacts and a fenced, scope-checked manifest delete, and a catalog rebuild that re-lists only a whole backup, so no publish replaces another scope's backup under it, no delete removes a backup a publish listed or another scope owns, and no rebuild lists a backup a delete half removed (#5620, #5627, #5631, #5632, #5637). | Two scopes, three captures of identical content (two in one scope), one retention pass, two operator deletes and one catalog rebuild in the owning scope. |
 
 An increment needs the WAL's partitions and offsets, which no other capture
 question does, so it is a module of its own rather than a third capture kind in
@@ -84,10 +84,12 @@ fixed in the anti-entropy digest); it checks every fix it models. See
 | | `KeepPolicyHonoured` | Action | Nothing the policy keeps is pruned. |
 | | `ExpiredEventuallyPruned` | Liveness | A listed backup outside the policy that nothing builds on is eventually pruned. |
 | `BackupIdClaim` | `ListedInSink` | Invariant | A retire or a delete never deletes the manifest of a row a publish registered meanwhile. |
+| | `ListedRestorable` | Invariant | Every listed backup's manifest is in the sink with every artifact it references: a rebuild never lists a backup a delete half removed. |
 | | `ScopeAgreement` | Invariant | The bare id's catalog row and sink manifest name one scope. |
 | | `DeleteFence` | Invariant | While a delete of the id is in progress and its lease is live, no publish of the id in its scope runs. |
 | | `NoForeignOverwrite` | Action | No publish replaces another scope's backup under the bare id. |
 | | `NoForeignDelete` | Action | No delete in one scope removes another scope's backup under the bare id. |
+| | `LeaseEventuallyEnds` | Liveness | A delete whose caller is lost does not keep the id reserved for good. |
 | `BackupCutover` | `RestoreNeverTorn` | Invariant | A reader never pairs one copy with another copy's shard map. |
 | | `CutoverServesRestored` | Invariant | Once a restore returns, every reader is served the restored copy. |
 | | `RevertNeverServesRestored` | Invariant | Once a revert returns, no reader is served the restored copy. |
@@ -253,9 +255,21 @@ refinement note's rows:
   activation memory only, so losing its activation while an owning scope's
   capture waited on its hold reopened #5627. The claims are now persisted. Pinned
   by a regression test, shown red in CI before the fix, that deactivates the claim
-  grain mid-publish.
+  grain mid-publish. The last claim released now clears the stored record, so
+  no bare id leaves one behind for good.
+- **#5637** (`BackupIdClaim`, fixed): a catalog rebuild re-listed a backup an
+  operator delete had half removed. Since #5628 a delete removes the row, then
+  the artifacts, then the sink manifest, so a retry resumes it; a rebuild
+  registered any sink manifest, and a delete's lease was not renewed while it
+  deleted artifacts. A delete whose caller was lost part-way, or whose artifact
+  deletes outlasted its lease, let a rebuild list a backup that could not be
+  restored. Found by the confirmation review (#5352). The delete now renews its
+  lease in the background and deletes no further artifact once a renewal is
+  refused, and a rebuild registers a manifest only when every artifact it
+  references is in the sink. `ListedRestorableDeleteBeforeFix` reproduces
+  production before the fix.
 
-All seventeen fixes have landed, so the reproducing mutations now stand as
+All eighteen fixes have landed, so the reproducing mutations now stand as
 regression checks: each must keep firing, and each has a code analogue that turns
 the fix's regression tests red.
 ## Saga abstraction
@@ -303,4 +317,4 @@ notes and TLC's own state counts.
 | `BackupRestore` | 5 | 1 | 16 | 20 | 20 | 22,700 |
 | `BackupCutover` | 5 | 2 | 10 | 12 | 16 | 39 |
 | `BackupRetention` | 5 | 3 | 18 | 28 | 24 | 2,680,648 |
-| `BackupIdClaim` | 4 | 2 | 11 | 16 | 14 | 1,928 |
+| `BackupIdClaim` | 5 | 3 | 13 | 22 | 19 | 6,824 |

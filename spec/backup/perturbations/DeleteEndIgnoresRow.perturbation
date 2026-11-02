@@ -1,0 +1,20 @@
+# A delete's end deletes the sink manifest without checking that no row lists
+# the id, as before #5631. DelEnd(d) keeps a manifest a row lists.
+MODULE: BackupIdClaim
+ROW: DelEnd(d)
+FILE: src/lattice.backup/BackupPublisher.cs
+DETECTORS: BackupDeleteOverlapTests.A_delete_whose_lease_ran_out_keeps_a_backup_a_capture_republished_meanwhile
+SUMMARY: a delete's end deletes the sink manifest while a row lists the id
+
+--- FIND
+        if (await catalog.GetAsync(backupId).ConfigureAwait(false) is not null)
+        {
+            return false;
+        }
+
+        var manifest = await sink.ReadManifestAsync(backupId).ConfigureAwait(false);
+        if (manifest is null || !IsOfScope(manifest, scopeKey))
+--- REPLACE
+        var manifest = await sink.ReadManifestAsync(backupId).ConfigureAwait(false);
+        if (manifest is null || !IsOfScope(manifest, scopeKey))
+--- END

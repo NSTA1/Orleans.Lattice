@@ -1,0 +1,13 @@
+# One publish's release drops every claim its scope holds on the bare id, as
+# before #5627. PubRow(c) releases one claim.
+MODULE: BackupIdClaim
+ROW: PubRow(c)
+FILE: src/lattice.backup/BackupIdClaimGrain.cs
+DETECTORS: BackupIdCollisionTests.A_scope_keeps_the_bare_id_until_its_last_claim_is_released
+SUMMARY: one release drops every claim of the scope
+
+--- FIND
+            Claims.RemoveAt(index);
+--- REPLACE
+            Claims.RemoveAll(claim => string.Equals(claim.ScopeKey, scopeKey, StringComparison.Ordinal));
+--- END

@@ -1,0 +1,13 @@
+# A delete's lease never runs out, so a delete whose caller was lost keeps the
+# id reserved for good. DelLapse(d) expires a lease that is not renewed.
+MODULE: BackupIdClaim
+ROW: DelLapse(d)
+FILE: src/lattice.backup/BackupSchedulerGrain.Holds.cs
+DETECTORS: BackupDeleteLeaseTests.A_lost_deletes_lease_runs_out_and_a_capture_then_republishes
+SUMMARY: a lost delete's lease never runs out
+
+--- FIND
+        foreach (var expired in leases.Where(lease => lease.Value <= now).Select(lease => lease.Key).ToList())
+--- REPLACE
+        foreach (var expired in leases.Where(lease => lease.Value < now.AddYears(-100)).Select(lease => lease.Key).ToList())
+--- END

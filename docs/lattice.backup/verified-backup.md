@@ -155,6 +155,14 @@ not to hold in production:
   reservation and removes the stored manifest in the scheduler, only while no
   catalog row lists the backup and the manifest is still its scope's. Found by
   the confirmation review; checked by `BackupIdClaim`.
+- **A catalog rebuild could list a backup a delete had half removed (#5637,
+  fixed).** A delete removes the catalog row, then the artifacts, then the stored
+  manifest, so a retry finishes an interrupted one; a rebuild listed any stored
+  manifest, and a delete that lost its caller or outlasted its reservation left
+  one whose artifacts were partly gone. A delete now keeps renewing its
+  reservation and stops once it cannot, and a rebuild lists only a backup whose
+  every artifact is still stored. Found by the confirmation review; checked by
+  `BackupIdClaim`.
 
 ## Which parts run in production code
 

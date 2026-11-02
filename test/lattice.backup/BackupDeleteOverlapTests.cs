@@ -62,30 +62,24 @@ public sealed class BackupDeleteOverlapTests
     [Test]
     public async Task A_delete_whose_lease_ran_out_keeps_a_backup_a_capture_republished_meanwhile()
     {
-        // The lease runs out while the delete deletes artifacts, and a capture of
-        // identical content republishes the id. The delete then ends: it must not
-        // delete the manifest of the backup that is listed again.
+        // A delete's caller cannot reach the grain for longer than its lease, and
+        // a capture of identical content republishes the id. The delete then ends:
+        // it must not delete the manifest of the backup that is listed again.
         _fixture = new SchedulerClusterFixture();
         await _fixture.InitializeAsync(intercepted: true, configureBackup: o => o.DeleteLease = TimeSpan.FromSeconds(1));
         var captured = await SeedAndCaptureTreeAsync();
-        LatticeBackupCaptureResult? republished = null;
-        InterceptingBackupSink.BeforeArtifactDelete = async _ =>
-        {
-            if (republished is not null)
-            {
-                return;
-            }
+        var scheduler = _fixture.Scheduler(BackupScopeSelector.WholeTree(Tree));
+        var token = Guid.NewGuid();
+        await scheduler.BeginDeleteAsync(captured.BackupId, token);
+        await Task.Delay(TimeSpan.FromSeconds(1.5));
+        var republished = await CaptureTreeAsync("again");
 
-            await Task.Delay(TimeSpan.FromSeconds(1.5));
-            republished = await CaptureTreeAsync("again");
-        };
+        var ended = await scheduler.EndDeleteAsync(captured.BackupId, token, finish: true);
 
-        await Gate.RetireAsync(captured.Manifest, BackupRetireKind.Delete, CancellationToken.None);
-
-        Assert.That(republished, Is.Not.Null, "precondition: the capture ran inside the delete");
         Assert.Multiple(async () =>
         {
-            Assert.That(republished!.BackupId, Is.EqualTo(captured.BackupId), "the capture republishes the id");
+            Assert.That(republished.BackupId, Is.EqualTo(captured.BackupId), "the capture republishes the id");
+            Assert.That(ended, Is.EqualTo(BackupRetireOutcome.Unchanged), "the end deletes nothing");
             Assert.That(await _fixture.Catalog.GetAsync(captured.BackupId), Is.Not.Null, "the republished backup is listed");
             Assert.That(await _fixture.Sink.ManifestExistsAsync(captured.BackupId), Is.True, "the listed backup's manifest is in the sink");
             Assert.That((await _fixture.Sink.ProbeAsync(captured.BackupId)).IsResolvable, Is.True);

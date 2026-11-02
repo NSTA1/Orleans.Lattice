@@ -113,7 +113,7 @@ internal sealed partial class BackupSchedulerGrain
     }
 
     /// <inheritdoc />
-    public async Task<BackupDeleteStart> BeginDeleteAsync(string backupId)
+    public async Task<BackupDeleteStart> BeginDeleteAsync(string backupId, Guid token)
     {
         ArgumentException.ThrowIfNullOrEmpty(backupId);
         if (!await TryHoldAsync(backupId, publishing: false, joinDelete: true))
@@ -130,8 +130,9 @@ internal sealed partial class BackupSchedulerGrain
             }
 
             // The hold becomes this delete's own lease, which outlives this call:
-            // the caller deletes the artifacts outside the grain, then ends it.
-            var token = Guid.NewGuid();
+            // the caller deletes the artifacts outside the grain, renewing it, then
+            // ends it. The caller's token, so a retried call whose first attempt
+            // completed renews the same lease rather than orphaning it.
             SetDeleteLease(backupId, token);
             return new BackupDeleteStart(BackupRetireOutcome.Removed, manifest, token);
         }
@@ -139,6 +140,27 @@ internal sealed partial class BackupSchedulerGrain
         {
             ReleaseHold(backupId, publishing: false, published: false);
         }
+    }
+
+    /// <inheritdoc />
+    public Task<bool> RenewDeleteAsync(string backupId, Guid token)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        if (!_deleting.TryGetValue(backupId, out var leases) || !leases.TryGetValue(token, out var until))
+        {
+            return Task.FromResult(false);
+        }
+
+        if (until <= DateTimeOffset.UtcNow)
+        {
+            // Ran out: a rebuild or a capture may have acted on the id since, so the
+            // delete must not go on deleting artifacts (issue #5637).
+            EndDeleteLease(backupId, token);
+            return Task.FromResult(false);
+        }
+
+        leases[token] = DateTimeOffset.UtcNow + DeleteLease;
+        return Task.FromResult(true);
     }
 
     /// <inheritdoc />

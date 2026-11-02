@@ -1,0 +1,13 @@
+# One delete ending drops every delete's lease on the id, as before #5631, so
+# a publish runs while an overlapping delete is still in progress.
+MODULE: BackupIdClaim
+ROW: DeleteFence
+FILE: src/lattice.backup/BackupSchedulerGrain.Holds.cs
+DETECTORS: BackupDeleteOverlapTests.A_delete_overlapping_another_keeps_the_id_reserved_until_its_own_end
+SUMMARY: one delete ending drops every delete's lease on the id
+
+--- FIND
+        if (_deleting.TryGetValue(backupId, out var leases) && leases.Remove(token))
+--- REPLACE
+        if (_deleting.Remove(backupId, out var leases) && leases.Remove(token))
+--- END

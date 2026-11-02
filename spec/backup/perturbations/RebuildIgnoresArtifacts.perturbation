@@ -1,0 +1,15 @@
+# A catalog rebuild registers any sink manifest, as before #5637, so a backup
+# an interrupted delete half removed is listed again. Rebuild probes first.
+MODULE: BackupIdClaim
+ROW: Rebuild
+FILE: src/lattice.backup/BackupPublisher.cs
+DETECTORS: BackupDeleteLeaseTests.A_rebuild_after_an_interrupted_delete_leaves_the_half_deleted_backup_unlisted
+SUMMARY: a rebuild registers a sink manifest without probing its artifacts
+
+--- FIND
+                if (!(await sink.ProbeAsync(manifest.Id).ConfigureAwait(false)).IsResolvable)
+                {
+                    return new BackupPublishResult(BackupPublishOutcome.Skipped, null);
+                }
+--- REPLACE
+--- END
