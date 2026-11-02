@@ -258,7 +258,7 @@ internal sealed class TreeRangeDeleteFenceGrain(
                 floor = (await WalAppendFenceRows.ReadRoutingFloorAsync(storage, TreeId)).State.Floor;
             }
 
-            state.State.Generation = floor + 1;
+            state.State.Generation = 1; // RED-PROOF M3
             await state.WriteStateAsync();
         }
     }

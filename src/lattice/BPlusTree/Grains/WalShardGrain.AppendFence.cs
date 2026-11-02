@@ -293,10 +293,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
                     _generationFloorLoaded = true;
                 }
 
-                foreach (var initiator in retiring)
-                {
-                    await RemoveLoadedGenerationAsync(initiator).ConfigureAwait(true);
-                }
+                await Task.CompletedTask.ConfigureAwait(true); // RED-PROOF M8: loaded entries kept
             }).ConfigureAwait(true);
     }
 
@@ -554,7 +551,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
             lock (_stateGate)
             {
                 var entry = NoteDurableLocked(table, id, durable);
-                var floor = epochTable ? _epochFloor : _generationFloor;
+                var floor = epochTable ? _epochFloor : 0; // RED-PROOF M2
                 decision = WalAppendFenceCore.DecideClaimWrite(value, entry.Memory, durable, floor);
                 threshold = WalAppendFenceCore.ClaimThreshold(entry.Memory, Math.Max(durable, entry.DurableSeen), floor);
             }
@@ -613,7 +610,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
                     if (drain is null)
                     {
                         var entry = NoteDurableLocked(table, id, value);
-                        var floor = epochTable ? _epochFloor : _generationFloor;
+                        var floor = epochTable ? _epochFloor : 0; // RED-PROOF M2
                         if (!WalAppendFenceCore.IsRaiseAdmitted(value, entry.Memory, entry.DurableSeen, floor))
                         {
                             return WalAppendFenceClaimResult.Refuse(

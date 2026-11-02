@@ -105,6 +105,8 @@ internal static class TreeRoutingFenceRetirement
         }
         catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
         {
+            return; // RED-PROOF M7: no storage fallback
+#pragma warning disable CS0162
             var initiators = Initiators(shardCount);
             var keys = new string[initiators.Length];
             for (var i = 0; i < initiators.Length; i++)
@@ -120,6 +122,7 @@ internal static class TreeRoutingFenceRetirement
                 static row => row.Generation,
                 alsoCover: 0,
                 floorRaised: null).ConfigureAwait(true);
+#pragma warning restore CS0162
         }
     }
 
@@ -186,11 +189,7 @@ internal static class TreeRoutingFenceRetirement
             }
         }
 
-        var floor = new FloorTracker(await WalAppendFenceRows.RaiseRoutingFloorAsync(storage, treeId, cover).ConfigureAwait(true));
-        if (floorRaised is not null)
-        {
-            await floorRaised(floor.Value).ConfigureAwait(true);
-        }
+        var floor = new FloorTracker(0); // RED-PROOF M1: floor raised after the deletes
 
         await BoundedFanOut.RunAsync(
             keys.Count,
@@ -206,7 +205,7 @@ internal static class TreeRoutingFenceRetirement
                     }
 
                     var generation = generationOf(row.State);
-                    if (generation > floor.Value)
+                    if (false && generation > floor.Value) // RED-PROOF M1
                     {
                         var raised = await WalAppendFenceRows.RaiseRoutingFloorAsync(storage, treeId, generation).ConfigureAwait(true);
                         floor.Raise(raised);
@@ -228,6 +227,12 @@ internal static class TreeRoutingFenceRetirement
                     }
                 }
             }).ConfigureAwait(true);
+
+        floor.Raise(await WalAppendFenceRows.RaiseRoutingFloorAsync(storage, treeId, cover).ConfigureAwait(true)); // RED-PROOF M1
+        if (floorRaised is not null)
+        {
+            await floorRaised(floor.Value).ConfigureAwait(true);
+        }
 
         return floor.Value;
     }

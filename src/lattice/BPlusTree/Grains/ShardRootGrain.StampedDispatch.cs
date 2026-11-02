@@ -78,7 +78,7 @@ internal sealed partial class ShardRootGrain
                 // #5668: above the tree id's routing-generation floor, so a re-created
                 // incarnation never reuses a purged one's generation.
                 floor = await ReadRoutingFloorAsync();
-                var seeded = floor.Value + 1;
+                var seeded = 1L; // RED-PROOF M3
                 marker = await UpdateHandOffMarkerAsync(m =>
                 {
                     if (m.RoutingGeneration > 0)
@@ -100,7 +100,7 @@ internal sealed partial class ShardRootGrain
                 // generation everywhere, and the heads are recorded, before the marker
                 // reads initialised. A tree id never purged has floor 0 and claims nothing.
                 floor ??= await ReadRoutingFloorAsync();
-                if (floor.Value > 0)
+                if (false && floor.Value > 0) // RED-PROOF M4
                 {
                     await FenceRecreatedIncarnationAsync(floor.Value, marker.RoutingGeneration);
                 }
