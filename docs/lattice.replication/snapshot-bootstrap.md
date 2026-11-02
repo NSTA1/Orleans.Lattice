@@ -1387,6 +1387,11 @@ so an operator's bootstrap serves it. The sender repeats the request on every pu
 until it sees the completion, so a repeat at or below the request the
 running drain already consumed is not recorded again: re-recording it
 would withhold the completion and start another re-seed for ever
+(#5534). A repeat that arrives once the bootstrap has completed, and that
+the completion answers (an export after the request, no reconcile owed, and
+installed under the tree's current frontier epoch), is neither recorded nor
+starts another bootstrap: that redundant import's cutover re-minted the frontier
+epoch after the sender had settled, and the sender re-seeded the receiver again
 (#5534). While the request is recorded
 the sender withholds every saga record, so a drain whose export
 postdates the request knows every pending bucket it holds from that

@@ -16,13 +16,13 @@ public sealed class ContosoContractConformanceTests() : ContractConformanceFixtu
     protected override string? SnapshotBefore => "C3";
 
     /// <inheritdoc />
-    /// <remarks>C1: after a coordinated restore of factory-orders the regions re-seed each other repeatedly, and its east-ledger batch never reaches west's dead letters (#5534).</remarks>
+    /// <remarks>C1: its east-ledger atomic batch reaches strict west only through a re-seed import, which does not divert it to west's dead letters (#5684).</remarks>
     protected override IReadOnlyDictionary<string, string> KnownDefectIssues { get; } =
-        new Dictionary<string, string>(StringComparer.Ordinal) { ["C1"] = "#5534" };
+        new Dictionary<string, string>(StringComparer.Ordinal) { ["C1"] = "#5684" };
 
     /// <inheritdoc />
     protected override Task RecordKnownDefectAsync(string chapter) =>
-        new KnownDefect("#5534", "after a coordinated restore of factory-orders the regions re-seed each other repeatedly, and C1's east-ledger batch never reaches west's dead letters (#5534)").ReproducesAsync(() => Task.CompletedTask);
+        new KnownDefect("#5684", "C1's east-ledger atomic batch reaches strict west only through a re-seed import, which does not divert it to west's dead letters (#5684)").ReproducesAsync(() => Task.CompletedTask);
 
     /// <summary>Establishes and verifies <paramref name="chapter"/>.</summary>
     /// <param name="chapter">The chapter id.</param>
