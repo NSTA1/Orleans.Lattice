@@ -98,6 +98,34 @@ public sealed class WalFenceSeamRetryTests
     }
 
     [Test]
+    public async Task A_sub_millisecond_remainder_never_spins()
+    {
+        // Task.Delay truncates a sub-millisecond span to zero, so a retry whose
+        // remaining budget is under a millisecond must sleep past the deadline, not
+        // re-issue the call in a tight loop until it passes.
+        WalFenceSeamRetry? retry = null;
+        TimeoutException? timeout = null;
+        for (var i = 0; i < 1000 && timeout is null; i++)
+        {
+            try
+            {
+                retry = await WalFenceSeamRetry.NextAsync(
+                    retry, WalFenceSeamRetry.CallerShardRoot, "tree", CancellationToken.None, TimeSpan.FromMilliseconds(0.5));
+            }
+            catch (TimeoutException ex)
+            {
+                timeout = ex;
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(timeout, Is.Not.Null);
+            Assert.That(retry?.Attempts ?? 0, Is.LessThanOrEqualTo(2), "one sleep covers the whole sub-millisecond budget");
+        });
+    }
+
+    [Test]
     public void A_cancelled_operation_surfaces_its_cancellation()
     {
         using var cts = new CancellationTokenSource();

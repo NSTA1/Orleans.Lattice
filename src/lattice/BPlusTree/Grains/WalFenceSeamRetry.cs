@@ -190,7 +190,12 @@ internal sealed class WalFenceSeamRetry
             MaxBackoff.TotalMilliseconds,
             InitialBackoff.TotalMilliseconds * Math.Pow(2, Math.Min(_attempt - 1, 16)));
         var remaining = TimeSpan.FromSeconds((double)remainingTicks / Stopwatch.Frequency);
-        var delay = TimeSpan.FromMilliseconds(Math.Min(backoffMs, remaining.TotalMilliseconds));
+
+        // Rounded up to a whole millisecond: Task.Delay truncates a sub-millisecond
+        // span to zero, which would spin re-issuing the call through the last
+        // millisecond before the deadline. Sleeping past it instead ends the retry
+        // at the next check.
+        var delay = TimeSpan.FromMilliseconds(Math.Ceiling(Math.Max(1, Math.Min(backoffMs, remaining.TotalMilliseconds))));
         await Task.Delay(delay, _cancellationToken);
     }
 }
