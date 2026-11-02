@@ -57,7 +57,7 @@ internal sealed partial class BPlusLeafGrain
     private WalRoutingStamp StampedRouting(WalRoutingStamp routing)
     {
         ResolveCommitLogWriter();
-        return routing;
+        return routing with { AdmissionMark = _appendFence is { } fence ? fence.HandOffCloses + 1 : 0 };
     }
 
     /// <summary>

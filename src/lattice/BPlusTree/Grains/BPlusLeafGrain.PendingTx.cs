@@ -2798,7 +2798,7 @@ internal sealed partial class BPlusLeafGrain
                     var walStartTicks = Stopwatch.GetTimestamp();
                     try
                     {
-                        await writer.AppendAsync(entry);
+                        await AppendRoutedAsync(writer, entry, backstopAdmission);
                     }
                     finally
                     {
