@@ -5,7 +5,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <summary>
 /// The seam retry of the WAL append fence (epic #5605, design note section 5):
 /// a caller of the leaf write surface that receives
-/// <see cref="WalAppendEpochStaleException"/> re-issues the write - a fresh call to
+/// a superseded-activation <see cref="LeafRetiredException"/> re-issues the write - a fresh call to
 /// the same leaf id, which reaches the live activation - until the operation's
 /// existing deadline. Nothing new is surfaced: when the deadline passes the caller
 /// sees what it sees today when that deadline passes, an
@@ -56,6 +56,11 @@ internal sealed class WalFenceSeamRetry
     /// The deadline when the caller has no cancellation token: the silo's configured
     /// Orleans response timeout, set by <see cref="WalFenceSeamRetryBudget"/>.
     /// </summary>
+    /// <remarks>
+    /// Process-wide (#5605 review, N4). A production process hosts one silo, so this
+    /// is that silo's timeout; a test host running several silos in one process keeps
+    /// the last one configured, which only matters if their timeouts differ.
+    /// </remarks>
     internal static TimeSpan Budget
     {
         get => TimeSpan.FromTicks(Interlocked.Read(ref _budgetTicks));
@@ -88,7 +93,7 @@ internal sealed class WalFenceSeamRetry
     internal int Attempts => _attempt;
 
     /// <summary>
-    /// Called from the <c>catch</c> of a <see cref="WalAppendEpochStaleException"/>:
+    /// Called from the <c>catch</c> of a superseded-activation <see cref="LeafRetiredException"/>:
     /// waits a short backoff and returns the retry state for the next attempt, or
     /// throws what the caller sees today when its deadline passes.
     /// </summary>
@@ -122,7 +127,7 @@ internal sealed class WalFenceSeamRetry
 
     /// <summary>
     /// Runs <paramref name="call"/>, retrying it on
-    /// <see cref="WalAppendEpochStaleException"/> until the deadline. For the
+    /// a superseded-activation <see cref="LeafRetiredException"/> until the deadline. For the
     /// leaf-write seams off the foreground hot path (leaf-to-leaf forwards and
     /// transfers, bulk seeding, maintenance); a hot path wraps its call in a
     /// <c>try</c> instead, so it pays no delegate.
@@ -137,7 +142,7 @@ internal sealed class WalFenceSeamRetry
             {
                 return await call();
             }
-            catch (WalAppendEpochStaleException)
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
             {
                 retry = await NextAsync(retry, caller, treeId, cancellationToken);
             }
@@ -156,7 +161,7 @@ internal sealed class WalFenceSeamRetry
                 await call();
                 return;
             }
-            catch (WalAppendEpochStaleException)
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
             {
                 retry = await NextAsync(retry, caller, treeId, cancellationToken);
             }

@@ -67,6 +67,46 @@ public sealed class ClusterManifestWalAppendFenceGateTests
     }
 
     [Test]
+    public void A_cached_verdict_is_read_without_the_gate_lock()
+    {
+        // #5605 review, S3: every leaf append on the silo reads the gate, so a cached
+        // verdict must not take the silo-wide lock. Hold it from another thread; a
+        // read whose versions have not moved must still answer.
+        var manifests = Substitute.For<IClusterManifestProvider>();
+        var membership = Substitute.For<IClusterMembershipService>();
+        var gate = Gate(manifests, membership, out var marker);
+        manifests.Current.Returns(Cluster(1, marker, (SiloA, true)));
+        membership.CurrentSnapshot.Returns(Members(1, (SiloA, SiloStatus.Active)));
+        Assert.That(gate.IsOpen, Is.True, "precondition: the verdict is evaluated and cached");
+
+        var lockObject = typeof(ClusterManifestWalAppendFenceGate)
+            .GetField("_gate", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(gate)!;
+        using var held = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var holder = Task.Factory.StartNew(() =>
+        {
+            lock (lockObject)
+            {
+                held.Set();
+                release.Wait();
+            }
+        }, TaskCreationOptions.LongRunning);
+        held.Wait();
+        try
+        {
+            var read = Task.Run(() => gate.IsOpen);
+            Assert.That(read.Wait(TimeSpan.FromSeconds(10)), Is.True, "a cached read must not wait for the lock");
+            Assert.That(read.Result, Is.True);
+        }
+        finally
+        {
+            release.Set();
+            holder.Wait();
+        }
+    }
+
+    [Test]
     public void Opens_when_every_active_silo_advertises_the_marker()
     {
         var manifests = Substitute.For<IClusterManifestProvider>();

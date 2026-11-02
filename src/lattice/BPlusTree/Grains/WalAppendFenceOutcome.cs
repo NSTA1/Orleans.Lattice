@@ -19,9 +19,10 @@ internal enum WalAppendFenceOutcome : byte
     Admitted = 0,
 
     /// <summary>
-    /// The stamp's epoch is below the leaf's entry or at or below the partition's
-    /// retired floor: the activation has been superseded. Entries allocated before
-    /// the rejection keep their offsets; the rest carry <see cref="WalStampedBatchResult.Rejected"/>.
+    /// The stamp's epoch is below the leaf's entry: the activation has been
+    /// superseded. The partition's retired floor is not an append-time check (#5635).
+    /// A stamped batch is rejected at its first entry, so nothing of it is allocated;
+    /// every entry carries <see cref="WalStampedBatchResult.Rejected"/>.
     /// </summary>
     StaleEpoch = 1,
 

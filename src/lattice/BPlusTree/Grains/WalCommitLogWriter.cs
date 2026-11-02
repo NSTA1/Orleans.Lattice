@@ -311,7 +311,7 @@ internal sealed class WalCommitLogWriter(
         // An append-fence rejection (epic #5605) is a superseded leaf activation
         // refused before any provider work; its seam retries it against the live
         // activation. It must never feed a provider-health or saturation signal.
-        if (ex is WalAppendEpochStaleException) return true;
+        if (ex is LeafRetiredException { ActivationSuperseded: true }) return true;
         return false;
     }
 

@@ -24,16 +24,21 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <b>Steps 2 and 3</b> run at the partition
 /// (<see cref="IWalShardGrain.ClaimAppendEpochAsync"/>). A refusal returns the
 /// value the claim must exceed; the activation persists that value plus one,
-/// conditionally on the ETag it last wrote. If the row has not moved the refusal
-/// came from the partition's retired floor and it claims again above it; if it has,
-/// another activation claimed and this one is superseded.
+/// conditionally on the ETag it last wrote. Whatever the refusal came from - the
+/// partition's retired floor, or an entry another claim raised - a row that has not
+/// moved means this activation is still the leaf's, so it claims again above the
+/// refusal; a row that has moved means another activation claimed and this one is
+/// superseded.
 /// </para>
 /// <para>
 /// <b>Fail safe.</b> Wherever the claim cannot complete for any reason other than
-/// being superseded - a storage fault, a timeout - the append goes unstamped, which
-/// the partition always admits, and the activation reports it to itself. So the
-/// fence adds no failure a caller can observe; only a superseded activation fails,
-/// with <see cref="WalAppendEpochStaleException"/>, which the seam that called the
+/// being superseded - a storage fault, a timeout, <see cref="MaxClaimRounds"/>
+/// refusals - the append goes unstamped, which the partition always admits, and the
+/// activation reports it to itself. It then keeps its view of the gate closed for
+/// <see cref="ClaimFailureBackoff"/>, so a faulting store costs one claim attempt per
+/// backoff window, not one per append. So the fence adds no failure a caller can
+/// observe; only a superseded activation fails,
+/// with a superseded-activation <see cref="LeafRetiredException"/>, which the seam that called the
 /// leaf retries against the live activation.
 /// </para>
 /// <para>
@@ -49,6 +54,13 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
 
     /// <summary>How long an activation keeps its view of the gate closed after a "method unknown" failure.</summary>
     internal static readonly TimeSpan MethodUnknownBackoff = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// How long an activation keeps its view of the gate closed after a claim failed
+    /// for a reason other than supersession, or ran out of rounds: it appends
+    /// unstamped meanwhile, rather than re-attempting the claim on every append.
+    /// </summary>
+    internal static readonly TimeSpan ClaimFailureBackoff = TimeSpan.FromSeconds(30);
 
     private readonly object _sync = new();
     private readonly Dictionary<int, PartitionClaim> _partitions = new();
@@ -90,6 +102,9 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         _treeTag = treeTag;
         _tenantTag = tenantTag;
     }
+
+    /// <summary>This activation's <see cref="ClaimFailureBackoff"/>; test seam.</summary>
+    internal TimeSpan ClaimFailureBackoffForTesting { get; set; } = ClaimFailureBackoff;
 
     /// <summary>The epoch this activation holds; 0 before its first claim.</summary>
     internal long Epoch
@@ -141,7 +156,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         {
             if (_stale)
             {
-                throw new WalAppendEpochStaleException(_leafId, _epoch);
+                throw LeafRetiredException.ForSupersededActivation(_leafId, _epoch);
             }
 
             if (!IsGateOpenLocked())
@@ -204,10 +219,10 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     }
 
     /// <inheritdoc />
-    public WalAppendEpochStaleException OnStale(WalAppendStamp stamp)
+    public LeafRetiredException OnStale(WalAppendStamp stamp)
     {
         MarkStale();
-        return new WalAppendEpochStaleException(_leafId, stamp.Epoch);
+        return LeafRetiredException.ForSupersededActivation(_leafId, stamp.Epoch);
     }
 
     /// <inheritdoc />
@@ -215,9 +230,40 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     {
         lock (_sync)
         {
-            _gateClosedUntilTicks = Environment.TickCount64 + (long)MethodUnknownBackoff.TotalMilliseconds;
+            CloseGateViewLocked(MethodUnknownBackoff);
         }
     }
+
+    /// <inheritdoc />
+    public void OnClaimsExhausted()
+    {
+        lock (_sync)
+        {
+            CloseGateViewLocked(ClaimFailureBackoffForTesting);
+        }
+    }
+
+    /// <summary>
+    /// Forgets this activation's epoch and every partition claim after the leaf was
+    /// cleared (#5605 review, N1): the clear retired every entry and deleted the
+    /// epoch row, so an activation that keeps serving claims afresh as the re-created
+    /// incarnation, instead of meeting its own retired entries and deactivating.
+    /// A superseded activation stays superseded.
+    /// </summary>
+    internal void ResetAfterClear()
+    {
+        lock (_sync)
+        {
+            _partitions.Clear();
+            _epoch = 0;
+            _row = null;
+            _rowClaim = null;
+            _bump = null;
+        }
+    }
+
+    private void CloseGateViewLocked(TimeSpan backoff) =>
+        _gateClosedUntilTicks = Environment.TickCount64 + (long)backoff.TotalMilliseconds;
 
     private bool IsGateOpenLocked() =>
         (_gateClosedUntilTicks == 0 || Environment.TickCount64 >= _gateClosedUntilTicks) && _gate.IsOpen;
@@ -233,7 +279,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 {
                     if (_stale)
                     {
-                        throw new WalAppendEpochStaleException(_leafId, _epoch);
+                        throw LeafRetiredException.ForSupersededActivation(_leafId, _epoch);
                     }
 
                     var p = PartitionLocked(partition);
@@ -261,7 +307,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 }
             }
         }
-        catch (WalAppendEpochStaleException)
+        catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
         {
             throw;
         }
@@ -272,12 +318,16 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         catch (Exception)
         {
             // Fail safe: an append that cannot be stamped goes unstamped, which the
-            // partition always admits and reports. Nothing new reaches the caller.
+            // partition always admits and reports. Nothing new reaches the caller,
+            // and the claim is not re-attempted until the backoff passes.
+            OnClaimsExhausted();
             return null;
         }
 
         // Every round was refused without this activation being superseded; the
-        // append goes unstamped rather than spin.
+        // append goes unstamped rather than spin, and so do the ones that follow
+        // until the backoff passes.
+        OnClaimsExhausted();
         return null;
     }
 
@@ -313,7 +363,22 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 return Task.FromResult(_epoch);
             }
 
-            return _rowClaim ??= ClaimRowAsync();
+            if (_rowClaim is { } running)
+            {
+                return running;
+            }
+
+            // Assigned only while still running: a claim that completed
+            // synchronously has already run its own clean-up, which must not be
+            // overwritten with its completed task (#5605 review, N2). Its
+            // continuation takes this lock, so it cannot clear before the assignment.
+            var claim = ClaimRowAsync();
+            if (!claim.IsCompleted)
+            {
+                _rowClaim = claim;
+            }
+
+            return claim;
         }
     }
 
@@ -359,7 +424,18 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 return Task.CompletedTask;
             }
 
-            return _bump ??= BumpAsync(epoch, refusal);
+            if (_bump is { } running)
+            {
+                return running;
+            }
+
+            var bump = BumpAsync(epoch, refusal);
+            if (!bump.IsCompleted)
+            {
+                _bump = bump;
+            }
+
+            return bump;
         }
     }
 
@@ -405,7 +481,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             // Only claims write the epoch row, so a conflict means another
             // activation claimed since this one read or last wrote it.
             MarkStale();
-            throw new WalAppendEpochStaleException(_leafId, row.State.Epoch);
+            throw LeafRetiredException.ForSupersededActivation(_leafId, row.State.Epoch);
         }
     }
 

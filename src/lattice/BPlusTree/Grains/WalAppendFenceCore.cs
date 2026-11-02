@@ -43,8 +43,13 @@ internal static class WalAppendFenceCore
     /// row never moves down (<c>StaleEpochNeverAppendsClaimEntryOverwrite</c>) and
     /// never lands at or below a retirement (<c>IgnoresRetiredFloor</c>). The one
     /// exception is a value equal to the durable entry and not below the loaded
-    /// one: only the claimant that wrote it can hold it, because the leaf's epoch
-    /// row is written by a strict conditional write.
+    /// one, a re-presentation after a WAL shard restart or move: only the claimant
+    /// that wrote it can hold it. That holds because the leaf's epoch row is written
+    /// by a strict conditional write and, across a clear that deletes the row so
+    /// that values recur, because retirement raises the floor to the row's value as
+    /// well as the entry's (#5641). A duplicate that had written its row but not yet
+    /// its entry here is then refused by the floor, so it can never share an epoch
+    /// with the re-created incarnation.
     /// </summary>
     /// <param name="value">The claimed epoch or generation.</param>
     /// <param name="loaded">The in-memory entry, or <see cref="Unloaded"/>.</param>

@@ -142,6 +142,127 @@ public sealed class LeafAppendEpochFenceTests
         });
         await h.Shard.Received(LeafAppendEpochFence.MaxClaimRounds)
             .ClaimAppendEpochAsync(Leaf, Arg.Any<long>(), Arg.Any<CancellationToken>());
+
+        // #5605 review, S2: the next append goes unstamped at once, instead of paying
+        // another eight rounds, until the backoff passes.
+        var next = await h.Fence.StampForAsync(h.Shard, partition: 0, CancellationToken.None);
+        Assert.That(next, Is.Null);
+        await h.Shard.Received(LeafAppendEpochFence.MaxClaimRounds)
+            .ClaimAppendEpochAsync(Leaf, Arg.Any<long>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task A_faulting_store_costs_one_claim_attempt_per_backoff_window()
+    {
+        var h = new Harness();
+        h.Shard.ClaimAppendEpochAsync(Leaf, Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new TimeoutException("the partition's grain storage is faulting"));
+
+        var stamps = new List<WalAppendStamp?>();
+        for (var i = 0; i < 5; i++)
+        {
+            stamps.Add(await h.Fence.StampForAsync(h.Shard, partition: 0, CancellationToken.None));
+        }
+
+        Assert.That(stamps, Is.All.Null, "every append goes unstamped, which is always admitted");
+        await h.Shard.Received(1).ClaimAppendEpochAsync(Leaf, Arg.Any<long>(), Arg.Any<CancellationToken>());
+
+        h.Fence.ClaimFailureBackoffForTesting = TimeSpan.Zero;
+        h.Fence.OnClaimsExhausted();
+        await h.Fence.StampForAsync(h.Shard, partition: 0, CancellationToken.None);
+        await h.Shard.Received(2).ClaimAppendEpochAsync(Leaf, Arg.Any<long>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task A_synchronously_faulted_row_claim_is_retried_once_the_backoff_passes()
+    {
+        // #5605 review, N2: a row claim that faults synchronously must not be pinned
+        // as the shared in-flight claim, or the activation could never stamp again.
+        var storage = new FaultFirstWriteStorage(new EnumerableMemoryGrainStorage());
+        var shard = Substitute.For<IWalShardGrain>();
+        shard.ClaimAppendEpochAsync(Leaf, Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(WalAppendFenceClaimResult.Accept(0)));
+        var fence = new LeafAppendEpochFence(
+            Leaf, new SettableGate(open: true), storage, _ => { }, default, LatticeTenantLabel.ForTree("tree"))
+        {
+            ClaimFailureBackoffForTesting = TimeSpan.Zero,
+        };
+
+        var first = await fence.StampForAsync(shard, partition: 0, CancellationToken.None);
+        var second = await fence.StampForAsync(shard, partition: 0, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.Null, "the faulted claim goes unstamped");
+            Assert.That(second?.Epoch, Is.EqualTo(1), "the next claim runs afresh and succeeds");
+        });
+    }
+
+    [Test]
+    public async Task A_cleared_leaf_claims_afresh_without_being_superseded()
+    {
+        // #5605 review, N1: an activation that keeps serving after its own clear claims
+        // as the re-created incarnation, instead of meeting its retired entries,
+        // conflicting on its deleted row, and deactivating.
+        var h = new Harness();
+        await h.Fence.StampForAsync(h.Shard, partition: 0, CancellationToken.None);
+        var row = await WalAppendFenceRows.ReadLeafEpochAsync(h.Storage, Leaf);
+        await WalAppendFenceRows.ClearAsync(h.Storage, WalAppendFenceRows.LeafEpochGrainType, WalAppendFenceRows.LeafEpochKey(Leaf), row);
+
+        h.Fence.ResetAfterClear();
+        var stamp = await h.Fence.StampForAsync(h.Shard, partition: 0, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stamp?.Epoch, Is.EqualTo(1), "the re-created incarnation's first epoch");
+            Assert.That(h.Fence.IsStale, Is.False);
+            Assert.That(h.Superseded, Is.Empty);
+        });
+        await h.Shard.Received(2).ClaimAppendEpochAsync(Leaf, 1, Arg.Any<CancellationToken>());
+        Assert.That(await h.RowEpochAsync(), Is.EqualTo(1), "the row was re-created by a fresh claim");
+    }
+
+    [Test]
+    public async Task Unloaded_rejections_past_the_cap_go_unstamped_and_never_supersede()
+    {
+        // #5605 review, N1: exhausting re-presentations is not a supersession.
+        var h = new Harness();
+        var shard = h.Shard;
+        shard.AppendStampedAsync(Arg.Any<WalRecord>(), Arg.Any<WalAppendStamp>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new WalStampedAppendResult(WalStampedBatchResult.Rejected, -1, WalAppendFenceOutcome.UnloadedEntry)));
+        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(41L));
+
+        var offset = await WalFencedAppendDispatch.AppendPointAsync(
+            shard, new WalRecord(), batched: false, partition: 0, h.Fence, waitForDeadline: false, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(offset, Is.EqualTo(41), "the append goes unstamped, which is always admitted");
+            Assert.That(h.Fence.IsStale, Is.False);
+            Assert.That(h.Superseded, Is.Empty, "an unloaded entry is not a supersession");
+        });
+    }
+
+    private sealed class FaultFirstWriteStorage(Orleans.Storage.IGrainStorage inner) : Orleans.Storage.IGrainStorage
+    {
+        private bool _faulted;
+
+        public Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
+            inner.ReadStateAsync(stateName, grainId, grainState);
+
+        public Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
+        {
+            if (!_faulted)
+            {
+                _faulted = true;
+                throw new IOException("the leaf's grain storage is faulting");
+            }
+
+            return inner.WriteStateAsync(stateName, grainId, grainState);
+        }
+
+        public Task ClearStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
+            inner.ClearStateAsync(stateName, grainId, grainState);
     }
 
     [Test]
@@ -155,9 +276,9 @@ public sealed class LeafAppendEpochFenceTests
         h.Shard.ClaimAppendEpochAsync(Leaf, 1, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(WalAppendFenceClaimResult.Refuse(2)));
 
-        Assert.ThrowsAsync<WalAppendEpochStaleException>(
+        Assert.ThrowsAsync<LeafRetiredException>(
             async () => await h.Fence.StampForAsync(h.Shard, partition: 1, CancellationToken.None));
-        Assert.ThrowsAsync<WalAppendEpochStaleException>(
+        Assert.ThrowsAsync<LeafRetiredException>(
             async () => await h.Fence.StampForAsync(h.Shard, partition: 0, CancellationToken.None),
             "a superseded activation stamps nothing more, even at a partition it had claimed");
         Assert.Multiple(() =>
@@ -199,9 +320,36 @@ public sealed class LeafAppendEpochFenceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(exception.LeafId, Is.EqualTo(Leaf));
-            Assert.That(exception.Epoch, Is.EqualTo(1));
+            Assert.That(exception.ActivationSuperseded, Is.True);
+            Assert.That(exception.LeafId, Is.EqualTo(Leaf.ToString("N")));
+            Assert.That(exception.SupersededEpoch, Is.EqualTo(1));
             Assert.That(h.Superseded, Has.Count.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task A_supersession_reaches_callers_as_the_retired_leaf_refusal_10_2_0_retries()
+    {
+        // #5605 review, S1: a 10.2.0 shard root can call a leaf on a newer silo while
+        // the gate races a rolling upgrade or rollback. What it receives must be a type
+        // it already knows and retries, never one only the newer build can resolve.
+        var h = new Harness();
+        await h.Fence.StampForAsync(h.Shard, partition: 0, CancellationToken.None);
+        await h.ClaimByAnotherActivationAsync();
+        h.Shard.ClaimAppendEpochAsync(Leaf, 1, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(WalAppendFenceClaimResult.Refuse(2)));
+
+        var thrown = Assert.CatchAsync(async () => await h.Fence.StampForAsync(h.Shard, partition: 1, CancellationToken.None));
+        var alias = typeof(LeafRetiredException).GetCustomAttributes(typeof(AliasAttribute), inherit: false)
+            .Cast<AliasAttribute>().Single().Alias;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown, Is.TypeOf<LeafRetiredException>(),
+                "the refusal crosses the wire as the type 10.2.0's ShouldRetryLeafDispatch retries until its deadline");
+            Assert.That(((LeafRetiredException)thrown!).ActivationSuperseded, Is.True,
+                "a newer caller tells it from a reclaimed leaf by the trailing field 10.2.0 skips");
+            Assert.That(alias, Is.EqualTo("ol.lrt"), "the alias 10.2.0 resolves, unchanged");
         });
     }
 

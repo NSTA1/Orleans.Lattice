@@ -129,7 +129,7 @@ public partial class WalShardGrainTests
         var grain = await CreateFencedGrainAsync(storage);
         await grain.ClaimAppendEpochAsync(FenceLeaf, 2, CancellationToken.None);
 
-        var floor = await grain.RetireAppendEpochAsync(FenceLeaf, CancellationToken.None);
+        var floor = await grain.RetireAppendEpochAsync(FenceLeaf, 0, CancellationToken.None);
         var survivor = await grain.AppendStampedAsync(MakeEntry("a"), WalAppendStamp.ForLeaf(FenceLeaf, 2), CancellationToken.None);
         var recreatedAtOne = await grain.ClaimAppendEpochAsync(FenceLeaf, 1, CancellationToken.None);
         var recreatedAtTwo = await grain.ClaimAppendEpochAsync(FenceLeaf, 2, CancellationToken.None);
@@ -160,7 +160,7 @@ public partial class WalShardGrainTests
         await grain.ClaimAppendEpochAsync(OtherFenceLeaf, 5, CancellationToken.None);
 
         // Retiring the other leaf raises the partition's floor above FenceLeaf's epoch.
-        await grain.RetireAppendEpochAsync(OtherFenceLeaf, CancellationToken.None);
+        await grain.RetireAppendEpochAsync(OtherFenceLeaf, 0, CancellationToken.None);
         var live = await grain.AppendStampedAsync(MakeEntry("a"), WalAppendStamp.ForLeaf(FenceLeaf, 3), CancellationToken.None);
         var retired = await grain.AppendStampedAsync(MakeEntry("b"), WalAppendStamp.ForLeaf(OtherFenceLeaf, 5), CancellationToken.None);
         var reclaimAtFloor = await grain.ClaimAppendEpochAsync(FenceLeaf, 5, CancellationToken.None);
@@ -188,7 +188,7 @@ public partial class WalShardGrainTests
         await grain.ClaimAppendEpochAsync(FenceLeaf, 4, CancellationToken.None);
         var before = await grain.AppendStampedAsync(MakeEntry("a"), WalAppendStamp.ForLeaf(FenceLeaf, 4), CancellationToken.None);
 
-        await grain.RetireAppendEpochAsync(FenceLeaf, CancellationToken.None);
+        await grain.RetireAppendEpochAsync(FenceLeaf, 0, CancellationToken.None);
         var atRetired = await grain.AppendStampedAsync(MakeEntry("b"), WalAppendStamp.ForLeaf(FenceLeaf, 4), CancellationToken.None);
         var aboveRetired = await grain.AppendBatchStampedAsync(
             new[] { MakeEntry("c") }, WalAppendStamp.ForLeaf(FenceLeaf, 9), CancellationToken.None);
@@ -214,7 +214,7 @@ public partial class WalShardGrainTests
         var p0 = await CreateFencedGrainAsync(new EnumerableMemoryGrainStorage());
         var p1 = await CreateFencedGrainAsync(new EnumerableMemoryGrainStorage());
         await p1.ClaimAppendEpochAsync(OtherFenceLeaf, 5, CancellationToken.None);
-        await p1.RetireAppendEpochAsync(OtherFenceLeaf, CancellationToken.None);
+        await p1.RetireAppendEpochAsync(OtherFenceLeaf, 0, CancellationToken.None);
 
         var leafStorage = new EnumerableMemoryGrainStorage();
         var superseded = new List<long>();
@@ -295,7 +295,7 @@ public partial class WalShardGrainTests
         var source = await CreateFencedGrainAsync(storage, new InMemoryWalStorageProvider());
         await source.ClaimAppendEpochAsync(FenceLeaf, 2, CancellationToken.None);
         await source.ClaimAppendEpochAsync(OtherFenceLeaf, 4, CancellationToken.None);
-        await source.RetireAppendEpochAsync(OtherFenceLeaf, CancellationToken.None);
+        await source.RetireAppendEpochAsync(OtherFenceLeaf, 0, CancellationToken.None);
 
         // The move's cutover reactivates the partition against a different provider;
         // the fence rows live in grain storage, keyed by tree and partition.
@@ -401,16 +401,44 @@ public partial class WalShardGrainTests
     }
 
     [Test]
-    public async Task Retiring_a_leaf_with_no_entry_is_a_no_op()
+    public async Task A_re_created_leaf_never_shares_an_epoch_with_a_pre_purge_duplicate()
+    {
+        // #5641 (the #5605 review's B1). A duplicate D persisted epoch 1 to the leaf's
+        // epoch row but has not yet written its entry here. The leaf's clear retires it
+        // at this partition, passing the row value it read, then deletes the row, so
+        // the re-created incarnation R starts again from epoch 1.
+        var storage = new EnumerableMemoryGrainStorage();
+        var grain = await CreateFencedGrainAsync(storage);
+
+        var floor = await grain.RetireAppendEpochAsync(FenceLeaf, rowEpoch: 1, CancellationToken.None);
+        var duplicate = await grain.ClaimAppendEpochAsync(FenceLeaf, 1, CancellationToken.None);
+        var recreated = await grain.ClaimAppendEpochAsync(FenceLeaf, 1, CancellationToken.None);
+        var recreatedAbove = await grain.ClaimAppendEpochAsync(FenceLeaf, 2, CancellationToken.None);
+        var duplicateAppend = await grain.AppendStampedAsync(MakeEntry("d"), WalAppendStamp.ForLeaf(FenceLeaf, 1), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(floor, Is.EqualTo(1), "the floor covers the epoch row, not only the entry");
+            Assert.That(duplicate.Accepted, Is.False, "D's straddling entry write is refused by the floor");
+            Assert.That(recreated.Accepted, Is.False,
+                "R cannot hold D's epoch: a claim equal to the durable entry is admitted only above the floor");
+            Assert.That(recreated.Refusal, Is.EqualTo(1));
+            Assert.That(recreatedAbove.Accepted, Is.True, "R bumps above the floor and claims");
+            Assert.That(duplicateAppend.Outcome, Is.EqualTo(WalAppendFenceOutcome.StaleEpoch), "D is fenced out");
+        });
+    }
+
+    [Test]
+    public async Task Retiring_a_leaf_with_no_entry_and_no_epoch_row_is_a_no_op()
     {
         var storage = new EnumerableMemoryGrainStorage();
         var grain = await CreateFencedGrainAsync(storage);
 
-        var floor = await grain.RetireAppendEpochAsync(FenceLeaf, CancellationToken.None);
+        var floor = await grain.RetireAppendEpochAsync(FenceLeaf, rowEpoch: 0, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
-            Assert.That(floor, Is.Zero);
+            Assert.That(floor, Is.Zero, "neither an entry nor an epoch row: nothing to floor");
             Assert.That(storage.GrainIds(WalAppendFenceRows.FloorGrainType), Is.Empty);
         });
     }

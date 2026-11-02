@@ -429,7 +429,7 @@ public partial class ReplicationShipperGrainTests
         public Task<WalAppendFenceClaimResult> ClaimRoutingGenerationAsync(WalRoutingInitiator initiator, long generation, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
-        public Task<long> RetireAppendEpochAsync(Guid leafId, CancellationToken cancellationToken) => Task.FromResult(0L);
+        public Task<long> RetireAppendEpochAsync(Guid leafId, long rowEpoch, CancellationToken cancellationToken) => Task.FromResult(0L);
     }
 
     /// <summary>

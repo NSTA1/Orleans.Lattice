@@ -937,7 +937,7 @@ internal sealed partial class ShardRootGrain(
                 await MirrorAppliedWritesAsync(MirroredKey(key), (key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return;
             }
-            catch (WalAppendEpochStaleException)
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
             {
                 // Epic #5605: the leaf activation was superseded. Retry the whole step,
                 // re-resolving the route, until the operation's deadline; the ordinary
@@ -987,7 +987,7 @@ internal sealed partial class ShardRootGrain(
                 await MirrorAppliedWritesAsync(MirroredKey(key), (key, value, expiresAtTicks), static (t, s) => t.SetAsync(s.key, s.value, s.expiresAtTicks));
                 return;
             }
-            catch (WalAppendEpochStaleException)
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
             {
                 // Epic #5605: the leaf activation was superseded. Retry the whole step,
                 // re-resolving the route, until the operation's deadline; the ordinary
@@ -1043,7 +1043,7 @@ internal sealed partial class ShardRootGrain(
                 await MirrorAppliedWritesAsync(MirroredKey(key), (key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return null;
             }
-            catch (WalAppendEpochStaleException)
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
             {
                 // Epic #5605: the leaf activation was superseded. Retry the whole step,
                 // re-resolving the route, until the operation's deadline; the ordinary
@@ -1105,7 +1105,7 @@ internal sealed partial class ShardRootGrain(
                 await MirrorAppliedWritesAsync(MirroredKey(key), (key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return true;
             }
-            catch (WalAppendEpochStaleException)
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
             {
                 // Epic #5605: the leaf activation was superseded. Retry the whole step,
                 // re-resolving the route, until the operation's deadline; the ordinary
@@ -1157,7 +1157,7 @@ internal sealed partial class ShardRootGrain(
                 await MirrorAppliedRowsAsync([key]);
                 return result.Version;
             }
-            catch (WalAppendEpochStaleException)
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
             {
                 // Epic #5605: the leaf activation was superseded. Retry the whole step,
                 // re-resolving the route, until the operation's deadline; the ordinary
@@ -1556,7 +1556,7 @@ internal sealed partial class ShardRootGrain(
             {
                 return await DispatchLeafCrdtBatchOnceAsync(leaf, leafId, slice, mode);
             }
-            catch (WalAppendEpochStaleException)
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
             {
                 // Epic #5605: the leaf activation was superseded; retry against the
                 // live one until the operation's deadline.
@@ -1661,7 +1661,7 @@ internal sealed partial class ShardRootGrain(
                     LatticeTenantLabel.ForTree(TreeId));
                 return result;
             }
-            catch (WalAppendEpochStaleException)
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
             {
                 // Epic #5605: the leaf activation was superseded. Retry the whole step,
                 // re-resolving the route, until the operation's deadline; the ordinary
@@ -1914,7 +1914,7 @@ internal sealed partial class ShardRootGrain(
                     LatticeTenantLabel.ForTree(TreeId));
                 return result;
             }
-            catch (WalAppendEpochStaleException)
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
             {
                 // Epic #5605: the leaf activation was superseded. Retry the whole step,
                 // re-resolving the route, until the operation's deadline; the ordinary
@@ -2046,7 +2046,7 @@ internal sealed partial class ShardRootGrain(
                 await MirrorAppliedWritesAsync(MirroredKey(key), key, static (t, s) => t.DeleteAsync(s));
                 return result;
             }
-            catch (WalAppendEpochStaleException)
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
             {
                 // Epic #5605: the leaf activation was superseded. Retry the whole step,
                 // re-resolving the route, until the operation's deadline; the ordinary
@@ -2220,7 +2220,7 @@ internal sealed partial class ShardRootGrain(
                     page = await leafGrain.DeleteRangeAndNextSiblingAsync(startInclusive, endExclusive, predicate);
                     break;
                 }
-                catch (WalAppendEpochStaleException)
+                catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
                 {
                     // Epic #5605: the leaf activation was superseded; the walk step
                     // retries against the live one until the operation's deadline.
@@ -3538,7 +3538,7 @@ internal sealed partial class ShardRootGrain(
             {
                 return await TraverseToLeafAsync(key);
             }
-            catch (WalAppendEpochStaleException)
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
             {
                 // Epic #5605: the leaf activation was superseded. Retry the whole step,
                 // re-resolving the route, until the operation's deadline; the ordinary
@@ -3621,7 +3621,7 @@ internal sealed partial class ShardRootGrain(
 
                 return;
             }
-            catch (WalAppendEpochStaleException)
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
             {
                 // Epic #5605: the leaf activation was superseded. Retry the whole step,
                 // re-resolving the route, until the operation's deadline; the ordinary

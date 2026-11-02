@@ -24,7 +24,7 @@ public sealed class WalFenceSeamRetryTests
             {
                 calls++;
                 return calls < 3
-                    ? Task.FromException<int>(new WalAppendEpochStaleException(Guid.NewGuid(), calls))
+                    ? Task.FromException<int>(LeafRetiredException.ForSupersededActivation(Guid.NewGuid(), calls))
                     : Task.FromResult(42);
             },
             WalFenceSeamRetry.CallerShardRoot,
@@ -35,6 +35,24 @@ public sealed class WalFenceSeamRetryTests
             Assert.That(result, Is.EqualTo(42));
             Assert.That(calls, Is.EqualTo(3));
         });
+    }
+
+    [Test]
+    public void A_reclaimed_leaf_refusal_is_not_retried_at_the_seam()
+    {
+        // #5605 review, S1: supersession shares LeafRetiredException with reclaim, so
+        // the seam must retry only the fence's refusal and leave a genuine retirement
+        // to re-route exactly as before.
+        var calls = 0;
+        Assert.ThrowsAsync<LeafRetiredException>(() => WalFenceSeamRetry.RunAsync<int>(
+            () =>
+            {
+                calls++;
+                return Task.FromException<int>(new LeafRetiredException("leaf"));
+            },
+            WalFenceSeamRetry.CallerLeaf,
+            "tree"));
+        Assert.That(calls, Is.EqualTo(1));
     }
 
     [Test]
@@ -118,7 +136,7 @@ public sealed class WalFenceSeamRetryTests
     {
         Assert.Multiple(() =>
         {
-            Assert.That(WalCommitLogWriter.IsExcludedFromProviderFailureCount(new WalAppendEpochStaleException()), Is.True,
+            Assert.That(WalCommitLogWriter.IsExcludedFromProviderFailureCount(LeafRetiredException.ForSupersededActivation(Guid.NewGuid(), 1)), Is.True,
                 "a superseded activation's rejection must not feed the saturation signal");
             Assert.That(WalCommitLogWriter.IsExcludedFromProviderFailureCount(new InvalidOperationException()), Is.False);
         });

@@ -166,7 +166,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
     }
 
     /// <inheritdoc />
-    public async Task<long> RetireAppendEpochAsync(Guid leafId, CancellationToken cancellationToken)
+    public async Task<long> RetireAppendEpochAsync(Guid leafId, long rowEpoch, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         EnsureInternalOrigin(LatticeOperation.Write);
@@ -181,7 +181,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
         await EnterLeafGateAsync(leafId).ConfigureAwait(true);
         try
         {
-            return await RetireUnderLeafGateAsync(storage, leafId).ConfigureAwait(true);
+            return await RetireUnderLeafGateAsync(storage, leafId, rowEpoch).ConfigureAwait(true);
         }
         finally
         {
@@ -189,7 +189,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
         }
     }
 
-    private async Task<long> RetireUnderLeafGateAsync(IGrainStorage storage, Guid leafId)
+    private async Task<long> RetireUnderLeafGateAsync(IGrainStorage storage, Guid leafId, long rowEpoch)
     {
         var key = WalAppendFenceRows.EntryKey(_treeId, _shardIndex, leafId);
         for (var attempt = 1; ; attempt++)
@@ -198,7 +198,11 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
             long retired;
             lock (_stateGate)
             {
-                retired = row.State.Epoch;
+                // #5641: the epoch row's value as well as the entry. A duplicate that
+                // persisted its row but has not yet written its entry here must be
+                // refused at its entry write, or it would share the re-created
+                // incarnation's epoch once the clear deletes the row.
+                retired = Math.Max(row.State.Epoch, Math.Max(rowEpoch, 0));
                 if (_epochEntries is not null && _epochEntries.TryGetValue(leafId, out var loaded))
                 {
                     retired = Math.Max(retired, Math.Max(loaded.Memory, loaded.DurableSeen));

@@ -229,6 +229,12 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     private sealed class LeafStateBook : IGrainStorage
     {
         private readonly Dictionary<GrainId, LeafNodeState?> _states = [];
+        private readonly Dictionary<GrainId, long> _appendEpochRows = [];
+
+        /// <summary>Seeds the leaf's WAL append-epoch row (epic #5605).</summary>
+        public void PutAppendEpoch(GrainId leaf, long epoch) =>
+            _appendEpochRows[WalAppendFenceRows.RowId(
+                WalAppendFenceRows.LeafEpochGrainType, WalAppendFenceRows.LeafEpochKey(leaf.GetGuidKey()))] = epoch;
 
         public Exception? Throws { get; set; }
 
@@ -313,6 +319,13 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             {
                 leafState.State = state;
                 leafState.RecordExists = true;
+            }
+            else if (_appendEpochRows.TryGetValue(grainId, out var epoch)
+                && grainState is IGrainState<Orleans.Lattice.BPlusTree.State.LeafAppendEpochState> epochRow)
+            {
+                epochRow.State = new Orleans.Lattice.BPlusTree.State.LeafAppendEpochState { Epoch = epoch };
+                epochRow.ETag = "1";
+                epochRow.RecordExists = true;
             }
             else
             {

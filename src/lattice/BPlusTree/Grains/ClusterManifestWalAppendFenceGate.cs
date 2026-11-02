@@ -15,6 +15,12 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// every append. Same shape as <see cref="ClusterManifestWalClockFloorGate"/>,
 /// whose verdict function it shares.
 /// </summary>
+/// <remarks>
+/// Every leaf append on the silo reads <see cref="IsOpen"/>, so the cached verdict
+/// is published as one immutable snapshot through a volatile field and read without
+/// a lock (#5605 review, S3): an append compares two versions against it. The lock
+/// is taken only when a version has moved, to re-evaluate and log a transition.
+/// </remarks>
 internal sealed class ClusterManifestWalAppendFenceGate : IWalAppendFenceGate
 {
     private readonly IClusterManifestProvider _manifests;
@@ -22,10 +28,7 @@ internal sealed class ClusterManifestWalAppendFenceGate : IWalAppendFenceGate
     private readonly ILogger<ClusterManifestWalAppendFenceGate> _logger;
     private readonly GrainInterfaceType _marker;
     private readonly object _gate = new();
-    private MajorMinorVersion _manifestVersion = MajorMinorVersion.MinValue;
-    private MembershipVersion _membershipVersion = MembershipVersion.MinValue;
-    private bool _open;
-    private bool _evaluated;
+    private volatile Verdict? _verdict;
 
     /// <summary>Initialises the gate over the silo's manifest and membership views.</summary>
     public ClusterManifestWalAppendFenceGate(
@@ -51,15 +54,22 @@ internal sealed class ClusterManifestWalAppendFenceGate : IWalAppendFenceGate
         {
             var manifest = _manifests.Current;
             var snapshot = _membership.CurrentSnapshot;
+            var cached = _verdict;
+            if (cached is not null && cached.Matches(manifest.Version, snapshot.Version))
+            {
+                return cached.Open;
+            }
+
             lock (_gate)
             {
-                if (_evaluated && manifest.Version == _manifestVersion && snapshot.Version == _membershipVersion)
+                var previous = _verdict;
+                if (previous is not null && previous.Matches(manifest.Version, snapshot.Version))
                 {
-                    return _open;
+                    return previous.Open;
                 }
 
                 var open = ClusterManifestWalClockFloorGate.Evaluate(manifest, snapshot, _marker);
-                if (!_evaluated || open != _open)
+                if (previous is null || open != previous.Open)
                 {
                     if (open)
                     {
@@ -73,12 +83,18 @@ internal sealed class ClusterManifestWalAppendFenceGate : IWalAppendFenceGate
                     }
                 }
 
-                _manifestVersion = manifest.Version;
-                _membershipVersion = snapshot.Version;
-                _open = open;
-                _evaluated = true;
+                _verdict = new Verdict(manifest.Version, snapshot.Version, open);
                 return open;
             }
         }
+    }
+
+    /// <summary>The verdict for one pair of manifest and membership versions; immutable.</summary>
+    private sealed class Verdict(MajorMinorVersion manifestVersion, MembershipVersion membershipVersion, bool open)
+    {
+        public bool Open { get; } = open;
+
+        public bool Matches(MajorMinorVersion manifest, MembershipVersion membership) =>
+            manifest == manifestVersion && membership == membershipVersion;
     }
 }

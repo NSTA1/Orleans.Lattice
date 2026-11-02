@@ -24,6 +24,13 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// <see cref="WalAppendFenceMethodProbe"/> recognises it, so the caller re-issues
 /// the append unstamped only on that definite failure, while the existing methods
 /// keep working on the older silo.
+/// <para>
+/// The older build is simulated, not run (#5605 review, N5): the pinned
+/// <see cref="TypeLoadException"/> shape is what this build's Orleans 10.2.2
+/// produces for an invokable missing from the receiver's manifest. It is inferred
+/// to be 10.2.0's shape - the same Orleans version, and the same manifest minus the
+/// new invokables - not observed against the <c>lattice-v10.2.0</c> binary.
+/// </para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]

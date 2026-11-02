@@ -158,15 +158,23 @@ internal interface IWalShardGrain : IGrainWithStringKey
 
     /// <summary>
     /// Retires leaf <paramref name="leafId"/>'s epoch entry at this partition (epic
-    /// #5605): raises the partition's durable retired floor to at least the entry,
-    /// then deletes the entry row. Called when the leaf is retired, whether or not
-    /// the fence gate is open; idempotent, and a no-op for a leaf with no entry.
+    /// #5605): raises the partition's durable retired floor to at least the higher of
+    /// the entry and <paramref name="rowEpoch"/>, then deletes the entry row. Called
+    /// when the leaf is retired, whether or not the fence gate is open; idempotent,
+    /// and a no-op for a leaf with neither an entry nor an epoch row.
     /// </summary>
     /// <param name="leafId">The retired leaf's grain key.</param>
+    /// <param name="rowEpoch">
+    /// The value the retirement read from the leaf's epoch row; 0 when it has none.
+    /// The floor must cover it as well as the entry (#5641): the clear deletes the
+    /// epoch row, so a re-created incarnation starts again from 1, and a duplicate
+    /// activation that wrote its row but not yet its entry here would otherwise
+    /// share that epoch with it.
+    /// </param>
     /// <param name="cancellationToken">Cancellation token propagated from the originating call.</param>
     /// <returns>The partition's retired floor after the retirement.</returns>
     [AlwaysInterleave]
-    Task<long> RetireAppendEpochAsync(Guid leafId, CancellationToken cancellationToken);
+    Task<long> RetireAppendEpochAsync(Guid leafId, long rowEpoch, CancellationToken cancellationToken);
 
     /// <summary>
     /// Returns up to <paramref name="maxEntries"/> entries with sequence

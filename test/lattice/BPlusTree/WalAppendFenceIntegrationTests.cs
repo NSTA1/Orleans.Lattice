@@ -181,4 +181,38 @@ public sealed class WalAppendFenceIntegrationTests
         Assert.That(Encoding.UTF8.GetString((await tree.GetAsync("y"))!), Is.EqualTo("2"));
         await AssertSupersededActivationWasReplacedAsync(leaf, superseding);
     }
+
+    [Test]
+    public async Task Clearing_a_leaf_floors_every_partition_at_its_epoch_row_and_deletes_its_rows()
+    {
+        // #5605 review, S5 and #5641: the clear's retirement is load-bearing. A
+        // duplicate activation has persisted the next epoch to the row but written no
+        // entry anywhere; the clear must floor every partition at the row's value, so
+        // that duplicate can never share an epoch with the re-created incarnation.
+        const string Name = "fence-clear";
+        var (_, leaf) = await NewTreeAsync(Name);
+        var row = await WalAppendFenceRows.ReadLeafEpochAsync(Storage, leaf);
+        Assert.That(row.State.Epoch, Is.GreaterThan(0), "precondition: the leaf claimed with the gate open");
+        var duplicateEpoch = row.State.Epoch + 1;
+        row.State.Epoch = duplicateEpoch;
+        await WalAppendFenceRows.WriteAsync(Storage, WalAppendFenceRows.LeafEpochGrainType, WalAppendFenceRows.LeafEpochKey(leaf), row);
+
+        await _cluster.Client.GetGrain<IBPlusLeafGrain>(leaf).ClearGrainStateAsync();
+
+        var partitions = await SiloServices.GetRequiredService<LatticeOptionsResolver>().GetWalPartitionsAsync(Name);
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            var floor = await WalAppendFenceRows.ReadFloorAsync(Storage, Name, partition);
+            var entry = await WalAppendFenceRows.ReadEntryAsync(Storage, Name, partition, leaf);
+            Assert.Multiple(() =>
+            {
+                Assert.That(floor.State.Floor, Is.GreaterThanOrEqualTo(duplicateEpoch),
+                    $"partition {partition}'s floor covers the epoch row, not only the entries");
+                Assert.That(entry.RecordExists, Is.False, $"partition {partition}'s entry is deleted");
+            });
+        }
+
+        Assert.That((await WalAppendFenceRows.ReadLeafEpochAsync(Storage, leaf)).RecordExists, Is.False,
+            "the epoch row goes once every partition has retired");
+    }
 }

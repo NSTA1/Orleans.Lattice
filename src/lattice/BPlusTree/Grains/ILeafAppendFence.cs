@@ -16,7 +16,7 @@ internal interface ILeafAppendFence
     /// closed, so the append goes through the existing, unstamped method. Completes
     /// synchronously once the partition is claimed.
     /// </summary>
-    /// <exception cref="WalAppendEpochStaleException">The activation has been superseded.</exception>
+    /// <exception cref="LeafRetiredException">The activation has been superseded (<see cref="LeafRetiredException.ActivationSuperseded"/>).</exception>
     ValueTask<WalAppendStamp?> StampForAsync(IWalShardGrain shard, int partition, CancellationToken cancellationToken);
 
     /// <summary>A stamped append at <paramref name="partition"/> was admitted; records the reported unstamped watermark.</summary>
@@ -39,7 +39,7 @@ internal interface ILeafAppendFence
     /// A stamped append was rejected as stale: the activation stops and
     /// deactivates. Returns the exception the writer throws.
     /// </summary>
-    WalAppendEpochStaleException OnStale(WalAppendStamp stamp);
+    LeafRetiredException OnStale(WalAppendStamp stamp);
 
     /// <summary>
     /// A stamped method failed with the definite "method unknown" failure of a
@@ -47,4 +47,12 @@ internal interface ILeafAppendFence
     /// gate, and the writer re-issues the append unstamped.
     /// </summary>
     void OnStampedMethodUnknown();
+
+    /// <summary>
+    /// The activation could not keep a claim without being superseded - every
+    /// re-presentation after an unloaded-entry rejection was rejected again - so it
+    /// closes its own view of the gate for a backoff and appends unstamped meanwhile.
+    /// It is not superseded, so it does not deactivate.
+    /// </summary>
+    void OnClaimsExhausted();
 }

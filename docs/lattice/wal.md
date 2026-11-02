@@ -1427,9 +1427,13 @@ fences: a leaf's projection checkpoint still advances by replay, as before.
    in-memory entry and returns its next offset as the **claim head**: everything
    allocated before the claim lies below it.
 
-A refusal from the retired floor alone makes the activation persist an epoch above
-it and claim again. A refusal because the epoch row moved means the activation was
-superseded.
+On any refusal the activation persists an epoch above the refused value and claims
+again, conditionally on the epoch row it last wrote: if that row moved, another
+activation claimed and this one was superseded. After eight refused rounds, or a
+claim that fails for any other reason (a storage fault, a timeout), the append goes
+unstamped and the activation keeps appending unstamped for 30 seconds before it
+tries again, so a faulting store costs one claim attempt per window, not one per
+write.
 
 **Stamped appends.** Every append then carries the leaf's id and epoch as a call
 argument, never in the stored record. The partition checks it in the same locked
@@ -1452,6 +1456,13 @@ operation's existing deadline: its cancellation token, or else the silo's
 configured Orleans response timeout. A rejection is not a provider failure, so it
 never feeds the WAL saturation signal. When that deadline expires the caller sees exactly
 what it sees today: a `TimeoutException` or an `OperationCanceledException`.
+The refusal itself is the leaf's existing retired-leaf refusal, marked as a
+superseded activation in two trailing fields. A shard root on an older build, which
+can reach a newer leaf while the gate races a rolling upgrade or rollback, does not
+read those fields: it sees the retired-leaf refusal it already retries until its
+deadline, and never a type it cannot resolve. A re-presented claim that is rejected
+as unloaded eight times in a row is not a supersession: the append goes unstamped
+and the activation stays.
 
 **Durable rows.** The epoch row, each partition's entries, its retired floor and
 its routing-generation entries are rows of their own under reserved grain types
@@ -1461,8 +1472,14 @@ through the tree's grain storage provider. No existing state type gains a field.
 The rows are keyed by tree and partition, not by WAL provider, so a WAL move
 carries them unchanged. When a leaf is cleared (purge, reclaim, orphan repair) or
 the WAL GC retires an orphaned leaf's materialiser pin, each partition raises its
-retired floor to at least the leaf's entry before deleting it, so a surviving
-duplicate never outranks a leaf re-created under the same id. A retirement driven
+retired floor to at least the higher of the leaf's entry and its epoch row before
+deleting the entry ([#5641](https://github.com/NSTA1/Orleans.Lattice/issues/5641)).
+The clear deletes the epoch row, so a leaf re-created under the same id starts its
+epochs again from one; covering the row as well as the entry means neither a
+surviving duplicate nor one that has written its row but not yet its entry can share
+an epoch with it. An activation that keeps serving after its own clear claims afresh
+as the re-created leaf. The GC skips a leaf with no epoch row - one that never
+claimed, or whose clear already retired it - at the cost of one storage read. A retirement driven
 by a silo running an older build during a rollback leaves the leaf's entry rows in
 place; they are inert, since only that leaf's claims read them, and are not yet
 swept ([#5634](https://github.com/NSTA1/Orleans.Lattice/issues/5634)).
@@ -1482,9 +1499,17 @@ gate has observed the join, the older silo refuses the unknown method while
 deserialising the request; only that definite failure is re-issued unstamped.
 Any other failure keeps today's retry semantics.
 
-**Cost.** One dictionary lookup and two comparisons per stamped append, under the
-lock the append already holds. Per activation: one epoch-row write, then one claim
-call, one entry-row read and one entry-row write per partition it writes.
+**Cost.** Per stamped append: one dictionary lookup and two comparisons, under the
+lock the append already holds. Per leaf append, stamped or not, the leaf reads the
+silo's cached gate verdict without a lock, comparing two versions. Per activation:
+one epoch-row read and write, then one claim call, one entry-row read and one
+entry-row write per partition it writes. The first write after each leaf activation
+therefore waits for about four sequential storage round trips before its append, a
+latency change for cold leaves. Per leaf clear: one epoch-row read, then for a leaf
+that has claimed, one retirement call per WAL partition (a floor and an entry read,
+a floor write and an entry delete) and the epoch row's delete. A tree purge pays
+that per leaf. Per orphaned pin the WAL GC retires: one epoch-row read, and a
+retirement call only if the row exists.
 
 The fence's counters are `orleans.lattice.wal.append_fence.claims`,
 `.rejections`, `.seam_retries` and `.unstamped_reports`; see

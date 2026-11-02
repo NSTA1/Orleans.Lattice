@@ -961,9 +961,6 @@ internal static class TypeAliases
     /// <summary>Alias for the result of an epoch or generation claim at a WAL partition.</summary>
     internal const string WalAppendFenceClaimResult = "ol.xfc";
 
-    /// <summary>Alias for the internal stale-epoch rejection the seam retry absorbs.</summary>
-    internal const string WalAppendEpochStaleException = "ol.xfx";
-
     /// <summary>Alias for the append-fence capability marker grain interface.</summary>
     internal const string IWalAppendFenceCapable = "ol.xfk";
 }

@@ -6970,23 +6970,47 @@ internal sealed class LatticeWalGcScheduler(
     /// pin was just retired (epic #5605), under the same retirement token: this is
     /// the pin-retirement step of the design note, and the sweep that removes an
     /// entry left by a clear that could not retire it. The partition raises its
-    /// retired floor above the entry before deleting it. Best effort: a leftover
-    /// entry only ever sits above a re-claim, so a failure is logged and left.
+    /// retired floor above the entry and the leaf's epoch row before deleting it.
+    /// A leaf with no epoch row never claimed, or its clear already retired every
+    /// entry and deleted the row, so it costs one storage read and no grain call.
+    /// Best effort: a leftover entry only ever sits above a re-claim, so a failure
+    /// is logged and left.
     /// </summary>
     private async Task RetireAppendEpochEntryAsync(string treeId, string consumerId, CancellationToken stoppingToken)
     {
-        if (!TryResolveLeafGrainId(treeId, consumerId, out var leafGrainId, out var partition))
+        if (leafStateStorage is null
+            || !TryResolveLeafGrainId(treeId, consumerId, out var leafGrainId, out var partition))
         {
             return;
         }
 
         try
         {
-            await Bounded(
-                grainFactory.GetGrain<BPlusTree.Grains.IWalShardGrain>($"{treeId}/{partition}")
-                    .RetireAppendEpochAsync(leafGrainId.GetGuidKey(), CancellationToken.None),
+            var leafId = leafGrainId.GetGuidKey();
+            var row = await Bounded(
+                BPlusTree.Grains.WalAppendFenceRows.ReadLeafEpochAsync(leafStateStorage, leafId),
                 OrphanSweepOperationBudget, stoppingToken)
                 .ConfigureAwait(false);
+            if (!row.RecordExists)
+            {
+                return;
+            }
+
+            await Bounded(
+                grainFactory.GetGrain<BPlusTree.Grains.IWalShardGrain>($"{treeId}/{partition}")
+                    .RetireAppendEpochAsync(leafId, row.State.Epoch, CancellationToken.None),
+                OrphanSweepOperationBudget, stoppingToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!stoppingToken.IsCancellationRequested && BPlusTree.Grains.WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
+        {
+            // The partition is hosted by a silo whose build predates the fence, during
+            // a rolling upgrade or a rollback: expected, and retried by a later sweep.
+            logger.LogDebug(
+                "WAL GC could not retire the WAL append-epoch entry of materialiser pin {Consumer} on tree {Tree} at partition {Partition}: the partition's silo predates the append fence (epic #5605).",
+                consumerId,
+                treeId,
+                partition);
         }
         catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
         {

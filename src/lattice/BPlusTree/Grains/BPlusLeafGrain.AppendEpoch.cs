@@ -99,7 +99,7 @@ internal sealed partial class BPlusLeafGrain
             {
                 retirements[partition] = grainFactory
                     .GetGrain<IWalShardGrain>($"{treeId}/{partition}")
-                    .RetireAppendEpochAsync(leafId, CancellationToken.None);
+                    .RetireAppendEpochAsync(leafId, row.State.Epoch, CancellationToken.None);
             }
 
             // The epoch row goes only once every partition has retired its entry.
@@ -127,6 +127,13 @@ internal sealed partial class BPlusLeafGrain
                 "Leaf {LeafId} of tree {TreeId}: could not retire its WAL append-epoch entries; the rows are left in place, which is safe (epic #5605).",
                 context.GrainId,
                 treeId);
+        }
+        finally
+        {
+            // The leaf is cleared: this activation, if it keeps serving, claims afresh
+            // as the re-created incarnation rather than meeting its own retired
+            // entries and deactivating (#5605 review, N1).
+            _appendFence?.ResetAfterClear();
         }
     }
 

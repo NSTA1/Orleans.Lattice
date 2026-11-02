@@ -4836,9 +4836,12 @@ internal sealed partial class BPlusLeafGrain(
 
             // The leaf's WAL append-epoch entries and epoch row go with it too
             // (epic #5605), whether or not the fence gate is open. Each partition
-            // raises its retired floor above the entry before deleting it, so a
-            // surviving duplicate can never outrank a leaf re-created under this
-            // id. Idempotent, and retried with the rest of the clear.
+            // raises its retired floor to the higher of the entry and the epoch row
+            // before deleting the entry (#5641), so neither a surviving duplicate nor
+            // one that has written its row but not yet its entry can share an epoch
+            // with a leaf re-created under this id. Best effort: a failure is logged
+            // and leaves the rows in place, which is safe, and the WAL GC's
+            // orphan-pin retirement retires what a failed clear left.
             await RetireAppendEpochAsync(fenceTreeId);
 
             // The row record goes last of all (issue #4654): until it is deleted, a

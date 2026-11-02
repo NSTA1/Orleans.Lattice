@@ -14,9 +14,11 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 ///   leaf's self-report of its own unstamped append.</description></item>
 ///   <item><description><b>Unloaded entry:</b> the partition restarted or moved since
 ///   the claim; the fence re-presents its claim, which loads the entry, and the append
-///   is retried. Nothing was allocated.</description></item>
+///   is retried. Nothing was allocated. After <see cref="MaxUnloadedRetries"/> such
+///   rejections the fence closes its view of the gate for a backoff and the append goes
+///   unstamped: that is not a supersession, so the activation does not deactivate.</description></item>
 ///   <item><description><b>Stale:</b> the activation was superseded; the fence stops
-///   it and the append fails with <see cref="WalAppendEpochStaleException"/>, which the
+///   it and the append fails with a superseded-activation <see cref="LeafRetiredException"/>, which the
 ///   seam that called the leaf retries against the live activation.</description></item>
 ///   <item><description><b>Method unknown:</b> the partition is hosted by a silo
 ///   running an older build that joined before this silo's gate observed it; only on
@@ -177,9 +179,16 @@ internal static class WalFencedAppendDispatch
 
     private static void HandleRejection(ILeafAppendFence fence, int partition, WalAppendStamp stamp, WalAppendFenceOutcome outcome, int attempt)
     {
-        if (outcome == WalAppendFenceOutcome.UnloadedEntry && attempt < MaxUnloadedRetries)
+        if (outcome == WalAppendFenceOutcome.UnloadedEntry)
         {
             fence.OnUnloaded(partition, stamp);
+            if (attempt >= MaxUnloadedRetries)
+            {
+                // Not a supersession (#5605 review, N1): the next stamp request finds
+                // the gate view closed and the append goes unstamped.
+                fence.OnClaimsExhausted();
+            }
+
             return;
         }
 
