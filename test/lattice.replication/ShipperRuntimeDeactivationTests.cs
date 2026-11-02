@@ -134,6 +134,9 @@ public sealed class ShipperRuntimeDeactivationTests
             siloBuilder.AddLatticeReplication(options =>
             {
                 options.ClusterId = Local;
+                // Enrolled: a shipper for a tree with no replication
+                // configuration is a stray and ships nothing (#5676).
+                options.ReplicatedTrees = new Dictionary<string, LatticeMergeMode> { [Tree] = LatticeMergeMode.LwwRegister };
                 options.ReplogPartitions = 1;
                 options.ShipBatchSize = 1;
                 options.AdaptiveBatchSizingEnabled = false;
