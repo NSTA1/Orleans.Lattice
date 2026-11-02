@@ -40,7 +40,8 @@ advisory and run at landing, nightly and on demand):
   pull_request edited    none (the body changed, not the code); provenance only.
   pull_request labeled   the full set when the added label is `journeys-full`,
                          otherwise nothing.
-  pull_request into an integration branch (`*/epic/*`), a member pull request:
+  pull_request into an integration branch (`*/epic/*`), a member pull request,
+  and any other pull request that is not a landing pull request (below):
       harness always, NO story leg and NO conformance shard. Isolated legs:
         - each journey folder the pull request touches;
         - for a file under src/lattice.explorer/UI/Areas/<Area>/, the chapters
@@ -55,8 +56,14 @@ advisory and run at landing, nightly and on demand):
           projects feed no chapter.
       Every chapter a member skips still runs when the bucket lands.
   A member pull request labelled `journeys-full`: the full set, as at landing.
-  pull_request into anything else (the bucket-to-main landing pull request),
-  push, workflow_dispatch: every leg and every conformance shard.
+  pull_request whose HEAD is an integration branch and whose base is not (the
+  bucket-to-main landing pull request), push, workflow_dispatch: every leg and
+  every conformance shard.
+  Any other pull_request (an ordinary pull request into main or a release
+  line) is gated like a member: its own isolated legs, no story and no
+  conformance shard. Only a landing pull request, the nightly run,
+  workflow_dispatch or `journeys-full` run the stories, so one open story
+  defect cannot redden every pull request that touches the Explorer.
   schedule: every leg and conformance shard, plus story-contoso-narrow.
   A member pull request whose changed files could not be listed runs every
   isolated leg (still no story and no conformance shard).
@@ -276,6 +283,11 @@ def is_integration_branch(ref):
     return "/epic/" in (ref or "")
 
 
+def is_landing(event, base_ref, head_ref):
+    """An integration branch landing on a non-integration base (main, a release line)."""
+    return event == "pull_request" and is_integration_branch(head_ref) and not is_integration_branch(base_ref)
+
+
 def isolated_leg(folder, jid, storyline):
     return {
         "name": "isolated-" + jid,
@@ -323,13 +335,13 @@ def harness_leg():
     }
 
 
-def plan(root, event, action="", base_ref="", changed=None, labels=(), label=""):
+def plan(root, event, action="", base_ref="", changed=None, labels=(), label="", head_ref=""):
     """The legs, conformance shards and provenance journeys for one run, plus the reasons, as a dict."""
     journeys = discover_journeys(root)
     stories = story_fixtures(root)
     conformance = conformance_shards(root)
     by_folder = {folder: (folder, jid, storyline) for folder, jid, storyline in journeys}
-    member = event == "pull_request" and is_integration_branch(base_ref)
+    member = event == "pull_request" and not is_landing(event, base_ref, head_ref)
     notes = []
     provenance = []
 
@@ -379,13 +391,17 @@ def plan(root, event, action="", base_ref="", changed=None, labels=(), label="")
         notes.append("Nightly: every leg and conformance shard, and the Contoso story at 390x844.")
     elif not member:
         legs = every_leg()
-        notes.append(f"{event} into '{base_ref or 'n/a'}': every leg and every conformance shard.")
+        if is_landing(event, base_ref, head_ref):
+            notes.append(f"Landing pull request ('{head_ref}' into '{base_ref}'): every leg and every conformance shard.")
+        else:
+            notes.append(f"{event}: every leg and every conformance shard.")
     elif FULL_LABEL in labels:
         legs = every_leg()
         notes.append(f"Member pull request labelled `{FULL_LABEL}`: every leg and every conformance shard.")
     else:
         conformance = []
-        notes.append("Member pull request: no story leg and no contract conformance shard (advisory; they run on "
+        notes.append(("Member" if is_integration_branch(base_ref) else f"Pull request into '{base_ref or 'n/a'}'")
+                     + " pull request: no story leg and no contract conformance shard (advisory; they run on "
                      f"the landing pull request into main, nightly, on workflow_dispatch, or with `{FULL_LABEL}`).")
         chosen = member_chapters(root, journeys, touched, changed, notes)
         legs = [harness_leg()] + [isolated_leg(*by_folder[folder]) for folder in chosen]
@@ -583,6 +599,7 @@ def main(argv=None):
     p.add_argument("--changed-files")
     p.add_argument("--labels", default="", help="the pull request's label names, as a JSON array")
     p.add_argument("--label", default="", help="the label a `labeled` event added")
+    p.add_argument("--head-ref", default="", help="the pull request's head branch (empty off a pull request)")
     s = sub.add_parser("leg-summary")
     s.add_argument("--leg", required=True)
     s.add_argument("--trx", required=True)
@@ -600,7 +617,8 @@ def main(argv=None):
                        if line.strip()]
         try:
             labels = parse_labels(args.labels)
-            result = plan(args.root, args.event, args.action, args.base_ref, changed, labels, args.label)
+            result = plan(args.root, args.event, args.action, args.base_ref, changed, labels, args.label,
+                          args.head_ref)
         except PlanError as error:
             print(f"::error::{error}")
             return 1

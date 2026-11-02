@@ -148,28 +148,32 @@ its docstring is the contract, and its self-test pins it.
 
 Which legs run depends on the event:
 
-- **A member pull request into an integration branch** runs the `harness` leg
-  and the isolated legs of the chapters it touches. A file under an Explorer
-  area folder (`src/lattice.explorer/UI/Areas/<Area>/`) adds the chapters whose
-  sources name that area. Any other file that can change what a journey sees -
-  the rest of the Explorer, the harness, the hosts, a facade, or the lane
-  itself - runs every isolated leg. Documentation feeds no chapter. A member
-  pull request runs no story leg and no conformance shard.
-- **The landing pull request** (an integration branch into `main`), a push,
-  and `workflow_dispatch` run every leg and every conformance shard. A nightly
-  schedule adds `story-contoso-narrow`.
-- **A member pull request labelled `journeys-full`** runs the full set, as the
-  landing pull request does.
+- **A member pull request into an integration branch**, and **any other pull
+  request that is not a landing pull request** (an ordinary pull request into
+  `main` or a release line), runs the `harness` leg and the isolated legs of
+  the chapters it touches. A file under an Explorer area folder
+  (`src/lattice.explorer/UI/Areas/<Area>/`) adds the chapters whose sources
+  name that area. Any other file that can change what a journey sees - the
+  rest of the Explorer, the harness, the hosts, a facade, or the lane itself -
+  runs every isolated leg. Documentation feeds no chapter. Such a pull request
+  runs no story leg and no conformance shard, so an open story defect does
+  not redden every pull request that touches the Explorer.
+- **A landing pull request** (its head is an integration branch, `*/epic/*`,
+  and its base is not), a push, and `workflow_dispatch` run every leg and
+  every conformance shard. A nightly schedule adds `story-contoso-narrow`.
+- **A pull request labelled `journeys-full`** runs the full set, as a landing
+  pull request does.
 - **Editing a member pull request's body** runs no leg. It runs the screenshot
   provenance check: every journey pull request carries a
   `## Journey screenshots` section, ordered and captioned, and the check
   matches it against the run it names. `tools/Get-JourneyScreenshots.ps1 -Run
   <id> -Journey <jid>` prints that section for a run.
 
-On a member pull request, the merge gates are CI (`build-and-test`), UI Tests,
-the pull request's own isolated legs, the harness leg, the coverage gate and
+On a member pull request, or an ordinary pull request into `main`, the merge
+gates are CI (`build-and-test`), UI Tests, the pull request's own isolated
+legs, the harness leg, the coverage gate and, on a member pull request,
 screenshot provenance. The story legs and contract conformance are advisory:
-they run when the integration branch lands and on demand.
+they run when an integration branch lands, nightly and on demand.
 
 `.github/instructions/testing.instructions.md` describes the lane alongside
 the repository's other test tiers.
