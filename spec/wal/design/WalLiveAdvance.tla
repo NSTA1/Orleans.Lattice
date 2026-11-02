@@ -65,8 +65,9 @@
 (* WithRecreate (purge and re-creation of L), WithRestart (a WAL shard     *)
 (* restart: a reactivation, or a move's cutover), FrozenView (a superseded *)
 (* activation keeps the marker state it last saw), WithMixedVersion (the   *)
-(* unstamped author), WithGateFlip (own unstamped appends), and            *)
-(* WithLegacyHandOff (a hand-off in flight across the gate opening).      *)
+(* unstamped author), WithGateFlip (own unstamped appends),               *)
+(* WithLegacyHandOff (a hand-off in flight across the gate opening), and  *)
+(* WithTreeWalk (another shard's walk of a tree-level range delete).      *)
 (* Ghosts enables the witness ghosts.                                      *)
 (***************************************************************************)
 EXTENDS Integers, FiniteSets
@@ -92,7 +93,10 @@ Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 Max2(x, y) == IF x >= y THEN x ELSE y
 
 VARIABLES
-    gst,        \* another shard's range-delete walk: "idle", "pend" (admitted), "done"
+    gst,        \* another shard's range-delete walk: "idle", "pend" (admitted), "repend"
+                \* (re-stamped after a rejection), "rejected", "done"
+    closing,    \* a close is between its re-claim and its marker close; always FALSE
+                \* here, because the close marks the intent closed atomically with it
     gstamp,     \* the tree range-delete generation it was admitted under
     phase,      \* "pre" before the bulk window opens, "window", then "live"
     hint,       \* the WAL head when the bulk load began: the leaf's birth hint
@@ -152,7 +156,7 @@ VARIABLES
     claimRefused,         \* witness: a claim was refused at the shard
     selfReported          \* witness: an own unstamped append reported itself
 
-walkVars == <<gst, gstamp>>
+walkVars == <<gst, gstamp, closing>>
 walVars == <<next, author, inflight, durable, acked, floor>>
 leafVars == <<up, cache, rp, mine, snapCov, snapRows>>
 epochVars == <<rowEpoch, seen, epoch, cstage, claimHead, fence, memFence, retired, maxClaimed>>
@@ -169,7 +173,8 @@ vars == <<walkVars, walVars, leafVars, epochVars, handVars, gateVars, viewVars, 
           safeVars, wghosts>>
 
 TypeOK ==
-    /\ gst \in {"idle", "pend", "done"}
+    /\ gst \in {"idle", "pend", "repend", "rejected", "done"}
+    /\ closing \in BOOLEAN
     /\ gstamp \in Epochs
     /\ phase \in {"pre", "window", "live"}
     /\ hint \in 0..MaxOff
@@ -232,6 +237,7 @@ TypeOK ==
 Init ==
     /\ gst = "idle"
     /\ gstamp = 0
+    /\ closing = FALSE
     /\ phase = "pre"
     /\ hint = 0
     /\ next = 0
@@ -497,6 +503,7 @@ ForeignOpen ==
 
 ForeignAdmit(k) ==
     /\ hoOpen \/ (hfly /\ resumed)
+    /\ ~closing
     /\ ~fpend
     /\ next < MaxOff
     /\ fpend' = TRUE
@@ -544,29 +551,60 @@ GAdmit ==
     /\ WithTreeWalk
     /\ phase = "live"
     /\ hoOpen
+    /\ ~closing
     /\ gst = "idle"
     /\ gst' = "pend"
     /\ gstamp' = fEpoch
-    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, gateVars, viewVars, oldVars, envVars,
-                   safeVars, wghosts>>
+    /\ UNCHANGED <<closing, walVars, leafVars, epochVars, handVars, gateVars, viewVars, oldVars,
+                   envVars, safeVars, wghosts>>
 
 GAlloc ==
-    /\ gst = "pend"
+    /\ gst \in {"pend", "repend"}
     /\ gstamp >= fFence
     /\ next < MaxOff
     /\ gst' = "done"
     /\ next' = next + 1
     /\ author' = [author EXCEPT ![next] = TreeWalk]
     /\ inflight' = inflight \cup {next}
-    /\ UNCHANGED <<gstamp, durable, acked, floor, leafVars, epochVars, handVars, gateVars,
+    /\ UNCHANGED <<gstamp, closing, durable, acked, floor, leafVars, epochVars, handVars, gateVars,
                    viewVars, oldVars, envVars, safeVars, wghosts>>
 
 GReject ==
-    /\ gst = "pend"
+    /\ gst \in {"pend", "repend"}
     /\ gstamp < fFence
-    /\ gst' = "done"
-    /\ UNCHANGED <<gstamp, walVars, leafVars, epochVars, handVars, gateVars, viewVars, oldVars,
+    /\ gst' = "rejected"
+    /\ UNCHANGED <<gstamp, closing, walVars, leafVars, epochVars, handVars, gateVars, viewVars,
+                   oldVars, envVars, safeVars, wghosts>>
+
+(* The seam retry of a rejected walk asks the fence grain whether an intent *)
+(* is open. The fence grain answers from one state, in turns that do not   *)
+(* interleave with a close, and marks the intent closed before the close's *)
+(* first re-claim, so the answer is "open" only while no close is under    *)
+(* way. GRestamp: open, so the walk re-stamps with the current generation  *)
+(* (another delete's, since its own intent closed when the generation it   *)
+(* carried was re-claimed); the check reads the marker, over-approximating *)
+(* "its own intent". GUnstamped: not open, so the walk appends unstamped,  *)
+(* admitted and reported.                                                  *)
+GRestamp ==
+    /\ gst = "rejected"
+    /\ hoOpen
+    /\ ~closing
+    /\ gst' = "repend"
+    /\ gstamp' = fEpoch
+    /\ UNCHANGED <<closing, walVars, leafVars, epochVars, handVars, gateVars, viewVars, oldVars,
                    envVars, safeVars, wghosts>>
+
+GUnstamped ==
+    /\ gst = "rejected"
+    /\ ~(hoOpen /\ ~closing)
+    /\ next < MaxOff
+    /\ gst' = "done"
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = TreeWalk]
+    /\ inflight' = inflight \cup {next}
+    /\ lastU' = next
+    /\ UNCHANGED <<gstamp, closing, durable, acked, floor, leafVars, epochVars, handVars, gateVars,
+                   viewVars, seenU, oldUsed, envVars, safeVars, wghosts>>
 
 HandOff(o, a) ==    /\ a \in up
     /\ o \in durable
@@ -804,7 +842,7 @@ Next ==
     \/ \E a \in Acts : OwnAlloc(a) \/ StaleAppend(a) \/ OwnAllocUnstamped(a)
     \/ \E o \in Offs : Land(o)
     \/ ForeignOpen \/ ForeignAlloc \/ ForeignReject \/ Close
-    \/ GAdmit \/ GAlloc \/ GReject
+    \/ GAdmit \/ GAlloc \/ GReject \/ GRestamp \/ GUnstamped
     \/ \E k \in Kinds : ForeignAdmit(k)
     \/ \E o \in Offs, a \in Acts : HandOff(o, a)
     \/ LegacyWrite \/ OpenGate \/ Resume \/ LegacyComplete \/ MarkInit
@@ -883,5 +921,9 @@ WitnessContestedKeyResolvedToPoint ==
 WitnessTreeWalkFenced == ~(gst = "pend" /\ gstamp < fFence)
 \* Another shard's walk is allocated under L's open marker (WithTreeWalk).
 WitnessTreeWalkAllocated == \A o \in Offs : author[o] # TreeWalk
+\* A rejected walk re-stamps under another open intent's generation (WithTreeWalk).
+WitnessTreeWalkRestamped == gst # "repend"
+\* A walk whose intent closed is appended unstamped and reported (WithTreeWalk).
+WitnessTreeWalkUnstamped == \A o \in Offs : ~(author[o] = TreeWalk /\ lastU = o)
 WitnessLegacyHandOffResumed == ~(resumed /\ advanced)
 ====

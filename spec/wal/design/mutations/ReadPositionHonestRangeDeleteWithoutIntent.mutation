@@ -12,6 +12,7 @@ BOUNDS: WithTreeWalk = TRUE, WithBatch = FALSE, MaxWindows = 1
 --- FIND
     /\ phase = "live"
     /\ hoOpen
+    /\ ~closing
     /\ gst = "idle"
 --- REPLACE
     /\ phase = "live"

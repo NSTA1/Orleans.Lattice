@@ -11,11 +11,11 @@ PERTURBS: GAlloc
 BOUNDS: WithTreeWalk = TRUE, WithBatch = FALSE, MaxWindows = 1
 
 --- FIND
-    /\ gst = "pend"
+    /\ gst \in {"pend", "repend"}
     /\ gstamp >= fFence
     /\ next < MaxOff
 --- REPLACE
-    /\ gst = "pend"
+    /\ gst \in {"pend", "repend"}
 \* MUTATION: stamped with its own shard's generation, which L's close does not re-claim.
     /\ next < MaxOff
 --- END

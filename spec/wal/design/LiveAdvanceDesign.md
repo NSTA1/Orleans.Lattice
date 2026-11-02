@@ -10,10 +10,23 @@ with a refinement note, when the production members land.
 **Gate.** A production member starts only once the independent reviewer has accepted
 the part of the design it builds. The re-review of revision 3 accepted member 1 (the
 epoch claim, stamped appends, the gate, seam retries, the floor, and the generation and
-epoch rows). Members 2 to 4 wait for the re-review of this revision.
+epoch rows). The re-review of revision 4 accepted member 2, except the tree range-delete
+fence's re-stamp path, which waits for the reviewer to confirm this revision's model
+change. Members 3 and 4 follow member 2.
 
-**Revision.** This is the fourth revision. It answers the
-[re-review of revision 3](https://github.com/NSTA1/Orleans.Lattice/issues/5605#issuecomment-6564904377)
+**Revision.** This is the fifth revision. It answers the
+[re-review of revision 4](https://github.com/NSTA1/Orleans.Lattice/issues/5605#issuecomment-6566046196)
+(1 blocking, 3 should-fix, 2 nits):
+- **The re-stamp is atomic with the close (B1).** The fence grain marks an intent closed
+  before the close's first re-claim, and answers the open check and the generation from
+  that one state, in turns that do not interleave with a close. The model gains
+  `GRestamp` and `GUnstamped` and a two-window configuration, and the split close is a
+  mutation. Section 2, "A walk outliving its intent".
+- **The intent's deadline** takes the `SagaDecisionDeadline` form and affects liveness
+  only (S1). The shard root asks the fence grain only after a rejection, never per page
+  (S2). The cost of unstamped walks is stated, with a counter by source (S3).
+
+Revision 4 answered the[re-review of revision 3](https://github.com/NSTA1/Orleans.Lattice/issues/5605#issuecomment-6564904377)
 (2 blocking, 4 should-fix, 3 nits), which accepted revision 3 for production member 1
 and held member 2 for this revision:
 - **The range-delete fence** stamps every shard's walk with one per-tree range-delete
@@ -225,9 +238,19 @@ and therefore every epoch a surviving duplicate of the old incarnation holds.
 `ReadPositionHonestRecreateDropsFloor` removes the floor raise and fails.
 
 Retirement code runs whether the gate is open or closed, so rows are retired on every
-path a new silo runs. A retirement on a 10.2.0 silo deletes none of these rows; the
-leftover rows are safe (the entry stays above any re-claim, the epoch row survives),
-and a periodic sweep removes rows whose leaf no longer exists (review N1).
+path a new silo runs: every leaf clear (purge, reclaim, orphan repair) and the WAL GC's
+orphan-pin retirement, which also re-drives an interrupted clear. A retirement on a
+10.2.0 silo, during a rollback or a rejoin after the gate opened, deletes none of these
+rows, and it also removes the leaf's materialiser pins, so the orphan-pin pass never
+finds the leaf again; `IGrainStorage` cannot enumerate rows, so the rows would leak for
+good (#5634). The leftover rows are safe (a leaked entry only ever sits above a
+re-claim, and a leaked epoch row makes a re-created leaf continue from a higher epoch),
+so the cost is storage only. A **per-partition epoch directory row** makes a
+partition's entries enumerable, and a **sweep** walks it and retires the entries of
+leaves that no longer exist (review N1). The directory row is bucketed or paged to
+stay within the provider's row limits (Azure Table: 64 KiB per property, 1 MiB per
+entity). It is built in its own production member (#5634), which lands before #5605's
+bucket reaches `main`.
 
 **Moves and restarts.** The entry, floor and generation rows live in grain storage,
 not in the WAL stream, so a WAL move, which switches the stream's provider, does not
@@ -388,17 +411,21 @@ are valid for every shard's marker. No two-phase close is needed.
 
 1. **Intent.** `LatticeGrain.DeleteRangeAsync` asks the fence grain to open an intent
    before any shard appends. The intent records the operation id, the range, and a
-   **deadline**: the call's cancellation deadline when it has one, otherwise now plus
-   the call's response timeout. The fence grain persists it in its own state and
-   returns the tree's current range-delete generation (S3).
+   **deadline**, taken once when the call starts in the form of
+   `LatticeGrain.SagaDecisionDeadline` (`LatticeGrain.cs:3448`): the silo's
+   `SiloMessagingOptions.ResponseTimeout` less a margin. A `CancellationToken` carries no
+   deadline to read. The fence grain persists the intent in its own state and returns
+   the tree's current range-delete generation.
 2. **Open.** The fence grain opens a range-scoped marker, idempotently, in the
    shard-level marker row of **every** shard root of the tree, and records each in the
    intent. Every shard's B+ tree spans the whole key space, so every shard can hold an
    overlapping leaf.
 3. **Fan out.** `LatticeGrain` runs the shard walks as today, with one issue HLC for
    all shards, through a **new stamped shard-root method** that names the intent and
-   carries the generation. The shard root stamps the walk's leaf appends with that
-   generation at admission.
+   carries the generation. The shard root **trusts the generation it is given** and
+   stamps the walk's leaf appends with it at admission. It does not ask the fence grain
+   per page: the WAL shard's generation check already rejects a walk whose intent has
+   closed, and only that rejection's seam retry asks the fence grain.
 4. **Close.** When every walk has returned, or the intent's deadline has passed, the
    fence grain re-claims the tree's range-delete generation at every partition (the
    re-claim returns allocator heads), records the heads in every shard's marker, closes
@@ -409,8 +436,16 @@ are valid for every shard's marker. No two-phase close is needed.
    nothing marks the fan-out ended; the recorded deadline is what lets the reminder
    tell "ended" from "still running".
 
+**The deadline affects liveness only.** A close that comes before every walk has
+finished is safe: the walk's next stamped append is rejected and, with the intent
+closed, the walk goes on unstamped and reported. The cost is that a range delete
+outlasting one response timeout, such as a paged drain
+(`LatticeGrain.DrainShardRangeDeleteAsync`), runs its later pages unstamped, which
+disarms the partitions they reach until their leaves replay past them.
+
 **A walk with no open intent is appended unstamped (B2).** A shard root stamps a
-range-delete walk only when the call names an intent the fence grain reports open. A
+range-delete walk only when the call comes through the stamped method with an intent's
+generation (step 3). A
 range-delete walk that reaches a shard root through the **existing** shard-root method
 is appended **unstamped**, so it is admitted and reported (section 4), never stamped
 under a fence that holds nothing. That covers, without any resume rule:
@@ -423,19 +458,51 @@ under a fence that holds nothing. That covers, without any resume rule:
   method;
 - **a 10.2.0 caller.**
 
-These stay unstamped by design, rather than being routed through the fence: they are
-rare, and an unstamped append costs only a replay past it on the partitions it reaches.
+These stay unstamped by design, rather than being routed through the fence. The cost is
+bounded: an unstamped walk raises the unstamped watermark on each partition it reaches,
+and every armed leaf writing those partitions then replays from its checkpoint past it.
+A live-advanced leaf's checkpoint is near the head, so that is a tail replay, never a
+replay from -1 and never more than 10.2.0 already does on every advance. The busiest
+case is a replicated repocontext tree, whose `RepoContextStore` range-deletes in steps
+(`:1187`, `:1587`), so each step reaches each peer as an unstamped walk. A
+predicate-filtered replicated delete is not affected: it ships the matched keys, which
+the receiver applies as point tombstones through `ApplyMergeManyAsync`, stamped as
+usual. A counter of unstamped reports by source makes the cost observable (change 7).
 Stamping a walk with no open intent fails (`ReadPositionHonestRangeDeleteWithoutIntent`,
 13 states).
 
-**A walk outliving its intent.** A walk still running after its intent closed has its
-next stamped append rejected by the re-claimed generation. The shard root's seam retry
-asks the fence grain whether the intent is still open. If it is (another delete's close
-re-claimed the generation), the walk is re-stamped with the current generation; if not,
-it appends unstamped, so the walk completes as it would in 10.2.0. Two concurrent range
-deletes on one tree share the generation, so one's close rejects the other's in-flight
-appends once, and each is retried this way.
+**A walk outliving its intent (B1).** A walk still running after its intent closed has
+its next stamped append rejected by the re-claimed generation. The shard root's seam
+retry then asks the fence grain whether an intent is open. If one is (another delete,
+whose close re-claimed the shared generation), the walk is re-stamped with the
+generation the fence grain returns; if not, it appends unstamped, so the walk completes
+as it would in 10.2.0. Two concurrent range deletes on one tree share the generation,
+so one's close rejects the other's in-flight appends once, and each is retried this
+way.
 
+That is sound **only if the open check is atomic with the close**. The close is not one
+instant: it re-claims the generation at every partition (several awaits), records the
+heads, and closes the markers. An open check answered between the first re-claim and
+the marker close says "open", the walk re-stamps with the **post-close** generation, its
+append is accepted above the heads the close already recorded, and the owner re-arms
+after replaying to those heads and passes it: the divergence the fence exists to
+prevent (`ReadPositionHonestRestampDuringClose`, 16 states). Two rules close it:
+1. **The intent is closed before the close's first re-claim.** The fence grain marks
+   the intent closing, durably, in the same turn that begins the close. From then on
+   the open check answers "not open".
+2. **One source for both answers.** The open check and the generation it hands out are
+   answered by the fence grain from that single state, in turns that do not interleave
+   with a close: `TreeRangeDeleteFenceGrain` is non-reentrant, and its open check is
+   neither `[AlwaysInterleave]` nor `[ReadOnly]`. No shard root caches either answer.
+
+In the model, `GReject` leaves a rejected walk to `GRestamp` (an intent is open and
+not closing: re-stamp with the current generation) or `GUnstamped` (otherwise: append
+unstamped and report it). `closing` marks a close between its re-claim and its marker
+close; it is always false in the model, because `Close` marks the intent closed
+atomically with the re-claim, which rule 1 makes true in production. The mutation splits
+`Close` into the re-claim and a later `CloseMark` and lets the open check read the
+marker alone. `WalLiveAdvanceTreeWalkConcurrent.cfg` (two windows) is the case where a
+re-stamp under a second delete's intent is reachable (`WitnessTreeWalkRestamped`).
 The record is unchanged (it is not clipped; see
 [Backward compatibility](#backward-compatibility)). A leaf whose range is disjoint
 from an open range-delete marker ignores it, by the same overlap test the replay judge
@@ -461,6 +528,7 @@ this design.
 and `g` (`WithTreeWalk`, `WalLiveAdvanceTreeWalk.cfg`) for another shard's walk. Both
 are stamped with `fEpoch`, the tree's generation, and are admitted only under the open
 marker. `Close` re-claims it once and fences both.
+
 **Hand-offs in flight across the gate (B2).** A split (`LeafNodeState.SplitInFlight`
 and `SplitSiblingId`, resumed by `CompleteSplitAsync`), an adaptive split
 (`ShardRootState.SplitInProgress`), a bulk graft (`PendingBulkGraft`), a shard fold, or
@@ -527,7 +595,7 @@ with a key both a bulk chunk and an earlier point write hold:
 - **Bulk entries are WAL records at versions below every real write.**
   `BulkAppendAsync` ticks its entries' versions from `HybridLogicalClock.Zero`
   (`ShardRootGrain.BulkLoad.cs:440`, `:460`, `:493`) and writes them through
-  `MergeEntriesAsync` (`BPlusLeafGrain.cs:3665`), which appends a merge record to the
+  `MergeEntriesAsync` (`BPlusLeafGrain.cs:3703`), which appends a merge record to the
   WAL and resolves last-writer-wins by timestamp. A point write is versioned by its
   leaf's real clock (`BPlusLeafGrain.cs:687`), so it outranks a bulk entry on every
   reader that applies both.
@@ -782,8 +850,8 @@ production).
 | 3 | *Withdrawn.* Revision 2 surfaced an exhausted retry as `LatticeWalQuiescingException` with a new `Reason`. The seam retry runs to the operation's existing deadline instead, so there is no exhaustion to surface, no new exception cause, and no change to `LatticeWalQuiescingException`. | - |
 | 4 | **Bulk append over existing rows (#5610, #5614).** The graft relocates the rows the bulk range already holds into the new bulk leaf, instead of stranding them. No new exception: a chunk that succeeds today still succeeds. For a key both the bulk chunk and an earlier point write hold, the point value is returned last-writer-wins, as 10.2.0 already returns on every replica and view, for every free-space key, and on the origin after a replay; only the origin's pre-replay read of a new-leaf key changes, from a value its replicas never return. Keys only the pre-existing rows hold become readable; counts and scans become exact. | Compatible bug fix (fixes an origin-versus-replica divergence) |
 | 5 | **The live advance itself (#5572).** A leaf's checkpoint advances without a replay from -1. The WAL GC trims sooner, replay demand falls, and #5570's "carries no usable offset" warnings stop for live leaves. Existing metrics report different values; none changes name, unit or tags. | Compatible bug fix |
-| 6 | **Range deletes cost more.** Each `DeleteRangeAsync` call opens an intent at the tree's fence grain, opens and closes a range-scoped marker on every shard of the tree, re-claims the tree's range-delete generation once per WAL partition, and disarms every overlapping leaf of the tree for the call's duration. Stepped range deletes pay this per step (section 2). The record, its result and its feed and history output are unchanged. | Compatible (cost only) |
-| 7 | **New metrics.** New instruments only, on the existing meter: claims, refusals and rejections by reason, seam retries by caller class, live advances by arming outcome, open markers, and unstamped reports. No existing instrument gains a tag, a tag value, or a new unit. | Compatible (additive) |
+| 6 | **Range deletes cost more.** Each `DeleteRangeAsync` call opens an intent at the tree's fence grain, opens and closes a range-scoped marker on every shard of the tree, re-claims the tree's range-delete generation once per WAL partition, and disarms every overlapping leaf of the tree for the call's duration. The shard root adds no per-page call: it trusts the generation it is given and asks the fence grain only after a rejection. Stepped range deletes pay this per step (section 2). A range-delete walk that stays unstamped (replication apply, a shadow forward, a gate-spanning fan-out, a 10.2.0 caller, or a page after the intent's deadline) costs every armed leaf on the partitions it reaches a tail replay past it. The record, its result and its feed and history output are unchanged. | Compatible (cost only) |
+| 7 | **New metrics.** New instruments only, on the existing meter: claims, refusals and rejections by reason, seam retries by caller class, live advances by arming outcome, open markers, and unstamped reports by source (replication apply, shadow forward, gate-spanning fan-out, 10.2.0 caller, census-unstamped, and a range-delete page past its intent's deadline). No existing instrument gains a tag, a tag value, or a new unit. | Compatible (additive) |
 | 8 | **New log lines.** A deactivation warning for a stale activation, and a debug line when a partition disarms on an unstamped report. #5571's blocked-pin warning keeps its categories. | Compatible (additive) |
 | 9 | **New storage rows** under the reserved grain types listed above, and the `TreeRangeDeleteFenceGrain` state, appear in the host's grain storage, and a sweep removes orphaned ones. The fence grain's reminder adds one reminder-table row per tree while it has an open intent. They are documented in the tree's storage notes. | Compatible (additive) |
 | 10 | **New public configuration.** A `LatticeOptions` switch to turn the live advance off is additive, and defaults to on once the gate opens. | Compatible (additive) |
@@ -805,7 +873,8 @@ none adds an exception a caller can observe.
   relocates (#5610);
 - an unstamped author `o`: a 10.2.0 silo, or any silo while the gate is closed;
 - a legacy hand-off begun before the gate opened, with no marker;
-- another shard's walk `g` of a tree-level range delete;
+- another shard's walk `g` of a tree-level range delete, which can be fenced out at a
+  close and then re-stamped under another open intent or appended unstamped;
 - a GC trimming below the shared snapshot's coverage.
 
 Only entries the leaf owns are modelled; entries other leaves own are invisible to its
@@ -839,7 +908,8 @@ a snapshot that keeps the highest coverage, and a pin at that coverage.
 - `WithDuplicate`: admits the duplicate. On in every configuration.
 - `WithRecreate`, `WithRestart`, `FrozenView` (a superseded activation keeps the marker
   state it last saw), `WithMixedVersion`, `WithGateFlip`, `WithLegacyHandOff`,
-  `WithTreeWalk` (another shard's walk of a tree-level range delete, author `g`).
+  `WithTreeWalk` (another shard's walk of a tree-level range delete, author `g`, with
+  `GAdmit`, `GAlloc`, `GReject`, `GRestamp` and `GUnstamped`).
 - `Ghosts`: enables the witness ghosts. Safety runs keep it off.
 
 **Properties:**
@@ -868,9 +938,10 @@ plus `TypeOK`):
 | `WalLiveAdvanceMixedRestart.cfg` | `WithMixedVersion`, `WithRestart` | 13,948,705 | 35 | 344 s |
 | `WalLiveAdvanceGateFlip.cfg` | `WithGateFlip` | 7,609,129 | 33 | 170 s |
 | `WalLiveAdvanceLegacyHandOff.cfg` | `WithLegacyHandOff` | 20,828,314 | 37 | 499 s |
-| `WalLiveAdvanceTreeWalk.cfg` | `WithTreeWalk` | 3,915,069 | 35 | 111 s |
+| `WalLiveAdvanceTreeWalk.cfg` | `WithTreeWalk` | 4,250,341 | 35 | 115 s |
+| `WalLiveAdvanceTreeWalkConcurrent.cfg` | `WithTreeWalk`, two windows | 23,951,016 | 38 | 711 s |
 
-All nine hold every property, `ContestedKeyAgrees` included (revision 4 re-ran the first
+All ten hold every property, `ContestedKeyAgrees` included (revision 4 re-ran the first
 eight with it; adding an invariant does not change the reachable states). `MixedRestart` is the reviewer's Mixed+Restart+duplicate
 combination (S8) on the reduced instance.
 
@@ -916,6 +987,7 @@ in states including the initial one.
 | `ReadPositionHonestResumeWithoutMarker` | The resume opening the marker (B2) | `ReadPositionHonest` | LegacyHandOff | 17 |
 | `ReadPositionHonestRangeDeletePerShardClose` | The per-tree range-delete generation: another shard's walk is fenced only by its own shard's close (revision 3's per-shard close) | `ReadPositionHonest` | TreeWalk | 13 |
 | `ReadPositionHonestRangeDeleteWithoutIntent` | Stamping a walk only under an open intent: a walk with none is stamped anyway | `ReadPositionHonest` | TreeWalk | 13 |
+| `ReadPositionHonestRestampDuringClose` | The intent closed atomically with the close: the close re-claims first and closes the intent and markers later, and the open check reads the marker | `ReadPositionHonest` | TreeWalk | 16 |
 | `ContestedKeyAgreesBulkWinsLocally` | Last-writer-wins on the owner: it ranks its born bulk entry above a point write made before the switch, 10.2.0's stranded origin read | `ContestedKeyAgrees` | base | 4 |
 
 **#5578's counterexample.** `NoTrimPastAckedLiveAdvance5578` reaches it in eleven
@@ -984,6 +1056,8 @@ shown, proving its step is reachable. Traces are from a single-worker breadth-fi
 | `WitnessContestedKeyResolvedToPoint` | - | `PreWrite`, `Begin`, `Create`: the owner resolves the contested key to the relocated point write, over its bulk entry |
 | `WitnessTreeWalkAllocated` | `WithTreeWalk` | `Begin`, `Create`, `GAdmit`, `GAlloc`: another shard's walk is allocated under L's open marker |
 | `WitnessTreeWalkFenced` | `WithTreeWalk` | `Begin`, `Create`, `GAdmit`, `Close`: L's close re-claims the tree generation and fences another shard's admitted walk |
+| `WitnessTreeWalkRestamped` | `WithTreeWalk` | `Begin`, `Create`, `GAdmit`, `Close`, `ForeignOpen`, `GReject`, `GRestamp`: a walk fenced out by one delete's close re-stamps under a second delete's open intent |
+| `WitnessTreeWalkUnstamped` | `WithTreeWalk` | `Begin`, `Create`, `GAdmit`, `Close`, `GReject`, `GUnstamped`: a walk whose intent closed goes on unstamped and reported |
 
 To run a witness, use a configuration with `Ghosts = TRUE` and the switch shown that
 checks `TypeOK` and the witness alone, for example
@@ -1042,6 +1116,11 @@ Each production member carries detectors proven red. They land in this order:
    - The shard routing generation, stamped at admission; the unstamped leaf methods
      appending unstamped.
    - The stamp census, including the terminal stamp class.
+   - **Ordering dependency (found by member 1):** the coordinator-terminal stamp class
+     must land before member 4 arms any leaf. Saga terminals from
+     `ShardRootGrain.TxTerminal` and `AtomicWriteGrain` otherwise append unstamped and
+     raise every partition's unstamped watermark, holding every leaf writing those
+     partitions on the replay-based advance.
 3. **Bulk.** #5610's relocating graft, fixed with #5614; the birth hint captured with
    it and persisted in `_lattice_shard-handoff`; bulk-leaf ranges; and the switch's
    marker and fence.
@@ -1049,14 +1128,33 @@ Each production member carries detectors proven red. They land in this order:
    - Armed only by the rules above.
    - It reuses #5578's applied-prefix tracker and the core extraction from the
      abandoned #5596.
-5. **Promotion.** `WalLiveAdvance` becomes a module with its refinement note, its
-   manifest, its redundancy rows, and **every combined configuration the reviewer named**
+5. **Epoch-row sweep (#5634).** The per-partition epoch directory row, bucketed or paged
+   within the provider's row limits, and the sweep that retires the entries of leaves
+   that no longer exist, which a 10.2.0 silo's retirement leaves behind. It lands
+   before #5605's bucket reaches `main`, independently of members 2 to 4.
+6. **Promotion.** `WalLiveAdvance` becomes a module with its refinement note, its
+   manifest, its redundancy rows (with a redundancy class in the mutation catalogue, or
+   kept out of the catalogue gate's glob, so a clean run is not reported as a missing
+   violation), and **every combined configuration the reviewer named**
    (Mixed+Restart+duplicate on the full instance, own unstamped appends with the
    self-report, repeated unstamped appends, the split claim under `Restart`, and the
-   nine configurations above) **in CI, on a dedicated or measured TLC shard.** Nothing
+   ten configurations above) **in CI, on a dedicated or measured TLC shard.** Nothing
    from phase 2 reaches `main` before this member lands.
 
 ## Review resolution
+
+### Re-review of revision 4
+
+| Finding | Resolution |
+|---------|------------|
+| B1 re-stamp not atomic with the close | Section 2, "A walk outliving its intent": the intent is marked closed, durably, in the turn that begins the close, before its first re-claim; the fence grain answers the open check and the generation from that one state, is non-reentrant, and its open check is neither `[AlwaysInterleave]` nor `[ReadOnly]`; no shard root caches either answer. The model gains `GRestamp` and `GUnstamped`; `TreeWalk` is clean at 4,250,341 states and the two-window `TreeWalkConcurrent` is clean at 23,951,016. The split close is mutation `RestampDuringClose` (16 states). |
+| S1 deadline from a cancellation token | Step 1 takes the `SagaDecisionDeadline` form; "The deadline affects liveness only" states that an early close is safe and that a long paged drain runs its later pages unstamped. |
+| S2 per-page intent check | Step 3: the stamped method trusts the generation it is given; only a rejection's seam retry asks the fence grain. Change 6 states it. |
+| S3 cost of unstamped walks | Section 2 states the tail-replay cost and the repocontext case; change 7 adds unstamped reports by source. |
+| N1 `MergeEntriesAsync` line | Corrected to `BPlusLeafGrain.cs:3703`. |
+| N2 redundancy class at promotion | Member 6 (promotion) gives the catalogue a redundancy class, or keeps the files out of the gate's glob. |
+| Q1-Q4 | Per-call fences stay the default; the re-stamp rule is B1; the deadline is S1; replication apply and the shadow forward stay unstamped (S3). |
+| Coordinator additions | #5634: the per-partition epoch directory row and sweep, as member 5, before the bucket reaches `main` (section 1). The ordering found by member 1: the coordinator-terminal class (member 2) lands before member 4 arms any leaf. |
 
 ### Re-review of revision 3
 
@@ -1117,8 +1215,6 @@ Each production member carries detectors proven red. They land in this order:
 
 ## Open questions for re-review
 
-1. **Stepped range deletes.** Each step is its own fenced call, so overlapping leaves
-   re-arm between steps after a short replay. One fence held across a whole stepped
-   operation (a cursor delete, say) would save the per-step marker writes and
-   re-claims, but keeps the leaves disarmed throughout. Is the per-call fence the
-   right default?
+None. Per the re-review of revision 4, the reviewer can confirm B1 from the model diff:
+`GRestamp`, `GUnstamped`, `closing`, the two `TreeWalk` configurations and
+`ReadPositionHonestRestampDuringClose`.
