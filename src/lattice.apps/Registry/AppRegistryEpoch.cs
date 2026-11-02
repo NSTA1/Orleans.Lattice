@@ -18,4 +18,16 @@ namespace Orleans.Lattice.Apps;
 [Alias(AppRegistryTypeAliases.AppRegistryEpoch)]
 internal readonly record struct AppRegistryEpoch(
     [property: Id(0)] Guid Incarnation,
-    [property: Id(1)] long Version);
+    [property: Id(1)] long Version)
+{
+    /// <summary>
+    /// <c>true</c> when this epoch supersedes <paramref name="known"/>: it comes from a different
+    /// incarnation of the epoch grain, or from the same one at a strictly later version. An equal or
+    /// older epoch within one incarnation never supersedes, so a late, out-of-order answer cannot move a
+    /// silo backwards.
+    /// </summary>
+    /// <param name="known">The epoch the silo last observed.</param>
+    /// <returns><c>true</c> when the silo must treat its snapshot as out of date.</returns>
+    public bool Supersedes(AppRegistryEpoch known) =>
+        Incarnation != known.Incarnation || Version > known.Version;
+}

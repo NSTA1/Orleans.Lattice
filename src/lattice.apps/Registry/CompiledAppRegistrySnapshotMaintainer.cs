@@ -37,6 +37,16 @@ namespace Orleans.Lattice.Apps;
 /// it. It fails closed: an epoch it cannot read, or a snapshot built while the epoch was
 /// unreadable, is never trusted - the registry is scanned afresh instead.
 /// </para>
+/// <para>
+/// <b>Leased fast path (#5713).</b> Reading the epoch on every evaluation costs a grain call
+/// each. Each silo therefore also holds a lease from the epoch grain
+/// (<see cref="AppRegistryEpochSubscription"/>), and the grain pushes every advance to every
+/// leased silo - waiting for its acknowledgement, or for its lease to expire - before the
+/// advance, and so the registry write, is acknowledged. While the lease is live and the snapshot
+/// was built after every epoch pushed here, <see cref="EnsureCurrentAsync"/> returns at once with
+/// no grain call and no allocation; a lapsed lease drops back to the epoch read above, and revocation
+/// is still honoured by the first evaluation that starts after the write is acknowledged.
+/// </para>
 /// </remarks>
 internal sealed class CompiledAppRegistrySnapshotMaintainer : IMutationObserver, IAppRegistryProjection, IDisposable
 {
@@ -47,12 +57,16 @@ internal sealed class CompiledAppRegistrySnapshotMaintainer : IMutationObserver,
     private readonly ILogger<CompiledAppRegistrySnapshotMaintainer> _logger;
     private readonly TimeProvider _time;
     private readonly IAppRegistryEpochSource? _epochSource;
+    private readonly AppRegistryEpochCurrency? _currency;
     private readonly SemaphoreSlim _rebuildLock = new(1, 1);
     private readonly CancellationTokenSource _stopping = new();
 
     private CompiledAppRegistrySnapshot _current = CompiledAppRegistrySnapshot.Empty;
     private long _epoch;
     private long _lastRebuildUtcTicks;
+
+    // The currency generation the current snapshot is known to be current for (#5713); -1 until one is.
+    private long _builtForGeneration = -1;
 
     // The cluster epoch read before the scan that built _current, or null when it was not
     // read (no source, or unreadable) - a null stamp never vouches for the snapshot.
@@ -96,6 +110,7 @@ internal sealed class CompiledAppRegistrySnapshotMaintainer : IMutationObserver,
         _logger = logger;
         _time = timeProvider ?? TimeProvider.System;
         _epochSource = epoch;
+        _currency = epoch is null ? null : new AppRegistryEpochCurrency(_time);
     }
 
     /// <summary>The current compiled snapshot. Read without locking; swapped atomically on rebuild.</summary>
@@ -110,8 +125,59 @@ internal sealed class CompiledAppRegistrySnapshotMaintainer : IMutationObserver,
     /// <summary>The most recently started background epoch publish, exposed so a test can await it.</summary>
     internal Task PublishLoop => Volatile.Read(ref _publishLoop);
 
+    /// <summary>
+    /// <c>true</c> when the snapshot can be trusted without reading the cluster epoch (#5713): it was built
+    /// (or confirmed) after every epoch this silo has been pushed or leased, and the silo's lease from the
+    /// <see cref="IAppRegistryEpochGrain"/> is live. While the lease is live the grain pushes every advance
+    /// here before the registry write is acknowledged (or waits the lease out), so no acknowledged write can
+    /// be missing from such a snapshot. A handful of field reads and one clock read; allocates nothing. An
+    /// expired lease only ever turns it false: it is never extended by anything but a granted lease.
+    /// </summary>
+    internal bool IsLeasedCurrent =>
+        _currency is { } currency
+        && Interlocked.Read(ref _epoch) > 0
+        && currency.IsCurrent(Interlocked.Read(ref _builtForGeneration));
+
+    /// <summary>Completes when the first lease has been applied. Exposed so a test can await it.</summary>
+    internal Task LeaseEstablished => _currency?.LeaseEstablished ?? Task.CompletedTask;
+
+    /// <summary>
+    /// Records a cluster epoch pushed by the epoch grain. When it supersedes the latest epoch this silo has
+    /// observed, the snapshot stops being trusted at once and a rebuild is scheduled; an older or equal
+    /// epoch is ignored. Synchronous, so the push's completion is a true acknowledgement.
+    /// </summary>
+    /// <param name="epoch">The pushed epoch.</param>
+    internal void ObserveEpoch(AppRegistryEpoch epoch)
+    {
+        if (_currency is { } currency && currency.Observe(epoch))
+        {
+            ScheduleRebuild();
+        }
+    }
+
+    /// <summary>
+    /// Applies a lease granted by the epoch grain: observes its epoch and extends the fast path to
+    /// <paramref name="requestedAt"/> plus the granted duration, never shortening an existing deadline.
+    /// </summary>
+    /// <param name="lease">The granted lease.</param>
+    /// <param name="requestedAt">The <see cref="TimeProvider"/> timestamp taken before the lease was requested.</param>
+    internal void ApplyLease(AppRegistryEpochLease lease, long requestedAt)
+    {
+        if (_currency is { } currency && currency.ApplyLease(lease, requestedAt))
+        {
+            ScheduleRebuild();
+        }
+    }
+
     /// <inheritdoc />
-    public async Task EnsureCurrentAsync(CancellationToken cancellationToken = default)
+    /// <remarks>
+    /// Returns synchronously, with no grain call and no allocation, while <see cref="IsLeasedCurrent"/>
+    /// holds (#5713). Otherwise it reads the epoch and rebuilds as needed (#5595).
+    /// </remarks>
+    public Task EnsureCurrentAsync(CancellationToken cancellationToken = default) =>
+        IsLeasedCurrent ? Task.CompletedTask : EnsureCurrentSlowAsync(cancellationToken);
+
+    private async Task EnsureCurrentSlowAsync(CancellationToken cancellationToken)
     {
         if (_epochSource is null)
         {
@@ -119,6 +185,9 @@ internal sealed class CompiledAppRegistrySnapshotMaintainer : IMutationObserver,
             return;
         }
 
+        // Every epoch this silo had observed before the read is covered by what the read returns, so a
+        // snapshot confirmed against that read is current for this generation.
+        var generation = _currency!.Generation;
         AppRegistryEpoch observed;
         try
         {
@@ -135,6 +204,7 @@ internal sealed class CompiledAppRegistrySnapshotMaintainer : IMutationObserver,
 
         if (IsCurrentAgainst(observed))
         {
+            RecordCurrentFor(generation);
             return;
         }
 
@@ -146,10 +216,33 @@ internal sealed class CompiledAppRegistrySnapshotMaintainer : IMutationObserver,
             {
                 await RebuildCoreAsync(cancellationToken).ConfigureAwait(false);
             }
+            else
+            {
+                RecordCurrentFor(generation);
+            }
         }
         finally
         {
             _rebuildLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Records that the current snapshot covers every epoch observed up to <paramref name="generation"/>.
+    /// Only ever raises the record: a lower generation is already implied.
+    /// </summary>
+    private void RecordCurrentFor(long generation)
+    {
+        var current = Interlocked.Read(ref _builtForGeneration);
+        while (generation > current)
+        {
+            var seen = Interlocked.CompareExchange(ref _builtForGeneration, generation, current);
+            if (seen == current)
+            {
+                return;
+            }
+
+            current = seen;
         }
     }
 
@@ -382,6 +475,10 @@ internal sealed class CompiledAppRegistrySnapshotMaintainer : IMutationObserver,
     /// <summary>Scans and publishes a new snapshot. The caller holds <see cref="_rebuildLock"/>.</summary>
     private async Task RebuildCoreAsync(CancellationToken cancellationToken)
     {
+        // Read the currency generation before the epoch and the scan: every epoch this silo had
+        // observed by then was advanced after its write committed, so the scan includes it (#5713).
+        var generation = _currency?.Generation ?? 0;
+
         // Read the cluster epoch before the scan: every write that advanced the epoch to this
         // value had committed before the read, so the scan below includes it and the snapshot
         // may vouch for this epoch. An unreadable epoch stamps nothing, so the snapshot is
@@ -418,6 +515,7 @@ internal sealed class CompiledAppRegistrySnapshotMaintainer : IMutationObserver,
         Interlocked.Exchange(ref _epoch, epoch);
         Volatile.Write(ref _builtAgainst, stamp);
         Interlocked.Exchange(ref _lastRebuildUtcTicks, _time.GetUtcNow().UtcTicks);
+        RecordCurrentFor(generation);
     }
 
     /// <summary>Advances the cluster epoch inline, falling back to a background retry when it fails.</summary>
