@@ -18,10 +18,11 @@ The `name` parameter is the storage provider name (`"lattice"`). Replace `AddMem
 
 ### The grain storage provider must enforce ETags
 
-The provider `configureStorage` registers must enforce ETags (optimistic concurrency) on write: a write that presents an ETag other than the stored row's current one must fail with Orleans' `InconsistentStateException`. Orleans' memory, Azure Table, Azure Blob, Cosmos DB and ADO.NET providers all do. Lattice depends on it in two ways:
+The provider `configureStorage` registers must enforce ETags (optimistic concurrency) on write: a write that presents an ETag other than the stored row's current one must fail with Orleans' `InconsistentStateException`. Orleans' memory, Azure Table, Azure Blob, Cosmos DB and ADO.NET providers all do. Lattice depends on it in three ways:
 
 - **Direct writes.** The durable write-ahead-log pin store writes its bucketed slots straight through the provider rather than through `IPersistentState`, and when that grain cannot be reached during shutdown the leaf cursor reporter writes the same slots itself, from outside any grain. Both read a slot and write it back with the ETag they read, so only the provider's ETag check stops one writer from overwriting the other.
 - **Duplicate activations.** Orleans' default grain directory is eventually consistent, so during a membership change two activations of the same grain can briefly coexist. The provider's ETag check is what rejects the stale activation's write.
+- **WAL append fencing.** A leaf activation claims its write-ahead-log append epoch with a strict conditional write to a reserved row (`_lattice_leaf-append-epoch`), and each WAL partition max-merges its per-leaf epoch entries (`_lattice_wal-append-epoch`), its retired-epoch floor (`_lattice_wal-append-epoch-floor`) and its routing-generation entries (`_lattice_wal-routing-generation`) through the same provider. Only the ETag check makes the claim exclusive. See [WAL append fencing](wal.md#append-epoch-fencing).
 
 With a provider that accepts a stale write, a stale activation can persist an older leaf checkpoint while the durable write-ahead-log pin, which merges by maximum, keeps the newer offset. The write-ahead-log garbage collector can then trim entries a later cold rebuild of that leaf needs. Nothing fails at the time, so the loss is silent.
 

@@ -919,4 +919,45 @@ internal static class TypeAliases
 
     /// <summary>Alias for the outcome of a replication version-conditioned set (issue #5265).</summary>
     internal const string ReplicationConditionalSetOutcome = "ol.rco";
+
+    // WAL append epoch fencing (epic #5605, member 1).
+
+    /// <summary>Alias for a leaf's durable append epoch row.</summary>
+    internal const string LeafAppendEpochState = "ol.xfl";
+
+    /// <summary>Alias for a WAL partition's durable epoch entry for one leaf.</summary>
+    internal const string WalAppendEpochEntryState = "ol.xfe";
+
+    /// <summary>Alias for a WAL partition's durable retired-epoch floor.</summary>
+    internal const string WalAppendEpochFloorState = "ol.xff";
+
+    /// <summary>Alias for a WAL partition's durable routing-generation entry for one initiator.</summary>
+    internal const string WalRoutingGenerationState = "ol.xfg";
+
+    /// <summary>Alias for the fence stamp a stamped WAL append carries.</summary>
+    internal const string WalAppendStamp = "ol.xfs";
+
+    /// <summary>Alias for the shard-level initiator a routing generation belongs to.</summary>
+    internal const string WalRoutingInitiator = "ol.xfi";
+
+    /// <summary>Alias for the kind of a routing-generation initiator.</summary>
+    internal const string WalRoutingInitiatorKind = "ol.xfj";
+
+    /// <summary>Alias for the outcome of a stamped WAL append.</summary>
+    internal const string WalAppendFenceOutcome = "ol.xfo";
+
+    /// <summary>Alias for the result of a single stamped WAL append.</summary>
+    internal const string WalStampedAppendResult = "ol.xfr";
+
+    /// <summary>Alias for the result of a stamped WAL batch append.</summary>
+    internal const string WalStampedBatchResult = "ol.xfb";
+
+    /// <summary>Alias for the result of an epoch or generation claim at a WAL partition.</summary>
+    internal const string WalAppendFenceClaimResult = "ol.xfc";
+
+    /// <summary>Alias for the internal stale-epoch rejection the seam retry absorbs.</summary>
+    internal const string WalAppendEpochStaleException = "ol.xfx";
+
+    /// <summary>Alias for the append-fence capability marker grain interface.</summary>
+    internal const string IWalAppendFenceCapable = "ol.xfk";
 }

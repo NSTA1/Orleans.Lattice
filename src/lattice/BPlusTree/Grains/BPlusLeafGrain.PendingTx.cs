@@ -2531,7 +2531,11 @@ internal sealed partial class BPlusLeafGrain
                 // so the declaring leaf applies it at that stamp too.
                 using (LatticeOriginalPrepareStampContext.With(SelectStamps(missingStamps, subset.Keys)))
                 {
-                    forwards[f++] = grainFactory.GetGrain<IBPlusLeafGrain>(target).ApplyTxTerminalAsync(transactionId, committed: true, subset);
+                    var terminalTarget = grainFactory.GetGrain<IBPlusLeafGrain>(target);
+                    forwards[f++] = WalFenceSeamRetry.RunAsync(
+                        () => terminalTarget.ApplyTxTerminalAsync(transactionId, committed: true, subset),
+                        WalFenceSeamRetry.CallerLeaf,
+                        state.State.TreeId);
                 }
             }
             await Task.WhenAll(forwards);

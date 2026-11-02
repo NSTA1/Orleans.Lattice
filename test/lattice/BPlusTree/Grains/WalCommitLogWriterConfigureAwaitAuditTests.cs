@@ -19,13 +19,16 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// the rationale.
 /// </para>
 /// <para>
-/// This test fixes the count at exactly five so a regression that
+/// This test fixes the count at exactly nine so a regression that
 /// reintroduces <c>.ConfigureAwait(false)</c> on a non-dispatch await
 /// trips immediately. The fifth site is inside the point-append dispatch
 /// helper, which awaits the interleaving batched overload when
 /// <see cref="LatticeOptions.WalBatchedSingleEntryAppends"/> is on (#812):
 /// its continuation is part of the same outbound dispatch, so it must not
-/// resume on the caller's grain context either. If the writer legitimately
+/// resume on the caller's grain context either. The other four are the
+/// fenced arms of the same four dispatch sites (epic #5605): a leaf's stamped
+/// append awaits <c>WalFencedAppendDispatch</c> in place of the shard call, for
+/// the same reason. If the writer legitimately
 /// grows or loses an outbound shard-RPC seam, update the expected count
 /// alongside the surrounding inline comment.
 /// </para>
@@ -34,7 +37,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 public class WalCommitLogWriterConfigureAwaitAuditTests
 {
     [Test]
-    public void WalCommitLogWriter_only_uses_ConfigureAwait_on_the_five_deliberate_dispatch_sites()
+    public void WalCommitLogWriter_only_uses_ConfigureAwait_on_the_nine_deliberate_dispatch_sites()
     {
         var path = LocateWriterSource();
         var lines = File.ReadAllLines(path);
@@ -59,9 +62,9 @@ public class WalCommitLogWriterConfigureAwaitAuditTests
 
         Assert.That(
             hits.Count,
-            Is.EqualTo(5),
-            "WalCommitLogWriter must use .ConfigureAwait(false) ONLY on the five deliberate wedge-attribution outbound shard-RPC dispatch sites "
-            + "(AppendAsync infinite + bounded, the point-append helper's batched await, AppendBatchAsync infinite + bounded). Every other internal await must run on the caller's grain context. "
+            Is.EqualTo(9),
+            "WalCommitLogWriter must use .ConfigureAwait(false) ONLY on the nine deliberate wedge-attribution outbound shard-RPC dispatch sites "
+            + "(AppendAsync infinite + bounded, the point-append helper's batched await, AppendBatchAsync infinite + bounded, and the fenced arms of the four AppendAsync / AppendBatchAsync sites). Every other internal await must run on the caller's grain context. "
             + "Current uses:" + Environment.NewLine
             + string.Join(Environment.NewLine, hits.Select(h => $"  line {h.LineNumber}: {h.Text}")));
 
@@ -75,7 +78,8 @@ public class WalCommitLogWriterConfigureAwaitAuditTests
                 text.Contains("grain.AppendAsync(", StringComparison.Ordinal)
                 || text.Contains("grain.AppendBatchAsync(", StringComparison.Ordinal)
                 || text.Contains("grainCall.WaitAsync(", StringComparison.Ordinal)
-                || text.Contains("DispatchPointAppendAsync(grain,", StringComparison.Ordinal),
+                || text.Contains("DispatchPointAppendAsync(grain,", StringComparison.Ordinal)
+                || text.Contains("WalFencedAppendDispatch.Append", StringComparison.Ordinal),
                 Is.True,
                 $"Retained .ConfigureAwait(false) at line {lineNumber} is not on a recognised wedge-attribution outbound shard-RPC dispatch site: {text}");
         }

@@ -438,6 +438,9 @@ internal sealed partial class WalShardGrain(
         await _provider.ReconcileAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
         var highest = await _provider.GetHighestOffsetAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
         _nextOffset = WalOffsetAllocationCore.RecoveredNextOffset(highest);
+        // Epic #5605: everything below the recovered head may have been appended
+        // unstamped before this activation, so the watermark restarts just below it.
+        _unstampedWatermark = _nextOffset - 1;
         _highestStored = highest;
         InitializeClockFloor();
         // Construct the per-activation drain cancellation source up-front
@@ -728,7 +731,22 @@ internal sealed partial class WalShardGrain(
     }
 
     /// <inheritdoc />
-    public async Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken)
+    public Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken) =>
+        AppendCoreAsync<long, UnstampedSingleShape>(entry, default, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<WalStampedAppendResult> AppendStampedAsync(WalRecord entry, WalAppendStamp stamp, CancellationToken cancellationToken) =>
+        AppendCoreAsync<WalStampedAppendResult, StampedSingleShape>(entry, stamp, cancellationToken);
+
+    /// <summary>
+    /// The single-entry append, unstamped or stamped (epic #5605). Specialised by
+    /// <typeparamref name="TShape"/> so neither path pays a wrapper state machine:
+    /// an unstamped append raises the partition's unstamped watermark, a stamped one
+    /// is checked against the append fence in the locked step that assigns its
+    /// offset and reports the watermark.
+    /// </summary>
+    private async Task<TResult> AppendCoreAsync<TResult, TShape>(WalRecord entry, WalAppendStamp stamp, CancellationToken cancellationToken)
+        where TShape : struct, ISingleAppendShape<TResult>
     {
         cancellationToken.ThrowIfCancellationRequested();
         EnsureInternalOrigin(LatticeOperation.Write);
@@ -834,6 +852,8 @@ internal sealed partial class WalShardGrain(
         int queueDepth = 0;
         bool fenced = false;
         HybridLogicalClock refusedBelow = default;
+        var fenceOutcome = WalAppendFenceOutcome.Admitted;
+        long unstampedWatermark;
         lock (_stateGate)
         {
             // Re-check the move fence under the gate: a quiesce may have raised
@@ -853,9 +873,19 @@ internal sealed partial class WalShardGrain(
                 // pairs the floor with the next offset under it.
                 refusedBelow = _floor;
             }
+            else if (TShape.Stamped && (fenceOutcome = AdmitStampLocked(in stamp)) != WalAppendFenceOutcome.Admitted)
+            {
+                // Epic #5605: the stamp is checked in the same locked step that
+                // would assign the offset, so a claim raised before this point
+                // rejects it and one raised after it finds it below its head.
+            }
             else
             {
                 var offset = WalOffsetAllocationCore.Assign(ref _nextOffset);
+                if (!TShape.Stamped)
+                {
+                    _unstampedWatermark = offset;
+                }
                 _pendingSegments.Add(segment);
                 _pendingOffsets.Add(offset);
                 _pendingBatchSizeBytes += size;
@@ -891,6 +921,8 @@ internal sealed partial class WalShardGrain(
                 kickFlush = _inFlight.Count < maxPending;
                 queueDepth = _pendingSegments.Count;
             }
+
+            unstampedWatermark = _unstampedWatermark;
         }
         if (fenced)
         {
@@ -902,6 +934,12 @@ internal sealed partial class WalShardGrain(
         {
             ReturnSegment(segment);
             throw RefuseBelowFloor(entry.Timestamp, refusedBelow, 1);
+        }
+        if (fenceOutcome != WalAppendFenceOutcome.Admitted)
+        {
+            ReturnSegment(segment);
+            RecordFenceRejection(fenceOutcome);
+            return TShape.Rejected(fenceOutcome, unstampedWatermark);
         }
         LatticeMetrics.WalAppendQueueDepth.Record(
             queueDepth,
@@ -920,7 +958,7 @@ internal sealed partial class WalShardGrain(
 
         try
         {
-            return await tcs.Task.ConfigureAwait(true);
+            return TShape.Admitted(await tcs.Task.ConfigureAwait(true), unstampedWatermark);
         }
         finally
         {
@@ -939,7 +977,28 @@ internal sealed partial class WalShardGrain(
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<long>> AppendBatchAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken)
+    public Task<IReadOnlyList<long>> AppendBatchAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken) =>
+        AppendBatchCoreAsync<IReadOnlyList<long>, UnstampedBatchShape>(entries, default, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<WalStampedBatchResult> AppendBatchStampedAsync(
+        IReadOnlyList<WalRecord> entries,
+        WalAppendStamp stamp,
+        CancellationToken cancellationToken) =>
+        AppendBatchCoreAsync<WalStampedBatchResult, StampedBatchShape>(entries, stamp, cancellationToken);
+
+    /// <summary>
+    /// The batched append, unstamped or stamped (epic #5605), specialised by
+    /// <typeparamref name="TShape"/> as <see cref="AppendCoreAsync{TResult, TShape}"/>
+    /// is. A stamped batch checks the stamp for each entry in the locked step that
+    /// assigns that entry's offset and stops at the first rejection, so the admitted
+    /// entries are a prefix.
+    /// </summary>
+    private async Task<TResult> AppendBatchCoreAsync<TResult, TShape>(
+        IReadOnlyList<WalRecord> entries,
+        WalAppendStamp stamp,
+        CancellationToken cancellationToken)
+        where TShape : struct, IBatchAppendShape<TResult>
     {
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
@@ -949,7 +1008,7 @@ internal sealed partial class WalShardGrain(
 
         if (entries.Count == 0)
         {
-            return Array.Empty<long>();
+            return TShape.Empty();
         }
 
         // Defence-in-depth: reject a pathologically large batch before
@@ -1025,6 +1084,9 @@ internal sealed partial class WalShardGrain(
         var offsets = new long[count];
         var acks = new TaskCompletionSource<long>[count];
         var admittedAgainst = new HybridLogicalClock { WallClockTicks = -1 };
+        var admittedCount = count;
+        var fenceOutcome = WalAppendFenceOutcome.Admitted;
+        long unstampedWatermark = -1;
         for (var i = 0; i < count; i++)
         {
             var size = sizes[i];
@@ -1102,10 +1164,19 @@ internal sealed partial class WalShardGrain(
                     // refusal before the first entry splits nothing.
                     refusedBelow = _floor;
                 }
+                else if (TShape.Stamped && (fenceOutcome = AdmitStampLocked(in stamp)) != WalAppendFenceOutcome.Admitted)
+                {
+                    // Epic #5605: checked per entry in the step that would assign
+                    // its offset; the first rejection ends the batch below.
+                }
                 else
                 {
                     admittedAgainst = _floor;
                     var offset = WalOffsetAllocationCore.Assign(ref _nextOffset);
+                    if (!TShape.Stamped)
+                    {
+                        _unstampedWatermark = offset;
+                    }
                     offsets[i] = offset;
                     _pendingSegments.Add(segments[i]);
                     _pendingOffsets.Add(offset);
@@ -1147,6 +1218,34 @@ internal sealed partial class WalShardGrain(
                             || _pendingBatchSizeBytes >= maxBytes
                             || (isLast && (coalesceThreshold <= 0 || _inFlight.Count < coalesceThreshold)));
                 }
+
+                if (fenceOutcome != WalAppendFenceOutcome.Admitted)
+                {
+                    // The admitted prefix may sit in the pending batch with no
+                    // flush kicked, because the latency-floor kick is reserved for
+                    // the batch's last entry. Kick it now when the chain has room;
+                    // otherwise the head's completion kicks the follow-on.
+                    kickFlush = _pendingSegments.Count > 0 && _inFlight.Count < maxPending;
+                }
+
+                unstampedWatermark = _unstampedWatermark;
+            }
+            if (fenceOutcome != WalAppendFenceOutcome.Admitted)
+            {
+                for (var j = i; j < count; j++)
+                {
+                    ReturnSegment(segments[j]);
+                    offsets[j] = WalStampedBatchResult.Rejected;
+                }
+
+                admittedCount = i;
+                if (kickFlush)
+                {
+                    StartFlush();
+                }
+
+                RecordFenceRejection(fenceOutcome);
+                break;
             }
             if (fenced)
             {
@@ -1184,11 +1283,11 @@ internal sealed partial class WalShardGrain(
         // one flush window); when the batch was cut over mid-stream
         // the later entries belong to later flushes and we observe
         // their independent completions here.
-        for (var i = 0; i < count; i++)
+        for (var i = 0; i < admittedCount; i++)
         {
             await acks[i].Task.ConfigureAwait(true);
         }
-        return offsets;
+        return TShape.Complete(offsets, admittedCount, unstampedWatermark, fenceOutcome);
     }
 
     /// <summary>
@@ -2887,6 +2986,9 @@ internal sealed partial class WalShardGrain(
         await provider.ReconcileAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(true);
         var highest = await provider.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(true);
         _nextOffset = WalOffsetAllocationCore.RecoveredNextOffset(highest);
+        // Epic #5605: everything below the recovered head may have been appended
+        // unstamped before this activation, so the watermark restarts just below it.
+        _unstampedWatermark = _nextOffset - 1;
         _highestStored = highest;
         InitializeClockFloor();
         // Mirror OnActivateAsync's drain-CTS construction so unit tests

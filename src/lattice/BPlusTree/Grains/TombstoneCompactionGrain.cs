@@ -1172,7 +1172,10 @@ internal sealed class TombstoneCompactionGrain(
                     // tags its own visit `outcome=partial`, so the condition is
                     // still observable from here. The leaf's chain link comes
                     // back in the same turn, so advancing costs no further call.
-                    page = await leaf.CompactTombstonesAndNextSiblingAsync(gracePeriod, reapCeiling);
+                    page = await WalFenceSeamRetry.RunAsync(
+                        () => leaf.CompactTombstonesAndNextSiblingAsync(gracePeriod, reapCeiling),
+                        WalFenceSeamRetry.CallerMaintenance,
+                        TreeId);
                 }
                 catch
                 {
@@ -1301,11 +1304,14 @@ internal sealed class TombstoneCompactionGrain(
     /// Compacts one leaf, under the reap ceiling when the tree has one. An
     /// ungated tree takes the original call, unchanged.
     /// </summary>
-    private static Task<LeafCompactionResult> CompactLeafAsync(
+    private Task<LeafCompactionResult> CompactLeafAsync(
         IBPlusLeafGrain leaf, TimeSpan gracePeriod, HybridLogicalClock? reapCeiling) =>
-        reapCeiling is { } ceiling
-            ? leaf.CompactTombstonesBelowAsync(gracePeriod, ceiling)
-            : leaf.CompactTombstonesAsync(gracePeriod);
+        WalFenceSeamRetry.RunAsync(
+            () => reapCeiling is { } ceiling
+                ? leaf.CompactTombstonesBelowAsync(gracePeriod, ceiling)
+                : leaf.CompactTombstonesAsync(gracePeriod),
+            WalFenceSeamRetry.CallerMaintenance,
+            TreeId);
 
     private static TimeSpan ClampPeriod(TimeSpan gracePeriod) =>
         gracePeriod < TimeSpan.FromMinutes(1) ? TimeSpan.FromMinutes(1) : gracePeriod;

@@ -417,6 +417,19 @@ public partial class ReplicationShipperGrainTests
             Task.FromResult(new WalMoveQuiesceResult(true, Entries.Count - 1, expectedPlacementVersion, "default"));
 
         public Task DeactivateForMoveAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<WalStampedAppendResult> AppendStampedAsync(WalRecord entry, WalAppendStamp stamp, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<WalStampedBatchResult> AppendBatchStampedAsync(IReadOnlyList<WalRecord> entries, WalAppendStamp stamp, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<WalAppendFenceClaimResult> ClaimAppendEpochAsync(Guid leafId, long epoch, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<WalAppendFenceClaimResult> ClaimRoutingGenerationAsync(WalRoutingInitiator initiator, long generation, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<long> RetireAppendEpochAsync(Guid leafId, CancellationToken cancellationToken) => Task.FromResult(0L);
     }
 
     /// <summary>

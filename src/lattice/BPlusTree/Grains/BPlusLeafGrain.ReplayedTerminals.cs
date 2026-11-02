@@ -43,8 +43,11 @@ internal sealed partial class BPlusLeafGrain
             // destination has durably accepted its typed prepares and commit.
             foreach (var (target, mutations) in targets)
             {
-                await grainFactory.GetGrain<IBPlusLeafGrain>(target)
-                    .ApplyPreparedReplayCommitAsync(transactionId, mutations, terminalTimestamp, remainingForwards - 1);
+                var destination = grainFactory.GetGrain<IBPlusLeafGrain>(target);
+                await WalFenceSeamRetry.RunAsync(
+                    () => destination.ApplyPreparedReplayCommitAsync(transactionId, mutations, terminalTimestamp, remainingForwards - 1),
+                    WalFenceSeamRetry.CallerLeaf,
+                    state.State.TreeId);
                 forwarded ??= new HashSet<string>(StringComparer.Ordinal);
                 foreach (var mutation in mutations)
                     forwarded.Add(mutation.Key);
