@@ -727,14 +727,13 @@ internal sealed partial class ShardRootGrain
     /// deleted, or held with another value or an expiry, the batch is not a
     /// re-delivery, and every one of them is stamped and merged last-writer-wins
     /// into the leaf the current routing names, as a merge of the same rows would
-    /// be, with the slot-ownership and split-shadow checks such a merge makes. A
+    /// be, with the split-shadow forward such a merge makes. A
     /// key the shard already holds therefore resolves by its stamp: bulk entries
     /// are stamped at the wall time of the append, so an entry appended after a
     /// point write wins over it, on this shard exactly as on every replica and
     /// view that applies both records, as 10.2.0 resolved it there. The two
     /// treatments are never mixed within a batch. A chunk that succeeded in 10.2.0
-    /// still succeeds, unless it names a slot this shard is handing off, which is
-    /// refused for the caller to re-route as every other merge is.
+    /// still succeeds.
     /// </para>
     /// </remarks>
     private async Task<(int Next, HybridLogicalClock Clock, bool Merged)> ResolveBelowEdgeAsync(
@@ -768,11 +767,12 @@ internal sealed partial class ShardRootGrain
             batch[sortedEntries[i].Key] = LwwValue<byte[]>.Create(sortedEntries[i].Value, clock);
         }
 
-        // The checks MergeManyAsync wraps around the same routed merge: a slot
-        // this shard is handing off is refused before anything is written, so the
-        // caller re-routes, and a row stored for a split's moved slot reaches the
-        // split destination before the merge returns (issue #4522).
-        ThrowIfRejectedForAnyMergeKey(batch);
+        // A row stored for a split's moved slot reaches the split destination
+        // before the merge returns, as MergeManyAsync forwards it (issue #4522).
+        // MergeManyAsync's other check, refusing a slot this shard is handing off,
+        // is deliberately not made: BulkAppendChunkAsync does not re-route a
+        // refused shard, so the caller would see a refusal for a chunk 10.2.0
+        // accepted; the above-edge graft checks no slot ownership either.
         await MergeRoutedAsync(batch, isCrossShardMigration: false);
         await ForwardMergedRowsToSplitShadowIfNeededAsync(batch.Keys);
         CollectMirroredRows(mirrored, batch);

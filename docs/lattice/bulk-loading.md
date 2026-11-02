@@ -208,7 +208,8 @@ stamp (issues #5610 and #5642):
   deleted key above it does not count - that are not a re-delivery (at least
   one of them is missing, deleted, or held with a different value or an
   expiry) are merged into the leaves that already own their keys, exactly as
-  `SetManyAsync` would route them, with its slot-ownership and split checks.
+  `SetManyAsync` would route them, and forwarded to a split's destination
+  when their slot is moving.
   Nothing is refused for being out of order, and none of them is skipped:
   skipping a held key here would keep a value that every replica replaces.
 - **Rows the shard's rightmost leaf holds in the appended range**, deleted
