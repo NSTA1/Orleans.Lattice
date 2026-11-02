@@ -6996,7 +6996,9 @@ internal sealed class LatticeWalGcScheduler(
         catch (Exception ex) when (!stoppingToken.IsCancellationRequested && BPlusTree.Grains.WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
         {
             // The partition is hosted by a silo whose build predates the fence, during
-            // a rolling upgrade or a rollback: expected, and retried by a later sweep.
+            // a rolling upgrade or a rollback: expected. The pin is already removed, so
+            // no later sweep retries this; the entry is left in place, which is safe,
+            // for the orphaned-row sweep (#5634).
             logger.LogDebug(
                 "WAL GC could not retire the WAL append-epoch entry of materialiser pin {Consumer} on tree {Tree} at partition {Partition}: the partition's silo predates the append fence (epic #5605).",
                 consumerId,
@@ -7013,6 +7015,9 @@ internal sealed class LatticeWalGcScheduler(
                 partition);
         }
     }
+
+    /// <summary>
+    /// Records one removal-decision arm of
     /// <see cref="LatticeMetrics.WalGcOrphanPinSweep"/>, with the cause the
     /// decision rested on (issue #4246). The single site both the zero primes
     /// and the real emissions route through, so the two carry an identical tag
