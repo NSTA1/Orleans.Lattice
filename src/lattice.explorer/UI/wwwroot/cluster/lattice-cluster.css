@@ -8,8 +8,8 @@
  * text area. Drawn in the order-diagram world (DESIGN.md): hairlines, no cards,
  * no shadows, and the marker only on the join node the primitives already paint.
  *
- * No width query appears here: the compact form reacts to the layout's
- * lt-shell--compact root class. Plain ASCII only: the hygiene gates scan it.
+ * The compact form queries the Shell root's lt-viewport container at the
+ * breakpoint layer's declared width. Plain ASCII only: the hygiene gates scan it.
  */
 
 /* ==========================================================================
@@ -271,7 +271,9 @@
   font-size: var(--lt-text-sm);
 }
 
-.lt-shell--compact .lt-cluster-regions__peers {
-  flex-direction: column;
-  border-top: 0;
+@container lt-viewport (width < 768px) {
+  .lt-shell .lt-cluster-regions__peers {
+    flex-direction: column;
+    border-top: 0;
+  }
 }

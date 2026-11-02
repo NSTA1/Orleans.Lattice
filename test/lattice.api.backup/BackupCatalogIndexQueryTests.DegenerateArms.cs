@@ -17,20 +17,40 @@ public sealed partial class BackupCatalogIndexQueryTests
     private const char Sep = BackupConstants.KeySeparator;
 
     [Test]
-    public async Task Index_scan_proceeds_when_the_read_your_writes_head_wait_times_out()
+    public async Task A_lagging_index_is_answered_from_the_catalog_so_no_backup_is_missing()
     {
-        // The best-effort catch-up is bounded: a view that cannot reach the
-        // catalog head in time degrades to the current (possibly stale, never
-        // wrong) generation rather than failing the listing.
-        var live = Manifest("live", DateTimeOffset.UnixEpoch.AddHours(1));
-        var catalog = new FakeCatalog(live);
-        var view = new RawIndexView(headWaitThrowsTimeout: true, Row(live));
+        // Issue #5450: an index still draining a burst (or rebuilding after it fell
+        // off the catalog's write-ahead log) lacks a backup the catalog already
+        // holds. When the read-your-writes catch-up times out the listing is served
+        // from the authoritative catalog, so the just-captured backup is listed.
+        var indexed = Manifest("indexed", DateTimeOffset.UnixEpoch.AddHours(1));
+        var unindexed = Manifest("unindexed", DateTimeOffset.UnixEpoch.AddHours(2));
+        var catalog = new FakeCatalog(indexed, unindexed);
+        var view = new RawIndexView(headWaitThrowsTimeout: true, Row(indexed));
 
         var page = await QueryAsync(catalog, Request(), viewFactory: new FakeViewFactory(view));
 
         Assert.Multiple(() =>
         {
             Assert.That(view.HeadWaits, Is.EqualTo(1), "the head wait really was attempted");
+            Assert.That(view.Scans, Is.Zero, "a lagging index is not read");
+            Assert.That(page.Entries.Select(e => e.Id), Is.EqualTo(new[] { "unindexed", "indexed" }));
+        });
+    }
+
+    [Test]
+    public async Task A_caught_up_index_is_served_without_a_catalog_scan()
+    {
+        var live = Manifest("live", DateTimeOffset.UnixEpoch.AddHours(1));
+        var catalog = new FakeCatalog(live);
+        var view = new RawIndexView(headWaitThrowsTimeout: false, Row(live));
+
+        var page = await QueryAsync(catalog, Request(), viewFactory: new FakeViewFactory(view));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(view.Scans, Is.EqualTo(1), "the caught-up index serves the listing");
+            Assert.That(catalog.ListCalls, Is.Zero, "the catalog is read per row, never scanned");
             Assert.That(page.Entries.Select(e => e.Id), Is.EqualTo(new[] { "live" }));
         });
     }
@@ -60,12 +80,10 @@ public sealed partial class BackupCatalogIndexQueryTests
     }
 
     [Test]
-    public async Task Kind_filter_rejects_a_group_that_is_not_an_incremental_ancestor()
+    public async Task Kind_filter_rejects_a_full_backup_whether_or_not_an_increment_builds_on_it()
     {
-        // Distinct from the existing kind-filter test, whose non-matching backup
-        // is folded out as an incremental ancestor before any filter runs. Here
-        // "adhoc" is referenced as nobody's base, so it reaches the filters and
-        // the rejection is genuinely the kind predicate's.
+        // "adhoc" is nobody's base and "base" carries an increment; both are full,
+        // so the incremental kind filter is what drops each of them.
         var catalog = new FakeCatalog(
             Manifest("adhoc", DateTimeOffset.UnixEpoch.AddHours(1)),
             Manifest("base", DateTimeOffset.UnixEpoch.AddHours(2)),
@@ -74,7 +92,7 @@ public sealed partial class BackupCatalogIndexQueryTests
         var page = await QueryAsync(catalog, Request(kind: BackupKind.Incremental));
 
         Assert.That(page.Entries.Select(e => e.Id), Is.EqualTo(new[] { "inc" }),
-            "the unreferenced full backup is dropped by the kind filter, not by the ancestor fold");
+            "both full backups are dropped by the kind filter");
     }
 
     [Test]
@@ -172,11 +190,14 @@ public sealed partial class BackupCatalogIndexQueryTests
 
         public int HeadWaits { get; private set; }
 
+        public int Scans { get; private set; }
+
         public async IAsyncEnumerable<KeyValuePair<string, byte[]>> EntriesAsync(
             string? startInclusive = null,
             string? endExclusive = null,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
+            Scans++;
             foreach (var entry in _entries)
             {
                 if (startInclusive is not null && string.CompareOrdinal(entry.Key, startInclusive) < 0)

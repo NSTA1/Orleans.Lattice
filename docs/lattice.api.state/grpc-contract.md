@@ -44,6 +44,7 @@ The service maps facade outcomes onto explicit gRPC statuses rather than letting
 |---|---|---|
 | `ArgumentException` | `InvalidArgument` | Every RPC: a malformed request, including a continuation or resume token that is malformed or names an unknown, drained, or closed cursor. |
 | `LatticeTenantAccessDeniedException` | `PermissionDenied` | Every RPC: fail-closed tenant resolution refused the call. |
+| `LatticeAuthorizationDeniedException` | `PermissionDenied` | Every RPC: the core access gate refused the caller the read - for example a `GetMetricsSnapshot` or `ObserveMetrics` sample, which is a whole-tree aggregate, under a grant narrowed to part of the tree. It is not logged as a server fault. |
 | `LatticeSaturatedException` | `ResourceExhausted` | The unary query RPCs other than `GetMetricsSnapshot`: the tree is WAL-saturated and shed the operation (for example a snapshot scan open); back off and retry. |
 | `LatticeTreeBootstrappingException` | `Unavailable` | The unary query RPCs other than `GetMetricsSnapshot`: the tree's replica is being bootstrapped from a snapshot and its reads are fenced until the import completes; back off and retry. |
 | `LatticeStateCursorExpiredException` | `FailedPrecondition` | `ObserveChanges`: the resume token fell outside the write-ahead-log retention window. |

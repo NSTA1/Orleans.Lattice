@@ -4444,6 +4444,21 @@ internal sealed partial class ReplicationShipperGrain(
         {
             await ForceSourceLineageGapAsync(partitions);
         }
+
+        // Hold the new log from its start now, not at the next read (#5462): the
+        // cursors were just reset to 0, and a GC pass in between could trim the
+        // records this shipper is about to re-ship, forcing a needless re-seed.
+        // Best effort: the next read registers again before it reads.
+        try
+        {
+            await EnsureReadPositionsPublishedAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex,
+                "{Context}: registering with the offset consumers of rebound log {Log} failed; the next read retries before it reads.",
+                LogContext, physical);
+        }
     }
 
     /// <summary>

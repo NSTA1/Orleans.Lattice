@@ -161,7 +161,12 @@ internal static class SchemaCardCompiler
     /// <returns><see langword="true"/> when it parses.</returns>
     internal static bool TryNumber(string text, out LatticeConstant constant)
     {
-        var trimmed = text.Trim().Replace(",", string.Empty, StringComparison.Ordinal);
+        constant = default;
+        if (!TryNumberText(text, out var trimmed))
+        {
+            return false;
+        }
+
         if (long.TryParse(trimmed, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var whole))
         {
             constant = LatticeConstant.Integer(whole);
@@ -434,12 +439,73 @@ internal static class SchemaCardCompiler
     private static bool TryWhole(string text, string what, out long value, out string? error)
     {
         error = null;
-        if (!long.TryParse(text.Trim().Replace(",", string.Empty, StringComparison.Ordinal), NumberStyles.None, CultureInfo.InvariantCulture, out value))
+        value = default;
+        if (!TryNumberText(text, out var normalized)
+            || !long.TryParse(normalized, NumberStyles.None, CultureInfo.InvariantCulture, out value))
         {
             error = $"Enter {what} as a whole number.";
             return false;
         }
 
+        return true;
+    }
+
+    private static bool TryNumberText(string text, out string normalized)
+    {
+        normalized = text.Trim();
+        if (!normalized.Contains(','))
+        {
+            return true;
+        }
+
+        var span = normalized.AsSpan();
+        var integerEnd = span.IndexOfAny('.', 'e', 'E');
+        if (integerEnd < 0)
+        {
+            integerEnd = span.Length;
+        }
+
+        if (span[integerEnd..].Contains(','))
+        {
+            return false;
+        }
+
+        var integer = span[..integerEnd];
+        if (!integer.IsEmpty && integer[0] is '+' or '-')
+        {
+            integer = integer[1..];
+        }
+
+        var digits = 0;
+        var grouped = false;
+        foreach (var character in integer)
+        {
+            if (character is >= '0' and <= '9')
+            {
+                digits++;
+            }
+            else if (character == ',')
+            {
+                if (grouped ? digits != 3 : digits is < 1 or > 3)
+                {
+                    return false;
+                }
+
+                grouped = true;
+                digits = 0;
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        if (digits != 3)
+        {
+            return false;
+        }
+
+        normalized = normalized.Replace(",", string.Empty, StringComparison.Ordinal);
         return true;
     }
 

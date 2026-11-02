@@ -174,7 +174,9 @@ Key properties:
   6 hours) and re-verifies each enrolled backup whose interval has elapsed. The
   `MultiSiteManufacturing` sample runs it every 5 minutes.
 - **Per-backup overrides.** An operator can enable or disable monitoring and set a
-  custom interval per backup with `ConfigureBackupHealthAsync`, trigger an on-demand
+  custom interval per backup with `ConfigureBackupHealthAsync`, read back the
+  configuration a backup is monitored under (its override, or the cluster default)
+  with `GetBackupHealthConfigAsync`, trigger an on-demand
   check with `StartBackupHealthCheckAsync` and poll it to a terminal status, and
   read the last stored report with `GetBackupHealthAsync`. A backup is re-verified only by a sweep that finds its
   interval fully elapsed since its last check, and that check was timestamped

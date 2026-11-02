@@ -7,10 +7,25 @@ namespace Orleans.Lattice.Apps;
 /// </summary>
 internal sealed class AppActivationGrain(AppActivationRunner runner) : Grain, IAppActivationGrain
 {
-    public Task<AppActivationOutcome> ExecuteAsync(
+    private AppActivationOperation? _running;
+
+    public async Task<AppActivationOutcome> ExecuteAsync(
         AppActivationOperation operation,
         TenantId tenant,
         AppSlug slug,
-        CancellationToken cancellationToken = default) =>
-        runner.RunAsync(this.GetPrimaryKeyString(), operation, tenant, slug, cancellationToken);
+        CancellationToken cancellationToken = default)
+    {
+        // The grain is non-reentrant, so at most one run executes here at a time.
+        _running = operation;
+        try
+        {
+            return await runner.RunAsync(this.GetPrimaryKeyString(), operation, tenant, slug, cancellationToken);
+        }
+        finally
+        {
+            _running = null;
+        }
+    }
+
+    public Task<AppActivationOperation?> GetRunningOperationAsync() => Task.FromResult(_running);
 }

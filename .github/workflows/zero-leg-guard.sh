@@ -21,6 +21,7 @@
 #   a release version bump (*.csproj <Version> only)     yes
 #   *.md or *.txt anywhere, including under src//test/   yes
 #   test/azure-throughput-silo, .../lattice.explorer.uitests  yes (own lanes)
+#   test/lattice.explorer.e2e                          yes (own lane)
 #   any other file under src/** or test/**               NO - selection is wrong
 #
 # The last row needs no judgement and no hand-maintained list: a change that
@@ -63,6 +64,7 @@ classify() {
     | grep -vE '\.txt$' \
     | grep -vE '^test/azure-throughput-silo/' \
     | grep -vE '^test/lattice\.explorer\.uitests/' \
+    | grep -vE '^test/lattice\.explorer\.e2e/' \
     || true)
 
   if [ -n "$seeds" ]; then

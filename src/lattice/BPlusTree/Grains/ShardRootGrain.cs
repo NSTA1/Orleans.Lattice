@@ -2429,7 +2429,11 @@ internal sealed partial class ShardRootGrain(
     /// </summary>
     private async Task<GrainId?> ResolveWalkStartLeafAsync(string? resumeFromInclusive)
     {
-        if (resumeFromInclusive is null || state.State.RootIsLeaf)
+        // Decided by node TYPE, as the walks that call this are (issue 899): a
+        // RootIsLeaf flag left true over an internal root would otherwise restart
+        // a resumed walk at the leftmost leaf, re-walking - and, for an aggregate,
+        // re-counting - every leaf before the resume key (issue #5460).
+        if (resumeFromInclusive is null || RootIsLeafTyped)
         {
             return await GetLeftmostLeafIdAsync();
         }

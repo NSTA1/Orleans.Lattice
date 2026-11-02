@@ -129,9 +129,11 @@ public partial class AccessGroupsPage : IDisposable
     private bool CreateRequested => string.Equals(Address.GetQuery(AccessRoutes.NewQuery), "true", StringComparison.Ordinal);
 
     private string IdHint => _model is { DirectoryAvailable: true } model
-        ? (string.IsNullOrWhiteSpace(model.DirectoryExplanation)
-            ? $"The id of a group in the identity directory ({AccessPrincipalValidation.DirectoryName(model)}) that is not defined here yet."
-            : model.DirectoryExplanation)
+        ? model.DirectoryValidationRequired
+            ? (string.IsNullOrWhiteSpace(model.DirectoryExplanation)
+                ? $"The id of a group in the identity directory ({AccessPrincipalValidation.DirectoryName(model)}) that is not defined here yet."
+                : model.DirectoryExplanation)
+            : $"A group in the identity directory ({AccessPrincipalValidation.DirectoryName(model)}), or a new id for a group stored here. It must not name a group that already exists."
         : "No identity directory is configured, so the id is used as typed. It must not name a group that already exists.";
 
     /// <inheritdoc />
@@ -273,7 +275,7 @@ public partial class AccessGroupsPage : IDisposable
     }
 
     private Task<string?> ValidateInDirectoryAsync(string id, CancellationToken cancellationToken) =>
-        AccessPrincipalValidation.ValidateAsync(Catalog.Admin, _model, id, DirectoryPrincipalKind.Group, cancellationToken);
+        AccessPrincipalValidation.ValidateNewGroupAsync(Catalog.Admin, _model, id, cancellationToken);
 
     private async Task CreateAsync()
     {
@@ -294,9 +296,9 @@ public partial class AccessGroupsPage : IDisposable
         _saving = true;
         try
         {
-            // The field's own checks - already a group, not in the directory - answer
-            // first, beside the id; the exact look-up below covers a group the field
-            // could not see, and the server validates again on write.
+            // The field's own checks - already a group, or an id the directory refuses
+            // as a group - answer first, beside the id; the exact look-up below covers
+            // a group the field could not see, and the server validates again on write.
             if (_idBox is { } box)
             {
                 if (!await box.ConfirmAsync().ConfigureAwait(true))

@@ -29,8 +29,9 @@ Each is an extension method on the public static `LatticeReplicationApiGrpcServi
 | Get config | `Task<ReplicationConfigReport> GetReplicationConfigAsync(CancellationToken cancellationToken = default)` |
 | Get auth scheme | `Task<AuthSchemeAdvertisement> GetAuthSchemeAsync(AuthSchemeAdvertisementRequest request, CancellationToken cancellationToken = default)` |
 | Decommission peer | `Task<ReplicationDecommissionPeerResult> DecommissionPeerAsync(string peerClusterId, CancellationToken cancellationToken = default)` |
+| Probe capabilities | `Task<ReplicationCapabilities> ProbeCapabilitiesAsync(string treeId, CancellationToken cancellationToken = default)` |
 
-The result and report types (`ReplicationEnableResult`, `ReplicationDisableResult`, `ReplicationConfigReport`, `ReplicationTreeConfigEntry`) are the shared facade model records documented in the [facade API reference](../lattice.api.replication/api.md#model-types).
+The result and report types (`ReplicationEnableResult`, `ReplicationDisableResult`, `ReplicationConfigReport`, `ReplicationTreeConfigEntry`, `ReplicationCapabilities`) are the shared facade model records documented in the [facade API reference](../lattice.api.replication/api.md#model-types).
 
 `LatticeReplicationStatusGrpcClient` is the public typed client for the peer-status service. It implements `ILatticeReplicationStatus`, so a caller can swap an in-process facade for it with no adapter.
 
@@ -48,8 +49,8 @@ The query, page, and entry records are the same facade model records, documented
 | `ILatticeReplicationApiAuthorizer` | interface | The transport meta-authorizer the interceptor consults for every guarded RPC. A host implements it to decide whether a call may run at all. |
 | `DenyAllReplicationApiAuthorizer` | class | The default-deny authorizer used when a host registers no authorizer and leaves `RequireAuthorization` on. Rejects every guarded RPC. |
 | `AllowAllReplicationApiAuthorizer` | class | Opt-in authorizer that permits every guarded RPC. Register it explicitly only when an outer trust boundary already guards the endpoint. |
-| `LatticeReplicationApiOperation` | enum | The operation an inbound RPC maps to (`EnableReplication`, `DisableReplication`, `GetReplicationConfig`, `Unknown`, `GetPeerStatus`, `DecommissionPeer`). An unrecognized method maps to `Unknown`, which the default-deny posture never grants. |
-| `LatticeReplicationApiAuthorizationContext` | readonly struct | What the authorizer receives: `Call` (the `ServerCallContext`), `Operation`, and `TargetId` - the tree id exactly as the enable / disable request or the peer-status query's tree filter supplied it, or the peer cluster id for a `DecommissionPeer` call, before the facade's tenant-scoped resolution; `null` for the config read, a peer-status read with no tree filter, and an `Unknown` operation. The exempt `GetAuthScheme` RPC never reaches the authorizer. |
+| `LatticeReplicationApiOperation` | enum | The operation an inbound RPC maps to (`EnableReplication`, `DisableReplication`, `GetReplicationConfig`, `Unknown`, `GetPeerStatus`, `DecommissionPeer`, `ProbeCapabilities`). A host authorizer that switches on the operation and denies by default refuses `ProbeCapabilities` until it is mapped, so a management surface then withholds the controls it gates. An unrecognized method maps to `Unknown`, which the default-deny posture never grants. |
+| `LatticeReplicationApiAuthorizationContext` | readonly struct | What the authorizer receives: `Call` (the `ServerCallContext`), `Operation`, and `TargetId` - the tree id exactly as the enable / disable / probe request or the peer-status query's tree filter supplied it, or the peer cluster id for a `DecommissionPeer` call, before the facade's tenant-scoped resolution; `null` for the config read, a peer-status read with no tree filter, and an `Unknown` operation. The exempt `GetAuthScheme` RPC never reaches the authorizer. |
 | `ILatticeReplicationApiCredentialBridge` | interface | Resolves the caller credential from an inbound `ServerCallContext` into the ambient `LatticeCredential` the facade access gate authorizes. Runs after the transport authorizer; returning `null` leaves the caller anonymous, which auth-backed replication control denies. The default reads `CredentialHeaderName` / `CredentialScheme`. |
 | `ILatticeReplicationApiAuthSchemeSource` | interface | Supplies the advertisement the unauthenticated `GetAuthScheme` RPC returns; it must carry only public configuration. |
 | `GrpcReplicationTypeAliases` | static class | The binding's stable serialization aliases for its wire messages (prefix `oirg.`). |
@@ -76,8 +77,10 @@ The request and response records the RPCs carry are public, `[GenerateSerializer
 | `AuthSchemeDescriptor` | one advertised scheme | `SchemeId` (required), `DisplayName`, `Parameters` (`IReadOnlyDictionary<string, string>` of public configuration only) |
 | `ReplicationDecommissionPeerRequestMessage` | `DecommissionPeer` request | `PeerClusterId` (required) |
 | `ReplicationDecommissionPeerResponse` | `DecommissionPeer` response | `PeerClusterId` (required), `TreeCount`, `AlreadyDecommissioned` |
+| `ReplicationProbeCapabilitiesRequestMessage` | `ProbeCapabilities` request | `TreeId` (required) |
+| `ReplicationCapabilitiesResponse` | `ProbeCapabilities` response | `TreeId` (required; the effective, tenant-scoped id), `CanConfigure` |
 
-The typed client maps these onto the facade model records, so a caller of `LatticeReplicationApiGrpcClient` sees `ReplicationEnableResult`, `ReplicationDisableResult`, and `ReplicationConfigReport` rather than the wire records.
+The typed client maps these onto the facade model records, so a caller of `LatticeReplicationApiGrpcClient` sees `ReplicationEnableResult`, `ReplicationDisableResult`, `ReplicationConfigReport`, and `ReplicationCapabilities` rather than the wire records.
 
 The peer-status service has no wire records of its own: its `GetPeerStatus` RPC carries the facade's `ReplicationPeerStatusQuery` as the request and `ReplicationPeerStatusPage` as the response, Orleans-serialized under the `oir.` aliases of `ApiReplicationTypeAliases` in `Orleans.Lattice.Api.Abstractions`.
 

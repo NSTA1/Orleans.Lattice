@@ -201,6 +201,7 @@ internal sealed class LatticeBackupApiGrpcAuthInterceptor : Interceptor
             LatticeBackupGrpcMethods.IsHealthMonitoringAvailableMethodName => LatticeBackupApiOperation.IsHealthMonitoringAvailable,
             LatticeBackupGrpcMethods.GetBackupHealthMethodName => LatticeBackupApiOperation.GetBackupHealth,
             LatticeBackupGrpcMethods.ConfigureBackupHealthMethodName => LatticeBackupApiOperation.ConfigureBackupHealth,
+            LatticeBackupGrpcMethods.GetBackupHealthConfigMethodName => LatticeBackupApiOperation.GetBackupHealthConfig,
             LatticeBackupGrpcMethods.StartBackupMethodName => LatticeBackupApiOperation.StartBackup,
             LatticeBackupGrpcMethods.StartIncrementalBackupMethodName => LatticeBackupApiOperation.StartIncrementalBackup,
             LatticeBackupGrpcMethods.StartBackupSetMethodName => LatticeBackupApiOperation.StartBackupSet,
@@ -231,6 +232,7 @@ internal sealed class LatticeBackupApiGrpcAuthInterceptor : Interceptor
             BackupHealthCheckRequestMessage h => h.BackupId,
             BackupHealthGetRequestMessage h => h.BackupId,
             BackupHealthConfigureRequestMessage h => h.BackupId,
+            BackupHealthConfigGetRequestMessage h => h.BackupId,
             // A tracked-operation status or cancel names an operation, not a backup or
             // tree, so it carries no target; the facade scopes it to the caller.
             BackupOperationRequestMessage => null,

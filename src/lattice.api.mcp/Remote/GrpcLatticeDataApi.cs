@@ -155,6 +155,10 @@ internal sealed partial class GrpcLatticeDataApi : ILatticeDataApi
     public Task<DataRangePage> ReadRangeAsync(DataRangeRequest request, CancellationToken cancellationToken = default)
         => _client.ReadRangeAsync(request, cancellationToken);
 
+    /// <inheritdoc />
+    public Task<LatticeDataCapabilities> ProbeCapabilitiesAsync(string treeId, string? key = null, CancellationToken cancellationToken = default)
+        => _client.ProbeCapabilitiesAsync(new DataProbeRequest { TreeId = treeId, Key = key }, cancellationToken);
+
     private static LatticeAuthorizationDeniedException Denied(RpcException ex)
         => new(ex.Status.Detail, ex);
 }

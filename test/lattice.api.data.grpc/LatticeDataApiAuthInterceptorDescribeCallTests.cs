@@ -177,6 +177,21 @@ public sealed class LatticeDataApiAuthInterceptorDescribeCallTests
     }
 
     [Test]
+    public void ProbeCapabilities_targets_its_tree()
+    {
+        var result = Describe(
+            LatticeDataApiGrpcMethods.ProbeCapabilitiesMethodName,
+            new DataProbeRequest { TreeId = TreeId, Key = "k1" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Operation, Is.EqualTo(LatticeDataApiOperation.ProbeCapabilities));
+            Assert.That(result.TargetTreeId, Is.EqualTo(TreeId),
+                "ProbeCapabilities asks about a caller-named tree, so the authorizer must see that tree.");
+        });
+    }
+
+    [Test]
     public void An_unrecognised_method_maps_to_Unknown()
     {
         var result = Describe("SomeFutureRpc", new DataSetRequest { TreeId = TreeId, Key = "k1" });

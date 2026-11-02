@@ -118,7 +118,9 @@ export function focusElement(element) {
 
 // Reports the band the element's inline size falls in whenever it changes. The
 // band edges are passed in from .NET, the one place besides the breakpoint
-// stylesheet that names them.
+// stylesheet that names them. A zero width is an element that is not laid out
+// (detached, or under a hidden ancestor), not a narrow one, so it reports nothing:
+// reporting it would paint the compact chrome at any width until the next report.
 export function observeViewport(element, target, edges) {
   if (!element || typeof ResizeObserver === 'undefined') {
     return null;
@@ -126,6 +128,10 @@ export function observeViewport(element, target, edges) {
 
   let band = -1;
   const report = (size) => {
+    if (!(size > 0)) {
+      return;
+    }
+
     let next = 0;
     for (const edge of edges) {
       if (size >= edge) {

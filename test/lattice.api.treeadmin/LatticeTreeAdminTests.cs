@@ -141,6 +141,8 @@ public sealed class LatticeTreeAdminTests
             Assert.That(caps.CanManageTreeLifecycle, Is.True);
             // The (uniform) gate allows, so the distinct bulk-load capability reports true.
             Assert.That(caps.CanBulkLoad, Is.True);
+            // The (uniform) gate allows, so the cluster-wide telemetry capability reports true.
+            Assert.That(caps.CanViewClusterTelemetry, Is.True);
         });
         await schemaControl.Received(1).ProbeCapabilitiesAsync(Tree, Arg.Any<CancellationToken>());
     }
@@ -161,6 +163,7 @@ public sealed class LatticeTreeAdminTests
             Assert.That(caps.CanAdministerTree, Is.False);
             Assert.That(caps.CanManageTreeLifecycle, Is.False);
             Assert.That(caps.CanBulkLoad, Is.False);
+            Assert.That(caps.CanViewClusterTelemetry, Is.False);
             Assert.That(caps.Schema.CanViewPolicy, Is.False);
         });
     }

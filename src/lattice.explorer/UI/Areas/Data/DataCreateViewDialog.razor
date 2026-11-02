@@ -1,0 +1,77 @@
+@*
+    The New view dialog: a materialised view over the workspace's tree, built by
+    one of the projection providers the cluster's host registered. The provider
+    is chosen from the list the tree-administration facade returns (each with
+    its description); the payload is a form when the provider describes its
+    fields, else JSON the provider validates when the view is created. Raw
+    server messages are never shown.
+*@
+@using Orleans.Lattice.Api.TreeAdmin
+
+@if (Workspace is not null)
+{
+    <LtDialog Open="Open" OpenChanged="OnOpenChangedAsync" Title="New view" Description="@($"A materialised view over {Source.LogicalId}, kept current from its write-ahead log.")" Placement="@Placement">
+        @if (_providers is null && _loadError is null)
+        {
+            <LtSkeleton Lines="3" Label="Loading the view providers" />
+        }
+        else if (_loadError is not null)
+        {
+            <p class="lt-data-note" role="alert">@_loadError</p>
+            <div class="lt-dialog__actions">
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="CancelAsync">Close</LtButton>
+            </div>
+        }
+        else if (_providers!.Count == 0)
+        {
+            <p class="lt-data-note" data-lt-view-providers="none">This cluster's host registers no view providers, so no view can be created here. A host registers one with AddRuntimeProjectionProvider.</p>
+            <div class="lt-dialog__actions">
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="CancelAsync">Close</LtButton>
+            </div>
+        }
+        else
+        {
+            <form class="lt-data-form" data-lt-view-create @onsubmit="SubmitAsync">
+                <LtSelect Label="Provider" Options="@ProviderOptions" Value="@_providerKey" ValueChanged="OnProviderChanged" Hint="@(Selected?.Description ?? "This provider has no description.")" Disabled="@_busy" data-lt-view-provider />
+                <LtTextInput Label="View name" Mono="true" Value="@_name" ValueChanged="value => _name = value" Error="@_nameError" Hint="@($"The view is browsable at view-{(string.IsNullOrEmpty(_name) ? "name" : _name)}.")" Disabled="@_busy" data-lt-view-name />
+                @if (Selected is { } provider && !provider.PayloadFields.IsDefaultOrEmpty)
+                {
+                    <fieldset class="lt-data-fieldset" data-lt-view-payload="form">
+                        <legend class="lt-field__label">Payload</legend>
+                        @foreach (var field in provider.PayloadFields)
+                        {
+                            if (field.Kind == TreeViewProviderFieldKind.Boolean)
+                            {
+                                <LtCheckbox @key="field.Name" Label="@field.Label" Checked="@_flags.GetValueOrDefault(field.Name)" CheckedChanged="value => _flags[field.Name] = value" Hint="@field.Description" Disabled="@_busy" data-lt-view-field="@field.Name" />
+                            }
+                            else
+                            {
+                                <LtTextInput @key="field.Name" Label="@(field.Required ? field.Label : field.Label + " (optional)")" Mono="@(field.Kind == TreeViewProviderFieldKind.Number)" Value="@_texts.GetValueOrDefault(field.Name)" ValueChanged="value => _texts[field.Name] = value" Hint="@field.Description" Error="@_fieldErrors.GetValueOrDefault(field.Name)" Disabled="@_busy" inputmode="@(field.Kind == TreeViewProviderFieldKind.Number ? "decimal" : null)" data-lt-view-field="@field.Name" />
+                            }
+                        }
+                    </fieldset>
+                }
+                else
+                {
+                    <div class="lt-field" data-lt-view-payload="json">
+                        <label class="lt-field__label" for="@JsonId">Payload (JSON)</label>
+                        <textarea id="@JsonId" class="lt-input lt-shell-mono" rows="6" spellcheck="false" aria-describedby="@($"{JsonId}-hint")" aria-invalid="@(_jsonError is null ? null : "true")" disabled="@_busy" @bind="_json" @bind:event="oninput"></textarea>
+                        <p id="@($"{JsonId}-hint")" class="lt-field__hint">The provider reads this JSON and refuses it when it does not fit. Leave it empty to send {}.</p>
+                        @if (_jsonError is not null)
+                        {
+                            <p class="lt-field__error"><span class="lt-field__error-mark" aria-hidden="true">!</span> @_jsonError</p>
+                        }
+                    </div>
+                }
+                @if (_submitError is not null)
+                {
+                    <p class="lt-data-note" role="alert" data-lt-view-create-error>@_submitError</p>
+                }
+                <div class="lt-dialog__actions">
+                    <LtButton Variant="LtButtonVariant.Quiet" OnClick="CancelAsync" Disabled="@_busy">Cancel</LtButton>
+                    <LtButton Type="LtButtonType.Submit" Disabled="@_busy">@(_busy ? "Creating" : "Create view")</LtButton>
+                </div>
+            </form>
+        }
+    </LtDialog>
+}

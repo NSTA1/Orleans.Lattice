@@ -273,6 +273,16 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<int> CountAsync();
 
     /// <summary>
+    /// Returns, in one grain turn, the number of live keys in this leaf (as
+    /// <see cref="CountAsync()"/> counts them) and the highest of those keys, or
+    /// <see langword="null"/> when the leaf holds none. A shard's bulk append
+    /// reads it from the rightmost leaf: the count sizes the fill of that leaf,
+    /// and the key is the shard's right edge, at or below which every entry of a
+    /// re-driven append has already been grafted (issue #5460).
+    /// </summary>
+    Task<(int LiveCount, string? HighestLiveKey)> GetAppendTailAsync();
+
+    /// <summary>
     /// Returns the number of live (non-tombstoned) keys in this leaf whose key
     /// falls in the half-open range [<paramref name="startInclusive"/>,
     /// <paramref name="endExclusive"/>). A <see langword="null"/> bound is
@@ -731,6 +741,20 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// pre-date this slot.
     /// </summary>
     Task SetKeyRangeAsync(string? lowKeyInclusive, string? highKeyExclusive);
+
+    /// <summary>
+    /// Narrows this leaf's exclusive high bound to <paramref name="highKeyExclusive"/>,
+    /// persisting it, when the current bound is open or lies above it; otherwise a
+    /// no-op, so a re-driven caller converges. A shard's bulk append calls it on the
+    /// rightmost leaf before it links the leaves it appended, so the leaf stops
+    /// declaring the keyspace those leaves now own: the WAL materialiser replays into
+    /// a leaf every record its declared range covers, so a leaf left open-ended would
+    /// re-materialise every later key of its shard when it next activated (issue
+    /// #5460). Throws <see cref="InvalidOperationException"/> when the bound is at or
+    /// below the leaf's low bound.
+    /// </summary>
+    /// <param name="highKeyExclusive">The new exclusive high bound. Must not be <see langword="null"/>.</param>
+    Task NarrowHighKeyAsync(string highKeyExclusive);
 
     /// <summary>
     /// Returns this leaf's persisted owned-key-range bounds

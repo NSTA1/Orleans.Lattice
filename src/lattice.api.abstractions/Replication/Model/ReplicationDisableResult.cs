@@ -7,8 +7,7 @@ namespace Orleans.Lattice.Api.Replication;
 /// already-active shipper; if it keeps shipping, peers that resolve no mode drop
 /// those entries while acknowledging the batch. It never purges already-replicated
 /// peer data and keeps the tree's fixed merge mode in the config. A later
-/// re-enable bootstraps only when a source cluster is supplied and the tree
-/// already holds data.
+/// re-enable bootstraps whenever a source cluster is supplied.
 /// </summary>
 [GenerateSerializer]
 [Alias(ApiReplicationTypeAliases.ReplicationDisableResult)]

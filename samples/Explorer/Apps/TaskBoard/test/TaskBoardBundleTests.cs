@@ -69,6 +69,36 @@ public sealed class TaskBoardBundleTests
         });
     }
 
+    /// <summary>
+    /// The Explorer delivers a window's in-app path with its <c>?query=</c> appended
+    /// (<c>/tasks/{id}?{query}</c>), so the path a deep link selects by must be read without it
+    /// (#5386). The module has no JavaScript host here, so this reads <c>idFromPath</c>'s own
+    /// regular expressions and applies them as the function does: cut at the first <c>?</c> or
+    /// <c>#</c>, then match the task path.
+    /// </summary>
+    [TestCase("/tasks/abc-123", "abc-123")]
+    [TestCase("/tasks/abc-123?from=u3", "abc-123")]
+    [TestCase("/tasks/abc-123#top", "abc-123")]
+    [TestCase("/tasks/abc-123/more", null)]
+    [TestCase("/", null)]
+    public void A_deep_link_selects_its_task_whatever_query_the_explorer_appends(string path, string? expected)
+    {
+        var module = TaskBoardFiles.ReadText("ui/app.mjs");
+        var function = Regex.Match(module, @"function idFromPath\(path\) \{(?<body>.*?)\n\}", RegexOptions.Singleline);
+        Assert.That(function.Success, Is.True, "app.mjs defines idFromPath(path)");
+        var body = function.Groups["body"].Value;
+
+        var cut = Regex.Match(body, @"\.split\(/(?<re>[^/]+)/");
+        Assert.That(cut.Success, Is.True, "idFromPath cuts the query and fragment off the path before matching it");
+        var match = Regex.Match(body, @"const match = /(?<re>.+?)/\.exec\(").Groups["re"].Value;
+        var id = Regex.Match(module, @"const ID_PATTERN = /(?<re>.+?)/;").Groups["re"].Value;
+
+        var bare = Regex.Split(path, cut.Groups["re"].Value)[0];
+        var found = Regex.Match(bare, match);
+        var actual = found.Success && Regex.IsMatch(found.Groups[1].Value, id) ? found.Groups[1].Value : null;
+        Assert.That(actual, Is.EqualTo(expected));
+    }
+
     [Test]
     public void The_stylesheet_needs_no_url_import_or_hover()
     {

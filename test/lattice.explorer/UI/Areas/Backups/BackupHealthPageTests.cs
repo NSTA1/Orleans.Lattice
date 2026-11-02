@@ -89,6 +89,21 @@ public sealed class BackupHealthPageTests : BackupsTestContext
     }
 
     [Test]
+    public void The_way_back_to_every_backups_health_is_a_full_size_target()
+    {
+        Backups.HealthAvailable = () => Task.FromResult(true);
+        Seed(FakeBackupControl.Manifest("b1", "nightly"));
+
+        var cut = RenderAt<BackupHealthPage>("backups/health?backup=b1");
+
+        // A link alone on its line is a target in its own right (WCAG 2.5.8 target size), so it
+        // carries the modifier that gives it a control's height.
+        cut.WaitUntil(() => Assert.That(
+            cut.FindAll("a").Single(a => a.TextContent == "All backups' health").ClassList,
+            Does.Contain("lt-backups-link--standalone")));
+    }
+
+    [Test]
     public void Check_now_starts_a_cluster_check_followed_with_real_progress_until_the_fresh_report_shows()
     {
         Backups.HealthAvailable = () => Task.FromResult(true);
@@ -230,6 +245,94 @@ public sealed class BackupHealthPageTests : BackupsTestContext
         cut.Find("button[role=switch]").Click();
         cut.Find("form.lt-backups-form").Submit();
         cut.WaitUntil(() => Assert.That(cut.Find("form [role=status]").TextContent, Is.EqualTo("Monitoring off for this backup.")));
+    }
+
+    [Test]
+    public void Saved_monitoring_reads_back_when_the_page_is_opened_again()
+    {
+        // #5523: the form opened On / 24 h whatever the backup's stored monitoring was.
+        Backups.HealthAvailable = () => Task.FromResult(true);
+        Seed(FakeBackupControl.Manifest("b1", "nightly"));
+        var first = RenderAt<BackupHealthPage>("backups/health?backup=b1");
+        first.WaitUntil(() => Assert.That(first.FindAll("form.lt-backups-form"), Has.Count.EqualTo(1)));
+        first.Find("button[role=switch]").Click();
+        first.FindAll("form.lt-backups-form input")[0].Input("1");
+        first.FindAll("form.lt-backups-form input")[1].Input("0");
+        first.Find("form.lt-backups-form").Submit();
+        first.WaitUntil(() => Assert.That(first.Find("form [role=status]").TextContent, Is.EqualTo("Monitoring off for this backup.")));
+
+        var reopened = RenderAt<BackupHealthPage>("backups/health?backup=b1");
+
+        reopened.WaitUntil(() =>
+        {
+            Assert.That(reopened.Find("button[role=switch]").GetAttribute("aria-checked"), Is.EqualTo("false"));
+            Assert.That(reopened.FindAll("form.lt-backups-form input").Select(input => input.GetAttribute("value")), Is.EqualTo(new[] { "1", "0" }));
+        });
+    }
+
+    [Test]
+    public void The_form_opens_with_the_backups_stored_monitoring_and_saving_it_unchanged_keeps_it()
+    {
+        Backups.HealthAvailable = () => Task.FromResult(true);
+        Seed(FakeBackupControl.Manifest("b1", "nightly"));
+        Backups.HealthConfigs["b1"] = new BackupHealthConfig(false, TimeSpan.FromMinutes(90));
+
+        var cut = RenderAt<BackupHealthPage>("backups/health?backup=b1");
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find("button[role=switch]").GetAttribute("aria-checked"), Is.EqualTo("false"));
+            Assert.That(cut.Find("button[role=switch] .lt-switch__state").TextContent, Is.EqualTo("Off"));
+            Assert.That(cut.FindAll("form.lt-backups-form input").Select(input => input.GetAttribute("value")), Is.EqualTo(new[] { "1", "30" }));
+        });
+        Assert.That(Backups.LastOf<string>(nameof(ILatticeBackupControl.GetBackupHealthConfigAsync)), Is.EqualTo("b1"));
+
+        cut.Find("form.lt-backups-form").Submit();
+
+        cut.WaitUntil(() => Assert.That(cut.Find("form [role=status]").TextContent, Is.EqualTo("Monitoring off for this backup.")));
+        var (_, saved) = Backups.LastOf<(string, BackupHealthConfig)>(nameof(ILatticeBackupControl.ConfigureBackupHealthAsync));
+        Assert.That(saved, Is.EqualTo(new BackupHealthConfig(false, TimeSpan.FromMinutes(90))));
+    }
+
+    [Test]
+    public void A_never_configured_backup_reads_as_the_monitoring_it_is_enrolled_under()
+    {
+        Backups.HealthAvailable = () => Task.FromResult(true);
+        Seed(FakeBackupControl.Manifest("b1", "nightly"));
+        Backups.DefaultHealthConfig = new BackupHealthConfig(true, TimeSpan.FromHours(6));
+
+        var cut = RenderAt<BackupHealthPage>("backups/health?backup=b1");
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find("button[role=switch]").GetAttribute("aria-checked"), Is.EqualTo("true"));
+            Assert.That(cut.FindAll("form.lt-backups-form input").Select(input => input.GetAttribute("value")), Is.EqualTo(new[] { "6", "0" }));
+        });
+    }
+
+    [Test]
+    public void Monitoring_that_cannot_be_read_says_why_and_offers_no_form()
+    {
+        Backups.HealthAvailable = () => Task.FromResult(true);
+        Seed(FakeBackupControl.Manifest("b1", "nightly"));
+        Backups.GetHealthConfig = _ => Task.FromException<BackupHealthConfig?>(new LatticeAuthorizationDeniedException());
+
+        var cut = RenderAt<BackupHealthPage>("backups/health?backup=b1");
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find("section.lt-backups-section [role=alert]").TextContent, Is.EqualTo(BackupsFaults.NotPermitted));
+            Assert.That(cut.FindAll("form"), Is.Empty);
+            Assert.That(cut.FindAll("button").Count(button => button.TextContent == "Check now"), Is.EqualTo(1));
+        });
+
+        Backups.GetHealthConfig = _ => Task.FromResult<BackupHealthConfig?>(null);
+        var gone = RenderAt<BackupHealthPage>("backups/health?backup=b1&x=1");
+        gone.WaitUntil(() =>
+        {
+            Assert.That(gone.Find("section.lt-backups-section [role=alert]").TextContent, Is.EqualTo(BackupsFaults.NotFound));
+            Assert.That(gone.FindAll("form"), Is.Empty);
+        });
     }
 
     [Test]

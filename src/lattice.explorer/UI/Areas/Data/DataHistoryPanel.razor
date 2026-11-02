@@ -43,7 +43,7 @@
                             <LtNode Kind="LtNodeKind.Hollow" />
                             <span class="lt-data-timeline__time">@DataFormat.Time(change.Hlc)</span>
                             <span>@ChangeText(change.Kind)</span>
-                            <a class="lt-shell-mono" href="@Workspace.Href(Workspace.With(ExplorerAddress.KeyQuery, change.Key))">@DataKeysPanel.Clip(change.Key)</a>
+                            <a class="lt-shell-mono lt-data-key" href="@Workspace.Href(Workspace.With(ExplorerAddress.KeyQuery, change.Key))">@DataKeysPanel.Clip(change.Key)</a>
                         </span>
                     </li>
                 }
@@ -126,6 +126,10 @@
                                 @if (row.RenderMode is HistoryRowRenderMode.ValueDiff or HistoryRowRenderMode.MetadataOnly)
                                 {
                                     <span class="lt-data-timeline__meta">@DataValueRendering.Size(row.ValueLength)</span>
+                                }
+                                @if (row.SchemaVersion > 0)
+                                {
+                                    <span class="lt-data-timeline__meta">schema version @row.SchemaVersion</span>
                                 }
                             </span>
                             @RenderBody(row)

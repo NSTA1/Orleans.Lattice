@@ -21,7 +21,9 @@ public enum AppLifecycleState
     /// <see cref="ILatticeAppsControl.DescribeAsync"/> and
     /// <see cref="ILatticeAppsControl.ListAsync"/> may report this when failure evidence
     /// is available; implementations must not infer it from a disabled registry state,
-    /// and the underlying install may still be enabled. Lifecycle mutations report
+    /// and the underlying install may still be enabled. It is never reported while a
+    /// lifecycle run is in flight (see <see cref="AppSummary.PendingState"/>), so it is
+    /// final evidence of a run that ended failed. Lifecycle mutations report
     /// failures by exception, not by returning this state.
     /// </summary>
     Failed = 5,

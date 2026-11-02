@@ -112,4 +112,15 @@ public sealed class AccessChromeTests : AccessTestContext
             Assert.That(File.Exists(Path.Combine(HygieneRepository.FindRepoRoot(), "src", "lattice.explorer", "UI", "wwwroot", "access", "lattice-access.css")), Is.True);
         });
     }
+
+    [Test]
+    public void The_rule_editors_operation_rows_are_tall_enough_to_space_their_checkboxes_24px_apart()
+    {
+        var css = File.ReadAllText(Path.Combine(HygieneRepository.FindRepoRoot(), "src", "lattice.explorer", "UI", "wwwroot", "access", "lattice-access.css"));
+
+        Assert.That(
+            System.Text.RegularExpressions.Regex.IsMatch(css, @"\.lt-access-fieldset__options \.lt-check\s*\{[^}]*min-block-size:\s*1\.5rem;"),
+            Is.True,
+            "The 16px operation checkboxes need 24px rows to meet the WCAG 2.2 target-size spacing exception (axe target-size).");
+    }
 }

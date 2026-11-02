@@ -37,14 +37,13 @@ internal sealed partial class LatticeAppsControl
                     continue;
                 }
 
-                var status = record.State == AppRegistryLifecycleState.Uninstalled
-                    ? null
-                    : await _pipeline.GetStatusAsync(tenant, record.Slug, cancellationToken).ConfigureAwait(false);
+                var (state, pending) = await AppsLiveState.ReadAsync(_pipeline, tenant, record, cancellationToken).ConfigureAwait(false);
                 apps.Add(new AppSummary
                 {
                     Slug = record.Slug.Value,
                     Version = record.Version.Value,
-                    State = AppsControlMapping.ToWireState(record.State, status),
+                    State = state,
+                    PendingState = pending,
                     Provenance = AppsControlMapping.ToWireProvenance(record.Provenance),
                 });
             }
@@ -95,6 +94,7 @@ internal sealed partial class LatticeAppsControl
 
             var matching = record is not null && record.Version == manifest.Identity.Version ? record : null;
             AppLifecycleState state;
+            AppLifecycleState? pending = null;
             if (matching is null)
             {
                 state = AppLifecycleState.NotInstalled;
@@ -105,8 +105,7 @@ internal sealed partial class LatticeAppsControl
             }
             else
             {
-                var status = await _pipeline.GetStatusAsync(tenant, slug, cancellationToken).ConfigureAwait(false);
-                state = AppsControlMapping.ToWireState(matching.State, status);
+                (state, pending) = await AppsLiveState.ReadAsync(_pipeline, tenant, matching, cancellationToken).ConfigureAwait(false);
             }
 
             var provenance = resolved.Provenance ?? manifest.Identity.Provenance;
@@ -118,7 +117,7 @@ internal sealed partial class LatticeAppsControl
                 provenance,
                 state,
                 live ? matching : null,
-                conflicts);
+                conflicts) with { PendingState = pending };
         }
         catch (Exception ex) when (AppsControlExceptionSanitizer.TryRewrite(ex, appSlug, out var sanitized))
         {

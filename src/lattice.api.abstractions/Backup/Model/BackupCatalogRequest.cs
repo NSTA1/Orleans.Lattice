@@ -49,9 +49,11 @@ public sealed record BackupCatalogRequest
     /// <summary>
     /// When set, returns the catalog newest-first (by capture time) with backup-set
     /// members adjacent, served from the backup-catalog index and honouring the
-    /// filter predicates below. When <see langword="false"/> (the default) the
-    /// listing keeps the legacy ascending-by-backup-id order and ignores the
-    /// filters.
+    /// filter predicates below. Every catalogued backup is listed, each member of an
+    /// incremental chain included, and a listing the index cannot serve up to date
+    /// is answered from the catalog itself. When <see langword="false"/> (the
+    /// default) the listing keeps the legacy ascending-by-backup-id order and
+    /// ignores the filters.
     /// </summary>
     [Id(2)] public bool OrderByCreatedDescending { get; init; }
 

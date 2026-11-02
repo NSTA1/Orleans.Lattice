@@ -152,6 +152,9 @@ internal sealed class GrpcTreeAdminHost : IAsyncDisposable
         Methods = host.Services.GetRequiredService<LatticeTreeAdminGrpcMethods>();
     }
 
+    /// <summary>The host's services, which carry the serializers a client built over another invoker needs.</summary>
+    public IServiceProvider Services => _host.Services;
+
     /// <summary>The client channel bound to the in-process server.</summary>
     public GrpcChannel Channel { get; }
 

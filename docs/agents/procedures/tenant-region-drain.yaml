@@ -21,6 +21,9 @@ preconditions:
   - id: caller-authorized
     check: "Residency changes and status reads require a platform operator or tenant administrator; revoking allowed regions requires a platform operator."
     source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs"
+  - id: region-identity
+    check: "Name the region to drain by its replication cluster id (Replication:ClusterId), not the Orleans cluster id. Only the silos serving that region id drive its drain to Removed."
+    source: "src/lattice.tenancy/TenantLocalRegion.cs"
 steps:
   - n: 1
     action: "Read the current status, then set the complete desired residency set without the region to drain."

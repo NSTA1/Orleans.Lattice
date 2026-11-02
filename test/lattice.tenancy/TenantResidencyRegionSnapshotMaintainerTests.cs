@@ -1,8 +1,6 @@
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using NSubstitute;
-using Orleans.Configuration;
 using Orleans.Lattice.Testing;
 using Orleans.Streams;
 
@@ -74,7 +72,7 @@ public sealed class TenantResidencyRegionSnapshotMaintainerTests
         params ITenantRegionStatusChangeListener[] listeners) =>
         new(
             registry,
-            Options.Create(new ClusterOptions { ClusterId = regionId }),
+            TenantLocalRegion.ForRegion(regionId),
             listeners,
             TimeProvider.System,
             NullLogger<TenantResidencySnapshotMaintainer>.Instance);
@@ -84,14 +82,14 @@ public sealed class TenantResidencyRegionSnapshotMaintainerTests
         Assert.That(
             () => new TenantResidencySnapshotMaintainer(
                 null!,
-                Options.Create(new ClusterOptions()),
+                TenantLocalRegion.ForRegion("region-a"),
                 Array.Empty<ITenantRegionStatusChangeListener>(),
                 TimeProvider.System,
                 NullLogger<TenantResidencySnapshotMaintainer>.Instance),
             Throws.ArgumentNullException);
 
     [Test]
-    public void Ctor_null_cluster_options_throws() =>
+    public void Ctor_null_local_region_throws() =>
         Assert.That(
             () => new TenantResidencySnapshotMaintainer(
                 Substitute.For<ITenantRegistry>(),
@@ -106,7 +104,7 @@ public sealed class TenantResidencyRegionSnapshotMaintainerTests
         Assert.That(
             () => new TenantResidencySnapshotMaintainer(
                 Substitute.For<ITenantRegistry>(),
-                Options.Create(new ClusterOptions()),
+                TenantLocalRegion.ForRegion("region-a"),
                 null!,
                 TimeProvider.System,
                 NullLogger<TenantResidencySnapshotMaintainer>.Instance),
@@ -117,7 +115,7 @@ public sealed class TenantResidencyRegionSnapshotMaintainerTests
         Assert.That(
             () => new TenantResidencySnapshotMaintainer(
                 Substitute.For<ITenantRegistry>(),
-                Options.Create(new ClusterOptions()),
+                TenantLocalRegion.ForRegion("region-a"),
                 Array.Empty<ITenantRegionStatusChangeListener>(),
                 null!,
                 NullLogger<TenantResidencySnapshotMaintainer>.Instance),
@@ -128,7 +126,7 @@ public sealed class TenantResidencyRegionSnapshotMaintainerTests
         Assert.That(
             () => new TenantResidencySnapshotMaintainer(
                 Substitute.For<ITenantRegistry>(),
-                Options.Create(new ClusterOptions()),
+                TenantLocalRegion.ForRegion("region-a"),
                 Array.Empty<ITenantRegionStatusChangeListener>(),
                 TimeProvider.System,
                 null!),
@@ -147,11 +145,31 @@ public sealed class TenantResidencyRegionSnapshotMaintainerTests
     }
 
     [Test]
-    public void LocalRegionId_falls_back_to_default_when_cluster_id_is_empty()
+    public void An_unresolved_local_region_fails_closed_without_a_default_region()
     {
-        var maintainer = Maintainer(Substitute.For<ITenantRegistry>(), regionId: "");
+        var replication = Substitute.For<ILatticeReplicationContext>();
+        replication.IsReplicationEnabled.Returns(true);
+        replication.LocalReplicaId.Returns(string.Empty);
+        var registry = Substitute.For<ITenantRegistry>();
+        registry.ListAsync(Arg.Any<CancellationToken>()).Returns(_ => Stream(new[]
+        {
+            Configured(TenantId.Parse("acme"), "default", TenantRegionStatus.Online),
+        }));
+        var maintainer = new TenantResidencySnapshotMaintainer(
+            registry,
+            new TenantLocalRegion(
+                Microsoft.Extensions.Options.Options.Create(new Orleans.Configuration.ClusterOptions { ClusterId = "estate-west" }),
+                replication),
+            Array.Empty<ITenantRegionStatusChangeListener>(),
+            TimeProvider.System,
+            NullLogger<TenantResidencySnapshotMaintainer>.Instance);
 
-        Assert.That(maintainer.LocalRegionId, Is.EqualTo("default"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => maintainer.LocalRegionId, Throws.InvalidOperationException);
+            Assert.That(async () => await maintainer.RebuildNowAsync(), Throws.InvalidOperationException);
+        });
+        Assert.That(maintainer.CurrentEpoch, Is.Zero, "a rebuild that cannot resolve the region publishes nothing");
     }
 
     [Test]

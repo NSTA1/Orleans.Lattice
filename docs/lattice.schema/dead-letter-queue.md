@@ -13,7 +13,8 @@ the store write is awaited, and storage failure or cancellation propagates to
 the intercepted write. Diversion does not acknowledge an item that could not
 be recorded. An operator inspects the recorded item out of band. Only
 ingest that reaches a tree's write operations can land here, which in practice is
-a replicated typed-CRDT entry or an entry of a replicated atomic batch; a plain
+a replicated typed-CRDT entry, an entry of a replicated atomic batch, or a row a
+receiver bootstrap drains from a peer's export; a steady-state plain
 (non-atomic) last-writer-wins replication apply and a backup restore write below
 the strict check and never produce an entry (see
 [strict-mode ingest](schema-enforcement.md#strict-mode-ingest)). A dead-lettered

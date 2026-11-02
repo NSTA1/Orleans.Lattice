@@ -1,6 +1,4 @@
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-using Orleans.Configuration;
 using Orleans.Streams;
 
 namespace Orleans.Lattice.Tenancy;
@@ -54,7 +52,7 @@ internal sealed class TenantResidencySnapshotMaintainer : IMutationObserver, ITe
     private readonly ITenantRegistry _registry;
     private readonly ILogger<TenantResidencySnapshotMaintainer> _logger;
     private readonly ITenantRegionStatusChangeListener[] _listeners;
-    private readonly string _regionId;
+    private readonly TenantLocalRegion _localRegion;
     private readonly TenantSnapshotCurrency _currency;
     private readonly SemaphoreSlim _rebuildLock = new(1, 1);
 
@@ -70,20 +68,20 @@ internal sealed class TenantResidencySnapshotMaintainer : IMutationObserver, ITe
 
     /// <summary>Initializes a new <see cref="TenantResidencySnapshotMaintainer"/>.</summary>
     /// <param name="registry">The tenant registry scanned to build the snapshot.</param>
-    /// <param name="clusterOptions">Supplies this silo's serving region id (the cluster id).</param>
+    /// <param name="localRegion">Supplies this silo's serving region id.</param>
     /// <param name="listeners">The registered region-status change listeners (may be empty).</param>
     /// <param name="timeProvider">The clock the silo's lease is measured on.</param>
     /// <param name="logger">The logger for background-rebuild failures.</param>
     /// <exception cref="ArgumentNullException">Any argument is <c>null</c>.</exception>
     public TenantResidencySnapshotMaintainer(
         ITenantRegistry registry,
-        IOptions<ClusterOptions> clusterOptions,
+        TenantLocalRegion localRegion,
         IEnumerable<ITenantRegionStatusChangeListener> listeners,
         TimeProvider timeProvider,
         ILogger<TenantResidencySnapshotMaintainer> logger)
     {
         ArgumentNullException.ThrowIfNull(registry);
-        ArgumentNullException.ThrowIfNull(clusterOptions);
+        ArgumentNullException.ThrowIfNull(localRegion);
         ArgumentNullException.ThrowIfNull(listeners);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
@@ -92,9 +90,7 @@ internal sealed class TenantResidencySnapshotMaintainer : IMutationObserver, ITe
         _currency = new TenantSnapshotCurrency(timeProvider);
         _logger = logger;
         _listeners = listeners as ITenantRegionStatusChangeListener[] ?? listeners.ToArray();
-
-        var clusterId = clusterOptions.Value.ClusterId;
-        _regionId = string.IsNullOrEmpty(clusterId) ? "default" : clusterId;
+        _localRegion = localRegion;
     }
 
     /// <summary>The current snapshot. Read without locking; swapped atomically on rebuild.</summary>
@@ -103,8 +99,12 @@ internal sealed class TenantResidencySnapshotMaintainer : IMutationObserver, ITe
     /// <summary>The monotonic epoch of the current snapshot; advances on every rebuild.</summary>
     public long CurrentEpoch => Interlocked.Read(ref _epoch);
 
-    /// <summary>This silo's serving region id (the cluster id).</summary>
-    public string LocalRegionId => _regionId;
+    /// <summary>
+    /// This silo's serving region id, from <see cref="TenantLocalRegion"/>. Throws
+    /// <see cref="InvalidOperationException"/> when the region cannot be resolved,
+    /// so a residency decision fails closed instead of reading a placeholder region.
+    /// </summary>
+    public string LocalRegionId => _localRegion.RegionId;
 
     /// <summary>
     /// <c>true</c> when the current snapshot reflects every committed
@@ -331,24 +331,28 @@ internal sealed class TenantResidencySnapshotMaintainer : IMutationObserver, ITe
         Dictionary<TenantId, TenantRecord> records,
         long generation)
     {
+        // Read first: an unresolvable region throws here, before any state changes,
+        // so the snapshot stays non-authoritative and residency fails closed.
+        var regionId = _localRegion.RegionId;
         var localStatuses = new Dictionary<TenantId, TenantRegionStatus>(records.Count);
         foreach (var (tenant, record) in records)
         {
-            localStatuses[tenant] = record.GetRegionStatus(_regionId);
+            localStatuses[tenant] = record.GetRegionStatus(regionId);
         }
 
         var changes = _listeners.Length == 0
             ? (IReadOnlyList<TenantRegionStatusChange>)Array.Empty<TenantRegionStatusChange>()
-            : DiffChanges(localStatuses);
+            : DiffChanges(localStatuses, regionId);
 
-        Volatile.Write(ref _current, TenantResidencySnapshot.Build(records.Values, _regionId));
+        Volatile.Write(ref _current, TenantResidencySnapshot.Build(records.Values, regionId));
         Volatile.Write(ref _builtForGeneration, generation);
         _lastByTenant = localStatuses;
         Interlocked.Increment(ref _epoch);
         return changes;
     }
 
-    private List<TenantRegionStatusChange> DiffChanges(Dictionary<TenantId, TenantRegionStatus> byTenant)
+    private List<TenantRegionStatusChange> DiffChanges(
+        Dictionary<TenantId, TenantRegionStatus> byTenant, string regionId)
     {
         var changes = new List<TenantRegionStatusChange>();
 
@@ -357,7 +361,7 @@ internal sealed class TenantResidencySnapshotMaintainer : IMutationObserver, ITe
             var previous = _lastByTenant.TryGetValue(tenant, out var p) ? p : TenantRegionStatus.None;
             if (previous != current)
             {
-                changes.Add(new TenantRegionStatusChange(tenant, _regionId, previous, current));
+                changes.Add(new TenantRegionStatusChange(tenant, regionId, previous, current));
             }
         }
 
@@ -365,7 +369,7 @@ internal sealed class TenantResidencySnapshotMaintainer : IMutationObserver, ITe
         {
             if (!byTenant.ContainsKey(tenant) && previous != TenantRegionStatus.None)
             {
-                changes.Add(new TenantRegionStatusChange(tenant, _regionId, previous, TenantRegionStatus.None));
+                changes.Add(new TenantRegionStatusChange(tenant, regionId, previous, TenantRegionStatus.None));
             }
         }
 

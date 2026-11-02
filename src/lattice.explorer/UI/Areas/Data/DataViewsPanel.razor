@@ -2,10 +2,11 @@
     Views: for a tree, the materialised views that read from it; for a view,
     the view itself. Each shows its kind, projection version and apply lag, and
     - when the caller holds administrative authority over the source tree - the
-    reconcile and rebuild actions the tree-administration facade offers, each
-    behind the destructive-action confirmation. A reconcile or rebuild runs on
-    the cluster as a tracked operation whose progress the tab follows and picks
-    up again when it is reopened. A view's physical generation tree is never shown.
+    reconcile, rebuild and drop actions the tree-administration facade offers, each
+    behind the destructive-action confirmation, and New view over the tree. A
+    reconcile or rebuild runs on the cluster as a tracked operation whose progress
+    the tab follows and picks up again when it is reopened. A view's physical
+    generation tree is never shown. Without that authority none of it is drawn.
 *@
 @using Orleans.Lattice.Explorer.UI.Operations
 
@@ -13,6 +14,10 @@
 {
     <div class="lt-toolbar">
         <LtButton OnClick="RefreshStatusesAsync" Disabled="@(Busy is not null)">Refresh</LtButton>
+        @if (_canCreate)
+        {
+            <LtButton data-lt-command="@DataArea.CreateViewCommandId" OnClick="OpenCreate">New view...</LtButton>
+        }
         <span class="lt-data-toolbar__status" role="status">@DataArea.Plural(_views.Count, "view")</span>
     </div>
 
@@ -54,7 +59,7 @@
                  DetailTitle="@(view => view.DisplayName)">
             <ChildContent>
                 <LtColumn TItem="DataTreeEntry" Context="view" Title="View" RowHeader="true" Mono="true">
-                    <a href="@Workspace.Href(view.Address)">@view.DisplayName</a>
+                    <a class="lt-data-key" href="@Workspace.Href(view.Address)">@view.DisplayName</a>
                 </LtColumn>
                 <LtColumn TItem="DataTreeEntry" Title="Kind" Value="@(view => view.KindText)" />
                 <LtColumn TItem="DataTreeEntry" Title="Projection" Mono="true" Value="@(view => view.ProjectionVersion)" />
@@ -98,6 +103,24 @@
             }
         </LtConfirmDestructive>
     }
+
+    @if (_pendingDrop is { } drop)
+    {
+        <LtConfirmDestructive Open="true"
+                              OpenChanged="OnDropOpenChanged"
+                              Title="Drop this view?"
+                              ObjectKind="view"
+                              ObjectName="@drop.DisplayName"
+                              ConfirmText="Drop view"
+                              OnConfirm="RunDropAsync">
+            <span>Dropping stops the view's maintenance and deletes its projection tree and every generation of it. The source tree is not touched. A view the host declares at startup cannot be dropped here.</span>
+        </LtConfirmDestructive>
+    }
+
+    @if (_canCreate)
+    {
+        <DataCreateViewDialog Open="@CreateOpen" OpenChanged="OnCreateOpenChanged" OnCreated="OnCreatedAsync" />
+    }
 }
 
 @code {
@@ -106,11 +129,17 @@
         @if (CanAdminister(view))
         {
             <span class="lt-data-actions">
-                <LtButton Variant="LtButtonVariant.Quiet" Disabled="@(Busy is not null)" OnClick="() => Ask(view, rebuild: false)">
-                    @(Busy == view.StateId && !BusyRebuild ? "Reconciling" : "Reconcile")
-                </LtButton>
-                <LtButton Variant="LtButtonVariant.Destructive" Disabled="@(Busy is not null)" OnClick="() => Ask(view, rebuild: true)">
-                    @(Busy == view.StateId && BusyRebuild ? "Rebuilding" : "Rebuild")
+                @if (CanRunOperations)
+                {
+                    <LtButton Variant="LtButtonVariant.Quiet" Disabled="@(Busy is not null || _dropping)" OnClick="() => Ask(view, rebuild: false)">
+                        @(Busy == view.StateId && !BusyRebuild ? "Reconciling" : "Reconcile")
+                    </LtButton>
+                    <LtButton Variant="LtButtonVariant.Destructive" Disabled="@(Busy is not null || _dropping)" OnClick="() => Ask(view, rebuild: true)">
+                        @(Busy == view.StateId && BusyRebuild ? "Rebuilding" : "Rebuild")
+                    </LtButton>
+                }
+                <LtButton Variant="LtButtonVariant.Destructive" Disabled="@(Busy is not null || _dropping)" OnClick="() => AskDrop(view)" data-lt-view-drop="@view.DisplayName">
+                    @(_dropping && _droppingView == view.StateId ? "Dropping" : "Drop view...")
                 </LtButton>
             </span>
         }

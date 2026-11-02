@@ -227,4 +227,23 @@ public interface ILatticeBackupControl
         string backupId,
         BackupHealthConfig config,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads the effective per-backup health-monitor configuration for the backup
+    /// identified by <paramref name="backupId"/>: the override last stored with
+    /// <see cref="ConfigureBackupHealthAsync"/>, or, when none was stored, the
+    /// deployment default every backup is auto-enrolled with (monitored when the
+    /// cluster-wide monitor is enabled, at its default interval). Returns
+    /// <see langword="null"/> when no backup with the id exists. Authorizes the
+    /// backup's scope fail-closed, with the same grant as
+    /// <see cref="ConfigureBackupHealthAsync"/>, before returning anything.
+    /// </summary>
+    /// <param name="backupId">The backup id. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The backup's effective monitor configuration, or <see langword="null"/> when the backup does not exist.</returns>
+    /// <exception cref="ArgumentException"><paramref name="backupId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the backup's scope.</exception>
+    Task<BackupHealthConfig?> GetBackupHealthConfigAsync(
+        string backupId,
+        CancellationToken cancellationToken = default);
 }

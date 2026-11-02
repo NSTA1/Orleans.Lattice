@@ -38,7 +38,6 @@ internal sealed class LatticeReplicationConfigAuthority(
     ILatticeReplicationPreconditionValidator preconditions,
     ILatticeReplicationContext replicationContext,
     ILatticeReplicationAdmin admin,
-    ILatticeTreeContentProbe treeContentProbe,
     IOptionsMonitor<LatticeReplicationOptions> options) : ILatticeReplicationConfigAuthority
 {
     private readonly ILatticeReplicationConfigStore _store =
@@ -52,9 +51,6 @@ internal sealed class LatticeReplicationConfigAuthority(
 
     private readonly ILatticeReplicationAdmin _admin =
         admin ?? throw new ArgumentNullException(nameof(admin));
-
-    private readonly ILatticeTreeContentProbe _treeContentProbe =
-        treeContentProbe ?? throw new ArgumentNullException(nameof(treeContentProbe));
 
     private readonly IOptionsMonitor<LatticeReplicationOptions> _options =
         options ?? throw new ArgumentNullException(nameof(options));
@@ -142,20 +138,20 @@ internal sealed class LatticeReplicationConfigAuthority(
         working.Enable(replicaId, NextFlagCounter(working.Enabled, replicaId));
         await _store.WriteEntryAsync(treeId, replicaId, working, cancellationToken).ConfigureAwait(false);
 
-        // Compose with the snapshot bootstrap when enabling a tree that already
-        // holds data: the change feed only carries new mutations, so peers need
-        // a one-off snapshot of the pre-existing rows. The bootstrap seam is
-        // receiver-driven, so bootstrapSourceClusterId names the cluster holding
-        // the authoritative data to pull from.
+        // Compose with the snapshot bootstrap: the change feed only carries new
+        // mutations, and a receiver drops (and acknowledges) every entry shipped
+        // before its own enrollment lands, so the source's pre-existing rows
+        // reach this cluster only through a snapshot. The bootstrap is
+        // receiver-driven: bootstrapSourceClusterId names the cluster holding
+        // the authoritative rows, and naming it is the request. Whether the
+        // LOCAL tree holds rows is not the question (issue #5557): an empty
+        // receiver is exactly the one that needs the snapshot.
         var bootstrapRequested = false;
         if (!string.IsNullOrEmpty(bootstrapSourceClusterId))
         {
-            if (await _treeContentProbe.HasContentAsync(treeId, cancellationToken).ConfigureAwait(false))
-            {
-                await _admin.RequestSnapshotAsync(treeId, bootstrapSourceClusterId, cancellationToken)
-                    .ConfigureAwait(false);
-                bootstrapRequested = true;
-            }
+            await _admin.RequestSnapshotAsync(treeId, bootstrapSourceClusterId, cancellationToken)
+                .ConfigureAwait(false);
+            bootstrapRequested = true;
         }
 
         return new LatticeReplicationEnableResult(

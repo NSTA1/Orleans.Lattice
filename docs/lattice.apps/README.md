@@ -354,6 +354,15 @@ callers skip the check), and return an `AppActivationOutcome` describing success
 structured failure (`AppActivationFailure`) with diagnostics. Its `GetStatusAsync` read
 is ungated and in-process, so a facade that exposes it must gate it itself.
 
+A run is a sequence of cluster calls (rules, replication, every owned tree, the registry
+transition), each bounded by the grain response timeout and each turning its own failure
+into a recorded outcome. The run as a whole is bounded by those steps (up to ten
+minutes) rather than by a single response timeout, so a slow uninstall on a loaded
+cluster finishes and records its outcome instead of being abandoned part-way through
+when the default response timeout (30 seconds) elapses. The app-control facade returns
+a pending result for a run that is still going after its accept window; see
+[Lifecycle results](../lattice.api.apps/README.md).
+
 **Enable** resolves the installed version's manifest from the app source, validates
 it, compiles its roles against the pinned ceiling and bindings, re-verifies its
 [tree ownership](#tree-ownership) claims, enrols the app's declared
@@ -394,7 +403,11 @@ storage, keyed per install; a run that cannot read the existing
 status leaves it untouched rather than overwrite it, and a failed status write is
 only logged. That record is the evidence the
 control facade reports as a `Failed` state; a disabled registry state alone is never
-read as a failure.
+read as a failure. A replicated run records interim failure evidence before it enrols,
+so a run stopped part-way is never read as a success; the facade reads
+`IAppActivationPipeline.GetRunningOperationAsync`, which the activation grain answers
+from memory while a run executes, and reports a run in flight as pending rather than
+`Failed`.
 
 Two prerequisites are enforced fail-closed. Without membership, every caller
 resolves to the anonymous subject with no groups and every app rule would be

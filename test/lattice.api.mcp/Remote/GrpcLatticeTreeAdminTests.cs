@@ -664,6 +664,23 @@ public sealed class GrpcLatticeTreeAdminTests
     }
 
     [Test]
+    public async Task ListViewProvidersAsync_forwards_the_source_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeViewProviderCatalog
+        {
+            Providers = [new TreeViewProviderInfo { ProviderKey = "app.by-status.v1", Description = "Orders by status" }],
+        });
+
+        var result = await Adapter(invoker).ListViewProvidersAsync("orders");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(invoker.LastRequest, Is.EqualTo(new TreeAdminTreeRequest { TreeId = "orders" }));
+            Assert.That(result.Providers.Single().ProviderKey, Is.EqualTo("app.by-status.v1"));
+        });
+    }
+
+    [Test]
     public async Task GetViewStatusAsync_forwards_request_and_unwraps_response()
     {
         var invoker = new FakeCallInvoker(_ => new TreeViewStatus

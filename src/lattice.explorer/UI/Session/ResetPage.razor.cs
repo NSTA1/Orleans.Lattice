@@ -4,9 +4,10 @@ using Orleans.Lattice.Explorer.Core.Session;
 namespace Orleans.Lattice.Explorer.UI.Session;
 
 /// <summary>
-/// The reset-view page at <c>/reset</c>: it discloses everything the preference
-/// contract remembers for the current identity and cluster, and clears all of it
-/// only when asked, announcing the outcome.
+/// The reset-view page at <c>/reset</c> (and <c>/t/{tenant}/reset</c>, so the escape
+/// also answers under the tenant root every other address carries): it discloses
+/// everything the preference contract remembers for the current identity and
+/// cluster, and clears all of it only when asked, announcing the outcome.
 /// </summary>
 /// <remarks>
 /// It lists <see cref="IExplorerShellPreferences.Keys"/> rather than a
@@ -24,6 +25,13 @@ public partial class ResetPage
 
     /// <summary>Creates the page, binding its one callback once rather than per render.</summary>
     public ResetPage() => _resetClicked = EventCallback.Factory.Create(this, ResetAsync);
+
+    /// <summary>
+    /// The <c>{tenant}</c> route parameter of a tenant-rooted address. Preferences belong to the
+    /// identity and cluster, not the tenant, so the page ignores it.
+    /// </summary>
+    [Parameter]
+    public string? Tenant { get; set; }
 
     [Inject]
     private IExplorerShellPreferences Preferences { get; set; } = default!;

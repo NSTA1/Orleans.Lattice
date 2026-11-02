@@ -33,6 +33,7 @@
                 {
                     <form class="lt-confirm" method="post" action="@Options.LoginPath" data-enhance="false">
                         <AntiforgeryToken />
+                        <input type="hidden" name="@SessionSignInOptions.ReturnPathFieldName" value="@ReturnPath" />
                         @PasswordFields(false)
                         <div class="lt-dialog__actions">
                             <LtButton Type="LtButtonType.Submit">Sign in</LtButton>

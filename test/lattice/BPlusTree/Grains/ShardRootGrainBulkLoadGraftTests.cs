@@ -91,6 +91,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         ((IGrainBase)leaf).GrainContext.Returns(leafContext);
 
         leaf.CountAsync().Returns(0);
+        leaf.GetAppendTailAsync().Returns((0, (string?)null));
         return leaf;
     }
 

@@ -72,6 +72,17 @@ public sealed partial class LatticeDataApiGrpcServiceUnitTests
     }
 
     [Test]
+    public async Task ProbeCapabilities_forwards_the_tree_and_key_and_returns_the_facades_report()
+    {
+        var report = new LatticeDataCapabilities { TreeId = "t", Key = "k", CanWrite = true };
+        _api.ProbeCapabilitiesAsync("t", "k", Arg.Any<CancellationToken>()).Returns(report);
+
+        var response = await _service.ProbeCapabilities(new DataProbeRequest { TreeId = "t", Key = "k" }, Context());
+
+        Assert.That(response, Is.SameAs(report));
+    }
+
+    [Test]
     public void CrdtWrite_unknown_op_maps_to_invalid_argument()
     {
         var ex = Assert.ThrowsAsync<RpcException>(

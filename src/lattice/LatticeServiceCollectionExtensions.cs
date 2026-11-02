@@ -97,6 +97,13 @@ public static class LatticeServiceCollectionExtensions
             ServiceDescriptor.Singleton<IValidateOptions<LatticeGrainStorageFencingOptions>, LatticeGrainStorageFencingOptionsValidator>());
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<ILifecycleParticipant<ISiloLifecycle>, GrainStorageFencingCheck>());
+
+        // The probe makes the provider reject a write on purpose, which providers
+        // such as Azure Table storage log at Error; drop the records written on
+        // the probe's own flow so a healthy start logs no Error (issue #5442).
+        // The check reports every outcome of the probe itself.
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IPostConfigureOptions<LoggerFilterOptions>, GrainStorageFencingProbeLogFilter>());
         builder.Services.AddSingleton<LatticeOptionsResolver>();
         builder.Services.AddOptions<Operations.LatticeOperationOptions>();
         builder.Services.TryAddSingleton<Operations.ILatticeOperationSiloLiveness, Operations.ClusterMembershipOperationSiloLiveness>();

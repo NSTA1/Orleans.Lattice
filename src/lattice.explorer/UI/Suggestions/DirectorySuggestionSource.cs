@@ -18,14 +18,14 @@ namespace Orleans.Lattice.Explorer.UI.Suggestions;
 /// <para>
 /// Without a directory (a token-only deployment, or none configured) the source
 /// answers unavailable and the field accepts the id as typed, saying the id is not
-/// validated. For groups it may instead list the auth store's own groups when
-/// asked to, for a field where a group need not be in the directory.
+/// validated. The auth store's own groups are a separate source
+/// (<see cref="Areas.Access.StoredGroupSuggestionSource"/>), which
+/// <see cref="Areas.Access.ClusterGroupSuggestionSource"/> lists beside this one.
 /// </para>
 /// </remarks>
 /// <param name="admin">The auth facade, or <see langword="null"/> when the head serves none.</param>
 /// <param name="kind">Whether users or groups are searched, or <see langword="null"/> for both.</param>
-/// <param name="listStoredGroups">For groups: list the auth store's groups when the directory is unavailable.</param>
-internal sealed class DirectorySuggestionSource(ILatticeAuthAdmin? admin, DirectoryPrincipalKind? kind, bool listStoredGroups = false)
+internal sealed class DirectorySuggestionSource(ILatticeAuthAdmin? admin, DirectoryPrincipalKind? kind)
     : ILtSuggestionSource
 {
     /// <summary>The note shown when no directory can be searched.</summary>
@@ -66,9 +66,7 @@ internal sealed class DirectorySuggestionSource(ILatticeAuthAdmin? admin, Direct
 
         if (result is not { Available: true, Principals: not null })
         {
-            return listStoredGroups && kind == DirectoryPrincipalKind.Group
-                ? await ListStoredGroupsAsync(admin, text, limit, cancellationToken).ConfigureAwait(false)
-                : LtSuggestionSet.Unavailable(UnavailableReason);
+            return LtSuggestionSet.Unavailable(UnavailableReason);
         }
 
         var term = text.Trim();
@@ -145,29 +143,7 @@ internal sealed class DirectorySuggestionSource(ILatticeAuthAdmin? admin, Direct
             return null;
         }
     }
+
     private static LtSuggestion Describe(DirectoryPrincipalDescriptor principal) =>
         new(principal.Id, string.IsNullOrWhiteSpace(principal.DisplayName) || principal.DisplayName == principal.Id ? null : principal.DisplayName);
-
-    private static async Task<LtSuggestionSet> ListStoredGroupsAsync(ILatticeAuthAdmin admin, string text, int limit, CancellationToken cancellationToken)
-    {
-        try
-        {
-            var page = await admin.ListGroupsAsync(new AuthPageRequest { PageSize = AuthPageRequest.MaxPageSize }, cancellationToken).ConfigureAwait(false);
-            var values = new List<LtSuggestion>();
-            foreach (var group in page?.Entries ?? [])
-            {
-                values.Add(new LtSuggestion(group.GroupId, string.IsNullOrWhiteSpace(group.DisplayName) ? null : group.DisplayName));
-            }
-
-            return SuggestionMatcher.Match(values, text.Trim(), limit);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception)
-        {
-            return LtSuggestionSet.Unavailable(UnavailableReason);
-        }
-    }
 }

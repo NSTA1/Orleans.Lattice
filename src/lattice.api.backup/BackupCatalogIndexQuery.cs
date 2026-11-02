@@ -13,10 +13,15 @@ namespace Orleans.Lattice.Api.Backup;
 /// drops any row whose backup no longer exists in the authoritative catalog (a
 /// liveness check that heals stale index rows a value-less delete cannot re-key),
 /// hides rows the caller may not read, and pages by an opaque index-key cursor.
+/// Every catalogued backup is listed, the members of an incremental chain
+/// included.
 /// <para>
 /// When the index view is not present (it is disabled, or the host does not run
-/// the view infrastructure) the query degrades to a full catalog scan that
-/// produces the identical ordering, filtering and cursor semantics.
+/// the view infrastructure), or it cannot catch up to the catalog head within
+/// <see cref="IndexCatchUpTimeout"/> (it is draining a burst or rebuilding), the
+/// query is answered from a full catalog scan that produces the identical
+/// ordering, filtering and cursor semantics, so a lagging index never hides a
+/// catalogued backup.
 /// </para>
 /// </summary>
 internal sealed class BackupCatalogIndexQuery
@@ -25,6 +30,12 @@ internal sealed class BackupCatalogIndexQuery
 
     private static readonly ILatticeSerializer<BackupCatalogIndexRow> RowSerializer =
         JsonLatticeSerializer<BackupCatalogIndexRow>.Default;
+
+    /// <summary>
+    /// How long a listing waits for the index to reach the catalog head before it
+    /// is answered from the authoritative catalog instead.
+    /// </summary>
+    internal static readonly TimeSpan IndexCatchUpTimeout = TimeSpan.FromSeconds(5);
 
     private readonly ILatticeBackupCatalogStore _catalog;
     private readonly ILatticeBackupSink _sink;
@@ -72,59 +83,40 @@ internal sealed class BackupCatalogIndexQuery
             ? null
             : await _viewFactory.GetAsync(BackupConstants.CatalogIndexView, cancellationToken).ConfigureAwait(false);
 
-        // An incremental chain is shown as a single row: its tip (the most recent
-        // increment). Every backup referenced as another backup's base is an
-        // ancestor the tip's collapsed row owns, so it is folded out of the listing.
-        // This must be decided over the whole catalog, not per page, because chain
-        // members carry distinct capture times and are scattered across pages.
-        var referencedBaseIds = view is not null
-            ? await BuildReferencedBaseIdsFromIndexAsync(view, cancellationToken).ConfigureAwait(false)
-            : await BuildReferencedBaseIdsFromCatalogAsync(cancellationToken).ConfigureAwait(false);
+        // Read-your-writes: the index is served only once it has caught up to the
+        // catalog head. An index still draining a burst, or rebuilding after falling
+        // off the catalog's write-ahead log, could lack a backup the catalog already
+        // holds, so a catch-up that does not complete in time is answered from the
+        // authoritative catalog instead (issue #5450). Both sources produce the same
+        // keys, so a cursor taken from one resumes on the other.
+        if (view is not null && !await IsCaughtUpAsync(view, cancellationToken).ConfigureAwait(false))
+        {
+            view = null;
+        }
 
         var source = view is not null
             ? ScanIndexAsync(view, startKey, cancellationToken)
             : ScanFullScanAsync(startKey, cancellationToken);
 
-        return await PageAsync(source, request, pageSize, referencedBaseIds, isReadAuthorized, cancellationToken).ConfigureAwait(false);
+        return await PageAsync(source, request, pageSize, isReadAuthorized, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
-    /// Collects, from the compact index, every backup id referenced as another
-    /// backup's base - the ancestors an incremental chain's tip row folds in.
+    /// Waits, bounded by <see cref="IndexCatchUpTimeout"/>, for the index to reflect
+    /// every catalog write committed before the call.
     /// </summary>
-    private static async Task<HashSet<string>> BuildReferencedBaseIdsFromIndexAsync(
-        ILatticeView view,
-        CancellationToken cancellationToken)
+    /// <returns><see langword="true"/> when the index caught up in time.</returns>
+    private static async Task<bool> IsCaughtUpAsync(ILatticeView view, CancellationToken cancellationToken)
     {
-        var referenced = new HashSet<string>(StringComparer.Ordinal);
-        await foreach (var entry in view.ScanEntriesAsync(null, null, cancellationToken: cancellationToken).ConfigureAwait(false))
+        try
         {
-            var row = RowSerializer.Deserialize(entry.Value);
-            if (row.BaseBackupId is { Length: > 0 } baseId)
-            {
-                referenced.Add(baseId);
-            }
+            await view.WaitForSourceHeadAsync(IndexCatchUpTimeout, cancellationToken).ConfigureAwait(false);
+            return true;
         }
-
-        return referenced;
-    }
-
-    /// <summary>
-    /// Collects every referenced base id from the authoritative catalog, used when
-    /// the index view is absent and the listing degrades to a full scan.
-    /// </summary>
-    private async Task<HashSet<string>> BuildReferencedBaseIdsFromCatalogAsync(CancellationToken cancellationToken)
-    {
-        var referenced = new HashSet<string>(StringComparer.Ordinal);
-        await foreach (var manifest in _catalog.ListAsync(cancellationToken).ConfigureAwait(false))
+        catch (TimeoutException)
         {
-            if (manifest.BaseBackupId is { Length: > 0 } baseId)
-            {
-                referenced.Add(baseId);
-            }
+            return false;
         }
-
-        return referenced;
     }
 
     /// <summary>Streams index entries from the materialised view in newest-first key order.</summary>
@@ -133,25 +125,13 @@ internal sealed class BackupCatalogIndexQuery
         string? startKey,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        // Best-effort read-your-writes: let the index catch up to the catalog head
-        // so a just-captured backup appears on the next listing. A slow catch-up
-        // degrades to a possibly-stale (never wrong) view rather than blocking.
-        try
-        {
-            await view.WaitForSourceHeadAsync(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
-        }
-        catch (TimeoutException)
-        {
-            // Proceed with the current view generation.
-        }
-
         await foreach (var entry in view.ScanEntriesAsync(startKey, null, cancellationToken: cancellationToken).ConfigureAwait(false))
         {
             yield return new IndexEntry(entry.Key, RowSerializer.Deserialize(entry.Value), Manifest: null);
         }
     }
 
-    /// <summary>Streams synthesized index entries from a full catalog scan when the index view is absent.</summary>
+    /// <summary>Streams synthesized index entries from a full catalog scan when the index view is absent or lagging.</summary>
     private async IAsyncEnumerable<IndexEntry> ScanFullScanAsync(
         string? startKey,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
@@ -191,7 +171,6 @@ internal sealed class BackupCatalogIndexQuery
         IAsyncEnumerable<IndexEntry> source,
         BackupCatalogRequest request,
         int pageSize,
-        HashSet<string> referencedBaseIds,
         Func<BackupScopeSelector, CancellationToken, ValueTask<bool>> isReadAuthorized,
         CancellationToken cancellationToken)
     {
@@ -213,7 +192,7 @@ internal sealed class BackupCatalogIndexQuery
             var thisGroupKey = GroupKeyOf(entry.Key);
             if (groupKey is not null && !string.Equals(thisGroupKey, groupKey, StringComparison.Ordinal))
             {
-                await FinalizeGroupAsync(group, groupLastKey!, request, referencedBaseIds, isReadAuthorized, matched, emitted, cancellationToken)
+                await FinalizeGroupAsync(group, groupLastKey!, request, isReadAuthorized, matched, emitted, cancellationToken)
                     .ConfigureAwait(false);
                 group.Clear();
 
@@ -232,7 +211,7 @@ internal sealed class BackupCatalogIndexQuery
 
         if (group.Count > 0 && matched.Count <= pageSize)
         {
-            await FinalizeGroupAsync(group, groupLastKey!, request, referencedBaseIds, isReadAuthorized, matched, emitted, cancellationToken)
+            await FinalizeGroupAsync(group, groupLastKey!, request, isReadAuthorized, matched, emitted, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -255,20 +234,15 @@ internal sealed class BackupCatalogIndexQuery
         List<BackupCatalogIndexRow> members,
         string groupLastKey,
         BackupCatalogRequest request,
-        HashSet<string> referencedBaseIds,
         Func<BackupScopeSelector, CancellationToken, ValueTask<bool>> isReadAuthorized,
         List<(IReadOnlyList<BackupManifest> Manifests, string CursorKey)> matched,
         HashSet<string> emitted,
         CancellationToken cancellationToken)
     {
-        // Fold incremental-chain ancestors: a group every one of whose distinct
-        // backups is referenced as some other backup's base is an ancestor the
-        // chain tip's collapsed row already represents, so it is not listed.
-        if (members.TrueForAll(r => referencedBaseIds.Contains(r.BackupId)))
-        {
-            return;
-        }
-
+        // Every catalogued backup is its own row, incremental-chain members
+        // included: a base an increment builds on is still a restorable backup the
+        // caller must be able to find, filter for, choose as a base and delete
+        // (issue #5450). The chain is described per backup, not by hiding rows.
         if (!MatchesFilters(members, request))
         {
             return;

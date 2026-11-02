@@ -252,6 +252,29 @@ internal sealed partial class ShellTreeAdminTransport(ShellTransportChannel chan
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Streams over the binding's single duplex <c>StreamBulkLoad</c> call, which resumes a
+    /// stream broken by a transient fault from its first unacknowledged chunk.
+    /// </remarks>
+    public Task<TreeBulkLoadResult> BulkLoadStreamAsync(
+        string treeId,
+        string operationId,
+        IAsyncEnumerable<DataEntry> sortedEntries,
+        IProgress<TreeBulkLoadChunkAck>? progress = null,
+        TreeBulkLoadStreamOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        ArgumentNullException.ThrowIfNull(sortedEntries);
+        return CallAsync(
+            (TreeId: treeId, OperationId: operationId, Entries: sortedEntries, Progress: progress, Options: options),
+            static (client, state, ct) => client.BulkLoadStreamAsync(state.TreeId, state.OperationId, state.Entries, state.Progress, state.Options, ct),
+            null,
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<TreeRestoreResult> RestoreTreeAsync(string treeId, string backupId, string? operationId = null, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
@@ -448,6 +471,17 @@ internal sealed partial class ShellTreeAdminTransport(ShellTransportChannel chan
         return CallAsync(
             (object?)null,
             static (client, _, ct) => client.ListViewsAsync(ct),
+            null,
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<TreeViewProviderCatalog> ListViewProvidersAsync(string sourceTreeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sourceTreeId);
+        return CallAsync(
+            sourceTreeId,
+            static (client, state, ct) => client.ListViewProvidersAsync(state, ct),
             null,
             cancellationToken);
     }

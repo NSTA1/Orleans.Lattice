@@ -107,7 +107,7 @@ internal sealed class ReplicationToolGroup : ILatticeApiMcpToolGroup
                 [Description("The target tree id to enable replication for.")] string treeId,
                 [Description("The wire merge mode to fix for the tree: LwwRegister, OrSet, PnCounter, VersionVector, MvRegister, OrMap, Sequence, OrFlag, RwFlag, or RwSet.")] string mode,
                 CancellationToken cancellationToken,
-                [Description("Optional cluster id to pull an initial snapshot from when the tree already holds data; null skips the bootstrap.")] string? bootstrapSourceClusterId = null) =>
+                [Description("Optional cluster id to pull an initial snapshot from (enable that cluster first); null skips the bootstrap.")] string? bootstrapSourceClusterId = null) =>
             {
                 using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var control = context.Services!.GetRequiredService<ILatticeReplicationControl>();
@@ -148,8 +148,8 @@ internal sealed class ReplicationToolGroup : ILatticeApiMcpToolGroup
                 Description =
                     "Disables cross-cluster replication for a tree: its runtime merge mode stops resolving, but a "
                     + "shipper already active for the tree is not stopped. Never purges already-replicated peer data "
-                    + "and keeps the tree's fixed merge mode; a later re-enable bootstraps only when a source cluster "
-                    + "is supplied and the tree already holds data. Idempotent. Subject to the fail-closed replication access gate. Requires "
+                    + "and keeps the tree's fixed merge mode; a later re-enable bootstraps whenever a source cluster "
+                    + "is supplied. Idempotent. Subject to the fail-closed replication access gate. Requires "
                     + "replication control to be enabled on the server.",
                 ReadOnly = false,
                 Destructive = true,

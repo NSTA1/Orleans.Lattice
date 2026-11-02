@@ -765,6 +765,14 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// B+ tree. All keys in <paramref name="sortedEntries"/> must be greater than
     /// every existing key in the shard. Creates new leaves as needed and propagates
     /// separators into internal nodes. Used by the streaming bulk-load extension method.
+    /// <para>
+    /// Re-delivery is a no-op whatever its operation id: entries at or below the
+    /// shard's highest key are recognised as already grafted and skipped, so a
+    /// resumed stream that re-sends a superseded batch, or a retry after a fault
+    /// part-way through an append, grafts nothing twice (issue #5460). A skipped
+    /// entry that the shard holds no row for is a batch out of order, and is
+    /// refused with <see cref="InvalidOperationException"/>.
+    /// </para>
     /// </summary>
     /// <param name="operationId">Unique ID for idempotency. Retries with the same ID are no-ops.</param>
     /// <param name="sortedEntries">The entries to append, already sorted in ascending key order and all greater than every existing key in the shard.</param>

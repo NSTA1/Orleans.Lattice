@@ -482,7 +482,8 @@ public static partial class LatticeReplicationServiceCollectionExtensions
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<RestoreParticipant>>(),
             sp.GetServices<Orleans.Lattice.Backup.ILatticeBackupSetResolver>().FirstOrDefault(),
             sp.GetRequiredService<Orleans.Lattice.Backup.IReplicatedTreeMembership>(),
-            sp.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>()));
+            sp.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>(),
+            sp.GetRequiredService<IReplicationTopology>()));
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<ISagaParticipant, RestoreParticipant>(
                 static sp => sp.GetRequiredService<RestoreParticipant>()));

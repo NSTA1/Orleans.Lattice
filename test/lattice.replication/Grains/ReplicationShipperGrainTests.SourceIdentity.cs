@@ -192,4 +192,30 @@ public partial class ReplicationShipperGrainTests
             () => grain.NotifySourceIdentityChangedAsync(physical!, CancellationToken.None),
             Throws.InstanceOf<ArgumentException>());
     }
+
+    /// <summary>
+    /// Regression for #5462: a rebind resets the cursors to 0 on the new physical
+    /// log, so the shipper must hold that log from its start at the rebind itself.
+    /// It used to register with the new log's offset consumers only before its
+    /// next read, and a WAL GC pass in between could trim the records it was about
+    /// to re-ship, forcing a re-seed of the peer.
+    /// </summary>
+    [Test]
+    public async Task NotifySourceIdentityChanged_holds_the_new_log_from_its_start_before_the_next_pump()
+    {
+        var (factory, _) = FactoryWithRegistry("unused");
+        var consumers = Substitute.For<IWalOffsetConsumerRegistryGrain>();
+        factory.GetGrain<IWalOffsetConsumerRegistryGrain>("phys-new", Arg.Any<string?>()).Returns(consumers);
+        var seed = new ReplicationShipperState { BoundPhysicalTreeId = "phys-old" };
+        seed.PartitionCursors[0] = 99L;
+        var (grain, _, _, _, _, _, _) = Create(seedState: seed, grainFactory: factory);
+        grain.SetCursorFlushClockForTesting(new AdvanceableClock(DateTimeOffset.UnixEpoch));
+
+        await grain.NotifySourceIdentityChangedAsync("phys-new", CancellationToken.None);
+
+        await consumers.Received(1).RegisterAsync(Arg.Any<GrainId>());
+        var held = await grain.GetDurableReadPositionsAsync("phys-new");
+        Assert.That(held, Is.Not.Null.And.Not.Empty);
+        Assert.That(held, Is.All.EqualTo(0L), "every partition of the new log is held from its start");
+    }
 }

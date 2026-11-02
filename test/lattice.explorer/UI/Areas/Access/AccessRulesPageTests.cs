@@ -119,6 +119,31 @@ public sealed class AccessRulesPageTests : AccessTestContext
     }
 
     [Test]
+    public void A_rule_saved_before_load_more_is_listed_once_when_its_page_arrives()
+    {
+        // The saved rule is put first at once; the page that later carries it again must not
+        // list it twice, or the table and its count overstate the rules.
+        Admin.ForcedPageSize = 2;
+        Admin.WithRule(Rule("a")).WithRule(Rule("b")).WithRule(Rule("c"));
+        var cut = RenderAt<AccessRulesPage>("access/rules");
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-access-count").TextContent, Is.EqualTo("2 rules, more to load")));
+
+        cut.Find("[data-lt-command=\"access.create-rule\"]").Click();
+        AccessRuleEditorTests.Fill(cut, "d", "ops", "orders");
+        cut.Find("[data-lt-operation=\"read\"]").Change(true);
+        cut.Find("form.lt-access-form").Submit();
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-access-count").TextContent, Is.EqualTo("3 rules, more to load")));
+
+        cut.FindAll("button").Single(button => button.TextContent == "Load more rules").Click();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.FindAll("tbody th").Select(cell => cell.TextContent), Is.EqualTo(new[] { "d", "a", "b", "c" }));
+            Assert.That(cut.Find(".lt-access-count").TextContent, Is.EqualTo("4 rules"));
+        });
+    }
+
+    [Test]
     public void An_empty_store_says_so()
     {
         var cut = RenderAt<AccessRulesPage>("access/rules");

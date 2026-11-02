@@ -46,12 +46,17 @@ public partial class DataDirectoryPage : IDisposable
     private bool _subscribed;
     private bool _anyApp;
     private bool _anySource;
+    private bool _canCreate;
+    private bool _createOpen;
 
     [Inject]
     internal DataDirectory Directory { get; set; } = default!;
 
     [Inject]
     internal ExplorerTenancy Tenancy { get; set; } = default!;
+
+    [Inject]
+    internal IServiceProvider Services { get; set; } = default!;
 
     [CascadingParameter(Name = LtBreakpointCascade.Name)]
     internal LtBreakpoint? Breakpoint { get; set; }
@@ -85,7 +90,49 @@ public partial class DataDirectoryPage : IDisposable
     }
 
     /// <inheritdoc />
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    protected override async Task OnInitializedAsync()
+    {
+        _ = LoadCreateGateAsync();
+        await LoadAsync();
+    }
+
+    /// <summary>
+    /// Draws New tree from file... only for a caller the tree-creation probe admits (issue
+    /// #5365). The control creates the tree through the Cluster area's creation seam, then
+    /// opens the new tree's Import dialog on a seed; the import's own gate then decides,
+    /// fail-closed, whether the caller may seed it.
+    /// </summary>
+    private async Task LoadCreateGateAsync()
+    {
+        if (Services.GetService(typeof(Cluster.ClusterTreeCreation)) is not Cluster.ClusterTreeCreation creation)
+        {
+            return;
+        }
+
+        try
+        {
+            if (await creation.CanCreateAsync(_lifetime.Token) && !_lifetime.IsLeft)
+            {
+                _canCreate = true;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (Exception)
+        {
+            // Fail closed: a probe that cannot answer draws nothing.
+        }
+    }
+
+    private void OpenCreate() => _createOpen = true;
+
+    private void OnTreeCreated(Orleans.Lattice.Api.TreeAdmin.TreeCreationResult result)
+    {
+        _createOpen = false;
+        (Services.GetService(typeof(DataImportGate)) as DataImportGate)?.Forget();
+        Navigator.NavigateTo(ExplorerAddress.ForTree(DataArea.AreaKey, result.TreeId)
+            .WithTenant(Address.Tenant)
+            .WithQuery(DataTabs.ImportQuery, DataTabs.ImportSeedValue));
+    }
 
     /// <inheritdoc />
     public void Dispose()

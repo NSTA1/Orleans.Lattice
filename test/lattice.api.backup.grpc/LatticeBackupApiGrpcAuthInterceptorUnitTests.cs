@@ -147,6 +147,11 @@ public sealed class LatticeBackupApiGrpcAuthInterceptorUnitTests
             LatticeBackupApiOperation.ConfigureBackupHealth,
             (string?)"b-cfg").SetName("ConfigureBackupHealth_targets_backup");
         yield return new TestCaseData(
+            LatticeBackupGrpcMethods.GetBackupHealthConfigMethodName,
+            (object)new BackupHealthConfigGetRequestMessage { BackupId = "b-cfg-get" },
+            LatticeBackupApiOperation.GetBackupHealthConfig,
+            (string?)"b-cfg-get").SetName("GetBackupHealthConfig_targets_backup");
+        yield return new TestCaseData(
             LatticeBackupGrpcMethods.StartBackupMethodName,
             (object)new BackupCaptureRequestMessage { Name = "n", Scope = Orleans.Lattice.Backup.BackupScopeSelector.WholeTree("t-start") },
             LatticeBackupApiOperation.StartBackup,

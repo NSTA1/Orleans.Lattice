@@ -118,6 +118,15 @@ public sealed class LatticeExplorerWebOptions
     public string? DataProtectionApplicationName { get; set; }
 
     /// <summary>
+    /// The largest file, in bytes, the Data area's Import dialog reads. Defaults to
+    /// 2 GiB. An import streams its file at every hop and holds a bounded window of it
+    /// whatever its size, so this bounds how long one import may occupy the head and the
+    /// cluster rather than how much memory it takes. A file larger than this is refused
+    /// before any of it is read.
+    /// </summary>
+    public long MaxImportBytes { get; set; } = 2L * 1024 * 1024 * 1024;
+
+    /// <summary>
     /// Optional escape hatch invoked with the Data Protection builder after the
     /// built-in persistence and application-name configuration is applied, so a
     /// host can attach additional configuration (a different key store, key

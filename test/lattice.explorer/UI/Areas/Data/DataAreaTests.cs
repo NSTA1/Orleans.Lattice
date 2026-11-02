@@ -171,7 +171,7 @@ public sealed class DataAreaTests : DataTestContext
     public async Task The_refresh_command_reloads_the_directory_and_has_a_visible_control()
     {
         Client.WithTree("orders");
-        var command = Area.Commands.Single();
+        var command = Area.Commands.Single(candidate => candidate.Id == DataArea.RefreshCommandId);
         var cut = RenderAt("data");
         cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr.lt-table__row"), Has.Count.EqualTo(1)));
 

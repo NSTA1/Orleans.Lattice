@@ -1,6 +1,5 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Orleans.Configuration;
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Api.TenantAdmin;
@@ -18,7 +17,7 @@ internal sealed class TenantRegionBackfillService(
     ITenantRegistry registry,
     TenantRegionLifecycleDriver lifecycle,
     IGrainFactory grainFactory,
-    IOptions<ClusterOptions> clusterOptions,
+    TenantLocalRegion localRegion,
     ILogger<TenantRegionBackfillService> logger,
     ILatticeBootstrapCoordinator? bootstrap = null,
     ILatticeReplicationDeadLetters? deadLetters = null,
@@ -26,9 +25,8 @@ internal sealed class TenantRegionBackfillService(
     ILatticeReplicationContext? replicationContext = null,
     ILatticeReplicationConfigAuthority? replicationConfigAuthority = null)
 {
-    internal string LocalRegionId { get; } = string.IsNullOrEmpty(clusterOptions.Value.ClusterId)
-        ? "default"
-        : clusterOptions.Value.ClusterId;
+    /// <summary>The region this silo serves, from the shared <see cref="TenantLocalRegion"/> authority.</summary>
+    internal string LocalRegionId => localRegion.RegionId;
 
     /// <summary>Reads the progress visible for the local region without advancing it.</summary>
     internal async Task<TenantRegionBackfillProgress> GetProgressAsync(

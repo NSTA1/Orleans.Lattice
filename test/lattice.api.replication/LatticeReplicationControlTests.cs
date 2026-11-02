@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Api.Replication.Tests;
 /// caller's authorized trees, and engine exceptions surface unchanged.
 /// </summary>
 [TestFixture]
-public sealed class LatticeReplicationControlTests
+public sealed partial class LatticeReplicationControlTests
 {
     private const string Tree = "orders";
 

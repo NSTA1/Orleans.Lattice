@@ -175,6 +175,57 @@ public sealed class ReplicationDataSourceTests
     }
 
     [Test]
+    public async Task The_enable_probe_asks_the_facade_about_the_reserved_tree_and_is_reused_until_forgotten()
+    {
+        _control.MayConfigure = false;
+        using var data = Create();
+
+        var first = await data.CanEnableAsync(refresh: false, CancellationToken.None);
+        _control.MayConfigure = true;
+        var reused = await data.CanEnableAsync(refresh: false, CancellationToken.None);
+        var refreshed = await data.CanEnableAsync(refresh: true, CancellationToken.None);
+        _control.MayConfigure = false;
+        data.Invalidate();
+        var forgotten = await data.CanEnableAsync(refresh: false, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.False);
+            Assert.That(reused, Is.False, "a fresh answer is reused");
+            Assert.That(refreshed, Is.True);
+            Assert.That(forgotten, Is.False);
+            Assert.That(_control.Probes, Is.EqualTo(Enumerable.Repeat(ReplicationDataSource.ProbeTreeId, 3)));
+        });
+    }
+
+    [Test]
+    public async Task A_failed_enable_probe_fails_closed_and_is_not_remembered()
+    {
+        using var data = Create();
+        _control.ProbeFailure = new TimeoutException();
+
+        var failed = await data.CanEnableAsync(refresh: false, CancellationToken.None);
+        _control.ProbeFailure = null;
+        var answered = await data.CanEnableAsync(refresh: false, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(failed, Is.False);
+            Assert.That(answered, Is.True, "a fault proved nothing, so the next read asks again");
+            Assert.That(_control.Probes, Has.Count.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public void A_cancelled_enable_probe_escapes()
+    {
+        using var data = Create();
+        _control.ProbeFailure = new OperationCanceledException();
+
+        Assert.That(async () => await data.CanEnableAsync(refresh: false, CancellationToken.None), Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    [Test]
     public async Task With_no_facade_registered_every_read_fails_closed_as_not_served()
     {
         await using var provider = new ServiceCollection().BuildServiceProvider();
@@ -183,6 +234,7 @@ public sealed class ReplicationDataSourceTests
         var status = await data.GetEstateAsync(refresh: false, CancellationToken.None);
         var tree = await data.GetTreeLinksAsync("orders", CancellationToken.None);
         var config = await data.GetConfigAsync(refresh: false, CancellationToken.None);
+        var canEnable = await data.CanEnableAsync(refresh: false, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -192,6 +244,7 @@ public sealed class ReplicationDataSourceTests
             Assert.That(status.Fault!.Kind, Is.EqualTo(ReplicationFaultKind.NotServed));
             Assert.That(tree.Fault!.Kind, Is.EqualTo(ReplicationFaultKind.NotServed));
             Assert.That(config.Fault!.Kind, Is.EqualTo(ReplicationFaultKind.NotServed));
+            Assert.That(canEnable, Is.False);
             Assert.That(async () => await data.EnableAsync("orders", LatticeMergeMode.LwwRegister, null, CancellationToken.None), Throws.InstanceOf<NotSupportedException>());
             Assert.That(async () => await data.DisableAsync("orders", CancellationToken.None), Throws.InstanceOf<NotSupportedException>());
         });

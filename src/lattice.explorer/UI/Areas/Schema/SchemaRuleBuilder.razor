@@ -134,7 +134,7 @@
                             }
                             @if (SchemaCardCompiler.IsPredicate(card.Kind))
                             {
-                                <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => AddAlternative(at)" aria-label="@($"Add an alternative to rule {number}")">Or...</LtButton>
+                                <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => AddAlternative(at)" aria-label="@($"Or: add an alternative to rule {number}")">Or...</LtButton>
                             }
                             <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => MoveRule(at, -1)" Disabled="@(at == 0)" aria-label="@($"Move rule {number} up")">Up</LtButton>
                             <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => MoveRule(at, 1)" Disabled="@(at == _cards.Count - 1)" aria-label="@($"Move rule {number} down")">Down</LtButton>
@@ -607,7 +607,7 @@
         <h3 class="lt-schema-subtitle">The exact policy</h3>
         @if (ExactPolicy() is { } exact)
         {
-            <pre class="lt-schema-value lt-schema-json" aria-label="The exact policy, as JSON">@SchemaPolicyJson.Write(exact)</pre>
+            <pre class="lt-schema-value lt-schema-json" tabindex="0" aria-label="The exact policy, as JSON">@SchemaPolicyJson.Write(exact)</pre>
         }
         else
         {

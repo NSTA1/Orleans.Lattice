@@ -73,6 +73,16 @@ internal sealed class InMemoryWalTable
     public Action<IReadOnlyList<TableTransactionAction>>? BeforeTransaction { get; set; }
 
     /// <summary>
+    /// A hook invoked after a transaction commits, given its actions. When it
+    /// returns <see langword="true"/> the same transaction is submitted again
+    /// and the caller observes the resend's outcome instead of the commit's.
+    /// Models the SDK retry pipeline resending a transaction whose first
+    /// attempt committed server-side but whose response was lost: the resend
+    /// collides with the rows the first attempt wrote.
+    /// </summary>
+    public Func<IReadOnlyList<TableTransactionAction>, bool>? ResendAfterCommit { get; set; }
+
+    /// <summary>
     /// A hook invoked before every single-entity upsert, given the entity
     /// about to be written. Throwing from it fails that write alone, which is
     /// how a phase-0 candidate-row failure is modelled without disturbing the
@@ -273,6 +283,11 @@ internal sealed class InMemoryWalTable
             }
 
             CommittedTransactions++;
+        }
+
+        if (ResendAfterCommit?.Invoke(materialised) == true)
+        {
+            return SubmitTransaction(materialised);
         }
 
         IReadOnlyList<Response> perAction = materialised.Select(_ => (Response)new FakeResponse(204)).ToList();

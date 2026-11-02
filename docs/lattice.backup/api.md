@@ -402,7 +402,7 @@ The selected cross-tree causal fence of a cross-tree-consistent set.
 The self-describing size and topology of a restore, resolved from the target backup's manifest chain before any fence is engaged or shadow tree is built, so a coordinated restore can hard-refuse an infeasible target up front. Returned by `ILatticeCoordinatedRestoreEngine.ProbeAdmissionAsync`. An in-process value only (no serializer surface).
 
 - Constructor: `RestoreAdmissionReport(string backupId, string targetTreeId, long totalByteLength, long totalChunkCount, int shardCount, IReadOnlyList<string> manifestChain)`. Throws `ArgumentException` (a required string null/empty), `ArgumentNullException` (`manifestChain` null), and `ArgumentOutOfRangeException` (`totalByteLength`/`totalChunkCount` negative, `shardCount` not positive).
-- Properties: `string BackupId`, `string TargetTreeId`, `long TotalByteLength`, `long TotalChunkCount`, `int ShardCount`, `IReadOnlyList<string> ManifestChain` (base-first order).
+- Properties: `string BackupId`, `string TargetTreeId`, `long TotalByteLength`, `long TotalChunkCount`, `int ShardCount`, `IReadOnlyList<string> ManifestChain` (base-first order), and `IReadOnlyList<string> SourceTreeIds { get; init; }` - the distinct trees the chain's manifests were captured from, in base-first order of first appearance. `ProbeAdmissionAsync` always reports at least one; it defaults to empty, which a consumer relying on it must treat as unknown. Setting it to `null` throws `ArgumentNullException`. A replication participant uses it to confine a peer-coordinated restore to backups of trees it replicates ([#5443](https://github.com/NSTA1/Orleans.Lattice/issues/5443)).
 
 ### `BackupSchedulerRuntimeStatus`
 
@@ -1465,3 +1465,4 @@ The following inventory includes directly declared public members and overloads,
 - `public long TotalChunkCount { get; }`
 - `public int ShardCount { get; }`
 - `public IReadOnlyList<string> ManifestChain { get; }`
+- `public IReadOnlyList<string> SourceTreeIds { get; init; }`

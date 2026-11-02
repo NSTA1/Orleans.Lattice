@@ -88,6 +88,22 @@ public sealed class LatticeReplicationApiGrpcAuthInterceptorTests
     }
 
     [Test]
+    public void DescribeCall_maps_probe_capabilities_to_operation_and_target()
+    {
+        var (operation, target) = LatticeReplicationApiGrpcAuthInterceptor.DescribeCall(
+            FullMethod("ProbeCapabilities"),
+            new ReplicationProbeCapabilitiesRequestMessage { TreeId = "orders" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(operation, Is.EqualTo(LatticeReplicationApiOperation.ProbeCapabilities));
+            Assert.That(target, Is.EqualTo("orders"));
+            Assert.That(LatticeReplicationApiGrpcAuthInterceptor.IsUnauthenticatedMethod(FullMethod("ProbeCapabilities")), Is.False,
+                "the probe is authorized like every other control-API call");
+        });
+    }
+
+    [Test]
     public void DescribeCall_maps_unknown_method_to_Unknown()
     {
         var (operation, target) = LatticeReplicationApiGrpcAuthInterceptor.DescribeCall(

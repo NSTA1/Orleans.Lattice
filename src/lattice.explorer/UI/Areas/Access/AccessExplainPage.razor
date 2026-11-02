@@ -34,7 +34,7 @@ else
     <LtSelect Label="Scope" Options="ScopeOptions" Value="@_scopeKind" ValueChanged="@(value => _scopeKind = value)" />
     @if (_scopeKind != AccessRuleDraft.ClusterScope)
     {
-        <LtComboBox @ref="_treeBox" Label="Tree" Value="@_tree" ValueChanged="@(value => _tree = value)" Error="@_treeError" Source="@Suggestions.Trees" Noun="tree" />
+        <LtComboBox @ref="_treeBox" Label="Tree" Value="@_tree" ValueChanged="@(value => _tree = value)" Error="@_treeError" Source="@Suggestions.Trees" Noun="tree" MissingMessage="MissingTreeMessage" />
     }
     @if (_scopeKind is AccessRuleDraft.PrefixScope or AccessRuleDraft.KeyScope)
     {

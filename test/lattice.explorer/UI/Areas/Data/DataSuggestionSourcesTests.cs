@@ -96,7 +96,7 @@ public sealed class DataSuggestionSourcesTests : DataTestContext
             Assert.That(hub.Regions, Is.SameAs(hub.Regions));
             Assert.That(hub.ClusterTrees, Is.SameAs(hub.ClusterTrees));
             Assert.That(hub.Principals, Is.SameAs(hub.Principals));
-            Assert.That(hub.GroupsOrStoredGroups, Is.Not.SameAs(hub.Groups));
+            Assert.That(hub.ClusterGroups, Is.Not.SameAs(hub.Groups));
             Assert.That(hub.Subjects(Orleans.Lattice.Auth.LatticeSubjectSelectorKind.Group), Is.SameAs(hub.Groups));
             Assert.That(hub.Subjects(Orleans.Lattice.Auth.LatticeSubjectSelectorKind.User), Is.SameAs(hub.Users));
             Assert.That(tenants.UnavailableReason, Does.StartWith("Tenancy is off"));
