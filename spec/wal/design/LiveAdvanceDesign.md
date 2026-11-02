@@ -252,16 +252,19 @@ activation appends through new stamped methods; the existing methods are unchang
   entry of the stamped batch carries its own stamp (leaf identity, epoch, and the
   shard routing generation of section 2). Under the one `_stateGate` section that
   assigns the batch's offsets, the shard checks every entry's stamp before it assigns
-  any offset. Entries whose stamp fails are rejected and the rest are allocated; the
-  response carries the per-entry outcome and the unstamped watermark (section 4). The
-  coalescing writer fails only the callers whose entries were rejected, and their
-  seam retries them (section 5).
+  any offset. A batch is rejected at its first failing entry, so nothing of it is
+  allocated (`WalAppendFenceOutcome`, as #5633 implements it); the response carries the
+  outcome per entry and the unstamped watermark (section 4). The coalescing writer fails
+  the callers of a rejected batch, and their seams retry them (section 5).
 
 The shard accepts a stamped entry only if the leaf's entry is loaded and the epoch is
-not below it. It does **not** check the retired floor on the append path (#5635). A
-stale epoch is rejected with
-`WalAppendEpochStaleException`, an internal exception (section 5). An entry not yet
-loaded rejects the append as unloaded (below); the leaf re-presents its claim and
+not below it. It does **not** check the retired floor on the append path (#5635). The
+shard reports a refusal as an outcome, not an exception: `StaleEpoch`, `UnloadedEntry`,
+`StaleGeneration` and so on (`WalAppendFenceOutcome`). The leaf turns `StaleEpoch` into the
+existing `LeafRetiredException`, with `ActivationSuperseded` set and the superseded epoch,
+which its callers' seams retry (section 5; the wire form is under
+[Wire formats](#wire-formats)). An entry not yet loaded rejects the append as
+unloaded (below); the leaf re-presents its claim and
 retries. The stored record does not change: the stamp is a call argument, never part
 of the record.
 
@@ -929,8 +932,9 @@ rejection at the seam that raised it, for as long as the operation's **existing
 deadline** allows (its cancellation token, or the response timeout of the call that
 carries it), not for a fixed number of attempts. When that deadline expires, the caller
 receives exactly what it receives today when the deadline expires. Nothing new is
-surfaced: `WalAppendEpochStaleException` and the fence rejection are internal, never
-cross a public API boundary, and are never an inner exception of anything public.
+surfaced: the fence's outcomes and the `LeafRetiredException` that carries a supersession
+are internal, never cross a public API boundary, and are never an inner exception of
+anything public.
 
 Convergence: each retry either succeeds or meets a claim or close that happened after
 its admission. Under unbounded claim or close churn on one key, the retry runs to the
@@ -1004,11 +1008,20 @@ no change, because no WAL record changes.
   is pinned by a mixed-version test, and only its definite "method unknown" failure is
   re-issued unstamped ([Racing the gate](#4-fail-safe-everywhere-and-mixed-versions)).
 - **Serializable types and exceptions.**
-  - The new request and response types have new aliases. Existing aliases and `[Id]`s
-    are untouched. `LatticeWalQuiescingException` is untouched (revision 2's `Reason`
-    field is withdrawn).
-  - `WalAppendEpochStaleException` derives directly from `System.Exception` and carries
-    a new alias. It is internal to the seam retry and reaches no public caller.
+  - The new request and response types have new aliases. No existing alias changes, and
+    no existing `[Id]` is renumbered or removed. `LatticeWalQuiescingException` is
+    untouched (revision 2's `Reason` field is withdrawn).
+  - **The one additive change to an existing serialized type.** A supersession is the
+    existing internal `LeafRetiredException`, alias `ol.lrt` unchanged, with two trailing
+    members appended after `[Id(0)] LeafId`: `[Id(1)] ActivationSuperseded` and
+    `[Id(2)] SupersededEpoch`. A 10.2.0 silo's deserializer skips the two trailing fields, so
+    a 10.2.0 shard root that reaches a newer leaf across a gate race sees exactly today's
+    retired-leaf refusal and retries it until its deadline, as every `LeafRetiredException`
+    handler does (a shard-root retry, never "skip this leaf"). A newer caller retries a
+    supersession at its seam against the live activation. Member 2's self-fence uses the
+    same form (section 2). `LeafRetiredExceptionWireCompatibilityTests` pins the trailing-field
+    skip in both directions, and the alias has its own test. No new exception type crosses a
+    silo boundary.
 - **Cross-cluster replication.** Shipped records are WAL records, which are unchanged,
   so a 10.2.0 peer and a new peer exchange exactly what two 10.2.0 peers exchange, in
   both directions. A replicated write applied on the receiving cluster goes through
@@ -1358,8 +1371,8 @@ Each production member carries detectors proven red. They land in this order:
      `AppendBatchStampedAsync`; the unloaded-entry reload; the unstamped watermark and
      the own-append self-report; the floor checks at the claim's write and raise, and none on
      the append path (#5635).
-   - `WalAppendEpochStaleException` (internal) and the seam retry of section 5 for every
-     caller in its table, each with a detector that the caller's 10.2.0 outcome is
+   - `WalAppendFenceOutcome`, the supersession as `LeafRetiredException` with its two
+     trailing members, and the seam retry of section 5 for every caller in its table, each with a detector that the caller's 10.2.0 outcome is
      unchanged: an atomic write commits, `DeleteAsync` and a CRDT delta succeed, and
      replication apply counts no failure.
    - Entry retirement in pin retirement and the purge tail, run regardless of the gate,
@@ -1405,6 +1418,12 @@ Each production member carries detectors proven red. They land in this order:
    from phase 2 reaches `main` before this member lands.
 
 ## Review resolution
+
+### After acceptance: member 1's review (S-a)
+
+| Finding | Resolution |
+|---------|------------|
+| S-a the note names a removed exception | Sections 1 and 5, the wire-format bullets and member 1's list now describe production: the shard reports `WalAppendFenceOutcome`, a supersession is the existing `LeafRetiredException` with two trailing members (alias unchanged), the one additive change to an existing serialized type, and a stamped batch is rejected whole at its first failing entry. |
 
 ### Re-review of revision 7
 
