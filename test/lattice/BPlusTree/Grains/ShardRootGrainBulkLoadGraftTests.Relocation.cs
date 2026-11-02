@@ -59,7 +59,9 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         var relocatedTombstone = appended["k0002"].ReceivedCalls()
             .Where(c => c.GetMethodInfo().Name == nameof(IBPlusLeafGrain.MergeEntriesAsync))
             .Select(c => (Dictionary<string, LwwValue<byte[]>>)c.GetArguments()[0]!)
-            .Single(b => b.ContainsKey("k0003"))["k0003"];
+            // The leaf's own bulk entry for k0003 is merged at its birth; the
+            // relocated tombstone follows, in the graft.
+            .Last(b => b.ContainsKey("k0003"))["k0003"];
         Assert.Multiple(() =>
         {
             Assert.That(relocatedTombstone.IsTombstone, Is.True, "a relocated row keeps its tombstone");
