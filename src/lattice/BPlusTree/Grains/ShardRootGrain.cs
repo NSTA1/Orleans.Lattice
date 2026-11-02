@@ -1729,7 +1729,7 @@ internal sealed partial class ShardRootGrain(
             var rpcTs = Stopwatch.GetTimestamp();
             try
             {
-                var result = await LeafSetManyAsync(leaf, slice, routing);
+                var result = await LeafSetManyAsync(leaf, slice, WalRoutingStamp.Unstamped);
                 LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
                     Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),

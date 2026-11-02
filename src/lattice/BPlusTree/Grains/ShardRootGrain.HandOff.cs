@@ -98,11 +98,7 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task<long[]> RaiseAndReclaimRoutingGenerationAsync()
     {
-        var raised = await UpdateHandOffMarkerAsync(marker =>
-        {
-            marker.RoutingGeneration++;
-            return true;
-        });
+        var raised = await UpdateHandOffMarkerAsync(marker => true);
         return await ClaimRoutingGenerationEverywhereAsync(raised.RoutingGeneration);
     }
 

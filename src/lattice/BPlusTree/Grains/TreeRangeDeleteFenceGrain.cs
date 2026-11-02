@@ -176,10 +176,10 @@ internal sealed class TreeRangeDeleteFenceGrain(
             // the same one.
             intent.Closing = true;
             state.State.Generation = Math.Max(state.State.Generation, state.State.ClaimedGeneration) + 1;
-            await state.WriteStateAsync();
         }
 
         var heads = await ClaimEverywhereAsync();
+        await state.WriteStateAsync();
         var token = MarkerToken(intent.IntentId);
         var closes = new Task[intent.Shards.Length];
         for (var i = 0; i < intent.Shards.Length; i++)
