@@ -134,9 +134,21 @@ internal sealed class AppRegistryEpochLedger<TSubscriber>
     {
         ArgumentNullException.ThrowIfNull(subscriber);
 
-        var deadline = Add(_time.GetTimestamp(), LeaseDuration);
+        var now = _time.GetTimestamp();
+        var deadline = Add(now, LeaseDuration);
         lock (_gate)
         {
+            // Prune leases past their deadline plus the margin, so the table tracks the live silos rather
+            // than every silo that ever leased. No advance can still need one: an advance already waiting
+            // one out holds its own copy of the deadline. Removal while enumerating is safe on Dictionary.
+            foreach (var lease in _leases)
+            {
+                if (Add(lease.Value, Margin) <= now)
+                {
+                    _leases.Remove(lease.Key);
+                }
+            }
+
             if (!_leases.TryGetValue(subscriber, out var existing) || deadline > existing)
             {
                 _leases[subscriber] = deadline;

@@ -33,4 +33,17 @@ public sealed class GrainAppRegistryEpochSourceTests
         Assert.That(await source.AdvanceAsync(CancellationToken.None), Is.EqualTo(new AppRegistryEpoch(incarnation, 5)));
         grains.Received(1).GetGrain<IAppRegistryEpochGrain>(IAppRegistryEpochGrain.GrainKey, Arg.Any<string?>());
     }
+
+    [Test]
+    public void A_failed_advance_on_the_epoch_grain_propagates_to_the_caller()
+    {
+        var grain = Substitute.For<IAppRegistryEpochGrain>();
+        grain.AdvanceAsync().Returns(Task.FromException<AppRegistryEpoch>(new TimeoutException("silo died mid-advance")));
+        var grains = Substitute.For<IGrainFactory>();
+        grains.GetGrain<IAppRegistryEpochGrain>(IAppRegistryEpochGrain.GrainKey, Arg.Any<string?>()).Returns(grain);
+        var source = new GrainAppRegistryEpochSource(grains);
+
+        Assert.That(async () => await source.AdvanceAsync(CancellationToken.None), Throws.InstanceOf<TimeoutException>(),
+            "the registry acknowledges a write only after the advance lands, so a failure must reach it");
+    }
 }

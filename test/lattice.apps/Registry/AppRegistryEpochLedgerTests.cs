@@ -235,6 +235,31 @@ public sealed class AppRegistryEpochLedgerTests
     }
 
     [Test]
+    public void Lease_prunes_leases_past_their_deadline_plus_the_margin()
+    {
+        var (ledger, time) = PastGrace();
+        ledger.Lease("silo-1");
+        ledger.Lease("silo-2");
+        time.Advance(Lease + ledger.Margin);
+
+        ledger.Lease("silo-3");
+
+        Assert.That(ledger.SubscriberCount, Is.EqualTo(1), "only the live lease remains; churned silos do not accumulate");
+    }
+
+    [Test]
+    public void Lease_keeps_a_lease_still_within_its_margin()
+    {
+        var (ledger, time) = PastGrace();
+        ledger.Lease("silo-1");
+        time.Advance(Lease + ledger.Margin - TimeSpan.FromTicks(1));
+
+        ledger.Lease("silo-2");
+
+        Assert.That(ledger.SubscriberCount, Is.EqualTo(2), "a silo on a slower clock may still trust that lease");
+    }
+
+    [Test]
     public async Task AdvanceAsync_successive_advances_produce_strictly_increasing_versions()
     {
         var (ledger, _) = PastGrace();
