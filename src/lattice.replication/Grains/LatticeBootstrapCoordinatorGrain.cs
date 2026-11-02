@@ -317,6 +317,18 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
                 + $"'{state.State.SourceClusterId}'; cannot re-seed from '{sourceClusterId}'.");
         }
 
+        // The responder reads the completion while a bootstrap runs and calls here
+        // afterwards; this call waits behind that bootstrap, so the completion may
+        // already answer it. Re-arming would start a redundant import whose cutover
+        // the sender reads as a new gap (#5534).
+        if (await IsAnsweredByCompletionAsync(sourceClusterId, reseedAfterEpoch, cancellationToken).ConfigureAwait(true))
+        {
+            Logger.LogDebug(
+                "Tree '{TreeName}': the completed bootstrap from '{SourceClusterId}' already answers its re-seed past epoch {Epoch}.",
+                TreeName, sourceClusterId, reseedAfterEpoch);
+            return;
+        }
+
         var requests = state.State.ReseedAfterEpochs;
         var had = requests.TryGetValue(sourceClusterId, out var recorded);
         // The drain of the bootstrap in progress from this sender already served a
@@ -353,6 +365,51 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
             await BootstrapAsync(sourceClusterId, cancellationToken).ConfigureAwait(true);
         }
     }
+
+    /// <summary>
+    /// Whether the last completed bootstrap from <paramref name="sourceClusterId"/>
+    /// answers a re-seed request past <paramref name="reseedAfterEpoch"/>: no
+    /// bootstrap runs, no reconcile is owed, the completed export postdates the
+    /// request, and the completion was installed under the tree's current
+    /// frontier epoch - the predicate the responder's echo uses (#4768), read from
+    /// durable state on both sides of the frontier read. A frontier that cannot be
+    /// read answers nothing, so the request re-bootstraps.
+    /// </summary>
+    private async Task<bool> IsAnsweredByCompletionAsync(string sourceClusterId, long reseedAfterEpoch, CancellationToken cancellationToken)
+    {
+        if (CompletedLineageAnswering(sourceClusterId, reseedAfterEpoch) is not { } lineage)
+        {
+            return false;
+        }
+
+        Guid current;
+        try
+        {
+            current = (await _grainFactory.GetGrain<IReplicationTreeFrontierGrain>(TreeName)
+                .GetAsync(cancellationToken)
+                .ConfigureAwait(true)).Epoch;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger.LogDebug(ex, "Tree '{TreeName}': could not read the frontier epoch; the re-seed request is recorded.", TreeName);
+            return false;
+        }
+
+        return current != Guid.Empty
+            && CompletedLineageAnswering(sourceClusterId, reseedAfterEpoch) is { } after
+            && after == lineage
+            && after == current;
+    }
+
+    private Guid? CompletedLineageAnswering(string sourceClusterId, long reseedAfterEpoch) =>
+        !state.State.InProgress
+        && !state.State.ReconcileOwedBySource.GetValueOrDefault(sourceClusterId)
+        && state.State.CompletedExportEpochs.TryGetValue(sourceClusterId, out var completed)
+        && completed > reseedAfterEpoch
+        && state.State.CompletedExportLineages.TryGetValue(sourceClusterId, out var lineage)
+        && lineage != Guid.Empty
+            ? lineage
+            : null;
 
     /// <summary>
     /// Persists kickoff intent and returns whether the caller should
