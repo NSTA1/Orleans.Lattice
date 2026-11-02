@@ -21,7 +21,7 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Journeys.U3;
 /// <param name="WorkspaceRefuses">Whether any sample of the workspace answers would refuse the launch on its own.</param>
 internal sealed record TaskBoardServerView(string Admin, string Listed, string Described, bool WorkspaceRefuses)
 {
-    /// <summary>How many times the persona's workspace is asked: its answers are known to vary between reads (#5595).</summary>
+    /// <summary>How many times the persona's workspace is asked, so an answer that varies between reads (once #5595) shows.</summary>
     private const int Samples = 5;
 
     /// <summary>Reads the cluster's answers for <paramref name="session"/>'s persona, in its region.</summary>

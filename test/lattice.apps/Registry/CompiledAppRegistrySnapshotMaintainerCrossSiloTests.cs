@@ -154,6 +154,47 @@ public sealed class CompiledAppRegistrySnapshotMaintainerCrossSiloTests
         Assert.That(maintainer.CurrentEpoch, Is.EqualTo(1));
     }
 
+    [Test]
+    public async Task Concurrent_evaluations_share_one_epoch_read_issued_after_they_arrive()
+    {
+        await WarmBothAsync();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _epoch.ReadGate = release.Task;
+        var readsBefore = _epoch.Reads;
+
+        // The first caller leads a read; the rest arrive while it is in flight and share the next one.
+        var callers = Enumerable.Range(0, 8).Select(_ => _other.EnsureCurrentAsync()).ToArray();
+        Assert.That(_epoch.Reads - readsBefore, Is.EqualTo(1), "only the leading read is in flight");
+
+        release.SetResult();
+        await Task.WhenAll(callers);
+
+        Assert.That(_epoch.Reads - readsBefore, Is.EqualTo(2), "the leading read plus one shared follow-up read");
+        Assert.That(_other.CurrentEpoch, Is.EqualTo(1), "an unchanged epoch rebuilds nothing");
+    }
+
+    [Test]
+    public async Task A_caller_never_joins_a_read_already_in_flight_when_it_arrived()
+    {
+        await _registry.InstallAsync(AppRegistryTestData.Request());
+        await _registry.EnableAsync(TenantId.Default, AppRegistryTestData.Slug);
+        await WarmBothAsync();
+
+        // A read issued before the revocation is in flight.
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _epoch.ReadGate = release.Task;
+        var early = _other.EnsureCurrentAsync();
+
+        await _registry.DisableAsync(TenantId.Default, AppRegistryTestData.Slug);
+        await _committing.OnMutationAsync(RegistryMutation, CancellationToken.None);
+        var late = _otherEvaluator.GetSnapshotAsync(CancellationToken.None).AsTask();
+
+        release.SetResult();
+        await early;
+
+        Assert.That((await late).GetEnabledTenantApps(TenantId.Default), Is.Empty);
+    }
+
     private CompiledAppRegistrySnapshotMaintainer CreateSilo() =>
         new(_registry, NullLogger<CompiledAppRegistrySnapshotMaintainer>.Instance, timeProvider: null, epoch: _epoch);
 

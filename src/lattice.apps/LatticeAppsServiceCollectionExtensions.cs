@@ -89,6 +89,9 @@ public static partial class LatticeAppsServiceCollectionExtensions
             ServiceDescriptor.Singleton<IValidateOptions<LatticeAppsOptions>, LatticeAppsOptionsValidator>());
 
         // Registry.
+        // The cluster-wide registry epoch (#5595): every committed transition advances it before it is
+        // acknowledged, and every silo's snapshot is measured against it.
+        services.TryAddSingleton<IAppRegistryEpochSource>(sp => new GrainAppRegistryEpochSource(sp.GetService<IGrainFactory>()));
         services.TryAddSingleton<IAppRegistryStore, LatticeAppRegistryStore>();
         services.TryAddSingleton<AppInstallAuthorizer>();
         services.TryAddSingleton<IAppRegistry, AppRegistry>();
@@ -105,6 +108,8 @@ public static partial class LatticeAppsServiceCollectionExtensions
 
         // The compiled snapshot maintainer is one singleton serving both as the change-feed
         // observer and the projection, so a registry write refreshes the snapshot readers see.
+        // The change feed fires only on the committing silo, so the maintainer is measured against
+        // the cluster-wide registry epoch (#5595).
         // AddSingleton<IMutationObserver> is not idempotent under TryAdd, hence the marker above.
         services.TryAddSingleton<CompiledAppRegistrySnapshotMaintainer>();
         services.AddSingleton<IMutationObserver>(sp => sp.GetRequiredService<CompiledAppRegistrySnapshotMaintainer>());

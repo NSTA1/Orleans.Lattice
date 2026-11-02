@@ -37,8 +37,32 @@ internal sealed class InMemoryAppRegistryEpochSource : IAppRegistryEpochSource
     }
 
     /// <inheritdoc />
-    public Task<AppRegistryEpoch> GetAsync(CancellationToken cancellationToken) =>
-        Fail ? Task.FromException<AppRegistryEpoch>(new InvalidOperationException("epoch unreachable")) : Task.FromResult(Current);
+    public async Task<AppRegistryEpoch> GetAsync(CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _reads);
+
+        // The value is taken when the read reaches the "grain", before any gate holds the reply back.
+        var value = Current;
+        if (ReadGate is { } gate)
+        {
+            await gate.ConfigureAwait(false);
+        }
+
+        if (Fail)
+        {
+            throw new InvalidOperationException("epoch unreachable");
+        }
+
+        return value;
+    }
+
+    private int _reads;
+
+    /// <summary>The number of epoch reads issued.</summary>
+    public int Reads => Volatile.Read(ref _reads);
+
+    /// <summary>When set, every read waits on it before answering.</summary>
+    public Task? ReadGate { get; set; }
 
     /// <inheritdoc />
     public Task<AppRegistryEpoch> AdvanceAsync(CancellationToken cancellationToken)

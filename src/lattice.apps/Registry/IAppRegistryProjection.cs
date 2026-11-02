@@ -5,8 +5,10 @@ namespace Orleans.Lattice.Apps;
 /// <see cref="CompiledAppRegistrySnapshot"/> refreshed off the core change-feed whenever
 /// the reserved <c>sys-app-registry</c> tree mutates, so activation and app surfaces can
 /// answer "is this app installed, enabled, and with which ceiling?" synchronously and
-/// without storage I/O. Consistency is eventual: a committed registry change is
-/// reflected shortly after it commits, not necessarily before the writing call returns.
+/// without storage I/O. <see cref="Current"/> is eventually consistent: the change feed fires
+/// only on the silo that committed a write. A surface that decides access on the snapshot calls
+/// <see cref="EnsureCurrentAsync"/> first, which on a silo host makes it current with every
+/// registry write that returned on any silo before the call began.
 /// </summary>
 public interface IAppRegistryProjection
 {
