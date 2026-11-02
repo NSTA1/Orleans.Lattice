@@ -20,7 +20,7 @@ internal sealed partial class ShardRootGrain
             // leaves the marker open and the hint stored. The replaced root is no
             // longer known, so the leaves keep reading from the log's start, which
             // reaches any row it held; the switch is closed without the hint.
-            await FinishBulkSwitchAsync(operationId, [], relocated: false, drainBatchWrites: false);
+            await FinishBulkSwitchAsync(operationId, [], relocated: false, closeNow: true);
             return;
         }
 
@@ -71,7 +71,7 @@ internal sealed partial class ShardRootGrain
 
         // Every row the shard held before the switch is now in the loaded tree, so
         // the leaves may read from the birth hint; the switch closes by fence.
-        await FinishBulkSwitchAsync(operationId, leafIds, relocated: true, drainBatchWrites: false);
+        await FinishBulkSwitchAsync(operationId, leafIds, relocated: true, closeNow: true);
     }
 
     /// <inheritdoc />
@@ -89,7 +89,7 @@ internal sealed partial class ShardRootGrain
             // leaves the marker open and the hint stored. The replaced root is no
             // longer known, so the leaves keep reading from the log's start, which
             // reaches any row it held; the switch is closed without the hint.
-            await FinishBulkSwitchAsync(operationId, [], relocated: false, drainBatchWrites: false);
+            await FinishBulkSwitchAsync(operationId, [], relocated: false, closeNow: true);
             return;
         }
 
@@ -133,7 +133,7 @@ internal sealed partial class ShardRootGrain
 
         // Every row the shard held before the switch is now in the loaded tree, so
         // the leaves may read from the birth hint; the switch closes by fence.
-        await FinishBulkSwitchAsync(operationId, leafIds, relocated: true, drainBatchWrites: false);
+        await FinishBulkSwitchAsync(operationId, leafIds, relocated: true, closeNow: true);
     }
 
     /// <summary>
@@ -557,11 +557,11 @@ internal sealed partial class ShardRootGrain
         {
             if (state.State.PendingBulkGraft.OperationId == operationId)
             {
-                await CompleteBulkGraftAsync(drainBatchWrites: true);
+                await CompleteBulkGraftAsync();
                 await MirrorAppliedRowsAsync(MirroredKeys(sortedEntries), joinCrdt: false);
                 return;
             }
-            await CompleteBulkGraftAsync(drainBatchWrites: true);
+            await CompleteBulkGraftAsync();
         }
 
         if (sortedEntries.Count == 0) return;
@@ -707,7 +707,7 @@ internal sealed partial class ShardRootGrain
         };
         await WriteShardStateAsync();
 
-        await CompleteBulkGraftAsync(drainBatchWrites: true);
+        await CompleteBulkGraftAsync();
         await MirrorBulkAppendAsync(mirrored, sortedEntries);
     }
 
@@ -872,12 +872,7 @@ internal sealed partial class ShardRootGrain
     /// <summary>
     /// Completes (or resumes) a bulk-append graft whose intent has been persisted.
     /// </summary>
-    /// <param name="drainBatchWrites">
-    /// Whether the switch's close first waits for the batch writes admitted before it;
-    /// see <see cref="FinishBulkSwitchAsync"/>. Only a serial turn passes
-    /// <see langword="true"/>.
-    /// </param>
-    private async Task CompleteBulkGraftAsync(bool drainBatchWrites = false)
+    private async Task CompleteBulkGraftAsync()
     {
         var graft = state.State.PendingBulkGraft!;
 
@@ -1009,13 +1004,13 @@ internal sealed partial class ShardRootGrain
             }
         }
 
-        // The appended leaves are routable, so the switch is closed by fence; their
-        // read position becomes the birth hint only when the relocation above moved
-        // every row they own whose records predate it (epic #5605, member 3).
+        // The appended leaves are routable. Their read position becomes the birth hint
+        // only when the relocation above moved every row they own whose records predate
+        // it; the switch is left for the run's fence (epic #5605, member 3).
         var newLeafIds = new GrainId[graft.NewLeaves.Count];
         for (var i = 0; i < newLeafIds.Length; i++)
             newLeafIds[i] = graft.NewLeaves[i].LeafId;
-        await FinishBulkSwitchAsync(graft.OperationId, newLeafIds, relocated, drainBatchWrites);
+        await FinishBulkSwitchAsync(graft.OperationId, newLeafIds, relocated, closeNow: false);
 
         state.State.PendingBulkGraft = null;
         state.State.LastCompletedBulkOperationId = graft.OperationId;

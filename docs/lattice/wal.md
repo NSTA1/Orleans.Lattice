@@ -1640,10 +1640,14 @@ or reshard shadow forward, a fan-out begun while the gate was closed, an older
 caller - is appended unstamped, by design. The record, its result and its feed are
 unchanged; range-delete records are fenced, never clipped.
 
-**The bulk birth hint.** A bulk load or bulk append records every WAL partition's
-head as its **birth hint** in the shard's marker row, in the same write that opens its
-marker and before it creates its first leaf; a resume of the same operation reuses the
-stored hint. Once the switch has moved into its new leaves every row the shard held
+**The bulk birth hint.** A bulk load or bulk append records a **birth hint** - a head
+of every WAL partition read before its first leaf is born - in the shard's marker row,
+in the same write that opens its marker and before it creates its first leaf; a resume
+of the same operation reuses the stored hint. A lower hint is never above a record the
+leaf has not applied, it only lengthens the replay, so the consecutive chunks of a
+streaming import - a **run** - share one: the run's first chunk reads the heads, and
+each later chunk reuses the previous chunk's hint, or the heads of the fence it folds
+(below). Once the switch has moved into its new leaves every row the shard held
 in their range before it - the old rightmost leaf's rows for an append, the rows a
 batch write stored on the replaced root for a load (see
 [Bulk Loading](bulk-loading.md#rows-the-append-meets)) - each new leaf's projection
@@ -1651,13 +1655,19 @@ checkpoint is set to the hint, so a cold activation replays the log from there r
 than from its start. Every row such a leaf owns was then appended after the hint. When
 that cannot be shown - the old rightmost leaf is hosted by an older build or the gate
 was closed, so its rows were not moved, or a load crashed after publishing its root -
-the hint is not applied and the new leaves replay from the log's start, as before. The
-switch then closes by fence and the hint is removed in the same write. A bulk load
-also waits, before it reads the root it replaced, for the batch writes admitted before
-it published its own; a bulk append waits likewise before its close, which only lowers
-the number of writes the fence rejects. A switch that an append opened and then
-abandoned before it recorded its graft is closed, without its hint, by the shard's next
-bulk operation.
+the hint is not applied and the new leaves replay from the log's start, as before. A
+bulk load then closes its switch by fence, removing the hint in the same write. A bulk
+append leaves its switch open for the run, which only holds its leaves on the
+replay-based advance longer: a close per chunk would cost a claim per partition and
+two marker writes, and reject every concurrent stamped write of the shard once, per
+chunk. The completed switches of a shard are closed together, by one fence and one
+marker write, when eight have accumulated (folded into the next chunk's open write,
+whose hint then becomes the fence's heads), when no chunk has reached the shard for
+five seconds, or by the next bulk load; a fresh activation folds them into its first
+chunk. A switch that an append opened and then abandoned before it recorded its graft
+is closed the same way, without its hint. A bulk load also waits, before it reads the
+root it replaced, for the batch writes admitted before it published its own; a run's
+fence waits likewise, which only lowers the number of writes it rejects.
 
 **Writes in flight at a read position.** A leaf write checks its span, appends its WAL
 record and only then stores its row, so a head read while such a write is between its
@@ -1699,11 +1709,14 @@ conditional delete per fence row, and a floor write per step. Per WAL partition
 activation: one floor-row read at its first routing-generation claim. Per shard root
 of a re-created tree: one floor-row read before its marker first reads initialised,
 and, when the floor is above 0, one fence-grain call and one claim per partition.
-Per bulk load or bulk append that
-creates leaves: one read of each partition's head and one marker write to open, one
-checkpoint-hint call per new leaf, and one generation re-claim per partition and one
-marker write to close. The in-flight drain adds two counter updates to each leaf write,
-on fields the activation already owns, and no allocation or call.
+Per bulk load: one read of each partition's head and one marker write to open, one
+checkpoint-hint call per new leaf, and one generation raise, one generation re-claim
+per partition and one marker write to close. Per bulk-append chunk that creates leaves:
+one marker write to open and one checkpoint-hint call per new leaf; the heads are read
+once per run, and the close - one generation raise, one re-claim per partition and one
+marker write - is paid once per eight chunks and once at the run's end. The in-flight
+drain adds two counter updates to each leaf write, on fields the activation already
+owns, and no allocation or call.
 
 **Purging a tree's fence rows.** The per-tree rows - each shard root's
 `_lattice_shard-handoff` marker, each partition's `_lattice_wal-routing-generation`

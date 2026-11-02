@@ -20,7 +20,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
     private const long BirthHead = 40;
     private const long CloseHead = 90;
 
-    private sealed record HintRig(Harness H, EnumerableMemoryGrainStorage Storage, IWalShardGrain Wal);
+    private sealed record HintRig(Harness H, EnumerableMemoryGrainStorage Storage, IWalShardGrain Wal, ILeafReplayCoordinatorGrain Coordinator);
 
     /// <summary>
     /// A harness whose append-fence gate is open, whose marker row lives in memory, whose
@@ -47,7 +47,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
             .Returns(Task.FromResult(WalAppendFenceClaimResult.Accept(CloseHead)));
         wal.GetNextSequenceAsync(Arg.Any<CancellationToken>()).Returns(new ValueTask<long>(CloseHead));
         h.Factory.GetGrain<IWalShardGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(wal);
-        return new HintRig(h, storage, wal);
+        return new HintRig(h, storage, wal, coordinator);
     }
 
     private static async Task<ShardHandOffState> ShardMarkerAsync(HintRig rig) =>
@@ -103,7 +103,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
     }
 
     [Test]
-    public async Task A_bulk_append_applies_its_hint_to_every_appended_leaf_then_closes_its_marker_by_fence()
+    public async Task A_bulk_append_applies_its_hint_to_every_appended_leaf_and_the_runs_close_closes_its_marker_by_fence()
     {
         var rig = CreateHintRig();
         var existing = SeedAppendTail(rig.H);
@@ -119,6 +119,16 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
             });
 
         await rig.H.Grain.BulkAppendAsync("op-hint", Pairs(5));
+
+        // Review C1 of #5702: the append leaves its switch for the run's fence.
+        var beforeClose = await ShardMarkerAsync(rig);
+        Assert.Multiple(() =>
+        {
+            Assert.That(beforeClose.Open, Does.ContainKey("bulk:op-hint"), "an append does not close its own switch");
+            Assert.That(hintedAtClose, Is.EqualTo(-1), "no fence ran during the append");
+        });
+
+        await rig.H.Grain.CloseBulkSwitchesForTestingAsync();
 
         var appended = LeavesByBirthLow(rig.H);
         Assert.That(appended, Has.Count.EqualTo(3), "precondition: three appended leaves");
@@ -203,6 +213,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
             .Returns(Task.FromException<List<LwwEntry>>(unknown));
 
         await rig.H.Grain.BulkAppendAsync("op-hint", Pairs(5));
+        await rig.H.Grain.CloseBulkSwitchesForTestingAsync();
 
         foreach (var (low, leaf) in LeavesByBirthLow(rig.H))
         {
@@ -230,6 +241,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         rig.H.Leaf(existing).GetKeyRangeAndNextSiblingAsync().Returns(Task.FromResult(new LeafChainLink()));
 
         await rig.H.Grain.BulkAppendAsync("op-hint", Pairs(1));
+        await rig.H.Grain.CloseBulkSwitchesForTestingAsync();
 
         foreach (var entry in rig.H.State.State.PendingBulkGraft?.NewLeaves ?? [])
         {
@@ -356,9 +368,11 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         var marker = await ShardMarkerAsync(rig);
         Assert.Multiple(() =>
         {
-            Assert.That(marker.Open, Is.Empty, "the abandoned switch and the new one are both closed");
-            Assert.That(marker.Closes.Select(c => c.Token), Is.SupersetOf(new[] { "bulk:abandoned", "bulk:op-next" }));
-            Assert.That(marker.BulkBirthHints, Is.Empty, "the abandoned hint is removed with its close");
+            Assert.That(marker.Open.Keys, Is.EqualTo(new[] { "bulk:op-next" }), "the abandoned switch is closed; the new one waits for its run's fence");
+            Assert.That(marker.Closes.Single(c => c.Token == "bulk:abandoned").Heads, Is.Not.Empty.And.All.EqualTo(CloseHead));
+            Assert.That(marker.BulkBirthHints.Keys, Is.EqualTo(new[] { "op-next" }), "the abandoned hint is removed with its close");
+            Assert.That(marker.BulkBirthHints["op-next"], Is.All.EqualTo(CloseHead),
+                "the close is folded into the open: the new switch's hint is the fence's heads, read no later than its first leaf's birth");
         });
     }
 
@@ -384,6 +398,119 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         {
             Assert.That(marker.Open, Does.ContainKey("bulk:pending"), "a pending graft still owns its switch");
             Assert.That(marker.BulkBirthHints, Does.ContainKey("pending"));
+        });
+    }
+
+    private static int HeadReads(HintRig rig) =>
+        rig.Coordinator.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ILeafReplayCoordinatorGrain.GetHeadOffsetAsync));
+
+    private static int Claims(HintRig rig) =>
+        rig.Wal.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IWalShardGrain.ClaimRoutingGenerationAsync));
+
+    [Test]
+    public async Task The_next_chunk_of_a_run_reuses_the_runs_hint_and_reads_no_heads()
+    {
+        // Review C1 of #5702. The reused hint was read before this chunk began, so it is
+        // no higher than the heads at its first leaf's birth: it never lies above a record
+        // the chunk's leaves have not applied, it only lengthens their replay.
+        var rig = CreateHintRig(advancingHeads: true);
+        var first = await rig.H.Grain.BeginBulkSwitchForTestingAsync("chunk-1", "a");
+        var readsAfterFirst = HeadReads(rig);
+
+        var second = await rig.H.Grain.BeginBulkSwitchForTestingAsync("chunk-2", "m");
+
+        var headNow = await rig.Coordinator.GetHeadOffsetAsync(CancellationToken.None);
+        Assert.Multiple(() =>
+        {
+            Assert.That(readsAfterFirst, Is.GreaterThan(0), "precondition: the run's first chunk read the heads");
+            Assert.That(HeadReads(rig) - readsAfterFirst, Is.EqualTo(1), "the second chunk read no heads (one read is this test's own)");
+            Assert.That(second, Is.EqualTo(first), "the second chunk reuses the run's hint");
+            Assert.That(second, Is.All.LessThan(headNow), "the reused hint is below the heads at the chunk's begin");
+            Assert.That(Claims(rig), Is.Zero, "no fence ran");
+        });
+    }
+
+    [Test]
+    public async Task The_chunk_after_a_full_run_closes_it_with_one_fence_folded_into_its_open_and_takes_the_fences_heads()
+    {
+        var rig = CreateHintRig();
+        for (var i = 0; i < ShardRootGrain.BulkSwitchesPerFence; i++)
+        {
+            await rig.H.Grain.BeginBulkSwitchForTestingAsync($"chunk-{i}", $"k{i}");
+        }
+
+        Assert.That(Claims(rig), Is.Zero, "precondition: no fence ran while the run filled");
+        var writesBefore = rig.Storage.Writes;
+
+        var hint = await rig.H.Grain.BeginBulkSwitchForTestingAsync("chunk-next", "z");
+
+        var marker = await ShardMarkerAsync(rig);
+        var partitions = marker.Closes.First().Heads.Length;
+        Assert.Multiple(() =>
+        {
+            Assert.That(Claims(rig), Is.EqualTo(partitions), "one claim per partition closes the whole run");
+            Assert.That(marker.Open.Keys, Is.EqualTo(new[] { "bulk:chunk-next" }));
+            Assert.That(marker.Closes.Count(c => c.Token.StartsWith("bulk:chunk-", StringComparison.Ordinal)), Is.EqualTo(ShardRootGrain.BulkSwitchesPerFence));
+            Assert.That(marker.Closes.SelectMany(c => c.Heads), Is.All.EqualTo(CloseHead));
+            Assert.That(marker.BulkBirthHints.Keys, Is.EqualTo(new[] { "chunk-next" }), "the closed switches' hints are removed");
+            Assert.That(hint, Is.All.EqualTo(CloseHead), "the new chunk takes the fence's heads as its hint");
+            Assert.That(rig.Storage.Writes - writesBefore, Is.EqualTo(2), "the generation raise, then one write that closes the run and opens the chunk");
+        });
+    }
+
+    [Test]
+    public async Task The_idle_close_closes_every_completed_switch_with_one_fence_and_ends_the_run()
+    {
+        var rig = CreateHintRig();
+        await rig.H.Grain.BeginBulkSwitchForTestingAsync("chunk-1", "a");
+        await rig.H.Grain.BeginBulkSwitchForTestingAsync("chunk-2", "m");
+        var readsBefore = HeadReads(rig);
+
+        await rig.H.Grain.CloseBulkSwitchesForTestingAsync();
+
+        var marker = await ShardMarkerAsync(rig);
+        var partitions = marker.Closes.First().Heads.Length;
+        Assert.Multiple(() =>
+        {
+            Assert.That(marker.Open, Is.Empty);
+            Assert.That(marker.BulkBirthHints, Is.Empty);
+            Assert.That(marker.Closes.Select(c => c.Token), Is.SupersetOf(new[] { "bulk:chunk-1", "bulk:chunk-2" }));
+            Assert.That(Claims(rig), Is.EqualTo(partitions), "one fence for the run");
+        });
+
+        // The run has ended, so the next chunk does not reuse a hint from before it.
+        await rig.H.Grain.BeginBulkSwitchForTestingAsync("chunk-3", "t");
+        Assert.That(HeadReads(rig), Is.GreaterThan(readsBefore), "a new run reads the heads afresh");
+    }
+
+    [Test]
+    public async Task The_idle_close_with_no_switch_open_runs_no_fence()
+    {
+        var rig = CreateHintRig();
+
+        await rig.H.Grain.CloseBulkSwitchesForTestingAsync();
+
+        Assert.That(Claims(rig), Is.Zero);
+    }
+
+    [Test]
+    public async Task A_resumed_chunk_keeps_its_stored_hint_when_it_folds_a_fence()
+    {
+        // S7: a resume never takes a later hint than its first attempt stored, even when
+        // it closes a full run and holds the fence's later heads.
+        var rig = CreateHintRig();
+        await HandOffMarkerRows.UpdateShardAsync(rig.Storage, TreeId, 0, m => m.BulkBirthHints.TryAdd("resumed", [7]));
+        for (var i = 0; i < ShardRootGrain.BulkSwitchesPerFence; i++)
+        {
+            await rig.H.Grain.BeginBulkSwitchForTestingAsync($"chunk-{i}", $"k{i}");
+        }
+
+        var hint = await rig.H.Grain.BeginBulkSwitchForTestingAsync("resumed", "z");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Claims(rig), Is.GreaterThan(0), "precondition: the resume folded the run's fence");
+            Assert.That(hint, Is.EqualTo(new long[] { 7 }), "the resume keeps the hint its first attempt stored");
         });
     }
 }

@@ -164,7 +164,7 @@ public sealed class BulkAppendExistingRowsIntegrationTests
     }
 
     [Test]
-    public async Task BulkAppend_appended_leaves_start_from_the_birth_hint_and_the_switch_closes_by_fence()
+    public async Task BulkAppend_appended_leaves_start_from_the_birth_hint_and_the_runs_switches_close_by_fence()
     {
         // Epic #5605, member 3: the appended leaves read from the hint captured before
         // they were born, so after a reactivation they replay only from there. Every
@@ -209,7 +209,17 @@ public sealed class BulkAppendExistingRowsIntegrationTests
     {
         var storage = ((InProcessSiloHandle)_cluster.Primary).SiloHost.Services
             .GetRequiredKeyedService<Orleans.Storage.IGrainStorage>(LatticeOptions.StorageProviderName);
+
+        // A bulk append leaves its switch for the run's fence, which the shard closes
+        // once no chunk has reached it for the idle interval (review C1 of #5702).
+        var deadline = DateTime.UtcNow + ShardRootGrain.BulkSwitchIdleClose + TimeSpan.FromSeconds(20);
         var marker = (await HandOffMarkerRows.ReadShardAsync(storage, treeId, 0)).State;
+        while (marker.Open.Count > 0 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(250);
+            marker = (await HandOffMarkerRows.ReadShardAsync(storage, treeId, 0)).State;
+        }
+
         var closed = marker.Closes.Select(c => c.Token).ToList();
         Assert.Multiple(() =>
         {

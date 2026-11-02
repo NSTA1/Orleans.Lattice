@@ -164,17 +164,21 @@ internal sealed partial class BPlusLeafGrain
     /// admitted before the latest flip, which only waits for more.
     /// </para>
     /// </remarks>
-    private async Task<bool> DrainMutationsAdmittedBeforeAsync(int allowance)
+    private ValueTask<bool> DrainMutationsAdmittedBeforeAsync(int allowance)
     {
         _mutationsInEarlierEpochs += _mutationsInCurrentEpoch;
         _mutationsInCurrentEpoch = 0;
         _mutationEpoch++;
 
-        if (_mutationsInEarlierEpochs <= allowance)
-        {
-            return true;
-        }
+        // The common case: nothing admitted earlier is still in flight, so the
+        // drain completes synchronously and allocates nothing.
+        return _mutationsInEarlierEpochs <= allowance
+            ? new ValueTask<bool>(true)
+            : new ValueTask<bool>(WaitForEarlierMutationsAsync(allowance));
+    }
 
+    private async Task<bool> WaitForEarlierMutationsAsync(int allowance)
+    {
         var deadline = Task.Delay(MutationDrainDeadline);
         while (_mutationsInEarlierEpochs > allowance)
         {

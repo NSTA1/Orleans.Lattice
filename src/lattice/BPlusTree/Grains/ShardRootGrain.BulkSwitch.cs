@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree.State;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -10,12 +11,20 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Begin.</b> Before the first leaf it creates, the operation captures every WAL
-/// partition's head and stores it as the operation's hint, together with the open
-/// marker <c>bulk:{operationId}</c>, in one write of the shard's
+/// <b>Begin.</b> Before the first leaf it creates, the operation stores its hint,
+/// together with the open marker <c>bulk:{operationId}</c>, in one write of the shard's
 /// <c>_lattice_shard-handoff</c> row. A resume of the same operation reuses the stored
 /// hint, so a crash between the capture and the switch cannot move it later than the
 /// window it covers.
+/// </para>
+/// <para>
+/// <b>The hint of a run (review C1 of #5702).</b> A hint may be any head read before the
+/// operation's first leaf is born: a lower hint is never above a record the leaf has not
+/// applied, it only lengthens the replay. So a chunk reuses the previous chunk's hint, or
+/// the heads of the fence it folds, and reads the partitions' heads only when the shard
+/// holds neither - the first chunk of a run. The reuse is bounded by the fence cadence,
+/// and the replay it adds is paid only by a leaf rehydrated before its checkpoint has
+/// advanced past it.
 /// </para>
 /// <para>
 /// <b>Why the hint is applied only at the switch's end.</b> A leaf whose checkpoint is
@@ -30,25 +39,61 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// such rows in 10.2.0 (review N2 of #5646).
 /// </para>
 /// <para>
-/// <b>Close by fence.</b> Once the switch has published the new routing, the shard
-/// root raises its routing generation, re-claims it at every WAL partition and records
-/// the claim heads as the token's close, removing the hint in the same write. Every
-/// write admitted before the switch was then either allocated below the heads or is
-/// rejected and re-admitted under the new routing. With the gate closed the close
-/// records the allocator heads instead, as a migration's does. Nothing here arms a
-/// leaf: member 3 is inert.
+/// <b>Close by fence, amortised over a run (review C1 of #5702).</b> A close raises the
+/// shard root's routing generation, re-claims it at every WAL partition and records the
+/// claim heads as the close of every switch it covers, removing their hints in the same
+/// write. Every write admitted before the close was then either allocated below the
+/// heads or is rejected and re-admitted under the new routing. A bulk load closes at its
+/// end. A bulk append does not close its own switch: a streaming import sends one
+/// append per chunk, and a close per chunk would cost a claim per partition and two
+/// row writes, and reject every concurrent stamped write once, per chunk. Instead the
+/// completed switches stay open, which only holds their leaves on the replay-based
+/// advance a little longer, and are closed together by one fence: when
+/// <see cref="BulkSwitchesPerFence"/> have accumulated (folded into the next chunk's
+/// open write), when the shard has seen no bulk chunk for
+/// <see cref="BulkSwitchIdleClose"/>, or by the next bulk load. With the gate closed a
+/// close records the allocator heads instead, as a migration's does. Nothing here arms
+/// a leaf: member 3 is inert.
 /// </para>
 /// </remarks>
 internal sealed partial class ShardRootGrain
 {
+    /// <summary>
+    /// How many completed bulk-append switches a shard keeps open before the next chunk
+    /// closes them with one fence (review C1 of #5702).
+    /// </summary>
+    internal const int BulkSwitchesPerFence = 8;
+
+    /// <summary>
+    /// How long a shard waits after its last bulk-append chunk before it closes the
+    /// switches still open, ending the run.
+    /// </summary>
+    internal static readonly TimeSpan BulkSwitchIdleClose = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// The hint the current run of bulk chunks reuses; <see langword="null"/> between runs
+    /// and on a fresh activation, when the next chunk reads the heads or folds a fence.
+    /// </summary>
+    private long[]? _bulkRunHint;
+
+    /// <summary>The one-shot timer that ends a run; registered once, re-armed per chunk.</summary>
+    private IGrainTimer? _bulkIdleCloseTimer;
+
+    /// <summary>Set when no timer can be registered (a test harness without a runtime).</summary>
+    private bool _bulkIdleCloseUnavailable;
+
     /// <summary>The token a bulk operation opens on its shard's marker.</summary>
     internal static string BulkHandOffToken(string operationId) => string.Concat("bulk:", operationId);
 
     /// <summary>
     /// Begins bulk operation <paramref name="operationId"/>'s switch while the append-fence
-    /// gate is open: stores its birth hint, captured now unless a previous attempt stored
-    /// one, and opens its marker over <c>[<paramref name="lowInclusive"/>, open)</c>, in one
-    /// write. Called before the operation creates its first leaf. Returns the stored hint,
+    /// gate is open: stores its birth hint and opens its marker over
+    /// <c>[<paramref name="lowInclusive"/>, open)</c>, in one write. The hint is the one a
+    /// previous attempt stored, else the heads of the fence this call folds, else the run's,
+    /// else the partitions' heads read now. When <see cref="BulkSwitchesPerFence"/> completed
+    /// switches are open, or any are and the activation holds no run hint, they are closed
+    /// by one fence and the close lands in the same write as the open. Called in the
+    /// operation's serial turn, before it creates its first leaf. Returns the stored hint,
     /// or <see langword="null"/> while the gate is closed or the silo provides no marker
     /// storage.
     /// </summary>
@@ -59,31 +104,59 @@ internal sealed partial class ShardRootGrain
             return null;
         }
 
-        await CloseAbandonedBulkSwitchesAsync(operationId);
+        var marker = await LoadHandOffMarkerAsync();
+        marker.BulkBirthHints.TryGetValue(operationId, out var stored);
 
-        var hint = await ReadBulkBirthHintAsync(operationId) ?? await CaptureBulkBirthHeadsAsync();
-        var token = BulkHandOffToken(operationId);
-        var opened = false;
-        var stored = await UpdateHandOffMarkerAsync(marker =>
+        // Review N1 of #5702: an abandoned switch counts here, so a fresh activation,
+        // which holds no run hint, closes it before it opens anything.
+        var completed = CountCompletedBulkSwitches(marker, operationId);
+        List<string>? closing = null;
+        long[]? fenceHeads = null;
+        if (completed >= BulkSwitchesPerFence || (completed > 0 && stored is null && _bulkRunHint is null))
         {
-            var added = marker.BulkBirthHints.TryAdd(operationId, (long[])hint.Clone());
-            opened = HandOffMarkerCore.Open(marker, token, lowInclusive, null);
-            return added | opened;
-        });
-
-        if (opened)
-        {
-            LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindBulk, opened: true, TreeId);
+            closing = CollectCompletedBulkSwitches(marker, operationId);
+            fenceHeads = await FenceBulkSwitchesAsync(drainBatchWrites: true);
         }
 
-        return stored.BulkBirthHints.TryGetValue(operationId, out var durable) ? (long[])durable.Clone() : null;
+        var hint = stored ?? fenceHeads ?? _bulkRunHint ?? await CaptureBulkBirthHeadsAsync();
+        var token = BulkHandOffToken(operationId);
+        var opened = false;
+        var closed = 0;
+        var updated = await UpdateHandOffMarkerAsync(m =>
+        {
+            var changed = false;
+            if (closing is not null)
+            {
+                foreach (var op in closing)
+                {
+                    if (HandOffMarkerCore.Close(m, BulkHandOffToken(op), fenceHeads!))
+                    {
+                        closed++;
+                    }
+
+                    changed |= m.BulkBirthHints.Remove(op);
+                }
+            }
+
+            changed |= m.BulkBirthHints.TryAdd(operationId, hint);
+            opened = HandOffMarkerCore.Open(m, token, lowInclusive, null);
+            return changed | closed > 0 | opened;
+        });
+
+        RecordBulkSwitchMarkers(opened ? 1 : 0, closed);
+
+        // A stored array is never mutated once stored (review C2), so none is cloned.
+        var durable = updated.BulkBirthHints.TryGetValue(operationId, out var d) ? d : null;
+        _bulkRunHint = durable;
+        return durable;
     }
 
     /// <summary>
     /// Ends bulk operation <paramref name="operationId"/>'s switch: applies its stored birth
-    /// hint to <paramref name="leaves"/> when <paramref name="relocated"/>, optionally waits
-    /// out the batch writes admitted before the switch, then closes its marker by fence and
-    /// removes the hint. A no-op when the operation stored no hint and opened no marker.
+    /// hint to <paramref name="leaves"/> when <paramref name="relocated"/>, then either
+    /// closes every completed bulk switch of the shard by one fence
+    /// (<paramref name="closeNow"/>) or leaves the switch for the run's fence and re-arms the
+    /// idle close. A no-op when the operation stored no hint and opened no marker.
     /// Idempotent, so a resumed switch re-runs it.
     /// </summary>
     /// <param name="operationId">The bulk operation.</param>
@@ -93,27 +166,24 @@ internal sealed partial class ShardRootGrain
     /// re-appended above the hint. When <see langword="false"/> the hint is not applied and
     /// the leaves read from the log's start.
     /// </param>
-    /// <param name="drainBatchWrites">
-    /// Whether to wait for the batch writes admitted before the call first. Only a serial
-    /// turn may pass <see langword="true"/>: a batch write that resumes the switch would
-    /// otherwise wait for itself. The wait is an optional latency step; the fence is what
-    /// bounds them.
+    /// <param name="closeNow">
+    /// <see langword="true"/> for a bulk load, which is not part of a run;
+    /// <see langword="false"/> for a bulk append, whose switch the run's fence closes.
     /// </param>
     private async Task FinishBulkSwitchAsync(
         string operationId,
         IReadOnlyList<GrainId> leaves,
         bool relocated,
-        bool drainBatchWrites)
+        bool closeNow)
     {
         if (!HasHandOffStorage())
         {
             return;
         }
 
-        var token = BulkHandOffToken(operationId);
         var marker = await LoadHandOffMarkerAsync();
-        var hint = marker.BulkBirthHints.TryGetValue(operationId, out var stored) ? (long[])stored.Clone() : null;
-        if (hint is null && !marker.Open.ContainsKey(token))
+        marker.BulkBirthHints.TryGetValue(operationId, out var hint);
+        if (hint is null && !marker.Open.ContainsKey(BulkHandOffToken(operationId)))
         {
             return;
         }
@@ -126,26 +196,125 @@ internal sealed partial class ShardRootGrain
                 leafId => grainFactory.GetGrain<IBPlusLeafGrain>(leafId).SetCheckpointOffsetHintsAsync(hint));
         }
 
+        if (closeNow)
+        {
+            await CloseBulkSwitchesAsync(drainBatchWrites: false);
+            return;
+        }
+
+        ArmBulkIdleClose();
+    }
+
+    /// <summary>
+    /// Closes, by one fence and one marker write, every bulk switch open on this shard
+    /// except a still-pending graft's: the completed switches of a run, and any a previous
+    /// operation opened and abandoned (review N1 of #5702). Their hints are removed and
+    /// none is applied: a completed switch applied its own, and an abandoned append's
+    /// leaves were never grafted, so a later re-drive of it re-merges every entry above
+    /// the hint it is then given. Ends the run.
+    /// </summary>
+    /// <param name="drainBatchWrites">
+    /// Whether to wait for the batch writes admitted before the close first. Only a turn
+    /// that is not a batch write may pass <see langword="true"/>, or it would wait for
+    /// itself. The wait only lowers how many writes the fence rejects.
+    /// </param>
+    private async Task CloseBulkSwitchesAsync(bool drainBatchWrites)
+    {
+        _bulkRunHint = null;
+        if (!HasHandOffStorage())
+        {
+            return;
+        }
+
+        var marker = await LoadHandOffMarkerAsync();
+        if (CountCompletedBulkSwitches(marker, currentOperationId: null) == 0)
+        {
+            return;
+        }
+
+        var closing = CollectCompletedBulkSwitches(marker, currentOperationId: null);
+        var heads = await FenceBulkSwitchesAsync(drainBatchWrites);
+        var closed = 0;
+        await UpdateHandOffMarkerAsync(m =>
+        {
+            var changed = false;
+            foreach (var op in closing)
+            {
+                if (HandOffMarkerCore.Close(m, BulkHandOffToken(op), heads))
+                {
+                    closed++;
+                }
+
+                changed |= m.BulkBirthHints.Remove(op);
+            }
+
+            return changed | closed > 0;
+        });
+
+        RecordBulkSwitchMarkers(0, closed);
+    }
+
+    /// <summary>
+    /// The heads a bulk close records: the routing generation's re-claim at every partition
+    /// while the gate is open, else the allocator heads.
+    /// </summary>
+    private async Task<long[]> FenceBulkSwitchesAsync(bool drainBatchWrites)
+    {
         if (drainBatchWrites)
         {
             await DrainBatchWritesAdmittedBeforeAsync();
         }
 
-        var heads = IsAppendFenceGateOpen()
+        return IsAppendFenceGateOpen()
             ? await RaiseAndReclaimRoutingGenerationAsync()
             : await BPlusLeafGrain.CaptureAllocatorHeadsAsync(
                 grainFactory, TreeId, Math.Max(1, await optionsResolver.GetWalPartitionsAsync(TreeId)));
+    }
 
-        var closed = false;
-        await UpdateHandOffMarkerAsync(m =>
+    /// <summary>
+    /// Re-arms the one-shot timer that closes the run's switches once no bulk chunk has
+    /// reached the shard for <see cref="BulkSwitchIdleClose"/>. The timer is registered
+    /// once per activation and re-armed in place, so a chunk allocates nothing here.
+    /// </summary>
+    private void ArmBulkIdleClose()
+    {
+        if (_bulkIdleCloseTimer is { } timer)
         {
-            closed = HandOffMarkerCore.Close(m, token, heads);
-            return m.BulkBirthHints.Remove(operationId) | closed;
-        });
+            timer.Change(BulkSwitchIdleClose, Timeout.InfiniteTimeSpan);
+            return;
+        }
 
-        if (closed)
+        if (_bulkIdleCloseUnavailable)
         {
-            LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindBulk, opened: false, TreeId);
+            return;
+        }
+
+        try
+        {
+            _bulkIdleCloseTimer = this.RegisterGrainTimer(
+                OnBulkIdleCloseAsync,
+                new GrainTimerCreationOptions(dueTime: BulkSwitchIdleClose, period: Timeout.InfiniteTimeSpan));
+        }
+        catch (Exception ex)
+        {
+            // A test harness without a grain runtime: the switches stay open until the
+            // next bulk operation closes them.
+            _bulkIdleCloseUnavailable = true;
+            logger.LogDebug(ex, "Could not register the bulk switch idle close on shard {ShardKey}.", context.GrainId.Key.ToString());
+        }
+    }
+
+    private async Task OnBulkIdleCloseAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await CloseBulkSwitchesAsync(drainBatchWrites: true);
+        }
+        catch (Exception ex)
+        {
+            // The switches stay open, which only holds their leaves on the replay-based
+            // advance; the next bulk operation or the next idle close retries.
+            logger.LogWarning(ex, "The bulk switch idle close failed on shard {ShardKey}.", context.GrainId.Key.ToString());
         }
     }
 
@@ -153,43 +322,64 @@ internal sealed partial class ShardRootGrain
     internal Task<long[]?> BeginBulkSwitchForTestingAsync(string operationId, string? lowInclusive) =>
         BeginBulkSwitchAsync(operationId, lowInclusive);
 
+    /// <summary>Test seam: the run's idle close, as its timer runs it.</summary>
+    internal Task CloseBulkSwitchesForTestingAsync() => OnBulkIdleCloseAsync(CancellationToken.None);
+
     /// <summary>
-    /// Closes, without applying their hints, the bulk switches a previous operation
-    /// opened on this shard and never finished (review N1 of #5702): an append that
-    /// stored its hint and opened its marker, then stopped before it recorded its graft
-    /// and was never re-driven. Its marker would otherwise hold the leaves it covers on
-    /// the replay-based advance for good. Called from the next bulk operation's serial
-    /// turn, which no other bulk operation on this shard can overlap; the operation
-    /// <paramref name="currentOperationId"/> and a graft still pending are left alone.
-    /// No hint is applied: the leaves an abandoned append seeded were never grafted,
-    /// and a later re-drive of the same operation captures a fresh hint and re-merges
-    /// every entry above it.
+    /// How many bulk switches are open on <paramref name="marker"/> other than
+    /// <paramref name="currentOperationId"/>'s and a still-pending graft's. Compares as
+    /// spans, so it allocates nothing.
     /// </summary>
-    private async Task CloseAbandonedBulkSwitchesAsync(string currentOperationId)
+    private int CountCompletedBulkSwitches(ShardHandOffState marker, string? currentOperationId)
     {
-        var marker = await LoadHandOffMarkerAsync();
-        List<string>? abandoned = null;
+        var count = 0;
         foreach (var token in marker.Open.Keys)
         {
-            if (!token.StartsWith("bulk:", StringComparison.Ordinal))
-                continue;
-
-            var operationId = token["bulk:".Length..];
-            if (string.Equals(operationId, currentOperationId, StringComparison.Ordinal)
-                || string.Equals(operationId, state.State.PendingBulkGraft?.OperationId, StringComparison.Ordinal))
+            if (IsCompletedBulkSwitch(token, currentOperationId))
             {
-                continue;
+                count++;
             }
-
-            (abandoned ??= []).Add(operationId);
         }
 
-        if (abandoned is null)
-            return;
+        return count;
+    }
 
-        foreach (var operationId in abandoned)
+    private List<string> CollectCompletedBulkSwitches(ShardHandOffState marker, string? currentOperationId)
+    {
+        var operations = new List<string>();
+        foreach (var token in marker.Open.Keys)
         {
-            await FinishBulkSwitchAsync(operationId, [], relocated: false, drainBatchWrites: false);
+            if (IsCompletedBulkSwitch(token, currentOperationId))
+            {
+                operations.Add(token["bulk:".Length..]);
+            }
+        }
+
+        return operations;
+    }
+
+    private bool IsCompletedBulkSwitch(string token, string? currentOperationId)
+    {
+        if (!token.StartsWith("bulk:", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var operationId = token.AsSpan("bulk:".Length);
+        return !operationId.SequenceEqual(currentOperationId)
+            && !operationId.SequenceEqual(state.State.PendingBulkGraft?.OperationId);
+    }
+
+    private void RecordBulkSwitchMarkers(int opened, int closed)
+    {
+        if (opened > 0)
+        {
+            LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindBulk, opened: true, TreeId);
+        }
+
+        for (var i = 0; i < closed; i++)
+        {
+            LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindBulk, opened: false, TreeId);
         }
     }
 
