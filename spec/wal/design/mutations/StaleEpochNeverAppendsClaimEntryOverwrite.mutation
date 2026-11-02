@@ -10,10 +10,12 @@ PERTURBS: ClaimWrite
 BOUNDS: WithRestart = TRUE, WithBatch = FALSE, MaxWindows = 1
 
 --- FIND
-    /\ epoch[a] > Max2(Max2(fence, memFence), retired)
+    /\ epoch[a] > retired
+    /\ epoch[a] > Max2(fence, memFence) \/ AlreadyDurable(a)
     /\ fence' = Max2(fence, epoch[a])
 --- REPLACE
 \* MUTATION: a plain write, checked against the loaded entry only.
-    /\ epoch[a] > Max2(memFence, retired)
+    /\ epoch[a] > retired
+    /\ epoch[a] > memFence
     /\ fence' = epoch[a]
 --- END

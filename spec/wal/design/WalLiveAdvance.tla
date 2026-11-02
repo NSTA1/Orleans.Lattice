@@ -414,13 +414,24 @@ ClaimConflict(a) ==
     /\ cstage[a] = 0
     /\ ~RowUnmoved(a)
     /\ StopAct(a)
-    /\ UNCHANGED <<walkVars, floorVars, walVars, rp, snapCov, snapRows, epochVars, handVars, gateVars, viewVars,
+    /\ wrongRefusal' = (wrongRefusal \/ RowUnmoved(a))
+    /\ UNCHANGED <<walkVars, lRetired, otherRetired, bumped, rowInc, seenInc, walVars, rp, snapCov, snapRows, epochVars, handVars, gateVars, viewVars,
                    oldVars, envVars, safeVars, wghosts>>
+
+\* AlreadyDurable(a): the claim equals the durable entry and is not below the
+\* loaded one. Production admits it without a write (WalAppendFenceCore
+\* DecideClaimWrite), so a re-presentation after a WAL shard restart or move costs
+\* no re-claim. It is sound only because a retirement raises the floor to the
+\* leaf's epoch row as well as its entry (#5641): epoch values recur after a clear
+\* deletes the row, and a floor built from entries alone would let a pre-purge
+\* duplicate and the re-created incarnation both hold the same epoch.
+AlreadyDurable(a) == epoch[a] = fence /\ epoch[a] >= memFence
 
 ClaimWrite(a) ==
     /\ a \in up
     /\ cstage[a] = 1
-    /\ epoch[a] > Max2(Max2(fence, memFence), retired)
+    /\ epoch[a] > retired
+    /\ epoch[a] > Max2(fence, memFence) \/ AlreadyDurable(a)
     /\ fence' = Max2(fence, epoch[a])
     /\ cstage' = [cstage EXCEPT ![a] = 2]
     /\ UNCHANGED <<walkVars, floorVars, walVars, leafVars, rowEpoch, seen, epoch, claimHead, memFence, retired,
@@ -449,7 +460,7 @@ ClaimRaise(a) ==
 \* or whose row moved, stops the activation (its unstamped fallback is the
 \* GateFlip configuration's OwnAllocUnstamped).
 EntryRefuses(a) ==
-    \/ cstage[a] = 1 /\ epoch[a] <= Max2(fence, memFence)
+    \/ cstage[a] = 1 /\ epoch[a] <= Max2(fence, memFence) /\ ~AlreadyDurable(a)
     \/ cstage[a] = 2 /\ epoch[a] < Max2(fence, memFence)
 FloorRefuses(a) == cstage[a] \in {1, 2} /\ ~EntryRefuses(a) /\ epoch[a] <= retired
 Refused(a) == EntryRefuses(a) \/ FloorRefuses(a)
@@ -684,10 +695,13 @@ GReject ==
 (* first re-claim, so the answer is "open" only while no close is under    *)
 (* way. The check asks about the walk's OWN intent, by id: markers are    *)
 (* range-scoped, so another intent's marker need not cover the leaves the  *)
-(* walk's record reaches. GRestamp: its own intent is open (another        *)
-(* delete's close re-claimed the shared generation), so the walk re-stamps *)
-(* with the current generation; L's marker (hoOpen) encodes that intent    *)
-(* exactly. GUnstamped: not open, so it appends unstamped and reported.    *)
+(* walk's record reaches. GRestamp: an intent whose marker holds L is open *)
+(* (OtherIntentClose: another delete's close re-claimed the shared         *)
+(* generation while the walk's own intent stays open), so the walk         *)
+(* re-stamps with the current generation. Reading L's marker (hoOpen) is a *)
+(* safe over-approximation of "its own intent": it also allows a re-stamp  *)
+(* under a newer intent covering L, which production forbids. GUnstamped:  *)
+(* not open, so it appends unstamped and reported.                         *)
 GRestamp ==
     /\ gst = "rejected"
     /\ hoOpen
@@ -709,7 +723,22 @@ GUnstamped ==
     /\ UNCHANGED <<floorVars, gstamp, closing, durable, acked, floor, leafVars, epochVars, handVars, gateVars,
                    viewVars, seenU, oldUsed, envVars, safeVars, wghosts>>
 
-HandOff(o, a) ==    /\ a \in up
+\* OtherIntentClose (WithTreeWalk): another range delete's close, its walks
+\* finished, re-claims the tree's shared range-delete generation while the walk's
+\* own intent, whose marker holds L, stays open. The walk's next stamped append is
+\* rejected, and rule 3 re-stamps it under its still-open own intent.
+OtherIntentClose ==
+    /\ WithTreeWalk
+    /\ hoOpen
+    /\ ~closing
+    /\ fEpoch < MaxEpoch
+    /\ fEpoch' = fEpoch + 1
+    /\ fFence' = fEpoch + 1
+    /\ UNCHANGED <<walkVars, floorVars, walVars, leafVars, epochVars, hoOpen, hoClosedAt, windows,
+                   fpend, fkind, fstamp, gateVars, viewVars, oldVars, envVars, safeVars, wghosts>>
+
+HandOff(o, a) ==
+    /\ a \in up
     /\ o \in durable
     /\ author[o] = Foreign
     /\ o \notin acked
@@ -911,8 +940,8 @@ Recreate ==
     /\ ~recreated
     /\ recreated' = TRUE
     /\ rowEpoch' = 0
-    /\ retired' = Max2(retired, fence)
-    /\ lRetired' = Max2(lRetired, fence)
+    /\ retired' = Max2(retired, Max2(fence, rowEpoch))
+    /\ lRetired' = Max2(lRetired, Max2(fence, rowEpoch))
     /\ rowInc' = rowInc + 1
     /\ fence' = 0
     /\ memFence' = IF memFence = -1 THEN -1 ELSE 0
@@ -949,7 +978,7 @@ Next ==
     \/ RetireOther
     \/ \E o \in Offs : Land(o)
     \/ ForeignOpen \/ ForeignAlloc \/ ForeignReject \/ Close
-    \/ GAdmit \/ GAlloc \/ GReject \/ GRestamp \/ GUnstamped
+    \/ GAdmit \/ GAlloc \/ GReject \/ GRestamp \/ GUnstamped \/ OtherIntentClose
     \/ \E k \in Kinds : ForeignAdmit(k)
     \/ \E o \in Offs, a \in Acts : HandOff(o, a)
     \/ LegacyWrite \/ OpenGate \/ Resume \/ LegacyComplete \/ MarkInit
@@ -1037,6 +1066,9 @@ WitnessTreeWalkAllocated == \A o \in Offs : author[o] # TreeWalk
 \* A rejected walk re-stamps under another open intent's generation (WithTreeWalk).
 WitnessTreeWalkRestamped == gst # "repend"
 \* A walk whose intent closed is appended unstamped and reported (WithTreeWalk).
+\* A walk rejected by another delete's close re-stamps under its own, still-open
+\* intent, in the first window (WithTreeWalk).
+WitnessTreeWalkRestampedOwnIntent == ~(gst = "repend" /\ hoOpen /\ windows = 1)
 WitnessTreeWalkUnstamped == \A o \in Offs : ~(author[o] = TreeWalk /\ lastU = o)
 \* Another leaf's retirement raises the partition floor to or above an epoch an
 \* activation of L holds, and that activation still appends (WithOtherRetire).

@@ -11,8 +11,12 @@ SUMMARY: the close records the head without fencing out writes admitted before i
 PERTURBS: Close
 
 --- FIND
+    /\ hoOpen' = FALSE
+    /\ fEpoch' = fEpoch + 1
     /\ fFence' = fEpoch + 1
 --- REPLACE
+    /\ hoOpen' = FALSE
+    /\ fEpoch' = fEpoch + 1
 \* MUTATION: no fence: the shard's entry for the author is not raised.
     /\ fFence' = fFence
 --- END

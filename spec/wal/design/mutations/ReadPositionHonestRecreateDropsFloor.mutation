@@ -9,7 +9,7 @@ PERTURBS: Recreate
 BOUNDS: WithRecreate = TRUE, WithBatch = FALSE, MaxWindows = 1
 
 --- FIND
-    /\ retired' = Max2(retired, fence)
+    /\ retired' = Max2(retired, Max2(fence, rowEpoch))
 --- REPLACE
 \* MUTATION: the floor is not raised.
     /\ retired' = retired
