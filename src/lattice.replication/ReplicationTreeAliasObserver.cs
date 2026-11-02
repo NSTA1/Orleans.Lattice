@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.Replication.Grains;
 
 namespace Orleans.Lattice.Replication;
@@ -20,11 +21,21 @@ namespace Orleans.Lattice.Replication;
 /// re-resolve (<see cref="LatticeReplicationOptions.ShipSourceIdentityBackstopInterval"/>),
 /// so a per-peer failure here is logged and does not abort the remaining peers.
 /// </para>
+/// <para>
+/// Shippers are notified only for a tree that has replication configuration on
+/// this cluster (#5676). An operator alias names a logical tree that is usually
+/// not enrolled itself, and a shipper keyed by that name would tail the target's
+/// log and ship it under the alias id. A write through the alias is logged under
+/// the enrolled target and ships with the target's own shipper.
+/// </para>
 /// </summary>
 internal sealed class ReplicationTreeAliasObserver(
     IGrainFactory grainFactory,
     IReplicationTopology topology,
-    ILogger<ReplicationTreeAliasObserver> logger) : ITreeAliasObserver
+    ILogger<ReplicationTreeAliasObserver> logger,
+    IOptionsMonitor<LatticeReplicationOptions>? options = null,
+    ILatticeReplicationContext? replicationContext = null,
+    CompiledReplicationConfigSnapshotMaintainer? runtimeConfig = null) : ITreeAliasObserver
 {
     private readonly IGrainFactory _grainFactory = grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
     private readonly IReplicationTopology _topology = topology ?? throw new ArgumentNullException(nameof(topology));
@@ -48,6 +59,13 @@ internal sealed class ReplicationTreeAliasObserver(
 
         var peers = _topology.CurrentPeers;
         if (peers.Count == 0)
+        {
+            return;
+        }
+
+        if (replicationContext is not null
+            && options is not null
+            && await ReplicationTreeConfiguration.IsUnconfiguredAsync(replicationContext, options, runtimeConfig, change.TreeId))
         {
             return;
         }
