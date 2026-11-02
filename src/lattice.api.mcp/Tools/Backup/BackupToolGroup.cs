@@ -568,8 +568,10 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Delete backup",
                 Description =
-                    "Deletes a backup and the artifacts it uniquely owns. Reports deleted=false when no backup with "
-                    + "the id existed. Mutating: subject to the fail-closed backup access gate. Requires backup control "
+                    "Deletes a backup and the artifacts it uniquely owns. Reports deleted=false when nothing was "
+                    + "deleted: no backup with the id existed, or a capture or catalog rebuild listed it again while "
+                    + "the delete ran, so it was kept. After deleted=false, re-read the backup and delete it again if "
+                    + "it is still listed. Mutating: subject to the fail-closed backup access gate. Requires backup control "
                     + "to be enabled on the server.",
                 ReadOnly = false,
                 Destructive = true,

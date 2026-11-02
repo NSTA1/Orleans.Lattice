@@ -316,7 +316,7 @@ public partial class BackupPage : IDisposable
             var deleted = await Control.DeleteBackupAsync(manifest.Id, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             Toasts.Show(
-                deleted ? "Deleted backup " + BackupsFormat.Name(manifest) + "." : "Backup " + BackupsFormat.Name(manifest) + " was already gone.",
+                deleted ? "Deleted backup " + BackupsFormat.Name(manifest) + "." : "Backup " + BackupsFormat.Name(manifest) + " was not deleted: it was already gone, or was listed again while the delete ran. Reload the backups to check, and delete it again if it is still listed.",
                 deleted ? LtToastTone.Success : LtToastTone.Warning);
             Navigator.NavigateTo(BackupsAddresses.Root);
         }
