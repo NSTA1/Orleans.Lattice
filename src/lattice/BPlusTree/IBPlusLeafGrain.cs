@@ -774,7 +774,8 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// Drops the rows a bulk-append graft has relocated out of this leaf (issue
     /// #5610): each named key whose row this leaf no longer declares and still
     /// holds at exactly the stamp given. A row rewritten since, or one inside the
-    /// leaf's declared range, is kept. Idempotent.
+    /// leaf's declared range, is kept. The drop is persisted before this returns,
+    /// and undone if the persist fails. Idempotent.
     /// </summary>
     /// <param name="relocated">The relocated keys and the stamps they were handed back with. Must not be <see langword="null"/>.</param>
     Task DropRelocatedRowsAsync(Dictionary<string, HybridLogicalClock> relocated);
