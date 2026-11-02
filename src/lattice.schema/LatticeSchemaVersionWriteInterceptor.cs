@@ -52,6 +52,7 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
     private readonly TimeProvider _timeProvider;
     private readonly int _previewMaxBytes;
     private readonly SchemaRuntimeRegistry? _runtimeRegistry;
+    private readonly SchemaVersionConfigRereads _rereads;
 
     /// <summary>Initializes a new <see cref="LatticeSchemaVersionWriteInterceptor"/>.</summary>
     /// <param name="provider">Resolves the cached per-tree version config.</param>
@@ -79,6 +80,7 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
         _timeProvider = timeProvider;
         _previewMaxBytes = Math.Max(1, options.Value.DeadLetterPreviewMaxBytes);
         _runtimeRegistry = runtimeRegistry;
+        _rereads = new SchemaVersionConfigRereads(provider, options, timeProvider);
     }
 
     /// <inheritdoc />
@@ -186,6 +188,17 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
             return LatticeWriteDecision.Accept();
         }
 
+        if (await RefreshAboveTargetAsync(treeId, schemaId, storedVersion, version).ConfigureAwait(false) is not { } current)
+        {
+            return LatticeWriteDecision.Accept();
+        }
+
+        version = current;
+        if (schemaId == version.SchemaId && storedVersion == version.TargetVersion)
+        {
+            return LatticeWriteDecision.Accept();
+        }
+
         // Strict ingest: lift the delta to the tree's target once, at this boundary,
         // so the WAL stores an at-target delta and every later fold is deterministic
         // (fold time never upcasts). An older delta with a contiguous upcaster chain
@@ -228,6 +241,12 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
         }
 
         _ = LatticeSchemaEnvelope.TryReadHeader(value, out var schemaId, out var storedVersion);
+        if (await RefreshAboveTargetAsync(treeId, schemaId, storedVersion, version).ConfigureAwait(false) is not { } current)
+        {
+            return LatticeWriteDecision.Accept();
+        }
+
+        version = current;
 
         // Trusted, upcastable ingest is stored with its own tag; read-time upcasting
         // brings it to the target when it is later read. Only an item newer than the
@@ -247,6 +266,28 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
         var entry = BuildDeadLetterEntry(key, value, reason);
         await _deadLetters.AppendAsync(treeId, entry, cancellationToken).ConfigureAwait(false);
         return LatticeWriteDecision.DeadLetter(reason);
+    }
+
+    /// <summary>
+    /// The config to judge a value stamped at <paramref name="storedVersion"/> by.
+    /// A value stamped above this silo's cached target may have been written after
+    /// another silo advanced the target, inside the propagation window, so the
+    /// config is re-read once, bounded and single-flight, before it is refused
+    /// (#5711). Only that cold path reads; any other value is judged by
+    /// <paramref name="cached"/>. Returns <c>null</c> when the re-read config no
+    /// longer subjects the value to strict ingest (the tree is unversioned, or not
+    /// strict), so the value is trusted.
+    /// </summary>
+    private async ValueTask<LatticeSchemaVersionConfig?> RefreshAboveTargetAsync(
+        string treeId, uint schemaId, uint storedVersion, LatticeSchemaVersionConfig cached)
+    {
+        if (schemaId != cached.SchemaId || storedVersion <= cached.TargetVersion)
+        {
+            return cached;
+        }
+
+        var current = await _rereads.RereadAsync(treeId, cached).ConfigureAwait(false);
+        return current is { StrictIngest: true } ? current : null;
     }
 
     private LatticeSchemaDeadLetterEntry BuildDeadLetterEntry(string key, byte[] value, string reason)

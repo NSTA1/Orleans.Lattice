@@ -310,6 +310,56 @@ public sealed class LatticeSchemaVersionWriteInterceptorTests
     }
 
     [Test]
+    public async Task OnWriteAsync_re_reads_the_config_before_dead_lettering_a_value_stamped_above_a_stale_cached_target()
+    {
+        // Another silo advanced the target to 3; this silo's cache still says 2.
+        var provider = Substitute.For<ILatticeSchemaVersionProvider>();
+        provider.StrictIngestEnabled.Returns(true);
+        provider.GetConfigAsync("orders", Arg.Any<CancellationToken>()).Returns(
+            new ValueTask<LatticeSchemaVersionConfig?>(new LatticeSchemaVersionConfig(1, 2, strictIngest: true)),
+            new ValueTask<LatticeSchemaVersionConfig?>(new LatticeSchemaVersionConfig(1, 3, strictIngest: true)));
+        var registry = Substitute.For<ILatticeSchemaRegistry>();
+        registry.CanUpcast(Arg.Any<uint>(), Arg.Any<uint>(), Arg.Any<uint>()).Returns(true);
+        var dlq = Substitute.For<ILatticeSchemaDeadLetterStore>();
+        var interceptor = new LatticeSchemaVersionWriteInterceptor(
+            provider, registry, dlq, Options.Create(new LatticeSchemaVersioningOptions()), new FixedTimeProvider(FixedNow));
+
+        LatticeWriteDecision decision;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            decision = await interceptor.OnWriteAsync(Request(
+                LatticeSchemaEnvelope.Encode(1, 3, Utf8("{}")), LatticeOperation.Write | LatticeOperation.Replication));
+        }
+
+        Assert.That(decision.Kind, Is.EqualTo(LatticeWriteDecisionKind.Accept), "a value stamped at the advanced target is current, not newer");
+        provider.Received(1).Invalidate("orders");
+        await dlq.DidNotReceive().AppendAsync(Arg.Any<string>(), Arg.Any<LatticeSchemaDeadLetterEntry>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task OnWriteAsync_re_reads_at_most_once_per_interval_for_a_value_that_really_is_newer()
+    {
+        var provider = Substitute.For<ILatticeSchemaVersionProvider>();
+        provider.StrictIngestEnabled.Returns(true);
+        provider.GetConfigAsync("orders", Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<LatticeSchemaVersionConfig?>(new LatticeSchemaVersionConfig(1, 2, strictIngest: true)));
+        var dlq = Substitute.For<ILatticeSchemaDeadLetterStore>();
+        var interceptor = new LatticeSchemaVersionWriteInterceptor(
+            provider, Substitute.For<ILatticeSchemaRegistry>(), dlq,
+            Options.Create(new LatticeSchemaVersioningOptions()), new FixedTimeProvider(FixedNow));
+        var newer = LatticeSchemaEnvelope.Encode(1, 3, Utf8("{}"));
+
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await interceptor.OnWriteAsync(Request(newer, LatticeOperation.Write | LatticeOperation.Replication));
+            await interceptor.OnWriteAsync(Request(newer, LatticeOperation.Write | LatticeOperation.Replication));
+        }
+
+        provider.Received(1).Invalidate("orders");
+        await dlq.Received(2).AppendAsync("orders", Arg.Any<LatticeSchemaDeadLetterEntry>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task OnWriteAsync_does_not_stamp_an_unstamped_plain_replicated_write()
     {
         var (interceptor, dlq) = Create(new LatticeSchemaVersionConfig(1, 2, strictIngest: true), strictIngestEnabled: true);

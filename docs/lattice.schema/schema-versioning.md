@@ -147,7 +147,9 @@ tree's config before refusing it, so the read, and a compliance scan, serves the
 value rather than failing (#5711). That re-read is shared by concurrent reads of the
 tree on the silo, and it runs at most once per tree per propagation interval, so a
 value that really is newer than the target still fails with `NotSupportedException`
-and costs at most one store read per tree per interval. Existing values are lifted lazily at read
+and costs at most one store read per tree per interval. Strict ingest does the same before it
+dead-letters a replicated value stamped above the cached target, so a peer that advanced
+first does not have its current values diverted on a lagging silo. Existing values are lifted lazily at read
 time by the upcaster chain. The advance is **monotonic**: `AdvanceTargetVersionAsync`
 rejects an unversioned tree, and a target that is not strictly greater than the
 current one, with `InvalidOperationException`. (`SetVersionConfigAsync` replaces the
