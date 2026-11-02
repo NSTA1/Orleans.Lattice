@@ -105,6 +105,35 @@ public sealed class WalAppendEpochDirectoryTests
     }
 
     [Test]
+    public async Task Every_page_of_every_bucket_is_enumerated()
+    {
+        // Written directly, so the enumeration is tested independently of how the
+        // listing fills pages.
+        var storage = new EnumerableMemoryGrainStorage();
+        var onFirstPage = Guid.NewGuid();
+        var onSecondPage = Guid.NewGuid();
+        var inLastBucket = Guid.NewGuid();
+        await WritePageAsync(storage, bucket: 4, page: 0, onFirstPage);
+        await WritePageAsync(storage, bucket: 4, page: 1, onSecondPage);
+        await WritePageAsync(storage, bucket: WalAppendEpochDirectory.Buckets - 1, page: 0, inLastBucket);
+
+        var listed = await WalAppendEpochDirectory.ListAsync(storage, Tree, Partition, CancellationToken.None);
+
+        Assert.That(listed.Keys, Is.EquivalentTo(new[] { onFirstPage, onSecondPage, inLastBucket }));
+    }
+
+    private static Task WritePageAsync(IGrainStorage storage, int bucket, int page, Guid leaf) =>
+        WalAppendFenceRows.WriteAsync(
+            storage,
+            WalAppendFenceRows.DirectoryPageGrainType,
+            WalAppendFenceRows.DirectoryPageKey(Tree, Partition, bucket, page),
+            new GrainState<WalAppendEpochDirectoryPageState>(new WalAppendEpochDirectoryPageState
+            {
+                Leaves = new List<Guid> { leaf },
+                AddedUtcTicks = new List<long> { 1 },
+            }));
+
+    [Test]
     public async Task A_leaf_listed_on_a_later_page_is_not_listed_twice_after_space_frees()
     {
         var storage = new EnumerableMemoryGrainStorage();
