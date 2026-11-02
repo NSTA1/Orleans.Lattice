@@ -166,7 +166,7 @@ internal sealed class WalFenceSeamRetry
     private async Task BackoffAsync()
     {
         _cancellationToken.ThrowIfCancellationRequested();
-        var remainingTicks = 0L; // RED-PROOF: seam retry never converges
+        var remainingTicks = _deadlineTicks - Stopwatch.GetTimestamp();
         if (remainingTicks <= 0)
         {
             throw new TimeoutException(

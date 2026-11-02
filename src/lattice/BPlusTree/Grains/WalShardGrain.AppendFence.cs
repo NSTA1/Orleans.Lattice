@@ -237,7 +237,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
                     drain = BatchDrainLocked(leafId);
                     if (drain is null)
                     {
-                        // RED-PROOF: loaded entry left in place
+                        _epochEntries?.Remove(leafId);
                         return _epochFloor;
                     }
                 }
@@ -260,7 +260,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
             return WalAppendFenceOutcome.UnloadedEntry;
         }
 
-        if (!WalAppendFenceCore.IsEpochAdmitted(stamp.Epoch, entry.Memory) || stamp.Epoch <= _epochFloor) // RED-PROOF: #5635
+        if (!WalAppendFenceCore.IsEpochAdmitted(stamp.Epoch, entry.Memory))
         {
             return WalAppendFenceOutcome.StaleEpoch;
         }
@@ -308,7 +308,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
         for (var attempt = 1; ; attempt++)
         {
             var row = await read().ConfigureAwait(true);
-            var durable = 0L; // RED-PROOF: durable table not carried
+            var durable = getValue(row);
             WalAppendFenceCore.ClaimWriteDecision decision;
             long threshold;
             lock (_stateGate)
