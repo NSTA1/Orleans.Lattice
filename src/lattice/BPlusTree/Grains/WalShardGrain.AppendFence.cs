@@ -256,7 +256,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
 
             // #5634: delisted only once the entry is gone. This leaf's claims wait on
             // the leaf gate this retirement holds, so none can list it in between.
-            await WalAppendEpochDirectory.RemoveAsync(storage, _treeId, _shardIndex, leafId).ConfigureAwait(true);
+            // RED-PROOF: retirement does not delist
 
             // A multi-entry stamped batch of this leaf finishes assigning before its
             // entry goes, so retirement never leaves it partially admitted.
@@ -361,7 +361,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
                 {
                     // #5634: listed before the entry row is first written, so every
                     // entry is enumerable by the sweep. Idempotent across retries.
-                    await WalAppendEpochDirectory.AddAsync(storage, _treeId, _shardIndex, listedLeaf, DateTime.UtcNow.Ticks).ConfigureAwait(true);
+                    _ = listedLeaf; // RED-PROOF: claim does not list
                 }
 
                 setValue(row, value);
