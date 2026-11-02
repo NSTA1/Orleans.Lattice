@@ -1,0 +1,18 @@
+# The close records a head below the allocator head at a partition the initiator
+# wrote: production's -1 for a partition whose claim OnUnloaded reset after a WAL
+# shard restart, although the initiator stamped appends there. The owner re-arms
+# without replaying them, and passes a record it owns but never applied.
+MODULE: ReadPositionHonestCloseHeadUnderstated
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the close records no head (-1) at a partition the initiator wrote
+PERTURBS: Close
+
+--- FIND
+    /\ fFence' = fEpoch + 1
+    /\ hoClosedAt' = next
+--- REPLACE
+    /\ fFence' = fEpoch + 1
+\* MUTATION: the head is recorded as -1 (closedAt 0), as for a never-claimed partition.
+    /\ hoClosedAt' = 0
+--- END
