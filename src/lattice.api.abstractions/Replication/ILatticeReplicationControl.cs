@@ -37,9 +37,11 @@ public interface ILatticeReplicationControl
     /// fixed at enable time: enabling an already-enabled tree under a different
     /// mode is rejected (disable then re-enable to change a mode). When
     /// <paramref name="bootstrapSourceClusterId"/> is supplied, a snapshot
-    /// bootstrap is requested whether or not the local tree holds rows, so this
-    /// cluster converges on the source's pre-existing rows the change feed will
-    /// not carry. Enable the source cluster first.
+    /// bootstrap is requested whether or not the local tree holds rows, and
+    /// whether or not the tree is already enabled here (unless a bootstrap from
+    /// that source is already in flight), so this cluster
+    /// converges on the source's pre-existing rows the change feed will not
+    /// carry. Enable the source cluster first.
     /// </summary>
     /// <param name="treeId">The target tree id to enable. Must not be <c>null</c> or empty.</param>
     /// <param name="mode">The wire merge mode to fix for the tree when first enabled.</param>

@@ -257,5 +257,14 @@ read as coverage of another (#2324):
   production mechanism.
 - **Receive fence, enrolment and tenant gates, merge-mode mismatch.** These
   defer or refuse entries for reasons outside convergence and are not modelled.
+  The enrolment gate drops (and acknowledges) every entry a receiver is shipped
+  before its own enrolment lands; that loss is repaired only by a snapshot, which
+  is the model's operator `Bootstrap`. An enable that names a bootstrap source
+  issues that request whether or not the tree is already enrolled locally
+  (#5557, #5594), skipping it only when a bootstrap from that source is
+  already in flight. Residual gap: a receiver enrolled purely by
+  convergence, with no enable call of its own, still waits for an operator
+  re-seed or the fall-off auto-bootstrap to receive the source's pre-enrolment
+  rows.
   No production symbol: the gap is a modelling abstraction with no single
   production owner.

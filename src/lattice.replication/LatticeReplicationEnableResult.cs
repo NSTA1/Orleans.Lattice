@@ -4,9 +4,9 @@ namespace Orleans.Lattice.Replication;
 /// The outcome of an
 /// <see cref="ILatticeReplicationConfigAuthority.EnableReplicationAsync"/> call.
 /// Reports the fixed merge mode the tree is now enabled under, whether the
-/// request was a no-op because the tree was already enabled under the same
-/// mode, and whether a snapshot bootstrap was requested to seed a peer with the
-/// tree's pre-existing data.
+/// tree was already enabled under the same mode, and whether a snapshot
+/// bootstrap was requested to seed this cluster with a source's pre-existing
+/// rows.
 /// </summary>
 /// <param name="TreeId">The target tree id the enable was authored for.</param>
 /// <param name="Mode">
@@ -16,13 +16,15 @@ namespace Orleans.Lattice.Replication;
 /// </param>
 /// <param name="AlreadyEnabled">
 /// <see langword="true"/> when the tree was already enabled under
-/// <paramref name="Mode"/> and the call was an idempotent no-op (no new dot was
-/// authored and no bootstrap was requested).
+/// <paramref name="Mode"/>, so no new dot was authored. A named bootstrap
+/// source may still have been requested on that path; see
+/// <paramref name="BootstrapRequested"/>.
 /// </param>
 /// <param name="BootstrapRequested">
-/// <see langword="true"/> when the authority requested a snapshot bootstrap
-/// (because the tree already held data and a bootstrap source cluster was
-/// supplied) so a peer converges on the pre-existing data.
+/// <see langword="true"/> when the call named a bootstrap source cluster and a
+/// snapshot bootstrap from it was requested, or was already in flight, so this
+/// cluster converges on the source's pre-existing rows.
+/// <see langword="false"/> when no source was named.
 /// </param>
 public readonly record struct LatticeReplicationEnableResult(
     string TreeId,

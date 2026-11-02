@@ -1526,7 +1526,7 @@
       },
       "idempotency": {
         "idempotent": "conditional",
-        "basis": "Already enabled under the same unambiguous mode is an idempotent no-op; different or ambiguous mode is rejected.",
+        "basis": "Already enabled under the same unambiguous mode authors no configuration; a named bootstrap source is still requested unless a bootstrap from it is already in flight. Different or ambiguous mode is rejected.",
         "source": "src/lattice.replication/ILatticeReplicationConfigAuthority.cs#EnableReplicationAsync"
       },
       "concurrency": {

@@ -2,10 +2,9 @@ namespace Orleans.Lattice.Api.Mcp;
 
 /// <summary>
 /// The MCP structured-content result of the <c>lattice_replication_enable</c>
-/// tool: the fixed merge mode the tree is now enabled under, whether the request
-/// was an idempotent no-op because the tree was already enabled under the same
-/// mode, and whether a snapshot bootstrap was requested to seed a peer with the
-/// tree's pre-existing data.
+/// tool: the fixed merge mode the tree is now enabled under, whether the tree was
+/// already enabled under the same mode, and whether a snapshot bootstrap was
+/// requested to seed this cluster with a source's pre-existing rows.
 /// </summary>
 internal sealed record McpReplicationEnableResult
 {
@@ -20,14 +19,15 @@ internal sealed record McpReplicationEnableResult
     public required string Mode { get; init; }
 
     /// <summary>
-    /// Whether the tree was already enabled under <see cref="Mode"/> and the call
-    /// was an idempotent no-op.
+    /// Whether the tree was already enabled under <see cref="Mode"/>, so no
+    /// configuration was authored. A named bootstrap source is still honoured.
     /// </summary>
     public required bool AlreadyEnabled { get; init; }
 
     /// <summary>
-    /// Whether the engine requested a snapshot bootstrap so a peer converges on
-    /// the tree's pre-existing data.
+    /// Whether a snapshot bootstrap from the named source cluster was requested or
+    /// is already in flight, so this cluster converges on the source's
+    /// pre-existing rows.
     /// </summary>
     public required bool BootstrapRequested { get; init; }
 }
