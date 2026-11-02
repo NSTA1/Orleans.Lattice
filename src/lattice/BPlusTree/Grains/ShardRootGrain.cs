@@ -3624,7 +3624,7 @@ internal sealed partial class ShardRootGrain(
         // not threaded through TrackShadowForward.
         var forwardTask = TrackShadowForward(entries, static (t, s) => t.MergeManyAsync(s), static s => ShadowForwardRefusal.PerEntry(s));
 
-        await MergeRoutedAsync(entries, isCrossShardMigration);
+        await MergeRoutedAsync(entries, isCrossShardMigration, routing);
 
         if (!isCrossShardMigration)
             await ForwardMergedRowsToSplitShadowIfNeededAsync(entries.Keys);
@@ -3640,9 +3640,13 @@ internal sealed partial class ShardRootGrain(
     /// current routing names for their keys, one leaf call per target leaf,
     /// linking any split a merge produces. The routing half of
     /// <see cref="MergeManyAsync"/>, shared with a bulk append's below-edge
-    /// entries (issue #5610).
+    /// entries (issue #5610). <paramref name="routing"/> is the routing stamp the
+    /// entries were admitted under (epic #5605, member 2): the shard root's generation
+    /// for a merge that passed the phase check, which a stale-generation rejection
+    /// re-runs; <see cref="WalRoutingStamp.Unstamped"/> for a bulk path that makes no
+    /// phase check, whose appends are therefore unstamped and reported.
     /// </summary>
-    private async Task MergeRoutedAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration)
+    private async Task MergeRoutedAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration, WalRoutingStamp routing)
     {
         // Root-is-leaf fast path: route the entire batch to the single leaf
         // in one grain call and one WriteStateAsync. Decided by node TYPE so a
