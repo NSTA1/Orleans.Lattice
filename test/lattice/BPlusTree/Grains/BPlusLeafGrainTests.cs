@@ -21,7 +21,8 @@ public partial class BPlusLeafGrainTests
         ILatticeMergeModeResolver? mergeModeResolver = null,
         ILatticeEnvelopeCodec? envelopeCodec = null,
         IReadOnlyDictionary<GrainId, IBPlusLeafGrain>? leafStubs = null,
-        Action<IGrainFactory>? configureGrainFactory = null)
+        Action<IGrainFactory>? configureGrainFactory = null,
+        IWalAppendFenceGate? fenceGate = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("leaf", replicaId));
@@ -46,7 +47,19 @@ public partial class BPlusLeafGrainTests
         // non-empty TreeId for the seam to engage.
         if (commitLog is not null || mergeModeResolver is not null || envelopeCodec is not null)
         {
-            var services = Substitute.For<IServiceProvider>();
+            // A fence gate needs the tree's grain storage, which resolves as a keyed
+            // service (epic #5605); the leaf then wraps a fencing writer in its fence.
+            var services = fenceGate is null
+                ? Substitute.For<IServiceProvider>()
+                : Substitute.For<IServiceProvider, Microsoft.Extensions.DependencyInjection.IKeyedServiceProvider>();
+            if (fenceGate is not null)
+            {
+                services.GetService(typeof(IWalAppendFenceGate)).Returns(fenceGate);
+                ((Microsoft.Extensions.DependencyInjection.IKeyedServiceProvider)services)
+                    .GetKeyedService(typeof(Orleans.Storage.IGrainStorage), LatticeOptions.StorageProviderName)
+                    .Returns(new EnumerableMemoryGrainStorage());
+            }
+
             if (commitLog is not null)
                 services.GetService(typeof(ICommitLogWriter)).Returns(commitLog);
             if (mergeModeResolver is not null)
