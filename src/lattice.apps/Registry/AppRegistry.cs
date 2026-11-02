@@ -27,6 +27,12 @@ internal sealed class AppRegistry : IAppRegistry
     private readonly IAppSource _source;
     private readonly string _clusterId;
     private readonly TimeProvider _time;
+    private readonly IAppRegistryEpochSource? _epoch;
+
+    /// <summary>How many times a committed transition tries to advance the cluster epoch before it reports failure.</summary>
+    internal const int MaxPublishAttempts = 3;
+
+    private static readonly TimeSpan PublishRetryDelay = TimeSpan.FromMilliseconds(50);
 
     /// <summary>Initializes a new <see cref="AppRegistry"/>.</summary>
     /// <param name="store">The record store.</param>
@@ -35,6 +41,10 @@ internal sealed class AppRegistry : IAppRegistry
     /// <param name="ownership">The tree ownership ledger install and upgrade claim through.</param>
     /// <param name="source">The app source an install's manifest is resolved from to plan its claims.</param>
     /// <param name="timeProvider">The clock stamping transitions; defaults to <see cref="TimeProvider.System"/>.</param>
+    /// <param name="epoch">
+    /// The cluster-wide registry epoch every committed transition advances before it is acknowledged, or null
+    /// when the host has no cluster (#5595).
+    /// </param>
     /// <exception cref="ArgumentNullException">A required argument is <c>null</c>.</exception>
     public AppRegistry(
         IAppRegistryStore store,
@@ -42,7 +52,8 @@ internal sealed class AppRegistry : IAppRegistry
         IOptions<ClusterOptions> clusterOptions,
         AppTreeOwnershipLedger ownership,
         IAppSource source,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IAppRegistryEpochSource? epoch = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(authorizer);
@@ -55,6 +66,7 @@ internal sealed class AppRegistry : IAppRegistry
         _source = source;
         _clusterId = clusterOptions.Value.ClusterId ?? string.Empty;
         _time = timeProvider ?? TimeProvider.System;
+        _epoch = epoch;
     }
 
     /// <inheritdoc />
@@ -158,6 +170,10 @@ internal sealed class AppRegistry : IAppRegistry
                 case AppLifecycleDecisionKind.NoOp:
                     if (action == AppLifecycleAction.Uninstall)
                         await _ownership.ReleaseAdoptedAsync(AppTreeOwner.Of(current!), keep: null, cancellationToken).ConfigureAwait(false);
+
+                    // A retried transition whose first attempt committed but could not publish lands
+                    // here; it is acknowledged only once the epoch has moved past that write.
+                    await PublishAsync(cancellationToken).ConfigureAwait(false);
                     return AppRegistryTransitionResult.Success(current!, changed: false);
             }
 
@@ -172,6 +188,7 @@ internal sealed class AppRegistry : IAppRegistry
             var next = BuildNext(tenant, slug, current, action, decision.NextState, request, actor);
             if (await _store.TrySetAsync(key, next, read.Version, cancellationToken).ConfigureAwait(false))
             {
+                await PublishAsync(cancellationToken).ConfigureAwait(false);
                 if (claims is not null)
                     return await ClaimAsync(key, current, next, action, claimant, claims, cancellationToken).ConfigureAwait(false);
                 if (action == AppLifecycleAction.Uninstall)
@@ -286,10 +303,46 @@ internal sealed class AppRegistry : IAppRegistry
                     StateChangedAtUtc = _time.GetUtcNow(),
                 };
             if (await _store.TrySetAsync(key, restored, read.Version, cancellationToken).ConfigureAwait(false))
+            {
+                await PublishAsync(cancellationToken).ConfigureAwait(false);
                 return restored;
+            }
         }
 
         return written;
+    }
+
+    /// <summary>
+    /// Advances the cluster-wide registry epoch after a committed write, so no silo's next evaluation answers
+    /// from a snapshot that predates it (#5595). The transition is acknowledged only after this returns: when
+    /// the advance cannot land within <see cref="MaxPublishAttempts"/>, the caller is told the transition
+    /// failed (the write stands, and the committing silo keeps retrying the advance in the background), and a
+    /// retry of the same transition publishes again before it reports success.
+    /// </summary>
+    private async Task PublishAsync(CancellationToken cancellationToken)
+    {
+        if (_epoch is null)
+            return;
+
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await _epoch.AdvanceAsync(cancellationToken).ConfigureAwait(false);
+                return;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                if (attempt >= MaxPublishAttempts)
+                {
+                    throw new InvalidOperationException(
+                        "The app registry change was recorded but could not yet be published to every silo, so it is not acknowledged; retry the transition.",
+                        ex);
+                }
+            }
+
+            await Task.Delay(PublishRetryDelay * attempt, _time, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <summary>

@@ -64,17 +64,17 @@ public sealed class BrowserConsoleLog
             return;
         }
 
-        if (IsExplorerPolicyViolation(text, location))
+        switch (Classify(message.Type, text, location))
         {
-            Add(fault: true, $"[csp {location}] {text}");
-        }
-        else if (message.Type == "error")
-        {
-            Add(fault: true, $"[console.error {location}] {text}");
-        }
-        else if (message.Type == "warning")
-        {
-            Add(fault: false, $"[console.warning {location}] {text}");
+            case ConsoleLine.PolicyViolation:
+                Add(fault: true, $"[csp {location}] {text}");
+                break;
+            case ConsoleLine.Error:
+                Add(fault: true, $"[console.error {location}] {text}");
+                break;
+            case ConsoleLine.Note:
+                Add(fault: false, $"[console.{message.Type} {location}] {text}");
+                break;
         }
     }
 
@@ -93,11 +93,50 @@ public sealed class BrowserConsoleLog
         }
     }
 
-    // As the UI-test suite reads it: a violation reported by one of the Explorer's own
-    // documents, not by an app's sandboxed frame, whose own policy is the app's business.
-    private static bool IsExplorerPolicyViolation(string text, string location) =>
-        Regex.IsMatch(text, "Content[- ]Security[- ]Policy", RegexOptions.IgnoreCase)
-        && !Regex.IsMatch(text, "Unrecognized|unknown directive|Couldn.t process|not supported", RegexOptions.IgnoreCase)
-        && !location.Contains("/_apps/frame/", StringComparison.OrdinalIgnoreCase)
-        && !location.StartsWith("blob:", StringComparison.OrdinalIgnoreCase);
+    /// <summary>How a console line counts at a checkpoint.</summary>
+    internal enum ConsoleLine
+    {
+        /// <summary>Not recorded: neither an error nor a warning.</summary>
+        Ignored,
+
+        /// <summary>Recorded, failing nothing.</summary>
+        Note,
+
+        /// <summary>A console error: fails the checkpoint.</summary>
+        Error,
+
+        /// <summary>A Content-Security-Policy violation by one of the Explorer's own documents: fails the checkpoint.</summary>
+        PolicyViolation,
+    }
+
+    /// <summary>
+    /// Classifies a console line. A Content-Security-Policy report is the Explorer's business only
+    /// when one of its own documents makes it: an app's sandboxed frame enforces its own policy, and
+    /// what that policy refuses inside the frame (the frame's documents report it with their own
+    /// <c>/_apps/frame/</c> location, a <c>blob:</c> one, or - from the opaque-origin sandbox - no
+    /// URL at all while naming a <c>/_apps/frame/</c> resource) is the app's. A directive the browser
+    /// does not recognise, such as <c>webrtc</c>, is reported but fails nothing: the policy names it
+    /// on purpose for the browsers that enforce it.
+    /// </summary>
+    /// <param name="type">The console message type.</param>
+    /// <param name="text">The message text.</param>
+    /// <param name="location">The message location.</param>
+    internal static ConsoleLine Classify(string type, string text, string location)
+    {
+        if (Regex.IsMatch(text, "Content[- ]Security[- ]Policy", RegexOptions.IgnoreCase))
+        {
+            var noise = Regex.IsMatch(text, "Unrecognized|unknown directive|Couldn.t process|not supported", RegexOptions.IgnoreCase);
+            var frame = location.Contains("/_apps/frame/", StringComparison.OrdinalIgnoreCase)
+                || location.StartsWith("blob:", StringComparison.OrdinalIgnoreCase)
+                || (!location.Contains("://", StringComparison.Ordinal) && text.Contains("/_apps/frame/", StringComparison.OrdinalIgnoreCase));
+            return noise || frame ? ConsoleLine.Note : ConsoleLine.PolicyViolation;
+        }
+
+        return type switch
+        {
+            "error" => ConsoleLine.Error,
+            "warning" => ConsoleLine.Note,
+            _ => ConsoleLine.Ignored,
+        };
+    }
 }

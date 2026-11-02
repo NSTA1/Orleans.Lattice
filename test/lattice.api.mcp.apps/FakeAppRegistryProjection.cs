@@ -20,4 +20,12 @@ internal sealed class FakeAppRegistryProjection : IAppRegistryProjection
         WarmCalls++;
         return WarmFault is null ? Task.CompletedTask : Task.FromException(WarmFault);
     }
+
+    public int CurrentCalls { get; private set; }
+
+    public Task EnsureCurrentAsync(CancellationToken cancellationToken = default)
+    {
+        CurrentCalls++;
+        return EnsureWarmAsync(cancellationToken);
+    }
 }

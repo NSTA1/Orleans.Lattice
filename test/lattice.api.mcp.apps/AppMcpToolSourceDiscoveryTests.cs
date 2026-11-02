@@ -255,14 +255,17 @@ public sealed class AppMcpToolSourceDiscoveryTests
     }
 
     [Test]
-    public async Task A_cold_projection_is_warmed_before_the_first_catalog_build()
+    public async Task The_projection_is_made_current_before_every_catalog_read()
     {
         var host = new AppMcpTestHost();
         host.Provide(Notes, AppMcpTestData.Tool("search"));
 
         await host.AdvertisedAsync();
+        var afterFirst = host.Projection.CurrentCalls;
+        await host.AdvertisedAsync();
 
-        Assert.That(host.Projection.WarmCalls, Is.EqualTo(1));
+        Assert.That(afterFirst, Is.GreaterThan(0), "the first catalog build is preceded by a currency check (#5595)");
+        Assert.That(host.Projection.CurrentCalls, Is.GreaterThan(afterFirst), "a warm projection is still checked for cross-silo currency");
     }
 
     [Test]

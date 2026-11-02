@@ -21,8 +21,6 @@ internal sealed class TaskBoardWindow
 
     private static readonly string[] Columns = ["todo", "doing", "done"];
 
-    private const int MaxReloads = 5;
-
     private readonly Func<JourneyRecorder, string, string, string, Task> _capture;
     private readonly Func<Task<TaskBoardServerView>>? _readServer;
 
@@ -32,12 +30,6 @@ internal sealed class TaskBoardWindow
         _capture = capture;
         _readServer = readServer;
     }
-
-    /// <summary>The text of the window's last refusal, or <see langword="null"/> when it never refused.</summary>
-    public string? LastRefusal { get; private set; }
-
-    /// <summary>What the cluster answered at the window's last refusal, or <see langword="null"/> when not read.</summary>
-    public TaskBoardServerView? LastServerView { get; private set; }
 
     /// <summary>The browser page showing the window.</summary>
     public IPage Page { get; }
@@ -98,92 +90,53 @@ internal sealed class TaskBoardWindow
 
     /// <summary>
     /// Waits until the frame has loaded the board and the board has read its tree: it names the
-    /// installed version and shows every column's count. A role grant reaches the workspace a
-    /// moment after a binding changes, and each silo's app registry catches up with an upgrade
-    /// on its own, so a window that says the app is not open yet, or whose launch was refused,
-    /// is loaded again, a bounded number of times, as a user would reload it; each refusal is
-    /// written to the test's output beside what the cluster answered for the persona.
+    /// installed version and shows every column's count. A refusal at any point before then fails
+    /// at once, with what the cluster answered for the persona: every silo answers the persona's
+    /// workspace from a registry snapshot current with every write that returned before the read
+    /// began (#5595), so a window that refuses an app the persona holds is a defect, not a wait.
     /// </summary>
     public async Task WaitForBoardAsync()
-    {
-        if (!await TryWaitForBoardAsync())
-        {
-            Assert.Fail($"The task board's window at {Page.Url} still refused to open after {MaxReloads} reloads: {LastRefusal}. Server: {LastServerView?.ToString() ?? "not read"}.");
-        }
-    }
-
-    /// <summary>
-    /// <see cref="WaitForBoardAsync"/>, answering <see langword="false"/> instead of failing when
-    /// the window still refuses after its reloads; <see cref="LastRefusal"/> and
-    /// <see cref="LastServerView"/> then say why.
-    /// </summary>
-    /// <returns>Whether the board loaded.</returns>
-    public async Task<bool> TryWaitForBoardAsync()
     {
         var closed = Page.GetByRole(AriaRole.Heading, new() { NameRegex = new Regex("is not open to you yet") });
         var notFound = Page.GetByRole(AriaRole.Heading, new() { Name = ShellPage.NotFoundHeading, Exact = true });
         var refused = Host.GetByRole(AriaRole.Alert);
         var context = Board.Locator("#tb-context");
         var loaded = new Regex(@"^task-board 1\.1\.0( in \S+)?\.$");
-        for (var attempt = 0; ; attempt++)
+
+        // The board has loaded only once it has read its tree. A window can draw the frame and then
+        // give way to a refusal (the page's own read of the app is a second read), so a refusal
+        // counts at any point until then.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
+        string? refusal;
+        while (true)
         {
-            // The board has loaded only once it has read its tree. A window can draw the frame
-            // and then give way to a refusal (the page's own read of the app can answer
-            // differently from the one that drew it), so a refusal counts at any point until then.
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
-            string? refusal = null;
-            while (true)
-            {
-                if (await context.IsVisibleAsync() && loaded.IsMatch(await context.InnerTextAsync()))
-                {
-                    break;
-                }
-
-                refusal = await refused.IsVisibleAsync() ? await refused.InnerTextAsync()
-                    : await notFound.IsVisibleAsync() ? ShellPage.NotFoundHeading
-                    : await closed.IsVisibleAsync() ? "is not open to you yet"
-                    : null;
-                if (refusal is not null)
-                {
-                    break;
-                }
-
-                if (DateTime.UtcNow > deadline)
-                {
-                    refusal = "the board did not load within 60 s" + (await Element.IsVisibleAsync() ? " (its frame is shown)" : " (no frame is shown)");
-                    break;
-                }
-
-                await Task.Delay(TimeSpan.FromMilliseconds(250));
-            }
-
-            if (refusal is null)
+            if (await context.IsVisibleAsync() && loaded.IsMatch(await context.InnerTextAsync()))
             {
                 break;
             }
 
-            LastRefusal = refusal.ReplaceLineEndings(" ");
-            if (_readServer is not null)
+            refusal = await refused.IsVisibleAsync() ? await refused.InnerTextAsync()
+                : await notFound.IsVisibleAsync() ? ShellPage.NotFoundHeading
+                : await closed.IsVisibleAsync() ? "is not open to you yet"
+                : null;
+            if (refusal is null && DateTime.UtcNow > deadline)
             {
-                LastServerView = await _readServer();
+                refusal = "the board did not load within 60 s" + (await Element.IsVisibleAsync() ? " (its frame is shown)" : " (no frame is shown)");
             }
 
-            TestContext.Out.WriteLine($"The task board's window at {Page.Url} did not open (attempt {attempt + 1}): {LastRefusal}. Server: {LastServerView?.ToString() ?? "not read"}.");
-            if (attempt >= MaxReloads)
+            if (refusal is not null)
             {
-                return false;
+                var server = _readServer is null ? "not read" : (await _readServer()).ToString();
+                Assert.Fail($"The task board's window at {Page.Url} refused to open: {refusal.ReplaceLineEndings(" ")}. Server: {server}.");
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(3));
-            await Page.ReloadAsync();
+            await Task.Delay(TimeSpan.FromMilliseconds(250));
         }
 
         foreach (var column in Columns)
         {
             await Expect(Board.Locator("#tb-count-" + column)).ToHaveTextAsync(new Regex(@"^\(\d+\)$"));
         }
-
-        return true;
     }
 
     /// <summary>Asserts the window stands alone: no header, address line or directory spine around the frame.</summary>
