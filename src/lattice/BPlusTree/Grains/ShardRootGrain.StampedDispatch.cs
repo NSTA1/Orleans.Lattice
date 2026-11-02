@@ -143,7 +143,7 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task RaiseRoutingGenerationAboveRefusalAsync(WalRoutingGenerationStaleException stale)
     {
-        if (stale.Refusal <= long.MaxValue
+        if (stale.Refusal <= 0
             || stale.Initiator != WalRoutingInitiator.ShardRoot(ShardIndex)
             || _handOffMarker is not { } marker
             || marker.RoutingGeneration >= stale.Refusal)
