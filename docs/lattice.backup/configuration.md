@@ -154,7 +154,10 @@ While it deletes artifacts it keeps renewing its reservation of the backup id;
 a delete that cannot renew it stops and fails, keeping the stored manifest for
 a retry. A catalog rebuild lists only a backup whose every artifact is still in
 the sink, so it never lists a backup a delete half removed - retry that delete
-instead.
+instead. This is a change from 10.2.0, whose rebuild listed every stored
+manifest, including one that would not restore: such a manifest is now skipped,
+counted in the rebuild's `SkippedCount` (`skippedCount` in the operation's
+result) and logged as a warning with its backup id.
 
 A publish call to the scheduler grain is idempotent, so the capture engine
 retries one that times out at the caller as it retries a busy one: a capture

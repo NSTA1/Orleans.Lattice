@@ -63,7 +63,7 @@ steps:
   - n: 5
     action: "Poll the tracked operation until its state is terminal and read its result map."
     api: "ILatticeBackupOperations.GetOperationStatusAsync / GetBackupOperationStatus / lattice_backup_operation_status"
-    expects: "A succeeded rebuild carries scannedCount, registeredCount and reconciledCount; a succeeded scrub carries scannedCount, orphanCount, removedCount, pruned and orphanBackupIds."
+    expects: "A succeeded rebuild carries scannedCount, registeredCount, reconciledCount and skippedCount (absent from results recorded before it existed); a succeeded scrub carries scannedCount, orphanCount, removedCount, pruned and orphanBackupIds."
     source: "docs/lattice.api.backup/operations.md"
   - n: 6
     action: "Only after reviewing orphanBackupIds, start a second scrub with pruneOrphans true and poll it to a terminal state."
@@ -87,7 +87,7 @@ postconditions:
     source: "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#DescribeBackupAsync"
   - check: "Inventory BytesReclaimed counts retention passes only, not a backup deleted through the facade."
     source: "docs/lattice.api.backup/api.md"
-  - check: "A succeeded rebuild has registered every manifest the sink listed during the pass; ScannedCount equals RegisteredCount plus ReconciledCount."
+  - check: "A succeeded rebuild has registered every manifest the sink listed during the pass that still restores; ScannedCount equals RegisteredCount plus ReconciledCount plus SkippedCount. A skipped manifest - logged with its backup id - left the sink during the pass or is missing an artifact, as an interrupted delete leaves it; retry that delete."
     source: "src/lattice.backup/LatticeBackupCatalogRebuildService.cs#LatticeBackupCatalogRebuildService.RebuildFromSinkAsync"
   - check: "A scrub with pruneOrphans false leaves the catalog unchanged and reports removedCount zero."
     source: "docs/lattice.backup/api.md"

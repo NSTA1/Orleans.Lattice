@@ -122,4 +122,29 @@ public sealed class BackupCatalogRebuildIntegrationTests
         });
         Assert.That(await CatalogIdsAsync(), Is.EquivalentTo(new[] { "aaaa", "bbbb", "cccc" }));
     }
+
+    [Test]
+    public async Task RebuildFromSinkAsync_skips_and_counts_a_manifest_whose_artifact_is_missing()
+    {
+        // 10.2.0 listed such a manifest as a backup that would not restore; a
+        // delete interrupted part-way leaves one (issue #5637).
+        await InitializeWithArtifactAsync();
+        await _fixture.Sink.WriteManifestAsync(Manifest("aaaa", DateTimeOffset.UnixEpoch));
+        var halfDeleted = Manifest("bbbb", DateTimeOffset.UnixEpoch.AddHours(1));
+        halfDeleted = halfDeleted with
+        {
+            ContentDescriptors = [halfDeleted.ContentDescriptors.Single() with { ArtifactId = "gone" }],
+        };
+        await _fixture.Sink.WriteManifestAsync(halfDeleted);
+
+        var report = await Rebuild.RebuildFromSinkAsync();
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(report.ScannedCount, Is.EqualTo(2));
+            Assert.That(report.RegisteredCount, Is.EqualTo(1));
+            Assert.That(report.SkippedCount, Is.EqualTo(1), "the half-deleted backup is counted as skipped");
+            Assert.That(await CatalogIdsAsync(), Is.EquivalentTo(new[] { "aaaa" }), "and is not listed");
+        });
+    }
 }

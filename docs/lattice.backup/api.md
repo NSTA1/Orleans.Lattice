@@ -247,7 +247,7 @@ Public constants for progress unit names: `Entries` (`entries`), `Shards` (`shar
 
 ### `BackupOperationResultKeys`
 
-Public constants for the string result map carried by a succeeded tracked operation: `backupId`, `setId`, `memberBackupIds`, `targetTreeId`, `mode`, `restoreOperationId`, `manifestChain`, `entriesApplied`, `shadowPhysicalTreeId`, `previousPhysicalTreeId`, `deadLetteredCrossTenant`, `deadLetteredOverQuota`, `healthStatus`, `missingArtifactCount`, `hashMismatchArtifactCount`, `scannedCount`, `registeredCount`, `reconciledCount`, `orphanCount`, `removedCount`, `pruned`, and `orphanBackupIds`.
+Public constants for the string result map carried by a succeeded tracked operation: `backupId`, `setId`, `memberBackupIds`, `targetTreeId`, `mode`, `restoreOperationId`, `manifestChain`, `entriesApplied`, `shadowPhysicalTreeId`, `previousPhysicalTreeId`, `deadLetteredCrossTenant`, `deadLetteredOverQuota`, `healthStatus`, `missingArtifactCount`, `hashMismatchArtifactCount`, `scannedCount`, `registeredCount`, `reconciledCount`, `skippedCount`, `orphanCount`, `removedCount`, `pruned`, and `orphanBackupIds`.
 
 ### `BackupOperationResults`
 
@@ -413,10 +413,10 @@ A scope's schedule registration and last-run status.
 
 ### `BackupCatalogRebuildReport`
 
-The outcome summary of `ILatticeBackupCatalogRebuildService.RebuildFromSinkAsync`. `ScannedCount` always equals `RegisteredCount + ReconciledCount`.
+The outcome summary of `ILatticeBackupCatalogRebuildService.RebuildFromSinkAsync`. `ScannedCount` always equals `RegisteredCount + ReconciledCount + SkippedCount`. A manifest is skipped, and logged with its backup id, when it left the sink during the rebuild or an artifact it references is missing - as an operator delete interrupted part-way leaves it - so it would not restore; 10.2.0 listed such a manifest.
 
 - Constructor: `BackupCatalogRebuildReport(long scannedCount, long registeredCount, long reconciledCount)`.
-- Properties: `long ScannedCount` (manifests enumerated from the sink), `long RegisteredCount` (absent from the catalog and freshly added), `long ReconciledCount` (already catalogued and reconciled in place).
+- Properties: `long ScannedCount` (manifests enumerated from the sink), `long RegisteredCount` (absent from the catalog and freshly added), `long ReconciledCount` (already catalogued and reconciled in place), `long SkippedCount` (not listed because it no longer restores; an `init` property, zero by default).
 
 ### `BackupCatalogScrubReport`
 
@@ -576,6 +576,7 @@ The following inventory includes directly declared public members and overloads,
 - `public long ScannedCount { get; init; }`
 - `public long RegisteredCount { get; init; }`
 - `public long ReconciledCount { get; init; }`
+- `public long SkippedCount { get; init; }`
 
 ### `Orleans.Lattice.Backup.BackupCatalogScrubReport`
 
@@ -801,6 +802,7 @@ The following inventory includes directly declared public members and overloads,
 - `public const string ScannedCount`
 - `public const string RegisteredCount`
 - `public const string ReconciledCount`
+- `public const string SkippedCount`
 - `public const string OrphanCount`
 - `public const string RemovedCount`
 - `public const string Pruned`
