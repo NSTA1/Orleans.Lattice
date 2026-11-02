@@ -56,7 +56,17 @@ public sealed class A3Contract() : ChapterContract("A3")
         await admin.CreateViewAsync(Names.Views.OrdersHistory, Names.Trees.FactoryOrders, HistoryProviderKey, "{}"u8.ToArray());
         await ContractWait.UntilAsync("orders-history to be ready", async () =>
             !string.IsNullOrEmpty((await admin.GetViewStatusAsync(Names.Views.OrdersHistory)).ActiveTreeId));
-        await ContractCalls.SetManyAsync(facades.Data, Names.Trees.FactoryOrders, StoryData.Orders);
+        // Seeded as the journey's import seeds them: a bulk load, whose rows carry its own
+        // zero-based stamps rather than the wall clock's (#5683). A re-run over a partial
+        // establish, which a bulk load would refuse, upserts them instead.
+        if (await ContractCalls.CountPrefixAsync(facades.Data, Names.Trees.FactoryOrders, "order/") == 0)
+        {
+            await ContractCalls.BulkLoadAsync(admin, Names.Trees.FactoryOrders, StoryData.Orders);
+        }
+        else
+        {
+            await ContractCalls.SetManyAsync(facades.Data, Names.Trees.FactoryOrders, StoryData.Orders);
+        }
 
         await admin.CreateTreeAsync(Names.Trees.FactoryLines);
         await ContractCalls.SetManyAsync(facades.Data, Names.Trees.FactoryLines, StoryData.Lines);

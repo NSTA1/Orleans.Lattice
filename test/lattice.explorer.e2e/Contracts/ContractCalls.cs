@@ -119,6 +119,30 @@ public static class ContractCalls
         return groups;
     }
 
+    /// <summary>
+    /// Seeds the empty tree <paramref name="treeId"/> with <paramref name="entries"/> as one bulk
+    /// load, as the Explorer's import seeds a tree. A bulk load stamps its rows from a zero-based
+    /// clock, so a contract that seeds this way leaves the rows a journey's import would.
+    /// </summary>
+    /// <param name="admin">The Tree Admin API.</param>
+    /// <param name="treeId">The empty tree.</param>
+    /// <param name="entries">The entries; sorted here by key.</param>
+    public static async Task BulkLoadAsync(LatticeTreeAdminApiGrpcClient admin, string treeId, IEnumerable<StoryEntry> entries)
+    {
+        var sorted = entries.OrderBy(entry => entry.Key, StringComparer.Ordinal).ToArray();
+        await admin.BulkLoadStreamAsync(treeId, "contract-seed-" + treeId, Stream(sorted));
+
+        static async IAsyncEnumerable<DataEntry> Stream(StoryEntry[] sorted)
+        {
+            foreach (var entry in sorted)
+            {
+                yield return new DataEntry { Key = entry.Key, Value = entry.Value };
+            }
+
+            await Task.CompletedTask;
+        }
+    }
+
     /// <summary>Upserts <paramref name="entries"/> in batches; idempotent.</summary>
     /// <param name="data">The Data API.</param>
     /// <param name="treeId">The tree.</param>
