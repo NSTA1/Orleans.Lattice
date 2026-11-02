@@ -92,6 +92,31 @@ public sealed class BackupRestoreValueTypeTests
     }
 
     [Test]
+    public void RestoreAdmissionReport_source_tree_ids_default_to_empty()
+    {
+        Assert.That(Report().SourceTreeIds, Is.Empty);
+    }
+
+    [Test]
+    public void RestoreAdmissionReport_exposes_the_source_tree_ids_it_was_given()
+    {
+        var report = new RestoreAdmissionReport("backup-1", "orders", 4096, 8, 4, ["backup-1"])
+        {
+            SourceTreeIds = ["orders", "orders-archive"],
+        };
+
+        Assert.That(report.SourceTreeIds, Is.EqualTo(new[] { "orders", "orders-archive" }));
+    }
+
+    [Test]
+    public void RestoreAdmissionReport_rejects_null_source_tree_ids()
+    {
+        Assert.That(
+            () => new RestoreAdmissionReport("backup-1", "orders", 4096, 8, 4, ["backup-1"]) { SourceTreeIds = null! },
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
     public void ScheduleRequest_exposes_its_scope_kind_and_cadence()
     {
         var scope = BackupScopeSelector.WholeTree("orders");

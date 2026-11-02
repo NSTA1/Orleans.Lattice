@@ -11,7 +11,8 @@ namespace Orleans.Lattice.Api.Replication.Grpc;
 /// Abstract base for the replication control-API gRPC service. Carries the
 /// <see cref="BindServiceMethodAttribute"/> that <c>Grpc.AspNetCore</c> reflects
 /// against to discover and register the unary RPCs (<c>EnableReplication</c>,
-/// <c>DisableReplication</c>, <c>GetReplicationConfig</c>, <c>GetAuthScheme</c>).
+/// <c>DisableReplication</c>, <c>GetReplicationConfig</c>, <c>DecommissionPeer</c>,
+/// <c>ProbeCapabilities</c>, <c>GetAuthScheme</c>).
 /// </summary>
 /// <remarks>
 /// The base/derived split mirrors the codegen shape <c>Grpc.Tools</c> produces
@@ -36,6 +37,9 @@ internal abstract class LatticeReplicationGrpcServiceBase
 
     /// <summary>Permanently decommissions a peer. Implemented in <see cref="LatticeReplicationGrpcService"/>.</summary>
     public abstract Task<ReplicationDecommissionPeerResponse> DecommissionPeer(ReplicationDecommissionPeerRequestMessage request, ServerCallContext context);
+
+    /// <summary>Probes the caller's replication capability over a tree. Implemented in <see cref="LatticeReplicationGrpcService"/>.</summary>
+    public abstract Task<ReplicationCapabilitiesResponse> ProbeCapabilities(ReplicationProbeCapabilitiesRequestMessage request, ServerCallContext context);
 
     /// <summary>
     /// Returns the endpoint's advertised auth schemes. Unauthenticated: this RPC
@@ -68,6 +72,7 @@ internal abstract class LatticeReplicationGrpcServiceBase
             binder.AddMethod(methods.DisableReplication, (UnaryServerMethod<ReplicationDisableRequestMessage, ReplicationDisableResponse>?)null);
             binder.AddMethod(methods.GetReplicationConfig, (UnaryServerMethod<ReplicationGetConfigRequest, ReplicationConfigResponse>?)null);
             binder.AddMethod(methods.DecommissionPeer, (UnaryServerMethod<ReplicationDecommissionPeerRequestMessage, ReplicationDecommissionPeerResponse>?)null);
+            binder.AddMethod(methods.ProbeCapabilities, (UnaryServerMethod<ReplicationProbeCapabilitiesRequestMessage, ReplicationCapabilitiesResponse>?)null);
             binder.AddMethod(methods.GetAuthScheme, (UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>?)null);
             return;
         }
@@ -76,6 +81,7 @@ internal abstract class LatticeReplicationGrpcServiceBase
         binder.AddMethod(methods.DisableReplication, new UnaryServerMethod<ReplicationDisableRequestMessage, ReplicationDisableResponse>(serviceImpl.DisableReplication));
         binder.AddMethod(methods.GetReplicationConfig, new UnaryServerMethod<ReplicationGetConfigRequest, ReplicationConfigResponse>(serviceImpl.GetReplicationConfig));
         binder.AddMethod(methods.DecommissionPeer, new UnaryServerMethod<ReplicationDecommissionPeerRequestMessage, ReplicationDecommissionPeerResponse>(serviceImpl.DecommissionPeer));
+        binder.AddMethod(methods.ProbeCapabilities, new UnaryServerMethod<ReplicationProbeCapabilitiesRequestMessage, ReplicationCapabilitiesResponse>(serviceImpl.ProbeCapabilities));
         binder.AddMethod(methods.GetAuthScheme, new UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>(serviceImpl.GetAuthScheme));
     }
 }
@@ -221,6 +227,18 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                 PeerClusterId = result.PeerClusterId,
                 TreeCount = result.TreeCount,
                 AlreadyDecommissioned = result.AlreadyDecommissioned,
+            };
+        });
+
+    /// <inheritdoc />
+    public override Task<ReplicationCapabilitiesResponse> ProbeCapabilities(ReplicationProbeCapabilitiesRequestMessage request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (ILatticeReplicationControl control, ReplicationProbeCapabilitiesRequestMessage req, CancellationToken ct) =>
+        {
+            var result = await control.ProbeCapabilitiesAsync(req.TreeId, ct).ConfigureAwait(false);
+            return new ReplicationCapabilitiesResponse
+            {
+                TreeId = result.TreeId,
+                CanConfigure = result.CanConfigure,
             };
         });
 

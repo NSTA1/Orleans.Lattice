@@ -1,4 +1,5 @@
 using Orleans.Lattice.Api.State;
+using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.UI.Transport;
 
@@ -133,13 +134,10 @@ internal sealed class ClusterTreeCatalog(ClusterFacades facades, TimeProvider ti
     internal static IReadOnlyList<ClusterTreeEntry> Project(IEnumerable<TreeCatalogEntry> entries)
     {
         var all = entries.ToList();
-        var shadows = all
-            .Where(entry => entry.IsAlias && entry.PhysicalTreeId is not null)
-            .Select(entry => entry.PhysicalTreeId!)
-            .ToHashSet(StringComparer.Ordinal);
+        var shadows = TreeCatalogShadows.Of(all);
 
         return all
-            .Where(entry => entry.RestoreShadowOfTreeId is null && !shadows.Contains(entry.TreeId))
+            .Where(entry => !shadows.Contains(entry.TreeId))
             .Select(entry => new ClusterTreeEntry(
                 ClusterTreeName.Parse(entry.TreeId),
                 entry.IsAlias,

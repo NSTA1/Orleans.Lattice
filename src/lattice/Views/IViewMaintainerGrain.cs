@@ -61,7 +61,15 @@ internal interface IViewMaintainerGrain : IGrainWithStringKey
     /// caught up to the source head as of this call.
     /// Throws <see cref="InvalidOperationException"/> for a
     /// <see cref="LatticeViewReplicationMode.ShipView"/> consumer.
+    /// <para>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/>, as are
+    /// <see cref="GetActiveTreeIdAsync"/> and <see cref="GetStatusAsync"/>: a status
+    /// read only reads, so it is answered while a drain or a rebuild holds the
+    /// maintainer's turn instead of queueing behind it for as long as the rebuild
+    /// runs (#5519). It reports the state as of the read.
+    /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task<long> GetLagAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -114,16 +122,33 @@ internal interface IViewMaintainerGrain : IGrainWithStringKey
     /// <summary>
     /// Returns the grain id of the view tree currently serving reads: the
     /// generation-addressed id for the durable active generation. The read handle
-    /// caches this to resolve queries without a grain hop per read.
+    /// caches this to resolve queries without a grain hop per read. Interleaves
+    /// like <see cref="GetLagAsync"/>.
     /// </summary>
+    [AlwaysInterleave]
     Task<string> GetActiveTreeIdAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns <see cref="GetLagAsync"/> and then <see cref="GetActiveTreeIdAsync"/>
-    /// from one turn, so a status read pays one maintainer call rather than two.
-    /// Throws exactly as <see cref="GetLagAsync"/> would.
+    /// from one call, so a status read pays one maintainer call rather than two.
+    /// Throws exactly as <see cref="GetLagAsync"/> would, and interleaves like it.
     /// </summary>
+    [AlwaysInterleave]
     Task<ViewMaintainerStatus> GetStatusAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The work of one keepalive reminder tick: brings a cold or ShipView-suppressed
+    /// maintainer online through <see cref="EnsureActiveAsync"/>, otherwise restarts
+    /// a missing drain timer and runs one drain pass. Faults are logged, not thrown.
+    /// <para>
+    /// Marked <see cref="OneWayAttribute"/>: the reminder tick interleaves, sends this
+    /// to the maintainer itself and returns at once, so the tick is acknowledged
+    /// even while a long drain or rebuild holds the turn, and this work then runs
+    /// after that turn in the ordinary, non-interleaved way (#5519).
+    /// </para>
+    /// </summary>
+    [OneWay]
+    Task RunKeepaliveTickAsync();
 
     /// <summary>
     /// Read-your-writes barrier: drives drains until the highest applied source

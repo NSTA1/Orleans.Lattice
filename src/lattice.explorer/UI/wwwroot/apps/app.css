@@ -75,6 +75,14 @@
   min-height: 2.75rem;
 }
 
+/* A short link in a section's table (a tree name such as "tasks") is a touch target in
+   its own right: at least 24px tall, to meet WCAG 2.2 target size (axe target-size). */
+.lt-app-sections .lt-table__cell > a {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: 1.5rem;
+}
+
 .lt-app-description {
   max-width: 42rem;
   margin: 0 0 var(--lt-space-4);

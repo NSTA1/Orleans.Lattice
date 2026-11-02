@@ -298,7 +298,11 @@ A picker works in one of two ways:
 - **Pick existing.** Only a listed value is accepted. Leaving the field, or
   submitting the form, with a value that names nothing is refused with an inline
   error such as "No tree is named orders. Choose one from the list." Fields that
-  act on an existing tree, region, subject or tenant work this way.
+  act on an existing tree, region, subject or tenant work this way. A field
+  that may name something not created yet keeps the list but accepts any text,
+  flagging a value that names nothing instead of refusing it: a new access
+  rule's Tree field says "No tree named orders exists yet. The rule applies to
+  it once it is created."
 - **Suggest.** Any text is accepted, and existing values are offered as
   suggestions. A typed value that already exists is flagged, for example "This
   tree exists: restoring replaces what it holds." (the Restore into tree field).

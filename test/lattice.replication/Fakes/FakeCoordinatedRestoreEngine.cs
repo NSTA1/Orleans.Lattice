@@ -68,7 +68,10 @@ internal sealed class FakeCoordinatedRestoreEngine
             totalByteLength: ProbeByteLength,
             totalChunkCount: 1,
             shardCount: ProbeShardCount,
-            manifestChain: [request.BackupId]));
+            manifestChain: [request.BackupId])
+        {
+            SourceTreeIds = [request.TargetTreeId ?? TargetTree],
+        });
     }
 
     /// <inheritdoc />

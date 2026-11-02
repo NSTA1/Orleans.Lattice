@@ -91,6 +91,15 @@ public enum LatticeBackupApiOperation
 
     /// <summary>The <c>StartCatalogScrub</c> accept-then-poll catalog-scrub RPC.</summary>
     StartCatalogScrub,
+
+    // Appended for #5523, again after every earlier member.
+
+    /// <summary>
+    /// The <c>GetBackupHealthConfig</c> per-backup monitor-config read RPC. It reads
+    /// what <see cref="ConfigureBackupHealth"/> writes, so a policy that admits the
+    /// write should admit this read too; the facade authorizes both with the same grant.
+    /// </summary>
+    GetBackupHealthConfig,
 }
 
 /// <summary>

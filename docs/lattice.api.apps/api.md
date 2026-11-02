@@ -258,6 +258,7 @@ The following inventory includes directly declared public members and overloads,
 - `public AppUiDescriptor? Ui { get; init; }`
 - `public string? SourceKey { get; init; }`
 - `public string? ManifestDigest { get; init; }`
+- `public AppLifecycleState? PendingState { get; init; }`
 
 ### `Orleans.Lattice.Api.Apps.AppExceptionScope`
 
@@ -313,6 +314,7 @@ The following inventory includes directly declared public members and overloads,
 - `public required string Version { get; init; }`
 - `public AppLifecycleState State { get; init; }`
 - `public bool Changed { get; init; }`
+- `public bool Pending { get; init; }`
 
 ### `Orleans.Lattice.Api.Apps.AppLifecycleState`
 
@@ -485,6 +487,7 @@ The following inventory includes directly declared public members and overloads,
 - `public required string Version { get; init; }`
 - `public AppLifecycleState State { get; init; }`
 - `public required AppProvenanceDescriptor Provenance { get; init; }`
+- `public AppLifecycleState? PendingState { get; init; }`
 
 ### `Orleans.Lattice.Api.Apps.AppTreeDescriptor`
 

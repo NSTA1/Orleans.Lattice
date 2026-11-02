@@ -49,6 +49,14 @@ public sealed record HistoryRevisionRow
     /// <summary>A content hash (xxHash64) of the source LWW value, or <c>0</c> when the revision carried no value.</summary>
     public long ValueHash { get; init; }
 
+    /// <summary>
+    /// The schema version stamped on the revision's value when its stored bytes
+    /// carried a schema-version envelope that the reader stripped before rendering;
+    /// <c>0</c>, the unversioned sentinel, otherwise. <see cref="From"/> never sets
+    /// it: Core does not parse the envelope, the caller that strips it does.
+    /// </summary>
+    public uint SchemaVersion { get; init; }
+
     /// <summary>Whether the value or delta preview was clipped to the preview budget.</summary>
     public bool Truncated { get; init; }
 

@@ -65,6 +65,56 @@ internal interface ICrossClusterSagaCoordinatorGrain : IGrainWithStringKey
         string? setId = null);
 
     /// <summary>
+    /// Records (or re-attaches to) the saga exactly as <see cref="RunAsync"/>
+    /// does, and returns at once without preparing anyone: the saga is advanced
+    /// by <see cref="DriveAsync"/> and followed through <see cref="GetStatusAsync"/>.
+    /// A caller that must not hold one grain call open for the whole saga - which
+    /// can outlast the response timeout and report a committed saga as failed
+    /// (issue #5506) - uses this instead of <see cref="RunAsync"/>.
+    /// <para>
+    /// Interleaved so a re-attach is answered even while a drive holds the
+    /// coordinator. It mutates state only on first submit, before its first
+    /// await; a re-attach only checks the persisted fingerprint.
+    /// </para>
+    /// </summary>
+    /// <param name="participantClusterIds">As for <see cref="RunAsync"/>.</param>
+    /// <param name="targetTree">As for <see cref="RunAsync"/>.</param>
+    /// <param name="manifestId">As for <see cref="RunAsync"/>.</param>
+    /// <param name="coordinatorClusterId">As for <see cref="RunAsync"/>.</param>
+    /// <param name="setId">As for <see cref="RunAsync"/>.</param>
+    /// <returns>The saga's status after the submit.</returns>
+    /// <exception cref="System.InvalidOperationException">
+    /// The same saga id was previously submitted with a different participant
+    /// set, target tree, manifest id, or set id.
+    /// </exception>
+    [AlwaysInterleave]
+    Task<CrossClusterSagaStatus> BeginAsync(
+        List<string> participantClusterIds,
+        string targetTree,
+        string manifestId,
+        string coordinatorClusterId,
+        string? setId = null);
+
+    /// <summary>
+    /// Advances the saga as far as it will go in one turn of the coordinator's
+    /// own: prepare, decide, and finalize. One-way, so the caller never waits on
+    /// it and no response timeout applies to the saga's length. Idempotent: a
+    /// completed or not-started saga is left as it is, and a fault leaves the
+    /// saga where it stopped, visible through <see cref="GetStatusAsync"/>, for
+    /// the next drive or the keepalive reminder to resume.
+    /// </summary>
+    [OneWay]
+    Task DriveAsync();
+
+    /// <summary>
+    /// The saga's current status: its phase, its outcome once decided, whether a
+    /// drive is running, and whether a participant refused the decision. Pure
+    /// read, interleaved, so it answers while a drive holds the coordinator.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<CrossClusterSagaStatus> GetStatusAsync();
+
+    /// <summary>
     /// The single global decision for this saga. Returns
     /// <see cref="CrossClusterSagaDecision.InFlight"/> while the coordinator is
     /// still preparing (so dialled reads see the pre-saga view), then the

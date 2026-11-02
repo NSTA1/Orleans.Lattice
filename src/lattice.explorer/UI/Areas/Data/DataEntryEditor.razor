@@ -1,0 +1,128 @@
+@*
+    The value editor: one dialog for a new entry (a key and a value) and for
+    changing an existing one. The value is edited as JSON (validated, and
+    pretty-printed on request), as UTF-8 text, or - for a value that is not
+    UTF-8 - as base64, replaced whole. When the tree has a schema policy the
+    draft is checked against it as it is typed. On save the editor reads the
+    entry again: if it changed since the editor opened, the newer value is
+    shown and the user chooses to overwrite it or reload it. The cluster is
+    last-writer-wins, so this is a warning, not a lock.
+*@
+
+<LtDialog Open="Open" OpenChanged="CloseAsync" Title="@Title" Placement="Placement" AutoFocus="true">
+    @if (Open)
+    {
+        @if (_loading)
+        {
+            <LtSkeleton Lines="5" Label="Loading the value" />
+        }
+        else if (_loadError is not null)
+        {
+            <p class="lt-data-editor__error" role="alert">@_loadError</p>
+            <div class="lt-dialog__actions">
+                <LtButton OnClick="StartAsync">Try again</LtButton>
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => CloseAsync(false)">Cancel</LtButton>
+            </div>
+        }
+        else
+        {
+            <form class="lt-data-editor" @onsubmit="SaveAsync" novalidate>
+                @if (IsCreate)
+                {
+                    <LtNameInput Label="Key"
+                                 Value="@_key"
+                                 ValueChanged="SetKey"
+                                 Noun="key"
+                                 Validate="@ValidateKeyAsync"
+                                 Error="@_keyError"
+                                 Disabled="@_saving"
+                                 Hint="Keys are case-sensitive and sort in ordinal order." />
+                }
+                else
+                {
+                    <p class="lt-data-editor__key">Key <span class="lt-shell-mono">@DataKeysPanel.Clip(Key!)</span></p>
+                }
+
+                <div class="lt-toolbar">
+                    <LtSelect Label="Edit as" Options="@FormatOptions" Value="@_format.ToString()" ValueChanged="SetFormat" Disabled="@_saving" />
+                    @if (_format == DataDraftFormat.Json)
+                    {
+                        <LtButton Variant="LtButtonVariant.Quiet" OnClick="FormatJson" Disabled="@_saving">Format JSON</LtButton>
+                    }
+                </div>
+
+                @if (_note is not null)
+                {
+                    <p class="lt-data-note">@_note</p>
+                }
+
+                <div class="lt-field">
+                    <label class="lt-field__label" for="@_valueId">Value</label>
+                    <textarea id="@_valueId"
+                              class="lt-input lt-shell-mono lt-data-editor__value"
+                              rows="12"
+                              spellcheck="false"
+                              autocomplete="off"
+                              disabled="@_saving"
+                              aria-invalid="@(_draftError is null ? null : "true")"
+                              aria-describedby="@(_draftError is null ? null : _errorId)"
+                              value="@_text"
+                              @oninput="OnTextInput"></textarea>
+                    @if (_draftError is not null)
+                    {
+                        <p id="@_errorId" class="lt-field__error"><span class="lt-field__error-mark" aria-hidden="true">!</span> @_draftError</p>
+                    }
+                </div>
+
+                <section class="lt-data-editor__schema" aria-label="Schema check">
+                    @if (_schema.Note is { } schemaNote)
+                    {
+                        <p class="lt-data-note">@schemaNote</p>
+                    }
+                    else if (_schema.HasPolicy && _draftError is null)
+                    {
+                        @if (_violations.Count == 0)
+                        {
+                            <p class="lt-data-editor__schema-ok" role="status">Passes this tree's schema policy (@DataArea.Plural(_schema.RuleCount, "rule")).</p>
+                        }
+                        else
+                        {
+                            <p class="lt-data-editor__schema-fail" role="status">The cluster will refuse this value: it fails this tree's schema policy.</p>
+                            <ul class="lt-data-editor__violations">
+                                @foreach (var reason in _violations)
+                                {
+                                    <li>@reason</li>
+                                }
+                            </ul>
+                        }
+                    }
+                </section>
+
+                @if (_conflict is { } conflict)
+                {
+                    <div class="lt-data-editor__conflict" role="alert">
+                        <p><strong>@ConflictTitle</strong> @ConflictText</p>
+                        @if (conflict.Entry is { IsTombstone: false } newer)
+                        {
+                            <pre class="lt-data-value" tabindex="0" aria-label="The newer value">@DataValueRendering.Inline(newer.Value, newer.Truncated)</pre>
+                        }
+                        <div class="lt-toolbar">
+                            <LtButton OnClick="ReloadAsync" Disabled="@_saving">Reload the newer value</LtButton>
+                            <LtButton Variant="LtButtonVariant.Destructive" OnClick="OverwriteAsync" Disabled="@_saving">Overwrite with my value</LtButton>
+                        </div>
+                    </div>
+                }
+
+                @if (_saveError is not null)
+                {
+                    <p class="lt-data-editor__error" role="alert">@_saveError</p>
+                }
+
+                <div class="lt-dialog__actions">
+                    <LtButton Type="LtButtonType.Submit" Disabled="@(_saving || _conflict is not null)">@(IsCreate ? "Create entry" : "Save")</LtButton>
+                    <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => CloseAsync(false)" Disabled="@_saving">Cancel</LtButton>
+                </div>
+            </form>
+        }
+    }
+</LtDialog>

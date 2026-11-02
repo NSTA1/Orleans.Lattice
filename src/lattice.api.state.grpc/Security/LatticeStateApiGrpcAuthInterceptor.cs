@@ -14,6 +14,21 @@ namespace Orleans.Lattice.Api.State.Grpc;
 /// gRPC services hosted in the same ASP.NET Core pipeline are unaffected.
 /// </summary>
 /// <remarks>
+/// <para>
+/// Before the authorizer runs, a call that presents a credential the cluster
+/// refuses - one a registered authenticator recognises and rejects, such as a
+/// wrong password - is failed with <see cref="StatusCode.Unauthenticated"/>,
+/// whether or not <see cref="LatticeStateApiGrpcOptions.RequireAuthorization"/>
+/// is set. Without it the refused caller would resolve to the anonymous subject
+/// and be answered exactly like a caller who presented no credential, or like a
+/// signed-in caller who holds no grants, so a client could not tell a bad
+/// password from a missing grant. A valid caller without grants is unaffected and
+/// still meets the authorizer and the access gate. A credential nothing
+/// recognises, or a host with no membership context, is left as it resolves
+/// today.
+/// </para>
+/// </remarks>
+/// <remarks>
 /// Registered globally via
 /// <c>AddGrpc(o =&gt; o.Interceptors.Add&lt;LatticeStateApiGrpcAuthInterceptor&gt;())</c>
 /// inside
@@ -26,15 +41,34 @@ namespace Orleans.Lattice.Api.State.Grpc;
 /// </remarks>
 internal sealed class LatticeStateApiGrpcAuthInterceptor : Interceptor
 {
+    /// <summary>The status detail a call presenting a refused credential fails with.</summary>
+    internal const string CredentialRefusedMessage =
+        "The cluster did not accept the presented credential. Sign in again with a valid credential.";
+
     private readonly ILatticeStateApiAuthorizer _authorizer;
     private readonly IOptionsMonitor<LatticeStateApiGrpcOptions> _options;
     private readonly ILogger<LatticeStateApiGrpcAuthInterceptor> _logger;
+    private readonly ILatticeStateApiCredentialBridge? _credentialBridge;
+    private readonly ILatticeMembershipContext? _membership;
 
     /// <summary>Initialises the interceptor.</summary>
+    /// <param name="authorizer">The transport-level authorizer.</param>
+    /// <param name="options">The binding options.</param>
+    /// <param name="logger">The logger.</param>
+    /// <param name="credentialBridge">
+    /// Lifts the caller's credential off the call, so a refused credential can be
+    /// failed as unauthenticated. <see langword="null"/> skips that check.
+    /// </param>
+    /// <param name="membership">
+    /// The membership context that judges the credential. <see langword="null"/>
+    /// (no membership registered on this host) skips that check.
+    /// </param>
     public LatticeStateApiGrpcAuthInterceptor(
         ILatticeStateApiAuthorizer authorizer,
         IOptionsMonitor<LatticeStateApiGrpcOptions> options,
-        ILogger<LatticeStateApiGrpcAuthInterceptor> logger)
+        ILogger<LatticeStateApiGrpcAuthInterceptor> logger,
+        ILatticeStateApiCredentialBridge? credentialBridge = null,
+        ILatticeMembershipContext? membership = null)
     {
         ArgumentNullException.ThrowIfNull(authorizer);
         ArgumentNullException.ThrowIfNull(options);
@@ -43,6 +77,8 @@ internal sealed class LatticeStateApiGrpcAuthInterceptor : Interceptor
         _authorizer = authorizer;
         _options = options;
         _logger = logger;
+        _credentialBridge = credentialBridge;
+        _membership = membership;
     }
 
     /// <inheritdoc />
@@ -61,6 +97,7 @@ internal sealed class LatticeStateApiGrpcAuthInterceptor : Interceptor
             return await continuation(request, context).ConfigureAwait(false);
         }
 
+        await RefuseRejectedCredentialAsync(method, context).ConfigureAwait(false);
         await EnforceAuthAsync(method, request, context).ConfigureAwait(false);
         return await continuation(request, context).ConfigureAwait(false);
     }
@@ -84,6 +121,7 @@ internal sealed class LatticeStateApiGrpcAuthInterceptor : Interceptor
             return;
         }
 
+        await RefuseRejectedCredentialAsync(method, context).ConfigureAwait(false);
         await EnforceAuthAsync(method, request, context).ConfigureAwait(false);
         await continuation(request, responseStream, context).ConfigureAwait(false);
     }
@@ -107,6 +145,7 @@ internal sealed class LatticeStateApiGrpcAuthInterceptor : Interceptor
         // A streaming call has no single request message to describe, so the call
         // is identified by its method name alone. The authorization decision is
         // made before the first client message is read.
+        await RefuseRejectedCredentialAsync(method, context).ConfigureAwait(false);
         await EnforceAuthAsync<TRequest>(method, default!, context).ConfigureAwait(false);
         return await continuation(requestStream, context).ConfigureAwait(false);
     }
@@ -130,9 +169,58 @@ internal sealed class LatticeStateApiGrpcAuthInterceptor : Interceptor
             return;
         }
 
+        await RefuseRejectedCredentialAsync(method, context).ConfigureAwait(false);
         await EnforceAuthAsync<TRequest>(method, default!, context).ConfigureAwait(false);
         await continuation(requestStream, responseStream, context).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Fails the call with <see cref="StatusCode.Unauthenticated"/> when it presents
+    /// a credential the cluster refuses. Runs ahead of the authorizer and regardless
+    /// of <see cref="LatticeStateApiGrpcOptions.RequireAuthorization"/>, so a refused
+    /// credential is never answered as an anonymous or an ungranted caller. A call
+    /// with no credential, an accepted one, or one nothing recognises passes through.
+    /// The credential itself is never logged.
+    /// </summary>
+    private async ValueTask RefuseRejectedCredentialAsync(string method, ServerCallContext context)
+    {
+        if (_credentialBridge is null || _membership is null)
+        {
+            return;
+        }
+
+        var credential = _credentialBridge.Resolve(context);
+        if (credential is null)
+        {
+            return;
+        }
+
+        LatticeCredentialVerdict verdict;
+        using (LatticeCredentialContext.With(credential))
+        {
+            try
+            {
+                verdict = await LatticeCredentialVerification
+                    .VerifyCurrentAsync(_membership, context.CancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw new RpcException(new Status(
+                    StatusCode.Cancelled,
+                    "State-API credential verification was cancelled."));
+            }
+        }
+
+        if (verdict == LatticeCredentialVerdict.Refused)
+        {
+            _logger.LogWarning(
+                "Api.State: rejected inbound gRPC call to {Method} - the presented credential was refused.",
+                method);
+            throw new RpcException(new Status(StatusCode.Unauthenticated, CredentialRefusedMessage));
+        }
+    }
+
     private async Task EnforceAuthAsync<TRequest>(string method, TRequest request, ServerCallContext context)
     {
         if (!_options.CurrentValue.RequireAuthorization)

@@ -7,8 +7,8 @@
     Bind roles: each role the app declares is bound to one membership group - never
     to a user. The same step changes the installed version's bindings, where a role
     may also be left unbound. The group is typed into a type-ahead picker that
-    suggests the cluster's groups (from the directory or, without one, the auth
-    store) and, when the installing tenant's delegated access administration is open
+    suggests the cluster's groups - the directory's and those stored in Access, each
+    labelled - and, when the installing tenant's delegated access administration is open
     to the caller, the tenant's own groups, labelled Tenant. Another tenant's group is
     never offered, and one typed in is refused before anything is sent. It is
     read-only here: nothing is created or changed in the directory.
@@ -103,7 +103,7 @@
         {
             if (_groups is null || !string.Equals(_groups.Tenant, _ownGroupsTenant, StringComparison.Ordinal))
             {
-                _groups = new AppGroupSuggestionSource(Suggestions.GroupsOrStoredGroups, TenantAccess, _ownGroupsTenant);
+                _groups = new AppGroupSuggestionSource(Suggestions.ClusterGroups, TenantAccess, _ownGroupsTenant);
             }
 
             return _groups;

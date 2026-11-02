@@ -94,6 +94,20 @@ public sealed partial class LatticeBackupCoordinatedRestoreEngineTests
 
         Assert.That(report.ManifestChain, Is.EqualTo(new[] { baseId, increment.BackupId }),
             "the probe must report the base-first chain the shadow build would replay");
+        Assert.That(report.SourceTreeIds, Is.EqualTo(new[] { Source }),
+            "both chain members were captured from the source tree, which is reported once");
+    }
+
+    [Test]
+    public async Task ProbeAdmissionAsync_reports_the_captured_source_tree_of_a_retargeted_restore()
+    {
+        await _fixture.InitializeAsync();
+        var backupId = await SeedAndCaptureAsync("probe-sources", ("k1", "v1"));
+
+        var report = await Engine.ProbeAdmissionAsync(new LatticeRestoreRequest(backupId, "orders-elsewhere"));
+
+        Assert.That(report.SourceTreeIds, Is.EqualTo(new[] { Source }),
+            "the source is the tree the backup was captured from, not the tree it is restored into");
     }
 
     [Test]

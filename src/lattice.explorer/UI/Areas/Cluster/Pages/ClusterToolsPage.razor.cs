@@ -65,6 +65,15 @@ public partial class ClusterToolsPage : IDisposable
 
     private int ChunkCount => (_entries.Count + ChunkSize - 1) / ChunkSize;
 
+    /// <summary>
+    /// The tree's Data page with its Import dialog open on a seed (issue #5365): the file
+    /// source of a bulk load, on the same streaming pipeline the Data area imports through.
+    /// </summary>
+    private string SeedFromFileHref => Navigation.Address.ExplorerAddress.ForTree(Data.DataArea.AreaKey, TreeId)
+        .WithTenant(Facades.AssertedTenant)
+        .WithQuery(Data.DataTabs.ImportQuery, Data.DataTabs.ImportSeedValue)
+        .ToHref();
+
     private string ShardHint
     {
         get

@@ -267,11 +267,21 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
     public Task<ReplicationDrainedLineage?> GetDrainedLineageAsync(string sourceClusterId)
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
+        // Interleaves with the handoff (#5534): between the shadow copy's alias
+        // swap, which re-mints the tree frontier epoch, and the write that records
+        // that epoch below, the recorded epoch trails the frontier although the
+        // tree holds exactly this drain.
+        var cutoverPending = state.State.InProgress
+            && state.State.Phase == LatticeBootstrapState.IncrementalHandoff
+            && state.State.UseShadowCopy
+            && !state.State.ShadowCopyCutoverComplete
+            && string.Equals(state.State.SourceClusterId, sourceClusterId, StringComparison.Ordinal);
         return Task.FromResult<ReplicationDrainedLineage?>(
             state.State.DrainedLineageBySource.TryGetValue(sourceClusterId, out var lineage)
                 ? new ReplicationDrainedLineage(
                     lineage,
-                    state.State.DrainedFrontierEpochBySource.TryGetValue(sourceClusterId, out var epoch) ? epoch : Guid.Empty)
+                    state.State.DrainedFrontierEpochBySource.TryGetValue(sourceClusterId, out var epoch) ? epoch : Guid.Empty,
+                    cutoverPending)
                 : null);
     }
 
@@ -309,7 +319,14 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
 
         var requests = state.State.ReseedAfterEpochs;
         var had = requests.TryGetValue(sourceClusterId, out var recorded);
-        if (!had || recorded < reseedAfterEpoch)
+        // The drain of the bootstrap in progress from this sender already served a
+        // request at or above this one: its export postdates the request and its
+        // stale-bucket clear has run, so the completion answers it (#5534).
+        var servedInFlight = state.State.InProgress
+            && string.Equals(state.State.SourceClusterId, sourceClusterId, StringComparison.Ordinal)
+            && state.State.DrainServedReseedEpoch is { } served
+            && reseedAfterEpoch <= served;
+        if (!servedInFlight && (!had || recorded < reseedAfterEpoch))
         {
             requests[sourceClusterId] = reseedAfterEpoch;
             try
@@ -405,6 +422,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         var prevUseShadowCopy = state.State.UseShadowCopy;
         var prevShadowCopyTreeId = state.State.ShadowCopyTreeId;
         var prevShadowCopyCutoverComplete = state.State.ShadowCopyCutoverComplete;
+        var prevDrainServedReseedEpoch = state.State.DrainServedReseedEpoch;
 
         state.State.InProgress = true;
         state.State.Phase = LatticeBootstrapState.RequestingSnapshot;
@@ -425,6 +443,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         state.State.UseShadowCopy = !state.State.ReadFenceArmed;
         state.State.ShadowCopyTreeId = null;
         state.State.ShadowCopyCutoverComplete = false;
+        state.State.DrainServedReseedEpoch = null;
         if (!state.State.ReadFenceArmed)
         {
             state.State.ImportApplied = false;
@@ -450,6 +469,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
             state.State.UseShadowCopy = prevUseShadowCopy;
             state.State.ShadowCopyTreeId = prevShadowCopyTreeId;
             state.State.ShadowCopyCutoverComplete = prevShadowCopyCutoverComplete;
+            state.State.DrainServedReseedEpoch = prevDrainServedReseedEpoch;
             throw;
         }
 
@@ -1180,7 +1200,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         // Issue #4549. Installed before the drain, and only once the import is
         // recorded. A failed shadow import discards its copy and clears this
         // provisional floor; a failed legacy import stays fenced and re-drives.
-        var floorInstalled = await InstallBootstrapFloorAsync(treeName, sourceClusterId, snapshot, cancellationToken).ConfigureAwait(true);
+        var floorInstalled = await InstallBootstrapFloorAsync(treeName, sourceClusterId, snapshot, mergeMode, cancellationToken).ConfigureAwait(true);
 
         // Lazy-initialise the duration anchor on resume after a silo
         // failover: TryInitiateBootstrapAsync set it on kickoff, but a
@@ -1417,8 +1437,11 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
 
         if (reseed)
         {
-            // Consumed; persisted with the phase transition below.
+            // Consumed; persisted with the phase transition below. Remembered so a
+            // push repeating this request before the handoff does not re-arm it
+            // (#5534).
             state.State.ReseedAfterEpochs.Remove(sourceClusterId);
+            state.State.DrainServedReseedEpoch = Math.Max(state.State.DrainServedReseedEpoch ?? long.MinValue, reseedAfter);
         }
 
         // The import settled cross-tree sub-sagas whose sibling trees may still
@@ -1598,15 +1621,22 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
     /// after the reconcile scan. The source's own origin is never floored: its
     /// writes are re-shipped in offset order with their deletes.
     /// </para>
+    /// <para>
+    /// A tree whose merge mode is not last-writer-wins gets no floor: the floor
+    /// exists only for the foreign-delete reconcile, which never applies to a
+    /// merged tree (issue #5534).
+    /// </para>
     /// </summary>
     private async Task<bool> InstallBootstrapFloorAsync(
         string treeName,
         string sourceClusterId,
         SnapshotStream snapshot,
+        LatticeMergeMode mergeMode,
         CancellationToken cancellationToken)
     {
         var hwm = _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(treeName);
-        if (!BootstrapForeignDeleteReconcile.FrontierMatchesOpen(snapshot.OpenFrontier, snapshot.OpenGeneration))
+        if (mergeMode != LatticeMergeMode.LwwRegister
+            || !BootstrapForeignDeleteReconcile.FrontierMatchesOpen(snapshot.OpenFrontier, snapshot.OpenGeneration))
         {
             await hwm.ClearBootstrapFloorAsync(cancellationToken).ConfigureAwait(true);
             return false;
@@ -1671,9 +1701,11 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
             await hwm.ClearBootstrapFloorAsync(cancellationToken).ConfigureAwait(true);
             state.State.ReconcileOwedBySource[sourceClusterId] = true;
             Logger.LogWarning(
-                "Bootstrap of tree '{TreeName}' from '{SourceClusterId}': the source tree changed during the export, so the "
-                + "bootstrap drop floor is cleared and the reconcile is owed a retry",
-                treeName, sourceClusterId);
+                "Bootstrap of tree '{TreeName}' from '{SourceClusterId}': the export cannot drive the foreign-delete reconcile "
+                + "({Reason}), so the bootstrap drop floor is cleared and the reconcile is owed a retry",
+                treeName, sourceClusterId,
+                BootstrapForeignDeleteReconcile.DescribeIneligibility(
+                    snapshot.OpenFrontier, snapshot.OpenGeneration, snapshot.CloseGeneration, mergeMode));
             return;
         }
 

@@ -170,6 +170,19 @@ public sealed class AppsPresentationTests
         });
     }
 
+    [TestCase(AppLifecycleState.Disabled, AppLifecycleState.Uninstalled, "Uninstalling...")]
+    [TestCase(AppLifecycleState.Enabled, AppLifecycleState.Disabled, "Disabling...")]
+    [TestCase(AppLifecycleState.Disabled, AppLifecycleState.Enabled, "Enabling...")]
+    [TestCase(AppLifecycleState.Enabled, AppLifecycleState.Enabled, "Re-applying...")]
+    public void A_lifecycle_run_in_flight_reads_as_the_change_it_is_making(AppLifecycleState state, AppLifecycleState target, string text)
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(AppsPresentation.LifecycleState(state, "1.0.0", target), Is.EqualTo((LtStateRole.Lagging, text)));
+            Assert.That(AppsPresentation.LifecycleState(state, "1.0.0", pending: null), Is.EqualTo(AppsPresentation.LifecycleState(state, "1.0.0")));
+        });
+    }
+
     [Test]
     public void Categories_join_or_read_as_none()
     {

@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
+using Orleans.Lattice.Explorer.Core.Connection;
 using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
@@ -27,6 +28,12 @@ namespace Orleans.Lattice.Explorer.UI.Session;
 /// menu renders there folded: the same details and actions in place, with no
 /// dialog of its own, because a dialog inside the overflow sheet would stack
 /// one modal on another.
+/// </para>
+/// <para>
+/// A session whose credential the cluster has refused (the connection reports
+/// <see cref="LatticeConnectionStatus.CredentialRefused"/>) is not presented as
+/// signed in: the menu offers Sign in, as the connection indicator does, rather
+/// than naming an identity the cluster does not accept.
 /// </para>
 /// <para>
 /// The tenant row appears only when the host registered Core's tenant view and
@@ -72,6 +79,8 @@ public partial class IdentityMenu
 
     private bool Folded => SessionPresentation.IsFolded(Breakpoint);
 
+    private bool IsSignedIn => Auth.IsAuthenticated && !Explorer.Connection.Status.CredentialRefused;
+
     private IExplorerTenantView? TenantView { get; set; }
 
     /// <inheritdoc />
@@ -80,6 +89,7 @@ public partial class IdentityMenu
         Auth.AuthenticationChanged -= OnChanged;
         State.Changed -= OnChanged;
         Panels.Opened -= OnPanelOpened;
+        Explorer.Connection.StatusChanged -= OnStatusChanged;
     }
 
     /// <inheritdoc />
@@ -90,6 +100,7 @@ public partial class IdentityMenu
         Auth.AuthenticationChanged += OnChanged;
         State.Changed += OnChanged;
         Panels.Opened += OnPanelOpened;
+        Explorer.Connection.StatusChanged += OnStatusChanged;
     }
 
     private void OpenSignIn() => State.OpenSignIn();
@@ -129,4 +140,6 @@ public partial class IdentityMenu
     }
 
     private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private void OnStatusChanged(LatticeConnectionStatus status) => _ = InvokeAsync(StateHasChanged);
 }

@@ -423,8 +423,8 @@ public partial class PhaseTwoWorkerTests
     {
         // The set must not grow with every batch the worker ever sees;
         // a committed range is already reflected in TAIL and is dropped
-        // when phase 2 lands. Observed through behaviour: an unpruned
-        // range would still be walkable from a tail below it.
+        // when phase 2 lands. Each commit settles only after its prune,
+        // so awaiting the last one observes the set fully drained.
         var submitter = new RecordingSubmitter();
         await using var worker = NewWorker(submitter);
 
@@ -433,8 +433,62 @@ public partial class PhaseTwoWorkerTests
             await worker.EnqueueAsync(start, start + 3L).ConfigureAwait(false);
         }
 
-        Assert.That(worker.ContiguousAcceptedEndOffsetInclusive(-1L), Is.EqualTo(-1L),
-            "every range committed, so none may remain to walk from an empty tail");
+        Assert.That(worker.AcceptedRangeCount, Is.EqualTo(0),
+            "every range committed, so none may remain in the accepted set");
+    }
+
+    [Test]
+    public async Task ContiguousAcceptedEndOffsetInclusive_covers_a_batch_committed_after_a_stale_tail_read()
+    {
+        // Issue #5466. GetHighestOffsetAsync reads the persisted TAIL and
+        // only then folds the accepted set. A phase-2 commit landing in
+        // between persists the newer TAIL and prunes its range, so the
+        // fold is handed a stale TAIL and finds no range above it. The
+        // shape is the one a WAL move hit: a 495-entry partition copied
+        // to Azure Table in 100-entry chunks, whose final 39-entry chunk
+        // (456..494) committed between the read and the fold, so the
+        // move's verification saw 455 and refused a complete copy.
+        var submitter = new RecordingSubmitter();
+        await using var worker = NewWorker(submitter);
+
+        long[][] chunks = [[0L, 99L], [100L, 199L], [200L, 255L], [256L, 355L], [356L, 455L], [456L, 494L]];
+        foreach (var chunk in chunks)
+        {
+            await worker.EnqueueAsync(chunk[0], chunk[1]).ConfigureAwait(false);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(worker.AcceptedRangeCount, Is.EqualTo(0),
+                "precondition: the final chunk committed and was pruned, as in the race");
+            Assert.That(worker.ContiguousAcceptedEndOffsetInclusive(455L), Is.EqualTo(494L),
+                "a TAIL read taken before the final commit must not hide the committed chunk");
+            Assert.That(worker.ContiguousAcceptedEndOffsetInclusive(-1L), Is.EqualTo(494L),
+                "nor may a TAIL read taken before any commit hide the committed run");
+        });
+    }
+
+    [Test]
+    public async Task ContiguousAcceptedEndOffsetInclusive_extends_the_committed_tail_with_a_pending_batch()
+    {
+        // The committed mark anchors the walk; a later batch still parked
+        // in phase 2 is folded on top of it rather than lost behind a hole
+        // between a stale TAIL read and the pruned committed range.
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        var submitter = new RecordingSubmitter((_, _) =>
+            Interlocked.Increment(ref calls) == 1 ? Task.CompletedTask : release.Task);
+        await using var worker = NewWorker(submitter);
+
+        await worker.EnqueueAsync(0L, 99L).ConfigureAwait(false);
+        var pending = worker.EnqueueAsync(100L, 138L);
+        ObserveFaults(pending);
+
+        Assert.That(worker.ContiguousAcceptedEndOffsetInclusive(-1L), Is.EqualTo(138L),
+            "the pending batch extends the committed run even from a stale TAIL");
+
+        release.TrySetResult();
+        await pending.ConfigureAwait(false);
     }
 
     [Test]

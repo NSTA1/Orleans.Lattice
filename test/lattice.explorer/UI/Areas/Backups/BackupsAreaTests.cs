@@ -3,6 +3,7 @@ using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.UI.Areas.Backups;
 using Orleans.Lattice.Explorer.UI.Navigation;
+using Orleans.Lattice.Explorer.UI.Transport;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Backups;
@@ -91,6 +92,29 @@ public sealed class BackupsAreaTests : BackupsTestContext
         Backups.Probe = _ => Task.FromException<BackupScopeCapabilities>(new NotSupportedException());
 
         Assert.That(await Area().GetAvailabilityAsync(CancellationToken.None), Is.EqualTo(AreaAvailability.Hidden));
+    }
+
+    [Test]
+    public async Task A_cluster_that_does_not_answer_leaves_the_area_not_checked_and_is_asked_again()
+    {
+        var calls = 0;
+        Backups.Probe = scope => ++calls == 1
+            ? Task.FromException<BackupScopeCapabilities>(new ShellTransportException(
+                "The backup control-API request failed.",
+                isTransient: false,
+                new Grpc.Core.RpcException(new Grpc.Core.Status(Grpc.Core.StatusCode.Internal, "activation lost"))))
+            : Task.FromResult(FakeBackupControl.AllowAll(scope));
+        var area = Area();
+
+        var first = await area.GetAvailabilityAsync(CancellationToken.None);
+        var second = await area.GetAvailabilityAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.EqualTo(AreaAvailability.Unchecked), "no answer is not a refusal (#5420)");
+            Assert.That(second, Is.EqualTo(AreaAvailability.Visible));
+            Assert.That(calls, Is.EqualTo(2), "a fault is never remembered");
+        });
     }
 
     [Test]

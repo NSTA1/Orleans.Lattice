@@ -44,6 +44,7 @@ public partial class DataTagIndexesPanel : IDisposable
     private string? _starting;
     private bool _cancelling;
     private TreeAdminOperationWatch _watch = default!;
+    private DataStatusFollow _follow = default!;
     private string? _error;
 
     [CascadingParameter]
@@ -72,6 +73,55 @@ public partial class DataTagIndexesPanel : IDisposable
         _watch = new TreeAdminOperationWatch(Time);
         _watch.Changed += OnWatchChanged;
         _watch.Finished += OnWatchFinished;
+        _follow = new DataStatusFollow(Time, InvokeAsync, FollowTickAsync);
+    }
+
+    /// <summary>
+    /// Arms the follow while any index reads as reconciling - a reconcile this tab did
+    /// not start, from another tab, session or caller - and disarms it once all are idle.
+    /// </summary>
+    private void UpdateFollow() =>
+        _follow.Update(!_catalogue.IsLeft && _statuses.Values.Any(status => status is { ReconcileIdle: false }));
+
+    /// <summary>
+    /// One follow tick: re-reads only the indexes that read as reconciling and replaces
+    /// each status in place. A failed re-read keeps the last answer, and a reload that
+    /// starts while the tick reads wins.
+    /// </summary>
+    private async Task FollowTickAsync()
+    {
+        var token = _catalogue.Token;
+        if (token.IsCancellationRequested || Gate.Admin is not { } admin)
+        {
+            return;
+        }
+
+        var changed = false;
+        foreach (var (name, previous) in _statuses.ToArray())
+        {
+            if (previous is not { ReconcileIdle: false })
+            {
+                continue;
+            }
+
+            var status = await StatusAsync(admin, name, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            if (status is not null)
+            {
+                _statuses[name] = status;
+                changed = true;
+            }
+        }
+
+        UpdateFollow();
+        if (changed)
+        {
+            StateHasChanged();
+        }
     }
 
     /// <inheritdoc />
@@ -128,6 +178,7 @@ public partial class DataTagIndexesPanel : IDisposable
         _catalogue.Leave();
         _details.Leave();
         _memberReads.Leave();
+        _follow?.Dispose();
         _watch?.Dispose();
         GC.SuppressFinalize(this);
     }
@@ -171,6 +222,7 @@ public partial class DataTagIndexesPanel : IDisposable
         _indexes = null;
         _error = null;
         _statuses.Clear();
+        _follow.Stop();
         if (DataServices.Find<IDataReader>(Services) is not { } reader || Workspace is not { } workspace)
         {
             _error = "This Explorer has no state API to read tag indexes through.";
@@ -200,6 +252,7 @@ public partial class DataTagIndexesPanel : IDisposable
                 }
             }
 
+            UpdateFollow();
             await LoadSelectionAsync();
             if (!token.IsCancellationRequested)
             {
@@ -479,6 +532,7 @@ public partial class DataTagIndexesPanel : IDisposable
                         }
 
                         _statuses[indexName] = current;
+                        UpdateFollow();
                     }
 
                     if (string.Equals(SelectedIndex?.IndexName, indexName, StringComparison.Ordinal))

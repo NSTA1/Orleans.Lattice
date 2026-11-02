@@ -106,20 +106,35 @@ public sealed class AccessAreaTests : AccessTestContext
     [Test]
     [TestCase("unserved")]
     [TestCase("unconfigured")]
-    [TestCase("transport")]
-    public async Task A_cluster_that_cannot_answer_hides_the_area(string fault)
+    public async Task A_cluster_that_answers_with_a_definite_fault_hides_the_area(string fault)
     {
         Exception failure = fault switch
         {
             "unserved" => new NotSupportedException(),
-            "unconfigured" => new InvalidOperationException("not configured"),
-            _ => new TimeoutException(),
+            _ => new InvalidOperationException("not configured"),
         };
         Admin.Fail(nameof(FakeAuthAdmin.ListGroupsAsync), failure);
 
         var availability = await CreateArea().GetAvailabilityAsync(CancellationToken.None);
 
         Assert.That(availability, Is.EqualTo(AreaAvailability.Hidden));
+    }
+
+    [Test]
+    public async Task A_cluster_that_does_not_answer_leaves_the_area_not_checked_and_asks_again()
+    {
+        Admin.Fail(nameof(FakeAuthAdmin.ListGroupsAsync), new TimeoutException());
+        var area = CreateArea();
+
+        var during = await area.GetAvailabilityAsync(CancellationToken.None);
+        Admin.Heal(nameof(FakeAuthAdmin.ListGroupsAsync));
+        var after = await area.GetAvailabilityAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(during, Is.EqualTo(AreaAvailability.Unchecked), "no answer is never read as a refusal (#5420)");
+            Assert.That(after, Is.EqualTo(AreaAvailability.Visible), "and is not remembered");
+        });
     }
 
     [Test]

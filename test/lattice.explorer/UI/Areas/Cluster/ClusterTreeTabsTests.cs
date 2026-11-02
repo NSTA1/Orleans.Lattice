@@ -109,6 +109,36 @@ public sealed class ClusterTreeTabsTests : ClusterTestContext
     }
 
     [Test]
+    public void Add_name_aliases_a_free_name_to_this_tree_after_its_name_is_typed()
+    {
+        Admin.GetTreeDeletionStatusAsync(TreeId, Arg.Any<CancellationToken>()).Returns(new TreeDeletionStatus { TreeId = TreeId });
+        Admin.CheckTreeExistsAsync("orders", Arg.Any<CancellationToken>()).Returns(new TreeExistenceResult { TreeId = "orders" });
+        Admin.CheckTreeExistsAsync("a/crm/orders-v2", Arg.Any<CancellationToken>()).Returns(new TreeExistenceResult { TreeId = "a/crm/orders-v2", Exists = true });
+        Admin.SetTreeAliasAsync("orders", TreeId, Arg.Any<CancellationToken>())
+            .Returns(new TreeAliasResolution { TreeId = "orders", PhysicalTreeId = TreeId, IsAliased = true });
+        Assert.That(HasButton(RenderTab<ClusterTreeLifecycle>(Grants.Read | Grants.Lifecycle), "Add name..."), Is.False);
+        var cut = RenderTab<ClusterTreeLifecycle>();
+
+        cut.Find("form[aria-label='Add a name']").Submit();
+        cut.WaitUntil(() => Assert.That(cut.Find("form[aria-label='Add a name'] .lt-field__error").TextContent, Does.Contain("Name the alias.")));
+        cut.Find("form[aria-label='Add a name'] input").Input(TreeId);
+        cut.Find("form[aria-label='Add a name']").Submit();
+        cut.WaitUntil(() => Assert.That(cut.Find("form[aria-label='Add a name'] .lt-field__error").TextContent, Does.Contain("A tree cannot alias itself.")));
+        cut.Find("form[aria-label='Add a name'] input").Input("a/crm/orders-v2");
+        cut.Find("form[aria-label='Add a name']").Submit();
+        cut.WaitUntil(() => Assert.That(cut.Find("form[aria-label='Add a name'] .lt-field__error").TextContent, Does.Contain("A tree named a/crm/orders-v2 already exists.")));
+
+        cut.Find("form[aria-label='Add a name'] input").Input("orders");
+        cut.Find("form[aria-label='Add a name']").Submit();
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-confirm__consequence").TextContent, Does.Contain("orders").And.Contain(TreeId)));
+        ConfirmTyping(cut, "orders");
+
+        cut.WaitUntil(() => Assert.That(Toasts, Does.Contain($"orders now reaches {TreeId}.")));
+        Admin.Received(1).SetTreeAliasAsync("orders", TreeId, Arg.Any<CancellationToken>());
+        Admin.DidNotReceive().SetTreeAliasAsync(TreeId, Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public void Configuration_saves_only_what_changed()
     {
         Admin.GetTreeConfigAsync(TreeId, Arg.Any<CancellationToken>())

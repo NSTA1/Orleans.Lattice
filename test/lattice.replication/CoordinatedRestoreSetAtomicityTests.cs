@@ -54,6 +54,7 @@ public sealed class CoordinatedRestoreSetAtomicityTests
         var vote = await participant.PrepareAsync(request);
         Assert.That(vote.Vote, Is.EqualTo(SagaVote.Commit), "the whole set prepared");
 
+        await DecideCommitAsync(request);
         await participant.CommitAsync(request);
 
         var repl = _fixture.GrainFactory.GetGrain<ILattice>(ReplTree);
@@ -84,6 +85,7 @@ public sealed class CoordinatedRestoreSetAtomicityTests
         var request = SetRequest(setId);
         Assert.That((await participant.PrepareAsync(request)).Vote, Is.EqualTo(SagaVote.Commit));
 
+        await DecideCommitAsync(request);
         await participant.CommitAsync(request);
 
         foreach (var tree in new[] { ReplTree, LocalTree })
@@ -159,6 +161,16 @@ public sealed class CoordinatedRestoreSetAtomicityTests
         Assert.That(setId, Is.Not.Null, "a two-tree set records durable membership and so carries a set id");
         return setId!;
     }
+
+    /// <summary>
+    /// Durably records a commit decision on this cluster's coordinator for the saga, as
+    /// the real coordinator does before it delivers one (issue #5506): a participant
+    /// refuses a commit naming this cluster as coordinator until it has decided. An
+    /// empty participant set is a vacuous commit.
+    /// </summary>
+    private async Task DecideCommitAsync(SagaControlRequest request) =>
+        await _fixture.GrainFactory.GetGrain<ICrossClusterSagaCoordinatorGrain>(request.SagaId)
+            .BeginAsync([], request.TargetTree, request.ManifestId, request.CoordinatorClusterId, request.SetId);
 
     private static SagaControlRequest SetRequest(string setId) =>
         new()

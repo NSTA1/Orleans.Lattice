@@ -25,6 +25,7 @@
 
   <ItemGroup>
     <Compile Include="..\lattice\Fakes\AllocationProbe.cs" Link="Shared\AllocationProbe.cs" />
+    <Compile Include="..\lattice\Fakes\SharedInMemoryWal.cs" Link="Shared\SharedInMemoryWal.cs" />
   </ItemGroup>
 
   <ItemGroup>

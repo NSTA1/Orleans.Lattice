@@ -88,6 +88,14 @@ public partial class RestoreParticipantTests
         return membership;
     }
 
+    /// <summary>A replication topology whose current peers are exactly <paramref name="peers"/>.</summary>
+    private static IReplicationTopology TopologyFor(params string[] peers)
+    {
+        var topology = Substitute.For<IReplicationTopology>();
+        topology.CurrentPeers.Returns(peers);
+        return topology;
+    }
+
     private static RestoreParticipant Participant(
         ILatticeCoordinatedRestoreEngine? engine,
         IGrainFactory factory,
@@ -95,7 +103,8 @@ public partial class RestoreParticipantTests
         ILatticeBackupRestoreService? restoreService = null,
         ILatticeBackupSetResolver? setResolver = null,
         IReplicatedTreeMembership? membership = null,
-        IOptionsMonitor<LatticeReplicationOptions>? options = null) =>
+        IOptionsMonitor<LatticeReplicationOptions>? options = null,
+        IReplicationTopology? topology = null) =>
         new(
             engine,
             restoreService,
@@ -104,16 +113,20 @@ public partial class RestoreParticipantTests
             NullLogger<RestoreParticipant>.Instance,
             setResolver,
             membership,
-            options);
+            options,
+            topology);
 
-    private static RestoreAdmissionReport ReportFor(string treeId) =>
+    private static RestoreAdmissionReport ReportFor(string treeId, string? sourceTreeId = null) =>
         new(
             backupId: "bkp-" + treeId,
             targetTreeId: treeId,
             totalByteLength: 1024,
             totalChunkCount: 1,
             shardCount: 1,
-            manifestChain: ["bkp-" + treeId]);
+            manifestChain: ["bkp-" + treeId])
+        {
+            SourceTreeIds = [sourceTreeId ?? treeId],
+        };
 
     private static LatticeRestoreResult ResultFor(string treeId, string? shadowId = null) =>
         new(
@@ -128,6 +141,19 @@ public partial class RestoreParticipantTests
 
     private static string TreeOf(CallInfo ci, string fallback) =>
         ((LatticeRestoreRequest)ci[0]).TargetTreeId ?? fallback;
+
+    /// <summary>
+    /// Drives a commit whose alias swap faults part-way, leaving the cutover started
+    /// but not completed - a state from which an abort must revert.
+    /// </summary>
+    private static async Task CommitFaultingPartWayAsync(
+        RestoreParticipant participant, ILatticeCoordinatedRestoreEngine engine, SagaControlRequest request)
+    {
+        engine.CommitShadowAsync(Arg.Any<LatticeRestoreResult>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("swap faulted part-way")));
+
+        Assert.That(async () => await participant.CommitAsync(request), Throws.Exception);
+    }
 
     private static SagaControlRequest SetRequestFor(
         string setId, string coordinator = CoordinatorCluster) =>

@@ -170,7 +170,7 @@ public sealed class SessionFoldedPresentationTests : SessionTestContext
     }
 
     [Test]
-    public void Folded_a_read_only_head_offers_no_connection_settings()
+    public void Folded_a_read_only_head_offers_connection_details_in_place_of_the_settings()
     {
         UseReadOnlyEndpoint();
         Explorer.Configured(RemoteConfiguration(Endpoint));
@@ -178,9 +178,17 @@ public sealed class SessionFoldedPresentationTests : SessionTestContext
 
         var cut = RenderAt<ConnectionIndicator>(LtBreakpoint.Compact);
 
-        Assert.That(
-            cut.FindAll(".lt-dialog__actions button").Select(button => button.TextContent),
-            Is.EqualTo(new[] { "Reconnect" }));
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                cut.FindAll(".lt-dialog__actions button").Select(button => button.TextContent),
+                Is.EqualTo(new[] { "Reconnect", "Connection details" }));
+            Assert.That(cut.FindAll("[data-lt-connection-details]"), Is.Empty, "folded, the endpoint is a definition, not a second trigger");
+        });
+
+        cut.FindAll("button").Single(button => button.TextContent == "Connection details").Click();
+
+        Assert.That(State.Overlay, Is.EqualTo(SessionOverlayKind.Configuration));
     }
 
     [Test]

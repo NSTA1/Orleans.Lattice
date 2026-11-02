@@ -101,6 +101,14 @@ public sealed class TaskBoardPilotTests(string engine) : UiTestBase(engine)
         await Expect(board.Locator("#tb-detail")).ToBeVisibleAsync();
         await Expect(board.Locator("#tb-detail-title")).ToHaveTextAsync("Ship U1 " + Engine);
         await Expect(board.Locator("#tb-detail-column")).ToContainTextAsync("Doing");
+
+        // The same deep link carrying an in-app query (?query=) still opens its task: the
+        // Explorer appends the query to the path it delivers, and the board selects by the path.
+        await page.GotoAsync(deepLink + "?query=from%3Dpilot");
+        await Shell.WaitForInteractiveAsync(page);
+        board = AppFrames.Content(page);
+        await Expect(board.Locator("#tb-detail")).ToBeVisibleAsync();
+        await Expect(board.Locator("#tb-detail-title")).ToHaveTextAsync("Ship U1 " + Engine);
     }
 
     private async Task ViewAsViewerAsync(ExplorerWorld world)

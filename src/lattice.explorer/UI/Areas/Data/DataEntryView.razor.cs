@@ -11,6 +11,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 public partial class DataEntryView : IDisposable
 {
     private readonly ComponentLifetime _lifetime = new();
+    private readonly ComponentLifetime _rightsLifetime = new();
     private readonly string _headingId = LtIds.Next("lt-data-entry");
     private DataEntry? _entry;
     private DataRenderedValue? _rendered;
@@ -20,6 +21,11 @@ public partial class DataEntryView : IDisposable
     private bool _keyExpanded;
     private bool _valueExpanded;
     private string? _error;
+    private DataWriteRights _rights;
+    private (string StateId, string Key)? _rightsFor;
+    private bool _editing;
+    private bool _deleting;
+    private bool _listening;
 
     /// <summary>The key to show.</summary>
     [Parameter, EditorRequired]
@@ -34,6 +40,18 @@ public partial class DataEntryView : IDisposable
 
     [Inject]
     internal IServiceProvider Services { get; set; } = default!;
+
+    [Inject]
+    internal DataWriteGate Gate { get; set; } = default!;
+
+    [Inject]
+    internal DataEntryCommands EntryCommands { get; set; } = default!;
+
+    [Inject]
+    internal LtToastService Toasts { get; set; } = default!;
+
+    /// <summary>Whether the value is edited here: a plain value, not a CRDT whose members change through typed operations.</summary>
+    private bool IsEditable => _entry is not { CrdtShape: not null } && _entry is not { CurrentMembers.Count: > 0 };
 
     private IReadOnlyList<LtSelectOption> RendererOptions =>
         [.. DataValueRendering.Offered(_entry?.CurrentMembers.Count > 0).Select(renderer => new LtSelectOption(renderer.ToString(), DataValueRendering.Label(renderer)))];
@@ -65,6 +83,20 @@ public partial class DataEntryView : IDisposable
             _renderer = DataValueRenderer.Auto;
             _keyExpanded = false;
             _valueExpanded = false;
+            _rights = DataWriteRights.None;
+            _editing = false;
+            _deleting = false;
+        }
+
+        if (!_listening)
+        {
+            _listening = true;
+            EntryCommands.Requested += OnCommand;
+        }
+
+        if (_rightsFor != (workspace.Tree.StateId, Key))
+        {
+            _ = LoadRightsAsync(workspace.Tree, Key);
         }
 
         _loadedFor = target;
@@ -74,6 +106,9 @@ public partial class DataEntryView : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
+        EntryCommands.Requested -= OnCommand;
+        EntryCommands.HideEntry(Key);
+        _rightsLifetime.Leave();
         _lifetime.Leave();
         GC.SuppressFinalize(this);
     }
@@ -115,6 +150,7 @@ public partial class DataEntryView : IDisposable
             }
 
             Render();
+            PublishRights();
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
@@ -149,4 +185,116 @@ public partial class DataEntryView : IDisposable
     private void Render() => _rendered = _entry is null
         ? null
         : DataValueRendering.Render(_entry.Value, _entry.Truncated, _renderer, _entry.CurrentMembers);
+
+    /// <summary>
+    /// Asks the data facade what the caller may change at this key, and publishes
+    /// it for the palette. Until it answers, and whenever it cannot, no write
+    /// control is drawn.
+    /// </summary>
+    private async Task LoadRightsAsync(DataTreeEntry tree, string key)
+    {
+        var token = _rightsLifetime.Renew();
+        _rightsFor = (tree.StateId, key);
+        _rights = DataWriteRights.None;
+        EntryCommands.ShowEntry(key, DataWriteRights.None);
+        var rights = await Gate.ForKeyAsync(tree, key, token);
+        if (token.IsCancellationRequested || _rightsLifetime.IsLeft)
+        {
+            return;
+        }
+
+        _rights = rights;
+        PublishRights();
+        if (EntryCommands.TryTake(DataEntryCommands.EditEntryId))
+        {
+            OpenEditor();
+        }
+        else if (EntryCommands.TryTake(DataEntryCommands.DeleteEntryId))
+        {
+            OpenDelete();
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void PublishRights() =>
+        EntryCommands.ShowEntry(Key, new DataWriteRights(_rights.CanWrite && IsEditable, _rights.CanDelete && _entry is { IsTombstone: false }));
+
+    private void OnCommand(string commandId) => _ = InvokeAsync(() =>
+    {
+        if (_lifetime.IsLeft)
+        {
+            return;
+        }
+
+        if (string.Equals(commandId, DataEntryCommands.EditEntryId, StringComparison.Ordinal))
+        {
+            OpenEditor();
+        }
+        else if (string.Equals(commandId, DataEntryCommands.DeleteEntryId, StringComparison.Ordinal))
+        {
+            OpenDelete();
+        }
+
+        StateHasChanged();
+    });
+
+    private void OpenEditor()
+    {
+        if (_rights.CanWrite && IsEditable)
+        {
+            _deleting = false;
+            _editing = true;
+        }
+    }
+
+    private void OpenDelete()
+    {
+        if (_rights.CanDelete && _entry is { IsTombstone: false })
+        {
+            _editing = false;
+            _deleting = true;
+        }
+    }
+
+    private async Task OnSavedAsync(string key)
+    {
+        await LoadAsync();
+        PublishRights();
+    }
+
+    private async Task DeleteAsync()
+    {
+        _deleting = false;
+        if (Workspace is not { } workspace || Gate.Data is not { } data)
+        {
+            Toasts.Show("This Explorer has no data API to delete through.", LtToastTone.Danger);
+            return;
+        }
+
+        var key = Key;
+        var token = _lifetime.Token;
+        try
+        {
+            await data.DeleteAsync(workspace.Tree.StateId, key, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            Toasts.Show($"Entry {DataKeysPanel.Clip(key)} deleted.", LtToastTone.Success);
+            await LoadAsync();
+            PublishRights();
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            if (!token.IsCancellationRequested)
+            {
+                Toasts.Show(DataErrors.Describe(exception, "delete this key"), LtToastTone.Danger);
+            }
+        }
+    }
 }

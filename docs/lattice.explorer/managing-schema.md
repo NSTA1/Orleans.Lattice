@@ -10,7 +10,7 @@ Schema is tenant-scoped. In a tenant-rooted Explorer, the same address under `/t
 
 ## Availability
 
-Schema is visible when its fail-closed capability probe returns a grant for an installed feature. The probe names a reserved sentinel tree and does not change schema or data. Definite answers expire after 30 seconds and are invalidated by sign-in, endpoint or tenant changes. A transport fault is not remembered, so the next navigation asks again. Replies from a previous caller cannot restore old grants or open editors.
+Schema is visible when its fail-closed capability probe returns a grant for an installed feature. The probe names a reserved sentinel tree and does not change schema or data. When the sentinel grants a signed-in caller nothing, the first 64 trees the catalogue lists are probed, eight at a time, and a grant on any of them admits the area, so a caller whose grants name trees still reads their schema. Definite answers expire after 30 seconds and are invalidated by sign-in, endpoint or tenant changes. A transport fault is not remembered, so the next navigation asks again. Replies from a previous caller cannot restore old grants or open editors.
 
 The area is hidden when the schema facade is absent, when a signed-in identity receives no grant or is refused by the probe, when the cluster does not serve schema administration, or when the connection is unavailable.
 

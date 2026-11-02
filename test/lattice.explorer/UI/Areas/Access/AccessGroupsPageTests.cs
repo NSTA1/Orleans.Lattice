@@ -81,9 +81,10 @@ public sealed class AccessGroupsPageTests : AccessTestContext
     }
 
     [Test]
-    public void With_a_directory_an_unresolved_id_is_refused_before_anything_is_written()
+    public void With_a_directory_that_validates_an_unresolved_id_is_refused_before_anything_is_written()
     {
         Admin.WithPrincipal("alice", "Alice", DirectoryPrincipalKind.User);
+        Admin.Model = Admin.Model with { DirectoryValidationRequired = true };
         var cut = OpenCreate();
 
         AccessForms.Type(cut, "Group id", "ghost");
@@ -91,16 +92,16 @@ public sealed class AccessGroupsPageTests : AccessTestContext
 
         cut.WaitUntil(() =>
         {
-            Assert.That(AccessForms.ErrorOf(cut, "Group id"), Is.EqualTo("ghost is not a group in the identity directory (Microsoft Entra ID)."));
+            Assert.That(AccessForms.ErrorOf(cut, "Group id"), Is.EqualTo("ghost is not a group in the identity directory (Microsoft Entra ID), and this cluster stores only directory groups."));
             Assert.That(Admin.Calls, Does.Not.Contain(nameof(FakeAuthAdmin.UpsertGroupAsync)));
         });
     }
 
     [Test]
-    public void With_a_directory_an_id_it_does_not_list_is_refused_by_name_when_the_field_is_left()
+    public void With_a_directory_that_validates_an_id_it_does_not_list_is_refused_by_name_when_the_field_is_left()
     {
         Admin.WithPrincipal("0f1e-ops", "Operations", DirectoryPrincipalKind.Group);
-        Admin.Model = Admin.Model with { DirectoryProviderId = "static" };
+        Admin.Model = Admin.Model with { DirectoryProviderId = "static", DirectoryValidationRequired = true };
         var cut = OpenCreate();
 
         AccessForms.Type(cut, "Group id", "ghost");
@@ -109,12 +110,37 @@ public sealed class AccessGroupsPageTests : AccessTestContext
 
         cut.WaitUntil(() =>
         {
-            Assert.That(AccessForms.ErrorOf(cut, "Group id"), Is.EqualTo("ghost is not a group in the identity directory (static roster)."));
+            Assert.That(AccessForms.ErrorOf(cut, "Group id"), Is.EqualTo("ghost is not a group in the identity directory (static roster), and this cluster stores only directory groups."));
             Assert.That(AccessForms.Field(cut, "Group id").GetAttribute("aria-invalid"), Is.EqualTo("true"));
             Assert.That(Admin.Calls, Does.Not.Contain(nameof(FakeAuthAdmin.UpsertGroupAsync)));
         });
     }
 
+    [Test]
+    public void With_a_directory_that_does_not_validate_a_new_id_creates_a_group_stored_here()
+    {
+        Admin.WithPrincipal("alice", "Alice", DirectoryPrincipalKind.User);
+        var cut = OpenCreate();
+
+        Assert.That(cut.Markup, Does.Contain("or a new id for a group stored here"));
+        AccessForms.Type(cut, "Group id", "data-stewards");
+        cut.Find("form.lt-access-form").Submit();
+
+        cut.WaitUntil(() => Assert.That(Admin.Groups.ContainsKey("data-stewards"), Is.True));
+    }
+
+    [Test]
+    public void A_reserved_tenant_group_id_is_refused_as_a_new_cluster_group()
+    {
+        Admin.WithPrincipal("alice", "Alice", DirectoryPrincipalKind.User);
+        var cut = OpenCreate();
+
+        AccessForms.Type(cut, "Group id", "t/acme/ops");
+        cut.Find("form.lt-access-form").Submit();
+
+        cut.WaitUntil(() => Assert.That(AccessForms.ErrorOf(cut, "Group id"), Does.StartWith("t/acme/ops is in the reserved tenant group namespace")));
+        Assert.That(Admin.Calls, Does.Not.Contain(nameof(FakeAuthAdmin.UpsertGroupAsync)));
+    }
     [Test]
     public void With_a_directory_a_user_id_typed_as_a_group_is_refused()
     {

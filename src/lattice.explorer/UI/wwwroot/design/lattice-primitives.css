@@ -1324,6 +1324,8 @@ a.lt-chain__text:hover {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
+  /* WCAG 2.2 SC 2.5.8: a sort header in a dense table is still a 24px target. */
+  min-height: 1.5rem;
   padding: 0;
   border: 0;
   background: none;
@@ -1710,6 +1712,12 @@ a.lt-chain__text:hover {
 
 .lt-confirm__instruction {
   margin: 0;
+}
+
+/* While the confirmed action runs: the confirmation stays open until it returns. */
+.lt-confirm__pending {
+  margin: 0;
+  color: var(--lt-ink-2);
 }
 
 .lt-confirm__name {

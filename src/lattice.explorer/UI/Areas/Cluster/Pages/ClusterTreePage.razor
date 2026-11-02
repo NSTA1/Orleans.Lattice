@@ -48,6 +48,24 @@ else
         }
     </nav>
 
+    @if (_created is { } created)
+    {
+        <section class="lt-cluster-section" role="status" aria-labelledby="lt-cluster-created-heading" data-lt-tree-created>
+            <h2 class="lt-cluster-heading" id="lt-cluster-created-heading">Tree created</h2>
+            <p>@CreatedSentence(created)</p>
+            <ul data-lt-tree-created-next-steps>
+                @if (access.CanBulkLoad)
+                {
+                    <li><ClusterTreeLink TreeId="@TreeId" View="tools" Text="Seed it with a bulk load" /></li>
+                }
+                @if (access.CanAdministerTree)
+                {
+                    <li><a class="lt-cluster-link" data-lt-tree-created-next="configuration" href="@ConfigurationHref">Set its configuration and history retention</a></li>
+                }
+                <li><a class="lt-cluster-link" data-lt-tree-created-next="data" href="@DataHref">Browse it in Data</a></li>
+            </ul>
+        </section>
+    }
     <LtTabs Label="Tree administration" ActiveId="@ActiveTab" ActiveIdChanged="OnTabChanged">
         <LtTab Id="summary" Title="Summary">
             <ClusterTreeSummary TreeId="@TreeId" Capabilities="access" OperationSettled="OnOperationSettledAsync" />

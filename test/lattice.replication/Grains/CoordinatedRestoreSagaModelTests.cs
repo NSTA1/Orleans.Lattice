@@ -137,9 +137,9 @@ public class CoordinatedRestoreSagaModelTests
         Assert.That(a.Engine.CommitCount, Is.EqualTo(0));
         Assert.That(b.Engine.CommitCount, Is.EqualTo(0));
 
-        // The prepared cluster (A) reverted, garbage collected its shadow, and lifted
-        // its fence.
-        Assert.That(a.Engine.RevertCount, Is.EqualTo(1));
+        // The prepared cluster (A) garbage collected its shadow and lifted its fence.
+        // It never cut over, so there is no alias to revert (#5443).
+        Assert.That(a.Engine.RevertCount, Is.EqualTo(0));
         Assert.That(a.Engine.DeleteCount, Is.GreaterThanOrEqualTo(1));
         await a.Fence.Received(1).LiftAsync();
 
@@ -183,7 +183,7 @@ public class CoordinatedRestoreSagaModelTests
         foreach (var cluster in new[] { a, b })
         {
             Assert.That(cluster.Engine.CommitCount, Is.EqualTo(0), "a lost coordinator never commits");
-            Assert.That(cluster.Engine.RevertCount, Is.EqualTo(1));
+            Assert.That(cluster.Engine.RevertCount, Is.EqualTo(0), "a prepared cluster never cut over, so nothing is reverted");
             Assert.That(cluster.Engine.DeleteCount, Is.GreaterThanOrEqualTo(1));
             await cluster.Fence.Received().LiftAsync();
         }

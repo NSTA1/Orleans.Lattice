@@ -112,4 +112,41 @@ public sealed class LatticeViewsServiceCollectionExtensionsTests
 
         Assert.Throws<ArgumentNullException>(() => builder.ConfigureLatticeView("by-owner", null!));
     }
+
+    [Test]
+    public void AddLatticeViews_called_again_accumulates_the_later_declarations()
+    {
+        // #5408: auth, membership, backup and tenancy call AddLatticeViews() before a
+        // host's own call; the host's providers and views must not be dropped.
+        var services = new ServiceCollection();
+        var builder = BuilderOver(services);
+
+        builder.AddLatticeViews();
+        builder.AddLatticeViews(views => views
+            .AddRuntimeProjectionProvider("host.v1", (_, context) => new LatticeViewDefinition(context.ViewName, new PredicateLatticeViewProjection()))
+            .AddView("adults", "people", new PredicateLatticeViewProjection()));
+
+        var shared = services.Where(descriptor => descriptor.ServiceType == typeof(LatticeViewRegistrationBuilder)).ToArray();
+        var startup = services.BuildServiceProvider().GetRequiredService<IReadOnlyList<StartupViewRegistration>>();
+        Assert.Multiple(() =>
+        {
+            Assert.That(shared, Has.Length.EqualTo(1));
+            var registrations = (LatticeViewRegistrationBuilder)shared[0].ImplementationInstance!;
+            Assert.That(registrations.RuntimeProviders.Select(provider => provider.ProviderKey), Is.EqualTo(new[] { "host.v1" }));
+            Assert.That(startup.Select(view => view.ViewName), Is.EqualTo(new[] { "adults" }));
+        });
+    }
+
+    [Test]
+    public void AddLatticeViews_refuses_a_provider_key_a_previous_call_registered()
+    {
+        var builder = BuilderOver(new ServiceCollection());
+        builder.AddLatticeViews(views => views.AddRuntimeProjectionProvider(
+            "host.v1", (_, context) => new LatticeViewDefinition(context.ViewName, new PredicateLatticeViewProjection())));
+
+        Assert.That(
+            () => builder.AddLatticeViews(views => views.AddRuntimeProjectionProvider(
+                "host.v1", (_, context) => new LatticeViewDefinition(context.ViewName, new PredicateLatticeViewProjection()))),
+            Throws.InvalidOperationException);
+    }
 }

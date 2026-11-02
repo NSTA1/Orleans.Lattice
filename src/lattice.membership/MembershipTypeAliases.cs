@@ -11,4 +11,10 @@ internal static class MembershipTypeAliases
 {
     /// <summary>Alias for <see cref="LatticePrincipal"/>.</summary>
     internal const string LatticePrincipal = "olm.pr";
+
+    /// <summary>Alias for <see cref="MembershipEpoch"/>.</summary>
+    internal const string MembershipEpoch = "olm.ep";
+
+    /// <summary>Alias for <see cref="IMembershipEpochGrain"/>.</summary>
+    internal const string IMembershipEpochGrain = "olm.eg";
 }

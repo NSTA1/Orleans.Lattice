@@ -208,9 +208,9 @@ public partial class AppsPage : IDisposable
     private bool HasSource(AppSummary app) => _snapshot?.CanReview == true && !string.IsNullOrWhiteSpace(app.Provenance.Source);
 
     private bool CanDisable(AppSummary app) =>
-        HasSource(app) && _snapshot!.Control.CanDisable && app.State == AppLifecycleState.Enabled;
+        HasSource(app) && _snapshot!.Control.CanDisable && app.State == AppLifecycleState.Enabled && app.PendingState is null;
 
-    private bool CanUninstall(AppSummary app) => HasSource(app) && _snapshot!.Control.CanUninstall;
+    private bool CanUninstall(AppSummary app) => HasSource(app) && _snapshot!.Control.CanUninstall && app.PendingState is null;
 
     /// <summary>
     /// The installed version's manage page (its review from the source it was installed from),

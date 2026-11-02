@@ -172,6 +172,28 @@ public sealed class LatticeReplicationApiGrpcClient
     }
 
     /// <summary>
+    /// Probes whether the calling credential may configure replication for the tree
+    /// <paramref name="treeId"/>, with no side effects.
+    /// </summary>
+    /// <param name="treeId">The tree to probe. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The caller's replication capability over the tree.</returns>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    public async Task<ReplicationCapabilities> ProbeCapabilitiesAsync(
+        string treeId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+
+        var response = await UnaryAsync(
+            _methods.ProbeCapabilities,
+            new ReplicationProbeCapabilitiesRequestMessage { TreeId = treeId },
+            cancellationToken).ConfigureAwait(false);
+
+        return new ReplicationCapabilities(response.TreeId, response.CanConfigure);
+    }
+
+    /// <summary>
     /// Returns the endpoint's advertised auth schemes. This RPC is
     /// unauthenticated: it can be called before any credential is acquired, so a
     /// client can discover how to sign in.

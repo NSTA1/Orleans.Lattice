@@ -70,6 +70,7 @@ public sealed class GrainStorageFencingProbeTests
         var result = await GrainStorageFencingProbe.RunAsync(storage);
 
         Assert.That(result.Verdict, Is.EqualTo(GrainStorageFencingVerdict.Inconclusive));
+        Assert.That(result.Fault, Is.InstanceOf<InconsistentStateException>(), "the last lost race is the evidence");
         Assert.That(storage.Writes, Is.EqualTo(GrainStorageFencingProbe.MaxAttempts));
     }
 

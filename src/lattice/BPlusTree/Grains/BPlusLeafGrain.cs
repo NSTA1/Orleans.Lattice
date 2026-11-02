@@ -2892,6 +2892,49 @@ internal sealed partial class BPlusLeafGrain(
     }
 
     /// <inheritdoc />
+    public async Task NarrowHighKeyAsync(string highKeyExclusive)
+    {
+        using var routingMutation = EnterLeafRoutingMutation();
+        _warmCacheTopologyChanged = true;
+        await AwaitReplayBarrierAsync();
+        ArgumentNullException.ThrowIfNull(highKeyExclusive);
+
+        // See SetNextSiblingAsync above for the gate rationale.
+        await _splitGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            // Narrows only, so a re-driven graft converges rather than widening a
+            // bound a later graft has already narrowed further.
+            var prevHighKey = state.State.HighKeyExclusive;
+            if (prevHighKey is not null && string.CompareOrdinal(prevHighKey, highKeyExclusive) <= 0)
+                return;
+
+            if (state.State.LowKeyInclusive is { } low && string.CompareOrdinal(highKeyExclusive, low) <= 0)
+            {
+                throw new InvalidOperationException(
+                    $"Leaf {context.GrainId} cannot narrow its high bound to '{highKeyExclusive}', which is at or "
+                    + $"below its low bound '{low}'.");
+            }
+
+            state.State.HighKeyExclusive = highKeyExclusive;
+            try
+            {
+                await PersistAsync();
+            }
+            catch
+            {
+                // Class B revert, as SetKeyRangeAsync reverts.
+                state.State.HighKeyExclusive = prevHighKey;
+                throw;
+            }
+        }
+        finally
+        {
+            _splitGate.Release();
+        }
+    }
+
+    /// <inheritdoc />
     public Task<LeafChainLink> GetKeyRangeAndNextSiblingAsync() =>
         Task.FromResult(new LeafChainLink
         {

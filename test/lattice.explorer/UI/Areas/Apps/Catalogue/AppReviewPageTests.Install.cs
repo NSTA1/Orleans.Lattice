@@ -54,35 +54,46 @@ public sealed partial class AppReviewPageTests
     }
 
     [Test]
-    public void The_group_picker_searches_the_directory_read_only_and_falls_back_to_listing_groups()
+    public void The_group_picker_lists_directory_and_stored_groups_labelled_read_only()
     {
         Offer(AppsTestData.TaskBoard());
         Auth.SearchDirectoryAsync(Arg.Any<DirectorySearchRequest>(), Arg.Any<CancellationToken>())
             .Returns(new DirectorySearchResult { Available = true, Principals = [new DirectoryPrincipalDescriptor { Id = "grp-readers", DisplayName = "Readers", Kind = DirectoryPrincipalKind.Group }] });
+        Auth.ListGroupsAsync(Arg.Any<AuthPageRequest>(), Arg.Any<CancellationToken>())
+            .Returns(new AuthGroupPage { Entries = [new AuthGroup { GroupId = "writers", DisplayName = "Writers" }, new AuthGroup { GroupId = "ops" }] });
         var cut = AtBindRoles();
         var inputs = () => cut.FindAll("section[aria-labelledby=lt-apps-bind] input[role=combobox]");
 
         inputs()[0].Input("read");
         cut.WaitUntil(() => Assert.That(cut.FindAll("[role=option]"), Has.Count.EqualTo(1)));
+        Assert.That(cut.Find("[role=option] .lt-combobox__detail").TextContent, Is.EqualTo("Directory - Readers"));
         cut.Find("[role=option]").Click();
 
         cut.WaitUntil(() => Assert.That(inputs()[0].GetAttribute("value"), Is.EqualTo("grp-readers")));
         Auth.Received().SearchDirectoryAsync(Arg.Is<DirectorySearchRequest>(request => request.Kind == DirectoryPrincipalKind.Group), Arg.Any<CancellationToken>());
 
-        Auth.SearchDirectoryAsync(Arg.Any<DirectorySearchRequest>(), Arg.Any<CancellationToken>()).Returns(DirectorySearchResult.Unavailable);
-        Auth.ListGroupsAsync(Arg.Any<AuthPageRequest>(), Arg.Any<CancellationToken>())
-            .Returns(new AuthGroupPage { Entries = [new AuthGroup { GroupId = "writers", DisplayName = "Writers" }, new AuthGroup { GroupId = "ops" }] });
+        // A group stored in Access is offered beside the directory's, even while the directory cannot answer.
+        Auth.SearchDirectoryAsync(Arg.Any<DirectorySearchRequest>(), Arg.Any<CancellationToken>()).Returns(Task.FromException<DirectorySearchResult>(new TimeoutException()));
         inputs()[1].Input("writ");
 
-        cut.WaitUntil(() => Assert.That(cut.FindAll("[role=option] .lt-combobox__detail").Select(detail => detail.TextContent), Has.Some.Contains("Writers")));
-
-        Auth.SearchDirectoryAsync(Arg.Any<DirectorySearchRequest>(), Arg.Any<CancellationToken>()).Returns(Task.FromException<DirectorySearchResult>(new TimeoutException()));
-        Auth.ListGroupsAsync(Arg.Any<AuthPageRequest>(), Arg.Any<CancellationToken>()).Returns(Task.FromException<AuthGroupPage>(new TimeoutException()));
-        inputs()[0].Input("any-group");
-
-        cut.WaitUntil(() => Assert.That(cut.Find(".lt-apps-binding .lt-combobox__note").TextContent, Does.Contain("used as typed")));
+        cut.WaitUntil(() => Assert.That(cut.FindAll("[role=option] .lt-combobox__detail").Select(detail => detail.TextContent), Is.EqualTo(new[] { "Stored - Writers" })));
         Assert.That(Control.Calls, Is.Empty, "nothing is created or changed while searching");
     }
+
+    [Test]
+    public void The_group_picker_uses_a_typed_id_when_no_source_can_answer()
+    {
+        Offer(AppsTestData.TaskBoard());
+        Auth.SearchDirectoryAsync(Arg.Any<DirectorySearchRequest>(), Arg.Any<CancellationToken>()).Returns(Task.FromException<DirectorySearchResult>(new TimeoutException()));
+        Auth.ListGroupsAsync(Arg.Any<AuthPageRequest>(), Arg.Any<CancellationToken>()).Returns(Task.FromException<AuthGroupPage>(new TimeoutException()));
+        var cut = AtBindRoles();
+
+        cut.FindAll("section[aria-labelledby=lt-apps-bind] input[role=combobox]")[0].Input("any-group");
+
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-apps-binding .lt-combobox__note").TextContent, Does.Contain("used as typed")));
+        Assert.That(Control.Calls, Is.Empty);
+    }
+
     [Test]
     public void Editing_the_ceiling_shows_what_would_fail_activation()
     {

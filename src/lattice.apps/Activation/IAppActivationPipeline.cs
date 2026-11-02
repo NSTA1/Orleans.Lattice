@@ -71,4 +71,17 @@ public interface IAppActivationPipeline
     /// <param name="cancellationToken">Cancels the read.</param>
     /// <returns>The recorded status, or <c>null</c> when no run was ever recorded.</returns>
     Task<AppActivationStatus?> GetStatusAsync(TenantId tenant, AppSlug slug, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads which run, if any, is executing for an app right now. While a run is in flight its
+    /// recorded status can be interim evidence (a replicated run records a failed outcome before
+    /// it enrols, so a crash part-way is not mistaken for success); a reader uses this to report
+    /// the run as in progress rather than failed. A run whose silo died is not reported.
+    /// </summary>
+    /// <param name="tenant">The tenant the app is installed for.</param>
+    /// <param name="slug">The app.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The operation in flight, or <c>null</c> when no run is executing (the default).</returns>
+    Task<AppActivationOperation?> GetRunningOperationAsync(TenantId tenant, AppSlug slug, CancellationToken cancellationToken = default) =>
+        Task.FromResult<AppActivationOperation?>(null);
 }

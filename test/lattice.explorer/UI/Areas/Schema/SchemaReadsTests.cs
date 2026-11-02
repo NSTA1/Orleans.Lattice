@@ -25,14 +25,26 @@ public sealed class SchemaReadsTests : SchemaTestContext
     {
         var trees = SchemaTreeCatalog.Project(
         [
-            SchemaTestData.Entry("orders") with { IsAlias = true, PhysicalTreeId = "orders-resized-1" },
-            SchemaTestData.Entry("orders-resized-1"),
+            SchemaTestData.Entry("orders") with { IsAlias = true, PhysicalTreeId = "orders/resized/1" },
+            SchemaTestData.Entry("orders/resized/1"),
             SchemaTestData.Entry("orders-restore-9") with { RestoreShadowOfTreeId = "orders" },
             SchemaTestData.Entry("audit"),
             SchemaTestData.Entry("audit"),
         ]);
 
         Assert.That(trees, Is.EqualTo(new[] { "audit", "orders" }));
+    }
+
+    [Test]
+    public void The_catalogue_keeps_a_tree_an_operator_gave_a_second_name()
+    {
+        var trees = SchemaTreeCatalog.Project(
+        [
+            SchemaTestData.Entry("orders") with { IsAlias = true, PhysicalTreeId = "factory-orders" },
+            SchemaTestData.Entry("factory-orders"),
+        ]);
+
+        Assert.That(trees, Is.EqualTo(new[] { "factory-orders", "orders" }));
     }
 
     [Test]

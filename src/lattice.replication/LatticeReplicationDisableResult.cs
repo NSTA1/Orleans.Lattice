@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Replication;
 /// peers that resolve no mode drop those entries while acknowledging the batch. It
 /// never purges already-replicated peer data and keeps the tree's fixed
 /// merge mode in the config OR-Map. A later re-enable requests a snapshot bootstrap
-/// only when a source cluster is supplied and the tree already holds data.
+/// whenever a source cluster is supplied.
 /// </summary>
 /// <param name="TreeId">The target tree id the disable was authored for.</param>
 /// <param name="AlreadyDisabled">

@@ -13,7 +13,14 @@ namespace Orleans.Lattice.Api.Apps;
 /// Lifecycle mutations return only Installed, Enabled, Disabled, or Uninstalled;
 /// failures throw with sanitized messages. NotInstalled is exclusive to DescribeAsync.
 /// DescribeAsync and ListAsync may report Failed only from known activation-failure
-/// evidence, never by interpreting a disabled registry state as a failure.
+/// evidence of a run that has ended, never while a run is in flight (they report
+/// <see cref="AppSummary.PendingState"/> then) and never by interpreting a disabled
+/// registry state as a failure.
+/// An enable, disable or uninstall that outlasts the implementation's accept window is
+/// not cut off: it keeps running and returns <see cref="AppLifecycleResult.Pending"/>
+/// with the state before the run; the caller polls <see cref="ListAsync"/> or
+/// <see cref="DescribeAsync"/> for its outcome. Cancelling the call stops the caller's
+/// wait, not an accepted run.
 /// </remarks>
 public interface ILatticeAppsControl
 {

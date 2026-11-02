@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Orleans.Lattice.Api.Apps;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Api.Backup;
+using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Api.Telemetry;
@@ -71,6 +72,7 @@ internal static class ShellTransportServiceCollectionExtensions
         typeof(ILatticeAppCatalog),
         typeof(ILatticeAppWorkspace),
         typeof(ILatticeAppRoleBindings),
+        typeof(ILatticeDataApi),
     ];
 
     /// <summary>
@@ -116,6 +118,7 @@ internal static class ShellTransportServiceCollectionExtensions
         services.TryAddKeyedScoped<ILatticeAppCatalog, ShellAppCatalogTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeAppWorkspace, ShellAppWorkspaceTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeAppRoleBindings, ShellAppRoleBindingsTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeDataApi, ShellDataTransport>(ShellFacades.Key);
 
         return services;
     }

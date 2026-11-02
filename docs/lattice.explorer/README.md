@@ -81,7 +81,7 @@ transitively.
 
 | Feature | Surface | Summary |
 |---|---|---|
-| Data | [State API](../lattice.api.state/README.md), [tree administration](../lattice.api.treeadmin/README.md) | Trees and views, key scans (live or snapshot), entries, per-key history and point-in-time reads, metrics, strict-mode dead letters, tag indexes and materialised views. See [The Explorer areas](areas.md#data). |
+| Data | [State API](../lattice.api.state/README.md), [data API](../lattice.api.data/README.md), [tree administration](../lattice.api.treeadmin/README.md) | Trees and views, key scans (live or snapshot), entries and creating, editing and deleting them, per-key history and point-in-time reads, metrics, strict-mode dead letters, tag indexes and materialised views. See [The Explorer areas](areas.md#data). |
 | Apps | [App control, catalogue, workspace and bridge](../lattice.api.apps/README.md) | Your apps, the source catalogue, consent review, lifecycle, each app's own pages, and its sandboxed UI. See [Lattice Apps in the Explorer](lattice-apps.md). |
 | Access | [Auth control API](../lattice.api.auth/README.md), [Tenant administration API](../lattice.api.tenantadmin/README.md) | Cluster rules and groups, delegated tenant groups and members, tenant-tier rules, and decision explanation. See [Managing access](managing-access.md). |
 | Schema | [Schema control API](../lattice.api.schema/README.md) | Policy, version configuration, compliance scans, remediation and schema dead letters. See [Managing schema](managing-schema.md). |
@@ -89,7 +89,7 @@ transitively.
 | Replication | [Replication API](../lattice.api.replication/README.md) | The estate map, peer link health, enrolled trees, and enabling or disabling replication for a tree. See [The Explorer areas](areas.md#replication). |
 | Backups | [Backup control API](../lattice.api.backup/README.md) | The backup catalogue, capture, restore, schedules, health and catalogue maintenance. See [Managing backups](managing-backups.md). |
 | Telemetry | [Telemetry API](../lattice.api.telemetry/README.md) | Boards of charts and tables built from the queries the cluster offers the caller. See [The Explorer areas](areas.md#telemetry). |
-| Cluster | [Tree administration API](../lattice.api.treeadmin/README.md) | The estate, regions, every tree's configuration, shards, storage and lifecycle, reshard, resize, snapshot, WAL placement and orphaned-leaf repair. See [The Explorer areas](areas.md#cluster). |
+| Cluster | [Tree administration API](../lattice.api.treeadmin/README.md) | The estate, regions, every tree's creation, configuration, shards, storage and lifecycle, reshard, resize, snapshot, WAL placement and orphaned-leaf repair. See [The Explorer areas](areas.md#cluster). |
 | Navigation | Address line, palette and spine | Canonical addresses, completions, commands, tenancy re-rooting. See [The Explorer navigation model](navigation-model.md). |
 | Sign-in | `IExplorerAuthMethod` | Basic, Entra or custom sign-in that attaches its credential to every call. See [Connecting to an auth-enabled State API](connecting-to-an-auth-enabled-state-api.md). |
 | Hosting | `AddLatticeExplorerWeb` / `MapLatticeExplorer` | One code path for the standalone head and for embedding, under a configurable base path. See [Running and hosting the Explorer](running-the-explorer.md). |
@@ -159,6 +159,7 @@ for wiring sign-in.
 - [What the Explorer remembers](what-the-explorer-remembers.md) - the preference contract: what is remembered, where, and how to reset it.
 - [Theming and density](theming-and-density.md) - the themes, the contrast axis, density, and how a choice is applied at first paint.
 - [Accessibility conformance](accessibility-conformance.md) - what the console targets, how that is verified, and the known limitations.
+- [Explorer user journeys](user-journeys.md) - the end-to-end journey series on an Azurite estate: run modes, chapter contracts, CI gating, and the known-defect policy and census.
 
 ### Hosting and administration
 

@@ -81,6 +81,57 @@ public sealed class AccessRulePageTests : AccessTestContext
     }
 
     [Test]
+    public void A_condition_is_shown_with_the_warning_that_it_is_not_evaluated()
+    {
+        Admin.WithRule(Rule("eu-readers") with { Condition = "region == \"eu\"" });
+
+        var cut = RenderAt<AccessRulePage>("access/rules/eu-readers?tree=orders");
+
+        cut.WaitUntil(() =>
+        {
+            var condition = cut.FindAll(".lt-dl__row").Single(row => row.QuerySelector(".lt-dl__term")!.TextContent.Trim() == "Condition");
+            Assert.That(condition.QuerySelector("[data-lt-condition]")!.TextContent, Is.EqualTo("region == \"eu\""));
+            Assert.That(condition.QuerySelector("[data-lt-condition-warning]")!.TextContent, Is.EqualTo(AccessRuleFormat.ConditionNotEvaluatedMessage));
+        });
+    }
+
+    [Test]
+    public void A_rule_without_a_condition_shows_no_condition_or_warning()
+    {
+        Admin.WithRule(Rule("orders-read"));
+
+        var cut = RenderAt<AccessRulePage>("access/rules/orders-read?tree=orders");
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(Definitions(cut), Does.Not.ContainKey("Condition"));
+            Assert.That(cut.FindAll("[data-lt-condition-warning]"), Is.Empty);
+        });
+    }
+
+    [Test]
+    public void Saving_a_rule_with_a_condition_keeps_it_and_the_confirmation_repeats_the_warning()
+    {
+        Admin.WithRule(Rule("eu-readers") with { Condition = "region == \"eu\"" });
+        var toasts = Services.GetRequiredService<Orleans.Lattice.Explorer.UI.Design.Components.LtToastService>();
+        var cut = RenderAt<AccessRulePage>("access/rules/eu-readers?tree=orders");
+        cut.WaitUntil(() => Assert.That(cut.FindAll("h1"), Has.Count.EqualTo(1)));
+
+        AccessForms.Button(cut, "Edit rule").Click();
+        cut.Find("[data-lt-operation=\"write\"]").Change(true);
+        cut.Find("form.lt-access-form").Submit();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(Admin.Rules.Single().Condition, Is.EqualTo("region == \"eu\""));
+            var toast = toasts.Toasts.Single();
+            Assert.That(toast.Tone, Is.EqualTo(Orleans.Lattice.Explorer.UI.Design.Components.LtToastTone.Warning));
+            Assert.That(toast.Message, Does.EndWith(AccessRuleFormat.ConditionNotEvaluatedMessage));
+            Assert.That(cut.Find("[data-lt-condition-warning]").TextContent, Is.EqualTo(AccessRuleFormat.ConditionNotEvaluatedMessage));
+        });
+    }
+
+    [Test]
     public void Deleting_asks_for_the_rule_id_then_removes_it_and_returns_to_the_list()
     {
         Admin.WithRule(Rule("orders-read"));

@@ -54,6 +54,7 @@ internal sealed class LoopbackCallInvoker : CallInvoker
             "EnableReplication" => await _service.EnableReplication((ReplicationEnableRequestMessage)(object)wireRequest, context),
             "DisableReplication" => await _service.DisableReplication((ReplicationDisableRequestMessage)(object)wireRequest, context),
             "GetReplicationConfig" => await _service.GetReplicationConfig((ReplicationGetConfigRequest)(object)wireRequest, context),
+            "ProbeCapabilities" => await _service.ProbeCapabilities((ReplicationProbeCapabilitiesRequestMessage)(object)wireRequest, context),
             "GetAuthScheme" => await _service.GetAuthScheme((AuthSchemeAdvertisementRequest)(object)wireRequest, context),
             _ => throw new NotSupportedException($"Unmapped loopback method '{method.Name}'."),
         };

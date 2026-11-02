@@ -206,8 +206,12 @@ public sealed class BackupSchedulesPageTests : BackupsTestContext
         Backups.ScopeStatuses["orders"] = new BackupScopeStatus(BackupScopeSelector.WholeTree("orders"), true, true, null, null, null, null, BackupScopeRunOutcome.None, 0);
         var cut = RenderAt<BackupSchedulesPage>("backups/schedules?tree=orders");
         cut.WaitUntil(() => Assert.That(cut.FindAll("tbody button"), Has.Count.EqualTo(2)));
+        Assert.That(
+            cut.FindAll("tbody button").Select(button => button.GetAttribute("aria-label")),
+            Has.All.StartsWith("Cancel schedule"),
+            "A row's cancel button's accessible name starts with its visible text (WCAG 2.5.3 label in name).");
 
-        cut.Find("tbody button[aria-label='Cancel the incremental schedule']").Click();
+        cut.Find("tbody button[aria-label='Cancel schedule, incremental']").Click();
         var dialog = cut.Find("[role=alertdialog]");
         Assert.That(dialog.TextContent, Does.Contain("The incremental schedule of orders stops."));
         cut.FindAll("[role=alertdialog] button").Single(button => button.TextContent == "Cancel schedule").Click();

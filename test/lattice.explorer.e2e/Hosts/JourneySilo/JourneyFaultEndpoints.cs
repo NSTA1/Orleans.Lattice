@@ -1,0 +1,136 @@
+using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.Explorer.EndToEnd.HostContract;
+using Orleans.Runtime;
+
+namespace Orleans.Lattice.Explorer.EndToEnd.Hosts.Silo;
+
+/// <summary>
+/// The journey host's diagnostic and fault endpoints, mapped on the silo's internal HTTP
+/// port only and only when the fault seams are enabled. They are the harness's reach into
+/// the running cluster for the things no product surface offers on purpose: where an
+/// activation lives, and the state a crash mid-split leaves.
+/// </summary>
+internal static class JourneyFaultEndpoints
+{
+    /// <summary>The path prefix of every endpoint here.</summary>
+    public const string Prefix = "/e2e";
+
+    /// <summary>Maps the endpoints.</summary>
+    /// <param name="app">The silo's web application.</param>
+    public static void MapJourneyFaultEndpoints(this WebApplication app)
+    {
+        // What the silo holds after a forced collection: the bounded-memory proof's reading.
+        app.MapJourneyMemoryProbe();
+
+        // Which silo hosts an activation, through the Orleans management grain, so a
+        // journey can kill the silo running an operation and assert it did.
+        app.MapGet(Prefix + "/activation", async (string grainType, string key, IGrainFactory grains) =>
+        {
+            var wanted = GrainId.Create(grainType, key);
+            var management = grains.GetGrain<IManagementGrain>(0);
+            var statistics = await management.GetDetailedGrainStatistics();
+            foreach (var statistic in statistics)
+            {
+                if (statistic.GrainId.Equals(wanted))
+                {
+                    return Results.Ok(new { silo = statistic.SiloAddress.Endpoint.ToString(), port = statistic.SiloAddress.Endpoint.Port });
+                }
+            }
+
+            return Results.NotFound();
+        });
+
+        // Every activation whose key contains a fragment, with its host: how a journey finds
+        // the grains serving a tree without knowing the routing layer's grain types.
+        app.MapGet(Prefix + "/activations", async (string keyContains, IGrainFactory grains) =>
+        {
+            var management = grains.GetGrain<IManagementGrain>(0);
+            var statistics = await management.GetDetailedGrainStatistics();
+            return Results.Ok(statistics
+                .Where(statistic => statistic.GrainId.Key.ToString()!.Contains(keyContains, StringComparison.Ordinal))
+                .Select(statistic => new { grainId = statistic.GrainId.ToString(), port = statistic.SiloAddress.Endpoint.Port })
+                .OrderBy(activation => activation.grainId, StringComparer.Ordinal)
+                .ToArray());
+        });
+
+        app.MapPost(Prefix + "/orphan", async (string tree, int? shard, IGrainFactory grains) =>
+        {
+            try
+            {
+                var orphan = await grains.GetGrain<IJourneyOrphanInjectorGrain>(tree).InjectAsync(shard ?? 0);
+                return Results.Ok(new { orphan });
+            }
+            catch (InvalidOperationException ex)
+            {
+                // The shard has no leaf holding rows to split; the harness tries the next one.
+                return Results.Conflict(new { reason = ex.Message });
+            }
+        });
+
+        // Holds (or releases) this silo's backup artifact writes, as a congested backup
+        // account would, so a capture a journey starts is still running when it cancels it.
+        app.MapPost(Prefix + "/backup-writes", (bool held, int? seconds, JourneyBackupWriteHold hold) =>
+        {
+            if (held)
+            {
+                hold.Hold(TimeSpan.FromSeconds(Math.Clamp(seconds ?? 300, 1, 900)));
+            }
+            else
+            {
+                hold.Release();
+            }
+
+            return Results.Ok(new { held = hold.IsHeld });
+        });
+
+        // A12: hold, or release, the writes a WAL move makes to its target (the secondary
+        // provider) for one tree, on this silo. The harness calls every silo of the region.
+        app.MapPost(Prefix + "/wal-target", async (string tree, bool hold, IGrainFactory grains) =>
+        {
+            var physical = await grains.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).ResolveAsync(tree);
+            if (hold)
+            {
+                JourneyWalTargetGate.HoldTree(physical);
+            }
+            else
+            {
+                JourneyWalTargetGate.Release(physical);
+            }
+
+            return Results.Ok(new { tree = physical, held = JourneyWalTargetGate.IsHeld(physical) });
+        });
+
+        // A12: plant a WAL materialiser pin of one kind on a tree, or release one.
+        app.MapPost(Prefix + "/wal-pin", async (string tree, string kind, IGrainFactory grains) =>
+        {
+            try
+            {
+                return Results.Ok(new { consumerId = await grains.GetGrain<IJourneyWalPinGrain>(tree).PlantAsync(kind) });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { reason = ex.Message });
+            }
+        });
+
+        app.MapDelete(Prefix + "/wal-pin", async (string tree, string consumerId, IGrainFactory grains) =>
+        {
+            await grains.GetGrain<IJourneyWalPinGrain>(tree).ReleaseAsync(consumerId);
+            return Results.NoContent();
+        });
+
+        // A journey app source's publisher releasing its next version (A5, #5376), recorded
+        // cluster-wide so every silo's copy of the source lists it from now on.
+        app.MapPost(Prefix + "/apps/publish", async (string source, IGrainFactory grains) =>
+        {
+            if (source != JourneyAppSource.Samples)
+            {
+                return Results.NotFound(new { reason = $"Source '{source}' has no next version to publish." });
+            }
+
+            await grains.GetGrain<IJourneyCatalogueGrain>(source).PublishNextAsync();
+            return Results.Ok(new { source });
+        });
+    }
+}

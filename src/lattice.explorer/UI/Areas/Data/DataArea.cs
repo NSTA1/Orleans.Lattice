@@ -23,30 +23,59 @@ internal sealed class DataArea : IExplorerArea
     /// <summary>The command that reloads the directory.</summary>
     public const string RefreshCommandId = "data.refresh";
 
+    /// <summary>The command that opens the New view dialog over the administered tree the workspace shows.</summary>
+    public const string CreateViewCommandId = "data.create-view";
+
+    /// <summary>The command that opens the Export dialog of the tree the workspace shows (issue #5366).</summary>
+    public const string ExportCommandId = "data.export";
+
+    /// <summary>The command that opens the Import dialog of the tree the workspace shows (issue #5365).</summary>
+    public const string ImportCommandId = "data.import";
+
     private readonly DataDirectory _directory;
     private readonly IServiceProvider _services;
+    private readonly DataViewCommandScope _viewCommand;
+    private readonly DataExportCommandScope _exportCommand;
+    private readonly DataCommandSignals _signals;
+    private readonly ExplorerCommand _refresh;
+    private readonly DataEntryCommands? _entryCommands;
+    private readonly DataImportCommandScope? _importCommand;
 
     /// <summary>Creates the area.</summary>
     /// <param name="directory">The circuit's tree directory.</param>
     /// <param name="completions">The area's address completions.</param>
     /// <param name="services">The circuit's services, from which the state connection is read lazily.</param>
-    public DataArea(DataDirectory directory, DataCompletionSource completions, IServiceProvider services)
+    /// <param name="viewCommand">The administered tree the workspace offers the New view command over.</param>
+    /// <param name="exportCommand">The tree the workspace offers the Export command over.</param>
+    /// <param name="signals">Carries palette commands to the open tree page.</param>
+    public DataArea(
+        DataDirectory directory,
+        DataCompletionSource completions,
+        IServiceProvider services,
+        DataViewCommandScope viewCommand,
+        DataExportCommandScope exportCommand,
+        DataCommandSignals signals)
     {
         ArgumentNullException.ThrowIfNull(directory);
         ArgumentNullException.ThrowIfNull(completions);
         ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(viewCommand);
+        ArgumentNullException.ThrowIfNull(exportCommand);
+        ArgumentNullException.ThrowIfNull(signals);
         _directory = directory;
         _services = services;
+        _viewCommand = viewCommand;
+        _exportCommand = exportCommand;
+        _signals = signals;
         Completions = completions;
-        Commands =
-        [
-            new ExplorerCommand(RefreshCommandId, "Refresh the tree directory")
-            {
-                Detail = "Reload every tree and view you can reach.",
-                Target = ExplorerAddress.ForArea(AreaKey),
-                InvokeAsync = async cancellationToken => await _directory.RefreshAsync(cancellationToken).ConfigureAwait(false),
-            },
-        ];
+        _entryCommands = services.GetService(typeof(DataEntryCommands)) as DataEntryCommands;
+        _importCommand = services.GetService(typeof(DataImportCommandScope)) as DataImportCommandScope;
+        _refresh = new ExplorerCommand(RefreshCommandId, "Refresh the tree directory")
+        {
+            Detail = "Reload every tree and view you can reach.",
+            Target = ExplorerAddress.ForArea(AreaKey),
+            InvokeAsync = async cancellationToken => await _directory.RefreshAsync(cancellationToken).ConfigureAwait(false),
+        };
     }
 
     /// <inheritdoc />
@@ -69,8 +98,63 @@ internal sealed class DataArea : IExplorerArea
         return address.Path.Count == 0 ? null : [address.Path.Count];
     }
 
-    /// <inheritdoc />
-    public IReadOnlyList<ExplorerCommand> Commands { get; }
+    /// <summary>
+    /// Refreshing the directory, always; creating a view, only while a tree
+    /// workspace the caller administers is open, targeting that tree's New view
+    /// dialog; and exporting, only while a tree workspace the caller may export is
+    /// open, opening that tree's Export dialog; importing, only while a tree workspace the
+    /// caller may import into is open, opening that tree's Import dialog; and the entry commands
+    /// (<see cref="DataEntryCommands"/>) while the open tree workspace draws their controls.
+    /// </summary>
+    public IReadOnlyList<ExplorerCommand> Commands => _entryCommands?.Commands is { Count: > 0 } entry ? [.. AreaCommands, .. entry] : AreaCommands;
+
+    private IReadOnlyList<ExplorerCommand> AreaCommands
+    {
+        get
+        {
+            var view = _viewCommand.Source;
+            var export = _exportCommand.Source;
+            var import = _importCommand?.Source;
+            if (view is null && export is null && import is null)
+            {
+                return [_refresh];
+            }
+
+            var commands = new List<ExplorerCommand>(4) { _refresh };
+            if (view is not null)
+            {
+                commands.Add(new ExplorerCommand(CreateViewCommandId, "New view...")
+                {
+                    Detail = "Create a materialised view over " + view.LogicalId + ".",
+                    Target = view.Address
+                        .WithQuery(DataTabs.TabQuery, DataTabs.Views)
+                        .WithQuery(DataTabs.NewQuery, DataTabs.NewViewValue),
+                });
+            }
+
+            if (export is not null)
+            {
+                commands.Add(new ExplorerCommand(ExportCommandId, "Export...")
+                {
+                    Detail = "Download " + export.LogicalId + ", a key prefix or a key range as NDJSON or CSV.",
+                    Target = export.Address,
+                    InvokeAsync = _ => _signals.RequestAsync(ExportCommandId),
+                });
+            }
+
+            if (import is not null)
+            {
+                commands.Add(new ExplorerCommand(ImportCommandId, "Import...")
+                {
+                    Detail = "Load an NDJSON, CSV or exported file into " + import.LogicalId + ".",
+                    Target = import.Address,
+                    InvokeAsync = _ => _signals.RequestAsync(ImportCommandId),
+                });
+            }
+
+            return commands;
+        }
+    }
 
     /// <inheritdoc />
     public async ValueTask<AreaAvailability> GetAvailabilityAsync(CancellationToken cancellationToken)

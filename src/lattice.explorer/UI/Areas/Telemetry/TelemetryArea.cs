@@ -64,6 +64,11 @@ internal sealed class TelemetryArea(TelemetryCatalogCache catalog, ExplorerTenan
         {
             throw;
         }
+        catch (Exception exception) when (AreaProbeFaults.IsTransient(exception))
+        {
+            // The cluster did not answer: not checked, and the read is retried on the next ask.
+            return AreaAvailability.Unchecked;
+        }
         catch (Exception)
         {
             return AreaAvailability.Hidden;

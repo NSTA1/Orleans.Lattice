@@ -90,7 +90,11 @@ public sealed class MembershipClusterFixture
         return new JsonWebTokenHandler().CreateToken(descriptor);
     }
 
-    private sealed class SiloConfigurator : ISiloConfigurator
+    /// <summary>
+    /// Wires the core lattice, the membership add-on and the fixture's JWT
+    /// authenticator onto a silo. Shared with multi-silo membership fixtures.
+    /// </summary>
+    internal sealed class SiloConfigurator : ISiloConfigurator
     {
         public void Configure(ISiloBuilder siloBuilder)
         {

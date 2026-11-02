@@ -257,6 +257,7 @@ public sealed class DataHistoryPanelTests : DataTestContext
             var change = cut.Find(".lt-data-timeline__rev");
             Assert.That(change.TextContent, Does.Contain("Deleted").And.Contain("order/9"));
             Assert.That(change.QuerySelector("a")!.GetAttribute("href"), Is.EqualTo("data/orders?tab=history&prefix=order%2F&key=order%2F9"));
+            Assert.That(change.QuerySelector("a")!.ClassList, Does.Contain("lt-data-key"), "a live change's key link is a 24px target (WCAG 2.5.8)");
         });
     }
 
@@ -330,6 +331,25 @@ public sealed class DataHistoryPanelTests : DataTestContext
             Assert.That(notes, Does.Contain(DataHistoryPanel.TrimmedWithNoEarliestText));
             Assert.That(notes, Has.None.Contains("available from"));
             Assert.That(notes, Has.None.Matches(@"(^|\s)-(\.|\s*$)"), "no placeholder dash in prose");
+        });
+    }
+
+    [Test]
+    public void A_tree_without_a_change_history_view_says_its_retention_does_not_keep_revisions()
+    {
+        // U4 (#5388): factory-orders held full-value retention and no change-history view, and
+        // History said only "keeps no durable history" - nothing named what was missing.
+        SeedHistory("orders", "k", "\"a\"");
+        Client.HistoryBounds[("orders", "k")] = (EntryHistoryBound.WalWindowFallback, default);
+
+        var cut = RenderAt("data/orders?tab=history&key=k");
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-data-timeline__rev"), Has.Count.EqualTo(1)));
+        var notes = cut.FindAll(".lt-data-note").Select(note => note.TextContent).ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(notes, Does.Contain(DataHistoryPanel.WalWindowFallbackText));
+            Assert.That(DataHistoryPanel.WalWindowFallbackText, Does.Contain("no change-history view").And.Contain("retention setting"));
         });
     }
 

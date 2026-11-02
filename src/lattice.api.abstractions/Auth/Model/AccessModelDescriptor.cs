@@ -96,4 +96,17 @@ public sealed record AccessModelDescriptor
     /// server that predates the flag.
     /// </summary>
     [Id(8)] public bool DelegatedTenantAccessAdministrationEnabled { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when a searchable identity directory is available
+    /// <b>and</b> the cluster requires every group and member id named in membership
+    /// administration to resolve in it, so a group the directory does not list cannot
+    /// be stored or nested; <see langword="false"/> (the default) when ids are not
+    /// validated on write, so a cluster group may be stored, nested and named without
+    /// being in the directory. Maps to
+    /// <c>LatticeIdentityDirectoryOptions.ValidationRequired</c>, and reads
+    /// <see langword="false"/> from a server that predates the flag, which then still
+    /// refuses on write whatever it requires.
+    /// </summary>
+    [Id(9)] public bool DirectoryValidationRequired { get; init; }
 }

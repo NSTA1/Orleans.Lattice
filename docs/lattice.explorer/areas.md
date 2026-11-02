@@ -99,15 +99,15 @@ The complete route inventory below contains the 70 unique `@page` route patterns
   - `/t/{tenant}/cluster/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}/{p7?}/{p8?}`
 | Area | Key and root address | Facades read or driven | Scope | Visibility probe |
 | --- | --- | --- | --- | --- |
-| Data | `data`, `/data` | State API, including `ILatticeStateClient`; `ILatticeTreeAdmin` for tag-index and view actions | Tenant-scoped | No state reader makes the area Hidden. Before a catalogue is loaded for the current caller and endpoint, a disconnected connection is Unavailable with a sign-in or connect reason; a denied catalogue probe is Hidden, and other read failures are Unavailable with a fixed, action-specific reason. A loaded catalogue keeps the area Visible until its caller-scoped memo is invalidated or refreshed. |
-| Apps | `apps`, `/apps` | `ILatticeAppWorkspace`, `ILatticeAppsControl`, `ILatticeAppCatalog`, and `ILatticeAuthAdmin` for role binding | Tenant-scoped | Probes workspace apps, catalogue capabilities and control capabilities. It is Visible when the caller has a workspace answer, can browse the catalogue, or can list installed apps. Probe faults and missing facades deny the relevant flags, so a head serving none of them is Hidden. |
-| Access | `access`, `/access` and `/t/{tenant}/access` | `ILatticeAuthAdmin`; delegated tenant policy and directory facades | Mixed: `/access` is cluster-wide; `/t/{tenant}/access` is tenant-rooted and filters rules/groups for that tenant, with delegated groups, members and rules available when enabled | The smallest cluster group-catalogue page admits cluster access administrators. Only a Hidden result falls through to delegated access: a valid non-default asserted tenant with delegated access enabled can admit its administrator. Missing both surfaces or a denied/faulted tenant posture hides the area; an anonymous cluster-wide denial is Unavailable with "Sign in to administer access on this cluster." |
-| Schema | `schema`, `/schema` | `ILatticeSchemaControl` | Tenant-scoped | Probes schema capabilities against a reserved, side-effect-free tree id. Any schema grant makes the area Visible. A refused anonymous caller sees Unavailable with "Sign in to manage schema on this cluster."; a signed-in refusal, missing facade, unserved cluster or fault is Hidden. |
-| Tenancy | `tenancy`, `/tenancy` and `/t/{tenant}/tenancy` | Tenant self-service, lifecycle, access, grant, region and quota facades; apps control for installed-app counts | Mixed: the directory is cluster-wide; `/t/{tenant}/tenancy` follows the active tenant | Requires tenancy to be active and the self-service facade to exist. It proves whether the caller is an operator or administers the scoped tenant. Operators and scoped tenant admins see it; refused anonymous callers see Unavailable with "Sign in to see the tenants you administer."; refused signed-in callers and other faults are Hidden. |
-| Replication | `replication`, `/replication` | `ILatticeReplicationStatus`, `ILatticeReplicationControl` | Tenant-scoped addresses, over the caller's admitted replication view | Reads the peer-status report, or falls back to the enrolment report. Status success makes the area Visible. If status fails but enrolment names at least one manageable tree, it is Visible. Missing facades, denied reads and other faults are Hidden. |
-| Backups | `backups`, `/backups` | `ILatticeBackupControl` | Tenant-scoped | Probes backup capabilities against a reserved scope. `CanList` makes the area Visible. A denied or grantless caller sees Unavailable with "You do not hold a backup grant on this cluster. Ask an administrator for one."; an unserved, unconfigured, unreachable or faulted control facade is Hidden. |
-| Telemetry | `telemetry`, `/telemetry` | `ILatticeTelemetry` | Tenant-scoped while tenancy is on | Reads the telemetry catalogue once. Any successful catalogue read, including an empty catalogue, makes the area Visible. A refused caller, a cluster with no telemetry facade, or a catalogue fault is Hidden. |
-| Cluster | `cluster`, `/cluster` and `/t/{tenant}/cluster` | `ILatticeTreeAdmin`, `ILatticeReplicationStatus`, and the state connection for cluster identity and tree catalogue | Mixed: `/cluster` is cluster-wide; the tenant-rooted form shows only that tenant's trees and storage | Requires a tree-admin facade and a configured cluster connection. It probes shallow storage usage. Success makes it Visible; a denied probe is Hidden; no connection is Unavailable with "Connect to a cluster to see its estate."; an unserved tree-admin operation is Unavailable; transient faults are Unavailable and are not remembered. |
+| Data | `data`, `/data` | State API, including `ILatticeStateClient`; `ILatticeTreeAdmin` for tag-index and view actions; `ILatticeDataApi`: its range read for **Export...**, and its writes and write-capability probe to create, edit and delete entries; `ILatticeSchemaControl` for the value editor's schema preview | Tenant-scoped | No state reader makes the area Hidden. Before a catalogue is loaded for the current caller and endpoint, a disconnected connection is Unavailable with a sign-in or connect reason; a denied catalogue probe is Hidden, and other read failures are Unavailable with a fixed, action-specific reason. A loaded catalogue keeps the area Visible until its caller-scoped memo is invalidated or refreshed. |
+| Apps | `apps`, `/apps` | `ILatticeAppWorkspace`, `ILatticeAppsControl`, `ILatticeAppCatalog`, and `ILatticeAuthAdmin` for role binding | Tenant-scoped | Probes workspace apps, catalogue capabilities and control capabilities. It is Visible when the caller has a workspace answer, can browse the catalogue, or can list installed apps. Probe faults and missing facades deny the relevant flags, so a head serving none of them is Hidden; a capability probe the cluster did not answer leaves an area that shows nothing not checked, and is not remembered. The answer is held for the circuit for ten seconds at most: the first navigation or completion after that re-reads it in the background, so an app installed, bound or granted elsewhere reaches the spine badge, Home, `a/` completions and the open Apps page without a reload. |
+| Access | `access`, `/access` and `/t/{tenant}/access` | `ILatticeAuthAdmin`; delegated tenant policy and directory facades | Mixed: `/access` is cluster-wide; `/t/{tenant}/access` is tenant-rooted and filters rules/groups for that tenant, with delegated groups, members and rules available when enabled | The smallest cluster group-catalogue page admits cluster access administrators. Only a Hidden result falls through to delegated access: a valid non-default asserted tenant with delegated access enabled can admit its administrator. Missing both surfaces or a denied/faulted tenant posture hides the area; an anonymous cluster-wide denial is Unavailable with "Sign in to administer access on this cluster."; a cluster probe the cluster did not answer is not checked and not remembered. |
+| Schema | `schema`, `/schema` | `ILatticeSchemaControl` | Tenant-scoped | Probes schema capabilities against a reserved, side-effect-free tree id. Any schema grant makes the area Visible. When that probe grants nothing, a signed-in caller is also admitted by a schema grant on one of the first 64 trees its catalogue lists, probed eight at a time, so a reader of named trees sees their schema. A refused anonymous caller sees Unavailable with "Sign in to manage schema on this cluster."; a signed-in refusal, missing facade, unserved cluster or definite fault is Hidden; a probe the cluster did not answer is not checked. |
+| Tenancy | `tenancy`, `/tenancy` and `/t/{tenant}/tenancy` | Tenant self-service, lifecycle, access, grant, region and quota facades; apps control for installed-app counts | Mixed: the directory is cluster-wide; `/t/{tenant}/tenancy` follows the active tenant | Requires tenancy to be active and the self-service facade to exist. It proves whether the caller is an operator or administers the scoped tenant. Operators and scoped tenant admins see it; refused anonymous callers see Unavailable with "Sign in to see the tenants you administer."; refused signed-in callers and other definite faults are Hidden; a probe the cluster did not answer is not checked. |
+| Replication | `replication`, `/replication` | `ILatticeReplicationStatus`, `ILatticeReplicationControl` | Tenant-scoped addresses, over the caller's admitted replication view | Reads the peer-status report, or falls back to the enrolment report. Status success makes the area Visible. If status fails but enrolment names at least one manageable tree, it is Visible. Missing facades, denied reads and other definite faults are Hidden; when neither read admits and either one met no answer, the area is not checked and that read is not reused. |
+| Backups | `backups`, `/backups` | `ILatticeBackupControl` | Tenant-scoped | Probes backup capabilities against a reserved scope. `CanList` makes the area Visible. A denied or grantless caller sees Unavailable with "You do not hold a backup grant on this cluster. Ask an administrator for one."; an unserved, unconfigured or definitely faulted control facade is Hidden; a probe the cluster did not answer is not checked. |
+| Telemetry | `telemetry`, `/telemetry` | `ILatticeTelemetry` | Tenant-scoped while tenancy is on | Reads the telemetry catalogue once. Any successful catalogue read, including an empty catalogue, makes the area Visible. A refused caller, a cluster with no telemetry facade, or a definite catalogue fault is Hidden; a catalogue read the cluster did not answer is not checked and is read again. |
+| Cluster | `cluster`, `/cluster` and `/t/{tenant}/cluster` | `ILatticeTreeAdmin`, `ILatticeReplicationStatus`, and the state connection for cluster identity and tree catalogue | Mixed: `/cluster` is cluster-wide; the tenant-rooted form shows only that tenant's trees and storage | Requires a tree-admin facade and a configured cluster connection. A side-effect-free capability probe of a reserved tree id that reports the cluster-wide Telemetry capability makes it Visible without reading the estate; the shallow storage usage Home shows is read afterwards. Otherwise it probes shallow storage usage, which needs that same capability. Success makes it Visible. A caller refused that probe is Visible only when the capability probe of one of the first 64 trees its catalogue lists, probed eight at a time, reports a tree-lifecycle or tree-admin grant; a read, diagnostics, bulk-load or restore grant does not admit it, so it is Hidden. Such a caller sees no estate-wide figures, Home status or badge, and the overview says the figures need Telemetry. No connection is Unavailable with "Connect to a cluster to see its estate."; an unserved tree-admin operation is Unavailable; transient faults are Unavailable and are not remembered. |
 
 ## Data
 
@@ -122,7 +122,9 @@ The directory uses `?filter=` for the text filter. A tree workspace keeps state
 in query keys: `?tab=` chooses one of `keys`, `history`, `metrics`,
 `dead-letters`, `tag-indexes` or `views`; `?prefix=` narrows key scans and live
 tails; `?key=` opens an entry; `?at=` pins History to a UTC instant;
-`?index=` and `?tag=` select a tag index and tag.
+`?index=` and `?tag=` select a tag index and tag; on the Views tab,
+`?new=view` opens the New view dialog; and `?import=seed` opens the Import
+dialog on a seed (see [Importing into a tree](#importing-into-a-tree)).
 
 The Keys tab pages through the tree by prefix or by tag. It offers Live and
 Snapshot scan modes, page-size choices from the shared paging ladder, Previous
@@ -145,6 +147,50 @@ permission to read this entry.", unserved operations become "This cluster does
 not let you read this entry.", missing entries become "It no longer exists, or
 you cannot see it.", and transient failures ask the reader to try again.
 
+### Creating, editing and deleting an entry
+
+A caller who may write a tree changes it from the Keys tab. **New entry...** sits
+in the Keys toolbar; the entry panel adds **Edit** and **Delete...** beside
+**History of this key**, and a key with no live value offers **Write a value**.
+Each control is drawn only when the data facade's capability probe
+(`ILatticeDataApi.ProbeCapabilitiesAsync`) says the caller may write or delete -
+across the tree for **New entry...**, at the open key for **Edit** and
+**Delete...**. A view, a shared prefix, a missing data facade, a refused or faulted
+probe all read as no rights, so a reader sees none of the controls. Hiding is not
+the defence: the facade authorizes every write as the signed-in user, so a write
+the controls never offered is refused all the same.
+
+The value editor opens as a dialog (a sheet at the compact width). A new entry
+names its key in a plain text box that says, when the field is left, if the key
+already holds a value. The value is edited in one of three formats, chosen in
+**Edit as**: **JSON**, which is validated as it is typed (the error names the line
+and position) and re-indented by **Format JSON**; **Text (UTF-8)**, stored exactly
+as typed; and **Binary (base64)**, which a value that is not UTF-8 opens in and
+which replaces the value whole. A typed CRDT value changes through its typed
+operations and is not edited here; the panel says so instead of offering **Edit**.
+
+When the tree has a schema policy, the editor reads it once through the schema
+facade and checks the draft against it with the cluster's own validator as it is
+typed. It reports "Passes this tree's schema policy (N rules)", or that the
+cluster will refuse the value, with the reason of every rule it fails. A policy
+the caller cannot read is said to be unchecked, and the value is still saved.
+Saving a violating value is the facade's decision: the editor reports the
+refusal, with the policy's reason, and keeps the draft. A refused write stores
+nothing and is not dead-lettered: only writes the cluster makes itself under a
+strict policy (a restore, a bulk load, a replicated batch) are diverted to the
+Dead letters tab.
+
+On save the editor reads the entry again. If it was written or deleted after the
+editor opened - by another user, or by an ingestion feed - the newer value is
+shown with **Reload the newer value** and **Overwrite with my value**. The cluster
+is last-writer-wins, so this is a warning, not a lock. After a write the editor
+reads the key back and says "Entry ... saved." (or "created."), or that the key
+does not hold the value written.
+
+**Delete...** opens a destructive confirmation that names the key and asks for
+it to be typed. The deletion is a tombstone: the key's History keeps every
+revision and reads "Deleted" for the newest.
+
 The History tab has three modes. With neither `?key=` nor `?prefix=`, it asks
 for a key, in a [picker](navigation-model.md#pickers) that suggests the tree's keys
 starting with what you type (one bounded prefix scan per query) and accepts any key. With `?prefix=`, it follows live changes under that prefix and keeps
@@ -153,7 +199,10 @@ time, newest first by default, with value diffs, CRDT member changes, retention
 boundary notes and a live tail. A revision whose value the tree's history
 retention did not keep, only its size and hash, reads "Set - value not kept", and
 the timeline explains once, rather than under each such revision, that it is still
-a write to the key and not a metadata change. Copies that resizing, resharding or
+a write to the key and not a metadata change. A revision of a
+[versioned](managing-schema.md) tree shows its body, as the Keys tab does, with
+the schema version it was stamped with beside its size; the body is shown in
+the shape it was written in, not upgraded to the tree's current version. Copies that resizing, resharding or
 replication make of a revision are not shown as revisions of their own. The **As of** field is a
 [date and time field](theming-and-density.md#dates-times-and-durations) in UTC.
 It starts empty, which means the latest, and refuses a time in the future;
@@ -163,13 +212,19 @@ disables the live tail while the point-in-time view is active.
 
 The Metrics tab shows per-tree measures: lifecycle, shards, live keys,
 tombstones, depth, shards splitting, views and view lag where the cluster
-reports them. When detail metrics are paused, the affected measures read
-"Paused". The Dead letters tab reads a count and then pages strict-mode dead
-letters 50 at a time, with source, key, reason and clipped details. Both tabs
+reports them. While view lag is above zero the measures are re-read every two
+seconds, in place, until it reaches zero. When detail metrics are paused, the affected measures read
+"Paused". The measures count every key in the tree, so a caller whose grant
+covers only part of it (a prefix-scoped rule, for example) is told they need
+read access to the whole tree; the tree's summary line then omits its key
+count, and the connection indicator stays Connected. The Dead letters tab reads a count and then pages strict-mode dead
+letters 50 at a time, with source, key, reason and clipped details; a dead
+letter's value, like a versioned revision's, is shown without its version envelope. Both tabs
 show fixed sentences when the state API is unavailable, denied or faulted.
 
 The Tag indexes tab lists indexes covering the tree, their reconcile state and
-covered-tree count. Selecting an index with `?index=` shows covered trees, tags,
+covered-tree count. An index reconciling from another tab, session or caller is
+re-read every two seconds until it reads Idle. Selecting an index with `?index=` shows covered trees, tags,
 and, with `?tag=`, member keys. Member rows link only to trees the caller can
 see and say "A tree you cannot see" otherwise. The Reconcile action is shown
 only when the caller can administer the index; it opens a destructive
@@ -178,12 +233,35 @@ rows.
 
 The Views tab lists materialised views over a tree, or the view itself when the
 current workspace is a view. It shows kind, projection version and apply lag.
+A view that is behind is re-read every two seconds until it reads Current,
+without a Refresh, because a view status answers as of now even while its
+maintainer drains or rebuilds.
 Overlapping refreshes keep the newest status rather than a late reply or fault
 from an earlier refresh.
 For callers that can administer the source tree, Reconcile compares the
 expected view with the live one and swaps it only when they differ; Rebuild
 builds a new generation and swaps it in. Both actions are behind destructive
-confirmations and both read every source key.
+confirmations and both read every source key. **Drop view...** removes the view,
+its projection tree and every generation of it, also behind a destructive
+confirmation; the source tree is untouched, and a view the host declares at
+startup cannot be dropped. Dropped from its own workspace, the tab returns to
+the source tree's views.
+
+**New view...** (palette command `data.create-view`, address
+`?tab=views&new=view`) creates a view over the tree. The dialog lists the
+projection providers the cluster's host registered, each with its description
+(the library's own filter provider is not offered), then takes a view name and
+the provider's payload: a form with one field per property when the provider
+describes its payload, otherwise JSON, checked for syntax before it is sent and
+validated by the provider. A refused create is reported in a fixed sentence.
+The created view appears in the list and its projection is browsable at
+`data/view-{name}`. A host registers a described provider with
+`AddRuntimeProjectionProvider(key, description, factory)` (see
+[Runtime view providers](../lattice/materialised-views.md#runtime-projection-providers)).
+
+Without administrative authority over the source tree, none of these actions
+is drawn, the palette offers no `data.create-view`, and `?new=view` opens
+nothing; the facade refuses a forged call all the same.
 
 A tag-index reconcile and a view reconcile or rebuild run on the cluster as
 tracked operations (see [Tracked operations](../lattice.api.treeadmin/operations.md)).
@@ -194,6 +272,144 @@ for one of its views or indexes and follows it again. A finished operation is
 announced once; a failed or stopped one stays on the tab with the phase it
 reached and why. The actions are drawn only when the Explorer's tree-administration
 facade runs tracked operations.
+
+### Exporting a tree
+
+A tree workspace offers **Export...** (command `data.export`) beside its heading
+when the caller may range-read at least part of the tree. The page asks the
+[Data API](../lattice.api.data/README.md) once, per tree and per caller, for a
+one-entry range read with gate coverage: a whole or a narrowed range-read grant
+draws the action, and a denial, a tree the caller cannot observe, a cluster that
+serves no Data API, or any fault leaves it out. Views and shared prefixes are not
+offered. The download is still authorized by the facade, key by key.
+
+The dialog asks **What to export** - the whole tree, keys with a prefix (prefilled
+from the workspace's `?prefix=`), or a key range from an included first key up to
+an excluded stop key - and a **Format**, NDJSON or CSV. **Prepare download**
+captures the endpoint, the caller's sign-in for it and the tenant asserted now,
+and mints a single-use download ticket that is redeemable for one minute, from
+this browser tab only. **Download** posts the ticket's token, the tab's binding and
+the antiforgery token to the `downloads` endpoint under the Explorer's mount; no
+credential ever appears in a URL. The file streams as it is read, one page of 256
+entries at a time, so neither the browser nor the Explorer holds the whole file.
+The dialog follows the download: a progress line while it streams, then
+**Complete** or **Not complete** with the reason. A sign-in or sign-out, a change of
+cluster, or the tab closing withdraws a waiting ticket and stops a running export.
+A token that is reused, expired, or presented from another tab is refused with an
+empty `204`, so the console stays put and the dialog says what happened.
+
+If the scan's cursor expires mid-export it is reopened just after the last key
+written, so no key is written twice or skipped.
+
+The file format is `lattice-export/1`, written in UTF-8 without a byte-order mark:
+
+- A value is written as **JSON**, verbatim, when its bytes are exactly one RFC 8259
+  JSON value with no byte-order mark, no leading or trailing whitespace and no
+  carriage return or line feed. Any other value is written as standard, padded
+  **base64** and marked `base64`. Either way the original bytes are recoverable
+  exactly: the raw JSON text of the value, or its base64-decoded bytes. Values are
+  the stored bytes, so a typed CRDT entry exports its internal serialization.
+- **NDJSON** (`application/x-ndjson`): one object per line, each ending in a line
+  feed: `{"key":"order/0017","value":{"total":-5}}`, or
+  `{"key":"blob","value":"AP8QIA==","encoding":"base64"}`.
+- **CSV** (`text/csv`, RFC 4180, CRLF line ends): the header `key,value,encoding`,
+  then one row per entry with the key always quoted, and either a quoted JSON value
+  with `json` or a base64 value with `base64` in the encoding column.
+- **The trailer** is always last, and a file without one was cut off. In NDJSON it
+  is the line `{"trailer":{...}}`, an object with no `key`; in CSV it is a row with
+  an empty key, the trailer object quoted as its value, and `trailer` as its
+  encoding. The object is
+  `{"format":"lattice-export/1","items":N,"complete":true|false,"refused":"none|some|all|unknown","reason":null|"..."}`.
+  `complete` is true only when every key in the scope is in the file. `refused` says
+  whether the caller's access withheld keys: `some` when it narrows the scope,
+  `all` when it denies it, and `unknown` when the export stopped or the tree could
+  not be read. It is a classification and never a count or list of withheld keys,
+  which would disclose data the caller may not read. `reason` is a plain sentence
+  whenever the file is not complete.
+
+The download endpoint, the single-use ticket and the trailer are a shared seam: any
+other Explorer download, such as an import's rejection list, is minted and
+streamed the same way.
+
+### Importing into a tree
+
+A tree workspace offers **Import...** (command `data.import`) beside its heading
+when the caller may use at least one import mode on the tree: **Add or replace
+entries** (an upsert) needs the write right the
+[Data API](../lattice.api.data/README.md)'s capability probe reports, and **Seed an
+empty tree (bulk load)** needs the bulk-load grant the
+[tree-administration API](../lattice.api.treeadmin/README.md)'s probe reports. Only
+the modes the caller may use are offered; a caller who may use neither is shown no
+control, and the palette offers no command. Views and shared trees are not offered.
+The facades still authorize every chunk and batch the import sends.
+
+The dialog asks for a **File**, its **Format**, the **Mode**, and, for NDJSON and CSV,
+where each **Key** and **Value** come from:
+
+- **NDJSON**: one JSON value per line; blank lines are skipped. The key is a JSON
+  Pointer (`/id`) or a template mixing literal text with pointers in braces
+  (`order/{/id}`); a pointer to a string gives its text, to a number or boolean its
+  literal, and to anything else refuses the line. The value is the line's bytes
+  verbatim, or the JSON value at a pointer.
+- **CSV**: RFC 4180, UTF-8 with or without a byte-order mark, with a header row and a
+  comma, semicolon, tab or vertical-bar delimiter. The key is a column (`id`) or a
+  template (`order/{id}`). The value is the row as a JSON object of header name to
+  field text - with **Infer numbers and booleans**, a field that reads as a JSON
+  number or as `true`/`false` is written as one - or one column's raw text.
+- **Lattice export**: a `lattice-export/1` NDJSON file (see
+  [Exporting a tree](#exporting-a-tree)). Each line's key and value are restored
+  exactly, base64 values included, and the dialog notes a file whose trailer is
+  missing or says the export was not complete.
+- **key=value lines**: the first `=` splits the key from the value, stored as UTF-8.
+
+A file's extension suggests its format (`.csv` and `.tsv`, `.ndjson`, `.jsonl` and
+`.json`, `.txt`). `{{` and `}}` write a literal brace in a key template.
+
+The import is **streamed at every hop**. The browser's file is read a buffer at a
+time over the circuit, parsed one line at a time, and handed through a bounded
+channel to the facade's streaming member, which sends it to the cluster over a
+single duplex gRPC call: `StreamBulkLoad` for a seed, `StreamSetMany` for an upsert.
+No hop holds the file, so memory is bounded by the channel and one batch whatever
+the file's size. A line longer than 4 MB stops the file at that line. The largest
+file is set by `LatticeExplorerWebOptions.MaxImportBytes` (2 GiB by default).
+
+- **Upsert** writes in batches of 256, in any key order, into a tree that may hold
+  keys. A line that cannot be read, and an entry the cluster refuses (a key the
+  caller may not write, a value the tree's schema policy rejects), is counted and
+  listed with its line, and every other entry still lands. Schema enforcement,
+  per-key authorization and dead-lettering apply exactly as for any other write.
+- **Seed** bulk-loads an empty tree in chunks of 1,000. A pre-flight pass reads the
+  whole file first and refuses it, naming the line, on the first line that cannot
+  be read or whose key does not sort strictly after the one before; nothing is
+  written. The load pass then reads the file again. A stream broken by a transient
+  fault resumes from its first unacknowledged chunk, with no entry lost or written
+  twice. A tree that already holds keys or tombstones is refused.
+
+While the file is read the dialog shows the operation's progress - bytes read of the
+file, lines read, entries written, the rate and the refused lines - with **Stop
+import**. Stop ends the import after the batch or chunk in flight, and the result
+reports exactly what was written before it. The browser reads the file through the
+dialog's file input, so the dialog stays open while the file is read; leaving the
+tree page ends the read, and the import reports what it wrote. Closing the browser
+tab ends the circuit, which cancels the import and records it as cancelled. An
+import belongs to the caller who started it: a sign-in, a sign-out, a new endpoint
+or another tenant cancels it, since its calls would otherwise go on as the new
+caller, and it is never shown to another caller. A finished import is shown again
+when the dialog reopens on its tree, until **Done** or **Import another file**.
+
+The result lists the first 100 refused lines with their line, key and reason, and
+**Prepare the list of refused lines** mints a download of every one through the
+download seam above: NDJSON with one `{"line","key","code","reason"}` object per
+line - `code` is `format` for a line that could not be read, or the Data API's
+`denied`, `schema` or `invalid` - ending in a `lattice-import-rejections/1` trailer.
+The list never carries values; it is kept in a temporary file deleted when the
+import is forgotten or the circuit ends.
+
+**New tree from file...** on the Data directory, drawn for a caller who may create
+trees, creates a tree through the Cluster area's New tree dialog and opens its
+Import dialog on a seed (`/data/{tree}?import=seed`). The Cluster tools' **Bulk
+load** section links to the same address, so a file seeds through the same
+pipeline as the typed `key=value` list.
 
 App-owned trees use logical ids shaped like `a/{slug}/...`. Data links their
 owner badge to `/apps/{slug}`, and tag and view member rows preserve those
@@ -210,16 +426,42 @@ pickers and address completions offer shared trees with their owner and access,
 and Home's Data line counts them ("..., and 2 shared with this tenant."). When the
 tenant's grants cannot be listed, the directory shows its own trees with a note.
 
-The Data palette command is:
+The Data palette commands are:
 
 | Command id | Label | Effect |
 | --- | --- | --- |
 | `data.refresh` | Refresh the tree directory | Drops the circuit's loaded tree and view list, reloads it, and updates the directory and workspace surfaces. |
+| `data.export` | Export... | Opens the Export dialog of the open tree workspace (see [Exporting a tree](#exporting-a-tree)). The palette offers it only while a tree workspace that draws **Export...** is open - the same verdict, for the same caller - and leaves it out everywhere else. |
+| `data.import` | Import... | Opens the Import dialog of the open tree workspace (see [Importing into a tree](#importing-into-a-tree)). The palette offers it only while a tree workspace that draws **Import...** is open, for the same caller. |
+| `data.new-entry` | New entry... | Offered while a tree workspace whose caller may write it is open. Opens the value editor for a new key. |
+| `data.edit-entry` | Edit entry | Offered while an entry the caller may write is open. Opens the value editor on it. |
+| `data.delete-entry` | Delete entry... | Offered while a live entry the caller may delete is open. Opens the destructive confirmation. |
 
 The directory remembers a successful tree/view catalogue for one caller,
 endpoint and active tenant. It forgets the list when sign-in, endpoint or active
 tenant changes. A load follows at most 400 catalogue pages of 500 entries each,
 and a view catalogue denial leaves views absent rather than hiding the trees.
+
+### Deleting and recovering a tree
+
+A caller who may manage a tree's lifecycle (the `TreeLifecycle` grant, as the
+tree-administration facade's capability probe reports it) is offered
+**Delete tree...** in the tree workspace's heading, beside **Import...** and
+**Export...**. This is the same delete the Cluster area's Lifecycle tab offers,
+for a caller who holds the grant on a tree but not the cluster-wide Telemetry
+capability the Cluster area needs - a data steward who creates and loads her own
+trees, for example. It is never drawn for a view or a shared tree, and a missing
+facade, a refused or faulted probe all draw nothing; the facade still authorizes
+the delete itself.
+
+**Delete tree...** opens a destructive confirmation that asks for the tree's name
+to be typed. The delete is a soft delete: every read and write on the tree fails
+at once, and a hard purge is scheduled after the cluster's soft-delete window.
+The workspace's tabs give way to a note saying the tree is deleted and until when
+it can be recovered, with **Recover tree...** (another typed confirmation) while
+recovery is possible and a link back to the directory. The directory lists a
+soft-deleted tree as **Soft-deleted** until it is purged, and opening it again
+shows the same note. Purge is not offered here; it stays in the Cluster area.
 
 ## Apps
 
@@ -245,8 +487,13 @@ or to callers who administer the active tenant through the delegated tenant
 access facades; anonymous cluster refusal stays visible as an Unavailable sign-in
 prompt, while signed-in refusal by both probes hides the area. Its cluster-wide
 commands are `access.explain`, `access.create-rule` and `access.create-group`.
-See [Managing access](managing-access.md) for rule editing, group management and
-explain output.
+Cluster-wide subject pickers offer a group from two labelled sources, the
+identity directory (**Directory**) and the groups stored in Access (**Stored**),
+so a group created here can be used once a directory is configured; the rule
+editor also lets a platform operator choose a **Tenant group** by tenant and name,
+verified against that tenant's stored groups and confined to its own trees.
+See [Managing access](managing-access.md) for rule editing, group management,
+subject picking and explain output.
 
 ## Schema
 
@@ -328,12 +575,22 @@ estate. A truncated status read says so and recommends filtering.
 
 The enrolled-trees page reads enrolment and status together. The table shows
 enabled, disabled or ambiguous state, merge mode, whether enrolment is runtime,
-static or both, app ownership and worst link health. A caller with the control
-facade and a readable enrolment report can enable replication for a new tree or
-for a disabled runtime tree. Enabling asks for the logical tree id (a picker
-that accepts only a tree you can reach), merge mode and optional bootstrap source
+static or both, app ownership and worst link health. Every listed tree is one the
+caller may manage, so a listed disabled runtime tree offers **Enable** and an
+enabled one **Disable**. **Enable replication for a tree** (a new tree) is
+offered only when the facade's capability probe says the caller holds the
+Replication grant, or the list holds a tree they manage: the report is readable
+by every caller, so an empty list proves nothing (#5478). The cluster still
+authorizes every enable and disable. Enabling asks for the logical tree id (a picker
+that accepts only a tree you can reach until a bootstrap source is named, and then
+any id, because the bootstrap brings a tree this region does not hold yet), merge
+mode and optional bootstrap source
 cluster (a picker that suggests the known regions and accepts any id); app-owned ids are rejected because their
-enrolment follows the app install. Disabling is a destructive confirmation: it
+enrolment follows the app install. While an enable is in flight the dialog says
+what it is waiting for: with a bootstrap source, the enable returns only once
+that cluster has answered, which can take a minute or more. The dialog can be
+closed meanwhile: the enable keeps running while you stay on the page, and a
+message reports the result (leaving the page abandons the wait). Disabling is a destructive confirmation: it
 stops new changes from replicating, leaves peer data in place, and keeps the
 merge mode for a later enable. Static-only enrolments cannot be toggled here.
 
@@ -343,7 +600,8 @@ shows a **Back to enrolled trees** link.
 
 The tree detail page reads one tree's links afresh, then starts a visibility
 aware refresh loop after the first browser render. While the page is visible it
-refreshes every 5 seconds; when the tab is hidden it stops; when it becomes
+refreshes every 5 seconds; when the tab is hidden it stops, and its status line
+says the refresh is paused while the page is hidden; when it becomes
 visible it refreshes immediately and resumes. If a later refresh fails, the page
 keeps the previous links and reports that the last refresh failed. If neither
 the enrolment report nor the status links name the tree, it navigates to not
@@ -449,7 +707,7 @@ region diagram.
 | Address | What it shows |
 | --- | --- |
 | `/cluster` | Estate overview: cluster id, service id, storage use, region diagram and links to Trees, WAL placement and Orphaned leaves. |
-| `/cluster/trees` | Every logical tree in the cluster, with owner, shard count, WAL partitions and lifecycle. System trees are not listed, and the list says so; a tenant-scoped list also leaves out other tenants' trees. |
+| `/cluster/trees` | Every logical tree in the cluster, with owner, shard count, WAL partitions and lifecycle. System trees are not listed, and the list says so; a tenant-scoped list also leaves out other tenants' trees. **New tree...** creates one. |
 | `/cluster/trees/{tree-path}` | One tree's summary, configuration, shards, storage and lifecycle tabs. |
 | `/cluster/trees/{tree-path}/tools` | Compaction, projection digest and bulk load tools. |
 | `/cluster/trees/{tree-path}/reshard` | Resumable online reshard status and staging. |
@@ -481,7 +739,9 @@ succeeds. A re-measure still running is picked up again when the overview opens.
 up the replication peer report, draws the local region and peers, marks stalled
 peers without relying on colour alone, and links to Replication.
 
-The tree list is filtered by tree name, app or tenant. It filters out restore
+The tree list's filter matches a tree's name (which carries its tenant and app), its
+owner as the Owner column reads it ("app crm, tenant acme"), or its state as the State
+column reads it, so "deleted" or "aliased" narrows the list to those trees. The list leaves out restore
 shadows and physical resize or restore targets, so rows show logical trees only.
 App and tenant ownership are parsed from `t/{tenant}/a/{app}/...` and shown as
 text. The visible `cluster.reshard-tree` control opens a dialog whose tree field
@@ -491,6 +751,34 @@ audits, the alias target, the reshard dialog) accepts only a listed tree. A
 snapshot's destination names a new tree, so it is a plain name box rather than a
 picker: it offers no list, and refuses a name that already exists ("A tree with
 this name already exists; a snapshot needs a new one.").
+
+**New tree...** (`cluster.create-tree`) creates an empty tree. It is drawn only for
+a caller the create-tree probe admits: the side-effect-free capability probe of a
+sentinel tree id, which grants a caller who administers every tree (or every tree
+of their tenant), else the probe of the first few listed trees, which grants a
+caller whose administration is scoped to some trees. For any other caller the
+control is hidden, and the palette command is refused with "Your identity holds no
+grant to create trees on this cluster.". The answer is remembered for 30 seconds
+for the caller it was read for. The dialog asks for the tree name and the physical
+shard count, keys per leaf and children per internal node, which start at the
+library defaults (64, 128 and 128) and each say what they do. A name that is
+empty, begins with the reserved `_lattice_` or `t/` namespace, has an empty part,
+or is too deep to have a Cluster address is refused beside the field in the
+cluster's own words; shards run from 1 to 4,096, keys per leaf from 2, and
+children from 3. **Review** then checks the exact name: a name the caller does not
+administer, a name already taken ("A tree named factory-floor already exists.
+Creating it again would change nothing; choose another name."), and, under a
+tenant, a tenant whose tree count has reached its quota ceiling ("Tenant acme is
+at its tree quota: 2 of 2 trees. Delete a tree, or ask a platform operator to
+raise the quota.") are refused before anything is written. The review names the
+tree, its tenant and its sizing, and **Create tree** creates it. At a
+tenant-rooted address the tree is created in that tenant. A refusal at the create
+itself is shown on the review: the cluster's idempotent create reports a name
+registered meanwhile as already existing, and a quota refusal is told in quota
+terms. A created tree is at once in the Cluster tree list and the Data directory,
+and the page opens on its Summary with a **Tree created** section, shown once,
+that offers to seed it with a bulk load, set its configuration and history
+retention, or browse it in Data.
 
 A tree page begins with a side-effect-free capability probe. If the caller has
 no tree-admin capability over the tree, it shows "Nothing you can administer".
@@ -512,6 +800,10 @@ changes, so they do not ask for destructive confirmation. Lifecycle operations
 do: Delete soft-deletes the tree and schedules purge, Recover restores normal
 reads and writes, Purge permanently removes tree state and is not an app
 operation, and Set alias points the logical name at another physical tree.
+**Add name...** in the same Alias section gives the tree another name: it names
+a free alias (a name that already holds a tree is refused, with a pointer to that
+tree's own Lifecycle) and, after the alias is typed to confirm, points it at this
+tree, so `/data/{alias}` and every read and write through the alias reach it.
 **Recoverable until** is shown with the recovery deadline only while the tree can
 still be recovered. Purge is accept-then-poll: the call can return while the shard
 walk is still running, so the tab says the purge was accepted, follows it with a
@@ -612,13 +904,16 @@ The read-only survey of every orphan key is driven batch by batch from the page
 (up to 1000 batches) and can be stopped. Repair is shown only with TreeLifecycle
 authority and repairable leaves, is behind a destructive confirmation, unsplices
 only leaves whose keys were shown readable elsewhere, and always audits again
-when repair completes.
+when repair completes. Because that audit replaces the repair's findings, the
+toast that announces it counts the leaves unspliced, any refused, and any region
+not judged.
 The Cluster palette commands are:
 
 | Command id | Label | Effect |
 | --- | --- | --- |
-| `cluster.reshard-tree` | Reshard tree... | "Grow or shrink a tree's physical shard count, online." Opens the reshard chooser on `/cluster/trees`, then navigates to the chosen tree's reshard page. |
+| `cluster.reshard-tree` | Reshard tree... | "Grow or shrink a tree's physical shard count, online." Opens the reshard chooser on `/cluster/trees`, then navigates to the chosen tree's reshard page. The control is drawn only for a caller whose capability probe reports a tree-lifecycle grant (on the reserved probe tree or one of the first 64 listed trees); for anyone else the command says "Your identity holds no grant to reshard a tree on this cluster." |
 | `cluster.plan-wal-move` | Plan WAL move... | Opens the WAL move planner on `/cluster/wal`, then navigates to the query-addressed plan. |
+| `cluster.create-tree` | New tree... | "Create an empty tree with a chosen shard count and node sizes." Opens the create-tree dialog on `/cluster/trees`, then lands on the new tree's Summary. Refused, with a sentence, for a caller who may not create trees. |
 
 Cluster faults are shown as short sentences, never a stack or a status code. An
 authorisation denial is always "You do not have permission to do this.". Any

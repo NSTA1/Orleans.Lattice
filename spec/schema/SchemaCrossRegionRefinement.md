@@ -167,11 +167,17 @@ claim the fixes are released.
   version. The model fixes the source's definitions and lets only the receiver's
   move.
   Production symbols: `SchemaRuntimeRegistry`, `LatticeSchemaRuntimeRegistryGrain`, `LatticeSchemaPolicyStore`, `LatticeSchemaVersionStore`.
-- **Writes below the check stay unchecked.** A plain last-writer-wins replication
-  apply, a backup restore and a tree merge write straight into the shards through
-  the batched merge, never reaching the write stages, so even under strict ingest
-  their values are stored with whatever stamp they carry and are neither judged nor
-  dead-lettered. Only the read decoder stands between such a value and a reader.
+- **Writes below the check stay unchecked.** A steady-state plain last-writer-wins
+  replication apply, a backup restore and a tree merge write straight into the
+  shards through the batched merge, never reaching the write stages, so even under
+  strict ingest their values are stored with whatever stamp they carry and are
+  neither judged nor dead-lettered. Only the read decoder stands between such a
+  value and a reader. The exception is a receiver bootstrap drain: a
+  last-writer-wins row drained from a peer's export (the apply runs under the
+  drain's request-context mark) is judged at the write interceptor and diverted
+  like a replicated atomic-batch entry (#5551), because the export no longer
+  records whether the row came from an atomic batch. The model abstracts the drain
+  into the same delivery the interceptor judges.
   Production symbols: `LatticeGrain.ApplySetAsync`, `IShardRootGrain.MergeManyAsync`.
 - **The merge-result observer does not see batched merges.** The opt-in
   merge-result observer runs on the foreground leaf write and on CRDT apply, local

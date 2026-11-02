@@ -2,11 +2,13 @@ using System.Diagnostics.Metrics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Orleans.Concurrency;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Wal;
 using Orleans.Runtime;
+using Orleans.Serialization.Invocation;
 using Orleans.Timers;
 
 namespace Orleans.Lattice.Views;
@@ -31,6 +33,7 @@ namespace Orleans.Lattice.Views;
 /// is idempotent.
 /// </para>
 /// </summary>
+[MayInterleave(nameof(IsKeepaliveTick))]
 internal sealed partial class ViewMaintainerGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
@@ -841,6 +844,18 @@ internal sealed partial class ViewMaintainerGrain(
             ? state.State.BoundPhysicalTreeId
             : await ResolveSourcePhysicalAsync(registration.SourceTreeId);
         var partitions = await optionsResolver.GetWalPartitionsAsync(walTreeId);
+
+        // A view still bound to a retired physical copy (a swap it has not healed
+        // yet, or is rebuilding from right now) has applied nothing of the current
+        // copy: its offsets belong to another log, and comparing them with this
+        // log's heads could read as caught up. Report every entry of the current
+        // copy as unapplied, and never zero, until the heal publishes (#5519).
+        var bound = state.State.BoundPhysicalTreeId;
+        if (!string.IsNullOrEmpty(bound) && !string.Equals(bound, walTreeId, StringComparison.Ordinal))
+        {
+            return Math.Max(1L, await ComputeLagAsync(walTreeId, partitions, cancellationToken, fromLogStart: true));
+        }
+
         return await ComputeLagAsync(walTreeId, partitions, cancellationToken);
     }
 
@@ -1204,15 +1219,43 @@ internal sealed partial class ViewMaintainerGrain(
         return true;
     }
 
+    /// <summary>
+    /// The <see cref="MayInterleaveAttribute"/> predicate: lets a reminder tick
+    /// interleave with whatever turn the maintainer is running. The tick only hands
+    /// its work to <see cref="RunKeepaliveTickAsync"/>, so it touches no maintainer
+    /// state; without this a tick queued behind a long rebuild timed out undelivered
+    /// (#5519).
+    /// </summary>
+    /// <param name="request">The incoming request.</param>
+    /// <returns><see langword="true"/> for an <see cref="IRemindable"/> tick.</returns>
+    public static bool IsKeepaliveTick(IInvokable request) =>
+        request.GetInterfaceType() == typeof(IRemindable);
+
     /// <inheritdoc />
-    public async Task ReceiveReminder(string reminderName, TickStatus status)
+    public Task ReceiveReminder(string reminderName, TickStatus status)
     {
-        using var viewWriteScope = ViewWriteContext.BeginScope();
         if (reminderName != KeepaliveReminderName)
         {
-            return;
+            return Task.CompletedTask;
         }
 
+        // Interleaved (see IsKeepaliveTick): never touch state here. The one-way
+        // self-call queues the tick's work behind the running turn and returns now.
+        try
+        {
+            return grainFactory.GetGrain<IViewMaintainerGrain>(ViewName).RunKeepaliveTickAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "View '{ViewName}' could not hand off its keepalive tick; will retry.", ViewName);
+            return Task.CompletedTask;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task RunKeepaliveTickAsync()
+    {
+        using var viewWriteScope = ViewWriteContext.BeginScope();
         try
         {
             // A reminder can wake a cold-reactivated grain that never ran
@@ -1438,8 +1481,13 @@ internal sealed partial class ViewMaintainerGrain(
     /// drain tick and again on every convergence check, so its cost is paid on the
     /// idle cadence of every view in the cluster, multiplied by the partition count.
     /// </para>
+    /// <para>
+    /// <paramref name="fromLogStart"/> counts every entry of the log as unapplied,
+    /// for a view whose checkpoint belongs to another physical log.
+    /// </para>
     /// </summary>
-    private async Task<long> ComputeLagAsync(string sourceTreeId, int partitions, CancellationToken cancellationToken)
+    private async Task<long> ComputeLagAsync(
+        string sourceTreeId, int partitions, CancellationToken cancellationToken, bool fromLogStart = false)
     {
         if (partitions <= 0)
         {
@@ -1471,7 +1519,7 @@ internal sealed partial class ViewMaintainerGrain(
 
         long PartitionLag(long head, int partition)
         {
-            var checkpoint = state.State.AppliedOffsets.GetValueOrDefault(partition, -1);
+            var checkpoint = fromLogStart ? -1 : state.State.AppliedOffsets.GetValueOrDefault(partition, -1);
             var partitionLag = head - (checkpoint + 1);
             return partitionLag > 0 ? partitionLag : 0;
         }

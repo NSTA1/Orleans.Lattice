@@ -18,9 +18,13 @@
                      Mono="true"
                      Value="@_typed"
                      ValueChanged="HandleTypedAsync" />
+        @if (Pending)
+        {
+            <p class="lt-confirm__pending" role="status" data-lt-confirm="pending">@(PendingText ?? DefaultPendingText)</p>
+        }
         <div class="lt-dialog__actions">
             <LtButton Variant="LtButtonVariant.Quiet" OnClick="CancelAsync">Cancel</LtButton>
-            <LtButton Variant="LtButtonVariant.Destructive" Type="LtButtonType.Submit" Disabled="@(!Matches)">@ConfirmText</LtButton>
+            <LtButton Variant="LtButtonVariant.Destructive" Type="LtButtonType.Submit" Disabled="@(Pending || !Matches)" aria-busy="@(Pending ? "true" : null)">@ConfirmText</LtButton>
         </div>
     </form>
 </LtDialog>
