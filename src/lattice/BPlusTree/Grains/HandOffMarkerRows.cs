@@ -59,6 +59,40 @@ internal static class HandOffMarkerRows
     internal static Task<ShardHandOffState> UpdateShardAsync(IGrainStorage storage, string treeId, int shardIndex, Func<ShardHandOffState, bool> mutate) =>
         UpdateAsync(storage, ShardGrainType, ShardKey(treeId, shardIndex), mutate);
 
+    /// <summary>
+    /// As <see cref="UpdateShardAsync"/>, but never creates the row: returns
+    /// <see langword="null"/> when the shard root's marker row is absent (#5705).
+    /// </summary>
+    internal static async Task<ShardHandOffState?> UpdateExistingShardAsync(
+        IGrainStorage storage, string treeId, int shardIndex, Func<ShardHandOffState, bool> mutate)
+    {
+        ArgumentNullException.ThrowIfNull(mutate);
+        var key = ShardKey(treeId, shardIndex);
+        for (var attempt = 1; ; attempt++)
+        {
+            var row = await ReadAsync<ShardHandOffState>(storage, ShardGrainType, key).ConfigureAwait(true);
+            if (!row.RecordExists)
+            {
+                return null;
+            }
+
+            if (!mutate(row.State))
+            {
+                return row.State;
+            }
+
+            try
+            {
+                await storage.WriteStateAsync(ShardGrainType, RowId(ShardGrainType, key), row).ConfigureAwait(true);
+                return row.State;
+            }
+            catch (InconsistentStateException) when (attempt < MaxUpdateAttempts)
+            {
+                // Another writer updated (or deleted) the marker since the read; re-read.
+            }
+        }
+    }
+
     /// <summary>Deletes a leaf's marker row, if any; called when the leaf is cleared.</summary>
     internal static async Task ClearLeafAsync(IGrainStorage storage, Guid leafId)
     {

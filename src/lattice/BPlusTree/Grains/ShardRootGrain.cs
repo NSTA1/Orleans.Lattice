@@ -3301,7 +3301,7 @@ internal sealed partial class ShardRootGrain(
         // generation the purge retired under the tree id's floor.
         if (prevIsPurged)
         {
-            _handOffMarker = null;
+            ForgetHandOffMarker();
         }
 
         return true;

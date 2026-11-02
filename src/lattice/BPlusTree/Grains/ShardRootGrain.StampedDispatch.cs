@@ -154,6 +154,7 @@ internal sealed partial class ShardRootGrain
         try
         {
             var row = await HandOffMarkerRows.ReadShardAsync(HandOffStorage(), TreeId, ShardIndex);
+            NoteHandOffMarkerRead(row);
             _handOffMarker = row.State;
         }
         catch (Exception ex)
@@ -171,10 +172,45 @@ internal sealed partial class ShardRootGrain
     private async Task<WalFenceSeamRetry?> NextRoutingRetryAsync(WalFenceSeamRetry? retry, WalRoutingGenerationStaleException stale)
     {
         retry = await WalFenceSeamRetry.NextAsync(retry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+        await ThrowIfAdmittedUnderPurgedIncarnationAsync(stale);
         await ReloadHandOffMarkerAsync();
         await RaiseRoutingGenerationAboveRefusalAsync(stale);
         return retry;
     }
+
+    /// <summary>
+    /// #5705: a write admitted under a generation at or below the tree id's routing
+    /// floor was admitted by an incarnation a purge has since retired. It is never
+    /// re-stamped: neither raised above the floor's refusal (which would re-create the
+    /// purged marker at floor + 1), nor re-admitted under a re-created incarnation's
+    /// generation. Its retry surfaces the deleted-tree outcome. A live incarnation's
+    /// generations are always above the floor, so this never refuses one of its writes.
+    /// Reads the floor row on the stale-generation path only.
+    /// </summary>
+    private async Task ThrowIfAdmittedUnderPurgedIncarnationAsync(WalRoutingGenerationStaleException stale)
+    {
+        if (stale.Generation <= 0 || WalAppendFenceStorage.Resolve(context.ActivationServices) is not { } storage)
+        {
+            return;
+        }
+
+        var floor = (await WalAppendFenceRows.ReadRoutingFloorAsync(storage, TreeId)).State.Floor;
+        if (stale.Generation <= floor)
+        {
+            throw PurgedIncarnation();
+        }
+    }
+
+    /// <summary>The deleted-tree outcome a retired incarnation's operation surfaces (#5705).</summary>
+    private static InvalidOperationException PurgedIncarnation() =>
+        new("This tree has been deleted and is no longer accessible.");
+
+    /// <summary>Runs one stale-generation retry step, as a write's seam does; test seam (#5705).</summary>
+    internal Task RetryStaleRoutingForTestingAsync(WalRoutingGenerationStaleException stale) =>
+        NextRoutingRetryAsync(null, stale);
+
+    /// <summary>Loads this activation's marker as its first admission does; test seam (#5705).</summary>
+    internal Task<State.ShardHandOffState> LoadHandOffMarkerForTestingAsync() => LoadHandOffMarkerAsync();
 
     /// <summary>
     /// #5663: a refusal above this shard root's stored generation means the
