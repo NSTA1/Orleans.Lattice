@@ -129,6 +129,10 @@ public partial class BPlusLeafGrainTests
         "SetAsync", "GetOrSetAsync", "SetIfVersionAsync", "SetManyAsync",
         "SetManyWherePredicateAsync", "ApplyCrdtDeltaAsync", "ApplyCrdtDeltaManyAsync",
         "DeleteAsync", "DeleteTrackedAsync", "DeleteRangeAsync", "DeleteRangeAndNextSiblingAsync",
+        // The routing-stamped twins of the writes above (epic #5605, member 2).
+        "SetStampedAsync", "GetOrSetStampedAsync", "SetIfVersionStampedAsync", "SetManyStampedAsync",
+        "SetManyWherePredicateStampedAsync", "ApplyCrdtDeltaStampedAsync", "ApplyCrdtDeltaManyStampedAsync",
+        "DeleteStampedAsync", "DeleteTrackedStampedAsync", "DeleteRangeAndNextSiblingStampedAsync",
         // Range and enumeration reads.
         "CountAsync", "CountAndNextSiblingAsync", "GetAppendTailAsync", "GetStatsAsync", "GetStatsAndNextSiblingAsync", "GetKeysAsync", "GetKeysAndNextSiblingAsync", "GetEntriesAsync",
         "GetLiveEntriesAsync", "GetLiveRawEntriesAsync", "GetLiveRawEntriesAndNextSiblingAsync",
@@ -137,7 +141,7 @@ public partial class BPlusLeafGrainTests
         "GetDeltaSinceAsync", "GetDeltaSinceAndNextSiblingAsync", "GetDeltaSinceCursorAsync", "GetCacheRefreshAsync", "GetDeltaSinceForSlotsAndNextSiblingAsync",
         "GetPendingKeysAsync", "GetPendingMutationsForSlotsAsync", "GetPendingMutationsForSlotsAndNextSiblingAsync",
         "GetOriginalPrepareStampsAsync",
-        "MergeEntriesAsync", "MergeManyAsync", "GetClockAsync", "GetClockAndNextSiblingAsync",
+        "MergeEntriesAsync", "MergeManyAsync", "MergeManyStampedAsync", "GetClockAsync", "GetClockAndNextSiblingAsync",
         // Digests and topology views computed FROM the projection.
         "GetProjectionDigestAsync", "GetProjectionDigestForRangeAsync",
         "GetChildDigestSnapshotAsync", "SetParentAndGetChildDigestSnapshotAsync", "GetTopologyNodeAsync",
