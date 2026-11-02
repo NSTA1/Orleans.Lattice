@@ -18,4 +18,12 @@ internal sealed class WalAppendFenceSweepState : ILatticeBinaryPersistedState
     /// <summary>When the last sweep of the tree started, in UTC ticks.</summary>
     [Id(0)]
     public long LastStartedUtcTicks { get; set; }
+
+    /// <summary>
+    /// The last leaf the previous sweep examined, in the sweep's order; the next sweep
+    /// starts after it, wrapping around, so every listed leaf is examined in turn
+    /// however many there are (#5656). <see cref="Guid.Empty"/> starts at the beginning.
+    /// </summary>
+    [Id(1)]
+    public Guid ResumeAfter { get; set; }
 }

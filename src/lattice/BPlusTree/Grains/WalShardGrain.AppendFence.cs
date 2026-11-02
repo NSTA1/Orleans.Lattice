@@ -61,6 +61,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
 
     /// <summary>Per-leaf claim/retirement gates; created on the first claim.</summary>
     private Dictionary<Guid, LeafGate>? _leafGates;
+    private SemaphoreSlim?[]? _directoryGates;
 
     /// <summary>The tree's grain storage provider, resolved on first use.</summary>
     private IGrainStorage? _fenceStorage;
@@ -215,66 +216,129 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
     private async Task<long> RetireUnderLeafGateAsync(IGrainStorage storage, Guid leafId, long rowEpoch)
     {
         var key = WalAppendFenceRows.EntryKey(_treeId, _shardIndex, leafId);
-        for (var attempt = 1; ; attempt++)
+        var floorCovers = false;
+        try
         {
-            var row = await WalAppendFenceRows.ReadEntryAsync(storage, _treeId, _shardIndex, leafId).ConfigureAwait(true);
-            long retired;
-            lock (_stateGate)
+            for (var attempt = 1; ; attempt++)
             {
-                // #5641: the epoch row's value as well as the entry. A duplicate that
-                // persisted its row but has not yet written its entry here must be
-                // refused at its entry write, or it would share the re-created
-                // incarnation's epoch once the clear deletes the row.
-                retired = Math.Max(row.State.Epoch, Math.Max(rowEpoch, 0));
-                if (_epochEntries is not null && _epochEntries.TryGetValue(leafId, out var loaded))
-                {
-                    retired = Math.Max(retired, Math.Max(loaded.Memory, loaded.DurableSeen));
-                }
-            }
-
-            // The floor is raised durably BEFORE the entry is deleted, so no
-            // interleaving can observe the entry gone with the floor still below
-            // it: a surviving duplicate of the retired leaf stays outranked
-            // (ReadPositionHonestRecreateDropsFloor).
-            if (retired > 0)
-            {
-                await RaiseEpochFloorAsync(storage, retired).ConfigureAwait(true);
-            }
-
-            if (row.RecordExists)
-            {
-                try
-                {
-                    await WalAppendFenceRows.ClearAsync(storage, WalAppendFenceRows.EntryGrainType, key, row).ConfigureAwait(true);
-                }
-                catch (InconsistentStateException) when (attempt < MaxFenceRowAttempts)
-                {
-                    // A claim wrote the entry since the read; retire what it wrote.
-                    continue;
-                }
-            }
-
-            // #5634: delisted only once the entry is gone. This leaf's claims wait on
-            // the leaf gate this retirement holds, so none can list it in between.
-            await WalAppendEpochDirectory.RemoveAsync(storage, _treeId, _shardIndex, leafId).ConfigureAwait(true);
-
-            // A multi-entry stamped batch of this leaf finishes assigning before its
-            // entry goes, so retirement never leaves it partially admitted.
-            while (true)
-            {
-                Task? drain;
+                var row = await WalAppendFenceRows.ReadEntryAsync(storage, _treeId, _shardIndex, leafId).ConfigureAwait(true);
+                long retired;
                 lock (_stateGate)
                 {
-                    drain = BatchDrainLocked(leafId);
-                    if (drain is null)
+                    // #5641: the epoch row's value as well as the entry. A duplicate that
+                    // persisted its row but has not yet written its entry here must be
+                    // refused at its entry write, or it would share the re-created
+                    // incarnation's epoch once the clear deletes the row.
+                    retired = Math.Max(row.State.Epoch, Math.Max(rowEpoch, 0));
+                    if (_epochEntries is not null && _epochEntries.TryGetValue(leafId, out var loaded))
                     {
-                        _epochEntries?.Remove(leafId);
-                        return _epochFloor;
+                        retired = Math.Max(retired, Math.Max(loaded.Memory, loaded.DurableSeen));
                     }
                 }
 
-                await drain.ConfigureAwait(true);
+                // The floor is raised durably BEFORE the entry is deleted, so no
+                // interleaving can observe the entry gone with the floor still below
+                // it: a surviving duplicate of the retired leaf stays outranked
+                // (ReadPositionHonestRecreateDropsFloor).
+                if (retired > 0)
+                {
+                    await RaiseEpochFloorAsync(storage, retired).ConfigureAwait(true);
+                }
+
+                // From here the floor covers every epoch this leaf held here, so its loaded
+                // entry is removed below whatever fails next (#5657): a surviving duplicate
+                // must not keep appending at a partition whose clear it outlived (#5635).
+                floorCovers = true;
+
+                if (row.RecordExists)
+                {
+                    try
+                    {
+                        await WalAppendFenceRows.ClearAsync(storage, WalAppendFenceRows.EntryGrainType, key, row).ConfigureAwait(true);
+                    }
+                    catch (InconsistentStateException) when (attempt < MaxFenceRowAttempts)
+                    {
+                        // A claim wrote the entry since the read; retire what it wrote.
+                        continue;
+                    }
+                }
+
+                break;
             }
+
+            // #5634: delisted only once the entry is gone. This leaf's claims wait on
+            // the leaf gate this retirement holds, so none can list it in between. Best
+            // effort: a listing left behind is harmless, and the sweep retires it again.
+            try
+            {
+                await DirectoryOpAsync(leafId, () => WalAppendEpochDirectory.RemoveAsync(storage, _treeId, _shardIndex, leafId)).ConfigureAwait(true);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Left listed; the sweep finds the leaf gone and retires it again.
+            }
+        }
+        finally
+        {
+            if (floorCovers)
+            {
+                await RemoveLoadedEntryAsync(leafId).ConfigureAwait(true);
+            }
+        }
+
+        lock (_stateGate)
+        {
+            return _epochFloor;
+        }
+    }
+
+    /// <summary>
+    /// Removes <paramref name="leafId"/>'s loaded entry once any multi-entry stamped
+    /// batch of it has finished assigning, so retirement never leaves a batch
+    /// partially admitted.
+    /// </summary>
+    private async Task RemoveLoadedEntryAsync(Guid leafId)
+    {
+        while (true)
+        {
+            Task? drain;
+            lock (_stateGate)
+            {
+                drain = BatchDrainLocked(leafId);
+                if (drain is null)
+                {
+                    _epochEntries?.Remove(leafId);
+                    return;
+                }
+            }
+
+            await drain.ConfigureAwait(true);
+        }
+    }
+
+    /// <summary>
+    /// Runs a directory listing or delisting under its bucket's in-process gate
+    /// (#5605 review of #5653, S2), so concurrent first claims on this partition list
+    /// one at a time per bucket and an ETag conflict means only a duplicate activation
+    /// of this WAL shard. Bounded: <see cref="WalAppendEpochDirectory.Buckets"/> gates.
+    /// </summary>
+    private async Task DirectoryOpAsync(Guid leafId, Func<Task> op)
+    {
+        SemaphoreSlim gate;
+        lock (_stateGate)
+        {
+            _directoryGates ??= new SemaphoreSlim[WalAppendEpochDirectory.Buckets];
+            gate = _directoryGates[WalAppendEpochDirectory.BucketOf(leafId)] ??= new SemaphoreSlim(1, 1);
+        }
+
+        await gate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            await op().ConfigureAwait(true);
+        }
+        finally
+        {
+            gate.Release();
         }
     }
 
@@ -361,7 +425,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
                 {
                     // #5634: listed before the entry row is first written, so every
                     // entry is enumerable by the sweep. Idempotent across retries.
-                    await WalAppendEpochDirectory.AddAsync(storage, _treeId, _shardIndex, listedLeaf, DateTime.UtcNow.Ticks).ConfigureAwait(true);
+                    await DirectoryOpAsync(listedLeaf, () => WalAppendEpochDirectory.AddAsync(storage, _treeId, _shardIndex, listedLeaf, DateTime.UtcNow.Ticks)).ConfigureAwait(true);
                 }
 
                 setValue(row, value);

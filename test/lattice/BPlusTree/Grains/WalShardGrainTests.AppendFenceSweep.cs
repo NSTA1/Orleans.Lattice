@@ -181,6 +181,152 @@ public partial class WalShardGrainTests
     }
 
     [Test]
+    public async Task The_sweep_reaches_an_orphan_behind_more_live_leaves_than_its_cap()
+    {
+        // #5656: live leaves count toward the per-sweep cap, so without a resume point
+        // every sweep would re-examine the same first leaves and never reach this one.
+        var storage = new EnumerableMemoryGrainStorage();
+        var grain = await CreateFencedGrainAsync(storage);
+        var leaves = Enumerable.Range(0, WalAppendFenceSweeper.MaxLeavesPerSweep + 6).Select(_ => Guid.NewGuid()).ToList();
+        leaves.Sort(WalAppendFenceSweeper.SweepOrder);
+        var orphan = leaves[^1];
+        foreach (var leaf in leaves)
+        {
+            await ListExplicitlyAsync(storage, leaf);
+            if (leaf != orphan)
+            {
+                await WriteLiveLeafRowAsync(storage, leaf);
+            }
+        }
+
+        await WriteLeafEpochRowAsync(storage, orphan, 1);
+        var start = DateTimeOffset.UtcNow + TimeSpan.FromDays(2);
+
+        await Sweeper(storage, grain, start).SweepTreeAsync(TreeId, 1, CancellationToken.None);
+        var afterFirst = (await ListedAsync(storage)).ContainsKey(orphan);
+        await Sweeper(storage, grain, start + WalAppendFenceSweeper.Interval).SweepTreeAsync(TreeId, 1, CancellationToken.None);
+        var afterSecond = (await ListedAsync(storage)).ContainsKey(orphan);
+
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(afterFirst, Is.True, "anti-vacuity: the first sweep's cap ran out on live leaves before the orphan");
+            Assert.That(afterSecond, Is.False, "the second sweep resumed where the first stopped and reached the orphan");
+            Assert.That((await WalAppendFenceRows.ReadLeafEpochAsync(storage, orphan)).RecordExists, Is.False);
+            Assert.That((await ListedAsync(storage)).Count, Is.EqualTo(leaves.Count - 1), "every live leaf is kept");
+        });
+    }
+
+    [Test]
+    public async Task A_failed_entry_delete_still_removes_the_retired_leaf_loaded_entry()
+    {
+        // #5657: once the floor covers the leaf, a fault deleting its entry must not
+        // leave it loaded, or a surviving duplicate keeps appending after the clear.
+        var storage = new FaultArmedGrainStorage(new EnumerableMemoryGrainStorage());
+        var grain = await CreateFencedGrainAsync(storage);
+        await grain.ClaimAppendEpochAsync(FenceLeaf, 2, CancellationToken.None);
+        storage.FailClearsOf = WalAppendFenceRows.EntryGrainType;
+
+        Assert.CatchAsync(async () => await grain.RetireAppendEpochAsync(FenceLeaf, 2, CancellationToken.None),
+            "precondition: the entry delete failed");
+        var duplicate = await grain.AppendStampedAsync(MakeEntry("d"), WalAppendStamp.ForLeaf(FenceLeaf, 2), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grain.EpochFloorForTesting, Is.GreaterThanOrEqualTo(2), "the floor was raised before the fault");
+            Assert.That(duplicate.Outcome, Is.EqualTo(WalAppendFenceOutcome.UnloadedEntry), "the duplicate meets an unloaded entry");
+        });
+    }
+
+    [Test]
+    public async Task A_failed_delisting_neither_fails_the_retirement_nor_keeps_the_loaded_entry()
+    {
+        // #5657: the delist is best effort, since a listing left behind is harmless and
+        // the sweep retires it again.
+        var storage = new FaultArmedGrainStorage(new EnumerableMemoryGrainStorage());
+        var grain = await CreateFencedGrainAsync(storage);
+        await grain.ClaimAppendEpochAsync(FenceLeaf, 2, CancellationToken.None);
+        storage.FailWritesOf = WalAppendFenceRows.DirectoryPageGrainType;
+
+        Assert.DoesNotThrowAsync(async () => await grain.RetireAppendEpochAsync(FenceLeaf, 2, CancellationToken.None));
+        var duplicate = await grain.AppendStampedAsync(MakeEntry("d"), WalAppendStamp.ForLeaf(FenceLeaf, 2), CancellationToken.None);
+
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(duplicate.Outcome, Is.EqualTo(WalAppendFenceOutcome.UnloadedEntry));
+            Assert.That((await ListedAsync(storage)).Keys, Does.Contain(FenceLeaf), "anti-vacuity: the delisting did fail");
+        });
+    }
+
+    [Test]
+    public async Task Concurrent_first_claims_in_one_bucket_all_list_and_all_claim()
+    {
+        // #5605 review of #5653, S2: a fresh estate's first claims fan in on a
+        // partition. Listings are serialised per bucket in the WAL shard, so none
+        // exhausts its ETag retries and fails its claim to unstamped.
+        var storage = new YieldingDirectoryStorage(new EnumerableMemoryGrainStorage());
+        var grain = await CreateFencedGrainAsync(storage);
+        var leaves = new List<Guid>();
+        for (var seed = 0; leaves.Count < 100; seed++)
+        {
+            var candidate = new Guid(seed, 5653, 0, new byte[8]);
+            if (WalAppendEpochDirectory.BucketOf(candidate) == 5)
+            {
+                leaves.Add(candidate);
+            }
+        }
+
+        var claims = await Task.WhenAll(leaves.Select(leaf => grain.ClaimAppendEpochAsync(leaf, 1, CancellationToken.None)));
+        var listed = await ListedAsync(storage);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(claims.Select(c => c.Accepted), Is.All.True);
+            Assert.That(listed.Keys, Is.EquivalentTo(leaves));
+        });
+    }
+
+    /// <summary>Fails clears or writes of one state name on demand.</summary>
+    private sealed class FaultArmedGrainStorage(IGrainStorage inner) : IGrainStorage
+    {
+        public string? FailClearsOf { get; set; }
+
+        public string? FailWritesOf { get; set; }
+
+        public Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
+            inner.ReadStateAsync(stateName, grainId, grainState);
+
+        public Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
+            stateName == FailWritesOf
+                ? Task.FromException(new IOException($"injected write fault on {stateName}"))
+                : inner.WriteStateAsync(stateName, grainId, grainState);
+
+        public Task ClearStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
+            stateName == FailClearsOf
+                ? Task.FromException(new IOException($"injected clear fault on {stateName}"))
+                : inner.ClearStateAsync(stateName, grainId, grainState);
+    }
+
+    /// <summary>Yields before every directory page read, so concurrent listings interleave as on a real provider.</summary>
+    private sealed class YieldingDirectoryStorage(IGrainStorage inner) : IGrainStorage
+    {
+        public async Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
+        {
+            if (stateName == WalAppendFenceRows.DirectoryPageGrainType)
+            {
+                await Task.Yield();
+            }
+
+            await inner.ReadStateAsync(stateName, grainId, grainState);
+        }
+
+        public Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
+            inner.WriteStateAsync(stateName, grainId, grainState);
+
+        public Task ClearStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
+            inner.ClearStateAsync(stateName, grainId, grainState);
+    }
+
+    [Test]
     public async Task A_tree_is_swept_once_per_interval_across_the_cluster()
     {
         var storage = new EnumerableMemoryGrainStorage();

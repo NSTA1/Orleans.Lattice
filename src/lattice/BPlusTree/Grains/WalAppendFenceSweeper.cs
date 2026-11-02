@@ -31,7 +31,20 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// tree swept within the interval. A sweep reads every directory page of every
 /// partition (at least <see cref="WalAppendEpochDirectory.Buckets"/> reads per
 /// partition), then one leaf row per examined leaf, at most
-/// <see cref="MaxLeavesPerSweep"/>, and retires the gone ones.
+/// <see cref="MaxLeavesPerSweep"/>, and retires the gone ones. Examination resumes
+/// where the previous sweep stopped, in a fixed order over the leaves' ids and
+/// wrapping around, so live leaves never hold an orphan behind the cap (#5656).
+/// </para>
+/// <para>
+/// <b>Start.</b> A silo first sweeps after <see cref="FirstSweepDelay"/> plus up to
+/// <see cref="FirstSweepJitter"/>, not a whole <see cref="Interval"/>, so a cluster
+/// whose silos restart more often than that still sweeps; the per-tree claim keeps it
+/// to once per tree per interval across the cluster.
+/// </para>
+/// <para>
+/// <b>Clocks.</b> A listing's time comes from the clock of the silo hosting the WAL
+/// shard, and the sweep compares it with the sweeping silo's. Skew between silos is
+/// absorbed by <see cref="Grace"/>, which is far longer than any tolerable skew.
 /// </para>
 /// </remarks>
 internal sealed class WalAppendFenceSweeper(
@@ -41,14 +54,23 @@ internal sealed class WalAppendFenceSweeper(
     LatticeOptionsResolver? optionsResolver = null,
     TimeProvider? timeProvider = null) : BackgroundService
 {
-    /// <summary>How often each tree is swept, across the cluster; also the delay before a silo's first sweep.</summary>
+    /// <summary>How often each tree is swept, across the cluster.</summary>
     internal static readonly TimeSpan Interval = TimeSpan.FromHours(6);
+
+    /// <summary>The least delay before a silo's first sweep.</summary>
+    internal static readonly TimeSpan FirstSweepDelay = TimeSpan.FromMinutes(5);
+
+    /// <summary>The most random delay added to <see cref="FirstSweepDelay"/>, to spread silos that start together.</summary>
+    internal static readonly TimeSpan FirstSweepJitter = TimeSpan.FromMinutes(10);
 
     /// <summary>How long a leaf must have been listed everywhere it is listed before the sweep examines it.</summary>
     internal static readonly TimeSpan Grace = TimeSpan.FromHours(24);
 
-    /// <summary>The most leaves one sweep of a tree examines; the rest wait for the next sweep.</summary>
+    /// <summary>The most leaves one sweep of a tree examines; the next sweep resumes after the last.</summary>
     internal const int MaxLeavesPerSweep = 1024;
+
+    /// <summary>The order the sweep examines a tree's listed leaves in, and resumes it by.</summary>
+    internal static readonly IComparer<Guid> SweepOrder = Comparer<Guid>.Default;
 
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
     private GrainType? _leafGrainType;
@@ -69,10 +91,12 @@ internal sealed class WalAppendFenceSweeper(
 
         try
         {
+            var delay = FirstSweepDelay + TimeSpan.FromTicks((long)(Random.Shared.NextDouble() * FirstSweepJitter.Ticks));
             while (!stoppingToken.IsCancellationRequested)
             {
-                await Task.Delay(Interval, _time, stoppingToken).ConfigureAwait(false);
+                await Task.Delay(delay, _time, stoppingToken).ConfigureAwait(false);
                 await SweepAllAsync(stoppingToken).ConfigureAwait(false);
+                delay = Interval;
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -156,22 +180,33 @@ internal sealed class WalAppendFenceSweeper(
             }
         }
 
+        // Every leaf listed longer than the grace, in a fixed order; the sweep resumes
+        // after the last leaf the previous sweep examined and wraps around (#5656).
         var cutoff = now - Grace.Ticks;
+        var candidates = new List<Guid>(listings.Count);
+        foreach (var (leaf, (newest, _)) in listings)
+        {
+            if (newest < cutoff)
+            {
+                candidates.Add(leaf);
+            }
+        }
+
+        candidates.Sort(SweepOrder);
+        var start = 0;
+        if (claim.State.ResumeAfter != Guid.Empty)
+        {
+            var at = candidates.BinarySearch(claim.State.ResumeAfter, SweepOrder);
+            start = at >= 0 ? at + 1 : ~at;
+        }
+
+        var toExamine = Math.Min(candidates.Count, MaxLeavesPerSweep);
         var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
         var tenantTag = LatticeTenantLabel.ForTree(treeId);
-        var examined = 0;
-        foreach (var (leaf, (newest, listedAt)) in listings)
+        for (var i = 0; i < toExamine; i++)
         {
-            if (newest >= cutoff)
-            {
-                continue;
-            }
-
-            if (examined++ >= MaxLeavesPerSweep)
-            {
-                break;
-            }
-
+            var leaf = candidates[(start + i) % candidates.Count];
+            var listedAt = listings[leaf].Partitions;
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
@@ -196,6 +231,21 @@ internal sealed class WalAppendFenceSweeper(
                     leaf,
                     treeId);
             }
+        }
+
+        // Record where to resume: after the last leaf examined, or at the beginning
+        // once every candidate has been examined. A conflict means another silo has
+        // claimed a later sweep, which records its own.
+        claim.State.ResumeAfter = toExamine < candidates.Count
+            ? candidates[(start + toExamine - 1) % candidates.Count]
+            : Guid.Empty;
+        try
+        {
+            await WalAppendFenceRows.WriteAsync(storage, WalAppendFenceRows.SweepGrainType, WalAppendFenceRows.SweepKey(treeId), claim)
+                .ConfigureAwait(false);
+        }
+        catch (InconsistentStateException)
+        {
         }
 
         return true;

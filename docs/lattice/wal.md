@@ -1496,7 +1496,9 @@ tree's sweep through a conditional write to its row (`_lattice_wal-append-fence-
 For each leaf listed for more than 24 hours whose row is absent or has no tree id, the
 test the GC uses for an orphaned pin, the sweep runs the leaf's clear sequence above:
 retire at every partition with the epoch row's value, then delete the row
-conditionally. It examines at most 1,024 leaves per tree per sweep. The fence's safety
+conditionally. It examines at most 1,024 leaves per tree per sweep, resuming where the
+previous sweep stopped, so live leaves never hold an orphan back. A silo's first sweep
+comes 5 to 15 minutes after it starts, so frequent restarts cannot starve it. The fence's safety
 does not rest on that test: retiring a leaf that is still live only costs its
 activation a deactivation and a re-claim above the raised floor, and its writes are
 retried at their seams.
@@ -1527,11 +1529,11 @@ that has claimed, one retirement call per WAL partition (a floor and an entry re
 a floor write and an entry delete) and the epoch row's delete. A tree purge pays
 that per leaf. Per orphaned pin the WAL GC retires: one retirement call, which
 reads the leaf's epoch row at the partition and stops there when it has none.
-The directory adds a read and a write of one page each time a partition first writes
-a leaf's entry, and each time it retires one, so a clear also reads one page at each
-partition the leaf never wrote. Per tree every 6 hours, the sweep reads every
-directory page of every partition (at least 64 reads per partition), then one leaf
-row per leaf listed for more than 24 hours, up to 1,024.
+The directory adds a read of the leaf's bucket chain (normally one page) and a page
+write each time a partition first writes a leaf's entry, and each time it retires
+one, so a clear also reads the chain at each partition the leaf never wrote. Per tree
+every 6 hours, the sweep reads every directory page of every partition (at least 64
+reads per partition), then one leaf row per leaf it examines, up to 1,024.
 
 The fence's counters are `orleans.lattice.wal.append_fence.claims`,
 `.rejections`, `.seam_retries`, `.unstamped_reports` and `.sweeps`; see
