@@ -124,11 +124,56 @@ internal sealed partial class ShardRootGrain
     /// re-admission carries. The caller re-runs its phase check between the reload
     /// and this capture.
     /// </summary>
-    private async Task<WalFenceSeamRetry?> NextRoutingRetryAsync(WalFenceSeamRetry? retry)
+    private async Task<WalFenceSeamRetry?> NextRoutingRetryAsync(WalFenceSeamRetry? retry, WalRoutingGenerationStaleException stale)
     {
         retry = await WalFenceSeamRetry.NextAsync(retry, WalFenceSeamRetry.CallerShardRoot, TreeId);
         await ReloadHandOffMarkerAsync();
+        await RaiseRoutingGenerationAboveRefusalAsync(stale);
         return retry;
+    }
+
+    /// <summary>
+    /// #5663: a refusal above this shard root's stored generation means the
+    /// marker is behind a partition's durable row (the marker row lost, reset or
+    /// restored older), not that a close raised it: re-admitting under the stored
+    /// value would be refused again until the operation's deadline. The marker is
+    /// raised above the refusal, as a close raises it; leaves re-present the raised
+    /// generation at each partition. Raising only fences this shard root's own writes
+    /// admitted under the old generation, which retry, so it is always safe.
+    /// </summary>
+    private async Task RaiseRoutingGenerationAboveRefusalAsync(WalRoutingGenerationStaleException stale)
+    {
+        if (stale.Refusal <= 0
+            || stale.Initiator != WalRoutingInitiator.ShardRoot(ShardIndex)
+            || _handOffMarker is not { } marker
+            || marker.RoutingGeneration >= stale.Refusal)
+        {
+            return;
+        }
+
+        try
+        {
+            await UpdateHandOffMarkerAsync(m =>
+            {
+                if (m.RoutingGeneration >= stale.Refusal)
+                {
+                    return false;
+                }
+
+                m.RoutingGeneration = stale.Refusal + 1;
+                return true;
+            });
+            logger.LogWarning(
+                "Shard root {TreeId}/{ShardIndex}: a WAL partition refused routing generation {Generation} at {Refusal}; the marker was behind it and is raised above it (#5663).",
+                TreeId,
+                ShardIndex,
+                stale.Generation,
+                stale.Refusal);
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Shard root {TreeId}/{ShardIndex}: could not raise its routing generation above a refusal (epic #5605).", TreeId, ShardIndex);
+        }
     }
 
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]

@@ -1,5 +1,6 @@
 using NSubstitute;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Runtime;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -83,6 +84,133 @@ public sealed partial class LeafAppendEpochFenceTests
             Assert.That(h.Fence.IsStale, Is.False);
             Assert.That(next?.Epoch, Is.EqualTo(2));
         });
+    }
+
+    /// <summary>
+    /// A storage that captures a write's state and ETag when the write is issued, as a
+    /// real provider serializes them before its I/O, and holds every write of the
+    /// leaf's epoch row behind <see cref="Gate"/> once armed.
+    /// </summary>
+    private sealed class CallTimeEtagStorage(EnumerableMemoryGrainStorage inner) : Orleans.Storage.IGrainStorage
+    {
+        private int _pending;
+
+        public TaskCompletionSource? Gate { get; set; }
+
+        public int PendingWrites => Volatile.Read(ref _pending);
+
+        public Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
+            inner.ReadStateAsync(stateName, grainId, grainState);
+
+        public Task ClearStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
+            inner.ClearStateAsync(stateName, grainId, grainState);
+
+        public async Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
+        {
+            if (Gate is not { } gate || grainState is not IGrainState<Orleans.Lattice.BPlusTree.State.LeafAppendEpochState> row)
+            {
+                await inner.WriteStateAsync(stateName, grainId, grainState);
+                return;
+            }
+
+            var issued = new GrainState<Orleans.Lattice.BPlusTree.State.LeafAppendEpochState>
+            {
+                State = new Orleans.Lattice.BPlusTree.State.LeafAppendEpochState { Epoch = row.State.Epoch },
+                ETag = row.ETag,
+                RecordExists = row.RecordExists,
+            };
+            Interlocked.Increment(ref _pending);
+            try
+            {
+                await gate.Task;
+                await inner.WriteStateAsync(stateName, grainId, issued);
+                row.ETag = issued.ETag;
+                row.RecordExists = issued.RecordExists;
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _pending);
+            }
+        }
+    }
+
+    [Test]
+    public async Task A_floor_refusal_concurrent_with_a_hand_off_close_joins_its_bump_and_does_not_supersede()
+    {
+        // #5662: the close's row write and a floor-refusal bump must not both write the
+        // activation's row, or one conflicts on the activation's own ETag and reads as
+        // a supersession (the #5643 class, from the other side).
+        var storage = new CallTimeEtagStorage(new EnumerableMemoryGrainStorage());
+        var superseded = new List<long>();
+        var fence = new LeafAppendEpochFence(
+            Leaf,
+            new SettableGate(open: true),
+            storage,
+            superseded.Add,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, "tree"),
+            LatticeTenantLabel.ForTree("tree"));
+        var claimed = Substitute.For<IWalShardGrain>();
+        claimed.ClaimAppendEpochAsync(Leaf, Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(WalAppendFenceClaimResult.Accept(11)));
+        var floored = Substitute.For<IWalShardGrain>();
+        floored.ClaimAppendEpochAsync(Leaf, Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(call => Task.FromResult(call.ArgAt<long>(1) <= 5
+                ? WalAppendFenceClaimResult.Refuse(5)
+                : WalAppendFenceClaimResult.Accept(23)));
+        await fence.StampForAsync(claimed, partition: 0, CancellationToken.None);
+
+        storage.Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var close = fence.BumpAndReclaimAsync(p => p == 0 ? claimed : floored, partitionCount: 2, CancellationToken.None);
+        await WaitForAsync(() => storage.PendingWrites >= 1);
+        var refused = fence.StampForAsync(floored, partition: 1, CancellationToken.None).AsTask();
+        await WaitForAsync(() => storage.PendingWrites >= 2, TimeSpan.FromMilliseconds(250));
+        var overlapped = storage.PendingWrites;
+        storage.Gate.SetResult();
+
+        Exception? closeFault = null;
+        long[]? heads = null;
+        try
+        {
+            heads = await close;
+        }
+        catch (Exception ex)
+        {
+            closeFault = ex;
+        }
+
+        WalAppendStamp? stamp = null;
+        Exception? stampFault = null;
+        try
+        {
+            stamp = await refused;
+        }
+        catch (Exception ex)
+        {
+            stampFault = ex;
+        }
+
+        storage.Gate = null;
+        var rowEpoch = (await WalAppendFenceRows.ReadLeafEpochAsync(storage, Leaf)).State.Epoch;
+        Assert.Multiple(() =>
+        {
+            Assert.That(overlapped, Is.EqualTo(1), "the refusal joins the close's bump instead of writing the row beside it");
+            Assert.That(superseded, Is.Empty, "neither write conflicts on the activation's own ETag");
+            Assert.That(fence.IsStale, Is.False);
+            Assert.That(closeFault, Is.Null);
+            Assert.That(stampFault, Is.Null);
+            Assert.That(heads, Is.Not.Null);
+            Assert.That(stamp?.Epoch, Is.EqualTo(6), "the refusal claims again above the floor, once the close's raise has landed");
+            Assert.That(rowEpoch, Is.EqualTo(fence.Epoch), "the durable row is the epoch the activation holds");
+        });
+    }
+
+    private static async Task WaitForAsync(Func<bool> condition, TimeSpan? timeout = null)
+    {
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(10));
+        while (!condition() && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(5);
+        }
     }
 
     [Test]

@@ -231,6 +231,9 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             // its caller's seam and re-admitted under the current epoch (span
             // admission forwards a key a split moved); the activation keeps serving.
             // A genuine supersession still meets its next, current-epoch append.
+            // Its caller retries on this same live activation, so a path that applied
+            // before appending (the batched CRDT apply) applies again: safe only for
+            // idempotent applies (review N1; see ApplyCrdtDeltaManyCoreAsync).
             selfFenced = !_stale && stamp.Epoch > 0 && stamp.Epoch < _epoch;
         }
 
@@ -266,47 +269,48 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     internal async Task<long[]?> BumpAndReclaimAsync(Func<int, IWalShardGrain> shardFor, int partitionCount, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(shardFor);
-        Task? pending;
-        lock (_sync)
+        long raised;
+        int[] claimed;
+        Task closeBump;
+        while (true)
         {
-            pending = _bump ?? (Task?)_rowClaim;
-        }
+            Task? pending;
+            lock (_sync)
+            {
+                pending = _bump ?? (_rowClaim is { IsCompleted: false } rowClaim ? rowClaim : null);
+                if (pending is null)
+                {
+                    if (_stale)
+                    {
+                        throw LeafRetiredException.ForSupersededActivation(_leafId, _epoch);
+                    }
 
-        if (pending is not null)
-        {
+                    if (_epoch == 0 || _row is null || !IsGateOpenLocked())
+                    {
+                        return null;
+                    }
+
+                    // #5662: the close's row write is this activation's bump, installed in
+                    // the step that read the epoch. A floor refusal concurrent with it joins
+                    // it rather than writing the same row beside it, which would conflict on
+                    // the activation's own ETag and read as a supersession (the #5643
+                    // class); its epoch check then sends it to claim under the raised epoch.
+                    raised = _epoch + 1;
+                    claimed = _partitions.Where(p => p.Value.ClaimedEpoch > 0).Select(p => p.Key).ToArray();
+                    closeBump = WriteCloseBumpAsync(_row, raised);
+                    if (!closeBump.IsCompleted)
+                    {
+                        _bump = closeBump;
+                    }
+
+                    break;
+                }
+            }
+
             await pending.ConfigureAwait(false);
         }
 
-        GrainState<LeafAppendEpochState> row;
-        long epoch;
-        int[] claimed;
-        lock (_sync)
-        {
-            if (_stale)
-            {
-                throw LeafRetiredException.ForSupersededActivation(_leafId, _epoch);
-            }
-
-            if (_epoch == 0 || _row is null || !IsGateOpenLocked())
-            {
-                return null;
-            }
-
-            row = _row;
-            epoch = _epoch;
-            claimed = _partitions.Where(p => p.Value.ClaimedEpoch > 0).Select(p => p.Key).ToArray();
-        }
-
-        // The row is written before the in-memory epoch moves, so an append admitted in
-        // between is stamped with the old epoch and rejected, never accepted above the
-        // heads (cost only).
-        var raised = epoch + 1;
-        row.State.Epoch = raised;
-        await WriteRowOrSupersedeAsync(row).ConfigureAwait(false);
-        lock (_sync)
-        {
-            _epoch = Math.Max(_epoch, raised);
-        }
+        await closeBump.ConfigureAwait(false);
 
         var heads = new long[partitionCount];
         Array.Fill(heads, -1L);
@@ -537,6 +541,32 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             }
 
             return bump;
+        }
+    }
+
+    /// <summary>
+    /// The hand-off close's row write (<see cref="BumpAndReclaimAsync"/>). The row is
+    /// written before the in-memory epoch moves, so an append admitted in between is
+    /// stamped with the old epoch and rejected, never accepted above the heads (cost
+    /// only).
+    /// </summary>
+    private async Task WriteCloseBumpAsync(GrainState<LeafAppendEpochState> row, long raised)
+    {
+        try
+        {
+            row.State.Epoch = raised;
+            await WriteRowOrSupersedeAsync(row).ConfigureAwait(false);
+            lock (_sync)
+            {
+                _epoch = Math.Max(_epoch, raised);
+            }
+        }
+        finally
+        {
+            lock (_sync)
+            {
+                _bump = null;
+            }
         }
     }
 

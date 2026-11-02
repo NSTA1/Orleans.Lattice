@@ -159,6 +159,37 @@ public sealed class ShardRoutingGenerationIntegrationTests
     }
 
     [Test]
+    public async Task A_partition_holding_a_generation_above_the_marker_still_accepts_the_shard_roots_writes()
+    {
+        // #5663: the marker row is behind the partitions' durable generation rows (lost,
+        // reset or restored older). Re-admitting under the stored value would be refused
+        // until the deadline; the refusal's threshold raises the marker above it instead.
+        const string Name = "routing-gen-behind";
+        var tree = await NewTreeAsync(Name);
+        await tree.SetAsync("seed", Encoding.UTF8.GetBytes("s"));
+        var partitions = await PartitionsAsync(Name);
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            var claim = await _cluster.Client.GetGrain<IWalShardGrain>($"{Name}/{partition}")
+                .ClaimRoutingGenerationAsync(WalRoutingInitiator.ShardRoot(0), 5, CancellationToken.None);
+            Assert.That(claim.Accepted, Is.True, "precondition: every partition holds generation 5, above the marker's 1");
+        }
+
+        await tree.SetAsync("k", Encoding.UTF8.GetBytes("v")).WaitAsync(TimeSpan.FromSeconds(20));
+        await tree.SetManyAsync([new("m", Encoding.UTF8.GetBytes("1"))]).WaitAsync(TimeSpan.FromSeconds(20));
+
+        var marker = (await HandOffMarkerRows.ReadShardAsync(Storage, Name, 0)).State;
+        var k = await tree.GetAsync("k");
+        var m = await tree.GetAsync("m");
+        Assert.Multiple(() =>
+        {
+            Assert.That(marker.RoutingGeneration, Is.GreaterThan(5), "the marker was raised above the partitions' refusal");
+            Assert.That(Encoding.UTF8.GetString(k!), Is.EqualTo("v"));
+            Assert.That(Encoding.UTF8.GetString(m!), Is.EqualTo("1"));
+        });
+    }
+
+    [Test]
     public async Task A_slot_migration_opens_its_marker_on_the_target_and_closes_it_by_the_donors_re_claim()
     {
         const string Name = "routing-gen-migrate";

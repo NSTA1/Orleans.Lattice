@@ -675,6 +675,15 @@ internal sealed partial class BPlusLeafGrain
 
         // Sized to the batch: one record per entry, appended once below. The
         // per-key core adds to this instead of dispatching its own append.
+        //
+        // Epic #5605 review N1: each delta is applied in memory before the batch's
+        // one append. A refused append (a self-fence, or a stale routing generation)
+        // keeps this activation serving, and its caller retries the same deltas on
+        // the same leaf, so they are applied a second time before being appended.
+        // That is safe only because a CRDT join is idempotent (docs/crdt): re-joining
+        // a delta already in the state changes nothing, and the retry's append
+        // carries the same joined value. A non-idempotent apply-before-append path
+        // must not rely on these retries.
         var walEntries = new List<WalRecord>(deltas.Count);
         foreach (var (key, deltaBytes) in deltas)
         {

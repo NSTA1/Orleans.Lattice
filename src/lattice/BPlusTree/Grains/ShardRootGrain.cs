@@ -939,12 +939,12 @@ internal sealed partial class ShardRootGrain(
                 await MirrorAppliedWritesAsync(MirroredKey(key), (key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return;
             }
-            catch (WalRoutingGenerationStaleException)
+            catch (WalRoutingGenerationStaleException routingStale)
             {
                 // Epic #5605, member 2: a hand-off close re-claimed the routing generation
                 // this write was admitted under. Re-run the phase check, which re-routes a
                 // moved slot, and re-admit under the current generation (section 5).
-                fenceRetry = await NextRoutingRetryAsync(fenceRetry);
+                fenceRetry = await NextRoutingRetryAsync(fenceRetry, routingStale);
                 ThrowIfRejectedForKey(key);
                 routing = AdmissionRoutingStamp();
                 attempt--;
@@ -1001,12 +1001,12 @@ internal sealed partial class ShardRootGrain(
                 await MirrorAppliedWritesAsync(MirroredKey(key), (key, value, expiresAtTicks), static (t, s) => t.SetAsync(s.key, s.value, s.expiresAtTicks));
                 return;
             }
-            catch (WalRoutingGenerationStaleException)
+            catch (WalRoutingGenerationStaleException routingStale)
             {
                 // Epic #5605, member 2: a hand-off close re-claimed the routing generation
                 // this write was admitted under. Re-run the phase check, which re-routes a
                 // moved slot, and re-admit under the current generation (section 5).
-                fenceRetry = await NextRoutingRetryAsync(fenceRetry);
+                fenceRetry = await NextRoutingRetryAsync(fenceRetry, routingStale);
                 ThrowIfRejectedForKey(key);
                 routing = AdmissionRoutingStamp();
                 attempt--;
@@ -1069,12 +1069,12 @@ internal sealed partial class ShardRootGrain(
                 await MirrorAppliedWritesAsync(MirroredKey(key), (key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return null;
             }
-            catch (WalRoutingGenerationStaleException)
+            catch (WalRoutingGenerationStaleException routingStale)
             {
                 // Epic #5605, member 2: a hand-off close re-claimed the routing generation
                 // this write was admitted under. Re-run the phase check, which re-routes a
                 // moved slot, and re-admit under the current generation (section 5).
-                fenceRetry = await NextRoutingRetryAsync(fenceRetry);
+                fenceRetry = await NextRoutingRetryAsync(fenceRetry, routingStale);
                 ThrowIfRejectedForKey(key);
                 routing = AdmissionRoutingStamp();
                 attempt--;
@@ -1143,12 +1143,12 @@ internal sealed partial class ShardRootGrain(
                 await MirrorAppliedWritesAsync(MirroredKey(key), (key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return true;
             }
-            catch (WalRoutingGenerationStaleException)
+            catch (WalRoutingGenerationStaleException routingStale)
             {
                 // Epic #5605, member 2: a hand-off close re-claimed the routing generation
                 // this write was admitted under. Re-run the phase check, which re-routes a
                 // moved slot, and re-admit under the current generation (section 5).
-                fenceRetry = await NextRoutingRetryAsync(fenceRetry);
+                fenceRetry = await NextRoutingRetryAsync(fenceRetry, routingStale);
                 ThrowIfRejectedForKey(key);
                 routing = AdmissionRoutingStamp();
                 attempt--;
@@ -1207,12 +1207,12 @@ internal sealed partial class ShardRootGrain(
                 await MirrorAppliedRowsAsync([key]);
                 return result.Version;
             }
-            catch (WalRoutingGenerationStaleException)
+            catch (WalRoutingGenerationStaleException routingStale)
             {
                 // Epic #5605, member 2: a hand-off close re-claimed the routing generation
                 // this write was admitted under. Re-run the phase check, which re-routes a
                 // moved slot, and re-admit under the current generation (section 5).
-                fenceRetry = await NextRoutingRetryAsync(fenceRetry);
+                fenceRetry = await NextRoutingRetryAsync(fenceRetry, routingStale);
                 ThrowIfRejectedForKey(key);
                 routing = AdmissionRoutingStamp();
                 attempt--;
@@ -1621,12 +1621,12 @@ internal sealed partial class ShardRootGrain(
             {
                 return await DispatchLeafCrdtBatchOnceAsync(leaf, leafId, slice, mode, routing);
             }
-            catch (WalRoutingGenerationStaleException)
+            catch (WalRoutingGenerationStaleException routingStale)
             {
                 // Epic #5605, member 2: a hand-off close re-claimed the routing generation
                 // this write was admitted under. Re-run the phase check, which re-routes a
                 // moved slot, and re-admit under the current generation (section 5).
-                fenceRetry = await NextRoutingRetryAsync(fenceRetry);
+                fenceRetry = await NextRoutingRetryAsync(fenceRetry, routingStale);
                 ThrowIfRejectedForAnyKey(slice);
                 routing = AdmissionRoutingStamp();
             }
@@ -1737,12 +1737,12 @@ internal sealed partial class ShardRootGrain(
                     LatticeTenantLabel.ForTree(TreeId));
                 return result;
             }
-            catch (WalRoutingGenerationStaleException)
+            catch (WalRoutingGenerationStaleException routingStale)
             {
                 // Epic #5605, member 2: a hand-off close re-claimed the routing generation
                 // this write was admitted under. Re-run the phase check, which re-routes a
                 // moved slot, and re-admit under the current generation (section 5).
-                fenceRetry = await NextRoutingRetryAsync(fenceRetry);
+                fenceRetry = await NextRoutingRetryAsync(fenceRetry, routingStale);
                 ThrowIfRejectedForAnyKey(slice);
                 routing = AdmissionRoutingStamp();
                 attempt--;
@@ -2003,12 +2003,12 @@ internal sealed partial class ShardRootGrain(
                     LatticeTenantLabel.ForTree(TreeId));
                 return result;
             }
-            catch (WalRoutingGenerationStaleException)
+            catch (WalRoutingGenerationStaleException routingStale)
             {
                 // Epic #5605, member 2: a hand-off close re-claimed the routing generation
                 // this write was admitted under. Re-run the phase check, which re-routes a
                 // moved slot, and re-admit under the current generation (section 5).
-                fenceRetry = await NextRoutingRetryAsync(fenceRetry);
+                fenceRetry = await NextRoutingRetryAsync(fenceRetry, routingStale);
                 ThrowIfRejectedForAnyKey(slice);
                 routing = AdmissionRoutingStamp();
                 attempt--;
@@ -2147,12 +2147,12 @@ internal sealed partial class ShardRootGrain(
                 await MirrorAppliedWritesAsync(MirroredKey(key), key, static (t, s) => t.DeleteAsync(s));
                 return result;
             }
-            catch (WalRoutingGenerationStaleException)
+            catch (WalRoutingGenerationStaleException routingStale)
             {
                 // Epic #5605, member 2: a hand-off close re-claimed the routing generation
                 // this write was admitted under. Re-run the phase check, which re-routes a
                 // moved slot, and re-admit under the current generation (section 5).
-                fenceRetry = await NextRoutingRetryAsync(fenceRetry);
+                fenceRetry = await NextRoutingRetryAsync(fenceRetry, routingStale);
                 ThrowIfRejectedForKey(key);
                 routing = AdmissionRoutingStamp();
                 attempt--;
@@ -3892,9 +3892,9 @@ internal sealed partial class ShardRootGrain(
             {
                 return await LeafMergeManyAsync(leaf, entries, isCrossShardMigration, routing);
             }
-            catch (WalRoutingGenerationStaleException)
+            catch (WalRoutingGenerationStaleException routingStale)
             {
-                fenceRetry = await NextRoutingRetryAsync(fenceRetry);
+                fenceRetry = await NextRoutingRetryAsync(fenceRetry, routingStale);
                 if (!isCrossShardMigration)
                 {
                     ThrowIfRejectedForAnyMergeKey(entries);

@@ -1590,7 +1590,11 @@ an older shard root admitted it - so it is appended **unstamped** and reported,
 never under the leaf's epoch alone. A write rejected because a close re-claimed its
 generation is retried from the shard root: the phase check runs again, which
 re-routes a key whose slot moved to another shard, and the write is re-admitted under
-the current generation. Whoever calls the WAL append stamps with its own epoch, so a
+the current generation. If the partition refused the write at a generation above the
+one the shard root holds - its marker row was lost or restored from an older copy -
+the shard root raises its generation above that refusal before re-admitting, so a
+marker behind the WAL's rows never refuses every write until the deadline. Whoever
+calls the WAL append stamps with its own epoch, so a
 split's transfers and a relocation, which the receiving leaf appends and applies
 itself, are that leaf's own appends.
 
@@ -1599,6 +1603,8 @@ own appends stamped before it. Those are **self-fenced**: refused for the caller
 re-admit under the current epoch, where the narrowed span forwards a moved key to
 the sibling, without the donor deactivating. The refusal has the same wire shape as
 a superseded activation's, which every caller and an older shard root already retry.
+The close's epoch raise and a raise after a floor refusal are one write: whichever
+starts second joins the first, so the two never conflict on the activation's own row.
 The same rule stops a leaf from deactivating itself after it raises its epoch above
 a retired floor ([#5643](https://github.com/NSTA1/Orleans.Lattice/issues/5643)).
 
@@ -1640,6 +1646,13 @@ partition at the close. Per range delete: one fence-grain call to open and one t
 close, one marker write per shard to open and one to close, one generation re-claim
 per partition, and the reminder only while an intent is open. Every overlapping
 leaf of the tree is held for the delete's duration.
+
+The per-tree rows - each shard root's `_lattice_shard-handoff` marker, each
+partition's `_lattice_wal-routing-generation` entries for the shard roots and the
+range-delete fence, and the range-delete fence grain's own state - are not deleted
+when the tree is deleted or purged. They are bounded by the tree's shards times its
+partitions, and their sweep is tracked with the fence's other rows in
+[#5634](https://github.com/NSTA1/Orleans.Lattice/issues/5634).
 
 The hand-off counters are `orleans.lattice.wal.append_fence.handoff_markers`,
 `.unstamped_appends` and `.self_fenced`; see [Metrics](metrics.md).

@@ -211,7 +211,20 @@ internal static class WalFencedAppendDispatch
     {
         if (outcome == WalAppendFenceOutcome.StaleGeneration)
         {
-            throw new WalRoutingGenerationStaleException(stamp.Initiator, stamp.Generation);
+            // #5663: read the threshold the write was refused at, on the rejection path
+            // only; a refused claim writes nothing. The initiator decides whether its
+            // own generation is behind it.
+            long refusal = 0;
+            try
+            {
+                var probe = await grain.ClaimRoutingGenerationAsync(stamp.Initiator, stamp.Generation, cancellationToken).ConfigureAwait(false);
+                refusal = probe.Accepted ? 0 : probe.Refusal;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+            }
+
+            throw new WalRoutingGenerationStaleException(stamp.Initiator, stamp.Generation, refusal);
         }
 
         if (outcome != WalAppendFenceOutcome.UnloadedGeneration)
@@ -227,7 +240,7 @@ internal static class WalFencedAppendDispatch
         var represented = await grain.ClaimRoutingGenerationAsync(stamp.Initiator, stamp.Generation, cancellationToken).ConfigureAwait(false);
         if (!represented.Accepted)
         {
-            throw new WalRoutingGenerationStaleException(stamp.Initiator, stamp.Generation);
+            throw new WalRoutingGenerationStaleException(stamp.Initiator, stamp.Generation, represented.Refusal);
         }
 
         return true;
