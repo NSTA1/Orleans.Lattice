@@ -790,6 +790,23 @@ bulk leaf at its birth, exactly as a split relocates its moved rows, narrowing t
 leaf. It never refuses the chunk: a chunk that succeeds today keeps succeeding.
 Skipping the relocation fails (`ReadPositionHonestBulkAppendDropsExistingRows`).
 
+**Narrow and link in one persist (#5654).** The graft narrows the old rightmost leaf's
+high bound and links it to the first appended leaf in **one** persist
+(`NarrowHighKeyAsync(highKeyExclusive, nextSibling)`). Narrowing first and linking later
+leaves a window in which the old leaf declares a narrower range but has no
+`NextSibling`, because it was the shard's rightmost leaf. A point or batch write at or
+above the new bound that still routes to the old leaf, the #5610 shape, then finds no
+forward target in span admission (`SpanFailOpenReason.NoSibling`) and is stored on the
+old leaf outside its declared range. Once the appended leaves are routable, the key
+routes to a leaf that does not hold it: the write is acknowledged and its WAL record
+reaches replicas and views, but the origin misses it until the appended leaf replays.
+With the bound and the link set together, every key at or above the bound forwards to
+the appended leaf from the moment the bound narrows. `SetNextSiblingAsync` stays, as an
+idempotent re-assertion for a resumed graft. The model's `Create` relocates the rows and
+re-points the owner in one step, so it has no such window; the bulk member's detector,
+a write interleaved between narrow and link that must be readable on the origin with the
+span fail-open counter at 0, pins it.
+
 **Which value wins (S5): last-writer-wins by HLC stamp; the later-stamped write wins.**
 What 10.2.0 does with a key both a bulk chunk and another write hold:
 - **Bulk entries carry real versions.** `BulkAppendAsync` stamps its entries with
@@ -826,11 +843,33 @@ reviewer's runs with every other placement are clean too.
 over a later-stamped write made before the switch (10.2.0's stranded origin read),
 fails in seven states.
 
-**Re-delivery (#5474, member 3).** A chunk below the right edge may be skipped as a
-re-delivery only when **every** key it carries at or below the right edge is already held:
-a genuine re-delivery of a chunk that already landed. Every other below-edge chunk is
-relocated and merged last-writer-wins as above, never mixed per key, so a partial
-re-delivery cannot skip the keys that did not land.
+**Re-delivery (#5474, member 3).** A run of a chunk below the right edge may be skipped as
+a re-delivery only when **every** key it carries at or below the right edge is already
+held **with an identical value and identical metadata** (value bytes, TTL, tombstone):
+nothing the run would write differs from what every reader already resolves. Every other
+below-edge run is relocated and merged last-writer-wins as above, the later stamp
+winning; a run is never skipped in part.
+
+Key presence alone cannot tell a re-delivery from a fresh chunk that overwrites existing
+keys: a refresh that re-imports an updated dataset into a populated tree, an import
+resumed into a tree that has since taken writes, or a writer that touched every
+below-edge key of the next chunk. Skipping such a run by presence would write no WAL
+record, return success, and leave every reader, origin, replicas and views, on the older
+value, with a held tombstone keeping a re-inserted key deleted. In 10.2.0 the same chunk
+was filled or grafted with fresh stamps, so replicas and views resolved it to the later
+bulk value. That would be a replica-visible behaviour change (revision 8's rule, found in
+the review of member 3's #5646). Under the value-and-metadata rule:
+- a genuine re-delivery with nothing changed since is all-equal, and is skipped;
+- a refresh with new values is merged, and the later stamp wins, as in 10.2.0;
+- a re-delivery after a later overwrite re-stamps the bulk value over it, consistently on
+  every reader, which is what 10.2.0 did on replicas.
+
+A skipped run's visible values are the same everywhere, so skipping cannot make the
+origin and its replicas disagree. No state and no wire format changes. The model has one
+bulk entry per key and no re-delivery step, so it does not encode the skip rule; the bulk
+member's detector does: a point writer holding every below-edge key of the next chunk
+(the reviewer's widened `BulkAppend_after_point_writes_above_the_maximum_keeps_every_key_readable_last_writer_wins`)
+must leave the later-stamped bulk value readable on every reader.
 
 **Rejected: a stable "bulk value wins".** Dropping the other row on the owner is
 unsound: replicas and views still apply it at its real version, so origin and replicas
@@ -1070,7 +1109,7 @@ production).
 | 1 | **A stale duplicate activation's write is retried, not accepted.** With the gate open, the WAL shard rejects a stale epoch's append; the stale activation deactivates, and the seam retry (section 5) reaches the live one. Every caller in the section 5 table sees one write that succeeds, with added latency, or today's deadline outcome. Atomic writes, cross-tree transactions, `DeleteAsync`, single-key CRDT deltas and replication apply are covered by the seam retry, so none of them fails, rolls back, or counts toward a dead-letter budget where 10.2.0 succeeds. Orleans already promises a single activation, so no caller relies on duplicates. | Compatible bug fix |
 | 2 | **A write admitted before a hand-off close, and not yet allocated, is retried.** The close's fence rejects it, and its seam re-admits it under the current stamp; span admission or the shard map routes it to the new owner. The callers and their outcomes are those of change 1. | Compatible bug fix |
 | 3 | *Withdrawn.* Revision 2 surfaced an exhausted retry as `LatticeWalQuiescingException` with a new `Reason`. The seam retry runs to the operation's existing deadline instead, so there is no exhaustion to surface, no new exception cause, and no change to `LatticeWalQuiescingException`. | - |
-| 4 | **Bulk append over existing rows (#5610, #5614).** The graft relocates the rows the bulk range already holds into the new bulk leaf, instead of stranding them. No new exception: a chunk that succeeds today still succeeds. A key both the bulk chunk and another write hold resolves last-writer-wins by HLC stamp, the later-stamped write winning, as 10.2.0 already resolves it on every replica and view, for every free-space key, and on the origin after a replay. Only the origin's pre-replay reads change: keys only the pre-existing rows hold become readable, a later-stamped stranded write is no longer hidden, and counts and scans become exact (#5614). A chunk below the right edge is skipped as a re-delivery only when every key it carries there is already held. | Compatible bug fix (fixes an origin-versus-replica divergence) |
+| 4 | **Bulk append over existing rows (#5610, #5614).** The graft relocates the rows the bulk range already holds into the new bulk leaf, instead of stranding them. No new exception: a chunk that succeeds today still succeeds. A key both the bulk chunk and another write hold resolves last-writer-wins by HLC stamp, the later-stamped write winning, as 10.2.0 already resolves it on every replica and view, for every free-space key, and on the origin after a replay. Only the origin's pre-replay reads change: keys only the pre-existing rows hold become readable, a later-stamped stranded write is no longer hidden, and counts and scans become exact (#5614). A run below the right edge is skipped as a re-delivery only when every key it carries there is already held with an identical value and metadata; any other run is relocated and merged last-writer-wins, so a refresh's later-stamped values reach every reader as in 10.2.0. The graft narrows and links the old leaf in one persist (#5654). | Compatible bug fix (fixes an origin-versus-replica divergence) |
 | 5 | **The live advance itself (#5572).** A leaf's checkpoint advances without a replay from -1. The WAL GC trims sooner, replay demand falls, and #5570's "carries no usable offset" warnings stop for live leaves. Existing metrics report different values; none changes name, unit or tags. | Compatible bug fix |
 | 6 | **Range deletes cost more.** Each `DeleteRangeAsync` call opens an intent at the tree's fence grain, opens and closes a range-scoped marker on every shard of the tree, re-claims the tree's range-delete generation once per WAL partition, and disarms every overlapping leaf of the tree for the call's duration. The shard root adds no per-page call: it trusts the generation it is given and asks the fence grain only after a rejection. Stepped range deletes pay this per step (section 2). A range-delete walk that stays unstamped (replication apply, a shadow forward, a gate-spanning fan-out, a 10.2.0 caller, or a page after the intent's deadline) costs every armed leaf on the partitions it reaches a tail replay past it. The record, its result and its feed and history output are unchanged. | Compatible (cost only) |
 | 7 | **New metrics.** New instruments only, on the existing meter: claims, refusals and rejections by reason, seam retries by caller class, self-fences (`orleans.lattice.wal.append_fence.self_fenced`), live advances by arming outcome, open markers, and unstamped reports by source (replication apply, shadow forward, gate-spanning fan-out, 10.2.0 caller, census-unstamped, and a range-delete page past its intent's deadline). No existing instrument gains a tag, a tag value, or a new unit. | Compatible (additive) |
@@ -1418,6 +1457,13 @@ Each production member carries detectors proven red. They land in this order:
    from phase 2 reaches `main` before this member lands.
 
 ## Review resolution
+
+### After acceptance: member 3's review (#5646)
+
+| Finding | Resolution |
+|---------|------------|
+| B2 the re-delivery rule drops a refresh | Section 3, "Re-delivery": a run is skipped only when every key is held with an identical value and metadata; any other run is relocated and merged last-writer-wins. With it, change 4's "only the origin's pre-replay reads change" holds: a refresh reaches replicas and views with its later stamp, as in 10.2.0. No state or wire change. The model has no re-delivery step, so the rule is pinned by the bulk member's widened detector, not a mutation. |
+| #5654 narrow then link fails open | Section 3, "Narrow and link in one persist": the old leaf's bound and its `NextSibling` are persisted together; `SetNextSiblingAsync` stays as an idempotent re-assertion. |
 
 ### After acceptance: member 1's review (S-a)
 
