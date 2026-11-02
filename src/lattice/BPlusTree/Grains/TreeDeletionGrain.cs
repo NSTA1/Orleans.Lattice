@@ -244,7 +244,6 @@ internal sealed partial class TreeDeletionGrain(
         if (state.State.RetainsRegistryEntry)
             throw Refuse("Cannot recover a tree that has not been deleted; its retired physical copy is separate.");
         await RecoverPhysicalAsync();
-        await RetirePurgedFenceRowsAsync(); // RED-PROOF M6: a recover retires the rows
     }
 
     /// <summary>
@@ -913,7 +912,9 @@ internal sealed partial class TreeDeletionGrain(
             logger.LogWarning(
                 ex,
                 "Tree {TreeId}: retiring the purged tree's fence rows failed; its registry removal stays owed and the purge re-drives both (#5668).",
-                TreeId); // RED-PROOF M5: best-effort, swallowed
+                TreeId);
+            await ArmKeepaliveForOwedUnregisterAsync();
+            throw;
         }
     }
 
