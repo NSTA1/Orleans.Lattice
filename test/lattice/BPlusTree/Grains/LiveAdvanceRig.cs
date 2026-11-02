@@ -28,8 +28,9 @@ internal sealed class LiveAdvanceRig
         Writer = new FencedWriter(this, firstOffset);
         Shard.ClaimAppendEpochAsync(LeafId, Arg.Any<long>(), Arg.Any<CancellationToken>())
             .Returns(_ => Task.FromResult(WalAppendFenceClaimResult.Accept(ClaimHead)));
-        ShardRoot.GetLiveAdvanceViewAsync(Arg.Any<GrainId>(), Arg.Any<string?>())
-            .Returns(_ => Task.FromResult(new LeafLiveAdvanceView(ShardMarker, Reachable, OrphanRepairInProgress)));
+        ShardRoot.GetLiveAdvanceViewAsync(Arg.Any<GrainId>(), Arg.Any<string?>(), Arg.Any<string?>())
+            .Returns(call => Task.FromResult(LeafLiveAdvanceView.For(
+                ShardMarker, call.ArgAt<string?>(1), call.ArgAt<string?>(2), Reachable, OrphanRepairInProgress)));
         FencingCheck = new GrainStorageFencingCheck(
             new ServiceCollection().BuildServiceProvider(),
             Options.Create(new LatticeGrainStorageFencingOptions()),
@@ -151,31 +152,62 @@ internal sealed class LiveAdvanceRig
 
         public async Task<long> AppendAsync(WalRecord entry, ILeafAppendFence fence, WalRoutingStamp routing, CancellationToken cancellationToken)
         {
-            if (ThrowNext is { } fault)
+            try
             {
-                ThrowNext = null;
-                throw fault;
-            }
+                if (ThrowNext is { } fault)
+                {
+                    ThrowNext = null;
+                    throw fault;
+                }
 
-            var offset = await DispatchAsync(entry, fence, routing, cancellationToken);
-            if (HoldNext is { } hold)
+                var offset = await DispatchAsync(entry, fence, routing, cancellationToken);
+                if (HoldNext is { } hold)
+                {
+                    HoldNext = null;
+                    await hold.Task;
+                }
+
+                return offset;
+            }
+            catch (Exception ex) when (ReportUnallocated(fence, ex, 1))
             {
-                HoldNext = null;
-                await hold.Task;
+                throw;
             }
-
-            return offset;
         }
 
         public async Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<WalRecord> entries, ILeafAppendFence fence, WalRoutingStamp routing, CancellationToken cancellationToken)
         {
-            var offsets = new long[entries.Count];
-            for (var i = 0; i < offsets.Length; i++)
+            try
             {
-                offsets[i] = await DispatchAsync(entries[i], fence, routing, cancellationToken);
+                if (ThrowNext is { } fault)
+                {
+                    ThrowNext = null;
+                    throw fault;
+                }
+
+                var offsets = new long[entries.Count];
+                for (var i = 0; i < offsets.Length; i++)
+                {
+                    offsets[i] = await DispatchAsync(entries[i], fence, routing, cancellationToken);
+                }
+
+                return offsets;
+            }
+            catch (Exception ex) when (ReportUnallocated(fence, ex, entries.Count))
+            {
+                throw;
+            }
+        }
+
+        // As WalCommitLogWriter does for a call that allocated nothing (#5708).
+        private static bool ReportUnallocated(ILeafAppendFence fence, Exception exception, int entries)
+        {
+            if (WalFencedAppendDispatch.IsUnallocatedRefusal(exception, entries))
+            {
+                fence.OnRefusedUnallocated();
             }
 
-            return offsets;
+            return false;
         }
 
         private async Task<long> DispatchAsync(WalRecord entry, ILeafAppendFence fence, WalRoutingStamp routing, CancellationToken cancellationToken)

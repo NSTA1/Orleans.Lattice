@@ -27,7 +27,10 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// partition. A site that forgets to release, or an apply that throws, leaves the count
 /// above zero, which only turns the advance off for the activation; a release with no
 /// matching issue latches it off. So a missed site costs the advance, never
-/// correctness. The write path gains an integer increment, a partition hash and an
+/// correctness. The one failure that is released is a definite refusal that allocated
+/// nothing at any partition - routine since the hand-off fences and the clock floor -
+/// which the writer reports through the fence (<see cref="DrainRefusedUnallocatedAppends"/>,
+/// #5708). The write path gains an integer increment, a partition hash and an
 /// array write per append: no allocation and no grain call.
 /// </para>
 /// <para>
@@ -69,6 +72,16 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>Per partition, the highest own offset this activation applied; <c>-1</c> when none.</summary>
     private long[]? _liveOwnHigh;
+
+    /// <summary>The reused copy of <see cref="_liveOwnHigh"/> an advance decides on.</summary>
+    private long[]? _liveOwnHighSnapshot;
+
+    /// <summary>Whether an advance is deciding on <see cref="_liveOwnHighSnapshot"/>.</summary>
+    private bool _liveAdvanceInFlight;
+
+    private IShardRootGrain? _liveAdvanceShardRoot;
+    private string? _liveAdvanceShardRootTree;
+    private int _liveAdvanceShardRootIndex;
 
     /// <summary>
     /// Counts an append this leaf is about to issue. Called by
@@ -210,7 +223,8 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="_starvationDriveInFlight"/> and has not started its replay.
     /// </param>
     private bool IsLiveAdvanceQuiescent(bool withinDrive) =>
-        _liveOwnHigh is not null
+        DrainRefusedUnallocatedAppends()
+        && _liveOwnHigh is not null
         && state.State.TreeId is { Length: > 0 }
         && LeafLiveAdvanceCore.IsQuiescent(
             poisoned: _liveAdvancePoisoned,
@@ -249,7 +263,10 @@ internal sealed partial class BPlusLeafGrain
     /// </param>
     internal async Task<bool> TryAdvanceLiveCheckpointAsync(bool withinDrive = false)
     {
-        if (!IsLiveAdvanceQuiescent(withinDrive)
+        // One advance at a time: the tick and the starvation drive run on interleaving
+        // turns, and an advance spans awaits while it decides on the reused snapshot.
+        if (_liveAdvanceInFlight
+            || !IsLiveAdvanceQuiescent(withinDrive)
             || _appendFence is not { } fence
             || !IsLiveAdvanceOverlapExcluded()
             || SnapshotLiveAdvanceCandidates() is not { } ownHigh
@@ -258,45 +275,56 @@ internal sealed partial class BPlusLeafGrain
             return false;
         }
 
-        // Read after the snapshot above, so every own append the advance can pass
-        // predates the read (design note section 2, "Shard-level marker").
-        if (await ReadLiveAdvanceHandOffAsync() is not { } handOff)
+        _liveAdvanceInFlight = true;
+        try
         {
-            return false;
-        }
-
-        var advanced = false;
-        for (var p = 0; p < ownHigh.Length; p++)
-        {
-            // Re-checked per partition: the stamp below may await a persist, and a
-            // write or a prepare can interleave with it.
-            if (!IsLiveAdvanceQuiescent(withinDrive))
+            // Read after the snapshot above, so every own append the advance can pass
+            // predates the read (design note section 2, "Shard-level marker").
+            if (await ReadLiveAdvanceHandOffAsync() is not { } handOff)
             {
-                return advanced;
+                return false;
             }
 
-            var claimRaised = fence.TryGetArmingView(p, out var claimHead, out var unstampedSeen);
-            var target = LeafLiveAdvanceCore.TargetFor(
-                claimRaised: claimRaised,
-                claimHead: claimHead,
-                handOffClear: handOff.Clear,
-                closeHead: p < handOff.CloseHeads.Length ? handOff.CloseHeads[p] : -1L,
-                unstampedSeen: unstampedSeen,
-                ownHigh: ownHigh[p],
-                current: GetCurrentCheckpointForPartition(p),
-                staleLatched: IsPartitionStaleLatched(p));
-            if (target < 0)
+            var low = state.State.LowKeyInclusive;
+            var high = state.State.HighKeyExclusive;
+            var advanced = false;
+            for (var p = 0; p < ownHigh.Length; p++)
             {
-                continue;
+                // Re-checked per partition: the stamp below may await a persist, and a
+                // write or a prepare can interleave with it.
+                if (!IsLiveAdvanceQuiescent(withinDrive))
+                {
+                    return advanced;
+                }
+
+                var claimRaised = fence.TryGetArmingView(p, out var claimHead, out var unstampedSeen);
+                var target = LeafLiveAdvanceCore.TargetFor(
+                    claimRaised: claimRaised,
+                    claimHead: claimHead,
+                    handOffClear: handOff.Clear,
+                    closeHead: Math.Max(
+                        HandOffMarkerCore.RequiredHead(handOff.LeafMarker, low, high, p),
+                        HandOffMarkerCore.HeadAt(handOff.ShardCloseHeads, p)),
+                    unstampedSeen: unstampedSeen,
+                    ownHigh: ownHigh[p],
+                    current: GetCurrentCheckpointForPartition(p),
+                    staleLatched: IsPartitionStaleLatched(p));
+                if (target < 0)
+                {
+                    continue;
+                }
+
+                await StampCheckpointHintAsync(p, target);
+                advanced = true;
             }
 
-            await StampCheckpointHintAsync(p, target);
-            advanced = true;
+            return advanced;
         }
-
-        return advanced;
+        finally
+        {
+            _liveAdvanceInFlight = false;
+        }
     }
-
     /// <summary>
     /// Whether any partition holds a claim the advance could arm on. When none does - the
     /// gate is closed, as it is throughout a rolling upgrade from a build without the
@@ -319,6 +347,8 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>
     /// A copy of the highest own offset per partition, or <see langword="null"/> when no
     /// partition has an own append above its checkpoint, so an idle tick reads nothing.
+    /// The copy reuses one array per activation: the tick runs on the grain turn, and only
+    /// one advance reads it at a time.
     /// </summary>
     private long[]? SnapshotLiveAdvanceCandidates()
     {
@@ -327,7 +357,9 @@ internal sealed partial class BPlusLeafGrain
         {
             if (own[p] > GetCurrentCheckpointForPartition(p))
             {
-                return (long[])own.Clone();
+                var copy = _liveOwnHighSnapshot ??= new long[own.Length];
+                own.CopyTo(copy, 0);
+                return copy;
             }
         }
 
@@ -359,16 +391,17 @@ internal sealed partial class BPlusLeafGrain
         {
             var leafKey = context.GrainId.GetGuidKey();
             var leafMarker = (await HandOffMarkerRows.ReadLeafAsync(storage, leafKey)).State;
-            var view = await grainFactory
-                .GetGrain<IShardRootGrain>($"{treeId}/{shardIndex}")
-                .GetLiveAdvanceViewAsync(context.GrainId, state.State.LowKeyInclusive);
+            var low = state.State.LowKeyInclusive;
+            var high = state.State.HighKeyExclusive;
+            var view = await LiveAdvanceShardRoot(treeId, shardIndex)
+                .GetLiveAdvanceViewAsync(context.GrainId, low, high);
             if (!view.Reachable || view.OrphanRepairInProgress)
             {
                 return null;
             }
 
             if (!leafMarker.Initialised
-                && view.Marker.Initialised
+                && view.Initialised
                 && !state.State.SplitInFlight
                 && state.State.UnlinkedSplitSiblingId is null)
             {
@@ -384,15 +417,10 @@ internal sealed partial class BPlusLeafGrain
                 });
             }
 
-            var low = state.State.LowKeyInclusive;
-            var high = state.State.HighKeyExclusive;
             var clear = leafMarker.Initialised
                 && leafMarker.Open.Count == 0
-                && !HandOffMarkerCore.IsHeldOpen(view.Marker, low, high);
-            var closeHeads = HandOffMarkerCore.MaxHeads(
-                HandOffMarkerCore.RequiredHeads(leafMarker, low, high),
-                HandOffMarkerCore.RequiredHeads(view.Marker, low, high));
-            return new LiveAdvanceHandOff(clear, closeHeads);
+                && !view.HeldOpen;
+            return new LiveAdvanceHandOff(clear, leafMarker, view.CloseHeads);
         }
         catch (Exception ex)
         {
@@ -404,13 +432,61 @@ internal sealed partial class BPlusLeafGrain
         }
     }
 
+    /// <summary>
+    /// The leaf's shard root, resolved once per activation and slot: the advance tick
+    /// would otherwise format its grain key on every attempt.
+    /// </summary>
+    private IShardRootGrain LiveAdvanceShardRoot(string treeId, int shardIndex)
+    {
+        if (_liveAdvanceShardRoot is not { } cached
+            || _liveAdvanceShardRootIndex != shardIndex
+            || !string.Equals(_liveAdvanceShardRootTree, treeId, StringComparison.Ordinal))
+        {
+            cached = grainFactory.GetGrain<IShardRootGrain>($"{treeId}/{shardIndex}");
+            _liveAdvanceShardRoot = cached;
+            _liveAdvanceShardRootTree = treeId;
+            _liveAdvanceShardRootIndex = shardIndex;
+        }
+
+        return cached;
+    }
+
     /// <summary>The hand-off conditions one advance tick read.</summary>
     /// <param name="Clear">The marker state is initialised and nothing overlapping the leaf is open.</param>
-    /// <param name="CloseHeads">Per partition, the highest head a close overlapping the leaf recorded; <c>-1</c> where none.</param>
-    private readonly record struct LiveAdvanceHandOff(bool Clear, long[] CloseHeads);
+    /// <param name="LeafMarker">The leaf's own marker, whose closes bound the replay per partition.</param>
+    /// <param name="ShardCloseHeads">The shard marker's close heads bearing on the leaf; <see langword="null"/> when none.</param>
+    private readonly record struct LiveAdvanceHandOff(bool Clear, LeafHandOffState LeafMarker, long[]? ShardCloseHeads);
+
+    /// <summary>
+    /// Releases the counted appends the writer reported refused without allocating
+    /// anything (#5708): the self-fence of a write admitted before a hand-off close, a
+    /// stale routing generation, or a single-record clock-floor refusal. Each is routine
+    /// and retried, and it left no own record to apply, so keeping its count would turn
+    /// the advance off for the activation. Runs on the grain turn; the fence counts the
+    /// refusals off it. A refusal is reported only after its append was counted and is
+    /// never released by its site, so more refusals than counted appends means the
+    /// tracker can no longer vouch for them, and it latches off. Always returns
+    /// <see langword="true"/>, so it can lead a condition.
+    /// </summary>
+    private bool DrainRefusedUnallocatedAppends()
+    {
+        if (_appendFence is { } fence && fence.TakeRefusedUnallocated() is var refused and > 0)
+        {
+            if (refused > _liveAppendsUnapplied)
+            {
+                _liveAdvancePoisoned = true;
+            }
+            else
+            {
+                _liveAppendsUnapplied -= refused;
+            }
+        }
+
+        return true;
+    }
 
     /// <summary>Test seam: the tracker's count of own appends not yet applied.</summary>
-    internal int LiveAppendsUnappliedForTest => _liveAppendsUnapplied;
+    internal int LiveAppendsUnappliedForTest => DrainRefusedUnallocatedAppends() ? _liveAppendsUnapplied : 0;
 
     /// <summary>Test seam: whether the tracker is latched off for this activation.</summary>
     internal bool LiveAdvancePoisonedForTest => _liveAdvancePoisoned;

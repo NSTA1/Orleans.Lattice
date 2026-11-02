@@ -291,6 +291,40 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
+    public async Task A_second_advance_while_one_is_deciding_returns_without_reading()
+    {
+        // The tick and the starvation drive run on interleaving turns; an advance decides
+        // on a reused snapshot across awaits, so a second one must not overlap it.
+        var (grain, rig) = await ArmedLeafWithWritesAsync("a");
+        var view = new TaskCompletionSource<LeafLiveAdvanceView>();
+        rig.ShardRoot.GetLiveAdvanceViewAsync(Arg.Any<GrainId>(), Arg.Any<string?>(), Arg.Any<string?>()).Returns(view.Task);
+        rig.ShardRoot.ClearReceivedCalls();
+
+        var first = grain.TryAdvanceLiveCheckpointAsync();
+        var second = await grain.TryAdvanceLiveCheckpointAsync();
+        await WaitUntilAsync(() => rig.ShardRoot.ReceivedCalls().Any());
+        view.SetResult(LeafLiveAdvanceView.For(rig.ShardMarker, null, null, reachable: true, orphanRepairInProgress: false));
+
+        var firstAdvanced = await first;
+        Assert.Multiple(() =>
+        {
+            Assert.That(second, Is.False);
+            Assert.That(firstAdvanced, Is.True);
+            Assert.That(rig.ShardRoot.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IShardRootGrain.GetLiveAdvanceViewAsync)), Is.EqualTo(1), "only the first advance read the shard root's view");
+        });
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        for (var i = 0; i < 200 && !condition(); i++)
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.That(condition(), Is.True, "the condition was not reached in time");
+    }
+
+    [Test]
     public async Task A_closed_gate_view_holds_the_advance()
     {
         var (grain, rig) = await ArmedLeafWithWritesAsync("a");
@@ -298,7 +332,7 @@ public partial class BPlusLeafGrainTests
         rig.ShardRoot.ClearReceivedCalls();
 
         Assert.That(await grain.TryAdvanceLiveCheckpointAsync(), Is.False);
-        await rig.ShardRoot.DidNotReceive().GetLiveAdvanceViewAsync(Arg.Any<GrainId>(), Arg.Any<string?>());
+        await rig.ShardRoot.DidNotReceive().GetLiveAdvanceViewAsync(Arg.Any<GrainId>(), Arg.Any<string?>(), Arg.Any<string?>());
     }
 
     [Test]

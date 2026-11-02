@@ -77,6 +77,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     private bool _stale;
     private long _gateClosedUntilTicks;
     private long _handOffCloses;
+    private int _refusedUnallocated;
 
     /// <summary>Creates the fence for one leaf activation.</summary>
     /// <param name="leafId">The leaf's grain key.</param>
@@ -421,6 +422,15 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             CloseGateViewLocked(ClaimFailureBackoffForTesting);
         }
     }
+
+    /// <inheritdoc />
+    public void OnRefusedUnallocated() => Interlocked.Increment(ref _refusedUnallocated);
+
+    /// <summary>
+    /// Takes the count of append calls refused without allocating anything since the
+    /// last take (#5708). The leaf releases that many counted appends on its own turn.
+    /// </summary>
+    internal int TakeRefusedUnallocated() => Interlocked.Exchange(ref _refusedUnallocated, 0);
 
     /// <summary>
     /// Forgets this activation's epoch and every partition claim after the leaf was

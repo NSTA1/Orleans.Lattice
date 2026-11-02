@@ -64,7 +64,7 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <inheritdoc />
-    public async Task<LeafLiveAdvanceView> GetLiveAdvanceViewAsync(GrainId leafId, string? lowKeyInclusive)
+    public async Task<LeafLiveAdvanceView> GetLiveAdvanceViewAsync(GrainId leafId, string? lowKeyInclusive, string? highKeyExclusive)
     {
         var marker = await GetHandOffMarkerAsync();
 
@@ -73,7 +73,7 @@ internal sealed partial class ShardRootGrain
         var reachable = state.State.RootNodeId is not null
             && !state.State.IsRetired
             && await ResolveWalkStartLeafAsync(lowKeyInclusive) == leafId;
-        return new LeafLiveAdvanceView(marker, reachable, Volatile.Read(ref _orphanRepairInProgress) != 0);
+        return LeafLiveAdvanceView.For(marker, lowKeyInclusive, highKeyExclusive, reachable, Volatile.Read(ref _orphanRepairInProgress) != 0);
     }
 
     /// <inheritdoc />

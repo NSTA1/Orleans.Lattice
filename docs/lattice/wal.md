@@ -1824,7 +1824,11 @@ holds; otherwise the checkpoint advances by replay, as before:
    highest unstamped offset the partition reported to it. A write through an unstamped
    leaf method reports itself, so it too falls back to replay.
 6. **Quiescent.** Every own append the activation issued has been applied, none failed,
-   no saga prepare is pending, and no replay is running.
+   no saga prepare is pending, and no replay is running. An append refused before
+   anything was allocated - the self-fence of a write admitted before a hand-off close, a
+   stale routing generation, or a single-record clock-floor refusal - is released, since
+   it left nothing to apply and its write is retried (#5708). Any other failure, such as
+   a timeout, may have landed a record, so it holds the advance for the activation.
 
 The advance also holds for the whole leaf when the leaf has no shard slot, when it
 covers no key range but has siblings, when the grain storage provider's ETag check
@@ -1847,9 +1851,19 @@ marker read and no shard-root call while no partition is claimed, so a shard roo
 older build is never asked for its view.
 
 **Cost.** Nothing is added to a write: the tracker is a counter and one offset per
-partition, updated as an append completes. Per coverage-lag tick on a leaf with own
-writes above its checkpoint: one marker-row read and one shard-root call. Once per leaf,
-the marker write that adopts its shard root's flag.
+partition, updated as an append completes, and a refused append adds one interlocked
+increment. Only a leaf with own writes above its checkpoint does anything on a
+coverage-lag tick, and then:
+
+- the leaf reads its own marker row and makes one shard-root call;
+- the shard root reads its marker row and descends for the leaf's low key, the same
+  traversal it routes a write by, and returns only the marker's projection onto the leaf's
+  range (an immutable value, so a same-silo call copies nothing);
+- the leaf decides on a per-activation copy of its offsets and computes close heads per
+  partition, allocating no array.
+
+A leaf with nothing to advance, or with no partition claimed, reads nothing and makes no
+call. Once per leaf, a marker write adopts its shard root's flag.
 
 ## Relationship to replication
 

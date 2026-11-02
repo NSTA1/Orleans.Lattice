@@ -475,6 +475,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// </summary>
     /// <param name="leafId">The asking leaf.</param>
     /// <param name="lowKeyInclusive">The leaf's declared low bound; <see langword="null"/> for the leftmost leaf.</param>
+    /// <param name="highKeyExclusive">The leaf's declared high bound; <see langword="null"/> for the rightmost leaf.</param>
     /// <remarks>
     /// <see cref="AlwaysInterleaveAttribute"/> and <see cref="ReadOnlyAttribute"/>, as
     /// <see cref="GetHandOffMarkerAsync"/>: a serial shard-root turn that calls the leaf
@@ -483,7 +484,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// </remarks>
     [AlwaysInterleave]
     [ReadOnly]
-    Task<LeafLiveAdvanceView> GetLiveAdvanceViewAsync(GrainId leafId, string? lowKeyInclusive);
+    Task<LeafLiveAdvanceView> GetLiveAdvanceViewAsync(GrainId leafId, string? lowKeyInclusive, string? highKeyExclusive);
 
     /// <summary>
     /// Opens a shard-level hand-off marker <paramref name="token"/> over
