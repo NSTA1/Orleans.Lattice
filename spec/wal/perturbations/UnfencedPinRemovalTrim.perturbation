@@ -1,0 +1,17 @@
+# The same unfenced removal, against the property it breaks: the re-created
+# leaf's pin goes, so nothing holds the trim floor for its writes.
+MODULE: WalPinRetirement
+ROW: NoTrimPastLiveNeed
+FILE: src/lattice/LatticeWalGcScheduler.cs
+DETECTORS: LatticeWalGcSchedulerCadenceTests.The_sweep_does_not_remove_a_pin_that_a_leaf_recreated_after_its_read_seeded_into
+SUMMARY: an unfenced removal leaves a re-created leaf's writes without a pin
+
+--- FIND
+                var removed = await Bounded(
+                    grainFactory.GetGrain<BPlusTree.Grains.IWalMaterialiserPinGrain>(keys[i])
+                        .RemoveIfUnmergedSinceAsync(consumerId, tokens[keys[i]]),
+--- REPLACE
+                await grainFactory.GetGrain<BPlusTree.Grains.IWalMaterialiserPinGrain>(keys[i]).RemoveAsync(consumerId);
+                var removed = await Bounded(
+                    Task.FromResult(true),
+--- END

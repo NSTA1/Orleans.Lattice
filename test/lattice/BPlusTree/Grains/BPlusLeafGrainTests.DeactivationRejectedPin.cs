@@ -133,6 +133,8 @@ public partial class BPlusLeafGrainTests
         public Task<IReadOnlyDictionary<string, long>> GetPinOffsetsAsync() => Reject()
             .ContinueWith<IReadOnlyDictionary<string, long>>(_ => null!);
         public Task RemoveAsync(string consumerId) => Reject();
+        public Task<WalMaterialiserPinToken> GetRetirementTokenAsync() => throw new NotSupportedException();
+        public Task<bool> RemoveIfUnmergedSinceAsync(string consumerId, WalMaterialiserPinToken token) => throw new NotSupportedException();
         public Task ClearAsync() => Reject();
     }
 

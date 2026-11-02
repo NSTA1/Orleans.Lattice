@@ -4,11 +4,13 @@ namespace Orleans.Lattice.Backup;
 /// The outcome summary of a <see cref="ILatticeBackupCatalogRebuildService.RebuildFromSinkAsync"/>
 /// pass: how many manifests were scanned out of the sink, how many were freshly
 /// added to the catalog, and how many were already present and reconciled in
-/// place. Because the sink is the single source of truth and the catalog is a
-/// rebuildable projection over it, <see cref="ScannedCount"/> always equals
-/// <see cref="RegisteredCount"/> plus <see cref="ReconciledCount"/>: every
-/// manifest the scan surfaced is re-registered, either as a new catalog row or as
-/// an idempotent upsert over an existing one.
+/// place, and how many were skipped. <see cref="ScannedCount"/> always equals
+/// <see cref="RegisteredCount"/> plus <see cref="ReconciledCount"/> plus
+/// <see cref="SkippedCount"/>: every manifest the scan surfaced is re-registered,
+/// either as a new catalog row or as an idempotent upsert over an existing one,
+/// unless it no longer restores - it left the sink during the walk, or an
+/// artifact it references is missing, as an operator delete interrupted part-way
+/// leaves it (issue #5637) - in which case it is skipped and not listed.
 /// </summary>
 [GenerateSerializer]
 [Alias(BackupTypeAliases.BackupCatalogRebuildReport)]
@@ -34,4 +36,11 @@ public sealed record BackupCatalogRebuildReport
 
     /// <summary>How many scanned manifests were already catalogued and reconciled in place.</summary>
     [Id(2)] public long ReconciledCount { get; init; }
+
+    /// <summary>
+    /// How many scanned manifests were not listed because they no longer restore:
+    /// the manifest left the sink during the walk, or an artifact it references is
+    /// missing (issue #5637). Each is logged with its backup id.
+    /// </summary>
+    [Id(3)] public long SkippedCount { get; init; }
 }

@@ -16,7 +16,10 @@ namespace Orleans.Lattice.Backup;
 /// instead captures a fresh full backup of the base's scope - a new chain with
 /// no base, not an increment - when the base chain is owned by another
 /// capturing cluster, when retention has trimmed the log past the base resume
-/// point, or when a range delete surfaces in the delta window.
+/// point, when a range delete surfaces in the delta window, or when a backup
+/// retention pass began pruning the base while the increment drained (the
+/// increment re-reads its base's catalog row after writing its manifest, and
+/// withdraws that manifest rather than publish an increment with no base).
 /// </para>
 /// </summary>
 public interface ILatticeBackupIncrementalCaptureService

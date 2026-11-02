@@ -1,0 +1,15 @@
+# Pairs with ExpiredEventuallyPruned, under the fairness Spec asserts. The
+# pass never returns to idle after its last delete, so a backup that expires
+# later is never pruned.
+MODULE: ExpiredEventuallyPrunedPassNeverEnds
+TARGET: ExpiredEventuallyPruned
+CLASS: Temporal
+SUMMARY: the pass does not end after its last delete
+PERTURBS: DelArt
+
+--- FIND
+    /\ prPh' = [prPh EXCEPT ![p] = Settle(p, prDoomed[p] \ {m})]
+--- REPLACE
+    \* MUTATION: the pass never ends.
+    /\ prPh' = [prPh EXCEPT ![p] = "delete"]
+--- END

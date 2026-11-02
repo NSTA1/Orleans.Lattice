@@ -238,8 +238,8 @@ internal sealed class LeafNodeState : ILatticeBinaryPersistedState
     /// Incremental XOR-fold projection fingerprint: a 16-byte buffer that holds
     /// the running XxHash128 XOR over per-key contributions of every entry in
     /// the leaf's entry cache. Each entry contributes a deterministic 16-byte
-    /// XxHash128 hash (over key, HLC, tombstone flag, expiry, origin, vector
-    /// clock, and value); insertions XOR the contribution in, deletions XOR it
+    /// XxHash128 hash (over key, HLC, tombstone flag, expiry, vector clock, and
+    /// value - not the observer-relative origin stamp); insertions XOR the contribution in, deletions XOR it
     /// out, and updates XOR out the old contribution and XOR in the new. The
     /// XOR fold is commutative and self-inverse, so the field is mathematically
     /// identical to a fresh walk over the entry cache at every commit
@@ -530,4 +530,16 @@ internal sealed class LeafNodeState : ILatticeBinaryPersistedState
 
     /// <summary>The successor after <see cref="PendingReclaimSuccessorId"/> in the chain.</summary>
     [Id(32)] public GrainId? PendingReclaimNextId { get; set; }
+
+    /// <summary>
+    /// The contribution-function version (<see cref="LeafProjectionDigest.CurrentVersion"/>)
+    /// that produced <see cref="ProjectionHash"/>. The fold is maintained
+    /// incrementally - each mutation XORs the old entry's contribution out and
+    /// the new one in - so it stays correct only while every contribution is
+    /// computed by the same function. A leaf whose persisted fold was produced
+    /// under another version therefore recomputes it from its entries before
+    /// folding anything into it. <c>0</c> on state persisted before this slot,
+    /// which is a version-0 fold.
+    /// </summary>
+    [Id(33)] public int ProjectionHashVersion { get; set; }
 }

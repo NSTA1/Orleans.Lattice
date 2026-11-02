@@ -1,0 +1,15 @@
+# Pairs with LivePublisherPinned. A leaf read that faults reports a husk instead
+# of failing closed, so a live leaf's only pin is retired.
+MODULE: LivePublisherPinnedFailedReadReadsAsHusk
+TARGET: LivePublisherPinned
+CLASS: Invariant
+SUMMARY: a faulted leaf read is reported as a husk
+PERTURBS: ReadFail
+BOUNDS: MaxFaults = 1
+
+--- FIND
+    /\ verdict' = [verdict EXCEPT ![p] = "unreadable"]
+--- REPLACE
+\* MUTATION: a faulted read is not fail-closed.
+    /\ verdict' = [verdict EXCEPT ![p] = "husk"]
+--- END

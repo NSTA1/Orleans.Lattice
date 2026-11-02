@@ -1,0 +1,16 @@
+# Pairs with RetireOnlyHusk. The removal is not fenced, so a sweep that read the
+# leaf as a husk removes the entry a re-created incarnation has merged into since:
+# its publisher is alive. The direct form of NoTrimPastLiveNeedUnfencedRemoval,
+# which needs a write and a trim to follow.
+MODULE: RetireOnlyHuskUnfencedRemoval
+TARGET: RetireOnlyHusk
+CLASS: Action
+SUMMARY: a husk read removes an entry a re-created incarnation merged into since
+PERTURBS: Decide
+
+--- FIND
+                    /\ k \notin touched[p]
+--- REPLACE
+\* MUTATION: the removal is not fenced against a later merge.
+                    /\ TRUE
+--- END

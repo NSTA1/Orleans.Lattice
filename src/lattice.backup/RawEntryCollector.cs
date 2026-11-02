@@ -124,11 +124,12 @@ internal sealed class RawEntryCollector(Serializer serializer, BackupKeyMergeMod
                 : BackupKeyMergeMode.Crdt)
             : treeMergeMode;
 
-        // An unstamped origin arrives as string.Empty, NOT null. The core default
-        // resolver (DefaultLatticeOriginClusterIdResolver) returns string.Empty for
-        // every tree on a single-cluster host, and its contract says downstream
-        // consumers ignore it - so normalize here, exactly as the incremental path
-        // (IncrementalDeltaCollector.OnEntry) already does.
+        // An own row's origin is null (issue #5524), but a row persisted before
+        // that fix can still carry the WAL's stamp, string.Empty on a
+        // single-cluster host (DefaultLatticeOriginClusterIdResolver), whose
+        // contract says downstream consumers ignore it - so normalize here,
+        // exactly as the incremental path (IncrementalDeltaCollector.OnEntry)
+        // already does.
         //
         // Guarding the raw value with `is { }` filters null but admits "", which
         // then becomes a per-origin high-water key, and those keys become

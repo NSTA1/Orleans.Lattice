@@ -1,0 +1,17 @@
+# Pairs with RetainedRestorable. An increment checks and publishes without
+# first writing its sink manifest, so a pass's scan cannot see an increment
+# in flight, and the fence between them is gone.
+MODULE: RetainedRestorableManifestNotWritten
+TARGET: RetainedRestorable
+CLASS: Invariant
+SUMMARY: an increment's sink manifest is not written before the check
+PERTURBS: WriteMan
+
+--- FIND
+    /\ snk' = snk \cup {cap[c].id}
+    /\ cap' = [cap EXCEPT ![c].ph = "man"]
+--- REPLACE
+    \* MUTATION: an increment's sink manifest is not written.
+    /\ snk' = IF meta[cap[c].id].kind = "incr" THEN snk ELSE snk \cup {cap[c].id}
+    /\ cap' = [cap EXCEPT ![c].ph = "man"]
+--- END

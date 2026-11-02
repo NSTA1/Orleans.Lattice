@@ -1,0 +1,15 @@
+# A set member registers its catalog row as soon as it is captured, and the
+# stamp registers it again, as production did before #5449. Between the two
+# a retention pass can prune the member, and the stamp lists it again over
+# its deleted artifact. Stamp(c) is the member's only registration.
+MODULE: BackupRetention
+ROW: Stamp(c)
+FILE: src/lattice.backup/LatticeBackupCaptureService.cs
+DETECTORS: BackupRetentionConcurrencyTests.A_pass_during_a_set_capture_does_not_leave_a_member_listed_over_a_deleted_artifact
+SUMMARY: a set member is listed before the stamp, so a pass can prune it and the stamp re-lists it
+
+--- FIND
+                        request.Name, scope, request.PageSize, cancellationToken, register: !deferRegistration)
+--- REPLACE
+                        request.Name, scope, request.PageSize, cancellationToken, register: true)
+--- END

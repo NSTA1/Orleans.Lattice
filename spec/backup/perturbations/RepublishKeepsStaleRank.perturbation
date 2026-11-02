@@ -1,0 +1,15 @@
+# A republish keeps the backup's ranking time, as 10.2.0 did with its first
+# capture time, so a pass right after a capture of an unchanged tree prunes the
+# backup the capture has just returned. KeepPolicyHonoured judges the policy by
+# when a backup was really last captured.
+MODULE: BackupRetention
+ROW: KeepPolicyHonoured
+FILE: src/lattice.backup/BackupManifestRegistration.cs
+DETECTORS: BackupRepublishHoldTests.A_republish_refreshes_the_ranking_so_retention_keeps_the_backup_a_capture_just_returned, BackupManifestRegistrationTests.Reconcile_records_the_latest_capture_for_retention_to_rank_by
+SUMMARY: a republished backup keeps its stale ranking time
+
+--- FIND
+            LastCapturedAtUtc = latest > existing.CreatedAtUtc ? latest : null,
+--- REPLACE
+            LastCapturedAtUtc = existing.LastCapturedAtUtc,
+--- END

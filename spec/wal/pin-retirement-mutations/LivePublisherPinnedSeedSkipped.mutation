@@ -1,0 +1,17 @@
+# Pairs with LivePublisherPinned. A re-created leaf's birth seam binds its tree id
+# but seeds no block pin, so once the orphan of its previous incarnation is
+# retired it holds no pin at all.
+MODULE: LivePublisherPinnedSeedSkipped
+TARGET: LivePublisherPinned
+CLASS: Invariant
+SUMMARY: the birth seam seeds no block pin
+PERTURBS: Seed
+
+--- FIND
+    /\ seeded' = TRUE
+    /\ MergeLeafPin(route, -1)
+--- REPLACE
+\* MUTATION: no seed.
+    /\ seeded' = TRUE
+    /\ UNCHANGED <<pinOff, pinInc, touched>>
+--- END

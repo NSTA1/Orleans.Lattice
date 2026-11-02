@@ -1,0 +1,22 @@
+# Pairs with LivePublisherPinned. A routing change moves the consumer to another
+# key by deleting its entry under the old one, before anything is published under
+# the new: the leaf is left with no pin. Production never deletes on a routing
+# change; the old entry stays as a duplicate.
+MODULE: LivePublisherPinnedRerouteDropsPin
+TARGET: LivePublisherPinned
+CLASS: Invariant
+SUMMARY: a routing change deletes the pin under the old key
+PERTURBS: RouteChange
+BOUNDS: MaxFaults = 1
+
+--- FIND
+    /\ UNCHANGED <<phase, inc, seeded, cp, need, purgeMark, owed>>
+    /\ UNCHANGED pinVars
+    /\ UNCHANGED procVars
+--- REPLACE
+    /\ UNCHANGED <<phase, inc, seeded, cp, need, purgeMark, owed>>
+\* MUTATION: the old key's entry is deleted.
+    /\ pinOff' = [pinOff EXCEPT ![route, "cL"] = NoPin]
+    /\ UNCHANGED pinInc
+    /\ UNCHANGED procVars
+--- END

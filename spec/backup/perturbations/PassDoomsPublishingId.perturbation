@@ -1,0 +1,17 @@
+# The pass dooms an id a capture is publishing: its listing still names the
+# old row, so it removes the row the republish is about to refresh and then
+# deletes the manifest the republish wrote (#5418). The pass never dooms
+# an id a capture holds, so ListedInSink holds: every listed backup's manifest
+# is in the sink.
+MODULE: BackupRetention
+ROW: ListedInSink
+FILE: src/lattice.backup/BackupSchedulerGrain.Holds.cs
+DETECTORS: BackupRepublishHoldTests.A_pass_never_dooms_a_backup_a_capture_is_republishing
+SUMMARY: a retention pass dooms the id of a backup a capture is republishing
+
+--- FIND
+        _publishing.Contains(backupId)
+        || _retiring.Contains(backupId)
+--- REPLACE
+        _retiring.Contains(backupId)
+--- END

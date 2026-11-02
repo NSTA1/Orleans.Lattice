@@ -158,6 +158,20 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     Task<bool> HoldsCompletedPurgeAsync();
 
     /// <summary>
+    /// Returns <c>true</c> while this grain durably records a deletion of the id
+    /// that a write may not lift (issue #5458): a soft delete, a purge still
+    /// walking, a completed purge whose registry removal is still owed, or a
+    /// logical deletion whose purge has not completed. A completed, settled purge
+    /// reads <c>false</c>: its registry row is gone, so a write registering the id
+    /// again is the deliberate reuse of issue #3940. A purged shard asks this
+    /// before it re-seeds, because a purge keeps the purged tree's own registry
+    /// row until the last step of its tail. A pure read of the state as last
+    /// persisted, with no grain call.
+    /// </summary>
+    [Orleans.Concurrency.AlwaysInterleave]
+    Task<bool> HoldsDeletionAsync();
+
+    /// <summary>
     /// Returns a read-only snapshot of the tree's soft-deletion lifecycle state -
     /// whether it is deleted, when, the recovery deadline derived from the
     /// configured soft-delete duration, whether a purge is in progress or has

@@ -1,0 +1,15 @@
+# Pairs with ScopeAgreement. Production before #5620: nothing checked which
+# scope owned the bare id, so identical content captured in a second scope
+# published under it, over the first scope's backup.
+MODULE: ScopeAgreementIgnoresOwner
+TARGET: ScopeAgreement
+CLASS: Invariant
+SUMMARY: a claim ignores the scope that owns the bare id
+PERTURBS: Resolve
+
+--- FIND
+             \/ Owner \notin {"none", s}
+--- REPLACE
+             \* MUTATION: the owner is not consulted.
+             \/ FALSE
+--- END

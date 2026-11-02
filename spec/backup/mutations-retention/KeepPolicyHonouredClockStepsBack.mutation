@@ -1,0 +1,16 @@
+# Pairs with KeepPolicyHonoured. The clock steps backwards, so a backup a
+# pass judged expired is young again by the time the pass deletes it. The
+# model's clock is monotonic; this mutation shows the property depends on it.
+MODULE: KeepPolicyHonouredClockStepsBack
+TARGET: KeepPolicyHonoured
+CLASS: Action
+SUMMARY: the clock may step backwards
+PERTURBS: Tick
+
+--- FIND
+    /\ now < MaxTime
+    /\ now' = now + 1
+--- REPLACE
+    \* MUTATION: the clock may step back.
+    /\ now' \in {n \in 0..MaxTime : n # now}
+--- END

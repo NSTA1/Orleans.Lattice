@@ -200,6 +200,23 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     /// </summary>
     private readonly Dictionary<string, uint> _hashes = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Identifies this activation to the retirement tokens it issues
+    /// (issue #5358). A token from another activation is refused, because the
+    /// merges it would have to be checked against are not remembered here.
+    /// </summary>
+    private readonly Guid _activationEpoch = Guid.NewGuid();
+
+    /// <summary>The sequence stamped on the latest merge, report, seed or hold (issue #5358).</summary>
+    private long _mergeSequence;
+
+    /// <summary>
+    /// The sequence of each consumer's latest merge on this activation, which
+    /// <see cref="RemoveIfUnmergedSinceAsync"/> compares against a retirement
+    /// token (issue #5358). In memory only: the fence lasts one activation.
+    /// </summary>
+    private readonly Dictionary<string, long> _lastMerged = new(StringComparer.Ordinal);
+
     /// <summary>The configured bucket count: the floor of the layout width.</summary>
     private int _configuredBuckets = 1;
 
@@ -936,6 +953,11 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         {
             var consumerId = consumerIds[i];
 
+            // A hold is raised by a live leaf about to append, so it fences any
+            // retirement decided before it (issue #5358), whether or not it
+            // changes anything below.
+            RecordMerge(consumerId);
+
             // A real offset already protects everything the hold would: the GC's
             // offset-floor stop refuses every entry above it on every arm.
             if (_state.State.Offsets.TryGetValue(consumerId, out var offset) && offset >= 0)
@@ -1007,6 +1029,10 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         var removedPin = _state.State.Pins.Remove(consumerId);
         var removedOffset = _state.State.Offsets.Remove(consumerId);
         var removedHold = _state.State.OverrideHolds.Remove(consumerId);
+
+        // Safe to forget: any merge after this removal stamps a fresh sequence,
+        // which every token taken before it is below (issue #5358).
+        _lastMerged.Remove(consumerId);
         if (!removedPin && !removedOffset && !removedHold)
         {
             _hashes.Remove(consumerId);
@@ -1040,6 +1066,35 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     }
 
     /// <inheritdoc />
+    public Task<WalMaterialiserPinToken> GetRetirementTokenAsync() =>
+        Task.FromResult(new WalMaterialiserPinToken(_activationEpoch, _mergeSequence));
+
+    /// <inheritdoc />
+    public async Task<bool> RemoveIfUnmergedSinceAsync(string consumerId, WalMaterialiserPinToken token)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(consumerId);
+
+        // Checked and acted on in one turn before any await, so no merge can
+        // land between the fence and the in-memory removal.
+        long? lastMerged = _lastMerged.TryGetValue(consumerId, out var merged) ? merged : null;
+        if (!WalOrphanPinRetirementCore.MayRemove(token, _activationEpoch, lastMerged))
+        {
+            return false;
+        }
+
+        await RemoveAsync(consumerId);
+        return true;
+    }
+
+    /// <summary>
+    /// Stamps a merge of <paramref name="consumerId"/> for the retirement
+    /// fence (issue #5358). Called for every report, seed and hold, changed or
+    /// not: a birth seed into a surviving entry changes nothing a read can see,
+    /// and is exactly the merge a stale retirement must not erase.
+    /// </summary>
+    private void RecordMerge(string consumerId) => _lastMerged[consumerId] = ++_mergeSequence;
+
+    /// <inheritdoc />
     public async Task ClearAsync()
     {
         // Checked before the empty short-circuit: a clear whose legacy write
@@ -1062,6 +1117,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         _state.State.Offsets.Clear();
         _state.State.OverrideHolds.Clear();
         _hashes.Clear();
+        _lastMerged.Clear();
         _estimatedBytes = 0;
         _dirty = true;
         var bucketed = _bucketCount > 1;
@@ -1152,6 +1208,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     /// </summary>
     private bool Merge(string consumerId, HybridLogicalClock frontier, long checkpointOffset)
     {
+        RecordMerge(consumerId);
         var changed = false;
         var frontierAdvanced = false;
 

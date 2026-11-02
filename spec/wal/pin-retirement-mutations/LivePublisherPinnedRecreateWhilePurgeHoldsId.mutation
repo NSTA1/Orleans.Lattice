@@ -1,0 +1,18 @@
+# Pairs with LivePublisherPinned. Issue #5458's production shape: a purged shard
+# lifts its tombstone for a write whenever the registry names the id live, and
+# while the purge's tail is owed that is the purged tree's own entry. The write
+# re-seeds the root leaf under the purged entry's lineage, so the purge's tail
+# takes the entry for its own and clears the live leaf's pins.
+MODULE: LivePublisherPinnedRecreateWhilePurgeHoldsId
+TARGET: LivePublisherPinned
+CLASS: Invariant
+SUMMARY: a purged shard re-seeds while the purge still holds the tree's entry
+PERTURBS: Recreate
+
+--- FIND
+    /\ \/ ~tailOwed
+       \/ ~(regPresent /\ regLin = tailLin)
+--- REPLACE
+\* MUTATION: the deletion record is not consulted.
+    /\ TRUE
+--- END

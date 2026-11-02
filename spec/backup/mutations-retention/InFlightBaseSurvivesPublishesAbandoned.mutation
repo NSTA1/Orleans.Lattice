@@ -1,0 +1,16 @@
+# Pairs with InFlightBaseSurvives. Publication ignores the check's verdict:
+# an increment that found its base's row gone registers anyway.
+MODULE: InFlightBaseSurvivesPublishesAbandoned
+TARGET: InFlightBaseSurvives
+CLASS: Action
+SUMMARY: an increment whose check failed is published
+PERTURBS: Register
+
+--- FIND
+    /\ cap[c].ph = "ok"
+    /\ \/ /\ cat' = cat \cup {cap[c].id}
+--- REPLACE
+    \* MUTATION: a failed check publishes too.
+    /\ cap[c].ph \in {"ok", "abandon"}
+    /\ \/ /\ cat' = cat \cup {cap[c].id}
+--- END

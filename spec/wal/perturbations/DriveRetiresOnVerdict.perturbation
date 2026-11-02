@@ -1,0 +1,16 @@
+# The drive's retirement takes its NotDriven verdict as the evidence again and
+# skips its fresh durable read, so a leaf re-created before that read loses its
+# pins.
+MODULE: WalPinRetirement
+ROW: Read(p)
+FILE: src/lattice/LatticeWalGcScheduler.cs
+DETECTORS: LatticeWalGcSchedulerCadenceTests.The_drive_does_not_remove_a_pin_whose_leaf_row_is_live_again
+SUMMARY: the drive retires on its NotDriven verdict without reading the leaf again
+
+--- FIND
+        var state = ClassifyLeafSnapshot(snapshot, partition).State;
+        if (!WalOrphanPinRetirementCore.IsHusk(state))
+--- REPLACE
+        var state = ClassifyLeafSnapshot(snapshot, partition).State;
+        if (!WalOrphanPinRetirementCore.IsHusk(WalGcBlockingPinState.Orphaned))
+--- END

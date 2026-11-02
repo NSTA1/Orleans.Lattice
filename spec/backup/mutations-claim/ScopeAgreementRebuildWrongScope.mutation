@@ -1,0 +1,18 @@
+# Pairs with ScopeAgreement. Scope A's rebuild registers whatever manifest
+# the id has, as A's, even when scope B wrote it.
+MODULE: ScopeAgreementRebuildWrongScope
+TARGET: ScopeAgreement
+CLASS: Invariant
+SUMMARY: a rebuild lists the manifest under a scope it does not name
+PERTURBS: Rebuild
+
+--- FIND
+    /\ row = "none"
+    /\ man = "A"
+    /\ art
+--- REPLACE
+    /\ row = "none"
+    \* MUTATION: the manifest's scope is not checked.
+    /\ man # "none"
+    /\ art
+--- END

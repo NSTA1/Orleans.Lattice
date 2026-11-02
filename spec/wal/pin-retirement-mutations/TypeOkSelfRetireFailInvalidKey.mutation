@@ -1,0 +1,18 @@
+# Pairs with TypeOK. A failed self-retirement owes a key the pin store does not
+# have.
+MODULE: TypeOkSelfRetireFailInvalidKey
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a failed self-retirement owes an undeclared key
+PERTURBS: SelfRetireFail
+
+--- FIND
+SelfRetireFail(k) ==
+    /\ k \in owed
+    /\ owed' = owed \ {k}
+--- REPLACE
+SelfRetireFail(k) ==
+    /\ k \in owed
+\* MUTATION: an undeclared key.
+    /\ owed' = (owed \ {k}) \cup {"k3"}
+--- END

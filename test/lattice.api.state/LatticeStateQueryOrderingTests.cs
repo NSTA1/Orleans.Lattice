@@ -64,6 +64,7 @@ public sealed class LatticeStateQueryOrderingTests
         public Task<bool> IsDiscardedAsync() => throw new NotSupportedException();
         public Task<bool> DiscardIfAbandonedDerivedCopyAsync() => throw new NotSupportedException();
         public Task<bool> HoldsCompletedPurgeAsync() => Task.FromResult(false);
+        public Task<bool> HoldsDeletionAsync() => Task.FromResult(false);
         public Task DeleteDelegatedAsync() => throw new NotSupportedException();
         public Task<bool> IsPhysicalDeletedAsync() => throw new NotSupportedException();
         public Task RecoverPhysicalAsync() => throw new NotSupportedException();

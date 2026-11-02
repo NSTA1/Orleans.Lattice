@@ -58,6 +58,38 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         /// <summary>When set, every pin removal throws it (issue #4246's <c>retire_failed</c> arm).</summary>
         public Exception? RemoveThrows { get; set; }
 
+        /// <summary>The fake pin grains' shared activation epoch for retirement tokens (issue #5358).</summary>
+        public Guid Epoch { get; set; } = Guid.NewGuid();
+
+        /// <summary>The latest merge sequence the store has stamped (issue #5358).</summary>
+        public long MergeSequence { get; private set; }
+
+        /// <summary>Each (key, consumer)'s latest merge stamp, as the pin grain keeps it (issue #5358).</summary>
+        public Dictionary<(string Key, string ConsumerId), long> LastMerged { get; } = [];
+
+        /// <summary>How many retirement tokens the fake grains have issued (issue #5358).</summary>
+        public int TokensIssued { get; set; }
+
+        /// <summary>Every removal the fence refused (issue #5358).</summary>
+        public List<(string Key, string ConsumerId)> FencedRemovals { get; } = [];
+
+        /// <summary>
+        /// Stamps a merge of <paramref name="consumerId"/> at <paramref name="key"/>,
+        /// as a re-created leaf's birth seed does even when it changes nothing
+        /// there (issue #5358).
+        /// </summary>
+        public void Merge(string key, string consumerId)
+        {
+            LastMerged[(key, consumerId)] = ++MergeSequence;
+            if (!_grains.TryGetValue(key, out var grain))
+            {
+                grain = new FakePinGrain(this, key);
+                _grains[key] = grain;
+            }
+
+            grain.Pins.TryAdd(consumerId, HybridLogicalClock.Zero);
+        }
+
         public void Seed(string key, string consumerId)
         {
             if (!_grains.TryGetValue(key, out var grain))
@@ -148,8 +180,28 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                 return Task.CompletedTask;
             }
 
-            public Task RaiseOverrideHoldsAsync(IReadOnlyList<string> consumerIds) => Task.CompletedTask;
-            public Task<IReadOnlyCollection<string>> GetOverrideHoldsAsync() =>
+            public Task<WalMaterialiserPinToken> GetRetirementTokenAsync()
+            {
+                store.TokensIssued++;
+                return Task.FromResult(new WalMaterialiserPinToken(store.Epoch, store.MergeSequence));
+            }
+
+            public async Task<bool> RemoveIfUnmergedSinceAsync(string consumerId, WalMaterialiserPinToken token)
+            {
+                // The production fence's rule, over the store's merge stamps
+                // (issue #5358).
+                long? lastMerged = store.LastMerged.TryGetValue((key, consumerId), out var merged) ? merged : null;
+                if (!WalOrphanPinRetirementCore.MayRemove(token, store.Epoch, lastMerged))
+                {
+                    store.FencedRemovals.Add((key, consumerId));
+                    return false;
+                }
+
+                await RemoveAsync(consumerId);
+                return true;
+            }
+
+            public Task RaiseOverrideHoldsAsync(IReadOnlyList<string> consumerIds) => Task.CompletedTask;            public Task<IReadOnlyCollection<string>> GetOverrideHoldsAsync() =>
                 Task.FromResult<IReadOnlyCollection<string>>(Array.Empty<string>());
             public Task<IReadOnlyDictionary<string, long>> GetPinOffsetsAsync() =>
                 Task.FromResult<IReadOnlyDictionary<string, long>>(
@@ -181,6 +233,13 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         public Exception? Throws { get; set; }
 
         public int Reads { get; private set; }
+
+        /// <summary>
+        /// Runs after each read has been served, so a test can change the leaf's
+        /// row - re-create it, as a recovery does after a purge - between the
+        /// retirement's read and its removal (issue #5358).
+        /// </summary>
+        public Action<GrainId>? AfterRead { get; set; }
 
         public void PutLive(GrainId leaf, string treeId) =>
             _states[leaf] = new LeafNodeState
@@ -260,6 +319,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                 grainState.RecordExists = false;
             }
 
+            AfterRead?.Invoke(grainId);
             return Task.CompletedTask;
         }
 

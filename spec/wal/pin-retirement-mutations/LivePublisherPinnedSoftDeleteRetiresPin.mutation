@@ -1,0 +1,24 @@
+# Pairs with LivePublisherPinned. A soft delete retires the tree's leaf pins as if
+# it were a purge, but a soft-deleted tree is recoverable: its leaves still need
+# their WAL.
+MODULE: LivePublisherPinnedSoftDeleteRetiresPin
+TARGET: LivePublisherPinned
+CLASS: Invariant
+SUMMARY: a soft delete retires the leaf's pins
+PERTURBS: SoftDelete
+
+--- FIND
+    /\ phase = "live"
+    /\ phase' = "deleted"
+    /\ UNCHANGED walVars
+    /\ UNCHANGED <<inc, seeded, cp, need, purgeMark, owed, route>>
+    /\ UNCHANGED pinVars
+--- REPLACE
+    /\ phase = "live"
+    /\ phase' = "deleted"
+    /\ UNCHANGED walVars
+    /\ UNCHANGED <<inc, seeded, cp, need, purgeMark, owed, route>>
+\* MUTATION: the soft delete retires the pins.
+    /\ pinOff' = [kc \in Keys \X Cons |-> NoPin]
+    /\ UNCHANGED pinInc
+--- END

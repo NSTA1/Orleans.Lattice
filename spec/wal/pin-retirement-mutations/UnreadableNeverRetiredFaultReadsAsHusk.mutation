@@ -1,0 +1,15 @@
+# Pairs with UnreadableNeverRetired. The decision treats an unreadable leaf read
+# as evidence the leaf is gone, so a storage fault retires a pin.
+MODULE: UnreadableNeverRetiredFaultReadsAsHusk
+TARGET: UnreadableNeverRetired
+CLASS: Action
+SUMMARY: an unreadable leaf read is decided as a husk
+PERTURBS: Decide
+BOUNDS: MaxFaults = 1
+
+--- FIND
+    /\ pinOff' = IF /\ verdict[p] = "husk"
+--- REPLACE
+\* MUTATION: fail-open on an unreadable read.
+    /\ pinOff' = IF /\ verdict[p] \in {"husk", "unreadable"}
+--- END

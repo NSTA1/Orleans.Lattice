@@ -1,0 +1,23 @@
+# Pairs with ListedRestorable. Production before the fix of #5412: a pass
+# read its catalog listing BEFORE it checked the one-pass guard, so it could
+# wait out another pass and then plan from a listing that still held rows
+# that pass had pruned since. Its scan could then find an increment built on
+# one of them and restore the row of a backup whose manifest and artifact were
+# already gone. The mutant plans from every row ever registered (pub), which
+# over-approximates any listing taken before the guard; the same interleaving
+# was confirmed against a model that splits the listing from the guard, as
+# production ordered them (see #5412).
+MODULE: ListedRestorableListingBeforeGuard
+TARGET: ListedRestorable
+CLASS: Invariant
+SUMMARY: a pass plans from a catalog listing taken before its one-pass guard
+PERTURBS: PruneList
+
+--- FIND
+    \* The listing, read under the guard.
+    /\ LET L == cat
+--- REPLACE
+    \* MUTATION: the listing was read before the guard, and may still hold
+    \* rows another pass has pruned since.
+    /\ LET L == pub
+--- END

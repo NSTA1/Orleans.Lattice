@@ -16,6 +16,10 @@ public sealed class SchedulerClusterFixture
 {
     private static Action<LatticeBackupScheduleOptions>? s_configure;
     private static bool s_gated;
+    private static bool s_intercepted;
+    private static Action<LatticeBackupOptions>? s_configureBackup;
+    private static bool s_recordGate;
+    private static TimeSpan? s_responseTimeout;
 
     /// <summary>
     /// A mutable toggle a test can flip to change the incremental-schedule setting
@@ -53,12 +57,39 @@ public sealed class SchedulerClusterFixture
     internal ILatticeBackupSchedulerGrain Scheduler(BackupScopeSelector scope) =>
         GrainFactory.GetGrain<ILatticeBackupSchedulerGrain>(BackupScopeKey.For(scope));
 
-    /// <summary>Deploys the cluster with the given schedule / retention configuration.</summary>
+    /// <summary>The silo-side full capture service.</summary>
+    public ILatticeBackupCaptureService CaptureService =>
+        SiloServices.GetRequiredService<ILatticeBackupCaptureService>();
+
+    /// <summary>The silo-side incremental capture service.</summary>
+    public ILatticeBackupIncrementalCaptureService IncrementalService =>
+        SiloServices.GetRequiredService<ILatticeBackupIncrementalCaptureService>();
+
+    /// <summary>
+    /// Deploys the cluster with the given schedule / retention configuration.
+    /// When <paramref name="intercepted"/> is set, the sink is an
+    /// <see cref="InterceptingBackupSink"/> over the real in-cluster sink.
+    /// <paramref name="configureBackup"/> adjusts the backup options, and
+    /// <paramref name="recordGate"/> fronts the publication gate with a
+    /// <see cref="RecordingPublicationGate"/>. <paramref name="responseTimeout"/>
+    /// shortens the silo's grain response timeout.
+    /// </summary>
     public async Task InitializeAsync(
-        Action<LatticeBackupScheduleOptions>? configure = null, bool gated = false)
+        Action<LatticeBackupScheduleOptions>? configure = null,
+        bool gated = false,
+        bool intercepted = false,
+        Action<LatticeBackupOptions>? configureBackup = null,
+        bool recordGate = false,
+        TimeSpan? responseTimeout = null)
     {
         s_configure = configure;
         s_gated = gated;
+        s_intercepted = intercepted;
+        s_configureBackup = configureBackup;
+        s_recordGate = recordGate;
+        s_responseTimeout = responseTimeout;
+        InterceptingBackupSink.Reset();
+        RecordingPublicationGate.Reset();
         var builder = new TestClusterBuilder(1);
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         Cluster = builder.Build();
@@ -111,6 +142,32 @@ public sealed class SchedulerClusterFixture
             if (s_configure is not null)
             {
                 siloBuilder.ConfigureLatticeBackupSchedule(s_configure);
+            }
+
+            if (s_intercepted)
+            {
+                siloBuilder.Services.AddSingleton<InClusterLatticeBackupSink>();
+                siloBuilder.Services.Replace(
+                    ServiceDescriptor.Singleton<ILatticeBackupSink, InterceptingBackupSink>());
+            }
+
+            if (s_responseTimeout is { } timeout)
+            {
+                siloBuilder.Services.Configure<Orleans.Configuration.SiloMessagingOptions>(o => o.ResponseTimeout = timeout);
+            }
+
+            if (s_configureBackup is not null)
+            {
+                siloBuilder.Services.Configure(s_configureBackup);
+            }
+
+            if (s_recordGate)
+            {
+                siloBuilder.Services.Replace(ServiceDescriptor.Singleton<IBackupPublicationGate>(sp =>
+                    new RecordingPublicationGate(new SchedulerBackupPublicationGate(
+                        sp.GetRequiredService<IGrainFactory>(),
+                        sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<LatticeBackupOptions>>(),
+                        sp.GetRequiredService<BackupPublisher>()))));
             }
 
             if (s_gated)

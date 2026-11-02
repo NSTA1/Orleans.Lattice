@@ -1,0 +1,16 @@
+# Pairs with NoForeignOverwrite. A finished publish releases every claim of
+# its scope rather than its own. A second publish of the same scope, still
+# waiting on its hold through a retire, is left without a claim, and another
+# scope takes the id from under it (#5627).
+MODULE: NoForeignOverwriteReleaseClearsAll
+TARGET: NoForeignOverwrite
+CLASS: Action
+SUMMARY: a release drops every claim of the scope, not one
+PERTURBS: PubRow
+
+--- FIND
+       /\ pend' = [pend EXCEPT ![s] = IF @ > 0 THEN @ - 1 ELSE 0]
+--- REPLACE
+       \* MUTATION: every claim of the scope is released.
+       /\ pend' = [pend EXCEPT ![s] = 0]
+--- END

@@ -126,7 +126,14 @@ and the observer publish must happen after both, inside a commit-log scope.
    its baseline, so on a silo wired through `AddLattice` this step always runs;
    it is skipped only for a leaf that has no tree id yet (one created outside
    `ILattice`, for example by a test harness). Failures here propagate to the
-   caller before any in-memory state has been touched.
+   caller before any in-memory state has been touched. The writer fills an
+   empty origin with the tree's resolved origin (the local cluster id on a
+   replicated tree, an empty string on a single-cluster host), which the
+   shipper and receivers rely on. The leaf row of an own write keeps a null
+   origin, and a row rebuilt from the record later - by the projection, a
+   replay or a snapshot's fold - turns that stamp back into null, so an own
+   row has one representation however it was produced; a peer's origin is
+   kept.
 
 3. **apply** - LWW-merge the value into the in-memory entry cache. If
    the leaf's entry count crosses `MaxLeafKeys`, or its live state bytes cross
@@ -1336,7 +1343,11 @@ partitions each examined durable pin into `retired`, `retire_failed`, `deferred`
 `unreadable`; the decision arms also carry a `cause` of `orphaned` or
 `no_durable_state`. `orleans.lattice.wal.gc.drive_orphan_pin_retirement` records
 the same removal/refusal outcomes when the blocked-leaf drive gets a `NotDriven`
-verdict, with `cause="not_driven"`.
+verdict, with `cause="not_driven"`. Both routes remove only through the pin grain's
+fence (issue #5358): each key's retirement token is taken before its pins are read,
+and a removal is refused when the consumer was merged since - as a leaf re-created
+under the same grain id does when it seeds its block pin. A refused removal counts as
+`retire_failed`, and the next sweep re-examines the pin against a fresh read.
 
 Two further GC signals separate a tree that is catching up from one that is
 stuck (issue #3149). `orleans.lattice.wal.gc.floor_head_distance` records,

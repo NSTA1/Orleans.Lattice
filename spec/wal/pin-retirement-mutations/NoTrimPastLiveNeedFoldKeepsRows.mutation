@@ -1,0 +1,16 @@
+# Pairs with NoTrimPastLiveNeed. A fold retires the leaf's pins while the leaf
+# still owns writes it has not moved to a survivor, so the trim passes them.
+MODULE: NoTrimPastLiveNeedFoldKeepsRows
+TARGET: NoTrimPastLiveNeed
+CLASS: Invariant
+SUMMARY: a fold retires the pins of a leaf whose rows have not moved
+PERTURBS: Fold
+
+--- FIND
+    /\ phase' = "draining"
+    /\ need' = {}
+--- REPLACE
+\* MUTATION: the rows did not move.
+    /\ phase' = "draining"
+    /\ need' = need
+--- END

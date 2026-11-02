@@ -1,0 +1,20 @@
+# Pairs with InFlightBaseSurvives. The fall back registers the abandoned
+# increment's row on its way out instead of deleting its sink manifest.
+MODULE: InFlightBaseSurvivesAbandonPublishes
+TARGET: InFlightBaseSurvives
+CLASS: Action
+SUMMARY: the abandoned increment is registered by the fall back
+PERTURBS: Abandon
+
+--- FIND
+    /\ snk' = snk \ {cap[c].id}
+    /\ arts' \in {arts, arts \ {cap[c].id}}
+    /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0, t |-> 0]]
+    /\ UNCHANGED <<now, pol, next, meta, cat, crashes, pub, lpt, reps>>
+--- REPLACE
+    \* MUTATION: the abandoned increment is registered.
+    /\ cat' = cat \cup {cap[c].id}
+    /\ pub' = pub \cup {cap[c].id}
+    /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0, t |-> 0]]
+    /\ UNCHANGED <<now, pol, next, meta, arts, snk, crashes, lpt, reps>>
+--- END

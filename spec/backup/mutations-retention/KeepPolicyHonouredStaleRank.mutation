@@ -1,0 +1,21 @@
+# Pairs with KeepPolicyHonoured. Production as 10.2.0 shipped it: a
+# republish kept the backup's original capture time, the only time the
+# pass ranked by. A backup captured again just now therefore ranked as old,
+# and the next pass under max-age (or keep-last, if a different backup had
+# been captured in between) pruned the backup the capture had just
+# returned. The mutation drops the ranking refresh from the register.
+MODULE: KeepPolicyHonouredStaleRank
+TARGET: KeepPolicyHonoured
+CLASS: Action
+SUMMARY: a republish keeps its stale ranking time
+PERTURBS: Register
+
+--- FIND
+          /\ Refresh(c)
+          /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0, t |-> 0]]
+--- REPLACE
+          \* MUTATION: the ranking time is not refreshed.
+          /\ lpt' = [lpt EXCEPT ![cap[c].id] = IF @ < cap[c].t THEN cap[c].t ELSE @]
+          /\ UNCHANGED meta
+          /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0, t |-> 0]]
+--- END

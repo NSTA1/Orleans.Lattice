@@ -1,0 +1,17 @@
+{
+  "mutations": "pin-retirement-mutations",
+  "refinement": "PinRetirementRefinement.md",
+  "nonBehaviouralActions": [],
+  "counts": {
+    "invariants": 3,
+    "properties": 3,
+    "actions": 25,
+    "mutations": 31,
+    "behaviourRows": 30,
+    "distinctStates": 284019
+  },
+  "variants": {
+    "OneFault": { "distinctStates": 2651902 },
+    "TwoSweepers": { "distinctStates": 3837317 }
+  }
+}

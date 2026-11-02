@@ -446,6 +446,8 @@ public sealed class LeafCursorReporterShedCeilingTests
                 new Dictionary<string, long>(_offsets, StringComparer.Ordinal));
 
         public Task RemoveAsync(string consumerId) => Task.CompletedTask;
+        public Task<WalMaterialiserPinToken> GetRetirementTokenAsync() => throw new NotSupportedException();
+        public Task<bool> RemoveIfUnmergedSinceAsync(string consumerId, WalMaterialiserPinToken token) => throw new NotSupportedException();
 
         public Task ClearAsync() => Task.CompletedTask;
     }

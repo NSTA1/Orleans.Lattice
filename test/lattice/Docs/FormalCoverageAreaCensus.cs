@@ -63,7 +63,7 @@ internal static class FormalCoverageAreaCensus
         new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
         {
             ["Single-cluster atomic commit"] = ["AtomicCommit"],
-            ["WAL durability lifecycle"] = ["WalDurability", "WalMove"],
+            ["WAL durability lifecycle"] = ["WalDurability", "WalMove", "WalPinRetirement"],
             ["Shard ownership"] =
             [
                 "ShardOwnership", "ShardOwnershipCrdt", "ShardOwnershipCutover", "ShardOwnershipFold",
@@ -73,7 +73,7 @@ internal static class FormalCoverageAreaCensus
             ["Replication convergence"] =
                 ["Replication", "ReplicationCausalDelivery", "ReplicationLowWatermark", "ReplicationReBootstrap"],
             ["Backup and restore"] =
-                ["BackupCapture", "BackupCutover", "BackupIncremental", "BackupProvenance", "BackupRestore"],
+                ["BackupCapture", "BackupCutover", "BackupIdClaim", "BackupIncremental", "BackupProvenance", "BackupRestore", "BackupRetention"],
             ["B+ tree topology"] =
                 ["BPlusCascade", "BPlusReclaimRecovery", "BPlusTopology", "SplitGateCycles", "SplitLink", "SplitLinkTurns"],
             ["Materialised-view tail and lifecycle"] = ["MaterialisedViewTail"],

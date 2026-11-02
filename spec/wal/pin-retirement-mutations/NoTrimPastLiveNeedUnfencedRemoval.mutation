@@ -1,0 +1,17 @@
+# Pairs with NoTrimPastLiveNeed. Production before the fence: a sweep that read
+# the leaf's row as a husk removes the pin by consumer id, unconditionally, even
+# though a purge-cleared leaf re-created under the same grain id has seeded its
+# block pin since the sweep enumerated the key. The re-created leaf's
+# un-checkpointed writes are then trimmed.
+MODULE: NoTrimPastLiveNeedUnfencedRemoval
+TARGET: NoTrimPastLiveNeed
+CLASS: Invariant
+SUMMARY: a husk read removes the pin even after a re-created leaf merged into it
+PERTURBS: Decide
+
+--- FIND
+                    /\ k \notin touched[p]
+--- REPLACE
+\* MUTATION: the removal is not fenced against a later merge.
+                    /\ TRUE
+--- END

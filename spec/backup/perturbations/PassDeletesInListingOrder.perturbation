@@ -1,0 +1,15 @@
+# The grain deletes the doomed manifests in listing order instead of tip
+# first, so a pass interrupted between two deletes can leave a doomed
+# increment's sink manifest without its base. SinkChainIntact: a published
+# increment still in the sink has a restorable base.
+MODULE: BackupRetention
+ROW: SinkChainIntact
+FILE: src/lattice.backup/BackupSchedulerGrain.cs
+DETECTORS: BackupSchedulerGrainUnitTests.PruneAsync_deletes_a_doomed_chain_tip_first
+SUMMARY: a retention pass deletes a doomed base before its doomed increment
+
+--- FIND
+        foreach (var manifest in BackupRetentionPlanner.TipFirst(deleting))
+--- REPLACE
+        foreach (var manifest in deleting)
+--- END

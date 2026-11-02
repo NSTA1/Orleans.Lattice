@@ -1,0 +1,18 @@
+# Issue #5358's production shape: the GC's orphan retirement removes a pin by
+# consumer id, unfenced, so a leaf re-created after the retirement's husk read
+# loses the block pin its birth seeded.
+MODULE: WalPinRetirement
+ROW: Decide(p, c, k)
+FILE: src/lattice/LatticeWalGcScheduler.cs
+DETECTORS: LatticeWalGcSchedulerCadenceTests.The_sweep_does_not_remove_a_pin_that_a_leaf_recreated_after_its_read_seeded_into, LatticeWalGcSchedulerCadenceTests.The_drive_does_not_remove_a_pin_that_a_leaf_recreated_after_its_read_seeded_into
+SUMMARY: the retirement's removal is unconditional by consumer id
+
+--- FIND
+                var removed = await Bounded(
+                    grainFactory.GetGrain<BPlusTree.Grains.IWalMaterialiserPinGrain>(keys[i])
+                        .RemoveIfUnmergedSinceAsync(consumerId, tokens[keys[i]]),
+--- REPLACE
+                await grainFactory.GetGrain<BPlusTree.Grains.IWalMaterialiserPinGrain>(keys[i]).RemoveAsync(consumerId);
+                var removed = await Bounded(
+                    Task.FromResult(true),
+--- END

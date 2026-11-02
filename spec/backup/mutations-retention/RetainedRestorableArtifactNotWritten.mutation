@@ -1,0 +1,14 @@
+# Pairs with RetainedRestorable. The capture publishes a manifest whose
+# artifact never reached the sink.
+MODULE: RetainedRestorableArtifactNotWritten
+TARGET: RetainedRestorable
+CLASS: Invariant
+SUMMARY: the capture's artifact write is lost
+PERTURBS: WriteArt
+
+--- FIND
+    /\ arts' = arts \cup {cap[c].id}
+--- REPLACE
+    \* MUTATION: the artifact is not written.
+    /\ arts' = arts
+--- END

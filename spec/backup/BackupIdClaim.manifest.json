@@ -1,0 +1,15 @@
+{
+  "mutations": "mutations-claim",
+  "refinement": "RefinementClaim.md",
+  "nonBehaviouralActions": [
+    "Stutter"
+  ],
+  "counts": {
+    "invariants": 5,
+    "properties": 3,
+    "actions": 14,
+    "mutations": 24,
+    "behaviourRows": 20,
+    "distinctStates": 14730
+  }
+}

@@ -1,0 +1,17 @@
+# Pairs with NoTrimPastLiveNeed. The leaf advances the checkpoint it publishes
+# without its durable state covering the writes below it (issue #3476's class),
+# so the pin licenses a trim of writes it still needs.
+MODULE: NoTrimPastLiveNeedCheckpointNotDurable
+TARGET: NoTrimPastLiveNeed
+CLASS: Invariant
+SUMMARY: the published checkpoint advances past what the leaf durably holds
+PERTURBS: Checkpoint
+
+--- FIND
+    /\ cp' = next - 1
+    /\ need' = {}
+--- REPLACE
+\* MUTATION: the checkpoint is not durable coverage.
+    /\ cp' = next - 1
+    /\ need' = need
+--- END

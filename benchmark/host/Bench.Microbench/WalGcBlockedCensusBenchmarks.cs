@@ -63,6 +63,8 @@ public class WalGcBlockedCensusBenchmarks
         public Task ReportManyAsync(IReadOnlyList<MaterialiserPinReport> reports) => throw new NotSupportedException();
         public Task SeedManyAsync(IReadOnlyList<MaterialiserPinReport> reports) => throw new NotSupportedException();
         public Task RemoveAsync(string consumerId) => throw new NotSupportedException();
+        public Task<WalMaterialiserPinToken> GetRetirementTokenAsync() => throw new NotSupportedException();
+        public Task<bool> RemoveIfUnmergedSinceAsync(string consumerId, WalMaterialiserPinToken token) => throw new NotSupportedException();
         public Task ClearAsync() => throw new NotSupportedException();
     }
 }

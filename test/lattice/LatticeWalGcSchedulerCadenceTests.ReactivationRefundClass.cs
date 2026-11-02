@@ -89,13 +89,21 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         Func<Task<string?>> probe,
         string? consumerId = null,
         string treeId = StrandedTree,
-        Orleans.Lattice.BPlusTree.Grains.ILeafCursorReporter? cursorReporter = null)
+        Orleans.Lattice.BPlusTree.Grains.ILeafCursorReporter? cursorReporter = null,
+        FakePinStore? pins = null,
+        Orleans.Storage.IGrainStorage? leafStateStorage = null,
+        IWalOrphanPinSweepCoordinator? orphanSweepCoordinator = null)
     {
         var gc = Substitute.For<ILatticeWalGc>();
         gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(_ => Task.FromResult(BlockedReportNaming(consumerId ?? BlockedConsumerId(treeId))));
 
         var (factory, leaf) = FactoryWithBlockedLeaf(treeId);
+        if (pins is not null)
+        {
+            factory.GetGrain<Orleans.Lattice.BPlusTree.Grains.IWalMaterialiserPinGrain>(Arg.Any<string>())
+                .Returns(call => pins.For(call.ArgAt<string>(0)));
+        }
 
         // Issue #2692 Half B moved the seam this fixture injects on. The
         // scheduler used to touch the leaf with GetTreeIdAsync and now drives it
@@ -117,7 +125,11 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         leaf.GetTreeIdAsync().Returns(_ => Task.FromResult<string?>(treeId));
 
         var recorder = new InstrumentRecorder(LatticeMetrics.WalGcBlockedLeafReactivations, treeId);
-        return (CreateScheduler(factory, gc, Adaptive(floor: SweepPass), time, cursorReporter: cursorReporter), recorder);
+        return (CreateScheduler(
+            factory, gc, Adaptive(floor: SweepPass), time,
+            leafStateStorage: leafStateStorage,
+            cursorReporter: cursorReporter,
+            orphanSweepCoordinator: orphanSweepCoordinator), recorder);
     }
 
     /// <summary>

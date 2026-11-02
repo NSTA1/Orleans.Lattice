@@ -308,6 +308,7 @@ internal sealed class CatalogGrainSurface
         public Task<bool> IsDiscardedAsync() => throw new NotSupportedException();
         public Task<bool> DiscardIfAbandonedDerivedCopyAsync() => throw new NotSupportedException();
         public Task<bool> HoldsCompletedPurgeAsync() => Task.FromResult(false);
+        public Task<bool> HoldsDeletionAsync() => Task.FromResult(false);
 
         public Task<bool> IsPhysicalDeletedAsync() => throw new NotSupportedException();
 

@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Backup;
 /// concurrent request observes the guard instead of queueing behind the running
 /// capture.
 /// </summary>
-internal sealed class BackupSchedulerGrain(
+internal sealed partial class BackupSchedulerGrain(
     IGrainContext context,
     IReminderRegistry reminderRegistry,
     ILatticeBackupCaptureService captureService,
@@ -29,7 +29,9 @@ internal sealed class BackupSchedulerGrain(
     BackupInventoryRegistry inventory,
     BackupAccessAuthorizer authorizer,
     [PersistentState("backup-scheduler", LatticeOptions.StorageProviderName)]
-    IPersistentState<BackupSchedulerState> state)
+    IPersistentState<BackupSchedulerState> state,
+    BackupPublisher? publisher = null,
+    IOptions<LatticeBackupOptions>? backupOptions = null)
     : IGrainBase, IRemindable, ILatticeBackupSchedulerGrain
 {
     private const string FullScheduleReminderName = "backup-schedule-full";
@@ -38,6 +40,24 @@ internal sealed class BackupSchedulerGrain(
     // Activation-local overlap guard. Not persisted: a crash that deactivates the
     // grain clears it, so a stale in-flight flag can never wedge the scope.
     private bool _captureInFlight;
+
+    // The reminder-driven cycle in flight, if any (issue #5473): a reminder tick
+    // dispatches its cycle onto an interleaved one-shot grain timer and returns,
+    // and a tick that arrives while one is still running is coalesced into it.
+    // Activation-local, like the guards below.
+    private bool _tickCycleInFlight;
+    private bool _tickCycleIncremental;
+    private IGrainTimer? _tickCycle;
+
+    // A full tick that arrived while an incremental reminder cycle was running
+    // (issue #5531). An incremental cycle does not subsume a full one, so the
+    // full tick is not coalesced into it: it runs one full cycle when the
+    // incremental cycle ends. Several such ticks collapse into one.
+    private bool _pendingFullTick;
+
+    // Activation-local retention guard (issue #5357): one retention pass at a time.
+    // Not persisted, for the same reason as the capture guard.
+    private bool _pruneInFlight;
 
     /// <inheritdoc />
     public IGrainContext GrainContext => context;
@@ -130,13 +150,13 @@ internal sealed class BackupSchedulerGrain(
         ArgumentNullException.ThrowIfNull(scope);
         await AuthorizeScheduleAsync(scope);
         var opts = Options;
-        var manifests = await ListScopeAsync(scope);
         if (!opts.RetentionEnabled)
         {
+            var manifests = await ListScopeAsync(scope);
             return new BackupRetentionReport(manifests.Count, Array.Empty<string>());
         }
 
-        return await PruneCoreAsync(manifests, opts);
+        return await PruneCoreAsync(scope, opts);
     }
 
     /// <inheritdoc />
@@ -160,15 +180,14 @@ internal sealed class BackupSchedulerGrain(
         var backupId = await RunCaptureAsync(incremental, scope);
         if (backupId is not null && Options.RetentionEnabled)
         {
-            var manifests = await ListScopeAsync(scope);
-            await PruneCoreAsync(manifests, Options);
+            await PruneCoreAsync(scope, Options);
         }
 
         return backupId;
     }
 
     /// <inheritdoc />
-    public Task<bool> IsIdleAsync() => Task.FromResult(!_captureInFlight);
+    public Task<bool> IsIdleAsync() => Task.FromResult(!_captureInFlight && !_tickCycleInFlight);
 
     /// <inheritdoc />
     public async Task<BackupSchedulerRuntimeStatus> GetScopeRuntimeStatusAsync()
@@ -198,9 +217,9 @@ internal sealed class BackupSchedulerGrain(
     }
 
     /// <summary>
-    /// Handles a schedule reminder by running one scheduled cycle (capture then
-    /// retention). Unknown reminder names and firings before the scope has been
-    /// configured are ignored.
+    /// Handles a schedule reminder by starting one scheduled cycle (capture then
+    /// retention) and returning without waiting for it. Unknown reminder names
+    /// and firings before the scope has been configured are ignored.
     /// </summary>
     /// <remarks>
     /// The cycle runs inside an <see cref="LatticeAccessGateContext.EnterSystemOrigin"/>
@@ -215,6 +234,25 @@ internal sealed class BackupSchedulerGrain(
     /// is taken where a caller asks for a schedule - see
     /// <see cref="AuthorizeScheduleAsync"/> - so a reminder can only exist because
     /// an authorized caller registered it.
+    /// <para>
+    /// The cycle is not run inside the reminder call (issue #5473). A capture can
+    /// outlast the reminder's response timeout, and <see cref="ReceiveReminder"/>
+    /// is not interleaving, so awaiting it here held the activation for the whole
+    /// capture: the reminder call timed out, and every tick that fired meanwhile
+    /// queued behind it and then ran its own capture back to back, so a schedule
+    /// shorter than its captures never caught up and kept the silo saturated.
+    /// Instead the tick dispatches the cycle onto an interleaved, keep-alive
+    /// one-shot grain timer and returns, and a tick that arrives while a
+    /// reminder-driven cycle is still running is coalesced into it: it starts
+    /// nothing and is recorded as an overrun. Coalescing is per kind (issue
+    /// #5531): a full cycle subsumes an incremental one, so an incremental tick
+    /// is coalesced into any running cycle, but a full tick arriving during an
+    /// incremental cycle is deferred instead - recorded as an overrun, not a
+    /// skip - and runs one full cycle as soon as the incremental one ends, so a
+    /// scope with both schedules never loses its full backup. With no grain
+    /// runtime (a unit-test harness, where <c>RegisterGrainTimer</c> throws) the
+    /// cycle runs inline.
+    /// </para>
     /// </remarks>
     public async Task ReceiveReminder(string reminderName, TickStatus status)
     {
@@ -223,8 +261,79 @@ internal sealed class BackupSchedulerGrain(
             return;
         }
 
-        using var origin = LatticeAccessGateContext.EnterSystemOrigin();
-        await RunScheduledCycleAsync(reminderName == IncrementalScheduleReminderName);
+        var incremental = reminderName == IncrementalScheduleReminderName;
+        if (_tickCycleInFlight && !incremental && _tickCycleIncremental)
+        {
+            LatticeBackupMetrics.RecordSchedulerOverrun(ScopeKey);
+            _pendingFullTick = true;
+            logger.LogInformation(
+                "Backup scope {Scope}: a full schedule tick arrived while an incremental scheduled cycle was "
+                + "running; the full cycle runs when that cycle ends.",
+                ScopeKey);
+            return;
+        }
+
+        if (_tickCycleInFlight)
+        {
+            LatticeBackupMetrics.RecordSchedulerOverrun(ScopeKey);
+            LatticeBackupMetrics.RecordSchedulerSkipped(ScopeKey);
+            logger.LogInformation(
+                "Backup scope {Scope}: a {Kind} schedule tick arrived while the previous scheduled cycle was "
+                + "still running; it was coalesced into that cycle.",
+                ScopeKey,
+                incremental ? "incremental" : "full");
+            return;
+        }
+
+        await StartTickCycleAsync(incremental);
+    }
+
+    private async Task StartTickCycleAsync(bool incremental)
+    {
+        _tickCycleInFlight = true;
+        _tickCycleIncremental = incremental;
+        try
+        {
+            // The callback cannot run before this assignment: it is queued on the
+            // activation and the current turn does not yield before it.
+            _tickCycle = this.RegisterGrainTimer(
+                _ => RunTickCycleAsync(incremental),
+                new GrainTimerCreationOptions(TimeSpan.Zero, Timeout.InfiniteTimeSpan) { Interleave = true, KeepAlive = true });
+            return;
+        }
+        catch
+        {
+            _tickCycle = null;
+        }
+
+        await RunTickCycleAsync(incremental);
+    }
+
+    private async Task RunTickCycleAsync(bool incremental)
+    {
+        try
+        {
+            using var origin = LatticeAccessGateContext.EnterSystemOrigin();
+            await RunScheduledCycleAsync(incremental);
+        }
+        catch (Exception ex)
+        {
+            // The capture path has already recorded its outcome; this surfaces a
+            // fault anywhere in the cycle, retention included, which the reminder
+            // call no longer carries back to the runtime.
+            logger.LogWarning(ex, "Backup scope {Scope}: the scheduled cycle faulted.", ScopeKey);
+        }
+        finally
+        {
+            _tickCycleInFlight = false;
+            Interlocked.Exchange(ref _tickCycle, null)?.Dispose();
+        }
+
+        if (_pendingFullTick)
+        {
+            _pendingFullTick = false;
+            await StartTickCycleAsync(incremental: false);
+        }
     }
 
     /// <summary>
@@ -361,8 +470,8 @@ internal sealed class BackupSchedulerGrain(
             }
 
             if (latest is null
-                || manifest.CreatedAtUtc > latest.CreatedAtUtc
-                || (manifest.CreatedAtUtc == latest.CreatedAtUtc
+                || BackupRetentionPlanner.RankTime(manifest) > BackupRetentionPlanner.RankTime(latest)
+                || (BackupRetentionPlanner.RankTime(manifest) == BackupRetentionPlanner.RankTime(latest)
                     && string.CompareOrdinal(manifest.Id, latest.Id) > 0))
             {
                 latest = manifest;
@@ -387,37 +496,130 @@ internal sealed class BackupSchedulerGrain(
     }
 
     private async Task<BackupRetentionReport> PruneCoreAsync(
+        BackupScopeSelector scope, LatticeBackupScheduleOptions opts)
+    {
+        // Activation-local prune guard (issue #5357). An operator PruneAsync and a
+        // scheduled cycle's prune ([AlwaysInterleave]) can otherwise run at once,
+        // each from its own stale plan: one pass can restore a depended-on row after
+        // the other has scanned for dependents and moved on to delete it. Like the
+        // capture guard it is not persisted, so a crash cannot wedge the scope.
+        if (_pruneInFlight)
+        {
+            logger.LogInformation(
+                "Retention for scope {Scope} skipped: another retention pass is in flight.", ScopeKey);
+            var listed = await ListScopeAsync(scope);
+            return new BackupRetentionReport(listed.Count, Array.Empty<string>());
+        }
+
+        _pruneInFlight = true;
+
+        // Every id published while the listing is read is recorded, so the plan
+        // made from it never dooms a backup a capture has published since (#5418).
+        _publishedDuringListing = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            // The listing is taken under the guard (issue #5412). Taken before it, a
+            // pass could wait out another pass and then plan from a catalog that pass
+            // had already pruned, and restore the row of a backup it had deleted.
+            var manifests = await ListScopeAsync(scope);
+            return await PruneUnderGuardAsync(manifests, opts);
+        }
+        finally
+        {
+            _publishedDuringListing = null;
+            _pruneInFlight = false;
+        }
+    }
+
+    private async Task<BackupRetentionReport> PruneUnderGuardAsync(
         List<BackupManifest> manifests, LatticeBackupScheduleOptions opts)
     {
-        var keep = ComputeKeepSet(manifests, opts, DateTimeOffset.UtcNow);
-        ExpandBaseClosure(manifests, keep);
+        var keep = BackupRetentionPlanner.ComputeRetained(
+            manifests, opts.RetentionKeepLast, opts.RetentionMaxAge, DateTimeOffset.UtcNow);
+
+        // The doom decision and the reservation are one step, with no await between
+        // the listing and here (issue #5418): an id held by a publish, published
+        // during the listing, awaiting its set's stamp, or held by a delete is not
+        // doomed, and every doomed id is held retiring before any row is removed,
+        // so a publish of it waits until this pass has deleted or restored it.
+        var held = new HashSet<string>(StringComparer.Ordinal);
+        var doomed = new List<BackupManifest>();
+        foreach (var manifest in BackupRetentionPlanner.Doomed(manifests, keep))
+        {
+            if (IsHeld(manifest.Id))
+            {
+                held.Add(manifest.Id);
+            }
+            else
+            {
+                doomed.Add(manifest);
+            }
+        }
+
+        _publishedDuringListing = null;
+        ReserveRetiring(doomed);
+        try
+        {
+            return await PruneReservedAsync(manifests, keep, held, doomed);
+        }
+        finally
+        {
+            ReleaseRetiring(doomed);
+        }
+    }
+
+    private async Task<BackupRetentionReport> PruneReservedAsync(
+        List<BackupManifest> manifests, HashSet<string> keep, HashSet<string> held, List<BackupManifest> doomed)
+    {
+        if (doomed.Count == 0)
+        {
+            logger.LogInformation(
+                "Retention pruned 0 backup(s) and retained {Retained} for scope {Scope}.",
+                manifests.Count, ScopeKey);
+            return new BackupRetentionReport(manifests.Count, Array.Empty<string>());
+        }
 
         // Artifacts referenced by any retained manifest must survive even if a
         // pruned manifest happens to reference the same artifact id.
-        var retainedArtifacts = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var manifest in manifests)
-        {
-            if (!keep.Contains(manifest.Id))
-            {
-                continue;
-            }
+        var retainedArtifacts = BackupRetentionPlanner.RetainedArtifacts(manifests, keep.Union(held).ToHashSet(StringComparer.Ordinal));
 
-            foreach (var descriptor in manifest.ContentDescriptors)
+        // The fence against an in-flight incremental capture (issue #5357). Each
+        // doomed row is removed FIRST, so an increment that re-reads its base's row
+        // after this point abandons itself; then one sink scan finds every
+        // increment that wrote its manifest before that point, and the row of any
+        // doomed manifest one outside this pass builds on - and of its own base
+        // chain - is restored instead of deleted.
+        foreach (var manifest in doomed)
+        {
+            await catalog.RemoveAsync(manifest.Id);
+        }
+
+        var sinkManifests = new List<BackupManifest>();
+        await foreach (var manifest in sink.ListManifestsAsync())
+        {
+            sinkManifests.Add(manifest);
+        }
+
+        var blocked = BackupRetentionPlanner.DependedOn(doomed, sinkManifests);
+        foreach (var manifest in doomed)
+        {
+            if (blocked.Contains(manifest.Id))
             {
-                retainedArtifacts.Add(descriptor.ArtifactId);
+                await catalog.RegisterAsync(manifest);
+                ReleaseRetiring(manifest.Id);
             }
         }
 
         var prunedIds = new List<string>();
         var prunedManifests = new List<BackupManifest>();
         long reclaimedBytes = 0;
-        foreach (var manifest in manifests)
+        var deleting = doomed.Where(m => !blocked.Contains(m.Id)).ToList();
+        foreach (var manifest in BackupRetentionPlanner.TipFirst(deleting))
         {
-            if (keep.Contains(manifest.Id))
-            {
-                continue;
-            }
-
+            // Tip first, and each sink manifest before its artifacts, so an
+            // interrupted pass leaves unreferenced artifacts rather than a manifest
+            // without them, or an increment without its base.
+            await sink.DeleteManifestAsync(manifest.Id);
             foreach (var descriptor in manifest.ContentDescriptors)
             {
                 if (!retainedArtifacts.Contains(descriptor.ArtifactId))
@@ -427,10 +629,9 @@ internal sealed class BackupSchedulerGrain(
                 }
             }
 
-            await sink.DeleteManifestAsync(manifest.Id);
-            await catalog.RemoveAsync(manifest.Id);
             prunedIds.Add(manifest.Id);
             prunedManifests.Add(manifest);
+            ReleaseRetiring(manifest.Id);
         }
 
         foreach (var pruned in prunedManifests)
@@ -443,84 +644,18 @@ internal sealed class BackupSchedulerGrain(
             LatticeBackupMetrics.RecordRetention(ScopeKey, reclaimedBytes, prunedIds.Count);
         }
 
+        if (blocked.Count > 0)
+        {
+            logger.LogInformation(
+                "Retention kept {Blocked} backup(s) outside the policy for scope {Scope}: an incremental backup builds on each.",
+                blocked.Count, ScopeKey);
+        }
+
         logger.LogInformation(
             "Retention pruned {Pruned} backup(s) and retained {Retained} for scope {Scope}.",
             prunedIds.Count, manifests.Count - prunedIds.Count, ScopeKey);
 
         return new BackupRetentionReport(manifests.Count - prunedIds.Count, prunedIds);
-    }
-
-    private static HashSet<string> ComputeKeepSet(
-        IReadOnlyList<BackupManifest> manifests, LatticeBackupScheduleOptions opts, DateTimeOffset now)
-    {
-        var keep = new HashSet<string>(StringComparer.Ordinal);
-
-        // Retention enabled but unbounded (neither knob set) retains everything -
-        // a safe no-op that never prunes.
-        if (opts.RetentionKeepLast is null && opts.RetentionMaxAge is null)
-        {
-            foreach (var manifest in manifests)
-            {
-                keep.Add(manifest.Id);
-            }
-
-            return keep;
-        }
-
-        if (opts.RetentionKeepLast is { } keepLast)
-        {
-            var recent = manifests
-                .OrderByDescending(m => m.CreatedAtUtc)
-                .ThenByDescending(m => m.Id, StringComparer.Ordinal)
-                .Take(keepLast);
-            foreach (var manifest in recent)
-            {
-                keep.Add(manifest.Id);
-            }
-        }
-
-        if (opts.RetentionMaxAge is { } maxAge)
-        {
-            // Guard the subtraction: a very large (but validator-permitted, since the
-            // validator only rejects a non-positive window) RetentionMaxAge would push
-            // the cutoff below DateTimeOffset.MinValue and throw. A "retain for
-            // practically forever" window means keep every manifest, so saturate the
-            // cutoff at MinValue rather than fault the retention pass.
-            var cutoff = maxAge >= now - DateTimeOffset.MinValue
-                ? DateTimeOffset.MinValue
-                : now - maxAge;
-            foreach (var manifest in manifests.Where(m => m.CreatedAtUtc >= cutoff))
-            {
-                keep.Add(manifest.Id);
-            }
-        }
-
-        return keep;
-    }
-
-    private static void ExpandBaseClosure(IReadOnlyList<BackupManifest> manifests, HashSet<string> keep)
-    {
-        var byId = new Dictionary<string, BackupManifest>(StringComparer.Ordinal);
-        foreach (var manifest in manifests)
-        {
-            byId[manifest.Id] = manifest;
-        }
-
-        var changed = true;
-        while (changed)
-        {
-            changed = false;
-            foreach (var id in keep.ToList())
-            {
-                if (byId.TryGetValue(id, out var manifest)
-                    && manifest.BaseBackupId is { } baseId
-                    && byId.ContainsKey(baseId)
-                    && keep.Add(baseId))
-                {
-                    changed = true;
-                }
-            }
-        }
     }
 
     private async Task ApplyScheduleAsync(string reminderName, bool enabled, TimeSpan interval)

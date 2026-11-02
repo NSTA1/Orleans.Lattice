@@ -141,6 +141,24 @@ public sealed class BackupOperationResultsTests
     }
 
     [Test]
+    public void A_catalog_rebuild_reports_skipped_count_round_trips_and_an_older_map_reads_none()
+    {
+        var map = BackupOperationResults.ToResultMap(new BackupCatalogRebuildReport(7, 3, 2) { SkippedCount = 2 });
+        var older = new Dictionary<string, string>(map, StringComparer.Ordinal);
+        older.Remove(BackupOperationResultKeys.SkippedCount);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(map[BackupOperationResultKeys.SkippedCount], Is.EqualTo("2"));
+            Assert.That(BackupOperationResults.TryReadCatalogRebuildReport(map, out var report), Is.True);
+            Assert.That(report!.SkippedCount, Is.EqualTo(2));
+            Assert.That(BackupOperationResults.TryReadCatalogRebuildReport(older, out var olderReport), Is.True,
+                "a map recorded before the skipped count existed still reads");
+            Assert.That(olderReport!.SkippedCount, Is.Zero);
+        });
+    }
+
+    [Test]
     public void A_catalog_scrub_report_round_trips_through_its_result_map()
     {
         var map = BackupOperationResults.ToResultMap(new BackupCatalogScrubReport(5, 2, 2, pruned: true, ["x", "y"]));

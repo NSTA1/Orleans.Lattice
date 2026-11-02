@@ -1,0 +1,13 @@
+# The one-pass guard never skips, so an operator's prune and a scheduled
+# cycle's prune run at once. PruneList(p) plans only while no other pass runs.
+MODULE: BackupRetention
+ROW: PruneList(p)
+FILE: src/lattice.backup/BackupSchedulerGrain.cs
+DETECTORS: BackupSchedulerGrainUnitTests.A_retention_pass_is_skipped_while_another_is_in_flight
+SUMMARY: a second retention pass runs while one is in flight
+
+--- FIND
+        if (_pruneInFlight)
+--- REPLACE
+        if (_pruneInFlight && ScopeKey.Length < 0)
+--- END

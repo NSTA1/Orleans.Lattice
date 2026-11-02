@@ -1,0 +1,24 @@
+# Pairs with LivePublisherPinned. Issue #4700's ordering reversed: the purge
+# retires the leaf's pins when it commits, before the row clear, so an interrupted
+# purge that recovery hands back leaves a live leaf with no pin.
+MODULE: LivePublisherPinnedPurgeRetiresPinFirst
+TARGET: LivePublisherPinned
+CLASS: Invariant
+SUMMARY: the purge retires the pins before it clears the row
+PERTURBS: MarkPurge
+
+--- FIND
+    /\ phase' = "marked"
+    /\ purgeMark' = TRUE
+    /\ UNCHANGED walVars
+    /\ UNCHANGED <<inc, seeded, cp, need, owed, route>>
+    /\ UNCHANGED pinVars
+--- REPLACE
+    /\ phase' = "marked"
+    /\ purgeMark' = TRUE
+    /\ UNCHANGED walVars
+    /\ UNCHANGED <<inc, seeded, cp, need, owed, route>>
+\* MUTATION: the pins go at the mark.
+    /\ pinOff' = [pinOff EXCEPT ![route, "cL"] = NoPin]
+    /\ UNCHANGED pinInc
+--- END

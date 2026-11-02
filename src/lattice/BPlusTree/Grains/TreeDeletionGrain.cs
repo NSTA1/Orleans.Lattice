@@ -397,8 +397,7 @@ internal sealed partial class TreeDeletionGrain(
 
         if (state.State.PurgeComplete && state.State.Delegated)
         {
-            await SettleRegistryEntryAsync();
-            await DeregisterLeafCursorsAsync();
+            await SettleDelegatedPurgeAsync();
             return;
         }
         if (state.State.PurgeComplete && state.State.RegistryUnregisterPending)
@@ -433,9 +432,13 @@ internal sealed partial class TreeDeletionGrain(
         var purgeRequestedSnapshot = state.State.PurgeRequested;
         var purgeShardCountSnapshot = state.State.PurgeShardCount;
         var unregisterPendingSnapshot = state.State.RegistryUnregisterPending;
+        var lineageSnapshot = (state.State.PurgedRegistryLineageRecorded, state.State.PurgedRegistryLineage);
+        var purgedLineage = await ReadPurgedRegistryLineageAsync();
 
         // Mark complete and clean up. The registry removal is recorded as owed
-        // in the same write, so it is re-driven if it throws (issue #4265).
+        // in the same write, so it is re-driven if it throws (issue #4265), with
+        // the lineage of the entry it removes, so a re-drive never acts on a
+        // reused id (issue #5417).
         state.State.PurgeInProgress = false;
         state.State.PurgeComplete = true;
         state.State.NextShardIndex = 0;
@@ -443,6 +446,7 @@ internal sealed partial class TreeDeletionGrain(
         state.State.PurgeRequested = false;
         state.State.PurgeShardCount = shardCount;
         state.State.RegistryUnregisterPending = PurgeUnregistersTree;
+        (state.State.PurgedRegistryLineageRecorded, state.State.PurgedRegistryLineage) = purgedLineage;
         try
         {
             await PersistAsync();
@@ -456,6 +460,7 @@ internal sealed partial class TreeDeletionGrain(
             state.State.PurgeRequested = purgeRequestedSnapshot;
             state.State.PurgeShardCount = purgeShardCountSnapshot;
             state.State.RegistryUnregisterPending = unregisterPendingSnapshot;
+            (state.State.PurgedRegistryLineageRecorded, state.State.PurgedRegistryLineage) = lineageSnapshot;
             throw;
         }
 
@@ -776,12 +781,15 @@ internal sealed partial class TreeDeletionGrain(
         // number of shards the finished purge walked.
         var snapshot = (state.State.PurgeInProgress, state.State.PurgeComplete, state.State.NextShardIndex,
             state.State.ShardRetries, state.State.PurgeRequested, state.State.RegistryUnregisterPending);
+        var lineageSnapshot = (state.State.PurgedRegistryLineageRecorded, state.State.PurgedRegistryLineage);
+        var purgedLineage = await ReadPurgedRegistryLineageAsync();
         state.State.PurgeInProgress = false;
         state.State.PurgeComplete = true;
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
         state.State.PurgeRequested = false;
         state.State.RegistryUnregisterPending = PurgeUnregistersTree;
+        (state.State.PurgedRegistryLineageRecorded, state.State.PurgedRegistryLineage) = purgedLineage;
         try
         {
             await PersistAsync();
@@ -790,6 +798,7 @@ internal sealed partial class TreeDeletionGrain(
         {
             (state.State.PurgeInProgress, state.State.PurgeComplete, state.State.NextShardIndex,
                 state.State.ShardRetries, state.State.PurgeRequested, state.State.RegistryUnregisterPending) = snapshot;
+            (state.State.PurgedRegistryLineageRecorded, state.State.PurgedRegistryLineage) = lineageSnapshot;
             throw;
         }
 
@@ -810,19 +819,167 @@ internal sealed partial class TreeDeletionGrain(
     /// Finishes a purge whose completion is persisted: trims the tree's log
     /// while its registry entry still resolves the partition count and
     /// placement (issue #3936 - otherwise a purge that never discarded leaves
-    /// no cursor behind to ever trim it again), removes the registry entry,
-    /// then retires the cursors and reminders and publishes the purge. Safe to
-    /// re-drive after a failure: a removal still owed is recorded in
+    /// no cursor behind to ever trim it again), retires the leaf cursors and
+    /// durable materialiser pins, removes the registry entry, then retires the
+    /// reminders and publishes the purge. Safe to re-drive after a failure: a
+    /// removal still owed is recorded in
     /// <see cref="TreeDeletionState.RegistryUnregisterPending"/> (issue #4265).
     /// </summary>
+    /// <remarks>
+    /// The pins are cleared BEFORE the registry entry is removed (issue #5416).
+    /// Removing the entry is what frees the id: a write can then register it
+    /// again and re-seed the shard's deterministic root leaf, whose birth seed
+    /// lands under the purged root leaf's consumer id. A clear after that would
+    /// erase the new tree's block pins, unfenced. While the registry still names
+    /// the purged tree, no write can register it again, and none can re-seed a
+    /// purged shard under that entry either: a purged shard admits a write only
+    /// once this record no longer holds the deletion (issue #5458,
+    /// <see cref="HoldsDeletionAsync"/>).
+    /// <para>
+    /// Every step acts on the tree id, not on the purged tree, so each runs only
+    /// while the registry entry is still the purged tree's own (issue #5417). A
+    /// removal that landed but whose record did not - the follow-up loop stop or
+    /// the write clearing the record threw, or the removal's own reply was lost -
+    /// is re-driven against an id a write or a create may already have registered
+    /// again. <see cref="ClassifyPurgedRegistryEntryAsync"/> tells the cases
+    /// apart by the lineage recorded with the purge's completion, and a removal
+    /// that already landed is only recorded, never repeated.
+    /// </para>
+    /// </remarks>
     private async Task FinishCompletedPurgeAsync()
     {
+        var entry = await ClassifyPurgedRegistryEntryAsync();
+        if (entry != PurgedRegistryEntry.Owned)
+        {
+            await RecordLandedRegistryRemovalAsync(entry);
+            await UnregisterAllRemindersAsync();
+            if (entry == PurgedRegistryEntry.Landed)
+                await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreePurged);
+            return;
+        }
+
         await TrimPurgedWalAsync();
+        await DeregisterLeafCursorsAsync();
         await SettleRegistryEntryAsync();
 
-        await DeregisterLeafCursorsAsync();
         await UnregisterAllRemindersAsync();
         await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreePurged);
+    }
+
+    /// <summary>
+    /// Whose registry entry a completed purge's owed removal would act on
+    /// (issue #5417).
+    /// </summary>
+    private enum PurgedRegistryEntry
+    {
+        /// <summary>The purged tree's own entry, or no record to tell: act as before.</summary>
+        Owned,
+
+        /// <summary>No entry: the removal landed and the id is free.</summary>
+        Landed,
+
+        /// <summary>An entry of another lineage: the removal landed and the id was registered again.</summary>
+        Reused,
+    }
+
+    /// <summary>
+    /// Reads the lineage of the registry entry a purge is about to record as
+    /// owed a removal (issue #5417), in the turn that records the purge
+    /// complete. While the tree is deleted and its purge running, no write or
+    /// create can register the id, so the entry read is the purged tree's own.
+    /// </summary>
+    /// <remarks>
+    /// Nothing is recorded when the entry is already absent: there is no
+    /// purged entry to tell a reuse from, and the removal then behaves as it
+    /// did before the record existed.
+    /// </remarks>
+    /// <returns>Whether a lineage is recorded, and the lineage (<see langword="null"/> when the entry carries none).</returns>
+    private async Task<(bool Recorded, Guid? Lineage)> ReadPurgedRegistryLineageAsync()
+    {
+        if (!PurgeUnregistersTree) return (false, null);
+        var entry = await grainFactory.GetLatticeRegistry().GetEntryAsync(TreeId);
+        return entry is null ? (false, null) : (true, entry.Lineage);
+    }
+
+    /// <summary>
+    /// Classifies the registry entry an owed removal would act on (issue #5417).
+    /// A purge that owes nothing, keeps its entry, or predates the lineage record
+    /// is <see cref="PurgedRegistryEntry.Owned"/>, its behaviour unchanged.
+    /// Otherwise the entry is the purged tree's own only while it carries the
+    /// recorded lineage. A registration of an absent id stamps a fresh lineage
+    /// unless its caller supplies one, and no caller registering a tree id
+    /// supplies a lineage, so a reused id does not match, even when the purged
+    /// entry carried none. A purged shard does not re-seed under the purged
+    /// entry itself (issue #5458), so the entry still carrying the recorded
+    /// lineage is the purged tree's own.
+    /// </summary>
+    /// <remarks>
+    /// The check and the removal that follows it are not atomic, and need not
+    /// be: this grain is the only caller that removes this id's entry, and it is
+    /// non-reentrant, so an entry that matches cannot be removed and registered
+    /// again before this turn's own removal.
+    /// </remarks>
+    private async Task<PurgedRegistryEntry> ClassifyPurgedRegistryEntryAsync()
+    {
+        if (!PurgeUnregistersTree || !state.State.PurgedRegistryLineageRecorded)
+            return PurgedRegistryEntry.Owned;
+
+        // The record of the removal cleared in the write after it landed.
+        if (!state.State.RegistryUnregisterPending)
+            return PurgedRegistryEntry.Landed;
+
+        var entry = await grainFactory.GetLatticeRegistry().GetEntryAsync(TreeId);
+        if (entry is null)
+            return PurgedRegistryEntry.Landed;
+
+        return entry.Lineage == state.State.PurgedRegistryLineage
+            ? PurgedRegistryEntry.Owned
+            : PurgedRegistryEntry.Reused;
+    }
+
+    /// <summary>
+    /// Records that an owed registry removal already landed, without repeating
+    /// it or any step before it (issue #5417). Every step it skips acts on the id
+    /// and so, for a reused id, on the new tree: the WAL trim on its acknowledged
+    /// writes, the pin-store clear on its leaves' block pins, the removal and the
+    /// loop stop on its registration. They had already run for the purged tree,
+    /// because the removal follows them.
+    /// </summary>
+    private async Task RecordLandedRegistryRemovalAsync(PurgedRegistryEntry entry)
+    {
+        if (state.State.RegistryUnregisterPending)
+        {
+            state.State.RegistryUnregisterPending = false;
+            try { await PersistAsync(); }
+            catch { state.State.RegistryUnregisterPending = true; throw; }
+        }
+
+        if (entry == PurgedRegistryEntry.Reused)
+        {
+            logger.LogInformation(
+                "Tree {TreeId}: the purge's owed registry removal had already landed and the id has been registered again; "
+                + "the re-drive leaves the new tree's log, pins and registration untouched and publishes no purge event for it.",
+                TreeId);
+        }
+    }
+
+    /// <summary>
+    /// Re-drives a delegated copy's completed purge cleanup - its pins, then its
+    /// registry entry - unless that removal already landed (issue #5417), when
+    /// the id may name a new tree.
+    /// </summary>
+    private async Task SettleDelegatedPurgeAsync()
+    {
+        var entry = await ClassifyPurgedRegistryEntryAsync();
+        if (entry != PurgedRegistryEntry.Owned)
+        {
+            await RecordLandedRegistryRemovalAsync(entry);
+            return;
+        }
+
+        // Pins before the registry entry, as FinishCompletedPurgeAsync (#5416).
+        await DeregisterLeafCursorsAsync();
+        await SettleRegistryEntryAsync();
     }
 
     /// <summary>

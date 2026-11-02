@@ -1,0 +1,14 @@
+# Pairs with NoTrimPastLiveNeed. The leaf publishes the allocator's head rather
+# than its durable checkpoint, so the floor passes writes it has not checkpointed.
+MODULE: NoTrimPastLiveNeedPublishPastCheckpoint
+TARGET: NoTrimPastLiveNeed
+CLASS: Invariant
+SUMMARY: the pin is published at the head rather than the checkpoint
+PERTURBS: Publish
+
+--- FIND
+    /\ MergeLeafPin(route, cp)
+--- REPLACE
+\* MUTATION: the head, not the checkpoint.
+    /\ MergeLeafPin(route, next - 1)
+--- END

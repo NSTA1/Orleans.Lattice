@@ -1,0 +1,20 @@
+# Pairs with LivePublisherPinned. The leaf is re-created while the dying
+# activation's own retirement is still owed, and that retirement then removes the
+# re-created leaf's pin. Production rules it out with one activation per grain:
+# the terminal turn ends before another activation exists.
+MODULE: LivePublisherPinnedRecreateBeforeRetireEnds
+TARGET: LivePublisherPinned
+CLASS: Invariant
+SUMMARY: re-creation overlaps the dying activation's own retirement
+PERTURBS: Recreate
+
+--- FIND
+    /\ purgeMark
+    /\ owed = {}
+    /\ inc < MaxInc
+--- REPLACE
+    /\ purgeMark
+\* MUTATION: the dying turn's retirement is still owed.
+    /\ TRUE
+    /\ inc < MaxInc
+--- END

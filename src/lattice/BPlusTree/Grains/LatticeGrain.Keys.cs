@@ -531,6 +531,9 @@ internal sealed partial class LatticeGrain
                 _page = result.Keys;
                 _index = 0;
                 _hasMore = result.HasMore;
+#if LATTICE_DIAG
+                DiagSink.Write($"[DIAG cursor-keys-page] shard={shard.GetPrimaryKeyString()} cont={_continuation ?? "-"} resume={_resumeFrom ?? "-"} rows={_page.Count} first={(_page.Count > 0 ? _page[0] : "-")} last={(_page.Count > 0 ? _page[^1] : "-")} hasMore={result.HasMore} nextResume={result.ResumeFromKey ?? "-"} prefetched={prefetch}");
+#endif
 
                 // Prefer the shard's resume boundary over the page's last key:
                 // it is strictly further along, so the leaves the bounded call

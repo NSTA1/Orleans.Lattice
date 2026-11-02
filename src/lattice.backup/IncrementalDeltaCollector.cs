@@ -20,10 +20,11 @@ namespace Orleans.Lattice.Backup;
 /// tombstone entry, each carrying its full last-writer-wins envelope (value,
 /// hybrid-logical-clock, expiry, origin, and version-vector).
 /// <para>
-/// The content digest is seeded with the base backup id so two empty increments
-/// off different bases never collide on a content address, keeping the chained
-/// backup id unique while an identical retry off the same base stays idempotent.
-/// The delta is never buffered whole - only one drained page is held at a time.
+/// The content digest hashes the streamed bytes alone; the capture engine folds
+/// it and the base backup id into the chained backup id
+/// (<see cref="BackupIdentity.Increment"/>), so two empty increments off different
+/// bases never collide while an identical retry off the same base re-derives the
+/// same id. The delta is never buffered whole - only one drained page is held at a time.
 /// </para>
 /// <para>
 /// A range delete has no faithful point-keyed representation in the uniform
@@ -61,7 +62,6 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
     private readonly IncrementalSagaStaging<CapturedWrite> _staging = new();
 
     private readonly IncrementalHash _hasher;
-    private readonly string _baseBackupId;
     private readonly List<BackupKeyDescriptor> _keyDescriptors = new();
     private readonly Dictionary<string, long> _perOriginHighWater = new(StringComparer.Ordinal);
     private readonly Dictionary<int, long> _maxAdvanced = new();
@@ -70,7 +70,10 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
     private long _byteLength;
     private int _chunkCount;
     private string? _contentHash;
-    private string? _backupId;
+
+    // The tree's own resolved origin, as WalCommitLogWriter stamped it onto an
+    // own write's record (issue #5529).
+    private readonly string? _localOrigin;
     private HybridLogicalClock _highestHlc = HybridLogicalClock.Zero;
 
     /// <summary>Initializes a new <see cref="IncrementalDeltaCollector"/>.</summary>
@@ -84,11 +87,12 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
         string? startInclusive,
         string? endExclusive,
         BackupKeyMergeMode mergeMode,
-        string baseBackupId,
         int batchSize,
         Func<IReadOnlyList<Guid>, CancellationToken, Task<IReadOnlyDictionary<Guid, TxStatus>>> resolveDecisions,
-        IReadOnlyList<Guid>? baseUndecided = null)
+        IReadOnlyList<Guid>? baseUndecided = null,
+        string? localOriginClusterId = null)
     {
+        _localOrigin = localOriginClusterId;
         ArgumentNullException.ThrowIfNull(resolveDecisions);
         _staging.TrackBaseUndecided(baseUndecided);
         _serializer = serializer;
@@ -101,13 +105,12 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
         _endExclusive = endExclusive;
         _mergeMode = mergeMode;
         _batchSize = batchSize;
-        _baseBackupId = baseBackupId;
         _resolveDecisions = resolveDecisions;
 
         // The content digest hashes only the streamed artifact bytes, so the restore
         // integrity gate (which re-hashes the artifact alone) reproduces it exactly.
-        // Base-relative uniqueness of the chained backup id is folded in separately
-        // (see BackupId), keeping the content address a pure hash of the payload.
+        // The backup id is derived from it separately (BackupIdentity), keeping the
+        // digest a pure hash of the payload.
         _hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
     }
 
@@ -174,17 +177,6 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
         _contentHash ?? throw new InvalidOperationException(
             "The content hash is not available until the delta stream has been fully drained.");
 
-    /// <summary>
-    /// The lowercase hexadecimal SHA-256 chained backup id: the content hash folded
-    /// with the base backup id so two empty increments off different bases never
-    /// collide on a manifest id, while an identical retry off the same base stays
-    /// idempotent. Available only after <see cref="StreamAsync"/> has been fully
-    /// enumerated.
-    /// </summary>
-    public string BackupId =>
-        _backupId ?? throw new InvalidOperationException(
-            "The backup id is not available until the delta stream has been fully drained.");
-
     /// <inheritdoc />
     public void OnEntry(in WalSubscriptionEntry entry)
     {
@@ -225,7 +217,12 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
             return;
         }
 
-        var origin = BackupChainFrontier.NormalizeOrigin(mutation.OriginClusterId);
+        // An own write's record carries the tree's resolved origin (the local
+        // cluster id on a replicated tree), while its row - and so a full backup -
+        // stores no origin. Route it through the core's WAL-to-row seam so an
+        // increment records own writes exactly as a full backup does (#5529).
+        var origin = BackupChainFrontier.NormalizeOrigin(
+            LatticeRowOrigin.FromRecord(mutation.OriginClusterId, _localOrigin));
 
         // The WAL mutation carries the authoring merge mode per record, so the
         // incremental path reads the true per-key mode directly - no durable
@@ -411,13 +408,6 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
 
         _contentHash = BackupContentHash.ToHexLowerAndReset(_hasher);
         _hasher.Dispose();
-
-        // Fold the base backup id into the chained backup id so an empty delta off a
-        // different base yields a distinct manifest id, while the content descriptor
-        // keeps the pure payload hash for the restore integrity gate.
-        var idBytes = Encoding.UTF8.GetBytes(
-            $"{_baseBackupId}{(char)BackupConstants.KeySeparator}{_contentHash}");
-        _backupId = BackupContentHash.Compute(idBytes);
     }
 
     private bool RangeIntersectsScope(in LatticeMutation mutation)

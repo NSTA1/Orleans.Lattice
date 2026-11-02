@@ -121,4 +121,45 @@ internal sealed class TreeDeletionState
     /// detect a delete-and-recover cycle that begins and ends live.
     /// </summary>
     [Id(21)] public long DeletionEpoch { get; set; }
+
+    /// <summary>
+    /// Whether <see cref="PurgedRegistryLineage"/> was recorded with the
+    /// completion of this tree's purge (issue #5417). A purge completed by a build
+    /// that predates the record decodes the missing slot to <see langword="false"/>,
+    /// and its owed registry removal is re-driven without the ownership check.
+    /// </summary>
+    [Id(22)] public bool PurgedRegistryLineageRecorded { get; set; }
+
+    /// <summary>
+    /// The <see cref="TreeRegistryEntry.Lineage"/> of the registry entry the
+    /// purge removes, read in the turn that records the purge complete
+    /// (issue #5417). An owed removal re-driven later acts only while the entry
+    /// still carries this lineage: a missing entry means the removal landed, and
+    /// a different one means the id was registered again by a write or a create,
+    /// so the re-drive must not trim, deregister or unregister the new tree.
+    /// <see langword="null"/> when the entry carried no lineage (a registration
+    /// predating issue #4537); a registration of an absent id stamps one unless
+    /// its caller supplies one, which no caller registering a tree id does. Not recorded
+    /// when the entry was already absent.
+    /// </summary>
+    [Id(23)] public Guid? PurgedRegistryLineage { get; set; }
+
+    /// <summary>
+    /// Whether <see cref="LogicalPurgedRegistryLineage"/> was recorded, in a
+    /// write of its own before a logical purge removes the logical tree's
+    /// registry entry (issue #5459). Legacy persisted state decodes the missing
+    /// slot to <see langword="false"/>, and the removal is then recorded on its
+    /// next attempt.
+    /// </summary>
+    [Id(24)] public bool LogicalPurgedRegistryLineageRecorded { get; set; }
+
+    /// <summary>
+    /// The <see cref="TreeRegistryEntry.Lineage"/> of the logical tree's registry
+    /// entry, read before a logical purge first removes it (issue #5459). A
+    /// completion re-driven after the removal landed removes the entry again only
+    /// while it still carries this lineage, so it never removes the entry of a
+    /// tree that a write or a create registered under the id since.
+    /// </summary>
+    [Id(25)] public Guid? LogicalPurgedRegistryLineage { get; set; }
 }
+

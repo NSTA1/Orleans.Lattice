@@ -90,4 +90,53 @@ public sealed class LatticeBackupOptions
     /// wait (<c>0xFFFFFFFE</c> milliseconds, about 49.7 days). Defaults to 15 seconds.
     /// </summary>
     public TimeSpan SinkSharingProbeTimeout { get; set; } = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// How long one publish or delete call on a scope's scheduler grain waits for
+    /// a backup id that a retention pass, a delete or another publish holds, before
+    /// it returns busy having written nothing (issue #5418). Kept well inside the
+    /// grain response timeout; the caller retries across calls. Internal: a test
+    /// shortens it to drive the busy path.
+    /// </summary>
+    internal TimeSpan PublishHoldWait { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// How long the publication gate keeps retrying a busy publish or delete before
+    /// it fails with <see cref="TimeoutException"/>. A pass holds an id only while
+    /// it deletes that one backup, so this bounds a sink that is stuck rather than
+    /// slow.
+    /// </summary>
+    internal TimeSpan PublishHoldTimeout { get; set; } = TimeSpan.FromMinutes(15);
+
+    /// <summary>The pause between the publication gate's retries of a busy call.</summary>
+    internal TimeSpan PublishHoldRetryDelay { get; set; } = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>
+    /// How long a set member written ahead of its set's membership stamp stays
+    /// held from retention (issue #5629). The stamp, or the member's unstamped
+    /// registration when the set fails, releases it at once; the lease bounds the
+    /// hold when the capturing silo is lost before either runs.
+    /// </summary>
+    internal TimeSpan PendingStampLease { get; set; } = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// How long an operator delete keeps its backup id reserved without a renewal
+    /// while it deletes the backup's artifacts outside the scheduler grain (issue
+    /// #5628). The caller renews it synchronously before each artifact delete, and
+    /// in the background every third of this while one artifact delete runs, and
+    /// releases it when it finishes or fails; so the lease runs out only when the
+    /// caller is lost, or cannot reach the grain, for a whole lease, or the
+    /// scheduler's activation - which holds the leases - is lost. Shorter than
+    /// <see cref="PublishHoldTimeout"/>, so a capture that waits on a lost
+    /// delete's lease outlasts it rather than failing. Once a lease has run out a
+    /// catalog rebuild may re-list the backup, so the caller deletes an artifact
+    /// only straight after the grain has confirmed its lease, and stops - keeping
+    /// the sink manifest for a retry - when the grain refuses or cannot be reached
+    /// (issues #5637 and #5639); a rebuild re-lists only a backup whose every
+    /// artifact is still in the sink; and the sink manifest is deleted under the
+    /// id's hold only while no row lists the id (#5631). The residual window is the
+    /// one artifact delete in flight between a confirmed renewal and the lease
+    /// running out or the activation being lost.
+    /// </summary>
+    internal TimeSpan DeleteLease { get; set; } = TimeSpan.FromMinutes(10);
 }

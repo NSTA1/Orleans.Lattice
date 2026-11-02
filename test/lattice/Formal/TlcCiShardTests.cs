@@ -109,6 +109,8 @@ public sealed partial class TlcCiShardTests
     [TestCase("ShardOwnershipRetention", "", TlcCiShard.ShardOwnership)]
     [TestCase("AtomicCommitCrossCluster", "", TlcCiShard.Atomic)]
     [TestCase("BackupCapture", "", TlcCiShard.Backup)]
+    [TestCase("BackupIdClaim", "", TlcCiShard.Backup)]
+    [TestCase("BackupRetention", "", TlcCiShard.BackupRetention)]
     [TestCase("ReplicationCausalDelivery", "", TlcCiShard.ReBootstrap)]
     [TestCase("ReplicationLowWatermark", "", TlcCiShard.ReBootstrap)]
     public void A_mutation_routes_to_its_modules_shard(string moduleName, string mutationPrefix, string? expected)
@@ -201,6 +203,8 @@ public sealed partial class TlcCiShardTests
                         ? TlcCiShard.ReBootstrap
                         : module.Name == "SchemaViewComposition"
                         ? TlcCiShard.SchemaView
+                        : module.Name == "BackupRetention"
+                        ? TlcCiShard.BackupRetention
                         : module.Name.StartsWith("Schema", StringComparison.Ordinal)
                         ? TlcCiShard.Schema
                         : module.Name == "MaterialisedViewFence"
@@ -398,6 +402,25 @@ public sealed partial class TlcCiShardTests
             Assert.That(module.LoadMutations().All(mutation => TlcCiShard.SharesBaseShard(module, mutation)), Is.True,
                 "the base must run in the mutations' process to serve their full-bound controls");
             Assert.That(LatticeShards().Single(shard => shard.Categories.Contains(TlcCiShard.SchemaView)).Tiers,
+                Is.EqualTo(new[] { "deterministic" }));
+        });
+    }
+
+    [Test]
+    public void Backup_retention_routes_every_case_to_its_own_shard_with_its_base()
+    {
+        var module = Module("BackupRetention");
+        var cases = new[] { TlcCiShard.OfModule(module) }
+            .Concat(module.Manifest.Variants.Keys.Select(variant => TlcCiShard.OfVariant(module, variant)))
+            .Concat(module.LoadMutations().Select(mutation => TlcCiShard.Of(module, mutation)))
+            .ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(cases, Has.Length.EqualTo(1 + module.Manifest.Variants.Count + module.Manifest.Counts.Mutations));
+            Assert.That(cases, Is.All.EqualTo(TlcCiShard.BackupRetention));
+            Assert.That(module.LoadMutations().All(mutation => TlcCiShard.SharesBaseShard(module, mutation)), Is.True,
+                "the base must run in the mutations' process to serve their full-bound controls");
+            Assert.That(LatticeShards().Single(shard => shard.Categories.Contains(TlcCiShard.BackupRetention)).Tiers,
                 Is.EqualTo(new[] { "deterministic" }));
         });
     }

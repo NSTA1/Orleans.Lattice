@@ -77,8 +77,17 @@ internal static class TlcCiShard
     public static IReadOnlyList<string> AtomicVariantShards { get; } =
         [AtomicVariants1, AtomicVariants2, AtomicVariants3, AtomicVariants4, AtomicVariants5, AtomicVariants6];
 
-    /// <summary>The mutants of every Backup* module, and the bases of all but BackupCapture.</summary>
+    /// <summary>The mutants of every Backup* module but BackupRetention, and the bases of all but BackupCapture and BackupRetention.</summary>
     public const string Backup = "TlcShardBackup";
+
+    /// <summary>
+    /// Every base, variant and mutation of <c>BackupRetention</c>, in a shard of its
+    /// own, so its base serves its mutations' full-bound controls. Its base grew to
+    /// 2,680,648 states with the republish under a per-id hold (#5418), and left in
+    /// the catch-all it made each of its mutations launch a full-bound control of
+    /// its own, which turned the backup shard into the CI critical path.
+    /// </summary>
+    public const string BackupRetention = "TlcShardBackupRetention";
 
     /// <summary>The measured materialised-view tail base, variant and mutation runs.</summary>
     public const string MaterialisedViews = "TlcShardMaterialisedViews";
@@ -184,7 +193,7 @@ internal static class TlcCiShard
 
     /// <summary>Every category <see cref="Of"/>, <see cref="OfModule"/> and <see cref="OfVariant"/> can return.</summary>
     public static IReadOnlyList<string> All { get; } =
-        [Convergence, ReplicationWal, ShardOwnership, ReBootstrap, Atomic, .. AtomicVariantShards, Backup,
+        [Convergence, ReplicationWal, ShardOwnership, ReBootstrap, Atomic, .. AtomicVariantShards, Backup, BackupRetention,
          BPlusCascade,
          MaterialisedViews, MaterialisedViewFence, MaterialisedViewHorizon,
          MaterialisedViewAggregation, MaterialisedViewRebind,
@@ -255,6 +264,11 @@ internal static class TlcCiShard
             return ShardOwnership;
         }
 
+        if (string.Equals(name, "BackupRetention", StringComparison.Ordinal))
+        {
+            return BackupRetention;
+        }
+
         if (name.StartsWith("Backup", StringComparison.Ordinal))
         {
             return Backup;
@@ -306,17 +320,24 @@ internal static class TlcCiShard
     /// their controls, as do the split AntiEntropy groups whose base stays
     /// where it is. BPlusCascade moved later (#5166): in CI run 40909619830 its
     /// base took 10 s against 227 s for its thirteen mutations, then split over
-    /// two shards, so its base and mutations now share one shard.
+    /// two shards, so its base and mutations now share one shard. WalPinRetirement
+    /// joined at creation (#5349): its base measured 24 s on two local workers,
+    /// far below half the replication-wal shard's 14-minute item. BackupIdClaim
+    /// joined at creation (#5627): its base is 174 states, under a second.
+    /// BackupRetention moved into a shard of its own with its mutations and
+    /// variant (#5352): its base is the shard's longest case, and serving its
+    /// full-bound controls removes a base-sized run per mutation.
     /// </para>
     /// </summary>
     private static string? CoLocatedBaseCategory(SpecModule module) => module.Name switch
     {
         "AtomicCommit" or "AtomicCommitCrossCluster" => Atomic,
-        "BackupCutover" or "BackupIncremental" or "BackupProvenance" or "BackupRestore" => Backup,
+        "BackupCutover" or "BackupIdClaim" or "BackupIncremental" or "BackupProvenance" or "BackupRestore" => Backup,
+        "BackupRetention" => BackupRetention,
         "BPlusCascade" => BPlusCascade,
         "ReplicationCausalDelivery" or "ReplicationLowWatermark" or "ReplicationReBootstrap" => ReBootstrap,
         "ShardOwnershipCrdt" or "ShardOwnershipCutover" or "ShardOwnershipFold" or "ShardOwnershipRetention" => ShardOwnership,
-        "Replication" or "WalDurability" or "WalMove" => ReplicationWal,
+        "Replication" or "WalDurability" or "WalMove" or "WalPinRetirement" => ReplicationWal,
         _ => null,
     };
 
@@ -344,6 +365,11 @@ internal static class TlcCiShard
             && string.Equals(variant, "Alias", StringComparison.Ordinal))
         {
             return AntiEntropy2;
+        }
+
+        if (string.Equals(module.Name, "BackupRetention", StringComparison.Ordinal))
+        {
+            return BackupRetention;
         }
 
         if (LifecycleCategory(module.Name) is { } lifecycleCategory)

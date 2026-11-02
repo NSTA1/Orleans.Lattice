@@ -1,0 +1,15 @@
+# Pairs with LivePublisherPinned. The classifier stops reading the tree id
+# (issue #3105's diagnostic half reversed the wrong way): every row reads as a
+# husk, so a live leaf's pin is retired.
+MODULE: LivePublisherPinnedReadIgnoresTreeId
+TARGET: LivePublisherPinned
+CLASS: Invariant
+SUMMARY: every leaf read is classified as a husk
+PERTURBS: Read
+
+--- FIND
+    /\ verdict' = [verdict EXCEPT ![p] = IF phase = "husk" THEN "husk" ELSE "live"]
+--- REPLACE
+\* MUTATION: the tree id is not consulted.
+    /\ verdict' = [verdict EXCEPT ![p] = "husk"]
+--- END
