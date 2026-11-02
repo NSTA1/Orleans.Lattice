@@ -53,7 +53,7 @@ public sealed class HandOffMarkerRowRoundTripTests
         RoutingGeneration = 7,
         BulkBirthHints = { ["bulk-op"] = [10, 11] },
         Sequence = 9,
-        ReseedOf = "tombstone-etag",
+        ReseedLineage = new Guid("5716a000-0000-0000-0000-000000000009"),
     };
 
     private static void AssertShard(ShardHandOffState round)
@@ -71,7 +71,7 @@ public sealed class HandOffMarkerRowRoundTripTests
             Assert.That(round.RoutingGeneration, Is.EqualTo(7));
             Assert.That(round.BulkBirthHints["bulk-op"], Is.EqualTo(new long[] { 10, 11 }));
             Assert.That(round.Sequence, Is.EqualTo(9));
-            Assert.That(round.ReseedOf, Is.EqualTo("tombstone-etag"), "the re-seed stamp (#5716)");
+            Assert.That(round.ReseedLineage, Is.EqualTo(new Guid("5716a000-0000-0000-0000-000000000009")), "the re-seed stamp (#5716)");
         });
     }
 

@@ -417,21 +417,25 @@ internal sealed partial class ShardRootGrain
     /// <summary>
     /// The re-seed catch-up (#5703 review, S2; #5716). It runs when this shard re-seeds
     /// a purged root for a re-created incarnation, before the tombstone is lifted, and
-    /// stamps the marker with <paramref name="reseedOf"/>: the storage ETag of the
-    /// tombstone being lifted. A marker that already carries it was caught up by
-    /// another activation lifting the same tombstone (a duplicate activation that
-    /// re-seeded first, and may since have seeded and fenced its generation), so it is
-    /// left alone. Any other marker predates the re-created incarnation. A 10.2.0 silo
+    /// stamps the marker with <paramref name="reseedLineage"/>: the registry lineage of
+    /// the re-created tree's registration. A marker that already carries it was caught
+    /// up by another activation re-seeding the same incarnation (a duplicate activation
+    /// that re-seeded first, and may since have seeded and fenced its generation), so it
+    /// is left alone. Any other marker predates the re-created incarnation. A 10.2.0 silo
     /// that finished the purge retired nothing, so such a marker can hold a generation
     /// or read initialised. The catch-up raises this shard root's own routing floor
     /// over its generation, then rewrites it as uninitialised with no generation. Its
     /// first initialisation then seeds above the floor through the first-initialisation
     /// fence.
     /// </summary>
-    /// <param name="reseedOf">
-    /// The ETag of the purge tombstone being lifted. Empty only on a storage double that
-    /// issues no ETags; the catch-up then infers "predates" from the generation and the
-    /// initialised flag, as it did before #5716. Production providers enforce ETags.
+    /// <param name="reseedLineage">
+    /// The re-created registration's lineage. A registration of an absent id always
+    /// stamps a fresh one, on this build and on 10.2.0, so it is unique per incarnation
+    /// whatever the storage provider. It changes otherwise only when an alias move
+    /// retargets the id's entry, which a tree being re-created by a write is not in the
+    /// middle of. <see langword="null"/> only for an entry that predates lineages; the
+    /// catch-up then infers "predates" from the generation and the initialised flag, as
+    /// it did before #5716.
     /// </param>
     /// <remarks>
     /// <para>
@@ -445,19 +449,20 @@ internal sealed partial class ShardRootGrain
     /// A marker the new incarnation's range-delete fence opened on this shard before it
     /// re-seeded holds neither a generation nor the initialised flag, so it is only
     /// stamped. Cost: one marker-row read and, unless a sibling already stamped it, one
-    /// marker-row write, once per shard per re-creation. No grain call. Mixed-version
+    /// marker-row write, once per shard per re-creation. No grain call: the lineage
+    /// comes from the registry read the re-seed already makes. Mixed-version
     /// residue: a re-seed run by a 10.2.0 silo, and a range-delete fence state an earlier
     /// incarnation left, are not caught up.
     /// </para>
     /// </remarks>
-    private async Task RetirePredatingHandOffMarkerAsync(string? reseedOf)
+    private async Task RetirePredatingHandOffMarkerAsync(Guid? reseedLineage)
     {
         if (WalAppendFenceStorage.Resolve(context.ActivationServices) is not { } storage)
         {
             return;
         }
 
-        var stamped = !string.IsNullOrEmpty(reseedOf);
+        var stamped = reseedLineage is not null;
         var self = WalRoutingInitiator.ShardRoot(ShardIndex);
         await _handOffGate.WaitAsync();
         try
@@ -483,7 +488,7 @@ internal sealed partial class ShardRootGrain
 
                     m.RoutingGeneration = 0;
                     m.Initialised = false;
-                    m.ReseedOf = stamped ? reseedOf : m.ReseedOf;
+                    m.ReseedLineage = stamped ? reseedLineage : m.ReseedLineage;
                     m.Sequence++;
                     return true;
                 });
@@ -508,13 +513,13 @@ internal sealed partial class ShardRootGrain
         }
 
         bool IsCaughtUp(ShardHandOffState marker) =>
-            stamped ? string.Equals(marker.ReseedOf, reseedOf, StringComparison.Ordinal) : !HoldsGeneration(marker);
+            stamped ? marker.ReseedLineage == reseedLineage : !HoldsGeneration(marker);
 
         static bool HoldsGeneration(ShardHandOffState marker) => marker.RoutingGeneration > 0 || marker.Initialised;
     }
 
-    /// <summary>Runs the re-seed catch-up as a purged root's re-seed of tombstone <paramref name="reseedOf"/> does; test seam (#5716).</summary>
-    internal Task RetirePredatingHandOffMarkerForTestingAsync(string? reseedOf) => RetirePredatingHandOffMarkerAsync(reseedOf);
+    /// <summary>Runs the re-seed catch-up as a re-seed of the registration <paramref name="reseedLineage"/> does; test seam (#5716).</summary>
+    internal Task RetirePredatingHandOffMarkerForTestingAsync(Guid? reseedLineage) => RetirePredatingHandOffMarkerAsync(reseedLineage);
     /// <summary>Forgets every marker read, when the shard re-seeds a purged root for a re-created incarnation (#5705).</summary>
     private void ForgetHandOffMarker()
     {

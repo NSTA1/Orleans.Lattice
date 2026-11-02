@@ -64,13 +64,14 @@ internal sealed class ShardHandOffState : ILatticeBinaryPersistedState, Orleans.
     public long Sequence { get; set; }
 
     /// <summary>
-    /// The re-seed that last caught this marker up (#5716): the storage ETag of the
-    /// purge tombstone the shard root lifted. Every activation lifting the same
-    /// tombstone shares it, and a later purge writes a new one, so a duplicate
+    /// The incarnation whose re-seed last caught this marker up (#5716): the registry
+    /// lineage of the registration the shard root re-seeded its purged root under.
+    /// Every activation re-seeding the same re-created tree reads the same lineage,
+    /// and every registration of an absent id stamps a new one, so a duplicate
     /// activation's catch-up recognises a marker its sibling already caught up and
     /// seeded, and leaves it alone. <see langword="null"/> on a marker no re-seed
     /// has caught up.
     /// </summary>
     [Id(7)]
-    public string? ReseedOf { get; set; }
+    public Guid? ReseedLineage { get; set; }
 }

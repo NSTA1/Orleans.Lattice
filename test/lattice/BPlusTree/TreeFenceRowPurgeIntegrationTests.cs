@@ -297,6 +297,7 @@ public sealed class TreeFenceRowPurgeIntegrationTests
         var floors = (await WalAppendFenceRows.ReadRoutingFloorAsync(Storage, Name)).State;
         var partitions = await PartitionsAsync(Name);
         var rows = await GenerationRowsAsync(Name);
+        var lineage = (await _cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).GetEntryAsync(Name))!.Lineage;
         for (var shard = 0; shard < Shards; shard++)
         {
             var marker = (await HandOffMarkerRows.ReadShardAsync(Storage, Name, shard)).State;
@@ -308,6 +309,8 @@ public sealed class TreeFenceRowPurgeIntegrationTests
                 Assert.That(marker.RoutingGeneration, Is.EqualTo(floor + 1), "the re-created shard root did not adopt the old generation");
                 Assert.That(marker.Closes.Any(c => c.Token == ShardRootGrain.RecreationFenceToken(floor)), Is.True,
                     "its first initialisation ran the fence");
+                Assert.That(marker.ReseedLineage, Is.Not.Null.And.EqualTo(lineage),
+                    "the re-seed stamped the re-created registration's lineage (#5716)");
                 for (var partition = 0; partition < partitions; partition++)
                 {
                     Assert.That(rows.GetValueOrDefault((partition, initiator)), Is.EqualTo(floor + 1),

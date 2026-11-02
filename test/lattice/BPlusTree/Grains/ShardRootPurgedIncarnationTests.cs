@@ -24,8 +24,10 @@ public sealed class ShardRootPurgedIncarnationTests
     private const string Tree = "purged-incarnation";
     private static readonly WalRoutingInitiator ShardZero = WalRoutingInitiator.ShardRoot(0);
 
-    /// <summary>The storage ETag of the purge tombstone a re-seed lifts (#5716).</summary>
-    private const string Tombstone = "tombstone-etag-1";
+    /// <summary>The registry lineage of the re-created tree a re-seed lifts the tombstone under (#5716).</summary>
+    private static readonly Guid Tombstone = new("5716a000-0000-0000-0000-000000000001");
+
+    private static readonly Guid NextIncarnation = new("5716a000-0000-0000-0000-000000000002");
 
     private static ShardRootGrain CreateGrain(IGrainStorage storage, int shard = 0)
     {
@@ -195,7 +197,7 @@ public sealed class ShardRootPurgedIncarnationTests
     }
 
     [Test]
-    public async Task A_duplicate_activation_lifting_the_same_tombstone_leaves_its_siblings_live_marker_alone()
+    public async Task A_duplicate_activation_re_seeding_the_same_incarnation_leaves_its_siblings_live_marker_alone()
     {
         // #5716: D2 loaded the purge tombstone and awaits the registry while D1 re-seeds,
         // seeds its marker at floor + 1, fences it, and admits writes under it.
@@ -216,7 +218,7 @@ public sealed class ShardRootPurgedIncarnationTests
             Assert.That(floor, Is.EqualTo(2), "D1's live generation 3 is not floored");
             Assert.That(marker.RoutingGeneration, Is.EqualTo(3), "D1's marker keeps its generation");
             Assert.That(marker.Initialised, Is.True, "and stays initialised");
-            Assert.That(marker.ReseedOf, Is.EqualTo(Tombstone));
+            Assert.That(marker.ReseedLineage, Is.EqualTo(Tombstone));
         });
         Assert.That(
             async () => await d1.RetryStaleRoutingForTestingAsync(new WalRoutingGenerationStaleException(ShardZero, 3, 0)),
@@ -234,7 +236,7 @@ public sealed class ShardRootPurgedIncarnationTests
         await SeedMarkerAsync(storage, 3, initialised: true);
 
         // Purged again on a 10.2.0 silo, which retires nothing: a new tombstone is lifted.
-        await CreateGrain(storage).RetirePredatingHandOffMarkerForTestingAsync("tombstone-etag-2");
+        await CreateGrain(storage).RetirePredatingHandOffMarkerForTestingAsync(NextIncarnation);
 
         var marker = (await HandOffMarkerRows.ReadShardAsync(storage, Tree, 0)).State;
         var floor = await WalAppendFenceRows.ReadRoutingFloorAsync(storage, Tree, ShardZero);
@@ -243,7 +245,7 @@ public sealed class ShardRootPurgedIncarnationTests
             Assert.That(floor, Is.EqualTo(3), "the earlier incarnation's generation is floored");
             Assert.That(marker.RoutingGeneration, Is.Zero);
             Assert.That(marker.Initialised, Is.False);
-            Assert.That(marker.ReseedOf, Is.EqualTo("tombstone-etag-2"));
+            Assert.That(marker.ReseedLineage, Is.EqualTo(NextIncarnation));
         });
     }
 
