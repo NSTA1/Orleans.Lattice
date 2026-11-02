@@ -55,7 +55,9 @@ public static class ContosoAccess
     /// <item><c>stewards-factory</c> (group <c>data-stewards</c>): edit, bulk load and administer the orders;
     /// edit the telemetry and the lines; create, load and delete the archive and the history trees
     /// (tree lifecycle there only, so resize is never offered on the orders); administer the
-    /// <c>order-status</c> tag index's tree.</item>
+    /// <c>order-status</c> tag index's tree; read through the <c>orders</c> alias. A read is authorized
+    /// on the name it addresses, before the alias resolves, so the grant on <c>factory-orders</c>
+    /// alone does not reach it through <c>orders</c> (#5597).</item>
     /// <item><c>schema-owners-factory</c> (group <c>schema-owners</c>): read and administer the schema of the
     /// orders, the lines and the archive.</item>
     /// <item><c>auditors-factory-read</c> (group <c>auditors</c>): read the orders, the lines and the archive,
@@ -77,6 +79,7 @@ public static class ContosoAccess
             EditOps | LatticeOperation.BulkLoad | LatticeOperation.Admin | LatticeOperation.TreeLifecycle),
         Group(StoryNames.Contoso.Rules.StewardsFactory, StoryNames.Contoso.Groups.DataStewards, OrderStatusIndexTree,
             ReadOps | LatticeOperation.Admin),
+        Group(StoryNames.Contoso.Rules.StewardsFactory, StoryNames.Contoso.Groups.DataStewards, StoryNames.Contoso.Aliases.Orders, ReadOps),
 
         Group(StoryNames.Contoso.Rules.SchemaOwnersFactory, StoryNames.Contoso.Groups.SchemaOwners, Trees.FactoryOrders, ReadOps | LatticeOperation.SchemaAdmin),
         Group(StoryNames.Contoso.Rules.SchemaOwnersFactory, StoryNames.Contoso.Groups.SchemaOwners, Trees.FactoryLines, ReadOps | LatticeOperation.SchemaAdmin),
