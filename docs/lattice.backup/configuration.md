@@ -108,7 +108,44 @@ Per-scope configuration for scheduled backup triggering and backup-chain retenti
 
 ### Retention rule semantics
 
-A backup is retained if it satisfies `RetentionKeepLast` **or** `RetentionMaxAge`; only a backup that fails every enabled rule is eligible for pruning. With `RetentionEnabled` set but neither bound configured, nothing is pruned. Regardless of either bound, the base chain of a retained increment is always preserved, so a restore chain is never left with a missing ancestor.
+A backup is retained if it satisfies `RetentionKeepLast` **or** `RetentionMaxAge`; only a backup that fails every enabled rule is eligible for pruning. With `RetentionEnabled` set but neither bound configured, nothing is pruned. Regardless of either bound, the base chain of a retained increment is always preserved, so a restore chain is never left with a missing ancestor. Both rules rank a backup by when it was last captured: a capture that reproduces an existing backup's bytes republishes it under the same content-addressed id, and records its capture time in `BackupManifest.LastCapturedAtUtc`, so `RetentionKeepLast` counts it as the newest and `RetentionMaxAge` measures from that capture.
+
+A retention pass is also safe against captures that run while it does. It removes each eligible backup's catalog row first, then looks in the sink for any incremental backup built on it - including one still being captured - and keeps such a backup, restoring its row, instead of deleting it. An incremental capture re-reads its base's catalog row just before it publishes and, if a pass has begun to prune that base, withdraws its manifest and takes a fresh full backup instead. One scope runs one retention pass at a time; a pass requested while another is in flight is skipped, and a pass reads the catalog only after it has taken the scope's retention guard. Because the row goes first, a pass interrupted part-way leaves backups that are no longer listed rather than listed backups that cannot be restored; their sink payload is reclaimed after a catalog rebuild lists them again. An incremental capture that crashes after writing its sink manifest leaves that manifest behind unlisted, and every later pass keeps the leftover's base (and its chain) rather than delete what the leftover builds on, until a catalog rebuild lists the leftover - after which retention applies to it like any other backup - or an operator deletes it. A pass never deletes a backup a capture is publishing, and a capture that republishes a backup a pass is deleting waits until the pass has finished with it, then publishes it afresh; an operator's explicit delete and a catalog scrub take the same per-backup hold. An operator's delete still removes the named backup whatever builds on it, so delete an increment's base only with its increments. See the [formal model](../../spec/backup/RefinementRetention.md).
+
+## Upgrading from 10.2.0
+
+Backup ids, catalog rows and stored manifests are unchanged from 10.2.0, and
+backups taken by either version stay valid after an upgrade or a rollback. What
+changes is how publishes and deletes are serialised: every capture, set stamp,
+catalog rebuild, scrub and operator delete now runs through the scope's
+scheduler grain, under a hold on the backup id, and retention ranks a backup by
+`BackupManifest.LastCapturedAtUtc`. While a cluster is part-way through a rolling
+upgrade:
+
+- a capture, delete, scrub or rebuild on an upgraded silo fails when the scope's
+  scheduler grain is still active on a 10.2.0 silo, which does not know the new
+  calls. It fails closed: nothing is listed, and a capture's already-streamed
+  artifact is left unreferenced in the sink;
+- captures and retention passes on 10.2.0 silos still run without the hold and
+  rank by first capture time, so the race #5418 fixed, and the pruning of a
+  backup a capture has just republished, stay reachable until every silo is
+  upgraded;
+- a 10.2.0 silo that rewrites a catalog row drops `LastCapturedAtUtc`, and that
+  backup ranks by its first capture time again until its next capture;
+- a 10.2.0 silo's capture of content another scope already owns takes the bare
+  id (#5620).
+
+So pause retention (`RetentionEnabled = false`, or no `PruneAsync`) and operator
+deletes while the roll is in progress, and expect captures of scopes whose
+scheduler is still on an old silo to fail and be retried. A rollback leaves every
+backup restorable: a scope-qualified id is an opaque id to 10.2.0.
+
+A publish call to the scheduler grain is idempotent, so the capture engine
+retries one that times out at the caller as it retries a busy one: a capture
+whose publish completed after its first call timed out returns that backup
+rather than a failure. A capture that republishes an existing backup leaves the
+artifact of the previous capture in the sink, unreferenced, as 10.2.0 does - a
+restore may still be reading it - and nothing reclaims it.
 
 ## Sink selection
 

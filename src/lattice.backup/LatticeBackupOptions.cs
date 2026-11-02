@@ -90,4 +90,44 @@ public sealed class LatticeBackupOptions
     /// wait (<c>0xFFFFFFFE</c> milliseconds, about 49.7 days). Defaults to 15 seconds.
     /// </summary>
     public TimeSpan SinkSharingProbeTimeout { get; set; } = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// How long one publish or delete call on a scope's scheduler grain waits for
+    /// a backup id that a retention pass, a delete or another publish holds, before
+    /// it returns busy having written nothing (issue #5418). Kept well inside the
+    /// grain response timeout; the caller retries across calls. Internal: a test
+    /// shortens it to drive the busy path.
+    /// </summary>
+    internal TimeSpan PublishHoldWait { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// How long the publication gate keeps retrying a busy publish or delete before
+    /// it fails with <see cref="TimeoutException"/>. A pass holds an id only while
+    /// it deletes that one backup, so this bounds a sink that is stuck rather than
+    /// slow.
+    /// </summary>
+    internal TimeSpan PublishHoldTimeout { get; set; } = TimeSpan.FromMinutes(15);
+
+    /// <summary>The pause between the publication gate's retries of a busy call.</summary>
+    internal TimeSpan PublishHoldRetryDelay { get; set; } = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>
+    /// How long a set member written ahead of its set's membership stamp stays
+    /// held from retention (issue #5629). The stamp, or the member's unstamped
+    /// registration when the set fails, releases it at once; the lease bounds the
+    /// hold when the capturing silo is lost before either runs.
+    /// </summary>
+    internal TimeSpan PendingStampLease { get; set; } = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// How long an operator delete keeps its backup id reserved while it deletes
+    /// the backup's artifacts outside the scheduler grain (issue #5628). The delete
+    /// releases it when it finishes or fails; the lease bounds the reservation when
+    /// the caller is lost part-way. Shorter than
+    /// <see cref="PublishHoldTimeout"/>, so a capture that waits on a lost
+    /// delete's lease outlasts it rather than failing. A lease that runs out while
+    /// its delete still runs is safe: the delete deletes the sink manifest under
+    /// the id's hold, and keeps it when a capture has republished the id (#5631).
+    /// </summary>
+    internal TimeSpan DeleteLease { get; set; } = TimeSpan.FromMinutes(10);
 }

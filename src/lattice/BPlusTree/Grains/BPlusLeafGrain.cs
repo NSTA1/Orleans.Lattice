@@ -11,12 +11,6 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// in a sorted dictionary. Splits when the entry count exceeds the leaf-sizing
 /// pin in the tree registry.
 /// </summary>
-// CS9113: 'originClusterIdResolver' is referenced only inside #if LATTICE_DIAG
-// blocks (used by DiagSiloTag to disambiguate Site A vs Site B emissions in the
-// shared file-based DiagSink log). Suppressed at the parameter list because in
-// non-diag builds the parameter is genuinely unread, but removing it would break
-// the activation-DI signature and the diag build's site-tagging behaviour.
-#pragma warning disable CS9113
 internal sealed partial class BPlusLeafGrain(
     IGrainContext context,
     [PersistentState("leaf", LatticeOptions.StorageProviderName)] IPersistentState<LeafNodeState> state,
@@ -24,9 +18,22 @@ internal sealed partial class BPlusLeafGrain(
     LatticeOptionsResolver optionsResolver,
     MutationObserverDispatcher mutationObservers,
     ILatticeOriginClusterIdResolver originClusterIdResolver) : IBPlusLeafGrain, ILeafProjection, IGrainBase
-#pragma warning restore CS9113
 {
     IGrainContext IGrainBase.GrainContext => context;
+
+    /// <summary>
+    /// The origin a row rebuilt from a WAL record stores (issue #5524): the
+    /// record's own-write stamp becomes <see langword="null"/>, as a live own
+    /// write stores it, and a peer's id is kept. Resolved under the logical
+    /// tree, as <c>WalCommitLogWriter</c> stamped it.
+    /// </summary>
+    private string? RowOrigin(string? recordOrigin) =>
+        string.IsNullOrEmpty(recordOrigin)
+            ? null
+            : LatticeRowOrigin.FromRecord(recordOrigin, originClusterIdResolver.Resolve(MetricTreeId));
+
+    /// <summary>The tree's own resolved origin, for a snapshot fold this leaf builds.</summary>
+    private string LocalOrigin => originClusterIdResolver.Resolve(MetricTreeId);
 
 #if LATTICE_DIAG
     /// <summary>
@@ -3995,8 +4002,20 @@ internal sealed partial class BPlusLeafGrain(
             LeafTreeTag(),
             new KeyValuePair<string, object?>(LatticeMetrics.TagOperation, "keys"),
             LeafTenantTag());
+#if LATTICE_DIAG
+        DiagLeafRead("keys", startInclusive, endExclusive, afterExclusive, keys.Count, keys.Count > 0 ? keys[0] : null, keys.Count > 0 ? keys[^1] : null, pendingKeys.Count);
+#endif
         return keys;
     }
+
+#if LATTICE_DIAG
+    // Issue #5607: what a leaf answered a range read with, against what it
+    // declares and holds, and whether its replay had settled.
+    private void DiagLeafRead(string kind, string? startInclusive, string? endExclusive, string? afterExclusive, int rows, string? first, string? last, int pending)
+    {
+        DiagSink.Write($"[DIAG leaf-{kind}-read] tree={state.State.TreeId} leaf={context.GrainId} range=[{state.State.LowKeyInclusive ?? "-"},{state.State.HighKeyExclusive ?? "-"}) start={startInclusive ?? "-"} end={endExclusive ?? "-"} after={afterExclusive ?? "-"} rows={rows} first={first ?? "-"} last={last ?? "-"} cache={Cache.Count} pending={pending} replaySatisfied={_replayBarrierSatisfied} replayRetired={_replayBarrierRetired} replayArmed={_replayBarrierArmed} coldPending={_coldRebuildPending} unanchored={_cacheUnanchored} splitInFlight={state.State.SplitInFlight}");
+    }
+#endif
 
     public async Task<List<KeyValuePair<string, byte[]>>> GetEntriesAsync(string? startInclusive = null, string? endExclusive = null, string? afterExclusive = null, string? beforeExclusive = null, LatticePredicateNode? predicate = null)
     {
@@ -4106,6 +4125,9 @@ internal sealed partial class BPlusLeafGrain(
             LeafTreeTag(),
             new KeyValuePair<string, object?>(LatticeMetrics.TagOperation, "entries"),
             LeafTenantTag());
+#if LATTICE_DIAG
+        DiagLeafRead("entries", startInclusive, endExclusive, afterExclusive, entries.Count, entries.Count > 0 ? entries[0].Key : null, entries.Count > 0 ? entries[^1].Key : null, pendingKeys.Count);
+#endif
         return entries;
     }
 

@@ -56,11 +56,13 @@ public sealed class ApiBackupClusterFixture
     /// the supplied authorizer, so a denying gate can drive the fail-closed path.
     /// An optional <paramref name="tenantResolver"/> substitutes the silo's
     /// registered resolver so tenant composition can be driven without hosting the
-    /// tenancy add-on.
+    /// tenancy add-on. An optional <paramref name="services"/> substitutes the
+    /// silo's service provider, so a test can front a silo service.
     /// </summary>
     internal ILatticeBackupControl CreateControlWith(
         BackupAccessAuthorizer authorizer,
-        ITenantContextResolver? tenantResolver = null) =>
+        ITenantContextResolver? tenantResolver = null,
+        IServiceProvider? services = null) =>
         new LatticeBackupControl(
             SiloServices.GetRequiredService<ILatticeBackupCaptureService>(),
             SiloServices.GetRequiredService<ILatticeBackupIncrementalCaptureService>(),
@@ -77,7 +79,7 @@ public sealed class ApiBackupClusterFixture
             SiloServices.GetRequiredService<BackupInventoryRegistry>(),
             Options.Create(new LatticeApiBackupOptions()),
             tenantResolver ?? SiloServices.GetRequiredService<ITenantContextResolver>(),
-            SiloServices);
+            services ?? SiloServices);
 
     /// <summary>
     /// Builds a control facade wired to the fixture's live engine seams and its

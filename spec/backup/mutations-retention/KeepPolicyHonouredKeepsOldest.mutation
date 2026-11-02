@@ -1,0 +1,14 @@
+# Pairs with KeepPolicyHonoured. The plan orders the listing the wrong way
+# round, so keep-last keeps the oldest backup and prunes the newest.
+MODULE: KeepPolicyHonouredKeepsOldest
+TARGET: KeepPolicyHonoured
+CLASS: Action
+SUMMARY: keep-last keeps the oldest backups
+PERTURBS: PruneList
+
+--- FIND
+                     \/ pol.keepLast > 0 /\ Cardinality({j \in L : Newer(j, i)}) < pol.keepLast
+--- REPLACE
+                     \* MUTATION: ordered oldest first.
+                     \/ pol.keepLast > 0 /\ Cardinality({j \in L : Newer(i, j)}) < pol.keepLast
+--- END

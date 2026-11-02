@@ -1,0 +1,13 @@
+# The increment publishes whatever its base's catalog row says, as production
+# did before #5357. Check(c) publishes only while the base's row is present.
+MODULE: BackupRetention
+ROW: Check(c)
+FILE: src/lattice.backup/BackupPublisher.cs
+DETECTORS: BackupRetentionConcurrencyTests.A_pass_before_the_increment_wrote_its_manifest_makes_the_increment_fall_back_to_a_full_backup
+SUMMARY: an increment publishes over a base a retention pass has already deleted
+
+--- FIND
+        if (BackupRetentionPlanner.MayPublishIncrement(manifest, row))
+--- REPLACE
+        if (BackupRetentionPlanner.MayPublishIncrement(manifest, row) || manifest.BaseBackupId is not null)
+--- END

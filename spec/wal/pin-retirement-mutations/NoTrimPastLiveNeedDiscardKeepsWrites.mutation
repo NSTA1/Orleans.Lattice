@@ -1,0 +1,17 @@
+# Pairs with NoTrimPastLiveNeed. A copy is discarded although its writes are still
+# wanted - one a resize could still recover - so the deleted-tree hold retires its
+# pins over writes it still needs.
+MODULE: NoTrimPastLiveNeedDiscardKeepsWrites
+TARGET: NoTrimPastLiveNeed
+CLASS: Invariant
+SUMMARY: a copy whose writes are still wanted is discarded
+PERTURBS: Discard
+
+--- FIND
+    /\ phase' = "discarded"
+    /\ need' = {}
+--- REPLACE
+\* MUTATION: the copy is still wanted.
+    /\ phase' = "discarded"
+    /\ need' = need
+--- END

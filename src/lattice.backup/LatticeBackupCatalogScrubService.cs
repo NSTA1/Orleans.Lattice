@@ -14,10 +14,17 @@ namespace Orleans.Lattice.Backup;
 /// </summary>
 internal sealed class LatticeBackupCatalogScrubService(
     ILatticeBackupCatalogStore catalog,
-    ILatticeBackupSink sink) : ILatticeBackupCatalogScrubService
+    ILatticeBackupSink sink,
+    IBackupPublicationGate? publicationGate = null) : ILatticeBackupCatalogScrubService
 {
     private readonly ILatticeBackupCatalogStore _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
     private readonly ILatticeBackupSink _sink = sink ?? throw new ArgumentNullException(nameof(sink));
+
+    // The removal runs under the orphan's per-id hold (issue #5418), and re-probes
+    // there: a capture that republished the id since the read pass made it
+    // resolvable again, and its row stays.
+    private readonly IBackupPublicationGate _publicationGate =
+        publicationGate ?? new DirectBackupPublicationGate(new BackupPublisher(catalog!, sink!));
 
     /// <inheritdoc />
     public async Task<BackupCatalogScrubReport> ScrubAsync(
@@ -25,7 +32,7 @@ internal sealed class LatticeBackupCatalogScrubService(
         CancellationToken cancellationToken = default)
     {
         long scanned = 0;
-        var orphans = new List<string>();
+        var orphans = new List<BackupManifest>();
 
         // Tracked-operation progress (#4125). The catalog is streamed, so the row
         // count is unknown until the walk ends and no total is invented.
@@ -46,7 +53,7 @@ internal sealed class LatticeBackupCatalogScrubService(
             var resolution = await _sink.ProbeAsync(manifest.Id, cancellationToken).ConfigureAwait(false);
             if (!resolution.IsResolvable)
             {
-                orphans.Add(manifest.Id);
+                orphans.Add(manifest);
             }
 
             if (progress is not null)
@@ -70,9 +77,10 @@ internal sealed class LatticeBackupCatalogScrubService(
             using (LatticeAccessGateContext.EnterSystemOrigin())
             {
                 long visited = 0;
-                foreach (var orphanId in orphans)
+                foreach (var orphan in orphans)
                 {
-                    if (await _catalog.RemoveAsync(orphanId, cancellationToken).ConfigureAwait(false))
+                    if (await _publicationGate.RetireAsync(orphan, BackupRetireKind.OrphanRow, cancellationToken)
+                            .ConfigureAwait(false))
                     {
                         removed++;
                     }
@@ -94,6 +102,6 @@ internal sealed class LatticeBackupCatalogScrubService(
             orphanCount: orphans.Count,
             removedCount: removed,
             pruned: pruneOrphans,
-            orphanBackupIds: orphans);
+            orphanBackupIds: orphans.Select(o => o.Id).ToList());
     }
 }

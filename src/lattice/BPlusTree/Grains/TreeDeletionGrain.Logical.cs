@@ -275,8 +275,11 @@ internal sealed partial class TreeDeletionGrain
         await deletion.PurgePhysicalAsync();
         if (state.State.RetainsRegistryEntry && state.State.IsDeleted && !state.State.PurgeComplete)
             await PurgePhysicalAsync();
-        await grainFactory.GetLatticeRegistry().UnregisterAsync(TreeId);
-        await StopAutonomicLoopsAsync();
+        // Never the entry, or the loops, of a tree registered under the id since
+        // an earlier attempt's removal landed (issue #5459).
+        var removal = await RemoveLogicalRegistryEntryAsync();
+        if (removal != PurgedRegistryEntry.Reused)
+            await StopAutonomicLoopsAsync();
         await RemoveLogicalReminderAsync();
         state.State.LogicalPurgeInProgress = false;
         state.State.LogicalPurgeComplete = true;
@@ -288,7 +291,8 @@ internal sealed partial class TreeDeletionGrain
             await ReanchorLogicalReminderAfterFailureAsync();
             throw;
         }
-        await PublishLogicalLifecycleEventAsync(LatticeTreeEventKind.TreePurged);
+        if (removal != PurgedRegistryEntry.Reused)
+            await PublishLogicalLifecycleEventAsync(LatticeTreeEventKind.TreePurged);
     }
 
     private Task EnsureLogicalReminderAsync()

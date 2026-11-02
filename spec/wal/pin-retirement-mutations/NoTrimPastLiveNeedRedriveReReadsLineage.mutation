@@ -1,0 +1,18 @@
+# Pairs with NoTrimPastLiveNeed. The re-drive re-reads the lineage it checks from
+# the registry instead of using the one recorded with the purge's completion, so
+# a reused id's entry passes the check and the tail then acts on the new tree.
+MODULE: NoTrimPastLiveNeedRedriveReReadsLineage
+TARGET: NoTrimPastLiveNeed
+CLASS: Invariant
+SUMMARY: the re-drive takes the current entry's lineage for the purged one
+PERTURBS: PurgeTailSettle
+
+--- FIND
+    /\ tailOwed' = FALSE
+    /\ UNCHANGED <<tailLin, regPresent, regLin>>
+--- REPLACE
+\* MUTATION: the lineage is re-read, not the recorded one.
+    /\ UNCHANGED tailOwed
+    /\ tailLin' = regLin
+    /\ UNCHANGED <<regPresent, regLin>>
+--- END

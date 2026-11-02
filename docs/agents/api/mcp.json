@@ -1687,16 +1687,16 @@
       ],
       "retry": {
         "safe": true,
-        "policy": "Reissuing is harmless, but the catalog row is removed before the sink manifest and the backup's own artifacts, so a retry after an interruption past that removal finds no catalog row, returns false and does not finish deleting the sink manifest or artifacts.",
+        "policy": "Reissuing is harmless and completes an interrupted delete: the catalog row is removed first and the sink manifest last, so a retry after an interruption finds the sink manifest, deletes the remaining artifacts and the manifest, and returns true.",
         "source": "src/lattice.api.backup/LatticeBackupControl.cs#LatticeBackupControl.DeleteBackupAsync"
       },
       "idempotency": {
-        "idempotent": "conditional",
-        "basis": "A missing backup returns false; a completed delete is idempotent, but a delete interrupted after its catalog row was removed is not completed by a retry.",
+        "idempotent": true,
+        "basis": "A missing backup returns false; a delete interrupted after its catalog row was removed is completed by a retry, which reads the backup from its surviving sink manifest.",
         "source": "src/lattice.api.backup/LatticeBackupControl.cs#LatticeBackupControl.DeleteBackupAsync"
       },
       "concurrency": {
-        "rule": "Delete keeps every artifact still referenced by another retained manifest, matched by artifact id rather than by base chain, then removes the catalog row, the sink manifest and the backup's unshared artifacts in that order.",
+        "rule": "Delete removes the catalog row and reserves the backup id in the scope's scheduler grain, so no retention pass or capture acts on that id until it finishes; overlapping deletes of one id each hold their own reservation. It then deletes the backup's unshared artifacts outside the grain, keeping every artifact still referenced by another catalogued manifest, and finally deletes the sink manifest in the grain, only while no catalog row lists the id and the manifest is still the deleting scope's.",
         "source": "src/lattice.api.backup/LatticeBackupControl.cs#LatticeBackupControl.DeleteBackupAsync"
       },
       "sources": [

@@ -1,0 +1,13 @@
+# Pairs with TypeOK. A run starts into a phase the process does not have.
+MODULE: TypeOkStartInvalidPhase
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a run starts in an undeclared phase
+PERTURBS: Start
+
+--- FIND
+    /\ pc' = [pc EXCEPT ![p] = "enum"]
+--- REPLACE
+\* MUTATION: an undeclared phase.
+    /\ pc' = [pc EXCEPT ![p] = "sweeping"]
+--- END

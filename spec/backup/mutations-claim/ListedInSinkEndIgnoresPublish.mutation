@@ -1,0 +1,18 @@
+# Pairs with ListedInSink. A delete whose lease ran out ends while a
+# republish holds the id between its manifest and its row, sees no row, and
+# deletes the manifest the republish is about to register.
+MODULE: ListedInSinkEndIgnoresPublish
+TARGET: ListedInSink
+CLASS: Invariant
+SUMMARY: a delete ends without waiting for a publish of the id
+PERTURBS: DelEnd
+
+--- FIND
+DelEnd(d) ==
+    /\ del[d] = "begun"
+    /\ held["A"] = "free"
+--- REPLACE
+DelEnd(d) ==
+    /\ del[d] = "begun"
+    \* MUTATION: the end does not take the hold.
+--- END

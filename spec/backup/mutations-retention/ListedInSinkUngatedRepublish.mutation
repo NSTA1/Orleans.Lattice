@@ -1,0 +1,21 @@
+# Pairs with ListedInSink. Production before the fix of #5418, with ids
+# content-addressed: a full capture of an unchanged tree republished an
+# existing backup's id with nothing to stop it while a retention pass was
+# deleting that backup. The pass had listed and doomed the id, removed its
+# row, and then deleted the sink manifest the republish had just rewritten
+# and registered, so the catalog listed a backup the sink no longer held.
+# The mutation drops the wait on the pass's reservation: a republish is
+# admitted while a pass still holds its id retiring.
+MODULE: ListedInSinkUngatedRepublish
+TARGET: ListedInSink
+CLASS: Invariant
+SUMMARY: a republish does not wait for the pass retiring its id
+PERTURBS: Acquire
+
+--- FIND
+    /\ \A p \in Passes : cap[c].id \notin prDoomed[p]
+    /\ \A d \in Caps : cap[d].id = cap[c].id => cap[d].ph \notin Held
+--- REPLACE
+    \* MUTATION: no wait on the pass's reservation.
+    /\ \A d \in Caps : cap[d].id = cap[c].id => cap[d].ph \notin Held
+--- END

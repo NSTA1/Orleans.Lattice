@@ -1,0 +1,14 @@
+# The pass's sink scan finds nothing built on a doomed manifest, as production
+# before #5357 never looked. Scan(p) keeps every doomed manifest an increment
+# outside the pass builds on.
+MODULE: BackupRetention
+ROW: Scan(p)
+FILE: src/lattice.backup/BackupSchedulerGrain.cs
+DETECTORS: BackupSchedulerGrainUnitTests.PruneAsync_keeps_and_restores_a_doomed_base_an_in_flight_increment_builds_on, BackupRetentionConcurrencyTests.A_pass_after_the_increment_wrote_its_manifest_keeps_the_base_the_increment_builds_on
+SUMMARY: a retention pass deletes the base of an increment that wrote its manifest before the pass's scan
+
+--- FIND
+        var blocked = BackupRetentionPlanner.DependedOn(doomed, sinkManifests);
+--- REPLACE
+        var blocked = BackupRetentionPlanner.DependedOn(Array.Empty<BackupManifest>(), sinkManifests);
+--- END

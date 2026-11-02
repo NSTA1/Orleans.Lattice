@@ -1,0 +1,16 @@
+{
+  "mutations": "mutations-claim",
+  "refinement": "RefinementClaim.md",
+  "nonBehaviouralActions": [
+    "Stutter",
+    "DelLapse"
+  ],
+  "counts": {
+    "invariants": 4,
+    "properties": 2,
+    "actions": 11,
+    "mutations": 16,
+    "behaviourRows": 14,
+    "distinctStates": 1928
+  }
+}

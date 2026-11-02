@@ -15,6 +15,15 @@ namespace Orleans.Lattice.Tests;
 /// scheduler needs a retirement seam of its own rather than relying on the leaf
 /// to have done the right thing on its way out.
 /// </para>
+/// <para>
+/// Since issue #5358 the drive's NotDriven verdict only starts the retirement:
+/// the removal runs the orphan sweep's fenced sequence - a retirement token and
+/// a pin read from every read key, a fresh durable read of the leaf, then
+/// removals the pin grain refuses if the consumer was merged since. Every
+/// fixture here therefore serves the pin store and the leaf's durable row, and
+/// stubs the orphan sweep's coordinator so that the sweep itself never runs and
+/// every removal observed is the drive's.
+/// </para>
 /// </summary>
 public partial class LatticeWalGcSchedulerCadenceTests
 {
@@ -22,13 +31,15 @@ public partial class LatticeWalGcSchedulerCadenceTests
     public async Task ExecuteAsync_retires_the_pin_of_a_leaf_that_reports_no_tree_id()
     {
         const string TreeId = "orphan-sweep";
-        var reporter = Substitute.For<ILeafCursorReporter>();
         var time = new VirtualTimeProvider();
 
         // The fixture's options carry the default WAL partition count, so the
         // consumer id is the partition-suffixed one a leaf of such a tree
         // publishes: retirement acts only on a leaf's own id (issue #4238).
         var consumerId = BlockedConsumerId(TreeId) + "_0";
+        var pins = DrivePinStore(TreeId, consumerId);
+        var storage = new LeafStateBook();
+        storage.PutHusk(BlockedLeafGrainId());
 
         // A drive verdict of NotDriven is exactly what a reclaimed leaf returns:
         // its state was cleared, so there is no tree to drive a checkpoint for.
@@ -37,7 +48,10 @@ public partial class LatticeWalGcSchedulerCadenceTests
             () => Task.FromResult<string?>(null),
             consumerId: consumerId,
             treeId: TreeId,
-            cursorReporter: reporter);
+            cursorReporter: Substitute.For<ILeafCursorReporter>(),
+            pins: pins,
+            leafStateStorage: storage,
+            orphanSweepCoordinator: InertSweepCoordinator());
 
         using var decisions = new InstrumentRecorder(LatticeMetrics.WalGcDriveOrphanPinRetirements, TreeId);
         using (recorder)
@@ -47,14 +61,12 @@ public partial class LatticeWalGcSchedulerCadenceTests
             await scheduler.StopAsync(CancellationToken.None);
         }
 
-        await reporter.Received().UnregisterAsync(
-            TreeId,
-            consumerId,
-            Arg.Any<CancellationToken>());
-
         // Issue #4246: the drive's removal is counted, with its cause.
         Assert.Multiple(() =>
         {
+            Assert.That(pins.Removals.Select(r => r.ConsumerId), Does.Contain(consumerId),
+                "the orphan's pin must be removed from the keys it was found under.");
+            Assert.That(pins.RemainingPins, Is.Zero, "the pin must be gone from every read key.");
             Assert.That(DriveDecisions(decisions, "retired", "not_driven"), Is.GreaterThan(0));
             Assert.That(DriveDecisions(decisions, "retire_failed"), Is.Zero);
             Assert.That(DriveDecisions(decisions, "refused_malformed_id"), Is.Zero);
@@ -69,7 +81,6 @@ public partial class LatticeWalGcSchedulerCadenceTests
         // "retires orphans" from "retires everything it touches", and the second
         // would discard WAL that live leaves still depend on.
         const string TreeId = "orphan-sweep-control";
-        var reporter = Substitute.For<ILeafCursorReporter>();
         var time = new VirtualTimeProvider();
 
         // Suffixed exactly as in the positive test above. Issue #4258: with the
@@ -77,12 +88,18 @@ public partial class LatticeWalGcSchedulerCadenceTests
         // removal, so this control held even under "retires everything it
         // touches" - the very defect it exists to rule out.
         var consumerId = BlockedConsumerId(TreeId) + "_0";
+        var pins = DrivePinStore(TreeId, consumerId);
+        var storage = new LeafStateBook();
+        storage.PutHusk(BlockedLeafGrainId());
         var (scheduler, recorder) = BlockedTreeProbing(
             time,
             () => Task.FromResult<string?>(TreeId),
             consumerId: consumerId,
             treeId: TreeId,
-            cursorReporter: reporter);
+            cursorReporter: Substitute.For<ILeafCursorReporter>(),
+            pins: pins,
+            leafStateStorage: storage,
+            orphanSweepCoordinator: InertSweepCoordinator());
 
         using var decisions = new InstrumentRecorder(LatticeMetrics.WalGcDriveOrphanPinRetirements, TreeId);
         int attempted;
@@ -103,36 +120,38 @@ public partial class LatticeWalGcSchedulerCadenceTests
                 "anti-vacuity: the gate must accept this id, or a retirement could never be observed.");
             Assert.That(DriveDecisions(decisions, "retired"), Is.Zero,
                 "a leaf that drives normally must keep its pin.");
+            Assert.That(pins.Removals, Is.Empty, "a leaf that drives normally must keep its pin.");
         });
-        await reporter.DidNotReceive().UnregisterAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public async Task ExecuteAsync_survives_a_reporter_that_refuses_the_retirement()
+    public async Task ExecuteAsync_survives_a_pin_store_that_refuses_the_retirement()
     {
-        // Retirement is opportunistic: a registry that refuses it leaves the WAL
+        // Retirement is opportunistic: a store that refuses it leaves the WAL
         // retained, which is the pre-fix behaviour, but must not take the sweep
         // down with it - the sweep is what every other blocked tree depends on.
         const string TreeId = "orphan-sweep-faulting";
-        var reporter = Substitute.For<ILeafCursorReporter>();
-        reporter.UnregisterAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromException(new InvalidOperationException("registry unavailable")));
-
         var time = new VirtualTimeProvider();
 
         // Suffixed as a leaf of the default (partitioned) tree publishes it, so
-        // the gate admits it and the reporter's refusal is actually reached.
+        // the gate admits it and the store's refusal is actually reached.
         // Before issue #4246 this fixture used the unsuffixed id, which the
-        // #4238 gate refuses, so the throwing reporter was never called and
+        // #4238 gate refuses, so the throwing store was never called and
         // nothing said so.
         var consumerId = BlockedConsumerId(TreeId) + "_0";
+        var pins = DrivePinStore(TreeId, consumerId);
+        pins.RemoveThrows = new InvalidOperationException("pin store unavailable");
+        var storage = new LeafStateBook();
+        storage.PutHusk(BlockedLeafGrainId());
         var (scheduler, recorder) = BlockedTreeProbing(
             time,
             () => Task.FromResult<string?>(null),
             consumerId: consumerId,
             treeId: TreeId,
-            cursorReporter: reporter);
+            cursorReporter: Substitute.For<ILeafCursorReporter>(),
+            pins: pins,
+            leafStateStorage: storage,
+            orphanSweepCoordinator: InertSweepCoordinator());
 
         using var decisions = new InstrumentRecorder(LatticeMetrics.WalGcDriveOrphanPinRetirements, TreeId);
         using (recorder)
@@ -165,4 +184,35 @@ public partial class LatticeWalGcSchedulerCadenceTests
             .Where(m => (m.Tag(LatticeMetrics.TagStatus) as string) == status)
             .Where(m => cause is null || (m.Tag(LatticeMetrics.TagPinRetirementCause) as string) == cause)
             .Sum(m => m.Value);
+
+    /// <summary>
+    /// A pin store holding <paramref name="consumerId"/>'s pin under every read
+    /// key of <paramref name="treeId"/> under the fixture's options: one logical
+    /// pin duplicated across keys, as an earlier routing leaves it.
+    /// </summary>
+    private static FakePinStore DrivePinStore(string treeId, string consumerId)
+    {
+        var pins = new FakePinStore();
+        var keys = WalMaterialiserPinRouting.EnumerateReadKeys(
+            treeId,
+            WalMaterialiserPinRouting.ResolveShardCount(Monitor(Adaptive(floor: SweepPass))));
+        foreach (var key in keys)
+        {
+            pins.Seed(key, consumerId);
+        }
+
+        return pins;
+    }
+
+    /// <summary>
+    /// An orphan sweep coordinator that accepts every request and sweeps
+    /// nothing, so the only retirement a fixture observes is the drive's.
+    /// </summary>
+    private static IWalOrphanPinSweepCoordinator InertSweepCoordinator()
+    {
+        var coordinator = Substitute.For<IWalOrphanPinSweepCoordinator>();
+        coordinator.RequestSweepAsync(Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<WalOrphanPinSweepOutcome?>(null));
+        return coordinator;
+    }
 }

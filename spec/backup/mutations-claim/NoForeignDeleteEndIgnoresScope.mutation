@@ -1,0 +1,16 @@
+# Pairs with NoForeignDelete. A delete does not check that the sink manifest
+# is still its own scope's: once an overlapping delete has removed scope A's
+# manifest, scope B takes the ownerless id, and the second delete removes B's
+# manifest before B registers its row.
+MODULE: NoForeignDeleteEndIgnoresScope
+TARGET: NoForeignDelete
+CLASS: Action
+SUMMARY: a delete ends by deleting whatever manifest the id has
+PERTURBS: DelEnd
+
+--- FIND
+    /\ man' = IF row = "none" /\ man = "A" THEN "none" ELSE man
+--- REPLACE
+    \* MUTATION: the manifest's scope is not checked.
+    /\ man' = IF row = "none" THEN "none" ELSE man
+--- END

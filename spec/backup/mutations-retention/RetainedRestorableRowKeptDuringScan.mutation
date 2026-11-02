@@ -1,0 +1,18 @@
+# Pairs with RetainedRestorable. The pass scans for dependents without first
+# removing the doomed row (the production order removed the row last). An
+# increment whose check runs after the scan still finds its base's row and
+# publishes, and the pass then deletes the base.
+MODULE: RetainedRestorableRowKeptDuringScan
+TARGET: RetainedRestorable
+CLASS: Invariant
+SUMMARY: the doomed row stays listed through the scan
+PERTURBS: RemoveRow
+
+--- FIND
+    /\ cat' = cat \ {m}
+    /\ prGone' = [prGone EXCEPT ![p] = @ \cup {m}]
+--- REPLACE
+    \* MUTATION: the row is not removed before the scan.
+    /\ cat' = cat
+    /\ prGone' = [prGone EXCEPT ![p] = @ \cup {m}]
+--- END

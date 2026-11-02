@@ -1,0 +1,20 @@
+# Pairs with RetainedRestorable, at two passes. Without the activation-local
+# prune guard an operator's PruneAsync and a scheduled cycle's prune run at
+# once: one pass restores a depended-on row after the other has scanned and
+# moved on, an increment then passes its check against the restored row, and
+# the first pass deletes its base.
+MODULE: RetainedRestorableConcurrentPasses
+TARGET: RetainedRestorable
+CLASS: Invariant
+SUMMARY: two retention passes run at once
+PERTURBS: PruneList
+BOUNDS: NumPasses = 2
+
+--- FIND
+    \* The activation-local guard, checked before the listing is read: a pass
+    \* is skipped while another runs.
+    /\ \A q \in Passes : prPh[q] = "idle"
+--- REPLACE
+    \* MUTATION: no prune guard.
+    /\ TRUE
+--- END

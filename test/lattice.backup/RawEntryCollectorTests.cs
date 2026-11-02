@@ -241,7 +241,6 @@ public sealed class RawEntryCollectorTests
             startInclusive: null,
             endExclusive: null,
             mergeMode: BackupKeyMergeMode.LastWriterWins,
-            baseBackupId: "base-id",
             batchSize: 100,
             resolveDecisions: (_, _) => Task.FromResult<IReadOnlyDictionary<Guid, Orleans.Lattice.BPlusTree.TxStatus>>(
                 new Dictionary<Guid, Orleans.Lattice.BPlusTree.TxStatus>()));

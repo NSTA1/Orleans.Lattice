@@ -92,7 +92,7 @@ internal interface ILatticeBackupSchedulerGrain : IGrainWithStringKey
     [AlwaysInterleave]
     Task<string?> RunScheduledCycleAsync(bool incremental);
 
-    /// <summary>Returns <c>true</c> when no capture is currently in flight for the scope.</summary>
+    /// <summary>Returns <c>true</c> when no capture, and no reminder-driven cycle, is currently in flight for the scope.</summary>
     [AlwaysInterleave]
     Task<bool> IsIdleAsync();
 
@@ -111,4 +111,59 @@ internal interface ILatticeBackupSchedulerGrain : IGrainWithStringKey
     /// <param name="incremental"><c>true</c> to check the incremental schedule, <c>false</c> for the full schedule.</param>
     [AlwaysInterleave]
     Task<bool> HasScheduleAsync(bool incremental);
+
+    /// <summary>
+    /// Publishes a manifest of this scope to the sink and the catalog under the
+    /// id's hold (issue #5418): it waits while a retention pass or a delete is
+    /// retiring the id, or another publish of it runs, and a pass never dooms the
+    /// id while it publishes. Returns <see cref="BackupPublishOutcome.Busy"/>,
+    /// having written nothing, when the id stays held beyond one call's wait
+    /// (<see cref="LatticeBackupOptions.PublishHoldWait"/>); the caller retries.
+    /// </summary>
+    /// <param name="request">The manifest and how to publish it.</param>
+    [AlwaysInterleave]
+    Task<BackupPublishResult> PublishAsync(BackupPublishRequest request);
+
+    /// <summary>
+    /// Removes the catalog row of an orphan - a row the sink cannot resolve - for
+    /// a catalog scrub, under the id's hold, re-probing the sink there. Returns
+    /// <see cref="BackupRetireOutcome.Busy"/>, having removed nothing, when the id
+    /// stays held beyond one call's wait; the caller retries. An operator delete
+    /// uses <see cref="BeginDeleteAsync"/> instead.
+    /// </summary>
+    /// <param name="backupId">The backup whose orphan row to remove.</param>
+    /// <param name="kind"><see cref="BackupRetireKind.OrphanRow"/>.</param>
+    [AlwaysInterleave]
+    Task<BackupRetireOutcome> RetireAsync(string backupId, BackupRetireKind kind);
+
+    /// <summary>
+    /// Starts an operator delete (issue #5628): under the id's hold, removes the
+    /// catalog row and reserves the id for this delete by a lease of its own, then
+    /// returns the manifest the rest of the delete works from and the lease's
+    /// token. The caller deletes the backup's artifacts outside the grain - so a
+    /// large delete never runs inside one grain call - and then calls
+    /// <see cref="EndDeleteAsync"/>. While any delete's lease is live, no publish
+    /// of the id proceeds and no pass dooms it; overlapping deletes of one id each
+    /// hold their own (issue #5631). A retry of an interrupted delete finds the
+    /// sink manifest and finishes (#5334). An id whose row or sink manifest is
+    /// another scope's is not this scope's to delete, and is left alone.
+    /// </summary>
+    /// <param name="backupId">The backup to delete.</param>
+    [AlwaysInterleave]
+    Task<BackupDeleteStart> BeginDeleteAsync(string backupId);
+
+    /// <summary>
+    /// Ends an operator delete <see cref="BeginDeleteAsync"/> started (issue
+    /// #5631). When <paramref name="finish"/> is set - the artifacts are deleted -
+    /// it takes the id's hold and deletes the sink manifest there, only while no
+    /// row lists the id and the manifest is still this scope's; then it ends this
+    /// delete's lease, and only this delete's. Returns
+    /// <see cref="BackupRetireOutcome.Busy"/>, having changed nothing, when the id
+    /// stays held beyond one call's wait; the caller retries.
+    /// </summary>
+    /// <param name="backupId">The deleted backup.</param>
+    /// <param name="token">The token <see cref="BeginDeleteAsync"/> returned.</param>
+    /// <param name="finish">Whether to delete the sink manifest; <see langword="false"/> when the artifact deletes failed, so a retry finds the manifest.</param>
+    [AlwaysInterleave]
+    Task<BackupRetireOutcome> EndDeleteAsync(string backupId, Guid token, bool finish);
 }

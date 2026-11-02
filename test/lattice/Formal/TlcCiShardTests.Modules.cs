@@ -49,9 +49,11 @@ public sealed partial class TlcCiShardTests
     [TestCase("AtomicCommit", TlcCiShard.Atomic)]
     [TestCase("AtomicCommitCrossCluster", TlcCiShard.Atomic)]
     [TestCase("BackupCutover", TlcCiShard.Backup)]
+    [TestCase("BackupIdClaim", TlcCiShard.Backup)]
     [TestCase("BackupIncremental", TlcCiShard.Backup)]
     [TestCase("BackupProvenance", TlcCiShard.Backup)]
     [TestCase("BackupRestore", TlcCiShard.Backup)]
+    [TestCase("BackupRetention", TlcCiShard.BackupRetention)]
     [TestCase("BPlusCascade", TlcCiShard.BPlusCascade)]
     [TestCase("ReplicationCausalDelivery", TlcCiShard.ReBootstrap)]
     [TestCase("ReplicationLowWatermark", TlcCiShard.ReBootstrap)]
@@ -62,6 +64,7 @@ public sealed partial class TlcCiShardTests
     [TestCase("ShardOwnershipRetention", TlcCiShard.ShardOwnership)]
     [TestCase("WalDurability", TlcCiShard.ReplicationWal)]
     [TestCase("WalMove", TlcCiShard.ReplicationWal)]
+    [TestCase("WalPinRetirement", TlcCiShard.ReplicationWal)]
     public void A_co_located_base_shares_the_shard_of_every_mutation_of_its_module(string name, string expected)
     {
         var module = Module(name);

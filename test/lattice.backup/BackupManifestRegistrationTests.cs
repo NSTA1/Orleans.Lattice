@@ -48,6 +48,37 @@ public sealed class BackupManifestRegistrationTests
     }
 
     [Test]
+    public void Reconcile_records_the_latest_capture_for_retention_to_rank_by()
+    {
+        var firstSeen = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var existing = Manifest("cafef00d", firstSeen);
+        var recaptured = Manifest("cafef00d", firstSeen.AddDays(3));
+
+        var reconciled = BackupManifestRegistration.Reconcile(existing, recaptured);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reconciled.CreatedAtUtc, Is.EqualTo(firstSeen), "the first capture time is immutable");
+            Assert.That(reconciled.LastCapturedAtUtc, Is.EqualTo(firstSeen.AddDays(3)), "the latest capture is recorded");
+            Assert.That(BackupRetentionPlanner.RankTime(reconciled), Is.EqualTo(firstSeen.AddDays(3)));
+        });
+    }
+
+    [Test]
+    public void Reconcile_never_moves_the_latest_capture_back()
+    {
+        // A slower, older capture registering after a newer one must not make the
+        // backup rank as older than its latest capture.
+        var firstSeen = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var existing = Manifest("cafef00d", firstSeen) with { LastCapturedAtUtc = firstSeen.AddDays(5) };
+        var older = Manifest("cafef00d", firstSeen.AddDays(2));
+
+        var reconciled = BackupManifestRegistration.Reconcile(existing, older);
+
+        Assert.That(reconciled.LastCapturedAtUtc, Is.EqualTo(firstSeen.AddDays(5)));
+    }
+
+    [Test]
     public void Reconcile_allows_set_membership_to_be_stamped_on_an_existing_id()
     {
         // The multi-tree set capture re-registers each member to stamp the shared

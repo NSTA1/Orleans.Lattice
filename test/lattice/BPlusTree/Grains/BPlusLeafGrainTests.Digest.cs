@@ -156,20 +156,59 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task Digest_changes_when_origin_cluster_id_changes()
+    public async Task Digest_is_independent_of_the_origin_stamp()
     {
-        var grain1 = CreateGrain();
-        var grain2 = CreateGrain();
-        var p1 = (ILeafProjection)grain1;
-        var p2 = (ILeafProjection)grain2;
+        // Issue #5530. The author of a write stores it with a null origin; every
+        // peer stores the same write stamped with the author's id. The two rows
+        // are the same converged write, so the leaf digest - and the range fold
+        // the Merkle walk compares - must agree, or two converged clusters would
+        // never match and every probe pass would re-localise and re-replay.
+        var author = CreateGrain();
+        var peer = CreateGrain();
+        var otherPeer = CreateGrain();
+        ((ILeafProjection)author).Apply(BuildSet("k", Encoding.UTF8.GetBytes("v"), hlcPhysical: 100));
+        ((ILeafProjection)peer).Apply(BuildSet("k", Encoding.UTF8.GetBytes("v"), hlcPhysical: 100, originClusterId: "cluster-A"));
+        ((ILeafProjection)otherPeer).Apply(BuildSet("k", Encoding.UTF8.GetBytes("v"), hlcPhysical: 100, originClusterId: "cluster-B"));
 
-        p1.Apply(BuildSet("k", Encoding.UTF8.GetBytes("v"), hlcPhysical: 100, originClusterId: "cluster-A"));
-        p2.Apply(BuildSet("k", Encoding.UTF8.GetBytes("v"), hlcPhysical: 100, originClusterId: "cluster-B"));
+        var authorDigest = await author.GetProjectionDigestAsync();
+        var peerDigest = await peer.GetProjectionDigestAsync();
+        var otherDigest = await otherPeer.GetProjectionDigestAsync();
+        var authorRange = await author.GetProjectionDigestForRangeAsync(null, null);
+        var peerRange = await peer.GetProjectionDigestForRangeAsync(null, null);
 
-        var d1 = await grain1.GetProjectionDigestAsync();
-        var d2 = await grain2.GetProjectionDigestAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(peerDigest.Hash, Is.EqualTo(authorDigest.Hash), "an author and its peer hold the same converged row");
+            Assert.That(otherDigest.Hash, Is.EqualTo(peerDigest.Hash), "two peers stamping different origins hold the same row");
+            Assert.That(peerRange.Hash, Is.EqualTo(authorRange.Hash), "the Merkle walk's range fold must agree too");
+        });
+    }
 
-        Assert.That(d1.Hash, Is.Not.EqualTo(d2.Hash));
+    [Test]
+    public async Task A_fold_persisted_under_an_older_contribution_version_is_recomputed_before_it_is_updated()
+    {
+        // The fold is maintained incrementally: a mutation XORs the entry's old
+        // contribution out and its new one in. A fold persisted under version 0
+        // (which hashed the origin stamp) and then updated under version 1 would
+        // XOR out a contribution it never XOR-ed in and stay wrong for good, so
+        // the leaf must recompute a stale-version fold from its entries first.
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+        ((ILeafProjection)grain).Apply(BuildSet("a", Encoding.UTF8.GetBytes("1"), hlcPhysical: 100, originClusterId: "cluster-A"));
+        await grain.GetProjectionDigestAsync();
+
+        // Simulate the fold a version-0 build persisted: different bytes, version 0.
+        state.State.ProjectionHash = Enumerable.Repeat((byte)0xA5, 16).ToArray();
+        state.State.ProjectionHashVersion = 0;
+
+        ((ILeafProjection)grain).Apply(BuildSet("b", Encoding.UTF8.GetBytes("2"), hlcPhysical: 200));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grain.PersistedProjectionHash, Is.EqualTo(grain.ComputeFullProjectionHashFromState()),
+                "the persisted fold must equal a fresh walk of the entries");
+            Assert.That(state.State.ProjectionHashVersion, Is.EqualTo(LeafProjectionDigest.CurrentVersion));
+        });
     }
 
     [Test]

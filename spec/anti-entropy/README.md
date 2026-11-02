@@ -60,6 +60,12 @@ mutation disables deadlock checking or changes fairness.
 - The projection digest folds each cluster's checkpoint offsets, so equal
   content may still mismatch and the walk may over-localise. The model allows
   both; they cost traffic, not safety.
+- The digest's per-entry contribution covers a row's committed value, not its
+  observer-relative origin stamp, and the model compares rows the same way.
+  Production hashed the origin until contribution version 1, so two converged
+  clusters mismatched on every authored row. The model allows a mismatch on
+  equal content, so it cannot show that defect as a violation; a leaf-digest
+  detector pins the content-only contribution (see the refinement note).
 - The fallback stamps re-shipped rows with A's origin and the row's own
   timestamp, so a foreign-origin row can raise B's cursor for origin A. That
   widens the below-cursor blind spot for later A-origin entries; the model
@@ -83,6 +89,7 @@ The `Alias` variant checks 200,460 distinct states.
 - [#4859](https://github.com/NSTA1/Orleans.Lattice/issues/4859): repair-helper faults reset the circuit breaker instead of contributing a failure.
 - [#4862](https://github.com/NSTA1/Orleans.Lattice/issues/4862): scoped fallback discarded retained tombstones, leaving trimmed-WAL and below-cursor lost deletes unrepaired.
 - [#4863](https://github.com/NSTA1/Orleans.Lattice/issues/4863): targeted re-replay used the logical-name WAL instead of the physical tree resolved for localisation after an alias cutover.
+- [#5530](https://github.com/NSTA1/Orleans.Lattice/issues/5530): the per-entry digest contribution folded the row's origin, which differs between the cluster that authored a row and its peers, so two converged clusters never matched. Found by the backup retention model's confirmation review (epic #5348); the contribution now covers content only, and a persisted fold carries its contribution version so a stale fold is recomputed rather than mixed.
 
 Each repair has a production regression proved failing without the fix. The
 refinement note maps the model obligations to those detectors; this is not a

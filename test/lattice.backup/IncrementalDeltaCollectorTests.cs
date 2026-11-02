@@ -37,7 +37,8 @@ public sealed partial class IncrementalDeltaCollectorTests
         string? endExclusive = null,
         IReadOnlyDictionary<Guid, TxStatus>? decisions = null,
         int partitions = 1,
-        IReadOnlyList<Guid>? baseUndecided = null)
+        IReadOnlyList<Guid>? baseUndecided = null,
+        string? localOrigin = null)
     {
         subscriber ??= Substitute.For<IWalSubscriber>();
         decisions ??= new Dictionary<Guid, TxStatus>();
@@ -51,11 +52,11 @@ public sealed partial class IncrementalDeltaCollectorTests
             startInclusive: startInclusive,
             endExclusive: endExclusive,
             mergeMode: BackupKeyMergeMode.LastWriterWins,
-            baseBackupId: "base-id",
             batchSize: 100,
             resolveDecisions: (txIds, _) => Task.FromResult<IReadOnlyDictionary<Guid, TxStatus>>(
                 txIds.Where(decisions.ContainsKey).ToDictionary(t => t, t => decisions[t])),
-            baseUndecided: baseUndecided);
+            baseUndecided: baseUndecided,
+            localOriginClusterId: localOrigin);
     }
 
     // Helper: build a WalSubscriptionEntry with the given mutation.
@@ -162,6 +163,82 @@ public sealed partial class IncrementalDeltaCollectorTests
         collector.OnEntry(MakeEntry(mutation));
 
         Assert.That(collector.PerOriginHighWater["cluster-neg"], Is.EqualTo(0L));
+    }
+
+    [Test]
+    public void OnEntry_an_own_write_stamped_with_the_local_cluster_id_records_no_origin()
+    {
+        // Issue #5529: on a replicated tree WalCommitLogWriter stamps an own
+        // write's record with the local cluster id, while the row - and so a
+        // full backup - stores it with no origin. The increment must agree.
+        var collector = MakeCollector(localOrigin: "west");
+        collector.OnEntry(MakeEntry(new LatticeMutation
+        {
+            TreeId = "orders",
+            Kind = MutationKind.Set,
+            Key = "own",
+            Value = [1],
+            OriginClusterId = "west",
+            Timestamp = new HybridLogicalClock { WallClockTicks = 10L },
+        }));
+        collector.OnEntry(MakeEntry(new LatticeMutation
+        {
+            TreeId = "orders",
+            Kind = MutationKind.Set,
+            Key = "peer",
+            Value = [2],
+            OriginClusterId = "east",
+            Timestamp = new HybridLogicalClock { WallClockTicks = 11L },
+        }));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(collector.KeyDescriptors.Single(d => d.Key == "own").OriginId, Is.Null);
+            Assert.That(collector.KeyDescriptors.Single(d => d.Key == "peer").OriginId, Is.EqualTo("east"));
+            Assert.That(collector.PerOriginHighWater.Keys, Is.EquivalentTo(new[] { "east" }));
+        });
+    }
+
+    [Test]
+    public async Task StreamAsync_an_own_write_stamped_with_the_local_cluster_id_is_captured_with_no_origin()
+    {
+        // The entry the increment writes - which a restore bulk-loads verbatim -
+        // carries no origin for an own write, as a full backup's row does (#5529).
+        var subscriber = Substitute.For<IWalSubscriber>();
+        var mutation = new LatticeMutation
+        {
+            TreeId = "orders",
+            Kind = MutationKind.Set,
+            Key = "own",
+            Value = [1],
+            OriginClusterId = "west",
+            Timestamp = new HybridLogicalClock { WallClockTicks = 10L },
+        };
+        var pass = 0;
+        subscriber.DrainAsync(Arg.Any<WalSubscriptionContext>(), Arg.Any<IWalSubscriptionHandler>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                if (pass++ > 0)
+                {
+                    return Task.FromResult(new WalDrainResult { EntriesRead = 0 });
+                }
+
+                call.ArgAt<IWalSubscriptionHandler>(1).OnEntry(MakeEntry(mutation));
+                return Task.FromResult(new WalDrainResult
+                {
+                    EntriesRead = 1,
+                    AdvancedOffsets = new Dictionary<int, long> { [0] = 1L },
+                });
+            });
+        var collector = MakeCollector(subscriber, localOrigin: "west");
+
+        var entries = new List<LwwEntry>();
+        await foreach (var chunk in collector.StreamAsync(CancellationToken.None))
+        {
+            entries.AddRange(_serializer.Deserialize<LwwEntry[]>(chunk));
+        }
+
+        Assert.That(entries.Single(e => e.Key == "own").OriginClusterId, Is.Null);
     }
 
     [Test]

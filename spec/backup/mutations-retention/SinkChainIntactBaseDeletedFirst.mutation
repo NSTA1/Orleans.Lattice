@@ -1,0 +1,16 @@
+# Pairs with SinkChainIntact. The pass deletes a doomed base's sink manifest
+# before that of a doomed increment built on it, so until the increment's
+# manifest goes - forever, if the pass is interrupted - the sink holds a
+# published increment whose base is gone.
+MODULE: SinkChainIntactBaseDeletedFirst
+TARGET: SinkChainIntact
+CLASS: Invariant
+SUMMARY: a base's sink manifest is deleted before its doomed increment's
+PERTURBS: DelMan
+
+--- FIND
+    /\ ~BuiltOn(m, snk \cap prDoomed[p])
+--- REPLACE
+    \* MUTATION: no tip-first order.
+    /\ TRUE
+--- END

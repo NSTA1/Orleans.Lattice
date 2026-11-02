@@ -25,7 +25,9 @@ namespace Orleans.Lattice.Backup.Tests;
 /// refuses a new delegation. A fourth pins the set's lease validation (the
 /// <c>Validate</c> row's release clause, issue #4441 F4): a member's gate lost
 /// after the capture, while a single-tree saga decides on that member, must
-/// discard the attempt, because only the release reports the loss.
+/// discard the attempt, because only the release reports the loss. A fifth pins
+/// what a discarded attempt leaves behind (issue #5449): its members, whose rows
+/// wait for a stamp that only the accepted attempt reaches, are listed unstamped.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -201,6 +203,63 @@ public sealed class LatticeBackupSetCaptureHoldLossTests
             Assert.That(result.SetManifest.Fence, Is.Not.Null);
             Assert.That(result.SetManifest.Fence!.Attempts, Is.EqualTo(2),
                 "a member gate lost inside the attempt must discard it, though the window looked quiet");
+        });
+    }
+
+    [Test]
+    public async Task A_discarded_attempt_lists_its_members_unstamped_beside_the_stamped_ones()
+    {
+        // Issue #5449. A fenced set member's catalog row waits for the set's
+        // membership stamp, which only the accepted attempt reaches. The members of
+        // a discarded attempt are therefore registered unstamped when it is
+        // discarded, as ordinary per-tree backups; otherwise they would stay in the
+        // sink with no catalog row, unlisted, once a later attempt succeeds. Each
+        // tree changes again before the second attempt, so that attempt's members
+        // have content - and so content-addressed ids - of their own.
+        var (treeA, treeB, suffix) = await SeedAsync("discarded");
+        HoldLossFilter.Arm(async (mode, ordinal, token, grainFactory) =>
+        {
+            if (mode == TxRegistryCaptureGateMode.Gate && ordinal == 2)
+            {
+                await grainFactory.GetGrain<ILattice>(treeA).SetAsync("k2", Bytes("second"));
+                await grainFactory.GetGrain<ILattice>(treeB).SetAsync("k2", Bytes("second"));
+                return;
+            }
+
+            if (mode != TxRegistryCaptureGateMode.Gate || ordinal != 1)
+                return;
+            await LoseFenceAsync(grainFactory, token, treeA, treeB);
+            await grainFactory.SetManyAtomicAsync(
+                new[]
+                {
+                    new LatticeTreeBatch(treeA, [new KeyValuePair<string, byte[]>("k", Bytes("new"))]),
+                    new LatticeTreeBatch(treeB, [new KeyValuePair<string, byte[]>("k", Bytes("new"))]),
+                },
+                operationId: $"op-{suffix}");
+        });
+
+        var result = await CaptureSetAsync(treeA, treeB, suffix);
+
+        var catalog = SiloServices.GetRequiredService<ILatticeBackupCatalogStore>();
+        var listed = new List<BackupManifest>();
+        await foreach (var manifest in catalog.ListAsync())
+        {
+            if (manifest.Scope.TreeId == treeA || manifest.Scope.TreeId == treeB)
+            {
+                listed.Add(manifest);
+            }
+        }
+
+        var stampedIds = result.Members.Select(m => m.BackupId).ToHashSet(StringComparer.Ordinal);
+        var unstamped = listed.Where(m => !stampedIds.Contains(m.Id)).ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.SetManifest.Fence!.Attempts, Is.EqualTo(2), "the first attempt must have been discarded");
+            Assert.That(listed.Where(m => stampedIds.Contains(m.Id)).Select(m => m.SetId).ToList(),
+                Has.Count.EqualTo(2).And.All.EqualTo(result.SetManifest.SetId), "the accepted attempt's members are listed, stamped");
+            Assert.That(unstamped.Select(m => m.Scope.TreeId), Is.EquivalentTo(new[] { treeA, treeB }),
+                "the discarded attempt's members are listed beside them");
+            Assert.That(unstamped.Select(m => m.SetId), Has.All.Null, "a discarded attempt's members are listed unstamped");
         });
     }
 

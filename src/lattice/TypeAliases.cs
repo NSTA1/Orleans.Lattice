@@ -273,6 +273,9 @@ internal static class TypeAliases
     /// <summary>Alias for the refusal a purged physical copy gives an unrouted call (issue #4503).</summary>
     internal const string LatticeTreePurged = "ol.ltp";
 
+    /// <summary>Alias for the refusal of a write while a purge still holds the tree id (issue #5458).</summary>
+    internal const string LatticeTreePurgeSettling = "ol.tps";
+
     // Restore shadow-cutover - retained-previous-tree redirect primitive
     internal const string RetainedRedirectState = "ol.rrs";
 
@@ -706,6 +709,7 @@ internal static class TypeAliases
     internal const string IWalMaterialiserPinGrain = "ol.wpi";
     internal const string WalMaterialiserPinState = "ol.wps";
     internal const string WalMaterialiserPinReport = "ol.wpr";
+    internal const string WalMaterialiserPinToken = "ol.wpt";
 
     // Cluster-wide WAL GC orphan-pin sweep coordinator (#5097): one sweep per
     // tree per interval instead of one per silo.

@@ -1,0 +1,36 @@
+# Pairs with ListedRestorable. Production before the fix of #5449: a member
+# of a multi-tree backup set registered its catalog row as soon as it was
+# captured, and the set's membership stamp re-wrote its sink manifest and
+# registered the row again once every member was captured. In between, the
+# member was an ordinary listed backup, so a retention pass could prune it;
+# the stamp then listed it again over the artifact the pass had deleted.
+# A member awaiting its stamp is now also held from every pass (Busy), which
+# alone would hide the double registration, so the mutation also makes the
+# pass's doom ignore that hold: it is the production behaviour before #5449,
+# which had neither.
+MODULE: ListedRestorableStampReregisters
+TARGET: ListedRestorable
+CLASS: Invariant
+SUMMARY: a set member is registered at capture and again by the stamp
+PERTURBS: Register, PruneList
+
+--- FIND
+          \* A set member: its row waits for the stamp.
+          /\ UNCHANGED <<cat, pub, lpt, reps>>
+--- REPLACE
+          \* MUTATION: the member is registered now, and again by the stamp.
+          /\ cat' = cat \cup {cap[c].id}
+          /\ pub' = pub \cup {cap[c].id}
+          /\ UNCHANGED <<lpt, reps>>
+--- END
+
+--- FIND
+       IN /\ D \ Busy # {}
+          /\ prPh' = [prPh EXCEPT ![p] = "rows"]
+          /\ prDoomed' = [prDoomed EXCEPT ![p] = D \ Busy]
+--- REPLACE
+       \* MUTATION: a member awaiting its stamp is not held from the pass.
+       IN /\ D \ (Busy \ {cap[c].id : c \in {d \in Caps : cap[d].ph = "stamp"}}) # {}
+          /\ prPh' = [prPh EXCEPT ![p] = "rows"]
+          /\ prDoomed' = [prDoomed EXCEPT ![p] = D \ (Busy \ {cap[c].id : c \in {d \in Caps : cap[d].ph = "stamp"}})]
+--- END

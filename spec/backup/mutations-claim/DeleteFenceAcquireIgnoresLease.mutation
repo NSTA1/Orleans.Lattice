@@ -1,0 +1,14 @@
+# Pairs with DeleteFence. A publish of the id does not wait for an operator
+# delete's lease, so it runs while the delete is deleting artifacts.
+MODULE: DeleteFenceAcquireIgnoresLease
+TARGET: DeleteFence
+CLASS: Invariant
+SUMMARY: a publish takes the hold while a delete's lease is live
+PERTURBS: Acquire
+
+--- FIND
+       /\ s = "A" => ~Leased
+--- REPLACE
+       \* MUTATION: the publish ignores delete leases.
+       /\ TRUE
+--- END

@@ -1,0 +1,19 @@
+# Pairs with NoTrimPastLiveNeed. A re-created leaf takes a write before its birth
+# seed has landed, so nothing holds the floor for it once an orphan sweep has
+# retired the surviving entry.
+MODULE: NoTrimPastLiveNeedWriteBeforeSeed
+TARGET: NoTrimPastLiveNeed
+CLASS: Invariant
+SUMMARY: a leaf takes a write before its birth block pin is seeded
+PERTURBS: Write
+
+--- FIND
+Write ==
+    /\ phase = "live"
+    /\ seeded
+--- REPLACE
+Write ==
+    /\ phase = "live"
+\* MUTATION: the birth seed does not gate the first write.
+    /\ TRUE
+--- END

@@ -1,0 +1,17 @@
+# Pairs with ExpiredEventuallyPruned, under the fairness Spec asserts. The
+# plan treats a policy with only one of keep-last and max-age set as the
+# unbounded no-op, so nothing is ever pruned under it.
+MODULE: ExpiredEventuallyPrunedOneKnobUnbounded
+TARGET: ExpiredEventuallyPruned
+CLASS: Temporal
+SUMMARY: a policy with one knob set retains everything
+PERTURBS: PruneList
+
+--- FIND
+             IF pol.keepLast = 0 /\ pol.maxAge = 0
+             THEN L
+--- REPLACE
+             \* MUTATION: one unset knob means unbounded.
+             IF pol.keepLast = 0 \/ pol.maxAge = 0
+             THEN L
+--- END

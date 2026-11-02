@@ -54,6 +54,7 @@ internal sealed partial class LatticeBackupControl : ILatticeBackupControl, ILat
     private readonly ITenantContextResolver _tenantResolver;
     private readonly LatticeApiBackupOptions _options;
     private readonly ILatticeViewFactory? _viewFactory;
+    private readonly IBackupPublicationGate _publicationGate;
 
     /// <summary>Initializes a new <see cref="LatticeBackupControl"/>.</summary>
     /// <param name="capture">The full-capture engine. Must not be <c>null</c>.</param>
@@ -116,6 +117,12 @@ internal sealed partial class LatticeBackupControl : ILatticeBackupControl, ILat
         _catalog = catalog;
         _sink = sink;
         _restore = restore;
+
+        // A delete runs under the backup's per-id hold on its scope's scheduler
+        // grain (issue #5418), so it never interleaves with a capture republishing
+        // the same content-addressed id or with a retention pass.
+        _publicationGate = services.GetService<IBackupPublicationGate>()
+            ?? new DirectBackupPublicationGate(new BackupPublisher(catalog, sink));
         _operations = new BackupOperationService(
             services.GetRequiredService<LatticeOperationRunner>(),
             capture,
@@ -330,7 +337,11 @@ internal sealed partial class LatticeBackupControl : ILatticeBackupControl, ILat
     {
         ArgumentException.ThrowIfNullOrEmpty(backupId);
 
-        var manifest = await _catalog.GetAsync(backupId, cancellationToken).ConfigureAwait(false);
+        // A delete interrupted after it removed the catalog row leaves the sink
+        // manifest behind, removed last, so a retry finds it there and finishes the
+        // delete (issue #5334).
+        var manifest = await _catalog.GetAsync(backupId, cancellationToken).ConfigureAwait(false)
+            ?? await _sink.ReadManifestAsync(backupId, cancellationToken).ConfigureAwait(false);
         if (manifest is null)
         {
             return false;
@@ -339,35 +350,13 @@ internal sealed partial class LatticeBackupControl : ILatticeBackupControl, ILat
         // Manifest-derived scope: already effective, never re-composed.
         await _authorizer.AuthorizeBackupAsync(manifest.Scope, cancellationToken).ConfigureAwait(false);
 
-        // Collect every artifact still referenced by another retained manifest so
-        // a shared artifact (for example a base backup an increment still depends
-        // on) is never deleted.
-        var stillReferenced = new HashSet<string>(StringComparer.Ordinal);
-        await foreach (var other in _catalog.ListAsync(cancellationToken).ConfigureAwait(false))
+        // The row is removed and the id reserved in the scope's scheduler grain,
+        // from the row as it stands then (a capture may have republished the id
+        // since it was read here); the unshared artifacts and then the sink
+        // manifest are deleted outside the grain (issue #5628).
+        if (!await _publicationGate.RetireAsync(manifest, BackupRetireKind.Delete, cancellationToken).ConfigureAwait(false))
         {
-            if (string.Equals(other.Id, backupId, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            foreach (var descriptor in other.ContentDescriptors)
-            {
-                stillReferenced.Add(descriptor.ArtifactId);
-            }
-        }
-
-        // Remove the manifest first so no catalog / sink entry can outlive the
-        // artifacts it points at, then delete only this backup's own unshared
-        // artifacts.
-        await _catalog.RemoveAsync(backupId, cancellationToken).ConfigureAwait(false);
-        await _sink.DeleteManifestAsync(backupId, cancellationToken).ConfigureAwait(false);
-
-        foreach (var descriptor in manifest.ContentDescriptors)
-        {
-            if (!stillReferenced.Contains(descriptor.ArtifactId))
-            {
-                await _sink.DeleteArtifactAsync(descriptor.ArtifactId, cancellationToken).ConfigureAwait(false);
-            }
+            return false;
         }
 
         // Discard the deleted backup's health state so a stale report never lingers

@@ -1,0 +1,17 @@
+# Pairs with DeleteFence. The lease half of #5631 alone: overlapping deletes
+# share one lease, so the first to end lets a publish of the id in while the
+# other is still deleting.
+MODULE: DeleteFenceEndClearsEveryLease
+TARGET: DeleteFence
+CLASS: Invariant
+SUMMARY: one delete ending drops every delete's lease
+PERTURBS: DelEnd
+
+--- FIND
+    /\ lease' = [lease EXCEPT ![d] = "none"]
+    /\ UNCHANGED <<row, pend, held, cap, ret>>
+--- REPLACE
+    \* MUTATION: the end drops every lease of the id, not its own.
+    /\ lease' = [e \in Dels |-> "none"]
+    /\ UNCHANGED <<row, pend, held, cap, ret>>
+--- END

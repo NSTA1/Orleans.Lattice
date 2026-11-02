@@ -1,0 +1,34 @@
+# The drive's fenced retirement takes the pinned leaf's durable read before its
+# token loop instead of after it, so a leaf re-created between that read and a
+# key's token merges its birth seed under a token the removal then honours, and
+# the drive removes the re-created leaf's block pin.
+MODULE: WalPinRetirement
+ROW: Enum(p, k)
+FILE: src/lattice/LatticeWalGcScheduler.cs
+DETECTORS: LatticeWalGcSchedulerCadenceTests.The_drive_does_not_remove_a_pin_that_a_leaf_recreated_after_its_read_seeded_into
+SUMMARY: the drive reads the leaf before it takes its tokens
+
+--- FIND
+        var snapshot = await ReadLeafSnapshotOrNullAsync(leafStateStorage, leafGrainId, CancellationToken.None)
+            .ConfigureAwait(false);
+        var state = ClassifyLeafSnapshot(snapshot, partition).State;
+--- REPLACE
+        var state = ClassifyLeafSnapshot(snapshot, partition).State;
+--- END
+
+--- FIND
+                "WAL GC cannot verify that materialiser pin {Consumer} on tree {Tree} belongs to a cleared leaf - no leaf-state storage, or the id does not resolve - so it is left holding the floor (issue #5358).",
+                consumerId,
+                treeId);
+            return false;
+        }
+--- REPLACE
+                "WAL GC cannot verify that materialiser pin {Consumer} on tree {Tree} belongs to a cleared leaf - no leaf-state storage, or the id does not resolve - so it is left holding the floor (issue #5358).",
+                consumerId,
+                treeId);
+            return false;
+        }
+
+        var snapshot = await ReadLeafSnapshotOrNullAsync(leafStateStorage, leafGrainId, CancellationToken.None)
+            .ConfigureAwait(false);
+--- END

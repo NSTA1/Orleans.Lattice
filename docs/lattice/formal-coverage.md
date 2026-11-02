@@ -61,15 +61,15 @@ once, either here or in the
 | Area | Modules | Mutations | Behaviour rows | Detector tests | Page |
 |------|---------|-----------|----------------|----------------|------|
 | Single-cluster atomic commit | 1 | 21 | 17 | 40 | [Verified Atomic-Commit](verified-atomic-commit.md) |
-| WAL durability lifecycle | 2 | 61 | 57 | 140 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
+| WAL durability lifecycle | 3 | 92 | 87 | 187 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
 | Shard ownership | 5 | 124 | 124 | 201 | [Verified Shard Ownership](verified-shard-ownership.md) |
 | Cross-cluster atomic visibility | 1 | 66 | 43 | 150 | [Verified Atomic-Commit: the replicated half](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | 4 | 84 | 64 | 195 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
-| Backup and restore | 5 | 71 | 78 | 154 | [Verified backup and restore](../lattice.backup/verified-backup.md) |
+| Backup and restore | 7 | 115 | 116 | 213 | [Verified backup and restore](../lattice.backup/verified-backup.md) |
 | B+ tree topology | 6 | 100 | 140 | 62 | [B+ tree topology](../../spec/bplustree/README.md) |
 | Materialised-view tail and lifecycle | 1 | 22 | 27 | 30 | [Materialised views](../../spec/materialised-views/README.md) |
 | Tree lifecycle composition | 2 | 46 | 66 | 48 | [Resize, reshard and shadow cutover](../../spec/tree-lifecycle/README.md) |
-| Anti-entropy remediation | 1 | 32 | 39 | 59 | [Digest-driven repair](../../spec/anti-entropy/README.md) |
+| Anti-entropy remediation | 1 | 32 | 39 | 60 | [Digest-driven repair](../../spec/anti-entropy/README.md) |
 | Shared alias routing and revert | 2 | 25 | 40 | 22 | [Aliasing](../../spec/aliasing/README.md) |
 | Tenant quotas | 3 | 29 | 26 | 32 | [Quota admission](../../spec/tenant-quotas/README.md) |
 | Tenant rate budgets | 1 | 14 | 23 | 22 | [Rate-budget leases](../../spec/tenant-rate-budget/README.md) |
@@ -394,10 +394,19 @@ gaps, states its full scope.
 - **WAL durability lifecycle** ([`spec/wal/`](../../spec/wal/README.md)).
   - **Covers:** a leaf's lifecycle under crash-anywhere recovery, across one WAL
     partition shared by two leaves, including snapshot and row loss and a purge;
-    and a WAL shard move with a durable fence, a shard crash and the loss of its
-    coordinator.
+    a WAL shard move with a durable fence, a shard crash and the loss of its
+    coordinator; and the GC's retirement of orphaned materialiser pins - the bulk
+    sweep and the starvation drive, with their token, leaf read and fenced removal
+    as separate steps and two sweepers racing - against a leaf's fold, purge,
+    discard and re-creation under the same grain id, and a completed purge's
+    tree-level tail re-driven onto a reused tree id.
   - **Does not cover:** more than two partitions; splits, resharding and saga
-    state; replication consumers, beyond their effect on the trim floor.
+    state; replication consumers, beyond their effect on the trim floor; for pin
+    retirement, several leaves or partitions per leaf, the pin's HLC frontier and
+    override holds, the in-memory cursor registry, the order of the steps
+    inside a purge's tree-level tail, and a resized tree's logical purge
+    completion (both pinned by tests instead), or how long a live leaf's pin
+    stays at the block value before its first WAL replay.
 - **Shard ownership** ([`spec/shard-ownership/`](../../spec/shard-ownership/README.md)).
   - **Covers:** who serves a key across an adaptive split, an online shard
     fold, an online reshard, an online resize and its undo, with stale routers
@@ -444,10 +453,16 @@ gaps, states its full scope.
 - **Backup and restore** ([`spec/backup/`](../../spec/backup/README.md)).
   - **Covers:** capture, incremental chains, provenance, a coordinated restore
     across regions, and a local cutover and its revert, all against in-flight
-    atomic writes.
+    atomic writes; and retention pruning (keep-last, max-age, the base closure)
+    racing full and incremental captures of the same scope, with a crash at any
+    step; and which scope owns a content-addressed backup id across scopes, with
+    the owning scope retiring it.
   - **Does not cover:** in-place and cold restores, reader atomicity across a
-    backup set's members during the alias swap, and a replication batch delayed
-    across a whole restore cutover.
+    backup set's members during the alias swap, a replication batch delayed
+    across a whole restore cutover, an operator's explicit backup delete,
+    catalog rebuild and scrub (each serialised per backup id with retention, but
+    not modelled), mixed-version silos during a rolling upgrade, and retention
+    over a sink shared between clusters.
 
 - **Materialised-view tail and lifecycle** ([`spec/materialised-views/`](../../spec/materialised-views/README.md)).
   - **Covers:** physical WAL binding, checkpoint and published read-position
@@ -588,11 +603,11 @@ area's list is the authoritative one. The separately listed interrupted-shadow d
 
 | Area | Defects | Full list |
 |------|---------|-----------|
-| WAL durability lifecycle | #4450, #4451, #4456, #4467, #4523, #4525, #4621, #4622, #4634, #4641, #4654, #4669, #4699, #4700 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
+| WAL durability lifecycle | #4450, #4451, #4456, #4467, #4523, #4525, #4621, #4622, #4634, #4641, #4654, #4669, #4699, #4700, #5358, #5416, #5417, #5458, #5459 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
 | Shard ownership | #4452, #4453, #4454, #4455, #4473, #4474, #4475, #4503, #4522, #4545, #4564, #4611, #4613, #4618, #4619, #4689 | [`spec/shard-ownership/`](../../spec/shard-ownership/README.md#defects-this-area-found) |
 | Cross-cluster atomic visibility | #4480, #4481, #4482, #4508, #4511, #4526, #4533, #4534, #4591, #4627, #4664, #4683, #4684, #4685 | [Verified Atomic-Commit](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | #4463, #4464, #4465, #4504, #4537, #4549, #4585, #4586, #4587, #4603, #4604, #4614, #4615, #4673, #4707 | [`spec/replication/`](../../spec/replication/README.md#production-defects-this-module-found) |
-| Backup and restore | #4485, #4490, #4589, #4593, #4686 | [`spec/backup/`](../../spec/backup/README.md#defects-the-modules-found) |
+| Backup and restore | #4485, #4490, #4589, #4593, #4686, #5357, #5412, #5418, #5449, #5529, #5531, #5532, #5627, #5628, #5629, #5631, #5632 | [`spec/backup/`](../../spec/backup/README.md#defects-the-modules-found) |
 | B+ tree topology | #4795, #4815, #4818, #4914 | [`spec/bplustree/`](../../spec/bplustree/README.md#defects-this-specification-found) |
 | Materialised-view tail and lifecycle | #4853, #4856, #4857 | [`spec/materialised-views/`](../../spec/materialised-views/README.md#defects-found) |
 | Materialised-view physical rebuild and resolved identity | #4891, #4895, #4905 | [Physical-rebind companion](../../spec/materialised-views/README.md#focused-aggregation-and-physical-rebind-companions) and [resolved identity](../../spec/view-resolved-identity/README.md) |
@@ -600,7 +615,7 @@ area's list is the authoritative one. The separately listed interrupted-shadow d
 | Materialised-view joint repair and automatic upgrade | #4876, #4897, #4898, #4899, #4902 | [Joint repair](../../spec/view-joint-repair/README.md) |
 | Interrupted-shadow regression detector | #4906 | [Exact physical generation control](../../spec/materialised-views/RefinementHorizon.md) |
 | Tree lifecycle composition | #4858 | [`spec/tree-lifecycle/`](../../spec/tree-lifecycle/README.md#defect-found) |
-| Anti-entropy remediation | #4859, #4862, #4863 | [`spec/anti-entropy/`](../../spec/anti-entropy/README.md) |
+| Anti-entropy remediation | #4859, #4862, #4863, #5530 | [`spec/anti-entropy/`](../../spec/anti-entropy/README.md) |
 | Shared alias routing and revert | #4860 | [`spec/aliasing/`](../../spec/aliasing/README.md#defect-found) |
 | Scheduling and progress | #4976, #4977, #4979, #4985, #4992 | [Scheduling defects](verified-scheduling.md#defects-found-during-the-bucket) |
 

@@ -248,6 +248,51 @@ public sealed class LatticeBackupIncrementalCaptureTests
         });
     }
 
+    // ---- Own-write origin on a replicated-shaped tree (#5529) -------------
+
+    [Test]
+    public async Task CaptureIncrementalAsync_with_a_local_cluster_id_stores_own_writes_with_no_origin()
+    {
+        // A non-empty local origin: WalCommitLogWriter stamps every own write's
+        // WAL record with "west", while the leaf rows (and so a full backup) store
+        // no origin. The capture service must pass the resolved local origin to
+        // the incremental collector, or the increment keeps "west" on own writes
+        // and a restored chain gives the same own rows two origins. An empty
+        // resolver cannot detect this, because "" was already mapped to null.
+        await _fixture.InitializeAsync(localOriginClusterId: "west");
+        Assert.That(
+            _fixture.SiloServices.GetRequiredService<ILatticeOriginClusterIdResolver>().Resolve(Tree),
+            Is.EqualTo("west"),
+            "the fixture must stamp own writes with a non-empty local origin");
+
+        var tree = _fixture.GrainFactory.GetGrain<ILattice>(Tree);
+        await tree.SetAsync("k1", Bytes("v1"));
+        await tree.SetAsync("k2", Bytes("v1"));
+
+        var baseBackup = await _fixture.Capture.CaptureAsync(
+            new LatticeBackupCaptureRequest("base", BackupScopeSelector.WholeTree(Tree)));
+
+        await tree.SetAsync("k1", Bytes("v2"));
+        await tree.SetAsync("k3", Bytes("v1"));
+        await tree.DeleteAsync("k2");
+
+        var increment = await _fixture.Incremental.CaptureIncrementalAsync(
+            new LatticeBackupIncrementalCaptureRequest("inc", BackupScopeSelector.WholeTree(Tree), baseBackup.BackupId));
+
+        var baseEntries = await DecodeEntriesAsync(baseBackup.Manifest);
+        var deltaEntries = await DecodeEntriesAsync(increment.Manifest);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(increment.Manifest.Kind, Is.EqualTo(BackupKind.Incremental));
+            Assert.That(
+                deltaEntries.Select(e => e.Key).OrderBy(k => k, StringComparer.Ordinal),
+                Is.EqualTo(new[] { "k1", "k2", "k3" }));
+            Assert.That(baseEntries.Select(e => e.OriginClusterId), Is.All.Null, "the full base stores own rows with no origin");
+            Assert.That(deltaEntries.Select(e => e.OriginClusterId), Is.All.Null, "the increment must store own writes as the base does");
+        });
+    }
+
     // ---- Missing base ----------------------------------------------------
 
     [Test]

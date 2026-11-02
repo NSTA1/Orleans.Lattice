@@ -195,8 +195,7 @@ internal sealed partial class TreeDeletionGrain
             // and so does a purge whose registry removal threw (issue #4265).
             if (state.State.Delegated)
             {
-                await SettleRegistryEntryAsync();
-                await DeregisterLeafCursorsAsync();
+                await SettleDelegatedPurgeAsync();
             }
             else if (state.State.RegistryUnregisterPending)
             {
@@ -331,7 +330,7 @@ internal sealed partial class TreeDeletionGrain
             return false;
         }
 
-        await grainFactory.GetLatticeRegistry().UnregisterAsync(TreeId);
+        var removal = await RemoveLogicalRegistryEntryAsync();
         state.State.LogicalPurgeInProgress = false;
         state.State.LogicalPurgeComplete = true;
         try { await PersistAsync(); }
@@ -356,8 +355,61 @@ internal sealed partial class TreeDeletionGrain
                 TreeId);
         }
 
-        await PublishLogicalLifecycleEventAsync(LatticeTreeEventKind.TreePurged);
+        if (removal != PurgedRegistryEntry.Reused)
+            await PublishLogicalLifecycleEventAsync(LatticeTreeEventKind.TreePurged);
         return true;
+    }
+
+    /// <summary>
+    /// Removes the logical tree's registry entry for a logical purge, unless an
+    /// earlier attempt's removal already landed (issue #5459). The entry's lineage
+    /// is recorded in a write of its own before the first removal, so a completion
+    /// re-driven after the removal landed but its completion's write did not - the
+    /// write threw, or the removal's reply was lost - finds the entry gone
+    /// (<see cref="PurgedRegistryEntry.Landed"/>) or carrying another lineage,
+    /// because a write or a create registered the id again
+    /// (<see cref="PurgedRegistryEntry.Reused"/>), and removes nothing.
+    /// </summary>
+    /// <remarks>
+    /// As for the physical tail (#5417), the check and the removal need not be
+    /// atomic: this non-reentrant grain is the only caller that removes the
+    /// logical id's entry. A purge recorded by a build that predates the record
+    /// records the lineage of whatever entry it finds on its next attempt.
+    /// </remarks>
+    /// <returns>Whose entry the removal acted on.</returns>
+    private async Task<PurgedRegistryEntry> RemoveLogicalRegistryEntryAsync()
+    {
+        var registry = grainFactory.GetLatticeRegistry();
+        var entry = await registry.GetEntryAsync(TreeId);
+        if (entry is null)
+            return PurgedRegistryEntry.Landed;
+
+        if (state.State.LogicalPurgedRegistryLineageRecorded)
+        {
+            if (entry.Lineage != state.State.LogicalPurgedRegistryLineage)
+            {
+                logger.LogInformation(
+                    "Tree {TreeId}: the logical purge's registry removal had already landed and the id has been registered again; "
+                    + "the re-driven completion leaves the new tree's registration untouched.",
+                    TreeId);
+                return PurgedRegistryEntry.Reused;
+            }
+        }
+        else
+        {
+            state.State.LogicalPurgedRegistryLineageRecorded = true;
+            state.State.LogicalPurgedRegistryLineage = entry.Lineage;
+            try { await PersistAsync(); }
+            catch
+            {
+                state.State.LogicalPurgedRegistryLineageRecorded = false;
+                state.State.LogicalPurgedRegistryLineage = null;
+                throw;
+            }
+        }
+
+        await registry.UnregisterAsync(TreeId);
+        return PurgedRegistryEntry.Owned;
     }
 
     /// <summary>

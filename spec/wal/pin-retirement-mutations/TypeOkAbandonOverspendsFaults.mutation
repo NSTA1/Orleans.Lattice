@@ -1,0 +1,17 @@
+# Pairs with TypeOK. An abandoned run charges the fault budget twice and leaves it
+# outside its bound.
+MODULE: TypeOkAbandonOverspendsFaults
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: an abandoned run overspends the fault budget
+PERTURBS: Abandon
+BOUNDS: MaxFaults = 1
+
+--- FIND
+    /\ touched' = [touched EXCEPT ![p] = {}]
+    /\ faults' = faults + 1
+--- REPLACE
+\* MUTATION: charged twice.
+    /\ touched' = [touched EXCEPT ![p] = {}]
+    /\ faults' = faults + 2
+--- END

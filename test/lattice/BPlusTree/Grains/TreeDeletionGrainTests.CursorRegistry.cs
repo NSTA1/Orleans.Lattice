@@ -104,6 +104,58 @@ public partial class TreeDeletionGrainTests
     }
 
     [Test]
+    public async Task PurgeNow_clears_the_pin_store_before_the_registry_frees_the_tree_id()
+    {
+        // Issue #5416: removing the registry entry is what lets a write register
+        // the id again and re-seed its deterministic root leaf, whose birth seed
+        // lands under the purged root leaf's consumer id. A pin-store clear that
+        // runs after that would erase the new tree's block pins, unfenced.
+        var (grain, _, reporter, factory) = CreateGrainWithReporter();
+        var order = RecordPurgeTailOrder(reporter, factory);
+        await grain.DeleteTreeAsync();
+
+        await grain.PurgeNowAsync();
+
+        Assert.That(order, Is.EqualTo(new[] { "pins", "registry" }));
+    }
+
+    [Test]
+    public async Task CompletePurge_clears_the_pin_store_before_the_registry_frees_the_tree_id()
+    {
+        var (grain, _, reporter, factory) = CreateGrainWithReporter();
+        var order = RecordPurgeTailOrder(reporter, factory);
+        await grain.DeleteTreeAsync();
+        await grain.BeginPurgeStateAsync(startFromShard: 0);
+
+        await grain.CompletePurgeAsync();
+
+        Assert.That(order, Is.EqualTo(new[] { "pins", "registry" }));
+    }
+
+    /// <summary>
+    /// Records, in call order, the pin-store clear of <see cref="TreeId"/> and
+    /// the registry removal that frees the id for reuse.
+    /// </summary>
+    private static List<string> RecordPurgeTailOrder(ILeafCursorReporter reporter, IGrainFactory factory)
+    {
+        var order = new List<string>();
+        reporter.UnregisterTreeAsync(TreeId, Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                order.Add("pins");
+                return Task.CompletedTask;
+            });
+        factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+            .UnregisterAsync(TreeId)
+            .Returns(_ =>
+            {
+                order.Add("registry");
+                return Task.CompletedTask;
+            });
+        return order;
+    }
+
+    [Test]
     public async Task PurgeNow_is_no_op_when_reporter_not_registered()
     {
         // Hosts that have not added the replication package leave the

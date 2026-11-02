@@ -1,0 +1,15 @@
+# Pairs with OrphanEventuallyRetired. A protocol defect with fairness intact: the
+# enumeration reads a key but never records what it found under it, so no pin is
+# ever decided.
+MODULE: OrphanEventuallyRetiredEnumFindsNothing
+TARGET: OrphanEventuallyRetired
+CLASS: Temporal
+SUMMARY: the enumeration records no pin it reads
+PERTURBS: Enum
+
+--- FIND
+                    [c \in Cons |-> IF Present(k, c) /\ (p # Drive \/ c = "cL")
+--- REPLACE
+\* MUTATION: nothing found is recorded.
+                    [c \in Cons |-> IF FALSE
+--- END

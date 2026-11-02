@@ -216,4 +216,17 @@ public sealed record BackupManifest
     /// </summary>
     [Id(15)]
     public string? CapturingClusterId { get; init; }
+
+    /// <summary>
+    /// When this backup was last captured, or <see langword="null"/> when it has
+    /// been captured only once (its <see cref="CreatedAtUtc"/>). A backup id is a
+    /// content address, so a capture that produces identical bytes republishes an
+    /// existing backup rather than creating a new one: its
+    /// <see cref="CreatedAtUtc"/> stays that of the first capture, and this records
+    /// the latest. Retention ranks a backup by the later of the two, so a backup a
+    /// capture has just returned is never pruned as old. A manifest written before
+    /// this field existed has none, and ranks by <see cref="CreatedAtUtc"/>.
+    /// </summary>
+    [Id(17)]
+    public DateTimeOffset? LastCapturedAtUtc { get; init; }
 }

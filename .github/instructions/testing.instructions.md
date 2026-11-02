@@ -1030,7 +1030,8 @@ production detectors, each proven red by perturbing production, in
 
 The WAL durability lifecycle has a TLA+ specification of its own, `spec/wal/`
 (`WalDurability.tla` for the leaf lifecycle under crash-anywhere recovery,
-`WalMove.tla` for shard moves), and an end-to-end Coyote companion,
+`WalMove.tla` for shard moves, `WalPinRetirement.tla` for the GC's retirement
+of orphaned materialiser pins), and an end-to-end Coyote companion,
 `WalDurabilityLifecycleModel` / `WalDurabilityLifecycleCoyoteTests`. The model
 drives five production cores together:
 
@@ -1064,6 +1065,9 @@ reported under that fix's own assertion tag, not merely some violation.
 | `ReaderNeverPassesHole`, `AllocatorNeverReissues` (`WalMove`) | As `ShippingNeverSkips` and `OffsetContiguity`. | `WalShippingWatermark`, `WalOffsetAllocationCore` | `WalShippingWatermarkModel`, `WalOffsetContiguityModel`. | Their models' guard tests. | Cited. |
 | `StreamEventuallyComplete` (`WalMove`) | A move's fence is always eventually lowered. | - | Not encoded in Coyote. | - | Gap: TLA+ only. |
 | `FenceEventuallyReleased` (`WalMove`) | A durable move fence is never held for ever, even once its coordinator is lost. | - | Not encoded in Coyote. | - | Gap: TLA+ only; its production detectors (#4525's fix) are named in `spec/wal/MoveRefinement.md`. |
+| `NoTrimPastLiveNeed`, `LivePublisherPinned`, `RetireOnlyHusk` (`WalPinRetirement`) | The GC never retires the pin of a leaf that is live or re-created under the same grain id, so the trim never passes writes it still needs (#5358). | `WalOrphanPinRetirementCore` | `WalPinRetirementModel`: the re-created leaf keeps a pin while it holds an un-checkpointed write. | `WalPinRetirementCoyoteTests.Unfenced_retirement_retires_the_pin_of_a_recreated_leaf` and `WalPinRetirementCoyoteTests.A_token_taken_after_the_read_does_not_fence_the_recreation`. | Net-new. |
+| `UnreadableNeverRetired` (`WalPinRetirement`) | A faulted leaf read never retires a pin. | `WalOrphanPinRetirementCore` | Not encoded in Coyote: `WalOrphanPinRetirementCoreTests` covers the arm. | - | Gap: TLA+ and unit tests only. |
+| `OrphanEventuallyRetired` (`WalPinRetirement`) | A gone leaf's pins are eventually retired, unless its grain id is populated again first. | - | Not encoded in Coyote. | - | Gap: TLA+ only; its production detectors are named in `spec/wal/PinRetirementRefinement.md`. |
 
 **Gap analysis.** Every assertion of `WalDurabilityLifecycleModel` and
 `WalPartitionReleaseModel` is the reporter of at least one guard: disabling any
@@ -1120,12 +1124,14 @@ targets and requires a clean run. The assurance document is
 
 ### Backup and restore property catalogue (epic #4430, issue #4440)
 
-The backup area's properties are checked by five TLA+ modules under
+The backup area's properties are checked by seven TLA+ modules under
 [`spec/backup/`](../../spec/backup/README.md), each with its own refinement note
 naming the production symbols and detector tests per row. Its Coyote models
 live in the backup and replication test projects, not in `test/lattice/`, and
-drive two extracted cores: `CrossTreeFenceWindow` (backup set capture window)
-and `CrossClusterSagaDecisionCore` (coordinated restore decision). Two more
+drive three extracted cores: `CrossTreeFenceWindow` (backup set capture window),
+`BackupRetentionPlanner` (retention pruning's keep set, dependent scan and an
+increment's publish check, #5357) and `CrossClusterSagaDecisionCore`
+(coordinated restore decision). Two more
 cores have unit suites only, because they are folds that are not
 schedule-sensitive: `BackupChainFrontier` (origin normalisation and chain
 frontier) and `IncrementalSagaStaging` (how an increment resolves the sagas in
@@ -1143,6 +1149,10 @@ its window, #4589).
 | `BackupRestore` | `RestoreAllOrNothing` | No cluster serves its restored copy unless every cluster voted commit and none compensated. The participant fence timer is modelled; its unilateral compensation is a gap filed as #4637. | `CoordinatedRestoreDecisionModel` (`Committing_on_any_vote_leaves_the_restore_mixed`). |
 | `BackupRestore` | `RestoredCutNotReAdvanced`, `RestoreAdmitsOnlyNamespace`, `AckedWritesServed`, `RestoreConverges` | No pre-cutover write reaches a restored copy (the #4490 rebind-first resume, and the #4593 restored-copy fence against a stale cached admission or a parked entry); no foreign record installed; post-cutover writes survive; resumed replication converges (liveness). | None; detectors in the note. |
 | `BackupCutover` | `RestoreNeverTorn`, `CutoverServesRestored`, `RevertNeverServesRestored`, `DeleteNeverMidCutover`, `RestoreReturns`, `RevertReturns` | Alias and map move together; stale routing heals after a restore and after a revert; no delete mid-cutover; a crashed restore, and a revert crashed between its swap and its fix-up, complete on retry (liveness). | None; integration and chaos detectors in the note. |
+| `BackupRetention` | `RetainedRestorable`, `ListedRestorable`, `ListedInSink`, `SinkChainIntact`, `InFlightBaseSurvives` | Every backup the catalog lists, and every backup the retention policy keeps, with its base chain, stays restorable while captures race the pass, which plans only from a listing read under its one-pass guard (#5412); every listed backup's manifest stays in the sink, because a capture that republishes a content-addressed id does so under the scope's per-id hold, which no pass dooms and which refreshes the backup's retention ranking (#5418); a backup set's member is listed only by the set's membership stamp, so no pass prunes it before it is listed (#5449); an increment publishes only while its base is restorable; an interrupted pass never leaves a published increment in the sink without its base. Models the #5357, #5412, #5418 and #5449 fixes. | `BackupRetentionModel` (guards `Without_the_base_recheck_an_increment_is_published_over_a_pruned_base`, `Without_the_dependent_scan_a_pass_deletes_a_base_an_increment_published_over`; witness `Exploration_reaches_an_increment_falling_back_because_a_pass_had_its_base`); `BackupRetentionConcurrencyTests`. |
+| `BackupRetention` | `KeepPolicyHonoured`, `ExpiredEventuallyPruned` | Nothing keep-last, max-age or the base closure keeps is pruned; a listed backup outside the policy that nothing builds on is eventually pruned, including after a faulted pass (liveness). | None; `BackupRetentionPlannerTests` and `BackupSchedulerGrainUnitTests`. |
+| `BackupIdClaim` | `NoForeignOverwrite`, `ScopeAgreement` | No publish replaces another scope's backup under a full backup's bare content-addressed id, and the id's catalog row and sink manifest name one scope: every admitted capture holds a persisted claim, the owning scope's included, released one at a time (#5620, #5627, #5632). | None; `BackupIdCollisionTests` and `BackupIdClaimRaceTests`. |
+| `BackupIdClaim` | `ListedInSink`, `DeleteFence`, `NoForeignDelete` | No retention pass or operator delete deletes the manifest of a row a publish listed; overlapping deletes of one id each keep it reserved until their own end; no delete in one scope removes another scope's backup under the id (#5631). | None; `BackupDeleteOverlapTests` and `BackupDeleteHoldTests`. |
 
 What these do not cover - a batch in flight across a whole cutover (checked by
 `ShardOwnershipCutover` under `spec/shard-ownership/`), reader atomicity across set members, in-place and cold
@@ -1275,7 +1285,7 @@ above). This reverses an earlier decision to keep exhaustive TLC out of routine 
 "CI decision" section of `spec/README.md` records why. `spec/` is outside
 `Orleans.Lattice.slnx` and is not built by `dotnet`.
 
-The WAL durability lifecycle has its own modules under `spec/wal/` (`WalDurability.tla`, `WalMove.tla`), with the same mutation, refinement and Coyote pattern; see `spec/wal/README.md` and the WAL durability property catalogue above.
+The WAL durability lifecycle has its own modules under `spec/wal/` (`WalDurability.tla`, `WalMove.tla`, `WalPinRetirement.tla`), with the same mutation, refinement and Coyote pattern; see `spec/wal/README.md` and the WAL durability property catalogue above.
 
 ## Hygiene gates
 

@@ -3249,7 +3249,9 @@ internal sealed partial class ShardRootGrain(
     /// purge has tombstoned (<see cref="ShardRootState.IsPurged"/>, issue #4503).
     /// The copy is live again only when the registry says so: for a routed call,
     /// when the router's logical tree resolves to this copy; for a call with no
-    /// routed stamp, when this id is registered and not aliased elsewhere. That
+    /// routed stamp, when this id is registered and not aliased elsewhere - and,
+    /// in either case, when that id's deletion record no longer holds a deletion
+    /// or a purge whose registry removal is owed (issue #5458). That
     /// is the deliberate reuse of the id (issue #3940), and the seed that follows
     /// lifts the tombstone. Otherwise a routed call is refused with the
     /// stale-routing signal the soft-delete window gave, so its router refreshes
@@ -3286,6 +3288,29 @@ internal sealed partial class ShardRootGrain(
                 if (!forWrite && purgedAnswersEmpty) return false;
                 throw new LatticeTreePurgedException(TreeId);
             }
+        }
+
+        // A registry entry naming the id live is not yet a reuse (issue #5458):
+        // a purge keeps the purged tree's own entry until the last step of its
+        // tail, so during the walk and while the entry's removal is owed it is
+        // the deleted tree that the registry names. Admitting a write then
+        // re-seeded the root leaf under the purged entry's lineage, and the
+        // purge's tail unpinned and unregistered that live leaf. The id's
+        // deletion record tells the cases apart: it holds the id until the
+        // purge has completed and removed the registry row, after which a row
+        // naming the id is a reuse. An id created again after the removal
+        // landed but before its record did is refused here until a re-drive
+        // records it - on the accepted purge's path within one deletion
+        // keepalive period, since that reminder stays armed until the tail
+        // settles - so the refusal names the purge, not a deletion.
+        var heldId = routedLogical ?? TreeId;
+        if (await grainFactory.GetGrain<ITreeDeletionGrain>(heldId).HoldsDeletionAsync())
+        {
+            if (!forWrite && purgedAnswersEmpty) return false;
+            throw new LatticeTreePurgeSettlingException(
+                $"Tree '{heldId}' is still held by a purge that has not yet released the id. "
+                + "Writes to it are refused until the purge settles; retry after about a minute.",
+                heldId);
         }
 
         return await PrepareForOperationSlowAsync(forWrite, purgedAnswersEmpty);
@@ -3655,11 +3680,70 @@ internal sealed partial class ShardRootGrain(
         EnsureInternalOrigin(LatticeOperation.RangeRead);
         if (IsRetiredForRangeRead) return Task.FromResult(new KeysPage { Keys = [], HasMore = false });
         var scan = BeginScanPage(nameof(GetSortedKeysBatchAsync));
+#if LATTICE_DIAG
+        DiagSink.Write($"[DIAG scan-keys-page-enter] tree={TreeId} start={startInclusive ?? "-"} end={endExclusive ?? "-"} size={pageSize} cont={continuationToken ?? "-"} resume={resumeFromKey ?? "-"}");
+        return DiagKeysPageExitAsync(
+            GuardScanPageAsync(
+                scan,
+                GetSortedKeysBatchCoreAsync(
+                    startInclusive, endExclusive, pageSize, continuationToken, predicate, resumeFromKey, scan)),
+            "fwd", continuationToken, resumeFromKey);
+#else
         return GuardScanPageAsync(
             scan,
             GetSortedKeysBatchCoreAsync(
                 startInclusive, endExclusive, pageSize, continuationToken, predicate, resumeFromKey, scan));
+#endif
     }
+
+#if LATTICE_DIAG
+    // Issue #5607: one line per page a shard root hands back, banked pages
+    // included, so a cursor that advanced past rows it never received shows up
+    // as a gap between consecutive page exits.
+    private async Task<KeysPage> DiagKeysPageExitAsync(Task<KeysPage> page, string direction, string? continuationToken, string? resumeFromKey)
+    {
+        try
+        {
+            var result = await page;
+            DiagSink.Write($"[DIAG scan-keys-page-exit] tree={TreeId} dir={direction} cont={continuationToken ?? "-"} resume={resumeFromKey ?? "-"} rows={result.Keys.Count} first={(result.Keys.Count > 0 ? result.Keys[0] : "-")} last={(result.Keys.Count > 0 ? result.Keys[^1] : "-")} hasMore={result.HasMore} nextResume={result.ResumeFromKey ?? "-"} moved={(result.MovedAwaySlots is { Length: > 0 } m ? string.Join(',', m) : "-")}");
+            return result;
+        }
+        catch (Exception ex)
+        {
+            DiagSink.Write($"[DIAG scan-keys-page-fault] tree={TreeId} dir={direction} cont={continuationToken ?? "-"} resume={resumeFromKey ?? "-"} fault={ex.GetType().Name}");
+            throw;
+        }
+    }
+
+    private async Task<EntriesPage> DiagEntriesPageExitAsync(Task<EntriesPage> page, string direction, string? continuationToken, string? resumeFromKey)
+    {
+        try
+        {
+            var result = await page;
+            DiagSink.Write($"[DIAG scan-entries-page-exit] tree={TreeId} dir={direction} cont={continuationToken ?? "-"} resume={resumeFromKey ?? "-"} rows={result.Entries.Count} first={(result.Entries.Count > 0 ? result.Entries[0].Key : "-")} last={(result.Entries.Count > 0 ? result.Entries[^1].Key : "-")} hasMore={result.HasMore} nextResume={result.ResumeFromKey ?? "-"} moved={(result.MovedAwaySlots is { Length: > 0 } m ? string.Join(',', m) : "-")}");
+            return result;
+        }
+        catch (Exception ex)
+        {
+            DiagSink.Write($"[DIAG scan-entries-page-fault] tree={TreeId} dir={direction} cont={continuationToken ?? "-"} resume={resumeFromKey ?? "-"} fault={ex.GetType().Name}");
+            throw;
+        }
+    }
+
+    // Issue #5607: one line per leaf a forward page fill reads - what it asked
+    // for, what the leaf declared and returned, and what the chain watermark
+    // dropped - so a row lost between the leaf and the page is attributable.
+    private void DiagScanLeaf(string kind, GrainId leafId, string? effectiveStart, string? afterExclusive, IReadOnlyList<string> rows, int dropped, string? watermarkBefore)
+    {
+        var sorted = true;
+        for (var i = 1; i < rows.Count && sorted; i++)
+        {
+            sorted = string.CompareOrdinal(rows[i - 1], rows[i]) < 0;
+        }
+
+        DiagSink.Write($"[DIAG scan-{kind}-leaf] tree={TreeId} leaf={leafId} start={effectiveStart ?? "-"} after={afterExclusive ?? "-"} rows={rows.Count} first={(rows.Count > 0 ? rows[0] : "-")} last={(rows.Count > 0 ? rows[^1] : "-")} sorted={sorted} dropped={dropped} watermarkBefore={watermarkBefore ?? "-"}{(sorted ? string.Empty : " order=[" + string.Join(',', rows) + "]")}");
+    }
+#endif
 
     private async Task<KeysPage> GetSortedKeysBatchCoreAsync(
         string? startInclusive,
@@ -3699,6 +3783,9 @@ internal sealed partial class ShardRootGrain(
         // re-descend to the leftmost leaf rather than blind-casting it.
         leafId = await DescendToLeafAsync(leafId, rightmost: false);
         var keys = BeginScanPageRows<string>(scan, pageSize);
+#if LATTICE_DIAG
+        DiagSink.Write($"[DIAG scan-keys-seek] tree={TreeId} seek={seekKey ?? "-"} effectiveStart={effectiveStart ?? "-"} leaf={leafId}");
+#endif
         HashSet<int>? movedSet = null;
         var chain = ScanChainCursor.Forward();
         scan.Phase = ScanPagePhase.LeafWalk;
@@ -3713,6 +3800,10 @@ internal sealed partial class ShardRootGrain(
             var leafKeys = await ReadLeafKeysAsync(scan, leafId, leafGrain, effectiveStart, endExclusive, afterExclusive: continuationToken, beforeExclusive: null, predicate: predicate);
             scan.Budget.RecordLeafVisited();
             chain.BeginLeaf();
+#if LATTICE_DIAG
+            var diagWatermark = chain.Watermark;
+            var diagDropped = 0;
+#endif
 
             foreach (var key in leafKeys)
             {
@@ -3720,7 +3811,12 @@ internal sealed partial class ShardRootGrain(
                 // reachable by descent for the range it claims, so nothing it
                 // reports - rows or moved-away slots - is trustworthy (3271).
                 if (!chain.Admit(key))
+                {
+#if LATTICE_DIAG
+                    diagDropped++;
+#endif
                     continue;
+                }
                 if (TryGetMovedAwaySlot(key, out var movedSlot))
                 {
                     RecordMovedAwaySlot(scan, ref movedSet, movedSlot);
@@ -3730,6 +3826,9 @@ internal sealed partial class ShardRootGrain(
                 if (keys.Count >= pageSize)
                     break;
             }
+#if LATTICE_DIAG
+            DiagScanLeaf("keys", leafId, effectiveStart, continuationToken, leafKeys, diagDropped, diagWatermark);
+#endif
 
             if (chain.TryClaimWarning())
                 WarnScanChainRegression(scan, leafId, chain.Watermark);
@@ -3991,10 +4090,20 @@ internal sealed partial class ShardRootGrain(
         EnsureInternalOrigin(LatticeOperation.RangeRead);
         if (IsRetiredForRangeRead) return Task.FromResult(new EntriesPage { Entries = [], HasMore = false });
         var scan = BeginScanPage(nameof(GetSortedEntriesBatchAsync));
+#if LATTICE_DIAG
+        DiagSink.Write($"[DIAG scan-entries-page-enter] tree={TreeId} start={startInclusive ?? "-"} end={endExclusive ?? "-"} size={pageSize} cont={continuationToken ?? "-"} resume={resumeFromKey ?? "-"}");
+        return DiagEntriesPageExitAsync(
+            GuardScanPageAsync(
+                scan,
+                GetSortedEntriesBatchCoreAsync(
+                    startInclusive, endExclusive, pageSize, continuationToken, predicate, resumeFromKey, scan)),
+            "fwd", continuationToken, resumeFromKey);
+#else
         return GuardScanPageAsync(
             scan,
             GetSortedEntriesBatchCoreAsync(
                 startInclusive, endExclusive, pageSize, continuationToken, predicate, resumeFromKey, scan));
+#endif
     }
 
     private async Task<EntriesPage> GetSortedEntriesBatchCoreAsync(
@@ -4034,6 +4143,9 @@ internal sealed partial class ShardRootGrain(
         // rather than blind-casting it (issue 899).
         leafId = await DescendToLeafAsync(leafId, rightmost: false);
         scan.Phase = ScanPagePhase.LeafWalk;
+#if LATTICE_DIAG
+        DiagSink.Write($"[DIAG scan-entries-seek] tree={TreeId} seek={seekKey ?? "-"} effectiveStart={effectiveStart ?? "-"} leaf={leafId}");
+#endif
         while (entries.Count < pageSize)
         {
             StandDownIfCeilingFired(scan, leafId);
@@ -4044,6 +4156,10 @@ internal sealed partial class ShardRootGrain(
             var leafEntries = await ReadLeafEntriesAsync(scan, leafId, leafGrain, effectiveStart, endExclusive, afterExclusive: continuationToken, beforeExclusive: null, predicate: predicate);
             scan.Budget.RecordLeafVisited();
             chain.BeginLeaf();
+#if LATTICE_DIAG
+            var diagWatermark = chain.Watermark;
+            var diagDropped = 0;
+#endif
 
             foreach (var entry in leafEntries)
             {
@@ -4053,7 +4169,12 @@ internal sealed partial class ShardRootGrain(
                 // de-duplicator could not answer: which of two values for one
                 // key wins. The untrusted leaf simply never contributes.
                 if (!chain.Admit(entry.Key))
+                {
+#if LATTICE_DIAG
+                    diagDropped++;
+#endif
                     continue;
+                }
                 if (TryGetMovedAwaySlot(entry.Key, out var movedSlot))
                 {
                     RecordMovedAwaySlot(scan, ref movedSet, movedSlot);
@@ -4063,6 +4184,9 @@ internal sealed partial class ShardRootGrain(
                 if (entries.Count >= pageSize)
                     break;
             }
+#if LATTICE_DIAG
+            DiagScanLeaf("entries", leafId, effectiveStart, continuationToken, leafEntries.Select(e => e.Key).ToList(), diagDropped, diagWatermark);
+#endif
 
             if (chain.TryClaimWarning())
                 WarnScanChainRegression(scan, leafId, chain.Watermark);

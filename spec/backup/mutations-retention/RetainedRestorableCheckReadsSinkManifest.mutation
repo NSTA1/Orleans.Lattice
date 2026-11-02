@@ -1,0 +1,18 @@
+# Pairs with RetainedRestorable. The increment re-checks its base by reading
+# the base's sink manifest - the read it already made before draining - rather
+# than its catalog row. A pass removes the row first and the sink manifest
+# only after its scan, so a check between the two passes while the scan has
+# already missed the increment, and the pass deletes a published increment's
+# base.
+MODULE: RetainedRestorableCheckReadsSinkManifest
+TARGET: RetainedRestorable
+CLASS: Invariant
+SUMMARY: the base re-check reads the sink manifest instead of the catalog row
+PERTURBS: Check
+
+--- FIND
+                    IF m.kind = "full" \/ m.base \in cat THEN "ok" ELSE "abandon"]
+--- REPLACE
+                    \* MUTATION: the check reads the base's sink manifest.
+                    IF m.kind = "full" \/ m.base \in snk THEN "ok" ELSE "abandon"]
+--- END

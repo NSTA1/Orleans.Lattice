@@ -1,0 +1,24 @@
+# Pairs with NoTrimPastLiveNeed. Production's drive path before the fence: the
+# starvation drive's NotDriven verdict is taken as the evidence, and the drive
+# unregisters the consumer from every key without a fresh read and without a
+# fence. A purge-cleared leaf re-created between the drive and the removal loses
+# the block pin its birth seeded, and its un-checkpointed write is trimmed.
+MODULE: NoTrimPastLiveNeedDriveRemovesOnProbe
+TARGET: NoTrimPastLiveNeed
+CLASS: Invariant
+SUMMARY: the drive removes on its NotDriven verdict, with no fresh read and no fence
+PERTURBS: Read, Decide
+
+--- FIND
+    /\ verdict' = [verdict EXCEPT ![p] = IF phase = "husk" THEN "husk" ELSE "live"]
+--- REPLACE
+\* MUTATION: the drive keeps the verdict it started on.
+    /\ verdict' = [verdict EXCEPT ![p] = IF phase = "husk" \/ p = Drive THEN "husk" ELSE "live"]
+--- END
+
+--- FIND
+                    /\ k \notin touched[p]
+--- REPLACE
+\* MUTATION: the drive's removal is not fenced.
+                    /\ (k \notin touched[p] \/ p = Drive)
+--- END
