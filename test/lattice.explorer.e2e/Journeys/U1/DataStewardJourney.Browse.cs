@@ -3,6 +3,7 @@ using Microsoft.Playwright;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 using static Microsoft.Playwright.Assertions;
 using Names = Orleans.Lattice.Explorer.EndToEnd.Tests.Story.StoryNames.Contoso;
 
@@ -36,14 +37,27 @@ public sealed partial class DataStewardJourney
         });
         await CheckpointAsync("1", "spine", "priya is signed in; the spine offers what stewards-factory permits");
 
+        // In the story A5 has installed the task board and bound its editor role to
+        // data-stewards, so priya also reads the board's tree. Only the tree A5 recorded is
+        // allowed, and only when the run's ledger holds it.
+        var taskBoardTree = _context.Ledger.TryGet(StoryKeys.TaskBoardTree, out var recorded) ? recorded : null;
         await _directory.OpenAsync();
         var names = await _directory.NamesAsync();
         Assert.Multiple(() =>
         {
             Assert.That(names, Is.SupersetOf(FactoryTrees), "the factory trees stewards-factory lets priya read");
-            Assert.That(names.Where(name => !IsFactoryName(name)), Is.Empty, "only factory trees, and what reads from them, are listed");
+            Assert.That(
+                names.Where(name => !IsFactoryName(name) && name != taskBoardTree),
+                Is.Empty,
+                "only factory trees, what reads from them and, once A5 has granted data-stewards the task board, its tree are listed");
+            if (taskBoardTree is not null)
+            {
+                Assert.That(names, Does.Contain(taskBoardTree), "A5 bound the task board's editor role to data-stewards, so priya reads its tree");
+            }
         });
-        await CheckpointAsync("1", "directory", "The Data directory lists only the factory trees and the view over the orders");
+        await CheckpointAsync("1", "directory", taskBoardTree is null
+            ? "The Data directory lists only the factory trees and the view over the orders"
+            : "The Data directory lists the factory trees, the view over the orders and the task board's tree A5 granted data-stewards");
 
         await _directory.FilterAsync("telemetry");
         Assert.That(await _directory.NamesAsync(), Does.Contain(Names.Trees.FactoryTelemetry));
