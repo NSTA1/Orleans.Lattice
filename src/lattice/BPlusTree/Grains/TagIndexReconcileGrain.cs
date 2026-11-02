@@ -272,7 +272,11 @@ internal sealed class TagIndexReconcileGrain(
         // authoritative marker rows, so an index that never tagged the tree short-
         // circuits with no sweep.
         var ctx = CreateCoordinatorContext();
-        var covered = await ctx.GetCoveredTreesAsync(CancellationToken.None);
+        IReadOnlyList<string> covered;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            covered = await ctx.GetCoveredTreesAsync(CancellationToken.None);
+        }
         if (!covered.Contains(subjectTreeId, StringComparer.Ordinal))
         {
             return false;
@@ -330,6 +334,17 @@ internal sealed class TagIndexReconcileGrain(
         {
             return;
         }
+
+        // A sweep is index maintenance, not a caller's data-plane operation: its
+        // probe reads every covered tree and its repairs remove only orphan rows
+        // and restore missing mirrors the scan itself found, never a row a caller
+        // names. It therefore runs under system origin whoever drove the turn -
+        // the schedule reminder, an identity-swap trigger, or a tracked operation
+        // the tree-admin facade authorized (Admin over the index tree) before
+        // starting it - as a view reconcile's maintenance writes do (#5613). The
+        // public ILatticeTagIndex.ReconcileAsync does not come through here and
+        // stays bound by its caller's grants.
+        using var origin = LatticeAccessGateContext.EnterSystemOrigin();
         switch (state.State.Phase)
         {
             case TagIndexReconcilePhase.Probe:
@@ -353,6 +368,7 @@ internal sealed class TagIndexReconcileGrain(
     private async Task InitSweepStateAsync()
     {
         _sweepStartTimestamp = Stopwatch.GetTimestamp();
+        using var origin = LatticeAccessGateContext.EnterSystemOrigin();
         var ctx = CreateCoordinatorContext();
         var covered = await ctx.GetCoveredTreesAsync(CancellationToken.None);
 

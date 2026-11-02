@@ -16,7 +16,7 @@ These verbs can run for minutes on a large tree. The original blocking verbs on 
 |---|---|---|
 | `StartViewRebuildAsync` | A shadow-swap rebuild of a materialised view. | Whole-tree `Admin` over the view's source tree. |
 | `StartViewReconcileAsync` | A view reconcile (anti-entropy). | Whole-tree `Admin` over the view's source tree. |
-| `StartTagIndexReconcileAsync` | A digest-gated tag-index reconcile sweep. | Whole-tree `Admin` over the index's `tag-{indexName}` tree. |
+| `StartTagIndexReconcileAsync` | A digest-gated tag-index reconcile sweep. | Whole-tree `Admin` over the index's `tag-{indexName}` tree. The admitted sweep then runs its repairs as index maintenance under system origin, so no `Delete` grant is needed. |
 | `StartWalMoveAsync` | An online move of one WAL partition to another storage provider key. | Whole-tree `TreeLifecycle`; reserved system tree ids are rejected. |
 | `StartOrphanedLeavesAuditAsync` | A whole-tree orphaned-leaf audit, driven batch by batch to the end of the tree. | As `AuditOrphanedLeavesAsync`: whole-tree `Read`. |
 | `StartOrphanedLeavesRepairAsync` | A whole-tree orphaned-leaf repair, driven batch by batch to the end of the tree. | As `RepairOrphanedLeavesAsync`: whole-tree `TreeLifecycle`; reserved system tree ids are rejected. |
