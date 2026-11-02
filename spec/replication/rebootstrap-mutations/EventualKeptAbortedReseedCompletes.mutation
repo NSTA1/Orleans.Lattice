@@ -1,0 +1,17 @@
+# Pairs with EventualKept in ReplicationReBootstrap. A drain whose source cut over under
+# it fails, and the coordinator records the re-seed as complete instead of re-driving
+# it, so the discarded copy's rows never reach s.
+MODULE: EventualKeptAbortedReseedCompletes
+TARGET: EventualKept
+CLASS: Temporal
+SUMMARY: an aborted shadow import of s counts as a completed re-seed, so it is never re-driven
+PERTURBS: AbortShadow
+BOUNDS: Mutual = TRUE
+
+--- FIND
+    /\ UNCHANGED <<cid, phy, src0, dd, fellOffS, bootedS>>
+--- REPLACE
+\* MUTATION: the abort marks s's re-seed complete.
+    /\ bootedS' = (bootedS \/ x = s)
+    /\ UNCHANGED <<cid, phy, src0, dd, fellOffS>>
+--- END

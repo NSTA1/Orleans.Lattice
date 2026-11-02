@@ -64,7 +64,7 @@ once, either here or in the
 | WAL durability lifecycle | 3 | 92 | 87 | 187 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
 | Shard ownership | 5 | 124 | 124 | 201 | [Verified Shard Ownership](verified-shard-ownership.md) |
 | Cross-cluster atomic visibility | 1 | 66 | 43 | 150 | [Verified Atomic-Commit: the replicated half](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
-| Replication convergence | 4 | 84 | 64 | 196 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
+| Replication convergence | 4 | 91 | 71 | 204 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
 | Backup and restore | 7 | 123 | 122 | 227 | [Verified backup and restore](../lattice.backup/verified-backup.md) |
 | B+ tree topology | 6 | 100 | 140 | 62 | [B+ tree topology](../../spec/bplustree/README.md) |
 | Materialised-view tail and lifecycle | 1 | 22 | 27 | 30 | [Materialised views](../../spec/materialised-views/README.md) |
@@ -446,7 +446,9 @@ gaps, states its full scope.
   - **Covers:** plain replication over a lossy, duplicating, reordering transport:
     the cycle-break, duplicate suppression, the bootstrap handoff, causal
     dependencies and their low watermark, and an in-place re-bootstrap after
-    the source reaped a delete, including the bootstrap drop floor.
+    the source reaped a delete, including the bootstrap drop floor, and
+    concurrent mutual re-seeds through shadow copies that a source's cutover
+    aborts and re-drives.
   - **Does not cover:** atomic-write sagas carried over replication (the
     cross-cluster area covers them), anti-entropy repair, and more than one WAL
     partition per cluster.
@@ -606,7 +608,7 @@ area's list is the authoritative one. The separately listed interrupted-shadow d
 | WAL durability lifecycle | #4450, #4451, #4456, #4467, #4523, #4525, #4621, #4622, #4634, #4641, #4654, #4669, #4699, #4700, #5358, #5416, #5417, #5458, #5459 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
 | Shard ownership | #4452, #4453, #4454, #4455, #4473, #4474, #4475, #4503, #4522, #4545, #4564, #4611, #4613, #4618, #4619, #4689 | [`spec/shard-ownership/`](../../spec/shard-ownership/README.md#defects-this-area-found) |
 | Cross-cluster atomic visibility | #4480, #4481, #4482, #4508, #4511, #4526, #4533, #4534, #4591, #4627, #4664, #4683, #4684, #4685 | [Verified Atomic-Commit](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
-| Replication convergence | #4463, #4464, #4465, #4504, #4537, #4549, #4585, #4586, #4587, #4603, #4604, #4614, #4615, #4673, #4707 | [`spec/replication/`](../../spec/replication/README.md#production-defects-this-module-found) |
+| Replication convergence | #4463, #4464, #4465, #4504, #4537, #4549, #4585, #4586, #4587, #4603, #4604, #4614, #4615, #4673, #4707, #5689 | [`spec/replication/`](../../spec/replication/README.md#production-defects-this-module-found) |
 | Backup and restore | #4485, #4490, #4589, #4593, #4686, #5357, #5412, #5418, #5449, #5529, #5531, #5532, #5627, #5628, #5629, #5631, #5632, #5637, #5639 | [`spec/backup/`](../../spec/backup/README.md#defects-the-modules-found) |
 | B+ tree topology | #4795, #4815, #4818, #4914 | [`spec/bplustree/`](../../spec/bplustree/README.md#defects-this-specification-found) |
 | Materialised-view tail and lifecycle | #4853, #4856, #4857 | [`spec/materialised-views/`](../../spec/materialised-views/README.md#defects-found) |

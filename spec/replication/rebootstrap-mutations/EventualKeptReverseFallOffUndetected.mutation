@@ -1,0 +1,17 @@
+# Pairs with EventualKept in ReplicationReBootstrap. The mirror of
+# EventualConvergenceFallOffUndetected for the Mutual variant's other direction: r
+# trims its log past writes s has not received and requests no re-seed, so a write of
+# r's that the trim skipped reaches s by no path.
+MODULE: EventualKeptReverseFallOffUndetected
+TARGET: EventualKept
+CLASS: Temporal
+SUMMARY: the reverse trim requests no re-seed of s, so r's trimmed write never reaches s
+PERTURBS: ReverseTrim
+BOUNDS: Mutual = TRUE
+
+--- FIND
+    /\ fellOffS' = TRUE
+--- REPLACE
+\* MUTATION: the trim does not mark s's re-seed owed.
+    /\ fellOffS' = FALSE
+--- END

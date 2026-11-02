@@ -1,0 +1,16 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. A shadow import that stages
+# on an empty copy instead of a copy of the receiver's own tree loses, at cutover, the
+# receiver's own write that has not yet reached its peer, which nothing ships back.
+MODULE: EventualConvergenceShadowCopyOpensEmpty
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: the shadow copy opens empty, so the cutover drops the receiver's own committed write
+PERTURBS: OpenShadow
+BOUNDS: Mutual = TRUE
+
+--- FIND
+    /\ cp' = [cp EXCEPT ![x] = reg[x]]
+--- REPLACE
+\* MUTATION: the copy does not carry the receiver's own tree.
+    /\ cp' = [cp EXCEPT ![x] = Absent]
+--- END
