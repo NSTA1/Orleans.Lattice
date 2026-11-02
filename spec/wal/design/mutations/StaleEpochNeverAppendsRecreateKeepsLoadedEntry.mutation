@@ -1,0 +1,19 @@
+# Retiring the leaf raises the partition's floor and deletes the entry row, but
+# leaves the WAL shard's loaded entry in memory. With no floor check on the append
+# path (#5635), a surviving activation of the retired incarnation keeps appending:
+# its epoch is still at or above the loaded entry. Retirement must go through the
+# WAL shard activation and remove the loaded entry under _stateGate, after the
+# in-flight stamped batches drain.
+MODULE: StaleEpochNeverAppendsRecreateKeepsLoadedEntry
+TARGET: StaleEpochNeverAppends
+CLASS: Invariant
+SUMMARY: retirement leaves the WAL shard's loaded entry in place
+PERTURBS: Recreate
+BOUNDS: WithRecreate = TRUE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+    /\ memFence' = IF memFence = -1 THEN -1 ELSE 0
+--- REPLACE
+\* MUTATION: the loaded entry survives the retirement.
+    /\ memFence' = memFence
+--- END

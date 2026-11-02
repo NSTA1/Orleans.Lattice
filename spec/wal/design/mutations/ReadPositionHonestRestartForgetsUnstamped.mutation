@@ -1,0 +1,16 @@
+# The shard's unstamped watermark lives in memory. Restarting without taking
+# every offset below the allocator as possibly unstamped forgets an unstamped
+# append made before the restart, so a later stamped append reports nothing.
+MODULE: ReadPositionHonestRestartForgetsUnstamped
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a restarted shard forgets the unstamped appends made before it
+PERTURBS: Restart
+BOUNDS: WithMixedVersion = TRUE, WithRestart = TRUE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+    /\ lastU' = next - 1
+--- REPLACE
+\* MUTATION: the watermark is lost.
+    /\ lastU' = -1
+--- END

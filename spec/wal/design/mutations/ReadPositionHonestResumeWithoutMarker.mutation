@@ -1,0 +1,18 @@
+# A hand-off begun before the fence gate opened resumes under the gate and
+# admits stamped writes without opening its marker. It completes without close
+# heads, the owner's marker state initialises, and the owner arms past them.
+MODULE: ReadPositionHonestResumeWithoutMarker
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a hand-off that spans the gate opening resumes without opening its marker
+PERTURBS: Resume
+BOUNDS: WithLegacyHandOff = TRUE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+    /\ resumed' = TRUE
+    /\ hoOpen' = TRUE
+--- REPLACE
+    /\ resumed' = TRUE
+\* MUTATION: the marker is not opened.
+    /\ hoOpen' = hoOpen
+--- END
