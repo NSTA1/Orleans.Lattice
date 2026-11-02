@@ -1,4 +1,3 @@
-using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 
 namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts;
@@ -14,15 +13,6 @@ public sealed class ContosoContractConformanceTests() : ContractConformanceFixtu
     /// <inheritdoc />
     /// <remarks>C3 consumes every Contoso chapter before it, so the photographs show the estate fully seeded.</remarks>
     protected override string? SnapshotBefore => "C3";
-
-    /// <inheritdoc />
-    /// <remarks>C1: after a coordinated restore of factory-orders the regions re-seed each other repeatedly, and its east-ledger batch never reaches west's dead letters (#5534).</remarks>
-    protected override IReadOnlyDictionary<string, string> KnownDefectIssues { get; } =
-        new Dictionary<string, string>(StringComparer.Ordinal) { ["C1"] = "#5534" };
-
-    /// <inheritdoc />
-    protected override Task RecordKnownDefectAsync(string chapter) =>
-        new KnownDefect("#5534", "after a coordinated restore of factory-orders the regions re-seed each other repeatedly, and C1's east-ledger batch never reaches west's dead letters (#5534)").ReproducesAsync(() => Task.CompletedTask);
 
     /// <summary>Establishes and verifies <paramref name="chapter"/>.</summary>
     /// <param name="chapter">The chapter id.</param>
