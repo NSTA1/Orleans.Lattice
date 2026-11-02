@@ -66,7 +66,14 @@ internal static class WalAppendFenceRows
 
     /// <summary>The key of a WAL partition's routing-generation row for one initiator.</summary>
     [GrainKeyBuilder]
-    internal static string GenerationKey(string treeId, int partition, WalRoutingInitiatorKind kind, int index)
+    internal static string GenerationKey(string treeId, int partition, WalRoutingInitiatorKind kind, int index) =>
+        string.Concat(FloorKey(treeId, partition), "~", InitiatorTag(kind, index));
+
+    /// <summary>
+    /// An initiator's tag: a one-letter kind and its index. It is the suffix of the
+    /// initiator's generation rows, and its key in the tree id's routing floors.
+    /// </summary>
+    internal static string InitiatorTag(WalRoutingInitiatorKind kind, int index)
     {
         var tag = kind switch
         {
@@ -74,8 +81,15 @@ internal static class WalAppendFenceRows
             WalRoutingInitiatorKind.TreeRangeDelete => "t",
             _ => "n",
         };
-        return string.Concat(FloorKey(treeId, partition), "~", tag, index.ToString(CultureInfo.InvariantCulture));
+        return string.Concat(tag, index.ToString(CultureInfo.InvariantCulture));
     }
+
+    /// <summary>An initiator's tag; see <see cref="InitiatorTag(WalRoutingInitiatorKind, int)"/>.</summary>
+    internal static string InitiatorTag(WalRoutingInitiator initiator) => InitiatorTag(initiator.Kind, initiator.Index);
+
+    /// <summary>The routing floor <paramref name="floors"/> holds for <paramref name="initiator"/>; 0 when it names none.</summary>
+    internal static long FloorOf(TreeRoutingFloorState floors, WalRoutingInitiator initiator) =>
+        floors.Floors.TryGetValue(InitiatorTag(initiator), out var floor) ? floor : 0;
 
     /// <summary>The key of one page of a WAL partition's append-epoch directory bucket.</summary>
     [GrainKeyBuilder]
@@ -131,27 +145,39 @@ internal static class WalAppendFenceRows
         ReadAsync<TreeRoutingFloorState>(storage, RoutingFloorGrainType, RoutingFloorKey(treeId));
 
     /// <summary>
-    /// Raises a tree id's durable routing-generation floor to at least
-    /// <paramref name="atLeast"/> as a conditional max-merge, re-read on an ETag
-    /// conflict, and returns the floor as stored. The floor never moves down, and a
-    /// value already covered costs one read.
+    /// Raises a tree id's durable routing floors to at least <paramref name="atLeast"/>,
+    /// per initiator, in one conditional max-merge write, re-read on an ETag conflict,
+    /// and returns the floors as stored. A floor never moves down, and floors already
+    /// covering every value cost one read.
     /// </summary>
-    internal static async Task<long> RaiseRoutingFloorAsync(IGrainStorage storage, string treeId, long atLeast)
+    internal static async Task<TreeRoutingFloorState> RaiseRoutingFloorsAsync(
+        IGrainStorage storage, string treeId, IReadOnlyDictionary<WalRoutingInitiator, long> atLeast)
     {
+        ArgumentNullException.ThrowIfNull(atLeast);
         var key = RoutingFloorKey(treeId);
         for (var attempt = 1; ; attempt++)
         {
             var row = await ReadRoutingFloorAsync(storage, treeId).ConfigureAwait(true);
-            if (row.State.Floor >= atLeast)
+            var changed = false;
+            foreach (var (initiator, value) in atLeast)
             {
-                return row.State.Floor;
+                var tag = InitiatorTag(initiator);
+                if (value > 0 && (!row.State.Floors.TryGetValue(tag, out var current) || current < value))
+                {
+                    row.State.Floors[tag] = value;
+                    changed = true;
+                }
             }
 
-            row.State.Floor = atLeast;
+            if (!changed)
+            {
+                return row.State;
+            }
+
             try
             {
                 await WriteAsync(storage, RoutingFloorGrainType, key, row).ConfigureAwait(true);
-                return atLeast;
+                return row.State;
             }
             catch (InconsistentStateException) when (attempt < WalShardGrain.MaxFenceRowAttempts)
             {
@@ -160,6 +186,18 @@ internal static class WalAppendFenceRows
         }
     }
 
+    /// <summary>
+    /// Raises <paramref name="initiator"/>'s routing floor under <paramref name="treeId"/>
+    /// to at least <paramref name="atLeast"/>, and returns that initiator's floor as stored.
+    /// </summary>
+    internal static async Task<long> RaiseRoutingFloorAsync(IGrainStorage storage, string treeId, WalRoutingInitiator initiator, long atLeast) =>
+        FloorOf(
+            await RaiseRoutingFloorsAsync(storage, treeId, new Dictionary<WalRoutingInitiator, long> { [initiator] = atLeast }).ConfigureAwait(true),
+            initiator);
+
+    /// <summary>Reads <paramref name="initiator"/>'s routing floor under <paramref name="treeId"/>; 0 when none is stored.</summary>
+    internal static async Task<long> ReadRoutingFloorAsync(IGrainStorage storage, string treeId, WalRoutingInitiator initiator) =>
+        FloorOf((await ReadRoutingFloorAsync(storage, treeId).ConfigureAwait(true)).State, initiator);
     /// <summary>Reads the row of <paramref name="grainType"/> under <paramref name="key"/>; an absent row reads as a new state.</summary>
     internal static Task<GrainState<T>> ReadRowAsync<T>(IGrainStorage storage, string grainType, string key)
         where T : new() =>

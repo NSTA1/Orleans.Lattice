@@ -75,7 +75,7 @@ internal sealed partial class ShardRootGrain
             long? floor = null;
             if (marker.RoutingGeneration == 0)
             {
-                // #5668: above the tree id's routing-generation floor, so a re-created
+                // #5668: above this shard root's routing floor, so a re-created
                 // incarnation never reuses a purged one's generation.
                 floor = await ReadRoutingFloorAsync();
                 var seeded = floor.Value + 1;
@@ -122,8 +122,9 @@ internal sealed partial class ShardRootGrain
         }
     }
 
-    private async Task<long> ReadRoutingFloorAsync() =>
-        (await WalAppendFenceRows.ReadRoutingFloorAsync(HandOffStorage(), TreeId)).State.Floor;
+    /// <summary>This shard root's own routing floor (#5668): 0 for a tree id never purged.</summary>
+    private Task<long> ReadRoutingFloorAsync() =>
+        WalAppendFenceRows.ReadRoutingFloorAsync(HandOffStorage(), TreeId, WalRoutingInitiator.ShardRoot(ShardIndex));
 
     /// <summary>The close token the fence of the incarnation re-created above <paramref name="floor"/> records.</summary>
     internal static string RecreationFenceToken(long floor) =>
@@ -179,7 +180,7 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
-    /// #5705: a write admitted under a generation at or below the tree id's routing
+    /// #5705: a write admitted under a generation at or below its initiator's routing
     /// floor was admitted by an incarnation a purge has since retired. It is never
     /// re-stamped: neither raised above the floor's refusal (which would re-create the
     /// purged marker at floor + 1), nor re-admitted under a re-created incarnation's
@@ -194,7 +195,7 @@ internal sealed partial class ShardRootGrain
             return;
         }
 
-        var floor = (await WalAppendFenceRows.ReadRoutingFloorAsync(storage, TreeId)).State.Floor;
+        var floor = await WalAppendFenceRows.ReadRoutingFloorAsync(storage, TreeId, stale.Initiator);
         if (stale.Generation <= floor)
         {
             throw PurgedIncarnation();

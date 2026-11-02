@@ -405,14 +405,99 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
-    /// Whether the tree id's routing floor covers every generation this activation saw
-    /// in its marker row, so the row it found absent was retired by a purge (#5705).
+    /// Whether this shard root's routing floor covers every generation this activation
+    /// saw in its marker row, so the row it found absent was retired by a purge (#5705).
     /// </summary>
     private async Task<bool> IsRetiredByPurgeAsync()
     {
-        var floor = (await WalAppendFenceRows.ReadRoutingFloorAsync(HandOffStorage(), TreeId)).State.Floor;
+        var floor = await WalAppendFenceRows.ReadRoutingFloorAsync(HandOffStorage(), TreeId, WalRoutingInitiator.ShardRoot(ShardIndex));
         return floor > 0 && floor >= _handOffMarkerSeenGeneration;
     }
+
+    /// <summary>
+    /// The re-seed catch-up (#5703 review, S2). It runs when this shard re-seeds a
+    /// purged root for a re-created incarnation, before the tombstone is lifted. A
+    /// marker that holds a generation, or reads initialised, was left by an earlier
+    /// incarnation: only this shard root sets either, and only after it has seeded,
+    /// which it has not done yet in this incarnation. That happens when a 10.2.0 silo
+    /// finished the purge, which runs no retirement. The catch-up raises this shard
+    /// root's own routing floor over the marker's generation, then rewrites the marker
+    /// as uninitialised with no generation. Its first initialisation then seeds above
+    /// the floor through the first-initialisation fence.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Only this shard root's own initiator floor rises. The re-created incarnation is
+    /// live while its shards re-seed one at a time, so raising any other initiator's
+    /// floor could cover a generation that initiator already holds. The open hand-offs
+    /// and closes the marker carries are kept: an open token only holds the shard's
+    /// leaves (rule 2), and a close's heads only make a leaf replay further.
+    /// </para>
+    /// <para>
+    /// A marker the new incarnation's range-delete fence opened on this shard before it
+    /// re-seeded holds neither a generation nor the initialised flag, so it is kept
+    /// unchanged. Mixed-version residue: a re-seed run by a 10.2.0 silo, and a
+    /// range-delete fence state an earlier incarnation left, are not caught up.
+    /// </para>
+    /// </remarks>
+    private async Task RetirePredatingHandOffMarkerAsync()
+    {
+        if (WalAppendFenceStorage.Resolve(context.ActivationServices) is not { } storage)
+        {
+            return;
+        }
+
+        var self = WalRoutingInitiator.ShardRoot(ShardIndex);
+        await _handOffGate.WaitAsync();
+        try
+        {
+            for (var attempt = 1; ; attempt++)
+            {
+                var row = await HandOffMarkerRows.ReadShardAsync(storage, TreeId, ShardIndex);
+                if (!row.RecordExists || !Predates(row.State))
+                {
+                    break;
+                }
+
+                var floor = await WalAppendFenceRows.RaiseRoutingFloorAsync(storage, TreeId, self, row.State.RoutingGeneration);
+                var stored = await HandOffMarkerRows.UpdateShardAsync(storage, TreeId, ShardIndex, m =>
+                {
+                    if (!Predates(m) || m.RoutingGeneration > floor)
+                    {
+                        // Already reset, or raised since the read: re-read and cover it.
+                        return false;
+                    }
+
+                    m.RoutingGeneration = 0;
+                    m.Initialised = false;
+                    m.Sequence++;
+                    return true;
+                });
+
+                if (!Predates(stored))
+                {
+                    break;
+                }
+
+                if (attempt >= HandOffMarkerRows.MaxUpdateAttempts)
+                {
+                    throw new InvalidOperationException(
+                        $"Shard root {TreeId}/{ShardIndex}: its predating hand-off marker could not be retired.");
+                }
+            }
+
+            ForgetHandOffMarker();
+        }
+        finally
+        {
+            _handOffGate.Release();
+        }
+
+        static bool Predates(ShardHandOffState marker) => marker.RoutingGeneration > 0 || marker.Initialised;
+    }
+
+    /// <summary>Runs the re-seed catch-up as a purged root's re-seed does; test seam (#5703 review, S2).</summary>
+    internal Task RetirePredatingHandOffMarkerForTestingAsync() => RetirePredatingHandOffMarkerAsync();
 
     /// <summary>Forgets every marker read, when the shard re-seeds a purged root for a re-created incarnation (#5705).</summary>
     private void ForgetHandOffMarker()

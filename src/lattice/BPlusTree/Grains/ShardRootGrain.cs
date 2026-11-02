@@ -3250,6 +3250,14 @@ internal sealed partial class ShardRootGrain(
         var deterministicId = DeterministicGuid(shardKey);
         var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(deterministicId);
 
+        // A re-created incarnation never adopts a hand-off marker that predates it
+        // (#5703 review, S2). Retired before the tombstone is lifted, so a failure
+        // leaves it for the write's retry.
+        if (state.State.IsPurged)
+        {
+            await RetirePredatingHandOffMarkerAsync();
+        }
+
         // This shard is creating its root leaf, so the leaf's first row write
         // carries a create intent naming it (issue #4654).
         using (LatticeNewLeafIntentContext.BeginScope(leafGrain.GetGrainId()))

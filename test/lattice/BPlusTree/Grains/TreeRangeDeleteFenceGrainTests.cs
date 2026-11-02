@@ -192,7 +192,7 @@ public sealed class TreeRangeDeleteFenceGrainTests
     {
         // #5668: starting at 1 would let a purged incarnation's generation recur.
         var storage = new EnumerableMemoryGrainStorage();
-        await WalAppendFenceRows.RaiseRoutingFloorAsync(storage, Tree, 6);
+        await WalAppendFenceRows.RaiseRoutingFloorAsync(storage, Tree, WalRoutingInitiator.TreeRangeDelete, 6);
         var harness = new Harness(storage);
 
         var generation = await harness.Grain.OpenIntentAsync(Guid.NewGuid(), "a", "b", long.MaxValue, [0]);
@@ -208,7 +208,7 @@ public sealed class TreeRangeDeleteFenceGrainTests
     public async Task EnsureInitialised_claims_the_seeded_generation_everywhere_and_returns_the_heads()
     {
         var storage = new EnumerableMemoryGrainStorage();
-        await WalAppendFenceRows.RaiseRoutingFloorAsync(storage, Tree, 3);
+        await WalAppendFenceRows.RaiseRoutingFloorAsync(storage, Tree, WalRoutingInitiator.TreeRangeDelete, 3);
         var harness = new Harness(storage) { Head = 11 };
 
         var heads = await harness.Grain.EnsureInitialisedAsync();
@@ -232,7 +232,7 @@ public sealed class TreeRangeDeleteFenceGrainTests
         harness.State.State.Generation = 5;
 
         await harness.Grain.RetireForPurgeAsync();
-        var floor = (await WalAppendFenceRows.ReadRoutingFloorAsync(storage, Tree)).State.Floor;
+        var floor = await WalAppendFenceRows.ReadRoutingFloorAsync(storage, Tree, WalRoutingInitiator.TreeRangeDelete);
         var next = await harness.Grain.EnsureInitialisedAsync();
 
         Assert.Multiple(() =>

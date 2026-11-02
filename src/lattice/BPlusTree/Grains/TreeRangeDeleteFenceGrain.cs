@@ -144,7 +144,7 @@ internal sealed class TreeRangeDeleteFenceGrain(
         var cover = Math.Max(state.State.Generation, state.State.ClaimedGeneration);
         if (cover > 0)
         {
-            await WalAppendFenceRows.RaiseRoutingFloorAsync(storage, TreeId, cover);
+            await WalAppendFenceRows.RaiseRoutingFloorAsync(storage, TreeId, WalRoutingInitiator.TreeRangeDelete, cover);
         }
 
         if (state.RecordExists || cover > 0 || state.State.Intents.Count > 0)
@@ -155,6 +155,10 @@ internal sealed class TreeRangeDeleteFenceGrain(
 
         await UnregisterReminderAsync();
     }
+
+    /// <inheritdoc />
+    public Task<long> GetRetiringGenerationAsync() =>
+        Task.FromResult(Math.Max(state.State.Generation, state.State.ClaimedGeneration));
 
     /// <inheritdoc />
     public async Task<long[]> EnsureInitialisedAsync()
@@ -231,8 +235,8 @@ internal sealed class TreeRangeDeleteFenceGrain(
 
     /// <summary>
     /// Ensures the current generation is claimed at every partition before an intent
-    /// is handed it: the first intent claims the generation above the tree id's
-    /// routing-generation floor (1 for a tree id never purged, #5668), and a close
+    /// is handed it: the first intent claims the generation above the range-delete
+    /// initiator's routing floor (1 for a tree id never purged, #5668), and a close
     /// interrupted mid-claim is finished.
     /// </summary>
     private async Task EnsureGenerationClaimedAsync()
@@ -245,7 +249,7 @@ internal sealed class TreeRangeDeleteFenceGrain(
     }
 
     /// <summary>
-    /// Seeds the first generation above the tree id's routing-generation floor (#5668):
+    /// Seeds the first generation above the range-delete initiator's routing floor (#5668):
     /// 1 for a tree id never purged. A no-op once the fence holds a generation.
     /// </summary>
     private async Task SeedGenerationAsync()
@@ -255,7 +259,7 @@ internal sealed class TreeRangeDeleteFenceGrain(
             var floor = 0L;
             if (WalAppendFenceStorage.Resolve(context.ActivationServices) is { } storage)
             {
-                floor = (await WalAppendFenceRows.ReadRoutingFloorAsync(storage, TreeId)).State.Floor;
+                floor = await WalAppendFenceRows.ReadRoutingFloorAsync(storage, TreeId, WalRoutingInitiator.TreeRangeDelete);
             }
 
             state.State.Generation = floor + 1;

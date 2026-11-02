@@ -25,18 +25,21 @@ public partial class WalShardGrainTests
         await grain.ClaimRoutingGenerationAsync(WalRoutingInitiator.TreeRangeDelete, 5, CancellationToken.None);
 
         // Shard 1 is outside the count passed: a loaded initiator is retired all the same.
-        var floor = await grain.RetireRoutingGenerationsAsync(shardCount: 1, CancellationToken.None);
-        var durableFloor = (await WalAppendFenceRows.ReadRoutingFloorAsync(storage, TreeId)).State.Floor;
+        var highest = await grain.RetireRoutingGenerationsAsync(shardCount: 1, CancellationToken.None);
+        var floors = (await WalAppendFenceRows.ReadRoutingFloorAsync(storage, TreeId)).State;
 
         Assert.Multiple(() =>
         {
-            Assert.That(floor, Is.EqualTo(5), "the floor covers the highest generation retired");
-            Assert.That(durableFloor, Is.EqualTo(5));
+            Assert.That(highest, Is.EqualTo(5), "the highest floor is the highest generation retired");
+            Assert.That(WalAppendFenceRows.FloorOf(floors, WalRoutingInitiator.ShardRoot(0)), Is.EqualTo(3), "each initiator's floor covers its own entry");
+            Assert.That(WalAppendFenceRows.FloorOf(floors, WalRoutingInitiator.ShardRoot(1)), Is.EqualTo(2), "a loaded initiator outside the count included");
+            Assert.That(WalAppendFenceRows.FloorOf(floors, WalRoutingInitiator.TreeRangeDelete), Is.EqualTo(5));
             Assert.That(storage.GrainIds(WalAppendFenceRows.GenerationGrainType), Is.Empty, "every generation row is deleted");
             Assert.That(grain.HasGenerationEntryForTesting(WalRoutingInitiator.ShardRoot(0)), Is.False, "the loaded entries are dropped");
             Assert.That(grain.HasGenerationEntryForTesting(WalRoutingInitiator.ShardRoot(1)), Is.False);
             Assert.That(grain.HasGenerationEntryForTesting(WalRoutingInitiator.TreeRangeDelete), Is.False);
-            Assert.That(grain.GenerationFloorForTesting, Is.EqualTo(5));
+            Assert.That(grain.GenerationFloorForTesting(WalRoutingInitiator.TreeRangeDelete), Is.EqualTo(5));
+            Assert.That(grain.GenerationFloorForTesting(WalRoutingInitiator.ShardRoot(0)), Is.EqualTo(3));
         });
     }
 
@@ -89,7 +92,7 @@ public partial class WalShardGrainTests
             async () => await grain.RetireRoutingGenerationsAsync(shardCount: 1, CancellationToken.None),
             Throws.InstanceOf<IOException>());
 
-        var floorAfterCrash = (await WalAppendFenceRows.ReadRoutingFloorAsync(inner, TreeId)).State.Floor;
+        var floorAfterCrash = await WalAppendFenceRows.ReadRoutingFloorAsync(inner, TreeId, WalRoutingInitiator.ShardRoot(0));
         var rowsAfterCrash = inner.GrainIds(WalAppendFenceRows.GenerationGrainType).Count;
 
         // The re-drive, on a fresh activation, as the purge's keepalive would run it.
@@ -114,7 +117,11 @@ public partial class WalShardGrainTests
         // gate closed, or before it read the floor - meets the floor at its first claim,
         // and no stamped append is admitted under a generation that was never claimed.
         var storage = new EnumerableMemoryGrainStorage();
-        await WalAppendFenceRows.RaiseRoutingFloorAsync(storage, TreeId, 6);
+        await WalAppendFenceRows.RaiseRoutingFloorsAsync(storage, TreeId, new Dictionary<WalRoutingInitiator, long>
+        {
+            [WalRoutingInitiator.ShardRoot(0)] = 6,
+            [WalRoutingInitiator.TreeRangeDelete] = 6,
+        });
         var grain = await CreateFencedGrainAsync(storage);
         var shardRoot = WalRoutingInitiator.ShardRoot(0);
         await grain.ClaimAppendEpochAsync(FenceLeaf, 1, CancellationToken.None);

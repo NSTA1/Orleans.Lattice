@@ -157,13 +157,19 @@ public sealed class TreeFenceRowPurgeIntegrationTests
         var markersAfter = await MarkerGenerationsAsync(Name);
         var generationRowsAfter = await GenerationRowsAsync(Name);
         var fenceAfter = await FenceStateAsync(Name);
-        var floor = (await WalAppendFenceRows.ReadRoutingFloorAsync(Storage, Name)).State.Floor;
+        var floors = (await WalAppendFenceRows.ReadRoutingFloorAsync(Storage, Name)).State;
+        var floor = WalAppendFenceRows.FloorOf(floors, WalRoutingInitiator.ShardRoot(0));
         Assert.Multiple(() =>
         {
             Assert.That(markersAfter, Is.All.EqualTo(-1), "no shard marker survives the purge");
             Assert.That(generationRowsAfter, Is.Empty, "no routing-generation entry survives the purge");
             Assert.That(fenceAfter.RecordExists, Is.False, "the range-delete fence's state is cleared");
             Assert.That(floor, Is.EqualTo(highestBefore), "the floor covers the highest generation the purge retired");
+            foreach (var initiator in TreeRoutingFenceRetirement.Initiators(Shards))
+            {
+                Assert.That(WalAppendFenceRows.FloorOf(floors, initiator), Is.EqualTo(highestBefore),
+                    $"the purge raised every initiator's floor, {initiator} among them, in its one write");
+            }
         });
 
         // The id is reused: a write registers a new tree. Its first initialisation is a
@@ -233,7 +239,8 @@ public sealed class TreeFenceRowPurgeIntegrationTests
         // cached marker of an earlier incarnation is involved.
         const string Name = "floored-fence-rows";
         const long Floor = 4;
-        await WalAppendFenceRows.RaiseRoutingFloorAsync(Storage, Name, Floor);
+        await WalAppendFenceRows.RaiseRoutingFloorsAsync(
+            Storage, Name, TreeRoutingFenceRetirement.Initiators(Shards).ToDictionary(i => i, _ => Floor));
         var refused = 0;
         using (ListenRefusedGenerationClaims(Name, () => Interlocked.Increment(ref refused)))
         {
@@ -256,6 +263,58 @@ public sealed class TreeFenceRowPurgeIntegrationTests
                 }
             }
         });
+    }
+
+    [Test]
+    public async Task A_tree_re_created_after_a_purge_that_retired_nothing_never_adopts_its_markers()
+    {
+        // A purge that finished on a 10.2.0 silo retires nothing (#5703 review, S2). It
+        // is emulated by restoring the markers and dropping the floor after the purge.
+        const string Name = "purge-on-old-silo";
+        var tree = await NewTreeAsync(Name);
+        var markersBefore = await MarkerGenerationsAsync(Name);
+        await tree.DeleteTreeAsync();
+        await tree.PurgeTreeAsync();
+        for (var shard = 0; shard < Shards; shard++)
+        {
+            var generation = markersBefore[shard];
+            await HandOffMarkerRows.UpdateShardAsync(Storage, Name, shard, m =>
+            {
+                m.RoutingGeneration = generation;
+                m.Initialised = true;
+                return true;
+            });
+        }
+
+        var floorRow = await WalAppendFenceRows.ReadRoutingFloorAsync(Storage, Name);
+        await Storage.ClearStateAsync(
+            WalAppendFenceRows.RoutingFloorGrainType,
+            WalAppendFenceRows.RowId(WalAppendFenceRows.RoutingFloorGrainType, WalAppendFenceRows.RoutingFloorKey(Name)),
+            floorRow);
+
+        await WriteAlphabetAsync(tree);
+
+        var floors = (await WalAppendFenceRows.ReadRoutingFloorAsync(Storage, Name)).State;
+        var partitions = await PartitionsAsync(Name);
+        var rows = await GenerationRowsAsync(Name);
+        for (var shard = 0; shard < Shards; shard++)
+        {
+            var marker = (await HandOffMarkerRows.ReadShardAsync(Storage, Name, shard)).State;
+            var initiator = WalRoutingInitiator.ShardRoot(shard);
+            var floor = WalAppendFenceRows.FloorOf(floors, initiator);
+            Assert.Multiple(() =>
+            {
+                Assert.That(floor, Is.EqualTo(markersBefore[shard]), $"shard {shard}'s re-seed raised its own floor over the marker it found");
+                Assert.That(marker.RoutingGeneration, Is.EqualTo(floor + 1), "the re-created shard root did not adopt the old generation");
+                Assert.That(marker.Closes.Any(c => c.Token == ShardRootGrain.RecreationFenceToken(floor)), Is.True,
+                    "its first initialisation ran the fence");
+                for (var partition = 0; partition < partitions; partition++)
+                {
+                    Assert.That(rows.GetValueOrDefault((partition, initiator)), Is.EqualTo(floor + 1),
+                        $"partition {partition}: shard {shard}'s new generation is claimed there");
+                }
+            });
+        }
     }
 
     [Test]

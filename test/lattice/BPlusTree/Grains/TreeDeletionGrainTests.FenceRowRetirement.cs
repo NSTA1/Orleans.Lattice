@@ -53,7 +53,7 @@ public partial class TreeDeletionGrainTests
         RegistryOf(factory).UnregisterAsync(TreeId).Returns(async _ =>
         {
             markersAtRemoval = storage.GrainIds(HandOffMarkerRows.ShardGrainType).Count;
-            floorAtRemoval = (await WalAppendFenceRows.ReadRoutingFloorAsync(storage, TreeId)).State.Floor;
+            floorAtRemoval = await WalAppendFenceRows.ReadRoutingFloorAsync(storage, TreeId, WalRoutingInitiator.ShardRoot(0));
         });
 
         await grain.DeleteTreeAsync();
@@ -95,7 +95,7 @@ public partial class TreeDeletionGrainTests
         await grain.PurgeNowAsync();
 
         await registry.Received(1).UnregisterAsync(TreeId);
-        var floor = (await WalAppendFenceRows.ReadRoutingFloorAsync(storage, TreeId)).State.Floor;
+        var floor = await WalAppendFenceRows.ReadRoutingFloorAsync(storage, TreeId, WalRoutingInitiator.ShardRoot(0));
         Assert.Multiple(() =>
         {
             Assert.That(storage.GrainIds(HandOffMarkerRows.ShardGrainType), Is.Empty, "the re-drive retired the rows");
@@ -118,7 +118,7 @@ public partial class TreeDeletionGrainTests
         await factory.GetGrain<IWalShardGrain>($"{TreeId}/0").DidNotReceive()
             .RetireRoutingGenerationsAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
         var marker = (await HandOffMarkerRows.ReadShardAsync(storage, TreeId, 0)).State;
-        var floor = (await WalAppendFenceRows.ReadRoutingFloorAsync(storage, TreeId)).State.Floor;
+        var floor = await WalAppendFenceRows.ReadRoutingFloorAsync(storage, TreeId, WalRoutingInitiator.ShardRoot(0));
         Assert.Multiple(() =>
         {
             Assert.That(marker.RoutingGeneration, Is.EqualTo(2), "the recovered tree keeps its generation");

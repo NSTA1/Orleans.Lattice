@@ -30,7 +30,7 @@ public sealed class TreeRoutingFloorRowRoundTripTests
         using var services = Services();
         var json = services.GetRequiredService<JsonGrainStorageSerializer>();
         var binary = new LatticeGrainStorageSerializer(services.GetRequiredService<Serializer>(), json);
-        var row = new TreeRoutingFloorState { Floor = 17 };
+        var row = new TreeRoutingFloorState { Floors = { ["s0"] = 17, ["t0"] = 4 } };
 
         var payload = binary.Serialize(row);
         var fromBinary = binary.Deserialize<TreeRoutingFloorState>(payload);
@@ -40,9 +40,9 @@ public sealed class TreeRoutingFloorRowRoundTripTests
         {
             Assert.That(payload.ToArray().AsSpan(0, 4).ToArray(), Is.EqualTo("LGB1"u8.ToArray()),
                 "the floor is marked ILatticeBinaryPersistedState, so it is written in binary");
-            Assert.That(fromBinary.Floor, Is.EqualTo(17));
-            Assert.That(fromJson.Floor, Is.EqualTo(17));
-            Assert.That(json.Deserialize<TreeRoutingFloorState>(json.Serialize(new TreeRoutingFloorState())).Floor, Is.Zero);
+            Assert.That(fromBinary.Floors, Is.EquivalentTo(row.Floors));
+            Assert.That(fromJson.Floors, Is.EquivalentTo(row.Floors));
+            Assert.That(json.Deserialize<TreeRoutingFloorState>(json.Serialize(new TreeRoutingFloorState())).Floors, Is.Empty);
         });
     }
 }

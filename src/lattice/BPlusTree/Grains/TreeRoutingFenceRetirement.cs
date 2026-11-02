@@ -11,12 +11,13 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Floor before delete.</b> Every step raises the tree id's routing-generation
-/// floor (<see cref="TreeRoutingFloorState"/>) durably to at least every generation it
-/// is about to delete, before it deletes anything. A crash between the two leaves
-/// rows that a re-drive deletes, never a generation that can recur: a WAL partition
-/// refuses a generation claim at or below the floor, and a re-created incarnation
-/// starts above it.
+/// <b>Floors before deletes.</b> The retirement first reads every row, then raises
+/// every initiator's routing floor (<see cref="TreeRoutingFloorState"/>) to the highest
+/// generation any of them holds, in one write, before it deletes anything. A row that
+/// moved since that read is covered again before its delete. A crash between the two
+/// leaves rows a re-drive deletes, never a generation that can recur. A WAL partition
+/// refuses a generation claim at or below its initiator's floor, and a re-created
+/// incarnation starts above it.
 /// </para>
 /// <para>
 /// <b>Not best-effort.</b> Any failure propagates, so the purge keeps its registry
@@ -27,7 +28,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// retirement call with the definite "method unknown" failure. That silo holds no
 /// fence state in memory, so its rows are retired straight from storage instead. A
 /// purge that finishes on a 10.2.0 silo retires nothing: that build runs no part of
-/// this sequence.
+/// this sequence (see <c>ShardRootGrain</c>'s re-seed catch-up, #5703 review S2).
 /// </para>
 /// </remarks>
 internal static class TreeRoutingFenceRetirement
@@ -51,9 +52,11 @@ internal static class TreeRoutingFenceRetirement
     }
 
     /// <summary>
-    /// Retires every per-tree fence row of <paramref name="treeId"/>: the range-delete
-    /// fence first (so no close of an intent it held can claim again), then the shard
-    /// markers, then each WAL partition's generation entries.
+    /// Retires every per-tree fence row of <paramref name="treeId"/>. First every
+    /// initiator's floor is raised, in one write, to the highest generation the fence,
+    /// the markers and the partitions' rows hold. Then the rows go, in this order: the
+    /// range-delete fence (so no close of an intent it held can claim again), then the
+    /// shard markers, then each WAL partition's generation entries.
     /// </summary>
     /// <param name="grainFactory">The grain factory, for the fence grain and the WAL shards.</param>
     /// <param name="storage">The tree's grain storage provider.</param>
@@ -71,7 +74,22 @@ internal static class TreeRoutingFenceRetirement
         ArgumentNullException.ThrowIfNull(storage);
         ArgumentException.ThrowIfNullOrEmpty(treeId);
 
-        await grainFactory.GetGrain<ITreeRangeDeleteFenceGrain>(treeId).RetireForPurgeAsync().ConfigureAwait(true);
+        var fence = grainFactory.GetGrain<ITreeRangeDeleteFenceGrain>(treeId);
+        var highest = await fence.GetRetiringGenerationAsync().ConfigureAwait(true);
+        highest = Math.Max(highest, await HighestMarkerGenerationAsync(storage, treeId, shardCount).ConfigureAwait(true));
+        highest = Math.Max(highest, await HighestPartitionGenerationAsync(storage, treeId, shardCount, partitions).ConfigureAwait(true));
+        if (highest > 0)
+        {
+            var floors = new Dictionary<WalRoutingInitiator, long>();
+            foreach (var initiator in Initiators(shardCount))
+            {
+                floors[initiator] = highest;
+            }
+
+            await WalAppendFenceRows.RaiseRoutingFloorsAsync(storage, treeId, floors).ConfigureAwait(true);
+        }
+
+        await fence.RetireForPurgeAsync().ConfigureAwait(true);
         await RetireMarkersAsync(storage, treeId, shardCount).ConfigureAwait(true);
         await BoundedFanOut.RunAsync(
             partitions,
@@ -84,6 +102,25 @@ internal static class TreeRoutingFenceRetirement
                 treeId,
                 partition,
                 shardCount)).ConfigureAwait(true);
+    }
+
+    private static async Task<long> HighestMarkerGenerationAsync(IGrainStorage storage, string treeId, int shardCount)
+    {
+        var rows = await BoundedFanOut.RunAsync(
+            shardCount,
+            BoundedFanOut.DefaultWidth,
+            shard => HandOffMarkerRows.ReadShardAsync(storage, treeId, shard)).ConfigureAwait(true);
+        return rows.Where(r => r.RecordExists).Select(r => r.State.RoutingGeneration).DefaultIfEmpty(0).Max();
+    }
+
+    private static async Task<long> HighestPartitionGenerationAsync(IGrainStorage storage, string treeId, int shardCount, int partitions)
+    {
+        var initiators = Initiators(shardCount);
+        var rows = await BoundedFanOut.RunAsync(
+            partitions * initiators.Length,
+            BoundedFanOut.DefaultWidth,
+            i => WalAppendFenceRows.ReadGenerationAsync(storage, treeId, i / initiators.Length, initiators[i % initiators.Length])).ConfigureAwait(true);
+        return rows.Where(r => r.RecordExists).Select(r => r.State.Generation).DefaultIfEmpty(0).Max();
     }
 
     /// <summary>
@@ -117,20 +154,23 @@ internal static class TreeRoutingFenceRetirement
                 treeId,
                 WalAppendFenceRows.GenerationGrainType,
                 keys,
+                initiators,
                 static row => row.Generation,
-                alsoCover: 0,
-                floorRaised: null).ConfigureAwait(true);
+                alsoCover: null,
+                floorsRaised: null).ConfigureAwait(true);
         }
     }
 
     /// <summary>Retires every shard root's hand-off marker row of <paramref name="treeId"/>.</summary>
-    internal static Task<long> RetireMarkersAsync(IGrainStorage storage, string treeId, int shardCount)
+    internal static Task<TreeRoutingFloorState> RetireMarkersAsync(IGrainStorage storage, string treeId, int shardCount)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(shardCount);
         var keys = new string[shardCount];
+        var initiators = new WalRoutingInitiator[shardCount];
         for (var shard = 0; shard < shardCount; shard++)
         {
             keys[shard] = HandOffMarkerRows.ShardKey(treeId, shard);
+            initiators[shard] = WalRoutingInitiator.ShardRoot(shard);
         }
 
         return RetireRowsAsync<ShardHandOffState>(
@@ -138,58 +178,82 @@ internal static class TreeRoutingFenceRetirement
             treeId,
             HandOffMarkerRows.ShardGrainType,
             keys,
+            initiators,
             static row => row.RoutingGeneration,
-            alsoCover: 0,
-            floorRaised: null);
+            alsoCover: null,
+            floorsRaised: null);
     }
 
     /// <summary>
     /// Deletes the rows of <paramref name="grainType"/> under <paramref name="keys"/>,
-    /// each conditionally on the ETag read, after raising <paramref name="treeId"/>'s
-    /// routing-generation floor durably to at least every generation they hold and
-    /// <paramref name="alsoCover"/>. A row rewritten since the read is re-read, the floor
-    /// raised over it, and deleted again.
+    /// each conditionally on the ETag read, after raising each row's initiator's routing
+    /// floor under <paramref name="treeId"/> durably to at least the generation it holds
+    /// and <paramref name="alsoCover"/>, in one write. A row rewritten since the read is
+    /// re-read, its initiator's floor raised over it, and deleted again.
     /// </summary>
     /// <param name="storage">The tree's grain storage provider.</param>
-    /// <param name="treeId">The tree id whose floor covers the rows.</param>
+    /// <param name="treeId">The tree id whose floors cover the rows.</param>
     /// <param name="grainType">The rows' reserved grain type.</param>
     /// <param name="keys">The rows' keys; an absent row is skipped.</param>
+    /// <param name="initiators">The initiator each row in <paramref name="keys"/> belongs to.</param>
     /// <param name="generationOf">The routing generation a row holds.</param>
-    /// <param name="alsoCover">A generation held elsewhere (in memory) the floor must cover too.</param>
-    /// <param name="floorRaised">Called with the stored floor after each raise, before any row it covers is deleted.</param>
-    /// <returns>The floor as stored after the last raise.</returns>
-    internal static async Task<long> RetireRowsAsync<T>(
+    /// <param name="alsoCover">Generations held elsewhere (in memory) the floors must cover too.</param>
+    /// <param name="floorsRaised">Called with the stored floors after each raise, before any row they cover is deleted.</param>
+    /// <returns>The floors as stored after the last raise.</returns>
+    /// <remarks>
+    /// A row absent at the read is skipped (#5703 review, N2): there is nothing to
+    /// retire, and none can appear behind the read for the retired incarnation. Its
+    /// shard roots never re-create a marker they saw retired, nor re-stamp a write at or
+    /// below its floor (#5705). A WAL partition refuses a generation claim at or below
+    /// the floor, and the floor is raised before this returns. No re-created incarnation
+    /// can write one either, because the purge runs this before it frees the id.
+    /// </remarks>
+    internal static async Task<TreeRoutingFloorState> RetireRowsAsync<T>(
         IGrainStorage storage,
         string treeId,
         string grainType,
         IReadOnlyList<string> keys,
+        IReadOnlyList<WalRoutingInitiator> initiators,
         Func<T, long> generationOf,
-        long alsoCover,
-        Func<long, Task>? floorRaised)
+        IReadOnlyDictionary<WalRoutingInitiator, long>? alsoCover,
+        Func<TreeRoutingFloorState, Task>? floorsRaised)
         where T : new()
     {
         ArgumentNullException.ThrowIfNull(storage);
         ArgumentNullException.ThrowIfNull(keys);
+        ArgumentNullException.ThrowIfNull(initiators);
         ArgumentNullException.ThrowIfNull(generationOf);
+        if (initiators.Count != keys.Count)
+        {
+            throw new ArgumentException("One initiator per key.", nameof(initiators));
+        }
 
         var rows = await BoundedFanOut.RunAsync(
             keys.Count,
             BoundedFanOut.DefaultWidth,
             i => WalAppendFenceRows.ReadRowAsync<T>(storage, grainType, keys[i])).ConfigureAwait(true);
 
-        var cover = Math.Max(alsoCover, 0);
-        foreach (var row in rows)
+        var cover = new Dictionary<WalRoutingInitiator, long>();
+        if (alsoCover is not null)
         {
-            if (row.RecordExists)
+            foreach (var (initiator, value) in alsoCover)
             {
-                cover = Math.Max(cover, generationOf(row.State));
+                cover[initiator] = value;
             }
         }
 
-        var floor = new FloorTracker(await WalAppendFenceRows.RaiseRoutingFloorAsync(storage, treeId, cover).ConfigureAwait(true));
-        if (floorRaised is not null)
+        for (var i = 0; i < rows.Length; i++)
         {
-            await floorRaised(floor.Value).ConfigureAwait(true);
+            if (rows[i].RecordExists)
+            {
+                cover[initiators[i]] = Math.Max(cover.GetValueOrDefault(initiators[i]), generationOf(rows[i].State));
+            }
+        }
+
+        var floors = new FloorTracker(await WalAppendFenceRows.RaiseRoutingFloorsAsync(storage, treeId, cover).ConfigureAwait(true));
+        if (floorsRaised is not null)
+        {
+            await floorsRaised(floors.Snapshot).ConfigureAwait(true);
         }
 
         await BoundedFanOut.RunAsync(
@@ -206,13 +270,14 @@ internal static class TreeRoutingFenceRetirement
                     }
 
                     var generation = generationOf(row.State);
-                    if (generation > floor.Value)
+                    if (generation > floors.Of(initiators[i]))
                     {
-                        var raised = await WalAppendFenceRows.RaiseRoutingFloorAsync(storage, treeId, generation).ConfigureAwait(true);
-                        floor.Raise(raised);
-                        if (floorRaised is not null)
+                        var raised = await WalAppendFenceRows.RaiseRoutingFloorsAsync(
+                            storage, treeId, new Dictionary<WalRoutingInitiator, long> { [initiators[i]] = generation }).ConfigureAwait(true);
+                        floors.Replace(raised);
+                        if (floorsRaised is not null)
                         {
-                            await floorRaised(raised).ConfigureAwait(true);
+                            await floorsRaised(raised).ConfigureAwait(true);
                         }
                     }
 
@@ -229,28 +294,48 @@ internal static class TreeRoutingFenceRetirement
                 }
             }).ConfigureAwait(true);
 
-        return floor.Value;
+        return floors.Snapshot;
     }
 
-    /// <summary>The highest floor a retirement has stored, shared by its concurrent row deletions.</summary>
-    private sealed class FloorTracker(long initial)
+    /// <summary>
+    /// The floors a retirement last stored, shared by its concurrent row deletions.
+    /// Floors only rise, so a later stored state covers an earlier one.
+    /// </summary>
+    private sealed class FloorTracker(TreeRoutingFloorState initial)
     {
-        private long _value = initial;
+        private readonly object _gate = new();
+        private TreeRoutingFloorState _floors = initial;
 
-        public long Value => Interlocked.Read(ref _value);
-
-        public void Raise(long value)
+        public TreeRoutingFloorState Snapshot
         {
-            var current = Interlocked.Read(ref _value);
-            while (value > current)
+            get
             {
-                var seen = Interlocked.CompareExchange(ref _value, value, current);
-                if (seen == current)
+                lock (_gate)
                 {
-                    return;
+                    return new TreeRoutingFloorState { Floors = new Dictionary<string, long>(_floors.Floors, StringComparer.Ordinal) };
                 }
+            }
+        }
 
-                current = seen;
+        public long Of(WalRoutingInitiator initiator)
+        {
+            lock (_gate)
+            {
+                return WalAppendFenceRows.FloorOf(_floors, initiator);
+            }
+        }
+
+        public void Replace(TreeRoutingFloorState stored)
+        {
+            lock (_gate)
+            {
+                foreach (var (tag, value) in stored.Floors)
+                {
+                    if (!_floors.Floors.TryGetValue(tag, out var current) || current < value)
+                    {
+                        _floors.Floors[tag] = value;
+                    }
+                }
             }
         }
     }
