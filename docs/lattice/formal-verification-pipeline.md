@@ -94,8 +94,11 @@ that can affect a TLC run into three classes, and
   partition check in `CiMemberPullRequestTieringTests` proves every TLC case is
   still selected by exactly one TLC shard.
 - **Neutral** files never affect a TLC run: refinement notes and READMEs, the
-  perturbation files, and the Formal and workflow files nothing on the TLC path
-  references.
+  perturbation files, unmanifested design models under `spec/<area>/design/`, and
+  the Formal and workflow files nothing on the TLC path references. A design model
+  is not a module until it gains a manifest, so no TLC run executes it;
+  `TlcInputClassificationTests` fails if any module's manifest, `.tla` or cfg is
+  neutral, so promoting a model makes it a verdict input.
 
 Routing and neutral are exclusions, so a path inside a verdict glob that a
 routing or neutral glob also matches is not a verdict input. When unsure, a file

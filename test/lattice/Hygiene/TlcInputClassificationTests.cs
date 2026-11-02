@@ -21,7 +21,7 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class TlcInputClassificationTests
+public sealed partial class TlcInputClassificationTests
 {
     private const string InputsFile = ".github/workflows/tlc-inputs.json";
     private const string FormalDirectory = "test/lattice/Formal/";
@@ -182,6 +182,9 @@ public sealed class TlcInputClassificationTests
     [TestCase(".github/actions/tla-toolchain/action.yml")]
     [TestCase("tools/tlc/toolchain.json")]
     [TestCase("spec/atomic-commit/AtomicCommit.tla")]
+    [TestCase("spec/wal/WalLiveAdvance.tla")]
+    [TestCase("spec/wal/WalLiveAdvance.manifest.json")]
+    [TestCase("spec/wal/designer/Any.tla")]
     public void A_file_that_can_change_a_verdict_is_a_verdict_input(string path)
     {
         Assert.That(Load().IsVerdictInput(path), Is.True, path);
@@ -213,6 +216,10 @@ public sealed class TlcInputClassificationTests
     [TestCase(".github/workflows/coverage-catch-up.yml")]
     [TestCase("spec/shard-ownership/Refinement.md")]
     [TestCase("spec/atomic-commit/perturbations/Any.perturbation")]
+    [TestCase("spec/wal/design/WalLiveAdvance.tla")]
+    [TestCase("spec/wal/design/WalLiveAdvanceRecreate.cfg")]
+    [TestCase("spec/wal/design/mutations/Any.mutation")]
+    [TestCase("spec/wal/design/redundancy/Any.mutation")]
     public void A_neutral_file_is_not_a_verdict_input(string path)
     {
         var inputs = Load();
@@ -335,6 +342,9 @@ public sealed class TlcInputClassificationTests
     [TestCase("spec/*.md", "spec/wal/Refinement.md", true)]
     [TestCase("spec/**/perturbations/**", "spec/atomic-commit/perturbations/A.perturbation", true)]
     [TestCase("spec/**/perturbations/**", "spec/perturbations.md", false)]
+    [TestCase("spec/**/design/**", "spec/wal/design/WalLiveAdvance.tla", true)]
+    [TestCase("spec/**/design/**", "spec/wal/designer/A.tla", false)]
+    [TestCase("spec/**/design/**", "spec/wal/WalDurability.tla", false)]
     [TestCase(".github/workflows/ci.yml", ".github/workflows/ci.yml", true)]
     [TestCase(".github/workflows/ci.yml", ".github/workflows/ci.yml.bak", false)]
     [TestCase("tools/tla*", "tools/tlc/build.py", false)]
