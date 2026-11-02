@@ -113,6 +113,29 @@ public abstract class ContractConformanceFixture(string storyline)
             Assert.Ignore($"BLOCKED, never passed: {chapter} consumes {string.Join(", ", blockers)}, which did not conform{(known ? $" (known defect {string.Join(", ", issues)})" : string.Empty)}.");
         }
 
+        // In an isolated leg (one chapter on a fresh estate) the chapters this one consumes are
+        // established here, not by their own cases: a consumed chapter failing on its known
+        // defect blocks this one exactly as it would in the serial run, and any other failure
+        // stays red.
+        foreach (var consume in session.EstablishmentOrderOf(chapter))
+        {
+            try
+            {
+                await session.EstablishAsync(consume);
+            }
+            catch (Exception ex) when (KnownDefectIssues.TryGetValue(consume, out var consumeKnown))
+            {
+                _failed.Add(consume);
+                _failed.Add(chapter);
+                _knownDefectBlocks[consume] = consumeKnown;
+                _knownDefectBlocks[chapter] = consumeKnown;
+                await RecordKnownDefectAsync(consume);
+                var detail = $"blocked by {consume} (known defect {consumeKnown}): {FirstLine(ex)}";
+                _rows.Add((chapter, $"blocked by {consumeKnown}", TimeSpan.Zero, TimeSpan.Zero, 0, detail));
+                Assert.Ignore($"BLOCKED, never passed: {chapter} consumes {consume}, which did not conform (known defect {consumeKnown}): {FirstLine(ex)}");
+            }
+        }
+
         var retriesBefore = ContractRetries.Count;
         var clock = Stopwatch.StartNew();
         TimeSpan establish = TimeSpan.Zero;
