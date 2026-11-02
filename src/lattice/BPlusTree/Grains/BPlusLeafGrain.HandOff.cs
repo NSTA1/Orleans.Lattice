@@ -50,10 +50,15 @@ internal sealed partial class BPlusLeafGrain
     /// a write reaching the leaf through an existing method appends unstamped (S3).
     /// Evaluated synchronously at the method's entry, before its span admission, it
     /// captures this activation's hand-off closes (#5664 (a)); a value carried from the
-    /// caller is replaced.
+    /// caller is replaced. The fence is created with the commit-log writer, so it is
+    /// resolved here first: a write admitted before this activation's first append is
+    /// marked too, and a close made before that write dispatches still refuses it.
     /// </summary>
-    private WalRoutingStamp StampedRouting(WalRoutingStamp routing) =>
-        routing with { AdmissionMark = _appendFence is { } fence ? fence.HandOffCloses + 1 : 0 };
+    private WalRoutingStamp StampedRouting(WalRoutingStamp routing)
+    {
+        ResolveCommitLogWriter();
+        return routing with { AdmissionMark = _appendFence is { } fence ? fence.HandOffCloses + 1 : 0 };
+    }
 
     /// <summary>
     /// Appends <paramref name="entry"/> under <paramref name="routing"/>: the leaf's
