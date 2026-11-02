@@ -154,6 +154,86 @@ internal sealed partial class ShardRootGrain
     private bool IsAppendFenceGateOpen() =>
         context.ActivationServices?.GetService<IWalAppendFenceGate>() is { IsOpen: true };
 
+    /// <summary>
+    /// The token an adaptive split or consolidation fold from this shard opens on its
+    /// target's marker. Unique per migration: a donor never moves the same slot twice.
+    /// </summary>
+    private string MigrationHandOffToken(ShardSplitInProgress sip) =>
+        string.Concat(
+            "migrate:",
+            ShardIndex.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ">",
+            sip.ShadowTargetShardIndex.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ":",
+            sip.VirtualShardCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ":",
+            string.Join(',', sip.MovedSlots));
+
+    private IShardRootGrain TargetShardRoot(int shardIndex) =>
+        grainFactory.GetGrain<IShardRootGrain>(
+            string.Concat(TreeId, "/", shardIndex.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+
+    /// <summary>
+    /// Opens this shard's migration hand-off on the target shard root's marker
+    /// (epic #5605, member 2; the hand-off table's adaptive split and shard fold rows),
+    /// idempotently. Called when the migration begins and on every resume path before
+    /// its next admission (rule 1). A target on an older build that answers "method
+    /// unknown" is skipped; any other failure propagates, so the migration does not
+    /// proceed without its marker.
+    /// </summary>
+    private async Task OpenMigrationHandOffAsync(ShardSplitInProgress sip)
+    {
+        if (!IsAppendFenceGateOpen())
+        {
+            return;
+        }
+
+        try
+        {
+            await TargetShardRoot(sip.ShadowTargetShardIndex).OpenHandOffMarkerAsync(MigrationHandOffToken(sip), null, null);
+            LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindShardMigration, opened: true, TreeId);
+        }
+        catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
+        {
+        }
+    }
+
+    /// <summary>
+    /// Closes this shard's migration hand-off on the target by fence, once admission
+    /// for the moved slots has stopped (the reject phase) and the drain has finished:
+    /// raises this shard root's routing generation, re-claims it at every WAL partition,
+    /// and records the heads on the target's marker. With the gate closed the
+    /// migration's writes were unstamped, which the watermark reports, so the current
+    /// allocator heads close it. A failure propagates and the completion is re-driven.
+    /// </summary>
+    private async Task CloseMigrationHandOffAsync(ShardSplitInProgress sip)
+    {
+        long[] heads;
+        if (IsAppendFenceGateOpen())
+        {
+            var raised = await UpdateHandOffMarkerAsync(marker =>
+            {
+                marker.RoutingGeneration++;
+                return true;
+            });
+            heads = await ClaimRoutingGenerationEverywhereAsync(raised.RoutingGeneration);
+        }
+        else
+        {
+            heads = await BPlusLeafGrain.CaptureAllocatorHeadsAsync(
+                grainFactory, TreeId, await optionsResolver.GetWalPartitionsAsync(TreeId));
+        }
+
+        try
+        {
+            await TargetShardRoot(sip.ShadowTargetShardIndex).CloseHandOffMarkerAsync(MigrationHandOffToken(sip), heads);
+            LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindShardMigration, opened: false, TreeId);
+        }
+        catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
+        {
+        }
+    }
+
     /// <summary>The token a reclaim of <paramref name="absorbedLeafId"/> opens on its survivor's marker.</summary>
     internal static string ReclaimHandOffToken(GrainId absorbedLeafId) =>
         string.Concat("reclaim:", absorbedLeafId.GetGuidKey().ToString("N"));

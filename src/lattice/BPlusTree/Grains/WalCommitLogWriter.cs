@@ -312,6 +312,9 @@ internal sealed class WalCommitLogWriter(
         // refused before any provider work; its seam retries it against the live
         // activation. It must never feed a provider-health or saturation signal.
         if (ex is LeafRetiredException { ActivationSuperseded: true }) return true;
+        // A hand-off close's routing-generation rejection (member 2) is the same kind
+        // of pre-provider refusal, retried from the shard root.
+        if (ex is WalRoutingGenerationStaleException) return true;
         return false;
     }
 

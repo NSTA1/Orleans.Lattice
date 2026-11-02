@@ -227,12 +227,19 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <inheritdoc />
-    public async Task<CrdtApplyResult> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks)
+    public Task<CrdtApplyResult> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks) =>
+        ApplyCrdtDeltaRoutedAsync(key, mode, deltaBytes, expiresAtTicks, WalRoutingStamp.Unstamped);
+
+    /// <inheritdoc />
+    public Task<CrdtApplyResult> ApplyCrdtDeltaStampedAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks, WalRoutingStamp routing) =>
+        ApplyCrdtDeltaRoutedAsync(key, mode, deltaBytes, expiresAtTicks, StampedRouting(routing));
+
+    private async Task<CrdtApplyResult> ApplyCrdtDeltaRoutedAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks, WalRoutingStamp routing)
     {
         await AwaitReplayBarrierAsync();
         try
         {
-            return await ApplyCrdtDeltaCoreAsync(key, mode, deltaBytes, expiresAtTicks, batch: null);
+            return await ApplyCrdtDeltaCoreAsync(key, mode, deltaBytes, expiresAtTicks, batch: null, routing);
         }
         catch (WalStampBelowFloorException refusal) when (AbsorbClockFloorRefusalAndRethrow(refusal))
         {
@@ -262,7 +269,7 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// </summary>
     private async Task<CrdtApplyResult> ApplyCrdtDeltaCoreAsync(
-        string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks, List<WalRecord>? batch)
+        string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks, List<WalRecord>? batch, WalRoutingStamp routing)
     {
         EnsureInternalOrigin(LatticeOperation.CrdtApply);
         using var _mutationScope = EnterMutationScope();
@@ -419,7 +426,7 @@ internal sealed partial class BPlusLeafGrain
                     deltaBytes);
                 if (batch is null)
                 {
-                    await writer.AppendAsync(record);
+                    await AppendRoutedAsync(writer, record, routing);
                 }
                 else
                 {
@@ -481,7 +488,7 @@ internal sealed partial class BPlusLeafGrain
                     deltaBytes);
                 if (batch is null)
                 {
-                    await writer.AppendAsync(record);
+                    await AppendRoutedAsync(writer, record, routing);
                 }
                 else
                 {
@@ -642,8 +649,17 @@ internal sealed partial class BPlusLeafGrain
     /// tree converges locally but diverges at replication, so the API does not
     /// offer the footgun.
     /// </param>
-    public async Task<SplitResult?> ApplyCrdtDeltaManyAsync(
-        List<KeyValuePair<string, byte[]>> deltas, LatticeMergeMode mode)
+    public Task<SplitResult?> ApplyCrdtDeltaManyAsync(
+        List<KeyValuePair<string, byte[]>> deltas, LatticeMergeMode mode) =>
+        ApplyCrdtDeltaManyCoreAsync(deltas, mode, WalRoutingStamp.Unstamped);
+
+    /// <inheritdoc />
+    public Task<SplitResult?> ApplyCrdtDeltaManyStampedAsync(
+        List<KeyValuePair<string, byte[]>> deltas, LatticeMergeMode mode, WalRoutingStamp routing) =>
+        ApplyCrdtDeltaManyCoreAsync(deltas, mode, StampedRouting(routing));
+
+    private async Task<SplitResult?> ApplyCrdtDeltaManyCoreAsync(
+        List<KeyValuePair<string, byte[]>> deltas, LatticeMergeMode mode, WalRoutingStamp routing)
     {
         await AwaitReplayBarrierAsync();
 
@@ -662,7 +678,7 @@ internal sealed partial class BPlusLeafGrain
         var walEntries = new List<WalRecord>(deltas.Count);
         foreach (var (key, deltaBytes) in deltas)
         {
-            await ApplyCrdtDeltaCoreAsync(key, mode, deltaBytes, expiresAtTicks: 0, walEntries);
+            await ApplyCrdtDeltaCoreAsync(key, mode, deltaBytes, expiresAtTicks: 0, walEntries, routing);
         }
 
         if (walEntries.Count > 0)
@@ -685,7 +701,7 @@ internal sealed partial class BPlusLeafGrain
                 // is safe; it is only the copy that was unnecessary.
                 try
                 {
-                    await writer.AppendManyAsync(walEntries);
+                    await AppendManyRoutedAsync(writer, walEntries, routing);
                 }
                 catch (WalStampBelowFloorException refusal) when (AbsorbClockFloorRefusalAndRethrow(refusal))
                 {

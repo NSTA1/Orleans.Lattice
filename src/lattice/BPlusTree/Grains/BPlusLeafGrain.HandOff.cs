@@ -42,6 +42,38 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>The token a split from <paramref name="donorLeafId"/> opens on its sibling's marker.</summary>
     internal static string SplitHandOffToken(Guid donorLeafId) => string.Concat("split:", donorLeafId.ToString("N"));
 
+    /// <summary>
+    /// The routing a stamped leaf method appends under (member 2): the shard-level
+    /// generation it was called with, or <see cref="WalRoutingStamp.None"/>, which a
+    /// leaf-to-leaf hand-off passes for a write the receiver appends and applies as its
+    /// own (the design owner's answer Q2). A stamped method is called only by new code;
+    /// a write reaching the leaf through an existing method appends unstamped (S3).
+    /// </summary>
+    private static WalRoutingStamp StampedRouting(WalRoutingStamp routing) => routing;
+
+    /// <summary>
+    /// Appends <paramref name="entry"/> under <paramref name="routing"/>: the leaf's
+    /// epoch alone for <see cref="WalRoutingStamp.None"/>, extended by the routing
+    /// generation when one is set, or unstamped for <see cref="WalRoutingStamp.Unstamped"/>.
+    /// </summary>
+    private static Task<long> AppendRoutedAsync(ICommitLogWriter writer, WalRecord entry, WalRoutingStamp routing) =>
+        routing != default && writer is IRoutingStampedCommitLogWriter routed
+            ? routed.AppendAsync(entry, routing, CancellationToken.None)
+            : writer.AppendAsync(entry);
+
+    /// <summary>The batched form of <see cref="AppendRoutedAsync"/>.</summary>
+    private static Task<IReadOnlyList<long>> AppendManyRoutedAsync(ICommitLogWriter writer, IReadOnlyList<WalRecord> entries, WalRoutingStamp routing) =>
+        routing != default && writer is IRoutingStampedCommitLogWriter routed
+            ? routed.AppendManyAsync(entries, routing, CancellationToken.None)
+            : writer.AppendManyAsync(entries);
+
+    /// <summary>A single-key set under <paramref name="routing"/>, as <see cref="SetAsync(string, byte[])"/> runs it.</summary>
+    private async Task<SplitResult?> SetRoutedAsync(string key, byte[] value, WalRoutingStamp routing)
+    {
+        await AwaitReplayBarrierAsync();
+        return await SetCoreAsync(key, value, 0L, routing);
+    }
+
     /// <summary>The hand-off markers' storage, or <see langword="null"/> when the silo provides no fence.</summary>
     private IGrainStorage? HandOffMarkerStorage() =>
         context.ActivationServices?.GetService<IWalAppendFenceGate>() is not null

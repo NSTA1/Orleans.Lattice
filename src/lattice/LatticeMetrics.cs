@@ -11543,11 +11543,12 @@ public static class LatticeMetrics
     /// <summary><see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a leaf reclaim onto its survivor.</summary>
     public const string HandOffKindReclaim = "reclaim";
 
-    /// <summary><see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: an adaptive split onto its target shard.</summary>
-    public const string HandOffKindAdaptiveSplit = "adaptive_split";
-
-    /// <summary><see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a shard fold onto its survivor shard.</summary>
-    public const string HandOffKindFold = "fold";
+    /// <summary>
+    /// <see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a slot
+    /// migration onto its target shard - an adaptive split, or a consolidation fold,
+    /// which opens its window through the same donor-shard migration.
+    /// </summary>
+    public const string HandOffKindShardMigration = "shard_migration";
 
     /// <summary><see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a tree range delete's intent.</summary>
     public const string HandOffKindRangeDelete = "range_delete";
@@ -11564,8 +11565,7 @@ public static class LatticeMetrics
     /// <summary>
     /// Counter of hand-off markers opened and closed (epic #5605, member 2), tagged
     /// with <see cref="TagTree"/>, the tenant, <see cref="TagKind"/> (<c>split</c>,
-    /// <c>reclaim</c>, <c>adaptive_split</c>, <c>fold</c>, <c>range_delete</c> or
-    /// <c>bulk</c>) and <see cref="TagOutcome"/> (<c>opened</c> or <c>closed</c>). An
+    /// <c>reclaim</c>, <c>shard_migration</c>, <c>range_delete</c> or <c>bulk</c>) and <see cref="TagOutcome"/> (<c>opened</c> or <c>closed</c>). An
     /// open marker holds the owners it covers on the replay-based advance until its
     /// close's fence returns heads they replay to; opened minus closed is the number
     /// in flight, and a gap that does not close means a hand-off whose recovery has not
@@ -11573,7 +11573,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> WalAppendFenceHandOffMarkers =
         Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.handoff_markers", unit: "{marker}",
-            description: "Hand-off markers opened and closed by their fence (epic #5605), by tree, kind (split, reclaim, adaptive_split, fold, range_delete, bulk) and outcome (opened or closed).");
+            description: "Hand-off markers opened and closed by their fence (epic #5605), by tree, kind (split, reclaim, shard_migration, range_delete, bulk) and outcome (opened or closed).");
 
     /// <summary>Records one hand-off marker of <paramref name="kind"/> opened or closed on <paramref name="treeId"/>.</summary>
     internal static void RecordHandOffMarker(string kind, bool opened, string treeId) =>
