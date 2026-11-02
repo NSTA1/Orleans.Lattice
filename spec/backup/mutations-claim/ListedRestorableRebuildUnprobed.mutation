@@ -1,0 +1,19 @@
+# Pairs with ListedRestorable. Half of production before the fix of #5637: a
+# catalog rebuild registered any sink manifest it found. An operator delete
+# whose caller was lost after deleting artifacts leaves its manifest behind;
+# once its lease runs out a rebuild lists a backup that cannot be restored.
+MODULE: ListedRestorableRebuildUnprobed
+TARGET: ListedRestorable
+CLASS: Invariant
+SUMMARY: a rebuild re-lists a sink manifest without probing its artifacts
+PERTURBS: Rebuild
+
+--- FIND
+    /\ man = "A"
+    /\ art
+    /\ row' = "A"
+--- REPLACE
+    /\ man = "A"
+    \* MUTATION: no artifact probe.
+    /\ row' = "A"
+--- END

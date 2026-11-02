@@ -112,8 +112,8 @@ failure_modes:
     response: "Pass a fresh id of 1 to 128 ASCII letters, digits, '-', '_' or '.', or omit it."
   - id: partial-delete-retry
     signal: "A delete faulted after removing the catalog row; the backup is no longer listed while its sink manifest and some artifacts remain."
-    effect: "Sink payload outlives the catalog row until the delete is retried."
-    response: "Delete the backup again: the retry reads it from its surviving sink manifest, deletes the remaining artifacts and then the manifest, and returns true (#5334)."
+    effect: "Sink payload outlives the catalog row until the delete is retried. A catalog rebuild does not list the backup again once any of its artifacts is gone (#5637)."
+    response: "Delete the backup again: the retry reads it from its surviving sink manifest, deletes the remaining artifacts and then the manifest, and returns true (#5334). A delete that fails with a TimeoutException saying it lost its reservation is retried the same way."
   - id: operation-runner-lost
     signal: "Tracked rebuild or scrub status becomes Failed after the accepting silo is lost or its lease lapses."
     effect: "The pass is not resumed; rows already registered or pruned stay as written."

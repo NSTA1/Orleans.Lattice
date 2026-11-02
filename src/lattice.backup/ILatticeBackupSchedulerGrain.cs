@@ -138,19 +138,33 @@ internal interface ILatticeBackupSchedulerGrain : IGrainWithStringKey
 
     /// <summary>
     /// Starts an operator delete (issue #5628): under the id's hold, removes the
-    /// catalog row and reserves the id for this delete by a lease of its own, then
-    /// returns the manifest the rest of the delete works from and the lease's
-    /// token. The caller deletes the backup's artifacts outside the grain - so a
-    /// large delete never runs inside one grain call - and then calls
+    /// catalog row and reserves the id for this delete by a lease of its own,
+    /// under the caller's <paramref name="token"/>, then returns the manifest the
+    /// rest of the delete works from. The caller deletes the backup's artifacts
+    /// outside the grain - so a large delete never runs inside one grain call -
+    /// renewing the lease with <see cref="RenewDeleteAsync"/>, and then calls
     /// <see cref="EndDeleteAsync"/>. While any delete's lease is live, no publish
-    /// of the id proceeds and no pass dooms it; overlapping deletes of one id each
-    /// hold their own (issue #5631). A retry of an interrupted delete finds the
-    /// sink manifest and finishes (#5334). An id whose row or sink manifest is
-    /// another scope's is not this scope's to delete, and is left alone.
+    /// or rebuild of the id proceeds and no pass dooms it; overlapping deletes of
+    /// one id each hold their own (issue #5631). A retry of an interrupted delete
+    /// finds the sink manifest and finishes (#5334); a retried call with the same
+    /// token renews the same lease. An id whose row or sink manifest is another
+    /// scope's is not this scope's to delete, and is left alone.
     /// </summary>
     /// <param name="backupId">The backup to delete.</param>
+    /// <param name="token">The delete's own lease token, chosen by the caller.</param>
     [AlwaysInterleave]
-    Task<BackupDeleteStart> BeginDeleteAsync(string backupId);
+    Task<BackupDeleteStart> BeginDeleteAsync(string backupId, Guid token);
+
+    /// <summary>
+    /// Renews the lease of a delete <see cref="BeginDeleteAsync"/> started (issue
+    /// #5637). Returns <see langword="false"/> when the lease has run out or
+    /// ended: a rebuild or a capture may since have acted on the id, so the caller
+    /// must delete no more artifacts.
+    /// </summary>
+    /// <param name="backupId">The backup being deleted.</param>
+    /// <param name="token">The delete's lease token.</param>
+    [AlwaysInterleave]
+    Task<bool> RenewDeleteAsync(string backupId, Guid token);
 
     /// <summary>
     /// Ends an operator delete <see cref="BeginDeleteAsync"/> started (issue
@@ -162,7 +176,7 @@ internal interface ILatticeBackupSchedulerGrain : IGrainWithStringKey
     /// stays held beyond one call's wait; the caller retries.
     /// </summary>
     /// <param name="backupId">The deleted backup.</param>
-    /// <param name="token">The token <see cref="BeginDeleteAsync"/> returned.</param>
+    /// <param name="token">The delete's lease token, as passed to <see cref="BeginDeleteAsync"/>.</param>
     /// <param name="finish">Whether to delete the sink manifest; <see langword="false"/> when the artifact deletes failed, so a retry finds the manifest.</param>
     [AlwaysInterleave]
     Task<BackupRetireOutcome> EndDeleteAsync(string backupId, Guid token, bool finish);

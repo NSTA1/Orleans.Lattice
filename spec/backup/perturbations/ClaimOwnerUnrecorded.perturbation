@@ -1,0 +1,18 @@
+# The claim grain admits a capture of the scope that owns the bare id without
+# recording a claim, as before #5627. Resolve(c) records one claim per capture.
+MODULE: BackupIdClaim
+ROW: Resolve(c)
+FILE: src/lattice.backup/BackupIdClaimGrain.cs
+DETECTORS: BackupIdClaimRaceTests.Another_scope_cannot_take_an_id_its_owner_is_republishing_through_a_retire, BackupIdCollisionTests.The_owning_scope_holds_a_claim_while_it_republishes_its_id
+SUMMARY: the claim grain admits the owning scope without recording a claim
+
+--- FIND
+        var claim = new BackupIdPendingClaim { ScopeKey = scopeKey, Until = now + PendingClaimLifetime };
+--- REPLACE
+        if (owner is not null)
+        {
+            return true;
+        }
+
+        var claim = new BackupIdPendingClaim { ScopeKey = scopeKey, Until = now + PendingClaimLifetime };
+--- END
