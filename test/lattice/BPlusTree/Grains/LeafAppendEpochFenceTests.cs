@@ -126,6 +126,25 @@ public sealed class LeafAppendEpochFenceTests
     }
 
     [Test]
+    public async Task Refusals_bump_and_re_claim_for_at_most_the_round_cap_then_go_unstamped()
+    {
+        var h = new Harness();
+        h.Shard.ClaimAppendEpochAsync(Leaf, Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(call => Task.FromResult(WalAppendFenceClaimResult.Refuse(call.ArgAt<long>(1) + 10)));
+
+        var stamp = await h.Fence.StampForAsync(h.Shard, partition: 0, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stamp, Is.Null, "a partition that keeps refusing is appended to unstamped, never spun on");
+            Assert.That(h.Superseded, Is.Empty, "refusals whose row has not moved are not a supersession");
+            Assert.That(h.Fence.IsStale, Is.False);
+        });
+        await h.Shard.Received(LeafAppendEpochFence.MaxClaimRounds)
+            .ClaimAppendEpochAsync(Leaf, Arg.Any<long>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task A_conflict_on_the_epoch_row_supersedes_the_activation()
     {
         var h = new Harness();
