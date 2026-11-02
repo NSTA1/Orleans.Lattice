@@ -19,7 +19,15 @@ change. Members 3 and 4 follow member 2.
 the epoch row's conditional write is load-bearing again, since `AlreadyDurable` relies on
 it, so `ClaimAdoptsNoCas` is a mutation (16 states) and step 2 says so (S1); the purge
 straddle text covers a duplicate's bump landing before the clear's conditional row delete
-(N1); and TreeWalk cites 22,966,529.
+(N1); and TreeWalk cites 22,966,529. Two clarifications follow production members
+2 and 3: section 2 states that a leaf initiator's close **bumps** its epoch, that its own
+rejected appends are a self-fence, and that whoever appends a record stamps it with its
+own epoch (the census rows for receiver-appended hand-offs are corrected); and section 3
+corrects change 4's reading of 10.2.0. Bulk entries carry real HLC versions, so a
+contested key resolves last-writer-wins by stamp, the later-stamped write winning, not
+"the point write wins". The behaviour is unchanged (still last-writer-wins, still a
+compatible bug fix); `ContestedKeyAgrees` now versions the bulk entry in time, and its
+mutation is `StrandedValueKept`.
 
 Revision 7 superseded revision 6 on one point,
 **#5641**, which the independent review of member 1 found: production admits a claim
@@ -75,8 +83,8 @@ and held member 2 for this revision:
   (S1, section 5). The terminal stamp class is accepted only for `TxCommit` and
   `TxAbort` (S2).
 - **Change 4** (a bulk append over a key the range already holds) is now last-writer-wins,
-  the point write wins, which is what 10.2.0 converges to on every reader: a compatible
-  bug fix needing no authorisation (section 3, "Which value wins").
+  last-writer-wins by HLC stamp, which is what 10.2.0 converges to on every reader: a
+  compatible bug fix needing no authorisation (section 3, "Which value wins").
 - **The model** gains `WithTreeWalk` (another shard's walk) and `ContestedKeyAgrees`
   (origin and replica agree on a contested key), with their mutations and witnesses;
   the redundancy checks are committed in `redundancy/`.
@@ -441,10 +449,23 @@ Every foreign-author path follows one protocol:
    - (a) stops admitting writes for the range;
    - (b) may wait a bounded time for writes it admitted earlier to return. This is an
      optional latency optimisation: no bound makes a rejection in (c) impossible;
-   - (c) re-claims its own epoch (a leaf initiator) or its routing generation (a
-     shard-level initiator) at every partition it may have written. The re-claim
-     returns allocator heads, exactly as a claim does;
+   - (c) **bumps and re-claims** its own epoch (a leaf initiator: it persists its row
+     plus one, conditionally on its own last ETag) or its routing generation (a
+     shard-level initiator) at every partition it may have written. A same-value
+     re-claim would fence nothing; the model's `Close` raises the initiator's epoch
+     (`fEpoch' = fEpoch + 1`). The re-claim returns allocator heads, exactly as a claim
+     does;
    - (d) closes the marker, recording those heads.
+
+   **A leaf initiator's own rejected appends are a self-fence, not supersession.** A
+   donor's appends admitted under its old epoch and not yet allocated at (c) are
+   rejected as stale. With its row ETag still held and the stamp below its own current
+   epoch, that rejection is a distinct internal outcome: the activation does not
+   deactivate, and its seam retry re-admits the write under the current epoch, where span
+   admission forwards a key the narrow moved and a key it still owns re-appends. The
+   order is narrow (a), then bump (c), then close (d); the in-memory epoch moves only
+   after the row's conditional write succeeds. The initiator's own claim heads move too,
+   so it is disarmed until it replays to them (N3).
 3. **Re-arm by replay.** The owner holds the live advance while any marker is open.
    It re-arms only after replaying to the recorded heads.
 
@@ -463,7 +484,10 @@ a leaf's entry: a conditional max-merge write, an in-memory copy raised under th
 lock, an unloaded entry that rejects until a re-presented re-claim reloads it, and no
 loss across a restart or a move. If a restart lost it, a write admitted before a close
 would pass the reset entry after the close (`ReadPositionHonestGenerationNotDurable`,
-14 states).
+14 states). A raise of any fenced identity, a leaf's epoch, a shard root's routing
+generation (per initiator) or the tree's range-delete generation, drains the in-flight
+stamped batches before it reads its heads, so no entry of a batch admitted under the old
+value is allocated above the heads the raise returns.
 
 **Stamped at admission.** The stamp is taken where the write is admitted, not where
 the append is built. A leaf captures its epoch in the same synchronous step as span
@@ -481,6 +505,13 @@ would pass the leaf's own check and escape every shard-level fence unreported; a
 unstamped append is admitted and reported (section 4), which is safe and disarms the
 leaves it reaches.
 
+**Who stamps.** Whoever calls the WAL append stamps it with **its own** epoch (and, for a
+write admitted at a shard root, that shard's routing generation). A record appended by
+the leaf that owns it is that leaf's own append, tracked by its applied-prefix tracker,
+and needs no marker. A marker on the owner is needed only for records a **different**
+author appends, such as a donor's appends of moved keys before its narrow, which the
+donor's bump fences.
+
 **The stamp census.** Production member 2 carries a census of every path that appends
 an entry a leaf owns, with a detector per path. Each path is stamped, classified, or
 stated "unstamped, disarms". A path that bypasses the stamp is the gap the fold's
@@ -491,9 +522,9 @@ from the paths that reach a leaf without shard-root admission:
 |------|-------|-----------|
 | Point, batch, CRDT apply, merge, delete | Shard root admission, then the stamped leaf-write method | Stamped with the shard's routing generation and the leaf's epoch |
 | Saga prepare | `BPlusLeafGrain.PendingTx` | Stamped at the participant's admission |
-| Stranded relocation, leaf to leaf | `BPlusLeafGrain.SpanAdmission.cs:431`, `MergeManyAsync` | Stamped with the donor leaf's epoch, under the donor's open marker on the receiver |
-| Re-routing a terminal's stranded prepared keys, and the backstop appends | `BPlusLeafGrain.PendingTx.cs:2534`, `:2719ff` | Stamped with the re-routing leaf's epoch, under its marker on the sibling |
-| Split transfers | `BPlusLeafGrain.Split.cs`, `MergeEntriesAsync` | Under the split's marker on the sibling; the donor's epoch |
+| Stranded relocation, leaf to leaf | `BPlusLeafGrain.SpanAdmission.cs:431`, `MergeManyAsync` | Appended by the receiver: stamped with the receiver's own epoch, its own append. The donor's own earlier appends of those keys are fenced by its bump under its marker on the receiver |
+| Re-routing a terminal's stranded prepared keys, and the backstop appends | `BPlusLeafGrain.PendingTx.cs:2534`, `:2719ff` | Whichever leaf calls the append stamps with its own epoch: the sibling's re-routed appends are its own; a backstop append by the re-routing leaf for a key it no longer owns stays stamped with that leaf's epoch, under its marker on the sibling |
+| Split transfers | `BPlusLeafGrain.Split.cs`, `MergeEntriesAsync` | Appended by the sibling: stamped with the sibling's own epoch (born under the gate, it claims eagerly). The donor's pre-narrow appends of moved keys are fenced by the donor's bump under the split's marker on the sibling |
 | Adaptive split coordinator's drain | `TreeShardSplitGrain.cs:1023`, `:1037` | Under the adaptive split's shard-level marker; the donor shard's generation |
 | Bulk seeding and the resize mirror | `ShardRootGrain.BulkLoad.cs`; the resize mirror | Under the bulk switch's marker; the shard's generation |
 | Shadow forwards, plain and CRDT | `ShardRootGrain.Split.cs` | Under the adaptive split's marker; the forwarding shard's generation |
@@ -527,7 +558,7 @@ rejected unacknowledged and retried at its seam (section 5).
 
 | Path | Initiator | Open | Admission stops at | Fence at close |
 |------|-----------|------|--------------------|----------------|
-| Split | Donor leaf | In the sibling's marker row, written in the sibling's birth (`InitializeSiblingAsync`) | The donor's narrow of `HighKeyExclusive`; span admission forwards moved keys afterwards | The donor re-claims its epoch at every partition it writes; the heads close the sibling's marker |
+| Split | Donor leaf | In the sibling's marker row, written in the sibling's birth (`InitializeSiblingAsync`) | The donor's narrow of `HighKeyExclusive`; span admission forwards moved keys afterwards | The donor bumps its epoch and re-claims it at every partition it writes; the heads close the sibling's marker; its own rejected appends are a self-fence |
 | Leaf reclaim | Absorbed neighbour leaf | On the survivor, before its range widens | The neighbour's unlink | The neighbour's entry is retired (the floor rises), so its later stamped appends are rejected; the heads are captured in the retire step |
 | Adaptive split | Donor shard root | Shard-level marker on the target shard root | The reject phase | The donor shard root re-claims its routing generation at every partition; the heads close the marker at completion |
 | Shard fold | Folded shard root | Shard-level marker on the survivor shard root | The fold's quiesce, point and batch | The same routing-generation re-claim |
@@ -750,48 +781,55 @@ bulk leaf at its birth, exactly as a split relocates its moved rows, narrowing t
 leaf. It never refuses the chunk: a chunk that succeeds today keeps succeeding.
 Skipping the relocation fails (`ReadPositionHonestBulkAppendDropsExistingRows`).
 
-**Which value wins (S5): last-writer-wins, the point write wins.** What 10.2.0 does
-with a key both a bulk chunk and an earlier point write hold:
-- **Bulk entries are WAL records at versions below every real write.**
-  `BulkAppendAsync` ticks its entries' versions from `HybridLogicalClock.Zero`
-  (`ShardRootGrain.BulkLoad.cs:440`, `:460`, `:493`) and writes them through
-  `MergeEntriesAsync` (`BPlusLeafGrain.cs:3703`), which appends a merge record to the
-  WAL and resolves last-writer-wins by timestamp. A point write is versioned by its
-  leaf's real clock (`BPlusLeafGrain.cs:687`), so it outranks a bulk entry on every
-  reader that applies both.
-- **Keys that fill the existing rightmost leaf's free space** (`ShardRootGrain.BulkLoad.cs:454-465`)
-  are merged into the leaf that already holds the point row: the **point value wins**,
-  immediately and permanently.
-- **Keys placed in new bulk leaves.** The origin returns the bulk value only while the
-  point row is stranded on the old leaf. Replicas and views apply both records and
-  return the **point value** now, so in 10.2.0 the origin and its replicas disagree on
-  the key. The origin itself flips to the point value when a rangeless bulk leaf
-  replays, because it owns every key of its shard during replay
-  (`ShardRootGrain.BulkLoad.cs:290`).
+**Which value wins (S5): last-writer-wins by HLC stamp; the later-stamped write wins.**
+What 10.2.0 does with a key both a bulk chunk and another write hold:
+- **Bulk entries carry real versions.** `BulkAppendAsync` stamps its entries with
+  `HybridLogicalClock.Tick` (`ShardRootGrain.BulkLoad.cs:440`, `:460`, `:493`), which
+  reads the wall clock (`Primitives/HybridLogicalClock.cs:26-39`), so a bulk entry is
+  versioned at the time its chunk was stamped, like any write. It is written through
+  `MergeEntriesAsync` (`BPlusLeafGrain.cs:3703`), which appends a merge record to the WAL
+  and resolves last-writer-wins by version. A point write is versioned by its leaf's
+  clock (`BPlusLeafGrain.cs:687`). So on every reader that applies both, the
+  later-stamped write wins.
+- **Keys that fill the existing rightmost leaf's free space**
+  (`ShardRootGrain.BulkLoad.cs:454-465`) are merged into the leaf that already holds the
+  other row: the later-stamped value wins, immediately and permanently.
+- **Keys placed in new bulk leaves.** Replicas and views apply both records and return
+  the later-stamped value. The origin returns the bulk value while the other row is
+  stranded on the old leaf, and flips when a rangeless bulk leaf replays, because it
+  owns every key of its shard during replay (`ShardRootGrain.BulkLoad.cs:290`).
 
-So 10.2.0 converges to the point value on every reader and for every free-space key;
-the one exception is the origin's read of a new-leaf key before a replay, which
-already diverges from its replicas. The relocation keeps that convergence and removes
-the exception: the acknowledged point write is returned on the origin as on every
-replica and view, keys only the pre-existing rows hold become readable again, and
-counts and scans become exact. This is a **compatible bug fix** (change 4): it fixes
-the origin-versus-replica divergence and needs no authorisation. The model states it
-as `ContestedKeyAgrees`: the owner resolves the contested key to the value a WAL
-reader resolves at the same position. `ContestedKeyAgreesBulkWinsLocally`, where the
-owner ranks its born bulk entry above a point write made before the switch (10.2.0's
-stranded origin read), fails in four states.
+So 10.2.0 already resolves a contested key last-writer-wins by stamp on every reader
+except the origin before a replay. The divergence the fix removes is that narrower
+set: on the origin, a key only the pre-existing rows hold is unreadable, a stranded
+write stamped later than the bulk entry is hidden behind the bulk value, and the
+stranded rows are still counted (#5614's duplicates). The relocation makes the origin
+resolve every key as its replicas and views do: the later-stamped value is returned,
+keys only the pre-existing rows hold become readable again, and counts and scans
+become exact. This is a **compatible bug fix** (change 4): it fixes the
+origin-versus-replica divergence and needs no authorisation. The model states it as
+`ContestedKeyAgrees`: the owner resolves the contested key to the value a WAL reader
+resolves at the same position, with the bulk entry versioned when the bulk load begins,
+between the writes before it and those after it.
+`ContestedKeyAgreesStrandedValueKept`, where the owner keeps a stranded or skipped value
+over a later-stamped write made before the switch (10.2.0's stranded origin read),
+fails in seven states.
 
-**Rejected: a stable "bulk value wins".** Dropping the superseded point row on the
-owner is unsound: replicas and views still apply the point record at its real version,
-so origin and replicas would disagree for good. The only replay-consistent form is to
-stamp the contested bulk entries above every earlier version, with the relocation
-narrowing the old leaf and reading its clock in one step. That flips every free-space
-key, and every replica's read of a new-leaf key, from the point value to the bulk value,
+**Re-delivery (#5474, member 3).** A chunk below the right edge may be skipped as a
+re-delivery only when **every** key it carries at or below the right edge is already held:
+a genuine re-delivery of a chunk that already landed. Every other below-edge chunk is
+relocated and merged last-writer-wins as above, never mixed per key, so a partial
+re-delivery cannot skip the keys that did not land.
+
+**Rejected: a stable "bulk value wins".** Dropping the other row on the owner is
+unsound: replicas and views still apply it at its real version, so origin and replicas
+would disagree for good. The only replay-consistent form is to stamp the contested
+bulk entries above every earlier version, with the relocation narrowing the old leaf
+and reading its clock in one step. That flips every key whose other write is stamped
+later than the bulk entry, on every reader, from that write's value to the bulk value:
 a documented-behaviour change on paths where 10.2.0 is already stable. The user may
-still choose it later; it would need that authorisation and a value-version layer in
-the model. #5610 and #5614 are fixed together in the bulk member, which confirms
-whether they share a cause.
-
+still choose it later; it would need that authorisation. #5610 and #5614 are fixed
+together in the bulk member, which confirms whether they share a cause.
 Bulk leaves also get the key ranges `PlanBulkLoadLeaves` already computes. A rangeless
 bulk leaf owns every key of its shard during replay, which duplicates sibling bulk
 leaves' rows into it.
@@ -1011,7 +1049,7 @@ production).
 | 1 | **A stale duplicate activation's write is retried, not accepted.** With the gate open, the WAL shard rejects a stale epoch's append; the stale activation deactivates, and the seam retry (section 5) reaches the live one. Every caller in the section 5 table sees one write that succeeds, with added latency, or today's deadline outcome. Atomic writes, cross-tree transactions, `DeleteAsync`, single-key CRDT deltas and replication apply are covered by the seam retry, so none of them fails, rolls back, or counts toward a dead-letter budget where 10.2.0 succeeds. Orleans already promises a single activation, so no caller relies on duplicates. | Compatible bug fix |
 | 2 | **A write admitted before a hand-off close, and not yet allocated, is retried.** The close's fence rejects it, and its seam re-admits it under the current stamp; span admission or the shard map routes it to the new owner. The callers and their outcomes are those of change 1. | Compatible bug fix |
 | 3 | *Withdrawn.* Revision 2 surfaced an exhausted retry as `LatticeWalQuiescingException` with a new `Reason`. The seam retry runs to the operation's existing deadline instead, so there is no exhaustion to surface, no new exception cause, and no change to `LatticeWalQuiescingException`. | - |
-| 4 | **Bulk append over existing rows (#5610, #5614).** The graft relocates the rows the bulk range already holds into the new bulk leaf, instead of stranding them. No new exception: a chunk that succeeds today still succeeds. For a key both the bulk chunk and an earlier point write hold, the point value is returned last-writer-wins, as 10.2.0 already returns on every replica and view, for every free-space key, and on the origin after a replay; only the origin's pre-replay read of a new-leaf key changes, from a value its replicas never return. Keys only the pre-existing rows hold become readable; counts and scans become exact. | Compatible bug fix (fixes an origin-versus-replica divergence) |
+| 4 | **Bulk append over existing rows (#5610, #5614).** The graft relocates the rows the bulk range already holds into the new bulk leaf, instead of stranding them. No new exception: a chunk that succeeds today still succeeds. A key both the bulk chunk and another write hold resolves last-writer-wins by HLC stamp, the later-stamped write winning, as 10.2.0 already resolves it on every replica and view, for every free-space key, and on the origin after a replay. Only the origin's pre-replay reads change: keys only the pre-existing rows hold become readable, a later-stamped stranded write is no longer hidden, and counts and scans become exact (#5614). A chunk below the right edge is skipped as a re-delivery only when every key it carries there is already held. | Compatible bug fix (fixes an origin-versus-replica divergence) |
 | 5 | **The live advance itself (#5572).** A leaf's checkpoint advances without a replay from -1. The WAL GC trims sooner, replay demand falls, and #5570's "carries no usable offset" warnings stop for live leaves. Existing metrics report different values; none changes name, unit or tags. | Compatible bug fix |
 | 6 | **Range deletes cost more.** Each `DeleteRangeAsync` call opens an intent at the tree's fence grain, opens and closes a range-scoped marker on every shard of the tree, re-claims the tree's range-delete generation once per WAL partition, and disarms every overlapping leaf of the tree for the call's duration. The shard root adds no per-page call: it trusts the generation it is given and asks the fence grain only after a rejection. Stepped range deletes pay this per step (section 2). A range-delete walk that stays unstamped (replication apply, a shadow forward, a gate-spanning fan-out, a 10.2.0 caller, or a page after the intent's deadline) costs every armed leaf on the partitions it reaches a tail replay past it. The record, its result and its feed and history output are unchanged. | Compatible (cost only) |
 | 7 | **New metrics.** New instruments only, on the existing meter: claims, refusals and rejections by reason, seam retries by caller class, live advances by arming outcome, open markers, and unstamped reports by source (replication apply, shadow forward, gate-spanning fan-out, 10.2.0 caller, census-unstamped, and a range-delete page past its intent's deadline). No existing instrument gains a tag, a tag value, or a new unit. | Compatible (additive) |
@@ -1109,9 +1147,10 @@ then.
   with `Ghosts` on.
 - `OldNeverRejected`: no unstamped append is ever rejected.
 - `ContestedKeyAgrees`: the owner resolves a contested key to the value a WAL reader
-  (a replica or a view) resolves at the same read position. Every entry the leaf owns
-  writes one key, the contention worst case; point and foreign entries carry real
-  versions, ordered by offset, and the bulk entry a version below them all.
+  (a replica or a view) resolves at the same read position, last-writer-wins by version.
+  Every entry the leaf owns writes one key, the contention worst case; every write has a
+  real version, ordered by time, and the bulk entry is versioned when the bulk load begins,
+  between the writes allocated before it and those allocated after it.
 
 **Checked locally** (tla2tools v1.7.4, `-workers 2`, safety only, all six properties
 plus `TypeOK`):
@@ -1198,7 +1237,7 @@ in states including the initial one.
 | `ReadPositionHonestRangeDeleteWithoutIntent` | Stamping a walk only under an open intent: a walk with none is stamped anyway | `ReadPositionHonest` | TreeWalk | 13 |
 | `ReadPositionHonestRestampDuringClose` | The intent closed atomically with the close: the close re-claims first and closes the intent and markers later, and the open check reads the marker | `ReadPositionHonest` | TreeWalk | 16 |
 | `ReadPositionHonestRestampUnderAnyIntent` | Rule 3: a rejected walk re-stamps under any open intent, not only its own | `ReadPositionHonest` | TreeWalk | 15 |
-| `ContestedKeyAgreesBulkWinsLocally` | Last-writer-wins on the owner: it ranks its born bulk entry above a point write made before the switch, 10.2.0's stranded origin read | `ContestedKeyAgrees` | base | 4 |
+| `ContestedKeyAgreesStrandedValueKept` | The relocation's last-writer-wins on the owner: it keeps a stranded or skipped value over a later-stamped write made before the switch (10.2.0's stranded origin read) | `ContestedKeyAgrees` | base | 7 |
 
 **#5578's counterexample.** `NoTrimPastAckedLiveAdvance5578` reaches it in eleven
 states:
@@ -1263,7 +1302,7 @@ shown, proving its step is reachable. Traces are from a single-worker breadth-fi
 | `WitnessUnstampedAppendReported` | `WithMixedVersion` | `Begin`, `Create`, `ClaimRow`, `ClaimWrite`, `ClaimRaise`, `OldAlloc`, `OwnAlloc(a1)` |
 | `WitnessOwnUnstampedReportsItself` | `WithGateFlip` | `Begin`, `Create`, `OwnAllocUnstamped(a1)` |
 | `WitnessLegacyHandOffResumed` | `WithLegacyHandOff` | `Begin`, `Create`, `OpenGate`, `ClaimRow`, `ClaimWrite`, `ClaimRaise`, `Resume`, `Close`, `OwnAlloc`, `Land`, `MarkInit`, `LiveAdvance(a1)` |
-| `WitnessContestedKeyResolvedToPoint` | - | `PreWrite`, `Begin`, `Create`: the owner resolves the contested key to the relocated point write, over its bulk entry |
+| `WitnessContestedKeyResolvedToPoint` | - | `Begin`, `Create`, `ForeignAdmit`, `ForeignAlloc`, `Land`, `Replay`: the owner resolves the contested key to a write stamped later than the bulk entry, over the bulk value |
 | `WitnessTreeWalkAllocated` | `WithTreeWalk` | `Begin`, `Create`, `GAdmit`, `GAlloc`: another shard's walk is allocated under L's open marker |
 | `WitnessTreeWalkFenced` | `WithTreeWalk` | `Begin`, `Create`, `GAdmit`, `Close`: L's close re-claims the tree generation and fences another shard's admitted walk |
 | `WitnessTreeWalkRestamped` | `WithTreeWalk` | `Begin`, `Create`, `GAdmit`, `Close`, `ForeignOpen`, `GReject`, `GRestamp`: a walk fenced out by one delete's close re-stamps under a second delete's open intent |
@@ -1416,7 +1455,7 @@ Each production member carries detectors proven red. They land in this order:
 | N2 reminder storage | Change 9. |
 | N3 `MarkInit` stronger than production | Stated in the `NoMarkerInit` redundancy row. |
 | Q1, Q2 | Q1: the per-tree generation with per-shard range-scoped markers, as answered. Q2: gap entry, member 2 detector, the `Op` check, and a prepare-terminal pair in the promoted module. |
-| Change 4 (coordinator decision after revision 3) | Last-writer-wins, the point write wins: what 10.2.0 converges to on every reader (section 3, with file and line). A compatible bug fix; no authorisation. Property `ContestedKeyAgrees`, mutation `BulkWinsLocally`, witness `ContestedKeyResolvedToPoint`. A stable "bulk value wins" is rejected, with reasons. |
+| Change 4 (coordinator decision after revision 3) | Last-writer-wins by HLC stamp, the later-stamped write winning: what 10.2.0 converges to on every reader (section 3, with file and line; revision 8 corrects revision 4's reading that bulk entries were versioned below every real write, found by member 3). A compatible bug fix; no authorisation. Property `ContestedKeyAgrees`, mutation `StrandedValueKept`, witness `ContestedKeyResolvedToPoint`. A stable "bulk value wins" is rejected, with reasons. |
 
 ### Re-review of revision 2
 
@@ -1430,7 +1469,7 @@ Each production member carries detectors proven red. They land in this order:
 | S2 gate flips | Own unstamped appends self-report; an explicit claim guard in `Armed`. `WithGateFlip` configuration, clean (7,609,129). Mutation `NoSelfReport` (13 states); the claim guard is a redundancy row. |
 | S3 stamp contract | Unstamped leaf methods append unstamped. `AppendBatchStampedAsync` named, with per-entry stamps checked under `_stateGate` and a per-entry outcome. |
 | S4 racing the gate | Pinned by a mixed-version test in member 1; re-issued unstamped only on the definite "method unknown" failure; anything else follows today's retry semantics. |
-| S5 #5610 who wins | Revision 4: last-writer-wins, the point write wins, as 10.2.0 converges on every reader (section 3, with file and line). A compatible bug fix that removes an origin-versus-replica divergence; no authorisation. Property `ContestedKeyAgrees`, mutation `BulkWinsLocally` (4 states), witness `ContestedKeyResolvedToPoint`. A stable "bulk value wins" is rejected, with reasons. |
+| S5 #5610 who wins | Last-writer-wins by HLC stamp, the later-stamped write winning, as 10.2.0 converges on every reader (section 3, with file and line; revisions 4 to 7 read the bulk stamp wrongly as below every real write, corrected in revision 8). A compatible bug fix that removes an origin-versus-replica divergence; no authorisation. |
 | S6 coordinator terminals | The terminal stamp class, excluded from the watermark, justified by the prepare clamp and `_recentlyTerminal`; not modelled (no sagas), so a gap entry and a member 2 detector. |
 | S7 bulk hint across a crash | Persisted in `_lattice_shard-handoff` by operation id; the resume reuses it. |
 | S8 configurations | Eight configurations, including `MixedRestart`, `GateFlip` and `LegacyHandOff`; the split claim and the durable generation are in the base model. The reviewer's larger combinations are a promotion-member CI requirement. |

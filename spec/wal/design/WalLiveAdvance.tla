@@ -1021,24 +1021,25 @@ OldNeverRejected == ~oldRejected
 OnlySupersededRefused == ~wrongRefusal
 
 \* The contested key (#5610). Every entry L owns writes one key K, the
-\* contention worst case. Point and foreign entries carry real versions, which
-\* the model orders by offset; the bulk chunk's entry for K carries a version
-\* ticked from HybridLogicalClock.Zero, below every real one, and every
-\* activation of L and every WAL reader holds it. Each side resolves K
-\* last-writer-wins: the owner over the entries it holds up to its read
-\* position, a replica or view over the durable entries up to the same
-\* position. -1 is the bulk value.
-BulkRank == -1
-LwwRank(S) == IF S = {} THEN BulkRank ELSE Max(S)
-OwnerRank(a) == LwwRank({o \in cache[a] : o <= rp[a]})
-ReaderRank(a) == LwwRank({o \in durable : o <= rp[a]})
+\* contention worst case. Every write carries a real HLC version, which the
+\* model orders by time: the entry at offset o has version Ver(o), and the bulk
+\* chunk's entry for K is stamped when the bulk load begins (HLC.Tick reads the
+\* wall clock), so it falls between the writes allocated before Begin and those
+\* allocated after it. Every activation of L and every WAL reader holds the bulk
+\* entry. Each side resolves K last-writer-wins by version: the owner over the
+\* entries it holds up to its read position, a replica or view over the durable
+\* entries up to the same position. Top is the winning offset, -1 the bulk value.
+Ver(o) == 2 * o + 2
+BulkVer == 2 * hint + 1
+Top(S) == IF S = {} \/ BulkVer > Ver(Max(S)) THEN -1 ELSE Max(S)
+OwnerRank(a) == Top({o \in cache[a] : o <= rp[a]})
+ReaderRank(a) == Top({o \in durable : o <= rp[a]})
 
 \* Origin and replica agree on the contested key: the owner resolves K to the
-\* value a WAL reader resolves at the same position. A bulk append over a key
-\* the range already holds therefore returns the point write's value on the
-\* origin, as on every replica and view.
-ContestedKeyAgrees == \A a \in up : OwnerRank(a) = ReaderRank(a)
-(***************************************************************************)
+\* value a WAL reader resolves at the same position, whichever write is stamped
+\* later. A bulk append over a key the range already holds therefore returns the
+\* later-stamped value on the origin, as on every replica and view.
+ContestedKeyAgrees == \A a \in up : OwnerRank(a) = ReaderRank(a)(***************************************************************************)
 (* Witnesses: each must be VIOLATED, with Ghosts = TRUE, proving its step  *)
 (* is reachable in the instance and the clean run is not vacuous.          *)
 (***************************************************************************)
@@ -1055,10 +1056,10 @@ WitnessClaimAboveRetiredFloor == ~floorClaim
 WitnessClaimRefused == ~claimRefused
 WitnessUnstampedAppendReported == \A a \in Acts : seenU[a] = -1
 WitnessOwnUnstampedReportsItself == ~selfReported
-\* The owner resolves the contested key to a point write made before the
-\* switch, over the bulk value it was born with.
+\* The owner resolves the contested key to a write stamped later than the bulk
+\* entry and made before the switch, over the bulk value it was born with.
 WitnessContestedKeyResolvedToPoint ==
-    ~(\E a \in up : OwnerRank(a) # BulkRank /\ author[OwnerRank(a)] \in {PreAuthor, Foreign})
+    ~(\E a \in up : OwnerRank(a) # -1 /\ author[OwnerRank(a)] = Foreign)
 \* Another shard's walk is fenced out at L's close (WithTreeWalk).
 WitnessTreeWalkFenced == ~(gst = "pend" /\ gstamp < fFence)
 \* Another shard's walk is allocated under L's open marker (WithTreeWalk).
