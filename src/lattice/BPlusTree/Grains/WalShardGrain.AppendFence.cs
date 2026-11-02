@@ -56,6 +56,15 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
     /// <summary>Set once the durable floor row has been read into <see cref="_epochFloor"/>.</summary>
     private bool _epochFloorLoaded;
 
+    /// <summary>
+    /// The tree id's routing-generation floor (#5668), as far as this activation has
+    /// read or raised it: a generation claim at or below it is refused.
+    /// </summary>
+    private long _generationFloor;
+
+    /// <summary>Set once the durable routing-generation floor row has been read into <see cref="_generationFloor"/>.</summary>
+    private bool _generationFloorLoaded;
+
     /// <summary>Waiters for a leaf's multi-entry stamped batches to finish assigning; created on demand.</summary>
     private Dictionary<Guid, TaskCompletionSource>? _batchDrains;
 
@@ -98,6 +107,27 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
         }
     }
 
+    /// <summary>The routing-generation floor as this activation holds it; test seam.</summary>
+    internal long GenerationFloorForTesting
+    {
+        get
+        {
+            lock (_stateGate)
+            {
+                return _generationFloor;
+            }
+        }
+    }
+
+    /// <summary>Whether a routing-generation entry for <paramref name="initiator"/> is loaded; test seam.</summary>
+    internal bool HasGenerationEntryForTesting(WalRoutingInitiator initiator)
+    {
+        lock (_stateGate)
+        {
+            return _generationEntries is not null && _generationEntries.ContainsKey(initiator);
+        }
+    }
+
     /// <summary>Overrides the grain storage provider the fence rows go through; test seam.</summary>
     internal void UseFenceStorageForTesting(IGrainStorage storage) => _fenceStorage = storage;
 
@@ -126,7 +156,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
                 EpochEntries(),
                 leafId,
                 epoch,
-                useFloor: true,
+                epochTable: true,
                 batchLeaf: leafId,
                 batchInitiator: null).ConfigureAwait(true);
         }
@@ -156,6 +186,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(generation);
 
         var storage = FenceStorage();
+        await EnsureGenerationFloorLoadedAsync(storage).ConfigureAwait(true);
         var key = WalAppendFenceRows.GenerationKey(_treeId, _shardIndex, initiator.Kind, initiator.Index);
         var result = await ClaimCoreAsync(
             storage,
@@ -167,7 +198,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
             GenerationEntries(),
             initiator,
             generation,
-            useFloor: false,
+            epochTable: false,
             batchLeaf: null,
             batchInitiator: initiator).ConfigureAwait(true);
         RecordFenceClaim(LatticeMetrics.AppendFenceKindGeneration, result.Accepted);
@@ -210,6 +241,103 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
         finally
         {
             ExitLeafGate(leafId);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<long> RetireRoutingGenerationsAsync(int shardCount, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInternalOrigin(LatticeOperation.Write);
+        EnsureInitialized();
+        ArgumentOutOfRangeException.ThrowIfNegative(shardCount);
+
+        var storage = FenceStorage();
+        var initiators = new HashSet<WalRoutingInitiator>(TreeRoutingFenceRetirement.Initiators(shardCount));
+        var loaded = 0L;
+        lock (_stateGate)
+        {
+            if (_generationEntries is not null)
+            {
+                foreach (var (initiator, entry) in _generationEntries)
+                {
+                    initiators.Add(initiator);
+                    loaded = Math.Max(loaded, Math.Max(entry.Memory, entry.DurableSeen));
+                }
+            }
+        }
+
+        var retiring = initiators.ToArray();
+        var keys = new string[retiring.Length];
+        for (var i = 0; i < retiring.Length; i++)
+        {
+            keys[i] = WalAppendFenceRows.GenerationKey(_treeId, _shardIndex, retiring[i].Kind, retiring[i].Index);
+        }
+
+        // The floor is raised in memory, and the loaded entries dropped, before any row
+        // is deleted: from then on a claim at or below the floor is refused at its row
+        // write and at its raise, and a stamped append meets an unloaded entry and
+        // re-presents a claim that is refused.
+        return await TreeRoutingFenceRetirement.RetireRowsAsync<WalRoutingGenerationState>(
+            storage,
+            _treeId,
+            WalAppendFenceRows.GenerationGrainType,
+            keys,
+            static row => row.Generation,
+            loaded,
+            async floor =>
+            {
+                lock (_stateGate)
+                {
+                    _generationFloor = Math.Max(_generationFloor, floor);
+                    _generationFloorLoaded = true;
+                }
+
+                foreach (var initiator in retiring)
+                {
+                    await RemoveLoadedGenerationAsync(initiator).ConfigureAwait(true);
+                }
+            }).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Removes <paramref name="initiator"/>'s loaded generation entry once any
+    /// multi-entry batch stamped with its generation has finished assigning.
+    /// </summary>
+    private async Task RemoveLoadedGenerationAsync(WalRoutingInitiator initiator)
+    {
+        while (true)
+        {
+            Task? drain;
+            lock (_stateGate)
+            {
+                drain = GenerationBatchDrainLocked(initiator);
+                if (drain is null)
+                {
+                    _generationEntries?.Remove(initiator);
+                    return;
+                }
+            }
+
+            await drain.ConfigureAwait(true);
+        }
+    }
+
+    private async Task EnsureGenerationFloorLoadedAsync(IGrainStorage storage)
+    {
+        lock (_stateGate)
+        {
+            if (_generationFloorLoaded)
+            {
+                return;
+            }
+        }
+
+        var row = await WalAppendFenceRows.ReadRoutingFloorAsync(storage, _treeId).ConfigureAwait(true);
+        lock (_stateGate)
+        {
+            _generationFloor = Math.Max(_generationFloor, row.State.Floor);
+            _generationFloorLoaded = true;
         }
     }
 
@@ -412,7 +540,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
         Dictionary<TId, FenceEntry> table,
         TId id,
         long value,
-        bool useFloor,
+        bool epochTable,
         Guid? batchLeaf,
         WalRoutingInitiator? batchInitiator)
         where TId : notnull
@@ -426,7 +554,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
             lock (_stateGate)
             {
                 var entry = NoteDurableLocked(table, id, durable);
-                var floor = useFloor ? _epochFloor : 0;
+                var floor = epochTable ? _epochFloor : _generationFloor;
                 decision = WalAppendFenceCore.DecideClaimWrite(value, entry.Memory, durable, floor);
                 threshold = WalAppendFenceCore.ClaimThreshold(entry.Memory, Math.Max(durable, entry.DurableSeen), floor);
             }
@@ -485,7 +613,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
                     if (drain is null)
                     {
                         var entry = NoteDurableLocked(table, id, value);
-                        var floor = useFloor ? _epochFloor : 0;
+                        var floor = epochTable ? _epochFloor : _generationFloor;
                         if (!WalAppendFenceCore.IsRaiseAdmitted(value, entry.Memory, entry.DurableSeen, floor))
                         {
                             return WalAppendFenceClaimResult.Refuse(

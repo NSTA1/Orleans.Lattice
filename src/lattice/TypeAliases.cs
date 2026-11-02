@@ -1001,4 +1001,7 @@ internal static class TypeAliases
 
     /// <summary>Alias for what a fenced range-delete walk carries to a shard root.</summary>
     internal const string RangeDeleteFenceTicket = "ol.xht";
+
+    /// <summary>Alias for a tree id's routing-generation floor, written when a purge retires its fence rows (#5668).</summary>
+    internal const string TreeRoutingFloorState = "ol.xrf";
 }

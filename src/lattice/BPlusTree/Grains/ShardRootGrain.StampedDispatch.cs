@@ -72,18 +72,38 @@ internal sealed partial class ShardRootGrain
         try
         {
             var marker = await LoadHandOffMarkerAsync();
+            long? floor = null;
             if (marker.RoutingGeneration == 0)
             {
-                await UpdateHandOffMarkerAsync(m =>
+                // #5668: above the tree id's routing-generation floor, so a re-created
+                // incarnation never reuses a purged one's generation.
+                floor = await ReadRoutingFloorAsync();
+                var seeded = floor.Value + 1;
+                marker = await UpdateHandOffMarkerAsync(m =>
                 {
                     if (m.RoutingGeneration > 0)
                     {
                         return false;
                     }
 
-                    m.RoutingGeneration = 1;
+                    m.RoutingGeneration = seeded;
                     return true;
                 });
+            }
+
+            if (!marker.Initialised)
+            {
+                // #5668: the first initialisation after a purge is a fence. The purge
+                // retired every generation entry, and a straddling write of the purged
+                // incarnation is refused at a partition only once a generation above its
+                // stamp is claimed there, so every retired initiator claims its seeded
+                // generation everywhere, and the heads are recorded, before the marker
+                // reads initialised. A tree id never purged has floor 0 and claims nothing.
+                floor ??= await ReadRoutingFloorAsync();
+                if (floor.Value > 0)
+                {
+                    await FenceRecreatedIncarnationAsync(floor.Value, marker.RoutingGeneration);
+                }
             }
 
             // Rule 2 ("absence never means closed"): the marker reads initialised
@@ -92,13 +112,37 @@ internal sealed partial class ShardRootGrain
         }
         catch (Exception ex)
         {
-            // Fail safe: the shard root keeps admitting unstamped writes.
+            // Fail safe: the shard root keeps admitting unstamped writes, and its marker
+            // stays uninitialised, which holds its leaves (rule 2).
             logger.LogDebug(
                 ex,
                 "Shard root {TreeId}/{ShardIndex}: could not raise its routing generation; its writes stay unstamped (epic #5605).",
                 TreeId,
                 ShardIndex);
         }
+    }
+
+    private async Task<long> ReadRoutingFloorAsync() =>
+        (await WalAppendFenceRows.ReadRoutingFloorAsync(HandOffStorage(), TreeId)).State.Floor;
+
+    /// <summary>The close token the fence of the incarnation re-created above <paramref name="floor"/> records.</summary>
+    internal static string RecreationFenceToken(long floor) =>
+        string.Concat("recreate:", floor.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+    /// <summary>
+    /// The re-created incarnation's first-initialisation fence (#5668; design note
+    /// section 2, "Purging a tree's fence rows"): drives the range-delete fence's
+    /// first claim, claims this shard root's seeded <paramref name="generation"/> at
+    /// every WAL partition, and records the higher of the two head vectors as a close
+    /// over the shard's whole range. Idempotent: a re-claim of the same generation is
+    /// accepted again, and a recorded close is not recorded twice.
+    /// </summary>
+    private async Task FenceRecreatedIncarnationAsync(long floor, long generation)
+    {
+        var fenceHeads = await grainFactory.GetGrain<ITreeRangeDeleteFenceGrain>(TreeId).EnsureInitialisedAsync();
+        var ownHeads = await ClaimRoutingGenerationEverywhereAsync(generation);
+        var heads = HandOffMarkerCore.MaxHeads(ownHeads, fenceHeads);
+        await UpdateHandOffMarkerAsync(m => HandOffMarkerCore.Close(m, RecreationFenceToken(floor), heads));
     }
 
     /// <summary>

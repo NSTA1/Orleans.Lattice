@@ -1658,14 +1658,48 @@ migration: a marker call to the target at each phase, one generation re-claim pe
 partition at the close. Per range delete: one fence-grain call to open and one to
 close, one marker write per shard to open and one to close, one generation re-claim
 per partition, and the reminder only while an intent is open. Every overlapping
-leaf of the tree is held for the delete's duration.
+leaf of the tree is held for the delete's duration. Per purge: a read and a
+conditional delete per fence row, and a floor write per step. Per WAL partition
+activation: one floor-row read at its first routing-generation claim. Per shard root
+of a re-created tree: one floor-row read before its marker first reads initialised,
+and, when the floor is above 0, one fence-grain call and one claim per partition.
 
-The per-tree rows - each shard root's `_lattice_shard-handoff` marker, each
-partition's `_lattice_wal-routing-generation` entries for the shard roots and the
-range-delete fence, and the range-delete fence grain's own state - are not deleted
-when the tree is deleted or purged. They are bounded by the tree's shards times its
-partitions, and their sweep is tracked in
-[#5668](https://github.com/NSTA1/Orleans.Lattice/issues/5668), alongside the fence's other rows in [#5634](https://github.com/NSTA1/Orleans.Lattice/issues/5634).
+**Purging a tree's fence rows.** The per-tree rows - each shard root's
+`_lattice_shard-handoff` marker, each partition's `_lattice_wal-routing-generation`
+entries for the shard roots and the range-delete fence, and the range-delete fence
+grain's own state - are retired when the tree is purged
+([#5668](https://github.com/NSTA1/Orleans.Lattice/issues/5668)), before the purge
+removes the tree's registry entry, which is what frees the id for re-use. A soft
+delete retires nothing, so a recovered tree keeps every row. The purge retires the
+fence's state first, then the markers, then each partition's entries, and each step
+first raises the tree id's routing-generation floor (`_lattice_tree-routing-floor`)
+durably to at least every generation it is about to delete. A failed step keeps the
+registry removal owed, and the purge's re-drive runs the retirement again. A
+partition hosted by a 10.2.0 silo answers the retirement call with the definite
+"method unknown" failure, and its rows are deleted straight from storage.
+
+The floor keeps a purged incarnation's generations from recurring:
+
+- A WAL partition refuses a routing-generation claim at or below the floor, so a
+  straddling initiator of the purged incarnation is refused at every partition.
+- A re-created tree seeds every first generation, its shard roots' and its
+  range-delete fence's, at the floor plus one.
+- A re-created shard root's first initialisation is a fence. Before its marker reads
+  initialised, it has the range-delete fence claim its seeded generation at every
+  partition, claims its own, and records the heads as a close. So a write the purged
+  incarnation appended between the purge's log trim and the retirement lies below
+  heads the new leaves must replay past before the live advance re-arms them. A tree id never purged has floor 0 and claims
+  nothing extra.
+
+Two residues remain, both bounded and harmless:
+
+- **One floor row per purged tree id.** It must outlive every row it covers.
+- **Rows a purge never retires.** That is a purge that finishes on a 10.2.0 silo,
+  whose build runs none of this. It is also a system tree's purge, or a retired
+  physical copy whose id stays registered as a live logical tree, since neither id is
+  freed for a re-created tree. Each is bounded by the tree's shards times its
+  partitions. The fence's per-leaf rows are swept separately
+  ([#5634](https://github.com/NSTA1/Orleans.Lattice/issues/5634)).
 
 The hand-off counters are `orleans.lattice.wal.append_fence.handoff_markers`,
 `.unstamped_appends` and `.self_fenced`; see [Metrics](metrics.md).

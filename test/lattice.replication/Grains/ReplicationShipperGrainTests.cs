@@ -430,6 +430,9 @@ public partial class ReplicationShipperGrainTests
             throw new NotSupportedException();
 
         public Task<long> RetireAppendEpochAsync(Guid leafId, long rowEpoch, CancellationToken cancellationToken) => Task.FromResult(0L);
+
+
+        public Task<long> RetireRoutingGenerationsAsync(int shardCount, CancellationToken cancellationToken) => Task.FromResult(0L);
     }
 
     /// <summary>

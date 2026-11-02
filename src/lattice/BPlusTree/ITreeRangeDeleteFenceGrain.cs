@@ -56,4 +56,23 @@ internal interface ITreeRangeDeleteFenceGrain : IGrainWithStringKey
     /// closes them, and forgets it. Idempotent; a no-op for an unknown intent.
     /// </summary>
     Task CloseIntentAsync(Guid intentId);
+
+    /// <summary>
+    /// Retires this fence when its tree is purged (#5668): raises the tree id's
+    /// routing-generation floor to at least every generation it has handed out or
+    /// claimed, then clears its state and unregisters its reminder. Any open intent is
+    /// dropped with it: the shards whose markers it opened are purged. Called only by
+    /// the tree's purge, before its registry entry is removed; idempotent.
+    /// </summary>
+    Task RetireForPurgeAsync();
+
+    /// <summary>
+    /// Claims this fence's current range-delete generation at every WAL partition,
+    /// seeding it above the tree id's routing-generation floor first if it has none,
+    /// and returns the claim heads, indexed by partition (#5668). Driven by a re-created
+    /// incarnation's shard roots before their markers read initialised, so a straddling
+    /// walk of the purged incarnation, stamped with the range-delete initiator, is below
+    /// heads they record. Idempotent: a re-claim of the same generation is accepted again.
+    /// </summary>
+    Task<long[]> EnsureInitialisedAsync();
 }

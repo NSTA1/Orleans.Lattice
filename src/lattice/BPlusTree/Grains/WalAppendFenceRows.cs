@@ -41,6 +41,9 @@ internal static class WalAppendFenceRows
     /// <summary>Reserved grain type and state name of a tree's append-fence sweep claim (#5634).</summary>
     internal const string SweepGrainType = "_lattice_wal-append-fence-sweep";
 
+    /// <summary>Reserved grain type and state name of a tree id's routing-generation floor (#5668).</summary>
+    internal const string RoutingFloorGrainType = "_lattice_tree-routing-floor";
+
     /// <summary>
     /// The <c>rowEpoch</c> a retirement passes when it has not read the leaf's epoch
     /// row: the partition reads it, and does nothing when the leaf has none.
@@ -88,6 +91,10 @@ internal static class WalAppendFenceRows
     [GrainKeyBuilder]
     internal static string SweepKey(string treeId) => treeId;
 
+    /// <summary>The key of a tree id's routing-generation floor row.</summary>
+    [GrainKeyBuilder]
+    internal static string RoutingFloorKey(string treeId) => treeId;
+
     /// <summary>The grain id a row of <paramref name="grainType"/> under <paramref name="key"/> is stored at.</summary>
     internal static GrainId RowId(string grainType, string key) =>
         GrainId.Create(GrainType.Create(grainType), IdSpan.Create(key));
@@ -118,6 +125,45 @@ internal static class WalAppendFenceRows
     /// <summary>Reads a tree's append-fence sweep claim row.</summary>
     internal static Task<GrainState<WalAppendFenceSweepState>> ReadSweepAsync(IGrainStorage storage, string treeId) =>
         ReadAsync<WalAppendFenceSweepState>(storage, SweepGrainType, SweepKey(treeId));
+
+    /// <summary>Reads a tree id's routing-generation floor row; an absent row reads as floor 0.</summary>
+    internal static Task<GrainState<TreeRoutingFloorState>> ReadRoutingFloorAsync(IGrainStorage storage, string treeId) =>
+        ReadAsync<TreeRoutingFloorState>(storage, RoutingFloorGrainType, RoutingFloorKey(treeId));
+
+    /// <summary>
+    /// Raises a tree id's durable routing-generation floor to at least
+    /// <paramref name="atLeast"/> as a conditional max-merge, re-read on an ETag
+    /// conflict, and returns the floor as stored. The floor never moves down, and a
+    /// value already covered costs one read.
+    /// </summary>
+    internal static async Task<long> RaiseRoutingFloorAsync(IGrainStorage storage, string treeId, long atLeast)
+    {
+        var key = RoutingFloorKey(treeId);
+        for (var attempt = 1; ; attempt++)
+        {
+            var row = await ReadRoutingFloorAsync(storage, treeId).ConfigureAwait(true);
+            if (row.State.Floor >= atLeast)
+            {
+                return row.State.Floor;
+            }
+
+            row.State.Floor = atLeast;
+            try
+            {
+                await WriteAsync(storage, RoutingFloorGrainType, key, row).ConfigureAwait(true);
+                return atLeast;
+            }
+            catch (InconsistentStateException) when (attempt < WalShardGrain.MaxFenceRowAttempts)
+            {
+                // Another retirement raised it since the read; max-merge with what it wrote.
+            }
+        }
+    }
+
+    /// <summary>Reads the row of <paramref name="grainType"/> under <paramref name="key"/>; an absent row reads as a new state.</summary>
+    internal static Task<GrainState<T>> ReadRowAsync<T>(IGrainStorage storage, string grainType, string key)
+        where T : new() =>
+        ReadAsync<T>(storage, grainType, key);
 
     /// <summary>
     /// Writes <paramref name="row"/> conditionally on the ETag it carries: a row

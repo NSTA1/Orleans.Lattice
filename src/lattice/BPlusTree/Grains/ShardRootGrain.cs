@@ -3296,6 +3296,14 @@ internal sealed partial class ShardRootGrain(
             throw;
         }
 
+        // A re-created incarnation re-reads its hand-off marker (#5668): this
+        // activation may still cache the purged incarnation's, whose routing
+        // generation the purge retired under the tree id's floor.
+        if (prevIsPurged)
+        {
+            _handOffMarker = null;
+        }
+
         return true;
     }
 
