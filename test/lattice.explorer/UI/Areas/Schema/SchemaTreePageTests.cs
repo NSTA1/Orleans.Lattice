@@ -59,7 +59,7 @@ public sealed class SchemaTreePageTests : SchemaTestContext
 
         cut.FindAll("[role=tab]").Single(tab => tab.TextContent == "Dead letters").Click();
 
-        Assert.That(Navigation.Uri, Does.EndWith("schema/orders?tab=dead-letters"));
+        cut.WaitUntil(() => Assert.That(Navigation.Uri, Does.EndWith("schema/orders?tab=dead-letters")));
     }
 
     [Test]
@@ -145,7 +145,7 @@ public sealed class SchemaTreePageTests : SchemaTestContext
 
         cut.FindAll("[role=tab]").Single(tab => tab.TextContent == "Versions").Click();
 
-        Assert.That(Navigation.Uri, Does.EndWith("t/acme/schema/a/crm/orders?tab=versions"));
+        cut.WaitUntil(() => Assert.That(Navigation.Uri, Does.EndWith("t/acme/schema/a/crm/orders?tab=versions")));
     }
 
     [Test]
