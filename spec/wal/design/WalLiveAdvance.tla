@@ -77,7 +77,7 @@ EXTENDS Integers, FiniteSets
 
 CONSTANTS WithBatch, MaxWindows, WithDuplicate, WithRecreate, WithRestart, FrozenView,
           WithMixedVersion, WithGateFlip, WithLegacyHandOff, WithTreeWalk, WithOtherRetire, WithSecondPartition,
-          Ghosts
+          WithSecondInitiator, WithLegacyPurge, Ghosts
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
@@ -153,7 +153,20 @@ VARIABLES
     dupUsed,
     restarted,
     recreated,
-    rFloor,     \* the tree's routing floor row: the highest routing generation a purge retired
+    rFloor,     \* the routing floor of f's initiator (L's shard root): the highest generation a purge retired
+    walFloorF,  \* the WAL shard's in-memory floor for f's initiator: raised by a purge's retirement,
+                \* otherwise loaded from rFloor when the WAL shard activates
+    legacy,     \* the purge finished on 10.2.0: the tree's routing rows survive and no floor was raised
+    fCaught,    \* L's shard root, re-seeding the purged tombstone, has run its catch-up
+    fDup,       \* a duplicate activation of L's shard root has also run the catch-up (#5716)
+    fMarkNew,   \* L's shard root's marker carries the re-created incarnation's identity (#5716)
+    fSeeded,    \* the live shard-root activation stamps with its cached generation fEpoch
+    sp,         \* a straddling write of the purged incarnation: "none", or the shard root that admitted it
+    spStamp,    \* the generation it was admitted under
+    r2Floor,    \* the routing floor of a second shard root s2 (WithSecondInitiator)
+    g2Epoch,    \* s2's current routing generation
+    g2Fence,    \* s2's generation entry at L's partition; 0 when absent
+    s2live,     \* s2's re-created incarnation has initialised
     staleAccepted,        \* an append from an epoch below maxClaimed was allocated
     oldRejected,          \* an unstamped append was rejected
     rejected,             \* witness: a stale epoch's append was rejected
@@ -176,7 +189,8 @@ handVars == <<hoOpen, hoClosedAt, windows, fpend, fkind, fstamp, fEpoch, fFence>
 gateVars == <<gate, hfly, resumed, mInit, legacyUsed>>
 viewVars == <<fz, fzOpen, fzClosedAt>>
 oldVars == <<lastU, seenU, oldUsed>>
-envVars == <<phase, hint, dupUsed, restarted, recreated, rFloor>>
+xVars == <<walFloorF, legacy, fCaught, fDup, fMarkNew, fSeeded, sp, spStamp, r2Floor, g2Epoch, g2Fence, s2live>>
+envVars == <<phase, hint, dupUsed, restarted, recreated, rFloor, xVars>>
 safeVars == <<staleAccepted, oldRejected>>
 wghosts == <<rejected, fRejected, advanced, advancedPastForeign, dupAdvanced, trimAfterAdvance,
              reloaded, floorClaim, claimRefused, selfReported>>
@@ -240,6 +254,18 @@ TypeOK ==
     /\ restarted \in BOOLEAN
     /\ recreated \in BOOLEAN
     /\ rFloor \in Epochs
+    /\ walFloorF \in Epochs
+    /\ legacy \in BOOLEAN
+    /\ fCaught \in BOOLEAN
+    /\ fDup \in BOOLEAN
+    /\ fMarkNew \in BOOLEAN
+    /\ fSeeded \in BOOLEAN
+    /\ sp \in {"none", "s", "s2"}
+    /\ spStamp \in Epochs
+    /\ r2Floor \in Epochs
+    /\ g2Epoch \in Epochs
+    /\ g2Fence \in Epochs
+    /\ s2live \in BOOLEAN
     /\ staleAccepted \in BOOLEAN
     /\ oldRejected \in BOOLEAN
     /\ rejected \in BOOLEAN
@@ -309,6 +335,18 @@ Init ==
     /\ restarted = FALSE
     /\ recreated = FALSE
     /\ rFloor = 0
+    /\ walFloorF = 0
+    /\ legacy = FALSE
+    /\ fCaught = FALSE
+    /\ fDup = FALSE
+    /\ fMarkNew = FALSE
+    /\ fSeeded = TRUE
+    /\ sp = "none"
+    /\ spStamp = 0
+    /\ r2Floor = 0
+    /\ g2Epoch = 1
+    /\ g2Fence = 1
+    /\ s2live = FALSE
     /\ staleAccepted = FALSE
     /\ oldRejected = FALSE
     /\ rejected = FALSE
@@ -347,7 +385,7 @@ Begin ==
     /\ hoOpen' = TRUE
     /\ windows' = 1
     /\ UNCHANGED <<walkVars, floorVars, walVars, leafVars, epochVars, hoClosedAt, fpend, fkind, fstamp, fEpoch,
-                   fFence, gateVars, viewVars, oldVars, dupUsed, restarted, recreated, rFloor, safeVars,
+                   fFence, gateVars, viewVars, oldVars, dupUsed, restarted, recreated, rFloor, xVars, safeVars,
                    wghosts>>
 
 (* Create: the leaf's first activation, born at its birth hint, holding the *)
@@ -362,7 +400,7 @@ Create ==
     /\ seenInc' = [seenInc EXCEPT !["a1"] = rowInc]
     /\ UNCHANGED <<walkVars, lRetired, otherRetired, wrongRefusal, bumped, rowInc, hint, walVars, mine, snapCov, snapRows, rowEpoch, epoch, cstage, claimHead,
                    fence, memFence, retired, maxClaimed, handVars, gateVars, viewVars, oldVars,
-                   dupUsed, restarted, recreated, rFloor, safeVars, wghosts>>
+                   dupUsed, restarted, recreated, rFloor, xVars, safeVars, wghosts>>
 
 StopAct(a) ==
     /\ up' = up \ {a}
@@ -631,6 +669,7 @@ ForeignAdmit(k) ==
 ForeignAlloc ==
     /\ fpend
     /\ fstamp >= fFence
+    /\ fstamp > walFloorF
     /\ next < MaxOff
     /\ fpend' = FALSE
     /\ fkind' = "point"
@@ -840,11 +879,16 @@ MarkInit ==
     /\ ~mInit
     /\ mInit' = TRUE
     /\ IF recreated
-       THEN /\ fFence' = Max2(fFence, fEpoch)
+       THEN /\ fEpoch' = Max2(fEpoch, rFloor + 1)
+            /\ fFence' = Max2(fFence, Max2(fEpoch, rFloor + 1))
             /\ hoClosedAt' = next
-       ELSE UNCHANGED <<fFence, hoClosedAt>>
-    /\ UNCHANGED <<walkVars, floorVars, walVars, leafVars, epochVars, hoOpen, windows, fpend, fkind, fstamp, fEpoch,
-                   gate, hfly, resumed, legacyUsed, viewVars, oldVars, envVars, safeVars, wghosts>>
+            /\ fMarkNew' = TRUE
+            /\ fSeeded' = TRUE
+       ELSE UNCHANGED <<fEpoch, fFence, hoClosedAt, fMarkNew, fSeeded>>
+    /\ UNCHANGED <<walkVars, floorVars, walVars, leafVars, epochVars, hoOpen, windows, fpend, fkind, fstamp,
+                   gate, hfly, resumed, legacyUsed, viewVars, oldVars, phase, hint, dupUsed, restarted,
+                   recreated, rFloor, walFloorF, legacy, fCaught, fDup, sp, spStamp, r2Floor, g2Epoch, g2Fence,
+                   s2live, safeVars, wghosts>>
 
 (* Replay(a): read and apply the next durable entry; never a trimmed one. *)
 Replay(a) ==
@@ -875,6 +919,7 @@ Armed(a) ==
     /\ rp[a] >= MarkerClosedAt(a) - 1
     /\ rp[a] >= seenU[a]
     /\ \A o \in inflight : author[o] # a
+    /\ ~(legacy /\ ~fCaught)
 
 LiveAdvance(a) ==
     /\ a \in up
@@ -952,18 +997,20 @@ Duplicate ==
     /\ seenInc' = [seenInc EXCEPT !["a2"] = rowInc]
     /\ UNCHANGED <<walkVars, lRetired, otherRetired, wrongRefusal, bumped, rowInc, walVars, mine, snapCov, snapRows, rowEpoch, epoch, cstage, claimHead, fence,
                    memFence, retired, maxClaimed, handVars, gateVars, viewVars, oldVars, phase,
-                   hint, restarted, recreated, rFloor, safeVars, wghosts>>
+                   hint, restarted, recreated, rFloor, xVars, safeVars, wghosts>>
 
 Restart ==
     /\ WithRestart
     /\ ~restarted
     /\ restarted' = TRUE
     /\ memFence' = -1
+    /\ walFloorF' = rFloor
     /\ lastU' = next - 1
     /\ UNCHANGED fFence
     /\ UNCHANGED <<walkVars, floorVars, walVars, leafVars, rowEpoch, seen, epoch, cstage, claimHead, fence, retired,
                    maxClaimed, hoOpen, hoClosedAt, windows, fpend, fkind, fstamp, fEpoch,
-                   gateVars, viewVars, seenU, oldUsed, phase, hint, dupUsed, recreated, rFloor, safeVars,
+                   gateVars, viewVars, seenU, oldUsed, phase, hint, dupUsed, recreated, rFloor, legacy, fCaught, fDup, fMarkNew, fSeeded, sp, spStamp, r2Floor, g2Epoch,
+                   g2Fence, s2live, safeVars,
                    wghosts>>
 
 Reload ==
@@ -975,28 +1022,167 @@ Reload ==
                    fRejected, advanced, advancedPastForeign, dupAdvanced, trimAfterAdvance,
                    floorClaim, claimRefused, selfReported>>
 
-Recreate ==
-    /\ WithRecreate
-    /\ phase = "live"
-    /\ ~recreated
-    /\ recreated' = TRUE
+(* The purge's retirements. PurgeTreeRows: the new build retires L's epoch *)
+(* row and entry under the leaf floor, and raises every                   *)
+(* initiator's own floor over its marker generation and entries before any *)
+(* delete, then retires the entries and deletes the markers (#5668).       *)
+(* LegacyPurgeTreeRows (WithLegacyPurge, where every purge takes it; the  *)
+(* new build's purge is covered without it): the purge finished on 10.2.0, *)
+(* which knows none of these rows. A cross-shard straddler spanning it is  *)
+(* the documented mixed-version residue, so it is excluded here.           *)
+PurgeTreeRows ==
+    /\ ~WithLegacyPurge
+    /\ LET rf == Max2(rFloor, Max2(fEpoch, fFence)) IN
+        /\ rFloor' = rf
+        /\ fEpoch' = rf + 1
+        /\ walFloorF' = rf
+    /\ fFence' = 0
+    /\ hoOpen' = FALSE
+    /\ hoClosedAt' = 0
+    /\ mInit' = FALSE
+    /\ r2Floor' = Max2(r2Floor, Max2(g2Epoch, g2Fence))
+    /\ g2Fence' = 0
+    /\ legacy' = FALSE
+    /\ fMarkNew' = fMarkNew
     /\ rowEpoch' = 0
     /\ retired' = Max2(retired, Max2(fence, rowEpoch))
     /\ lRetired' = Max2(lRetired, Max2(fence, rowEpoch))
     /\ rowInc' = rowInc + 1
     /\ fence' = 0
     /\ memFence' = IF memFence = -1 THEN -1 ELSE 0
+
+\* A 10.2.0 clear knows no epoch row or entry either, so it keeps them, and the
+\* re-created incarnation's leaf claims above the row it finds.
+LegacyPurgeTreeRows ==
+    /\ WithLegacyPurge
+    /\ sp # "s2"
+    /\ legacy' = TRUE
+    /\ fMarkNew' = FALSE
+    /\ UNCHANGED <<rFloor, fEpoch, fFence, hoOpen, hoClosedAt, mInit, walFloorF, r2Floor, g2Fence>>
+    /\ UNCHANGED <<rowEpoch, retired, lRetired, rowInc, fence, memFence>>
+
+Recreate ==
+    /\ WithRecreate
+    /\ phase = "live"
+    /\ ~recreated
+    /\ recreated' = TRUE
     /\ Max2(fEpoch, fFence) < MaxEpoch
-    /\ LET rf == Max2(rFloor, Max2(fEpoch, fFence)) IN
-        /\ rFloor' = rf
-        /\ fEpoch' = rf + 1
-    /\ fFence' = 0
-    /\ hoOpen' = FALSE
-    /\ hoClosedAt' = 0
-    /\ mInit' = FALSE
+    /\ PurgeTreeRows \/ LegacyPurgeTreeRows
     /\ UNCHANGED <<walkVars, otherRetired, wrongRefusal, bumped, seenInc, walVars, leafVars, seen, epoch, cstage, claimHead, maxClaimed,
                    windows, fpend, fkind, fstamp, gate, hfly, resumed, legacyUsed, viewVars, oldVars, phase, hint,
-                   dupUsed, restarted, safeVars, wghosts>>
+                   dupUsed, restarted, fCaught, fDup, fSeeded, sp, spStamp, g2Epoch, s2live, safeVars, wghosts>>
+
+(* CatchUp (WithLegacyPurge): L's shard root, on the new build, re-seeds    *)
+(* the purged tombstone and finds its marker predating the re-created      *)
+(* tree: it carries another incarnation's identity, not by inference from *)
+(* its generation (#5716). It raises only its own initiator's floor row    *)
+(* over the marker's generation and entries, and resets the marker to     *)
+(* generation 0, uninitialised, keeping its opens and closes; the first-   *)
+(* initialisation fence (MarkInit) then seeds the floor plus one, tags the *)
+(* marker with this incarnation, and claims the generation. A second run   *)
+(* is a duplicate activation's, whose reset does not reach the first's     *)
+(* cached generation, so it leaves fSeeded alone. The                      *)
+(* partition entries stay, and a running WAL shard's in-memory floor is    *)
+(* not raised (it loads the row only when it activates), so the fence's    *)
+(* claim is what refuses a straddler here. Only its own initiator's floor: *)
+(* another shard root may already be live at a lower generation.           *)
+CatchUp ==
+    /\ recreated
+    /\ legacy
+    /\ ~fDup
+    /\ fDup' = fCaught
+    /\ fCaught' = TRUE
+    /\ ~fMarkNew
+    /\ LET rc == Max2(rFloor, Max2(fEpoch, fFence)) IN
+        /\ rc < MaxEpoch
+        /\ rFloor' = rc
+        /\ r2Floor' = r2Floor
+    /\ mInit' = FALSE
+    /\ fSeeded' = (fSeeded /\ fCaught)
+    /\ UNCHANGED <<walkVars, floorVars, walVars, leafVars, epochVars, hoOpen, hoClosedAt, windows, fpend, fkind,
+                   fstamp, fEpoch, fFence, gate, hfly, resumed, legacyUsed, viewVars, oldVars, phase, hint, dupUsed,
+                   restarted, recreated, walFloorF, legacy, fMarkNew, sp, spStamp, g2Epoch, g2Fence, s2live,
+                   safeVars, wghosts>>
+
+(* CatchUpSkip (#5716): a duplicate activation of L's shard root, which    *)
+(* re-seeds concurrently, finds the marker the first activation seeded:    *)
+(* it carries this incarnation's identity, so the catch-up leaves it. The  *)
+(* first activation keeps stamping its cached generation (fSeeded).        *)
+CatchUpSkip ==
+    /\ recreated
+    /\ legacy
+    /\ fCaught
+    /\ ~fDup
+    /\ fMarkNew
+    /\ fDup' = TRUE
+    /\ UNCHANGED <<walkVars, floorVars, walVars, leafVars, epochVars, handVars, gateVars, viewVars, oldVars,
+                   phase, hint, dupUsed, restarted, recreated, rFloor, walFloorF, legacy, fCaught, fMarkNew,
+                   fSeeded, sp, spStamp, r2Floor, g2Epoch, g2Fence, s2live, safeVars, wghosts>>
+
+(* The second shard root s2 (WithSecondInitiator), standing for every      *)
+(* shard root other than L's. S2Init: its re-created incarnation           *)
+(* initialises, raising its own floor over anything a 10.2.0 purge left    *)
+(* (its catch-up), seeding the floor plus one and claiming it everywhere.  *)
+(* L's first initialisation does not claim s2's generation.                *)
+S2Init ==
+    /\ WithSecondInitiator
+    /\ recreated
+    /\ ~s2live
+    /\ s2live' = TRUE
+    /\ LET rf2 == Max2(r2Floor, Max2(g2Epoch, g2Fence)) IN
+        /\ rf2 < MaxEpoch
+        /\ r2Floor' = rf2
+        /\ g2Epoch' = rf2 + 1
+        /\ g2Fence' = rf2 + 1
+    /\ UNCHANGED <<walkVars, floorVars, walVars, leafVars, epochVars, handVars, gateVars, viewVars, oldVars,
+                   phase, hint, dupUsed, restarted, recreated, rFloor, walFloorF, legacy, fCaught, fDup, fMarkNew, fSeeded, sp, spStamp,
+                   safeVars, wghosts>>
+
+(* A straddling write, admitted before the purge by shard root i of the   *)
+(* purged incarnation under i's generation: i is s2 (WithSecondInitiator), *)
+(* or L's own shard root outside a hand-off window (WithLegacyPurge, for   *)
+(* the catch-up). The re-created tree maps keys to shards differently, so  *)
+(* after the purge the write's record is foreign to L, with no marker of   *)
+(* L's covering it. SAlloc: the WAL admits it only at or above i's entry   *)
+(* and above i's WAL-side floor. SFail: otherwise it is refused, and its   *)
+(* seam retry never re-stamps it (#5705).                                  *)
+SEntry == IF sp = "s" THEN fFence ELSE g2Fence
+SFloor == IF sp = "s" THEN walFloorF ELSE r2Floor
+
+SAdmit(i) ==
+    /\ phase = "live"
+    /\ ~recreated
+    /\ sp = "none"
+    /\ sp' = i
+    /\ spStamp' = IF i = "s" THEN fEpoch ELSE g2Epoch
+    /\ UNCHANGED <<walkVars, floorVars, walVars, leafVars, epochVars, handVars, gateVars, viewVars, oldVars,
+                   phase, hint, dupUsed, restarted, recreated, rFloor, walFloorF, legacy, fCaught, fDup, fMarkNew, fSeeded, r2Floor, g2Epoch,
+                   g2Fence, s2live, safeVars, wghosts>>
+
+SAlloc ==
+    /\ recreated
+    /\ sp # "none"
+    /\ next < MaxOff
+    /\ spStamp >= SEntry
+    /\ spStamp > SFloor
+    /\ sp' = "none"
+    /\ spStamp' = 0
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = Foreign]
+    /\ inflight' = inflight \cup {next}
+    /\ UNCHANGED <<walkVars, floorVars, durable, acked, floor, leafVars, epochVars, handVars, gateVars, viewVars,
+                   oldVars, phase, hint, dupUsed, restarted, recreated, rFloor, walFloorF, legacy, fCaught, fDup, fMarkNew, fSeeded, r2Floor,
+                   g2Epoch, g2Fence, s2live, safeVars, wghosts>>
+
+SFail ==
+    /\ recreated
+    /\ sp # "none"
+    /\ ~(spStamp >= SEntry /\ spStamp > SFloor)
+    /\ sp' = "none"
+    /\ spStamp' = 0
+    /\ UNCHANGED <<walkVars, floorVars, walVars, leafVars, epochVars, handVars, gateVars, viewVars, oldVars,
+                   phase, hint, dupUsed, restarted, recreated, rFloor, walFloorF, legacy, fCaught, fDup, fMarkNew, fSeeded, r2Floor, g2Epoch,
+                   g2Fence, s2live, safeVars, wghosts>>
 
 UnstampedAdmitted == TRUE
 
@@ -1035,6 +1221,8 @@ Next ==
     \/ \E a \in Acts : Replay(a) \/ LiveAdvance(a) \/ Capture(a)
     \/ GcTrim
     \/ Duplicate \/ Restart \/ Reload \/ Recreate \/ OldAlloc
+    \/ CatchUp \/ CatchUpSkip \/ S2Init \/ SAlloc \/ SFail
+    \/ \E i \in (IF WithSecondInitiator THEN {"s2"} ELSE {}) \cup (IF WithLegacyPurge THEN {"s"} ELSE {}) : SAdmit(i)
     \/ Done
 
 Spec == Init /\ [][Next]_vars
@@ -1069,6 +1257,14 @@ OldNeverRejected == ~oldRejected
 \* re-created incarnation is never stopped by a claim straddling the purge.
 \* StaleAppend is witness-gated, so the append half is checked with Ghosts on.
 OnlySupersededRefused == ~wrongRefusal
+
+\* Every live initiator's generation is above its own routing floor, so the WAL
+\* never refuses a live shard root's claim (production's refusal threshold
+\* includes the floor). A purge or catch-up that raised a floor tree-wide, or a
+\* re-created incarnation seeded below its floor, would leave one at or below it.
+LiveGenerationAboveFloor ==
+    /\ fSeeded => fEpoch > rFloor
+    /\ s2live => g2Epoch > r2Floor
 
 \* The contested key (#5610). Every entry L owns writes one key K, the
 \* contention worst case. Every write carries a real HLC version, which the
@@ -1133,6 +1329,11 @@ WitnessClaimBumped == ~bumped
 \* A straddling write of the purged incarnation, pending after the re-created
 \* incarnation's marker initialisation, is below the claimed generation (WithRecreate).
 WitnessRecreatedStraddleFenced == ~(recreated /\ mInit /\ fpend /\ fstamp < fFence)
+\* A cross-shard straddler pending after L has initialised, at or below its own
+\* initiator's floor, which L's initialisation did not claim (WithSecondInitiator).
+WitnessCrossShardStraddlerAtFloor == ~(recreated /\ mInit /\ sp = "s2" /\ spStamp <= r2Floor /\ ~s2live)
+\* L's shard root caught up after a purge that finished on 10.2.0 (WithLegacyPurge).
+WitnessCatchUp == ~(fCaught /\ mInit)
 \* An activation stamps this partition with an epoch a bump on another partition
 \* gave it, above this partition's entry (WithSecondPartition).
 WitnessOtherPartitionEpoch ==

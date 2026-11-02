@@ -1,0 +1,24 @@
+# The WAL admits a re-presented generation against the initiator's entry alone,
+# ignoring its routing floor (#5697 review, S1). A cross-shard straddler: shard root
+# s2 of the purged incarnation admitted a write whose keys, under the re-created
+# tree's shard map, belong to L. L's first initialisation claims only its own shard
+# root's generation (and the range-delete fence's), not s2's, and s2's re-created
+# counterpart has not initialised (or no longer exists). With s2's entry retired,
+# only the WAL-side floor refuses the write; without it, the write is admitted above
+# L's recorded heads and L advances past it. The floor is load-bearing.
+MODULE: ReadPositionHonestRoutingWalIgnoresFloor
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the WAL admits a re-presented routing generation at or below the initiator's floor
+PERTURBS: SAlloc
+BOUNDS: WithRecreate = TRUE, WithSecondInitiator = TRUE, WithLegacyPurge = FALSE, WithDuplicate = TRUE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+    /\ spStamp >= SEntry
+    /\ spStamp > SFloor
+    /\ sp' = "none"
+--- REPLACE
+    /\ spStamp >= SEntry
+\* MUTATION: no WAL-side floor check.
+    /\ sp' = "none"
+--- END
