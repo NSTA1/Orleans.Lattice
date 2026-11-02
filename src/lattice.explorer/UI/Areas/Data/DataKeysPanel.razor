@@ -33,7 +33,7 @@
         {
             <LtSwitch Label="Live updates"
                       Checked="@_live"
-                      CheckedChanged="SetLive"
+                      CheckedChanged="SetLiveAsync"
                       Disabled="@(_mode != EntryScanMode.Live)"
                       Hint="@(_mode != EntryScanMode.Live ? "A snapshot never changes, so live updates follow live scans only." : null)" />
         }
@@ -51,7 +51,7 @@
             <span>@_liveNote</span>
             @if (_liveRestartable)
             {
-                <LtButton Variant="LtButtonVariant.Quiet" OnClick="RestartLive">Restart live updates</LtButton>
+                <LtButton Variant="LtButtonVariant.Quiet" OnClick="RestartLiveAsync">Restart live updates</LtButton>
             }
         </div>
     }

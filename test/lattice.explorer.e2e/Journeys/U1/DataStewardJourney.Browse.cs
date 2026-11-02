@@ -1,6 +1,9 @@
 using System.Text.RegularExpressions;
 using Microsoft.Playwright;
+using Orleans.Lattice.Api.Data;
+using Orleans.Lattice.Api.Data.Grpc;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
@@ -173,15 +176,24 @@ public sealed partial class DataStewardJourney
 
         await _tree.SetLiveUpdatesAsync(false);
         await Task.Delay(TimeSpan.FromSeconds(1));
-        var paused = await _tree.KeyLinks.CountAsync();
-        var written = (await _context.Estate.LineFeed.StatusAsync()).OrdersWritten;
-        await _context.Estate.LineFeed.WaitUntilAsync(status => status.OrdersWritten >= written + 4, TimeSpan.FromSeconds(60));
+        var shown = await _tree.KeysAsync();
+        var paused = shown.Count;
+        // The line feed opens the decade's remaining orders while the table is paused: wait
+        // until the Data API holds keys under the prefix that the table does not show.
+        var meanwhile = await KeysWrittenSinceAsync(prefix, shown, TimeSpan.FromSeconds(60));
         await Task.Delay(TimeSpan.FromSeconds(2));
         Assert.That(await _tree.KeyLinks.CountAsync(), Is.EqualTo(paused), "paused, the table holds still while the line feed writes");
         await CheckpointAsync("3", "paused", "Live updates paused: the table holds still while the line feed writes");
 
+        // #5647: resuming reads the page again, so the orders written while paused arrive
+        // even if no further write reaches the prefix after the resume.
         await _tree.SetLiveUpdatesAsync(true);
-        await Expect(_tree.KeyLinks).Not.ToHaveCountAsync(paused, new() { Timeout = 60_000 });
+        foreach (var key in meanwhile)
+        {
+            await Expect(_tree.KeyLinks.Filter(new() { HasTextRegex = new Regex("^" + Regex.Escape(key) + "$") }))
+                .ToHaveCountAsync(1, new() { Timeout = 60_000 });
+        }
+
         Coverage.Hit("use-case:data/live-updates");
         await CheckpointAsync("3", "resumed", "Live updates on again: the orders written meanwhile arrive");
 
@@ -269,6 +281,34 @@ public sealed partial class DataStewardJourney
         catch (TimeoutException)
         {
             return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Waits until the Data API holds keys under <paramref name="prefix"/> that are not in
+    /// <paramref name="shown"/>, and returns them. It reads the cluster as the administrator,
+    /// so it is the ground truth the paused table is compared with.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> KeysWrittenSinceAsync(string prefix, IReadOnlyList<string> shown, TimeSpan timeout)
+    {
+        var data = LatticeDataApiGrpcClient.Create(_context.Estate.Invoker(), JourneyEstate.Serialization);
+        var end = prefix[..^1] + (char)(prefix[^1] + 1);
+        var deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            var page = await data.ReadRangeAsync(new DataRangeRequest { TreeId = Names.Trees.FactoryOrders, StartInclusive = prefix, EndExclusive = end, PageSize = 100 });
+            var added = page.Entries.Select(entry => entry.Key).Where(key => !shown.Contains(key, StringComparer.Ordinal)).ToList();
+            if (added.Count > 0)
+            {
+                return added;
+            }
+
+            if (DateTime.UtcNow >= deadline)
+            {
+                Assert.Fail($"U1.3: the line feed wrote no order under {prefix} in {timeout.TotalSeconds:0} s beyond the {shown.Count} the table showed: {await _context.Estate.LineFeed.StatusAsync()}");
+            }
+
+            await Task.Delay(500);
         }
     }
 

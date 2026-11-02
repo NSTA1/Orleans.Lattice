@@ -328,6 +328,73 @@ public sealed class DataKeysPanelTests : DataTestContext
     }
 
     [Test]
+    public void Resuming_live_updates_shows_the_keys_written_while_they_were_off()
+    {
+        Client.WithTree("orders", keys: 2, prefix: "key/");
+        var cut = RenderAt("data/orders?prefix=key%2F");
+        cut.WaitUntil(() =>
+        {
+            Assert.That(Rows(cut), Has.Count.EqualTo(2));
+            Assert.That(Client.OpenFeeds, Is.EqualTo(1));
+        });
+
+        Switch(cut, "Live updates").Click();
+        cut.WaitUntil(() => Assert.That(Client.OpenFeeds, Is.EqualTo(0)));
+
+        // Written while paused; no change reaches the feed opened on resume.
+        Client.Entries["orders"]["key/0002"] = FakeStateClient.Entry("key/0002", "\"new\"");
+        Client.Entries["orders"]["key/0003"] = FakeStateClient.Entry("key/0003", "\"new\"");
+        Assert.That(Rows(cut), Has.Count.EqualTo(2));
+
+        Switch(cut, "Live updates").Click();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(Client.OpenFeeds, Is.EqualTo(1));
+            Assert.That(Rows(cut).Select(row => row.QuerySelector("th")!.TextContent), Is.EqualTo(new[] { "key/0000", "key/0001", "key/0002", "key/0003" }));
+        });
+    }
+
+    [Test]
+    public void Resuming_live_updates_on_a_later_page_offers_a_reload_from_the_first()
+    {
+        Client.WithTree("orders", keys: 30);
+        var cut = RenderAt("data/orders");
+        cut.WaitUntil(() => Assert.That(Client.OpenFeeds, Is.EqualTo(1)));
+        Switch(cut, "Live updates").Click();
+        Button(cut, "Next page").Click();
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-data-pager__position").TextContent, Is.EqualTo("Page 2")));
+
+        Switch(cut, "Live updates").Click();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find(".lt-data-pager__position").TextContent, Is.EqualTo("Page 2"));
+            Assert.That(cut.Find(".lt-data-note").TextContent, Does.Contain("have changed since this page loaded"));
+        });
+    }
+
+    [Test]
+    public void Restarting_live_updates_shows_the_keys_written_after_the_feed_expired()
+    {
+        Client.WithTree("orders", keys: 2);
+        var cut = RenderAt("data/orders");
+        cut.WaitUntil(() => Assert.That(Client.OpenFeeds, Is.EqualTo(1)));
+
+        Client.Feeds[^1].Writer.TryComplete(new LatticeStateApiException("expired", new RpcException(new Status(StatusCode.FailedPrecondition, "trimmed"))));
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-data-note").TextContent, Does.Contain("change feed moved past this position")));
+        Client.Entries["orders"]["key/0002"] = FakeStateClient.Entry("key/0002", "\"new\"");
+
+        Button(cut, "Restart live updates").Click();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(Client.OpenFeeds, Is.EqualTo(1));
+            Assert.That(Rows(cut), Has.Count.EqualTo(3));
+        });
+    }
+
+    [Test]
     public void A_cluster_without_a_change_feed_hides_live_updates_and_says_why()
     {
         Client.WithTree("orders", keys: 2);
