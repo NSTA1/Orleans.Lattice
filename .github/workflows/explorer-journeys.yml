@@ -27,6 +27,10 @@ name: Explorer Journeys
 #                      no shared file. A pull request touching only Journeys/<id>/
 #                      runs that leg; a change to the Explorer, the harness, the
 #                      hosts, a facade or this lane runs every leg.
+#   contract-<chapter> one per story-only chapter (a contract, no Journeys/<id>
+#                      folder; #5660): that chapter's case of its storyline's
+#                      contract conformance fixture alone on a fresh estate. Run
+#                      by the `legs` job like any other leg.
 #   story-contoso, story-fabrikam
 #                      the storyline run in order on one estate. ADVISORY and
 #                      NOT run on an ordinary pull request (user decision on

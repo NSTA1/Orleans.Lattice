@@ -3,6 +3,7 @@ using Microsoft.Playwright;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 using static Microsoft.Playwright.Assertions;
 using Names = Orleans.Lattice.Explorer.EndToEnd.Tests.Story.StoryNames.Contoso;
 
@@ -36,14 +37,27 @@ public sealed partial class DataStewardJourney
         });
         await CheckpointAsync("1", "spine", "priya is signed in; the spine offers what stewards-factory permits");
 
+        // In the story A5 has installed the task board and bound its editor role to
+        // data-stewards, so priya also reads the board's tree. Only the tree A5 recorded is
+        // allowed, and only when the run's ledger holds it.
+        var taskBoardTree = _context.Ledger.TryGet(StoryKeys.TaskBoardTree, out var recorded) ? recorded : null;
         await _directory.OpenAsync();
         var names = await _directory.NamesAsync();
         Assert.Multiple(() =>
         {
             Assert.That(names, Is.SupersetOf(FactoryTrees), "the factory trees stewards-factory lets priya read");
-            Assert.That(names.Where(name => !IsFactoryName(name)), Is.Empty, "only factory trees, and what reads from them, are listed");
+            Assert.That(
+                names.Where(name => !IsFactoryName(name) && name != taskBoardTree),
+                Is.Empty,
+                "only factory trees, what reads from them and, once A5 has granted data-stewards the task board, its tree are listed");
+            if (taskBoardTree is not null)
+            {
+                Assert.That(names, Does.Contain(taskBoardTree), "A5 bound the task board's editor role to data-stewards, so priya reads its tree");
+            }
         });
-        await CheckpointAsync("1", "directory", "The Data directory lists only the factory trees and the views over the orders");
+        await CheckpointAsync("1", "directory", taskBoardTree is null
+            ? "The Data directory lists only the factory trees and the views over the orders"
+            : "The Data directory lists the factory trees, the views over the orders and the task board's tree A5 granted data-stewards");
 
         await _directory.FilterAsync("telemetry");
         Assert.That(await _directory.NamesAsync(), Does.Contain(Names.Trees.FactoryTelemetry));
@@ -94,14 +108,15 @@ public sealed partial class DataStewardJourney
         await _tree.WaitForKeysAsync();
         await CheckpointAsync("2", "completed-tree", "Accepting the completion opens factory-orders");
 
-        // The alias: orders names the same tree. Her grant names factory-orders, not orders,
-        // and the alias is filtered out of her catalogue (#5597).
-        await new KnownDefect("#5597", "a caller granted only on factory-orders cannot reach it through its alias orders").ReproducesAsync(async () =>
-        {
-            await _priya.Shell.GotoAsync("/data/" + Names.Aliases.Orders);
-            await Expect(_priya.Shell.Heading).ToHaveTextAsync("Nothing lives at this address");
-        });
-        await CheckpointAsync("2", "alias", "/data/orders reads Nothing lives at this address for her (#5597)");
+        // The alias: orders names the same tree. A read is authorized on the name it addresses,
+        // so stewards-factory grants her orders as well as factory-orders (#5597).
+        await _priya.Shell.GotoAsync("/data/" + Names.Aliases.Orders);
+        await Expect(_tree.Heading).ToHaveTextAsync(Names.Aliases.Orders);
+        await _tree.WaitForKeysAsync();
+        await _tree.SetPrefixAsync("order/00");
+        Assert.That(await _tree.KeysAsync(), Has.Count.EqualTo(25), "the orders alias reads the seeded factory-orders keys");
+        Coverage.Hit("use-case:data/alias-resolution");
+        await CheckpointAsync("2", "alias", "/data/orders reaches factory-orders through the alias");
         await _priya.Shell.GotoAsync("/data/" + Names.Trees.FactoryOrders);
         await Expect(_tree.Heading).ToHaveTextAsync(Names.Trees.FactoryOrders);
         await _tree.WaitForKeysAsync();

@@ -204,7 +204,7 @@ public sealed class BackupsInDepthJourney : JourneyChapter
             await _backups.OpenCatalogueOfAsync(FactoryLines);
             await Expect(_backups.CatalogueRow(Names.Backups.LinesInc1)).ToHaveCountAsync(1);
             await Expect(_backups.CatalogueRow(Names.Backups.LinesFull)).ToHaveCountAsync(1);
-            await ShotAsync(5, "lines-catalogue", "factory-lines' backups: lines-inc-1 and its base lines-full both listed (#5450)");
+            await ShotAsync(5, "lines-catalogue", "factory-lines' backups: lines-inc-1 and its base lines-full both listed");
 
             var deleted = StoryData.LineDeletedBeforeRepair;
             await _entry.OpenAsync(FactoryLines, deleted);

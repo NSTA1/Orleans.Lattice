@@ -804,6 +804,10 @@ operation, and Set alias points the logical name at another physical tree.
 a free alias (a name that already holds a tree is refused, with a pointer to that
 tree's own Lifecycle) and, after the alias is typed to confirm, points it at this
 tree, so `/data/{alias}` and every read and write through the alias reach it.
+Access is authorized on the name a caller addresses, before the alias resolves:
+a caller granted only on the tree does not see or reach it through the alias,
+which needs a grant of its own (see the set-alias verb in
+[tree administration](../lattice.api.treeadmin/README.md)).
 **Recoverable until** is shown with the recovery deadline only while the tree can
 still be recovered. Purge is accept-then-poll: the call can return while the shard
 walk is still running, so the tab says the purge was accepted, follows it with a
