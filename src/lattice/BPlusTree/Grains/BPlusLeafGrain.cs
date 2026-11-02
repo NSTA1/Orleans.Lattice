@@ -3010,7 +3010,7 @@ internal sealed partial class BPlusLeafGrain(
         // record below the hint. Each must have applied before the bound narrows,
         // or a death in between leaves its record unapplied by every leaf. Drained
         // outside the split gate, which a mutation may itself be waiting for.
-        if (!await DrainMutationsAdmittedBeforeAsync(allowance: 0))
+        if (false && !await DrainMutationsAdmittedBeforeAsync(allowance: 0)) // RED-PROOF M1
         {
             throw new TimeoutException(
                 $"Leaf {context.GrainId} could not narrow its high bound: commits it admitted earlier were still "

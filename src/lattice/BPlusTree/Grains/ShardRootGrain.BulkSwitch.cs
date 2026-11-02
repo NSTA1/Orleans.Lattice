@@ -54,7 +54,7 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task<long[]?> BeginBulkSwitchAsync(string operationId, string? lowInclusive)
     {
-        if (!IsAppendFenceGateOpen() || !HasHandOffStorage())
+        if (!HasHandOffStorage()) // RED-PROOF M6
         {
             return null;
         }
@@ -176,7 +176,7 @@ internal sealed partial class ShardRootGrain
 
             var operationId = token["bulk:".Length..];
             if (string.Equals(operationId, currentOperationId, StringComparison.Ordinal)
-                || string.Equals(operationId, state.State.PendingBulkGraft?.OperationId, StringComparison.Ordinal))
+                /* RED-PROOF M5 */)
             {
                 continue;
             }
@@ -189,7 +189,8 @@ internal sealed partial class ShardRootGrain
 
         foreach (var operationId in abandoned)
         {
-            await FinishBulkSwitchAsync(operationId, [], relocated: false, drainBatchWrites: false);
+            // RED-PROOF M4: drops the hint but never closes the marker.
+            await UpdateHandOffMarkerAsync(m => m.BulkBirthHints.Remove(operationId));
         }
     }
 
