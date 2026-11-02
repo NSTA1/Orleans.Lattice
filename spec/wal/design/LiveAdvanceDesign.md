@@ -617,7 +617,15 @@ rejected unacknowledged and retried at its seam (section 5).
 | Adaptive split | Donor shard root | Shard-level marker on the target shard root | The reject phase | The donor shard root re-claims its routing generation at every partition; the heads close the marker at completion |
 | Shard fold | Folded shard root | Shard-level marker on the survivor shard root | The fold's quiesce, point and batch | The same routing-generation re-claim |
 | Range delete | The tree's range-delete fence grain (below) | A range-scoped marker on **every** shard root of the tree, before any shard appends | The end of every shard's walk, or the intent's recorded deadline | The fence grain re-claims the tree's range-delete generation at every partition once; the heads close every shard's marker |
-| Bulk load / append | The shard root, for writes admitted before the switch | At the bulk leaf's birth, with the birth hint | The switch, in the shard root's serial turn | The shard root re-claims its routing generation at every partition; the heads close the marker |
+| Bulk load / append | The shard root, for writes admitted before the switch | At the bulk leaf's birth, with the birth hint (shared by a run of append chunks) | The switch, in the shard root's serial turn | The shard root re-claims its routing generation at every partition; the heads close the marker. Completed append tokens close in batches (section 3, #5702) |
+
+**A resumed division applies no read position (#5706).** A forward division (a split,
+or the bulk switch's narrow) drains the mutations admitted before it reads the heads it
+gives the new leaf as its read position, so nothing admitted earlier lies above them
+unapplied. A division resumed on the recovery path (`CompleteSplitAsync`) cannot drain
+commits that were in flight when the original activation died, so it applies no read
+position, and the sibling replays from its own start. The close heads do not cover this:
+they gate arming only, not the sibling's replay start.
 
 **Range delete: fenced at the tree.** A range delete's record is replayed by every
 overlapping leaf of every shard, not only by the authoring shard's leaves. A
@@ -806,10 +814,10 @@ every partition while any prepare is pending.
 
 ### 3. The bulk birth hint
 
-A bulk load or append captures the per-partition WAL heads when it begins, before any
-write it can race. The leaves it creates take those heads as their birth hint. The
-hint is the read position they start from, as a split sibling starts from its donor's
-heads (`WalHeadsAtBirth`). With the open marker, re-arming then means a short, bounded
+A bulk load or append captures per-partition WAL heads before its first leaf is born,
+before any write it can race. The leaves it creates take those heads as their birth
+hint. The hint is the read position they start from, as a split sibling starts from its
+donor's heads (`WalHeadsAtBirth`). With the open marker, re-arming then means a short, bounded
 replay from the hint to the close heads of the switch's fence. That replay imports any
 write that reached the old leaf in the window, before the advance proceeds as for any
 leaf.
@@ -818,13 +826,28 @@ The hint is needed by every arming, not only by the live advance: it is the leaf
 birth read position. Starting the leaf at the head when it is created instead fails
 without any live advance (`ReadPositionHonestBulkWithoutHint`).
 
+**A run shares a hint (#5702).** A chunk's hint may be any head read before its first
+leaf is born: a lower hint is never above an unapplied record, it only lengthens the
+replay. So consecutive append chunks on a shard reuse the previous chunk's hint, or the
+heads of the fence they fold, and read the partitions' heads only at the start of a
+run. A resumed operation's stored hint always wins (S7, below).
+
 **The hint survives a crash (S7).** The hint is written to the shard root's
 `_lattice_shard-handoff` row, keyed by the bulk operation id, in the serial turn that
 captures it and before any leaf is created. A crash between the capture and the switch
 resumes the same operation id with deterministic leaf ids, and the resume reuses the
 stored hint; a later one would skip the window the hint exists to cover.
 `PendingBulkGraft` stays in `ShardRootState` unchanged. The hint row is deleted when the
-switch's marker closes.
+switch's token closes.
+
+**Deferred, batched close (#5702).** A bulk append no longer closes its own `bulk:{op}`
+token. A shard's completed bulk tokens (open, not the current operation's, not a pending
+graft's) are closed together by one routing-generation fence and one marker write: when
+eight have accumulated (folded into the next chunk's open write), after five seconds with
+no chunk (a grain timer), or by a bulk load, which still closes at its end. A fresh
+shard-root activation folds any stale tokens into its first chunk, which also closes an
+abandoned switch. The open tokens hold the leaves they cover on the replay-based advance
+for longer, which is safe, only slower. The token and range interface is unchanged.
 
 **Existing rows: relocate, never refuse (#5610).** Today a bulk append grafts its
 leaves without checking the keys the rightmost leaf already holds, so a point write
@@ -997,14 +1020,48 @@ exclusive authorship:
     replay);
   - the leaf is rangeless but has siblings (a legacy bulk leaf: "Bulk-load leaves
     carry no ownership range");
-  - the leaf is suspected to be an orphan: the scan chain flagged it, orphan repair
-    is pending for it, or it is not reachable by descent. An orphan sharing a live
-    leaf's bounds materialises a full copy of that leaf's range.
+  - the leaf is suspected to be an orphan: orphan repair is pending for it, or it is
+    not reachable by descent. An orphan sharing a live leaf's bounds materialises a
+    full copy of that leaf's range. The descent check is the orphan signal, and it
+    subsumes a scan-chain flag: an orphan that shares a live leaf's bounds is never the
+    leaf descent reaches (#5704, #5709).
 - **Storage.** The grain storage provider does not enforce ETags
   (`GrainStorageFencingProbe` reports so). The claim's conditional writes prove
   nothing without them.
 - **Rollout.** The fence gate is closed. Nothing claims, the shards keep no entries,
   and every advance is replay-based.
+
+**An unreachable leaf never stamps (#5709).** The overlap rule above holds the
+**orphan's** advance. The reverse direction needs its own rule. An unreachable orphan O
+can share bounds with a reachable leaf L, and it is still doubly linked into the sibling
+chain, so a span forward from its predecessor, or a stale route, can deliver a write for
+L's keys into O. O's append of it would be stamped with O's own epoch under O's own
+entry, so no fence rejects it, and L's live advance would pass it unread: the record
+reaches replicas and views, but reads through L never see it. Orphan repair cannot be
+relied on to close this. It runs only when an operator invokes it, and it clears an
+orphan only after proving, key by key, that every row the orphan holds is readable from
+the reachable owner; otherwise it refuses and leaves the orphan untouched. It never folds
+rows into L. So the rule is at the source:
+1. **Claim-time reachability.** Before an activation's first claim of its append epoch,
+   the leaf proves it is reachable by descent, with the same interleaving shard-root
+   check the live-advance view makes, once per activation. An unreachable leaf does not
+   claim, and appends through the **unstamped** WAL method, as with a closed gate view.
+   An unstamped append is always reported and raises the partition's unstamped
+   watermark, so any leaf sharing the partition replays past it before it arms, and
+   L's replay applies O's record by key range. That covers an orphan anywhere in the
+   chain, with no persisted audit result.
+2. **Born under an open hand-off marker.** A split sibling claims eagerly at its birth,
+   before its parent learns of it, and is legitimately unreachable until then. It keeps
+   its claim: it admits only keys the donor has already narrowed away, because the donor
+   forwards a key only once it is outside the donor's span.
+3. **Tick re-check.** If an advance tick's descent finds the leaf unreachable while no
+   marker is open on it, the leaf stops stamping for the rest of the activation.
+
+The residue is the window between a leaf becoming unreachable and its next tick. No
+correct topology change opens it: a reclaim retires the leaf under the epoch floor, and a
+split is under its marker. Only a defect that mints a live orphan would. In the model an
+orphan's append is `OldAlloc` (unstamped, reported), and dropping the report is
+`ReadPositionHonestUnstampedNotReported`, the same counterexample.
 
 ### 5. Rejections are retried where they are raised
 
@@ -1515,6 +1572,14 @@ Each production member carries detectors proven red. They land in this order:
    from phase 2 reaches `main` before this member lands.
 
 ## Review resolution
+
+### After acceptance: #5704's review S2 (#5709), and member 3's #5702 and #5706
+
+| Finding | Resolution |
+|---------|------------|
+| #5709: a reachable leaf's live advance can pass an overlapping orphan's appends | Section 4, "An unreachable leaf never stamps": orphan repair never folds rows, so the rule is at the source. A leaf proves reachability by descent before its first claim; an unreachable one appends unstamped (reported), so every leaf sharing the partition replays past its records. A sibling born under an open marker keeps its eager claim, and a tick re-check stops stamping. The model's counterexample is `ReadPositionHonestUnstampedNotReported`. The descent check is named as the orphan signal, subsuming "scan chain flagged". |
+| #5702: a run shares a hint; deferred, batched closes | Section 3: a chunk's hint may be any head read before its first leaf is born, and a run reads heads only at its start. Completed append tokens close in batches by one fence and one marker write. Hand-off table updated. |
+| #5706: a resumed division cannot drain in-flight commits | Section 2: a resumed division applies no read position; the sibling replays from its own start. |
 
 ### After acceptance: member 2's review (#5644), S2
 
