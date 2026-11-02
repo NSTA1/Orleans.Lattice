@@ -155,6 +155,18 @@ internal sealed partial class LatticeGrain
                 value = outcome.Value;
             }
         }
+        else if (WriteInterceptionActive
+            && await ReplicatedWriteJudgement.AppliesAsync(WriteInterceptor, TreeId, CancellationToken.None))
+        {
+            // Issue #5684: a plain replicated write is judged under the logical
+            // tree's strict policy too, and stored verbatim when admitted.
+            var ttl = ReplicatedWriteJudgement.RemainingTtl(expiresAtTicks, DateTimeOffset.UtcNow.UtcTicks);
+            if ((ttl is null || ttl > TimeSpan.Zero)
+                && !await ReplicatedWriteJudgement.AdmitsAsync(WriteInterceptor, TreeId, key, value, ttl, CancellationToken.None))
+            {
+                return;
+            }
+        }
 
         var lww = LwwValue<byte[]>.CreateWithExpiry(value, sourceHlc, expiresAtTicks)
             with
@@ -391,6 +403,20 @@ internal sealed partial class LatticeGrain
         // resolution it makes checks the copy's receive fence, and check it now.
         ReplicationApplyScope.Enter();
         await GetRoutingAsync();
+
+        // Issue #5684: judge each plain replicated row under the logical tree's
+        // strict policy, asked once per batch; a tree that is not strict skips
+        // the rows entirely. Admitted rows are stored verbatim.
+        if (WriteInterceptionActive
+            && await ReplicatedWriteJudgement.AppliesAsync(WriteInterceptor, TreeId, CancellationToken.None))
+        {
+            items = await ReplicatedWriteJudgement.FilterAsync(
+                WriteInterceptor, TreeId, items, DateTimeOffset.UtcNow.UtcTicks, CancellationToken.None);
+            if (items.Count == 0)
+            {
+                return;
+            }
+        }
 
         if (items.Count == 1)
         {

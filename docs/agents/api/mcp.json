@@ -13451,7 +13451,7 @@
           "type": "bool",
           "required": false,
           "default": "false",
-          "notes": "When true (and strict ingest is also enabled host-wide), a replicated entry that reaches the core write path - a typed-CRDT delta or an atomic-batch entry - whose version is newer than the target or cannot be upcast to it is dead-lettered instead of applied. Local writes are never dead-lettered; a plain last-writer-wins replication apply, a backup restore and a tree merge never reach this check. Defaults to false (trusted ingest)."
+          "notes": "When true (and strict ingest is also enabled host-wide), a replicated entry - a plain last-writer-wins write, a typed-CRDT delta or an atomic-batch entry - whose version is newer than the target or cannot be upcast to it is dead-lettered instead of applied. Local writes are never dead-lettered; a backup restore and a tree merge never reach this check. Defaults to false (trusted ingest)."
         },
         {
           "name": "region",

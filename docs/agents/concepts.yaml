@@ -968,7 +968,7 @@ concepts:
       - "Orleans.Lattice.Schema"
     capability_boundary:
       in_scope:
-        - statement: "Strict ingest dead-letters a non-compliant replicated entry that reaches a checked write path; backup restore, tree merge, and plain last-writer-wins replication apply outside atomic batch are stored unchecked."
+        - statement: "Strict ingest dead-letters a non-compliant replicated entry, including a plain last-writer-wins write; backup restore and tree merge are stored unchecked."
           source: "docs/lattice.explorer/managing-schema.md"
       out_of_scope:
         - statement: "Dead-letter listing is a bounded read surface, not a mutating remediation by itself."
@@ -2526,7 +2526,7 @@ concepts:
         - statement: "Schema enforcement validates the values a tree's checked local write operations carry against per-tree policy."
           source: "FEATURES.md"
       out_of_scope:
-        - statement: "Strict ingest dead-letters a non-compliant replicated entry that reaches a checked write path instead of applying it, and does not cover backup restore, tree merge, or plain last-writer-wins replication apply outside atomic batch."
+        - statement: "Strict ingest dead-letters a non-compliant replicated entry, including a plain last-writer-wins write, instead of applying it, and does not cover backup restore or tree merge."
           source: "docs/lattice.explorer/managing-schema.md"
     operational_envelope:
       limits: []

@@ -82,6 +82,46 @@ internal sealed class CompositeLatticeWriteInterceptor : ILatticeWriteIntercepto
     }
 
     /// <inheritdoc />
+    /// <remarks><c>true</c> when any stage judges the tree's replicated writes; the stages are asked in order.</remarks>
+    public ValueTask<bool> JudgesReplicatedWritesAsync(string treeId, CancellationToken cancellationToken = default)
+    {
+        for (var i = 0; i < _stages.Length; i++)
+        {
+            var judges = _stages[i].JudgesReplicatedWritesAsync(treeId, cancellationToken);
+            if (!judges.IsCompletedSuccessfully)
+            {
+                return AwaitRestAsync(_stages, judges, i, treeId, cancellationToken);
+            }
+
+            if (judges.Result)
+            {
+                return new ValueTask<bool>(true);
+            }
+        }
+
+        return new ValueTask<bool>(false);
+
+        static async ValueTask<bool> AwaitRestAsync(
+            ILatticeWriteInterceptor[] stages, ValueTask<bool> pending, int index, string treeId, CancellationToken cancellationToken)
+        {
+            if (await pending.ConfigureAwait(false))
+            {
+                return true;
+            }
+
+            for (var j = index + 1; j < stages.Length; j++)
+            {
+                if (await stages[j].JudgesReplicatedWritesAsync(treeId, cancellationToken).ConfigureAwait(false))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
+    /// <inheritdoc />
     public ValueTask<LatticeWriteDecision> OnWriteAsync(
         in LatticeWriteRequest request,
         CancellationToken cancellationToken = default)

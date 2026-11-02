@@ -149,4 +149,34 @@ public sealed class CompositeLatticeWriteInterceptorTests
         Assert.That(new CompositeLatticeWriteInterceptor(quiet, loud).InterceptsSystemOrigin, Is.True);
         Assert.That(new CompositeLatticeWriteInterceptor(loud, quiet).InterceptsSystemOrigin, Is.True);
     }
+
+    /// <summary>A stage that answers the replicated-write gate with a fixed value.</summary>
+    private sealed class GateStage(bool judges) : ILatticeWriteInterceptor
+    {
+        public int Asked { get; private set; }
+
+        public ValueTask<bool> JudgesReplicatedWritesAsync(string treeId, CancellationToken cancellationToken = default)
+        {
+            Asked++;
+            return new ValueTask<bool>(judges);
+        }
+
+        public ValueTask<LatticeWriteDecision> OnWriteAsync(in LatticeWriteRequest request, CancellationToken cancellationToken = default) =>
+            new(LatticeWriteDecision.Accept());
+    }
+
+    [Test]
+    public async Task JudgesReplicatedWritesAsync_is_true_when_any_stage_judges_and_stops_at_the_first()
+    {
+        var no = new GateStage(false);
+        var yes = new GateStage(true);
+        var after = new GateStage(false);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await new CompositeLatticeWriteInterceptor(no, new GateStage(false)).JudgesReplicatedWritesAsync("t"), Is.False);
+            Assert.That(await new CompositeLatticeWriteInterceptor(after, yes).JudgesReplicatedWritesAsync("t"), Is.True);
+            Assert.That(after.Asked, Is.Zero, "the enforcement stage runs first and its yes ends the check");
+        });
+    }
 }

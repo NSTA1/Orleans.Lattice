@@ -293,4 +293,50 @@ public sealed class LatticeSchemaVersionWriteInterceptorTests
         Assert.That(() => new LatticeSchemaVersionWriteInterceptor(provider, registry, dlq, null!, TimeProvider.System), Throws.ArgumentNullException);
         Assert.That(() => new LatticeSchemaVersionWriteInterceptor(provider, registry, dlq, options, null!), Throws.ArgumentNullException);
     }
+
+    [Test]
+    public async Task JudgesReplicatedWritesAsync_is_true_only_for_a_tree_whose_version_config_is_strict()
+    {
+        var (strict, _) = Create(new LatticeSchemaVersionConfig(1, 2, strictIngest: true), strictIngestEnabled: true);
+        var (trusted, _) = Create(new LatticeSchemaVersionConfig(1, 2, strictIngest: false), strictIngestEnabled: true);
+        var (unversioned, _) = Create(config: null, strictIngestEnabled: true);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await strict.JudgesReplicatedWritesAsync("orders"), Is.True);
+            Assert.That(await trusted.JudgesReplicatedWritesAsync("orders"), Is.False);
+            Assert.That(await unversioned.JudgesReplicatedWritesAsync("orders"), Is.False);
+        });
+    }
+
+    [Test]
+    public async Task OnWriteAsync_does_not_stamp_an_unstamped_plain_replicated_write()
+    {
+        var (interceptor, dlq) = Create(new LatticeSchemaVersionConfig(1, 2, strictIngest: true), strictIngestEnabled: true);
+
+        LatticeWriteDecision decision;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            decision = await interceptor.OnWriteAsync(Request(Utf8("{}"), LatticeOperation.Write | LatticeOperation.Replication));
+        }
+
+        Assert.That(decision.Kind, Is.EqualTo(LatticeWriteDecisionKind.Accept), "a plain replicated value is stored verbatim");
+        await dlq.DidNotReceive().AppendAsync(Arg.Any<string>(), Arg.Any<LatticeSchemaDeadLetterEntry>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task OnWriteAsync_dead_letters_a_plain_replicated_write_stamped_past_a_strict_target()
+    {
+        var (interceptor, dlq) = Create(new LatticeSchemaVersionConfig(1, 2, strictIngest: true), strictIngestEnabled: true, canUpcast: false);
+
+        LatticeWriteDecision decision;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            decision = await interceptor.OnWriteAsync(Request(
+                LatticeSchemaEnvelope.Encode(1, 3, Utf8("{}")), LatticeOperation.Write | LatticeOperation.Replication));
+        }
+
+        Assert.That(decision.Kind, Is.EqualTo(LatticeWriteDecisionKind.DeadLetter));
+        await dlq.Received(1).AppendAsync("orders", Arg.Any<LatticeSchemaDeadLetterEntry>(), Arg.Any<CancellationToken>());
+    }
 }

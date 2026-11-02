@@ -145,10 +145,9 @@ matter.
   API.
 - **Schema.** [Per-tree write validation and value versioning](docs/lattice.schema/README.md):
   a local write that breaks the tree's policy is rejected, and stale values are
-  upcast on read. A plain last-writer-wins replication apply, a backup restore
-  and a tree merge are stored without validation; once strict ingest is enabled,
-  a non-compliant replicated typed-CRDT entry or replicated atomic-batch entry is
-  dead-lettered.
+  upcast on read. A backup restore and a tree merge are stored without
+  validation; once strict ingest is enabled, a non-compliant replicated entry
+  (plain last-writer-wins, typed-CRDT or atomic-batch) is dead-lettered.
 - **Tenancy.** [Keyspace-partitioned tenants](docs/lattice.tenancy/README.md) with
   a lifecycle, per-tenant quotas, metering and rate limiting.
 

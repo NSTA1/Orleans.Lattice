@@ -85,6 +85,19 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
     public bool InterceptsSystemOrigin => _provider.StrictIngestEnabled;
 
     /// <inheritdoc />
+    /// <remarks>Answers from the cached version config: <c>true</c> only for a tree whose config sets strict ingest.</remarks>
+    public ValueTask<bool> JudgesReplicatedWritesAsync(string treeId, CancellationToken cancellationToken = default)
+    {
+        var config = _provider.GetConfigAsync(treeId, cancellationToken);
+        return config.IsCompletedSuccessfully
+            ? new ValueTask<bool>(config.Result is { StrictIngest: true })
+            : AwaitStrictAsync(config);
+
+        static async ValueTask<bool> AwaitStrictAsync(ValueTask<LatticeSchemaVersionConfig?> pending) =>
+            await pending.ConfigureAwait(false) is { StrictIngest: true };
+    }
+
+    /// <inheritdoc />
     public ValueTask<LatticeWriteDecision> OnWriteAsync(
         in LatticeWriteRequest request,
         CancellationToken cancellationToken = default) =>
@@ -123,6 +136,13 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
         if (LatticeSchemaEnvelope.IsEnveloped(value))
         {
             return await OnEnvelopedAsync(treeId, key, value, version, cancellationToken).ConfigureAwait(false);
+        }
+
+        // A plain replicated value is stored verbatim, so regions converge byte for
+        // byte: an unstamped one is not stamped here (issue #5684).
+        if ((operation & LatticeOperation.Replication) != 0)
+        {
+            return LatticeWriteDecision.Accept();
         }
 
         // A local whole-value write to an opted-in tree is stamped at the target.

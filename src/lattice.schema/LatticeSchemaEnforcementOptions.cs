@@ -15,11 +15,13 @@ public sealed class LatticeSchemaEnforcementOptions
     /// skips those system-origin writes, so they pay zero overhead. When
     /// <c>true</c>, intercepted system-origin writes are inspected and a
     /// non-compliant item is dead-lettered for any tree whose policy also sets
-    /// <see cref="LatticeSchemaPolicy.StrictIngest"/>. Replicated typed-CRDT
-    /// deltas, replicated atomic-batch entries and the rows a receiver bootstrap
-    /// drains from a peer's export reach the interceptor; a steady-state plain
-    /// last-writer-wins replication apply, a backup restore and a tree merge bypass
-    /// write interception and are not made schema-checked by this switch.
+    /// <see cref="LatticeSchemaPolicy.StrictIngest"/>. Every replicated entry
+    /// reaches the interceptor: a plain last-writer-wins write (#5684), a
+    /// typed-CRDT delta, an atomic-batch entry, and the rows a receiver bootstrap
+    /// drains from a peer's export. An admitted plain write is stored verbatim. A
+    /// backup restore and a tree merge bypass write interception and are not made
+    /// schema-checked by this switch. A tree that is not strict pays one cached
+    /// lookup per replicated batch, and nothing per row.
     /// </summary>
     public bool StrictIngest { get; set; }
 
