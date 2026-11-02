@@ -1,0 +1,39 @@
+# Issue #5578's design, reproduced: the advance is armed by the born rule or by
+# reaching the activation's first own append; appends need no claim and no epoch
+# check; no hand-off marker is consulted. With duplicate activations and foreign
+# authors in the environment, an acknowledged entry is trimmed.
+MODULE: NoTrimPastAckedLiveAdvance5578
+TARGET: NoTrimPastAcked
+CLASS: Invariant
+SUMMARY: #5578 exactly: a live advance from applied-live offsets, armed by birth or by a read position within one of the first own append, with no epoch fence and no hand-off fence
+PERTURBS: LiveAdvance, OwnAlloc
+
+--- FIND
+Armed(a) ==
+    /\ cstage[a] = 3
+    /\ mInit
+    /\ rp[a] >= claimHead[a] - 1
+    /\ ~MarkerOpen(a)
+    /\ rp[a] >= MarkerClosedAt(a) - 1
+    /\ rp[a] >= seenU[a]
+    /\ \A o \in inflight : author[o] # a
+--- REPLACE
+\* MUTATION: #5578's arming rule, with its applied-prefix tracker.
+Armed(a) ==
+    /\ (a = "a1" \/ rp[a] >= Min(mine[a]) - 1)
+    /\ \A o \in inflight : author[o] # a
+--- END
+
+--- FIND
+    /\ cstage[a] = 3
+    /\ memFence > 0
+    /\ AppendAdmits(a)
+    /\ next < MaxOff
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = a]
+--- REPLACE
+\* MUTATION: no claim and no epoch check.
+    /\ next < MaxOff
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = a]
+--- END

@@ -1,0 +1,18 @@
+# An activation's own unstamped append - made while its view of the fence gate
+# is closed - is not counted as reported. When the gate reopens, its next live
+# advance passes a duplicate's unstamped append below its own.
+MODULE: ReadPositionHonestNoSelfReport
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: an own unstamped append does not raise the activation's reported watermark
+PERTURBS: OwnAllocUnstamped
+BOUNDS: WithGateFlip = TRUE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+    /\ lastU' = next
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, next)]
+--- REPLACE
+    /\ lastU' = next
+\* MUTATION: no self-report.
+    /\ seenU' = seenU
+--- END

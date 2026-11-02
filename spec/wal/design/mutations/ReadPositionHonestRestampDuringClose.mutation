@@ -1,0 +1,65 @@
+# The close is not atomic with the intent's open check: it re-claims the tree's
+# range-delete generation and records the heads first, and marks the intent and
+# the markers closed only afterwards, while the open check reads the marker. A
+# walk rejected by the re-claim asks in between, is told "open", re-stamps with
+# the post-close generation, and is allocated above the recorded heads, which the
+# owner then passes.
+MODULE: ReadPositionHonestRestampDuringClose
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the intent is marked closed only after the close's re-claim, so a rejected walk re-stamps with the post-close generation
+PERTURBS: Close, GRestamp
+BOUNDS: WithTreeWalk = TRUE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+Close ==
+    /\ phase = "live"
+    /\ hoOpen
+    /\ fEpoch < MaxEpoch
+    /\ hoOpen' = FALSE
+    /\ fEpoch' = fEpoch + 1
+    /\ fFence' = fEpoch + 1
+    /\ hoClosedAt' = next
+    /\ hfly' = IF resumed THEN FALSE ELSE hfly
+    /\ UNCHANGED <<walkVars, floorVars, walVars, leafVars, epochVars, windows, fpend, fkind, fstamp, gate, resumed,
+                   mInit, legacyUsed, viewVars, oldVars, envVars, safeVars, wghosts>>
+--- REPLACE
+\* MUTATION: the close re-claims first; CloseMark closes the intent and markers later.
+Close ==
+    /\ phase = "live"
+    /\ hoOpen
+    /\ ~closing
+    /\ fEpoch < MaxEpoch
+    /\ closing' = TRUE
+    /\ fEpoch' = fEpoch + 1
+    /\ fFence' = fEpoch + 1
+    /\ hoClosedAt' = next
+    /\ hfly' = IF resumed THEN FALSE ELSE hfly
+    /\ UNCHANGED <<floorVars, gst, gstamp, hoOpen, walVars, leafVars, epochVars, windows, fpend, fkind, fstamp,
+                   gate, resumed, mInit, legacyUsed, viewVars, oldVars, envVars, safeVars, wghosts>>
+
+CloseMark ==
+    /\ closing
+    /\ closing' = FALSE
+    /\ hoOpen' = FALSE
+    /\ UNCHANGED <<floorVars, gst, gstamp, walVars, leafVars, epochVars, hoClosedAt, windows, fpend, fkind,
+                   fstamp, fEpoch, fFence, gateVars, viewVars, oldVars, envVars, safeVars, wghosts>>
+--- END
+
+--- FIND
+GRestamp ==
+    /\ gst = "rejected"
+    /\ hoOpen
+    /\ ~closing
+--- REPLACE
+\* MUTATION: the open check reads the marker, not the intent's closing mark.
+GRestamp ==
+    /\ gst = "rejected"
+    /\ hoOpen
+--- END
+
+--- FIND
+    \/ GAdmit \/ GAlloc \/ GReject \/ GRestamp \/ GUnstamped
+--- REPLACE
+    \/ GAdmit \/ GAlloc \/ GReject \/ GRestamp \/ GUnstamped \/ CloseMark
+--- END

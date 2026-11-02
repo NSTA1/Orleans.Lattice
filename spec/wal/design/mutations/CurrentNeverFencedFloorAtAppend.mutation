@@ -1,0 +1,17 @@
+# The partition's retired floor is checked on every stamped append, as revision 4
+# specified. The floor is one value per partition but epochs are per leaf, so
+# another leaf's retirement rejects an append the live leaf's own entry admits,
+# superseding a leaf that nothing superseded (#5635).
+MODULE: CurrentNeverFencedFloorAtAppend
+TARGET: CurrentNeverFenced
+CLASS: Invariant
+SUMMARY: the shard checks the partition's retired floor on every stamped append
+PERTURBS: OwnAlloc, FloorReject
+BOUNDS: WithOtherRetire = TRUE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+AppendAdmits(a) == epoch[a] >= memFence
+--- REPLACE
+\* MUTATION: the partition's retired floor is checked on the append path too.
+AppendAdmits(a) == epoch[a] >= memFence /\ epoch[a] > retired
+--- END

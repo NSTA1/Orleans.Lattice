@@ -1,0 +1,54 @@
+# A lazy fence: the epoch is persisted eagerly but the shard's entry is raised
+# only by the activation's first append, so a stale duplicate appends between
+# the newer activation's claim and that append, above the claim head the newer
+# activation replays to.
+MODULE: NoTrimPastAckedLazyFence
+TARGET: NoTrimPastAcked
+CLASS: Invariant
+SUMMARY: the claim does not raise the WAL shard's entry; the activation's first append does
+PERTURBS: ClaimWrite, ClaimRaise, OwnAlloc
+
+--- FIND
+    /\ fence' = Max2(fence, epoch[a])
+    /\ cstage' = [cstage EXCEPT ![a] = 2]
+--- REPLACE
+\* MUTATION: the claim leaves the durable entry alone.
+    /\ fence' = fence
+    /\ cstage' = [cstage EXCEPT ![a] = 2]
+--- END
+
+--- FIND
+    /\ memFence' = epoch[a]
+    /\ claimHead' = [claimHead EXCEPT ![a] = next]
+--- REPLACE
+\* MUTATION: the claim leaves the loaded entry alone.
+    /\ memFence' = memFence
+    /\ claimHead' = [claimHead EXCEPT ![a] = next]
+--- END
+
+--- FIND
+    /\ memFence > 0
+    /\ AppendAdmits(a)
+    /\ next < MaxOff
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = a]
+    /\ inflight' = inflight \cup {next}
+    /\ staleAccepted' = (staleAccepted \/ epoch[a] < maxClaimed \/ epoch[a] <= lRetired)
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
+    /\ UNCHANGED <<walkVars, floorVars, lastU, oldUsed, durable, acked, floor, leafVars, epochVars, handVars, gateVars,
+                   viewVars, envVars, oldRejected, wghosts>>
+--- REPLACE
+    /\ AppendAdmits(a)
+    /\ next < MaxOff
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = a]
+    /\ inflight' = inflight \cup {next}
+    /\ staleAccepted' = (staleAccepted \/ epoch[a] < maxClaimed \/ epoch[a] <= lRetired)
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
+\* MUTATION: the first append raises the entry instead.
+    /\ fence' = Max2(fence, epoch[a])
+    /\ memFence' = Max2(memFence, epoch[a])
+    /\ UNCHANGED <<walkVars, floorVars, lastU, oldUsed, durable, acked, floor, leafVars, rowEpoch, seen, epoch, cstage,
+                   claimHead, retired, maxClaimed, handVars, gateVars, viewVars, envVars,
+                   oldRejected, wghosts>>
+--- END

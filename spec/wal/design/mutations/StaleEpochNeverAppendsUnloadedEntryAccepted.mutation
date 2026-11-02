@@ -1,0 +1,17 @@
+# After a WAL shard restart its in-memory entries are gone. Accepting an append
+# from a leaf whose entry is not loaded, instead of rejecting it until the leaf
+# re-presents its claim, accepts a stale epoch.
+MODULE: StaleEpochNeverAppendsUnloadedEntryAccepted
+TARGET: StaleEpochNeverAppends
+CLASS: Invariant
+SUMMARY: the restarted shard accepts an append whose entry it has not reloaded
+PERTURBS: OwnAlloc
+BOUNDS: WithRestart = TRUE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+    /\ memFence > 0
+    /\ AppendAdmits(a)
+--- REPLACE
+\* MUTATION: an unloaded entry does not hold the append.
+    /\ AppendAdmits(a)
+--- END

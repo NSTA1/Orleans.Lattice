@@ -1,0 +1,15 @@
+MODULE: ReadPositionHonestArmsWithoutClaim
+TARGET: ReadPositionHonest
+CLASS: Invariant
+EXPECT: clean (a redundancy check: the guard is implied in the model and kept for the reason in LiveAdvanceDesign.md)
+SUMMARY: an activation arms without a claim
+PERTURBS: LiveAdvance
+BOUNDS: WithGateFlip = TRUE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+Armed(a) ==
+    /\ cstage[a] = 3
+
+--- REPLACE
+Armed(a) ==
+--- END

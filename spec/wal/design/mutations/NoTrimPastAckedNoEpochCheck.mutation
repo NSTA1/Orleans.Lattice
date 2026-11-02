@@ -1,0 +1,15 @@
+# The epoch check dropped: a stale duplicate keeps appending after a newer
+# activation claimed, and the newer one's live advance passes its entries.
+MODULE: NoTrimPastAckedNoEpochCheck
+TARGET: NoTrimPastAcked
+CLASS: Invariant
+SUMMARY: the WAL shard accepts an append from an epoch below its entry
+PERTURBS: OwnAlloc
+
+--- FIND
+    /\ AppendAdmits(a)
+    /\ next < MaxOff
+--- REPLACE
+\* MUTATION: the shard does not check the epoch against its entry.
+    /\ next < MaxOff
+--- END
