@@ -7,7 +7,8 @@ namespace Orleans.Lattice.Backup.Tests;
 /// a live single-silo cluster with the real in-cluster sink and the real catalog
 /// store. Proves the rebuild-from-sink pass repopulates an empty catalog from the
 /// sink's self-describing manifests, is idempotent on re-run through the real
-/// reconcile path, and heals a catalog that has drifted behind the sink.
+/// reconcile path, and heals a catalog that has drifted behind the sink. Each
+/// sink manifest's artifact is written too: a rebuild lists only whole backups.
 /// </summary>
 [Category("Integration")]
 public sealed class BackupCatalogRebuildIntegrationTests
@@ -22,6 +23,22 @@ public sealed class BackupCatalogRebuildIntegrationTests
 
     private static BackupManifest Manifest(string id, DateTimeOffset createdAtUtc) =>
         BackupManifestModelTests.Sample(id: id) with { CreatedAtUtc = createdAtUtc };
+
+    // A rebuild lists only a backup whose every artifact is in the sink (issue
+    // #5637), so each test's manifests stand for whole backups: their one
+    // artifact is written first.
+    private async Task InitializeWithArtifactAsync()
+    {
+        await _fixture.InitializeAsync();
+        var artifactId = BackupManifestModelTests.Sample().ContentDescriptors.Single().ArtifactId;
+        await _fixture.Sink.WriteArtifactAsync(artifactId, OneChunk());
+    }
+
+    private static async IAsyncEnumerable<ReadOnlyMemory<byte>> OneChunk()
+    {
+        await Task.CompletedTask;
+        yield return new byte[] { 1, 2, 3 };
+    }
 
     private ILatticeBackupCatalogRebuildService Rebuild =>
         (ILatticeBackupCatalogRebuildService)_fixture.SiloServices
@@ -41,7 +58,7 @@ public sealed class BackupCatalogRebuildIntegrationTests
     [Test]
     public async Task RebuildFromSinkAsync_repopulates_an_empty_catalog_from_the_sink()
     {
-        await _fixture.InitializeAsync();
+        await InitializeWithArtifactAsync();
         await _fixture.Sink.WriteManifestAsync(Manifest("aaaa", DateTimeOffset.UnixEpoch));
         await _fixture.Sink.WriteManifestAsync(Manifest("bbbb", DateTimeOffset.UnixEpoch.AddHours(1)));
 
@@ -61,7 +78,7 @@ public sealed class BackupCatalogRebuildIntegrationTests
     [Test]
     public async Task RebuildFromSinkAsync_is_idempotent_and_preserves_capture_timestamp()
     {
-        await _fixture.InitializeAsync();
+        await InitializeWithArtifactAsync();
         var firstSeen = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
         // Catalogue the manifest first, then let the sink hold a later-timestamped
@@ -87,7 +104,7 @@ public sealed class BackupCatalogRebuildIntegrationTests
     [Test]
     public async Task RebuildFromSinkAsync_heals_a_catalog_drifted_behind_the_sink()
     {
-        await _fixture.InitializeAsync();
+        await InitializeWithArtifactAsync();
         await _fixture.Sink.WriteManifestAsync(Manifest("aaaa", DateTimeOffset.UnixEpoch));
         await _fixture.Sink.WriteManifestAsync(Manifest("bbbb", DateTimeOffset.UnixEpoch.AddHours(1)));
         await _fixture.Sink.WriteManifestAsync(Manifest("cccc", DateTimeOffset.UnixEpoch.AddHours(2)));

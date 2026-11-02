@@ -99,7 +99,6 @@ internal sealed class BackupPublisher(
                 // before the sink manifest, so a delete interrupted part-way leaves a
                 // manifest whose artifacts are partly gone, which must stay unlisted
                 // until a retry of the delete finishes it.
-                if (RedProof.RebuildUnprobed) { var unprobed = await sink.ReadManifestAsync(manifest.Id).ConfigureAwait(false); if (unprobed is not null) { await catalog.RegisterAsync(unprobed).ConfigureAwait(false); return new BackupPublishResult(BackupPublishOutcome.Published, unprobed); } } // RED-PROOF
                 if (!(await sink.ProbeAsync(manifest.Id).ConfigureAwait(false)).IsResolvable)
                 {
                     return new BackupPublishResult(BackupPublishOutcome.Skipped, null);
@@ -261,7 +260,6 @@ internal sealed class BackupPublisher(
     public async Task<bool> FinishDeleteAsync(string backupId, string? scopeKey = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(backupId);
-        if (RedProof.EndIgnoresRow) { var any = await sink.ReadManifestAsync(backupId).ConfigureAwait(false); if (any is not null && IsOfScope(any, scopeKey)) { await sink.DeleteManifestAsync(backupId).ConfigureAwait(false); return true; } return false; } // RED-PROOF
         if (await catalog.GetAsync(backupId).ConfigureAwait(false) is not null)
         {
             return false;

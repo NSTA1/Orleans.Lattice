@@ -157,7 +157,6 @@ internal sealed class SchedulerBackupPublicationGate(
         CancellationTokenSource lost,
         CancellationToken stop)
     {
-        if (RedProof.NoRenewal) { return; } // RED-PROOF
         try
         {
             while (true)
@@ -190,7 +189,6 @@ internal sealed class SchedulerBackupPublicationGate(
 
     private static void ThrowIfLost(CancellationTokenSource lost, string backupId)
     {
-        if (RedProof.NoStopOnLoss) { return; } // RED-PROOF
         if (lost.IsCancellationRequested)
         {
             throw new TimeoutException(

@@ -62,7 +62,6 @@ public sealed class BackupDeleteOverlapTests
     [Test]
     public async Task A_delete_whose_lease_ran_out_keeps_a_backup_a_capture_republished_meanwhile()
     {
-        RedProof.EndIgnoresRow = true; // RED-PROOF
         // A delete's caller cannot reach the grain for longer than its lease, and
         // a capture of identical content republishes the id. The delete then ends:
         // it must not delete the manifest of the backup that is listed again.

@@ -83,5 +83,5 @@ internal sealed class BackupIdClaimGrain(
 
     // The last claim released clears the record, so a bare id leaves nothing in
     // storage once no publish of it is in flight.
-    private Task PersistAsync() => Claims.Count == 0 && !RedProof.ClaimNeverCleared ? state.ClearStateAsync() : state.WriteStateAsync(); // RED-PROOF
+    private Task PersistAsync() => Claims.Count == 0 ? state.ClearStateAsync() : state.WriteStateAsync();
 }

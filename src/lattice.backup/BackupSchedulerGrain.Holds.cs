@@ -133,7 +133,7 @@ internal sealed partial class BackupSchedulerGrain
             // the caller deletes the artifacts outside the grain, renewing it, then
             // ends it. The caller's token, so a retried call whose first attempt
             // completed renews the same lease rather than orphaning it.
-            SetDeleteLease(backupId, RedProof.BeginMintsToken ? Guid.NewGuid() : token); // RED-PROOF
+            SetDeleteLease(backupId, token);
             return new BackupDeleteStart(BackupRetireOutcome.Removed, manifest, token);
         }
         finally
@@ -250,8 +250,6 @@ internal sealed partial class BackupSchedulerGrain
         }
 
         var now = DateTimeOffset.UtcNow;
-        if (RedProof.LeaseNeverLapses) { return leases.Count > 0; } // RED-PROOF
-        if (RedProof.ExpiryDropsEveryLease && leases.Values.Any(until => until <= now)) { _deleting.Remove(backupId); return false; } // RED-PROOF
         foreach (var expired in leases.Where(lease => lease.Value <= now).Select(lease => lease.Key).ToList())
         {
             leases.Remove(expired);

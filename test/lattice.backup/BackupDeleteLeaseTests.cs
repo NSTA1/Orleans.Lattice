@@ -28,7 +28,6 @@ public sealed class BackupDeleteLeaseTests
     [Test]
     public async Task A_rebuild_after_an_interrupted_delete_leaves_the_half_deleted_backup_unlisted()
     {
-        RedProof.RebuildUnprobed = true; // RED-PROOF
         await StartAsync(o => o.DeleteLease = TimeSpan.FromSeconds(1));
         var captured = await SeedAndCaptureAsync();
 
@@ -54,7 +53,6 @@ public sealed class BackupDeleteLeaseTests
     [Test]
     public async Task A_delete_whose_artifact_deletes_outlast_its_lease_keeps_a_rebuild_waiting()
     {
-        RedProof.NoRenewal = true; // RED-PROOF
         // The artifact delete takes longer than the lease; the caller renews it.
         await StartAsync(o => o.DeleteLease = TimeSpan.FromSeconds(1));
         var captured = await SeedAndCaptureAsync();
@@ -82,7 +80,6 @@ public sealed class BackupDeleteLeaseTests
     [Test]
     public async Task A_delete_that_loses_its_lease_deletes_no_further_artifact()
     {
-        RedProof.NoStopOnLoss = true; // RED-PROOF
         await StartAsync(o => o.DeleteLease = TimeSpan.FromSeconds(1.5));
         var (manifest, second) = await CaptureWithTwoArtifactsAsync();
 
@@ -119,7 +116,6 @@ public sealed class BackupDeleteLeaseTests
     [Test]
     public async Task A_lost_deletes_lease_runs_out_and_a_capture_then_republishes()
     {
-        RedProof.LeaseNeverLapses = true; // RED-PROOF
         await StartAsync(o =>
         {
             o.DeleteLease = TimeSpan.FromSeconds(1);
@@ -143,7 +139,6 @@ public sealed class BackupDeleteLeaseTests
     [Test]
     public async Task One_deletes_lease_running_out_leaves_another_deletes_lease_in_force()
     {
-        RedProof.ExpiryDropsEveryLease = true; // RED-PROOF
         await StartAsync(o => o.DeleteLease = TimeSpan.FromSeconds(1), publishHoldWait: TimeSpan.FromSeconds(2));
         var captured = await SeedAndCaptureAsync();
 
@@ -174,7 +169,6 @@ public sealed class BackupDeleteLeaseTests
     [Test]
     public async Task A_delete_start_retried_with_its_token_holds_one_lease()
     {
-        RedProof.BeginMintsToken = true; // RED-PROOF
         await StartAsync(o => o.PublishHoldTimeout = TimeSpan.FromSeconds(5));
         var captured = await SeedAndCaptureAsync();
 

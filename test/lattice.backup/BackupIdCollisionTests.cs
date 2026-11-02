@@ -107,7 +107,6 @@ public sealed class BackupIdCollisionTests
     [Test]
     public async Task A_bare_id_claim_leaves_no_stored_record_once_released()
     {
-        RedProof.ClaimNeverCleared = true; // RED-PROOF
         // One grain, and so one stored record, per bare id: the record must go
         // when the last claim does, or every content id ever captured leaves one.
         var claim = _fixture.GrainFactory.GetGrain<IBackupIdClaimGrain>("released-id");
