@@ -273,14 +273,16 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
             {
                 await DirectoryOpAsync(leafId, () => WalAppendEpochDirectory.RemoveAsync(storage, _treeId, _shardIndex, leafId)).ConfigureAwait(true);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (ex is not OperationCanceledException && false) // RED-PROOF: delist not best effort
             {
                 // Left listed; the sweep finds the leaf gone and retires it again.
             }
+
+            await RemoveLoadedEntryAsync(leafId).ConfigureAwait(true); // RED-PROOF: success path only
         }
         finally
         {
-            if (floorCovers)
+            if (floorCovers && false) // RED-PROOF: no finally removal
             {
                 await RemoveLoadedEntryAsync(leafId).ConfigureAwait(true);
             }
@@ -331,15 +333,8 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
             gate = _directoryGates[WalAppendEpochDirectory.BucketOf(leafId)] ??= new SemaphoreSlim(1, 1);
         }
 
-        await gate.WaitAsync().ConfigureAwait(true);
-        try
-        {
-            await op().ConfigureAwait(true);
-        }
-        finally
-        {
-            gate.Release();
-        }
+        _ = gate;
+        await op().ConfigureAwait(true); // RED-PROOF: no bucket gate
     }
 
     /// <summary>
