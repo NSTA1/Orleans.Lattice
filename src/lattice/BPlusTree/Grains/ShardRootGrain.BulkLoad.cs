@@ -54,8 +54,8 @@ internal sealed partial class ShardRootGrain
             return batch;
         });
 
-        await FinalizeBulkLoadTreeAsync(operationId, leafIds, separators, maxChildren);
-        await RetireSeededRootLeafAsync(seededRoot);
+        var replaced = await FinalizeBulkLoadTreeAsync(operationId, leafIds, separators, maxChildren);
+        await RetireReplacedRootAsync(seededRoot, replaced);
     }
 
     /// <inheritdoc />
@@ -100,8 +100,8 @@ internal sealed partial class ShardRootGrain
             return batch;
         });
 
-        await FinalizeBulkLoadTreeAsync(operationId, leafIds, separators, maxChildren);
-        await RetireSeededRootLeafAsync(seededRoot);
+        var replaced = await FinalizeBulkLoadTreeAsync(operationId, leafIds, separators, maxChildren);
+        await RetireReplacedRootAsync(seededRoot, replaced);
     }
 
     /// <summary>
@@ -160,14 +160,33 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
-    /// Retires the empty seeded root leaf a bulk load replaced, so it does not
-    /// linger unreachable with its materialiser pins holding the tree's WAL.
+    /// Retires the root a bulk load replaced, so it does not linger unreachable
+    /// with its materialiser pins holding the tree's WAL, after relocating any row
+    /// it holds into the loaded tree (issue #5642).
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// The load checks that the shard is empty once, before its first await, but
+    /// a batch write is <c>[AlwaysInterleave]</c> and runs inside the load's
+    /// awaits. It routes to the root still published, the empty seeded leaf, or
+    /// seeds one itself on a shard that had no root, and may divide it. Point
+    /// writes cannot interleave with the load's serial turn. Once the load has
+    /// published its root, every batch write admitted before that is waited out
+    /// (<see cref="DrainBatchWritesAdmittedBeforeAsync"/>), so no write can reach
+    /// the replaced tree any more. Every
+    /// leaf of that replaced tree is then read, and any row it holds,
+    /// tombstones included, is merged last-writer-wins into the loaded tree by
+    /// routing, exactly as a merge of the same rows would be, before the leaf is
+    /// cleared. The batch write's stamp then resolves against the bulk entry for
+    /// the same key as it does on every replica. Without it the acknowledged row
+    /// was unreadable until a covering bulk leaf replayed it from the WAL.
+    /// </para>
+    /// <para>
     /// Runs only after the new root is persisted, so a failure before it leaves
-    /// the shard on its seeded root, and the leaf is cleared only while it still
-    /// holds nothing. A crash in between leaves an empty unreachable leaf whose
-    /// pins the WAL GC's orphan sweep retires.
+    /// the shard on its seeded root. A crash in between leaves an unreachable
+    /// leaf whose rows its covering bulk leaf replays and whose pins the WAL GC's
+    /// orphan sweep retires.
+    /// </para>
     /// <para>
     /// The clear goes through the shard root's owed-clear record rather than
     /// being awaited directly (issue #4383). By now the bulk operation is
@@ -178,16 +197,88 @@ internal sealed partial class ShardRootGrain
     /// or orphan-repair pass and swept by a purge.
     /// </para>
     /// </remarks>
-    private async Task RetireSeededRootLeafAsync(GrainId? seededRoot)
+    private async Task RetireReplacedRootAsync(GrainId? seededRoot, ReplacedBulkRoot replaced)
     {
-        if (seededRoot is not { } leafId || state.State.RootNodeId == leafId) return;
+        var rootId = replaced.RootId ?? seededRoot;
+        if (rootId is not { } root || state.State.RootNodeId == root) return;
 
-        var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-        var stats = await leaf.GetStatsAsync();
-        if (stats.LiveKeys == 0 && stats.Tombstones == 0)
-            await ClearRemovedLeafAsync(leafId, "replaced seeded root");
+        // The loaded root is published, so a batch write admitted from here on
+        // routes into the loaded tree. Wait out the ones admitted before, which may
+        // still reach the replaced root, so the read below sees every row any of
+        // them stores there and nothing lands between that read and the clear.
+        await DrainBatchWritesAdmittedBeforeAsync();
+
+        var leafIds = await CollectReplacedLeavesAsync(root, replaced.RootId is null || replaced.WasLeaf);
+        foreach (var leafId in leafIds)
+        {
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            var stats = await leaf.GetStatsAsync();
+            if (stats.LiveKeys != 0 || stats.Tombstones != 0)
+            {
+                var delta = await leaf.GetDeltaSinceAsync(new VersionVector());
+                if (delta.Entries.Count > 0)
+                {
+                    var rows = new Dictionary<string, LwwValue<byte[]>>(delta.Entries, StringComparer.Ordinal);
+                    await MergeRoutedAsync(rows, isCrossShardMigration: false);
+                    RecordBulkRelocation(rows.Count, LatticeMetrics.BulkRelocationReplacedRoot);
+                }
+            }
+
+            await ClearRemovedLeafAsync(leafId, "replaced bulk-load root");
+        }
     }
 
+    /// <summary>
+    /// The leaves of the tree rooted at <paramref name="root"/>, the root a bulk
+    /// load replaced: the root itself when it is a leaf, otherwise its leftmost
+    /// leaf and every leaf on the chain to its right. That chain is not linked to
+    /// the loaded leaves, which the load chains among themselves.
+    /// </summary>
+    private async Task<List<GrainId>> CollectReplacedLeavesAsync(GrainId root, bool rootIsLeaf)
+    {
+        if (rootIsLeaf)
+            return [root];
+
+        var nodeId = root;
+        GrainId leftmost;
+        while (true)
+        {
+            var routing = await grainFactory.GetGrain<IBPlusInternalGrain>(nodeId).GetRoutingTableAsync();
+            if (routing.ChildIds is not { Length: > 0 })
+                return [];
+            if (routing.ChildrenAreLeaves)
+            {
+                leftmost = routing.ChildIds[0];
+                break;
+            }
+
+            nodeId = routing.ChildIds[0];
+        }
+
+        var leaves = new List<GrainId>();
+        GrainId? next = leftmost;
+        while (next is { } id && leaves.Count < MaxReplacedRootLeaves)
+        {
+            leaves.Add(id);
+            next = await grainFactory.GetGrain<IBPlusLeafGrain>(id).GetNextSiblingAsync();
+        }
+
+        return leaves;
+    }
+
+    /// <summary>
+    /// Bound on the leaves <see cref="CollectReplacedLeavesAsync"/> walks. The tree
+    /// a bulk load replaces holds only what batch writes added during the load,
+    /// so it is small; the bound keeps a corrupt chain from looping.
+    /// </summary>
+    private const int MaxReplacedRootLeaves = 10_000;
+
+    /// <summary>
+    /// The root a bulk load replaced when it published its own (issue #5642):
+    /// its id, or <see langword="null"/> when the shard had none, and whether it
+    /// was a leaf.
+    /// </summary>
+    private readonly record struct ReplacedBulkRoot(GrainId? RootId, bool WasLeaf);
     /// <summary>
     /// Computes every bulk-load leaf's deterministic identity and promoted
     /// separator up front, without issuing a single grain call.
@@ -317,8 +408,11 @@ internal sealed partial class ShardRootGrain
     /// <see cref="BulkLoadAsync"/> and <see cref="BulkLoadRawAsync"/>. Builds
     /// internal nodes from <paramref name="leafIds"/> / <paramref name="separators"/>,
     /// persists the root, and records <paramref name="operationId"/> as complete.
+    /// Returns the root it replaced, read in the same synchronous step that
+    /// publishes the new one, so a root a concurrent batch write seeded or divided
+    /// while the load ran is the one reported (issue #5642).
     /// </summary>
-    private async Task FinalizeBulkLoadTreeAsync(
+    private async Task<ReplacedBulkRoot> FinalizeBulkLoadTreeAsync(
         string operationId,
         List<GrainId> leafIds,
         List<string?> separators,
@@ -326,11 +420,12 @@ internal sealed partial class ShardRootGrain
     {
         if (leafIds.Count == 1)
         {
+            var replacedLeafRoot = new ReplacedBulkRoot(state.State.RootNodeId, state.State.RootIsLeaf);
             state.State.RootNodeId = leafIds[0];
             state.State.RootIsLeaf = true;
             state.State.LastCompletedBulkOperationId = operationId;
             await WriteShardStateAsync();
-            return;
+            return replacedLeafRoot;
         }
 
         var shardKey = context.GrainId.Key.ToString()!;
@@ -396,10 +491,12 @@ internal sealed partial class ShardRootGrain
             level++;
         }
 
+        var replaced = new ReplacedBulkRoot(state.State.RootNodeId, state.State.RootIsLeaf);
         state.State.RootNodeId = currentLevel[0].id;
         state.State.RootIsLeaf = false;
         state.State.LastCompletedBulkOperationId = operationId;
         await WriteShardStateAsync();
+        return replaced;
     }
 
     public async Task BulkAppendAsync(string operationId, List<KeyValuePair<string, byte[]>> sortedEntries)
@@ -458,12 +555,37 @@ internal sealed partial class ShardRootGrain
             : await TraverseToRightmostLeafAsync();
 
         var rightmostLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(rightmostLeafId);
-        var (existingCount, rightEdge) = await rightmostLeaf.GetAppendTailAsync();
 
-        // Issue #5460: entries at or below the shard's right edge were grafted by
-        // an earlier delivery of this batch, so they are skipped rather than
-        // grafted again. See SkipAlreadyGraftedAsync.
-        int idx = await SkipAlreadyGraftedAsync(operationId, sortedEntries, rightEdge);
+        // GetAppendTailAsync and NarrowHighKeyAsync are new leaf methods, so while an
+        // older silo may host the leaf the append takes the 10.2.0 path: fill by count,
+        // graft without narrowing, relocate nothing. See BulkGraftSeamsAvailable.
+        var (graftSeams, existingCount, rightEdge) = await ReadAppendTailAsync(rightmostLeaf);
+
+        // Entries the right edge cannot take: at or below the shard's highest key,
+        // or below the rightmost leaf's own low bound. Either they were grafted by
+        // an earlier delivery of this batch (issue #5460) or the batch sorts below
+        // rows the shard already holds (issue #5610). See ResolveBelowEdgeAsync.
+        var lowBound = RootIsLeafTyped || !graftSeams
+            ? null
+            : (await rightmostLeaf.GetKeyRangeAndNextSiblingAsync()).KeyRange.LowKeyInclusive;
+        var belowEdge = CountBelowEdge(sortedEntries, rightEdge, lowBound);
+        int idx = 0;
+        if (belowEdge > 0)
+        {
+            bool merged;
+            (idx, clock, merged) = await ResolveBelowEdgeAsync(sortedEntries, belowEdge, clock, mirrored);
+            if (merged && idx < sortedEntries.Count)
+            {
+                // The merge may have divided the rightmost leaf, so the right edge
+                // is found again before the append fills it.
+                rightmostLeafId = RootIsLeafTyped
+                    ? state.State.RootNodeId!.Value
+                    : await TraverseToRightmostLeafAsync();
+                rightmostLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(rightmostLeafId);
+                (_, existingCount, _) = await ReadAppendTailAsync(rightmostLeaf);
+            }
+        }
+
         int space = maxLeafKeys - existingCount;
 
         if (space > 0 && idx < sortedEntries.Count)
@@ -551,72 +673,133 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
-    /// Returns how many leading entries of <paramref name="sortedEntries"/> sort at
-    /// or below <paramref name="rightEdge"/> - the highest live key of the shard's
-    /// rightmost leaf - and so were grafted by an earlier delivery of this batch.
-    /// The append starts from that index.
+    /// Counts the leading entries of <paramref name="sortedEntries"/> the shard's
+    /// right edge cannot take: those at or below <paramref name="rightEdge"/>, the
+    /// highest live key of the rightmost leaf, or below <paramref name="lowBound"/>,
+    /// that leaf's declared low bound.
+    /// </summary>
+    private static int CountBelowEdge(
+        List<KeyValuePair<string, byte[]>> sortedEntries,
+        string? rightEdge,
+        string? lowBound)
+    {
+        var count = 0;
+        while (count < sortedEntries.Count)
+        {
+            var key = sortedEntries[count].Key;
+            var atOrBelowEdge = rightEdge is not null && string.CompareOrdinal(key, rightEdge) <= 0;
+            var belowLow = lowBound is not null && string.CompareOrdinal(key, lowBound) < 0;
+            if (!atOrBelowEdge && !belowLow)
+                break;
+            count++;
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// Resolves the first <paramref name="belowEdge"/> entries, which the shard's
+    /// right edge cannot take, and returns the index the append continues from,
+    /// the clock after stamping, and whether any entry was merged.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// A bulk append grafts at the shard's right edge, so it is correct only for
-    /// keys above every key the shard already holds. The last-completed operation
-    /// id dedupes a retry of the batch the shard finished last, and nothing else.
-    /// A resumed bulk-load stream re-sends every unacknowledged chunk, which can
-    /// include one a later chunk has already superseded here; and a retry after a
-    /// fault part-way through an append finds the rightmost leaf already filled,
-    /// so it re-partitioned the remaining entries across the leaves the first
-    /// attempt had seeded. Either way entries were grafted a second time below
-    /// the right edge: rows duplicated across leaves, so counts and statistics
-    /// over-reported, and a leaf chain whose keys regress, so a range scan
-    /// suppressed the regressed leaves and omitted keys that point reads still
-    /// found (issue #5460).
+    /// A bulk append grafts at the shard's right edge, so it can graft only keys
+    /// above every key the shard already holds. Two things put entries below it.
+    /// A resumed bulk-load stream re-sends every unacknowledged chunk, including
+    /// one a later chunk has already superseded here, and a retry after a fault
+    /// part-way through an append finds the rightmost leaf already filled (issue
+    /// #5460). Or the batch really does sort below rows the shard holds: a point
+    /// write landed above the maximum between two chunks, or an import resumed
+    /// into a tree that has since taken writes (issue #5610).
     /// </para>
     /// <para>
-    /// The right edge records what was grafted whatever the operation id, so a
-    /// re-delivered entry is recognised by its key. Each skipped entry must have
-    /// a row in the shard - a tombstone counts, since a deleted key was still
-    /// grafted - or the batch is not a re-delivery but one out of order, which is
-    /// refused rather than silently dropped. The rows are read only for a
-    /// re-delivery: a fresh append skips nothing and reads nothing. They are
+    /// <b>A re-delivery appends nothing.</b> When the shard holds every one of
+    /// these entries with the identical value (live, no expiry, the same bytes),
+    /// the batch is a re-delivery and they are skipped, so nothing is grafted
+    /// twice. Key presence alone cannot tell a re-delivery from a refresh that
+    /// overwrites the keys with new values, so it is not the test. The rows are
     /// mirrored to an online resize's destination, as a same-operation retry's
     /// rows are, so a crash between an apply and its mirror stays covered.
     /// </para>
+    /// <para>
+    /// <b>Anything else is merged, never refused.</b> When any of them is missing,
+    /// deleted, or held with another value or an expiry, the batch is not a
+    /// re-delivery, and every one of them is stamped and merged last-writer-wins
+    /// into the leaf the current routing names, as a merge of the same rows would
+    /// be, with the split-shadow forward such a merge makes. A
+    /// key the shard already holds therefore resolves by its stamp: bulk entries
+    /// are stamped at the wall time of the append, so an entry appended after a
+    /// point write wins over it, on this shard exactly as on every replica and
+    /// view that applies both records, as 10.2.0 resolved it there. The two
+    /// treatments are never mixed within a batch. A chunk that succeeded in 10.2.0
+    /// still succeeds.
+    /// </para>
     /// </remarks>
-    private async Task<int> SkipAlreadyGraftedAsync(
-        string operationId,
+    private async Task<(int Next, HybridLogicalClock Clock, bool Merged)> ResolveBelowEdgeAsync(
         List<KeyValuePair<string, byte[]>> sortedEntries,
-        string? rightEdge)
+        int belowEdge,
+        HybridLogicalClock clock,
+        Dictionary<string, LwwValue<byte[]>>? mirrored)
     {
-        if (rightEdge is null)
-            return 0;
-
-        var skip = 0;
-        while (skip < sortedEntries.Count && string.CompareOrdinal(sortedEntries[skip].Key, rightEdge) <= 0)
-            skip++;
-
-        if (skip == 0)
-            return 0;
-
-        var keys = new List<string>(skip);
-        for (var i = 0; i < skip; i++)
+        var keys = new List<string>(belowEdge);
+        for (var i = 0; i < belowEdge; i++)
             keys.Add(sortedEntries[i].Key);
 
         var rows = await AppliedRowsAsync(keys);
-        foreach (var key in keys)
+        var redelivery = true;
+        for (var i = 0; i < belowEdge && redelivery; i++)
         {
-            if (!rows.ContainsKey(key))
-            {
-                throw new InvalidOperationException(
-                    $"Bulk append '{operationId}' to shard {MyShardIndex} of tree '{TreeId}' carries key '{key}', "
-                    + $"which sorts at or below the shard's highest key '{rightEdge}' but was never stored here. "
-                    + "A bulk append's keys must sort after every key the shard already holds.");
-            }
+            redelivery = rows.TryGetValue(sortedEntries[i].Key, out var held)
+                && HoldsIdentically(held, sortedEntries[i].Value);
         }
 
-        await MirrorRowsAsync(rows, joinCrdt: false);
-        return skip;
+        if (redelivery)
+        {
+            await MirrorRowsAsync(rows, joinCrdt: false);
+            return (belowEdge, clock, false);
+        }
+
+        var batch = new Dictionary<string, LwwValue<byte[]>>(belowEdge, StringComparer.Ordinal);
+        for (var i = 0; i < belowEdge; i++)
+        {
+            clock = HybridLogicalClock.Tick(clock);
+            batch[sortedEntries[i].Key] = LwwValue<byte[]>.Create(sortedEntries[i].Value, clock);
+        }
+
+        // A row stored for a split's moved slot reaches the split destination
+        // before the merge returns, as MergeManyAsync forwards it (issue #4522).
+        // MergeManyAsync's other check, refusing a slot this shard is handing off,
+        // is deliberately not made: BulkAppendChunkAsync does not re-route a
+        // refused shard, so the caller would see a refusal for a chunk 10.2.0
+        // accepted; the above-edge graft checks no slot ownership either.
+        await MergeRoutedAsync(batch, isCrossShardMigration: false);
+        await ForwardMergedRowsToSplitShadowIfNeededAsync(batch.Keys);
+        CollectMirroredRows(mirrored, batch);
+        RecordBulkRelocation(belowEdge, LatticeMetrics.BulkRelocationBelowEdge);
+        return (belowEdge, clock, true);
     }
 
+    /// <summary>
+    /// Whether <paramref name="held"/> is exactly the entry a bulk append of
+    /// <paramref name="value"/> would have stored: live, with no expiry, and the
+    /// same bytes. Only such a row marks a re-delivery; anything else, a value
+    /// overwritten since, a deletion, or a refresh carrying new bytes, is merged
+    /// (design #5604 change 4).
+    /// </summary>
+    private static bool HoldsIdentically(in LwwValue<byte[]> held, byte[] value) =>
+        !held.IsTombstone
+        && held.ExpiresAtTicks == 0
+        && held.Value is { } bytes
+        && bytes.AsSpan().SequenceEqual(value);
+
+    /// <summary>The single write seam for <see cref="LatticeMetrics.BulkRelocatedRows"/>.</summary>
+    private void RecordBulkRelocation(long rows, KeyValuePair<string, object?> source) =>
+        LatticeMetrics.BulkRelocatedRows.Add(
+            rows,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
+            source,
+            LatticeTenantLabel.ForTree(TreeId));
     private static void CollectMirroredRows(
         Dictionary<string, LwwValue<byte[]>>? mirrored,
         Dictionary<string, LwwValue<byte[]>> batch)
@@ -657,9 +840,17 @@ internal sealed partial class ShardRootGrain
         var firstNewLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(graft.NewLeaves[0].LeafId);
 
         // The rightmost leaf stops declaring the keyspace the appended leaves now
-        // own before they are linked behind it (issue #5460). Narrowing only, so a
-        // resumed graft re-runs it harmlessly.
-        await existingLeaf.NarrowHighKeyAsync(graft.NewLeaves[0].SeparatorKey);
+        // own, and links the first of them, in one persist (issues #5460, #5654).
+        // Narrowing only, so a resumed graft re-runs it harmlessly. The rows it
+        // held in that keyspace come back as a copy, are relocated into the
+        // appended leaves, and only then dropped from it (issue #5610), so a
+        // relocation that fails part-way is handed the same rows when the graft is
+        // resumed. A resume narrows whenever the leaf was already narrowed, even
+        // with the gate closed, so it never abandons rows a first attempt stranded.
+        await NarrowAndRelocateAsync(graft, existingLeaf);
+
+        // Re-asserts the link for the 10.2.0 path and for a graft resumed after the
+        // narrow; a no-op persist-wise once the narrow linked it.
         await existingLeaf.SetNextSiblingAsync(graft.NewLeaves[0].LeafId);
         await firstNewLeaf.SetPrevSiblingAsync(graft.ExistingRightmostLeafId);
 
@@ -776,6 +967,135 @@ internal sealed partial class ShardRootGrain
         state.State.PendingBulkGraft = null;
         state.State.LastCompletedBulkOperationId = graft.OperationId;
         await WriteShardStateAsync();
+    }
+
+    /// <summary>
+    /// Whether every silo that may host a leaf serves the bulk-graft leaf methods
+    /// <c>GetAppendTailAsync</c> and <c>NarrowHighKeyAsync</c>. A 10.2.0 silo has
+    /// neither, so a call to a leaf it hosts fails with an unknown-method fault and
+    /// the append, which succeeded in 10.2.0, would fail. The append-fence gate
+    /// (epic #5605) is open only while every active silo runs a build that has them,
+    /// and closes by itself when an older silo joins, so while it is closed the
+    /// append takes the 10.2.0 path. A host with no gate registered runs a single
+    /// build.
+    /// </summary>
+    private bool BulkGraftSeamsAvailable =>
+        context.ActivationServices?.GetService(typeof(IWalAppendFenceGate)) is not IWalAppendFenceGate gate
+        || gate.IsOpen;
+
+    /// <summary>
+    /// Narrows the old rightmost leaf to the first appended separator and links
+    /// the first appended leaf in one persist, relocates the rows it held at or
+    /// above that separator into the appended leaves, and only then drops exactly
+    /// those rows from it (issues #5610, #5654). Copy, deliver, drop: a relocation
+    /// that fails, or a shard root that dies before it, leaves the rows on the old
+    /// leaf for the resumed graft to be handed again.
+    /// </summary>
+    private async Task NarrowAndRelocateAsync(PendingBulkGraft graft, IBPlusLeafGrain existingLeaf)
+    {
+        var separator = graft.NewLeaves[0].SeparatorKey;
+        if (!BulkGraftSeamsAvailable)
+        {
+            // The gate is closed, but a first attempt with it open may have
+            // narrowed the leaf already; its stranded rows must still be moved.
+            var high = (await existingLeaf.GetKeyRangeAndNextSiblingAsync()).KeyRange.HighKeyExclusive;
+            if (high is null || string.CompareOrdinal(high, separator) > 0)
+                return;
+        }
+
+        List<LwwEntry>? stranded;
+        try
+        {
+            stranded = await existingLeaf.NarrowHighKeyAsync(separator, graft.NewLeaves[0].LeafId);
+        }
+        catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
+        {
+            // An older silo joined and hosts the leaf before the gate saw it: the
+            // 10.2.0 path, which links without narrowing.
+            return;
+        }
+
+        if (stranded is not { Count: > 0 })
+            return;
+
+        await RelocateIntoGraftedLeavesAsync(graft, stranded);
+
+        var relocated = new Dictionary<string, HybridLogicalClock>(stranded.Count, StringComparer.Ordinal);
+        foreach (var row in stranded)
+            relocated[row.Key] = row.Timestamp;
+        try
+        {
+            await existingLeaf.DropRelocatedRowsAsync(relocated);
+        }
+        catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
+        {
+            // The rows are delivered and lie outside the leaf's declared span, so
+            // no read reaches them there and its replay does not reload them; only
+            // the in-memory copy on an older silo's activation is left behind.
+        }
+    }
+
+    /// <summary>
+    /// Reads the rightmost leaf's live count and highest live key in one call, or,
+    /// while an older silo may host the leaf, only its count (the 10.2.0 path). An
+    /// older silo that joins before the gate sees it answers the new method with a
+    /// definite unknown-method fault, which also takes the 10.2.0 path.
+    /// </summary>
+    private async Task<(bool Seams, int LiveCount, string? RightEdge)> ReadAppendTailAsync(IBPlusLeafGrain leaf)
+    {
+        if (BulkGraftSeamsAvailable)
+        {
+            try
+            {
+                var (count, edge) = await leaf.GetAppendTailAsync();
+                return (true, count, edge);
+            }
+            catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
+            {
+            }
+        }
+
+        return (false, await leaf.CountAsync(), null);
+    }
+
+    /// <summary>
+    /// Merges the rows the old rightmost leaf held at or above the first appended
+    /// separator into the appended leaf whose range declares each one, preserving
+    /// their stamps (issue #5610). A row and a bulk entry for the same key resolve
+    /// last-writer-wins on their stamps, as on every replica, so the acknowledged
+    /// row is never lost and a key only the old leaf held stays readable. Re-run
+    /// by a resumed graft against whatever the narrow hands back, so it is
+    /// idempotent.
+    /// </summary>
+    private async Task RelocateIntoGraftedLeavesAsync(PendingBulkGraft graft, List<LwwEntry> rows)
+    {
+        var byLeaf = new Dictionary<GrainId, Dictionary<string, LwwValue<byte[]>>>();
+        foreach (var row in rows)
+        {
+            // The appended leaves are ordered by separator, and every row sorts at
+            // or above the first, so the owner is the last leaf whose separator is
+            // at or below the row's key.
+            var owner = graft.NewLeaves[0].LeafId;
+            for (var i = 1; i < graft.NewLeaves.Count; i++)
+            {
+                if (string.CompareOrdinal(row.Key, graft.NewLeaves[i].SeparatorKey) < 0)
+                    break;
+                owner = graft.NewLeaves[i].LeafId;
+            }
+
+            if (!byLeaf.TryGetValue(owner, out var batch))
+                byLeaf[owner] = batch = new Dictionary<string, LwwValue<byte[]>>(StringComparer.Ordinal);
+            batch[row.Key] = row.ToLwwValue();
+        }
+
+        foreach (var (leafId, batch) in byLeaf)
+        {
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            await WalFenceSeamRetry.RunAsync(
+                () => leaf.MergeEntriesAsync(batch), WalFenceSeamRetry.CallerShardCoordinator, TreeId);
+        }
+
+        RecordBulkRelocation(rows.Count, LatticeMetrics.BulkRelocationRightmostLeaf);
     }
 
     /// <summary>

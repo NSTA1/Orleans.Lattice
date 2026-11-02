@@ -169,14 +169,18 @@ Two caller obligations make it safe to re-drive:
   dropped connection reapplies nothing. Re-driving an *older* chunk - one a
   later chunk has already superseded on a shard, which is what a resumed
   stream does when it re-sends its whole unacknowledged window - is a no-op
-  as well: each shard treats entries at or below its highest key as already
-  grafted and skips them, so no entry is grafted twice (issue #5460). A
-  skipped entry the shard holds no row for means the chunk is out of order,
-  and the append is refused with `InvalidOperationException`.
-- **Keys must ascend**, both within a chunk and across the whole stream.
+  as well: when a shard already holds every entry at or below its highest
+  live key with the identical value (live, no expiry, the same bytes), it
+  treats the chunk as a re-delivery and skips those entries, so no entry is
+  grafted twice (issue #5460). A chunk that changes any of those values is
+  not a re-delivery: it is applied, so a refresh that overwrites keys
+  reaches replicas and views as it did before.
+- **Keys should ascend**, both within a chunk and across the whole stream.
   Hash-partitioning a globally sorted stream preserves relative order within
   each partition, which is what keeps the per-shard appends on the right edge
-  of the tree.
+  of the tree, where they are cheapest. A chunk that does not is still
+  applied, never refused: see
+  [Rows the append meets](#rows-the-append-meets).
 
 Throws `ArgumentException` when `operationId` is null or empty, and
 `ArgumentNullException` when `sortedEntries` is null. An empty chunk is a
@@ -189,6 +193,48 @@ as well as live keys (sampled fresh from the shards, never answered from the
 diagnostics cache, and refusing to begin while any shard could not be sampled),
 within-chunk order validation, and a server-acknowledged chunk index; see
 [Migrating from an External Store](external-store-migration.md#choosing-an-ingest-path).
+
+### Rows the append meets
+
+A bulk append grafts new leaves at a shard's right edge, but the shard may
+already hold rows where the chunk lands: a point or batch write accepted
+between two chunks above the previous chunk's highest key, a chunk that sorts
+below rows the shard holds (an import resumed into a tree that has since taken
+writes), or a batch write accepted while a `BulkLoadAsync` was running on that
+shard. Those rows stay readable, and every key resolves last-writer-wins on its
+stamp (issues #5610 and #5642):
+
+- **Entries at or below the right edge** - the shard's highest live key; a
+  deleted key above it does not count - that are not a re-delivery (at least
+  one of them is missing, deleted, or held with a different value or an
+  expiry) are merged into the leaves that already own their keys, exactly as
+  `SetManyAsync` would route them, and forwarded to a split's destination
+  when their slot is moving.
+  Nothing is refused for being out of order, and none of them is skipped:
+  skipping a held key here would keep a value that every replica replaces.
+- **Rows the shard's rightmost leaf holds in the appended range**, deleted
+  ones included, are moved with their stamps into the new leaf that owns each
+  key.
+- **Rows a batch write stored during a `BulkLoadAsync`** on the root the load
+  replaces are merged into the loaded tree before that root is retired.
+
+A bulk entry is stamped with the wall-clock time of the append, like any write.
+So for a key both the chunk and an earlier write hold, **the later-stamped
+write wins**: a chunk appended after a point write replaces its value, and a
+write stamped after the chunk keeps its own. That is the value every replica
+and materialised view resolves from the same WAL records. A key only the
+pre-existing rows hold keeps its value.
+
+Before this change, such rows were stranded on a leaf that reads no longer
+reached. **Keys that only the pre-existing rows held were unreadable** by point
+reads, counts and scans on the origin, though replicas returned them, until a
+replay of a bulk leaf brought them back; and counts could include a key twice.
+They are now readable, and counts and scans report each key once.
+
+The number of rows placed this way is reported by
+`orleans.lattice.shard_root.bulk.relocated_rows` (see
+[Metrics](metrics.md)); it stays at zero for an import into a quiet tree in
+ascending key order.
 
 ## Efficiency compared with `SetManyAsync`
 
