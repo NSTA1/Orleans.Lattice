@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
@@ -5,6 +6,7 @@ using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Tests.Fakes;
 using Orleans.Runtime;
+using Orleans.Storage;
 using Orleans.Timers;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -39,7 +41,7 @@ public sealed class TreeRangeDeleteFenceGrainTests
 
         public TreeRangeDeleteFenceGrain Grain { get; }
 
-        public Harness()
+        public Harness(IGrainStorage? storage = null)
         {
             var factory = Substitute.For<IGrainFactory>();
             factory.GetGrain<IWalShardGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(Wal);
@@ -62,6 +64,13 @@ public sealed class TreeRangeDeleteFenceGrainTests
 
             var context = Substitute.For<IGrainContext>();
             context.GrainId.Returns(GrainId.Create("rdfence", Tree));
+            if (storage is not null)
+            {
+                var services = new ServiceCollection();
+                services.AddKeyedSingleton(LatticeOptions.StorageProviderName, storage);
+                context.ActivationServices.Returns(services.BuildServiceProvider());
+            }
+
             Grain = new TreeRangeDeleteFenceGrain(
                 context,
                 factory,
@@ -176,5 +185,62 @@ public sealed class TreeRangeDeleteFenceGrainTests
         var generation = await harness.Grain.OpenIntentAsync(Guid.NewGuid(), "a", "b", long.MaxValue, [0]);
 
         Assert.That(generation, Is.EqualTo(6), "never hand out a generation a partition already holds above");
+    }
+
+    [Test]
+    public async Task A_fence_of_a_purged_tree_id_seeds_its_first_generation_above_the_floor()
+    {
+        // #5668: starting at 1 would let a purged incarnation's generation recur.
+        var storage = new EnumerableMemoryGrainStorage();
+        await WalAppendFenceRows.RaiseRoutingFloorAsync(storage, Tree, WalRoutingInitiator.TreeRangeDelete, 6);
+        var harness = new Harness(storage);
+
+        var generation = await harness.Grain.OpenIntentAsync(Guid.NewGuid(), "a", "b", long.MaxValue, [0]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(generation, Is.EqualTo(7));
+            Assert.That(harness.Claimed, Is.Not.Empty.And.All.EqualTo(7L), "the seeded generation is the one claimed");
+        });
+    }
+
+    [Test]
+    public async Task EnsureInitialised_claims_the_seeded_generation_everywhere_and_returns_the_heads()
+    {
+        var storage = new EnumerableMemoryGrainStorage();
+        await WalAppendFenceRows.RaiseRoutingFloorAsync(storage, Tree, WalRoutingInitiator.TreeRangeDelete, 3);
+        var harness = new Harness(storage) { Head = 11 };
+
+        var heads = await harness.Grain.EnsureInitialisedAsync();
+        var again = await harness.Grain.EnsureInitialisedAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(heads, Is.Not.Empty.And.All.EqualTo(11L), "one head per partition, as a close records them");
+            Assert.That(again, Is.EqualTo(heads), "idempotent");
+            Assert.That(harness.Claimed, Is.All.EqualTo(4L), "the seeded generation, re-claimed rather than raised");
+            Assert.That(harness.State.State.Generation, Is.EqualTo(4));
+        });
+    }
+
+    [Test]
+    public async Task RetireForPurge_raises_the_floor_over_every_generation_then_clears_the_state()
+    {
+        var storage = new EnumerableMemoryGrainStorage();
+        var harness = new Harness(storage);
+        await harness.Grain.OpenIntentAsync(Guid.NewGuid(), "a", "b", long.MaxValue, [0]);
+        harness.State.State.Generation = 5;
+
+        await harness.Grain.RetireForPurgeAsync();
+        var floor = await WalAppendFenceRows.ReadRoutingFloorAsync(storage, Tree, WalRoutingInitiator.TreeRangeDelete);
+        var next = await harness.Grain.EnsureInitialisedAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(floor, Is.EqualTo(5), "a generation a close raised but never claimed is covered too");
+            Assert.That(harness.State.State.Generation, Is.EqualTo(6), "the state was cleared, and re-seeded above the floor");
+            Assert.That(harness.State.State.Intents, Is.Empty, "the purged incarnation's intents are dropped");
+            Assert.That(next, Is.Not.Empty);
+        });
     }
 }

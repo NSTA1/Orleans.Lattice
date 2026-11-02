@@ -132,6 +132,42 @@ internal sealed class TreeRangeDeleteFenceGrain(
     }
 
     /// <inheritdoc />
+    public async Task RetireForPurgeAsync()
+    {
+        var storage = WalAppendFenceStorage.Resolve(context.ActivationServices)
+            ?? throw new InvalidOperationException(
+                $"Tree '{TreeId}': the range-delete fence cannot be retired: no grain storage provider is registered under '{LatticeOptions.StorageProviderName}'.");
+
+        // The floor first: from the moment the state is gone, a re-created incarnation's
+        // first generation is read from it, so it must already cover every generation
+        // this incarnation handed out, including one a close raised but never claimed.
+        var cover = Math.Max(state.State.Generation, state.State.ClaimedGeneration);
+        if (cover > 0)
+        {
+            await WalAppendFenceRows.RaiseRoutingFloorAsync(storage, TreeId, WalRoutingInitiator.TreeRangeDelete, cover);
+        }
+
+        if (state.RecordExists || cover > 0 || state.State.Intents.Count > 0)
+        {
+            await state.ClearStateAsync();
+            state.State = new TreeRangeDeleteFenceState();
+        }
+
+        await UnregisterReminderAsync();
+    }
+
+    /// <inheritdoc />
+    public Task<long> GetRetiringGenerationAsync() =>
+        Task.FromResult(Math.Max(state.State.Generation, state.State.ClaimedGeneration));
+
+    /// <inheritdoc />
+    public async Task<long[]> EnsureInitialisedAsync()
+    {
+        await SeedGenerationAsync();
+        return await ClaimEverywhereAsync();
+    }
+
+    /// <inheritdoc />
     public async Task ReceiveReminder(string reminderName, TickStatus status)
     {
         if (!string.Equals(reminderName, ReminderName, StringComparison.Ordinal))
@@ -199,20 +235,35 @@ internal sealed class TreeRangeDeleteFenceGrain(
 
     /// <summary>
     /// Ensures the current generation is claimed at every partition before an intent
-    /// is handed it: the first intent claims generation 1, and a close interrupted
-    /// mid-claim is finished.
+    /// is handed it: the first intent claims the generation above the range-delete
+    /// initiator's routing floor (1 for a tree id never purged, #5668), and a close
+    /// interrupted mid-claim is finished.
     /// </summary>
     private async Task EnsureGenerationClaimedAsync()
     {
-        if (state.State.Generation == 0)
-        {
-            state.State.Generation = 1;
-            await state.WriteStateAsync();
-        }
-
+        await SeedGenerationAsync();
         if (state.State.ClaimedGeneration < state.State.Generation)
         {
             await ClaimEverywhereAsync();
+        }
+    }
+
+    /// <summary>
+    /// Seeds the first generation above the range-delete initiator's routing floor (#5668):
+    /// 1 for a tree id never purged. A no-op once the fence holds a generation.
+    /// </summary>
+    private async Task SeedGenerationAsync()
+    {
+        if (state.State.Generation == 0)
+        {
+            var floor = 0L;
+            if (WalAppendFenceStorage.Resolve(context.ActivationServices) is { } storage)
+            {
+                floor = await WalAppendFenceRows.ReadRoutingFloorAsync(storage, TreeId, WalRoutingInitiator.TreeRangeDelete);
+            }
+
+            state.State.Generation = floor + 1;
+            await state.WriteStateAsync();
         }
     }
 

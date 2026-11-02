@@ -141,7 +141,9 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// <summary>
     /// Claims (or re-claims) routing generation <paramref name="generation"/> for
     /// <paramref name="initiator"/> at this partition (epic #5605), with the
-    /// semantics of <see cref="ClaimAppendEpochAsync"/> but no retired floor. A
+    /// semantics of <see cref="ClaimAppendEpochAsync"/>, with the initiator's
+    /// routing floor under the tree id (#5668, <see cref="RetireRoutingGenerationsAsync"/>)
+    /// in place of the retired-epoch floor: a claim at or below it is refused. A
     /// re-claim at a hand-off close fences every write admitted under an older
     /// generation, and returns the allocator head the close records.
     /// </summary>
@@ -179,6 +181,23 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// <returns>The partition's retired floor after the retirement.</returns>
     [AlwaysInterleave]
     Task<long> RetireAppendEpochAsync(Guid leafId, long rowEpoch, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Retires every routing-generation entry this partition holds for its tree (epic
+    /// #5605, #5668), when the tree is purged: raises each entry's initiator's durable
+    /// routing floor to at least the entry, durable or loaded, then drops the loaded
+    /// entries and deletes the entry rows. From then on this partition refuses a
+    /// generation claim at or below its initiator's floor. Idempotent.
+    /// </summary>
+    /// <param name="shardCount">
+    /// One past the highest shard index the tree ever allocated: the partition retires
+    /// the entry of each of those shard roots and of the range-delete fence, plus any
+    /// other initiator it has loaded.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token propagated from the originating call.</param>
+    /// <returns>The highest of the tree id's routing floors after the retirement.</returns>
+    [AlwaysInterleave]
+    Task<long> RetireRoutingGenerationsAsync(int shardCount, CancellationToken cancellationToken);
 
     /// <summary>
     /// Returns up to <paramref name="maxEntries"/> entries with sequence

@@ -860,10 +860,62 @@ internal sealed partial class TreeDeletionGrain(
 
         await TrimPurgedWalAsync();
         await DeregisterLeafCursorsAsync();
+        await RetirePurgedFenceRowsAsync();
         await SettleRegistryEntryAsync();
 
         await UnregisterAllRemindersAsync();
         await PublishTreeLifecycleEventAsync(LatticeTreeEventKind.TreePurged);
+    }
+
+    /// <summary>
+    /// Retires the purged tree's per-tree fence rows (epic #5605, #5668): the
+    /// range-delete fence's state, each shard root's hand-off marker and each WAL
+    /// partition's routing-generation entries, each after the tree id's
+    /// routing-generation floor is raised over it
+    /// (<see cref="TreeRoutingFenceRetirement"/>). Runs before the registry entry is
+    /// removed, which is what frees the id, so a re-created tree never meets these
+    /// rows and none of its own can be deleted. Only a purge retires them: a soft
+    /// delete keeps every row, so a recovered tree keeps its generations.
+    /// </summary>
+    /// <remarks>
+    /// Not best-effort: a failure propagates with the registry removal still owed, and
+    /// the keepalive reminder is armed as <see cref="SettleRegistryEntryAsync"/> arms
+    /// it, so the purge's re-drive runs the retirement again. Self-gates via
+    /// <see cref="PurgeUnregistersTree"/>: a system tree, or a retired physical copy
+    /// whose id stays registered as a live logical tree, keeps its rows, since its id
+    /// is never freed for a re-created tree. It runs whether or not the append-fence
+    /// gate is open: rows written while it was open are retired by a purge that
+    /// finishes after it closed again.
+    /// </remarks>
+    private async Task RetirePurgedFenceRowsAsync()
+    {
+        if (!PurgeUnregistersTree)
+        {
+            return;
+        }
+
+        try
+        {
+            var storage = WalAppendFenceStorage.Resolve(context.ActivationServices);
+            if (storage is null)
+            {
+                // No provider, so the fence never wrote a row for this tree.
+                return;
+            }
+
+            var shardCount = await ResolveAllocatedShardCountAsync();
+            var partitions = await optionsResolver.GetWalPartitionsAsync(TreeId);
+            await TreeRoutingFenceRetirement.RetireAsync(grainFactory, storage, TreeId, shardCount, partitions);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Tree {TreeId}: retiring the purged tree's fence rows failed; its registry removal stays owed and the purge re-drives both (#5668).",
+                TreeId);
+            await ArmKeepaliveForOwedUnregisterAsync();
+            throw;
+        }
     }
 
     /// <summary>
@@ -977,8 +1029,10 @@ internal sealed partial class TreeDeletionGrain(
             return;
         }
 
-        // Pins before the registry entry, as FinishCompletedPurgeAsync (#5416).
+        // Pins before the registry entry, as FinishCompletedPurgeAsync (#5416), and
+        // the fence rows too (#5668): a re-drive after a failed retirement retires again.
         await DeregisterLeafCursorsAsync();
+        await RetirePurgedFenceRowsAsync();
         await SettleRegistryEntryAsync();
     }
 
