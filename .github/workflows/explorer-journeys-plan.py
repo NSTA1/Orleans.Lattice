@@ -25,6 +25,17 @@ Legs:
   isolated-<jid>    one per folder under test/lattice.explorer.e2e/Journeys/,
                     discovered from the directory, so adding a journey edits
                     no shared file. LATTICE_E2E_MODE=isolated.
+  contract-<chapter> one per STORY-ONLY chapter: a chapter with a contract
+                    (F6) but no Journeys/<id> folder, discovered from the tree,
+                    so the set shrinks by itself as journeys land (#5660). It
+                    runs that chapter's case of its storyline's contract
+                    conformance fixture alone on a fresh estate: the case
+                    establishes the chapter's consumes through their contracts
+                    in story order (StorySession.EstablishmentOrderOf, as
+                    isolated mode does), then establishes and verifies the
+                    chapter's own contract. Without it such a chapter would run
+                    only in the advisory story and conformance runs below.
+                    Needs its storyline's conformance fixture.
   story-<storyline> the Contoso and Fabrikam story fixtures, once they and a
                     contract (F6) for one of that storyline's chapters exist in
                     the tree (F6 lands Contoso's contracts before Fabrikam's).
@@ -57,11 +68,21 @@ advisory and run at landing, nightly and on demand):
           chapter and the planner cannot tell which;
         - markdown, docs, tools, videos, other workflows and other test
           projects feed no chapter.
+      Contract legs, by the same classification:
+        - a shared file (above, which includes everything under Contracts/
+          and the rest of the e2e harness) runs every contract leg;
+        - an Explorer area file that is not shared runs the contract legs whose
+          chapter, or a chapter it consumes (read from Story/StoryOutline.cs),
+          has a contract naming that area, and every contract leg when a shared
+          helper under Contracts/ names it. A chapter the outline cannot be
+          read for counts as consuming its whole storyline;
+        - a journey folder feeds no contract leg (a contract never runs one);
+        - an unlisted or empty change set runs every contract leg.
       Every chapter a member skips still runs when the bucket lands.
   A member pull request labelled `journeys-full`: the full set, as at landing.
   pull_request whose HEAD is an integration branch and whose base is not (the
-  bucket-to-main landing pull request), push, workflow_dispatch: every leg and
-  every conformance shard.
+  bucket-to-main landing pull request), push, workflow_dispatch: every leg
+  (every contract leg included) and every conformance shard.
   Any other pull_request (an ordinary pull request into main or a release
   line) is gated like a member: its own isolated legs, no story and no
   conformance shard. Only a landing pull request, the nightly run,
@@ -69,7 +90,7 @@ advisory and run at landing, nightly and on demand):
   defect cannot redden every pull request that touches the Explorer.
   schedule: every leg and conformance shard, plus story-contoso-narrow.
   A member pull request whose changed files could not be listed runs every
-  isolated leg (still no story and no conformance shard).
+  isolated and every contract leg (still no story and no conformance shard).
 """
 
 import argparse
@@ -122,9 +143,15 @@ CONFORMANCE_FIXTURE = re.compile(r"^([A-Z][A-Za-z]*)ContractConformanceTests\.cs
 HARNESS_FILTER = (
     "TestCategory=EndToEnd&TestCategory!=Journey&TestCategory!=Story&TestCategory!=CoverageGate&TestCategory!=ContractConformance"
 )
+# Each conformance case is named `<NN>_<chapter>_establishes_what_it_verifies`
+# (ContractConformanceFixture.CasesFor); a contract leg selects one case by it.
+CONFORMANCE_CASE_SUFFIX = "_establishes_what_it_verifies"
+STORY_OUTLINE = E2E + "/Story/StoryOutline.cs"
+OUTLINE_CHAPTER = re.compile(r'\bChapter\(\s*"([A-Za-z]\d+)"\s*,\s*\d+\s*,\s*"(?:[^"\\]|\\.)*"((?:\s*,\s*"[A-Za-z]\d+")*)\s*\)')
 JOURNEY_FOLDER = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
-# The harness leg carries the east-region and Fabrikam estate fixtures (#5362).
-TIMEOUTS = {"harness": 60, "isolated": 45, "story": 150}
+# The harness leg carries the east-region and Fabrikam estate fixtures (#5362). A contract
+# leg establishes up to its whole storyline on one estate, as a conformance shard does.
+TIMEOUTS = {"harness": 60, "isolated": 45, "contract": 60, "story": 150}
 # Each leg's `estimate` is its timeout. runner-overflow.py reads it only to send the
 # longest legs to the self-hosted pool first, so an upper bound orders them as well.
 
@@ -220,6 +247,82 @@ def conformance_shards(root):
                   if match)
 
 
+CHAPTER_CONTRACT_ID = re.compile(
+    r"\bclass\s+([A-Za-z]\d+)Contract\b[^{;]*:[^{;]*\b(?:IChapterContract|ChapterContract)\b")
+
+
+def chapter_contract_sources(root):
+    """Every chapter contract under Contracts/, as {chapter id: source}, and the other Contracts/ sources (helpers)."""
+    directory = Path(root) / CONTRACTS
+    chapters, helpers = {}, []
+    if not directory.is_dir():
+        return chapters, helpers
+    for path in sorted(directory.rglob("*.cs")):
+        if any(part in ("bin", "obj") for part in path.relative_to(directory).parts):
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        ids = CHAPTER_CONTRACT_ID.findall(text)
+        for chapter in ids:
+            chapters[chapter] = chapters.get(chapter, "") + text
+        if not ids and not CONFORMANCE_FIXTURE.match(path.name):
+            helpers.append(text)
+    return chapters, helpers
+
+
+def _chapter_key(chapter):
+    return (chapter[0].lower(), int(chapter[1:]))
+
+
+def story_only_contracts(root, journeys, shards, notes):
+    """Chapters with a contract but no Journeys/<id> folder, as (chapter, storyline, shard), by storyline and number.
+
+    Such a chapter (its journey not landed yet) would otherwise execute only in the advisory story
+    and conformance runs (#5660), so it gets a contract leg; one whose storyline has no
+    conformance fixture to run the case gets a note instead.
+    """
+    folders = {folder.lower() for folder, _, _ in journeys}
+    by_storyline = {shard.lower(): shard for shard in shards}
+    found = []
+    for chapter in sorted(chapter_contract_sources(root)[0], key=_chapter_key):
+        if chapter.lower() in folders:
+            continue
+        storyline = STORYLINE_BY_PREFIX.get(chapter[0].lower())
+        if storyline is None:
+            continue
+        shard = by_storyline.get(storyline)
+        if shard is None:
+            notes.append(f"{chapter} has a contract and no journey, but no {storyline} contract conformance fixture "
+                         "exists to run it, so it has no contract leg.")
+            continue
+        found.append((chapter, storyline, shard))
+    return found
+
+
+def outline_graph(root):
+    """Each outline chapter's direct consumes, read from Story/StoryOutline.cs ({} when it cannot be read)."""
+    path = Path(root) / STORY_OUTLINE
+    if not path.is_file():
+        return {}
+    graph = {}
+    for match in OUTLINE_CHAPTER.finditer(path.read_text(encoding="utf-8", errors="replace")):
+        graph[match.group(1)] = re.findall(r'"([A-Za-z]\d+)"', match.group(2))
+    return graph
+
+
+def consume_closure(graph, chapter):
+    """The chapter and every chapter it consumes, directly or through another; None when the outline lacks it."""
+    if chapter not in graph:
+        return None
+    closure, pending = set(), [chapter]
+    while pending:
+        current = pending.pop()
+        if current in closure:
+            continue
+        closure.add(current)
+        pending.extend(graph.get(current, ()))
+    return closure
+
+
 def classify(path):
     """'journey:<folder>', 'area:<Area>', 'neutral' or 'all' for one changed file."""
     if path.lower().endswith(".md"):
@@ -274,14 +377,18 @@ def area_file_is_shared(root, path, area):
 
 def chapters_naming_area(root, journeys, area):
     """The journey folders whose own sources name an Explorer area, as `Schema` or `/schema`."""
-    pattern = re.compile(rf"(?<![A-Za-z])(?:{re.escape(area)}|{re.escape(area.lower())})(?![a-z])")
     found = []
     for folder, _, _ in journeys:
         directory = Path(root) / JOURNEYS / folder
-        if any(pattern.search(source.read_text(encoding="utf-8", errors="replace"))
+        if any(names_area(source.read_text(encoding="utf-8", errors="replace"), area)
                for source in directory.rglob("*.cs")):
             found.append(folder)
     return found
+
+
+def names_area(text, area):
+    """Whether source text names an Explorer area, as `Schema` or `/schema` (not `Schemas`)."""
+    return re.search(rf"(?<![A-Za-z])(?:{re.escape(area)}|{re.escape(area.lower())})(?![a-z])", text) is not None
 
 
 def is_integration_branch(ref):
@@ -307,6 +414,25 @@ def isolated_leg(folder, jid, storyline):
         # The trailing dot keeps Journeys.A1 from selecting A10, A11 and A12.
         "filter": f"FullyQualifiedName~{NAMESPACE}.Journeys.{folder}.|FullyQualifiedName~{PENDING_GATE}",
         "expect": f"{NAMESPACE}.Journeys.{folder}.",
+    }
+
+
+def contract_leg(chapter, storyline, shard):
+    fixture = f"{NAMESPACE}.Contracts.{shard}ContractConformanceTests"
+    return {
+        "name": "contract-" + chapter.lower(),
+        "kind": "contract",
+        "journey": "",
+        "jid": "",
+        "storyline": storyline,
+        "mode": "isolated",
+        "viewport": "",
+        "timeout": TIMEOUTS["contract"],
+        "estimate": TIMEOUTS["contract"],
+        # The leading underscore keeps _C1_ from selecting a C10 case.
+        "filter": (f"(FullyQualifiedName~{fixture}.&FullyQualifiedName~_{chapter}{CONFORMANCE_CASE_SUFFIX})"
+                   f"|FullyQualifiedName~{PENDING_GATE}"),
+        "expect": fixture,
     }
 
 
@@ -352,6 +478,14 @@ def plan(root, event, action="", base_ref="", changed=None, labels=(), label="",
     member = event == "pull_request" and not is_landing(event, base_ref, head_ref)
     notes = []
     provenance = []
+    contracts = story_only_contracts(root, journeys, conformance, notes)
+    shared = {}
+
+    def is_shared(path, area):
+        # Each scans the whole Explorer; isolated and contract legs ask about the same files.
+        if (path, area) not in shared:
+            shared[(path, area)] = area_file_is_shared(root, path, area)
+        return shared[(path, area)]
 
     if not stories:
         notes.append("No story fixture exists in this tree yet, so no story leg is planned.")
@@ -370,6 +504,7 @@ def plan(root, event, action="", base_ref="", changed=None, labels=(), label="",
     def every_leg():
         return ([harness_leg()]
                 + [isolated_leg(*journey) for journey in journeys]
+                + [contract_leg(*contract) for contract in contracts]
                 + [story_leg(storyline, fixture) for storyline, fixture in stories])
 
     touched = []
@@ -411,8 +546,10 @@ def plan(root, event, action="", base_ref="", changed=None, labels=(), label="",
         notes.append(("Member" if is_integration_branch(base_ref) else f"Pull request into '{base_ref or 'n/a'}'")
                      + " pull request: no story leg and no contract conformance shard (advisory; they run on "
                      f"the landing pull request into main, nightly, on workflow_dispatch, or with `{FULL_LABEL}`).")
-        chosen = member_chapters(root, journeys, touched, changed, notes)
-        legs = [harness_leg()] + [isolated_leg(*by_folder[folder]) for folder in chosen]
+        chosen = member_chapters(root, journeys, touched, changed, notes, is_shared)
+        chosen_contracts = member_contracts(root, contracts, changed, notes, is_shared)
+        legs = ([harness_leg()] + [isolated_leg(*by_folder[folder]) for folder in chosen]
+                + [contract_leg(*contract) for contract in chosen_contracts])
 
     if event == "pull_request" and is_integration_branch(base_ref) and touched:
         if action in ("edited", "reopened"):
@@ -426,8 +563,9 @@ def plan(root, event, action="", base_ref="", changed=None, labels=(), label="",
     return {"legs": legs, "conformance": conformance, "provenance": provenance, "notes": notes}
 
 
-def member_chapters(root, journeys, touched, changed, notes):
+def member_chapters(root, journeys, touched, changed, notes, is_shared=None):
     """The journey folders a member pull request runs isolated legs for (see the module docstring)."""
+    is_shared = is_shared or (lambda path, area: area_file_is_shared(root, path, area))
     every = [folder for folder, _, _ in journeys]
     if changed is None:
         notes.append("The pull request's changed files could not be listed; every isolated leg runs.")
@@ -443,7 +581,7 @@ def member_chapters(root, journeys, touched, changed, notes):
             widening.append(path)
         elif cls.startswith("area:"):
             area = cls.split(":", 1)[1]
-            if area_file_is_shared(root, path, area):
+            if is_shared(path, area):
                 widening.append(path)
                 continue
             chapters = chapters_naming_area(root, journeys, area)
@@ -456,6 +594,40 @@ def member_chapters(root, journeys, touched, changed, notes):
         return every
     chosen = [folder for folder in every if folder in fed]
     notes.append("Journey-scoped member pull request: " + (", ".join(chosen) if chosen else "no journey") + ".")
+    return chosen
+
+
+def member_contracts(root, contracts, changed, notes, is_shared=None):
+    """The story-only contracts a member pull request runs contract legs for (see the module docstring)."""
+    is_shared = is_shared or (lambda path, area: area_file_is_shared(root, path, area))
+    if not contracts:
+        return []
+    if not changed:
+        notes.append("The pull request's changed files are unknown or empty; every contract leg runs.")
+        return list(contracts)
+    sources, helpers = chapter_contract_sources(root)
+    graph = outline_graph(root)
+    fed = set()
+    for path in changed:
+        cls = classify(path)
+        if cls == "all":
+            notes.append(f"{path} is shared, so every contract leg runs.")
+            return list(contracts)
+        if not cls.startswith("area:"):
+            continue
+        area = cls.split(":", 1)[1]
+        if is_shared(path, area) or any(names_area(text, area) for text in helpers):
+            notes.append(f"{path} is shared, or a shared contract helper names the {area} area, so every contract leg runs.")
+            return list(contracts)
+        for chapter, storyline, _ in contracts:
+            closure = consume_closure(graph, chapter)
+            if closure is None:
+                # The outline could not be read for it: count its whole storyline as consumed.
+                closure = {other for other in sources if STORYLINE_BY_PREFIX.get(other[0].lower()) == storyline}
+            if any(names_area(sources.get(other, ""), area) for other in closure):
+                fed.add(chapter)
+    chosen = [contract for contract in contracts if contract[0] in fed]
+    notes.append("Contract legs: " + (", ".join(chapter for chapter, _, _ in chosen) if chosen else "none") + ".")
     return chosen
 
 

@@ -143,6 +143,7 @@ its docstring is the contract, and its self-test pins it.
 |---|---|
 | `harness` | Every end-to-end fixture that is not a journey, a story, the coverage gate or contract conformance: the estate smoke test, fault seams, parity, checkpoints, and the catalogue and outline checks. It also stops Azurite and requires the smoke fixture to fail, proving the lane fails closed. |
 | `isolated-<jid>` | One leg per folder under `Journeys/`, in isolated mode. |
+| `contract-<chapter>` | One leg per story-only chapter: a chapter with a contract but no `Journeys/<id>` folder yet (U2 and C1-C4 while their journeys are parked for phase 2). It runs that chapter's case of its storyline's conformance fixture alone on a fresh estate: the chapters it consumes are established through their contracts in story order, as isolated mode does, then the chapter's own contract is established and verified. The set is discovered from the tree, so a chapter's leg disappears when its journey lands. |
 | `story-contoso`, `story-fabrikam` | Each storyline in story mode on one estate, once the tree holds a contract for one of its chapters. |
 | `contract-conformance` | One shard per storyline's conformance fixture. |
 | `story-contoso-narrow` | Nightly only: the Contoso story at a 390x844 viewport. |
@@ -157,12 +158,17 @@ Which legs run depends on the event:
   (`src/lattice.explorer/UI/Areas/<Area>/`) adds the chapters whose sources
   name that area. Any other file that can change what a journey sees - the
   rest of the Explorer, the harness, the hosts, a facade, or the lane itself -
-  runs every isolated leg. Documentation feeds no chapter. Such a pull request
+  runs every isolated leg. Documentation feeds no chapter. Contract legs follow
+  the same rule: a shared file, which includes anything under `Contracts/` and
+  the rest of the harness, runs every contract leg; an area file runs the
+  contract legs whose chapter, or a chapter it consumes, has a contract naming
+  that area; a journey folder runs none. Such a pull request
   runs no story leg and no conformance shard, so an open story defect does
   not redden every pull request that touches the Explorer.
 - **A landing pull request** (its head is an integration branch, `*/epic/*`,
-  and its base is not), a push, and `workflow_dispatch` run every leg and
-  every conformance shard. A nightly schedule adds `story-contoso-narrow`.
+  and its base is not), a push, and `workflow_dispatch` run every leg (every
+  contract leg included) and every conformance shard. A nightly schedule adds
+  `story-contoso-narrow`.
 - **A pull request labelled `journeys-full`** runs the full set, as a landing
   pull request does.
 - **Editing a member pull request's body** runs no leg. It runs the screenshot
@@ -183,7 +189,7 @@ budget for that run, so `0` sends every leg to the pool. See
 
 On a member pull request, or an ordinary pull request into `main`, the merge
 gates are CI (`build-and-test`), UI Tests, the pull request's own isolated
-legs, the harness leg, the coverage gate and, on a member pull request,
+and contract legs, the harness leg, the coverage gate and, on a member pull request,
 screenshot provenance. The story legs and contract conformance are advisory:
 they run when an integration branch lands, nightly and on demand.
 
