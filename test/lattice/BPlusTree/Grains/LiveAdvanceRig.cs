@@ -31,6 +31,8 @@ internal sealed class LiveAdvanceRig
         ShardRoot.GetLiveAdvanceViewAsync(Arg.Any<GrainId>(), Arg.Any<string?>(), Arg.Any<string?>())
             .Returns(call => Task.FromResult(LeafLiveAdvanceView.For(
                 ShardMarker, call.ArgAt<string?>(1), call.ArgAt<string?>(2), Reachable, OrphanRepairInProgress)));
+        ShardRoot.IsReachableByDescentAsync(Arg.Any<GrainId>(), Arg.Any<string?>())
+            .Returns(_ => Task.FromResult(Reachable));
         FencingCheck = new GrainStorageFencingCheck(
             new ServiceCollection().BuildServiceProvider(),
             Options.Create(new LatticeGrainStorageFencingOptions()),

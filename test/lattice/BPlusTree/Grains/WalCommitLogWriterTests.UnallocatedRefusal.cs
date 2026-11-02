@@ -203,6 +203,20 @@ public partial class WalCommitLogWriterTests
     }
 
     [Test]
+    public void An_ambiguous_batch_failure_is_not_reported()
+    {
+        var shard = Substitute.For<IWalShardGrain>();
+        shard.AppendBatchStampedAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<WalAppendStamp>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new TimeoutException("the batch may have landed"));
+        var writer = CreateFencedWriter(_ => shard);
+        var fence = new CountingFence();
+
+        Assert.ThrowsAsync<TimeoutException>(() =>
+            writer.AppendManyAsync([RefusalRecord("a"), RefusalRecord("b")], fence, WalRoutingStamp.None, CancellationToken.None));
+        Assert.That(fence.RefusedUnallocated, Is.Zero);
+    }
+
+    [Test]
     public void An_ambiguous_append_failure_is_not_reported()
     {
         var shard = Substitute.For<IWalShardGrain>();

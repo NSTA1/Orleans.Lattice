@@ -38,7 +38,8 @@ public sealed class LiveCheckpointAdvanceIntegrationTests
     private const string LatencyTree = "live-advance-latency";
     private const string DuplicateTree = "live-advance-duplicate";
     private const string UnstampedTree = "live-advance-unstamped";
-    private static readonly string[] Trees = [LatencyTree, DuplicateTree, UnstampedTree];
+    private const string OrphanTree = "live-advance-orphan";
+    private static readonly string[] Trees = [LatencyTree, DuplicateTree, UnstampedTree, OrphanTree];
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(45);
     private TestCluster _cluster = null!;
 
@@ -153,6 +154,37 @@ public sealed class LiveCheckpointAdvanceIntegrationTests
 
         Assert.That(banked, Is.Not.Null,
             "the reported unstamped row reaches the snapshot: the leaf fell back to replay instead of advancing past it unread");
+    }
+
+    [Test]
+    public async Task An_orphans_append_is_unstamped_so_the_reachable_owner_reads_it_before_it_advances()
+    {
+        // #5709: an orphan O shares the live leaf L's bounds but descent never reaches
+        // it. A write still reaches O - a sibling-chain span forward, or a stale route -
+        // and O appends it. O must not stamp: its append is reported to L, whose replay
+        // applies it by key range before L can advance past it.
+        var tree = _cluster.Client.GetGrain<ILattice>(OrphanTree);
+        await tree.GetAsync("warm");
+        var (_, snapshot) = await ResolveLeafAsync(OrphanTree);
+        await tree.SetAsync("own1", [1]);
+        Assert.That(await WaitForCoverageAsync(snapshot, await HeadAsync(OrphanTree) - 1, "own1"), Is.Not.Null,
+            "precondition: the reachable leaf banks its first write live");
+
+        // Minted as a crashed split leaves one (the explorer journey's orphan injector):
+        // a sibling born with the live leaf's bounds that the parent never learned of.
+        var orphan = _cluster.Client.GetGrain<IBPlusLeafGrain>(Guid.NewGuid());
+        using (LatticeNewLeafIntentContext.BeginScope(orphan.GetGrainId()))
+        {
+            await orphan.InitializeSiblingAsync(new SiblingInitialization { TreeId = OrphanTree, ShardIndex = 0 });
+        }
+
+        await orphan.SetStampedAsync("orphan", [5], 0, WalRoutingStamp.None);
+        await tree.SetAsync("own2", [2]);
+        var head = await HeadAsync(OrphanTree);
+        var banked = await WaitForCoverageAsync(snapshot, head - 1, "orphan");
+
+        Assert.That(banked, Is.Not.Null,
+            "the orphan's acknowledged row reaches the reachable owner's snapshot: it was unstamped and reported, so the owner replayed it");
     }
 
     private static WalRecord Record(string tree, string key, byte value) => new()

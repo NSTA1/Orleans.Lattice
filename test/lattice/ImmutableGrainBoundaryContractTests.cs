@@ -112,6 +112,9 @@ public sealed class ImmutableGrainBoundaryContractTests : ImmutableGrainBoundary
             ["Orleans.Lattice.BPlusTree.CrossTreeReceiverTerminal"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.CrossTreeReceiverTreeFinalize"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.DirtyLeavesSnapshot"] = ReadModel,
+            // Epic #5605 member 4: CloseHeads is a fresh array per call (HandOffMarkerCore.RequiredHeads
+            // clones), and the leaf only reads it, per partition, for the one advance it decides.
+            ["Orleans.Lattice.BPlusTree.LeafLiveAdvanceView"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.LeafLiveRawEntriesPage"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.LeafPendingMutationsPage"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.Grains.WalShardPage"] = ReadModel,

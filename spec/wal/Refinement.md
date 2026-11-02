@@ -407,7 +407,15 @@ from this specification.**
   `BPlusLeafGrainTests.A_reported_unstamped_append_holds_the_advance_until_a_replay_reads_past_it`,
   `BPlusLeafGrainTests.A_live_advance_waits_until_every_issued_append_is_applied` and
   `LeafLiveAdvanceCoreTests.The_advance_is_taken_exactly_when_the_leaf_is_armed`.
-  Production symbols: `BPlusLeafGrain.TryAdvanceLiveCheckpointAsync`, `LeafLiveAdvanceCore.TargetFor`, `LeafAppendEpochFence.TryGetArmingView`, `ShardRootGrain.GetLiveAdvanceViewAsync`.
+  An orphan sharing a live leaf's bounds is covered by the rule that an unreachable
+  leaf never appends stamped (#5709): it proves it is reachable by descent before its
+  first claim (`BPlusLeafGrain.ProveStampReachabilityAsync`,
+  `ShardRootGrain.IsReachableByDescentAsync`), so its appends are the model's unstamped,
+  reported `OldAlloc`, pinned by
+  `LiveCheckpointAdvanceIntegrationTests.An_orphans_append_is_unstamped_so_the_reachable_owner_reads_it_before_it_advances`;
+  a split sibling born under its donor's open marker keeps its claim
+  (`BPlusLeafGrainTests.A_sibling_born_under_an_open_split_marker_still_claims_and_stamps`).
+  Production symbols: `BPlusLeafGrain.TryAdvanceLiveCheckpointAsync`, `LeafLiveAdvanceCore.TargetFor`, `LeafAppendEpochFence.TryGetArmingView`, `ShardRootGrain.GetLiveAdvanceViewAsync`, `BPlusLeafGrain.ProveStampReachabilityAsync`, `ShardRootGrain.IsReachableByDescentAsync`.
 
 ## Excluded candidates from the issue
 

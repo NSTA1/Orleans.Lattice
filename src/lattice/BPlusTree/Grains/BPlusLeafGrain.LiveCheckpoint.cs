@@ -397,6 +397,13 @@ internal sealed partial class BPlusLeafGrain
                 .GetLiveAdvanceViewAsync(context.GrainId, low, high);
             if (!view.Reachable || view.OrphanRepairInProgress)
             {
+                // #5709: a leaf descent no longer reaches, with no hand-off open on it,
+                // stops stamping for the rest of the activation.
+                if (!view.Reachable && leafMarker.Open.Count == 0 && _appendFence is { } fence)
+                {
+                    StopStampingUnreachable(fence);
+                }
+
                 return null;
             }
 

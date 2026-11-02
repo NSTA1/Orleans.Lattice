@@ -90,6 +90,7 @@ public sealed class ShardRootBootstrapReadFenceClassificationTests
         nameof(IShardRootGrain.GetLeftmostLeafIdAsync),
         // Epic #5605 member 4: a leaf's live-advance read; fence bookkeeping and routing, no stored value.
         nameof(IShardRootGrain.GetLiveAdvanceViewAsync),
+        nameof(IShardRootGrain.IsReachableByDescentAsync),
         nameof(IShardRootGrain.GetMigrationTargetShardIndexAsync),
         nameof(IShardRootGrain.GetMirrorDestinationAsync),
         // A saga coordinator's read-back of its prepare stamps (#4522): part of

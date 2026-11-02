@@ -301,14 +301,16 @@ public partial class BPlusLeafGrainTests
         rig.ShardRoot.ClearReceivedCalls();
 
         var first = grain.TryAdvanceLiveCheckpointAsync();
-        var second = await grain.TryAdvanceLiveCheckpointAsync();
+        var second = grain.TryAdvanceLiveCheckpointAsync();
         await WaitUntilAsync(() => rig.ShardRoot.ReceivedCalls().Any());
+        var secondDeclinedAtOnce = second.IsCompleted && !second.Result;
         view.SetResult(LeafLiveAdvanceView.For(rig.ShardMarker, null, null, reachable: true, orphanRepairInProgress: false));
+        await Task.WhenAll(first, second);
 
         var firstAdvanced = await first;
         Assert.Multiple(() =>
         {
-            Assert.That(second, Is.False);
+            Assert.That(secondDeclinedAtOnce, Is.True, "the second advance returns without waiting on the first's read");
             Assert.That(firstAdvanced, Is.True);
             Assert.That(rig.ShardRoot.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IShardRootGrain.GetLiveAdvanceViewAsync)), Is.EqualTo(1), "only the first advance read the shard root's view");
         });

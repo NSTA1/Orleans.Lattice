@@ -1839,6 +1839,22 @@ not reach it, or orphan repair is running. The markers and the shard root's view
 read fresh on every attempt; the shard root answers on an interleaving, read-only call,
 so a serial shard-root turn that calls the leaf cannot deadlock against it.
 
+**An unreachable leaf never appends stamped (#5709).** An orphan - a leaf in the
+sibling chain that descent no longer reaches, often sharing a live leaf's bounds - can
+still be handed a write by a span forward from its neighbour. If it stamped that write,
+the live leaf owning the same keys could advance past it unread. So before an
+activation's first epoch claim, the leaf asks its shard root, once, whether descent for
+its low key reaches it. If it does not, and no hand-off marker is open on it, the
+activation claims nothing and appends unstamped for the rest of its life: every append
+is reported to the leaves sharing the partition, whose replay applies it by key range
+before they can arm. A split sibling the parent has not yet learned of is exempt: it is
+born under its donor's open marker and admits only keys the donor has narrowed away.
+The advance tick repeats the check, and a leaf it finds unreachable with no marker open
+stops stamping the same way. If the shard root cannot be asked, the leaf appends
+unstamped and asks again after a backoff. Orphaned-leaf repair never folds an orphan's
+rows; it clears an orphan only after proving every row it holds is readable from the
+reachable owner.
+
 **Where it runs.** On the coverage-lag tick and at the start of a starvation drive, so
 the tick banks a snapshot and a usable pin for a live-written leaf without taking a
 replay permit.
@@ -1863,7 +1879,9 @@ coverage-lag tick, and then:
   partition, allocating no array.
 
 A leaf with nothing to advance, or with no partition claimed, reads nothing and makes no
-call. Once per leaf, a marker write adopts its shard root's flag.
+call. Once per leaf, a marker write adopts its shard root's flag. Once per activation,
+before its first claim, one shard-root call proves the leaf is reachable; a leaf that is
+not also reads its own marker row.
 
 ## Relationship to replication
 

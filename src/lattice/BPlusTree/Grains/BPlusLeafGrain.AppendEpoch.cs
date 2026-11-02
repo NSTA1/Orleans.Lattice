@@ -41,8 +41,86 @@ internal sealed partial class BPlusLeafGrain
             storage,
             OnAppendEpochSuperseded,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
-            LatticeTenantLabel.ForTree(state.State.TreeId ?? string.Empty));
+            LatticeTenantLabel.ForTree(state.State.TreeId ?? string.Empty),
+            requireReachabilityProof: true);
         return new FencedCommitLogWriter(fenced, _appendFence);
+    }
+
+    /// <summary>The proof in flight, shared by concurrent first appends.</summary>
+    private Task? _stampReachabilityProof;
+
+    /// <summary>
+    /// Proves, once per activation and before its first append-epoch claim, that this
+    /// leaf is reachable by descent (#5709). An unreachable leaf never appends stamped:
+    /// its appends go unstamped and are reported to every leaf sharing the partition, so
+    /// a reachable leaf that owns the same keys replays them before it can arm. A leaf
+    /// with a hand-off marker open on it - a split sibling the parent has not yet learned
+    /// of - is exempt: it admits only keys its donor has narrowed away. Completes
+    /// synchronously once decided, so it costs an append one flag read.
+    /// </summary>
+    internal ValueTask ProveStampReachabilityAsync()
+    {
+        if (_appendFence is not { } fence || !fence.NeedsReachabilityProof)
+        {
+            return default;
+        }
+
+        if (_stampReachabilityProof is { IsCompleted: false } inFlight)
+        {
+            return new ValueTask(inFlight);
+        }
+
+        var proof = ProveStampReachabilityCoreAsync(fence);
+        _stampReachabilityProof = proof.IsCompleted ? null : proof;
+        return new ValueTask(proof);
+    }
+
+    private async Task ProveStampReachabilityCoreAsync(LeafAppendEpochFence fence)
+    {
+        if (state.State.TreeId is not { Length: > 0 } treeId || state.State.ShardIndex is not { } shardIndex)
+        {
+            // No shard root to ask: the leaf cannot prove it, so it appends unstamped.
+            fence.OnReachabilityUndecided();
+            return;
+        }
+
+        try
+        {
+            if (await LiveAdvanceShardRoot(treeId, shardIndex).IsReachableByDescentAsync(context.GrainId, state.State.LowKeyInclusive))
+            {
+                fence.OnReachabilityProven();
+                return;
+            }
+
+            if (HandOffMarkerStorage() is { } storage
+                && (await HandOffMarkerRows.ReadLeafAsync(storage, context.GrainId.GetGuidKey())).State.Open.Count > 0)
+            {
+                fence.OnReachabilityProven();
+                return;
+            }
+
+            StopStampingUnreachable(fence);
+        }
+        catch (Exception ex)
+        {
+            ResolveLogger()?.LogDebug(
+                ex,
+                "Leaf {LeafId}: could not prove it is reachable by descent; it appends unstamped and tries again after a backoff (epic #5605, #5709).",
+                context.GrainId);
+            fence.OnReachabilityUndecided();
+        }
+    }
+
+    /// <summary>Latches <paramref name="fence"/> unstamped for the activation, logging once.</summary>
+    private void StopStampingUnreachable(LeafAppendEpochFence fence)
+    {
+        if (fence.StopStampingUnreachable())
+        {
+            ResolveLogger()?.LogWarning(
+                "Leaf {LeafId} of tree {TreeId} is not reachable by descent and no hand-off is open on it: it appends unstamped for the rest of this activation, so the leaf that owns its keys replays them (epic #5605, #5709). An orphaned leaf; see orphaned-leaf repair.",
+                context.GrainId,
+                MetricTreeId);
+        }
     }
 
     /// <summary>
