@@ -23,7 +23,7 @@ replication says nothing about it.
 | [`ReplicationCausalDelivery.tla`](ReplicationCausalDelivery.tla), [`.cfg`](ReplicationCausalDelivery.cfg), [`.manifest.json`](ReplicationCausalDelivery.manifest.json) | The focused companion module: causal-dependency delivery under head-of-line blocking (below). |
 | [`causal-delivery-mutations/`](causal-delivery-mutations/) | The companion module's mutation catalogue. |
 | [`ReplicationCausalDelivery.Refinement.md`](ReplicationCausalDelivery.Refinement.md) | The companion module's refinement note. |
-| [`ReplicationReBootstrap.tla`](ReplicationReBootstrap.tla), [`.cfg`](ReplicationReBootstrap.cfg), [`.manifest.json`](ReplicationReBootstrap.manifest.json) and the [`Floor`](ReplicationReBootstrap.Floor.cfg) variant configuration | The second companion module: an in-place re-bootstrap after the source reaped a delete, and the bootstrap drop floor (below). |
+| [`ReplicationReBootstrap.tla`](ReplicationReBootstrap.tla), [`.cfg`](ReplicationReBootstrap.cfg), [`.manifest.json`](ReplicationReBootstrap.manifest.json) and the [`Floor`](ReplicationReBootstrap.Floor.cfg) and [`Mutual`](ReplicationReBootstrap.Mutual.cfg) variant configurations | The second companion module: an in-place re-bootstrap after the source reaped a delete, the bootstrap drop floor, and concurrent mutual re-seeds through shadow copies (below). |
 | [`rebootstrap-mutations/`](rebootstrap-mutations/) | The second companion module's mutation catalogue. |
 | [`ReplicationReBootstrap.Refinement.md`](ReplicationReBootstrap.Refinement.md) | The second companion module's refinement note. |
 | [`ReplicationLowWatermark.tla`](ReplicationLowWatermark.tla), [`.cfg`](ReplicationLowWatermark.cfg), [`.manifest.json`](ReplicationLowWatermark.manifest.json) and four variant configurations | The third companion module: the low watermark that makes the causal-dependency check sound (below). |
@@ -139,6 +139,19 @@ covers the source's own origin, and arms the receiver's shard roots so a
 write admitted before it is refused rather than land after the reconcile
 scan. The Floor variant configuration adds the third cluster that needs.
 
+The Mutual variant configuration (#5689, found under #5684) re-seeds in both directions at
+once. Each side drains the other's export into a shadow copy of its own
+tree, with its local writes and deliveries forwarded into the copy, and a
+cutover puts the copy in the tree's place rather than merging it. A cutover
+moves the tree, so the other side's drain from it fails, its copy is
+discarded, and its re-seed is re-driven into a fresh copy. The drain's
+exact-identity dedupe memory is scoped to the copy it applied into:
+`EventualKeptDedupeOutlivesShadowCopy` keys it by tree alone, as production
+did before #5689's fix, and the re-driven drain then acknowledges a row the
+aborted copy took with it without applying it, so the write is lost for good.
+`EventualKept` states that no write of another origin is lost that way, in
+either direction.
+
 The module also checks the reap guard (#4615, built by #4678), the refusal of
 a batch read under a source lineage the receiver has left (#4673, built by
 #4681), the re-seed a receiver
@@ -248,6 +261,12 @@ lands as the check that reintroducing it is caught:
   write still in flight, `EventualConvergenceNoBootstrapFloor`,
   `EventualConvergenceReapInsideGrace`,
   `ReconcileDeletesOnlyDeletedStaleLineageApplied`).
+- #5689, fixed by #5687 - in a concurrent mutual re-seed, a drain whose
+  source cut over under it re-drove into a fresh shadow copy, and the
+  applier's dedupe memory, keyed by tree alone, acknowledged a row the
+  aborted copy had taken with it without applying it, so the cutover lost it
+  (`EventualKeptDedupeOutlivesShadowCopy`, in the re-bootstrap companion's
+  Mutual variant).
 
 [`Refinement.md`](Refinement.md#defects-found-and-fixed) lists them with the
 fixes.
@@ -279,8 +298,8 @@ On tla2tools v1.7.4 with a Temurin-compatible 17 JDK, every property in
 `ReplicationCausalDelivery.cfg` held over 19,161 distinct states (62,250
 generated) at a depth of 16. Every property in `ReplicationReBootstrap.cfg`
 held over 761,543 distinct states (2,328,265 generated) at a depth of 25,
-and in its Floor variant over 551,869 (1,647,259 generated) at a depth of
-21.
+in its Floor variant over 551,869 (1,647,259 generated) at a depth of
+21, and in its Mutual variant over 8,846 (16,262 generated) at a depth of 17.
 Every property in `ReplicationLowWatermark.cfg` held over 330,842 distinct
 states (1,669,854 generated) at a depth of 26, and in its Sagas, Loss,
 DeadLetters and Bootstrap variants over 181,862, 27,522, 19,449 and 43,757.
@@ -298,5 +317,5 @@ This table is the one place this directory states them; see
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `Replication` | 5 | 3 | 14 | 22 | 20 | 306,494 |
 | `ReplicationCausalDelivery` | 2 | 1 | 5 | 6 | 6 | 19,161 |
-| `ReplicationReBootstrap` | 2 | 1 | 18 | 35 | 19 | 761,543 |
+| `ReplicationReBootstrap` | 2 | 2 | 24 | 42 | 26 | 761,543 |
 | `ReplicationLowWatermark` | 2 | 1 | 18 | 21 | 19 | 330,842 |

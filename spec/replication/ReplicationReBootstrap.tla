@@ -42,6 +42,18 @@
 (* One last-writer-wins key, two clusters (three in the Floor variant), at *)
 (* most three writes. Only s deletes. Delivery is FIFO and exactly once    *)
 (* per edge: Replication.tla checks loss, duplication and reordering.      *)
+(*                                                                         *)
+(* The Mutual variant (#5689) re-seeds in both directions at once, as a    *)
+(* production shadow import does: each side drains the other's export into *)
+(* a shadow copy of its own tree, which a cutover then puts in the tree's  *)
+(* place. Local writes and deliveries during the hold are forwarded into   *)
+(* the copy. A cutover moves the tree to a new physical copy, so a drain   *)
+(* still reading the other side's export fails, its copy is discarded, and *)
+(* the re-seed is re-driven into a fresh copy. The drain's exact-identity  *)
+(* dedupe memory is scoped to the copy it applied into: memory that        *)
+(* outlived an aborted copy would skip a row the fresh copy never got.     *)
+(* The Mutual instance takes no disruption, no detach and no third origin; *)
+(* the base and Floor instances check the reconcile and the drop floor.    *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets, Sequences, TLC
 
@@ -56,6 +68,13 @@ Third == FALSE
 \* the write then in flight, so unboundedly many re-attaches - an operator
 \* who never stops re-seeding - would starve it.
 Reattach == TRUE
+
+\* The Mutual variant: s also re-seeds from r, and both imports stage on a
+\* shadow copy that a cutover puts in the tree's place (#5689). A side opens
+\* at most two copies: one aborted by the other side's single cutover, then
+\* its re-drive.
+Mutual == FALSE
+MaxCopies == 2
 
 Clusters == IF Third THEN {s, r, q} ELSE {s, r}
 \* The origins s's export carries a watermark for, and the third ones: every
@@ -80,6 +99,9 @@ Writes == [o : Clusters, h : Hlcs, del : BOOLEAN]
 Regs == [present : BOOLEAN, o : Clusters, h : 0..(MaxHlc + 1), del : BOOLEAN, fab : BOOLEAN]
 Absent == [present |-> FALSE, o |-> s, h |-> 0, del |-> FALSE, fab |-> FALSE]
 AsReg(w) == [present |-> TRUE, o |-> w.o, h |-> w.h, del |-> w.del, fab |-> FALSE]
+\* A held value's identity: (origin, hlc, op) of the one key, which is what
+\* the applier's exact-identity dedupe memory records.
+Id(u) == [o |-> u.o, h |-> u.h, del |-> u.del]
 
 (* LwwValue.Merge: the HLC, then a tombstone wins the tie, then the value. *)
 (* The origin's rank stands for the value bytes.                           *)
@@ -130,17 +152,30 @@ VARIABLES
     fl,          \* fl[o]: r's bootstrap drop floor for third origin o; 0 when none
     prov,        \* the floor is provisional: its import has not closed stable
     adm,         \* adm[o]: the admission at r of the next write on edge <<o, r>>
-    ex           \* the export in progress
+    ex,          \* the export in progress
+    \* The Mutual variant's shadow imports; constant in the other instances.
+    cp,          \* cp[x]: the shadow copy x's import is draining into
+    cid,         \* cid[x]: the id of x's latest shadow copy (copies opened)
+    phy,         \* phy[x]: the copy x's tree last cut over to; 0 is the original
+    src0,        \* src0[x]: the source's physical tree when x's drain opened
+    ph,          \* ph[x]: x's shadow import: idle, open, or its row scanned
+    dd,          \* dd[x]: x's dedupe memory: applied identities, by copy id
+    fellOffS,    \* r trimmed its log past s's cursor: s's re-seed is owed
+    bootedS      \* s's re-seed from r has cut over
 
 vars == <<authored, wal, cursor, reg, clk, reaped, fellOff, booted, scopedDone,
           topo, gen, restored, phys, deleted, delDone, owed, aligned, restoredR, coordDone, lost, oldS, detached,
-          fl, prov, adm, ex>>
+          fl, prov, adm, ex, cp, cid, phy, src0, ph, dd, fellOffS, bootedS>>
+
+\* The shadow-import variables an action of the other instances leaves alone.
+shadowVars == <<cp, cid, phy, src0, ph, dd, fellOffS, bootedS>>
+copyCtl == <<cid, phy, src0, ph, dd, fellOffS, bootedS>>
 
 (* At most one disruption per behaviour: a source restore, reshard,       *)
 (* resize or soft delete, or a receiver restore. Each gate is checked      *)
 (* against the disruption it exists for; the bound keeps the instance     *)
-(* small.                                                                  *)
-Undisrupted == topo = 0 /\ phys = 0 /\ ~restored /\ ~delDone /\ ~restoredR
+(* small. The Mutual instance takes none.                                  *)
+Undisrupted == ~Mutual /\ topo = 0 /\ phys = 0 /\ ~restored /\ ~delDone /\ ~restoredR
 
 (* r pre-captures its live entry if s is its origin, so s held it. *)
 Eligible(u) == u.present /\ ~u.del /\ u.o = s
@@ -184,6 +219,15 @@ TypeOK ==
     /\ prov \in BOOLEAN
     /\ adm \in [Thirds -> Admissions]
     /\ ex \in Exports
+    /\ cp \in [Clusters -> Regs]
+    /\ cid \in [Clusters -> 0..MaxCopies]
+    /\ phy \in [Clusters -> 0..MaxCopies]
+    /\ src0 \in [Clusters -> 0..MaxCopies]
+    /\ ph \in [Clusters -> {"idle", "open", "scanned"}]
+    /\ DOMAIN dd = Clusters
+    /\ \A x \in Clusters : dd[x] \subseteq [w : Writes, c : 1..MaxCopies]
+    /\ fellOffS \in BOOLEAN
+    /\ bootedS \in BOOLEAN
 
 Init ==
     /\ authored = {}
@@ -212,6 +256,20 @@ Init ==
     /\ prov = FALSE
     /\ adm = [o \in Thirds |-> "none"]
     /\ ex = IdleExport
+    /\ cp = [x \in Clusters |-> Absent]
+    /\ cid = [x \in Clusters |-> 0]
+    /\ phy = [x \in Clusters |-> 0]
+    /\ src0 = [x \in Clusters |-> 0]
+    /\ ph = [x \in Clusters |-> "idle"]
+    /\ dd = [x \in Clusters |-> {}]
+    /\ fellOffS = FALSE
+    /\ bootedS = FALSE
+
+(* A local write at x while x holds a shadow copy reaches the copy too:     *)
+(* it lands on the tree, and the copy's online shadow forward carries it   *)
+(* there, so the cutover keeps it (#5684's T2). A delivery is routed to    *)
+(* the copy alone (DeliverHeld).                                           *)
+Forward(x, v) == IF Mutual /\ ph[x] # "idle" THEN [cp EXCEPT ![x] = Merge(@, v)] ELSE cp
 
 (***************************************************************************)
 (* Write(o, h, d): o commits a write, or (s only) deletes the key it holds. *)
@@ -231,6 +289,8 @@ Write(o, h, d) ==
           /\ reg' = [reg EXCEPT ![o] = AsReg(w)]
           /\ clk' = [clk EXCEPT ![o] = w.h]
     /\ UNCHANGED <<cursor, reaped, fellOff, booted, scopedDone, topo, gen, restored, phys, deleted, delDone, owed, aligned, restoredR, coordDone, lost, oldS, detached, ex, fl, prov, adm>>
+    /\ cp' = Forward(o, AsReg([o |-> o, h |-> h, del |-> d]))
+    /\ UNCHANGED copyCtl
 
 (***************************************************************************)
 (* Deliver(e): the shipper on edge e delivers its next entry and the       *)
@@ -246,6 +306,7 @@ StaleLineage(e) ==
 
 Deliver(e) ==
     /\ e \notin {<<o, r>> : o \in Thirds}
+    /\ ~(Mutual /\ ph[e[2]] # "idle")
     /\ cursor[e] < Len(wal[e[1]])
     /\ LET w == wal[e[1]][cursor[e] + 1]
        IN IF StaleLineage(e) THEN UNCHANGED <<reg, clk>>
@@ -253,6 +314,7 @@ Deliver(e) ==
                /\ clk' = [clk EXCEPT ![e[2]] = Max2(@, w.h)]
     /\ cursor' = [cursor EXCEPT ![e] = @ + 1]
     /\ UNCHANGED <<authored, wal, reaped, fellOff, booted, scopedDone, topo, gen, restored, phys, deleted, delDone, owed, aligned, restoredR, coordDone, lost, oldS, detached, ex, fl, prov, adm>>
+    /\ UNCHANGED shadowVars
 
 (***************************************************************************)
 (* Admit(o): the applier at r admits the next write of third origin o      *)
@@ -279,6 +341,7 @@ Admit(o) ==
              ELSE /\ adm' = [adm EXCEPT ![o] = "fresh"]
                   /\ UNCHANGED cursor
     /\ UNCHANGED <<authored, wal, reg, clk, reaped, fellOff, booted, scopedDone, topo, gen, restored, phys, deleted, delDone, owed, aligned, restoredR, coordDone, lost, oldS, detached, ex, fl, prov>>
+    /\ UNCHANGED shadowVars
 
 (***************************************************************************)
 (* Land(o): the admitted write reaches r's shard root. The shard root      *)
@@ -299,6 +362,7 @@ Land(o) ==
                /\ clk' = [clk EXCEPT ![r] = Max2(@, w.h)]
                /\ cursor' = [cursor EXCEPT ![<<o, r>>] = @ + 1]
     /\ UNCHANGED <<authored, wal, reaped, fellOff, booted, scopedDone, topo, gen, restored, phys, deleted, delDone, owed, aligned, restoredR, coordDone, lost, oldS, detached, ex, fl, prov>>
+    /\ UNCHANGED shadowVars
 
 (***************************************************************************)
 (* Trim: s trims its log past entries r has not received. Those entries   *)
@@ -311,6 +375,7 @@ Trim ==
     /\ \E t \in (cursor[<<s, r>>] + 1)..Len(wal[s]) : cursor' = [cursor EXCEPT ![<<s, r>>] = t]
     /\ fellOff' = TRUE
     /\ UNCHANGED <<authored, wal, reg, clk, reaped, booted, scopedDone, topo, gen, restored, phys, deleted, delDone, owed, aligned, restoredR, coordDone, lost, oldS, detached, ex, fl, prov, adm>>
+    /\ UNCHANGED shadowVars
 
 (***************************************************************************)
 (* Reap: s compacts a tombstone away once no write it beats is still on   *)
@@ -333,6 +398,7 @@ Reap ==
     /\ reg' = [reg EXCEPT ![s] = Absent]
     /\ reaped' = Max2(reaped, reg[s].h)
     /\ UNCHANGED <<authored, wal, cursor, clk, fellOff, booted, scopedDone, topo, gen, restored, phys, deleted, delDone, owed, aligned, restoredR, coordDone, lost, oldS, detached, ex, fl, prov, adm>>
+    /\ UNCHANGED shadowVars
 
 (***************************************************************************)
 (* Detach: an operator detaches r as a peer of s's tree (#4534-B), and     *)
@@ -342,6 +408,7 @@ Reap ==
 (* only one in progress blocks it.                                         *)
 (***************************************************************************)
 Detach ==
+    /\ ~Mutual
     /\ fellOff => booted
     /\ Reattach \/ ~fellOff
     /\ ~detached
@@ -350,6 +417,7 @@ Detach ==
     /\ fellOff' = TRUE
     /\ booted' = FALSE
     /\ UNCHANGED <<authored, wal, reg, clk, reaped, scopedDone, topo, gen, restored, phys, deleted, delDone, owed, aligned, restoredR, coordDone, lost, oldS, ex, fl, prov, adm>>
+    /\ UNCHANGED shadowVars
 
 (***************************************************************************)
 (* Restore: a unilateral source restore. s loses the key without a delete *)
@@ -369,6 +437,7 @@ Restore ==
     /\ lost' = [o \in Others |-> cursor[<<o, s>>]]
     /\ oldS' = Len(wal[s])
     /\ UNCHANGED <<authored, wal, cursor, clk, reaped, fellOff, booted, scopedDone, topo, phys, deleted, delDone, owed, aligned, restoredR, coordDone, detached, ex, fl, prov, adm>>
+    /\ UNCHANGED shadowVars
 
 (***************************************************************************)
 (* CoordinatedRestore: the remedy for a unilateral source restore. Every   *)
@@ -393,6 +462,7 @@ CoordinatedRestore ==
     /\ fl' = [o \in Thirds |-> 0]
     /\ adm' = [o \in Thirds |-> "none"]
     /\ UNCHANGED <<authored, wal, reaped, fellOff, booted, scopedDone, topo, gen, restored, phys, deleted, delDone, owed, restoredR, oldS, detached, ex, prov>>
+    /\ UNCHANGED shadowVars
 
 (***************************************************************************)
 (* RestoreR: a receiver restore removes the key at r and re-stamps r's     *)
@@ -419,6 +489,7 @@ RestoreR ==
     /\ cursor' = [e \in Edges |-> IF e[1] \in Thirds /\ e[2] = r THEN 0 ELSE cursor[e]]
     /\ adm' = [o \in Thirds |-> "none"]
     /\ UNCHANGED <<authored, wal, clk, reaped, scopedDone, topo, gen, restored, phys, deleted, delDone, owed, aligned, coordDone, lost, oldS, detached, ex, prov>>
+    /\ UNCHANGED shadowVars
 
 (***************************************************************************)
 (* Reshard: s's shard map changes, as the one disruption. A scan in        *)
@@ -430,6 +501,7 @@ Reshard ==
     /\ \E sk \in BOOLEAN :
           ex' = IF ex.phase # "idle" /\ ~ex.scanned THEN [ex EXCEPT !.skipped = ex.skipped \/ sk] ELSE ex
     /\ UNCHANGED <<authored, wal, cursor, reg, clk, reaped, fellOff, booted, scopedDone, gen, restored, phys, deleted, delDone, owed, aligned, restoredR, coordDone, lost, oldS, detached, fl, prov, adm>>
+    /\ UNCHANGED shadowVars
 
 (***************************************************************************)
 (* Resize: s copies its tree into a new physical tree and swaps the alias, *)
@@ -442,6 +514,7 @@ Resize ==
     /\ \E sk \in BOOLEAN :
           ex' = IF ex.phase # "idle" /\ ~ex.scanned THEN [ex EXCEPT !.skipped = ex.skipped \/ sk] ELSE ex
     /\ UNCHANGED <<authored, wal, cursor, reg, clk, reaped, fellOff, booted, scopedDone, topo, gen, restored, deleted, delDone, owed, aligned, restoredR, coordDone, lost, oldS, detached, fl, prov, adm>>
+    /\ UNCHANGED shadowVars
 
 (***************************************************************************)
 (* SoftDelete / Recover: s's tree is soft-deleted, as the one              *)
@@ -456,11 +529,13 @@ SoftDelete ==
     /\ deleted' = TRUE
     /\ delDone' = TRUE
     /\ UNCHANGED <<authored, wal, cursor, reg, clk, reaped, fellOff, booted, scopedDone, topo, gen, restored, phys, owed, aligned, restoredR, coordDone, lost, oldS, detached, ex, fl, prov, adm>>
+    /\ UNCHANGED shadowVars
 
 Recover ==
     /\ deleted
     /\ deleted' = FALSE
     /\ UNCHANGED <<authored, wal, cursor, reg, clk, reaped, fellOff, booted, scopedDone, topo, gen, restored, phys, delDone, owed, aligned, restoredR, coordDone, lost, oldS, detached, ex, fl, prov, adm>>
+    /\ UNCHANGED shadowVars
 
 (***************************************************************************)
 (* BeginExport(kind): an export opens. "full" is the in-place re-bootstrap *)
@@ -481,6 +556,7 @@ Recover ==
 (* no floor.                                                               *)
 (***************************************************************************)
 BeginExport(kind) ==
+    /\ ~Mutual
     /\ ex.phase = "idle"
     /\ CASE kind = "full" -> fellOff /\ ~booted
           [] kind = "reconcile" -> booted /\ owed /\ \A o \in Thirds : adm[o] = "none"
@@ -496,6 +572,7 @@ BeginExport(kind) ==
             /\ prov' = TRUE
             /\ adm' = [o \in Thirds |-> IF adm[o] = "fresh" THEN "stale" ELSE adm[o]]
     /\ UNCHANGED <<authored, wal, cursor, reg, clk, reaped, fellOff, booted, scopedDone, topo, gen, restored, phys, deleted, delDone, owed, aligned, restoredR, coordDone, lost, oldS, detached>>
+    /\ UNCHANGED shadowVars
 
 (***************************************************************************)
 (* ExportRow: the scan reaches the key. Whatever s holds, tombstone        *)
@@ -514,6 +591,7 @@ ExportRow ==
             /\ reg' = [reg EXCEPT ![r] = Merge(@, reg[s])]
             /\ clk' = [clk EXCEPT ![r] = Max2(@, reg[s].h)]
     /\ UNCHANGED <<authored, wal, cursor, reaped, fellOff, booted, scopedDone, topo, gen, restored, phys, deleted, delDone, owed, aligned, restoredR, coordDone, lost, oldS, detached, fl, prov, adm>>
+    /\ UNCHANGED shadowVars
 
 (***************************************************************************)
 (* EndExport: the drain completes. If the key was pre-captured, is in the  *)
@@ -579,10 +657,121 @@ EndExport ==
                        /\ reg[r].o # s /\ reg[r].h >= ex.lwm0[reg[r].o]
     /\ ex' = IdleExport
     /\ UNCHANGED <<authored, wal, cursor, reaped, fellOff, topo, gen, restored, phys, deleted, delDone, restoredR, coordDone, lost, oldS, adm>>
+    /\ UNCHANGED shadowVars
+
+(***************************************************************************)
+(* The Mutual variant's shadow imports (#5689). x re-seeds from its peer   *)
+(* y: r when s trimmed past it (Trim), s when r trimmed past it            *)
+(* (ReverseTrim). Both may be in progress at once.                         *)
+(***************************************************************************)
+Peer(x) == IF x = r THEN s ELSE r
+Owed(x) == IF x = r THEN fellOff /\ ~booted ELSE fellOffS /\ ~bootedS
+
+(***************************************************************************)
+(* DeliverHeld(e): a shipper delivers its next entry to a receiver holding *)
+(* a shadow copy. The replicated apply is routed to the copy alone, not    *)
+(* the tree, and acknowledged; an aborted copy discards it, and the        *)
+(* re-driven import's export, which carries the sender's value or a later  *)
+(* one, brings it back.                                                    *)
+(***************************************************************************)
+DeliverHeld(e) ==
+    /\ Mutual
+    /\ ph[e[2]] # "idle"
+    /\ cursor[e] < Len(wal[e[1]])
+    /\ LET w == wal[e[1]][cursor[e] + 1]
+       IN /\ cp' = [cp EXCEPT ![e[2]] = Merge(@, AsReg(w))]
+          /\ clk' = [clk EXCEPT ![e[2]] = Max2(@, w.h)]
+    /\ cursor' = [cursor EXCEPT ![e] = @ + 1]
+    /\ UNCHANGED <<authored, wal, reg, reaped, fellOff, booted, scopedDone, topo, gen, restored, phys, deleted, delDone, owed, aligned, restoredR, coordDone, lost, oldS, detached, ex, fl, prov, adm>>
+    /\ UNCHANGED copyCtl
+
+(***************************************************************************)
+(* ReverseTrim: r trims its log past entries s has not received, and its   *)
+(* shipper requests that s re-seed from r: Trim, the other way round.      *)
+(***************************************************************************)
+ReverseTrim ==
+    /\ Mutual
+    /\ ~fellOffS
+    /\ cursor[<<r, s>>] < Len(wal[r])
+    /\ \E t \in (cursor[<<r, s>>] + 1)..Len(wal[r]) : cursor' = [cursor EXCEPT ![<<r, s>>] = t]
+    /\ fellOffS' = TRUE
+    /\ UNCHANGED <<authored, wal, reg, clk, reaped, fellOff, booted, scopedDone, topo, gen, restored, phys, deleted, delDone, owed, aligned, restoredR, coordDone, lost, oldS, detached, ex, fl, prov, adm>>
+    /\ UNCHANGED <<cp, cid, phy, src0, ph, dd, bootedS>>
+
+(***************************************************************************)
+(* OpenShadow(x): x's owed re-seed opens. x copies its own tree into a     *)
+(* fresh shadow copy with a new copy id, held for the import, and opens    *)
+(* the export of y's tree, recording which physical tree it reads.         *)
+(***************************************************************************)
+OpenShadow(x) ==
+    /\ Mutual
+    /\ ph[x] = "idle"
+    /\ Owed(x)
+    /\ ph' = [ph EXCEPT ![x] = "open"]
+    /\ cp' = [cp EXCEPT ![x] = reg[x]]
+    /\ cid' = [cid EXCEPT ![x] = @ + 1]
+    /\ src0' = [src0 EXCEPT ![x] = phy[Peer(x)]]
+    /\ UNCHANGED <<authored, wal, cursor, reg, clk, reaped, fellOff, booted, scopedDone, topo, gen, restored, phys, deleted, delDone, owed, aligned, restoredR, coordDone, lost, oldS, detached, ex, fl, prov, adm>>
+    /\ UNCHANGED <<phy, dd, fellOffS, bootedS>>
+
+(***************************************************************************)
+(* ShadowRow(x): x's drain reads the key from y's export, tombstone        *)
+(* included, while y's tree has not moved, and applies it to the copy.     *)
+(* The applier's exact-identity dedupe memory is scoped to (tree, copy     *)
+(* id): a row already applied into THIS copy is acknowledged without being *)
+(* applied again, and the row's identity is recorded against this copy.    *)
+(***************************************************************************)
+ShadowRow(x) ==
+    /\ ph[x] = "open"
+    /\ phy[Peer(x)] = src0[x]
+    /\ ph' = [ph EXCEPT ![x] = "scanned"]
+    /\ LET u == reg[Peer(x)]
+           seen == [w |-> Id(u), c |-> cid[x]] \in dd[x]
+       IN IF ~u.present \/ seen
+          THEN UNCHANGED <<cp, clk, dd>>
+          ELSE /\ cp' = [cp EXCEPT ![x] = Merge(@, u)]
+               /\ clk' = [clk EXCEPT ![x] = Max2(@, u.h)]
+               /\ dd' = [dd EXCEPT ![x] = @ \cup {[w |-> Id(u), c |-> cid[x]]}]
+    /\ UNCHANGED <<authored, wal, cursor, reg, reaped, fellOff, booted, scopedDone, topo, gen, restored, phys, deleted, delDone, owed, aligned, restoredR, coordDone, lost, oldS, detached, ex, fl, prov, adm>>
+    /\ UNCHANGED <<cid, phy, src0, fellOffS, bootedS>>
+
+(***************************************************************************)
+(* Cutover(x): the drain completes against an unmoved source, and x's tree *)
+(* is REPLACED by the copy, not merged with it: whatever the copy lacks,   *)
+(* x no longer holds. x's tree is now that copy, so a drain reading it     *)
+(* fails, and the re-seed is complete.                                     *)
+(***************************************************************************)
+Cutover(x) ==
+    /\ ph[x] = "scanned"
+    /\ phy[Peer(x)] = src0[x]
+    /\ reg' = [reg EXCEPT ![x] = cp[x]]
+    /\ phy' = [phy EXCEPT ![x] = cid[x]]
+    /\ ph' = [ph EXCEPT ![x] = "idle"]
+    /\ cp' = [cp EXCEPT ![x] = Absent]
+    /\ booted' = (booted \/ x = r)
+    /\ bootedS' = (bootedS \/ x = s)
+    /\ UNCHANGED <<authored, wal, cursor, clk, reaped, fellOff, scopedDone, topo, gen, restored, phys, deleted, delDone, owed, aligned, restoredR, coordDone, lost, oldS, detached, ex, fl, prov, adm>>
+    /\ UNCHANGED <<cid, src0, dd, fellOffS>>
+
+(***************************************************************************)
+(* AbortShadow(x): y's tree moved under x's drain - y cut over to its own  *)
+(* copy - so the export fails. x discards its copy, everything the drain   *)
+(* applied with it, and the re-seed stays owed, so OpenShadow re-drives it *)
+(* into a fresh copy.                                                      *)
+(***************************************************************************)
+AbortShadow(x) ==
+    /\ ph[x] # "idle"
+    /\ phy[Peer(x)] # src0[x]
+    /\ ph' = [ph EXCEPT ![x] = "idle"]
+    /\ cp' = [cp EXCEPT ![x] = Absent]
+    /\ UNCHANGED <<authored, wal, cursor, reg, clk, reaped, fellOff, booted, scopedDone, topo, gen, restored, phys, deleted, delDone, owed, aligned, restoredR, coordDone, lost, oldS, detached, ex, fl, prov, adm>>
+    /\ UNCHANGED <<cid, phy, src0, dd, fellOffS, bootedS>>
 
 Quiesced ==
     /\ ex.phase = "idle"
     /\ fellOff => booted
+    /\ fellOffS => bootedS
+    /\ \A x \in Clusters : ph[x] = "idle"
     /\ ~owed
     /\ ~deleted
     /\ \A e \in Edges : cursor[e] = Len(wal[e[1]])
@@ -607,24 +796,33 @@ Next ==
     \/ \E kind \in {"full", "scoped", "reconcile"} : BeginExport(kind)
     \/ ExportRow
     \/ EndExport
+    \/ ReverseTrim
+    \/ \E e \in Edges : DeliverHeld(e)
+    \/ \E x \in {r, s} : OpenShadow(x)
+    \/ \E x \in {r, s} : ShadowRow(x)
+    \/ \E x \in {r, s} : Cutover(x)
+    \/ \E x \in {r, s} : AbortShadow(x)
     \/ Stutter
 
 (***************************************************************************)
 (* Fairness: delivery is fair, a third origin's admission and landing      *)
 (* included, a requested full re-bootstrap and an owed reconcile start, an *)
-(* export in progress completes, and a soft-deleted tree is recovered.     *)
+(* export in progress completes, a soft-deleted tree is recovered, and an  *)
+(* owed shadow import opens, drains, and cuts over or aborts.              *)
 (* Writes, trims, reaps, restores (unilateral, coordinated or at the       *)
 (* receiver), reshards, resizes, soft deletes and scoped exports are       *)
 (* environment events.                                                     *)
 (***************************************************************************)
 Fairness ==
-    /\ \A e \in Edges : WF_vars(Deliver(e))
+    /\ \A e \in Edges : WF_vars(Deliver(e)) /\ WF_vars(DeliverHeld(e))
     /\ \A o \in Thirds : WF_vars(Admit(o)) /\ WF_vars(Land(o))
     /\ WF_vars(BeginExport("full"))
     /\ WF_vars(BeginExport("reconcile"))
     /\ WF_vars(Recover)
     /\ WF_vars(ExportRow)
     /\ WF_vars(EndExport)
+    /\ \A x \in {r, s} : /\ WF_vars(OpenShadow(x)) /\ WF_vars(ShadowRow(x))
+                         /\ WF_vars(Cutover(x)) /\ WF_vars(AbortShadow(x))
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 
@@ -655,9 +853,14 @@ Agreed == Read(reg[s]) = Read(reg[r])
 (* holds that write or a later one, or s authored a delete that beats it. *)
 (* A unilateral source restore does not release r from it: r keeps what  *)
 (* s lost, and nothing s's restore did makes r drop another origin's      *)
-(* write, the bootstrap drop floor included (#4549).                      *)
+(* write, the bootstrap drop floor included (#4549). In the Mutual        *)
+(* variant r is also s's source, so s's copy must reflect every write of  *)
+(* r's in the same sense: a shadow cutover may not drop one (#5689).      *)
+Reflects(x, w) == ~Beats(AsReg(w), reg[x]) \/ \E d \in authored : d.o = s /\ d.del /\ d.h >= w.h
+
 Kept == \A w \in authored :
-            w.o # s => (~Beats(AsReg(w), reg[r]) \/ \E d \in authored : d.o = s /\ d.del /\ d.h >= w.h)
+            /\ w.o # s => Reflects(r, w)
+            /\ (Mutual /\ w.o = r) => Reflects(s, w)
 
 (* EventualConvergence: once writing stops, both replicas hold the value  *)
 (* of every write, the deletes included, on every behaviour with no        *)
@@ -667,5 +870,14 @@ Kept == \A w \in authored :
 (* unremedied unilateral source restore is the contract's one exclusion.  *)
 EventualConvergence ==
     <>[](IF ~restored THEN Converged ELSE IF coordDone THEN Agreed ELSE Kept)
+
+(* EventualKept: no write of another origin is lost for good. Kept holds   *)
+(* from some point on, on every behaviour, unless a coordinated restore   *)
+(* ran: its cut is an operator's choice of what both clusters keep, which *)
+(* EventualConvergence's Agreed covers. Kept is not an invariant - a      *)
+(* write in flight is not yet reflected - so a lost write shows as Kept   *)
+(* failing for ever.                                                       *)
+EventualKept ==
+    <>[](coordDone \/ Kept)
 
 =============================================================================
