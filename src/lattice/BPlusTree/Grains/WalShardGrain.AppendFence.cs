@@ -573,7 +573,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
     {
         if (_generationEntries is null
             || !_generationEntries.TryGetValue(initiator, out var entry)
-            || entry.InFlightBatches <= int.MaxValue)
+            || entry.InFlightBatches <= 0)
         {
             return null;
         }
@@ -767,7 +767,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
     /// admitted unstamped and reported. Called under <see cref="_stateGate"/>.
     /// </summary>
     private static bool RaisesUnstampedWatermark(bool stamped, in WalAppendStamp stamp, in WalRecord entry) =>
-        !stamped || stamp.IsCoordinatorTerminal;
+        !stamped || (stamp.IsCoordinatorTerminal && !WalAppendFenceCore.IsCoordinatorTerminalOp(entry.Op));
 
     /// <summary>
     /// Counts records sent under the coordinator-terminal class that were not

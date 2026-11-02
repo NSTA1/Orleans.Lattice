@@ -124,7 +124,7 @@ internal static class WalAppendFenceCore
     /// </summary>
     /// <param name="op">The record's mutation kind.</param>
     public static bool IsCoordinatorTerminalOp(MutationKind op) =>
-        op is MutationKind.TxCommit or MutationKind.TxAbort or MutationKind.Set;
+        op is MutationKind.TxCommit or MutationKind.TxAbort;
 
     /// <summary>The value a refused claim must exceed.</summary>
     public static long ClaimThreshold(long loaded, long durable, long floor) =>

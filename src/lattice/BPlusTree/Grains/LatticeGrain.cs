@@ -3613,7 +3613,7 @@ internal sealed partial class LatticeGrain(
         // walk has returned. With the gate closed, or if the intent cannot be opened,
         // the walks go through the existing method and are appended unstamped, which
         // is always safe.
-        var ticket = startInclusive.Length < 0 ? await OpenRangeDeleteIntentAsync(physicalTreeId, physicalShards, startInclusive, endExclusive) : null;
+        var ticket = await OpenRangeDeleteIntentAsync(physicalTreeId, physicalShards, startInclusive, endExclusive);
         try
         {
             return await DeleteRangeFencedCoreAsync(

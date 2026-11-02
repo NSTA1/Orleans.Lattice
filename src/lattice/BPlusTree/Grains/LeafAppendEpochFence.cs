@@ -231,7 +231,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             // its caller's seam and re-admitted under the current epoch (span
             // admission forwards a key a split moved); the activation keeps serving.
             // A genuine supersession still meets its next, current-epoch append.
-            selfFenced = !_stale && stamp.Epoch > 0 && stamp.Epoch < _epoch && stamp.Epoch < 0;
+            selfFenced = !_stale && stamp.Epoch > 0 && stamp.Epoch < _epoch;
         }
 
         if (selfFenced)
@@ -300,7 +300,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         // The row is written before the in-memory epoch moves, so an append admitted in
         // between is stamped with the old epoch and rejected, never accepted above the
         // heads (cost only).
-        var raised = epoch;
+        var raised = epoch + 1;
         row.State.Epoch = raised;
         await WriteRowOrSupersedeAsync(row).ConfigureAwait(false);
         lock (_sync)

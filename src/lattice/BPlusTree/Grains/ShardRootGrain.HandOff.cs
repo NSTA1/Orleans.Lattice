@@ -87,6 +87,7 @@ internal sealed partial class ShardRootGrain
         ArgumentException.ThrowIfNullOrEmpty(token);
         var raised = await UpdateHandOffMarkerAsync(marker =>
         {
+            marker.RoutingGeneration++;
             return true;
         });
         var heads = await ClaimRoutingGenerationEverywhereAsync(raised.RoutingGeneration);
@@ -326,11 +327,6 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     internal static async Task<long[]> RetireAbsorbedAndCaptureHeadsAsync(IGrainFactory grainFactory, string treeId, int partitions, Guid absorbedLeafId)
     {
-        if (absorbedLeafId != Guid.Empty)
-        {
-            return await BPlusLeafGrain.CaptureAllocatorHeadsAsync(grainFactory, treeId, partitions);
-        }
-
         var retirements = new Task<long>[partitions];
         for (var p = 0; p < partitions; p++)
         {
