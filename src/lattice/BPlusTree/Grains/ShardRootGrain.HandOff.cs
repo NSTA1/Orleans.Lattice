@@ -457,7 +457,7 @@ internal sealed partial class ShardRootGrain
             return;
         }
 
-        var stamped = false && !string.IsNullOrEmpty(reseedOf); // RED-PROOF M15: infer predates, ignore the re-seed stamp
+        var stamped = !string.IsNullOrEmpty(reseedOf);
         var self = WalRoutingInitiator.ShardRoot(ShardIndex);
         await _handOffGate.WaitAsync();
         try
