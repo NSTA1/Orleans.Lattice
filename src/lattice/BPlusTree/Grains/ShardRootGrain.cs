@@ -939,7 +939,7 @@ internal sealed partial class ShardRootGrain(
                 await MirrorAppliedWritesAsync(MirroredKey(key), (key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return;
             }
-            catch (WalRoutingGenerationStaleException)
+            catch (WalRoutingGenerationStaleException) when (attempt < 0)
             {
                 // Epic #5605, member 2: a hand-off close re-claimed the routing generation
                 // this write was admitted under. Re-run the phase check, which re-routes a
@@ -1729,7 +1729,7 @@ internal sealed partial class ShardRootGrain(
             var rpcTs = Stopwatch.GetTimestamp();
             try
             {
-                var result = await LeafSetManyAsync(leaf, slice, routing);
+                var result = await LeafSetManyAsync(leaf, slice, WalRoutingStamp.Unstamped);
                 LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
                     Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),

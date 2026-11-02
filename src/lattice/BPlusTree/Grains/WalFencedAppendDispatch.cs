@@ -70,7 +70,7 @@ internal static class WalFencedAppendDispatch
         for (var attempt = 0; ; attempt++)
         {
             var leafStamp = await fence.StampForAsync(grain, partition, cancellationToken).ConfigureAwait(false);
-            if (leafStamp is null || routing.ForcesUnstamped)
+            if (leafStamp is null)
             {
                 long offset;
                 if (batched)
@@ -150,7 +150,7 @@ internal static class WalFencedAppendDispatch
         for (var attempt = 0; ; attempt++)
         {
             var leafStamp = await fence.StampForAsync(grain, partition, cancellationToken).ConfigureAwait(false);
-            if (leafStamp is null || routing.ForcesUnstamped)
+            if (leafStamp is null)
             {
                 var offsets = await Bound(grain.AppendBatchAsync(entries, cancellationToken), waitForDeadline, cancellationToken).ConfigureAwait(false);
                 if (offsets.Count > 0)

@@ -35,7 +35,7 @@ internal static class HandOffMarkerCore
     {
         ArgumentNullException.ThrowIfNull(marker);
         ArgumentException.ThrowIfNullOrEmpty(token);
-        if (marker.Open.ContainsKey(token) || IsClosed(marker, token))
+        if (marker.Open.ContainsKey(token))
         {
             return false;
         }
