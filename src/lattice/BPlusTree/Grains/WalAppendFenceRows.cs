@@ -84,6 +84,31 @@ internal static class WalAppendFenceRows
         return string.Concat(tag, index.ToString(CultureInfo.InvariantCulture));
     }
 
+    /// <summary>Parses an initiator's tag back into the initiator; <see langword="false"/> for a tag this build does not know.</summary>
+    internal static bool TryParseInitiatorTag(string tag, out WalRoutingInitiator initiator)
+    {
+        initiator = default;
+        if (string.IsNullOrEmpty(tag) || tag.Length < 2
+            || !int.TryParse(tag.AsSpan(1), NumberStyles.None, CultureInfo.InvariantCulture, out var index))
+        {
+            return false;
+        }
+
+        WalRoutingInitiatorKind? kind = tag[0] switch
+        {
+            's' => WalRoutingInitiatorKind.ShardRoot,
+            't' => WalRoutingInitiatorKind.TreeRangeDelete,
+            _ => null,
+        };
+        if (kind is not { } known)
+        {
+            return false;
+        }
+
+        initiator = new WalRoutingInitiator(known, index);
+        return true;
+    }
+
     /// <summary>An initiator's tag; see <see cref="InitiatorTag(WalRoutingInitiatorKind, int)"/>.</summary>
     internal static string InitiatorTag(WalRoutingInitiator initiator) => InitiatorTag(initiator.Kind, initiator.Index);
 

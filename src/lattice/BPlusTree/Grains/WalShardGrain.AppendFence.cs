@@ -62,7 +62,8 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
     /// initiator's floor is refused. Load-bearing: it is the one seam every routing
     /// generation passes before a stamped append under it is admitted.
     /// </summary>
-    private TreeRoutingFloorState _generationFloors = new();
+    /// <remarks>Keyed by initiator, not by its stored tag, so a claim's lookup allocates nothing.</remarks>
+    private Dictionary<WalRoutingInitiator, long>? _generationFloors;
 
     /// <summary>Set once the durable routing floor row has been read into <see cref="_generationFloors"/>.</summary>
     private bool _generationFloorLoaded;
@@ -114,18 +115,28 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
     {
         lock (_stateGate)
         {
-            return WalAppendFenceRows.FloorOf(_generationFloors, initiator);
+            return GenerationFloorLocked(initiator);
         }
     }
+
+    /// <summary><paramref name="initiator"/>'s routing floor as this activation holds it; called under <see cref="_stateGate"/>. No allocation.</summary>
+    private long GenerationFloorLocked(WalRoutingInitiator initiator) =>
+        _generationFloors is not null && _generationFloors.TryGetValue(initiator, out var floor) ? floor : 0;
 
     /// <summary>Merges <paramref name="stored"/> into the floors this activation holds; called under <see cref="_stateGate"/>.</summary>
     private void MergeGenerationFloorsLocked(TreeRoutingFloorState stored)
     {
         foreach (var (tag, value) in stored.Floors)
         {
-            if (!_generationFloors.Floors.TryGetValue(tag, out var current) || current < value)
+            if (!WalAppendFenceRows.TryParseInitiatorTag(tag, out var initiator))
             {
-                _generationFloors.Floors[tag] = value;
+                continue;
+            }
+
+            _generationFloors ??= new Dictionary<WalRoutingInitiator, long>();
+            if (!_generationFloors.TryGetValue(initiator, out var current) || current < value)
+            {
+                _generationFloors[initiator] = value;
             }
         }
 
@@ -567,7 +578,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
             lock (_stateGate)
             {
                 var entry = NoteDurableLocked(table, id, durable);
-                var floor = epochTable ? _epochFloor : WalAppendFenceRows.FloorOf(_generationFloors, batchInitiator!.Value);
+                var floor = epochTable ? _epochFloor : GenerationFloorLocked(batchInitiator!.Value);
                 decision = WalAppendFenceCore.DecideClaimWrite(value, entry.Memory, durable, floor);
                 threshold = WalAppendFenceCore.ClaimThreshold(entry.Memory, Math.Max(durable, entry.DurableSeen), floor);
             }
@@ -626,7 +637,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
                     if (drain is null)
                     {
                         var entry = NoteDurableLocked(table, id, value);
-                        var floor = epochTable ? _epochFloor : WalAppendFenceRows.FloorOf(_generationFloors, batchInitiator!.Value);
+                        var floor = epochTable ? _epochFloor : GenerationFloorLocked(batchInitiator!.Value);
                         if (!WalAppendFenceCore.IsRaiseAdmitted(value, entry.Memory, entry.DurableSeen, floor))
                         {
                             return WalAppendFenceClaimResult.Refuse(

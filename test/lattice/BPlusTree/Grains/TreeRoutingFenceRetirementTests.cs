@@ -46,6 +46,24 @@ public sealed class TreeRoutingFenceRetirementTests
             Is.EqualTo(new[] { WalRoutingInitiator.ShardRoot(0), WalRoutingInitiator.ShardRoot(1), WalRoutingInitiator.TreeRangeDelete }));
     }
 
+    [TestCase(false, 0)]
+    [TestCase(false, 37)]
+    [TestCase(true, 0)]
+    public void An_initiator_tag_round_trips(bool rangeDelete, int index)
+    {
+        var initiator = rangeDelete ? WalRoutingInitiator.TreeRangeDelete : WalRoutingInitiator.ShardRoot(index);
+
+        var parsed = WalAppendFenceRows.TryParseInitiatorTag(WalAppendFenceRows.InitiatorTag(initiator), out var back);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(parsed, Is.True);
+            Assert.That(back, Is.EqualTo(initiator));
+            Assert.That(WalAppendFenceRows.TryParseInitiatorTag("x1", out _), Is.False, "an unknown kind is skipped, not mistaken for another");
+            Assert.That(WalAppendFenceRows.TryParseInitiatorTag("s", out _), Is.False);
+        });
+    }
+
     [Test]
     public async Task A_partition_on_an_older_build_is_retired_straight_from_storage()
     {
