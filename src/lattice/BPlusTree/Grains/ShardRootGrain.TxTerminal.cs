@@ -754,7 +754,10 @@ internal sealed partial class ShardRootGrain
         var startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
-            await leaf.ApplyTxTerminalAsync(transactionId, committed, subset);
+            await WalFenceSeamRetry.RunAsync(
+                () => leaf.ApplyTxTerminalAsync(transactionId, committed, subset),
+                WalFenceSeamRetry.CallerShardRoot,
+                TreeId);
         }
         finally
         {

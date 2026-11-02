@@ -428,7 +428,8 @@ internal sealed partial class BPlusLeafGrain
                 // on its promoted key; see SplitResult.Additional.
                 forwardedSplit = SplitResult.Combine(
                     forwardedSplit,
-                    SplitResult.Forward(await sibling.MergeManyAsync(bucket, isCrossShardMigration)));
+                    SplitResult.Forward(await WalFenceSeamRetry.RunAsync(
+                        () => sibling.MergeManyAsync(bucket, isCrossShardMigration), WalFenceSeamRetry.CallerLeaf, state.State.TreeId)));
             }
         }
 
@@ -602,7 +603,8 @@ internal sealed partial class BPlusLeafGrain
             //
             // The forwarded SplitResult is kept, for the reason given in
             // ForwardOutOfSpanMergeAsync (issue #3523).
-            var forwarded = await sibling.SetManyWherePredicateAsync(bucket, predicate);
+            var forwarded = await WalFenceSeamRetry.RunAsync(
+                () => sibling.SetManyWherePredicateAsync(bucket, predicate), WalFenceSeamRetry.CallerLeaf, state.State.TreeId);
             forwardedSplit = SplitResult.Combine(forwardedSplit, SplitResult.Forward(forwarded.Split));
             var written = forwarded.WrittenKeys;
             for (var i = 0; i < written.Count; i++)
@@ -713,7 +715,9 @@ internal sealed partial class BPlusLeafGrain
                 // the shape SetCoreAsync's span forward takes. The sibling's
                 // SplitResult is kept, for the reason given in
                 // ForwardOutOfSpanMergeAsync (issue #3523).
-                forwards[i] = grainFactory.GetGrain<IBPlusLeafGrain>(target).SetManyAsync(bucket);
+                var forwardTarget = grainFactory.GetGrain<IBPlusLeafGrain>(target);
+                forwards[i] = WalFenceSeamRetry.RunAsync(
+                    () => forwardTarget.SetManyAsync(bucket), WalFenceSeamRetry.CallerLeaf, state.State.TreeId);
                 parts[i] = forwards[i];
                 i++;
             }

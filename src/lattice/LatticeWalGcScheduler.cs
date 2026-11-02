@@ -6956,11 +6956,48 @@ internal sealed class LatticeWalGcScheduler(
             }
         }
 
-        return removedEverywhere && !stoppingToken.IsCancellationRequested;
+        var complete = removedEverywhere && !stoppingToken.IsCancellationRequested;
+        if (complete)
+        {
+            await RetireAppendEpochEntryAsync(treeId, consumerId, stoppingToken).ConfigureAwait(false);
+        }
+
+        return complete;
     }
 
     /// <summary>
-    /// Records one removal-decision arm of
+    /// Retires the cleared leaf's WAL append-epoch entry at the partition whose
+    /// pin was just retired (epic #5605), under the same retirement token: this is
+    /// the pin-retirement step of the design note, and the sweep that removes an
+    /// entry left by a clear that could not retire it. The partition raises its
+    /// retired floor above the entry before deleting it. Best effort: a leftover
+    /// entry only ever sits above a re-claim, so a failure is logged and left.
+    /// </summary>
+    private async Task RetireAppendEpochEntryAsync(string treeId, string consumerId, CancellationToken stoppingToken)
+    {
+        if (!TryResolveLeafGrainId(treeId, consumerId, out var leafGrainId, out var partition))
+        {
+            return;
+        }
+
+        try
+        {
+            await Bounded(
+                grainFactory.GetGrain<BPlusTree.Grains.IWalShardGrain>($"{treeId}/{partition}")
+                    .RetireAppendEpochAsync(leafGrainId.GetGuidKey(), CancellationToken.None),
+                OrphanSweepOperationBudget, stoppingToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
+        {
+            logger.LogWarning(
+                ex,
+                "WAL GC retired materialiser pin {Consumer} on tree {Tree} but could not retire its leaf's WAL append-epoch entry at partition {Partition}; the entry is left in place, which is safe (epic #5605).",
+                consumerId,
+                treeId,
+                partition);
+        }
+    }
     /// <see cref="LatticeMetrics.WalGcOrphanPinSweep"/>, with the cause the
     /// decision rested on (issue #4246). The single site both the zero primes
     /// and the real emissions route through, so the two carry an identical tag

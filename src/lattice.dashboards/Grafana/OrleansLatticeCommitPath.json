@@ -1338,6 +1338,21 @@
       "targets": [
         { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_leaf_merge_observer_events_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} merge-observer events/s" }
       ]
+    },
+    {
+      "id": 5605,
+      "title": "WAL append fence: claims, rejections, seam retries and unstamped reports (rate) - epic #5605",
+      "description": "The WAL append fence (epic #5605): every leaf activation claims an append epoch at each WAL partition it writes, and a partition rejects a stamped append from a superseded epoch. CLAIMS (orleans.lattice.wal.append_fence.claims) by kind and outcome: accepted claims follow leaf activations, not writes; one refusal per new leaf per partition is expected after a retirement raises the partition's retired floor, and a sustained refusal rate on one tree means activations of the same leaf are contending. REJECTIONS (orleans.lattice.wal.append_fence.rejections) by reason: stale_epoch is a superseded duplicate activation that deactivated; unloaded_entry is a partition that restarted or moved since the claim. SEAM RETRIES (orleans.lattice.wal.append_fence.seam_retries) by caller class: every rejection is retried at the seam that raised it until the operation's existing deadline, so none reaches a caller. UNSTAMPED REPORTS (orleans.lattice.wal.append_fence.unstamped_reports): stamped responses that reported an unstamped append made after the leaf's claim: a saga coordinator's transaction terminal, or an append by an older-build silo during a rolling upgrade. NONE IS ZERO-PRIMED, so this panel has no 'or vector(0)' and an absent line is not a measured zero.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 468 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (kind, outcome) (rate(orleans_lattice_wal_append_fence_claims_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "claim {{kind}} {{outcome}}" },
+        { "refId": "B", "expr": "sum by (reason) (rate(orleans_lattice_wal_append_fence_rejections_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "rejected {{reason}}" },
+        { "refId": "C", "expr": "sum by (caller) (rate(orleans_lattice_wal_append_fence_seam_retries_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "seam retry {{caller}}" },
+        { "refId": "D", "expr": "sum by (tree) (rate(orleans_lattice_wal_append_fence_unstamped_reports_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "unstamped reported {{tree}}" }
+      ]
     }
   ]
 }
