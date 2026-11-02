@@ -812,24 +812,41 @@ its registry removal and re-driven while `RegistryUnregisterPending`, in this or
    rows that are already gone, and the floor is never raised
    (`ReadPositionHonestRoutingFloorAfterDeletes`, 15 states).
 2. **Then retire.** It retires the generation entries (durable and loaded), deletes the
-   marker rows and clears the fence state.
+   marker rows and clears the fence state. Production retires in the order fence grain
+   (which raises the floor over its own generation, then clears its state and reminder),
+   markers, then each partition, and each step raises the floor durably before its
+   deletes.
 3. **Re-creation starts above the floor.** A re-created incarnation initialises every
    first routing generation (the shard root's and the range-delete fence's) at the
    floor plus one, on every initialisation path, including one taken while the gate is
    closed that opens later. Starting at 1 lets generation values recur, the #5641 shape
    applied to generations (`ReadPositionHonestRoutingRecreatedAtOne`, 15 states).
 
-The WAL keeps no generation floor, and that makes two further rules load-bearing. A
-retired entry is absent, and an absent entry admits any stamp: the leaf re-presents an
-unloaded generation and the claim max-merges with no floor
-(`WalAppendFenceCore.IsGenerationAdmitted`). So a **straddling shard root** of the
-purged incarnation, which admitted a write before the purge and dispatches it after, is
-refused only once a generation above its stamp has been claimed at that partition. New
-generations exceed every old one, but only once they are claimed.
+The model gives the WAL no generation floor, so a retired entry is absent and an absent
+entry admits any stamp: a re-presented generation max-merges with nothing beneath it.
+A **straddling shard root** of the purged incarnation, which admitted a write before the
+purge and dispatches it after, is then refused only once a generation above its stamp
+has been claimed at that partition. New generations exceed every old one, but only once
+they are claimed. Under that weaker WAL, two further rules are load-bearing.
+
+**Production also keeps a WAL-side generation floor, as defence in depth (unmodelled).**
+`ClaimRoutingGenerationAsync` loads the tree's routing floor once per WAL shard
+activation and refuses a claim at or below it, with the floor included in the refusal
+threshold. `RetireRoutingGenerationsAsync` raises the floor in memory and drops the
+loaded entries before deleting any row. So a straddler re-presenting its old generation
+after retirement is refused at every partition before any re-created claim, and no
+generation is admitted without a claim that meets the floor. It is strictly stronger
+than the model: it only adds refusals, and only of generations at or below the floor,
+which no claimant of the re-created incarnation holds, so it cannot refuse a current
+initiator. The rules below still hold, because between the purge's WAL trim and the
+retirement the entries are still loaded and a straddler can append there; the init
+fence's recorded heads place those appends below the point the leaves re-arm from.
 - **The purge leaves the marker state uninitialised.** A deleted marker is absent, and
   rule 2 holds the leaves until their marker state is initialised again. Read as
   closed, it releases a foreign write the open marker held
-  (`ReadPositionHonestRoutingPurgeKeepsMarkerInit`, 13 states).
+  (`ReadPositionHonestRoutingPurgeKeepsMarkerInit`, 13 states). A shard root activation
+  that outlives the purge would still cache the old marker, which reads initialised, so
+  it drops that cache when it re-seeds a purged tombstone (`EnsureRootAsync`).
 - **The re-created incarnation's first initialisation is a fence.** When the floor is
   above 0, the marker reads initialised only after every initiator the purge retired
   has claimed its seeded first generation at every WAL partition of the tree, with the
@@ -839,8 +856,14 @@ generations exceed every old one, but only once they are claimed.
   writes its own initialised flag. Seeding the value without claiming it admits the
   straddling write above the recorded heads (`ReadPositionHonestRoutingInitWithoutClaim`,
   15 states). A tree whose floor is 0 has no straddler, so its initialisation claims
-  nothing extra. Today's `EnsureRoutingGenerationSlowAsync` sets the generation to 1 and
-  claims nothing, so the #5668 member changes it on both counts.
+  nothing extra. In production, `EnsureRoutingGenerationSlowAsync`, while the marker is
+  uninitialised and the floor is above 0, seeds the floor plus one, drives the fence
+  grain through `ITreeRangeDeleteFenceGrain.EnsureInitialisedAsync` (which seeds the
+  floor plus one if it has no generation, claims everywhere and returns its heads),
+  claims its own generation at every partition, and records the per-partition maximum
+  of both head vectors as a close (token `recreate:{floor}`, the whole range), all before
+  `TryInitialiseHandOffMarkerAsync`. Every step is idempotent, and a failure leaves the
+  marker uninitialised.
 
 A straddling shard root's own close re-claims at most the floor plus one, fencing only
 its own writes, and its marker write meets a row the purge deleted, so its conditional
@@ -1643,7 +1666,7 @@ Each production member carries detectors proven red. They land in this order:
 
 | Finding | Resolution |
 |---------|------------|
-| #5668: the per-tree fence rows are never deleted | Section 2, "Purging a tree's fence rows": the floor is max-merged into `_lattice_tree-routing-floor` before any delete, then the rows are retired, and a re-created incarnation starts at the floor plus one. Modelling it surfaced two further rules: the deleted marker reads uninitialised, and the first initialisation after a purge claims its seeded generation at every partition before reading initialised, because an absent generation entry admits any stamp. `Recreate` and `MarkInit` model all of it, with four mutations (`RoutingRecreatedAtOne`, `RoutingFloorAfterDeletes`, `RoutingInitWithoutClaim`, `RoutingPurgeKeepsMarkerInit`) and the witness `WitnessRecreatedStraddleFenced`; Recreate is clean at 6,748,568. |
+| #5668: the per-tree fence rows are never deleted | Section 2, "Purging a tree's fence rows": the floor is max-merged into `_lattice_tree-routing-floor` before any delete, then the rows are retired, and a re-created incarnation starts at the floor plus one. Modelling it surfaced two further rules: the deleted marker reads uninitialised, and the first initialisation after a purge claims its seeded generation at every partition before reading initialised, because in the model an absent generation entry admits any stamp. Production also keeps a WAL-side generation floor, recorded as unmodelled defence in depth; the init fence still covers a straddler's appends between the WAL trim and the retirement. `Recreate` and `MarkInit` model all of it, with four mutations (`RoutingRecreatedAtOne`, `RoutingFloorAfterDeletes`, `RoutingInitWithoutClaim`, `RoutingPurgeKeepsMarkerInit`) and the witness `WitnessRecreatedStraddleFenced`; Recreate is clean at 6,748,568. |
 
 ### After acceptance: member 2's review (#5644), S2
 
