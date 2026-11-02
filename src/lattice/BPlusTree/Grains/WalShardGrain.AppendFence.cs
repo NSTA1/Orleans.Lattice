@@ -180,8 +180,12 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
             // A leaf writes its epoch row before it claims anywhere, and its clear
             // deletes the row only after every partition retired its entry.
             var row = await WalAppendFenceRows.ReadLeafEpochAsync(storage, leafId).ConfigureAwait(true);
-            // RED-PROOF: no early return for an absent row
-            rowEpoch = 0; // RED-PROOF: the row read is ignored
+            if (!row.RecordExists && !HasLoadedEpochEntry(leafId))
+            {
+                return 0;
+            }
+
+            rowEpoch = row.State.Epoch;
         }
 
         await EnsureEpochFloorLoadedAsync(storage).ConfigureAwait(true);

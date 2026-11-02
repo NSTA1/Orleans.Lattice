@@ -35,7 +35,7 @@ namespace Orleans.Lattice;
 internal sealed class LeafRetiredException : Exception
 {
     /// <summary>The identity of the leaf grain that has been retired.</summary>
-    [Id(1)] public string LeafId { get; set; } = string.Empty; // RED-PROOF: ids renumbered
+    [Id(0)] public string LeafId { get; set; } = string.Empty;
 
     /// <summary>Creates a new <see cref="LeafRetiredException"/>.</summary>
     public LeafRetiredException(string leafId)
@@ -58,7 +58,7 @@ internal sealed class LeafRetiredException : Exception
     /// activation was superseded by a newer activation of the same leaf, which a
     /// fresh call reaches. <see langword="false"/> for a reclaimed leaf.
     /// </summary>
-    [Id(0)] public bool ActivationSuperseded { get; set; } // RED-PROOF: ids renumbered
+    [Id(1)] public bool ActivationSuperseded { get; set; }
 
     /// <summary>The append epoch the superseded activation held; 0 for a reclaimed leaf.</summary>
     [Id(2)] public long SupersededEpoch { get; set; }
