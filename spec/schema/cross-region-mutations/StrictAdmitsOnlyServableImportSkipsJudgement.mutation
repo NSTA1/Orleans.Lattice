@@ -1,0 +1,17 @@
+# Pairs with StrictAdmitsOnlyServable in SchemaCrossRegion. A re-seed import applies the
+# source's rows directly into the receiver's copy, around strict ingest, so a body the receiver's
+# policy refuses is admitted by the import (the shape #5684's T1 pins against).
+MODULE: StrictAdmitsOnlyServableImportSkipsJudgement
+TARGET: StrictAdmitsOnlyServable
+CLASS: Invariant
+SUMMARY: a re-seed import stores the source row verbatim, bypassing strict ingest
+PERTURBS: Import
+
+--- FIND
+    /\ IF dl[e] = 1 THEN UNCHANGED <<st, tag, dl>> ELSE Ingest(e, TRUE)
+--- REPLACE
+\* MUTATION: the imported row is stored without being judged.
+    /\ st' = [st EXCEPT ![e] = Landing(e)]
+    /\ tag' = [tag EXCEPT ![e] = stamp[e]]
+    /\ UNCHANGED dl
+--- END

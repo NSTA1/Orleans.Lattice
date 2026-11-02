@@ -8,16 +8,19 @@ target and its own upcaster catalog (startup declarations plus the durable runti
 registry), and nothing the replication stream carries changes the receiver's
 catalog. The source ships each entry stamped at the version it held when it judged
 and wrote it: a plain last-writer-wins write, a typed-CRDT delta, or one entry of
-one replicated atomic batch. The receiver merges a plain write below the write
-check, so it is stored with the stamp it carries even under strict ingest. Without
-strict ingest a delta or batch entry is stored verbatim too. Under strict ingest
-each delta and batch entry reaches the write choke point as a system-origin write
-and is judged by the receiver's own policy and catalog: an entry whose stamp the
-receiver cannot serve (newer than its target, or with no hop to it) or whose body
-its policy refuses is diverted to the dead-letter queue; an admitted delta is lifted
-to the receiver's target once, at the boundary; an admitted batch entry keeps its
-stamp and is staged for its batch's decision, which reveals the staged entries
-together while a diverted sibling is left out. The stream, the receiver's catalog,
+one replicated atomic batch. Without strict ingest every entry is stored verbatim,
+with the stamp it carries. Under strict ingest every replicated entry, a plain
+last-writer-wins write included (#5684), is judged by the receiver's own policy and
+catalog: an entry whose stamp the receiver cannot serve (newer than its target, or
+with no hop to it) or whose body its policy refuses is diverted to the dead-letter
+queue; an admitted plain write keeps its original bytes and stamp; an admitted delta
+is lifted to the receiver's target once, at the boundary; an admitted batch entry
+keeps its stamp and is staged for its batch's decision, which reveals the staged
+entries together while a diverted sibling is left out. A row can also reach the
+receiver through anti-entropy repair or a re-seed import. Both apply the same
+judgement, so a body the receiver refused is never re-introduced, and the regions
+converge modulo dead-lettered entries, each divergence accounted for by at least
+one dead letter. The stream, the receiver's catalog,
 policy and dead-letter collaborators, and the receiver's physical copy (which a
 coordinated restore can hold receive-closed) can each be unavailable for a while:
 nothing is judged, admitted or diverted while they are, and the entry is
@@ -40,34 +43,38 @@ version as its target.
 | `decided` | Whether the batch's commit decision reached the receiver. | `LatticeGrain.ApplyTxTerminalAsync`. |
 | `up`, `faults` | Which of the stream, the receiver's collaborators and its physical copy are available, and the faults left. | `ReplicationApplier.ApplyAsync`, `ICopyReceiveFenceGrain`. |
 | `lastRead` | The last client read and whether it served a body or failed. | `LatticeSchemaVersionDecoder.DecodeAsync`. |
+| `dl` | Whether the receiver holds a dead letter for the entry. One flag stands for one or more records: duplicates are a deliberate abstraction gap (below). | `LatticeSchemaDeadLetterStore.AppendAsync`. |
 
 ## Action mapping
 
 | Spec action | Protocol step | Code counterpart | Detector |
 |-------------|---------------|------------------|----------|
-| `Deliver(e)` | The receiver applies a replicated entry: a plain write merges below the check; under strict ingest a delta or batch entry is judged by the receiver's own policy and catalog and is admitted (a delta lifted to the target, a batch entry staged with its stamp) or diverted; an entry routed to a restored copy held closed, or judged while a collaborator is unavailable, fails and is re-delivered. | `ReplicationApplier.ApplyAsync`, `LatticeGrain.ApplySetAsync`, `LatticeGrain.ApplyCrdtDeltaWithExpiryAsync`, `LatticeGrain.ApplyPreparedSetAsync`, `LatticeWriteInterceptorEnforcement.InterceptPointAsync`. | Yes: `SchemaCrossRegionIngestIntegrationTests.Plain_lww_entry_stamped_past_the_target_of_a_tree_without_strict_ingest_is_stored_verbatim_and_its_read_fails_explicitly`, `SchemaCrossRegionIngestIntegrationTests.Strict_crdt_delta_stamped_past_the_receivers_target_is_dead_lettered_and_not_applied`, `SchemaCrossRegionIngestIntegrationTests.Strict_atomic_entry_stamped_past_the_receivers_target_is_dead_lettered_and_its_batch_siblings_commit_together`, `SchemaStrictIngestDeadLetterTests.Failed_policy_lookup_fails_the_write_instead_of_admitting_it`, `StrictIngestCommittedDeadLetterIntegrationTests.Refused_atomic_entry_prepared_before_the_decision_leaves_one_ordinary_committed_dead_letter_record`, `StrictIngestCommittedDeadLetterIntegrationTests.Refused_crdt_atomic_entry_prepared_before_the_decision_leaves_one_ordinary_committed_dead_letter_record`. |
+| `Deliver(e)` | The receiver applies a replicated entry: under strict ingest every entry, a plain write included (#5684), is judged by the receiver's own policy and catalog and is admitted (a plain write with its original bytes and stamp, a delta lifted to the target, a batch entry staged with its stamp) or diverted with a dead-letter record; without strict ingest it is stored verbatim; an entry routed to a restored copy held closed, or judged while a collaborator is unavailable, fails and is re-delivered. The plain-write judgement runs once per batch on the batched merge and per entry on the point path, against the logical tree's policy even when the apply is routed to a bootstrap shadow copy. | `ReplicationApplier.ApplyAsync`, `LatticeGrain.ApplySetAsync`, `LatticeGrain.ApplyMergeManyAsync`, `ILatticeWriteInterceptor.JudgesReplicatedWritesAsync`, `LatticeGrain.ApplyCrdtDeltaWithExpiryAsync`, `LatticeGrain.ApplyPreparedSetAsync`, `LatticeWriteInterceptorEnforcement.InterceptPointAsync`, `LatticeSchemaDeadLetterStore.AppendAsync`. | Yes: `SchemaCrossRegionIngestIntegrationTests.Plain_lww_entry_stamped_past_the_receivers_target_is_dead_lettered_under_strict_ingest_and_not_stored`, `SchemaCrossRegionIngestIntegrationTests.Plain_lww_entry_the_receivers_policy_refuses_is_dead_lettered_under_strict_ingest_and_not_stored`, `StrictIngestPlainReplicatedWriteIntegrationTests.A_refused_plain_write_is_dead_lettered_under_the_logical_tree_and_not_stored`, `StrictIngestPlainReplicatedWriteIntegrationTests.A_refused_plain_write_in_a_merge_batch_is_diverted_and_its_siblings_land`, `StrictIngestPlainReplicatedWriteIntegrationTests.A_plain_write_to_a_shadow_routed_tree_is_judged_under_the_logical_policy`, `SchemaCrossRegionIngestIntegrationTests.Strict_crdt_delta_stamped_past_the_receivers_target_is_dead_lettered_and_not_applied`, `SchemaCrossRegionIngestIntegrationTests.Strict_atomic_entry_stamped_past_the_receivers_target_is_dead_lettered_and_its_batch_siblings_commit_together`, `SchemaStrictIngestDeadLetterTests.Failed_policy_lookup_fails_the_write_instead_of_admitting_it`, `StrictIngestCommittedDeadLetterIntegrationTests.Refused_atomic_entry_prepared_before_the_decision_leaves_one_ordinary_committed_dead_letter_record`, `StrictIngestCommittedDeadLetterIntegrationTests.Refused_crdt_atomic_entry_prepared_before_the_decision_leaves_one_ordinary_committed_dead_letter_record`. |
 | `Decide` | The batch's commit terminal, which the source ships only after every prepare of its saga was acknowledged, reaches the receiver and reveals the staged entries; a diverted entry counts as settled, so it does not hold the decision back. | `LatticeGrain.ApplyTxTerminalAsync`. | Yes: `SchemaCrossRegionIngestIntegrationTests.Strict_atomic_entry_the_receivers_policy_refuses_is_dead_lettered_and_its_batch_siblings_commit_together`, `StrictIngestLatePrepareIntegrationTests.Refused_lww_atomic_entry_whose_prepare_precedes_the_commit_decision_is_diverted_not_applied`. |
 | `Read(e)` | A client read decodes the stored stamp at the receiver's target, upcasting along its own catalog, or fails explicitly. | `LatticeSchemaVersionDecoder.DecodeAsync`. | Yes: `SchemaCrossRegionIngestIntegrationTests.Plain_lww_entry_stamped_past_the_target_of_a_tree_without_strict_ingest_is_stored_verbatim_and_its_read_fails_explicitly`, `LatticeSchemaVersionDecoderTests.DecodeAsync_stale_value_with_no_upcast_path_throws_not_supported`. |
 | `Register` | The receiver's operator registers the source's newer version and the hop to it in the receiver's own catalog; nothing stored is rewritten. | `SchemaRuntimeRegistry.RegisterAsync`, `LatticeSchemaControl.RegisterSchemaAsync`. | Yes: `SchemaTargetAdvanceIntegrationTests.AdvanceTargetVersionAsync_rewrites_no_stored_value_and_a_later_registered_hop_upcasts_it_on_read`, `SchemaRuntimeRegistryTests.A_later_registration_keeps_every_earlier_entry`. |
 | `Advance` | The receiver's operator advances its target, which the facade admits only to a version registered in the receiver's catalog and reachable from its current target. | `LatticeSchemaControl.AdvanceTargetVersionAsync`. | Yes: `LatticeSchemaControlVersionTargetTests.AdvanceTargetVersion_refuses_a_target_with_no_registered_path`, `SchemaCrossRegionIngestIntegrationTests.Plain_lww_entry_stamped_past_the_receivers_target_becomes_readable_once_the_receiver_advances_to_it`. |
 | `Fault(c)` | Environment: the stream, a receiver collaborator, or the receiver's physical copy becomes unavailable. | No production counterpart: an outage or a coordinated restore's receive fence is the environment here. | Not applicable. |
 | `Recover(c)` | Environment: it becomes available again. | No production counterpart: recovery from a fault. | Not applicable. |
+| `Repair(e)` | Anti-entropy repair re-ships a committed row the source holds and the receiver lacks, a diverted row included, through the ordinary transport into the receiver's applier, which judges it like any replicated entry: a refused body is diverted again, never stored. | `ReplicationDigestProbeGrain`, `LeafReReplayer`, `WalGrainReReplaySource`, `TransportLeafReReplaySink.ReplayAsync`, `BootstrapFallbackPlanner.PlanAsync`, `ReplicationApplier.ApplyAsync`. | Yes: `StrictIngestPlainReplicatedWriteIntegrationTests.A_repaired_refused_row_is_diverted_not_stored`. |
+| `Import(e)` | A re-seed import drains every row of the source's export, staged batch rows included, through the receiver's applier under the drain flag, which judges each row like a replicated entry: a refused body is diverted under the logical tree, never stored; an admitted row is stamped at the receiver's target (#5551). | `LatticeBootstrapCoordinatorGrain.DrainSnapshotOnceAsync`, `LatticeBootstrapCoordinatorGrain.ApplyBootstrapRecordAsync`, `ReplicationApplier.ApplyAsync`, `LatticeGrain.ApplySetAsync`, `LatticeGrain.ApplyPreparedSetAsync`. | Yes: `StrictIngestShadowImportDeadLetterIntegrationTests.A_refused_committed_row_of_a_shadow_import_is_dead_lettered_under_the_logical_tree`, `StrictIngestShadowImportDeadLetterIntegrationTests.A_refused_prepared_row_decided_after_it_in_a_shadow_import_is_dead_lettered_under_the_logical_tree`. |
 | `Stutter` | No protocol step. | No production counterpart. | Not applicable. |
 
 ## Property mapping
 
 | Spec property | Production property | Detector |
 |---------------|--------------------|----------|
-| `StrictAdmitsOnlyServable` | Under strict ingest every delta and batch entry the receiver admits carries a body its own policy accepts and a stamp its own catalog serves; the source's verdict and the source's catalog are never trusted. | Yes: `SchemaCrossRegionIngestIntegrationTests.Strict_crdt_delta_stamped_past_the_receivers_target_is_dead_lettered_and_not_applied`, `SchemaCrossRegionIngestIntegrationTests.Strict_atomic_entry_stamped_past_the_receivers_target_is_dead_lettered_and_its_batch_siblings_commit_together`, `SchemaCrossRegionIngestIntegrationTests.Strict_atomic_entry_the_receivers_policy_refuses_is_dead_lettered_and_its_batch_siblings_commit_together`, `LatticeSchemaVersionWriteInterceptorTests.OnWriteAsync_strict_ingest_newer_than_target_dead_letters`. |
+| `StrictAdmitsOnlyServable` | Under strict ingest every replicated entry the receiver admits - a plain write, a delta or a batch entry, whether the stream, anti-entropy repair or a re-seed import delivered it - carries a body its own policy accepts and a stamp its own catalog serves; the source's verdict and the source's catalog are never trusted, and a body the receiver refused is never re-introduced. | Yes: `StrictIngestPlainReplicatedWriteIntegrationTests.A_refused_plain_write_is_dead_lettered_under_the_logical_tree_and_not_stored`, `StrictIngestPlainReplicatedWriteIntegrationTests.A_repaired_refused_row_is_diverted_not_stored`, `StrictIngestShadowImportDeadLetterIntegrationTests.A_refused_committed_row_of_a_shadow_import_is_dead_lettered_under_the_logical_tree`, `SchemaCrossRegionIngestIntegrationTests.Strict_crdt_delta_stamped_past_the_receivers_target_is_dead_lettered_and_not_applied`, `SchemaCrossRegionIngestIntegrationTests.Strict_atomic_entry_stamped_past_the_receivers_target_is_dead_lettered_and_its_batch_siblings_commit_together`, `SchemaCrossRegionIngestIntegrationTests.Strict_atomic_entry_the_receivers_policy_refuses_is_dead_lettered_and_its_batch_siblings_commit_together`, `LatticeSchemaVersionWriteInterceptorTests.OnWriteAsync_strict_ingest_newer_than_target_dead_letters`. |
+| `DivergenceAccounted` | The receiver lacks a replicated row for good only where strict ingest diverted it, and every diversion, by any path, leaves a durable dead-letter record under the logical tree. | Yes: `StrictIngestPlainReplicatedWriteIntegrationTests.A_refused_plain_write_is_dead_lettered_under_the_logical_tree_and_not_stored`, `StrictIngestShadowImportDeadLetterIntegrationTests.A_refused_committed_row_of_a_shadow_import_is_dead_lettered_under_the_logical_tree`, `SchemaStrictIngestDeadLetterTests.Failed_dead_letter_append_fails_the_write_instead_of_diverting_it`. |
 | `AtomicAllOrNothing` | A reader sees none of a replicated batch, or every entry of it the receiver admitted, and only once every entry was admitted or diverted. | Yes: `SchemaCrossRegionIngestIntegrationTests.Strict_atomic_entry_stamped_past_the_receivers_target_is_dead_lettered_and_its_batch_siblings_commit_together`, `CrossClusterAtomicVisibilityTests.Multi_shard_saga_through_the_applier_stays_invisible_until_every_source_shard_terminal_arrives`. |
-| `StoredStampFixed` | A stored stamp is fixed when the entry lands: registering a definition, advancing the target, reading or folding never rewrites it. | Yes: `SchemaCrossRegionIngestIntegrationTests.Plain_lww_entry_stamped_past_the_receivers_target_becomes_readable_once_the_receiver_advances_to_it`, `SchemaTargetAdvanceIntegrationTests.AdvanceTargetVersionAsync_rewrites_no_stored_value_and_a_later_registered_hop_upcasts_it_on_read`, `LatticeSchemaEnvelopeCodecTests.StripForFold_is_version_agnostic_across_targets`. |
+| `StoredStampFixed` | A stored stamp is fixed when the entry lands: registering a definition, advancing the target, reading or folding never rewrites it, and a plain write admitted under strict ingest is stored with its original stamp, never re-stamped. | Yes: `SchemaCrossRegionIngestIntegrationTests.Plain_lww_entry_admitted_under_strict_ingest_is_stored_verbatim_and_never_re_stamped`, `SchemaCrossRegionIngestIntegrationTests.Plain_lww_entry_stamped_past_the_receivers_target_becomes_readable_once_the_receiver_advances_to_it`, `SchemaTargetAdvanceIntegrationTests.AdvanceTargetVersionAsync_rewrites_no_stored_value_and_a_later_registered_hop_upcasts_it_on_read`, `LatticeSchemaEnvelopeCodecTests.StripForFold_is_version_agnostic_across_targets`. |
 | `CrdtLiftedAtIngest` | Under strict ingest a typed-CRDT delta is lifted to the receiver's target once, at the boundary, so every later fold strips the same stored stamp and never upcasts. | Yes: `SchemaCrossRegionIngestIntegrationTests.Strict_crdt_delta_stamped_below_the_receivers_target_is_lifted_to_the_target_once_at_ingest`, `LatticeSchemaVersionWriteInterceptorTests.OnWriteAsync_strict_ingest_crdt_delta_upcasts_and_reenvelopes_at_target`. |
-| `UncheckedStoredVerbatim` | What is not judged - a plain write in any mode, or a delta or batch entry without strict ingest - is stored with the stamp it carried, never re-stamped and never diverted. | Yes: `SchemaCrossRegionIngestIntegrationTests.Plain_lww_entry_stamped_past_the_target_of_a_tree_without_strict_ingest_is_stored_verbatim_and_its_read_fails_explicitly`, `SchemaCrossRegionIngestIntegrationTests.Crdt_delta_stamped_past_the_target_of_a_tree_without_strict_ingest_is_stored_verbatim`, `LatticeSchemaVersionWriteInterceptorTests.OnWriteAsync_non_strict_crdt_ingest_trusts_enveloped_delta`. |
+| `UncheckedStoredVerbatim` | Without strict ingest every replicated entry - a plain write, a delta or a batch entry - is stored with the stamp it carried, never re-stamped and never diverted. | Yes: `SchemaCrossRegionIngestIntegrationTests.Plain_lww_entry_stamped_past_the_target_of_a_tree_without_strict_ingest_is_stored_verbatim_and_its_read_fails_explicitly`, `StrictIngestPlainReplicatedWriteIntegrationTests.A_non_strict_tree_stores_a_plain_write_verbatim`, `SchemaCrossRegionIngestIntegrationTests.Crdt_delta_stamped_past_the_target_of_a_tree_without_strict_ingest_is_stored_verbatim`, `LatticeSchemaVersionWriteInterceptorTests.OnWriteAsync_non_strict_crdt_ingest_trusts_enveloped_delta`. |
 | `NothingAdmittedWhileUnavailable` | A failed or cancelled policy lookup, catalog resolution or dead-letter append fails the strict-ingest write, so nothing is admitted or diverted until it is re-delivered with the collaborator available. | Yes: `SchemaStrictIngestDeadLetterTests.Failed_policy_lookup_fails_the_write_instead_of_admitting_it`, `SchemaStrictIngestDeadLetterTests.Failed_dead_letter_append_fails_the_write_instead_of_diverting_it`, `DeadLetterTrackingReplicationApplierTests.ApplyAsync_rethrows_failure_below_threshold`. |
 | `NothingLandsOnFencedCopy` | No replicated entry of any kind - plain write, delta, full-state row or batch entry - lands on, or is diverted from, a physical copy a coordinated restore holds receive-closed; it is deferred and re-shipped. | Yes: `CoordinatedRestoreCopyReceiveFenceTests.Every_replicated_write_path_refuses_a_closed_copy`, `CoordinatedRestoreCopyReceiveFenceTests.A_peer_write_that_passed_the_receive_gate_before_the_pause_never_lands_on_the_restored_copy`, `FullStateCopyReceiveFenceIntegrationTests.Full_state_pn_counter_row_routed_to_a_closed_restored_copy_is_deferred_not_applied`, `FullStateCopyReceiveFenceIntegrationTests.Full_state_or_map_row_routed_to_a_closed_restored_copy_is_deferred_not_applied`, `FullStateCopyReceiveFenceIntegrationTests.Full_state_pn_counter_row_admitted_below_the_copy_floor_is_deferred_not_applied`, `FullStateCopyReceiveFenceIntegrationTests.Full_state_or_map_row_admitted_below_the_copy_floor_is_deferred_not_applied`. |
 | `ReadsServeOrFail` | A read serves a body exactly when the receiver's own catalog decodes the stored stamp at its target, and otherwise fails explicitly rather than serving a body of another version. | Yes: `SchemaCrossRegionIngestIntegrationTests.Plain_lww_entry_stamped_past_the_target_of_a_tree_without_strict_ingest_is_stored_verbatim_and_its_read_fails_explicitly`, `LatticeSchemaVersionDecoderTests.DecodeAsync_stale_value_with_no_upcast_path_throws_not_supported`. |
 | `AdmittedNeverDropped` | An entry the receiver admitted stays admitted: a diverted sibling is left out of its batch and the receiver commits the rest. | Yes: `SchemaCrossRegionIngestIntegrationTests.Strict_atomic_entry_the_receivers_policy_refuses_is_dead_lettered_and_its_batch_siblings_commit_together`, `StrictIngestLatePrepareIntegrationTests.Refused_lww_atomic_entry_whose_prepare_follows_the_commit_decision_is_diverted_not_applied`, `StrictIngestCommittedDeadLetterIntegrationTests.Refused_atomic_entry_prepared_before_the_decision_under_a_bootstrap_hold_leaves_one_ordinary_committed_dead_letter_record`. |
-| `EveryEntryResolved` | Once the stream and collaborators stop failing, every replicated entry is eventually admitted and visible, or diverted; a diversion settles its entry and does not strand its batch. | Yes: `SchemaCrossRegionIngestIntegrationTests.Strict_atomic_entry_stamped_past_the_receivers_target_is_dead_lettered_and_its_batch_siblings_commit_together`, `StrictIngestFullStateDivertIntegrationTests.Refused_full_state_pn_counter_row_under_strict_ingest_is_diverted_once_and_the_apply_completes`, `DeadLetterTrackingReplicationApplierTests.ApplyAsync_rethrows_failure_below_threshold`. |
+| `EveryEntryResolved` | Once the stream and collaborators stop failing, every replicated entry is eventually admitted and visible, or diverted with its dead letter: the regions converge modulo dead-lettered entries; a diversion settles its entry and does not strand its batch. | Yes: `SchemaCrossRegionIngestIntegrationTests.Strict_atomic_entry_stamped_past_the_receivers_target_is_dead_lettered_and_its_batch_siblings_commit_together`, `StrictIngestFullStateDivertIntegrationTests.Refused_full_state_pn_counter_row_under_strict_ingest_is_diverted_once_and_the_apply_completes`, `DeadLetterTrackingReplicationApplierTests.ApplyAsync_rethrows_failure_below_threshold`. |
 | `ConvergesWhenAligned` | If the receiver eventually holds the source's version as its target, every entry it did not divert becomes readable there; a diverted entry stays in the dead-letter queue for the operator. | Yes: `SchemaCrossRegionIngestIntegrationTests.Plain_lww_entry_stamped_past_the_receivers_target_becomes_readable_once_the_receiver_advances_to_it`, `LatticeSchemaControlVersionTargetTests.AdvanceTargetVersion_refuses_a_target_with_no_registered_path`. |
 
 ## Excluded properties
@@ -80,7 +87,8 @@ version as its target.
 
 ## Property classification (issue #2321)
 
-TypeOK, StrictAdmitsOnlyServable and AtomicAllOrNothing are state safety.
+TypeOK, StrictAdmitsOnlyServable, DivergenceAccounted and AtomicAllOrNothing are
+state safety.
 StoredStampFixed, CrdtLiftedAtIngest, UncheckedStoredVerbatim,
 NothingAdmittedWhileUnavailable, NothingLandsOnFencedCopy, ReadsServeOrFail and
 AdmittedNeverDropped are action safety, and hold under any availability with no
@@ -98,6 +106,10 @@ and leaves both liveness properties bounded-out to the base for the TLC budget.
 | TypeOKRecoverOverCounts | Anchored action: Recover. |
 | StrictAdmitsOnlyServableIgnoresCatalog | Anchored action: Deliver. |
 | StrictAdmitsOnlyServableJudgedBySourcePolicy | Anchored action: Deliver. |
+| StrictAdmitsOnlyServableLwwUnjudged | Anchored action: Deliver. |
+| StrictAdmitsOnlyServableRepairSkipsJudgement | Anchored action: Repair. |
+| StrictAdmitsOnlyServableImportSkipsJudgement | Anchored action: Import. |
+| DivergenceAccountedDivertWithoutRecord | Anchored action: Deliver. |
 | AtomicAllOrNothingDecidesEarly | Anchored action: Decide. |
 | AtomicAllOrNothingEntryAppliedUnstaged | Anchored action: Deliver. |
 | StoredStampFixedAdvanceRestamps | Anchored action: Advance. |
@@ -118,14 +130,18 @@ and leaves both liveness properties bounded-out to the base for the TLC budget.
 schema add-ons (enforcement composed ahead of versioning, both strict, a host
 catalog declaring two versions and the hop between them) and delivers entries a
 source region stamped through the real replication applier: plain writes stamped
-past the receiver's target, deltas stamped above and below it with and without the
+past the receiver's target or refused by its policy, with and without strict ingest,
+deltas stamped above and below it with and without the
 tree's strict flag, and two-entry atomic batches with one entry the receiver cannot
 serve or its policy refuses. It reads the stored form through the apply seam and
 the served form through the client. The unavailable-collaborator rows are pinned by
 `SchemaStrictIngestDeadLetterTests`, the applier's re-delivery by
 `DeadLetterTrackingReplicationApplierTests`, the copy receive fence by
 `CoordinatedRestoreCopyReceiveFenceTests`, and the facade's catalog-checked advance
-by `LatticeSchemaControlVersionTargetTests`.
+by `LatticeSchemaControlVersionTargetTests`. `StrictIngestPlainReplicatedWriteIntegrationTests`
+pins the plain-write judgement on the batched merge, under a bootstrap shadow route
+and on an anti-entropy re-ship, and `StrictIngestShadowImportDeadLetterIntegrationTests`
+pins it on a re-seed import.
 
 ## Rely-guarantee composition
 
@@ -167,18 +183,30 @@ claim the fixes are released.
   version. The model fixes the source's definitions and lets only the receiver's
   move.
   Production symbols: `SchemaRuntimeRegistry`, `LatticeSchemaRuntimeRegistryGrain`, `LatticeSchemaPolicyStore`, `LatticeSchemaVersionStore`.
-- **Writes below the check stay unchecked.** A steady-state plain last-writer-wins
-  replication apply, a backup restore and a tree merge write straight into the
-  shards through the batched merge, never reaching the write stages, so even under
-  strict ingest their values are stored with whatever stamp they carry and are
-  neither judged nor dead-lettered. Only the read decoder stands between such a
-  value and a reader. The exception is a receiver bootstrap drain: a
-  last-writer-wins row drained from a peer's export (the apply runs under the
-  drain's request-context mark) is judged at the write interceptor and diverted
-  like a replicated atomic-batch entry (#5551), because the export no longer
-  records whether the row came from an atomic batch. The model abstracts the drain
-  into the same delivery the interceptor judges.
-  Production symbols: `LatticeGrain.ApplySetAsync`, `IShardRootGrain.MergeManyAsync`.
+- **Local writes below the check stay unchecked.** A backup restore and a tree
+  merge write straight into the shards through the batched merge, never reaching
+  the write stages, so even under strict ingest their values are stored with
+  whatever stamp they carry and are neither judged nor dead-lettered. They are not
+  replication, so the model has none. A replicated plain write is judged under
+  strict ingest (#5684), on the stream, on repair and on a re-seed drain alike;
+  the drain's admitted row is stamped at the receiver's target (#5551) while the
+  stream's and repair's keep their original stamp.
+  Production symbols: `IShardRootGrain.MergeManyAsync`.
+- **Re-delivery of a diverted row is judged afresh, and recorded again.** Repair
+  and a re-seed import re-judge a row whose identity the receiver dead-lettered;
+  nothing checks the dead letters for that identity, because the dead-letter
+  store keys a record by tree, wall time, key and a random suffix, so a check
+  would cost a lookup per row. Two behaviours follow, and neither is modelled.
+  A refused row diverted again files another record, and anti-entropy repair,
+  whose digest diff does not exclude dead-lettered keys, re-ships it every probe
+  round once auto-remediation is enabled (it is off by default); the model's
+  dead-letter flag stands for one or more records, so the module checks that a
+  divergence is accounted for, not that it is accounted for once. And a row
+  diverted only because its stamp was unservable is admitted once the receiver's
+  catalog serves it, while its dead letter still stands; the model's repair and
+  import take a diverted row only while the receiver would still refuse it. A
+  refused body is never admitted by any path, which the module does check.
+  Production symbols: `LatticeSchemaDeadLetterStore.AppendAsync`, `ReplicationDigestProbeGrain`, `RemediationGuard`, `RecentApplyCache`.
 - **The merge-result observer does not see batched merges.** The opt-in
   merge-result observer runs on the foreground leaf write and on CRDT apply, local
   and replicated. The batched merges - a plain last-writer-wins replication apply,
@@ -188,10 +216,11 @@ claim the fixes are released.
   merge is kept; the BPlusLeafGrainTests merge-observer cases pin both that and
   the batched merge never consulting it.
   Production symbols: `ILatticeMergeObserver`, `IShardRootGrain.MergeManyAsync`.
-- **A diversion is permanent.** An entry diverted because the receiver's catalog
-  could not yet serve its stamp is not re-applied when the receiver later registers
-  the version; it stays in the dead-letter queue for the operator to inspect and
-  re-submit. Strict ingest therefore turns a transient catalog mismatch into a
+- **A diversion is permanent on the stream.** An entry diverted because the
+  receiver's catalog could not yet serve its stamp is not re-applied by the stream
+  when the receiver later registers the version; it stays in the dead-letter queue
+  for the operator to inspect and re-submit, unless a repair or re-seed re-ships
+  it (the gap above). Strict ingest therefore turns a transient catalog mismatch into a
   divergence between regions that only out-of-band repair closes, which is why the
   convergence property exempts diverted entries.
   Production symbols: `LatticeSchemaDeadLetterStore.AppendAsync`.
