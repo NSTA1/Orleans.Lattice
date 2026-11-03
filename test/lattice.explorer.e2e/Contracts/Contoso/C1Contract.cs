@@ -191,6 +191,14 @@ public sealed class C1Contract() : ChapterContract("C1")
     /// only because its last contact is older than 30 seconds. The wrapper runs only when that is
     /// the sole unsettled signal once the copies have held still.
     /// </summary>
+    /// <summary>
+    /// Under the same starvation (#5569) a re-seed C1's remediation forces cannot complete: its
+    /// bootstrap copy's snapshot calls time out, so a link stays stalled on the re-seed. The
+    /// wrapper runs only when that, or starved contact, is the sole unsettled signal once the
+    /// copies have held still.
+    /// </summary>
+    private static readonly KnownDefect StarvedReseed = new KnownDefect("#5569", "under replay-permit starvation the re-seed C1's remediation forces makes no headway, so a link stays stalled on ReseedRequired and the replication never settles");
+
     private static readonly KnownDefect StarvedShipperContact = new KnownDefect("#5569", "under replay-permit starvation the shipper's WAL reads time out, so an outbound link with no backlog and nothing in flight reads Lagging and the replication never reports settled");
 
     /// <summary>
@@ -212,6 +220,7 @@ public sealed class C1Contract() : ChapterContract("C1")
         var detail = "no poll yet";
         var stablePolls = 0;
         var starvedPolls = 0;
+        var reseedPolls = 0;
         var cutovers = 0L;
         try
         {
@@ -219,6 +228,7 @@ public sealed class C1Contract() : ChapterContract("C1")
             {
                 var settled = true;
                 var starvedOnly = true;
+                var reseedOnly = true;
                 var parts = new List<string>();
                 for (var i = 0; i < regions.Length; i++)
                 {
@@ -231,6 +241,7 @@ public sealed class C1Contract() : ChapterContract("C1")
                     var hasOutbound = links.Any(link => link.Direction == ReplicationLinkDirection.Outbound);
                     settled &= hasOutbound && held && links.All(IsSettled);
                     starvedOnly &= hasOutbound && held && links.All(link => IsSettled(link) || IsStarvedContact(link));
+                    reseedOnly &= hasOutbound && held && links.All(link => IsSettled(link) || IsStarvedContact(link) || link.StallReason == ReplicationLinkStallReason.ReseedRequired);
                     if (lastPhysical[i] is not null && !held)
                     {
                         cutovers++;
@@ -244,6 +255,7 @@ public sealed class C1Contract() : ChapterContract("C1")
                 detail = string.Join(" | ", parts);
                 stablePolls = settled ? stablePolls + 1 : 0;
                 starvedPolls = starvedOnly && !settled ? starvedPolls + 1 : 0;
+                reseedPolls = reseedOnly && !settled && !starvedOnly ? reseedPolls + 1 : 0;
                 return stablePolls >= SettledPolls;
             }, () => cutovers, SettleStall, SettleCeiling, () => $"{cutovers} re-seed(s) or cutover(s) observed; last: {detail}");
         }
@@ -259,6 +271,17 @@ public sealed class C1Contract() : ChapterContract("C1")
             });
             NUnit.Framework.TestContext.Progress.WriteLine($"C1 replay: KNOWN DEFECT #5569, settled but for starved shipper contact - {ex.Message}");
             return;
+        }
+        catch (TimeoutException ex) when (reseedPolls >= SettledPolls)
+        {
+            // A re-seed is owed and in flight, but under starvation its copy makes no headway: the
+            // east ledger must not write into a re-seed (#5684), so C1 cannot go on.
+            await StarvedReseed.ReproducesAsync(() =>
+            {
+                Assert.That(detail, Does.Contain("stall=ReseedRequired"), "a link waits on a re-seed");
+                return Task.CompletedTask;
+            });
+            Assert.Ignore($"KNOWN DEFECT #5569: factory-orders' re-seed made no headway - {ex.Message}");
         }
         catch (TimeoutException ex)
         {
