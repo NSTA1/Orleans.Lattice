@@ -271,7 +271,7 @@ CClose == \E h \in IF mInit THEN HeadsAbove({Foreign}) ELSE 0..next : hoClosedAt
 CStraddlerAlloc == recreated /\ ~reinit
 CMarkInit == \E h \in HeadsAbove({Foreign, Straddler}) : hoClosedAt' = Max2(hoClosedAt, h)
 CCreate ==
-    \E r \in -1..(hint - 1), held \in SUBSET Allocated :
+    \E r \in -1..(next - 1), held \in SUBSET Allocated :
         /\ \A o \in Allocated : o <= r => o \in held
         /\ cache' = [cache EXCEPT !["a1"] = held]
         /\ rp' = [rp EXCEPT !["a1"] = r]

@@ -259,14 +259,14 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardWalLiveAdvanceCore"],
-        "note": "WalLiveAdvanceCore (epic #5605, live-advance module C): base 778,329 states with the armed-newborn liveness property (#5772), Restart 3,052,664, GateFlip 3,373,761, Recreate 4,032,667 and Bulk 875,431 variants, and 30 mutations co-located with their base, 35 cases; no case exceeds the 5M-state budget TlcCiShardTests pins, and the longest case is the Restart variant at 226 s. Measured locally on four CPUs (process affinity) with two TLC slots of two workers, Java 17, as the CI legs run, after #5772: 11 m 12 s of tests (41 case-minutes), 11.37 minutes of dotnet test."
+        "note": "WalLiveAdvanceCore (epic #5605, live-advance module C): base 778,329 states with the armed-newborn liveness property (#5772), Restart 3,052,664, GateFlip 3,373,761, Recreate 3,693,715, RecreateSurvivor 4,638,713, RecreateSurvivorMixed 1,622,161 and Bulk 1,114,185 variants (the purge in three slices and the widened environment of #5776), and 31 mutations co-located with their base, 38 cases; no case exceeds the 5M-state budget TlcCiShardTests pins, and the longest case is the ReadPositionHonestNoSelfReport mutation at 404 s. Measured locally on four CPUs (process affinity) with two TLC slots of two workers, Java 17, as the CI legs run: 15 m 20 s of tests (57 case-minutes), 15.56 minutes of dotnet test."
       },
       {
         "shard": "formal-tlc-wal-live-advance-composite",
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardWalLiveAdvanceComposite"],
-        "note": "WalLiveAdvanceComposite (epic #5605, member 6c): the five live-advance modules' interface check, base 552,598 states and 27 mutations co-located with their base, 28 cases. Measured at 8 m 11 s of tests, 8.67 minutes of dotnet test, locally on four CPUs with two TLC slots while five edges were still red, so every control launched separately; an upper bound until re-measured green."
+        "note": "WalLiveAdvanceComposite (epic #5605, member 6c): the five live-advance modules' interface check, base 138,603 states and 27 mutations co-located with their base, 28 cases. Measured locally on four CPUs (process affinity) with two TLC slots of two workers, Java 17, as the CI legs run: 47 s of tests, 0.94 minutes of dotnet test."
       },
       {
         "shard": "formal-tlc-shard-ownership",

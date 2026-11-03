@@ -151,19 +151,22 @@ These record which guarantee carries an edge when another guarantee already impl
 
 ## Findings
 
-The first run found five interface gaps (F1 to F4, F2 on two edges). #5776 closed them by
+The first run found interface gaps F1 to F4 (F2 on two edges). #5776 closed them by
 widening C's environment to the stated guarantees and adding R's
 `InitHeadCoversPriorAllocations`:
 - **F1, `EpochMeetsCoreClaim`.** C's `Recreate` no longer makes an activation that survived the
   purge unclaimed stale.
 - **F2, `HandOffMeetsCoreForeignAlloc` and `HandOffMeetsCoreClose`.** C admits a foreign append,
   and a close at any head, while L's marker is uninitialised.
-- **F3, `BulkMeetsCoreCreate`.** C's `Create` takes any read position up to the hint less one
-  with any records covering it.
+- **F3, `BulkMeetsCoreCreate`.** C's `Create` takes a read position below the hint with any
+  records covering it, where it had fixed it at the hint less one.
 - **F4, `RoutingMeetsCoreInit`.** R guarantees the first initialisation's head lies above every
   prior allocation.
 
-The run against those fixes found one more:
+The run against those fixes found one more, also closed in #5776:
 - **F5, `BulkMeetsCoreCreate` (B -> C).** B's `BulkHintBound` allows a birth read position at
   or above the hint, over a foreign record of the switch's window that the leaf holds. C's
-  `Create` bounds it below the hint.
+  `Create` now takes any read position up to the allocator head with any records covering it,
+  which is `BulkHintBound` exactly.
+
+Against the fixed modules every edge is clean.

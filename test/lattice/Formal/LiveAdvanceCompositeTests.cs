@@ -107,7 +107,7 @@ public sealed class LiveAdvanceCompositeTests
         yield return new(c, "MarkInit", @"\E h \in HeadsAbove({Foreign, Straddler}) : hoClosedAt' = Max2(hoClosedAt, h)",
             "CMarkInit", None);
         yield return new(c, "Create",
-            @"\E r \in -1..(hint - 1), held \in SUBSET Allocated : /\ \A o \in Allocated : o <= r => o \in held /\ cache' = [cache EXCEPT ![""a1""] = held] /\ rp' = [rp EXCEPT ![""a1""] = r]",
+            @"\E r \in -1..(next - 1), held \in SUBSET Allocated : /\ \A o \in Allocated : o <= r => o \in held /\ cache' = [cache EXCEPT ![""a1""] = held] /\ rp' = [rp EXCEPT ![""a1""] = r]",
             "CCreate", None);
     }
 
