@@ -1041,7 +1041,6 @@ internal sealed partial class BPlusLeafGrain
         // partition's head; a single scalar would conflate them.
         var treeId = state.State.TreeId;
         long[]? walHeadsAtSplit = null;
-        long[]? donorHeads = null;
         if (!string.IsNullOrEmpty(treeId))
         {
             walHeadsAtSplit = await CaptureWalHeadsByPartitionAsync(treeId);
@@ -1065,12 +1064,14 @@ internal sealed partial class BPlusLeafGrain
             // - another shard's range-delete walk, a duplicate activation's append -
             // and that this leaf has not replayed yet would be skipped by the sibling
             // starting at the heads and, once this leaf narrows, by this leaf too. So
-            // the sibling's read position may not pass how far this leaf has
-            // replayed, read now, before the intent is persisted: until then the leaf
-            // still declares the whole range, so its replay applies every such record
-            // rather than stepping past it. This leaf's own advance keeps the heads.
-            donorHeads = HeadsAsCheckpoints(walHeadsAtSplit);
-            walHeadsAtSplit = CapAtOwnReadFrontier(donorHeads);
+            // neither leaf's read position may pass how far this leaf has replayed,
+            // read now, before the intent is persisted: until then the leaf still
+            // declares the whole range, so its replay applies every such record rather
+            // than stepping past it. The same capped heads advance this leaf's own
+            // checkpoint (issue #5756), which a record of the range it keeps would
+            // otherwise be skipped by in the same way; where it has a frontier, that
+            // advance is a no-op.
+            walHeadsAtSplit = CapAtOwnReadFrontier(HeadsAsCheckpoints(walHeadsAtSplit));
         }
 
         state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitInProgress);
@@ -1092,7 +1093,7 @@ internal sealed partial class BPlusLeafGrain
         LatticeMetrics.LeafSplits.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             LatticeTenantLabel.ForTree(state.State.TreeId ?? string.Empty));
-        return await CompleteSplitAsync(walHeadsAtSplit, donorHeads);
+        return await CompleteSplitAsync(walHeadsAtSplit);
     }
 
     /// <summary>
@@ -1185,12 +1186,11 @@ internal sealed partial class BPlusLeafGrain
     /// position is applied to either leaf (issue #5706): heads read now could lie
     /// above a commit admitted before them and not yet applied, which a recovery
     /// cannot drain, so the sibling replays its range from the log's start.
-    /// <paramref name="walHeadsAtSplit"/> is the sibling's read position, already
-    /// capped at this leaf's replay frontier (issue #5752);
-    /// <paramref name="donorHeads"/>, when given, is what this leaf advances its own
-    /// checkpoint to, and otherwise <paramref name="walHeadsAtSplit"/> is used for both.
+    /// <paramref name="walHeadsAtSplit"/> is the read position of both leaves, one
+    /// below the heads read (issue #5760) and capped at this leaf's replay frontier
+    /// (issues #5752 and #5756).
     /// </summary>
-    private async Task<SplitResult> CompleteSplitAsync(long[]? walHeadsAtSplit = null, long[]? donorHeads = null)
+    private async Task<SplitResult> CompleteSplitAsync(long[]? walHeadsAtSplit = null)
     {
         using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
@@ -1559,9 +1559,12 @@ internal sealed partial class BPlusLeafGrain
         // inline and left the sibling site 28 lines above unguarded,
         // which is issue #3360.
         //
-        // The donor advances to the heads it read, not to the sibling's capped read
-        // position (issue #5752 caps only the latter).
-        var donorAdvance = donorHeads ?? resolvedHeads;
+        // The heads are capped at this donor's own replay frontier (issues #5752 and
+        // #5756), so this advance never moves the donor past a record of the range it
+        // keeps that it has not applied: where it has a frontier the advance is a
+        // no-op, and only a partition it has never scanned takes one below the head,
+        // as in 10.2.0.
+        var donorAdvance = resolvedHeads;
         if (donorAdvance is not null)
         {
             using (AwaitDiagnostics.Begin("leaf.split.donor-hints", context.GrainId, splitDiag))

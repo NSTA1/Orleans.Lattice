@@ -355,7 +355,7 @@ public partial class BPlusLeafGrainTests
             "CompleteSplitAsync",
             System.Reflection.BindingFlags.NonPublic
                 | System.Reflection.BindingFlags.Instance)!;
-        await (Task<SplitResult>)completeSplit.Invoke(donor, new object?[] { heads, null })!;
+        await (Task<SplitResult>)completeSplit.Invoke(donor, new object?[] { heads })!;
 
         // The sibling must have been hinted with every per-partition
         // head in a single batched round-trip - the

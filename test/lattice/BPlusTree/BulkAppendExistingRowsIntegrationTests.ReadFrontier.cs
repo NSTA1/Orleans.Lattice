@@ -68,6 +68,31 @@ public sealed partial class BulkAppendExistingRowsIntegrationTests
     }
 
     [Test]
+    public async Task Split_donor_replays_a_record_of_the_range_it_keeps_that_it_never_applied()
+    {
+        // Issue #5756: the split donor's own checkpoint advance is capped at its replay
+        // frontier too. The foreign key sorts inside the range the rightmost leaf keeps
+        // when the point writes above it divide it.
+        const string treeId = "split-donor-foreign-record";
+        const string foreignKey = "a0006a";
+        var (shard, tree) = await SingleShardTreeAsync(treeId);
+        var expected = await WriteOnEveryPartitionAsync(treeId, tree, "a");
+        await ReplayRightmostLeafToHeadAsync(shard, tree, expected);
+
+        await AppendForeignRecordAsync(treeId, foreignKey, "foreign");
+
+        for (var i = 0; i < SmallLeafClusterFixture.SmallMaxLeafKeys + 1; i++)
+        {
+            var key = $"y{i:D4}";
+            await tree.SetAsync(key, Utf8("point"));
+            expected[key] = "point";
+        }
+
+        expected[foreignKey] = "foreign";
+        await DeactivateEveryLeafAsync(shard);
+        await AssertTreeHoldsExactlyAsync(tree, expected, "after every leaf replayed from its read position");
+    }
+    [Test]
     public async Task BulkLoad_leaves_replay_a_record_of_their_range_the_replaced_root_never_applied()
     {
         // Issue #5766: the bulk load's leaves start no higher than the replaced root's

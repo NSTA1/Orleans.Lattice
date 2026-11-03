@@ -4182,6 +4182,8 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
+        DropRowsTransferredByACompletedSplit();
+
         // Advance the persisted checkpoint per partition to match the
         // snapshot EXACTLY - including resetting a partition to -1 when the
         // snapshot predates that partition's checkpoint. After Cache.Clear()
@@ -4288,6 +4290,46 @@ internal sealed partial class BPlusLeafGrain
             _warmCacheOriginScalar = blob.ScalarOffsetOrSentinel();
         }
         return true;
+    }
+
+    /// <summary>
+    /// Removes from a just-rehydrated cache the rows a completed split moved to its
+    /// sibling (issue #5756). A snapshot captured before the split still holds them,
+    /// and nothing else removes them: replay never re-applies a key outside the
+    /// declared span, so they would sit out of span, counted on two leaves. Only rows
+    /// at or above the completed split's key are dropped, and only while the leaf no
+    /// longer declares that key - the sibling holds every one of them, because the
+    /// split completes only after it has transferred them. Rows a bulk append's narrow
+    /// stranded below that key are kept for the graft to relocate. The steady state -
+    /// no completed split, or no row at or above its key - costs one check and
+    /// hydrates nothing.
+    /// </summary>
+    private void DropRowsTransferredByACompletedSplit()
+    {
+        if (state.State.SplitKey is not { } splitKey
+            || HasInterruptedSplit
+            || state.State.HighKeyExclusive is not { } high
+            || string.CompareOrdinal(high, splitKey) > 0
+            || !Cache.HasKeyAtOrAboveWithoutHydrating(splitKey))
+        {
+            return;
+        }
+
+        List<string>? transferred = null;
+        foreach (var (key, _) in Cache.EnumerateRange(splitKey, null))
+        {
+            (transferred ??= []).Add(key);
+        }
+
+        if (transferred is null)
+        {
+            return;
+        }
+
+        foreach (var key in transferred)
+        {
+            Cache.Remove(key);
+        }
     }
 
     /// <summary>

@@ -22,10 +22,11 @@ internal sealed record LeafNarrowResult
     /// Per WAL partition, the leaf's in-memory projection checkpoint when this call
     /// narrowed it (inclusive; <c>-1</c> for none), read before the narrow so no record
     /// it skipped as out of span is behind it (issue #5752). Replay, an armed live
-    /// advance and checkpoint hints move it; a split donor's own advance to one below
-    /// the heads is a hint that is not capped, so on such a leaf the frontier carries
-    /// that residue (issue #5756). Every record of the narrowed-away range the leaf had not applied lies
-    /// above it, so an appended leaf that starts no higher replays every one.
+    /// advance and checkpoint hints move it, each capped at a predecessor's frontier
+    /// (issues #5752 and #5756), except where that predecessor had none and one below
+    /// the head was taken instead - the documented residue a frontier then carries.
+    /// Every record of the narrowed-away range the leaf had not applied lies above it,
+    /// so an appended leaf that starts no higher replays every one.
     /// <see langword="null"/> when a narrow did not narrow - the leaf was already
     /// narrowed by an earlier attempt, after which its replay may have stepped past a
     /// record of that range - so no read position can be inferred.
