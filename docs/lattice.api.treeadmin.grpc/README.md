@@ -200,6 +200,8 @@ The service maps every facade outcome onto an explicit gRPC status rather than l
 | `InvalidOperationException` | `FailedPrecondition` | A precondition refused on a well-formed request - for example no backup engine or view subsystem registered, a reshard or resize already in flight, a `SetTreeAlias` while another operation holds the tree's alias reservation (the message names the holder), a tree that still sources a materialised view, a tenant quota breach, or a saturation refusal (`LatticeQuotaExceededException` and `LatticeSaturatedException` both derive from it, so neither surfaces as `ResourceExhausted` here). |
 | `ArgumentException` | `InvalidArgument` | A malformed or out-of-range argument (including an undefined `TreeSnapshotMode` or `TreeHistoryRetentionMode`, refused with `ArgumentOutOfRangeException`), a reserved tree id, or an unconfirmed purge. |
 | `OperationCanceledException` | `Cancelled` | The caller's deadline or cancellation token fired. |
+| `TimeoutException` | `DeadlineExceeded` | A grain call timed out inside the cluster, so the outcome is unknown and a write may already have applied. Retry an idempotent read; confirm state before retrying a write. Logged at Warning (#5742). |
+| `OrleansMessageRejectionException` (including `SiloUnavailableException`) | `Unavailable` | A silo was unavailable or rejected the message: a transient cluster fault. Retry after a short backoff. Logged at Warning (#5742). |
 | anything else | `Internal` | Logged server-side and returned with a generic message, without echoing the exception text. |
 
 ## Configuration

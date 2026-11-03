@@ -185,6 +185,8 @@ same vocabulary; the last column notes where an arm applies to only some of them
 | `ArgumentException` | `InvalidArgument` | A malformed tenant, region, or subject id, or a grant with a blank scope, an empty operation set, or the same tenant on both sides; also a negative `BurstPercent` or quota ceiling, and an added admin subject the identity directory cannot resolve (`LatticeDirectoryValidationException` derives from `ArgumentException`). |
 | `OperationCanceledException` | `Cancelled` | The caller's deadline or cancellation token fired. |
 | (optional facade not registered) | `Unimplemented` | The region-residency, tenant-admin subject, cross-tenant grant, quota-usage, tenant directory, or tenant policy facade is absent from the host, so its RPCs are not served. |
+| `TimeoutException` | `DeadlineExceeded` | A grain call timed out inside the cluster, so the outcome is unknown and a write may already have applied. Retry an idempotent read; confirm state before retrying a write. Logged at Warning (#5742). |
+| `OrleansMessageRejectionException` (including `SiloUnavailableException`) | `Unavailable` | A silo was unavailable or rejected the message: a transient cluster fault. Retry after a short backoff. Logged at Warning (#5742). |
 | anything else | `Internal` | The catch-all, logged server-side and returned without echoing the exception text. It includes the tenancy package's `TenantRegistryConcurrencyException` (sustained write contention on one tenant's registry record), which a client may retry. |
 
 Each arm is explicit and separately tested. `TenantRegionNotAllowedException` and

@@ -56,7 +56,10 @@ installing a new app never adds a new service, credential bridge or interceptor.
   inner exception is forwarded: cancellation is `Cancelled`, an authorization or tenant
   denial `PermissionDenied`, an `ArgumentException` `InvalidArgument`, a
   `KeyNotFoundException` `NotFound`, an `InvalidOperationException`
-  `FailedPrecondition`, and anything else `Internal`. A failed activation or a
+  `FailedPrecondition`, a grain-call `TimeoutException` `DeadlineExceeded` (the outcome
+  is unknown, so confirm state before retrying a write), an
+  `OrleansMessageRejectionException` such as `SiloUnavailableException` the retryable
+  `Unavailable`, and anything else `Internal`. A failed activation or a
   [tree ownership](../lattice.apps/README.md#tree-ownership) conflict on install, upgrade
   or enable is therefore `FailedPrecondition`; `Describe` returns each tree's
   `OwnershipConflict`, so a client can see which trees conflict before it installs.
@@ -108,7 +111,9 @@ mapped one to one from its `AppBridgeFailure` (`Denied` to `PermissionDenied`,
 `NotFound` to `NotFound`, `Invalid` to `InvalidArgument`, `TooLarge` to
 `ResourceExhausted`, `Conflict` to `Aborted`, `Unavailable` to `Unavailable`),
 carrying only the fixed message, and `LatticeAppBridgeApiGrpcClient` rethrows it as
-an `AppBridgeException` with the same failure.
+an `AppBridgeException` with the same failure. The bridge vocabulary has no
+outcome-unknown code, so a grain-call timeout or an unavailable silo on a bridge RPC
+crosses the wire as `Unavailable`.
 
 ## Hosting the service
 

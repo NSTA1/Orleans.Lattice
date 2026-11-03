@@ -50,6 +50,8 @@ The service maps facade outcomes onto explicit gRPC statuses rather than letting
 | `LatticeStateCursorExpiredException` | `FailedPrecondition` | `ObserveChanges`: the resume token fell outside the write-ahead-log retention window. |
 | `KeyNotFoundException` | `NotFound` | `ObserveChanges`: an unknown, system, or unreadable tree. The unary RPCs do not map it, so there it arrives as `Internal`. |
 | `OperationCanceledException` | `Cancelled` | The unary RPCs. On `ObserveChanges` and `ObserveMetrics` a cancellation ends the stream cleanly instead. |
+| `TimeoutException` | `DeadlineExceeded` | Every RPC: a grain call timed out inside the cluster, so the outcome is unknown and a write may already have applied. Retry an idempotent read; confirm state before retrying a write. Logged at Warning (#5742). |
+| `OrleansMessageRejectionException` (including `SiloUnavailableException`) | `Unavailable` | Every RPC: a silo was unavailable or rejected the message: a transient cluster fault. Retry after a short backoff. Logged at Warning (#5742). |
 | anything else | `Internal` | Logged server-side and returned with a generic message, without echoing the exception text. |
 
 The authorization interceptor's refusal is a `PermissionDenied` as well.

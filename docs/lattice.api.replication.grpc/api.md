@@ -92,6 +92,8 @@ The peer-status service has no wire records of its own: its `GetPeerStatus` RPC 
 | In-place mode change on an enabled tree; unmet enable or disable precondition; `DecommissionPeer` called while the peer is still present in `ReplicationPeers` | `FailedPrecondition` |
 | Malformed request (for example a null or empty tree id) | `InvalidArgument` |
 | Request cancelled | `Cancelled` |
+| Grain-call timeout inside the cluster (outcome unknown; confirm state before retrying a write) | `DeadlineExceeded` |
+| Silo unavailable or message rejected (transient; retry after a short backoff) | `Unavailable` |
 | Any other fault | `Internal` (with a non-leaking message) |
 
 `GetPeerStatus` follows the same mapping, except that it has no `FailedPrecondition` outcome: a negative page size or a malformed continuation token is `InvalidArgument`.

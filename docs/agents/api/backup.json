@@ -2723,6 +2723,22 @@
       "source": "src/lattice.api.backup.grpc/LatticeBackupGrpcService.cs#InvokeAsync"
     },
     {
+      "id": "cluster-timeout",
+      "type": "TimeoutException",
+      "grpc_status": "DeadlineExceeded",
+      "retryable": false,
+      "meaning": "A grain call timed out inside the cluster, so the outcome is unknown and a write may already have applied. Retry an idempotent read; confirm state before retrying a write (#5742). On the control RPCs a timeout matched by the transient-reminder arm is reported there instead.",
+      "source": "src/lattice.api.backup.grpc/LatticeBackupGrpcService.cs"
+    },
+    {
+      "id": "cluster-unavailable",
+      "type": "OrleansMessageRejectionException (including SiloUnavailableException)",
+      "grpc_status": "Unavailable",
+      "retryable": true,
+      "meaning": "A silo was unavailable or rejected the message: a transient cluster fault. Retry after a short backoff (#5742).",
+      "source": "src/lattice.api.backup.grpc/LatticeBackupGrpcService.cs"
+    },
+    {
       "id": "internal",
       "type": "Exception",
       "grpc_status": "Internal",

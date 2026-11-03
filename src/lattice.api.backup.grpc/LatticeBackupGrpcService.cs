@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Backup;
+using Orleans.Runtime;
 
 namespace Orleans.Lattice.Api.Backup.Grpc;
 
@@ -385,6 +386,20 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
             // the Data facade does, never as an opaque server fault (#5722).
             throw new RpcException(new Status(StatusCode.ResourceExhausted, SaturatedDetail));
         }
+        catch (TimeoutException ex)
+        {
+            // A grain call timed out under load (#5742): the outcome is unknown, so report
+            // DeadlineExceeded - never Internal, and never a failure the client may assume.
+            _logger.LogWarning(ex, "Api.Backup: gRPC call to {Method} timed out inside the cluster; outcome unknown.", context.Method);
+            throw new RpcException(new Status(StatusCode.DeadlineExceeded, "The request did not complete in time inside the cluster, so its outcome is unknown. Confirm the result before retrying a write."));
+        }
+        catch (OrleansMessageRejectionException ex)
+        {
+            // A silo was unavailable or rejected the message (#5742): a transient cluster
+            // fault, reported as the retryable Unavailable rather than a server error.
+            _logger.LogWarning(ex, "Api.Backup: gRPC call to {Method} hit an unavailable cluster node.", context.Method);
+            throw new RpcException(new Status(StatusCode.Unavailable, "A cluster node was temporarily unavailable. Retry after a short backoff."));
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Api.Backup: gRPC catalog stream failed.");
@@ -573,6 +588,20 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
             // the Data facade does, never as an opaque server fault (#5722).
             throw new RpcException(new Status(StatusCode.ResourceExhausted, SaturatedDetail));
         }
+        catch (TimeoutException ex)
+        {
+            // A grain call timed out under load (#5742): the outcome is unknown, so report
+            // DeadlineExceeded - never Internal, and never a failure the client may assume.
+            _logger.LogWarning(ex, "Api.Backup: gRPC call to {Method} timed out inside the cluster; outcome unknown.", context.Method);
+            throw new RpcException(new Status(StatusCode.DeadlineExceeded, "The request did not complete in time inside the cluster, so its outcome is unknown. Confirm the result before retrying a write."));
+        }
+        catch (OrleansMessageRejectionException ex)
+        {
+            // A silo was unavailable or rejected the message (#5742): a transient cluster
+            // fault, reported as the retryable Unavailable rather than a server error.
+            _logger.LogWarning(ex, "Api.Backup: gRPC call to {Method} hit an unavailable cluster node.", context.Method);
+            throw new RpcException(new Status(StatusCode.Unavailable, "A cluster node was temporarily unavailable. Retry after a short backoff."));
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Api.Backup: gRPC artifact export for backup {BackupId} failed.", request.BackupId);
@@ -728,6 +757,20 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         catch (LatticeBackupTenantIsolationException ex)
         {
             throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
+        catch (TimeoutException ex)
+        {
+            // A grain call timed out under load (#5742): the outcome is unknown, so report
+            // DeadlineExceeded - never Internal, and never a failure the client may assume.
+            _logger.LogWarning(ex, "Api.Backup: gRPC call to {Method} timed out inside the cluster; outcome unknown.", context.Method);
+            throw new RpcException(new Status(StatusCode.DeadlineExceeded, "The request did not complete in time inside the cluster, so its outcome is unknown. Confirm the result before retrying a write."));
+        }
+        catch (OrleansMessageRejectionException ex)
+        {
+            // A silo was unavailable or rejected the message (#5742): a transient cluster
+            // fault, reported as the retryable Unavailable rather than a server error.
+            _logger.LogWarning(ex, "Api.Backup: gRPC call to {Method} hit an unavailable cluster node.", context.Method);
+            throw new RpcException(new Status(StatusCode.Unavailable, "A cluster node was temporarily unavailable. Retry after a short backoff."));
         }
         catch (Exception ex)
         {
