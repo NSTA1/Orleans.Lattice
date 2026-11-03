@@ -207,6 +207,8 @@ public sealed partial class TlcCiShardTests
                         ? TlcCiShard.WalHandOffFence
                         : module.Name == "WalRoutingFloor"
                         ? TlcCiShard.WalRoutingFloor
+                        : module.Name == "WalBulkSwitch"
+                        ? TlcCiShard.WalBulkSwitch
                         : module.Name == "WalLiveAdvanceCore"
                         ? TlcCiShard.WalLiveAdvanceCore
                         : module.Name == "SchemaViewComposition"

@@ -134,6 +134,7 @@ lattice	formal-tlc-replication-wal	deterministic	13.98
 lattice	formal-tlc-wal-append-epoch	deterministic	1.05
 lattice	formal-tlc-wal-handoff-fence	deterministic	0.64
 lattice	formal-tlc-wal-routing-floor	deterministic	0.59
+lattice	formal-tlc-wal-bulk-switch	deterministic	1.96
 lattice	formal-tlc-wal-live-advance-core	deterministic	8.48
 lattice	formal-tlc-rebootstrap	deterministic	15.68
 lattice	formal-tlc-atomic	deterministic	14.93
