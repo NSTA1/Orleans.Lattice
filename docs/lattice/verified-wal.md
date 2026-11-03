@@ -339,8 +339,9 @@ still holds, and checks every consumer's environment guard against it, edge by e
 Every module, and the composite, runs on a TLC shard of its own, sized by measurement.
 Each CI case stays within about five million states and twenty minutes, so combinations
 larger than that are split into scenario variants or bounded out by name. For example,
-the core checks a purge's unclaimed survivor with a hand-off window, and separately with
-a 10.2.0 silo, but not with both at once (about 7.6 million states). The design model's
+CI checks the core's purge with an unclaimed survivor and a hand-off window, and
+separately with a 10.2.0 silo. The combination of both was checked locally and is clean at
+8,913,193 states, but is kept out of CI because it exceeds the per-case budget. The design model's
 own combined configurations, up to about 23 million states, stay as local evidence in
 the [design note](../../spec/wal/design/LiveAdvanceDesign.md).
 

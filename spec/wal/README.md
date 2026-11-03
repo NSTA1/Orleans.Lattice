@@ -290,7 +290,8 @@ production symbols.
   markers move with the relocation, outside the model (#5755); the persisted drop.
 - **`WalLiveAdvanceCore`** ([gaps](LiveAdvanceCoreRefinement.md#deliberate-abstraction-gaps)):
   the liveness property excludes a current activation that has fallen off the log
-  (`CurrentFellOffLog`, answered in production by the stale latch of #3477); production
+  (`CurrentFellOffLog`, answered in production by the stale latch of #3477, whose
+latch-disabled red proof ran in CI); production
   holds the advance in more cases than `Armed`; the marker read is atomic with the
   advance; refusals that allocate nothing; one partition, one leaf, two activations;
   re-claims; the duplicate's own snapshot and the purge's trim; the unreachable leaf's
@@ -300,8 +301,9 @@ Two cuts are budget bounds rather than abstractions, and the core's
 [property classification](LiveAdvanceCoreRefinement.md#property-classification) names
 them: the liveness property is checked on the base and `Bulk` only (`Restart` holds it
 but takes over seven minutes, and `GateFlip` and `Recreate` are outside its premise), and
-a purge's unclaimed survivor is checked with a hand-off window and, separately, with a
-10.2.0 silo, but not with both at once, which is about 7.6M states.
+CI checks a purge's unclaimed survivor with a hand-off window and, separately, with a
+10.2.0 silo. The combination of both was checked locally and is clean at 8,913,193 states
+(232 seconds), but is kept out of CI only for the 5M-state case budget.
 ## How to run TLC
 
 ```powershell
