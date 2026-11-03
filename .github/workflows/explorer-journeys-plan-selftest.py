@@ -674,7 +674,7 @@ class SummaryTests(unittest.TestCase):
         self.assertNotIn("vacuous", problems[0])
 
     def test_a_contract_leg_has_the_longest_hang_budget(self):
-        self.assertEqual(30, planner.HANGS["contract"])
+        self.assertEqual(50, planner.HANGS["contract"])
         self.assertTrue(all(planner.HANGS[kind] <= planner.HANGS["contract"] for kind in planner.HANGS))
         self.assertTrue(all(planner.HANGS[kind] < planner.TIMEOUTS[kind] for kind in planner.HANGS))
 
