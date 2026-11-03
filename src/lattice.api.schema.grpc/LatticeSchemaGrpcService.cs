@@ -367,6 +367,12 @@ internal sealed class LatticeSchemaGrpcService : LatticeSchemaGrpcServiceBase
         {
             throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
         }
+        catch (LatticeSaturatedException)
+        {
+            // Storage back-pressure is a deliberate "busy, retry later" refusal (#5723):
+            // report the retryable ResourceExhausted, not a precondition or server fault.
+            throw new RpcException(new Status(StatusCode.ResourceExhausted, "The store is busy (storage back-pressure) and the request was refused. Retry after a short backoff."));
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Api.Schema: gRPC dead-letter stream failed.");
@@ -570,6 +576,12 @@ internal sealed class LatticeSchemaGrpcService : LatticeSchemaGrpcServiceBase
             // below, which would otherwise shadow this type (it derives from it)
             // and report the breach as FailedPrecondition.
             throw ToResourceExhausted(ex);
+        }
+        catch (LatticeSaturatedException)
+        {
+            // Storage back-pressure is a deliberate "busy, retry later" refusal (#5723):
+            // report the retryable ResourceExhausted, not a precondition or server fault.
+            throw new RpcException(new Status(StatusCode.ResourceExhausted, "The store is busy (storage back-pressure) and the request was refused. Retry after a short backoff."));
         }
         catch (InvalidOperationException ex)
         {
