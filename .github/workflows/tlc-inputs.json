@@ -90,6 +90,7 @@
     "test/lattice/Formal/TlcCheckpointToolchainTests.cs",
     "test/lattice/Formal/TlcCaseCensusTests.cs",
     "test/lattice/Formal/TlcCiShardTests.cs",
+    "test/lattice/Formal/TlcCiShardTests.LiveAdvance.cs",
     "test/lattice/Formal/TlcCiShardTests.Modules.cs",
     "test/lattice/Formal/TlcCiShardTests.Scheduling.cs",
     "test/lattice/Formal/TlcEvidenceRetentionTests.cs",
