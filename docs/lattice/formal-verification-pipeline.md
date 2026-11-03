@@ -59,7 +59,11 @@ How to read the columns:
   or to documentation, runs no TLC at all; pushes and dispatches select every
   package.
 - **Exhaustive TLC** is every base, variant and mutation case of the modules
-  that run, routed onto the `"tlc": true` shards.
+  that run, routed onto the `"tlc": true` shards. Each module promoted from the
+  live checkpoint advance's design model (epic #5605) has a shard of its own,
+  routed by its exact module name in `TlcCiShard`, holding its base, variants and
+  mutations together, so its base serves its mutations' controls and the module
+  never lengthens another shard.
 - **Gate only** under perturbations means `RefinementPerturbationTests`, which
   checks every perturbation's anchors, row and detectors without building or
   running anything. Only the weekly lane applies the perturbations.

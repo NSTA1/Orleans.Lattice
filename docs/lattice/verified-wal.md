@@ -301,6 +301,79 @@ stamps and a retention TTL (`WalPartitionReleaseModel`).
 Coverage of the leaf lifecycle does not imply coverage of any of those. Each module's
 refinement note lists its gaps in full.
 
+### The live checkpoint advance
+
+The live checkpoint advance (epic #5605) lets a leaf move its read position over its
+own applied appends without reading the WAL. That is only safe when no other writer's
+record can sit unread below the new position, so the advance is fenced: an append epoch
+per activation, a hand-off marker per foreign writer, a routing floor across a purge,
+and a birth hint for a bulk-born leaf. It was designed against one draft model,
+[`spec/wal/design/WalLiveAdvance.tla`](../../spec/wal/design/LiveAdvanceDesign.md#the-model),
+and is checked in CI by five modules promoted from it. Each module is small enough to
+check exhaustively, and they fit together through a written assume-guarantee contract,
+[`LiveAdvanceInterface.md`](../../spec/wal/LiveAdvanceInterface.md):
+
+| Module | What it checks | Assumes |
+|--------|----------------|---------|
+| E, `WalAppendEpoch` | A superseded or retired activation never appends, a claim's head covers every earlier allocation, no two live activations share an epoch, and only a superseded activation is ever refused. | nothing |
+| H, `WalHandOffFence` | A foreign writer's record lands while the owner's marker is open or below the heads its close recorded, an absent or uninitialised marker holds the owner, and close heads only rise. | E's entry check |
+| R, `WalRoutingFloor` | A write of a purged tree lands below the heads the re-created tree's first initialisation recorded, and every live shard root's routing generation stays above its own floor. | E's entry check |
+| B, `WalBulkSwitch` | A bulk-born leaf's birth read position is at or below every record of its range it does not hold, and the leaf resolves a contested key as every WAL reader does. | nothing |
+| C, `WalLiveAdvanceCore` | An armed activation's read position never passes a record it does not hold, the shared snapshot is honest, the GC never trims an acknowledged entry the snapshot lacks, and a newborn leaf's pin eventually becomes usable without a replay from the start. | every guarantee above |
+
+The graph is E <- H, E <- R and {E, H, R, B} <- C: an arrow points from the module that
+assumes to the module that guarantees, and no other edge exists, so it is acyclic. A
+module takes another's guarantee only as an environment constraint in the interface's
+exact form, never by importing its state. The core's liveness property,
+`NewbornPinEventuallyUsable`, holds under weak fairness of the leaf's own steps, with
+replay assumed only as far as the arming bounds require; it is discharged once the
+current activation has fallen off the log, where production's stale latch (#3477) takes
+over.
+
+Because each module checks its side of an edge separately, a guarantee could be stated
+more weakly than the assumption that relies on it. A composite check (#5774) closes that
+gap: one small configuration composes the five modules at minimal constants, generates
+each step freely within the vocabulary, keeps it only if every producer's guarantee
+still holds, and checks every consumer's environment guard against it, edge by edge.
+
+Every module, and the composite, runs on a TLC shard of its own, sized by measurement.
+Each CI case stays within about five million states and twenty minutes, so combinations
+larger than that are split into scenario variants or bounded out by name. For example,
+the core checks a purge's unclaimed survivor with a hand-off window, and separately with
+a 10.2.0 silo, but not with both at once (about 7.6 million states). The design model's
+own combined configurations, up to about 23 million states, stay as local evidence in
+the [design note](../../spec/wal/design/LiveAdvanceDesign.md).
+
+The design, its models and the independent review of the production members found
+these defects in production. Each is fixed on the epic's integration branch, which lands
+on `main` as a whole:
+
+| Issue | Defect |
+|-------|--------|
+| #5662 | A split's close bumped its epoch in a race with a floor refusal's bump on the same epoch row, and superseded its own activation. |
+| #5663 | A shard root whose routing generation fell behind a partition's durable row made every write retry until it timed out. |
+| #5664 | A hand-off's close heads could miss the donor's appends: a stamp taken at dispatch, a partition reset by an unloaded rejection, or the gate-view fallback. |
+| #5668 | A tree's per-tree hand-off fence rows were never deleted on a tree delete or purge. |
+| #5705 | A straddling shard root's stale-generation raise re-created its marker above the routing floor after a purge. |
+| #5706 | A commit in flight when a split or bulk birth hint was captured, allocated below it, was skipped by both leaves if the donor died before applying it. |
+| #5708 | A routine refusal before allocation leaked the unapplied count and turned the live advance off for the activation. |
+| #5709 | A reachable leaf could advance past an overlapping orphan leaf's appends. |
+| #5716 | The re-seed catch-up could floor a duplicate activation's live generation and fail a re-created tree's writes as deleted. |
+| #5752 | A bulk append's birth hint was not capped at the old leaf's read position, so another author's record below it, unapplied by the old leaf, was applied by no leaf. |
+| #5755 | A bulk graft's relocation did not move the reshard read gate, so a prepared or migrated key reached the bulk-born leaf without its shadow marker. |
+| #5756 | A split donor advanced its own checkpoint past records another author appended. |
+| #5760 | Birth hints stamped the exclusive WAL head as an inclusive checkpoint, so the record at exactly the captured head was skipped. |
+| #5766 | A bulk load applied its birth hint uncapped, so a record another author appended below it, unapplied by the replaced root, was applied by no leaf. |
+
+**What is not covered.** Each module checks one partition and one owner leaf, with two
+activations at most and each environment step once. The modules model the fences'
+effect at the WAL partition, not their scheduling: seam retries, multi-entry stamped
+batches, the range-delete fence as an initiator of its own, the purge's steps one by
+one, and several keys or appended leaves in a bulk switch are out of scope. The core
+over-approximates the cases in which production holds the advance. The
+[`spec/wal/` README](../../spec/wal/README.md#the-live-advances-gap-register) lists
+every module's abstraction gaps in one place.
+
 ## Related
 
 - [Verified Atomic-Commit Protocol](verified-atomic-commit.md) - the sibling

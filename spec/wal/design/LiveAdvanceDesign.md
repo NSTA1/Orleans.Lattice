@@ -8,6 +8,15 @@ it, with variant configurations and its mutations in `mutations/`. A module unde
 outside module discovery. It becomes the companion module `spec/wal/WalLiveAdvance`,
 with a refinement note, when the production members land.
 
+**Now promoted.** The production members have landed, and the CI authority for the live
+advance is no longer this draft: it is the five modules promoted from it - `WalAppendEpoch`,
+`WalHandOffFence`, `WalRoutingFloor`, `WalBulkSwitch` and `WalLiveAdvanceCore` - and
+the composite interface check that composes them (#5774), against the contract in
+[`LiveAdvanceInterface.md`](../LiveAdvanceInterface.md). This note stays the design
+authority. `WalLiveAdvance.tla` and its configurations, several of them past the CI case
+budget, are kept as local evidence, and the counts this note cites for them are local
+measurements.
+
 **Gate.** A production member starts only once the independent reviewer has accepted
 the part of the design it builds. The re-review of revision 3 accepted member 1 (the
 epoch claim, stamped appends, the gate, seam retries, the floor, and the generation and
