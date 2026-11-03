@@ -13,6 +13,14 @@ section 4's unstamped watermark and self-report, and "The model". Production lan
 refinement proof: the gates check its names, detectors and coverage, and its claims were
 checked by reading production.
 
+In plain terms, the module guarantees that a leaf's live advance never moves its read
+position past a record of its range it does not hold, whoever wrote that record; that
+the shared snapshot never claims coverage of a record it lacks; that the GC never trims
+an acknowledged append the snapshot lacks; and that the append fence never rejects an
+unstamped append. It also checks that a newborn leaf's WAL pin eventually becomes usable
+through the live advance alone, without a replay from `-1`. It relies on the other four
+modules only through the guarantees they check.
+
 ## Model scope in one paragraph
 
 One leaf L at one WAL partition of three offsets. Its born activation `a1` and one
@@ -32,9 +40,9 @@ initialisation (R and H, in three slices: `Recreate`, `RecreateSurvivor` and
 `RecreateSurvivorMixed`), and a bulk-born leaf (`Bulk`, B). The core owns
 `Armed(a)`, `LiveAdvance`, `Replay`, `Capture`, `GcTrim`, the applied-prefix tracker
 (`mine`, and the in-flight own appends), the unstamped watermark with its restart reset and
-self-report, and the duplicate. The base also checks one liveness property,
-`NewbornPinEventuallyUsable`, under `LiveSpec`'s explicit fairness; the variants check
-safety only.
+self-report, and the duplicate. The base and the `Bulk` variant also check one liveness
+property, `NewbornPinEventuallyUsable`, under `LiveSpec`'s explicit fairness; the other
+variants check safety only.
 
 ## Interface
 
@@ -85,7 +93,7 @@ weaken each one in turn and go red, so each is load-bearing.
   straddler (`ReadPositionHonestAssumeCloseReplacesHeads`, red in `Recreate`).
 - **Guarantees.** Four, each a checked invariant of the base and every variant, consumed
   by no other module: `ReadPositionHonest`, `SnapshotHonest`, `NoTrimPastAcked` and
-  `OldNeverRejected`; and one liveness property of the base,
+  `OldNeverRejected`; and one liveness property, checked on the base and in `Bulk`,
   `NewbornPinEventuallyUsable`, the armed newborn's pin becoming usable without a
   replay from `-1`.
 - **The graph.** E <- H, E <- R, and {E, H, R, B} <- C, where E is `WalAppendEpoch`,
@@ -177,8 +185,9 @@ that finds `a1` unclaimed. The base and the other variants allow both.
 - `Recreate` checks the claimed purge with the full environment: 3,693,715 states.
 - `RecreateSurvivor` checks the unclaimed survivor without the 10.2.0 silo: 4,638,713.
 - `RecreateSurvivorMixed` checks it with the silo and no hand-off window: 1,622,161.
-- **Bounded out:** the unclaimed survivor with both a hand-off window and the silo, about
-  7.6M states; the gap register below records it.
+- **Bounded out of CI:** the unclaimed survivor with both a hand-off window and the silo.
+  It was checked locally and is clean at 8,913,193 distinct states (232 seconds), which is
+  over the 5M-state case budget; the gap register below records it.
 
 Measured with tla2tools v1.7.4 on two workers, the three slices take 2 minutes, 3
 minutes and 1 minute.
@@ -219,8 +228,9 @@ the shared snapshot covers every durable own append. The base cfg's specificatio
   additionally bounded by every running activation's read position, the property holds
   without it (550,843 states, checked by the independent review).
 - **Cost, measured** (tla2tools v1.7.4, two workers, liveness included): the base finds
-  778,329 distinct states to depth 25 in 1 minute 27 seconds, and `Bulk` 875,431 in 2
-  minutes 19 seconds. Stated as three leads-to formulas the base took 4 minutes, and with
+  778,329 distinct states to depth 25 in 1 minute 27 seconds, and `Bulk` 1,114,185 to
+  depth 25 in 2 minutes 38 seconds (re-measured with TLC 2.19). Stated as three
+  leads-to formulas the base took 4 minutes, and with
   one fairness condition per step as well, 11.
 - **Bounded out:** `Restart` holds the property too, but takes 7 minutes 18 seconds
   locally, too close to the 20-minute case budget on a CI runner, so it checks safety
@@ -293,7 +303,8 @@ reason as the one above.
   (the latch, the refused hint and the refused live advance) and
   `BPlusLeafGrainTests.A_reactivation_after_the_duplicate_trim_rehydrates_the_newer_snapshot_and_loses_no_key`
   (every key of both activations served after the rehydrate). Disabling the latch turns
-  both red. The latch's own detectors are
+  both red, and that red proof ran in CI: run 41693299334 failed all four
+  parameterised cases of those two tests. The latch's own detectors are
   `BPlusLeafGrainTests.A_stale_latched_partition_never_live_advances`,
   `BPlusLeafGrainTests.A_checkpoint_hint_does_not_advance_a_stale_latched_partition` and
   `BPlusLeafGrainTests.A_latched_stale_leaf_still_faults_a_direct_drive_without_replaying`;
@@ -301,10 +312,11 @@ reason as the one above.
   `BPlusLeafGrainTests.Activation_rehydrates_cache_from_snapshot_when_offset_exceeds_checkpoint`
   and `LeafSnapshotRehydrateIntegrationTests.Snapshot_capture_persists_blob_and_rehydrate_serves_keys_after_deactivation`.
   Production symbols: `WalMaterialiserPinGrain`, `LeafProjectionStaleException`, `BPlusLeafGrain.TryRescueWarmStaleLeafAsync`, `BPlusLeafGrain.LatchProjectionStaleDrive`, `BPlusLeafGrain.IsPartitionStaleLatched`.
-- **A purge's unclaimed survivor is not checked with both a hand-off window and a 10.2.0 silo.**
+- **CI does not check a purge's unclaimed survivor with both a hand-off window and a 10.2.0 silo.**
   When the purge finds the born activation unclaimed, it may claim afterwards as the
-  re-created incarnation's. That slice with every other environment of `Recreate` is
-  about 7.6M states, over the 5M-state case budget, and cannot be cut further by
+  re-created incarnation's. That slice with every other environment of `Recreate` was
+  checked locally and is clean at 8,913,193 distinct states (232 seconds), but it is over
+  the 5M-state case budget, and cannot be cut further by
   scenario: splitting it by whether the window opens, or the silo appends, before or
   after the purge, or by whether the duplicate exists at the purge, leaves each half at
   6.5M to 7.5M, because those reachable states coincide whatever the order of the
@@ -314,8 +326,8 @@ reason as the one above.
   survivor adds to the purge - its claim after it, its own appends, and the claim head,
   close heads and reported unstamped offsets it must read before it arms - meets each
   of those environments in one of them. Only an interleaving needing a foreign record
-  and the silo's append at once, around the survivor's claim, is unchecked; the
-  claimed purge (`Recreate`) checks that interleaving for every other activation.
+  and the silo's append at once, around the survivor's claim, is left to the local check;
+  the claimed purge (`Recreate`) checks that interleaving in CI for every other activation.
   No production symbol: a model-budget scoping of which environments one configuration combines, not a production mechanism.
 - **Production holds the advance in more cases than `Armed`.** The model arms on the
   design's six conditions. Production also holds the advance while a saga prepare is
@@ -334,8 +346,8 @@ reason as the one above.
   arming view (`LeafAppendEpochFence.TryGetArmingView`) is read after the marker, so only
   fresher. The model reads the marker in the step that advances, so it cannot express that
   order. The detector
-  `A_hand_off_opening_during_the_marker_read_cannot_carry_the_advance_past_its_foreign_record`
-  (`BPlusLeafGrainTests.LiveCheckpointAdvance.cs`, #5768) pins it: a hand-off opens while
+  `BPlusLeafGrainTests.A_hand_off_opening_during_the_marker_read_cannot_carry_the_advance_past_its_foreign_record`
+  (#5768) pins it: a hand-off opens while
   the marker read is in flight, allocates a foreign record, and an own append lands above
   it, and the advance must stay below that record. Taking the snapshot after the read turns
   it red. The design's `FrozenView`, a superseded activation that keeps the marker

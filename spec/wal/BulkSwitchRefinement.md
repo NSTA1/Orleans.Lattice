@@ -11,6 +11,10 @@ authority is [`design/LiveAdvanceDesign.md`](design/LiveAdvanceDesign.md), secti
 directory it is a documented mapping, not a refinement proof: the gates check its names,
 detectors and coverage, and its claims were checked by reading production.
 
+In plain terms, the module guarantees that a leaf born by a bulk append never starts
+reading the WAL past a record of its range that it does not already hold, and that it
+resolves a key the range already held to the same value every other WAL reader does.
+
 ## Model scope in one paragraph
 
 One WAL partition of four offsets and one key K in the appended range, the contention
@@ -69,7 +73,8 @@ design model ([`LiveAdvanceInterface.md`](LiveAdvanceInterface.md)).
   `rpN` to `Min2(hint - 1, fO)`. Production stores the hint already converted, as the heads
   minus one (`BPlusLeafGrain.HeadsAsCheckpoints`, #5760), and applies
   `min(hint, frontier)`: in checkpoint terms `min(head - 1, O's checkpoint)`, which is the
-  model's `Min2(hint - 1, fO)`.- **Guarantees.** Two, each a checked invariant of the base:
+  model's `Min2(hint - 1, fO)`.
+- **Guarantees.** Two, each a checked invariant of the base:
   - `BulkHintBound`: N's read position is at or below every record of its range it does
     not hold, from its birth through its replay. Rows relocated into it at birth are
     held, by the offset of the record that wrote them.
@@ -187,8 +192,8 @@ at its properties and re-anchored on its text.
   model reaches that path only through a drain past its deadline. A bulk load, which
   replaces the root and relocates a batch write stored on it, is not modelled.
   Production symbols: `ShardRootGrain.BulkGraftSeamsAvailable`, `WalAppendFenceMethodProbe.IsDefiniteMethodUnknown`.
-- **Shadow markers are not carried by the relocation.** The model has no sagas or reshard migration, so it does not check that a relocated row keeps its read gate. A split and a span forward install shadow markers on the destination for every saga still isolating a moved key (prepared, not yet terminal, or a migrated row) before they merge the rows; the bulk graft's relocation does not, so a prepared or migrated key relocated into the appended leaf can be read ungated there until its backstop lands. The remedy, the same transfer per destination before the merge, is #5755, and this entry stands until that change is in this tree.
-  Production symbols: `BPlusLeafGrain.TransferShadowMarkersToSiblingAsync`, `ShardRootGrain.RelocateIntoGraftedLeavesAsync`, `BPlusLeafGrain.NarrowHighKeyAsync`.
+- **Shadow markers move with the relocation, outside the model.** The model has no sagas or reshard migration, so it does not check that a relocated row keeps its read gate. Production now moves them with the graft (#5755): before the narrow hands its rows back, the old leaf installs on each appended leaf a shadow marker for every saga still isolating a key relocated there, prepared and not yet terminal or a migrated row, as a split and a span forward do. Tests pin it: `BPlusLeafGrainTests.Graft_narrow_moves_shadow_markers_to_the_appended_leaf_each_row_relocates_to` and `BPlusLeafGrainTests.Graft_narrow_moves_locally_prepared_saga_buckets_for_relocated_keys`.
+  Production symbols: `BPlusLeafGrain.TransferShadowMarkersToGraftAsync`, `BPlusLeafGrain.TransferShadowMarkersToSiblingAsync`, `BPlusLeafGrain.NarrowHighKeyAsync`.
 - **The persisted drop.** The old leaf persists its drop, so a reloaded snapshot cannot
   bring the relocated rows back outside its span; the model has no snapshot of the old
   leaf, and its counts are not modelled.

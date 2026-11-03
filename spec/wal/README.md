@@ -37,12 +37,14 @@ exhaustively within the TLC budget.
 variant configurations and its `design/mutations/` model the fenced redesign of the
 live checkpoint advance (issues #5572, #5593, epic #5605), described in
 [`design/LiveAdvanceDesign.md`](design/LiveAdvanceDesign.md). Module discovery reads
-only top-level `.tla` files, so no TLC case runs the draft. Now that the production
-members have landed it is being promoted as five focused modules with an acyclic
-assume-guarantee graph; [`WalAppendEpoch`](#walappendepoch),
+only top-level `.tla` files, so no TLC case runs the draft. It has been promoted as five
+focused modules with an acyclic assume-guarantee graph,
+[`LiveAdvanceInterface.md`](LiveAdvanceInterface.md): [`WalAppendEpoch`](#walappendepoch),
 [`WalHandOffFence`](#walhandofffence), [`WalRoutingFloor`](#walroutingfloor),
-[`WalBulkSwitch`](#walbulkswitch) and [`WalLiveAdvanceCore`](#walliveadvancecore) are in this
-directory, and the draft keeps every design mutation as the record each module took its own from.
+[`WalBulkSwitch`](#walbulkswitch) and [`WalLiveAdvanceCore`](#walliveadvancecore). Those
+modules, with the composite interface check that composes them (#5774), are the CI
+authority for the live advance. The draft and its configurations stay as local evidence,
+and its mutations as the record each module took its own from.
 
 ## Counts
 
@@ -260,6 +262,55 @@ cover:
 
 The full list is under the abstraction gaps of each refinement note. A property that
 holds here is evidence about the modelled design, not about the gaps.
+
+## The live advance's gap register
+
+The five live-advance modules each keep a register of what they do not model, in their
+refinement notes' `## Deliberate abstraction gaps`. This is every entry, by module, so a
+reader can see the whole cut in one place; the note holds the reasoning and the
+production symbols.
+
+- **`WalAppendEpoch`** ([gaps](AppendEpochRefinement.md#deliberate-abstraction-gaps)):
+  the fence gate and the unstamped fallback; one leaf, one partition, two activations;
+  the leaf's gate at the partition; the clear's kept row has no detector; retirements
+  other than the leaf's clear; stamped batches and the entry row's retries; self-fenced
+  rejections.
+- **`WalHandOffFence`** ([gaps](HandOffFenceRefinement.md#deliberate-abstraction-gaps)):
+  one initiator, one owner, one partition; the owner's read and its replay; a close with
+  the gate view closed; unstamped writes; rule 3's intent identity; stamped batches,
+  seam retries and the deadline.
+- **`WalRoutingFloor`** ([gaps](RoutingFloorRefinement.md#deliberate-abstraction-gaps)):
+  the range-delete fence is not a separate initiator; the mixed-version residue is
+  excluded; one partition, one write per shard root at a time; the purge is one step;
+  the marker-write guard is not modelled; a refused write above its floor is not
+  re-stamped there.
+- **`WalBulkSwitch`** ([gaps](BulkSwitchRefinement.md#deliberate-abstraction-gaps)):
+  one key, one appended leaf, one chunk; the bulk entry is held by every reader; the
+  close's fence is the hand-off module's; the gate, older silos and bulk loads; shadow
+  markers move with the relocation, outside the model (#5755); the persisted drop.
+- **`WalLiveAdvanceCore`** ([gaps](LiveAdvanceCoreRefinement.md#deliberate-abstraction-gaps)):
+  the liveness property excludes a current activation that has fallen off the log
+  (`CurrentFellOffLog`, answered in production by the stale latch of #3477, whose
+latch-disabled red proof ran in CI); production
+  holds the advance in more cases than `Armed`; the marker read is atomic with the
+  advance; refusals that allocate nothing; one partition, one leaf, two activations;
+  re-claims; the duplicate's own snapshot and the purge's trim; the unreachable leaf's
+  tick re-check.
+
+Two cuts are budget bounds rather than abstractions, and the core's
+[property classification](LiveAdvanceCoreRefinement.md#property-classification) names
+them: the liveness property is checked on the base and `Bulk` only (`Restart` holds it
+but takes over seven minutes, and `GateFlip` and `Recreate` are outside its premise), and
+CI checks a purge's unclaimed survivor with a hand-off window and, separately, with a
+10.2.0 silo. The combination of both was checked locally and is clean at 8,913,193 states
+(232 seconds), but is kept out of CI only for the 5M-state case budget.
+
+The composite interface check ([gaps and scope cuts](LiveAdvanceCompositeRefinement.md#scope-cuts))
+has four scope cuts of its own: one WAL shard restart; no purge after a bulk birth (no
+module combines the two either); no step for the bulk switch's own close, which no B
+guarantee states, and which is shown harmless: C's `Bulk` configuration without the close's
+`phase` guard is clean at 1,114,208 states; and two offsets with one hand-off window, which its witness mutations
+show reach every edge.
 
 ## How to run TLC
 

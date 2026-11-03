@@ -4,16 +4,18 @@ agent_spec: "docs/agents/invariants.yaml"
 
 # Verified WAL Concurrency
 
+The WAL's concurrency safety properties - no acknowledged write is lost, no reader skips
+an offset, the GC never trims what a consumer still needs - are machine-checked: each
+decision point that enforces them is a pure core that production and a Coyote model both
+execute.
+
 The write-ahead log (WAL) is Orleans.Lattice's durability boundary: every
 mutation lands in the log before it is acknowledged, and a background garbage
 collector trims the log once every consumer has durably consumed past a point.
 That machinery runs under heavy concurrency - producers appending, peer ship
 loops and leaf materialisers reporting cursors, the GC trimming, and shard moves
 quiescing and re-fencing the log - and a handful of small decision points keep it
-safe. Orleans.Lattice drives those decision points from a set of **verified
-cores** - pure, deterministic functions that both the production grains and a
-Coyote verification layer execute - so the WAL's safety properties are
-machine-checked, not just asserted by prose and integration tests.
+safe.
 
 This document describes the verification apparatus for the WAL: the proven-core
 pattern applied to the WAL seams, and the Coyote concurrency tier that
@@ -42,24 +44,32 @@ directly is the public `InMemoryWalCursorRegistry`.
 | Core | Decision it owns |
 |------|------------------|
 | `WalShippingWatermark` | The durable-contiguous tail of a WAL shard that has several flushes in flight and out of completion order - the start of the oldest in-flight flush, or the next offset when none is in flight, which `WalShardGrain` further bounds by every abandoned flush that can still land and by one past the highest stored offset (issue #4621) - and whether an offset may be shown to a cursor-advancing reader (the replication shipper, the view maintainer, leaf replay): only offsets strictly below the tail, so no reader is ever handed an offset above a still-unfilled prefix hole. |
-| `WalGcTrimCore.IsEntryEligible` | Whether one log entry may be trimmed, given the GC's min-acked cursor, the optional retention ceiling, the durable materialiser offset admission (which can also refuse an entry only the in-memory cursor would admit), the causal-stable frontier, and any buffer-pin blocked-floor - the exact per-entry predicate the GC scan applies. |
+| `WalGcTrimCore.ClassifyEntry` (`IsEntryEligible` is the same predicate without the refusal reason) | Whether one log entry may be trimmed, given the GC's min-acked cursor, the optional retention ceiling, the durable materialiser offset admission (which can also refuse an entry only the in-memory cursor would admit), the causal-stable frontier, the lowest offset an offset-reading consumer such as the replication shipper has not durably consumed (issue #4579), and any buffer-pin blocked-floor - the exact per-entry predicate the GC scan applies. |
 | `InMemoryWalCursorRegistry` (driven directly) | The per-consumer cursor max-merge and the `min(cursor)` GC floor scan - a consumer cursor never regresses under a stale re-delivery, and the floor is the minimum across consumers. |
-| `WalMoveFenceCore` | Whether an append is admitted while a shard move has fenced the log (`!moveFenced`), and whether a stale quiesce observation must abort (`observed > expected`) - the fence check that must be atomic with the offset assignment. |
+| `WalMoveFenceCore` | Whether an append is admitted while a shard move has fenced the log (`!moveFenced`), and whether a stale quiesce observation must abort (`observed > expected`) - the fence check that must be atomic with the offset assignment. It also owns the durable move fence of issue #4525: whether an activation comes up fenced, whether a fence may be raised, renewed, taken over or released, and whether the placement may flip. `WalMoveQuiesceModel` checks only the append fence. |
 | `WalAdmissionGateCore.IsDispatchRefused` | Whether the commit-log writer refuses a new dispatch because it is draining for shutdown - the pre-admission gate paired with a drain that must release every parked caller. |
 | `WalOffsetAllocationCore.Assign` | The per-shard log-offset handed to an append and the single-step advance of the offset counter - the read-and-advance that must be atomic so two concurrent appends never share an offset and the sequence stays dense. |
 | `WalOffsetAllocationCore.RecoveredNextOffset` | The offset a recovering shard activation resumes from: one past the highest stored offset, so a recovered allocator never reissues an acknowledged offset. Activation, the post-failure resync and the test seam all recover through it. |
 | `WalBlockedFloorCore.Meet` | The lowest buffer-pin HLC across consumers - the meet (minimum) each consumer's live pin is folded into, so the GC's blocked floor tracks the slowest buffering consumer and never trims an entry a live buffer still needs. |
 | `WalMoveResumeCore` | Whether a move's target is a clean prefix of the source tail, and the offset a crashed-and-re-driven copy resumes just past - the resume arithmetic that makes an interrupted placement move copy each retained offset exactly once. |
-| `LeafDurablePinCore` | The durable materialiser pin a leaf publishes for a partition: a release for a partition with nothing to lose, the never-written release (#3453), the Zero block pin for a prefix whose only durable copy is the WAL, or a trim entitlement of `min(persisted checkpoint, covered)` - never the pending checkpoint (#3476). `BPlusLeafGrain.ResolveDurablePinForPartition` gathers the inputs and maps the verdict. |
+| `LeafDurablePinCore` | The durable materialiser pin a leaf publishes for a partition: a release for a partition with nothing to lose, the never-written release (#3453), itself bounded by durable snapshot coverage (#4456, #4523), the Zero block pin for a prefix whose only durable copy is the WAL, or a trim entitlement of `min(persisted checkpoint, covered)` - never the pending checkpoint (#3476). `BPlusLeafGrain.ResolveDurablePinForPartition` gathers the inputs and maps the verdict. |
 | `WalOrphanPinRetirementCore` | Whether the GC may remove an orphaned materialiser pin: only on a durable leaf read that is a husk (no record, or no tree id), only for a consumer id the gate reads as a leaf's own, within the pass budget, and - the fence of issue #5358 - only when the pin grain has recorded no merge of the consumer since the retirement's token, on the activation that issued it. The bulk orphan sweep, the starvation drive's retirement and `WalMaterialiserPinGrain.RemoveIfUnmergedSinceAsync` all route through it. |
 | `WalFallOffCore` | Whether the WAL has been trimmed past the first offset a replay resuming after a checkpoint still needs (`checkpoint >= 0 && tail > checkpoint + 1`; a durably recorded checkpoint of 0 is a real read position, issue #4433). Both the fall-off-log detector and the activation's cold-replay guard route through it, so the two cannot disagree. |
 
 The core files live under `src/lattice/`, `src/lattice/BPlusTree/`, and
 `src/lattice/BPlusTree/Grains/` next to the grains that call them.
 
+The live checkpoint advance (epic #5605) adds further pure cores - `LeafLiveAdvanceCore`,
+`WalAppendFenceCore` and `HandOffMarkerCore` - as does the clock floor's
+`WalClockFloorCore` (issue #4586). They are unit-tested, and the first three are checked
+through the TLA+ modules [described below](#the-live-checkpoint-advance), but no Coyote
+model drives them yet, so they are not in this table.
+
 ## The Coyote concurrency tier
 
-The WAL cores are model-checked with [Microsoft Coyote](https://github.com/microsoft/coyote)
+Each WAL core is checked against every explored ordering of the steps that race on it, so
+an interleaving bug in the decision is found in test, not in production. The cores are
+model-checked with [Microsoft Coyote](https://github.com/microsoft/coyote)
 using the same shared harness (`CoyoteModelHarness`) and the same explicit
 cooperative step-ordering style (a model implements `ICoyoteModel` and advances
 the steps itself; Coyote drives `runtime.RandomBoolean()` to explore the
@@ -69,7 +79,7 @@ a concurrency degree of zero) described in the
 There is no `coyote rewrite` pass; the concurrency is encoded as data so it is
 fully enumerable.
 
-The WAL models live under `test/lattice/BPlusTree/Coyote/`:
+The pure-core WAL models live under `test/lattice/BPlusTree/Coyote/`. That directory also holds Coyote fixtures that drive production WAL admission and replay types directly (for example `WalGcStarvationDriveCoyoteTests` and `WalAdmissionCoyoteTests`); they are not pure-core models and are not covered by this table:
 
 | Model | Core(s) exercised | Property checked |
 |-------|-------------------|------------------|
@@ -83,7 +93,7 @@ The WAL models live under `test/lattice/BPlusTree/Coyote/`:
 | `WalMoveRedriveModel` | `WalMoveResumeCore` | A placement move's tail copy resumes just past what the target already holds, so a coordinator that crashes and re-drives at any offset boundary copies every retained offset exactly once with no duplicate and no gap. |
 | `WalDurabilityLifecycleModel` | `WalOffsetAllocationCore`, `WalShippingWatermark`, `LeafDurablePinCore`, `WalGcTrimCore`, `WalFallOffCore` | End to end, with a leaf stopping at any step: appends, out-of-order flushes, read-position replay, checkpoint persists and snapshot captures that can fail, pin publication and the GC trim, with a variant in which one leaf owns nothing so the never-written release is exercised. No acknowledged write is lost or skipped, no leaf falls off the log, no trim entitlement exceeds snapshot coverage, a failed persist is rolled back, and no pin exceeds the persisted checkpoint. |
 | `WalPinRetirementModel` | `WalOrphanPinRetirementCore` | A purge-cleared leaf re-created under the same grain id while a retirement takes its token, reads the leaf and removes: under every interleaving, the re-created leaf keeps a pin while it holds an un-checkpointed write. |
-| `WalPartitionReleaseModel` | `LeafDurablePinCore`, `WalGcTrimCore` | One leaf whose writes span two partitions, with HLC stamps and a retention TTL: the empty release of a partition the leaf has applied nothing in, writes stamped below the leaf's clock (replication, carried copies), and every GC arm that admits by stamp or by age. No acknowledged write leaves durable state, under the replay barrier of #4669 and the override hold of #4641. |
+| `WalPartitionReleaseModel` | `LeafDurablePinCore`, `WalGcTrimCore`, `WalFallOffCore` | One leaf whose writes span two partitions, with HLC stamps and a retention TTL: the empty release of a partition the leaf has applied nothing in, writes stamped below the leaf's clock (replication, carried copies), and every GC arm that admits by stamp or by age. No acknowledged write leaves durable state, under the replay barrier of #4669 and the override hold of #4641. |
 
 ### Every model ships a non-vacuous guard test
 
@@ -117,7 +127,7 @@ asserts Coyote *finds* the resulting violation
 - `WalMoveRedriveModel` - the guard resumes every re-drive from the source floor
   instead of past what the target already holds, and Coyote finds the crash point
   after which the copy re-appends an offset the target already has (a duplicate).
-- `WalDurabilityLifecycleModel` - nine guards, each removing one fix and each
+- `WalDurabilityLifecycleModel` - nine guards in ten tests (the never-written release guard runs twice, once per assertion), each removing one fix and each
   required to be caught by the assertion that fix protects, not merely by some
   violation:
   - resolving the pin against the pending checkpoint (`[PublishedPinWithinPersistedBelief]`);
@@ -133,8 +143,8 @@ asserts Coyote *finds* the resulting violation
     (`[ReadPositionHonest]`);
   - a replay that never reads past the persisted checkpoint
     (`[EveryAckedWriteMaterialised]`);
-  - a read position that advances only over the leaf's own entries, as before
-    #2270 (`[ReclamationEventuallyAdvances]`, with one leaf owning nothing).
+  - a read position that advances only over the leaf's own entries, the
+    "applied through" reading that #2270 rejected (`[ReclamationEventuallyAdvances]`, with one leaf owning nothing).
 - `WalPartitionReleaseModel` - seven guards, each caught by its one assertion,
   `[AckedWriteDurable]`: an empty release before the partition's replay (#4669),
   a retention ceiling that yields only to a Zero pin (#4622), and, for the override
@@ -149,7 +159,7 @@ asserts Coyote *finds* the resulting violation
 A model with a green fix test and a green guard test is proven load-bearing for the
 assertions its guards name, and only for those. Every assertion of both
 end-to-end models is the reporter of at least one guard: disabling any one of them
-turns a guard red. The confirmation pass of issue #4433 found four lifecycle
+turns a guard red. The confirmation pass of the independent review (issue #4433) found four lifecycle
 assertions that were never the reporter; each now has its own guard.
 
 ### Running the tier
@@ -220,7 +230,10 @@ TLA+ specification in [`spec/wal/`](../../spec/wal/README.md):
   token and capped at the old leaf's read frontier, the drain before the narrow, the
   relocation of the rows the range held, and the batched close, against a crash of the
   shard root and a drain past its deadline. It is the fifth module promoted from that
-  draft.
+  draft;
+- `WalLiveAdvanceComposite.tla`, the interface check of those five modules: every
+  producer guarantee, copied from its module, as a constraint on freely generated steps,
+  checked against every assumption a consumer module takes of it.
 
 It follows the pattern of the atomic-commit specification: every property and every
 action has a mutation that makes a property fire, and a refinement note maps each
@@ -300,6 +313,94 @@ stamps and a retention TTL (`WalPartitionReleaseModel`).
 
 Coverage of the leaf lifecycle does not imply coverage of any of those. Each module's
 refinement note lists its gaps in full.
+
+### The live checkpoint advance
+
+The live checkpoint advance (epic #5605) lets a leaf move its read position over its
+own applied appends without reading the WAL. That is only safe when no other writer's
+record can sit unread below the new position, so the advance is fenced: an append epoch
+per activation, a hand-off marker per foreign writer, a routing floor across a purge,
+and a birth hint for a bulk-born leaf. It was designed against one draft model,
+[`spec/wal/design/WalLiveAdvance.tla`](../../spec/wal/design/LiveAdvanceDesign.md#the-model),
+and is checked in CI by five modules promoted from it. Each module is small enough to
+check exhaustively, and they fit together through a written assume-guarantee contract,
+[`LiveAdvanceInterface.md`](../../spec/wal/LiveAdvanceInterface.md):
+
+| Module | What it checks | Assumes |
+|--------|----------------|---------|
+| E, `WalAppendEpoch` | A superseded or retired activation never appends, a claim's head covers every earlier allocation, no two live activations share an epoch, and only a superseded activation is ever refused. | nothing |
+| H, `WalHandOffFence` | A foreign writer's record lands while the owner's marker is open or below the heads its close recorded, an absent or uninitialised marker holds the owner, and close heads only rise. | E's entry check |
+| R, `WalRoutingFloor` | A write of a purged tree lands below the heads the re-created tree's first initialisation recorded, those heads lie above every record already allocated in the partition (`InitHeadCoversPriorAllocations`), and every live shard root's routing generation stays above its own floor. | E's entry check |
+| B, `WalBulkSwitch` | A bulk-born leaf's birth read position is at or below every record of its range it does not hold, and the leaf resolves a contested key as every WAL reader does. | nothing |
+| C, `WalLiveAdvanceCore` | No running activation's read position ever passes a record it does not hold, whether it advances by replay or, once armed, by the live advance; the shared snapshot is honest, the GC never trims an acknowledged entry the snapshot lacks, and a newborn leaf's pin eventually becomes usable without a replay from the start. | every guarantee above |
+
+The graph is E <- H, E <- R and {E, H, R, B} <- C: an arrow points from the module that
+assumes to the module that guarantees, and no other edge exists, so it is acyclic. A
+module takes another's guarantee only as an environment constraint in the interface's
+exact form, never by importing its state. The core's liveness property,
+`NewbornPinEventuallyUsable`, holds under weak fairness of the leaf's own steps and of the
+environment steps that end a hold (a close, the bulk birth, the marker's initialisation),
+with replay assumed only as far as the arming bounds require; it is discharged once the
+current activation has fallen off the log, where production's stale latch (#3477) takes
+over.
+
+Because each module checks its side of an edge separately, a guarantee could be stated
+more weakly than the assumption that relies on it. The composite interface check,
+`WalLiveAdvanceComposite` (#5774), closes that gap: one small configuration (131,423
+distinct states) generates each step freely within the shared vocabulary, keeps it only
+if every producer's guarantee still holds, and checks every consumer's environment guard
+against it, on each of the twelve edges. Its first runs found five places where a module
+assumed more than its producer guaranteed (F1 to F5, in the
+[composite's note](../../spec/wal/LiveAdvanceCompositeRefinement.md#findings)); all were
+closed by widening the consumer or strengthening the producer, and every edge is now
+clean.
+
+Every module, and the composite, runs on a TLC shard of its own, sized by measurement.
+Each CI case stays within about five million states and twenty minutes, so combinations
+larger than that are split into scenario variants or bounded out by name. For example,
+CI checks the core's purge with an unclaimed survivor and a hand-off window, and
+separately with a 10.2.0 silo. The combination of both was checked locally and is clean at
+8,913,193 states, but is kept out of CI because it exceeds the per-case budget. The design model's
+own combined configurations, up to about 23 million states, stay as local evidence in
+the [design note](../../spec/wal/design/LiveAdvanceDesign.md).
+
+The design, its models and the independent review of the production members found
+these defects in production. Each is fixed on the epic's integration branch, which lands
+on `main` as a whole:
+
+| Issue | Defect |
+|-------|--------|
+| #5610 | A bulk append grafted its leaves without checking the keys the old rightmost leaf already held, so rows at or above the first separator became unroutable. Fixed by #5646: the graft relocates them into the appended leaves and never refuses the chunk; #5677 persists the old leaf's drop. |
+| #5614 | A streamed bulk load intermittently committed duplicate or orphan rows, so counts and scans disagreed with what was loaded. Fixed by #5646, with the relocation of #5610. |
+| #5634 | The WAL append fence's rows leaked when a 10.2.0 silo retired a fenced leaf, because nothing could enumerate them. Fixed by #5653: a directory of fenced leaves and a sweep that retires the orphans. |
+| #5642 | A batch write admitted during a bulk load landed on the replaced seeded root and was unreadable until a replay. Fixed by #5646: the load drains the batch writes admitted before it and merges the replaced root's rows. |
+| #5643 | An activation's own epoch bump deactivated it when its in-flight appends met the raised entry. Fixed by #5644: the activation's own stale appends are self-fenced and re-admitted, not a supersession. |
+| #5654 | A write above the edge between a bulk graft's narrow and its link failed open onto the old leaf and was unreadable on the origin. Fixed by #5646: the narrow and the link are one persist. |
+| #5656 | The append-fence sweep never reached orphans past the first 1,024 listed leaves. Fixed by #5653: each sweep resumes after the last leaf the previous one examined and wraps around, so every listed leaf is examined in turn. |
+| #5657 | The append-fence retirement kept the loaded entry when the entry delete or delist failed after the floor raise. Fixed by #5653: once the floor is raised, the loaded entry is removed whatever fails next. |
+| #5662 | A split's close bumped its epoch in a race with a floor refusal's bump on the same epoch row, and superseded its own activation. |
+| #5663 | A shard root whose routing generation fell behind a partition's durable row made every write retry until it timed out. |
+| #5664 | A hand-off's close heads could miss the donor's appends: a stamp taken at dispatch, a partition reset by an unloaded rejection, or the gate-view fallback. |
+| #5668 | A tree's per-tree hand-off fence rows were never deleted on a tree delete or purge. |
+| #5705 | A straddling shard root's stale-generation raise re-created its marker above the routing floor after a purge. |
+| #5706 | A commit in flight when a split or bulk birth hint was captured, allocated below it, was skipped by both leaves if the donor died before applying it. |
+| #5708 | A routine refusal before allocation leaked the unapplied count and turned the live advance off for the activation. |
+| #5709 | A reachable leaf could advance past an overlapping orphan leaf's appends. |
+| #5716 | The re-seed catch-up could floor a duplicate activation's live generation and fail a re-created tree's writes as deleted. |
+| #5752 | A bulk append's birth hint was not capped at the old leaf's read position, so another author's record below it, unapplied by the old leaf, was applied by no leaf. |
+| #5755 | A bulk graft's relocation did not move the reshard read gate, so a prepared or migrated key reached the bulk-born leaf without its shadow marker. |
+| #5756 | A split donor advanced its own checkpoint past records another author appended. |
+| #5760 | Birth hints stamped the exclusive WAL head as an inclusive checkpoint, so the record at exactly the captured head was skipped. |
+| #5766 | A bulk load applied its birth hint uncapped, so a record another author appended below it, unapplied by the replaced root, was applied by no leaf. |
+
+**What is not covered.** Each module checks one partition and one owner leaf, with two
+activations at most and each environment step once. The modules model the fences'
+effect at the WAL partition, not their scheduling: seam retries, multi-entry stamped
+batches, the range-delete fence as an initiator of its own, the purge's steps one by
+one, and several keys or appended leaves in a bulk switch are out of scope. The core
+over-approximates the cases in which production holds the advance. The
+[`spec/wal/` README](../../spec/wal/README.md#the-live-advances-gap-register) lists
+every module's abstraction gaps in one place.
 
 ## Related
 

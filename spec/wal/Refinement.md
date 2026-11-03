@@ -7,10 +7,20 @@ protocol and any divergence is visible. The shard-move half of the WAL lives in
 [`WalMove.tla`](WalMove.tla) and has its own note,
 [`MoveRefinement.md`](MoveRefinement.md).
 
+What the model guarantees, in plain terms: an acknowledged write is never lost or
+skipped by the leaf that owns it, outside a purge, which deletes a marked leaf's
+writes by contract. It survives a crash of its owner; the GC never trims it before
+the owner's durable snapshot holds it; no reader is shown an offset above one still
+in flight; a recovering leaf never falls off the log and never resumes past a write
+it does not hold; and, under the spec's fairness, every acknowledged write is
+eventually applied and the log eventually reclaimed. The property mapping below
+states each guarantee and names the production tests that detect its loss.
+
 It is a **documented mapping, not a machine-checked refinement proof**. Three gates
 keep it honest about what it names: the staleness gate resolves every backticked
 `Type.Member` against `src/`; the detector gate resolves every test the Detector
-column names against `test/` and requires every admitted gap to cite an issue; and
+column names against `test/` and requires every row whose Detector reports a gap
+(`None` or `Partial`) to cite an issue; and
 the coverage gates require a row for every action in `Next` and every property the
 cfg checks. None of them checks that a row's claim is TRUE. That was done by reading
 production and, for every Detector, by perturbing production and watching the named
@@ -21,12 +31,12 @@ test go red (the log is in the pull request that introduced this note).
 One WAL partition of three offsets is shared by two leaves. Every write belongs to
 `l1`; `l2` owns nothing in the partition, which is the common production case
 (keys hash across every partition) and the reason a checkpoint must be a read
-position. A budget of one fault - a shard crash, a leaf stop, a failed persist or a
-failed capture - bounds the environment; the two fault-free intended-design stutters
+position. A budget of one fault - a shard crash, an abandoned flush, a leaf stop, a
+failed persist or a failed capture - bounds the environment; the three fault-free intended-design stutters
 (`ActivateLoadFail`, `ActivateRowless`, `ReplayFaultRearm`) cost nothing. The base model
 checks 226,592 distinct states to depth 35 with every safety and liveness property.
 The `TwoFaults` variant (`WalDurability.TwoFaults.cfg`) checks every safety invariant
-with a budget of two faults: 1,310,600 distinct states to depth 42. The `SnapshotLoss`
+and both action properties with a budget of two faults: 1,310,600 distinct states to depth 42. The `SnapshotLoss`
 variant lets the environment destroy a leaf's snapshot or its row, and the operator
 purge a tree, at two faults: 6,402,166 distinct states to depth 42. The `WarmLeaf` variant has no
 faults: 17,041 distinct states to depth 28, with every property checked.
@@ -248,7 +258,7 @@ trim and recovers.
 |----------|------------------------------|-----------|----------|----------|
 | Leaf materialiser with a durable checkpoint | Nothing. The scan stops at the partition's durable materialiser offset floor, the minimum of every leaf's `min(checkpoint, coverage)`, before eligibility is evaluated (`LatticeWalGc.TrimShardAsync`), so the TTL arm never reaches an entry a leaf has not durably applied or snapshotted. | Not needed. | Not needed. | `LatticeWalGcRetentionLeafFloorTests.RunOnceAsync_retention_ttl_never_trims_past_a_leafs_durable_offset_floor` (red when the floor stop is dropped). |
 | Leaf materialiser with no durable checkpoint on the partition (a standing `Zero` block pin: a data-bearing leaf that has never checkpointed, present in the registry or not, including a tree none of whose leaves has checkpointed yet) | Nothing. Every durable pin at or below `Zero` that the offset floor does not cover holds the partition it names against every admitting arm, the TTL arm included (`DurableMaterialiserFloor.IsPartitionHeldByBlockPin`, issue #4622), because such a leaf replays from the `-1` sentinel on a cold activation and could not detect a trimmed prefix. Every other uncovered leaf pin caps the partition's TTL ceiling at its frontier (`DurableMaterialiserFloor.RetentionCeilingFor`): the frontier was published by an empty release, when the leaf held no row in the partition and had applied nothing there, so every entry the leaf has written there since is stamped above it, although the pin store's max merge keeps the frontier once that write turns the partition into a block. That precondition is the empty-release arm's, and two production rules keep it true. No partition releases empty before the leaf's replay has read it: until the replay barrier latches, `BPlusLeafGrain.WithUnreplayedPartitionsLive` counts every partition as data-bearing (issue #4669, fixed by #4677). And a write stamped below the leaf's clock - a replication apply, a range delete's issue stamp, a carried copy, a reap - is preceded by a durable override hold that the GC reads as a block until the consumer's first real offset lands (issue #4641, fixed by #4679; `BPlusLeafGrain.NeedsOverrideHold`, `WalMaterialiserPinState.OverrideHolds`). | Not needed. | Not needed. | `WalRetentionBlockPinTests.A_retention_trim_keeps_an_acknowledged_write_a_never_checkpointed_leaf_owns` (real grains, silo lost; red when the TTL arm passes a block pin), `WalRetentionBlockPinTests.A_retention_trim_keeps_a_write_a_leaf_applied_after_it_released_the_partition_empty` (real grains: an empty release by a graceful deactivation, then a write, then the silo is lost; red when only a `Zero` pin holds the TTL arm), `LatticeWalGcBlockPinHoldTests.A_retention_ceiling_does_not_trim_a_partition_a_standing_block_pin_holds` (red when the TTL arm passes a block pin), `LatticeWalGcBlockPinHoldTests.A_retention_ceiling_is_capped_at_an_uncovered_leaf_pins_frontier` (red when the cap is dropped), `LatticeWalGcBlockPinHoldTests.A_registered_leafs_cursor_does_not_trim_a_partition_its_standing_block_pin_holds` (red when only registry-absent pins hold) and `LeafDurablePinCoreTests.Live_never_checkpointed_rows_over_an_unproven_wal_keep_the_block` (the empty-release precondition: a partition holding a live row never releases empty). At the model level, `WalPartitionReleaseCoyoteTests` drives `LeafDurablePinCore` and `WalGcTrimCore` on a leaf spanning two partitions: `A_ttl_that_yields_only_to_zero_pins_trims_a_write_made_after_an_empty_release` is red without the cap, and `Empty_releases_lose_no_acknowledged_write_under_the_replay_barrier_and_the_frontier_capped_ttl` holds with it. The two rules that keep the cap's premise true are detected end to end on real grains, silo lost: `LeafEmptyReleaseBeforeReplayTests.A_cold_leaf_never_releases_a_partition_its_replay_has_not_read` (red on the code before #4677 and with the gate disabled), and `WalOverrideHoldTests.A_trim_keeps_a_replicated_write_stamped_below_an_empty_release_frontier` (cursor and retention arms), `WalOverrideHoldTests.A_trim_never_resurrects_keys_a_replicated_range_delete_removed`, `WalOverrideHoldTests.A_hold_survives_a_restart_between_the_write_and_its_coverage`, `WalOverrideHoldTests.A_block_report_after_the_write_does_not_release_the_hold` and `WalOverrideHoldTests.A_carried_stamp_saga_terminal_holds_the_touched_leaf_on_the_terminal_partition` (each red when the leaf never raises, when the GC ignores holds, when a report clears the hold, or when the shard root never raises, as the case applies); the trigger by `BPlusLeafGrainOverrideHoldTriggerTests.A_saturated_merge_that_leaves_the_stamp_at_the_clock_still_needs_a_hold`. In the model, `WalPartitionReleaseCoyoteTests.An_empty_release_published_before_the_partition_is_replayed_trims_an_unread_write`, `WalPartitionReleaseCoyoteTests.Skipping_the_override_hold_lets_the_gc_trim_an_override_stamped_write_issue_4641`, `WalPartitionReleaseCoyoteTests.Dropping_the_override_hold_without_a_real_offset_lets_the_gc_trim_an_override_stamped_write_issue_4641`, `WalPartitionReleaseCoyoteTests.Clearing_the_override_hold_on_a_persisted_checkpoint_lets_the_gc_trim_an_override_stamped_write_issue_4641`, `WalPartitionReleaseCoyoteTests.Reading_the_holds_before_the_head_bound_lets_the_gc_trim_an_override_stamped_write_issue_4641` and `WalPartitionReleaseCoyoteTests.A_trigger_on_a_stamp_below_the_clock_alone_misses_a_saturated_merge_issue_4641` are each red with one rule removed, and the design run holds with override-stamped and saturated writes. |
-| Replication shipper | Entries it has not durably acknowledged. | A shipping read whose first sequence is above the one requested (`ReplicationShipperGrain.ForcedGap`). | The shipper withholds saga records and asks the peer to re-seed (`ReplicationBatch.ReseedAfterEpoch`); the receiver bootstraps from an export taken after the gap, and the shipper then rewinds every partition to its lowest retained entry (#4534, #4599). | `CrossClusterAtomicVisibilityTests.Saga_whose_prepare_was_trimmed_unshipped_is_never_delivered_torn`, `CrossClusterAtomicVisibilityTests.Shipper_asks_a_peer_it_took_off_the_log_to_reseed_and_resumes_once_it_has` and `SourceWalTrimFallOffIntegrationTests.Receiver_behind_a_source_wal_trim_is_re_seeded_and_converges`. |
+| Replication shipper | Entries it has not durably acknowledged. | A shipping read whose first sequence is above the one requested, recorded by `ReplicationShipperGrain.MarkReseedRequiredAsync`. | The shipper withholds saga records and asks the peer to re-seed (`ReplicationBatch.ReseedAfterEpoch`); the receiver bootstraps from an export taken after the gap, and the shipper then rewinds every partition to its lowest retained entry (#4534, #4599). | `CrossClusterAtomicVisibilityTests.Saga_whose_prepare_was_trimmed_unshipped_is_never_delivered_torn`, `CrossClusterAtomicVisibilityTests.Shipper_asks_a_peer_it_took_off_the_log_to_reseed_and_resumes_once_it_has` and `SourceWalTrimFallOffIntegrationTests.Receiver_behind_a_source_wal_trim_is_re_seeded_and_converges`. |
 | View maintainer | Entries past its durable read position. | `WalLogSubscriber` reports a fall-off when the tail has passed the next offset it needs, probed before the read and again whenever a read jumps an offset. | The maintainer logs the warning `View '{ViewName}' fell off the WAL on source '{SourceTree}'; rebuilding.` (`ViewMaintainerGrain.DrainAsync`; the aggregation drain logs its own), rebuilds from current source state and resumes tailing from the heads it captured. An accumulative (history) view's rebuild collapses its timeline to one revision per key: that is its contract, since a history view's timeline is bounded by WAL retention (`docs/lattice/history-views.md`), and the warning makes the collapse observable. | `WalGcViewOffsetFloorTests.A_view_a_retention_trim_overtakes_falls_off_and_rebuilds_from_source_state` (red when the maintainer ignores the fall-off), `HistoryViewWalFallOffTests.A_history_view_a_retention_trim_overtakes_logs_the_fall_off_and_collapses_to_current_state` (asserts the warning and the collapse; red likewise), `WalLogSubscriberTests.DrainAsync_reports_fell_off_log_when_a_trim_lands_between_the_tail_probe_and_the_read` and `ViewMaintainerAggregationDrainTests.Aggregation_drain_rebuilds_when_the_source_WAL_trimmed_past_the_checkpoint`. |
 | Incremental backup capture | Its delta window (it is not a retention reader). | `LatticeBackupCaptureService.HasFallenOffAsync` before the drain, and `WalLogSubscriber` during it. | A full capture, whose cut is read from leaf state and is newer than the window it replaces. | `LatticeBackupIncrementalCaptureTests.CaptureIncrementalAsync_falls_back_to_a_full_when_the_base_resume_point_fell_off_the_wal` and `IncrementalDeltaCollectorTests.A_trim_landing_after_the_tail_probe_makes_the_capture_fall_back_rather_than_skip_entries`. |
 
@@ -305,7 +315,7 @@ from this specification.**
   trim it misses makes the capture fall back to a full backup, whose cut is read
   from leaf state the durable pins protect and is newer than the window it replaces
   (`IncrementalDeltaCollectorTests.A_trim_landing_after_the_tail_probe_makes_the_capture_fall_back_rather_than_skip_entries`).
-  A configured retention TTL may trim past a reader; see "Retention TTL" below.
+  A configured retention TTL may trim past a reader; see "Retention TTL" above.
   Production symbols: `IWalOffsetConsumerRegistryGrain`,
   `WalGcTrimCore.ClassifyEntry`, `WalLogSubscriber`.
 - **HLC stamps, several partitions and the empty release: checked by a Coyote
@@ -388,15 +398,17 @@ from this specification.**
   owner activation is always the current epoch, so the stale duplicate, the hand-off
   initiator and the unstamped writer that the arming rules exclude are not
   expressible here, and adding an activation dimension to every leaf would push
-  `SnapshotLoss` (17,428,938 states) well past CI's budget. The safety argument is the
-  design model `WalLiveAdvance` (`spec/wal/design/WalLiveAdvance.tla`): production
+  `SnapshotLoss` (already 6,402,166 states) well past CI's budget. The safety argument is
+  the checked module `WalLiveAdvanceCore` ([`WalLiveAdvanceCore.tla`](WalLiveAdvanceCore.tla),
+  mapped in [`LiveAdvanceCoreRefinement.md`](LiveAdvanceCoreRefinement.md)), promoted from
+  the design model `WalLiveAdvance` (`spec/wal/design/WalLiveAdvance.tla`): production
   advances only when its `Armed(a)` holds, one conjunct per argument of `TargetFor` -
   the claim raised (`LeafAppendEpochFence.TryGetArmingView`), read to the claim head,
   no hand-off open and read to every close (`ShardRootGrain.GetLiveAdvanceViewAsync`),
-  read past every reported unstamped offset, and every own append applied. Epic
-  #5605's promotion member makes it a checked module. #5578's `LiveAdvance` and
-  `NewbornPinEventuallyUsable` are deliberately not re-landed here; no property yet
-  states the latency of an armed newborn, which is pinned in production by
+  read past every reported unstamped offset, and every own append applied. #5578's
+  `LiveAdvance` and `NewbornPinEventuallyUsable` are deliberately not re-landed here:
+  `WalLiveAdvanceCore` checks `NewbornPinEventuallyUsable` on its base configuration,
+  and the latency of an armed newborn is pinned in production by
   `LiveCheckpointAdvanceIntegrationTests.A_live_written_leaf_banks_its_snapshot_without_a_replay_drive`.
   The arming detectors are
   `LiveCheckpointAdvanceIntegrationTests.A_stale_duplicates_append_before_the_claim_is_read_before_the_leaf_advances_past_it`,
