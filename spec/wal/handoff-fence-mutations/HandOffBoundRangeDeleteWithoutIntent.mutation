@@ -1,0 +1,22 @@
+# Pairs with HandOffBound. Moved from the design's
+# ReadPositionHonestRangeDeleteWithoutIntent. A replicated or shadow-forwarded
+# range delete, or a fan-out that began before the gate opened, reaches a shard
+# root through an existing method that stamps it anyway. No marker holds L, so the
+# stamped walk lies above the head L's marker reads.
+MODULE: HandOffBoundRangeDeleteWithoutIntent
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: a range-delete walk is stamped although no tree-fence intent is open
+PERTURBS: GAdmit
+
+--- FIND
+    /\ WithTreeWalk
+    /\ fAdmit
+    /\ ~closing
+    /\ gst = "idle"
+--- REPLACE
+    /\ WithTreeWalk
+\* MUTATION: stamped without an open intent; it should be appended unstamped.
+    /\ ~closing
+    /\ gst = "idle"
+--- END

@@ -1,0 +1,66 @@
+# Pairs with HandOffBound. Moved from the design's
+# ReadPositionHonestRestampDuringClose. The close re-claims and records the heads
+# first, and closes the intent and L's marker only afterwards (CloseMark), while
+# the open check reads the marker. A walk rejected by the re-claim asks in
+# between, is told "open", re-stamps with the post-close generation, and is
+# allocated above the recorded heads.
+MODULE: HandOffBoundRestampDuringClose
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: the intent is marked closed only after the close's re-claim, so a rejected walk re-stamps with the post-close generation
+PERTURBS: Close, GRestamp
+
+--- FIND
+Close ==
+    /\ hoOpen
+    /\ ~closing
+    /\ fEpoch < MaxEpoch
+    /\ fAdmit' = FALSE
+    /\ fEpoch' = fEpoch + 1
+    /\ fFence' = fEpoch + 1
+    /\ hoClosedAt' = next
+    /\ hoOpen' = FALSE
+    /\ UNCHANGED <<next, author, windows, fpend, fkind, fstamp, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+--- REPLACE
+\* MUTATION: the close re-claims first; CloseMark closes the intent and marker later.
+Close ==
+    /\ hoOpen
+    /\ ~closing
+    /\ fEpoch < MaxEpoch
+    /\ closing' = TRUE
+    /\ fAdmit' = FALSE
+    /\ fEpoch' = fEpoch + 1
+    /\ fFence' = fEpoch + 1
+    /\ hoClosedAt' = next
+    /\ UNCHANGED <<next, author, hoOpen, windows, fpend, fkind, fstamp, restarted>>
+    /\ UNCHANGED <<gst, gstamp, gate, hfly, resumed, mInit>>
+
+CloseMark ==
+    /\ closing
+    /\ closing' = FALSE
+    /\ hoOpen' = FALSE
+    /\ UNCHANGED <<next, author, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, gate, hfly, resumed, mInit>>
+--- END
+
+--- FIND
+    /\ gst = "rejected"
+    /\ hoOpen
+    /\ ~closing
+    /\ gst' = "repend"
+--- REPLACE
+    /\ gst = "rejected"
+\* MUTATION: the open check reads the marker, not the intent's closing mark.
+    /\ hoOpen
+    /\ gst' = "repend"
+--- END
+
+--- FIND
+    \/ GRestamp
+
+--- REPLACE
+    \/ GRestamp
+    \/ CloseMark
+
+--- END

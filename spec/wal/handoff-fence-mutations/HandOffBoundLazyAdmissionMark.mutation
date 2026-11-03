@@ -1,0 +1,36 @@
+# Pairs with HandOffBound. The fence that counts closes is created at the
+# initiator's first append rather than at admission. A write admitted before that
+# first append reads "no fence yet" as mark 0, a close lands before it is
+# dispatched, and mark 0 is stamped at dispatch with the raised generation, above
+# the recorded head.
+MODULE: HandOffBoundLazyAdmissionMark
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: the admission mark's fence is created lazily at the initiator's first append, so an earlier admission carries mark 0 and is stamped at dispatch
+PERTURBS: ForeignAdmit, ForeignAlloc, ForeignReject
+
+--- FIND
+    /\ fstamp' = fEpoch
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fEpoch, fFence, restarted>>
+--- REPLACE
+\* MUTATION: mark 0 until the initiator's first stamped append.
+    /\ fstamp' = IF \E o \in Offs : author[o] = "f" THEN fEpoch ELSE 0
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fEpoch, fFence, restarted>>
+--- END
+
+--- FIND
+    /\ fpend
+    /\ fstamp >= fFence
+--- REPLACE
+    /\ fpend
+\* MUTATION: mark 0 is stamped at dispatch.
+    /\ (IF fstamp = 0 THEN fEpoch ELSE fstamp) >= fFence
+--- END
+
+--- FIND
+    /\ fpend
+    /\ fstamp < fFence
+--- REPLACE
+    /\ fpend
+    /\ (IF fstamp = 0 THEN fEpoch ELSE fstamp) < fFence
+--- END

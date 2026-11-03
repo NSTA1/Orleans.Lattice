@@ -1,0 +1,21 @@
+# Pairs with HandOffBound. Moved from the design's ReadPositionHonestNoOpenCheck.
+# The design dropped the owner's check of the open marker; here the owner's read
+# is the marker itself, so the same hole is a hand-off whose open L cannot see:
+# the initiator admits writes and they are allocated while L's marker reads
+# closed, above the head the last close recorded.
+MODULE: HandOffBoundNoOpenCheck
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: the initiator starts admitting without opening L's marker
+PERTURBS: ForeignOpen
+
+--- FIND
+    /\ hoOpen' = TRUE
+    /\ fAdmit' = TRUE
+    /\ windows' = windows + 1
+--- REPLACE
+\* MUTATION: the marker the owner reads is not opened.
+    /\ hoOpen' = hoOpen
+    /\ fAdmit' = TRUE
+    /\ windows' = windows + 1
+--- END

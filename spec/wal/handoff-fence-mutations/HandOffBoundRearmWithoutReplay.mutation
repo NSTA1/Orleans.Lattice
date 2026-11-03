@@ -1,0 +1,22 @@
+# Pairs with HandOffBound. Moved from the design's
+# ReadPositionHonestRearmWithoutReplay. The design let the owner re-arm as soon as
+# the marker closed, without replaying to the close heads. The replay itself is
+# the core module's; this module's half of the guard is that the close records the
+# heads to replay to. Here the marker keeps the previous close's heads, so a
+# foreign append of this window lies at or above them.
+MODULE: HandOffBoundRearmWithoutReplay
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: the close closes the marker without recording its heads, so the owner has nothing to replay to
+PERTURBS: Close
+
+--- FIND
+    /\ fFence' = fEpoch + 1
+    /\ hoClosedAt' = next
+    /\ hoOpen' = FALSE
+--- REPLACE
+    /\ fFence' = fEpoch + 1
+\* MUTATION: the close records no heads; the marker keeps the last close's.
+    /\ hoClosedAt' = hoClosedAt
+    /\ hoOpen' = FALSE
+--- END

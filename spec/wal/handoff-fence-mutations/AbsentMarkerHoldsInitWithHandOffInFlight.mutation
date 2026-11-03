@@ -1,0 +1,19 @@
+# Pairs with AbsentMarkerHolds. Rule 2 of the gate rollout dropped: the marker
+# state is initialised in a turn in which a hand-off begun before the gate opened
+# is still in flight, so an absent marker reads as closed while that hand-off can
+# still admit.
+MODULE: AbsentMarkerHoldsInitWithHandOffInFlight
+TARGET: AbsentMarkerHolds
+CLASS: Invariant
+SUMMARY: L's marker state is initialised while a marker-less hand-off is still in flight
+PERTURBS: MarkInit
+
+--- FIND
+    /\ ~hfly
+    /\ ~mInit
+    /\ mInit' = TRUE
+--- REPLACE
+\* MUTATION: no check for a hand-off in flight.
+    /\ ~mInit
+    /\ mInit' = TRUE
+--- END

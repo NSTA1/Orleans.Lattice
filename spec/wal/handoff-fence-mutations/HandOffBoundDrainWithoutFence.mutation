@@ -1,0 +1,24 @@
+# Pairs with HandOffBound. Moved from the design's
+# ReadPositionHonestDrainWithoutFence. A drain that waits instead of fencing: the
+# close records the allocator head without raising the initiator's entry, so a
+# write admitted before the close and delivered after it is allocated above the
+# recorded head. Waiting for every admitted write to return is the same thing
+# here: a call returns by timeout while its append is still delivered. It is also
+# a close taken while the initiator's view of the gate is closed, which cannot
+# bump.
+MODULE: HandOffBoundDrainWithoutFence
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: the close records the head without fencing out writes admitted before it
+PERTURBS: Close
+
+--- FIND
+    /\ fEpoch' = fEpoch + 1
+    /\ fFence' = fEpoch + 1
+    /\ hoClosedAt' = next
+--- REPLACE
+    /\ fEpoch' = fEpoch + 1
+\* MUTATION: no fence: the shard's entry for the initiator is not raised.
+    /\ fFence' = fFence
+    /\ hoClosedAt' = next
+--- END

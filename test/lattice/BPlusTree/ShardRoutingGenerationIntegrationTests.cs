@@ -223,4 +223,59 @@ public sealed class ShardRoutingGenerationIntegrationTests
                 $"partition {partition}: the raised generation was re-claimed, fencing every write admitted before the close");
         }
     }
+
+    [Test]
+    public async Task A_migration_resumed_without_its_marker_opens_it_before_its_next_admission()
+    {
+        // Rule 1 of "Hand-offs in flight across the gate": a migration begun with no
+        // marker (a 10.2.0 silo, or the gate closed) opens it on every resume path
+        // before its next admission, and it closes by fence at completion.
+        const string Name = "routing-gen-resume";
+        var tree = await NewTreeAsync(Name, shards: 2);
+        await tree.SetAsync("x", Encoding.UTF8.GetBytes("1"));
+        var donor = _cluster.Client.GetGrain<IShardRootGrain>($"{Name}/0");
+        await donor.BeginSplitAsync(targetShardIndex: 1, movedSlots: [5], virtualShardCount: 64);
+        await HandOffMarkerRows.UpdateShardAsync(Storage, Name, 1, m =>
+        {
+            m.Open.Clear();
+            return true;
+        });
+
+        await donor.EnterRejectPhaseAsync();
+        var resumed = (await HandOffMarkerRows.ReadShardAsync(Storage, Name, 1)).State;
+        await donor.CompleteSplitAsync();
+        var completed = (await HandOffMarkerRows.ReadShardAsync(Storage, Name, 1)).State;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(resumed.Open.Keys, Has.Some.StartsWith("migrate:0>1:"), "the resume re-opened the missing marker");
+            Assert.That(completed.Open, Is.Empty, "the completion closed it");
+            Assert.That(completed.Closes, Has.Some.Matches<HandOffClose>(c => c.Token.StartsWith("migrate:0>1:", StringComparison.Ordinal)),
+                "by fence, recording its heads");
+        });
+    }
+
+    [Test]
+    public async Task A_shard_root_with_a_migration_in_flight_leaves_its_marker_uninitialised()
+    {
+        // Rule 2 ("absence never means closed"): a shard root writes the initialised
+        // flag only in a turn with no hand-off of its own in flight, so its leaves stay
+        // held while one may have begun without a marker.
+        const string Name = "routing-gen-uninitialised";
+        var tree = await NewTreeAsync(Name, shards: 2);
+        var donor = _cluster.Client.GetGrain<IShardRootGrain>($"{Name}/0");
+        await donor.BeginSplitAsync(targetShardIndex: 1, movedSlots: [7], virtualShardCount: 64);
+
+        for (var i = 0; i < 32; i++)
+        {
+            await tree.SetAsync(string.Concat("k", i.ToString(System.Globalization.CultureInfo.InvariantCulture)), [1]);
+        }
+
+        var marker = (await HandOffMarkerRows.ReadShardAsync(Storage, Name, 0)).State;
+        Assert.Multiple(() =>
+        {
+            Assert.That(marker.RoutingGeneration, Is.GreaterThan(0), "precondition: the donor admitted stamped writes");
+            Assert.That(marker.Initialised, Is.False, "the donor's own migration is in flight, so its marker state stays uninitialised");
+        });
+    }
 }

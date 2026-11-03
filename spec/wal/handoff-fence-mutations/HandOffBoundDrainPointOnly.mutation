@@ -1,0 +1,27 @@
+# Pairs with HandOffBound. Moved from the design's
+# ReadPositionHonestDrainPointOnly. Batch appends carry no initiator stamp - the
+# shape of the shard fold's serial-turn guard, which excludes point writes and
+# only counts batches - so a batch admitted before the close is accepted after it.
+MODULE: HandOffBoundDrainPointOnly
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: batch appends bypass the initiator's fence, so the close drains point writes only
+PERTURBS: ForeignAlloc, ForeignReject
+
+--- FIND
+    /\ fpend
+    /\ fstamp >= fFence
+--- REPLACE
+    /\ fpend
+\* MUTATION: a batch append is not checked.
+    /\ (fkind = "batch" \/ fstamp >= fFence)
+--- END
+
+--- FIND
+    /\ fpend
+    /\ fstamp < fFence
+--- REPLACE
+    /\ fpend
+    /\ fkind = "point"
+    /\ fstamp < fFence
+--- END

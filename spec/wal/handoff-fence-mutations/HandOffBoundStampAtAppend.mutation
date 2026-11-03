@@ -1,0 +1,27 @@
+# Pairs with HandOffBound. Moved from the design's
+# ReadPositionHonestStampAtAppend. The append is stamped with the initiator's
+# generation when it is sent, not when the write was admitted, so a write admitted
+# before the close carries the re-claimed generation and is accepted above the
+# recorded head.
+MODULE: HandOffBoundStampAtAppend
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: the foreign append carries the initiator's current generation instead of the one it was admitted under
+PERTURBS: ForeignAlloc, ForeignReject
+
+--- FIND
+    /\ fpend
+    /\ fstamp >= fFence
+--- REPLACE
+    /\ fpend
+\* MUTATION: stamped at append time.
+    /\ fEpoch >= fFence
+--- END
+
+--- FIND
+    /\ fpend
+    /\ fstamp < fFence
+--- REPLACE
+    /\ fpend
+    /\ fEpoch < fFence
+--- END
