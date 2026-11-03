@@ -65,6 +65,11 @@ public sealed partial class TlcCiShardTests
     [TestCase("WalDurability", TlcCiShard.ReplicationWal)]
     [TestCase("WalMove", TlcCiShard.ReplicationWal)]
     [TestCase("WalPinRetirement", TlcCiShard.ReplicationWal)]
+    [TestCase("WalAppendEpoch", TlcCiShard.WalAppendEpoch)]
+    [TestCase("WalHandOffFence", TlcCiShard.WalHandOffFence)]
+    [TestCase("WalRoutingFloor", TlcCiShard.WalRoutingFloor)]
+    [TestCase("WalBulkSwitch", TlcCiShard.WalBulkSwitch)]
+    [TestCase("WalLiveAdvanceCore", TlcCiShard.WalLiveAdvanceCore)]
     public void A_co_located_base_shares_the_shard_of_every_mutation_of_its_module(string name, string expected)
     {
         var module = Module(name);

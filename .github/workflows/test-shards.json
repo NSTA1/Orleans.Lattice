@@ -224,7 +224,42 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardReplicationWal"],
-        "note": "The other Replication mutants plus the mutants of every Wal* module, with the Replication, WalDurability and WalMove bases co-located so they serve the full-bound controls (#5161). 77 cases, 56.1 case-minutes in a 14.12-minute item in the receipt-free bucket push run 40909619830 (#5166)."
+        "note": "The other Replication mutants plus the mutants of every Wal* module without a shard of its own (the live-advance modules of epic #5605 have theirs), with the Replication, WalDurability and WalMove bases co-located so they serve the full-bound controls (#5161). 77 cases, 56.1 case-minutes in a 14.12-minute item in the receipt-free bucket push run 40909619830 (#5166)."
+      },
+      {
+        "shard": "formal-tlc-wal-append-epoch",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardWalAppendEpoch"],
+        "note": "WalAppendEpoch (epic #5605, live-advance module E): base 150,706 states, WideEpochs variant 495,810 and 23 mutations co-located with their base, 25 cases. "
+      },
+      {
+        "shard": "formal-tlc-wal-handoff-fence",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardWalHandOffFence"],
+        "note": "WalHandOffFence (epic #5605, live-advance module H): base 8,826 states, WideWindows variant 47,000 and 21 mutations co-located with their base, 23 cases. "
+      },
+      {
+        "shard": "formal-tlc-wal-routing-floor",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardWalRoutingFloor"],
+        "note": "WalRoutingFloor (epic #5605, live-advance module R): base 10,704 states, WideGenerations variant 24,084 and 16 mutations co-located with their base, 18 cases. "
+      },
+      {
+        "shard": "formal-tlc-wal-bulk-switch",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardWalBulkSwitch"],
+        "note": "WalBulkSwitch (epic #5605, live-advance module B): base 39,110 states and 19 mutations co-located with their base, 20 cases. Measured locally on four CPUs (process affinity) with two TLC slots of two workers, Java 17, as the CI legs run: 1 m of tests, 1.96 minutes of dotnet test."
+      },
+      {
+        "shard": "formal-tlc-wal-live-advance-core",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardWalLiveAdvanceCore"],
+        "note": "WalLiveAdvanceCore (epic #5605, live-advance module C): base 778,329 states, Restart 3,052,664, GateFlip 3,373,761, Recreate 4,032,667 and Bulk 875,431 variants, and 28 mutations co-located with their base, 33 cases; no case exceeds the 5M-state budget TlcCiShardTests pins. "
       },
       {
         "shard": "formal-tlc-shard-ownership",
