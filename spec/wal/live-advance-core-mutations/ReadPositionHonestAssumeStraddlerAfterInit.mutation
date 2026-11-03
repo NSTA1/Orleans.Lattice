@@ -1,0 +1,20 @@
+# Weakens R's StraddlerBelowInit in this module's environment: a straddler of the
+# purged incarnation is allocated after the re-created incarnation's first
+# initialisation recorded its heads, above them. The re-created incarnation's live
+# advance passes it. Shows the assumption is load-bearing.
+MODULE: ReadPositionHonestAssumeStraddlerAfterInit
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a straddler is allocated whether or not the re-created incarnation has initialised
+PERTURBS: StraddlerAlloc
+BOUNDS: WithRecreate = TRUE
+
+--- FIND
+    /\ recreated
+    /\ ~reinit
+    /\ ~spUsed
+--- REPLACE
+    /\ recreated
+\* MUTATION: allocated after the initialisation's heads too.
+    /\ ~spUsed
+--- END

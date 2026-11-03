@@ -18,12 +18,14 @@ cores in the product assembly, and a Coyote model that executes those cores.
 | [`WalAppendEpoch.tla`](WalAppendEpoch.tla) | The append-epoch fence of the fenced live checkpoint advance (epic #5605): one leaf's activations claiming an epoch at a WAL partition in three steps - the epoch row's conditional write, the durable entry's max-merge and the in-memory raise that returns the claim head - the bump on a refusal, and the shard refusing a superseded or retired activation's append, against a WAL shard restart, another leaf's retirement and the leaf's three-step clear. The first module promoted from the design draft below. See [below](#walappendepoch). |
 | [`WalHandOffFence.tla`](WalHandOffFence.tla) | The hand-off fence of the fenced live checkpoint advance (epic #5605): a foreign author's writes to a range the owner leaf owns - opened under the owner's durable marker, stamped at admission, and closed by a fence that re-claims the initiator's generation and records the allocator head - with point and batch writes, another shard's range-delete walk and rule 3's re-stamp, a WAL shard restart, and a hand-off in flight across the fence gate's opening. The second module promoted from the design draft. See [below](#walhandofffence). |
 | [`WalRoutingFloor.tla`](WalRoutingFloor.tla) | The routing floor of the fenced live checkpoint advance (epic #5605): a tree's purge and re-creation keeping every write the purged incarnation admitted below the close the re-created incarnation's first initialisation records, and every live shard root's routing generation above its own floor - the per-initiator floors in the row and at the WAL, the claim where a floor is checked, the seam retry that never re-stamps (#5705), and the re-seed catch-up after a purge that finished on 10.2.0 (#5716). The third module promoted from the design draft. See [below](#walroutingfloor). |
+| [`WalLiveAdvanceCore.tla`](WalLiveAdvanceCore.tla) | The core of the same live advance: when a leaf's activation is armed to advance its read position over its own applied appends without reading the WAL - its raised claim, its replay to the claim head and to the last close's heads, no open or uninitialised marker, every reported unstamped append read, every own append applied - and the shared snapshot and GC trim that follow, with the other promoted modules' guarantees as environment constraints. The sink of their assume-guarantee graph. See [below](#walliveadvancecore). |
 
 They are separate modules because a move touches none of the leaf state, pin
 retirement only the leaf's lifecycle, not its replay, and the append-epoch fence
 only which activation may append, not what it reads, the hand-off fence only
 which foreign records the owner's marker bounds, and the routing floor only the purge's
-rows and generations, not a leaf's epochs. Keeping each out of
+rows and generations, not a leaf's epochs, and the live-advance core only the advance
+over a leaf's own appends, taking the fences as given. Keeping each out of
 `WalDurability` keeps that module small enough to check its liveness properties
 exhaustively within the TLC budget.
 
@@ -35,9 +37,10 @@ live checkpoint advance (issues #5572, #5593, epic #5605), described in
 [`design/LiveAdvanceDesign.md`](design/LiveAdvanceDesign.md). Module discovery reads
 only top-level `.tla` files, so no TLC case runs the draft. Now that the production
 members have landed it is being promoted as five focused modules with an acyclic
-assume-guarantee graph; the first three, [`WalAppendEpoch`](#walappendepoch),
-[`WalHandOffFence`](#walhandofffence) and [`WalRoutingFloor`](#walroutingfloor), are in this directory, and the draft keeps every
-design mutation until the others land.
+assume-guarantee graph; [`WalAppendEpoch`](#walappendepoch),
+[`WalHandOffFence`](#walhandofffence), [`WalRoutingFloor`](#walroutingfloor) and
+[`WalLiveAdvanceCore`](#walliveadvancecore) are in this directory, and the draft keeps every
+design mutation until the last, the bulk switch, lands.
 
 ## Counts
 
@@ -49,9 +52,10 @@ design mutation until the others land.
 | `WalAppendEpoch` | 5 | 0 | 17 | 23 | 20 | 150,706 |
 | `WalHandOffFence` | 3 | 0 | 17 | 20 | 18 | 8,826 |
 | `WalRoutingFloor` | 3 | 0 | 12 | 16 | 13 | 10,704 |
+| `WalLiveAdvanceCore` | 5 | 0 | 20 | 27 | 23 | 778,329 |
 
 `Actions` counts the disjuncts of `Next`, including the non-behavioural `Stutter`
-of `WalMove`, `WalAppendEpoch`, `WalHandOffFence` and `WalRoutingFloor`. `Behaviour rows` counts the action rows of the
+of `WalMove`, `WalAppendEpoch`, `WalHandOffFence`, `WalRoutingFloor` and `WalLiveAdvanceCore`. `Behaviour rows` counts the action rows of the
 module's refinement note, excluding non-behavioural actions, plus its property rows. `Distinct states` is
 TLC's count for the module's own cfg. `WalDurability` searches to depth 35 and
 `WalMove` to depth 16, with tla2tools v1.7.4. `WalAppendEpoch` searches to depth
@@ -59,6 +63,9 @@ TLC's count for the module's own cfg. `WalDurability` searches to depth 35 and
 `WalHandOffFence` searches to depth 19, and its `WideWindows` variant finds 47,000
 distinct states to depth 23. `WalRoutingFloor` searches to depth 15, and its
 `WideGenerations` variant finds 24,084 distinct states to depth 15.
+`WalLiveAdvanceCore` searches to depth 25; its variants find 3,052,664 (`Restart`,
+depth 26), 3,373,761 (`GateFlip`, depth 25), 3,715,174 (`Recreate`, depth 27) and
+870,639 (`Bulk`, depth 25) distinct states.
 
 `WalDurability` has a two-fault variant configuration, `WalDurability.TwoFaults.cfg`
 (see "Variant configurations" in [`../README.md`](../README.md)). It checks every
@@ -125,6 +132,13 @@ distinct states to depth 21, about fifteen seconds on two workers.
 | `WalRoutingFloor.WideGenerations.cfg` | The routing-floor module with the purged incarnation's generations up to 3, checked against every invariant. |
 | [`routing-floor-mutations/`](routing-floor-mutations/) | One or more deliberate defects per property and per action of `WalRoutingFloor`. |
 | [`RoutingFloorRefinement.md`](RoutingFloorRefinement.md) | `WalRoutingFloor` mapped to production, and its interface. |
+| `WalLiveAdvanceCore.tla` / `.cfg` / `.manifest.json` | The live-advance core module, its TLC model and its manifest. |
+| `WalLiveAdvanceCore.Restart.cfg` | The live-advance core with a WAL shard restart, checked against every invariant. |
+| `WalLiveAdvanceCore.GateFlip.cfg` | The live-advance core with own unstamped appends by any running activation, checked against every invariant. |
+| `WalLiveAdvanceCore.Recreate.cfg` | The live-advance core with the tree purged and re-created, a straddler and the first initialisation, checked against every invariant. |
+| `WalLiveAdvanceCore.Bulk.cfg` | The live-advance core with a bulk-born leaf, checked against every invariant. |
+| [`live-advance-core-mutations/`](live-advance-core-mutations/) | One or more deliberate defects per property and per action of `WalLiveAdvanceCore`, and one weakening of each assumption it takes. |
+| [`LiveAdvanceCoreRefinement.md`](LiveAdvanceCoreRefinement.md) | `WalLiveAdvanceCore` mapped to production, and its interface: each assumption with the guarantee and module that discharge it. |
 | [`HandOffFenceRefinement.md`](HandOffFenceRefinement.md) | `WalHandOffFence` mapped to production, and its interface: E's entry check assumed, `HandOffBound` and `AbsentMarkerHolds` guaranteed. |
 
 ## Properties checked
@@ -486,4 +500,67 @@ modules'), or the purge's steps as separate actions.
 ```powershell
 java -cp C:\path\to\tla2tools.jar tlc2.TLC -workers 2 -config WalRoutingFloor.cfg WalRoutingFloor.tla
 java -cp C:\path\to\tla2tools.jar tlc2.TLC -workers 2 -config WalRoutingFloor.WideGenerations.cfg WalRoutingFloor.tla
+```
+
+## WalLiveAdvanceCore
+
+`WalLiveAdvanceCore` models the core of the fenced live checkpoint advance (epic #5605,
+[`design/LiveAdvanceDesign.md`](design/LiveAdvanceDesign.md), section 1's "Arming" list
+and section 4): when an activation of a leaf may advance its read position over the
+appends it issued and applied itself, without reading the WAL, and what that does to the
+shared per-leaf snapshot and the GC trim. An activation is armed only when its claim is
+raised, the leaf's marker state is initialised, it has replayed to its claim head, no
+marker is open and it has replayed to the last close's heads, it has read past every
+unstamped offset reported to it, and every own append it issued is applied. Otherwise it
+advances by replay.
+
+It is the last of the five modules promoted from the design draft, and the sink of their
+assume-guarantee graph ([`LiveAdvanceInterface.md`](LiveAdvanceInterface.md)). It assumes
+every guarantee of the other four and models each only as an environment constraint in the
+form stated there: only the current activation's stamped appends are allocated, at or above
+its claim head (`WalAppendEpoch`); foreign appends only while the marker is open, below the
+heads a close records, and an absent marker holds the leaf (`WalHandOffFence`); a straddler
+of a purged incarnation only before the re-created incarnation's first initialisation
+records its heads (`WalRoutingFloor`); and a bulk-born leaf holds every record below its
+birth hint (`WalBulkSwitch`). It models the unstamped watermark itself: a 10.2.0 silo's
+append is always admitted and raises it, every stamped response reports it, a WAL shard
+restart resets it to the recovered head minus one, and an own unstamped append reports
+itself ([the interface](LiveAdvanceCoreRefinement.md#interface)).
+
+| Property | Kind | Meaning |
+|----------|------|---------|
+| `TypeOK` | Invariant | State stays well-typed. |
+| `ReadPositionHonest` | Invariant | No running activation's read position passes a durable entry it does not hold, acknowledged or not, whoever appended it. |
+| `SnapshotHonest` | Invariant | The shared snapshot never claims coverage of a durable entry it lacks. |
+| `NoTrimPastAcked` | Invariant | The GC never trims an acknowledged append the snapshot lacks. |
+| `OldNeverRejected` | Invariant | An unstamped append is never rejected. |
+
+The base checks every property with the duplicate, one hand-off window and a 10.2.0 silo's
+unstamped append (about twenty seconds on two workers). Each variant adds one environment:
+`WalLiveAdvanceCore.Restart.cfg` a WAL shard restart, `WalLiveAdvanceCore.GateFlip.cfg` own
+unstamped appends, `WalLiveAdvanceCore.Recreate.cfg` the purge with a straddler and the first
+initialisation, and `WalLiveAdvanceCore.Bulk.cfg` a bulk-born leaf (each between twenty
+seconds and a minute and a half). The design model's larger combined configurations stay as
+local evidence in the design note. Seven of the design draft's mutations moved here; the
+refinement note lists them, the assumption mutations that weaken each assumption in turn,
+and the one redundancy check this module keeps, which stays clean and so is not in its
+mutation directory. Liveness, the armed newborn's pin becoming usable, is added by member
+6b.
+
+### What it covers, and what it does not
+
+It covers the arming conditions, the live advance, replay, the snapshot capture and the GC
+trim, the applied-prefix tracker, the unstamped watermark with its restart reset and the
+self-report, a duplicate activation, and each other module's guarantee as the environment
+it is stated to be. It does NOT cover the other modules' mechanisms (claims, markers,
+routing generations, the bulk switch), the cases in which production holds the advance
+beyond the design's arming list (a pending saga prepare, a replay in flight, a stale latch,
+an overlap that cannot be excluded, an unfenced storage provider), the split between
+reading the marker and stamping the target, refusals that allocate nothing, re-claims,
+more than one partition or leaf, or combined environments. The refinement note's
+abstraction gaps list them.
+
+```powershell
+java -cp C:\path\to\tla2tools.jar tlc2.TLC -workers 2 -config WalLiveAdvanceCore.cfg WalLiveAdvanceCore.tla
+java -cp C:\path\to\tla2tools.jar tlc2.TLC -workers 2 -config WalLiveAdvanceCore.Recreate.cfg WalLiveAdvanceCore.tla
 ```

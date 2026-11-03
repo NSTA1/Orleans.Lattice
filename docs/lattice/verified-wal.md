@@ -206,7 +206,14 @@ TLA+ specification in [`spec/wal/`](../../spec/wal/README.md):
   checked where a generation is claimed, a straddling write's seam retry that never
   re-stamps it, and the re-created incarnation's first initialisation, against a
   second shard root, a purge that finished on 10.2.0 with the re-seed catch-up, and
-  a WAL shard restart. It is the third module promoted from that draft.
+  a WAL shard restart. It is the third module promoted from that draft;
+- `WalLiveAdvanceCore.tla`, the core of the same live advance: when an activation
+  is armed to advance its read position over its own applied appends without reading
+  the WAL, and the shared snapshot and GC trim that follow, with the epoch, hand-off,
+  routing-floor and bulk-switch fences as environment constraints in the form their
+  modules guarantee, and the unstamped watermark, its restart reset and the own
+  unstamped append's self-report modelled directly. It is the fourth module
+  promoted from that draft.
 
 It follows the pattern of the atomic-commit specification: every property and every
 action has a mutation that makes a property fire, and a refinement note maps each

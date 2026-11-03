@@ -1,0 +1,18 @@
+# Weakens H's HandOffBound in this module's environment from the close's side: the
+# close records heads below the allocator head, so a foreign record of the window
+# lies at or above them. The core replays only to the recorded heads, and its live
+# advance passes the record.
+MODULE: ReadPositionHonestAssumeCloseHeadUnderstated
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a close records any heads at or below the allocator head
+PERTURBS: Close
+
+--- FIND
+    /\ hoOpen' = FALSE
+    /\ hoClosedAt' = next
+--- REPLACE
+    /\ hoOpen' = FALSE
+\* MUTATION: the heads may be understated.
+    /\ \E h \in 0..next : hoClosedAt' = h
+--- END

@@ -1,0 +1,16 @@
+# The unstamped conjunct of Armed dropped: an activation arms without reading past
+# the unstamped appends its own appends reported, and its live advance passes a
+# 10.2.0 silo's acknowledged write. Moved from the design's mutation of the same
+# name. It edits the Armed predicate, so it names no perturbed action.
+MODULE: ReadPositionHonestUnstampedNotReported
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the activation arms without reading past the highest reported unstamped append
+
+--- FIND
+    /\ rp[a] >= hoClosedAt - 1
+    /\ rp[a] >= seenU[a]
+--- REPLACE
+    /\ rp[a] >= hoClosedAt - 1
+\* MUTATION: reported unstamped appends are not waited for.
+--- END

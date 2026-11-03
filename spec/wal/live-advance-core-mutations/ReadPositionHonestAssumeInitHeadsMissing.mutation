@@ -1,0 +1,19 @@
+# Weakens R's StraddlerBelowInit in this module's environment from the
+# initialisation's side: the re-created incarnation's first initialisation records
+# no heads, so a straddler allocated before it is not below them. The re-created
+# incarnation's live advance passes the straddler.
+MODULE: ReadPositionHonestAssumeInitHeadsMissing
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the first initialisation after a purge records no heads
+PERTURBS: MarkInit
+BOUNDS: WithRecreate = TRUE
+
+--- FIND
+    /\ mInit' = TRUE
+    /\ hoClosedAt' = next
+--- REPLACE
+    /\ mInit' = TRUE
+\* MUTATION: no heads are recorded.
+    /\ hoClosedAt' = hoClosedAt
+--- END
