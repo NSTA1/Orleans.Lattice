@@ -549,6 +549,41 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
+    public async Task Split_keeps_the_sibling_hint_one_below_the_head_when_the_donor_has_no_frontier()
+    {
+        // A donor that has scanned nothing on a partition has no frontier there.
+        // Capping at -1 would make the sibling replay the whole log and seed its birth
+        // pin on the sentinel, blocking the tree's WAL trim (#3094), so the sibling
+        // keeps one below the head, as in 10.2.0 (the #5752 residue tracked in #5756).
+        var (grain, _, siblingMock, _) = BuildSplitFixture(walHead: 42L);
+
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        var result = await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+
+        Assert.That(result, Is.Not.Null, "split should have occurred");
+        await siblingMock.Received(1).SetCheckpointOffsetHintsAsync(
+            Arg.Is<long[]>(heads => heads.Length == 1 && heads[0] == 41L));
+    }
+
+    [Test]
+    public async Task A_checkpoint_hint_of_zero_is_stamped_as_applied_through_offset_zero()
+    {
+        // Issue #5760: a hint is one below a head, so 0 means offset 0 is applied; only
+        // a negative hint means nothing applied and is ignored.
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+
+        await grain.SetCheckpointOffsetHintsAsync([0L]);
+        Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(0L));
+
+        var other = CreateGrain(new FakePersistentState<LeafNodeState>());
+        await other.SetCheckpointOffsetHintsAsync([-1L]);
+        Assert.That(other.GetCurrentCheckpointForPartition(0), Is.EqualTo(-1L));
+    }
+
+    [Test]
     public async Task Split_stamps_the_sibling_hint_one_below_the_wal_head()
     {
         // The other half of the minimum: a donor whose checkpoint is above the head

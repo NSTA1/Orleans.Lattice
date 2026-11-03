@@ -1127,7 +1127,18 @@ internal sealed partial class BPlusLeafGrain
         var capped = new long[heads.Length];
         for (var p = 0; p < capped.Length; p++)
         {
-            capped[p] = Math.Min(heads[p], GetCurrentCheckpointForPartition(p));
+            // The frontier is in memory - the projection checkpoint, pending or
+            // persisted - so it includes this activation's replay to its barrier. A
+            // leaf that has scanned nothing on a partition (it activated on an empty
+            // partition and has not replayed since, or was born from such a donor)
+            // has no frontier there; capping at -1 would make the sibling replay the
+            // whole log and seed its birth pin on the sentinel, which blocks the
+            // tree's WAL trim (#3094). There the sibling keeps the head, as in
+            // 10.2.0: the residue of #5752 is a record of the moved range another
+            // author appended after such a leaf activated, which the live advance
+            // closes once it keeps frontiers current.
+            var frontier = GetCurrentCheckpointForPartition(p);
+            capped[p] = frontier < 0 ? heads[p] : Math.Min(heads[p], frontier);
         }
 
         return capped;

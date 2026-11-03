@@ -1703,8 +1703,21 @@ it is exactly the first record the old leaf had not applied. Before the narrow t
 leaf still declares the whole range, so its replay applies such records rather than
 stepping past them; after it, a replay steps past them, which is why a graft resumed
 on a leaf an earlier attempt already narrowed applies no hint. A lower read position
-only lengthens the new leaf's first replay. The donor of a split still advances its own
-checkpoint from the heads it read.
+only lengthens the new leaf's first replay.
+
+The old leaf's frontier is its in-memory projection checkpoint, which only its replay
+moves - to the end of its activation replay, then by any later replay - and never its
+own writes, so it is contiguous: every record at or below it has been applied. A
+partition on which the old leaf has scanned nothing (it activated on an empty partition
+and has not replayed since, or was born from such a leaf) has no frontier, reported as
+-1. There an appended leaf applies no hint, as in 10.2.0. A split sibling instead keeps
+one below the head, as in 10.2.0: a sibling with no read position would replay the
+whole log and seed its birth pin on the sentinel that blocks the tree's WAL trim. The
+records such a split can still skip - another author's, appended to the moved range
+after the donor activated - are tracked with the donor's own checkpoint advance, which
+still starts from the heads it read, in
+[#5756](https://github.com/NSTA1/Orleans.Lattice/issues/5756); the live advance closes
+both once it keeps frontiers current.
 
 **A head is one past a checkpoint.** A WAL head is exclusive - the next offset the log
 will assign - while a leaf's checkpoint is inclusive - the last offset it has applied, and
@@ -1714,7 +1727,8 @@ sibling's birth pin and the bulk birth hint alike
 ([#5760](https://github.com/NSTA1/Orleans.Lattice/issues/5760)). Taken as it is, a head
 would skip the record first allocated at it, which, written by another author, no leaf
 would then apply; one below re-applies at most one record, which last-writer-wins makes
-idempotent.
+idempotent. A read position of 0 therefore means offset 0 is applied and is stamped and
+pinned as a real offset; only a negative one means nothing applied.
 
 **Coordinator terminals** carry the coordinator-terminal stamp class described in
 [Append epoch fencing](#append-epoch-fencing), so a saga does not raise the reported

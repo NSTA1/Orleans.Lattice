@@ -314,10 +314,14 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// </summary>
     /// <param name="partition">The WAL partition ordinal the hint targets.</param>
-    /// <param name="offset">The hinted WAL head offset. Non-positive offsets are ignored.</param>
+    /// <param name="offset">
+    /// The hinted read position, an inclusive checkpoint (one below a WAL head, issue
+    /// #5760). Negative offsets - nothing applied - are ignored; 0 is "applied through
+    /// offset 0" and is stamped.
+    /// </param>
     private ValueTask ApplyCheckpointHintAsync(int partition, long offset)
     {
-        if (offset <= 0 || GetCurrentCheckpointForPartition(partition) >= offset)
+        if (offset < 0 || GetCurrentCheckpointForPartition(partition) >= offset)
         {
             return ValueTask.CompletedTask;
         }

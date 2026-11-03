@@ -873,13 +873,15 @@ internal sealed partial class BPlusLeafGrain
         {
             var consumerId = BuildConsumerId(idBase, partition, partitionCount);
 
-            // Only a head the donor actually captured for THIS partition is
-            // usable. A short array (a donor configured with fewer partitions
+            // Only a read position the donor actually captured for THIS partition
+            // is usable. A short array (a donor configured with fewer partitions
             // than this leaf resolves) contributes nothing rather than reading
-            // another partition's offset space.
+            // another partition's offset space. The positions are checkpoints, one
+            // below the heads (issue #5760), so 0 is "applied through offset 0", a
+            // real offset; only a negative one - an empty WAL - is the sentinel.
             var offset = walHeadsAtBirth is { } heads
                 && partition < heads.Length
-                && heads[partition] > 0
+                && heads[partition] >= 0
                     ? heads[partition]
                     : -1;
 
