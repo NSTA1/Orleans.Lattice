@@ -88,7 +88,7 @@ internal sealed class LiveAdvanceRig
     public void Register(IServiceCollection services)
     {
         services.AddSingleton<IWalAppendFenceGate>(FenceGate);
-        services.AddKeyedSingleton<IGrainStorage>(LatticeOptions.StorageProviderName, Storage);
+        services.AddKeyedSingleton<IGrainStorage>(LatticeOptions.StorageProviderName, new HookedStorage(this));
         services.AddSingleton(FencingCheck);
         services.AddSingleton<ICommitLogWriter>(Writer);
     }
@@ -109,9 +109,38 @@ internal sealed class LiveAdvanceRig
     public Task SetLeafMarkerAsync(Func<LeafHandOffState, bool> mutate) =>
         HandOffMarkerRows.UpdateLeafAsync(Storage, LeafId, mutate);
 
+    /// <summary>
+    /// When set, runs once, after the leaf's next read of its own hand-off marker row has
+    /// read the row and before that read returns, so a test can act between the read and
+    /// the leaf's use of it (#5768). The read returns what it read before the hook ran.
+    /// Writes through <see cref="Storage"/> are not hooked.
+    /// </summary>
+    public Func<Task>? AfterNextLeafMarkerRead { get; set; }
+
     /// <summary>Reads the leaf's own hand-off marker row.</summary>
     public async Task<LeafHandOffState> LeafMarkerAsync() =>
         (await HandOffMarkerRows.ReadLeafAsync(Storage, LeafId)).State;
+
+    /// <summary>The storage the leaf resolves: <see cref="Storage"/>, with <see cref="AfterNextLeafMarkerRead"/> applied.</summary>
+    private sealed class HookedStorage(LiveAdvanceRig rig) : IGrainStorage
+    {
+        public async Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
+        {
+            await rig.Storage.ReadStateAsync(stateName, grainId, grainState);
+            if (stateName == HandOffMarkerRows.LeafGrainType
+                && rig.AfterNextLeafMarkerRead is { } hook)
+            {
+                rig.AfterNextLeafMarkerRead = null;
+                await hook();
+            }
+        }
+
+        public Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
+            rig.Storage.WriteStateAsync(stateName, grainId, grainState);
+
+        public Task ClearStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
+            rig.Storage.ClearStateAsync(stateName, grainId, grainState);
+    }
 
     /// <summary>The fence gate's view.</summary>
     internal sealed class Gate : IWalAppendFenceGate

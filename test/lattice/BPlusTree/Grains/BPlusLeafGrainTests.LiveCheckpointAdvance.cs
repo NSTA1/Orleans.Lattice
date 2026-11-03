@@ -121,6 +121,45 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
+    public async Task A_hand_off_opening_during_the_marker_read_cannot_carry_the_advance_past_its_foreign_record()
+    {
+        // #5768: the advance snapshots its own appends BEFORE it reads the marker. A
+        // hand-off that opens while the marker read is in flight is not in what the read
+        // returns, so the snapshot is all that keeps the advance below the window's
+        // foreign record: an own append that lands above that record during the read is
+        // newer than the snapshot. Taken after the read, the snapshot would include it,
+        // and the advance would pass a record the leaf has not read.
+        var (grain, rig) = await ArmedLeafWithWritesAsync("a");
+
+        // Initialised already, as a leaf born under the gate is, so the advance acts on
+        // the marker it read rather than re-reading it to adopt the shard's flag.
+        await rig.SetLeafMarkerAsync(static m =>
+        {
+            m.Initialised = true;
+            return true;
+        });
+        long foreign = -1;
+        rig.AfterNextLeafMarkerRead = async () =>
+        {
+            await rig.SetLeafMarkerAsync(m => HandOffMarkerCore.Open(m, "split:donor", null, null));
+            foreign = rig.Writer.ForeignAppend();
+            await SetStampedAsync(grain, "b", "2");
+        };
+
+        var advanced = await grain.TryAdvanceLiveCheckpointAsync();
+        var own = rig.Writer.NextOffset(0) - 1;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(foreign, Is.EqualTo(1L), "precondition: the window allocated its record during the marker read");
+            Assert.That(own, Is.EqualTo(2L), "precondition: the own append landed above it, also during the read");
+            Assert.That(advanced, Is.True, "the own append the snapshot held is still passed");
+            Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.LessThan(foreign),
+                "the advance must not pass a record the leaf has not read");
+        });
+    }
+
+    [Test]
     public async Task An_open_leaf_marker_holds_the_advance()
     {
         var (grain, rig) = await ArmedLeafWithWritesAsync("a");
