@@ -2081,6 +2081,22 @@
       "source": "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#InvokeAsync"
     },
     {
+      "id": "cluster-timeout",
+      "type": "TimeoutException",
+      "grpc_status": "DeadlineExceeded",
+      "retryable": false,
+      "meaning": "A grain call timed out inside the cluster, so the outcome is unknown and a write may already have applied. Retry an idempotent read; confirm state before retrying a write (#5742).",
+      "source": "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs"
+    },
+    {
+      "id": "cluster-unavailable",
+      "type": "OrleansMessageRejectionException (including SiloUnavailableException) or EnumerationAbortedException",
+      "grpc_status": "Unavailable",
+      "retryable": true,
+      "meaning": "A silo was unavailable or rejected the message, or a remote enumerator was lost to a grain deactivation mid-read: a transient cluster fault. Retry after a short backoff (#5742).",
+      "source": "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs"
+    },
+    {
       "id": "failed-precondition",
       "type": "InvalidOperationException",
       "grpc_status": "FailedPrecondition",
