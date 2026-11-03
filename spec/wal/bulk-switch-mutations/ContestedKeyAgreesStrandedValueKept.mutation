@@ -1,0 +1,16 @@
+# The owner keeps a stranded or skipped value: it does not take a write made
+# before the switch into its resolution of the contested key, as 10.2.0's origin
+# does while the old leaf strands it, so a write stamped later than the bulk entry
+# loses on the origin and wins on every replica and view. Moved from the design;
+# it edits the owner's resolution, so it names no perturbed action.
+MODULE: ContestedKeyAgreesStrandedValueKept
+TARGET: ContestedKeyAgrees
+CLASS: Invariant
+SUMMARY: the owner resolves a contested key without a later-stamped write made before the switch
+
+--- FIND
+OwnerRank == Top({o \in heldN : o <= rpN})
+--- REPLACE
+\* MUTATION: writes made before the switch are not part of the owner's resolution.
+OwnerRank == Top({o \in heldN : o <= rpN /\ author[o] \notin {"p", "c"}})
+--- END

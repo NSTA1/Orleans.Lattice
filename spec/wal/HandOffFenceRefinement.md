@@ -78,9 +78,9 @@ design model.
   | L's marker: `initialised`, `open`, `closedAt` | `mInit`, `hoOpen`, `hoClosedAt`. |
   | `claimHead[a]`, `seenU[a]` | Not modelled: C's. |
 
-- **Who assumes what.** B assumes the first two guarantees for the bulk switch's
-  marker; C assumes all three for every foreign append and close, and owns the arming that reads the marker
-  and replays to its heads. The graph is E <- H <- B, E <- R, and {E, H, R, B} <- C,
+- **Who assumes what.** C assumes all three for every foreign append and close, the bulk
+  switch's included, and owns the arming that reads the marker and replays to its heads;
+  B assumes nothing of H. The graph is E <- H, E <- R, and {E, H, R, B} <- C,
   where an arrow points from the module that assumes to the module that guarantees.
 
 ## Variable mapping

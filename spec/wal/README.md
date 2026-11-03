@@ -18,6 +18,7 @@ cores in the product assembly, and a Coyote model that executes those cores.
 | [`WalAppendEpoch.tla`](WalAppendEpoch.tla) | The append-epoch fence of the fenced live checkpoint advance (epic #5605): one leaf's activations claiming an epoch at a WAL partition in three steps - the epoch row's conditional write, the durable entry's max-merge and the in-memory raise that returns the claim head - the bump on a refusal, and the shard refusing a superseded or retired activation's append, against a WAL shard restart, another leaf's retirement and the leaf's three-step clear. The first module promoted from the design draft below. See [below](#walappendepoch). |
 | [`WalHandOffFence.tla`](WalHandOffFence.tla) | The hand-off fence of the fenced live checkpoint advance (epic #5605): a foreign author's writes to a range the owner leaf owns - opened under the owner's durable marker, stamped at admission, and closed by a fence that re-claims the initiator's generation and records the allocator head - with point and batch writes, another shard's range-delete walk and rule 3's re-stamp, a WAL shard restart, and a hand-off in flight across the fence gate's opening. The second module promoted from the design draft. See [below](#walhandofffence). |
 | [`WalRoutingFloor.tla`](WalRoutingFloor.tla) | The routing floor of the fenced live checkpoint advance (epic #5605): a tree's purge and re-creation keeping every write the purged incarnation admitted below the close the re-created incarnation's first initialisation records, and every live shard root's routing generation above its own floor - the per-initiator floors in the row and at the WAL, the claim where a floor is checked, the seam retry that never re-stamps (#5705), and the re-seed catch-up after a purge that finished on 10.2.0 (#5716). The third module promoted from the design draft. See [below](#walroutingfloor). |
+| [`WalBulkSwitch.tla`](WalBulkSwitch.tla) | The bulk switch of the fenced live checkpoint advance: a bulk append's leaf born from the old rightmost leaf's range - the birth hint stored with the switch's open token, the run's hint and the fence that folds its completed switches, the drain before the narrow, and the relocation of the rows the range held (copy, deliver, drop) - against a crash of the shard root, a drain past its deadline and a foreign record of the range the old leaf replays, with the hint capped at its read frontier. See [below](#walbulkswitch). |
 | [`WalLiveAdvanceCore.tla`](WalLiveAdvanceCore.tla) | The core of the same live advance: when a leaf's activation is armed to advance its read position over its own applied appends without reading the WAL - its raised claim, its replay to the claim head and to the last close's heads, no open or uninitialised marker, every reported unstamped append read, every own append applied - and the shared snapshot and GC trim that follow, with the other promoted modules' guarantees as environment constraints. The sink of their assume-guarantee graph. See [below](#walliveadvancecore). |
 
 They are separate modules because a move touches none of the leaf state, pin
@@ -38,9 +39,9 @@ live checkpoint advance (issues #5572, #5593, epic #5605), described in
 only top-level `.tla` files, so no TLC case runs the draft. Now that the production
 members have landed it is being promoted as five focused modules with an acyclic
 assume-guarantee graph; [`WalAppendEpoch`](#walappendepoch),
-[`WalHandOffFence`](#walhandofffence), [`WalRoutingFloor`](#walroutingfloor) and
-[`WalLiveAdvanceCore`](#walliveadvancecore) are in this directory, and the draft keeps every
-design mutation until the last, the bulk switch, lands.
+[`WalHandOffFence`](#walhandofffence), [`WalRoutingFloor`](#walroutingfloor),
+[`WalBulkSwitch`](#walbulkswitch) and [`WalLiveAdvanceCore`](#walliveadvancecore) are in this
+directory, and the draft keeps every design mutation as the record each module took its own from.
 
 ## Counts
 
@@ -52,10 +53,11 @@ design mutation until the last, the bulk switch, lands.
 | `WalAppendEpoch` | 5 | 0 | 17 | 23 | 20 | 150,706 |
 | `WalHandOffFence` | 3 | 1 | 17 | 21 | 19 | 8,826 |
 | `WalRoutingFloor` | 3 | 0 | 12 | 16 | 13 | 10,704 |
+| `WalBulkSwitch` | 4 | 0 | 16 | 19 | 18 | 39,110 |
 | `WalLiveAdvanceCore` | 5 | 0 | 20 | 28 | 23 | 778,329 |
 
 `Actions` counts the disjuncts of `Next`, including the non-behavioural `Stutter`
-of `WalMove`, `WalAppendEpoch`, `WalHandOffFence`, `WalRoutingFloor` and `WalLiveAdvanceCore`. `Behaviour rows` counts the action rows of the
+of `WalMove`, `WalAppendEpoch`, `WalHandOffFence`, `WalRoutingFloor`, `WalBulkSwitch` and `WalLiveAdvanceCore`. `Behaviour rows` counts the action rows of the
 module's refinement note, excluding non-behavioural actions, plus its property rows. `Distinct states` is
 TLC's count for the module's own cfg. `WalDurability` searches to depth 35 and
 `WalMove` to depth 16, with tla2tools v1.7.4. `WalAppendEpoch` searches to depth
@@ -66,6 +68,7 @@ distinct states to depth 23. `WalRoutingFloor` searches to depth 15, and its
 `WalLiveAdvanceCore` searches to depth 25; its variants find 3,052,664 (`Restart`,
 depth 26), 3,373,761 (`GateFlip`, depth 25), 4,032,667 (`Recreate`, depth 27) and
 875,431 (`Bulk`, depth 25) distinct states.
+`WalBulkSwitch` searches to depth 22.
 
 `WalDurability` has a two-fault variant configuration, `WalDurability.TwoFaults.cfg`
 (see "Variant configurations" in [`../README.md`](../README.md)). It checks every
@@ -140,6 +143,9 @@ distinct states to depth 21, about fifteen seconds on two workers.
 | [`live-advance-core-mutations/`](live-advance-core-mutations/) | One or more deliberate defects per property and per action of `WalLiveAdvanceCore`, and one weakening of each assumption it takes. |
 | [`LiveAdvanceCoreRefinement.md`](LiveAdvanceCoreRefinement.md) | `WalLiveAdvanceCore` mapped to production, and its interface: each assumption with the guarantee and module that discharge it. |
 | [`HandOffFenceRefinement.md`](HandOffFenceRefinement.md) | `WalHandOffFence` mapped to production, and its interface: E's entry check assumed, `HandOffBound`, `AbsentMarkerHolds` and `CloseHeadMonotone` guaranteed. |
+| `WalBulkSwitch.tla` / `.cfg` / `.manifest.json` | The bulk switch module, its TLC model and its manifest. |
+| [`bulk-switch-mutations/`](bulk-switch-mutations/) | One or more deliberate defects per property and per action of `WalBulkSwitch`. |
+| [`BulkSwitchRefinement.md`](BulkSwitchRefinement.md) | `WalBulkSwitch` mapped to production, and its interface. |
 
 ## Properties checked
 
@@ -501,6 +507,48 @@ modules'), or the purge's steps as separate actions.
 ```powershell
 java -cp C:\path\to\tla2tools.jar tlc2.TLC -workers 2 -config WalRoutingFloor.cfg WalRoutingFloor.tla
 java -cp C:\path\to\tla2tools.jar tlc2.TLC -workers 2 -config WalRoutingFloor.WideGenerations.cfg WalRoutingFloor.tla
+```
+
+## WalBulkSwitch
+
+`WalBulkSwitch` models the bulk switch of the fenced live checkpoint advance (epic
+#5605, [`design/LiveAdvanceDesign.md`](design/LiveAdvanceDesign.md) section 3): how a
+bulk append's leaf is born from the old rightmost leaf's range. The operation stores
+its birth hint and opens its switch token in one write before its first appended leaf
+is born, reusing a stored hint on a retry, the heads of a fence that folds the run's
+completed switches, or the run's hint, and reading the heads otherwise. The graft
+narrows the old leaf, which first drains the commits it admitted, relocates the rows
+the range held into the appended leaf and only then drops them, and the switch ends by
+making the leaf's read position the hint capped at the old leaf's read frontier when it
+narrowed (#5752), only when every row was relocated. A drain
+past its deadline takes the 10.2.0 path and applies no hint. Completed switches are
+closed in batches by one fence that removes their hints.
+
+It is module B of the promoted modules' assume-guarantee graph: it assumes nothing, and
+its two guarantees are what the core module assumes of a bulk-born leaf ([the interface](BulkSwitchRefinement.md#interface)).
+
+| Property | Kind | Meaning |
+|----------|------|---------|
+| `TypeOK` | Invariant | State stays well-typed. |
+| `BulkHintBound` | Invariant | The appended leaf's read position is at or below every record of its range it does not hold, from its birth through its replay. |
+| `ContestedKeyAgrees` | Invariant | The appended leaf resolves a contested key to the value every WAL reader resolves it to: the later-stamped write wins. |
+| `HintOnlyWhileOpen` | Invariant | A stored birth hint belongs to an open switch. |
+
+The base checks every property with every environment step on, in about a second.
+Three of the design draft's mutations moved here, re-targeted at these properties; the
+refinement note lists them.
+
+### What it covers, and what it does not
+
+It covers the hint's sources (stored, folded fence, run, fresh), the drain before the
+narrow and its deadline, the relocation's copy, delivery and drop, a crash of the shard
+root before or during the graft, the batched close, an abandoned switch's close, and
+the appended leaf's replay. It does NOT cover several keys or appended leaves, the
+re-delivery skip, a bulk load, the gate closed or an older silo, the close's fence
+(the hand-off module's), or arming; the refinement note's abstraction gaps list them.
+
+```powershell
+java -cp C:\path\to\tla2tools.jar tlc2.TLC -workers 2 -config WalBulkSwitch.cfg WalBulkSwitch.tla
 ```
 
 ## WalLiveAdvanceCore

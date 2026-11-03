@@ -1,0 +1,16 @@
+# Pairs with BulkHintBound. Issue #5752: a resumed narrow of a leaf an earlier attempt
+# already narrowed must report no frontier, since its replay may have passed a record
+# of the range since without holding it. Reporting its current read position as the
+# frontier lets the capped hint pass that record.
+MODULE: BulkHintBoundResumedNarrowReportsFrontier
+TARGET: BulkHintBound
+CLASS: Invariant
+SUMMARY: a resumed narrow of an already-narrowed leaf reports its read position as the frontier
+PERTURBS: Narrow
+
+--- FIND
+    /\ relocOk' = ~narrowed
+--- REPLACE
+\* MUTATION: the resumed narrow reports a frontier.
+    /\ relocOk' = TRUE
+--- END

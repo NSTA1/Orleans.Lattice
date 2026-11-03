@@ -55,7 +55,7 @@ the design model.
     incarnations (the retired floor and the clear's conditional delete).
   - `OnlySupersededRefused`: only a superseded activation is ever refused, at a
     claim or at an append.
-- **The graph.** E <- H <- B, E <- R, and {E, H, R, B} <- C, where H is
+- **The graph.** E <- H, E <- R, and {E, H, R, B} <- C, where H is
   `WalHandOffFence`, R `WalRoutingFloor`, B `WalBulkSwitch` and C
   `WalLiveAdvanceCore`; an arrow points from the module that assumes to the module
   that guarantees. Every module's assumptions are guarantees of modules that

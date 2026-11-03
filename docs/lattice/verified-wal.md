@@ -213,7 +213,13 @@ TLA+ specification in [`spec/wal/`](../../spec/wal/README.md):
   routing-floor and bulk-switch fences as environment constraints in the form their
   modules guarantee, and the unstamped watermark, its restart reset and the own
   unstamped append's self-report modelled directly. It is the fourth module
-  promoted from that draft.
+  promoted from that draft;
+- `WalBulkSwitch.tla`, the bulk switch of the same advance: a bulk append's leaf born
+  from the old rightmost leaf's range with the birth hint stored with its switch's open
+  token and capped at the old leaf's read frontier, the drain before the narrow, the
+  relocation of the rows the range held, and the batched close, against a crash of the
+  shard root and a drain past its deadline. It is the fifth module promoted from that
+  draft.
 
 It follows the pattern of the atomic-commit specification: every property and every
 action has a mutation that makes a property fire, and a refinement note maps each

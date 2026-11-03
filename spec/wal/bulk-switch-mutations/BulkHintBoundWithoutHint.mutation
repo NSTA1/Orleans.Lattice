@@ -1,0 +1,17 @@
+# Bulk without hint: the appended leaf starts at the WAL head at its switch's end
+# instead of its birth hint capped at the old leaf's frontier, so a foreign record of
+# the range allocated after the narrow and before the switch ends lies below its read
+# position. The violation needs no live advance: the hint is the birth read position.
+# Moved from the design's ReadPositionHonestBulkWithoutHint.
+MODULE: BulkHintBoundWithoutHint
+TARGET: BulkHintBound
+CLASS: Invariant
+SUMMARY: the appended leaf starts at the WAL head at its switch's end instead of its capped birth hint
+PERTURBS: Finish
+
+--- FIND
+    /\ rpN' = IF relocOk /\ hint # Null THEN Min2(hint - 1, fO) ELSE rpN
+--- REPLACE
+\* MUTATION: the head at the switch's end, not the capped birth hint.
+    /\ rpN' = IF relocOk /\ hint # Null THEN next - 1 ELSE rpN
+--- END
