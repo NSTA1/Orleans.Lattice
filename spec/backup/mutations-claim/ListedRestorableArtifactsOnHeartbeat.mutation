@@ -1,0 +1,22 @@
+# Pairs with ListedRestorable. Production before the fix of #5639: the delete
+# learned of a lost lease only from its background renewal, which first ran a
+# third of a lease in and swallowed failures. The scheduler's activation was
+# lost - and its leases with it - a rebuild re-listed the whole backup, and the
+# delete, still trusting its last confirmation, deleted the listed backup's
+# artifacts.
+MODULE: ListedRestorableArtifactsOnHeartbeat
+TARGET: ListedRestorable
+CLASS: Invariant
+SUMMARY: a delete deletes artifacts on its last background confirmation of the lease
+PERTURBS: DelArt
+
+--- FIND
+    /\ del[d] = "begun"
+    /\ lease[d] = "live"
+    /\ art' = IF gen = dgen[d] THEN FALSE ELSE art
+--- REPLACE
+    /\ del[d] = "begun"
+    \* MUTATION: the caller acts on its last confirmation, not a fresh one.
+    /\ seen[d] = "live"
+    /\ art' = IF gen = dgen[d] THEN FALSE ELSE art
+--- END

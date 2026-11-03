@@ -22,8 +22,8 @@ namespace Orleans.Lattice.Samples.Explorer;
 /// </para>
 /// <para>
 /// Artifacts keep the chunk boundaries they were written with, because each
-/// chunk is one entry batch the restore engine decodes on its own. Rewriting
-/// an id with identical content is idempotent.
+/// chunk is one entry batch the restore engine decodes on its own. Ids are
+/// content-addressed, so rewriting identical content is idempotent.
 /// </para>
 /// </remarks>
 internal sealed class SampleSharedBackupSink : ILatticeBackupSink

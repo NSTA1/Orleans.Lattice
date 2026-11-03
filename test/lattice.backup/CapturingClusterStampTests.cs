@@ -11,7 +11,8 @@ namespace Orleans.Lattice.Backup.Tests;
 /// deployment, where it is simply the local cluster id. An incremental extends
 /// only the chain owned by its base's capturing cluster; an extend request whose
 /// base was captured on a different cluster produces a fresh full rather than a
-/// forked chain. Identical captures publish distinct backups (issue #5418).
+/// forked chain. A backup id is a content address, so an identical capture
+/// republishes the same backup (issue #5418).
 /// </summary>
 [Category("Integration")]
 public sealed class CapturingClusterStampTests
@@ -118,10 +119,10 @@ public sealed class CapturingClusterStampTests
         });
     }
 
-    // ---- One backup per capture ------------------------------------------
+    // ---- Content-addressed idempotency -----------------------------------
 
     [Test]
-    public async Task CaptureAsync_identical_content_publishes_a_distinct_backup_per_capture()
+    public async Task CaptureAsync_identical_content_republishes_the_same_backup()
     {
         await _fixture.InitializeAsync();
         var tree = _fixture.GrainFactory.GetGrain<ILattice>(Tree);
@@ -133,26 +134,39 @@ public sealed class CapturingClusterStampTests
         var second = await _fixture.Capture.CaptureAsync(
             new LatticeBackupCaptureRequest("second", BackupScopeSelector.WholeTree(Tree)));
 
-        // A backup id is unique to its capture (issue #5418): identical live state
-        // yields two backups, each with its own manifest and artifact, so neither
-        // capture can overwrite the other.
+        // A backup id is the content address of the captured payload, as 10.2.0
+        // documents, so identical live state re-derives the same id and the second
+        // capture republishes that backup in place: one manifest, the first
+        // capture time kept, the latest recorded for retention to rank by.
         //
-        // The two artifacts are compared by their decoded entries, not by their
-        // content digests (#5472). Before #5524 an own row read back from a
-        // snapshot with a null origin before background leaf materialization and
-        // with the WAL's stamp ("" on a single cluster) after it, so a capture
-        // taken either side of that materialization hashed differently. An own
-        // row is now null both ways (LatticeRowOrigin), and that is pinned
-        // directly by the core's origin tests rather than by a digest here.
+        // The entries are compared too (#5472): before #5524 an own row read back
+        // from a snapshot with a null origin before background leaf materialization
+        // and with the WAL's stamp ("" on a single cluster) after it, so a capture
+        // taken either side of that materialization hashed differently. An own row
+        // is now null both ways (LatticeRowOrigin).
         var firstEntries = await DecodeAsync(first.Manifest);
         var secondEntries = await DecodeAsync(second.Manifest);
+        var manifestsForId = new List<BackupManifest>();
+        await foreach (var manifest in _fixture.Sink.ListManifestsAsync())
+        {
+            if (manifest.Id == first.BackupId)
+            {
+                manifestsForId.Add(manifest);
+            }
+        }
+
+        var row = await _fixture.Catalog.GetAsync(first.BackupId);
         Assert.Multiple(async () =>
         {
-            Assert.That(second.BackupId, Is.Not.EqualTo(first.BackupId));
             Assert.That(secondEntries, Is.EqualTo(firstEntries));
             Assert.That(firstEntries.Select(e => e.Key), Is.EqualTo(new[] { "k1", "k2" }));
+            Assert.That(second.BackupId, Is.EqualTo(first.BackupId));
+            Assert.That(manifestsForId, Has.Count.EqualTo(1));
+            Assert.That(row, Is.Not.Null);
+            Assert.That(row!.CreatedAtUtc, Is.EqualTo(first.Manifest.CreatedAtUtc));
+            Assert.That(row.LastCapturedAtUtc, Is.GreaterThan(row.CreatedAtUtc));
+            Assert.That(second.Manifest.LastCapturedAtUtc, Is.EqualTo(row.LastCapturedAtUtc));
             Assert.That((await _fixture.Sink.ProbeAsync(first.BackupId)).IsResolvable, Is.True);
-            Assert.That((await _fixture.Sink.ProbeAsync(second.BackupId)).IsResolvable, Is.True);
         });
     }
 

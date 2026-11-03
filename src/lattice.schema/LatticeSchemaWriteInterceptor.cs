@@ -81,6 +81,19 @@ internal sealed class LatticeSchemaWriteInterceptor : ILatticeWriteInterceptor
     public bool InterceptsSystemOrigin => _provider.StrictIngestEnabled;
 
     /// <inheritdoc />
+    /// <remarks>Answers from the cached policy: <c>true</c> only for a tree whose policy sets strict ingest.</remarks>
+    public ValueTask<bool> JudgesReplicatedWritesAsync(string treeId, CancellationToken cancellationToken = default)
+    {
+        var compiled = _provider.GetCompiledPolicyAsync(treeId, cancellationToken);
+        return compiled.IsCompletedSuccessfully
+            ? new ValueTask<bool>(compiled.Result is { StrictIngest: true })
+            : AwaitStrictAsync(compiled);
+
+        static async ValueTask<bool> AwaitStrictAsync(ValueTask<CompiledSchemaPolicy?> pending) =>
+            await pending.ConfigureAwait(false) is { StrictIngest: true };
+    }
+
+    /// <inheritdoc />
     public ValueTask<LatticeWriteDecision> OnWriteAsync(
         in LatticeWriteRequest request,
         CancellationToken cancellationToken = default) =>
@@ -97,6 +110,13 @@ internal sealed class LatticeSchemaWriteInterceptor : ILatticeWriteInterceptor
         if (compiled is null)
         {
             // No policy governs this tree: accept with no per-write allocation.
+            return LatticeWriteDecision.Accept();
+        }
+
+        if (!compiled.StrictIngest && LatticeAccessGateContext.IsSystemOrigin)
+        {
+            // A system-origin write to a tree that is not strict is trusted
+            // whatever it holds, so it is not validated at all.
             return LatticeWriteDecision.Accept();
         }
 

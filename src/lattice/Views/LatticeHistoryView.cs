@@ -22,6 +22,22 @@ namespace Orleans.Lattice;
 public static class LatticeHistoryView
 {
     /// <summary>
+    /// The key of the built-in runtime provider <c>AddLatticeViews</c> registers for
+    /// change-history views. A tree-administration facade or operator console
+    /// creates a change-history view by naming this key with an empty JSON object
+    /// (<c>{}</c>) as its payload. The key is reserved: a host cannot register a
+    /// provider of its own under it.
+    /// </summary>
+    public const string ProviderKey = "orleans.lattice.history.v1";
+
+    /// <summary>
+    /// A runtime projection descriptor naming the built-in change-history provider,
+    /// for <see cref="ILatticeViewFactory.CreateAsync(ILattice,string,LatticeRuntimeViewProjectionDescriptor,CancellationToken)"/>.
+    /// A view created this way is re-hydrated through the provider on every silo.
+    /// </summary>
+    public static LatticeRuntimeViewProjectionDescriptor Descriptor => new(ProviderKey, "{}"u8);
+
+    /// <summary>
     /// Builds an accumulative history-view definition for <paramref name="viewName"/>,
     /// resolving the history-row codec from <paramref name="services"/>.
     /// </summary>

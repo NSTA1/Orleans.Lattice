@@ -105,8 +105,8 @@ public sealed class LatticeBackupCatalogRebuildServiceTests
         var catalog = new FakeCatalog();
         await catalog.RegisterAsync(Manifest("cafef00d", firstSeen));
 
-        // The sink holds the same backup id but a later capture
-        // time (a stale or rewritten copy). Rebuild must keep the first
+        // The sink holds the same content-addressed backup id but a later capture
+        // time (a non-clean restart re-captured it). Rebuild must keep the first
         // timestamp, matching the reconcile contract the catalog store enforces.
         var sink = new FakeSink();
         await sink.WriteManifestAsync(Manifest("cafef00d", firstSeen.AddDays(3)));

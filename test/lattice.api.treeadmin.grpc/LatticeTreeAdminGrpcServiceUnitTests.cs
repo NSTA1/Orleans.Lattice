@@ -239,6 +239,31 @@ public sealed class LatticeTreeAdminGrpcServiceUnitTests
     }
 
     [Test]
+    public void InvokeAsync_maps_a_grain_call_timeout_to_DeadlineExceeded()
+    {
+        // #5742: the outcome is unknown, so a client must not read it as a server fault or a failure.
+        var ex = MapFault(new TimeoutException("Response did not arrive on time for grain secret-grain"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.StatusCode, Is.EqualTo(StatusCode.DeadlineExceeded));
+            Assert.That(ex.Status.Detail, Does.Not.Contain("secret-grain"));
+        });
+    }
+
+    [Test]
+    public void InvokeAsync_maps_an_unavailable_silo_to_Unavailable()
+    {
+        var ex = MapFault(new Orleans.Runtime.SiloUnavailableException("silo S10.0.0.1 secret-silo is dead"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.StatusCode, Is.EqualTo(StatusCode.Unavailable));
+            Assert.That(ex.Status.Detail, Does.Not.Contain("secret-silo"));
+        });
+    }
+
+    [Test]
     public void InvokeAsync_maps_an_unexpected_fault_to_a_non_revealing_Internal()
     {
         var ex = MapFault(new BadImageFormatException("secret internal detail"));

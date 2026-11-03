@@ -124,18 +124,16 @@ public sealed class ClusterTreePageTests : ClusterTestContext
         var cut = RenderAt("/cluster/trees/" + TreeId);
         cut.WaitUntil(() => Assert.That(cut.FindAll("[role=tab]"), Has.Count.EqualTo(5)));
 
+        // A synchronous Click is dispatched fire-and-forget, so it can be queued
+        // behind work the renderer is still doing; the address is waited for.
         cut.FindAll("[role=tab]").Single(tab => tab.TextContent == "Storage").Click();
-        var storage = Navigation.Uri;
+        cut.WaitUntil(() => Assert.That(Navigation.Uri, Is.EqualTo(Navigation.BaseUri + "cluster/trees/t/acme/a/crm/orders?tab=storage")));
 
         var onStorage = RenderAt("/cluster/trees/" + TreeId + "?tab=storage");
         onStorage.WaitUntil(() => Assert.That(onStorage.FindAll("[role=tab]"), Has.Count.EqualTo(5)));
         onStorage.FindAll("[role=tab]").Single(tab => tab.TextContent == "Summary").Click();
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(storage, Is.EqualTo(Navigation.BaseUri + "cluster/trees/t/acme/a/crm/orders?tab=storage"));
-            Assert.That(Navigation.Uri, Is.EqualTo(Navigation.BaseUri + "cluster/trees/t/acme/a/crm/orders"));
-        });
+        onStorage.WaitUntil(() => Assert.That(Navigation.Uri, Is.EqualTo(Navigation.BaseUri + "cluster/trees/t/acme/a/crm/orders")));
     }
 
     [Test]

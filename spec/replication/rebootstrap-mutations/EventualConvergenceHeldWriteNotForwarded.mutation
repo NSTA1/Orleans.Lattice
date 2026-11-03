@@ -1,0 +1,16 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. #5684's T2: a local write
+# committed while the shadow copy is held is not forwarded into it, so the cutover
+# drops it at the cluster that wrote it, and nothing ships a cluster its own write back.
+MODULE: EventualConvergenceHeldWriteNotForwarded
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: a local write during the shadow hold is not forwarded to the copy, so the cutover drops it
+PERTURBS: Write
+BOUNDS: Mutual = TRUE
+
+--- FIND
+    /\ cp' = Forward(o, AsReg([o |-> o, h |-> h, del |-> d]))
+--- REPLACE
+\* MUTATION: no shadow forward of a local write.
+    /\ cp' = cp
+--- END

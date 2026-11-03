@@ -1,0 +1,14 @@
+# Pairs with TypeOK. A claim is recorded twice, so the claim count runs past
+# the number of captures.
+MODULE: TypeOkClaimRunaway
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a claim is counted twice
+PERTURBS: Resolve
+
+--- FIND
+          ELSE /\ pend' = [pend EXCEPT ![s] = @ + 1]
+--- REPLACE
+          \* MUTATION: two claims per capture.
+          ELSE /\ pend' = [pend EXCEPT ![s] = @ + 2]
+--- END

@@ -231,11 +231,15 @@ internal sealed class AppMcpToolSource : ILatticeApiMcpAppToolSource
     /// <summary>Returns the catalog for the projection's current epoch, rebuilding it when the epoch advanced.</summary>
     /// <param name="cancellationToken">Cancels the wait or the rebuild.</param>
     /// <returns>The current catalog.</returns>
+    /// <remarks>
+    /// The projection is first made current with the cluster-wide registry, not merely warmed: it is per silo,
+    /// and a catalog built from a snapshot that predates a registry write committed on another silo would keep
+    /// serving a disabled install's tools, or a revoked role binding (#5595).
+    /// </remarks>
     internal async ValueTask<AppMcpToolCatalog> GetCatalogAsync(CancellationToken cancellationToken)
     {
         var projection = _projection!;
-        if (projection.CurrentEpoch == 0)
-            await projection.EnsureWarmAsync(cancellationToken).ConfigureAwait(false);
+        await projection.EnsureCurrentAsync(cancellationToken).ConfigureAwait(false);
 
         var catalog = _catalog;
         var snapshot = projection.Current;

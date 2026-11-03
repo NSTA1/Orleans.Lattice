@@ -136,6 +136,18 @@ internal sealed class LatticeSnapshotProvider(
         // no entry can have a VC component above the producer's own
         // local VC at the moment of capture.
         _ = _options.Get(treeName);
+
+        // Issue #5683. An export is an infrastructure read of the whole tree: every
+        // caller authorizes it before it gets here (the remote snapshot service
+        // checks the requesting peer, the tree's enrolment and the tenant gate;
+        // the bootstrap coordinator, the fallback planner and the digest probe are
+        // library-internal). It therefore reads under a system-origin scope, as
+        // the replication applier and the digest readers do. Without one, the
+        // committed-projection pass reads through the client-facing scan as the
+        // anonymous subject, and a deny-by-default access gate filters every key
+        // out: the export silently streamed zero rows, so a receiver held only
+        // what the incremental stream re-shipped, and never a bulk-loaded row.
+        using var systemOrigin = LatticeAccessGateContext.EnterSystemOrigin();
         var frontier = await _cursors
             .GetCausalStableAsync(treeName, cancellationToken)
             .ConfigureAwait(false);
@@ -166,7 +178,7 @@ internal sealed class LatticeSnapshotProvider(
             ? await CaptureFrontierAtOpenAsync(treeName, openGeneration, cancellationToken).ConfigureAwait(false)
             : null;
         SnapshotStream? stream = null;
-        var entries = EnumerateWithCloseGenerationAsync();
+        var entries = InSystemOriginAsync(EnumerateWithCloseGenerationAsync());
         stream = new SnapshotStream(treeName, asOfHlc, frontier, entries)
         {
             OpenGeneration = openGeneration,
@@ -200,6 +212,132 @@ internal sealed class LatticeSnapshotProvider(
             finally
             {
                 linked?.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Fails the export closed when it is not reading under a system-origin scope
+    /// (issue #5683): without one the committed-projection scan is filtered by the
+    /// read access gate, and a denied read streams zero rows rather than failing,
+    /// so a receiver would import an incomplete copy and its reconciles would treat
+    /// the missing rows as absent at the source.
+    /// </summary>
+    private static void EnsureSystemOrigin(string treeName)
+    {
+        if (!LatticeAccessGateContext.IsSystemOrigin)
+        {
+            throw new InvalidOperationException(
+                $"The snapshot export of tree '{treeName}' is not reading under a system-origin scope, so the access gate "
+                + "could filter its rows; the export is refused rather than streamed incomplete.");
+        }
+    }
+
+    /// <summary>
+    /// Runs every step of <paramref name="source"/> under a system-origin scope
+    /// (issue #5683). The scope is request-context state, which an async iterator
+    /// does not keep across its yields - each step resumes in its consumer's
+    /// context - so every step is started under it, and every grain call the step
+    /// makes carries it.
+    /// </summary>
+    /// <remarks>
+    /// Entering the scope writes the request context, which copies it, and
+    /// allocates the scope itself. Rather than paying that per row, the execution
+    /// context is captured once inside one scope and each step is started under
+    /// that capture, which allocates nothing (issue #5713). A host that suppressed
+    /// execution-context flow captures nothing, so it enters the scope per step.
+    /// </remarks>
+    internal static async IAsyncEnumerable<SnapshotEntry> InSystemOriginAsync(
+        IAsyncEnumerable<SnapshotEntry> source,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var steps = new SystemOriginSteps(source.GetAsyncEnumerator(cancellationToken));
+        try
+        {
+            while (await steps.MoveNextAsync().ConfigureAwait(false))
+            {
+                yield return steps.Current;
+            }
+        }
+        finally
+        {
+            await steps.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Starts each step of an enumerator under one execution context captured
+    /// inside a system-origin scope. Allocated once per export.
+    /// </summary>
+    private sealed class SystemOriginSteps(IAsyncEnumerator<SnapshotEntry> inner)
+    {
+        private static readonly ContextCallback StartMoveNext =
+            static state => ((SystemOriginSteps)state!).StartMoveNextCore();
+
+        private static readonly ContextCallback StartDispose =
+            static state => ((SystemOriginSteps)state!).StartDisposeCore();
+
+        private ExecutionContext? _context;
+        private bool _captured;
+        private ValueTask<bool> _move;
+        private ValueTask _dispose;
+
+        public SnapshotEntry Current => inner.Current;
+
+        public ValueTask<bool> MoveNextAsync()
+        {
+            if (Capture() is { } context)
+            {
+                ExecutionContext.Run(context, StartMoveNext, this);
+                return _move;
+            }
+
+            return MoveNextInScopeAsync();
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            if (Capture() is { } context)
+            {
+                ExecutionContext.Run(context, StartDispose, this);
+                return _dispose;
+            }
+
+            return DisposeInScopeAsync();
+        }
+
+        private ExecutionContext? Capture()
+        {
+            if (!_captured)
+            {
+                using (LatticeAccessGateContext.EnterSystemOrigin())
+                {
+                    _context = ExecutionContext.Capture();
+                }
+
+                _captured = true;
+            }
+
+            return _context;
+        }
+
+        private void StartMoveNextCore() => _move = inner.MoveNextAsync();
+
+        private void StartDisposeCore() => _dispose = inner.DisposeAsync();
+
+        private async ValueTask<bool> MoveNextInScopeAsync()
+        {
+            using (LatticeAccessGateContext.EnterSystemOrigin())
+            {
+                return await inner.MoveNextAsync().ConfigureAwait(false);
+            }
+        }
+
+        private async ValueTask DisposeInScopeAsync()
+        {
+            using (LatticeAccessGateContext.EnterSystemOrigin())
+            {
+                await inner.DisposeAsync().ConfigureAwait(false);
             }
         }
     }
@@ -326,6 +464,7 @@ internal sealed class LatticeSnapshotProvider(
         // all of physicalTreeId. Mixing the two shipped the old copy's rows
         // under the new copy's lineage (issue #4673's re-seed after an alias move).
         var lattice = _grainFactory.GetGrain<ILattice>(physicalTreeId);
+        EnsureSystemOrigin(treeName);
         var hasUpperBound = asOfHlc != HybridLogicalClock.Zero;
 
         // Issue #4685: every WAL partition's readable head, captured BEFORE
@@ -433,6 +572,7 @@ internal sealed class LatticeSnapshotProvider(
                     await beforeEntry(pair.Key).ConfigureAwait(false);
                 }
 
+                EnsureSystemOrigin(treeName);
                 var versioned = await lattice
                     .GetWithVersionAsync(pair.Key, cancellationToken)
                     .ConfigureAwait(false);

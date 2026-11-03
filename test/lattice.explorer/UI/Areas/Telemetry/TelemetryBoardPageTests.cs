@@ -107,7 +107,7 @@ public sealed class TelemetryBoardPageTests : TelemetryTestContext
 
         cut.Find("select").Change("15m");
 
-        Assert.That(Navigation.Uri, Does.Contain("step=15m").And.Contain("range=1h"));
+        cut.WaitUntil(() => Assert.That(Navigation.Uri, Does.Contain("step=15m").And.Contain("range=1h")));
     }
 
     [Test]
@@ -214,12 +214,12 @@ public sealed class TelemetryBoardPageTests : TelemetryTestContext
         });
 
         cut.FindAll("select")[1].Change("1d");
-        Assert.That(Navigation.Uri, Does.EndWith("telemetry/latency?range=1d"));
+        cut.WaitUntil(() => Assert.That(Navigation.Uri, Does.EndWith("telemetry/latency?range=1d")));
 
         var boards = RenderPage("telemetry/latency?range=1h", LtBreakpoint.Compact);
         boards.WaitUntil(() => Assert.That(boards.FindAll("select"), Has.Count.GreaterThanOrEqualTo(3)));
         boards.FindAll("select")[0].Change("storage");
-        Assert.That(Navigation.Uri, Does.EndWith("telemetry/storage?range=1h"));
+        boards.WaitUntil(() => Assert.That(Navigation.Uri, Does.EndWith("telemetry/storage?range=1h")));
     }
 
     [Test]

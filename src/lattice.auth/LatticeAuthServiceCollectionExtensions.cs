@@ -122,6 +122,11 @@ public static class LatticeAuthServiceCollectionExtensions
         builder.Services.AddSingleton<IHostedService>(
             sp => sp.GetRequiredService<AuthPolicyEpochSynchronizer>());
 
+        // A restore or re-seed cutover swaps the policy tree's alias and publishes
+        // no mutation, so the same instance publishes alias changes too (#5731).
+        builder.Services.AddSingleton<ITreeAliasObserver>(
+            sp => sp.GetRequiredService<AuthPolicyEpochSynchronizer>());
+
         // The decision engine: the in-memory decision surface the enforcement
         // gate consults. Registered once as the concrete type (which the gate and
         // the audit path depend on for the detailed, rule-carrying evaluation)

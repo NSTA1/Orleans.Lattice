@@ -100,15 +100,19 @@ internal sealed class AppRoleGrantEvaluator
     public static bool IsEvaluated(AppRegistryRecord record) =>
         record is { State: AppRegistryLifecycleState.Enabled, IsCeilingPinnedToVersion: true };
 
-    /// <summary>Returns the current registry snapshot, warming the projection when it is still cold.</summary>
+    /// <summary>Returns the current registry snapshot, first making it current with the cluster-wide registry.</summary>
     /// <param name="cancellationToken">Cancels the wait.</param>
     /// <returns>The current snapshot, or <see cref="CompiledAppRegistrySnapshot.Empty"/> when no projection is registered.</returns>
+    /// <remarks>
+    /// Every evaluation goes through <see cref="IAppRegistryProjection.EnsureCurrentAsync"/>, never only a warm
+    /// check: the snapshot is per silo, and a grant decided on a snapshot built before a registry write committed
+    /// on another silo would answer from a revoked binding or a disabled install (#5595).
+    /// </remarks>
     public async ValueTask<CompiledAppRegistrySnapshot> GetSnapshotAsync(CancellationToken cancellationToken)
     {
         if (_projection is null)
             return CompiledAppRegistrySnapshot.Empty;
-        if (_projection.CurrentEpoch == 0)
-            await _projection.EnsureWarmAsync(cancellationToken).ConfigureAwait(false);
+        await _projection.EnsureCurrentAsync(cancellationToken).ConfigureAwait(false);
         return _projection.Current;
     }
 

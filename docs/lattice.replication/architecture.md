@@ -278,6 +278,12 @@ rather than land after the reconcile. It also checks:
 - The source-restore contract: a unilateral source restore never makes a
   peer delete a row it dropped, so peers may diverge, and a coordinated
   restore converges them.
+- Concurrent mutual re-seeds, in the module's Mutual variant: each side
+  drains the other's export into a shadow copy that a cutover puts in the
+  tree's place, a drain whose source cut over under it is discarded and
+  re-driven into a fresh copy, and the drain's dedupe memory is scoped to the
+  copy it applied into, so the re-drive applies every row again rather than
+  lose one (#5689).
 
 **Scope.** The specification covers plain replication only. Atomic-write sagas
 carried over replication (invariant 4 above) are not modelled here; that is

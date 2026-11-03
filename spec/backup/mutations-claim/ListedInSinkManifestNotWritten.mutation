@@ -1,0 +1,14 @@
+# Pairs with ListedInSink. A publish skips its sink manifest write, so a fresh
+# publish of an id a retire removed registers a row the sink cannot back.
+MODULE: ListedInSinkManifestNotWritten
+TARGET: ListedInSink
+CLASS: Invariant
+SUMMARY: a publish registers a row without writing its manifest
+PERTURBS: PubMan
+
+--- FIND
+    /\ man' = ScopeOf(c)
+--- REPLACE
+    \* MUTATION: the manifest is not written.
+    /\ UNCHANGED man
+--- END

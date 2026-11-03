@@ -23,7 +23,8 @@ public sealed partial class LatticeReplicationConfigAuthorityTests
         InMemoryConfigStore store,
         string localReplicaId = LocalReplica,
         ILatticeReplicationAdmin? admin = null,
-        IReadOnlyDictionary<string, LatticeMergeMode>? staticTrees = null)
+        IReadOnlyDictionary<string, LatticeMergeMode>? staticTrees = null,
+        ILatticeBootstrapCoordinator? coordinator = null)
     {
         var context = Substitute.For<ILatticeReplicationContext>();
         context.LocalReplicaId.Returns(localReplicaId);
@@ -34,7 +35,7 @@ public sealed partial class LatticeReplicationConfigAuthorityTests
         admin ??= Substitute.For<ILatticeReplicationAdmin>();
 
         return new LatticeReplicationConfigAuthority(
-            store, preconditions, context, admin, Monitor(staticTrees));
+            store, preconditions, context, admin, Monitor(staticTrees), coordinator);
     }
 
     /// <summary>

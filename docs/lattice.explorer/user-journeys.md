@@ -128,7 +128,9 @@ the run.
 The lane also reads `LATTICE_E2E_STORAGE`, `LATTICE_E2E_BACKUP_STORAGE` and
 `LATTICE_E2E_EAST_STORAGE` (connection strings to existing accounts),
 `LATTICE_E2E_HOSTS_DIR` (a directory of published hosts, as CI publishes them
-once per job), and `LATTICE_E2E_VIEWPORT`.
+once per job), `LATTICE_E2E_VIEWPORT`, and `LATTICE_E2E_PROMETHEUS_BINARY` (a
+Prometheus binary of the pinned version, run as a local process in place of
+the Prometheus container where there is no Docker daemon).
 
 ## CI gating
 
@@ -141,6 +143,7 @@ its docstring is the contract, and its self-test pins it.
 |---|---|
 | `harness` | Every end-to-end fixture that is not a journey, a story, the coverage gate or contract conformance: the estate smoke test, fault seams, parity, checkpoints, and the catalogue and outline checks. It also stops Azurite and requires the smoke fixture to fail, proving the lane fails closed. |
 | `isolated-<jid>` | One leg per folder under `Journeys/`, in isolated mode. |
+| `contract-<chapter>` | One leg per story-only chapter: a chapter with a contract but no `Journeys/<id>` folder yet (U2 and C1-C4 while their journeys are parked for phase 2). It runs that chapter's case of its storyline's conformance fixture alone on a fresh estate: the chapters it consumes are established through their contracts in story order, as isolated mode does, then the chapter's own contract is established and verified. The set is discovered from the tree, so a chapter's leg disappears when its journey lands. |
 | `story-contoso`, `story-fabrikam` | Each storyline in story mode on one estate, once the tree holds a contract for one of its chapters. |
 | `contract-conformance` | One shard per storyline's conformance fixture. |
 | `story-contoso-narrow` | Nightly only: the Contoso story at a 390x844 viewport. |
@@ -148,28 +151,47 @@ its docstring is the contract, and its self-test pins it.
 
 Which legs run depends on the event:
 
-- **A member pull request into an integration branch** runs the `harness` leg
-  and the isolated legs of the chapters it touches. A file under an Explorer
-  area folder (`src/lattice.explorer/UI/Areas/<Area>/`) adds the chapters whose
-  sources name that area. Any other file that can change what a journey sees -
-  the rest of the Explorer, the harness, the hosts, a facade, or the lane
-  itself - runs every isolated leg. Documentation feeds no chapter. A member
-  pull request runs no story leg and no conformance shard.
-- **The landing pull request** (an integration branch into `main`), a push,
-  and `workflow_dispatch` run every leg and every conformance shard. A nightly
-  schedule adds `story-contoso-narrow`.
-- **A member pull request labelled `journeys-full`** runs the full set, as the
-  landing pull request does.
+- **A member pull request into an integration branch**, and **any other pull
+  request that is not a landing pull request** (an ordinary pull request into
+  `main` or a release line), runs the `harness` leg and the isolated legs of
+  the chapters it touches. A file under an Explorer area folder
+  (`src/lattice.explorer/UI/Areas/<Area>/`) adds the chapters whose sources
+  name that area. Any other file that can change what a journey sees - the
+  rest of the Explorer, the harness, the hosts, a facade, or the lane itself -
+  runs every isolated leg. Documentation feeds no chapter. Contract legs follow
+  the same rule: a shared file, which includes anything under `Contracts/` and
+  the rest of the harness, runs every contract leg; an area file runs the
+  contract legs whose chapter, or a chapter it consumes, has a contract naming
+  that area; a journey folder runs none. Such a pull request
+  runs no story leg and no conformance shard, so an open story defect does
+  not redden every pull request that touches the Explorer.
+- **A landing pull request** (its head is an integration branch, `*/epic/*`,
+  and its base is not), a push, and `workflow_dispatch` run every leg (every
+  contract leg included) and every conformance shard. A nightly schedule adds
+  `story-contoso-narrow`.
+- **A pull request labelled `journeys-full`** runs the full set, as a landing
+  pull request does.
 - **Editing a member pull request's body** runs no leg. It runs the screenshot
   provenance check: every journey pull request carries a
   `## Journey screenshots` section, ordered and captioned, and the check
   matches it against the run it names. `tools/Get-JourneyScreenshots.ps1 -Run
   <id> -Journey <jid>` prints that section for a run.
 
-On a member pull request, the merge gates are CI (`build-and-test`), UI Tests,
-the pull request's own isolated legs, the harness leg, the coverage gate and
+Legs are routed between GitHub-hosted runners and the self-hosted runner pool
+as CI's legs are: the planner runs `.github/workflows/runner-overflow.py`, which
+keeps legs hosted while the repository's busy hosted jobs (CI's included) stay
+under `HOSTED_RUNNER_BUDGET`, and sends the rest to the pool, longest first. A
+pool leg's name starts with `[pool] `; it runs Azurite from npm and the
+Prometheus binary the pool image bakes in. With `RUNNER_POOL` unset every leg
+runs hosted. A `workflow_dispatch` run's `hosted_budget` input overrides the
+budget for that run, so `0` sends every leg to the pool. See
+`tools/ci-runners/README.md`.
+
+On a member pull request, or an ordinary pull request into `main`, the merge
+gates are CI (`build-and-test`), UI Tests, the pull request's own isolated
+and contract legs, the harness leg, the coverage gate and, on a member pull request,
 screenshot provenance. The story legs and contract conformance are advisory:
-they run when the integration branch lands and on demand.
+they run when an integration branch lands, nightly and on demand.
 
 `.github/instructions/testing.instructions.md` describes the lane alongside
 the repository's other test tiers.
@@ -214,20 +236,21 @@ linked to an open issue.
 
 ### Wrapper census at landing
 
-At phase 1's landing the journeys carry no `KnownGap` wrappers and the following
-`KnownDefect` wrappers, every one linked to an open issue:
+At the follow-ups landing (epic [#5661](https://github.com/NSTA1/Orleans.Lattice/issues/5661)) the journeys and chapter contracts carry no `KnownGap` wrappers, no chapter-level `KnownDefectIssues` entries, and the following `KnownDefect` wrappers. Each wraps only the failure branch it names, so a healthy run stays strict:
 
 | Issue | Where | Step | Symptom the wrapper asserts |
 |---|---|---|---|
-| [#5594](https://github.com/NSTA1/Orleans.Lattice/issues/5594) | `Journeys/A7/GoingMultiRegionJourney.cs` (2 sites) | A7.3, A7.7 | Enabling replication for an already-enrolled tree ignores its bootstrap source, so east never receives west's pre-enable rows. |
-| [#5595](https://github.com/NSTA1/Orleans.Lattice/issues/5595) | `Journeys/U3/TaskBoardTeamJourney.cs` | U3.1 | The apps workspace answers the task board's editor with no apps, so its window shows a not-found page. |
-| [#5595](https://github.com/NSTA1/Orleans.Lattice/issues/5595) | `Journeys/U5/PersonalisingTheConsoleJourney.cs` (2 sites) | U5 step 3 | The apps workspace answers a nested-group viewer with no apps, so `a/` completions omit the task board. |
-| [#5597](https://github.com/NSTA1/Orleans.Lattice/issues/5597) | `Journeys/U1/DataStewardJourney.Browse.cs` | U1 step 2 | A caller granted only on `factory-orders` cannot reach it through its alias `orders`. |
-| [#5613](https://github.com/NSTA1/Orleans.Lattice/issues/5613) | `Journeys/U1/DataStewardJourney.Operate.cs` | U1 step 12 | A tag-index reconcile by a caller with Admin on the index tree fails in its repair phase. The step waits for either outcome and wraps only a failed reconcile, because the defect does not reproduce on every run. |
-| [#5612](https://github.com/NSTA1/Orleans.Lattice/issues/5612) | `Journeys/U4/AuditorsReviewChapter.cs`, used in `AuditorsReviewChapter.Data.cs` | U4 step 2 | History keeps only the write-ahead log's window, because a change-history view over a busy tree stalls its maintainer. The step also cites [#5611](https://github.com/NSTA1/Orleans.Lattice/issues/5611): no built-in provider can create such a view. |
-| [#5534](https://github.com/NSTA1/Orleans.Lattice/issues/5534) | `Story/ContosoStoryTests.cs`, `Contracts/ContosoContractConformanceTests.cs` | C1 stand-in | A coordinated restore causes repeated re-seeds, and C1's withheld east batch bypasses strict-ingest diversion. C1 is phase 2 work. |
+| [#5569](https://github.com/NSTA1/Orleans.Lattice/issues/5569) | `Journeys/U1/DataStewardJourney.Files.cs` | U1 step 8 | Under replay-permit starvation the seed's bulk appends time out, so the Import dialog says it could not seed the tree. |
+| [#5569](https://github.com/NSTA1/Orleans.Lattice/issues/5569) | `Journeys/U1/DataStewardJourney.History.cs` | U1 steps 4 and 7 | The change-history view's drain lags its source by minutes, so a revision just written is not yet in History; the server's entry history is the oracle. |
+| [#5569](https://github.com/NSTA1/Orleans.Lattice/issues/5569) | `Journeys/U1/DataStewardJourney.Operate.cs` | U1 step 12 | The orders-by-status view's drain lags its source, so the view does not yet reflect the edit. |
+| [#5569](https://github.com/NSTA1/Orleans.Lattice/issues/5569) | `Journeys/U3/TaskBoardWindow.cs` | U3 step 1 | The first read of the task board's idle tree outlasts the AppKit's 30 s bridge request, so the board says it could not be read. |
+| [#5675](https://github.com/NSTA1/Orleans.Lattice/issues/5675) | `Journeys/U4/AuditorsReviewChapter.cs` | U4 step 3 | The WAL-window History read of the line feed's latest reading times out behind a replay on a saturated WAL shard. |
+| [#5569](https://github.com/NSTA1/Orleans.Lattice/issues/5569) | `Contracts/Contoso/A10Contract.cs` | A10 verify | The backup-catalogue index view's leaves are refused replay admission, so no catalogue listing read succeeds. A short listing stays strict. |
+| [#5569](https://github.com/NSTA1/Orleans.Lattice/issues/5569) | `Contracts/Contoso/U2Contract.cs` (2 sites) | U2 migrate and verify | A whole-tree migration stops advancing while still running, or the compliance scan exhausts its resumes and ends with an enumeration abort. |
+| [#5569](https://github.com/NSTA1/Orleans.Lattice/issues/5569) | `Contracts/Contoso/C1Contract.cs` (2 sites) | C1 settle | The re-seed C1's remediation forces makes no headway, or a shipper's WAL reads time out, so the replication never reports settled. |
+| [#5729](https://github.com/NSTA1/Orleans.Lattice/issues/5729) | `Contracts/Contoso/C3Contract.cs` | C3 teardown | `DropView` times out behind the view maintainer's post-swap rebuild, which holds the grain turn and cannot be cancelled. |
 
-That is ten wrapper sites over six open issues. The authoritative list for any
+That is eleven wrapper sites over three open issues. #5569 and #5675 are the replay-permit starvation that epic [#5605](https://github.com/NSTA1/Orleans.Lattice/issues/5605) is fixing; those wrappers are removed once it lands. The authoritative list for any
 run is the one `PendingWrapperGateTests` publishes in that run's job summary.
 
 ## Phase 2

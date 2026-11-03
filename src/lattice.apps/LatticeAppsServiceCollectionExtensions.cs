@@ -2,6 +2,7 @@ using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Hosting;
 
@@ -89,6 +90,9 @@ public static partial class LatticeAppsServiceCollectionExtensions
             ServiceDescriptor.Singleton<IValidateOptions<LatticeAppsOptions>, LatticeAppsOptionsValidator>());
 
         // Registry.
+        // The cluster-wide registry epoch (#5595): every committed transition advances it before it is
+        // acknowledged, and every silo's snapshot is measured against it.
+        services.TryAddSingleton<IAppRegistryEpochSource>(sp => new GrainAppRegistryEpochSource(sp.GetService<IGrainFactory>()));
         services.TryAddSingleton<IAppRegistryStore, LatticeAppRegistryStore>();
         services.TryAddSingleton<AppInstallAuthorizer>();
         services.TryAddSingleton<IAppRegistry, AppRegistry>();
@@ -105,10 +109,27 @@ public static partial class LatticeAppsServiceCollectionExtensions
 
         // The compiled snapshot maintainer is one singleton serving both as the change-feed
         // observer and the projection, so a registry write refreshes the snapshot readers see.
+        // The change feed fires only on the committing silo, so the maintainer is measured against
+        // the cluster-wide registry epoch (#5595).
         // AddSingleton<IMutationObserver> is not idempotent under TryAdd, hence the marker above.
         services.TryAddSingleton<CompiledAppRegistrySnapshotMaintainer>();
         services.AddSingleton<IMutationObserver>(sp => sp.GetRequiredService<CompiledAppRegistrySnapshotMaintainer>());
+
+        // A restore or re-seed cutover swaps the registry tree's alias and publishes no mutation,
+        // so the same instance republishes on the registry tree's alias changes (#5731).
+        services.AddSingleton<ITreeAliasObserver>(sp => sp.GetRequiredService<CompiledAppRegistrySnapshotMaintainer>());
         services.TryAddSingleton<IAppRegistryProjection>(sp => sp.GetRequiredService<CompiledAppRegistrySnapshotMaintainer>());
+
+        // Each silo leases its snapshot from the registry epoch grain, which pushes every advance to it
+        // before the write is acknowledged, so an evaluation trusts the snapshot without a grain call
+        // while the lease is live (#5713). A host that is not a silo never leases and reads the epoch.
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<IHostedService>(sp => new AppRegistryEpochSubscription(
+            sp.GetService<IGrainFactory>(),
+            sp.GetService<ILocalSiloDetails>(),
+            sp.GetRequiredService<CompiledAppRegistrySnapshotMaintainer>(),
+            sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<ILogger<AppRegistryEpochSubscription>>()));
 
         // App source seam: the in-image source, composed with any host-registered catalogue sources
         // into the AppSourceSet that serves as the single IAppSource.

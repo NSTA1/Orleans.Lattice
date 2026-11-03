@@ -263,15 +263,16 @@ public partial class ReplicationTreesPage
             }
 
             _enableOpen = false;
+            var bootstrap = result.BootstrapRequested ? " A snapshot bootstrap was requested." : string.Empty;
             if (result.AlreadyEnabled)
             {
-                Toasts.Show($"Replication was already enabled for {result.TreeId} ({ReplicationFormat.MergeMode(result.Mode)}).", LtToastTone.Info);
+                // An already-enrolled tree still honours a named bootstrap source (#5594).
+                Toasts.Show($"Replication was already enabled for {result.TreeId} ({ReplicationFormat.MergeMode(result.Mode)})." + bootstrap, LtToastTone.Info);
             }
             else
             {
                 Toasts.Show(
-                    $"Replication enabled for {result.TreeId} ({ReplicationFormat.MergeMode(result.Mode)})."
-                    + (result.BootstrapRequested ? " A snapshot bootstrap was requested." : string.Empty),
+                    $"Replication enabled for {result.TreeId} ({ReplicationFormat.MergeMode(result.Mode)})." + bootstrap,
                     LtToastTone.Success);
             }
         }

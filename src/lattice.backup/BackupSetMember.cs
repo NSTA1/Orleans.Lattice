@@ -7,6 +7,6 @@ namespace Orleans.Lattice.Backup;
 /// knowing how the set is catalogued. This is an in-process value only; it never
 /// crosses the wire, so it carries no serializer surface.
 /// </summary>
-/// <param name="BackupId">The id of the member backup.</param>
+/// <param name="BackupId">The content-addressed id of the member backup.</param>
 /// <param name="TreeId">The tree the member backup restores.</param>
 public readonly record struct BackupSetMember(string BackupId, string TreeId);

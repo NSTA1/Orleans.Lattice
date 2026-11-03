@@ -137,6 +137,10 @@ lattice	formal-tlc-atomic-variants-4	deterministic	8.88
 lattice	formal-tlc-atomic-variants-5	deterministic	9.43
 lattice	formal-tlc-atomic-variants-6	deterministic	8.97
 lattice	formal-tlc-backup	deterministic	3.94
+# formal-tlc-backup-retention (#5352): BackupRetention's base took 6 m 52 s
+# locally on four workers, its variant 75 s and its mutants under 5 minutes in
+# all; estimated until its first CI measurement.
+lattice	formal-tlc-backup-retention	deterministic	12.00
 # formal-tlc-schema is one measured item: every Schema* module's base,
 # variants and mutations. Earlier figures: 30 cases 2.34 min (ci.yml run
 # 41065598921, #5226); 48 cases 1 m 54 s of dotnet test (run 41087582284,

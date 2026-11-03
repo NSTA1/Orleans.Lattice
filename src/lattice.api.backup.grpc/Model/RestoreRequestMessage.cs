@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Api.Backup.Grpc;
 [Immutable]
 public sealed record RestoreRequestMessage
 {
-    /// <summary>The id of the backup to restore to.</summary>
+    /// <summary>The content-addressed id of the backup to restore to.</summary>
     [Id(0)] public required string BackupId { get; init; }
 
     /// <summary>The tree to restore into, or <see langword="null"/> to restore into the captured tree.</summary>

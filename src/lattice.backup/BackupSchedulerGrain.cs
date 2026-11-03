@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Backup;
 /// concurrent request observes the guard instead of queueing behind the running
 /// capture.
 /// </summary>
-internal sealed class BackupSchedulerGrain(
+internal sealed partial class BackupSchedulerGrain(
     IGrainContext context,
     IReminderRegistry reminderRegistry,
     ILatticeBackupCaptureService captureService,
@@ -29,7 +29,9 @@ internal sealed class BackupSchedulerGrain(
     BackupInventoryRegistry inventory,
     BackupAccessAuthorizer authorizer,
     [PersistentState("backup-scheduler", LatticeOptions.StorageProviderName)]
-    IPersistentState<BackupSchedulerState> state)
+    IPersistentState<BackupSchedulerState> state,
+    BackupPublisher? publisher = null,
+    IOptions<LatticeBackupOptions>? backupOptions = null)
     : IGrainBase, IRemindable, ILatticeBackupSchedulerGrain
 {
     private const string FullScheduleReminderName = "backup-schedule-full";
@@ -468,8 +470,8 @@ internal sealed class BackupSchedulerGrain(
             }
 
             if (latest is null
-                || manifest.CreatedAtUtc > latest.CreatedAtUtc
-                || (manifest.CreatedAtUtc == latest.CreatedAtUtc
+                || BackupRetentionPlanner.RankTime(manifest) > BackupRetentionPlanner.RankTime(latest)
+                || (BackupRetentionPlanner.RankTime(manifest) == BackupRetentionPlanner.RankTime(latest)
                     && string.CompareOrdinal(manifest.Id, latest.Id) > 0))
             {
                 latest = manifest;
@@ -510,6 +512,10 @@ internal sealed class BackupSchedulerGrain(
         }
 
         _pruneInFlight = true;
+
+        // Every id published while the listing is read is recorded, so the plan
+        // made from it never dooms a backup a capture has published since (#5418).
+        _publishedDuringListing = new HashSet<string>(StringComparer.Ordinal);
         try
         {
             // The listing is taken under the guard (issue #5412). Taken before it, a
@@ -520,6 +526,7 @@ internal sealed class BackupSchedulerGrain(
         }
         finally
         {
+            _publishedDuringListing = null;
             _pruneInFlight = false;
         }
     }
@@ -529,7 +536,41 @@ internal sealed class BackupSchedulerGrain(
     {
         var keep = BackupRetentionPlanner.ComputeRetained(
             manifests, opts.RetentionKeepLast, opts.RetentionMaxAge, DateTimeOffset.UtcNow);
-        var doomed = BackupRetentionPlanner.Doomed(manifests, keep);
+
+        // The doom decision and the reservation are one step, with no await between
+        // the listing and here (issue #5418): an id held by a publish, published
+        // during the listing, awaiting its set's stamp, or held by a delete is not
+        // doomed, and every doomed id is held retiring before any row is removed,
+        // so a publish of it waits until this pass has deleted or restored it.
+        var held = new HashSet<string>(StringComparer.Ordinal);
+        var doomed = new List<BackupManifest>();
+        foreach (var manifest in BackupRetentionPlanner.Doomed(manifests, keep))
+        {
+            if (IsHeld(manifest.Id))
+            {
+                held.Add(manifest.Id);
+            }
+            else
+            {
+                doomed.Add(manifest);
+            }
+        }
+
+        _publishedDuringListing = null;
+        ReserveRetiring(doomed);
+        try
+        {
+            return await PruneReservedAsync(manifests, keep, held, doomed);
+        }
+        finally
+        {
+            ReleaseRetiring(doomed);
+        }
+    }
+
+    private async Task<BackupRetentionReport> PruneReservedAsync(
+        List<BackupManifest> manifests, HashSet<string> keep, HashSet<string> held, List<BackupManifest> doomed)
+    {
         if (doomed.Count == 0)
         {
             logger.LogInformation(
@@ -540,7 +581,7 @@ internal sealed class BackupSchedulerGrain(
 
         // Artifacts referenced by any retained manifest must survive even if a
         // pruned manifest happens to reference the same artifact id.
-        var retainedArtifacts = BackupRetentionPlanner.RetainedArtifacts(manifests, keep);
+        var retainedArtifacts = BackupRetentionPlanner.RetainedArtifacts(manifests, keep.Union(held).ToHashSet(StringComparer.Ordinal));
 
         // The fence against an in-flight incremental capture (issue #5357). Each
         // doomed row is removed FIRST, so an increment that re-reads its base's row
@@ -565,6 +606,7 @@ internal sealed class BackupSchedulerGrain(
             if (blocked.Contains(manifest.Id))
             {
                 await catalog.RegisterAsync(manifest);
+                ReleaseRetiring(manifest.Id);
             }
         }
 
@@ -589,6 +631,7 @@ internal sealed class BackupSchedulerGrain(
 
             prunedIds.Add(manifest.Id);
             prunedManifests.Add(manifest);
+            ReleaseRetiring(manifest.Id);
         }
 
         foreach (var pruned in prunedManifests)

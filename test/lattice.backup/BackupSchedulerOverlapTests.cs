@@ -75,12 +75,15 @@ public sealed class BackupSchedulerOverlapTests
         await Task.WhenAll(incremental, full).WaitAsync(TimeSpan.FromSeconds(60));
         await WaitForAsync(async () => _fixture.Gate.Calls >= 2 && await scheduler.IsIdleAsync());
 
-        var names = (await _fixture.ListScopeAsync(scope)).Select(m => m.Name).ToList();
-        Assert.Multiple(() =>
+        // The tree does not change between the two captures, so both re-derive one
+        // content-addressed backup id: the captures themselves are what is counted.
+        var names = _fixture.Gate.Names.ToList();
+        Assert.Multiple(async () =>
         {
             Assert.That(_fixture.Gate.Calls, Is.EqualTo(2), "the full tick should run one full cycle after the incremental one");
             Assert.That(names.Count(n => n.StartsWith("incremental-", StringComparison.Ordinal)), Is.EqualTo(1));
             Assert.That(names.Count(n => n.StartsWith("full-", StringComparison.Ordinal)), Is.EqualTo(1), "the full backup must not be dropped");
+            Assert.That(await _fixture.ListScopeAsync(scope), Has.Count.EqualTo(1), "the full cycle republishes the unchanged tree's backup");
         });
     }
 

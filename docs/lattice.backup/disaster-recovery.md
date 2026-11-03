@@ -16,7 +16,7 @@ see the [API reference](api.md) and the
 
 A backup has two distinct pieces of state:
 
-- **Payload** - the self-describing `BackupManifest` and the
+- **Payload** - the self-describing, content-addressed `BackupManifest` and the
   artifacts it references (named per capture, not by content), written to the external [sink](../lattice.backup.azureblob/README.md).
   This is the backup itself.
 - **Discovery index** - the per-cluster catalog in the reserved
@@ -63,8 +63,11 @@ returns manifests in backup-id order) and re-registers each into
 `sys-backup-catalog` under system origin. It is
 idempotent: a manifest already catalogued is reconciled in place, keeping its
 immutable capture timestamp, rather than duplicated; a catalog missing rows the
-sink has is repopulated. It returns a `BackupCatalogRebuildReport` whose invariant
-is `ScannedCount == RegisteredCount + ReconciledCount`.
+sink has is repopulated. A manifest that no longer restores - it left the sink
+during the rebuild, or an artifact it references is missing, as an operator
+delete interrupted part-way leaves it - is skipped and logged with its backup id
+rather than listed. It returns a `BackupCatalogRebuildReport` whose invariant is
+`ScannedCount == RegisteredCount + ReconciledCount + SkippedCount`.
 
 Use it whenever the catalog has drifted from the sink - after a non-clean cluster
 restart, a partial storage loss, or any time the enumerated backups look

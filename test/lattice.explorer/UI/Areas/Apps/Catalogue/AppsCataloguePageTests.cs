@@ -89,15 +89,15 @@ public sealed class AppsCataloguePageTests : AppsTestContext
         cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-apps-filter button"), Has.Count.EqualTo(4)));
 
         cut.FindAll("select")[0].Change("blob-ops");
-        Assert.That(Navigation.Uri, Does.EndWith("apps/catalogue?source=blob-ops&filter=all"));
+        cut.WaitUntil(() => Assert.That(Navigation.Uri, Does.EndWith("apps/catalogue?source=blob-ops&filter=all")));
 
         cut.FindAll(".lt-apps-filter button")[3].Click();
-        Assert.That(Navigation.Uri, Does.EndWith("apps/catalogue?source=all&filter=updates"));
+        cut.WaitUntil(() => Assert.That(Navigation.Uri, Does.EndWith("apps/catalogue?source=all&filter=updates")));
 
         var search = cut.Find("input[type=search]");
         search.Input("board");
         search.KeyDown("Enter");
-        Assert.That(Navigation.Uri, Does.EndWith("apps/catalogue?source=all&filter=all&q=board"));
+        cut.WaitUntil(() => Assert.That(Navigation.Uri, Does.EndWith("apps/catalogue?source=all&filter=all&q=board")));
     }
 
     [Test]
@@ -321,7 +321,7 @@ public sealed class AppsCataloguePageTests : AppsTestContext
         });
 
         cut.FindAll(".lt-toolbar select")[1].Change("available");
-        Assert.That(Navigation.Uri, Does.EndWith("filter=available"));
+        cut.WaitUntil(() => Assert.That(Navigation.Uri, Does.EndWith("filter=available")));
 
         cut.Find(".lt-table-list__open").Click();
         cut.WaitUntil(() => Assert.That(cut.Find("[role=dialog] a.lt-btn").TextContent, Is.EqualTo("Manage")));

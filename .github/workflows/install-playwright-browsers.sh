@@ -58,7 +58,23 @@ install_with_retry() {
   return "$code"
 }
 
-install_with_retry install-deps "$@"
+# An image that bakes in the system packages for some browsers names them in
+# LATTICE_PLAYWRIGHT_SYSTEM_DEPS (the CI runner pool's, tools/ci-runners, names
+# chromium). When it names every browser requested, install-deps is skipped:
+# it would only re-run apt as root on a runner that already has them.
+deps_baked=true
+for browser in "$@"; do
+  case " ${LATTICE_PLAYWRIGHT_SYSTEM_DEPS:-} " in
+    *" $browser "*) ;;
+    *) deps_baked=false ;;
+  esac
+done
+
+if [ "$deps_baked" = "true" ]; then
+  echo "Playwright system dependencies for $* are baked into this image (LATTICE_PLAYWRIGHT_SYSTEM_DEPS); skipping install-deps."
+else
+  install_with_retry install-deps "$@"
+fi
 if [ "$cache_hit" != "true" ]; then
   install_with_retry install "$@"
 fi

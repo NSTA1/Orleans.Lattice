@@ -97,7 +97,7 @@ defaulting to a shared temp directory).
 (`src/MultiSiteManufacturing.Host/Backup/`) is a DI-registered facade -
 the same seam `OperatorActions` uses, drivable by the UI, a gRPC service,
 or a test. `CaptureFactTreeAsync(name)` captures the whole `mfg-facts`
-tree to the shared sink and returns its backup id;
+tree to the shared sink and returns a content-addressed backup id;
 `RestoreFactTreeAsync(backupId)` restores it with an atomic shadow
 cutover. The facade calls the backup package's public `RestoreAsync`
 entry point and holds no saga wiring of its own: because `mfg-facts` is

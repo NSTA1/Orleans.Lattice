@@ -184,7 +184,7 @@ public sealed class ClusterTreeListTests : ClusterTestContext
 
         cut.Find(".lt-dialog input").Input("a/crm/orders");
         cut.Find(".lt-dialog form").Submit();
-        Assert.That(Navigation.Uri, Does.EndWith("/cluster/trees/a/crm/orders/reshard"));
+        cut.WaitUntil(() => Assert.That(Navigation.Uri, Does.EndWith("/cluster/trees/a/crm/orders/reshard")));
     }
 
     [Test]

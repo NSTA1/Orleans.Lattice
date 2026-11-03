@@ -32,8 +32,8 @@ internal static class BackupRetentionPlanner
     /// <param name="now">The current time.</param>
     /// <returns>
     /// Every listed manifest when neither knob is set (the unbounded no-op).
-    /// Otherwise the newest <paramref name="keepLast"/> (by creation time, then
-    /// ordinal id, descending), every manifest created at or after
+    /// Otherwise the newest <paramref name="keepLast"/> (by <see cref="RankTime"/>,
+    /// then ordinal id, descending), every manifest last captured at or after
     /// <c>now - maxAge</c>, and then repeatedly the base of a kept increment while
     /// that base is itself in the listing.
     /// </returns>
@@ -205,6 +205,24 @@ internal static class BackupRetentionPlanner
         return baseRow is not null && string.Equals(baseRow.Id, baseId, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The time retention ranks a backup by: when it was last captured. A backup
+    /// id is a content address, so a capture of identical bytes republishes an
+    /// existing backup, keeping its first <see cref="BackupManifest.CreatedAtUtc"/>
+    /// and recording itself in <see cref="BackupManifest.LastCapturedAtUtc"/>; the
+    /// later of the two is the rank. A manifest that predates the field ranks by
+    /// <see cref="BackupManifest.CreatedAtUtc"/>.
+    /// </summary>
+    /// <param name="manifest">The manifest to rank.</param>
+    /// <returns>The later of its capture time and its last capture time.</returns>
+    public static DateTimeOffset RankTime(BackupManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        return manifest.LastCapturedAtUtc is { } last && last > manifest.CreatedAtUtc
+            ? last
+            : manifest.CreatedAtUtc;
+    }
+
     private static HashSet<string> ComputeKeepSet(
         IReadOnlyList<BackupManifest> listing, int? keepLast, TimeSpan? maxAge, DateTimeOffset now)
     {
@@ -225,7 +243,7 @@ internal static class BackupRetentionPlanner
         if (keepLast is { } count)
         {
             var recent = listing
-                .OrderByDescending(m => m.CreatedAtUtc)
+                .OrderByDescending(RankTime)
                 .ThenByDescending(m => m.Id, StringComparer.Ordinal)
                 .Take(count);
             foreach (var manifest in recent)
@@ -246,7 +264,7 @@ internal static class BackupRetentionPlanner
                 : now - window;
             foreach (var manifest in listing)
             {
-                if (manifest.CreatedAtUtc >= cutoff)
+                if (RankTime(manifest) >= cutoff)
                 {
                     keep.Add(manifest.Id);
                 }

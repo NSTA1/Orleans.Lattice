@@ -2,8 +2,8 @@
 
 The repository's hosted runners share one account-wide concurrency cap (20 jobs
 on the Free plan). Every matrix lane (ci.yml legs, the nightly Coverage legs
-and TLC legs, formal-receipts.yml TLC legs) plans its legs, then calls this
-script before publishing them; ci.yml's Content gates job is routed as a
+and TLC legs, formal-receipts.yml TLC legs, explorer-journeys.yml journey
+legs) plans its legs, then calls this script before publishing them; ci.yml's Content gates job is routed as a
 single-leg matrix by its own small job. It counts the hosted jobs already running or
 queued in this repository - queued counts, because a queued hosted job is one
 waiting behind the cap, and a new hosted leg would wait behind it - and keeps
@@ -14,7 +14,9 @@ queue). The legs beyond the budget go to the elastic self-hosted pool in
 tools/ci-runners, longest first, because a long leg holds a hosted slot longest.
 
 Each leg gains three keys, read by the workflows:
-  runsOn  a JSON runs-on value: "ubuntu-latest" or the pool's label array;
+  runsOn  a JSON runs-on value: the hosted label ("ubuntu-latest" unless
+          --hosted names another, as the journey legs name the ubuntu-24.04
+          their Playwright needs) or the pool's label array;
   pool    true on a pool leg (the job prefixes its name with "[pool] " and
           its Azurite step runs the npm build rather than the image);
   runner  "hosted" or "pool", for the summary.
@@ -28,7 +30,7 @@ the same headroom; the budget's margin under the cap absorbs that. It counts
 this repository only: the cap is account-wide, so other repositories' jobs are
 invisible here.
 
-Usage: runner-overflow.py --matrix FILE [--matrix FILE ...]   (rewritten in place)
+Usage: runner-overflow.py --matrix FILE [--matrix FILE ...] [--hosted LABEL]   (rewritten in place)
        runner-overflow.py --self-test
 Environment: RUNNER_POOL (JSON label array), HOSTED_RUNNER_BUDGET,
              GITHUB_REPOSITORY, GH_TOKEN or GITHUB_TOKEN, GITHUB_API_URL,
@@ -69,11 +71,12 @@ def parse_budget(raw: str | None) -> int:
     return value
 
 
-def route(legs_by_file: list[list[dict]], pool: list[str] | None, busy: int | None, budget: int) -> tuple[int, int]:
+def route(legs_by_file: list[list[dict]], pool: list[str] | None, busy: int | None, budget: int,
+          hosted: str = HOSTED) -> tuple[int, int]:
     """Annotate every leg in place. Returns (hosted, pooled)."""
     everything = [leg for legs in legs_by_file for leg in legs]
     for leg in everything:
-        leg["runsOn"] = json.dumps(HOSTED)
+        leg["runsOn"] = json.dumps(hosted)
         leg["pool"] = False
         leg["runner"] = "hosted"
     if pool is None or busy is None:
@@ -126,6 +129,7 @@ def count_busy_hosted(api: str, repo: str, token: str) -> int:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--matrix", action="append", default=[])
+    ap.add_argument("--hosted", default=HOSTED, help="the hosted runs-on label (default ubuntu-latest)")
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args(argv)
     if args.self_test:
@@ -156,7 +160,9 @@ def main(argv: list[str]) -> int:
             print(f"::warning::runner-overflow: could not count hosted jobs ({e}); every leg stays on hosted runners.")
             note = "The hosted job count could not be read, so every leg stays on hosted runners."
 
-    hosted, pooled = route(legs_by_file, pool, busy, budget)
+    if not args.hosted.strip() or args.hosted.strip() == "self-hosted":
+        ap.error("--hosted must name a GitHub-hosted runner label")
+    hosted, pooled = route(legs_by_file, pool, busy, budget, args.hosted.strip())
     for path, legs in zip(args.matrix, legs_by_file):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(legs, f)
@@ -205,6 +211,14 @@ def self_test() -> int:
     f1, f2 = legs(5, 50), legs(40)
     check(route([f1, f2], pool, 17, 18) == (1, 2), "several matrices share one budget")
     check(f1[0]["pool"] is False and f1[1]["pool"] and f2[0]["pool"], "shared budget keeps the shortest leg hosted")
+
+    g = legs(10, 30)
+    check(route([g], None, 0, 18, "ubuntu-24.04") == (2, 0), "--hosted: no pool, everything hosted")
+    check(all(json.loads(l["runsOn"]) == "ubuntu-24.04" for l in g), "--hosted names the hosted label")
+    h = legs(10, 30, 20)
+    check(route([h], pool, 17, 18, "ubuntu-24.04") == (1, 2), "--hosted: the budget still overflows")
+    check([json.loads(l["runsOn"]) for l in h] == ["ubuntu-24.04", pool, pool],
+          "--hosted: hosted legs carry the label, pooled legs the pool's")
 
     for raw, ok in (("", None), ('["self-hosted","lattice-pool"]', pool)):
         check(parse_pool(raw) == ok, f"parse_pool({raw!r})")

@@ -64,8 +64,8 @@ once, either here or in the
 | WAL durability lifecycle | 6 | 151 | 138 | 262 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
 | Shard ownership | 5 | 124 | 124 | 201 | [Verified Shard Ownership](verified-shard-ownership.md) |
 | Cross-cluster atomic visibility | 1 | 66 | 43 | 150 | [Verified Atomic-Commit: the replicated half](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
-| Replication convergence | 4 | 84 | 64 | 195 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
-| Backup and restore | 6 | 96 | 101 | 189 | [Verified backup and restore](../lattice.backup/verified-backup.md) |
+| Replication convergence | 4 | 91 | 71 | 206 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
+| Backup and restore | 7 | 123 | 122 | 227 | [Verified backup and restore](../lattice.backup/verified-backup.md) |
 | B+ tree topology | 6 | 100 | 140 | 62 | [B+ tree topology](../../spec/bplustree/README.md) |
 | Materialised-view tail and lifecycle | 1 | 22 | 27 | 30 | [Materialised views](../../spec/materialised-views/README.md) |
 | Tree lifecycle composition | 2 | 46 | 66 | 48 | [Resize, reshard and shadow cutover](../../spec/tree-lifecycle/README.md) |
@@ -75,7 +75,7 @@ once, either here or in the
 | Tenant rate budgets | 1 | 14 | 23 | 22 | [Rate-budget leases](../../spec/tenant-rate-budget/README.md) |
 | Tenant isolation | 1 | 25 | 25 | 31 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
 | Scheduling and progress | 10 | 196 | 244 | 119 | [Verified Scheduling and Progress](verified-scheduling.md) |
-| Schema enforcement and versioning | 9 | 145 | 175 | 289 | [Schema enforcement and versioning](../../spec/schema/README.md) |
+| Schema enforcement and versioning | 9 | 149 | 178 | 299 | [Schema enforcement and versioning](../../spec/schema/README.md) |
 | Schema and view composition | 1 | 23 | 23 | 28 | [Schema and view composition](../../spec/schema-view/README.md) |
 
 **Behaviour rows** are the rows of a refinement note's action and property tables
@@ -467,7 +467,9 @@ gaps, states its full scope.
   - **Covers:** plain replication over a lossy, duplicating, reordering transport:
     the cycle-break, duplicate suppression, the bootstrap handoff, causal
     dependencies and their low watermark, and an in-place re-bootstrap after
-    the source reaped a delete, including the bootstrap drop floor.
+    the source reaped a delete, including the bootstrap drop floor, and
+    concurrent mutual re-seeds through shadow copies that a source's cutover
+    aborts and re-drives.
   - **Does not cover:** atomic-write sagas carried over replication (the
     cross-cluster area covers them), anti-entropy repair, and more than one WAL
     partition per cluster.
@@ -476,12 +478,14 @@ gaps, states its full scope.
     across regions, and a local cutover and its revert, all against in-flight
     atomic writes; and retention pruning (keep-last, max-age, the base closure)
     racing full and incremental captures of the same scope, with a crash at any
-    step.
+    step; and which scope owns a content-addressed backup id across scopes, with
+    the owning scope retiring it.
   - **Does not cover:** in-place and cold restores, reader atomicity across a
     backup set's members during the alias swap, a replication batch delayed
     across a whole restore cutover, an operator's explicit backup delete,
-    catalog rebuild and scrub, and retention over a sink shared between
-    clusters.
+    catalog rebuild and scrub (each serialised per backup id with retention, but
+    not modelled), mixed-version silos during a rolling upgrade, and retention
+    over a sink shared between clusters.
 
 - **Materialised-view tail and lifecycle** ([`spec/materialised-views/`](../../spec/materialised-views/README.md)).
   - **Covers:** physical WAL binding, checkpoint and published read-position
@@ -561,15 +565,17 @@ gaps, states its full scope.
     keeps the tree's policy), every source shard armed at its live layout,
     crash recovery, aborts and cancels that publish nothing, and refusal of a
     cutover whose captured source was superseded. Cross-region
-    (`SchemaCrossRegion`): each receiver judges replicated entries and atomic
-    batches by its own policy and catalog, and a refused batch entry is
+    (`SchemaCrossRegion`): each receiver judges every replicated entry, a plain
+    write included, and atomic batches by its own policy and catalog, on the
+    stream, anti-entropy repair and a re-seed import alike, and a refused batch entry is
     dead-lettered durably while its siblings commit.
   - **Does not cover:** writes during a remediation or migration build
     (quiescence is required), an ownership-guard refusal of the swap, the
     timing of policy propagation to other silos, and split or fold
-    publication; writes below the choke point (plain last-writer-wins
-    replication, backup restore, tree merge), which are never validated or
-    stamped; replication of any schema definition between regions; re-applying
+    publication; local writes below the choke point (backup restore, tree
+    merge), which are never validated or stamped; a second dead-letter record
+    for a re-delivered refused row, and a repair or re-seed admitting a row
+    diverted for an unservable stamp once the receiver's catalog serves it; replication of any schema definition between regions; re-applying
     a diverted entry, which stays diverted after the version is registered;
     and the batched (`MergeManyAsync`) merges the merge-result observer does
     not see. The tenant model covers the facade only, not the in-process
@@ -625,8 +631,8 @@ area's list is the authoritative one. The separately listed interrupted-shadow d
 | WAL durability lifecycle | #4450, #4451, #4456, #4467, #4523, #4525, #4621, #4622, #4634, #4641, #4654, #4669, #4699, #4700, #5358, #5416, #5417, #5458, #5459 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
 | Shard ownership | #4452, #4453, #4454, #4455, #4473, #4474, #4475, #4503, #4522, #4545, #4564, #4611, #4613, #4618, #4619, #4689 | [`spec/shard-ownership/`](../../spec/shard-ownership/README.md#defects-this-area-found) |
 | Cross-cluster atomic visibility | #4480, #4481, #4482, #4508, #4511, #4526, #4533, #4534, #4591, #4627, #4664, #4683, #4684, #4685 | [Verified Atomic-Commit](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
-| Replication convergence | #4463, #4464, #4465, #4504, #4537, #4549, #4585, #4586, #4587, #4603, #4604, #4614, #4615, #4673, #4707 | [`spec/replication/`](../../spec/replication/README.md#production-defects-this-module-found) |
-| Backup and restore | #4485, #4490, #4589, #4593, #4686, #5357, #5412, #5418, #5449, #5529, #5531, #5532 | [`spec/backup/`](../../spec/backup/README.md#defects-the-modules-found) |
+| Replication convergence | #4463, #4464, #4465, #4504, #4537, #4549, #4585, #4586, #4587, #4603, #4604, #4614, #4615, #4673, #4707, #5689 | [`spec/replication/`](../../spec/replication/README.md#production-defects-this-module-found) |
+| Backup and restore | #4485, #4490, #4589, #4593, #4686, #5357, #5412, #5418, #5449, #5529, #5531, #5532, #5627, #5628, #5629, #5631, #5632, #5637, #5639 | [`spec/backup/`](../../spec/backup/README.md#defects-the-modules-found) |
 | B+ tree topology | #4795, #4815, #4818, #4914 | [`spec/bplustree/`](../../spec/bplustree/README.md#defects-this-specification-found) |
 | Materialised-view tail and lifecycle | #4853, #4856, #4857 | [`spec/materialised-views/`](../../spec/materialised-views/README.md#defects-found) |
 | Materialised-view physical rebuild and resolved identity | #4891, #4895, #4905 | [Physical-rebind companion](../../spec/materialised-views/README.md#focused-aggregation-and-physical-rebind-companions) and [resolved identity](../../spec/view-resolved-identity/README.md) |

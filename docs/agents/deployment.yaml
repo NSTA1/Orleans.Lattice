@@ -2857,6 +2857,10 @@ configuration_schema:
         type: "TimeSpan"
         default: "TimeSpan.FromSeconds(1)"
         source: "src/lattice.schema/LatticeSchemaEnforcementOptions.cs#LatticeSchemaEnforcementOptions.PropagationInterval"
+      - name: "AliasReservationWaitTimeout"
+        type: "TimeSpan"
+        default: "TimeSpan.FromMinutes(15)"
+        source: "src/lattice.schema/LatticeSchemaEnforcementOptions.cs#LatticeSchemaEnforcementOptions.AliasReservationWaitTimeout"
   - type: "LatticeSchemaVersioningOptions"
     package: "Orleans.Lattice.Schema"
     registration:

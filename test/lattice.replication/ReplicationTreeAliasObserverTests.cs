@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.Replication.Grains;
 
@@ -10,7 +11,8 @@ namespace Orleans.Lattice.Replication.Tests;
 /// the replication-side hook that fans a core tree-registry physical-identity
 /// swap out to the per-peer shipper grains as an event-driven rebind. Verifies
 /// the per-peer fan-out, the empty-peer fast path, best-effort isolation when
-/// one peer's notify throws, and cancellation propagation.
+/// one peer's notify throws, cancellation propagation, and that no shipper is
+/// activated for an alias name with no replication configuration (#5676).
 /// </summary>
 [TestFixture]
 public class ReplicationTreeAliasObserverTests
@@ -132,6 +134,73 @@ public class ReplicationTreeAliasObserverTests
         Assert.That(
             () => observer.OnTreeAliasChangedAsync(Change(), cts.Token),
             Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    [Test]
+    public async Task OnTreeAliasChanged_does_not_activate_a_shipper_for_an_unconfigured_alias_name()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var topology = Substitute.For<IReplicationTopology>();
+        topology.CurrentPeers.Returns(["site-b"]);
+        var context = Substitute.For<ILatticeReplicationContext>();
+        context.ResolveMergeMode("orders").Returns((LatticeMergeMode?)null);
+        var observer = new ReplicationTreeAliasObserver(
+            factory, topology, NullLogger<ReplicationTreeAliasObserver>.Instance,
+            Options(new LatticeReplicationOptions()), context);
+
+        await observer.OnTreeAliasChangedAsync(
+            Change(tree: "orders", oldPhysical: "orders", newPhysical: "factory-orders"), CancellationToken.None);
+
+        factory.DidNotReceive().GetGrain<IReplicationShipperGrain>(Arg.Any<string>());
+    }
+
+    [Test]
+    public async Task OnTreeAliasChanged_still_rebinds_a_statically_configured_tree_without_a_mode()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var shipper = Substitute.For<IReplicationShipperGrain>();
+        factory.GetGrain<IReplicationShipperGrain>("alpha/site-b").Returns(shipper);
+        var topology = Substitute.For<IReplicationTopology>();
+        topology.CurrentPeers.Returns(["site-b"]);
+        var context = Substitute.For<ILatticeReplicationContext>();
+        context.ResolveMergeMode("alpha").Returns((LatticeMergeMode?)null);
+        var options = new LatticeReplicationOptions
+        {
+            ReplicatedTrees = new Dictionary<string, LatticeMergeMode> { ["alpha"] = LatticeMergeMode.LwwRegister },
+        };
+        var observer = new ReplicationTreeAliasObserver(
+            factory, topology, NullLogger<ReplicationTreeAliasObserver>.Instance, Options(options), context);
+
+        await observer.OnTreeAliasChangedAsync(Change(newPhysical: "alpha-v2"), CancellationToken.None);
+
+        await shipper.Received(1).NotifySourceIdentityChangedAsync("alpha-v2", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task OnTreeAliasChanged_rebinds_an_enrolled_tree()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var shipper = Substitute.For<IReplicationShipperGrain>();
+        factory.GetGrain<IReplicationShipperGrain>("alpha/site-b").Returns(shipper);
+        var topology = Substitute.For<IReplicationTopology>();
+        topology.CurrentPeers.Returns(["site-b"]);
+        var context = Substitute.For<ILatticeReplicationContext>();
+        context.ResolveMergeMode("alpha").Returns(LatticeMergeMode.LwwRegister);
+        var observer = new ReplicationTreeAliasObserver(
+            factory, topology, NullLogger<ReplicationTreeAliasObserver>.Instance,
+            Options(new LatticeReplicationOptions()), context);
+
+        await observer.OnTreeAliasChangedAsync(Change(newPhysical: "alpha-v2"), CancellationToken.None);
+
+        await shipper.Received(1).NotifySourceIdentityChangedAsync("alpha-v2", Arg.Any<CancellationToken>());
+    }
+
+    private static IOptionsMonitor<LatticeReplicationOptions> Options(LatticeReplicationOptions value)
+    {
+        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        monitor.CurrentValue.Returns(value);
+        monitor.Get(Arg.Any<string>()).Returns(value);
+        return monitor;
     }
 
     [Test]

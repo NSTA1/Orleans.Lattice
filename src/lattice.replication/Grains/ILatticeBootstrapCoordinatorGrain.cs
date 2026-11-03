@@ -105,6 +105,9 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     /// the export carries neither as a prepared row nor as a decision row,
     /// which the source therefore decided and purged, is decided aborted
     /// locally. Its committed values, if any, arrived as committed rows.
+    /// A request the last completed bootstrap from the source already answers
+    /// (an export after it, no reconcile owed, installed under the tree's current
+    /// frontier epoch) is neither recorded nor restarted (issue #5534).
     /// </summary>
     /// <param name="sourceClusterId">The re-seeding sender's cluster id. Must be non-null and non-empty.</param>
     /// <param name="reseedAfterEpoch">The sender's recorded re-seed epoch.</param>

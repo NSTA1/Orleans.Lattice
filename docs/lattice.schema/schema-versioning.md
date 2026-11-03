@@ -66,7 +66,7 @@ Each hop uses validated declarative value-transform IR, or a stable transform id
 
 Catalog scope is the selected region and effective tenant tree, not a process-global registry or a cross-region deployment mechanism. For a replicated tree, register the same definitions in every serving region before advancing its target or shipping values at that version. A missing descriptor or migration path remains an explicit refusal; discovery cannot prove that unknown external values will be readable.
 
-The same holds for the tree's policy and version config: they are stored in the region's own reserved `sys-schema-*` trees, so the replication stream carries stamped values, never the definitions that interpret them. A receiving region therefore judges and reads every replicated value by its own definitions. A plain last-writer-wins entry stamped past the receiver's target is stored with that stamp even under `StrictIngest`, and reads of it fail with `NotSupportedException` until the receiver registers that version and advances to it; the stored stamp is never rewritten. Under `StrictIngest`, a typed-CRDT delta or an atomic-batch entry the receiver cannot decode, or whose body its own policy refuses, is [dead-lettered](dead-letter-queue.md) rather than applied. That diversion is permanent: registering the version afterwards does not re-apply it, so the two regions differ for that key until it is written again (the dead-letter queue is read-only and keeps only a bounded preview of the value). Register and advance in the receiving regions before any source region advances or ships values at a new version. The `SchemaCrossRegion` TLA+ module checks this interaction; its [refinement note](../../spec/schema/SchemaCrossRegionRefinement.md) lists what is not checked.
+The same holds for the tree's policy and version config: they are stored in the region's own reserved `sys-schema-*` trees, so the replication stream carries stamped values, never the definitions that interpret them. A receiving region therefore judges and reads every replicated value by its own definitions. Without `StrictIngest`, a plain last-writer-wins entry stamped past the receiver's target is stored with that stamp, and reads of it fail with `NotSupportedException` until the receiver registers that version and advances to it; the stored stamp is never rewritten. Under `StrictIngest`, any replicated entry - a plain last-writer-wins write, a typed-CRDT delta or an atomic-batch entry - the receiver cannot decode, or whose body its own policy refuses, is [dead-lettered](dead-letter-queue.md) rather than applied, and an admitted plain write is stored with the stamp it carried, never re-stamped. That diversion is permanent: registering the version afterwards does not re-apply it, so the two regions differ for that key until it is written again (the dead-letter queue is read-only and keeps only a bounded preview of the value). Register and advance in the receiving regions before any source region advances or ships values at a new version. The `SchemaCrossRegion` TLA+ module checks this interaction; its [refinement note](../../spec/schema/SchemaCrossRegionRefinement.md) lists what is not checked.
 
 ### Versioning options
 
@@ -141,9 +141,15 @@ version to read it. A hop whose DI `transformId` has no registered transform thr
 Advancing a tree's target version is an admin action allowed at any time. The new
 target applies to new writes on the serving silo as soon as the call returns, and on
 every other silo within `LatticeSchemaVersioningOptions.PropagationInterval` (one
-second by default); inside that window a lagging silo can still stamp at the previous
-target, and fails a read of a value stamped at the newer target with
-`NotSupportedException`. Existing values are lifted lazily at read
+second by default). Inside that window a lagging silo can still stamp at the previous
+target. A lagging silo that reads a value stamped at the newer target re-reads the
+tree's config before refusing it, so the read, and a compliance scan, serves the
+value rather than failing (#5711). That re-read is shared by concurrent reads of the
+tree on the silo, and it runs at most once per tree per propagation interval, so a
+value that really is newer than the target still fails with `NotSupportedException`
+and costs at most one store read per tree per interval. Strict ingest does the same before it
+dead-letters a replicated value stamped above the cached target, so a peer that advanced
+first does not have its current values diverted on a lagging silo. Existing values are lifted lazily at read
 time by the upcaster chain. The advance is **monotonic**: `AdvanceTargetVersionAsync`
 rejects an unversioned tree, and a target that is not strictly greater than the
 current one, with `InvalidOperationException`. (`SetVersionConfigAsync` replaces the

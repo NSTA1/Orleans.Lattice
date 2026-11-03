@@ -1,0 +1,20 @@
+# Pairs with ListedInSink. The pass dooms an id a capture is publishing:
+# its listing still names the old row, so it removes the row the republish
+# is about to refresh and then deletes the manifest the republish wrote,
+# after the republish has registered it again.
+MODULE: ListedInSinkPassDoomsPublishing
+TARGET: ListedInSink
+CLASS: Invariant
+SUMMARY: the pass dooms an id a capture is publishing
+PERTURBS: PruneList
+
+--- FIND
+       IN /\ D \ Busy # {}
+          /\ prPh' = [prPh EXCEPT ![p] = "rows"]
+          /\ prDoomed' = [prDoomed EXCEPT ![p] = D \ Busy]
+--- REPLACE
+       \* MUTATION: an id being published can be doomed.
+       IN /\ D # {}
+          /\ prPh' = [prPh EXCEPT ![p] = "rows"]
+          /\ prDoomed' = [prDoomed EXCEPT ![p] = D]
+--- END

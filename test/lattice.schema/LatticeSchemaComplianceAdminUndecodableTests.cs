@@ -146,4 +146,46 @@ public sealed class LatticeSchemaComplianceAdminUndecodableTests
             Assert.That(rows.GetValueOrDefault(Json.Validate(Utf8("nope"))!), Is.EqualTo(1));
         });
     }
+
+    /// <summary>
+    /// Regression for #5711: the scan runs on a silo whose cached target lags an
+    /// advance another silo already stamps writes at. The streaming scan's in-tree
+    /// decode refuses such a value, and the stored-form fallback, decoding with the
+    /// real versioning decoder, re-reads the config and judges the value at its stamp,
+    /// so a current value is not reported undecodable.
+    /// </summary>
+    [Test]
+    public async Task ScanCompliance_judges_a_value_stamped_above_a_stale_cached_target_as_current()
+    {
+        var invalidated = false;
+        var versions = Substitute.For<ILatticeSchemaVersionProvider>();
+        versions.GetConfigAsync(Tree, Arg.Any<CancellationToken>()).Returns(_ =>
+            new ValueTask<LatticeSchemaVersionConfig?>(new LatticeSchemaVersionConfig(1, invalidated ? 2u : 1u)));
+        versions.When(p => p.Invalidate(Tree)).Do(_ => invalidated = true);
+        var decoder = new LatticeSchemaVersionDecoder(versions, new LatticeSchemaRegistryBuilder().Build());
+
+        var grain = Substitute.For<ILattice>();
+        var reader = Substitute.For<IReplicationApplyGrain>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        grainFactory.GetGrain<ILattice>(Tree).Returns(grain);
+        grainFactory.GetGrain<IReplicationApplyGrain>(Tree).Returns(reader);
+        var policies = Substitute.For<ILatticeSchemaPolicyProvider>();
+        policies.GetCompiledPolicyAsync(Tree, Arg.Any<CancellationToken>()).Returns(new ValueTask<CompiledSchemaPolicy?>(Json));
+        var admin = new LatticeSchemaComplianceAdmin(grainFactory, policies, decoder);
+
+        // The in-tree decode on the stale silo refuses k1, stamped v2 by the silo that advanced the target.
+        SetEntries(grain, () => Faulting("{}"));
+        grain.KeysAsync("k0\0", Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Keys("k1"));
+        reader.ReadStoredWithVersionAsync("k1")
+            .Returns(Task.FromResult(new VersionedValue { Value = LatticeSchemaEnvelope.Encode(1, 2, Utf8("{}")) }));
+
+        var report = await admin.ScanComplianceAsync(Tree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.ScannedCount, Is.EqualTo(2));
+            Assert.That(report.NonCompliantCount, Is.EqualTo(0), string.Join("; ", report.RuleBreakdown.Select(r => r.Reason)));
+        });
+    }
 }

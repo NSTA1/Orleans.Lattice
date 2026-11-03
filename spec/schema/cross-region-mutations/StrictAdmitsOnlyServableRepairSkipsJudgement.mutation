@@ -1,0 +1,17 @@
+# Pairs with StrictAdmitsOnlyServable in SchemaCrossRegion. Anti-entropy repair re-ships a row
+# the receiver lacks and stores it directly, around strict ingest, so a body the receiver's
+# policy refuses is admitted by repair where the stream would have diverted it.
+MODULE: StrictAdmitsOnlyServableRepairSkipsJudgement
+TARGET: StrictAdmitsOnlyServable
+CLASS: Invariant
+SUMMARY: anti-entropy repair stores the source row verbatim, bypassing strict ingest
+PERTURBS: Repair
+
+--- FIND
+    /\ IF dl[e] = 1 THEN UNCHANGED <<st, tag, dl>> ELSE Ingest(e, FALSE)
+--- REPLACE
+\* MUTATION: the repaired row is stored without being judged.
+    /\ st' = [st EXCEPT ![e] = Landing(e)]
+    /\ tag' = [tag EXCEPT ![e] = stamp[e]]
+    /\ UNCHANGED dl
+--- END

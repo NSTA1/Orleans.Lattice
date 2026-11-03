@@ -3,9 +3,10 @@ namespace Orleans.Lattice.Backup.Tests;
 /// <summary>
 /// A test <see cref="ILatticeBackupSink"/> that forwards to the real in-cluster
 /// sink and runs an optional hook immediately before and after each manifest
-/// write, and before each sink manifest listing, so a test can place a
-/// retention pass at an exact point of an in-flight capture, or a capture at
-/// the point of a retention pass's sink scan.
+/// write, before each sink manifest listing and as each listed manifest is
+/// yielded, before each artifact delete and after each probe, so a test can
+/// place a retention pass at an exact point of an in-flight capture, or a
+/// capture, a delete or a rebuild at an exact point of a pass or a scrub.
 /// </summary>
 internal sealed class InterceptingBackupSink(InClusterLatticeBackupSink inner) : ILatticeBackupSink
 {
@@ -18,12 +19,24 @@ internal sealed class InterceptingBackupSink(InClusterLatticeBackupSink inner) :
     /// <summary>Runs before the sink's manifests are listed; <see langword="null"/> for none.</summary>
     public static Func<Task>? BeforeManifestList { get; set; }
 
+    /// <summary>Runs as each listed manifest is yielded; <see langword="null"/> for none.</summary>
+    public static Func<BackupManifest, Task>? OnManifestListed { get; set; }
+
+    /// <summary>Runs before an artifact is deleted; <see langword="null"/> for none.</summary>
+    public static Func<string, Task>? BeforeArtifactDelete { get; set; }
+
+    /// <summary>Runs after a backup is probed, with the probe's result; <see langword="null"/> for none.</summary>
+    public static Func<string, BackupSinkResolution, Task>? AfterProbe { get; set; }
+
     /// <summary>Clears every hook.</summary>
     public static void Reset()
     {
         BeforeManifestWrite = null;
         AfterManifestWrite = null;
         BeforeManifestList = null;
+        OnManifestListed = null;
+        BeforeArtifactDelete = null;
+        AfterProbe = null;
     }
 
     /// <inheritdoc />
@@ -39,8 +52,15 @@ internal sealed class InterceptingBackupSink(InClusterLatticeBackupSink inner) :
         inner.ReadArtifactAsync(artifactId, cancellationToken);
 
     /// <inheritdoc />
-    public Task<bool> DeleteArtifactAsync(string artifactId, CancellationToken cancellationToken = default) =>
-        inner.DeleteArtifactAsync(artifactId, cancellationToken);
+    public async Task<bool> DeleteArtifactAsync(string artifactId, CancellationToken cancellationToken = default)
+    {
+        if (BeforeArtifactDelete is { } before)
+        {
+            await before(artifactId);
+        }
+
+        return await inner.DeleteArtifactAsync(artifactId, cancellationToken);
+    }
 
     /// <inheritdoc />
     public IAsyncEnumerable<string> ListArtifactIdsAsync(CancellationToken cancellationToken = default) =>
@@ -77,6 +97,11 @@ internal sealed class InterceptingBackupSink(InClusterLatticeBackupSink inner) :
 
         await foreach (var manifest in inner.ListManifestsAsync(cancellationToken))
         {
+            if (OnManifestListed is { } listed)
+            {
+                await listed(manifest);
+            }
+
             yield return manifest;
         }
     }
@@ -86,8 +111,16 @@ internal sealed class InterceptingBackupSink(InClusterLatticeBackupSink inner) :
         inner.ManifestExistsAsync(backupId, cancellationToken);
 
     /// <inheritdoc />
-    public Task<BackupSinkResolution> ProbeAsync(string backupId, CancellationToken cancellationToken = default) =>
-        inner.ProbeAsync(backupId, cancellationToken);
+    public async Task<BackupSinkResolution> ProbeAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        var resolution = await inner.ProbeAsync(backupId, cancellationToken);
+        if (AfterProbe is { } after)
+        {
+            await after(backupId, resolution);
+        }
+
+        return resolution;
+    }
 
     /// <inheritdoc />
     public Task<bool> DeleteManifestAsync(string backupId, CancellationToken cancellationToken = default) =>

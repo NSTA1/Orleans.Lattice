@@ -3,6 +3,7 @@ using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Explorer.UI.Areas.Replication;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using static Orleans.Lattice.Explorer.Tests.UI.Areas.Replication.ReplicationTestData;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Replication;
@@ -128,7 +129,7 @@ public sealed class ReplicationComponentsTests : ReplicationTestContext
         });
 
         cut.FindAll("select")[2].Change(string.Empty);
-        Assert.That(Navigation.Uri, Does.EndWith("/replication"), "choosing Any removes the key");
+        cut.WaitUntil(() => Assert.That(Navigation.Uri, Does.EndWith("/replication"), "choosing Any removes the key"));
     }
 
     [Test]

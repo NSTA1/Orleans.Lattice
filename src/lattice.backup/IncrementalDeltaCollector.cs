@@ -21,9 +21,10 @@ namespace Orleans.Lattice.Backup;
 /// hybrid-logical-clock, expiry, origin, and version-vector).
 /// <para>
 /// The content digest hashes the streamed bytes alone; the capture engine folds
-/// it, the base backup id and the capture's artifact id into the backup id
-/// (<see cref="BackupIdentity"/>), so every increment, even an empty one, is its
-/// own backup. The delta is never buffered whole - only one drained page is held at a time.
+/// it and the base backup id into the chained backup id
+/// (<see cref="BackupIdentity.Increment"/>), so two empty increments off different
+/// bases never collide while an identical retry off the same base re-derives the
+/// same id. The delta is never buffered whole - only one drained page is held at a time.
 /// </para>
 /// <para>
 /// A range delete has no faithful point-keyed representation in the uniform

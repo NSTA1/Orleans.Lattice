@@ -26,7 +26,7 @@ public interface ILatticeBackupIncrementalCaptureService
 {
     /// <summary>
     /// Captures the incremental backup described by <paramref name="request"/> and
-    /// returns the id and manifest of the stored backup.
+    /// returns the content-addressed id and manifest of the stored backup.
     /// </summary>
     /// <param name="request">The incremental capture request. Must not be <c>null</c>.</param>
     /// <param name="cancellationToken">Cancels the capture.</param>

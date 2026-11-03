@@ -19,6 +19,10 @@ SUMMARY: a retention pass plans from a listing taken before its one-pass guard
         }
 
         _pruneInFlight = true;
+
+        // Every id published while the listing is read is recorded, so the plan
+        // made from it never dooms a backup a capture has published since (#5418).
+        _publishedDuringListing = new HashSet<string>(StringComparer.Ordinal);
         try
         {
             // The listing is taken under the guard (issue #5412). Taken before it, a
@@ -35,6 +39,7 @@ SUMMARY: a retention pass plans from a listing taken before its one-pass guard
         }
 
         _pruneInFlight = true;
+        _publishedDuringListing = new HashSet<string>(StringComparer.Ordinal);
         try
         {
             var manifests = listed;

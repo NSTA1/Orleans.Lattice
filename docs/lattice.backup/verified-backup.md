@@ -7,7 +7,7 @@ agent_spec: "docs/agents/api/backup.json"
 Backup and restore meet concurrent atomic writes, replication and failures at
 several points, and the argument that they stay consistent there was until now
 made only in prose and chaos tests. This page states what is now checked
-formally, by six TLA+ specifications under
+formally, by seven TLA+ specifications under
 [`spec/backup/`](../../spec/backup/README.md) and by Coyote models driving
 extracted production cores, and - just as importantly - what is not.
 
@@ -21,6 +21,7 @@ extracted production cores, and - just as importantly - what is not.
 | Coordinated restore | A restore of a replicated tree is all-or-nothing across regions; no pre-restore write ever reaches a restored copy; a restore never installs another tenant's records; replication resumed after a restore converges. | `BackupRestore` |
 | Local cutover and revert | A reader never pairs one physical copy with another copy's shard map; once a restore returns every reader sees the restored copy, and once a revert returns none does, however stale its routing; a tree is never deleted while its copies are in motion; a restore, or a revert, that crashes part-way still completes on retry. | `BackupCutover` |
 | Retention pruning | Every backup the catalog lists, and in particular every backup the retention policy keeps, with its whole base chain, stays restorable while full and incremental captures of the same scope run alongside the pruning and either side crashes at any step; an incremental backup is published only while its base is restorable; nothing the policy keeps is pruned; and a backup outside the policy that nothing builds on is eventually pruned. | `BackupRetention` |
+| Backup id ownership | Identical content captured in two scopes never shares one backup: a capture never publishes over another scope's backup under the content-addressed id, even while the owning scope is retiring that id, so a backup's catalog row and stored manifest always name the scope that captured it; and overlapping deletes of one backup never remove a backup a capture listed again meanwhile, or another scope's backup under the id. | `BackupIdClaim` |
 
 Every property is paired with a deliberate defect (a mutation) that must make
 TLC report it, and every protocol step of each specification is perturbed by at
@@ -102,13 +103,17 @@ not to hold in production:
   one whose data was gone. A pass now reads its listing only once it holds the
   guard. Found by the specification's independent review.
 - **A capture of an unchanged tree could be deleted by a retention pass
-  (#5418, fixed).** A full backup's id was the hash of its bytes alone, so a
-  capture of a tree that had not changed republished an older backup's id. A
-  retention pass that had already decided to prune the older backup then deleted
-  what the new capture had just written, so the catalog could list a backup the
-  storage no longer held, or lose the new backup outright. Every capture now gets
-  its own backup id, derived from its own artifact, so no capture ever reuses
-  another backup's id. Found by the specification's independent review.
+  (#5418, fixed).** A backup's id is the hash of its bytes, so a capture of a
+  tree that had not changed republishes the existing backup, as documented since
+  10.2.0. A retention pass that had already decided to prune that backup could
+  then delete what the new capture had just written, so the catalog could list a
+  backup the storage no longer held, or lose the backup outright; and because a
+  republish kept the backup's first capture time, the next pass could prune the
+  backup a capture had just returned. Ids are unchanged. A pass and a publish of
+  the same id are now serialised on the scope's scheduler, so neither acts on an
+  id the other holds, and a republish records its capture time
+  (`BackupManifest.LastCapturedAtUtc`), which retention ranks by. Found by the
+  specification's independent review.
 - **A retention pass could prune a backup set's member before the set listed
   it, and the set then listed it again without its data (#5449, fixed).** A
   multi-tree backup set registered each member as soon as it was captured and
@@ -125,6 +130,40 @@ not to hold in production:
   origin from a full backup (#5529, fixed).** A restored chain therefore gave the
   same rows two origins. Every capture now records an own row's origin the same
   way. Found by the specification's confirmation review.
+- **A capture in one scope could overwrite another scope's backup of identical
+  content (#5627, fixed).** A capture of a scope that owned a backup id could wait
+  while that scope's own retention or delete removed the id; another scope's
+  capture of identical content then took the id, and the waiting capture
+  published over it. The owning scope's capture now holds its claim on the id for
+  as long as it publishes, and the claim is stored, so it survives the claiming
+  service being restarted or moved (#5632, fixed). Found by the confirmation
+  review; checked by `BackupIdClaim`.
+- **A large operator delete timed out (#5628, fixed).** A delete ran inside one
+  call to the scope's scheduler, which a large backup or catalog could outlast,
+  skipping the health cleanup; and a retry of an interrupted delete did not finish
+  it (#5334). The scheduler now only removes the catalog row and reserves the id;
+  the artifacts and then the stored manifest are deleted outside it, and a retry
+  finds the manifest and finishes. Found by the confirmation review.
+- **A backup set member whose capture died stayed exempt from retention
+  (#5629, fixed).** The member's hold now lapses after a lease. Found by the
+  confirmation review.
+- **Two overlapping deletes of one backup could leave a listed backup with no
+  stored manifest (#5631, fixed).** A retried or double-submitted delete shared
+  one reservation of the backup id with the first, which released it on
+  finishing; a capture of identical content then republished the backup, and the
+  second delete removed its stored manifest. Each delete now holds its own
+  reservation and removes the stored manifest in the scheduler, only while no
+  catalog row lists the backup and the manifest is still its scope's. Found by
+  the confirmation review; checked by `BackupIdClaim`.
+- **A catalog rebuild could list a backup a delete had half removed (#5637,
+  fixed).** A delete removes the catalog row, then the artifacts, then the stored
+  manifest, so a retry finishes an interrupted one; a rebuild listed any stored
+  manifest, and a delete that lost its caller or outlasted its reservation left
+  one whose artifacts were partly gone. A delete now confirms its reservation
+  with the scheduler before each artifact it deletes and stops when it cannot
+  (#5639, fixed), and a rebuild lists only a backup whose every artifact is
+  still stored. Found by the confirmation review; checked by
+  `BackupIdClaim`.
 
 ## Which parts run in production code
 
@@ -164,8 +203,13 @@ Coverage of one half must not be read as coverage of the other. Not covered:
 - the receiver side of cross-cluster atomic batches, which the atomic-commit
   cross-cluster module checks ([formal coverage](../lattice/formal-coverage.md));
 - an operator's explicit backup delete, which removes the named backup whatever
-  builds on it and is not coordinated with a retention pass running beside it,
-  and catalog rebuild and scrub;
+  builds on it - `BackupIdClaim` checks overlapping deletes against captures, but
+  not what a delete does to increments built on the backup - and catalog rebuild
+  and scrub, which take the same per-backup hold as a retention pass and a
+  capture but are not modelled as steps;
+- a cluster part-way through a rolling upgrade from 10.2.0, whose old silos
+  publish and prune without the per-backup hold (see the upgrade note in
+  [configuration](configuration.md#upgrading-from-1020));
 - retention over a sink shared between clusters.
 
 Each refinement note under [`spec/backup/`](../../spec/backup/README.md) lists in

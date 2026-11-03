@@ -948,6 +948,9 @@ public static class LatticeExtensions
 
             if (shouldReopen)
             {
+#if LATTICE_DIAG
+                Orleans.Lattice.BPlusTree.Grains.DiagSink.Write($"[DIAG scan-reopen] lastKey={lastKey ?? "-"} attempt={attempt}");
+#endif
                 var delayMs = stallDelayMs > 0 ? stallDelayMs : ResilientScanResume.ReconnectDelayMs(attempt);
                 stallDelayMs = 0;
                 if (delayMs > 0)
@@ -1151,6 +1154,9 @@ public static class LatticeExtensions
 
             if (shouldReopen)
             {
+#if LATTICE_DIAG
+                Orleans.Lattice.BPlusTree.Grains.DiagSink.Write($"[DIAG scan-reopen] lastKey={lastKey ?? "-"} attempt={attempt}");
+#endif
                 var delayMs = stallDelayMs > 0 ? stallDelayMs : ResilientScanResume.ReconnectDelayMs(attempt);
                 stallDelayMs = 0;
                 if (delayMs > 0)
@@ -1423,6 +1429,9 @@ public static class LatticeExtensions
 
             if (shouldReopen)
             {
+#if LATTICE_DIAG
+                Orleans.Lattice.BPlusTree.Grains.DiagSink.Write($"[DIAG scan-cursor-reopen] attempt={attempt}");
+#endif
                 var delayMs = ResilientScanResume.ReconnectDelayMs(attempt);
                 if (delayMs > 0)
                 {

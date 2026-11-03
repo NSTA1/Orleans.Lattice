@@ -80,7 +80,11 @@ public static class BackupOperationResults
             return false;
         }
 
-        report = new BackupCatalogRebuildReport(scanned, registered, reconciled);
+        // Absent from a map recorded before the count existed: nothing was skipped.
+        report = new BackupCatalogRebuildReport(scanned, registered, reconciled)
+        {
+            SkippedCount = ReadLong(result, BackupOperationResultKeys.SkippedCount),
+        };
         return true;
     }
 
@@ -123,11 +127,12 @@ public static class BackupOperationResults
 
     /// <summary>Builds the result map of a catalog rebuild.</summary>
     internal static IReadOnlyDictionary<string, string> ToResultMap(BackupCatalogRebuildReport rebuild) =>
-        new Dictionary<string, string>(3, StringComparer.Ordinal)
+        new Dictionary<string, string>(4, StringComparer.Ordinal)
         {
             [BackupOperationResultKeys.ScannedCount] = rebuild.ScannedCount.ToString(CultureInfo.InvariantCulture),
             [BackupOperationResultKeys.RegisteredCount] = rebuild.RegisteredCount.ToString(CultureInfo.InvariantCulture),
             [BackupOperationResultKeys.ReconciledCount] = rebuild.ReconciledCount.ToString(CultureInfo.InvariantCulture),
+            [BackupOperationResultKeys.SkippedCount] = rebuild.SkippedCount.ToString(CultureInfo.InvariantCulture),
         };
 
     /// <summary>Builds the result map of a catalog scrub.</summary>

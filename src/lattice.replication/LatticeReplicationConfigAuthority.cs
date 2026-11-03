@@ -38,7 +38,9 @@ internal sealed class LatticeReplicationConfigAuthority(
     ILatticeReplicationPreconditionValidator preconditions,
     ILatticeReplicationContext replicationContext,
     ILatticeReplicationAdmin admin,
-    IOptionsMonitor<LatticeReplicationOptions> options) : ILatticeReplicationConfigAuthority
+    IOptionsMonitor<LatticeReplicationOptions> options,
+    ILatticeBootstrapCoordinator? bootstrapCoordinator = null,
+    CompiledReplicationConfigSnapshotMaintainer? runtimeConfig = null) : ILatticeReplicationConfigAuthority
 {
     private readonly ILatticeReplicationConfigStore _store =
         store ?? throw new ArgumentNullException(nameof(store));
@@ -111,12 +113,23 @@ internal sealed class LatticeReplicationConfigAuthority(
             {
                 if (existingMode == mode)
                 {
-                    // Idempotent no-op: already enabled under the requested mode.
+                    // Idempotent for the config: already enabled under the
+                    // requested mode, so no dot is authored. Enrolment converges
+                    // from a peer through the config tree, so a receiver is
+                    // often enrolled before its own enable runs, and a named
+                    // source is still a bootstrap request (issue #5594). The
+                    // tree may hold that enrolment without this silo's snapshot
+                    // having compiled it - a re-seed cutover publishes no
+                    // mutation (#5731) - so compile it before acknowledging.
+                    await EnsureCompiledAsync(treeId, existingMode, cancellationToken).ConfigureAwait(false);
+                    var requested = !string.IsNullOrEmpty(bootstrapSourceClusterId)
+                        && await RequestBootstrapUnlessInFlightAsync(treeId, bootstrapSourceClusterId, cancellationToken)
+                            .ConfigureAwait(false);
                     return new LatticeReplicationEnableResult(
                         treeId,
                         existingMode,
                         AlreadyEnabled: true,
-                        BootstrapRequested: false);
+                        BootstrapRequested: requested);
                 }
 
                 throw new LatticeReplicationModeChangeRejectedException(
@@ -137,6 +150,11 @@ internal sealed class LatticeReplicationConfigAuthority(
         working.SetMode(replicaId, mode);
         working.Enable(replicaId, NextFlagCounter(working.Enabled, replicaId));
         await _store.WriteEntryAsync(treeId, replicaId, working, cancellationToken).ConfigureAwait(false);
+
+        // The write's change-feed rebuild runs in the background; the enable is
+        // acknowledged - and its bootstrap drained - only once this silo's
+        // receiver gate admits the tree (#5731).
+        await EnsureCompiledAsync(treeId, mode, cancellationToken).ConfigureAwait(false);
 
         // Compose with the snapshot bootstrap: the change feed only carries new
         // mutations, and a receiver drops (and acknowledges) every entry shipped
@@ -159,6 +177,58 @@ internal sealed class LatticeReplicationConfigAuthority(
             mode,
             AlreadyEnabled: false,
             BootstrapRequested: bootstrapRequested);
+    }
+
+    /// <summary>
+    /// The bootstrap an enable of an already-enrolled tree that names
+    /// <paramref name="sourceClusterId"/> requests (issue #5594). A bootstrap
+    /// from that source already in flight is the one requested, so no other is
+    /// started; otherwise the snapshot is requested exactly as a first enable
+    /// requests it. A bootstrap that already completed is not taken as proof:
+    /// it may have exported before the source wrote rows this receiver then
+    /// dropped while it was not yet enrolled, so the enable requests again.
+    /// Repeats are bounded by the operator's calls and by the admin seam's
+    /// <see cref="LatticeReplicationOptions.OperatorReseedMinInterval"/>.
+    /// </summary>
+    /// <returns><see langword="true"/>: a bootstrap from the source was requested or is in flight.</returns>
+    private async Task<bool> RequestBootstrapUnlessInFlightAsync(
+        string treeId,
+        string sourceClusterId,
+        CancellationToken cancellationToken)
+    {
+        if (bootstrapCoordinator is not null)
+        {
+            var status = await bootstrapCoordinator.GetStatusAsync(treeId, cancellationToken).ConfigureAwait(false);
+            if (string.Equals(status.SourceClusterId, sourceClusterId, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        // Without a coordinator to ask, request: the coordinator absorbs a
+        // same-source kickoff while one is in flight, so asking is always safe.
+        await _admin.RequestSnapshotAsync(treeId, sourceClusterId, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Brings this silo's compiled snapshot up to the config tree when it does not
+    /// already show <paramref name="treeId"/> enabled under <paramref name="mode"/>
+    /// (#5731). No call when it does; one config-map read otherwise. Other silos
+    /// converge through the epoch the write or cutover advanced.
+    /// </summary>
+    private async Task EnsureCompiledAsync(string treeId, LatticeMergeMode mode, CancellationToken cancellationToken)
+    {
+        if (runtimeConfig is null
+            || (runtimeConfig.Current.TryGetTree(treeId, out var projection)
+                && projection.Enabled
+                && !projection.Ambiguous
+                && projection.Mode == mode))
+        {
+            return;
+        }
+
+        await runtimeConfig.RebuildNowAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />

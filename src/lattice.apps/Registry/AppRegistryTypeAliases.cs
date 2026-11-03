@@ -16,4 +16,8 @@ internal static class AppRegistryTypeAliases
     internal const string AppRegistryTransitionResult = "oap.tx";
     internal const string AppTreeClaim = "oap.oc";
     internal const string AppTreeClaimKind = "oap.ok";
+    internal const string AppRegistryEpoch = "oap.ep";
+    internal const string IAppRegistryEpochGrain = "oap.eg";
+    internal const string AppRegistryEpochLease = "oap.el";
+    internal const string IAppRegistryEpochObserver = "oap.eo";
 }

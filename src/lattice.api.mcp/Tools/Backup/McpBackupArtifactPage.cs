@@ -2,7 +2,7 @@ namespace Orleans.Lattice.Api.Mcp;
 
 /// <summary>
 /// The MCP structured-content result of the <c>lattice_backup_export_artifact</c> tool:
-/// one bounded page of a backup artifact's bytes, base64-encoded, plus
+/// one bounded page of a content-addressed artifact's bytes, base64-encoded, plus
 /// a continuation cursor. The facade streams an artifact chunk-wise with bounded
 /// memory; this tool drains at most one page-budget of bytes per call and
 /// surfaces <see cref="NextChunkOffset"/> so a caller can resume without the

@@ -72,6 +72,44 @@ var history = await factory.CreateAsync(
 await factory.DeleteAsync("orders-history", cancellationToken);
 ```
 
+### Without host code: the built-in provider
+
+`AddLatticeViews` also registers a built-in runtime provider for change-history
+views under the key `orleans.lattice.history.v1` (`LatticeHistoryView.ProviderKey`).
+It takes no settings: its payload is an empty JSON object, `{}` (an empty payload
+is accepted too, and anything else is refused). So a tree-administration facade
+(`CreateViewAsync(viewName, sourceTreeId, "orleans.lattice.history.v1", "{}"u8.ToArray())`,
+or the MCP `lattice_treeadmin_view_create` tool with payload `e30=`) or the
+Explorer's **New view** dialog can enable durable history on a tree, with no
+provider registered by the host. In code, `LatticeHistoryView.Descriptor` names
+the same provider. The key is reserved, so `AddRuntimeProjectionProvider` refuses
+it.
+
+```csharp verify
+using Microsoft.Extensions.DependencyInjection;
+
+var factory = client.ServiceProvider.GetRequiredService<ILatticeViewFactory>();
+var history = await factory.CreateAsync(
+    grainFactory.GetGrain<ILattice>("orders"),
+    "orders-history",
+    LatticeHistoryView.Descriptor,
+    cancellationToken);
+```
+
+A view created through the provider is persisted against the provider key, and
+every silo re-hydrates it the same way. It reads, retains and drops exactly like
+one built from `LatticeHistoryView.Definition`. Creating one needs the same
+authority as any runtime view: Admin over the source tree.
+
+A change-history view **retains every revision of every key, including values
+later overwritten or deleted, until the view is dropped** (or, when the tree has
+an age window, until that window expires them). Its storage therefore
+grows with the source's write volume, not its size. Under `FullValue` retention it
+also keeps the bytes of every past value, which matters for data that must not
+outlive its deletion. Bound it with an age window (see
+[Retention modes](#retention-modes)) or drop the view to stop recording and
+reclaim it.
+
 ## Retention modes
 
 Storage cost is bounded and configurable per source tree. The retention policy is

@@ -5,7 +5,7 @@ namespace Orleans.Lattice.Api.Backup.Grpc;
 /// <summary>
 /// Wire response for the full- and incremental-capture RPCs. A serializable
 /// mirror of <see cref="LatticeBackupCaptureResult"/> (a plain,
-/// non-serializable facade record): the
+/// non-serializable facade record): the content-addressed
 /// <see cref="BackupId"/> and the captured <see cref="Manifest"/>.
 /// </summary>
 [GenerateSerializer]
@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Api.Backup.Grpc;
 [Immutable]
 public sealed record BackupCaptureResponse
 {
-    /// <summary>The backup id, unique to the capture.</summary>
+    /// <summary>The content-addressed backup id.</summary>
     [Id(0)] public required string BackupId { get; init; }
 
     /// <summary>The manifest written for the backup.</summary>

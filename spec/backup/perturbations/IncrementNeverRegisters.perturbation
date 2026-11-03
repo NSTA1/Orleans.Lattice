@@ -2,15 +2,15 @@
 # a published increment is never listed. Register(c) publishes the row.
 MODULE: BackupRetention
 ROW: Register(c)
-FILE: src/lattice.backup/LatticeBackupCaptureService.cs
+FILE: src/lattice.backup/BackupPublisher.cs
 DETECTORS: BackupRetentionConcurrencyTests.A_pass_after_the_increment_wrote_its_manifest_keeps_the_base_the_increment_builds_on, BackupRetentionTests.PruneAsync_keep_last_one_preserves_the_base_of_a_retained_increment
 SUMMARY: an incremental capture returns without registering its catalog row
 
 --- FIND
-            if (BackupRetentionPlanner.MayPublishIncrement(manifest, baseRow))
-            {
-                await catalog.RegisterAsync(manifest, cancellationToken).ConfigureAwait(false);
+        if (BackupRetentionPlanner.MayPublishIncrement(manifest, row))
+        {
+            await catalog.RegisterAsync(manifest).ConfigureAwait(false);
 --- REPLACE
-            if (BackupRetentionPlanner.MayPublishIncrement(manifest, baseRow))
-            {
+        if (BackupRetentionPlanner.MayPublishIncrement(manifest, row))
+        {
 --- END

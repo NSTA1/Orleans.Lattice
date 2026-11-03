@@ -19,7 +19,7 @@ public interface ILatticeBackupCaptureService
 {
     /// <summary>
     /// Captures a full backup described by <paramref name="request"/> and returns
-    /// the id and manifest of the stored backup.
+    /// the content-addressed id and manifest of the stored backup.
     /// </summary>
     /// <param name="request">The capture request (name, scope, page size). Must not be <c>null</c>.</param>
     /// <param name="cancellationToken">Cancels the capture.</param>

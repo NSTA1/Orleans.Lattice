@@ -1526,7 +1526,7 @@
       },
       "idempotency": {
         "idempotent": "conditional",
-        "basis": "Already enabled under the same unambiguous mode is an idempotent no-op; different or ambiguous mode is rejected.",
+        "basis": "Already enabled under the same unambiguous mode authors no configuration; a named bootstrap source is still requested unless a bootstrap from it is already in flight. Different or ambiguous mode is rejected.",
         "source": "src/lattice.replication/ILatticeReplicationConfigAuthority.cs#EnableReplicationAsync"
       },
       "concurrency": {
@@ -2730,6 +2730,22 @@
       "retryable": false,
       "meaning": "The request or authorization check was cancelled.",
       "source": "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "cluster-timeout",
+      "type": "TimeoutException",
+      "grpc_status": "DeadlineExceeded",
+      "retryable": false,
+      "meaning": "A grain call timed out inside the cluster, so the outcome is unknown and a write may already have applied. Retry an idempotent read; confirm state before retrying a write (#5742).",
+      "source": "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs"
+    },
+    {
+      "id": "cluster-unavailable",
+      "type": "OrleansMessageRejectionException (including SiloUnavailableException) or EnumerationAbortedException",
+      "grpc_status": "Unavailable",
+      "retryable": true,
+      "meaning": "A silo was unavailable or rejected the message, or a remote enumerator was lost to a grain deactivation mid-read: a transient cluster fault. Retry after a short backoff (#5742).",
+      "source": "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs"
     },
     {
       "id": "failed-precondition",

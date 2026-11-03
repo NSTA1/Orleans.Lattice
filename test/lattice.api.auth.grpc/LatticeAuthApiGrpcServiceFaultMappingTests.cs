@@ -123,6 +123,49 @@ public sealed class LatticeAuthApiGrpcServiceFaultMappingTests
     }
 
     [Test]
+    public void InvokeAsync_maps_a_grain_call_timeout_to_DeadlineExceeded()
+    {
+        // #5742: a grain call that outlasts the silo's response timeout has an unknown
+        // outcome. It is not a server fault, so it must not collapse into Internal.
+        var service = ServiceThrowing(new TimeoutException("Response did not arrive on time for grain secret-grain"));
+
+        var thrown = Assert.ThrowsAsync<RpcException>(
+            () => service.GetGroup(new AuthGroupRef { GroupId = "g" }, Context()));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown!.StatusCode, Is.EqualTo(StatusCode.DeadlineExceeded));
+            Assert.That(thrown.Status.Detail, Does.Not.Contain("secret-grain"));
+        });
+    }
+
+    [Test]
+    public void InvokeAsync_maps_an_unavailable_silo_to_Unavailable()
+    {
+        var service = ServiceThrowing(new Orleans.Runtime.SiloUnavailableException("silo secret-silo is dead"));
+
+        var thrown = Assert.ThrowsAsync<RpcException>(
+            () => service.GetGroup(new AuthGroupRef { GroupId = "g" }, Context()));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown!.StatusCode, Is.EqualTo(StatusCode.Unavailable));
+            Assert.That(thrown.Status.Detail, Does.Not.Contain("secret-silo"));
+        });
+    }
+
+    [Test]
+    public void InvokeAsync_still_maps_an_authorization_denial_ahead_of_the_transient_arms()
+    {
+        var service = ServiceThrowing(new LatticeTenantAccessDeniedException("tenant-a is not in scope"));
+
+        var thrown = Assert.ThrowsAsync<RpcException>(
+            () => service.GetGroup(new AuthGroupRef { GroupId = "g" }, Context()));
+
+        Assert.That(thrown!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+    }
+
+    [Test]
     public void InvokeAsync_maps_an_unexpected_fault_to_an_opaque_Internal()
     {
         var service = ServiceThrowing(new InvalidOperationException("connection string is s3cret"));

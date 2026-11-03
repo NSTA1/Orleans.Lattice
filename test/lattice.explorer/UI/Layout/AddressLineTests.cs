@@ -209,11 +209,11 @@ public sealed partial class AddressLineTests : ShellChromeTestContext
 
         cut.Find("input").KeyDown(new KeyboardEventArgs { Key = "Enter" });
 
-        Assert.Multiple(() =>
+        cut.WaitUntil(() => Assert.Multiple(() =>
         {
             Assert.That(Navigation.Uri, Is.EqualTo(Navigation.BaseUri + "data/%4Frders"));
             Assert.That(cut.FindAll("input"), Is.Empty);
-        });
+        }));
     }
 
     [Test]
@@ -341,11 +341,11 @@ public sealed partial class AddressLineTests : ShellChromeTestContext
 
         cut.Find("[role='option']").Click();
 
-        Assert.Multiple(() =>
+        cut.WaitUntil(() => Assert.Multiple(() =>
         {
             Assert.That(invoked, Is.EqualTo(1));
             Assert.That(Navigation.Uri, Is.EqualTo(Navigation.BaseUri + "data"));
-        });
+        }));
     }
 
     [Test]
@@ -398,7 +398,7 @@ public sealed partial class AddressLineTests : ShellChromeTestContext
         cut.WaitUntil(() => Assert.That(cut.FindAll("[role='option']"), Has.Count.EqualTo(1)));
         cut.Find("[role='option']").Click();
 
-        Assert.That(Navigation.Uri, Is.EqualTo(Navigation.BaseUri + "t/globex/data/orders"));
+        cut.WaitUntil(() => Assert.That(Navigation.Uri, Is.EqualTo(Navigation.BaseUri + "t/globex/data/orders")));
     }
 
     private static string ActiveOption(IRenderedComponent<AddressLine> cut) => cut.Find("[aria-selected='true']").TextContent;

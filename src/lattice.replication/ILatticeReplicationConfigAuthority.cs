@@ -53,9 +53,10 @@ public interface ILatticeReplicationConfigAuthority
     /// </para>
     /// <para>
     /// <b>Mode immutability.</b> If the tree is already enabled under a single
-    /// unambiguous mode equal to <paramref name="mode"/>, the call is an
-    /// idempotent no-op (<see cref="LatticeReplicationEnableResult.AlreadyEnabled"/>
-    /// is <see langword="true"/>, no new dot is authored). If it is enabled under
+    /// unambiguous mode equal to <paramref name="mode"/>, the call is
+    /// idempotent for the configuration (<see cref="LatticeReplicationEnableResult.AlreadyEnabled"/>
+    /// is <see langword="true"/>, no new dot is authored). A named bootstrap
+    /// source is still honoured on that path (see below). If it is enabled under
     /// a different unambiguous mode, or its mode is currently ambiguous, the call
     /// is rejected with <see cref="LatticeReplicationModeChangeRejectedException"/>
     /// instructing the operator to disable then re-enable.
@@ -68,6 +69,16 @@ public interface ILatticeReplicationConfigAuthority
     /// pre-existing rows that the change feed will not carry. A receiver drops,
     /// and acknowledges, every entry shipped to it before its own enrollment
     /// lands, so an empty receiver depends on the snapshot most (issue #5557).
+    /// This holds when the tree is already enrolled here too, which is the usual
+    /// case for a second region: enrolment converges from the cluster that
+    /// enabled first, often before this cluster's own enable runs (issue #5594).
+    /// On that path a bootstrap from the same source that is already in flight
+    /// is reported as requested without starting another; otherwise the
+    /// snapshot is requested. A bootstrap that completed earlier is not taken as
+    /// covering the source's rows, because it may have exported before rows this
+    /// receiver dropped while not yet enrolled, so a repeat enable requests
+    /// again, bounded by
+    /// <see cref="LatticeReplicationOptions.OperatorReseedMinInterval"/>.
     /// <b>Limitation:</b> the bootstrap seam is receiver-driven - it pulls a
     /// snapshot into the local cluster from the named source cluster - so
     /// <paramref name="bootstrapSourceClusterId"/> names the cluster holding the

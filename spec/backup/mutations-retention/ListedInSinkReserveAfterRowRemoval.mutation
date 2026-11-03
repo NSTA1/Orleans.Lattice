@@ -1,0 +1,17 @@
+# Pairs with ListedInSink. The pass reserves a doomed id only when it
+# removes the id's row, not when it decides the doom. Between the two, a
+# republish of the id is admitted, rewrites its manifest and registers it
+# again after the pass has removed the row; the pass then deletes the sink
+# manifest of a backup the catalog lists.
+MODULE: ListedInSinkReserveAfterRowRemoval
+TARGET: ListedInSink
+CLASS: Invariant
+SUMMARY: the pass reserves a doomed id only at its row removal
+PERTURBS: Acquire
+
+--- FIND
+    /\ \A p \in Passes : cap[c].id \notin prDoomed[p]
+--- REPLACE
+    \* MUTATION: the reservation starts at the row removal.
+    /\ \A p \in Passes : cap[c].id \notin prGone[p]
+--- END

@@ -119,6 +119,30 @@ public static class ContractCalls
         return groups;
     }
 
+    /// <summary>
+    /// Seeds the empty tree <paramref name="treeId"/> with <paramref name="entries"/> as one bulk
+    /// load, as the Explorer's import seeds a tree. A bulk load stamps its rows from a zero-based
+    /// clock, so a contract that seeds this way leaves the rows a journey's import would.
+    /// </summary>
+    /// <param name="admin">The Tree Admin API.</param>
+    /// <param name="treeId">The empty tree.</param>
+    /// <param name="entries">The entries; sorted here by key.</param>
+    public static async Task BulkLoadAsync(LatticeTreeAdminApiGrpcClient admin, string treeId, IEnumerable<StoryEntry> entries)
+    {
+        var sorted = entries.OrderBy(entry => entry.Key, StringComparer.Ordinal).ToArray();
+        await admin.BulkLoadStreamAsync(treeId, "contract-seed-" + treeId, Stream(sorted));
+
+        static async IAsyncEnumerable<DataEntry> Stream(StoryEntry[] sorted)
+        {
+            foreach (var entry in sorted)
+            {
+                yield return new DataEntry { Key = entry.Key, Value = entry.Value };
+            }
+
+            await Task.CompletedTask;
+        }
+    }
+
     /// <summary>Upserts <paramref name="entries"/> in batches; idempotent.</summary>
     /// <param name="data">The Data API.</param>
     /// <param name="treeId">The tree.</param>
@@ -215,6 +239,15 @@ public static class ContractCalls
     /// <param name="treeId">The tree.</param>
     public static async Task DeleteAndPurgeAsync(LatticeTreeAdminApiGrpcClient admin, string treeId)
     {
+        await BeginDeleteAndPurgeAsync(admin, treeId);
+        await WaitForPurgeAsync(admin, treeId);
+    }
+
+    /// <summary>Soft-deletes a tree and starts its purge, without waiting for it; idempotent.</summary>
+    /// <param name="admin">The TreeAdmin API.</param>
+    /// <param name="treeId">The tree.</param>
+    public static async Task BeginDeleteAndPurgeAsync(LatticeTreeAdminApiGrpcClient admin, string treeId)
+    {
         if (await TreeIsPurgedAsync(admin, treeId))
         {
             return;
@@ -226,13 +259,56 @@ public static class ContractCalls
         }
 
         await admin.PurgeTreeAsync(treeId, confirm: true);
-        await ContractWait.UntilAsync($"the purge of {treeId}", () => TreeIsPurgedAsync(admin, treeId));
+    }
+
+    /// <summary>How long a purge may go without purging another shard.</summary>
+    public static readonly TimeSpan PurgeStall = TimeSpan.FromMinutes(3);
+
+    /// <summary>The absolute deadline for one purge, however steadily it advances.</summary>
+    public static readonly TimeSpan PurgeCeiling = TimeSpan.FromMinutes(15);
+
+    /// <summary>
+    /// Waits for a started purge to complete. A purge walks the tree's shards one after another,
+    /// so its length scales with the shard count: the wait fails only when the walk stops
+    /// purging shards for <see cref="PurgeStall"/>, or runs past <see cref="PurgeCeiling"/>, and
+    /// reports the walk's trajectory (#5724).
+    /// </summary>
+    /// <param name="admin">The TreeAdmin API.</param>
+    /// <param name="treeId">The tree.</param>
+    public static async Task WaitForPurgeAsync(LatticeTreeAdminApiGrpcClient admin, string treeId)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var purged = -1;
+        var trajectory = new List<string>();
+        await ContractWait.UntilAdvancingAsync(
+            $"the purge of {treeId}",
+            async () =>
+            {
+                if (!(await admin.CheckTreeExistsAsync(treeId)).Exists)
+                {
+                    return true;
+                }
+
+                var status = await admin.GetTreeDeletionStatusAsync(treeId);
+                if (status.PurgedShardCount != purged)
+                {
+                    purged = status.PurgedShardCount;
+                    trajectory.Add($"{status.PurgedShardCount}/{status.PurgeShardCount} at {clock.Elapsed.TotalSeconds:0} s");
+                }
+
+                return status.PurgeComplete;
+            },
+            () => purged,
+            PurgeStall,
+            PurgeCeiling,
+            () => trajectory.Count == 0 ? "no status read" : string.Join(", ", trajectory));
     }
 
     /// <summary>Every catalogued backup of <paramref name="treeId"/> (or of every tree), newest first.</summary>
     /// <param name="backup">The Backup API.</param>
     /// <param name="treeId">The tree, or <see langword="null"/> for every tree.</param>
-    public static async Task<IReadOnlyList<BackupManifest>> BackupsAsync(LatticeBackupApiGrpcClient backup, string? treeId = null)
+    /// <param name="cancellationToken">Cuts the read.</param>
+    public static async Task<IReadOnlyList<BackupManifest>> BackupsAsync(LatticeBackupApiGrpcClient backup, string? treeId = null, CancellationToken cancellationToken = default)
     {
         var manifests = new List<BackupManifest>();
         string? token = null;
@@ -244,7 +320,7 @@ public static class ContractCalls
                 PageToken = token,
                 TreeId = treeId,
                 OrderByCreatedDescending = true,
-            });
+            }, cancellationToken);
             manifests.AddRange(page.Entries);
             token = page.NextPageToken;
         }

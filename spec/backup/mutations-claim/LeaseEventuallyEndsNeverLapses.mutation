@@ -1,0 +1,17 @@
+# Pairs with LeaseEventuallyEnds, under the fairness Spec asserts. A lease
+# that never runs out keeps the id of a delete whose caller was lost reserved
+# for good, and every capture of identical content waits on it.
+MODULE: LeaseEventuallyEndsNeverLapses
+TARGET: LeaseEventuallyEnds
+CLASS: Temporal
+SUMMARY: a lost delete's lease never runs out
+PERTURBS: DelLapse
+
+--- FIND
+DelLapse(d) ==
+    /\ del[d] \in {"begun", "art"}
+--- REPLACE
+DelLapse(d) ==
+    \* MUTATION: the lease runs out only once the delete is over.
+    /\ del[d] = "done"
+--- END

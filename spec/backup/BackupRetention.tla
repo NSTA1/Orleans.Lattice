@@ -21,8 +21,18 @@
 (* manifest's catalog row FIRST, then scans the sink for an increment      *)
 (* built on it and restores the row if it finds one; an increment writes   *)
 (* its sink manifest, then re-reads its base's catalog row, and publishes  *)
-(* only if the row is still there. See RefinementRetention.md for the      *)
-(* mapping to production symbols.                                          *)
+(* only if the row is still there.                                        *)
+(*                                                                         *)
+(* A backup id is a content address (#5418, as documented in 10.2.0): an   *)
+(* identical capture re-derives an existing backup's id and republishes it *)
+(* with a fresh artifact. The design checked here serialises a republish   *)
+(* against a pass per id: the pass reserves every id it dooms as retiring  *)
+(* in the same step that decides the doom, before it removes any row, and  *)
+(* never dooms an id a capture is publishing or a set member is waiting to *)
+(* stamp; a publish of a retiring id waits until the pass is done with it. *)
+(* A publish refreshes the id's ranking time (LastCapturedAtUtc), so a     *)
+(* pass ranks a republished backup by its latest capture. See              *)
+(* RefinementRetention.md for the mapping to production symbols.           *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets, TLC
 
@@ -35,6 +45,7 @@ Passes == 1..NumPasses
 MaxTime == 2
 MaxCrashes == 1
 MaxKeepLast == 1
+MaxRepublish == 1
 
 Kinds == {"full", "incr"}
 Meta == [kind : Kinds, base : 0..MaxIds, t : 0..MaxTime]
@@ -60,16 +71,22 @@ Policy == [keepLast : 0..MaxKeepLast, maxAge : 0..1]
 (*           the ones whose sink manifest it has deleted.                  *)
 (*  crashes  the crash budget spent.                                       *)
 (*  pub      ghost: the backups whose catalog row has ever been registered. *)
+(*  lpt      ghost: for each backup, the start time of the latest capture  *)
+(*           that published it - when it was really last captured. The    *)
+(*           properties judge the policy by it; the pass ranks by meta's   *)
+(*           t, the manifest's own record of it (LastCapturedAtUtc).       *)
+(*  reps     the republish budget spent: a republish allocates no id, so   *)
+(*           this bounds the captures a run can start.                     *)
 (***************************************************************************)
 VARIABLES now, pol, next, meta, arts, snk, cat, cap,
-          prPh, prDoomed, prGone, prBlocked, prManGone, crashes, pub
+          prPh, prDoomed, prGone, prBlocked, prManGone, crashes, pub, lpt, reps
 
 vars == <<now, pol, next, meta, arts, snk, cat, cap,
-          prPh, prDoomed, prGone, prBlocked, prManGone, crashes, pub>>
-storeVars == <<arts, snk, cat, pub>>
+          prPh, prDoomed, prGone, prBlocked, prManGone, crashes, pub, lpt, reps>>
+storeVars == <<arts, snk, cat, pub, lpt, reps>>
 passVars == <<prPh, prDoomed, prGone, prBlocked, prManGone>>
 
-CapPhases == {"idle", "drain", "art", "man", "ok", "stamp", "abandon"}
+CapPhases == {"idle", "re", "drain", "art", "man", "ok", "stamp", "abandon"}
 PassPhases == {"idle", "rows", "restore", "delete"}
 
 TypeOK ==
@@ -80,7 +97,7 @@ TypeOK ==
     /\ arts \subseteq Ids
     /\ snk \subseteq Ids
     /\ cat \subseteq Ids
-    /\ cap \in [Caps -> [ph : CapPhases, id : 0..MaxIds]]
+    /\ cap \in [Caps -> [ph : CapPhases, id : 0..MaxIds, t : 0..MaxTime]]
     /\ prPh \in [Passes -> PassPhases]
     /\ prDoomed \in [Passes -> SUBSET Ids]
     /\ prGone \in [Passes -> SUBSET Ids]
@@ -88,6 +105,8 @@ TypeOK ==
     /\ prManGone \in [Passes -> SUBSET Ids]
     /\ crashes \in 0..MaxCrashes
     /\ pub \subseteq Ids
+    /\ lpt \in [Ids -> 0..MaxTime]
+    /\ reps \in 0..MaxRepublish
 
 Init ==
     /\ now = 0
@@ -97,7 +116,7 @@ Init ==
     /\ arts = {}
     /\ snk = {}
     /\ cat = {}
-    /\ cap = [c \in Caps |-> [ph |-> "idle", id |-> 0]]
+    /\ cap = [c \in Caps |-> [ph |-> "idle", id |-> 0, t |-> 0]]
     /\ prPh = [p \in Passes |-> "idle"]
     /\ prDoomed = [p \in Passes |-> {}]
     /\ prGone = [p \in Passes |-> {}]
@@ -105,6 +124,8 @@ Init ==
     /\ prManGone = [p \in Passes |-> {}]
     /\ crashes = 0
     /\ pub = {}
+    /\ lpt = [i \in Ids |-> 0]
+    /\ reps = 0
 
 (***************************************************************************)
 (* What the policy keeps of a listing L at the current time, as            *)
@@ -116,12 +137,16 @@ Init ==
 (***************************************************************************)
 Newer(j, i) == meta[j].t > meta[i].t \/ (meta[j].t = meta[i].t /\ j > i)
 
+\* The ranking the properties judge by: when each backup was really last
+\* captured (the ghost lpt), not the time its manifest records.
+Fresher(j, i) == lpt[j] > lpt[i] \/ (lpt[j] = lpt[i] /\ j > i)
+
 KeepSet(L) ==
     IF pol.keepLast = 0 /\ pol.maxAge = 0
     THEN L
     ELSE {i \in L :
-            \/ pol.keepLast > 0 /\ Cardinality({j \in L : Newer(j, i)}) < pol.keepLast
-            \/ pol.maxAge > 0 /\ meta[i].t + pol.maxAge >= now}
+            \/ pol.keepLast > 0 /\ Cardinality({j \in L : Fresher(j, i)}) < pol.keepLast
+            \/ pol.maxAge > 0 /\ lpt[i] + pol.maxAge >= now}
 
 CloseStep(S, L) ==
     S \cup {meta[i].base : i \in {j \in S : meta[j].kind = "incr" /\ meta[j].base \in L}}
@@ -152,10 +177,13 @@ Tick ==
 (***************************************************************************)
 (* A capture (environment start). Any free slot starts a full or an        *)
 (* incremental capture at any time; the scheduler's own captures, the      *)
-(* backup API's and another silo's are all such slots. Every capture gets  *)
-(* a fresh id (BackupIdentity folds the capture's own artifact id into     *)
-(* it), so no capture ever republishes an existing backup's id (#5418);   *)
-(* a set member's second sink-manifest write, by the stamp, precedes its   *)
+(* backup API's and another silo's are all such slots. A capture of new    *)
+(* content takes a fresh id. A capture of content already captured (a full *)
+(* backup of an unchanged tree, or an identical delta on the same base)    *)
+(* re-derives that backup's id - any allocated id of the same kind and     *)
+(* base, whether it is still listed, being pruned, or long deleted - and   *)
+(* starts in phase "re": its publish has yet to be admitted (Acquire).     *)
+(* A set member's second sink-manifest write, by the stamp, precedes its   *)
 (* only registration (#5449).                                              *)
 (* An increment names any base whose sink manifest it can read - the       *)
 (* scheduler names the newest catalog row, the API whatever its caller     *)
@@ -163,14 +191,70 @@ Tick ==
 (***************************************************************************)
 Start(c, k, b) ==
     /\ cap[c].ph = "idle"
-    /\ next <= MaxIds
     /\ k = "full" => b = 0
     /\ k = "incr" => b \in snk
-    /\ meta' = [meta EXCEPT ![next] = [kind |-> k, base |-> b, t |-> now]]
-    /\ cap' = [cap EXCEPT ![c] = [ph |-> "drain", id |-> next]]
-    /\ next' = next + 1
+    /\ \/ /\ next <= MaxIds
+          /\ meta' = [meta EXCEPT ![next] = [kind |-> k, base |-> b, t |-> now]]
+          /\ cap' = [cap EXCEPT ![c] = [ph |-> "drain", id |-> next, t |-> now]]
+          /\ next' = next + 1
+          /\ UNCHANGED reps
+       \/ /\ reps < MaxRepublish
+          /\ reps' = reps + 1
+          /\ \E r \in 1..(next - 1) :
+                /\ meta[r].kind = k
+                /\ meta[r].base = b
+                /\ cap' = [cap EXCEPT ![c] = [ph |-> "re", id |-> r, t |-> now]]
+          /\ UNCHANGED <<meta, next>>
     /\ UNCHANGED <<now, pol, crashes>>
-    /\ UNCHANGED storeVars
+    /\ UNCHANGED <<arts, snk, cat, pub, lpt>>
+    /\ UNCHANGED passVars
+
+(***************************************************************************)
+(* Acquire: a republish is admitted to publish its id only once no pass    *)
+(* holds the id retiring (BackupSchedulerGrain's per-id reservation): it   *)
+(* waits while a pass that doomed the id is still deleting it, and then    *)
+(* publishes it as a fresh backup. Publishes of one id are exclusive too:  *)
+(* it also waits while another capture holds the id (Held), so an          *)
+(* increment that abandons never withdraws a manifest another capture of   *)
+(* the same id has registered. From here until it registers, stamps or     *)
+(* abandons, no pass can doom the id (Busy). The model writes a            *)
+(* republish's artifact after this step, and holds a fresh capture's id    *)
+(* from its start; in production the artifact is streamed first, under its *)
+(* own fresh artifact id that nothing else can name, and the id is held    *)
+(* only for the publish call. The model's one artifact per id needs the    *)
+(* wider window; production's narrower one is equivalent because artifact  *)
+(* ids are disjoint. A republish whose id still has a sink manifest checks *)
+(* an increment's base first, then rewrites it in place; one whose id has  *)
+(* none -                                                                   *)
+(* a pass deleted it, or it never got that far - is a fresh publish, so    *)
+(* the ghost pub forgets the id until the republish registers it.          *)
+(***************************************************************************)
+Held == {"drain", "art", "man", "ok", "abandon", "stamp"}
+
+Acquire(c) ==
+    /\ cap[c].ph = "re"
+    /\ \A p \in Passes : cap[c].id \notin prDoomed[p]
+    /\ \A d \in Caps : cap[d].id = cap[c].id => cap[d].ph \notin Held
+    /\ \/ \* The id's sink manifest exists. An increment checks its base's row
+          \* first: a row gone means the base is being pruned (or was never
+          \* published), and the republish abandons without touching the
+          \* existing manifest. Otherwise it rewrites the manifest in place,
+          \* with its own artifact: the existing manifest already makes any
+          \* pass that dooms the base later keep it (Scan).
+          /\ cap[c].id \in snk
+          /\ IF meta[cap[c].id].kind = "full" \/ meta[cap[c].id].base \in cat
+             THEN /\ arts' = arts \cup {cap[c].id}
+                  /\ cap' = [cap EXCEPT ![c].ph = "ok"]
+             ELSE /\ UNCHANGED arts
+                  /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0, t |-> 0]]
+          /\ UNCHANGED pub
+       \/ \* No sink manifest: a fresh publish, through the fence like any other.
+          /\ cap[c].id \notin snk
+          /\ cap' = [cap EXCEPT ![c].ph = "drain"]
+          /\ pub' = pub \ {cap[c].id}
+          /\ UNCHANGED arts
+    /\ UNCHANGED <<now, pol, next, meta, crashes>>
+    /\ UNCHANGED <<snk, cat, lpt, reps>>
     /\ UNCHANGED passVars
 
 \* The capture streams its artifact to the sink.
@@ -178,7 +262,7 @@ WriteArt(c) ==
     /\ cap[c].ph = "drain"
     /\ arts' = arts \cup {cap[c].id}
     /\ cap' = [cap EXCEPT ![c].ph = "art"]
-    /\ UNCHANGED <<now, pol, next, meta, snk, cat, crashes, pub>>
+    /\ UNCHANGED <<now, pol, next, meta, snk, cat, crashes, pub, lpt, reps>>
     /\ UNCHANGED passVars
 
 \* The capture writes its manifest to the sink.
@@ -186,7 +270,7 @@ WriteMan(c) ==
     /\ cap[c].ph = "art"
     /\ snk' = snk \cup {cap[c].id}
     /\ cap' = [cap EXCEPT ![c].ph = "man"]
-    /\ UNCHANGED <<now, pol, next, meta, arts, cat, crashes, pub>>
+    /\ UNCHANGED <<now, pol, next, meta, arts, cat, crashes, pub, lpt, reps>>
     /\ UNCHANGED passVars
 
 (***************************************************************************)
@@ -206,6 +290,13 @@ Check(c) ==
     /\ UNCHANGED storeVars
     /\ UNCHANGED passVars
 
+\* A publish refreshes the id's ranking time to the capture's own start
+\* (BackupManifestRegistration.Reconcile carries LastCapturedAtUtc forward
+\* as the later of the two), and the ghost records the capture.
+Refresh(c) ==
+    /\ meta' = [meta EXCEPT ![cap[c].id].t = IF @ < cap[c].t THEN cap[c].t ELSE @]
+    /\ lpt' = [lpt EXCEPT ![cap[c].id] = IF @ < cap[c].t THEN cap[c].t ELSE @]
+
 (***************************************************************************)
 (* The capture publishes its manifest: it registers the catalog row. A     *)
 (* full capture may instead be a member of a multi-tree backup set, whose  *)
@@ -218,12 +309,14 @@ Register(c) ==
     /\ cap[c].ph = "ok"
     /\ \/ /\ cat' = cat \cup {cap[c].id}
           /\ pub' = pub \cup {cap[c].id}
-          /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0]]
+          /\ Refresh(c)
+          /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0, t |-> 0]]
        \/ /\ meta[cap[c].id].kind = "full"
           \* A set member: its row waits for the stamp.
-          /\ UNCHANGED <<cat, pub>>
+          /\ UNCHANGED <<cat, pub, lpt, reps>>
+          /\ UNCHANGED meta
           /\ cap' = [cap EXCEPT ![c].ph = "stamp"]
-    /\ UNCHANGED <<now, pol, next, meta, arts, snk, crashes>>
+    /\ UNCHANGED <<now, pol, next, arts, snk, crashes, reps>>
     /\ UNCHANGED passVars
 
 \* The set's membership stamp (LatticeBackupCaptureService.
@@ -235,8 +328,9 @@ Stamp(c) ==
     /\ snk' = snk \cup {cap[c].id}
     /\ cat' = cat \cup {cap[c].id}
     /\ pub' = pub \cup {cap[c].id}
-    /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0]]
-    /\ UNCHANGED <<now, pol, next, meta, arts, crashes>>
+    /\ Refresh(c)
+    /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0, t |-> 0]]
+    /\ UNCHANGED <<now, pol, next, arts, crashes, reps>>
     /\ UNCHANGED passVars
 
 \* An increment whose base was being pruned deletes its own sink manifest
@@ -248,8 +342,8 @@ Abandon(c) ==
     /\ cap[c].ph = "abandon"
     /\ snk' = snk \ {cap[c].id}
     /\ arts' \in {arts, arts \ {cap[c].id}}
-    /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0]]
-    /\ UNCHANGED <<now, pol, next, meta, cat, crashes, pub>>
+    /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0, t |-> 0]]
+    /\ UNCHANGED <<now, pol, next, meta, cat, crashes, pub, lpt, reps>>
     /\ UNCHANGED passVars
 
 \* A capture crashes at any step (environment): its activation-local
@@ -258,7 +352,7 @@ CaptureCrash(c) ==
     /\ cap[c].ph # "idle"
     /\ crashes < MaxCrashes
     /\ crashes' = crashes + 1
-    /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0]]
+    /\ cap' = [cap EXCEPT ![c] = [ph |-> "idle", id |-> 0, t |-> 0]]
     /\ UNCHANGED <<now, pol, next, meta>>
     /\ UNCHANGED storeVars
     /\ UNCHANGED passVars
@@ -277,7 +371,15 @@ CaptureCrash(c) ==
 (* (RestoreRow), and deletes each remaining doomed manifest's sink         *)
 (* manifest (DelMan) and then its artifact (DelArt). Every delete is its   *)
 (* own storage call, in any order across manifests.                        *)
+(*                                                                         *)
+(* The doom is also the reservation: in the same step, before any row is   *)
+(* removed, every doomed id is held retiring (prDoomed) until the pass has *)
+(* deleted or restored it, and a republish of it waits (Acquire). An id a  *)
+(* capture is publishing, or a set member is waiting to stamp, is Busy and *)
+(* is never doomed.                                                        *)
 (***************************************************************************)
+Busy == {cap[c].id : c \in {d \in Caps : cap[d].ph \in Held}}
+
 PruneList(p) ==
     /\ prPh[p] = "idle"
     \* The activation-local guard, checked before the listing is read: a pass
@@ -292,9 +394,9 @@ PruneList(p) ==
                      \/ pol.keepLast > 0 /\ Cardinality({j \in L : Newer(j, i)}) < pol.keepLast
                      \/ pol.maxAge > 0 /\ meta[i].t + pol.maxAge >= now}
            D == L \ CloseStep(CloseStep(CloseStep(Keep, L), L), L)
-       IN /\ D # {}
+       IN /\ D \ Busy # {}
           /\ prPh' = [prPh EXCEPT ![p] = "rows"]
-          /\ prDoomed' = [prDoomed EXCEPT ![p] = D]
+          /\ prDoomed' = [prDoomed EXCEPT ![p] = D \ Busy]
     /\ prGone' = [prGone EXCEPT ![p] = {}]
     /\ prBlocked' = [prBlocked EXCEPT ![p] = {}]
     /\ prManGone' = [prManGone EXCEPT ![p] = {}]
@@ -307,7 +409,7 @@ RemoveRow(p, m) ==
     /\ cat' = cat \ {m}
     /\ prGone' = [prGone EXCEPT ![p] = @ \cup {m}]
     /\ UNCHANGED <<prPh, prDoomed, prBlocked, prManGone>>
-    /\ UNCHANGED <<now, pol, next, meta, cap, crashes, arts, snk, pub>>
+    /\ UNCHANGED <<now, pol, next, meta, cap, crashes, arts, snk, pub, lpt, reps>>
 
 (***************************************************************************)
 (* The doomed manifests the scan finds built on (BackupRetentionPlanner.   *)
@@ -345,7 +447,7 @@ RestoreRow(p, m) ==
     /\ prPh' = [prPh EXCEPT ![p] =
          IF prBlocked[p] = {m} THEN Settle(p, prDoomed[p] \ {m}) ELSE "restore"]
     /\ UNCHANGED <<prGone, prManGone>>
-    /\ UNCHANGED <<now, pol, next, meta, cap, crashes, arts, snk, pub>>
+    /\ UNCHANGED <<now, pol, next, meta, cap, crashes, arts, snk, pub, lpt, reps>>
 
 DelMan(p, m) ==
     /\ \/ prPh[p] = "delete"
@@ -357,7 +459,7 @@ DelMan(p, m) ==
     /\ prManGone' = [prManGone EXCEPT ![p] = @ \cup {m}]
     /\ prPh' = [prPh EXCEPT ![p] = "delete"]
     /\ UNCHANGED <<prDoomed, prGone, prBlocked>>
-    /\ UNCHANGED <<now, pol, next, meta, cap, crashes, arts, cat, pub>>
+    /\ UNCHANGED <<now, pol, next, meta, cap, crashes, arts, cat, pub, lpt, reps>>
 
 DelArt(p, m) ==
     /\ prPh[p] = "delete"
@@ -367,7 +469,7 @@ DelArt(p, m) ==
     /\ prDoomed' = [prDoomed EXCEPT ![p] = @ \ {m}]
     /\ prPh' = [prPh EXCEPT ![p] = Settle(p, prDoomed[p] \ {m})]
     /\ UNCHANGED <<prGone, prBlocked>>
-    /\ UNCHANGED <<now, pol, next, meta, cap, crashes, snk, cat, pub>>
+    /\ UNCHANGED <<now, pol, next, meta, cap, crashes, snk, cat, pub, lpt, reps>>
 
 \* A pass crashes at any step (environment): its plan is activation-local
 \* and is lost, and whatever it already deleted stays deleted.
@@ -397,6 +499,7 @@ PassStep(p) ==
 Next ==
     \/ Tick
     \/ \E c \in Caps, k \in Kinds, b \in 0..MaxIds : Start(c, k, b)
+    \/ \E c \in Caps : Acquire(c)
     \/ \E c \in Caps : WriteArt(c)
     \/ \E c \in Caps : WriteMan(c)
     \/ \E c \in Caps : Check(c)
@@ -450,7 +553,8 @@ InFlightBaseSurvives ==
 \* resolves every backup the catalog lists. A pass removes a row before it
 \* deletes the sink manifest, and a capture writes its sink manifest before it
 \* registers the row; a capture that republished an id a pass had doomed
-\* would register a row whose sink manifest the pass then deleted (#5418).
+\* would register a row whose sink manifest the pass then deleted (#5418),
+\* which the per-id reservation (Acquire, Busy) prevents.
 ListedInSink == cat \subseteq snk
 
 \* A published increment still in the sink has a restorable base: a pass
@@ -477,5 +581,5 @@ KeepPolicyHonoured ==
 Expired(i) == i \in cat /\ i \notin RetainedIn(cat) /\ ~Depended(i)
 
 ExpiredEventuallyPruned ==
-    \A i \in Ids : Expired(i) ~> (i \notin cat \/ Depended(i))
+    \A i \in Ids : Expired(i) ~> (i \notin cat \/ Depended(i) \/ i \in Busy)
 =============================================================================

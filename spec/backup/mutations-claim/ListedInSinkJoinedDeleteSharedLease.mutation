@@ -1,0 +1,22 @@
+# Pairs with ListedInSink. Production before the fix of #5631: overlapping
+# operator deletes of one id shared one lease, which the first to end removed,
+# and each deleted the sink manifest outside the grain, unconditionally. A
+# capture of identical content republished the id as soon as the first delete
+# ended, and the second delete then deleted the republished manifest, leaving
+# its row listed with nothing in the sink.
+MODULE: ListedInSinkJoinedDeleteSharedLease
+TARGET: ListedInSink
+CLASS: Invariant
+SUMMARY: one delete ends every delete's lease and deletes the manifest unfenced
+PERTURBS: DelEnd
+
+--- FIND
+    /\ man' = IF row = "none" /\ man = "A" THEN "none" ELSE man
+    /\ del' = [del EXCEPT ![d] = "done"]
+    /\ lease' = [lease EXCEPT ![d] = "none"]
+--- REPLACE
+    \* MUTATION: one shared lease, and an unfenced manifest delete.
+    /\ man' = "none"
+    /\ del' = [del EXCEPT ![d] = "done"]
+    /\ lease' = [e \in Dels |-> "none"]
+--- END

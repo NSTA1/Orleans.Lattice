@@ -1,0 +1,17 @@
+# A renewal extends a delete's lease that has already run out, after which a
+# rebuild or a capture may have acted on the id. DelRenew(d) never revives one.
+MODULE: BackupIdClaim
+ROW: DelRenew(d)
+FILE: src/lattice.backup/BackupSchedulerGrain.Holds.cs
+DETECTORS: BackupDeleteLeaseTests.A_lease_that_has_run_out_is_not_renewed
+SUMMARY: a renewal revives a delete's lease that has run out
+
+--- FIND
+        if (until <= DateTimeOffset.UtcNow)
+        {
+            // Ran out: a rebuild or a capture may have acted on the id since, so the
+--- REPLACE
+        if (until <= DateTimeOffset.MinValue)
+        {
+            // Ran out: a rebuild or a capture may have acted on the id since, so the
+--- END

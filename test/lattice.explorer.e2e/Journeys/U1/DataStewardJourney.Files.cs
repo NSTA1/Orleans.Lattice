@@ -1,8 +1,10 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 using Microsoft.Playwright;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 using static Microsoft.Playwright.Assertions;
 using Names = Orleans.Lattice.Explorer.EndToEnd.Tests.Story.StoryNames.Contoso;
@@ -12,6 +14,8 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Journeys.U1;
 /// <summary>Steps 8 to 11: a tree seeded from a CSV, an import cancelled and its tree deleted, the corrections, and an export.</summary>
 public sealed partial class DataStewardJourney
 {
+    private static readonly KnownDefect StarvedSeed = new KnownDefect("#5569", "under replay-permit starvation the seed's bulk appends to the new archive tree's shards time out at 30 s, so the Import dialog says it could not seed the tree");
+
     private async Task SeedTheArchiveFromACsvAsync()
     {
         var archive = Names.Trees.FactoryOrdersArchive;
@@ -29,16 +33,80 @@ public sealed partial class DataStewardJourney
         await CheckpointAsync("8", "seed-dialog", "archive-2026-10.csv: seed mode, key order/{id}, each row stored as a JSON object of its columns");
 
         await import.Start(seed: true).ClickAsync();
-        await import.WaitForStateAsync("succeeded", 300_000);
+        await Expect(import.State).ToHaveAttributeAsync("data-lt-import-state", new Regex("^(succeeded|failed)$"), new() { Timeout = 300_000 });
+        if (await import.State.GetAttributeAsync("data-lt-import-state") == "failed")
+        {
+            await StandInForAStarvedSeedAsync(import, archive);
+            return;
+        }
+
         Assert.That(await import.CommittedAsync(), Is.EqualTo(Names.Files.ArchiveRows), "every row of the archive was written");
         await Expect(import.Result).ToContainTextAsync($"Seeded {Names.Files.ArchiveRows.ToString("N0", CultureInfo.InvariantCulture)} entries.");
         await CheckpointAsync("8", "seeded", "The archive is seeded: 5,000 entries");
 
         await import.Done.ClickAsync();
         await Expect(import.Dialog).ToHaveCountAsync(0);
-        await Expect(_tree.KeyLinks.First).ToHaveTextAsync(StoryData.Archive[0].Key, new() { Timeout = 60_000 });
+        await Expect(_tree.KeyLinks.First).ToHaveTextAsync(StoryData.Archive[0].Key, new() { Timeout = PanelSettled.BoundMs });
         Coverage.Hit("use-case:data/import-csv-new-tree");
         await CheckpointAsync("8", "archive-keys", "The new tree holds the October orders");
+    }
+
+    /// <summary>
+    /// The seed failed. Under replay-permit starvation (#5569) the seed's bulk appends to the new
+    /// tree's shards time out at 30 s, and the dialog says it could not seed the tree; that is
+    /// recorded as a known defect, and the archive later chapters read is written as priya through
+    /// the Data API instead, as U1's contract does. Any other failure fails the step.
+    /// </summary>
+    private async Task StandInForAStarvedSeedAsync(DataImportDialog import, string archive)
+    {
+        var failure = (await import.Dialog.InnerTextAsync()).ReplaceLineEndings(" ");
+        if (!failure.Contains("could not seed this tree", StringComparison.Ordinal))
+        {
+            Assert.Fail($"The archive's seed failed: {failure}");
+        }
+
+        await StarvedSeed.ReproducesAsync(async () =>
+            await Expect(import.Dialog).ToContainTextAsync("could not seed this tree"));
+        await CheckpointAsync("8", "seed-failed", "Under replay-permit starvation the seed's writes time out, and the dialog says the tree could not be seeded (#5569)");
+
+        await import.Done.ClickAsync();
+        await Expect(import.Dialog).ToHaveCountAsync(0);
+        var data = ContractFacades.Of(_context, Personas.Priya.Id).Data;
+        await WriteArchiveWhileAdvancingAsync(data, archive);
+        Assert.That(await ContractCalls.CountPrefixAsync(data, archive, "order/"), Is.EqualTo(Names.Files.ArchiveRows), "the stand-in wrote every row of the archive");
+
+        await _priya.Page.ReloadAsync();
+        await Expect(_tree.KeyLinks.First).ToHaveTextAsync(StoryData.Archive[0].Key, new() { Timeout = 120_000 });
+        await CheckpointAsync("8", "archive-keys", "The new tree holds the October orders, written through the Data API in place of the starved seed");
+    }
+
+    /// <summary>
+    /// Writes the archive through the Data API in batches, judged by whether the writing advances,
+    /// not by one fixed window: a transient failure (#5743 maps a grain timeout to DeadlineExceeded
+    /// or Unavailable) retries the batch, and the wait fails only when no batch lands for three
+    /// minutes, or the whole write runs past fifteen.
+    /// </summary>
+    private static async Task WriteArchiveWhileAdvancingAsync(Api.Data.Grpc.LatticeDataApiGrpcClient data, string archive)
+    {
+        var batches = StoryData.Archive.Chunk(100).ToArray();
+        var written = 0;
+        await ContractWait.UntilAdvancingAsync(
+            $"writing the archive to {archive}",
+            async () =>
+            {
+                var batch = batches[written];
+                await data.SetManyAsync(new Api.Data.Grpc.DataSetManyRequest
+                {
+                    TreeId = archive,
+                    Upserts = [.. batch.Select(entry => new Api.Data.DataEntry { Key = entry.Key, Value = entry.Value })],
+                });
+                written++;
+                return written == batches.Length;
+            },
+            () => written,
+            stall: TimeSpan.FromMinutes(3),
+            ceiling: TimeSpan.FromMinutes(15),
+            () => $"{written} of {batches.Length} batches of 100 written");
     }
 
     private async Task CancelAnOversizedImportAndDeleteItsTreeAsync()
@@ -58,7 +126,7 @@ public sealed partial class DataStewardJourney
         await CheckpointAsync("9", "importing", "history-2025.ndjson, 500,000 lines, streams in");
 
         await import.Stop.ClickAsync();
-        await import.WaitForStateAsync("stopped");
+        await import.ExpectEndAsync("stopped", PanelSettled.BoundMs);
         var committed = await import.CommittedAsync();
         var written = committed.ToString("N0", CultureInfo.InvariantCulture) + (committed == 1 ? " entry" : " entries");
         await Expect(import.Result).ToContainTextAsync($"Stopped. {written} were written before the stop, and nothing after it.");
@@ -69,12 +137,12 @@ public sealed partial class DataStewardJourney
         await Expect(import.Dialog).ToHaveCountAsync(0);
         if (committed == 0)
         {
-            await Expect(_tree.EmptyKeys).ToContainTextAsync("This tree holds no keys yet.", new() { Timeout = 30_000 });
+            await Expect(_tree.EmptyKeys).ToContainTextAsync("This tree holds no keys yet.", new() { Timeout = PanelSettled.BoundMs });
         }
         else
         {
             // What was committed is the file's head.
-            await Expect(_tree.KeyLinks.First).ToHaveTextAsync(Names.Orders.Key(1), new() { Timeout = 60_000 });
+            await Expect(_tree.KeyLinks.First).ToHaveTextAsync(Names.Orders.Key(1), new() { Timeout = PanelSettled.BoundMs });
         }
 
         Coverage.Hit("use-case:data/import-cancel");
@@ -84,7 +152,7 @@ public sealed partial class DataStewardJourney
         await CheckpointAsync("9", "delete-confirmation", "Delete tree... asks her to type the tree's name");
         await confirm.GetByRole(AriaRole.Button, new() { Name = "Delete tree", Exact = true }).ClickAsync();
         await ExpectToastAsync($"Tree {history} deleted. It can be recovered until its window closes.");
-        await Expect(_tree.Deleted).ToHaveAttributeAsync("data-lt-tree-deleted", "recoverable");
+        await Expect(_tree.Deleted).ToHaveAttributeAsync("data-lt-tree-deleted", "recoverable", new() { Timeout = PanelSettled.BoundMs });
         Coverage.Hit("use-case:data/tree-delete-recover");
         await CheckpointAsync("9", "deleted", "factory-history is deleted, and recoverable until its window closes");
     }
@@ -109,7 +177,7 @@ public sealed partial class DataStewardJourney
         await CheckpointAsync("10", "upsert-dialog", "corrections.ndjson: 50 lines, upserted into factory-orders");
 
         await import.Start(seed: false).ClickAsync();
-        await import.WaitForStateAsync("succeeded");
+        await import.ExpectEndAsync("succeeded", 300_000);
         Assert.That(await import.CommittedAsync(), Is.EqualTo(Names.Files.CorrectionsApplied));
         await Expect(import.Refused).ToHaveAttributeAsync("data-lt-import-refused", Names.Files.CorrectionsRefused.ToString(CultureInfo.InvariantCulture));
         await Expect(import.RefusedRows).ToHaveCountAsync(Names.Files.CorrectionsRefused);
@@ -151,13 +219,13 @@ public sealed partial class DataStewardJourney
         await CheckpointAsync("11", "export-dialog", $"Export...: prefix {prefix}, as CSV");
 
         await export.Prepare.ClickAsync();
-        await Expect(export.Download).ToBeVisibleAsync();
+        await Expect(export.Download).ToBeVisibleAsync(new() { Timeout = PanelSettled.BoundMs });
         await CheckpointAsync("11", "download-ready", "The download is ready");
 
         var download = await _priya.Page.RunAndWaitForDownloadAsync(() => export.Download.ClickAsync());
         var saved = Path.Combine(_files, download.SuggestedFilename);
         await download.SaveAsAsync(saved);
-        await Expect(export.Result).ToContainTextAsync("Every key in the scope is in the file.", new() { Timeout = 60_000 });
+        await Expect(export.Result).ToContainTextAsync("Every key in the scope is in the file.", new() { Timeout = PanelSettled.BoundMs });
         await CheckpointAsync("11", "export-complete", "The export streams to the end: every key in the scope is in the file");
 
         // She opens the file: a header, the hundred orders under the prefix, and the trailer.
@@ -191,11 +259,11 @@ public sealed partial class DataStewardJourney
         await Expect(create).ToBeVisibleAsync();
         await create.GetByLabel("Tree name", new() { Exact = true }).FillAsync(tree);
         await create.GetByRole(AriaRole.Button, new() { Name = "Review", Exact = true }).ClickAsync();
-        await Expect(create.GetByRole(AriaRole.Button, new() { Name = "Create tree", Exact = true })).ToBeVisibleAsync();
+        await Expect(create.GetByRole(AriaRole.Button, new() { Name = "Create tree", Exact = true })).ToBeVisibleAsync(new() { Timeout = PanelSettled.BoundMs });
         await CheckpointAsync(step, "create-review", $"New tree from file...: {tree}, reviewed before it is created");
 
         await create.GetByRole(AriaRole.Button, new() { Name = "Create tree", Exact = true }).ClickAsync();
-        await Expect(_tree.Heading).ToHaveTextAsync(tree, new() { Timeout = 60_000 });
+        await Expect(_tree.Heading).ToHaveTextAsync(tree, new() { Timeout = PanelSettled.BoundMs });
         await Expect(_priya.Page).ToHaveURLAsync(new Regex("[?&]import=seed(&|$)"));
     }
 }

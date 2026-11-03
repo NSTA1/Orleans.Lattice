@@ -236,6 +236,7 @@ The following inventory includes directly declared public members and overloads,
 - `public bool ValidateCrdtMergeResults { get; set; }`
 - `public int DeadLetterPreviewMaxBytes { get; set; }`
 - `public TimeSpan PropagationInterval { get; set; }`
+- `public TimeSpan AliasReservationWaitTimeout { get; set; }`
 
 ### `Orleans.Lattice.Schema.LatticeSchemaEnforcementServiceCollectionExtensions`
 

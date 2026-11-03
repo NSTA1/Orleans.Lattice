@@ -2,6 +2,7 @@ using Grpc.Core;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Api.Operations;
+using Orleans.Runtime;
 
 namespace Orleans.Lattice.Api.TreeAdmin.Grpc;
 
@@ -705,6 +706,30 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
             // mapping is the same PermissionDenied the shared ladder below applies.
             throw ToRpcException(exception, context);
         }
+        catch (LatticeSaturatedException exception)
+        {
+            // Named on its own so the saturation contract gate sees the clause (#5723); the
+            // shared ladder below maps it to ResourceExhausted.
+            throw ToRpcException(exception, context);
+        }
+        catch (TimeoutException exception)
+        {
+            // Named on its own so the transient-fault contract gate sees the clause (#5742); the
+            // shared ladder below maps it to DeadlineExceeded.
+            throw ToRpcException(exception, context);
+        }
+        catch (OrleansMessageRejectionException exception)
+        {
+            // Named on its own so the transient-fault contract gate sees the clause (#5742); the
+            // shared ladder below maps it to Unavailable.
+            throw ToRpcException(exception, context);
+        }
+        catch (EnumerationAbortedException exception)
+        {
+            // Named on its own so the transient-fault contract gate sees the clause (#5742); the
+            // shared ladder below maps it to Unavailable.
+            throw ToRpcException(exception, context);
+        }
         catch (Exception exception) when (exception is not RpcException)
         {
             throw ToRpcException(exception, context);
@@ -905,6 +930,30 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
             // mapping is the same PermissionDenied the shared ladder below applies.
             throw ToRpcException(exception, context);
         }
+        catch (LatticeSaturatedException exception)
+        {
+            // Named on its own so the saturation contract gate sees the clause (#5723); the
+            // shared ladder below maps it to ResourceExhausted.
+            throw ToRpcException(exception, context);
+        }
+        catch (TimeoutException exception)
+        {
+            // Named on its own so the transient-fault contract gate sees the clause (#5742); the
+            // shared ladder below maps it to DeadlineExceeded.
+            throw ToRpcException(exception, context);
+        }
+        catch (OrleansMessageRejectionException exception)
+        {
+            // Named on its own so the transient-fault contract gate sees the clause (#5742); the
+            // shared ladder below maps it to Unavailable.
+            throw ToRpcException(exception, context);
+        }
+        catch (EnumerationAbortedException exception)
+        {
+            // Named on its own so the transient-fault contract gate sees the clause (#5742); the
+            // shared ladder below maps it to Unavailable.
+            throw ToRpcException(exception, context);
+        }
         catch (Exception exception) when (exception is not RpcException)
         {
             throw ToRpcException(exception, context);
@@ -938,6 +987,10 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
                 // the chunk were not strictly ascending. InvalidArgument mirrors the
                 // local ArgumentException mapping.
                 return new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+            case LatticeSaturatedException:
+                // Storage back-pressure is a deliberate "busy, retry later" refusal (#5723):
+                // report the retryable ResourceExhausted, not the precondition arm below.
+                return new RpcException(new Status(StatusCode.ResourceExhausted, "The store is busy (storage back-pressure) and the request was refused. Retry after a short backoff."));
             case InvalidOperationException ex:
                 // A precondition failure surfaced by the composed facade. The message
                 // is safe and actionable (no secrets), so surface it as
@@ -953,6 +1006,24 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
             // client to retry a decision that will never change.
             case LatticeTenantAccessDeniedException ex:
                 return new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+
+            // A grain call timed out under load (#5742): the outcome is unknown, so report
+            // DeadlineExceeded - never Internal, and never a failure the client may assume.
+            case TimeoutException:
+                _logger.LogWarning(exception, "Api.TreeAdmin: gRPC call to {Method} timed out inside the cluster; outcome unknown.", context.Method);
+                return new RpcException(new Status(StatusCode.DeadlineExceeded, "The request did not complete in time inside the cluster, so its outcome is unknown. Confirm the result before retrying a write."));
+
+            // A silo was unavailable or rejected the message (#5742): a transient cluster
+            // fault, reported as the retryable Unavailable rather than a server error.
+            case OrleansMessageRejectionException:
+                _logger.LogWarning(exception, "Api.TreeAdmin: gRPC call to {Method} hit an unavailable cluster node.", context.Method);
+                return new RpcException(new Status(StatusCode.Unavailable, "A cluster node was temporarily unavailable. Retry after a short backoff."));
+
+            // A remote enumerator was lost to a grain deactivation mid-read (#5742): transient,
+            // cleared by reading again, so the retryable Unavailable rather than a server error.
+            case EnumerationAbortedException:
+                _logger.LogWarning(exception, "Api.TreeAdmin: gRPC call to {Method} lost a remote enumeration.", context.Method);
+                return new RpcException(new Status(StatusCode.Unavailable, "A cluster node lost the read in progress. Retry after a short backoff."));
             default:
                 _logger.LogError(exception, "Api.TreeAdmin: gRPC call to {Method} failed.", context.Method);
                 return new RpcException(new Status(StatusCode.Internal, "The tree-administration control-API request failed."));

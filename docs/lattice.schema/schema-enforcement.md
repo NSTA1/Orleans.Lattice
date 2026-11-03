@@ -132,8 +132,8 @@ violates the policy is diverted to the tree's [dead-letter
 queue](dead-letter-queue.md) instead of being applied, so a bad item is neither
 silently accepted nor allowed to stall the ingest stream.
 
-Strict mode only sees ingest that reaches the tree's write operations as a
-system-origin write, which in practice is three replication paths. One is the
+Strict mode sees every replicated write, and judges it at the tree's write
+operations as a system-origin write. Four replication paths reach it. One is the
 typed-CRDT path: a replicated CRDT delta (judged, like a local delta, only when
 its body parses as JSON) or a full-state CRDT row during bootstrap. Another is the
 entries of a replicated atomic batch, which the receiver stages one at a time
@@ -148,10 +148,26 @@ export carries committed state only, so it no longer records whether a row was
 written by an atomic batch or by a plain write, and it can be the only delivery of
 a batch the source withheld (for example after a coordinated restore), so the
 receiver judges every drained row rather than let the export become a way past the
-check. A steady-state plain
-(non-atomic) last-writer-wins replication apply and a backup restore merge or
-bulk-load straight into the tree's shards, so even in strict mode their values
-are stored verbatim and never dead-lettered.
+check. The fourth is a steady-state plain (non-atomic) last-writer-wins
+replication apply, whether it arrives as a single entry, in a merged batch, as an
+anti-entropy repair re-ship, or routed to a bootstrap copy
+([#5684](https://github.com/NSTA1/Orleans.Lattice/issues/5684)). A peer's atomic
+batch can reach a receiver this way: a source that re-seeds copies the batch into
+its new copy as plain rows and re-ships them. Each row is judged under the logical
+tree's policy, a refused row is diverted and the rest of the batch applies, and an
+admitted row is stored verbatim, never re-stamped, so regions converge byte for
+byte. Whether a tree is strict is asked once per replicated batch from the cached
+policy, so a tree that is not strict pays nothing per row. A backup restore
+bulk-loads straight into the tree's shards, so even in strict mode its values are
+stored verbatim and never dead-lettered.
+
+A diverted plain write leaves the receiver without a row its peer holds, by design,
+until the key is written again. With anti-entropy auto-remediation on
+(`DigestProbeEnabled`, `AutoRemediateOnDigestMismatch` and `LeafReReplayEnabled`,
+all off by default), the digest probe treats that row as a divergence on every
+round and re-ships it: the receiver diverts it again and files another dead-letter
+record each time. This is a known limitation, tracked in
+[#5714](https://github.com/NSTA1/Orleans.Lattice/issues/5714).
 
 Strict ingest requires **two** flags to line up, and takes effect only when both
 are set:

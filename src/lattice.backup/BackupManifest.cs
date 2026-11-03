@@ -1,8 +1,9 @@
 namespace Orleans.Lattice.Backup;
 
 /// <summary>
-/// A self-describing description of one backup. Its <see cref="Id"/> is unique to
-/// the capture that produced it (<see cref="BackupIdentity"/>), and it carries everything a restore needs to be
+/// A self-describing description of one backup. A manifest is content-addressed
+/// by its <see cref="Id"/> so a retried capture that produces the same backup does
+/// not create a duplicate, and it carries everything a restore needs to be
 /// integrity-checked and applied faithfully without consulting the source cluster:
 /// the scope captured, the point-in-time consistency cut, the shard topology and
 /// structural digest, each key's declared shape / merge mode, per-origin
@@ -17,7 +18,7 @@ public sealed record BackupManifest
 {
     /// <summary>Initializes a new <see cref="BackupManifest"/>.</summary>
     /// <param name="id">
-    /// The backup id, unique to its capture. Must not be <c>null</c> or empty and must
+    /// The content-addressed backup id. Must not be <c>null</c> or empty and must
     /// not contain the reserved unit-separator character (<c>U+001F</c>) that the
     /// in-cluster sink and catalog use as a key separator.
     /// </param>
@@ -109,7 +110,7 @@ public sealed record BackupManifest
         CapturingClusterId = capturingClusterId;
     }
 
-    /// <summary>The backup id, unique to the capture that produced it.</summary>
+    /// <summary>The content-addressed backup id.</summary>
     [Id(0)]
     public string Id { get; init; }
 
@@ -215,4 +216,17 @@ public sealed record BackupManifest
     /// </summary>
     [Id(15)]
     public string? CapturingClusterId { get; init; }
+
+    /// <summary>
+    /// When this backup was last captured, or <see langword="null"/> when it has
+    /// been captured only once (its <see cref="CreatedAtUtc"/>). A backup id is a
+    /// content address, so a capture that produces identical bytes republishes an
+    /// existing backup rather than creating a new one: its
+    /// <see cref="CreatedAtUtc"/> stays that of the first capture, and this records
+    /// the latest. Retention ranks a backup by the later of the two, so a backup a
+    /// capture has just returned is never pruned as old. A manifest written before
+    /// this field existed has none, and ranks by <see cref="CreatedAtUtc"/>.
+    /// </summary>
+    [Id(17)]
+    public DateTimeOffset? LastCapturedAtUtc { get; init; }
 }

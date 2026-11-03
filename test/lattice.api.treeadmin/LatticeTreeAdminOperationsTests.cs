@@ -200,6 +200,19 @@ public sealed partial class LatticeTreeAdminOperationsTests
     }
 
     [Test]
+    public void StartTagIndexReconcileAsync_without_the_admin_grant_starts_nothing()
+    {
+        var coordinator = Substitute.For<ITagIndexReconcileGrain>();
+        _factory.GetGrain<ITagIndexReconcileGrain>(IndexName, null).Returns(coordinator);
+        var facade = Create([LatticeOperation.Read]);
+
+        Assert.That(async () => await facade.StartTagIndexReconcileAsync(IndexName, "denied-sweep"),
+            Throws.TypeOf<LatticeAuthorizationDeniedException>());
+        Assert.That(OperationFor("denied-sweep").BeginRequest, Is.Null);
+        coordinator.DidNotReceiveWithAnyArgs().RunTrackedSweepAsync(default!, default);
+    }
+
+    [Test]
     public async Task StartWalMoveAsync_runs_the_tracked_move_and_records_the_receipt()
     {
         var admin = Substitute.For<ILatticeAdminTrackedGrain>();

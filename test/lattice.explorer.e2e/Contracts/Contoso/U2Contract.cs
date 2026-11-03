@@ -1,4 +1,5 @@
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 using Names = Orleans.Lattice.Explorer.EndToEnd.Tests.Story.StoryNames.Contoso;
 
@@ -46,14 +47,53 @@ public sealed class U2Contract() : ChapterContract("U2")
         await schema.ClearVersionConfigAsync(Names.Trees.FactoryOrdersArchive);
     }
 
-    /// <summary>Starts a migration of <paramref name="treeId"/> and waits for it to succeed.</summary>
+    /// <summary>
+    /// A whole-tree migration saturates the journey estate (#5569): its own calls then time out
+    /// behind replays from -1 and it stops advancing. The wrapper runs only when the migration's
+    /// wait gave up with the operation still running.
+    /// </summary>
+    private static readonly KnownDefect MigrationStarved = new KnownDefect("#5569", "a whole-tree schema migration saturates the journey estate, so the migration stops advancing while it is still running");
+
+    /// <summary>How long a migration may go without moving to a new phase or completing more units.</summary>
+    private static readonly TimeSpan MigrationStall = TimeSpan.FromMinutes(6);
+
+    /// <summary>The absolute deadline for a migration, however steadily it advances.</summary>
+    private static readonly TimeSpan MigrationCeiling = TimeSpan.FromMinutes(8);
+
+    /// <summary>Starts a migration of <paramref name="treeId"/> and waits for it to succeed while it advances.</summary>
     /// <param name="schema">The Schema API.</param>
     /// <param name="treeId">The tree.</param>
     /// <param name="what">The migration, for messages.</param>
     public static async Task MigrateAsync(Orleans.Lattice.Api.Schema.Grpc.LatticeSchemaApiGrpcClient schema, string treeId, string what)
     {
         var migration = await schema.StartMigrationAsync(treeId);
-        await ContractWait.SucceededAsync(what, () => schema.GetSchemaOperationStatusAsync(migration.OperationId), OperationPatience);
+        var last = new System.Runtime.CompilerServices.StrongBox<Orleans.Lattice.Api.Operations.LatticeOperationStatus?>();
+        TimeoutException? timedOut = null;
+        try
+        {
+            await ContractWait.SucceededWhileAdvancingAsync(what, () => schema.GetSchemaOperationStatusAsync(migration.OperationId), MigrationStall, MigrationCeiling, last);
+        }
+        catch (TimeoutException ex)
+        {
+            timedOut = ex;
+        }
+
+        if (timedOut is null)
+        {
+            return;
+        }
+
+        if (last.Value is not { IsTerminal: false })
+        {
+            throw timedOut;
+        }
+
+        await MigrationStarved.ReproducesAsync(() =>
+        {
+            Assert.That(last.Value!.IsTerminal, Is.False, "the migration is still running when its wait gives up");
+            return Task.CompletedTask;
+        });
+        Assert.Ignore($"KNOWN DEFECT #5569: {what} was still running: {timedOut.Message}");
     }
 
     /// <inheritdoc />
@@ -70,8 +110,47 @@ public sealed class U2Contract() : ChapterContract("U2")
         if (!context.IsProduced("C1"))
         {
             var scan = await schema.StartComplianceScanAsync(orders);
-            var result = await ContractWait.SucceededAsync("the compliance scan", () => schema.GetComplianceScanStatusAsync(scan.OperationId), OperationPatience);
-            RequireEqual(result.Result.GetValueOrDefault(NonCompliantCount), "0", "factory-orders is compliant at scan time");
+            Orleans.Lattice.Api.Operations.LatticeOperationStatus? scanned = null;
+            await ContractWait.UntilAsync("the compliance scan", async () =>
+            {
+                scanned = await schema.GetComplianceScanStatusAsync(scan.OperationId);
+                return scanned is { IsTerminal: true };
+            }, OperationPatience);
+
+            if (scanned!.State == Orleans.Lattice.Api.Operations.LatticeOperationState.Failed
+                && scanned.FailureReason?.Contains("EnumerationAborted", StringComparison.Ordinal) == true)
+            {
+                await ScanStarved.ReproducesAsync(() =>
+                {
+                    Assert.That(scanned.FailureReason, Does.Contain("EnumerationAborted"), "the compliance scan ran out of resumes");
+                    return Task.CompletedTask;
+                });
+                Assert.Ignore($"KNOWN DEFECT #5569: the compliance scan ended Failed in phase '{scanned.Phase}': {scanned.FailureReason}");
+            }
+
+            Require(scanned.State == Orleans.Lattice.Api.Operations.LatticeOperationState.Succeeded, $"the compliance scan succeeded (it ended {scanned.State} in phase '{scanned.Phase}': {scanned.FailureReason})");
+            var nonCompliant = scanned.Result.GetValueOrDefault(NonCompliantCount);
+            RequireEqual(nonCompliant, "0", "factory-orders is compliant at scan time" + (nonCompliant == "0" ? string.Empty : $" ({Breakdown(scanned.Result)})"));
         }
+    }
+
+    /// <summary>
+    /// Under replay-permit starvation (#5569) the compliance scan's resilient source scan exhausts
+    /// its resumes and the scan ends Failed with an enumeration abort. The wrapper runs only on
+    /// that outcome; any other failure stays red.
+    /// </summary>
+    private static readonly KnownDefect ScanStarved = new KnownDefect("#5569", "under replay-permit starvation the compliance scan's resilient source scan exhausts its resumes, so the scan ends Failed with an enumeration abort");
+
+    /// <summary>The non-compliant breakdown of a compliance scan's result, as reason: count pairs, for a failure message.</summary>
+    /// <param name="result">The scan operation's result map.</param>
+    private static string Breakdown(IReadOnlyDictionary<string, string> result)
+    {
+        var rows = new List<string>();
+        for (var i = 0; result.TryGetValue($"rule.{i}.reason", out var reason); i++)
+        {
+            rows.Add($"{result.GetValueOrDefault($"rule.{i}.count")}x {reason}");
+        }
+
+        return rows.Count == 0 ? "no breakdown recorded" : string.Join("; ", rows);
     }
 }

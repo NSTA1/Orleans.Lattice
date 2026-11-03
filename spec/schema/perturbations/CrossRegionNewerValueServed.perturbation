@@ -2,7 +2,7 @@
 MODULE: SchemaCrossRegion
 ROW: ReadsServeOrFail
 FILE: src/lattice.schema/LatticeSchemaVersionDecoder.cs
-DETECTORS: SchemaCrossRegionIngestIntegrationTests.Plain_lww_entry_stamped_past_the_receivers_target_is_stored_verbatim_under_strict_ingest_and_its_read_fails_explicitly
+DETECTORS: SchemaCrossRegionIngestIntegrationTests.Plain_lww_entry_stamped_past_the_target_of_a_tree_without_strict_ingest_is_stored_verbatim_and_its_read_fails_explicitly
 SUMMARY: a newer-than-target value is served as if at target
 
 --- FIND
