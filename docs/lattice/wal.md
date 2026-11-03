@@ -1859,8 +1859,11 @@ reachable owner.
 the tick banks a snapshot and a usable pin for a live-written leaf without taking a
 replay permit.
 
-**Bulk-loaded leaves** start with no checkpoint, so they replay to their claim head
-before they arm, until the bulk birth hint lands (#5605, member 3).
+**Bulk-loaded leaves** are held while their shard's `bulk:` switch is open over their
+range, and arm once it has closed and they have read to its heads and their claim head.
+Their checkpoint starts at the [bulk birth hint](#hand-off-fences) where one was
+applied, which shortens their activation replay; where none was, they replay from the
+log's start, as before. Arming needs no bulk-specific rule.
 
 **Rolling upgrades.** Nothing arms while the gate is closed, and the leaf issues no
 marker read and no shard-root call while no partition is claimed, so a shard root on an

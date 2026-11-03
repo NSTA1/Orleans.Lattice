@@ -39,7 +39,8 @@ public sealed class LiveCheckpointAdvanceIntegrationTests
     private const string DuplicateTree = "live-advance-duplicate";
     private const string UnstampedTree = "live-advance-unstamped";
     private const string OrphanTree = "live-advance-orphan";
-    private static readonly string[] Trees = [LatencyTree, DuplicateTree, UnstampedTree, OrphanTree];
+    private const string BulkTree = "live-advance-bulk";
+    private static readonly string[] Trees = [LatencyTree, DuplicateTree, UnstampedTree, OrphanTree, BulkTree];
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(45);
     private TestCluster _cluster = null!;
 
@@ -185,6 +186,78 @@ public sealed class LiveCheckpointAdvanceIntegrationTests
 
         Assert.That(banked, Is.Not.Null,
             "the orphan's acknowledged row reaches the reachable owner's snapshot: it was unstamped and reported, so the owner replayed it");
+    }
+
+    [Test]
+    public async Task A_bulk_appended_leaf_arms_once_its_switch_has_closed()
+    {
+        // A leaf a bulk append creates is held while the shard's bulk: token is open over
+        // its range. Once the switch closes, its activation replay - from #5702's birth
+        // hint, or from -1 where none was applied - has read to its claim head, so it
+        // banks its live writes without the starvation drive.
+        var tree = _cluster.Client.GetGrain<ILattice>(BulkTree);
+        for (var i = 0; i < 5; i++)
+        {
+            await tree.SetAsync($"a{i}", [(byte)i]);
+        }
+
+        var shard = _cluster.Client.GetGrain<IShardRootGrain>($"{BulkTree}/0");
+        var appended = Enumerable.Range(0, 300).Select(i => KeyValuePair.Create($"z{i:D4}", new byte[] { 1 })).ToList();
+        await shard.BulkAppendAsync("live-advance-bulk-1", appended);
+        await WaitForBulkSwitchClosedAsync();
+
+        var rightmost = await RightmostLeafAsync(shard);
+        Assert.That(rightmost, Is.Not.EqualTo(await shard.GetLeftmostLeafIdAsync()), "precondition: the append created leaves");
+        var snapshot = _cluster.Client.GetGrain<ILeafSnapshotStorageGrain>(rightmost.GetGuidKey());
+
+        var reasons = new List<string>();
+        LeafSnapshotBlob? banked;
+        using (ListenForDriverDeclines(BulkTree, reasons))
+        {
+            await tree.SetAsync("z9999", [9]);
+            banked = await WaitForCoverageAsync(snapshot, await HeadAsync(BulkTree) - 1, "z9999");
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(banked, Is.Not.Null, "the bulk-born leaf banks its live write");
+            Assert.That(reasons, Does.Not.Contain(LatticeMetrics.DriverDeclineRecheckNoDurableCheckpoint.Value),
+                "the bulk-born leaf never took the starved arm");
+        });
+    }
+
+    private async Task WaitForBulkSwitchClosedAsync()
+    {
+        var deadline = DateTime.UtcNow + ShardRootGrain.BulkSwitchIdleClose + TimeSpan.FromSeconds(20);
+        while (DateTime.UtcNow < deadline)
+        {
+            var marker = (await HandOffMarkerRows.ReadShardAsync(Storage, BulkTree, 0)).State;
+            if (marker.Open.Count == 0 && marker.BulkBirthHints.Count == 0)
+            {
+                return;
+            }
+
+            await Task.Delay(250);
+        }
+
+        Assert.Fail("precondition: the bulk switch closed");
+    }
+
+    private async Task<GrainId> RightmostLeafAsync(IShardRootGrain shard)
+    {
+        var id = (await shard.GetLeftmostLeafIdAsync())!.Value;
+        for (var i = 0; i < 1000; i++)
+        {
+            var link = await _cluster.Client.GetGrain<IBPlusLeafGrain>(id.GetGuidKey()).GetKeyRangeAndNextSiblingAsync();
+            if (link.NextSibling is not { } next)
+            {
+                return id;
+            }
+
+            id = next;
+        }
+
+        throw new InvalidOperationException("the sibling chain did not end");
     }
 
     private static WalRecord Record(string tree, string key, byte value) => new()
