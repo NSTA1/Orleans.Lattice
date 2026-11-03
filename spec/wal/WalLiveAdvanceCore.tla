@@ -31,8 +31,9 @@
 (* the applied-prefix tracker, the unstamped watermark and self-report,   *)
 (* and the duplicate activation.                                          *)
 (*                                                                         *)
-(* Safety only. The armed-newborn liveness property is added later (epic *)
-(* #5605, member 6b); nothing here assumes fairness.                       *)
+(* Safety, and one liveness property, NewbornPinEventuallyUsable (epic    *)
+(* #5605, member 6b), checked under LiveSpec's explicit fairness on the   *)
+(* base configuration only.                                                *)
 (*                                                                         *)
 (* See LiveAdvanceCoreRefinement.md for the mapping to production, the    *)
 (* interface, and what this model does NOT cover.                          *)
@@ -475,6 +476,42 @@ Next ==
 Spec == Init /\ [][Next]_vars
 
 (***************************************************************************)
+(* Fairness, for NewbornPinEventuallyUsable. Weak fairness of the leaf's  *)
+(* own steps - its claim, the apply of an append, the live advance and the *)
+(* snapshot's capture - and of the environment steps that end a hold: a   *)
+(* close, a bulk switch's creation, the first initialisation. A replay is *)
+(* fair only while a bound the arming list names lies above the read      *)
+(* position (ReplayNeeded): production replays a live leaf only when its  *)
+(* claim head, a close's heads or a reported unstamped offset requires   *)
+(* it, never to catch up over its own appends. So any progress past those *)
+(* bounds is the live advance's, not a replay's.                          *)
+(***************************************************************************)
+ReplayNeeded(a) ==
+    \/ claimed[a] /\ rp[a] < claimHead[a] - 1
+    \/ rp[a] < hoClosedAt - 1
+    \/ rp[a] < seenU[a]
+
+Progress ==
+    \/ \E a \in Acts :
+        \/ Claim(a)
+        \/ ReplayNeeded(a) /\ Replay(a)
+        \/ LiveAdvance(a)
+        \/ Capture(a)
+    \/ \E o \in Offs : Land(o)
+    \/ Close
+    \/ Create
+    \/ MarkInit
+
+(* One weak-fairness condition over the disjunction. Every step of         *)
+(* Progress, and every other step but Stutter, can be taken only finitely  *)
+(* often, so a fair behaviour ends in a state where no Progress step is    *)
+(* enabled: exactly what one condition per step would force, at a fraction *)
+(* of TLC's liveness cost.                                                 *)
+Fairness == WF_vars(Progress)
+
+LiveSpec == Spec /\ Fairness
+
+(***************************************************************************)
 (* The core's guarantees.                                                  *)
 (***************************************************************************)
 
@@ -496,4 +533,20 @@ NoTrimPastAcked ==
 (* An unstamped append - a 10.2.0 silo's, or any while the gate is        *)
 (* closed - is never rejected.                                             *)
 OldNeverRejected == ~oldRejected
+
+(* The current activation has fallen off the log: the GC trimmed an entry *)
+(* it must still replay. Production latches such a partition stale and    *)
+(* holds its pin for an operator (issue #3477), so no progress is owed.   *)
+(* The model reaches it only through a duplicate that activated from an   *)
+(* older snapshot, because its GC trims to the shared snapshot alone.     *)
+CurrentFellOffLog == cur \in up /\ rp[cur] + 1 < floor
+
+(* The armed newborn (LiveAdvanceDesign.md, member 6): every own append    *)
+(* that becomes durable is eventually covered by the shared snapshot, so   *)
+(* the leaf's pin becomes usable without a replay from -1, unless the      *)
+(* current activation has fallen off the log. Under LiveSpec only the live *)
+(* advance carries the read position past the arming bounds, so this holds *)
+(* only if the newborn eventually arms and advances.                       *)
+NewbornPinEventuallyUsable ==
+    <>[](CurrentFellOffLog \/ \A o \in durable : author[o] \in Acts => snapCov >= o)
 =============================================================================
