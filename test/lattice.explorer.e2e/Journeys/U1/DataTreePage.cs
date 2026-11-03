@@ -87,6 +87,9 @@ internal sealed class DataTreePage(PersonaSession session)
     /// <summary>The empty state's Restart from the first page control.</summary>
     public ILocator RestartFromFirstPage => Content.GetByRole(AriaRole.Button, new() { Name = "Restart from the first page", Exact = true });
 
+    /// <summary>The empty state the Keys tab shows when its read fails.</summary>
+    public ILocator KeysDidNotLoad => Content.GetByRole(AriaRole.Heading, new() { Name = "The keys did not load", Exact = true });
+
     /// <summary>The keys on the page.</summary>
     public async Task<IReadOnlyList<string>> KeysAsync() =>
         [.. (await KeyLinks.AllInnerTextsAsync()).Select(key => key.Trim())];

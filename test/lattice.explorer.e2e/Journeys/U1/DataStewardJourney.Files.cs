@@ -1,8 +1,10 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 using Microsoft.Playwright;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 using static Microsoft.Playwright.Assertions;
 using Names = Orleans.Lattice.Explorer.EndToEnd.Tests.Story.StoryNames.Contoso;
@@ -12,6 +14,8 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Journeys.U1;
 /// <summary>Steps 8 to 11: a tree seeded from a CSV, an import cancelled and its tree deleted, the corrections, and an export.</summary>
 public sealed partial class DataStewardJourney
 {
+    private static readonly KnownDefect StarvedSeed = new KnownDefect("#5569", "under replay-permit starvation the seed's bulk appends to the new archive tree's shards time out at 30 s, so the Import dialog says it could not seed the tree");
+
     private async Task SeedTheArchiveFromACsvAsync()
     {
         var archive = Names.Trees.FactoryOrdersArchive;
@@ -29,7 +33,13 @@ public sealed partial class DataStewardJourney
         await CheckpointAsync("8", "seed-dialog", "archive-2026-10.csv: seed mode, key order/{id}, each row stored as a JSON object of its columns");
 
         await import.Start(seed: true).ClickAsync();
-        await import.WaitForStateAsync("succeeded", 300_000);
+        await Expect(import.State).ToHaveAttributeAsync("data-lt-import-state", new Regex("^(succeeded|failed)$"), new() { Timeout = 300_000 });
+        if (await import.State.GetAttributeAsync("data-lt-import-state") == "failed")
+        {
+            await StandInForAStarvedSeedAsync(import, archive);
+            return;
+        }
+
         Assert.That(await import.CommittedAsync(), Is.EqualTo(Names.Files.ArchiveRows), "every row of the archive was written");
         await Expect(import.Result).ToContainTextAsync($"Seeded {Names.Files.ArchiveRows.ToString("N0", CultureInfo.InvariantCulture)} entries.");
         await CheckpointAsync("8", "seeded", "The archive is seeded: 5,000 entries");
@@ -39,6 +49,35 @@ public sealed partial class DataStewardJourney
         await Expect(_tree.KeyLinks.First).ToHaveTextAsync(StoryData.Archive[0].Key, new() { Timeout = 60_000 });
         Coverage.Hit("use-case:data/import-csv-new-tree");
         await CheckpointAsync("8", "archive-keys", "The new tree holds the October orders");
+    }
+
+    /// <summary>
+    /// The seed failed. Under replay-permit starvation (#5569) the seed's bulk appends to the new
+    /// tree's shards time out at 30 s, and the dialog says it could not seed the tree; that is
+    /// recorded as a known defect, and the archive later chapters read is written as priya through
+    /// the Data API instead, as U1's contract does. Any other failure fails the step.
+    /// </summary>
+    private async Task StandInForAStarvedSeedAsync(DataImportDialog import, string archive)
+    {
+        var failure = (await import.Dialog.InnerTextAsync()).ReplaceLineEndings(" ");
+        if (!failure.Contains("could not seed this tree", StringComparison.Ordinal))
+        {
+            Assert.Fail($"The archive's seed failed: {failure}");
+        }
+
+        await StarvedSeed.ReproducesAsync(async () =>
+            await Expect(import.Dialog).ToContainTextAsync("could not seed this tree"));
+        await CheckpointAsync("8", "seed-failed", "Under replay-permit starvation the seed's writes time out, and the dialog says the tree could not be seeded (#5569)");
+
+        await import.Done.ClickAsync();
+        await Expect(import.Dialog).ToHaveCountAsync(0);
+        var data = ContractFacades.Of(_context, Personas.Priya.Id).Data;
+        await ContractCalls.SetManyAsync(data, archive, StoryData.Archive);
+        Assert.That(await ContractCalls.CountPrefixAsync(data, archive, "order/"), Is.EqualTo(Names.Files.ArchiveRows), "the stand-in wrote every row of the archive");
+
+        await _priya.Page.ReloadAsync();
+        await Expect(_tree.KeyLinks.First).ToHaveTextAsync(StoryData.Archive[0].Key, new() { Timeout = 120_000 });
+        await CheckpointAsync("8", "archive-keys", "The new tree holds the October orders, written through the Data API in place of the starved seed");
     }
 
     private async Task CancelAnOversizedImportAndDeleteItsTreeAsync()

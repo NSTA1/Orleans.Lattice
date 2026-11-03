@@ -207,6 +207,16 @@ public sealed partial class DataStewardJourney
         await CheckpointAsync("3", "cursor-expired", "Left idle past its lifetime, the scan's cursor has expired");
 
         await _tree.RestartFromFirstPage.ClickAsync();
+
+        // The pager moves to page 1 only once the new scan's first page is read; under #5569 that
+        // read can take up to three server timeouts, or end in the tab's own failure state.
+        var firstPage = _tree.PagePosition.Filter(new() { HasTextRegex = new Regex("^Page 1$") });
+        await Expect(firstPage.Or(_tree.KeysDidNotLoad)).ToBeVisibleAsync(new() { Timeout = 120_000 });
+        if (await _tree.KeysDidNotLoad.IsVisibleAsync())
+        {
+            Assert.Fail($"Restart from the first page: the keys did not load: {(await _tree.KeysDidNotLoad.Locator("xpath=..").InnerTextAsync()).ReplaceLineEndings(" ")}");
+        }
+
         await Expect(_tree.PagePosition).ToHaveTextAsync("Page 1");
         await Expect(_tree.KeyLinks.First).ToHaveTextAsync(Names.Orders.Key(1), new() { Timeout = 60_000 });
         Coverage.Hit("use-case:data/cursor-expiry");
