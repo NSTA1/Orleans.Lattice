@@ -158,6 +158,10 @@ public sealed class ReplicationConfigReseedEnrolmentIntegrationTests
         await AssertEnrolledAsync(tree);
         await AssertEnrolledAsync("east-baseline-tree");
 
+        // The peer's enrolment reached the tree only through the re-seed, which
+        // publishes no config mutation: the cutover itself must recompile it.
+        await AssertEnrolledAsync(PeerEnabledTree);
+
         // As A7's east enable did: the re-seed imported the peer's enrolment, so the
         // local enable is acknowledged as already enabled and authors nothing. The
         // acknowledgement must still mean the receiver admits the tree.

@@ -1170,7 +1170,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         // to LwwRegister, preserving the historical hardcode for trees
         // that bootstrap intra-cluster only without an explicit replication
         // declaration.
-        var mergeMode = _mergeModeResolver.Resolve(treeName) ?? LatticeMergeMode.LwwRegister;
+        var mergeMode = await ResolveAdmittedDrainModeAsync(treeName, cancellationToken).ConfigureAwait(true);
         var preCapture = await CaptureReceiverEntriesAsync(
                 treeName,
                 sourceClusterId,
@@ -1423,6 +1423,8 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
                 sinceLastPersist = 0;
             }
         }
+
+        ThrowIfDrainNoLongerAdmitted(treeName, mergeMode);
 
         await ReconcileReapedSourceDeletesAsync(
                 preCapture,

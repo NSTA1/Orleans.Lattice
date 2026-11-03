@@ -39,7 +39,8 @@ internal sealed class LatticeReplicationConfigAuthority(
     ILatticeReplicationContext replicationContext,
     ILatticeReplicationAdmin admin,
     IOptionsMonitor<LatticeReplicationOptions> options,
-    ILatticeBootstrapCoordinator? bootstrapCoordinator = null) : ILatticeReplicationConfigAuthority
+    ILatticeBootstrapCoordinator? bootstrapCoordinator = null,
+    CompiledReplicationConfigSnapshotMaintainer? runtimeConfig = null) : ILatticeReplicationConfigAuthority
 {
     private readonly ILatticeReplicationConfigStore _store =
         store ?? throw new ArgumentNullException(nameof(store));
@@ -116,7 +117,11 @@ internal sealed class LatticeReplicationConfigAuthority(
                     // requested mode, so no dot is authored. Enrolment converges
                     // from a peer through the config tree, so a receiver is
                     // often enrolled before its own enable runs, and a named
-                    // source is still a bootstrap request (issue #5594).
+                    // source is still a bootstrap request (issue #5594). The
+                    // tree may hold that enrolment without this silo's snapshot
+                    // having compiled it - a re-seed cutover publishes no
+                    // mutation (#5731) - so compile it before acknowledging.
+                    await EnsureCompiledAsync(treeId, existingMode, cancellationToken).ConfigureAwait(false);
                     var requested = !string.IsNullOrEmpty(bootstrapSourceClusterId)
                         && await RequestBootstrapUnlessInFlightAsync(treeId, bootstrapSourceClusterId, cancellationToken)
                             .ConfigureAwait(false);
@@ -145,6 +150,11 @@ internal sealed class LatticeReplicationConfigAuthority(
         working.SetMode(replicaId, mode);
         working.Enable(replicaId, NextFlagCounter(working.Enabled, replicaId));
         await _store.WriteEntryAsync(treeId, replicaId, working, cancellationToken).ConfigureAwait(false);
+
+        // The write's change-feed rebuild runs in the background; the enable is
+        // acknowledged - and its bootstrap drained - only once this silo's
+        // receiver gate admits the tree (#5731).
+        await EnsureCompiledAsync(treeId, mode, cancellationToken).ConfigureAwait(false);
 
         // Compose with the snapshot bootstrap: the change feed only carries new
         // mutations, and a receiver drops (and acknowledges) every entry shipped
@@ -199,6 +209,26 @@ internal sealed class LatticeReplicationConfigAuthority(
         // same-source kickoff while one is in flight, so asking is always safe.
         await _admin.RequestSnapshotAsync(treeId, sourceClusterId, cancellationToken).ConfigureAwait(false);
         return true;
+    }
+
+    /// <summary>
+    /// Brings this silo's compiled snapshot up to the config tree when it does not
+    /// already show <paramref name="treeId"/> enabled under <paramref name="mode"/>
+    /// (#5731). No call when it does; one config-map read otherwise. Other silos
+    /// converge through the epoch the write or cutover advanced.
+    /// </summary>
+    private async Task EnsureCompiledAsync(string treeId, LatticeMergeMode mode, CancellationToken cancellationToken)
+    {
+        if (runtimeConfig is null
+            || (runtimeConfig.Current.TryGetTree(treeId, out var projection)
+                && projection.Enabled
+                && !projection.Ambiguous
+                && projection.Mode == mode))
+        {
+            return;
+        }
+
+        await runtimeConfig.RebuildNowAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
