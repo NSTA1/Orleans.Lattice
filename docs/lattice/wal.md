@@ -1713,21 +1713,27 @@ The old leaf's frontier is its in-memory projection checkpoint. Its replay moves
 to the end of its activation replay, then by any later replay - and the live advance
 moves it over the leaf's own writes only while armed, behind the append fences; a write
 applied in memory never moves it on its own. A checkpoint hint also moves it: a split
-sibling's or bulk-born leaf's read position, which is capped as described here, and a
-split donor's own advance to one below the heads it read, which is not (#5756). So
-the frontier is contiguous - every record at or below it has been applied - except on
-a leaf whose checkpoint a donor's advance has moved, and a later cap at such a leaf's
-frontier inherits #5756's residue. A
-partition on which the old leaf has scanned nothing (it activated on an empty partition
-and has not replayed since, or was born from such a leaf) has no frontier, reported as
--1. There an appended leaf applies no hint, as in 10.2.0. A split sibling instead keeps
-one below the head, as in 10.2.0: a sibling with no read position would replay the
-whole log and seed its birth pin on the sentinel that blocks the tree's WAL trim. The
-records such a split can still skip - another author's, appended to the moved range
-after the donor activated - are tracked with the donor's own checkpoint advance, which
-still starts from the heads it read, in
-[#5756](https://github.com/NSTA1/Orleans.Lattice/issues/5756); the live advance closes
-both once it keeps frontiers current.
+sibling's or bulk-born leaf's read position, and a split donor's own advance, each
+capped as described here - the donor advances to the same capped heads its sibling
+starts from, which is a no-op wherever it has a frontier
+([#5756](https://github.com/NSTA1/Orleans.Lattice/issues/5756)). So the frontier is
+contiguous: every record at or below it has been applied. A partition on which the old
+leaf has scanned nothing (it activated on an empty partition and has not replayed
+since, or was born from such a leaf) has no frontier, reported as -1. There an appended
+leaf applies no hint, as in 10.2.0. A split sibling and its donor instead take one below
+the head, as in 10.2.0: a sibling with no read position would replay the whole log and
+seed its birth pin on the sentinel that blocks the tree's WAL trim. That is the
+residue: a split on a partition its donor has never scanned can still skip another
+author's record, appended to the range after the donor activated, and a later cap at
+either leaf's frontier inherits it. The live advance closes it once it keeps frontiers
+current.
+
+A donor that no longer advances to the heads may reactivate onto a snapshot captured
+before it split, which still holds the rows the split moved to its sibling. Replay
+never removes a key outside the declared span, so rehydration drops every row at or
+above a completed split's key that the leaf no longer declares; the sibling holds all of
+them. A row below that key - one a later bulk narrow stranded, owed to the graft's
+relocation - is kept.
 
 **A head is one past a checkpoint.** A WAL head is exclusive - the next offset the log
 will assign - while a leaf's checkpoint is inclusive - the last offset it has applied, and

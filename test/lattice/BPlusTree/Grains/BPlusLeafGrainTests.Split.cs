@@ -511,13 +511,31 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task Split_advances_donor_checkpoint_to_one_below_the_wal_head()
+    public async Task Split_does_not_advance_the_donor_past_its_own_replay_frontier()
     {
-        // Issue #5752 caps the sibling's read position only; the donor still advances
-        // to the heads it read, even from below its own frontier - one below each, as a
-        // head is exclusive and a checkpoint inclusive (issue #5760).
+        // Issue #5756: a record of the range the donor keeps that another author
+        // appended below the heads, and that the donor has not replayed, lies above
+        // its frontier; advancing the donor to the heads would skip it on its next
+        // cold replay, and no other leaf declares its key.
         var (grain, state, _, _) = BuildSplitFixture(walHead: 42L);
         SeedDonorFrontier(state, 30);
+
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        var result = await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+
+        Assert.That(result, Is.Not.Null, "split should have occurred");
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(30L));
+    }
+
+    [Test]
+    public async Task Split_advances_a_donor_with_no_frontier_to_one_below_the_wal_head()
+    {
+        // A donor that has scanned nothing on a partition has no frontier there; it
+        // advances to one below the head, as in 10.2.0 (a head is exclusive and a
+        // checkpoint inclusive, issue #5760). This is the documented residue of #5756.
+        var (grain, state, _, _) = BuildSplitFixture(walHead: 42L);
 
         await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
         await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
