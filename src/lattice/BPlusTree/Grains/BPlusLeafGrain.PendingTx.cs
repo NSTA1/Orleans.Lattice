@@ -1372,9 +1372,21 @@ internal sealed partial class BPlusLeafGrain
         if (txid == Guid.Empty) return TxStatus.InFlight;
         var treeId = state.State.TreeId;
         if (string.IsNullOrEmpty(treeId)) return TxStatus.InFlight;
-        return await TxRegistryRouting
-            .GetRegistry(grainFactory, treeId, txid)
-            .GetStatusForSettlementAsync(txid);
+
+        // Pass 2.5 resolves under the replay's permit; the registry's own
+        // activation can need one (issue #5775), so the permit is out for the call.
+        var suspended = SuspendReplayPermit();
+        try
+        {
+            return await TxRegistryRouting
+                .GetRegistry(grainFactory, treeId, txid)
+                .GetStatusForSettlementAsync(txid);
+        }
+        finally
+        {
+            if (suspended is not null)
+                await ResumeReplayPermitAsync(suspended);
+        }
     }
 
     /// <summary>
