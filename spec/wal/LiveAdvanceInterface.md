@@ -13,7 +13,7 @@ guarantee. The design authority remains [`design/LiveAdvanceDesign.md`](design/L
 | Module | Name | Assumes | Guarantees |
 |--------|------|---------|------------|
 | E | `WalAppendEpoch` | nothing | `StaleEpochNeverAppends`, `ClaimHeadCoversPriorAppends`, `RaisedEpochUnique`, `OnlySupersededRefused`, and the entry check |
-| H | `WalHandOffFence` | E's entry check | `HandOffBound`, `AbsentMarkerHolds` |
+| H | `WalHandOffFence` | E's entry check | `HandOffBound`, `AbsentMarkerHolds`, `CloseHeadMonotone` |
 | R | `WalRoutingFloor` | E's entry check | `StraddlerBelowInit`, `LiveGenerationAboveFloor` |
 | B | `WalBulkSwitch` | H's `HandOffBound` and `AbsentMarkerHolds` | `BulkHintBound`, `ContestedKeyAgrees` |
 | C | `WalLiveAdvanceCore` | every guarantee above | `ReadPositionHonest`, `SnapshotHonest`, `NoTrimPastAcked`, and liveness |
@@ -52,15 +52,21 @@ design change, not a modelling choice.
   - **Retirement** raises `floor(i)` and unloads `entry(i)` before deleting it, so
     a retired stamp's next append is refused as unloaded, and the re-claim it then
     makes meets the floor.
-- **L's marker** has the states `initialised`, `open`, and `closedAt`, the
-  per-partition heads its last close recorded.
+- **L's marker** has the states `initialised`, `open`, and `closedAt`: per
+  partition, the **maximum** of the heads every close recorded on it, the
+  re-created incarnation's first initialisation included, since it records its
+  heads as a close. It is a maximum, not the last close's heads: production
+  max-merges every retained close with the compacted heads of evicted ones
+  (`HandOffMarkerCore.RequiredHead`). A purge discards the marker, so `closedAt`
+  starts again from nothing in the re-created incarnation.
 - **Per activation**, `claimHead[a]` is the head a's claim returned, and
   `seenU[a]` is the highest unstamped offset reported to `a`.
 
 ## Guarantees
 
 Each guarantee is stated in the vocabulary. The owning module checks it as an
-invariant (or, for the entry check, by the action guards its mutations break).
+invariant (or, for the entry check, by the action guards its mutations break, and,
+for `CloseHeadMonotone`, as an action property).
 
 **E, `WalAppendEpoch`**
 - `StaleEpochNeverAppends`: an `Own(a)` offset is allocated only while `a`'s epoch
@@ -86,6 +92,11 @@ invariant (or, for the entry check, by the action guards its mutations break).
   (stamp at admission, admission mark, a claim reset by a restart) it took.
 - `AbsentMarkerHolds`: L's marker reads closed only once it is initialised. An
   absent or uninitialised marker holds L.
+- `CloseHeadMonotone`: within an incarnation of L's marker, `closedAt` never
+  decreases. A close whose own heads are lower, such as a window opened before the
+  re-created incarnation's first initialisation and closed after it, leaves the
+  heads an earlier close or the initialisation recorded in force. H checks it as
+  an action property.
 
 **R, `WalRoutingFloor`**
 - `StraddlerBelowInit`: a `Straddler(i)` offset is allocated only below the
@@ -105,7 +116,9 @@ invariant (or, for the entry check, by the action guards its mutations break).
 
 C models the other modules only as environment constraints:
 - **Own appends** satisfy E's three guarantees.
-- **Foreign appends** satisfy `HandOffBound` and `AbsentMarkerHolds`.
+- **Foreign appends** satisfy `HandOffBound` and `AbsentMarkerHolds`, and every
+  close and the first initialisation max-merge their heads into `closedAt`
+  (`CloseHeadMonotone`).
 - **Straddler appends** satisfy `StraddlerBelowInit`.
 - **A bulk-born leaf's birth** satisfies `BulkHintBound`.
 - **Unstamped appends** are always reported, and raise every reader's `seenU` before

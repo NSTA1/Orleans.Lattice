@@ -18,7 +18,7 @@ Close ==
     /\ fAdmit' = FALSE
     /\ fEpoch' = fEpoch + 1
     /\ fFence' = fEpoch + 1
-    /\ hoClosedAt' = next
+    /\ \E h \in CloseHeads : hoClosedAt' = Max2(hoClosedAt, h)
     /\ hoOpen' = FALSE
     /\ UNCHANGED <<next, author, windows, fpend, fkind, fstamp, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
@@ -32,7 +32,7 @@ Close ==
     /\ fAdmit' = FALSE
     /\ fEpoch' = fEpoch + 1
     /\ fFence' = fEpoch + 1
-    /\ hoClosedAt' = next
+    /\ \E h \in CloseHeads : hoClosedAt' = Max2(hoClosedAt, h)
     /\ UNCHANGED <<next, author, hoOpen, windows, fpend, fkind, fstamp, restarted>>
     /\ UNCHANGED <<gst, gstamp, gate, hfly, resumed, mInit>>
 

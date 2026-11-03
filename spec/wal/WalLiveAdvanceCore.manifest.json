@@ -6,14 +6,14 @@
     "invariants": 5,
     "properties": 0,
     "actions": 20,
-    "mutations": 27,
+    "mutations": 28,
     "behaviourRows": 23,
     "distinctStates": 778329
   },
   "variants": {
     "Restart": { "distinctStates": 3052664 },
     "GateFlip": { "distinctStates": 3373761 },
-    "Recreate": { "distinctStates": 3715174 },
-    "Bulk": { "distinctStates": 870639 }
+    "Recreate": { "distinctStates": 4032667 },
+    "Bulk": { "distinctStates": 875431 }
   }
 }

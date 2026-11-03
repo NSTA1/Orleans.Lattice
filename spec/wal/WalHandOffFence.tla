@@ -60,7 +60,7 @@ VARIABLES
     next,       \* the WAL shard's allocator: the next offset it assigns
     author,     \* the author kind each allocated offset was allocated to
     hoOpen,     \* L's durable hand-off marker is open
-    hoClosedAt, \* the allocator head the marker's last close recorded
+    hoClosedAt, \* the per-partition maximum of the heads the marker's closes recorded
     windows,    \* hand-off windows opened so far
     fAdmit,     \* the initiator is admitting writes for L's range
     fpend,      \* a foreign write is admitted and not yet allocated or rejected
@@ -183,9 +183,14 @@ ForeignReject ==
     /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
 
+(* The heads a close may record: any head up to the allocator's that lies  *)
+(* above every stamped foreign append, the weakest E's claim head allows.  *)
+CloseHeads == {h \in 0..next : \A o \in Offs : author[o] \in Stamped => o < h}
+
 (* Close: the initiator stops admitting, bumps its generation and re-      *)
 (* claims it, which raises its entry and reads the allocator head in one   *)
-(* step (E's entry check), and closes L's marker recording that head.      *)
+(* step (E's entry check), and closes L's marker recording that head. The  *)
+(* marker max-merges it with the heads earlier closes recorded.            *)
 Close ==
     /\ hoOpen
     /\ ~closing
@@ -193,7 +198,7 @@ Close ==
     /\ fAdmit' = FALSE
     /\ fEpoch' = fEpoch + 1
     /\ fFence' = fEpoch + 1
-    /\ hoClosedAt' = next
+    /\ \E h \in CloseHeads : hoClosedAt' = Max2(hoClosedAt, h)
     /\ hoOpen' = FALSE
     /\ UNCHANGED <<next, author, windows, fpend, fkind, fstamp, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
@@ -366,4 +371,9 @@ HandOffBound ==
 (* L's marker state is initialised only while no hand-off begun without a  *)
 (* marker is in flight, so an absent or uninitialised marker holds L.      *)
 AbsentMarkerHolds == mInit => ~hfly
+
+(* The heads L's marker requires never decrease: every close is max-merged *)
+(* with the heads earlier closes recorded, so a late close with lower      *)
+(* heads cannot release an owner an earlier close holds.                   *)
+CloseHeadMonotone == [][hoClosedAt' >= hoClosedAt]_vars
 =============================================================================

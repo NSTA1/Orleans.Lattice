@@ -83,7 +83,7 @@ VARIABLES
     dupUsed,     \* the duplicate activation has activated
     mInit,       \* H: L's marker state is initialised
     hoOpen,      \* H: L's marker is open
-    hoClosedAt,  \* H: the allocator head the last close (or initialisation) recorded
+    hoClosedAt,  \* H: the maximum of the heads every close (and the initialisation) recorded
     windows,     \* H: hand-off windows opened so far
     lastU,       \* the partition's unstamped watermark: the highest unstamped offset
     seenU,       \* the highest unstamped offset reported to each activation
@@ -259,8 +259,9 @@ Land(o) ==
 (***************************************************************************)
 (* H's guarantees, as environment steps. ForeignOpen opens L's marker for *)
 (* a hand-off window. ForeignAlloc: a foreign append is allocated only    *)
-(* while the marker is open (HandOffBound). Close records the allocator   *)
-(* head as closedAt, so every foreign record of the window lies below it. *)
+(* while the marker is open (HandOffBound). Close records any head up to  *)
+(* the allocator's above every foreign record, the weakest HandOffBound   *)
+(* allows, and the marker max-merges it into closedAt (CloseHeadMonotone). *)
 (* HandOff(o, a) delivers a foreign record to an activation, which is     *)
 (* when it is acknowledged; it may never happen.                          *)
 (***************************************************************************)
@@ -280,11 +281,15 @@ ForeignAlloc ==
     /\ inflight' = inflight \cup {next}
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, oldVars, envVars>>
 
+(* The heads a close may record: any head up to the allocator's above     *)
+(* every allocated offset whose author is in S.                            *)
+HeadsAbove(S) == {h \in 0..next : \A o \in Offs : o < next /\ author[o] \in S => o < h}
+
 Close ==
     /\ phase = "live"
     /\ hoOpen
     /\ hoOpen' = FALSE
-    /\ hoClosedAt' = next
+    /\ \E h \in HeadsAbove({Foreign}) : hoClosedAt' = Max2(hoClosedAt, h)
     /\ UNCHANGED <<walVars, leafVars, epochVars, mInit, windows, oldVars, envVars>>
 
 HandOff(o, a) ==
@@ -336,7 +341,7 @@ Replay(a) ==
 (*  - a's claim is raised at the partition;                                *)
 (*  - L's marker state is initialised;                                     *)
 (*  - a has replayed to its claim head;                                    *)
-(*  - no marker is open, and a has replayed to the last close's heads;     *)
+(*  - no marker is open, and a has replayed to its closes' max heads;      *)
 (*  - a has read past every unstamped offset reported to it;              *)
 (*  - every own append a issued is applied (the applied-prefix tracker).  *)
 (* LiveAdvance(a): advance over a's own applied appends without reading.  *)
@@ -404,8 +409,9 @@ Restart ==
 (* duplicate, if it has not activated, is the re-created incarnation's.   *)
 (* StraddlerAlloc: a write a shard root of the purged incarnation admitted *)
 (* is allocated, only before the re-created incarnation's first            *)
-(* initialisation. MarkInit: that initialisation records the allocator     *)
-(* head as its heads, and initialises L's marker state.                    *)
+(* initialisation. MarkInit: that initialisation records, as a close, any  *)
+(* head above every foreign and straddler record (StraddlerBelowInit),     *)
+(* max-merged into closedAt, and initialises L's marker state.             *)
 (***************************************************************************)
 Recreate ==
     /\ WithRecreate
@@ -436,7 +442,7 @@ MarkInit ==
     /\ recreated
     /\ ~mInit
     /\ mInit' = TRUE
-    /\ hoClosedAt' = next
+    /\ \E h \in HeadsAbove({Foreign, Straddler}) : hoClosedAt' = Max2(hoClosedAt, h)
     /\ reinit' = TRUE
     /\ UNCHANGED <<walVars, leafVars, epochVars, hoOpen, windows, oldVars>>
     /\ UNCHANGED <<recreated, spUsed, phase, hint>>

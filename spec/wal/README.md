@@ -50,9 +50,9 @@ design mutation until the last, the bulk switch, lands.
 | `WalMove` | 5 | 2 | 13 | 18 | 18 | 1,617 |
 | `WalPinRetirement` | 3 | 3 | 25 | 31 | 30 | 284,019 |
 | `WalAppendEpoch` | 5 | 0 | 17 | 23 | 20 | 150,706 |
-| `WalHandOffFence` | 3 | 0 | 17 | 20 | 18 | 8,826 |
+| `WalHandOffFence` | 3 | 1 | 17 | 21 | 19 | 8,826 |
 | `WalRoutingFloor` | 3 | 0 | 12 | 16 | 13 | 10,704 |
-| `WalLiveAdvanceCore` | 5 | 0 | 20 | 27 | 23 | 778,329 |
+| `WalLiveAdvanceCore` | 5 | 0 | 20 | 28 | 23 | 778,329 |
 
 `Actions` counts the disjuncts of `Next`, including the non-behavioural `Stutter`
 of `WalMove`, `WalAppendEpoch`, `WalHandOffFence`, `WalRoutingFloor` and `WalLiveAdvanceCore`. `Behaviour rows` counts the action rows of the
@@ -64,8 +64,8 @@ TLC's count for the module's own cfg. `WalDurability` searches to depth 35 and
 distinct states to depth 23. `WalRoutingFloor` searches to depth 15, and its
 `WideGenerations` variant finds 24,084 distinct states to depth 15.
 `WalLiveAdvanceCore` searches to depth 25; its variants find 3,052,664 (`Restart`,
-depth 26), 3,373,761 (`GateFlip`, depth 25), 3,715,174 (`Recreate`, depth 27) and
-870,639 (`Bulk`, depth 25) distinct states.
+depth 26), 3,373,761 (`GateFlip`, depth 25), 4,032,667 (`Recreate`, depth 27) and
+875,431 (`Bulk`, depth 25) distinct states.
 
 `WalDurability` has a two-fault variant configuration, `WalDurability.TwoFaults.cfg`
 (see "Variant configurations" in [`../README.md`](../README.md)). It checks every
@@ -126,7 +126,7 @@ distinct states to depth 21, about fifteen seconds on two workers.
 | [`append-epoch-mutations/`](append-epoch-mutations/) | One or more deliberate defects per property and per action of `WalAppendEpoch`. |
 | [`AppendEpochRefinement.md`](AppendEpochRefinement.md) | `WalAppendEpoch` mapped to production, and the interface the other promoted modules assume. |
 | `WalHandOffFence.tla` / `.cfg` / `.manifest.json` | The hand-off fence module, its TLC model and its manifest. |
-| `WalHandOffFence.WideWindows.cfg` | The hand-off fence module with four offsets, generations up to 4 and three windows, checked against every invariant. |
+| `WalHandOffFence.WideWindows.cfg` | The hand-off fence module with four offsets, generations up to 4 and three windows, checked against every invariant and the action property. |
 | [`handoff-fence-mutations/`](handoff-fence-mutations/) | One or more deliberate defects per property and per action of `WalHandOffFence`. |
 | `WalRoutingFloor.tla` / `.cfg` / `.manifest.json` | The routing-floor module, its TLC model and its manifest. |
 | `WalRoutingFloor.WideGenerations.cfg` | The routing-floor module with the purged incarnation's generations up to 3, checked against every invariant. |
@@ -139,7 +139,7 @@ distinct states to depth 21, about fifteen seconds on two workers.
 | `WalLiveAdvanceCore.Bulk.cfg` | The live-advance core with a bulk-born leaf, checked against every invariant. |
 | [`live-advance-core-mutations/`](live-advance-core-mutations/) | One or more deliberate defects per property and per action of `WalLiveAdvanceCore`, and one weakening of each assumption it takes. |
 | [`LiveAdvanceCoreRefinement.md`](LiveAdvanceCoreRefinement.md) | `WalLiveAdvanceCore` mapped to production, and its interface: each assumption with the guarantee and module that discharge it. |
-| [`HandOffFenceRefinement.md`](HandOffFenceRefinement.md) | `WalHandOffFence` mapped to production, and its interface: E's entry check assumed, `HandOffBound` and `AbsentMarkerHolds` guaranteed. |
+| [`HandOffFenceRefinement.md`](HandOffFenceRefinement.md) | `WalHandOffFence` mapped to production, and its interface: E's entry check assumed, `HandOffBound`, `AbsentMarkerHolds` and `CloseHeadMonotone` guaranteed. |
 
 ## Properties checked
 
@@ -412,28 +412,29 @@ durable hand-off marker. The initiator opens the owner's marker before its first
 admission, stamps each write with its generation in the same step that admits it, and
 closes by fence: it stops admitting, bumps and re-claims its generation, which raises
 its entry at the WAL shard and reads the allocator head in one step, and records that
-head as the close. Another shard's range-delete walk carries the same tree generation,
+head as the close, max-merged with the heads earlier closes recorded. Another shard's range-delete walk carries the same tree generation,
 so one re-claim fences it; a rejected walk re-stamps only while its own intent holds
 the owner (rule 3), and otherwise goes on unstamped. A hand-off begun before the fence
 gate opened has no marker; it opens one when it resumes, and the owner's marker state
 is initialised only once no such hand-off is in flight.
 
 It is module H of the five promoted from the design draft. It assumes only
-`WalAppendEpoch`'s entry check, as an environment constraint, and its two guarantees
+`WalAppendEpoch`'s entry check, as an environment constraint, and its three guarantees
 are what the bulk-switch and core modules assume
 ([the interface](HandOffFenceRefinement.md#interface)).
 
 | Property | Kind | Meaning |
 |----------|------|---------|
 | `TypeOK` | Invariant | State stays well-typed. |
-| `HandOffBound` | Invariant | Whenever the owner's marker reads closed, every stamped foreign append lies below the head its last close recorded. |
+| `HandOffBound` | Invariant | Whenever the owner's marker reads closed, every stamped foreign append lies below the heads its closes recorded. |
 | `AbsentMarkerHolds` | Invariant | The owner's marker state is initialised only while no hand-off begun without a marker is in flight, so an absent marker holds the owner. |
+| `CloseHeadMonotone` | Action property | The heads the owner's marker requires never decrease: every close is max-merged with the heads earlier closes recorded. |
 
 The base checks every property with every environment step on (about a second on four
 workers); `WalHandOffFence.WideWindows.cfg` re-checks them with four offsets,
 generations up to 4 and three windows (a few seconds). Twelve of the design draft's
-mutations moved here, re-targeted at these properties, and eight more perturb the
-actions the draft had none for; the refinement note lists them, and the redundancy
+mutations moved here, re-targeted at these properties, eight more perturb the
+actions the draft had none for, and one makes a close overwrite the recorded heads; the refinement note lists them, and the redundancy
 check this module keeps.
 
 ### What it covers, and what it does not
@@ -510,7 +511,7 @@ and section 4): when an activation of a leaf may advance its read position over 
 appends it issued and applied itself, without reading the WAL, and what that does to the
 shared per-leaf snapshot and the GC trim. An activation is armed only when its claim is
 raised, the leaf's marker state is initialised, it has replayed to its claim head, no
-marker is open and it has replayed to the last close's heads, it has read past every
+marker is open and it has replayed to the heads the marker's closes recorded, it has read past every
 unstamped offset reported to it, and every own append it issued is applied. Otherwise it
 advances by replay.
 
@@ -519,7 +520,8 @@ assume-guarantee graph ([`LiveAdvanceInterface.md`](LiveAdvanceInterface.md)). I
 every guarantee of the other four and models each only as an environment constraint in the
 form stated there: only the current activation's stamped appends are allocated, at or above
 its claim head (`WalAppendEpoch`); foreign appends only while the marker is open, below the
-heads a close records, and an absent marker holds the leaf (`WalHandOffFence`); a straddler
+heads a close records, which the marker max-merges so they never decrease, and an absent
+marker holds the leaf (`WalHandOffFence`); a straddler
 of a purged incarnation only before the re-created incarnation's first initialisation
 records its heads (`WalRoutingFloor`); and a bulk-born leaf holds every record below its
 birth hint (`WalBulkSwitch`). It models the unstamped watermark itself: a 10.2.0 silo's

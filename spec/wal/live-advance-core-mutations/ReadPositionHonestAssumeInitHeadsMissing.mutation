@@ -11,7 +11,7 @@ BOUNDS: WithRecreate = TRUE
 
 --- FIND
     /\ mInit' = TRUE
-    /\ hoClosedAt' = next
+    /\ \E h \in HeadsAbove({Foreign, Straddler}) : hoClosedAt' = Max2(hoClosedAt, h)
 --- REPLACE
     /\ mInit' = TRUE
 \* MUTATION: no heads are recorded.
