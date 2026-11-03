@@ -75,7 +75,7 @@ once, either here or in the
 | Tenant rate budgets | 1 | 14 | 23 | 22 | [Rate-budget leases](../../spec/tenant-rate-budget/README.md) |
 | Tenant isolation | 1 | 25 | 25 | 31 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
 | Scheduling and progress | 10 | 196 | 244 | 119 | [Verified Scheduling and Progress](verified-scheduling.md) |
-| Schema enforcement and versioning | 9 | 145 | 175 | 289 | [Schema enforcement and versioning](../../spec/schema/README.md) |
+| Schema enforcement and versioning | 9 | 149 | 178 | 299 | [Schema enforcement and versioning](../../spec/schema/README.md) |
 | Schema and view composition | 1 | 23 | 23 | 28 | [Schema and view composition](../../spec/schema-view/README.md) |
 
 **Behaviour rows** are the rows of a refinement note's action and property tables
@@ -544,15 +544,17 @@ gaps, states its full scope.
     keeps the tree's policy), every source shard armed at its live layout,
     crash recovery, aborts and cancels that publish nothing, and refusal of a
     cutover whose captured source was superseded. Cross-region
-    (`SchemaCrossRegion`): each receiver judges replicated entries and atomic
-    batches by its own policy and catalog, and a refused batch entry is
+    (`SchemaCrossRegion`): each receiver judges every replicated entry, a plain
+    write included, and atomic batches by its own policy and catalog, on the
+    stream, anti-entropy repair and a re-seed import alike, and a refused batch entry is
     dead-lettered durably while its siblings commit.
   - **Does not cover:** writes during a remediation or migration build
     (quiescence is required), an ownership-guard refusal of the swap, the
     timing of policy propagation to other silos, and split or fold
-    publication; writes below the choke point (plain last-writer-wins
-    replication, backup restore, tree merge), which are never validated or
-    stamped; replication of any schema definition between regions; re-applying
+    publication; local writes below the choke point (backup restore, tree
+    merge), which are never validated or stamped; a second dead-letter record
+    for a re-delivered refused row, and a repair or re-seed admitting a row
+    diverted for an unservable stamp once the receiver's catalog serves it; replication of any schema definition between regions; re-applying
     a diverted entry, which stays diverted after the version is registered;
     and the batched (`MergeManyAsync`) merges the merge-result observer does
     not see. The tenant model covers the facade only, not the in-process

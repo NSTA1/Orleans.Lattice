@@ -25,7 +25,7 @@ below.
 | `SchemaComplianceScan` | One tracked compliance scan: the policy read once at the start, the ungoverned short-circuit, the count before an ordered non-snapshot pass over a writable tree, per-reason tallies, undecodable values counted non-compliant (#5253), the rule count kept apart from the failure-reason count (#4966), and cancellation or a lost runner ending it with no report. | [`SchemaComplianceScanRefinement.md`](SchemaComplianceScanRefinement.md) |
 | `SchemaStrictIngest` | Strict ingest at a replication receiver: each entry judged by the policy its silo holds, whatever order it and its batch's decision arrived in; a refused entry diverted only once its dead-letter record is durable; policy lookups, appends and commits that fail, are cancelled or lose their response; the applier's re-throw and park; lost acknowledgements and re-delivery; at-least-once records; and a policy change that reaches the silo late. | [`SchemaStrictIngestRefinement.md`](SchemaStrictIngestRefinement.md) |
 | `SchemaRemediationCutover` | The copy-and-cutover protocol beneath a transform remediation and an eager migration: the alias reservation, intent persisted with a fresh destination and the captured source, the dry run, a build that inherits the source's layout and re-stamps every value at the target, the policy install, the atomic alias-and-map swap and the source's redirects; crash recovery from banked progress, aborts and cancels that publish nothing, a cutover refused when its source was superseded (#5289), and resizes, restores, reshards, explicit alias sets and stale routers around it. | [`SchemaRemediationCutoverRefinement.md`](SchemaRemediationCutoverRefinement.md) |
-| `SchemaCrossRegion` | A versioned tree replicated between regions whose policies, targets and upcaster catalogs are region-local: plain writes stored below the check with their own stamp, deltas and atomic-batch entries judged by the receiver's own policy and catalog under strict ingest (a delta lifted to the receiver's target once, a refused batch entry left out while its siblings commit together), nothing admitted while the stream, a collaborator or a restore-fenced copy is unavailable, reads that serve or fail explicitly, and convergence once the receiver holds the source's version. | [`SchemaCrossRegionRefinement.md`](SchemaCrossRegionRefinement.md) |
+| `SchemaCrossRegion` | A versioned tree replicated between regions whose policies, targets and upcaster catalogs are region-local: every replicated entry - plain write, delta or atomic-batch entry - judged by the receiver's own policy and catalog under strict ingest, on the stream, on anti-entropy repair and on a re-seed import alike, so a refused body is never re-introduced and every divergence is accounted for by a dead letter (a plain write keeps its original stamp, a delta lifted to the receiver's target once, a refused batch entry left out while its siblings commit together), nothing admitted while the stream, a collaborator or a restore-fenced copy is unavailable, reads that serve or fail explicitly, and convergence once the receiver holds the source's version. | [`SchemaCrossRegionRefinement.md`](SchemaCrossRegionRefinement.md) |
 | `SchemaTenantScope` | The schema facade under tenancy: the caller's tree resolved once to its tenant-scoped effective tree, an unattributed caller and a confined tenant's escape into a reserved or malformed namespace refused before the gate, `SchemaAdmin` or `Read` authorized over the whole effective tree while the tenancy layer can confirm its policy, the operation acting on exactly that tree, and tracked operations found only under the caller's tenant. | [`SchemaTenantScopeRefinement.md`](SchemaTenantScopeRefinement.md) |
 
 Shared vocabulary, for later modules here: a value is `Raw(body)` or
@@ -77,8 +77,8 @@ confirmation; its `ThreeRequests` variant re-checks every property with three.
 ## What is not modelled
 
 Each refinement note's `## Deliberate abstraction gaps` register is the
-authority. In short: writes below the choke point (plain LWW replication apply,
-backup restore, tree merge) are never validated or stamped, so strict ingest is
+authority. In short: local writes below the choke point (backup restore, tree
+merge) are never validated or stamped, so strict ingest is
 not a universal validation guarantee; dead-letter
 records are at least once (a re-delivered entry refused again is recorded again)
 and are never retired; rule semantics, CRDT deltas and the upcaster graph are
@@ -127,5 +127,5 @@ dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "TestCategory=Tlc
 | `SchemaComplianceScan` | 10 | 4 | 9 | 16 | 21 | 23,580 |
 | `SchemaStrictIngest` | 3 | 7 | 9 | 16 | 16 | 5,326 |
 | `SchemaRemediationCutover` | 8 | 9 | 20 | 25 | 34 | 115,966 |
-| `SchemaCrossRegion` | 3 | 9 | 8 | 17 | 16 | 47,890 |
+| `SchemaCrossRegion` | 4 | 9 | 10 | 21 | 19 | 47,924 |
 | `SchemaTenantScope` | 4 | 6 | 7 | 12 | 12 | 124,968 |

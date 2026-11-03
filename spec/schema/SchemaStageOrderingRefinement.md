@@ -40,7 +40,7 @@ land below the choke point are environment steps that no stage sees.
 | `RunEnforcement` | Judge the entry's served body, failing closed when it cannot be decoded; reject a local violation, dead-letter or trust strict or lax ingest. | `LatticeSchemaWriteInterceptor.OnWriteAsync`. | Yes: `LatticeSchemaWriteInterceptorTests.OnWriteAsync_invalid_local_value_throws_violation`, `LatticeSchemaWriteInterceptorTests.OnWriteAsync_strict_ingest_invalid_item_dead_letters`, `LatticeSchemaWriteInterceptorTests.OnWriteAsync_non_strict_policy_trusts_ingest`, `SchemaWriteStageRegistrationTests.Enforcement_only_rejects_an_invalid_local_write_and_accepts_a_valid_one_unchanged`. |
 | `RunVersioning` | Stamp a raw entry at the target; keep an enveloped one, or dead-letter it on strict ingest when it cannot be upcast. | `LatticeSchemaVersionWriteInterceptor.OnWriteAsync`. | Yes: `LatticeSchemaVersionWriteInterceptorTests.OnWriteAsync_local_write_stamps_envelope_at_target`, `LatticeSchemaVersionWriteInterceptorTests.OnWriteAsync_already_enveloped_local_write_accepts_verbatim`, `LatticeSchemaVersionWriteInterceptorTests.OnWriteAsync_strict_ingest_non_upcastable_item_dead_letters`, `SchemaWriteStageRegistrationTests.Versioning_only_stamps_a_raw_local_write_at_the_target`. |
 | `Commit` | Append the entries the chain kept, with their transformed bytes. | `LatticeWriteInterceptorEnforcement.InterceptPointAsync`, `LatticeWriteInterceptorEnforcement.InterceptEntriesAsync`. | Yes: `LatticeWriteInterceptorEnforcementTests.InterceptPoint_accept_transformed_proceeds_with_the_replacement_value`, `LatticeWriteInterceptorEnforcementTests.InterceptEntries_transform_replaces_only_the_targeted_value`, `CompositeLatticeWriteInterceptorTests.OnWriteAsync_threads_transformed_value_into_next_stage`. |
-| `Bypass(r)` | Environment: a write below the choke point, which no stage sees. | No production counterpart: plain LWW replication apply, backup restore and tree merge never reach the interceptor. | Not applicable. |
+| `Bypass(r)` | Environment: a write below the choke point, which no stage sees. | No production counterpart: backup restore and tree merge never reach the interceptor, nor does a plain LWW replication apply without strict ingest (under strict ingest it is judged, #5684, which SchemaCrossRegion models). | Not applicable. |
 | `Stutter` | No protocol step. | No production counterpart. | Not applicable. |
 
 ## Property mapping
@@ -135,8 +135,9 @@ claim the fix is released.
 
 ## Deliberate abstraction gaps
 
-- **Writes below the choke point.** Plain LWW replication apply, backup
-  restore, tree merge, bulk paths below the grain write choke point, WAL
+- **Writes below the choke point.** Plain LWW replication apply without
+  strict ingest (under it, the apply is judged: #5684, in SchemaCrossRegion),
+  backup restore, tree merge, bulk paths below the grain write choke point, WAL
   replay, splits and moves never consult the interceptor, so nothing here holds
   for them. They are the `Bypass` environment action; every property is scoped
   to the intercepted path. Strict ingest is not a universal validation

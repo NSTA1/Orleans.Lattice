@@ -149,9 +149,9 @@ evidence, not a claim the fixes are released.
   and flag combination are `SchemaStageOrdering`'s, whose checked properties
   this module relies on.
   No production symbol: the gap delegates to another model, not to a production mechanism.
-- **Writes below the choke point.** Plain last-writer-wins replication apply,
-  backup restore, tree merge, WAL replay, splits and moves never reach the
-  strict stages, so nothing here holds for them and strict ingest is not a
+- **Writes below the choke point.** Backup restore, tree merge, WAL replay,
+  splits and moves never reach the strict stages (a plain last-writer-wins
+  replication apply now does, #5684, which SchemaCrossRegion models), so nothing here holds for them and strict ingest is not a
   universal validation guarantee.
   Production symbols: `LatticeWriteInterceptorEnforcement.Skips`.
 - **Body validity and decodability are abstract.** A body is good, legacy

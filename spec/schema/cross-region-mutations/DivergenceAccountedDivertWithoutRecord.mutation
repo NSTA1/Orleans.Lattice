@@ -1,0 +1,15 @@
+# Pairs with DivergenceAccounted in SchemaCrossRegion. Strict ingest diverts a refused entry
+# without writing its dead-letter record, so the receiver lacks the row for good and nothing
+# accounts for the divergence (the record is what the operator inspects and re-submits).
+MODULE: DivergenceAccountedDivertWithoutRecord
+TARGET: DivergenceAccounted
+CLASS: Invariant
+SUMMARY: a diverted entry leaves no dead-letter record, so its divergence is unaccounted
+PERTURBS: Deliver
+
+--- FIND
+    /\ dl' = [dl EXCEPT ![e] = IF st'[e] = "Diverted" THEN 1 ELSE @]
+--- REPLACE
+\* MUTATION: the diversion writes no dead letter.
+    /\ UNCHANGED dl
+--- END
