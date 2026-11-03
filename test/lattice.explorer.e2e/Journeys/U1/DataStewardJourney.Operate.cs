@@ -14,6 +14,29 @@ public sealed partial class DataStewardJourney
     /// <summary>The status a tag index's keys are shown for.</summary>
     private const string ShippedTag = "shipped";
 
+    /// <summary>
+    /// Waits for priya's newest view reconcile of <paramref name="view"/> to succeed, while it
+    /// advances: it fails when the operation stalls for three minutes, ends other than Succeeded,
+    /// or runs past fifteen minutes.
+    /// </summary>
+    private async Task WaitForViewReconcileAsync(string view)
+    {
+        var admin = ContractFacades.Of(_context, Cast.Personas.Priya.Id).TreeAdmin;
+        string? operationId = null;
+        await ContractWait.UntilAsync($"priya's reconcile of {view} to be listed", async () =>
+        {
+            var page = await admin.ListTreeAdminOperationsAsync(new Api.Operations.LatticeOperationListRequest { PageSize = 20 });
+            operationId = page.Operations.FirstOrDefault(operation => operation.Kind == Api.TreeAdmin.TreeAdminOperationKinds.ViewReconcile)?.OperationId;
+            return operationId is not null;
+        }, TimeSpan.FromSeconds(120));
+
+        await ContractWait.SucceededWhileAdvancingAsync(
+            $"the reconcile of {view}",
+            () => admin.GetTreeAdminOperationStatusAsync(operationId!),
+            stall: TimeSpan.FromMinutes(3),
+            ceiling: TimeSpan.FromMinutes(15));
+    }
+
     private async Task CheckViewsTagIndexesAndMetricsAsync()
     {
         var orders = Names.Trees.FactoryOrders;
@@ -34,8 +57,12 @@ public sealed partial class DataStewardJourney
         await row.GetByRole(AriaRole.Button, new() { Name = "Reconcile", Exact = true }).ClickAsync();
         var confirm = await _tree.TypeConfirmationAsync("Reconcile this view?", view);
         await confirm.GetByRole(AriaRole.Button, new() { Name = "Reconcile", Exact = true }).ClickAsync();
+
+        // The reconcile runs on the cluster; the panel toasts once it ends. Under #5569 it can run
+        // for minutes, so the wait follows the operation itself while it advances.
+        await WaitForViewReconcileAsync(view);
         await Expect(_priya.Shell.Toasts.Filter(new() { HasTextRegex = new Regex("^\\s*Reconciled " + Regex.Escape(view)) }))
-            .Not.ToHaveCountAsync(0, new() { Timeout = 180_000 });
+            .Not.ToHaveCountAsync(0, new() { Timeout = 60_000 });
         Coverage.Hit("tab:data/views");
         Coverage.Hit("use-case:data/view-reconcile");
         await CheckpointAsync("12", "view-reconciled", "Reconcile... runs on the cluster and reports its outcome");

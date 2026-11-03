@@ -215,6 +215,22 @@ internal sealed class TaskBoardWindow
         }
     }
 
+    /// <summary>
+    /// Waits for a write's outcome in the board's status line: <paramref name="success"/>, or the
+    /// board's own failure (<paramref name="failurePrefix"/> and its code), bounded by the AppKit's
+    /// 30 s bridge request (<see cref="ReadPatience"/>); a failure fails at once.
+    /// </summary>
+    private async Task ExpectWriteAsync(string success, string failurePrefix)
+    {
+        var outcome = new Regex("^(" + Regex.Escape(success) + "|" + Regex.Escape(failurePrefix) + @" \([^)]+\)\.)$");
+        await Expect(Status).ToHaveTextAsync(outcome, new() { Timeout = (float)ReadPatience.TotalMilliseconds });
+        var status = (await Status.InnerTextAsync()).Trim();
+        if (status != success)
+        {
+            await FailReadAsync($"the write ended '{status}'");
+        }
+    }
+
     private async Task<bool> CountsDrawnAsync()
     {
         foreach (var column in Columns)
@@ -231,7 +247,7 @@ internal sealed class TaskBoardWindow
     private async Task FailReadAsync(string what)
     {
         var server = _readServer is null ? "not read" : (await _readServer()).ToString();
-        Assert.Fail($"The task board at {Page.Url} did not read its tree: {what.ReplaceLineEndings(" ")}. Server: {server}.");
+        Assert.Fail($"The task board at {Page.Url}: {what.ReplaceLineEndings(" ")}. Server: {server}.");
     }
 
     /// <summary>Asserts the window stands alone: no header, address line or directory spine around the frame.</summary>
@@ -281,7 +297,7 @@ internal sealed class TaskBoardWindow
     {
         await Board.Locator("#tb-add-title").FillAsync(title);
         await Board.Locator("#tb-add-button").ClickAsync();
-        await Expect(Status).ToHaveTextAsync($"Added \"{title}\" to To do.");
+        await ExpectWriteAsync($"Added \"{title}\" to To do.", "The task could not be added");
         var card = Card("todo", title);
         await Expect(card).ToHaveCountAsync(1);
         return await card.GetAttributeAsync("data-id") ?? throw new InvalidOperationException($"The card '{title}' carries no task id.");
@@ -303,7 +319,7 @@ internal sealed class TaskBoardWindow
     public async Task MoveSelectedAsync(string title, string column, string columnName)
     {
         await Board.Locator($"#tb-detail-actions [data-move=\"{column}\"]").ClickAsync();
-        await Expect(Status).ToHaveTextAsync($"Moved \"{title}\" to {columnName}.");
+        await ExpectWriteAsync($"Moved \"{title}\" to {columnName}.", "The task could not be moved");
         await Expect(Card(column, title)).ToHaveCountAsync(1);
         await Expect(Board.Locator("#tb-detail-column")).ToHaveTextAsync($"In {columnName}.");
     }
