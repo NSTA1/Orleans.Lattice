@@ -136,10 +136,110 @@ internal static class JourneyBrowser
     /// <param name="page">A page showing the Explorer, signed out.</param>
     public static async Task<ILocator> OpenSignInAsync(IPage page)
     {
-        await page.GetByRole(AriaRole.Banner).GetByRole(AriaRole.Button, new() { Name = "Sign in", Exact = true }).First.ClickAsync();
         var dialog = page.GetByRole(AriaRole.Dialog, new() { Name = "Sign in" });
-        await Expect(dialog).ToBeVisibleAsync();
+        var trigger = page.GetByRole(AriaRole.Banner).GetByRole(AriaRole.Button, new() { Name = "Sign in", Exact = true }).First;
+        await OpenDialogAsync(page, dialog, () => trigger.ClickAsync(new LocatorClickOptions { Timeout = (float)DialogAttempt.TotalMilliseconds }), "the sign-in dialog");
         return dialog;
+    }
+
+    /// <summary>How long one attempt waits for a dialog to open after its trigger is activated.</summary>
+    internal static readonly TimeSpan DialogAttempt = TimeSpan.FromSeconds(15);
+
+    /// <summary>The absolute deadline for a dialog to open, however many attempts it takes.</summary>
+    internal static readonly TimeSpan DialogCeiling = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Opens <paramref name="dialog"/> with <paramref name="open"/> and waits until it is shown
+    /// (#5744). A dialog is opened by the server over the interactive circuit, so on a loaded
+    /// estate the render can lag the click, and a click made while the circuit reconnects is
+    /// dropped. Each attempt waits for the live circuit, activates the trigger unless the dialog
+    /// already opened, and waits <see cref="DialogAttempt"/> for it; the wait ends at
+    /// <see cref="DialogCeiling"/>, and a dialog that never opens fails with the page's state
+    /// and a screenshot of it.
+    /// </summary>
+    /// <param name="page">The page.</param>
+    /// <param name="dialog">The dialog.</param>
+    /// <param name="open">Activates the dialog's trigger.</param>
+    /// <param name="what">The dialog, for the failure message.</param>
+    /// <exception cref="TimeoutException">The dialog did not open by the ceiling.</exception>
+    public static async Task OpenDialogAsync(IPage page, ILocator dialog, Func<Task> open, string what)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        ArgumentNullException.ThrowIfNull(dialog);
+        ArgumentNullException.ThrowIfNull(open);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var attempts = new List<string>();
+        while (true)
+        {
+            if (await dialog.IsVisibleAsync())
+            {
+                return;
+            }
+
+            try
+            {
+                await WaitForInteractiveAsync(page);
+                if (!await dialog.IsVisibleAsync())
+                {
+                    await open();
+                }
+
+                await Expect(dialog).ToBeVisibleAsync(new LocatorAssertionsToBeVisibleOptions { Timeout = (float)DialogAttempt.TotalMilliseconds });
+                return;
+            }
+            catch (Exception ex) when (ex is PlaywrightException or TimeoutException && clock.Elapsed < DialogCeiling)
+            {
+                attempts.Add($"{FirstLine(ex.Message)} by {clock.Elapsed.TotalSeconds:0} s");
+            }
+            catch (Exception ex) when (ex is PlaywrightException or TimeoutException)
+            {
+                attempts.Add($"{FirstLine(ex.Message)} by {clock.Elapsed.TotalSeconds:0} s");
+                throw new TimeoutException(
+                    $"{what} did not open within {DialogCeiling.TotalSeconds:0} seconds. Attempts: {string.Join("; ", attempts)}. Page: {await DescribeAsync(page)}",
+                    ex);
+            }
+        }
+    }
+
+    /// <summary>The page's state for a failure message: its address, circuit, reconnect UI and open dialogs, and a screenshot's path.</summary>
+    private static async Task<string> DescribeAsync(IPage page)
+    {
+        var parts = new List<string> { $"url {page.Url}" };
+        try
+        {
+            parts.Add(await page.EvaluateAsync<string>(
+                """
+                async () => {
+                  const ready = await Promise.race([window.__ltReady, new Promise((r) => setTimeout(() => r('pending'), 1000))]);
+                  const reconnect = document.querySelector('#components-reconnect-modal, .components-reconnect-show, .components-reconnect-failed, .components-reconnect-rejected');
+                  const dialogs = [...document.querySelectorAll('[role=dialog]')].map((d) => d.getAttribute('aria-label') || d.getAttribute('aria-labelledby') || '?');
+                  return `circuit ${ready === true ? 'live' : ready}; reconnect UI ${reconnect ? (reconnect.className || reconnect.id) : 'none'}; dialogs [${dialogs.join(', ')}]; title ${document.title}`;
+                }
+                """));
+        }
+        catch (PlaywrightException ex)
+        {
+            parts.Add($"state unreadable ({FirstLine(ex.Message)})");
+        }
+
+        try
+        {
+            var shot = Path.Combine(Estate.JourneyPaths.ProjectDirectory, "artifacts", "dialog-failures", $"{DateTime.UtcNow:yyyyMMdd-HHmmss-fff}.png");
+            await ScreenshotAsync(page, shot);
+            parts.Add($"screenshot {shot}");
+        }
+        catch (PlaywrightException ex)
+        {
+            parts.Add($"no screenshot ({FirstLine(ex.Message)})");
+        }
+
+        return string.Join("; ", parts);
+    }
+
+    private static string FirstLine(string message)
+    {
+        var end = message.IndexOf('\n');
+        return (end < 0 ? message : message[..end]).Trim();
     }
 
     /// <summary>The header's session button for <paramref name="user"/>, shown once they are signed in.</summary>
