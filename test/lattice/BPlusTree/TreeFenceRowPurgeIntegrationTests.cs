@@ -297,6 +297,7 @@ public sealed class TreeFenceRowPurgeIntegrationTests
         var floors = (await WalAppendFenceRows.ReadRoutingFloorAsync(Storage, Name)).State;
         var partitions = await PartitionsAsync(Name);
         var rows = await GenerationRowsAsync(Name);
+        var lineage = (await _cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).GetEntryAsync(Name))!.Lineage;
         for (var shard = 0; shard < Shards; shard++)
         {
             var marker = (await HandOffMarkerRows.ReadShardAsync(Storage, Name, shard)).State;
@@ -308,6 +309,8 @@ public sealed class TreeFenceRowPurgeIntegrationTests
                 Assert.That(marker.RoutingGeneration, Is.EqualTo(floor + 1), "the re-created shard root did not adopt the old generation");
                 Assert.That(marker.Closes.Any(c => c.Token == ShardRootGrain.RecreationFenceToken(floor)), Is.True,
                     "its first initialisation ran the fence");
+                Assert.That(marker.ReseedLineage, Is.Not.Null.And.EqualTo(lineage),
+                    "the re-seed stamped the re-created registration's lineage (#5716)");
                 for (var partition = 0; partition < partitions; partition++)
                 {
                     Assert.That(rows.GetValueOrDefault((partition, initiator)), Is.EqualTo(floor + 1),
@@ -315,6 +318,71 @@ public sealed class TreeFenceRowPurgeIntegrationTests
                 }
             });
         }
+    }
+
+    [Test]
+    public async Task A_live_re_created_trees_shard_root_reactivated_after_its_lineage_moved_runs_no_catch_up()
+    {
+        // #5716: the catch-up runs only on the re-seed that lifts a purge tombstone. A live
+        // re-created tree whose lineage later moves (an alias set and removed again, as an
+        // undo-resize does) keeps its markers across a shard root reactivation.
+        const string Name = "recreated-lineage-moves";
+        var registry = _cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var tree = await NewTreeAsync(Name);
+        await tree.DeleteTreeAsync();
+        await tree.PurgeTreeAsync();
+        await WriteAlphabetAsync(tree);
+        var stamped = (await registry.GetEntryAsync(Name))!.Lineage;
+        var markersBefore = new ShardHandOffState[Shards];
+        for (var shard = 0; shard < Shards; shard++)
+        {
+            markersBefore[shard] = (await HandOffMarkerRows.ReadShardAsync(Storage, Name, shard)).State;
+        }
+
+        var floorsBefore = (await WalAppendFenceRows.ReadRoutingFloorAsync(Storage, Name)).State.Floors.ToDictionary(kv => kv.Key, kv => kv.Value);
+
+        const string Other = Name + "-other";
+        await registry.RegisterAsync(Other, new TreeRegistryEntry { MaxLeafKeys = 1024, MaxInternalChildren = 16, ShardCount = Shards });
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await registry.SetAliasAsync(Name, Other);
+            await registry.RemoveAliasAsync(Name);
+        }
+
+        var moved = (await registry.GetEntryAsync(Name))!.Lineage;
+        Assert.That(moved, Is.Not.EqualTo(stamped), "precondition: the alias moves restamped the tree's lineage");
+
+        for (var shard = 0; shard < Shards; shard++)
+        {
+            await _cluster.Client.GetGrain<IShardRootGrain>($"{Name}/{shard}").ForceDeactivateAsync();
+        }
+
+        await Task.Delay(500);
+
+        // Admitted on the reactivated shard roots, never refused as a deleted tree.
+        Assert.That(
+            async () =>
+            {
+                await tree.SetAsync("after-move", Encoding.UTF8.GetBytes("v")).WaitAsync(TimeSpan.FromSeconds(20));
+                await tree.DeleteRangeAsync("a", "c").WaitAsync(TimeSpan.FromSeconds(20));
+            },
+            Throws.Nothing,
+            "the live tree's writes are admitted after the reactivation");
+
+        var floorsAfter = (await WalAppendFenceRows.ReadRoutingFloorAsync(Storage, Name)).State.Floors;
+        for (var shard = 0; shard < Shards; shard++)
+        {
+            var marker = (await HandOffMarkerRows.ReadShardAsync(Storage, Name, shard)).State;
+            var before = markersBefore[shard];
+            Assert.Multiple(() =>
+            {
+                Assert.That(marker.ReseedLineage, Is.EqualTo(stamped), $"shard {shard}: no catch-up restamped the marker");
+                Assert.That(marker.RoutingGeneration, Is.GreaterThanOrEqualTo(before.RoutingGeneration), $"shard {shard}: its generation was not reset");
+                Assert.That(marker.Initialised, Is.True, $"shard {shard}: its marker still reads initialised");
+            });
+        }
+
+        Assert.That(floorsAfter, Is.EquivalentTo(floorsBefore), "no floor was raised");
     }
 
     [Test]

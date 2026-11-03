@@ -62,4 +62,16 @@ internal sealed class ShardHandOffState : ILatticeBinaryPersistedState, Orleans.
     /// <summary>Raised on every open and close, so a reader can tell that the marker changed.</summary>
     [Id(6)]
     public long Sequence { get; set; }
+
+    /// <summary>
+    /// The incarnation whose re-seed last caught this marker up (#5716): the registry
+    /// lineage of the registration the shard root re-seeded its purged root under.
+    /// Every activation re-seeding the same re-created tree reads the same lineage,
+    /// and every registration of an absent id stamps a new one, so a duplicate
+    /// activation's catch-up recognises a marker its sibling already caught up and
+    /// seeded, and leaves it alone. <see langword="null"/> on a marker no re-seed
+    /// has caught up.
+    /// </summary>
+    [Id(7)]
+    public Guid? ReseedLineage { get; set; }
 }

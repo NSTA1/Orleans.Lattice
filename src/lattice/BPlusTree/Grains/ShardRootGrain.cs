@@ -3221,11 +3221,25 @@ internal sealed partial class ShardRootGrain(
         // registered tree, so skipping it then is equivalent, and only a
         // genuinely unregistered tree still takes the mutating path.
         var prevIsRegistered = state.State.IsRegistered;
+
+        // On a purged re-seed, the registration's lineage identifies the re-created
+        // incarnation (#5716). It is read in place of the existence probe, and taken
+        // from the registration's own reply when this activation registers the id, so
+        // it costs no extra grain call.
+        TreeRegistryEntry? reseedEntry = null;
+        var reseedEntryRead = false;
         if (!state.State.IsRegistered &&
             !TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
         {
             var registry = grainFactory.GetLatticeRegistry();
-            if (!await registry.ExistsAsync(TreeId))
+            var reseed = state.State.IsPurged;
+            if (reseed)
+            {
+                reseedEntry = await registry.GetEntryAsync(TreeId);
+                reseedEntryRead = true;
+            }
+
+            if (reseed ? reseedEntry is null : !await registry.ExistsAsync(TreeId))
             {
                 // A write is the deliberate reuse of an id (issue #3940) and
                 // registers it; a read must not recreate a purged tree
@@ -3239,7 +3253,14 @@ internal sealed partial class ShardRootGrain(
                     else if (await PurgedTreeRegistrationGuard.IsPurgedAsync(grainFactory, TreeId))
                         return false;
                 }
-                await registry.RegisterAsync(TreeId);
+                if (reseed)
+                {
+                    reseedEntry = (await registry.RegisterAndGetEntryAsync(TreeId)).Entry;
+                }
+                else
+                {
+                    await registry.RegisterAsync(TreeId);
+                }
             }
             state.State.IsRegistered = true;
         }
@@ -3251,11 +3272,16 @@ internal sealed partial class ShardRootGrain(
         var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(deterministicId);
 
         // A re-created incarnation never adopts a hand-off marker that predates it
-        // (#5703 review, S2). Retired before the tombstone is lifted, so a failure
-        // leaves it for the write's retry.
+        // (#5703 review, S2), identified by its registration's lineage (#5716). Retired
+        // before the tombstone is lifted, so a failure leaves it for the write's retry.
         if (state.State.IsPurged)
         {
-            await RetirePredatingHandOffMarkerAsync();
+            if (!reseedEntryRead)
+            {
+                reseedEntry = await grainFactory.GetLatticeRegistry().GetEntryAsync(TreeId);
+            }
+
+            await RetirePredatingHandOffMarkerAsync(reseedEntry?.Lineage);
         }
 
         // This shard is creating its root leaf, so the leaf's first row write

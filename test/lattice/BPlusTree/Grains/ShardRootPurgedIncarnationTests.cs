@@ -24,6 +24,11 @@ public sealed class ShardRootPurgedIncarnationTests
     private const string Tree = "purged-incarnation";
     private static readonly WalRoutingInitiator ShardZero = WalRoutingInitiator.ShardRoot(0);
 
+    /// <summary>The registry lineage of the re-created tree a re-seed lifts the tombstone under (#5716).</summary>
+    private static readonly Guid Tombstone = new("5716a000-0000-0000-0000-000000000001");
+
+    private static readonly Guid NextIncarnation = new("5716a000-0000-0000-0000-000000000002");
+
     private static ShardRootGrain CreateGrain(IGrainStorage storage, int shard = 0)
     {
         var services = new ServiceCollection();
@@ -131,7 +136,7 @@ public sealed class ShardRootPurgedIncarnationTests
         await HandOffMarkerRows.UpdateShardAsync(storage, Tree, 0, m => HandOffMarkerCore.Open(m, "rd:old", "a", "m"));
         var grain = CreateGrain(storage);
 
-        await grain.RetirePredatingHandOffMarkerForTestingAsync();
+        await grain.RetirePredatingHandOffMarkerForTestingAsync(Tombstone);
 
         var marker = (await HandOffMarkerRows.ReadShardAsync(storage, Tree, 0)).State;
         var floor = await WalAppendFenceRows.ReadRoutingFloorAsync(storage, Tree, ShardZero);
@@ -151,7 +156,7 @@ public sealed class ShardRootPurgedIncarnationTests
         await HandOffMarkerRows.UpdateShardAsync(storage, Tree, 0, m => HandOffMarkerCore.Open(m, "rd:new", "a", "m"));
         var grain = CreateGrain(storage);
 
-        await grain.RetirePredatingHandOffMarkerForTestingAsync();
+        await grain.RetirePredatingHandOffMarkerForTestingAsync(Tombstone);
 
         var marker = (await HandOffMarkerRows.ReadShardAsync(storage, Tree, 0)).State;
         var floor = await WalAppendFenceRows.ReadRoutingFloorAsync(storage, Tree, ShardZero);
@@ -172,11 +177,11 @@ public sealed class ShardRootPurgedIncarnationTests
         await SeedMarkerAsync(storage, 7, shard: 1, initialised: true);
         var shard0 = CreateGrain(storage, shard: 0);
         var shard1 = CreateGrain(storage, shard: 1);
-        await shard0.RetirePredatingHandOffMarkerForTestingAsync();
+        await shard0.RetirePredatingHandOffMarkerForTestingAsync(Tombstone);
         await SeedMarkerAsync(storage, 3, shard: 0, initialised: true);
         await shard0.LoadHandOffMarkerForTestingAsync();
 
-        await shard1.RetirePredatingHandOffMarkerForTestingAsync();
+        await shard1.RetirePredatingHandOffMarkerForTestingAsync(Tombstone);
 
         var floor0 = await WalAppendFenceRows.ReadRoutingFloorAsync(storage, Tree, ShardZero);
         var floor1 = await WalAppendFenceRows.ReadRoutingFloorAsync(storage, Tree, WalRoutingInitiator.ShardRoot(1));
@@ -189,5 +194,96 @@ public sealed class ShardRootPurgedIncarnationTests
             async () => await shard0.RetryStaleRoutingForTestingAsync(new WalRoutingGenerationStaleException(ShardZero, 3, 0)),
             Throws.Nothing,
             "shard 0's live write at generation 3 is retried, never surfaced as deleted");
+    }
+
+    [Test]
+    public async Task A_duplicate_activation_re_seeding_the_same_incarnation_leaves_its_siblings_live_marker_alone()
+    {
+        // #5716: D2 loaded the purge tombstone and awaits the registry while D1 re-seeds,
+        // seeds its marker at floor + 1, fences it, and admits writes under it.
+        var storage = new EnumerableMemoryGrainStorage();
+        await SeedMarkerAsync(storage, 2, initialised: true);
+        var d1 = CreateGrain(storage);
+        var d2 = CreateGrain(storage);
+        await d1.RetirePredatingHandOffMarkerForTestingAsync(Tombstone);
+        await SeedMarkerAsync(storage, 3, initialised: true);
+        await d1.LoadHandOffMarkerForTestingAsync();
+
+        await d2.RetirePredatingHandOffMarkerForTestingAsync(Tombstone);
+
+        var marker = (await HandOffMarkerRows.ReadShardAsync(storage, Tree, 0)).State;
+        var floor = await WalAppendFenceRows.ReadRoutingFloorAsync(storage, Tree, ShardZero);
+        Assert.Multiple(() =>
+        {
+            Assert.That(floor, Is.EqualTo(2), "D1's live generation 3 is not floored");
+            Assert.That(marker.RoutingGeneration, Is.EqualTo(3), "D1's marker keeps its generation");
+            Assert.That(marker.Initialised, Is.True, "and stays initialised");
+            Assert.That(marker.ReseedLineage, Is.EqualTo(Tombstone));
+        });
+        Assert.That(
+            async () => await d1.RetryStaleRoutingForTestingAsync(new WalRoutingGenerationStaleException(ShardZero, 3, 0)),
+            Throws.Nothing,
+            "D1's write under generation 3 is retried on a live tree, never surfaced as deleted");
+    }
+
+    [Test]
+    public async Task The_next_purges_re_seed_catches_up_a_marker_an_earlier_re_seed_stamped()
+    {
+        var storage = new EnumerableMemoryGrainStorage();
+        await SeedMarkerAsync(storage, 2, initialised: true);
+        var first = CreateGrain(storage);
+        await first.RetirePredatingHandOffMarkerForTestingAsync(Tombstone);
+        await SeedMarkerAsync(storage, 3, initialised: true);
+
+        // Purged again on a 10.2.0 silo, which retires nothing: a new tombstone is lifted.
+        await CreateGrain(storage).RetirePredatingHandOffMarkerForTestingAsync(NextIncarnation);
+
+        var marker = (await HandOffMarkerRows.ReadShardAsync(storage, Tree, 0)).State;
+        var floor = await WalAppendFenceRows.ReadRoutingFloorAsync(storage, Tree, ShardZero);
+        Assert.Multiple(() =>
+        {
+            Assert.That(floor, Is.EqualTo(3), "the earlier incarnation's generation is floored");
+            Assert.That(marker.RoutingGeneration, Is.Zero);
+            Assert.That(marker.Initialised, Is.False);
+            Assert.That(marker.ReseedLineage, Is.EqualTo(NextIncarnation));
+        });
+    }
+
+    [Test]
+    public async Task A_purge_landing_after_the_floor_check_still_surfaces_the_deleted_outcome()
+    {
+        // #5716 review, N1: the retry's floor check reads the floor before the purge's
+        // retirement lands; the marker is then gone when the retry reloads it.
+        var inner = new EnumerableMemoryGrainStorage();
+        await SeedMarkerAsync(inner, 2, initialised: true);
+        var storage = new RetireAfterFirstFloorReadStorage(inner);
+        var grain = CreateGrain(storage);
+        await grain.LoadHandOffMarkerForTestingAsync();
+
+        var retry = grain.RetryStaleRoutingForTestingAsync(new WalRoutingGenerationStaleException(ShardZero, 2, 2));
+
+        Assert.That(async () => await retry, Throws.InvalidOperationException.With.Message.Contains("deleted"));
+        Assert.That(inner.GrainIds(HandOffMarkerRows.ShardGrainType), Is.Empty, "the retired marker is not re-created");
+    }
+
+    /// <summary>Runs the purge's marker retirement just after the first floor read returns its stale value.</summary>
+    private sealed class RetireAfterFirstFloorReadStorage(EnumerableMemoryGrainStorage inner) : IGrainStorage
+    {
+        private int _fired;
+
+        public async Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
+        {
+            await inner.ReadStateAsync(stateName, grainId, grainState);
+            if (stateName == WalAppendFenceRows.RoutingFloorGrainType && Interlocked.Exchange(ref _fired, 1) == 0)
+            {
+                await TreeRoutingFenceRetirement.RetireMarkersAsync(inner, Tree, shardCount: 1);
+            }
+        }
+
+        public Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
+            inner.WriteStateAsync(stateName, grainId, grainState);
+
+        public Task ClearStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
+            inner.ClearStateAsync(stateName, grainId, grainState);
     }
 }

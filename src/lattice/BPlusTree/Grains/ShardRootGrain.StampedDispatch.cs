@@ -149,18 +149,21 @@ internal sealed partial class ShardRootGrain
     /// <summary>
     /// Re-reads the marker after a stale-generation rejection, so a re-admission
     /// stamps the generation a close (possibly by another activation) raised.
+    /// Returns whether the row was read and found absent.
     /// </summary>
-    private async Task ReloadHandOffMarkerAsync()
+    private async Task<bool> ReloadHandOffMarkerAsync()
     {
         try
         {
             var row = await HandOffMarkerRows.ReadShardAsync(HandOffStorage(), TreeId, ShardIndex);
             NoteHandOffMarkerRead(row);
             _handOffMarker = row.State;
+            return !row.RecordExists;
         }
         catch (Exception ex)
         {
             logger.LogDebug(ex, "Shard root {TreeId}/{ShardIndex}: could not reload its hand-off marker (epic #5605).", TreeId, ShardIndex);
+            return false;
         }
     }
 
@@ -174,7 +177,13 @@ internal sealed partial class ShardRootGrain
     {
         retry = await WalFenceSeamRetry.NextAsync(retry, WalFenceSeamRetry.CallerShardRoot, TreeId);
         await ThrowIfAdmittedUnderPurgedIncarnationAsync(stale);
-        await ReloadHandOffMarkerAsync();
+        if (await ReloadHandOffMarkerAsync() && _handOffMarkerSeen && await IsRetiredByPurgeAsync())
+        {
+            // #5716 review, N1: the purge retired the marker after the floor check above.
+            // Re-admitting would go unstamped, under a marker read absent.
+            throw PurgedIncarnation();
+        }
+
         await RaiseRoutingGenerationAboveRefusalAsync(stale);
         return retry;
     }
@@ -202,9 +211,23 @@ internal sealed partial class ShardRootGrain
         }
     }
 
-    /// <summary>The deleted-tree outcome a retired incarnation's operation surfaces (#5705).</summary>
-    private static InvalidOperationException PurgedIncarnation() =>
-        new("This tree has been deleted and is no longer accessible.");
+    /// <summary>
+    /// The deleted-tree outcome a retired incarnation's operation surfaces (#5705): the
+    /// existing exception and message, tagged in <see cref="Exception.Data"/> so a
+    /// best-effort step on the retry path can tell it from a fault it may swallow.
+    /// </summary>
+    private static InvalidOperationException PurgedIncarnation()
+    {
+        var ex = new InvalidOperationException("This tree has been deleted and is no longer accessible.");
+        ex.Data[PurgedIncarnationKey] = true;
+        return ex;
+    }
+
+    private const string PurgedIncarnationKey = "lattice.purged-incarnation";
+
+    /// <summary>Whether <paramref name="ex"/> is the purged-incarnation outcome (#5705), which is never swallowed.</summary>
+    private static bool IsPurgedIncarnation(Exception ex) =>
+        ex is InvalidOperationException && ex.Data.Contains(PurgedIncarnationKey);
 
     /// <summary>Runs one stale-generation retry step, as a write's seam does; test seam (#5705).</summary>
     internal Task RetryStaleRoutingForTestingAsync(WalRoutingGenerationStaleException stale) =>
@@ -251,8 +274,9 @@ internal sealed partial class ShardRootGrain
                 stale.Generation,
                 stale.Refusal);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!IsPurgedIncarnation(ex))
         {
+            // #5716 review, N1: a purged incarnation's outcome is surfaced, never swallowed.
             logger.LogDebug(ex, "Shard root {TreeId}/{ShardIndex}: could not raise its routing generation above a refusal (epic #5605).", TreeId, ShardIndex);
         }
     }
