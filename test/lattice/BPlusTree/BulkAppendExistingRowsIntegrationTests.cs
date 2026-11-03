@@ -34,7 +34,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public sealed class BulkAppendExistingRowsIntegrationTests
+public sealed partial class BulkAppendExistingRowsIntegrationTests
 {
     private SmallLeafClusterFixture _fixture = null!;
     private TestCluster _cluster = null!;

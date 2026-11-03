@@ -43,7 +43,7 @@ public partial class BPlusLeafGrainTests
         Assert.Multiple(() =>
         {
             Assert.That(pendingWhileHeld, Is.True, "the narrow waits for the write whose record is already in the log");
-            Assert.That(stranded.Select(r => r.Key), Is.EqualTo(new[] { "z" }),
+            Assert.That(stranded!.Rows.Select(r => r.Key), Is.EqualTo(new[] { "z" }),
                 "the drained write's row is above the bound, so it is handed back for relocation");
         });
     }
@@ -125,7 +125,7 @@ public partial class BPlusLeafGrainTests
         await commitLog.AppendHeld.Task.WaitAsync(TimeSpan.FromSeconds(10));
         var writesBefore = state.WriteCount;
 
-        List<LwwEntry>? stranded;
+        LeafNarrowResult? stranded;
         try
         {
             stranded = await grain.NarrowHighKeyAsync("m", GrainId.Create("leaf", "successor"))
@@ -157,14 +157,14 @@ public partial class BPlusLeafGrainTests
         grain.SetMutationDrainDeadlineForTest(TimeSpan.FromMilliseconds(200));
         await grain.SetAsync("b", Encoding.UTF8.GetBytes("vb"));
         await grain.SetAsync("z", Encoding.UTF8.GetBytes("vz"));
-        Assert.That((await grain.NarrowHighKeyAsync("m"))!.Select(r => r.Key), Is.EqualTo(new[] { "z" }), "precondition");
+        Assert.That((await grain.NarrowHighKeyAsync("m"))!.Rows.Select(r => r.Key), Is.EqualTo(new[] { "z" }), "precondition");
 
         var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         commitLog.HoldNextAppend = hold;
         var write = grain.SetAsync("c", Encoding.UTF8.GetBytes("vc"));
         await commitLog.AppendHeld.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
-        List<LwwEntry>? again;
+        LeafNarrowResult? again;
         try
         {
             again = await grain.NarrowHighKeyAsync("m").WaitAsync(TimeSpan.FromSeconds(10));
@@ -175,7 +175,12 @@ public partial class BPlusLeafGrainTests
             await write.WaitAsync(TimeSpan.FromSeconds(10));
         }
 
-        Assert.That(again?.Select(r => r.Key), Is.EqualTo(new[] { "z" }), "the resumed graft is handed the stranded row again");
+        Assert.Multiple(() =>
+        {
+            Assert.That(again?.Rows.Select(r => r.Key), Is.EqualTo(new[] { "z" }), "the resumed graft is handed the stranded row again");
+            Assert.That(again?.ReadFrontier, Is.Null,
+                "a leaf an earlier attempt narrowed reports no frontier: its replay may have stepped past a record of the range since (issue #5752)");
+        });
     }
 
     [Test]
@@ -219,7 +224,7 @@ public partial class BPlusLeafGrainTests
         Assert.Multiple(() =>
         {
             Assert.That(pendingWhileHeld, Is.True, "the narrow waits for the replayed prepare whose record is already in the log");
-            Assert.That(stranded?.Select(r => r.Key), Is.EqualTo(new[] { "z" }),
+            Assert.That(stranded?.Rows.Select(r => r.Key), Is.EqualTo(new[] { "z" }),
                 "the replayed row is above the bound, so it is handed back for relocation");
         });
     }

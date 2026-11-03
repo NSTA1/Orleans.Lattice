@@ -93,10 +93,17 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         leaf.CountAsync().Returns(0);
         leaf.GetAppendTailAsync().Returns((0, (string?)null));
         // A leaf that narrows and strands nothing; null would mean "not narrowed".
-        leaf.NarrowHighKeyAsync(Arg.Any<string>(), Arg.Any<GrainId?>())
-            .Returns(_ => Task.FromResult<List<LwwEntry>?>([]));
+        leaf.NarrowHighKeyAsync(Arg.Any<string>(), Arg.Any<GrainId?>(), Arg.Any<List<GraftEntry>?>())
+            .Returns(_ => Task.FromResult<LeafNarrowResult?>(new LeafNarrowResult { ReadFrontier = UncappedFrontier }));
         return leaf;
     }
+
+    /// <summary>A replay frontier above every head, so the hint applies as stored.</summary>
+    private static readonly long[] UncappedFrontier = Enumerable.Repeat(long.MaxValue, 64).ToArray();
+
+    /// <summary>A narrow that handed back <paramref name="rows"/> with an uncapping frontier.</summary>
+    private static Task<LeafNarrowResult?> Narrowed(List<LwwEntry> rows) =>
+        Task.FromResult<LeafNarrowResult?>(new LeafNarrowResult { Rows = rows, ReadFrontier = UncappedFrontier });
 
     private static IBPlusInternalGrain MakeInternal(Guid key)
     {

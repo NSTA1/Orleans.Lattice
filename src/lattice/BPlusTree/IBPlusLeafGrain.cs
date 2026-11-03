@@ -834,8 +834,9 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// <see cref="InvalidOperationException"/> when the bound is at or below the
     /// leaf's low bound.
     /// <para>
-    /// Returns a copy of every row at or above the bound, tombstones included, with
-    /// its stamp and metadata, and removes nothing (issue #5610). The graft
+    /// Returns, in <see cref="LeafNarrowResult.Rows"/>, a copy of every row at or above
+    /// the bound, tombstones included, with its stamp and metadata, and removes nothing
+    /// (issue #5610). The graft
     /// relocates them into the appended leaves and then calls
     /// <see cref="DropRelocatedRowsAsync"/>, so a relocation that fails part-way is
     /// handed the same rows again when the graft is re-driven. A converged leaf
@@ -847,10 +848,31 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// deadline (issue #5706): narrowing then could leave such a write's record
     /// unapplied by every leaf. The caller links without narrowing, as 10.2.0 does.
     /// </para>
+    /// <para>
+    /// The result also carries the leaf's replay frontier when this call narrowed it
+    /// (<see cref="LeafNarrowResult.ReadFrontier"/>, issue #5752): the appended leaves
+    /// may start reading the WAL no higher than it, or a record of their range that
+    /// another author appended and this leaf never applied would be applied by no leaf.
+    /// </para>
+    /// <para>
+    /// Before handing the rows back, the leaf moves the saga shadow markers and the
+    /// isolation of its prepared buckets that cover them to the appended leaf in
+    /// <paramref name="relocationTargets"/> that will receive each row (issue #5755),
+    /// as a split and a span forward do, so no destination holds a relocated row
+    /// without its read gate.
+    /// </para>
     /// </summary>
     /// <param name="highKeyExclusive">The new exclusive high bound. Must not be <see langword="null"/>.</param>
     /// <param name="nextSibling">The successor to link with the narrowed bound, or <see langword="null"/> to leave the successor unchanged.</param>
-    Task<List<LwwEntry>?> NarrowHighKeyAsync(string highKeyExclusive, GrainId? nextSibling = null);
+    /// <param name="relocationTargets">
+    /// The appended leaves in ascending separator order, the first at
+    /// <paramref name="highKeyExclusive"/>; a row is relocated to the last one whose
+    /// separator is at or below its key. <see langword="null"/> to move no marker.
+    /// </param>
+    Task<LeafNarrowResult?> NarrowHighKeyAsync(
+        string highKeyExclusive,
+        GrainId? nextSibling = null,
+        List<GraftEntry>? relocationTargets = null);
 
     /// <summary>
     /// Drops the rows a bulk-append graft has relocated out of this leaf (issue

@@ -1,5 +1,6 @@
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.State;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -56,7 +57,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         }));
         Received.InOrder(() =>
         {
-            tail.NarrowHighKeyAsync("k0000", Arg.Any<GrainId?>());
+            tail.NarrowHighKeyAsync("k0000", Arg.Any<GrainId?>(), Arg.Any<List<GraftEntry>?>());
             tail.SetNextSiblingAsync(Arg.Any<GrainId?>());
         });
     }
@@ -71,6 +72,6 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
 
         await h.Grain.BulkAppendAsync("op-1", Pairs(1));
 
-        await h.Leaf(existing).Received(1).NarrowHighKeyAsync(separator, firstAppended);
+        await h.Leaf(existing).Received(1).NarrowHighKeyAsync(separator, firstAppended, Arg.Any<List<GraftEntry>?>());
     }
 }

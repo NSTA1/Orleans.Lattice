@@ -156,7 +156,8 @@ public partial class BPlusLeafGrainTests
             Assert.That(topology.EntryCount + moved.Count, Is.EqualTo(5));
             Assert.That(digest.EntryCount, Is.EqualTo(2));
             Assert.That(fullRange.EntryCount, Is.EqualTo(2));
-            Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(wal.Head),
+            // Issue #5760: the head is exclusive, so the split banks one below it.
+            Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(wal.Head - 1),
                 "The split's checkpoint hint remains banked while transferred records are consumed.");
             Assert.That(grain.EntriesForTest.Values.All(value => value.IsTombstone),
                 Is.EqualTo(kind == MutationKind.Delete),

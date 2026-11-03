@@ -215,6 +215,10 @@ stamp (issues #5610 and #5642):
 - **Rows the shard's rightmost leaf holds in the appended range**, deleted
   ones included, are moved with their stamps into the new leaf that owns each
   key.
+  A saga's read gate on such a row - a key prepared on the old leaf, or a
+  migrated row a shadow marker guards - moves with it to the new leaf before the
+  row is merged there, as it does in a leaf split, so the new leaf never serves
+  a pre-saga value ungated (issue #5755).
   The move copies each row before it drops it from the old leaf, so for the
   moment between the two - or, after a crash, until the append is resumed -
   such a row is held by both leaves, and a count or scan taken then can

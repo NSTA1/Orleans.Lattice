@@ -104,7 +104,7 @@ public partial class BPlusLeafGrainTests
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
         Assert.That(completeSplit, Is.Not.Null,
             "BPlusLeafGrain.CompleteSplitAsync was renamed; update this regression test.");
-        return (Task<SplitResult>)completeSplit!.Invoke(donor, new object?[] { walHeadsAtSplit })!;
+        return (Task<SplitResult>)completeSplit!.Invoke(donor, new object?[] { walHeadsAtSplit, null })!;
     }
 
     // -----------------------------------------------------------------

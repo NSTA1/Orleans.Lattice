@@ -3025,11 +3025,52 @@ internal sealed partial class BPlusLeafGrain(
         }
     }
 
+    /// <summary>
+    /// Moves the saga shadow markers, and the isolation of the prepared buckets, that
+    /// cover <paramref name="rows"/> to the appended leaf of
+    /// <paramref name="targets"/> that will receive each row (issue #5755). The
+    /// steady state - no marker and no prepared bucket here - returns on two checks
+    /// without allocating or calling anything; otherwise one marker call per saga per
+    /// destination that holds a covered key.
+    /// </summary>
+    private async Task TransferShadowMarkersToGraftAsync(List<LwwEntry> rows, List<GraftEntry> targets)
+    {
+        if (_shadowedSagas is not { Count: > 0 } && _pendingTx is not { Count: > 0 })
+            return;
+
+        var byTarget = new Dictionary<GrainId, List<string>>();
+        foreach (var row in rows)
+        {
+            // Ascending separators, every row at or above the first: the owner is
+            // the last target whose separator is at or below the key, as the graft's
+            // relocation routes it.
+            var owner = targets[0].LeafId;
+            for (var i = 1; i < targets.Count; i++)
+            {
+                if (string.CompareOrdinal(row.Key, targets[i].SeparatorKey) < 0)
+                    break;
+                owner = targets[i].LeafId;
+            }
+
+            if (!byTarget.TryGetValue(owner, out var keys))
+                byTarget[owner] = keys = [];
+            keys.Add(row.Key);
+        }
+
+        foreach (var (target, keys) in byTarget)
+        {
+            await TransferShadowMarkersToSiblingAsync(grainFactory.GetGrain<IBPlusLeafGrain>(target), keys);
+        }
+    }
+
     private bool WouldNarrowHighKey(string highKeyExclusive) =>
         state.State.HighKeyExclusive is not { } high || string.CompareOrdinal(high, highKeyExclusive) > 0;
 
     /// <inheritdoc />
-    public async Task<List<LwwEntry>?> NarrowHighKeyAsync(string highKeyExclusive, GrainId? nextSibling = null)
+    public async Task<LeafNarrowResult?> NarrowHighKeyAsync(
+        string highKeyExclusive,
+        GrainId? nextSibling = null,
+        List<GraftEntry>? relocationTargets = null)
     {
         using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
@@ -3056,6 +3097,8 @@ internal sealed partial class BPlusLeafGrain(
 
             drained = true;
         }
+
+        var partitionCount = drained ? Math.Max(1, (await GetOptionsAsync()).WalPartitions) : 0;
 
         // See SetNextSiblingAsync above for the gate rationale.
         await _splitGate.WaitAsync().ConfigureAwait(true);
@@ -3086,6 +3129,21 @@ internal sealed partial class BPlusLeafGrain(
             // leaf stops declaring it, instead of failing open onto this leaf
             // outside its span, where no read reaches it.
             var link = nextSibling is { } next && !Equals(prevNext, next);
+
+            // Issue #5752: how far this leaf has replayed, read in the same
+            // synchronous step that narrows it. Before the narrow its replay applies
+            // every record of the range, so each one it has not applied lies above
+            // this frontier; after it, a replay skips them as out of span but still
+            // advances past them, which is why the frontier is never read later (and
+            // why a call that finds the leaf already narrowed reports none).
+            long[]? frontier = null;
+            if (narrow)
+            {
+                frontier = new long[partitionCount];
+                for (var p = 0; p < frontier.Length; p++)
+                    frontier[p] = GetCurrentCheckpointForPartition(p);
+            }
+
             if (narrow || link)
             {
                 if (narrow)
@@ -3112,7 +3170,18 @@ internal sealed partial class BPlusLeafGrain(
             // fails, or a shard root that dies before it, loses nothing: the
             // re-driven graft is handed the same rows again. Outside the declared
             // span they are invisible to range-routed reads in the meantime.
-            return CopyRowsAtOrAbove(state.State.HighKeyExclusive!);
+            var rows = CopyRowsAtOrAbove(state.State.HighKeyExclusive!);
+
+            // Issue #5755: each destination receives the read gates of the rows it
+            // is about to be handed before the graft merges them there, as a split
+            // and a span forward install them, so no instant exists at which a
+            // relocated row is readable without its gate.
+            if (relocationTargets is { Count: > 0 } && rows.Count > 0)
+            {
+                await TransferShadowMarkersToGraftAsync(rows, relocationTargets);
+            }
+
+            return new LeafNarrowResult { Rows = rows, ReadFrontier = frontier };
         }
         finally
         {

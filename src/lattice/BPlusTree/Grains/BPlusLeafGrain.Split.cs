@@ -1041,6 +1041,7 @@ internal sealed partial class BPlusLeafGrain
         // partition's head; a single scalar would conflate them.
         var treeId = state.State.TreeId;
         long[]? walHeadsAtSplit = null;
+        long[]? donorHeads = null;
         if (!string.IsNullOrEmpty(treeId))
         {
             walHeadsAtSplit = await CaptureWalHeadsByPartitionAsync(treeId);
@@ -1058,6 +1059,18 @@ internal sealed partial class BPlusLeafGrain
                 RecordSplitAttempt(LatticeMetrics.LeafSplitCommitsInFlight);
                 return null;
             }
+
+            // Issue #5752. The drain covers this activation's own commits only. A
+            // record of the moved range that another author appended below the heads
+            // - another shard's range-delete walk, a duplicate activation's append -
+            // and that this leaf has not replayed yet would be skipped by the sibling
+            // starting at the heads and, once this leaf narrows, by this leaf too. So
+            // the sibling's read position may not pass how far this leaf has
+            // replayed, read now, before the intent is persisted: until then the leaf
+            // still declares the whole range, so its replay applies every such record
+            // rather than stepping past it. This leaf's own advance keeps the heads.
+            donorHeads = HeadsAsCheckpoints(walHeadsAtSplit);
+            walHeadsAtSplit = CapAtOwnReadFrontier(donorHeads);
         }
 
         state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitInProgress);
@@ -1079,7 +1092,56 @@ internal sealed partial class BPlusLeafGrain
         LatticeMetrics.LeafSplits.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             LatticeTenantLabel.ForTree(state.State.TreeId ?? string.Empty));
-        return await CompleteSplitAsync(walHeadsAtSplit);
+        return await CompleteSplitAsync(walHeadsAtSplit, donorHeads);
+    }
+
+    /// <summary>
+    /// The read position a leaf born now may take from WAL heads read now (issue #5760):
+    /// per partition, the head minus one. A head is exclusive - the next offset the log
+    /// will assign - while a checkpoint is inclusive - the leaf replays every record
+    /// above it - so a head stamped as it is would skip the record first allocated at
+    /// it, which, written by another author, no leaf would then apply. At most one
+    /// record is re-applied instead, which last-writer-wins makes idempotent. A head of
+    /// 0 becomes -1, the "nothing applied" sentinel.
+    /// </summary>
+    internal static long[] HeadsAsCheckpoints(long[] heads)
+    {
+        var checkpoints = new long[heads.Length];
+        for (var p = 0; p < checkpoints.Length; p++)
+        {
+            checkpoints[p] = heads[p] - 1;
+        }
+
+        return checkpoints;
+    }
+
+    /// <summary>
+    /// A copy of <paramref name="heads"/> - already in checkpoint space, see
+    /// <see cref="HeadsAsCheckpoints"/> - with each lowered to this leaf's projection
+    /// checkpoint for that partition (issue #5752). Both are inclusive checkpoints - a
+    /// leaf replays every record above its own - so a record at the checkpoint plus one,
+    /// the first this leaf has not applied, is replayed by a leaf that starts there.
+    /// </summary>
+    private long[] CapAtOwnReadFrontier(long[] heads)
+    {
+        var capped = new long[heads.Length];
+        for (var p = 0; p < capped.Length; p++)
+        {
+            // The frontier is in memory - the projection checkpoint, pending or
+            // persisted - so it includes this activation's replay to its barrier. A
+            // leaf that has scanned nothing on a partition (it activated on an empty
+            // partition and has not replayed since, or was born from such a donor)
+            // has no frontier there; capping at -1 would make the sibling replay the
+            // whole log and seed its birth pin on the sentinel, which blocks the
+            // tree's WAL trim (#3094). There the sibling keeps the head, as in
+            // 10.2.0: the residue of #5752 is a record of the moved range another
+            // author appended after such a leaf activated, which the live advance
+            // closes once it keeps frontiers current.
+            var frontier = GetCurrentCheckpointForPartition(p);
+            capped[p] = frontier < 0 ? heads[p] : Math.Min(heads[p], frontier);
+        }
+
+        return capped;
     }
 
     /// <summary>
@@ -1123,8 +1185,12 @@ internal sealed partial class BPlusLeafGrain
     /// position is applied to either leaf (issue #5706): heads read now could lie
     /// above a commit admitted before them and not yet applied, which a recovery
     /// cannot drain, so the sibling replays its range from the log's start.
+    /// <paramref name="walHeadsAtSplit"/> is the sibling's read position, already
+    /// capped at this leaf's replay frontier (issue #5752);
+    /// <paramref name="donorHeads"/>, when given, is what this leaf advances its own
+    /// checkpoint to, and otherwise <paramref name="walHeadsAtSplit"/> is used for both.
     /// </summary>
-    private async Task<SplitResult> CompleteSplitAsync(long[]? walHeadsAtSplit = null)
+    private async Task<SplitResult> CompleteSplitAsync(long[]? walHeadsAtSplit = null, long[]? donorHeads = null)
     {
         using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
@@ -1492,13 +1558,17 @@ internal sealed partial class BPlusLeafGrain
         // sites therefore share one guard: issue 905 guarded this site
         // inline and left the sibling site 28 lines above unguarded,
         // which is issue #3360.
-        if (resolvedHeads is not null)
+        //
+        // The donor advances to the heads it read, not to the sibling's capped read
+        // position (issue #5752 caps only the latter).
+        var donorAdvance = donorHeads ?? resolvedHeads;
+        if (donorAdvance is not null)
         {
             using (AwaitDiagnostics.Begin("leaf.split.donor-hints", context.GrainId, splitDiag))
             {
-                for (var p = 0; p < resolvedHeads.Length; p++)
+                for (var p = 0; p < donorAdvance.Length; p++)
                 {
-                    await ApplyCheckpointHintAsync(p, resolvedHeads[p]);
+                    await ApplyCheckpointHintAsync(p, donorAdvance[p]);
                 }
             }
         }

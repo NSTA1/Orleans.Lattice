@@ -20,6 +20,12 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
     private const long BirthHead = 40;
     private const long CloseHead = 90;
 
+    /// <summary>
+    /// The hint a bulk operation stores from <see cref="BirthHead"/>: one below it, as a head
+    /// is exclusive and a hint an inclusive checkpoint (issue #5760).
+    /// </summary>
+    private const long BirthHint = BirthHead - 1;
+
     private sealed record HintRig(Harness H, EnumerableMemoryGrainStorage Storage, IWalShardGrain Wal, ILeafReplayCoordinatorGrain Coordinator);
 
     /// <summary>
@@ -95,7 +101,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         Assert.That(atBirth, Is.Not.Empty, "precondition: the append created leaves");
         Assert.Multiple(() =>
         {
-            Assert.That(atBirth.All(m => m.BulkBirthHints.TryGetValue("op-hint", out var hint) && hint.Length > 0 && hint.All(x => x == BirthHead)), Is.True,
+            Assert.That(atBirth.All(m => m.BulkBirthHints.TryGetValue("op-hint", out var hint) && hint.Length > 0 && hint.All(x => x == BirthHint)), Is.True,
                 "the hint is durable before any appended leaf is born");
             Assert.That(atBirth.All(m => m.Open.TryGetValue("bulk:op-hint", out var range) && range.LowInclusive == "k0000" && range.HighExclusive is null), Is.True,
                 "the marker is open over the appended range before any appended leaf is born");
@@ -134,7 +140,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         Assert.That(appended, Has.Count.EqualTo(3), "precondition: three appended leaves");
         foreach (var (low, leaf) in appended)
         {
-            Assert.That(HintAppliedTo(leaf), Is.Not.Empty.And.All.EqualTo(BirthHead), $"the appended leaf at {low} reads from the hint");
+            Assert.That(HintAppliedTo(leaf), Is.Not.Empty.And.All.EqualTo(BirthHint), $"the appended leaf at {low} reads from one below the head it captured (#5760)");
         }
 
         Assert.That(HintAppliedTo(rig.H.Leaf(existing)), Is.Null, "the old rightmost leaf keeps its read position");
@@ -209,8 +215,8 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         var rig = CreateHintRig();
         var existing = SeedAppendTail(rig.H);
         var unknown = new TypeLoadException(WalAppendFenceMethodProbe.UnresolvedAliasPrefix + " 'inv.lattice.leaf.narrow'");
-        rig.H.Leaf(existing).NarrowHighKeyAsync(Arg.Any<string>(), Arg.Any<GrainId?>())
-            .Returns(Task.FromException<List<LwwEntry>>(unknown));
+        rig.H.Leaf(existing).NarrowHighKeyAsync(Arg.Any<string>(), Arg.Any<GrainId?>(), Arg.Any<List<GraftEntry>?>())
+            .Returns(Task.FromException<LeafNarrowResult?>(unknown));
 
         await rig.H.Grain.BulkAppendAsync("op-hint", Pairs(5));
         await rig.H.Grain.CloseBulkSwitchesForTestingAsync();
@@ -235,8 +241,8 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         // nothing and returned null. The chunk must still succeed, on the 10.2.0 path.
         var rig = CreateHintRig();
         var existing = SeedAppendTail(rig.H);
-        rig.H.Leaf(existing).NarrowHighKeyAsync(Arg.Any<string>(), Arg.Any<GrainId?>())
-            .Returns(Task.FromResult<List<LwwEntry>?>(null));
+        rig.H.Leaf(existing).NarrowHighKeyAsync(Arg.Any<string>(), Arg.Any<GrainId?>(), Arg.Any<List<GraftEntry>?>())
+            .Returns(Task.FromResult<LeafNarrowResult?>(null));
 
         await rig.H.Grain.BulkAppendAsync("op-hint", Pairs(5));
         await rig.H.Grain.CloseBulkSwitchesForTestingAsync();
@@ -330,7 +336,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
 
         var loaded = rig.H.Leaves.Values.Where(l => l != seededLeaf && HintAppliedTo(l) is not null).ToList();
         Assert.That(loaded, Has.Count.EqualTo(3), "every loaded leaf reads from the hint");
-        Assert.That(loaded.SelectMany(l => HintAppliedTo(l)!), Is.All.EqualTo(BirthHead));
+        Assert.That(loaded.SelectMany(l => HintAppliedTo(l)!), Is.All.EqualTo(BirthHint));
 
         // The replaced root's rows are merged into the loaded tree before any loaded
         // leaf's read position moves past them.
@@ -396,7 +402,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
             Assert.That(marker.Open.Keys, Is.EqualTo(new[] { "bulk:op-next" }), "the abandoned switch is closed; the new one waits for its run's fence");
             Assert.That(marker.Closes.Single(c => c.Token == "bulk:abandoned").Heads, Is.Not.Empty.And.All.EqualTo(CloseHead));
             Assert.That(marker.BulkBirthHints.Keys, Is.EqualTo(new[] { "op-next" }), "the abandoned hint is removed with its close");
-            Assert.That(marker.BulkBirthHints["op-next"], Is.All.EqualTo(CloseHead),
+            Assert.That(marker.BulkBirthHints["op-next"], Is.All.EqualTo(CloseHead - 1),
                 "the close is folded into the open: the new switch's hint is the fence's heads, read no later than its first leaf's birth");
         });
     }
@@ -478,7 +484,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
             Assert.That(marker.Closes.Count(c => c.Token.StartsWith("bulk:chunk-", StringComparison.Ordinal)), Is.EqualTo(ShardRootGrain.BulkSwitchesPerFence));
             Assert.That(marker.Closes.SelectMany(c => c.Heads), Is.All.EqualTo(CloseHead));
             Assert.That(marker.BulkBirthHints.Keys, Is.EqualTo(new[] { "chunk-next" }), "the closed switches' hints are removed");
-            Assert.That(hint, Is.All.EqualTo(CloseHead), "the new chunk takes the fence's heads as its hint");
+            Assert.That(hint, Is.All.EqualTo(CloseHead - 1), "the new chunk takes one below the fence's heads as its hint (#5760)");
             Assert.That(rig.Storage.Writes - writesBefore, Is.EqualTo(2), "the generation raise, then one write that closes the run and opens the chunk");
         });
     }
@@ -537,5 +543,75 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
             Assert.That(Claims(rig), Is.GreaterThan(0), "precondition: the resume folded the run's fence");
             Assert.That(hint, Is.EqualTo(new long[] { 7 }), "the resume keeps the hint its first attempt stored");
         });
+    }
+
+    [Test]
+    public async Task A_bulk_append_applies_its_hint_capped_per_partition_at_the_old_leafs_replay_frontier()
+    {
+        // Issue #5752: a record of the appended range that another author appended
+        // below the hint and the old leaf never applied lies above the old leaf's
+        // frontier; an appended leaf starting at the hint would skip it, and the old
+        // leaf, narrowed, would skip it too.
+        var rig = CreateHintRig();
+        var existing = SeedAppendTail(rig.H);
+        var frontier = Enumerable.Repeat(BirthHead + 5, 64).ToArray();
+        frontier[0] = BirthHead - 10;
+        frontier[1] = -1;
+        rig.H.Leaf(existing).NarrowHighKeyAsync(Arg.Any<string>(), Arg.Any<GrainId?>(), Arg.Any<List<GraftEntry>?>())
+            .Returns(Task.FromResult<LeafNarrowResult?>(new LeafNarrowResult { ReadFrontier = frontier }));
+
+        await rig.H.Grain.BulkAppendAsync("op-hint", Pairs(5));
+
+        var appended = LeavesByBirthLow(rig.H);
+        Assert.That(appended, Is.Not.Empty, "precondition: the append created leaves");
+        foreach (var (low, leaf) in appended)
+        {
+            var applied = HintAppliedTo(leaf);
+            Assert.That(applied, Is.Not.Null, $"the appended leaf at {low} reads from the capped hint");
+            Assert.Multiple(() =>
+            {
+                Assert.That(applied![0], Is.EqualTo(BirthHead - 10), "capped at the frontier, not at the frontier plus one");
+                Assert.That(applied[1], Is.EqualTo(-1), "a partition the old leaf never replayed is replayed from the start");
+                Assert.That(applied.Skip(2), Is.All.EqualTo(BirthHint), "the hint, one below the head, where it is the lower");
+            });
+        }
+    }
+
+    [Test]
+    public async Task A_graft_whose_old_leaf_reports_no_frontier_applies_no_hint()
+    {
+        // An old leaf an earlier attempt narrowed cannot say how far it had replayed
+        // when it narrowed, so the resumed graft's leaves replay from the log's start.
+        var rig = CreateHintRig();
+        var existing = SeedAppendTail(rig.H);
+        rig.H.Leaf(existing).NarrowHighKeyAsync(Arg.Any<string>(), Arg.Any<GrainId?>(), Arg.Any<List<GraftEntry>?>())
+            .Returns(Task.FromResult<LeafNarrowResult?>(new LeafNarrowResult { ReadFrontier = null }));
+
+        await rig.H.Grain.BulkAppendAsync("op-hint", Pairs(5));
+
+        foreach (var (low, leaf) in LeavesByBirthLow(rig.H))
+        {
+            Assert.That(HintAppliedTo(leaf), Is.Null, $"the appended leaf at {low} keeps reading from the log's start");
+        }
+    }
+
+    [Test]
+    public async Task A_graft_hands_the_old_leaf_every_appended_leaf_so_it_can_move_their_read_gates()
+    {
+        // Issue #5755: the old leaf moves the shadow markers of the rows it hands back
+        // to the appended leaf each will be merged into, so it needs all of them.
+        var rig = CreateHintRig();
+        var existing = SeedAppendTail(rig.H);
+
+        await rig.H.Grain.BulkAppendAsync("op-hint", Pairs(5));
+
+        var appended = LeavesByBirthLow(rig.H);
+        var expected = appended.OrderBy(kv => kv.Key, StringComparer.Ordinal)
+            .Select(kv => (kv.Key, ((IGrainBase)kv.Value).GrainContext.GrainId)).ToList();
+        var call = rig.H.Leaf(existing).ReceivedCalls()
+            .Single(c => c.GetMethodInfo().Name == nameof(IBPlusLeafGrain.NarrowHighKeyAsync));
+        var targets = (List<GraftEntry>?)call.GetArguments()[2];
+        Assert.That(targets?.Select(e => (e.SeparatorKey, e.LeafId)), Is.EqualTo(expected),
+            "every appended leaf, by separator, in order");
     }
 }

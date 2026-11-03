@@ -1641,8 +1641,8 @@ or reshard shadow forward, a fan-out begun while the gate was closed, an older
 caller - is appended unstamped, by design. The record, its result and its feed are
 unchanged; range-delete records are fenced, never clipped.
 
-**The bulk birth hint.** A bulk load or bulk append records a **birth hint** - a head
-of every WAL partition read before its first leaf is born - in the shard's marker row,
+**The bulk birth hint.** A bulk load or bulk append records a **birth hint** - one below
+a head of every WAL partition read before its first leaf is born - in the shard's marker row,
 in the same write that opens its marker and before it creates its first leaf; a resume
 of the same operation reuses the stored hint. A lower hint is never above a record the
 leaf has not applied, it only lengthens the replay, so the consecutive chunks of a
@@ -1689,6 +1689,53 @@ gives neither leaf a read position and the sibling replays its range from the lo
 start. The marker's close heads do not cover this: they gate the live advance's arming,
 not the read position a new leaf replays from.
 
+**Records another author appended.** The drain covers the old leaf's own writes only.
+A record of the moved range that another author appended - another shard's
+range-delete walk, a duplicate activation of the old leaf, a 10.2.0 silo during an
+upgrade - and that the old leaf has not replayed lies above how far it has replayed,
+and below the heads. So a new leaf never starts reading higher than that: per WAL
+partition, an appended leaf applies the lower of the birth hint and the old rightmost
+leaf's checkpoint, read in the same step that narrows it, and a split sibling the lower
+of the heads and its donor's checkpoint, read before the division's intent is persisted
+([#5752](https://github.com/NSTA1/Orleans.Lattice/issues/5752)). The checkpoint is
+inclusive - a leaf replays every record above it - so it is taken as it is: one above
+it is exactly the first record the old leaf had not applied. Before the narrow the old
+leaf still declares the whole range, so its replay applies such records rather than
+stepping past them; after it, a replay steps past them, which is why a graft resumed
+on a leaf an earlier attempt already narrowed applies no hint. A lower read position
+only lengthens the new leaf's first replay.
+
+The old leaf's frontier is its in-memory projection checkpoint. Its replay moves it -
+to the end of its activation replay, then by any later replay - and the live advance
+moves it over the leaf's own writes only while armed, behind the append fences; a write
+applied in memory never moves it on its own. A checkpoint hint also moves it: a split
+sibling's or bulk-born leaf's read position, which is capped as described here, and a
+split donor's own advance to one below the heads it read, which is not (#5756). So
+the frontier is contiguous - every record at or below it has been applied - except on
+a leaf whose checkpoint a donor's advance has moved, and a later cap at such a leaf's
+frontier inherits #5756's residue. A
+partition on which the old leaf has scanned nothing (it activated on an empty partition
+and has not replayed since, or was born from such a leaf) has no frontier, reported as
+-1. There an appended leaf applies no hint, as in 10.2.0. A split sibling instead keeps
+one below the head, as in 10.2.0: a sibling with no read position would replay the
+whole log and seed its birth pin on the sentinel that blocks the tree's WAL trim. The
+records such a split can still skip - another author's, appended to the moved range
+after the donor activated - are tracked with the donor's own checkpoint advance, which
+still starts from the heads it read, in
+[#5756](https://github.com/NSTA1/Orleans.Lattice/issues/5756); the live advance closes
+both once it keeps frontiers current.
+
+**A head is one past a checkpoint.** A WAL head is exclusive - the next offset the log
+will assign - while a leaf's checkpoint is inclusive - the last offset it has applied, and
+it replays every record above it. So every head a split or a bulk operation reads becomes
+a read position one below it, for the split sibling, the split donor's own advance, the
+sibling's birth pin and the bulk birth hint alike
+([#5760](https://github.com/NSTA1/Orleans.Lattice/issues/5760)). Taken as it is, a head
+would skip the record first allocated at it, which, written by another author, no leaf
+would then apply; one below re-applies at most one record, which last-writer-wins makes
+idempotent. A read position of 0 therefore means offset 0 is applied and is stamped and
+pinned as a real offset; only a negative one means nothing applied.
+
 **Coordinator terminals** carry the coordinator-terminal stamp class described in
 [Append epoch fencing](#append-epoch-fencing), so a saga does not raise the reported
 unstamped offset of every partition it touched.
@@ -1718,7 +1765,10 @@ checkpoint-hint call per new leaf, and one generation raise, one generation re-c
 per partition and one marker write to close. Per bulk-append chunk that creates leaves:
 one marker write to open and one checkpoint-hint call per new leaf; the heads are read
 once per run, and the close - one generation raise, one re-claim per partition and one
-marker write - is paid once per eight chunks and once at the run's end. The in-flight
+marker write - is paid once per eight chunks and once at the run's end. The old
+leaf's replay frontier rides the narrow's existing reply, and the read gates of
+relocated rows cost one marker call per saga per appended leaf, only when those rows
+carry saga state. The in-flight
 drain adds two counter updates to each leaf write, on fields the activation already
 owns, and no allocation or call.
 
