@@ -77,6 +77,13 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     private bool _stale;
     private long _gateClosedUntilTicks;
     private long _handOffCloses;
+    private int _refusedUnallocated;
+    private readonly bool _requireReachability;
+    private int _reachability;
+
+    private const int ReachabilityUnproven = 0;
+    private const int ReachabilityProven = 1;
+    private const int ReachabilityUnreachable = 2;
 
     /// <summary>Creates the fence for one leaf activation.</summary>
     /// <param name="leafId">The leaf's grain key.</param>
@@ -85,13 +92,19 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     /// <param name="onSuperseded">Called once, with the epoch held, when the activation is found superseded; it deactivates the leaf.</param>
     /// <param name="treeTag">The leaf's tree tag, for its metrics.</param>
     /// <param name="tenantTag">The leaf's tenant tag, for its metrics.</param>
+    /// <param name="requireReachabilityProof">
+    /// Whether the activation may stamp only once it has proven it is reachable by descent
+    /// (#5709): until then, and for good once it is found unreachable, its view of the gate
+    /// reads closed, so it claims nothing and appends unstamped.
+    /// </param>
     public LeafAppendEpochFence(
         Guid leafId,
         IWalAppendFenceGate gate,
         IGrainStorage storage,
         Action<long> onSuperseded,
         KeyValuePair<string, object?> treeTag,
-        KeyValuePair<string, object?> tenantTag)
+        KeyValuePair<string, object?> tenantTag,
+        bool requireReachabilityProof = false)
     {
         ArgumentNullException.ThrowIfNull(gate);
         ArgumentNullException.ThrowIfNull(storage);
@@ -102,6 +115,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         _onSuperseded = onSuperseded;
         _treeTag = treeTag;
         _tenantTag = tenantTag;
+        _requireReachability = requireReachabilityProof;
     }
 
     /// <summary>This activation's <see cref="ClaimFailureBackoff"/>; test seam.</summary>
@@ -147,6 +161,36 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         {
             return _partitions.TryGetValue(partition, out var p) ? p.ReportedUnstamped : -1;
         }
+    }
+
+    /// <summary>
+    /// The live advance's view of <paramref name="partition"/> (epic #5605, member 4),
+    /// read in one step: the claim head under the current epoch and the highest
+    /// unstamped offset reported to this activation there. <see langword="false"/>
+    /// when the activation cannot arm on the partition at all: it is superseded, its
+    /// view of the gate is closed, or the partition is not claimed under its current
+    /// epoch (never claimed, reset by an unloaded rejection, or awaiting a re-claim
+    /// after a bump).
+    /// </summary>
+    internal bool TryGetArmingView(int partition, out long claimHead, out long reportedUnstamped)
+    {
+        lock (_sync)
+        {
+            if (!_stale
+                && IsGateOpenLocked()
+                && _epoch > 0
+                && _partitions.TryGetValue(partition, out var p)
+                && p.ClaimedEpoch == _epoch)
+            {
+                claimHead = p.Head;
+                reportedUnstamped = p.ReportedUnstamped;
+                return true;
+            }
+        }
+
+        claimHead = -1;
+        reportedUnstamped = -1;
+        return false;
     }
 
     /// <inheritdoc />
@@ -392,6 +436,15 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         }
     }
 
+    /// <inheritdoc />
+    public void OnRefusedUnallocated() => Interlocked.Increment(ref _refusedUnallocated);
+
+    /// <summary>
+    /// Takes the count of append calls refused without allocating anything since the
+    /// last take (#5708). The leaf releases that many counted appends on its own turn.
+    /// </summary>
+    internal int TakeRefusedUnallocated() => Interlocked.Exchange(ref _refusedUnallocated, 0);
+
     /// <summary>
     /// Forgets this activation's epoch and every partition claim after the leaf was
     /// cleared (#5605 review, N1): the clear retired every entry and deleted the
@@ -415,7 +468,83 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         _gateClosedUntilTicks = Environment.TickCount64 + (long)backoff.TotalMilliseconds;
 
     private bool IsGateOpenLocked() =>
+        IsGateViewOpenLocked()
+        && (_reachability == ReachabilityProven || (!_requireReachability && _reachability == ReachabilityUnproven));
+
+    private bool IsGateViewOpenLocked() =>
         (_gateClosedUntilTicks == 0 || Environment.TickCount64 >= _gateClosedUntilTicks) && _gate.IsOpen;
+
+    /// <summary>
+    /// Whether the activation must prove it is reachable by descent before it may claim
+    /// (#5709): the proof is required, not yet decided, and the activation would
+    /// otherwise stamp. The leaf proves it on its own turn before its next append.
+    /// </summary>
+    internal bool NeedsReachabilityProof
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _requireReachability && _reachability == ReachabilityUnproven && !_stale && IsGateViewOpenLocked();
+            }
+        }
+    }
+
+    /// <summary>Whether the activation has stopped stamping for good because it was found unreachable (#5709).</summary>
+    internal bool IsUnreachable
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _reachability == ReachabilityUnreachable;
+            }
+        }
+    }
+
+    /// <summary>The activation proved it is reachable by descent, or was born under an open hand-off marker; it may claim.</summary>
+    internal void OnReachabilityProven()
+    {
+        lock (_sync)
+        {
+            if (_reachability == ReachabilityUnproven)
+            {
+                _reachability = ReachabilityProven;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The proof could not be decided (the shard root could not be asked): the activation
+    /// appends unstamped for a backoff, then proves again.
+    /// </summary>
+    internal void OnReachabilityUndecided()
+    {
+        lock (_sync)
+        {
+            CloseGateViewLocked(ClaimFailureBackoffForTesting);
+        }
+    }
+
+    /// <summary>
+    /// The activation is not reachable by descent and no hand-off marker is open on it
+    /// (#5709): it never stamps again, so every append it makes is unstamped and reported
+    /// to every leaf sharing the partition, whose replay applies it by key range. Returns
+    /// whether this call latched it.
+    /// </summary>
+    internal bool StopStampingUnreachable()
+    {
+        lock (_sync)
+        {
+            if (_reachability == ReachabilityUnreachable)
+            {
+                return false;
+            }
+
+            _reachability = ReachabilityUnreachable;
+            return true;
+        }
+    }
 
     private async ValueTask<WalAppendStamp?> ClaimAsync(IWalShardGrain shard, int partition, CancellationToken cancellationToken)
     {

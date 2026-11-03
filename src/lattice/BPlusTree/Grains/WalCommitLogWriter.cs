@@ -855,6 +855,7 @@ internal sealed class WalCommitLogWriter(
                     {
                         IncrementProviderFailureCount(stamped.TreeId, partition);
                     }
+                    NoteUnallocatedRefusal(fence, ex, sliceEntries: 1);
                     pending.AdvanceTo(WalAppendStage.Failed);
                     throw;
                 }
@@ -931,6 +932,7 @@ internal sealed class WalCommitLogWriter(
                 {
                     IncrementProviderFailureCount(stamped.TreeId, partition);
                 }
+                NoteUnallocatedRefusal(fence, ex, sliceEntries: 1);
                 pending.AdvanceTo(WalAppendStage.Failed);
                 throw;
             }
@@ -941,6 +943,46 @@ internal sealed class WalCommitLogWriter(
             tracker.ReleaseAdmission();
             RecordDispatchOutcome(stamped.TreeId, partition, walPartitions, perTree, entryCount: 1, dispatchStartTicks);
         }
+    }
+
+    /// <summary>
+    /// Tells a leaf's fence that its single-partition append call was refused without
+    /// allocating anything, so the leaf releases the append it counted (#5708).
+    /// </summary>
+    private static void NoteUnallocatedRefusal(ILeafAppendFence? fence, Exception exception, int sliceEntries)
+    {
+        if (fence is not null && WalFencedAppendDispatch.IsUnallocatedRefusal(exception, sliceEntries))
+        {
+            fence.OnRefusedUnallocated();
+        }
+    }
+
+    /// <summary>
+    /// As <see cref="NoteUnallocatedRefusal"/>, for a batch fanned out across partitions:
+    /// the call allocated nothing only when every partition's slice failed with a
+    /// definite refusal. Every task has completed when <c>Task.WhenAll</c> throws. Used as
+    /// an exception filter, so it always returns <see langword="false"/> and lets the
+    /// failure propagate unchanged.
+    /// </summary>
+    private static bool NoteUnallocatedBatchRefusal(
+        ILeafAppendFence fence,
+        Task<KeyValuePair<string, IReadOnlyList<long>>>[] tasks,
+        Dictionary<string, WalPartitionBatch> partitions)
+    {
+        var t = 0;
+        foreach (var batch in partitions.Values)
+        {
+            var task = tasks[t++];
+            if (!task.IsFaulted
+                || task.Exception!.InnerExceptions.Count != 1
+                || !WalFencedAppendDispatch.IsUnallocatedRefusal(task.Exception.InnerExceptions[0], batch.Records.Count))
+            {
+                return false;
+            }
+        }
+
+        fence.OnRefusedUnallocated();
+        return false;
     }
 
     // Selects the grain overload a point append dispatches to (#812).
@@ -1096,7 +1138,15 @@ internal sealed class WalCommitLogWriter(
             var grain = grainFactory.GetGrain<IWalShardGrain>(batch.GrainKey);
             tasks[t++] = AppendForPartitionAsync(batch.GrainKey, grain, batch.Records, batch.TreeId, batch.Partition, batch.WalPartitions, batch.PerTree, terminalsOnly, fence, routing, cancellationToken);
         }
-        var partitionResults = await Task.WhenAll(tasks);
+        KeyValuePair<string, IReadOnlyList<long>>[] partitionResults;
+        try
+        {
+            partitionResults = await Task.WhenAll(tasks);
+        }
+        catch (Exception) when (fence is not null && NoteUnallocatedBatchRefusal(fence, tasks, partitions))
+        {
+            throw;
+        }
 
         // Stitch the per-partition offsets back into the caller's
         // input order.

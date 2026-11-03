@@ -111,6 +111,12 @@ internal sealed class CoordinatorTerminalAppendFence : ILeafAppendFence
     /// <inheritdoc />
     public void OnClaimsExhausted() => CloseGateView();
 
+    /// <inheritdoc />
+    /// <remarks>A coordinator terminal tracks no own appends, so there is nothing to release.</remarks>
+    public void OnRefusedUnallocated()
+    {
+    }
+
     private bool IsStamping()
     {
         var until = Volatile.Read(ref _gateClosedUntilTicks);

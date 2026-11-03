@@ -468,6 +468,43 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<State.ShardHandOffState> GetHandOffMarkerAsync();
 
     /// <summary>
+    /// A leaf's live-advance read (epic #5605, member 4): this shard's hand-off marker,
+    /// read fresh, and whether <paramref name="leafId"/> is suspected to be an orphan:
+    /// descent for <paramref name="lowKeyInclusive"/> does not reach it, or orphan repair
+    /// is in progress. The leaf holds its live advance on any doubt.
+    /// </summary>
+    /// <param name="leafId">The asking leaf.</param>
+    /// <param name="lowKeyInclusive">The leaf's declared low bound; <see langword="null"/> for the leftmost leaf.</param>
+    /// <param name="highKeyExclusive">The leaf's declared high bound; <see langword="null"/> for the rightmost leaf.</param>
+    /// <remarks>
+    /// <see cref="AlwaysInterleaveAttribute"/> and <see cref="ReadOnlyAttribute"/>, as
+    /// <see cref="GetHandOffMarkerAsync"/>: a serial shard-root turn that calls the leaf
+    /// must not deadlock against the leaf's read. Called only while the caller's
+    /// append-fence gate is open.
+    /// </remarks>
+    [AlwaysInterleave]
+    [ReadOnly]
+    Task<LeafLiveAdvanceView> GetLiveAdvanceViewAsync(GrainId leafId, string? lowKeyInclusive, string? highKeyExclusive);
+
+    /// <summary>
+    /// Whether descent for <paramref name="lowKeyInclusive"/> reaches
+    /// <paramref name="leafId"/> (epic #5605, #5709): a leaf proves it once per
+    /// activation, before its first append-epoch claim, and an unreachable leaf never
+    /// appends stamped. The same descent <see cref="GetLiveAdvanceViewAsync"/> makes,
+    /// without the marker read.
+    /// </summary>
+    /// <param name="leafId">The asking leaf.</param>
+    /// <param name="lowKeyInclusive">The leaf's declared low bound; <see langword="null"/> for the leftmost leaf.</param>
+    /// <remarks>
+    /// <see cref="AlwaysInterleaveAttribute"/> and <see cref="ReadOnlyAttribute"/>, as
+    /// <see cref="GetLiveAdvanceViewAsync"/>: the leaf asks from inside a write the shard
+    /// root may itself be awaiting. Called only while the caller's append-fence gate is open.
+    /// </remarks>
+    [AlwaysInterleave]
+    [ReadOnly]
+    Task<bool> IsReachableByDescentAsync(GrainId leafId, string? lowKeyInclusive);
+
+    /// <summary>
     /// Opens a shard-level hand-off marker <paramref name="token"/> over
     /// <c>[low, high)</c>, idempotently (epic #5605, member 2). Called by the tree's
     /// range-delete fence for every shard of the tree.

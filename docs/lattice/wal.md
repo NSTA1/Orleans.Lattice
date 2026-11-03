@@ -1411,8 +1411,9 @@ Orleans promises one activation per grain, but during a membership change a
 leaf can briefly run twice. A WAL partition therefore fences appends by **leaf
 activation epoch** ([epic #5605](https://github.com/NSTA1/Orleans.Lattice/issues/5605)),
 so a stale duplicate activation can never append after a newer one has claimed.
-The design note is `spec/wal/design/LiveAdvanceDesign.md`. This release only
-fences: a leaf's projection checkpoint still advances by replay, as before.
+The design note is `spec/wal/design/LiveAdvanceDesign.md`. The fence is what lets
+a leaf advance its checkpoint over its own writes without a replay; see
+[Live checkpoint advance](#live-checkpoint-advance).
 
 **The claim.** Before an activation's first append to a partition, it claims an epoch:
 
@@ -1550,9 +1551,9 @@ The fence's counters are `orleans.lattice.wal.append_fence.claims`,
 The epoch fence above stops a stale duplicate of a leaf. The **hand-off fences**
 stop a different author: one that appends a record a leaf will own, while handing
 keys to it ([epic #5605](https://github.com/NSTA1/Orleans.Lattice/issues/5605), the
-design note's section 2). This release builds the markers and fences only. Nothing
-reads a marker to skip records yet: every leaf's projection checkpoint still advances
-by replay, so the fences add cost and change no result.
+design note's section 2). A leaf reads the markers before it advances its checkpoint
+over its own writes ([Live checkpoint advance](#live-checkpoint-advance)); a hand-off
+in flight holds that advance, and the leaf's checkpoint advances by replay meanwhile.
 
 Every hand-off follows one protocol:
 
@@ -1791,6 +1792,99 @@ Three residues remain, all bounded:
   Do not purge trees while a rolling upgrade from 10.2.0 is in progress.
 The hand-off counters are `orleans.lattice.wal.append_fence.handoff_markers`,
 `.unstamped_appends` and `.self_fenced`; see [Metrics](metrics.md).
+
+## Live checkpoint advance
+
+A leaf whose WAL partition holds no record it has not read, other than its own
+writes, may advance its projection checkpoint over those writes without replaying
+them ([#5570](https://github.com/NSTA1/Orleans.Lattice/issues/5570),
+[#5572](https://github.com/NSTA1/Orleans.Lattice/issues/5572),
+[#5593](https://github.com/NSTA1/Orleans.Lattice/issues/5593); design note section 1).
+Before it, a leaf written only through the live path banked no usable durable pin
+until its coverage-lag timer had spent a replay permit reading its own writes back,
+so a fresh tree held its WAL floor for up to
+[`LeafSnapshotMaxCoverageLagSeconds`](configuration.md#leafsnapshotmaxcoveragelagseconds).
+
+**When a leaf may advance.** Per partition, the activation advances its checkpoint to
+the highest offset its own applied appends returned, and only when every one of these
+holds; otherwise the checkpoint advances by replay, as before:
+
+1. **Claimed.** The activation holds a claim at the partition under its current epoch,
+   and its view of the append-fence gate is open.
+2. **Read to the claim head.** Its checkpoint has reached the claim head minus one:
+   it has read everything allocated before it claimed, including an acknowledged write
+   of a stale duplicate activation (#5593). A new tree's first leaf claims at head `0`
+   and needs no replay; an existing leaf replays to its claim head once.
+3. **No hand-off open.** Its marker is initialised, no token is open on it, and no
+   token on its shard root's marker overlaps its key range. An existing leaf adopts its
+   shard root's initialised flag once it has no split in flight.
+4. **Read to every close.** Its checkpoint has reached the heads every closed hand-off
+   overlapping it recorded.
+5. **Read past every reported unstamped append.** Its checkpoint is at or past the
+   highest unstamped offset the partition reported to it. A write through an unstamped
+   leaf method reports itself, so it too falls back to replay.
+6. **Quiescent.** Every own append the activation issued has been applied, none failed,
+   no saga prepare is pending, and no replay is running. An append refused before
+   anything was allocated - the self-fence of a write admitted before a hand-off close, a
+   stale routing generation, or a single-record clock-floor refusal - is released, since
+   it left nothing to apply and its write is retried (#5708). Any other failure, such as
+   a timeout, may have landed a record, so it holds the advance for the activation.
+
+The advance also holds for the whole leaf when the leaf has no shard slot, when it
+covers no key range but has siblings, when the grain storage provider's ETag check
+did not report the provider fenced at silo start
+([The grain storage provider must enforce ETags](configuration.md#the-grain-storage-provider-must-enforce-etags)),
+or when it is suspected to be an orphan: the shard root's descent for its low key does
+not reach it, or orphan repair is running. The markers and the shard root's view are
+read fresh on every attempt; the shard root answers on an interleaving, read-only call,
+so a serial shard-root turn that calls the leaf cannot deadlock against it.
+
+**An unreachable leaf never appends stamped (#5709).** An orphan - a leaf in the
+sibling chain that descent no longer reaches, often sharing a live leaf's bounds - can
+still be handed a write by a span forward from its neighbour. If it stamped that write,
+the live leaf owning the same keys could advance past it unread. So before an
+activation's first epoch claim, the leaf asks its shard root, once, whether descent for
+its low key reaches it. If it does not, and no hand-off marker is open on it, the
+activation claims nothing and appends unstamped for the rest of its life: every append
+is reported to the leaves sharing the partition, whose replay applies it by key range
+before they can arm. A split sibling the parent has not yet learned of is exempt: it is
+born under its donor's open marker and admits only keys the donor has narrowed away.
+The advance tick repeats the check, and a leaf it finds unreachable with no marker open
+stops stamping the same way. If the shard root cannot be asked, the leaf appends
+unstamped and asks again after a backoff. Orphaned-leaf repair never folds an orphan's
+rows; it clears an orphan only after proving every row it holds is readable from the
+reachable owner.
+
+**Where it runs.** On the coverage-lag tick and at the start of a starvation drive, so
+the tick banks a snapshot and a usable pin for a live-written leaf without taking a
+replay permit.
+
+**Bulk-loaded leaves** are held while their shard's `bulk:` switch is open over their
+range, and arm once it has closed and they have read to its heads and their claim head.
+Their checkpoint starts at the [bulk birth hint](#hand-off-fences) where one was
+applied, which shortens their activation replay; where none was, they replay from the
+log's start, as before. Arming needs no bulk-specific rule.
+
+**Rolling upgrades.** Nothing arms while the gate is closed, and the leaf issues no
+marker read and no shard-root call while no partition is claimed, so a shard root on an
+older build is never asked for its view.
+
+**Cost.** Nothing is added to a write: the tracker is a counter and one offset per
+partition, updated as an append completes, and a refused append adds one interlocked
+increment. Only a leaf with own writes above its checkpoint does anything on a
+coverage-lag tick, and then:
+
+- the leaf reads its own marker row and makes one shard-root call;
+- the shard root reads its marker row and descends for the leaf's low key, the same
+  traversal it routes a write by, and returns only the marker's projection onto the leaf's
+  range (an immutable value, so a same-silo call copies nothing);
+- the leaf decides on a per-activation copy of its offsets and computes close heads per
+  partition, allocating no array.
+
+A leaf with nothing to advance, or with no partition claimed, reads nothing and makes no
+call. Once per leaf, a marker write adopts its shard root's flag. Once per activation,
+before its first claim, one shard-root call proves the leaf is reachable; a leaf that is
+not also reads its own marker row.
 
 ## Relationship to replication
 

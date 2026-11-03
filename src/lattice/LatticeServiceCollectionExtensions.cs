@@ -95,8 +95,13 @@ public static class LatticeServiceCollectionExtensions
         // repeated AddLattice call registers it once.
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<LatticeGrainStorageFencingOptions>, LatticeGrainStorageFencingOptionsValidator>());
-        builder.Services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<ILifecycleParticipant<ISiloLifecycle>, GrainStorageFencingCheck>());
+        // Also resolvable by type, so a leaf's live checkpoint advance can read the
+        // verdict: it arms only on a provider the probe found fenced (epic #5605).
+        if (!builder.Services.Any(static d => d.ServiceType == typeof(GrainStorageFencingCheck)))
+        {
+            builder.Services.AddSingleton<GrainStorageFencingCheck>();
+            builder.Services.AddSingleton<ILifecycleParticipant<ISiloLifecycle>>(static sp => sp.GetRequiredService<GrainStorageFencingCheck>());
+        }
 
         // The probe makes the provider reject a write on purpose, which providers
         // such as Azure Table storage log at Error; drop the records written on

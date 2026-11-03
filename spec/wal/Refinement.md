@@ -381,6 +381,42 @@ from this specification.**
   No production symbol: the gap is a modelling abstraction with no single
   production owner.
 
+- **The live checkpoint advance (epic #5605).** The model's checkpoint advances only
+  by `ReadStep`. Production also advances an armed leaf's checkpoint over its own
+  applied appends without a replay (`BPlusLeafGrain.TryAdvanceLiveCheckpointAsync`,
+  `LeafLiveAdvanceCore.TargetFor`). This model cannot state when that is safe: its one
+  owner activation is always the current epoch, so the stale duplicate, the hand-off
+  initiator and the unstamped writer that the arming rules exclude are not
+  expressible here, and adding an activation dimension to every leaf would push
+  `SnapshotLoss` (17,428,938 states) well past CI's budget. The safety argument is the
+  design model `WalLiveAdvance` (`spec/wal/design/WalLiveAdvance.tla`): production
+  advances only when its `Armed(a)` holds, one conjunct per argument of `TargetFor` -
+  the claim raised (`LeafAppendEpochFence.TryGetArmingView`), read to the claim head,
+  no hand-off open and read to every close (`ShardRootGrain.GetLiveAdvanceViewAsync`),
+  read past every reported unstamped offset, and every own append applied. Epic
+  #5605's promotion member makes it a checked module. #5578's `LiveAdvance` and
+  `NewbornPinEventuallyUsable` are deliberately not re-landed here; no property yet
+  states the latency of an armed newborn, which is pinned in production by
+  `LiveCheckpointAdvanceIntegrationTests.A_live_written_leaf_banks_its_snapshot_without_a_replay_drive`.
+  The arming detectors are
+  `LiveCheckpointAdvanceIntegrationTests.A_stale_duplicates_append_before_the_claim_is_read_before_the_leaf_advances_past_it`,
+  `LiveCheckpointAdvanceIntegrationTests.A_foreign_unstamped_append_reported_after_arming_is_read_by_replay`,
+  `BPlusLeafGrainTests.A_leaf_that_has_not_read_to_its_claim_head_advances_only_by_replay`,
+  `BPlusLeafGrainTests.An_open_shard_marker_token_holds_only_the_leaves_it_overlaps`,
+  `BPlusLeafGrainTests.A_close_head_above_the_checkpoint_holds_the_advance_until_a_replay_reaches_it`,
+  `BPlusLeafGrainTests.A_reported_unstamped_append_holds_the_advance_until_a_replay_reads_past_it`,
+  `BPlusLeafGrainTests.A_live_advance_waits_until_every_issued_append_is_applied` and
+  `LeafLiveAdvanceCoreTests.The_advance_is_taken_exactly_when_the_leaf_is_armed`.
+  An orphan sharing a live leaf's bounds is covered by the rule that an unreachable
+  leaf never appends stamped (#5709): it proves it is reachable by descent before its
+  first claim (`BPlusLeafGrain.ProveStampReachabilityAsync`,
+  `ShardRootGrain.IsReachableByDescentAsync`), so its appends are the model's unstamped,
+  reported `OldAlloc`, pinned by
+  `LiveCheckpointAdvanceIntegrationTests.An_orphans_append_is_unstamped_so_the_reachable_owner_reads_it_before_it_advances`;
+  a split sibling born under its donor's open marker keeps its claim
+  (`BPlusLeafGrainTests.A_sibling_born_under_an_open_split_marker_still_claims_and_stamps`).
+  Production symbols: `BPlusLeafGrain.TryAdvanceLiveCheckpointAsync`, `LeafLiveAdvanceCore.TargetFor`, `LeafAppendEpochFence.TryGetArmingView`, `ShardRootGrain.GetLiveAdvanceViewAsync`, `BPlusLeafGrain.ProveStampReachabilityAsync`, `ShardRootGrain.IsReachableByDescentAsync`.
+
 ## Excluded candidates from the issue
 
 | Candidate | Why it is not a checked property |

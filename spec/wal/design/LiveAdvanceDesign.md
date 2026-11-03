@@ -1,7 +1,8 @@
 # Live checkpoint advance: fenced redesign
 
-Design for issues #5572 and #5593, epic #5605. This is a design draft for review:
-no production code implements it yet. `WalLiveAdvance.tla` beside this note models
+Design for issues #5572 and #5593, epic #5605. Its production members land in the
+order [Production members](#production-members) sets; the live advance itself is
+`BPlusLeafGrain.TryAdvanceLiveCheckpointAsync`. `WalLiveAdvance.tla` beside this note models
 it, with variant configurations and its mutations in `mutations/`. A module under
 `spec/` must cite a production detector on every behaviour row, so this draft sits
 outside module discovery. It becomes the companion module `spec/wal/WalLiveAdvance`,
@@ -583,7 +584,7 @@ from the paths that reach a leaf without shard-root admission:
 | Adaptive split coordinator's drain | `TreeShardSplitGrain.cs:1023`, `:1037` | Under the adaptive split's shard-level marker; the donor shard's generation |
 | Bulk seeding and the resize mirror | `ShardRootGrain.BulkLoad.cs`; the resize mirror | Under the bulk switch's marker; the shard's generation |
 | Shadow forwards, plain and CRDT | `ShardRootGrain.Split.cs` | Under the adaptive split's marker; the forwarding shard's generation |
-| Compaction reap, replayed terminals | `BPlusLeafGrain.cs:3434`; `BPlusLeafGrain.ReplayedTerminals.cs:147` | Leaf-internal: stamped with the leaf's own epoch. They are the leaf's own appends, tracked like any other |
+| Compaction reap, replayed terminals | `BPlusLeafGrain.cs:3434`; `BPlusLeafGrain.ReplayedTerminals.cs:147` | Leaf-internal: stamped with the leaf's own epoch. They are the leaf's own appends, tracked like any other. Both append with mark `0`, so a reap collected before a split narrows the leaf can be stamped with the raised epoch above the close heads. That is harmless by content: a reap only drops a tombstone at or below its own stamp, so a reader that skips it never resurrects or changes a visible value, and a replayed terminal carries no row data and sits under the prepare clamp (re-review of #5644, N-a) |
 | Coordinator saga terminals | `AtomicWriteGrain.FlushPendingTerminalsAsync` (`:2356`); `ShardRootGrain.TxTerminal` (`:352`) | The **terminal** stamp class (below) |
 
 **Coordinator terminals (S6).** A saga terminal appended by a coordinator, not by a

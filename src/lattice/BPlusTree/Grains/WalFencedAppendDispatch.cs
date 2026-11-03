@@ -263,6 +263,26 @@ internal static class WalFencedAppendDispatch
     private static Task<T> Bound<T>(Task<T> call, bool waitForDeadline, CancellationToken cancellationToken) =>
         waitForDeadline ? call.WaitAsync(cancellationToken) : call;
 
+    /// <summary>
+    /// Whether <paramref name="exception"/>, ending one partition's append of
+    /// <paramref name="sliceEntries"/> records, is a definite refusal that allocated
+    /// nothing there (#5708): a superseded-form <see cref="LeafRetiredException"/> (the
+    /// self-fence of a write admitted before a hand-off close, or a stale rejection,
+    /// both raised before or instead of any allocation, and a multi-entry stamped batch
+    /// is never left partially admitted because claim and generation raises wait it
+    /// out); a <see cref="WalRoutingGenerationStaleException"/> (rejected before
+    /// allocation); or a <see cref="WalStampBelowFloorException"/> for a single record.
+    /// A floor refusal of a multi-record slice may follow entries already enqueued, and
+    /// any other failure - a timeout, a provider fault - is ambiguous, so neither counts.
+    /// </summary>
+    internal static bool IsUnallocatedRefusal(Exception exception, int sliceEntries) => exception switch
+    {
+        LeafRetiredException { ActivationSuperseded: true } => true,
+        WalRoutingGenerationStaleException => true,
+        WalStampBelowFloorException => sliceEntries == 1,
+        _ => false,
+    };
+
     private static void HandleRejection(ILeafAppendFence fence, int partition, WalAppendStamp stamp, WalAppendFenceOutcome outcome, int attempt)
     {
         if (outcome == WalAppendFenceOutcome.UnloadedEntry)

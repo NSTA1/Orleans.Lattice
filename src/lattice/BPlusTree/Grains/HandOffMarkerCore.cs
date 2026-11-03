@@ -122,6 +122,63 @@ internal static class HandOffMarkerCore
         return (long[])heads.Clone();
     }
 
+    /// <summary>
+    /// <see cref="RequiredHeads"/> at one partition, without allocating: the head an
+    /// owner of <c>[low, high)</c> must have replayed to at <paramref name="partition"/>
+    /// before it may re-arm; <c>-1</c> when none.
+    /// </summary>
+    public static long RequiredHead(IHandOffMarker marker, string? ownerLowInclusive, string? ownerHighExclusive, int partition)
+    {
+        ArgumentNullException.ThrowIfNull(marker);
+        var head = HeadAt(marker.CompactedHeads, partition);
+        foreach (var close in marker.Closes)
+        {
+            if (Overlaps(close.LowInclusive, close.HighExclusive, ownerLowInclusive, ownerHighExclusive))
+            {
+                head = Math.Max(head, HeadAt(close.Heads, partition));
+            }
+        }
+
+        return head;
+    }
+
+    /// <summary>
+    /// <see cref="RequiredHeads"/>, or <see langword="null"/> when the owner need replay to
+    /// no head at any partition, so a marker with nothing bearing on the owner costs no
+    /// array.
+    /// </summary>
+    public static long[]? RequiredHeadsOrNull(IHandOffMarker marker, string? ownerLowInclusive, string? ownerHighExclusive)
+    {
+        ArgumentNullException.ThrowIfNull(marker);
+        var any = AnyAtOrAbove(marker.CompactedHeads, 0);
+        foreach (var close in marker.Closes)
+        {
+            if (!any && Overlaps(close.LowInclusive, close.HighExclusive, ownerLowInclusive, ownerHighExclusive))
+            {
+                any = AnyAtOrAbove(close.Heads, 0);
+            }
+        }
+
+        return any ? RequiredHeads(marker, ownerLowInclusive, ownerHighExclusive) : null;
+    }
+
+    /// <summary>The head at <paramref name="partition"/>, or <c>-1</c> when <paramref name="heads"/> is shorter.</summary>
+    public static long HeadAt(long[]? heads, int partition) =>
+        heads is not null && partition < heads.Length ? heads[partition] : -1L;
+
+    private static bool AnyAtOrAbove(long[] heads, long floor)
+    {
+        foreach (var head in heads)
+        {
+            if (head >= floor)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>The per-partition maximum of two head vectors; a missing partition reads as -1.</summary>
     public static long[] MaxHeads(long[] left, long[] right)
     {

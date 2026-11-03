@@ -22,11 +22,21 @@ public partial class BPlusLeafGrainTests
         ILatticeEnvelopeCodec? envelopeCodec = null,
         IReadOnlyDictionary<GrainId, IBPlusLeafGrain>? leafStubs = null,
         Action<IGrainFactory>? configureGrainFactory = null,
-        IWalAppendFenceGate? fenceGate = null)
+        IWalAppendFenceGate? fenceGate = null,
+        LiveAdvanceRig? liveAdvance = null)
     {
         var context = Substitute.For<IGrainContext>();
-        context.GrainId.Returns(GrainId.Create("leaf", replicaId));
+        context.GrainId.Returns(GrainId.Create("leaf", liveAdvance is null ? replicaId : liveAdvance.LeafId.ToString("N")));
         state ??= new FakePersistentState<LeafNodeState>();
+        if (liveAdvance is not null)
+        {
+            // Epic #5605 member 4: a real service provider, so the fence resolves its
+            // keyed storage, and a shard-indexed leaf on a bound tree.
+            context.ActivationServices.Returns(liveAdvance.BuildServices());
+            state.State.TreeId ??= "live-advance-tree";
+            state.State.ShardIndex ??= 0;
+            options ??= new LatticeOptions { WalPartitions = liveAdvance.Partitions };
+        }
 
         // When a fake ICommitLogWriter is supplied, wire it through
         // the grain context's ActivationServices and seed a non-empty
@@ -45,7 +55,7 @@ public partial class BPlusLeafGrainTests
         // grain caches EnvelopeCodecActive once per activation from
         // IsActive(state.State.TreeId), so a codec-bearing grain also needs a
         // non-empty TreeId for the seam to engage.
-        if (commitLog is not null || mergeModeResolver is not null || envelopeCodec is not null)
+        if (liveAdvance is null && (commitLog is not null || mergeModeResolver is not null || envelopeCodec is not null))
         {
             // A fence gate needs the tree's grain storage, which resolves as a keyed
             // service (epic #5605); the leaf then wraps a fencing writer in its fence.
@@ -88,6 +98,7 @@ public partial class BPlusLeafGrainTests
             }
         }
         configureGrainFactory?.Invoke(grainFactory);
+        liveAdvance?.Configure(grainFactory);
         options ??= new LatticeOptions();
         // Structural sizing (MaxLeafKeys) now flows from the registry
         // pin via LatticeOptionsResolver. Tests pin the desired sizing through

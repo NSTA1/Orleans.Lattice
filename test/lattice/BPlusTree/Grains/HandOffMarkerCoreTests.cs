@@ -84,6 +84,60 @@ public sealed class HandOffMarkerCoreTests
     }
 
     [Test]
+    public void The_allocation_free_forms_agree_with_required_heads()
+    {
+        var marker = new ShardHandOffState();
+        HandOffMarkerCore.Open(marker, "a", "a", "c");
+        HandOffMarkerCore.Close(marker, "a", [10, 1]);
+        HandOffMarkerCore.Open(marker, "b", "x", "z");
+        HandOffMarkerCore.Close(marker, "b", [1, 20]);
+
+        Assert.Multiple(() =>
+        {
+            foreach (var (low, high) in new[] { ("a", "b"), ("y", (string?)null), ("d", "e") })
+            {
+                var heads = HandOffMarkerCore.RequiredHeads(marker, low, high);
+                for (var p = 0; p < 3; p++)
+                {
+                    Assert.That(HandOffMarkerCore.RequiredHead(marker, low, high, p), Is.EqualTo(HandOffMarkerCore.HeadAt(heads, p)),
+                        $"[{low}, {high}) at partition {p}");
+                }
+            }
+
+            Assert.That(HandOffMarkerCore.RequiredHeadsOrNull(marker, "a", "b"), Is.EqualTo(new long[] { 10, 1 }));
+            Assert.That(HandOffMarkerCore.RequiredHeadsOrNull(marker, "d", "e"), Is.Null, "nothing bears on a disjoint owner, so no array");
+            Assert.That(HandOffMarkerCore.HeadAt(null, 0), Is.EqualTo(-1L));
+            Assert.That(HandOffMarkerCore.HeadAt([3], 1), Is.EqualTo(-1L));
+        });
+    }
+
+    [Test]
+    public void A_leaf_live_advance_view_projects_the_shard_marker_onto_the_leaf_range()
+    {
+        var marker = new ShardHandOffState { Initialised = true };
+        HandOffMarkerCore.Open(marker, "open", "m", "p");
+        HandOffMarkerCore.Open(marker, "closed", "a", "c");
+        HandOffMarkerCore.Close(marker, "closed", [6]);
+
+        var overlappingOpen = Orleans.Lattice.BPlusTree.LeafLiveAdvanceView.For(marker, "n", "o", reachable: true, orphanRepairInProgress: false);
+        var overlappingClose = Orleans.Lattice.BPlusTree.LeafLiveAdvanceView.For(marker, "b", "d", reachable: false, orphanRepairInProgress: true);
+        var disjoint = Orleans.Lattice.BPlusTree.LeafLiveAdvanceView.For(marker, "x", null, reachable: true, orphanRepairInProgress: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(overlappingOpen.Initialised, Is.True);
+            Assert.That(overlappingOpen.HeldOpen, Is.True);
+            Assert.That(overlappingOpen.CloseHeads, Is.Null);
+            Assert.That(overlappingClose.HeldOpen, Is.False);
+            Assert.That(overlappingClose.CloseHeads, Is.EqualTo(new long[] { 6 }));
+            Assert.That(overlappingClose.Reachable, Is.False);
+            Assert.That(overlappingClose.OrphanRepairInProgress, Is.True);
+            Assert.That(disjoint.HeldOpen, Is.False);
+            Assert.That(disjoint.CloseHeads, Is.Null);
+        });
+    }
+
+    [Test]
     public void A_close_of_a_token_never_opened_is_recorded_over_the_given_range()
     {
         var marker = new ShardHandOffState();

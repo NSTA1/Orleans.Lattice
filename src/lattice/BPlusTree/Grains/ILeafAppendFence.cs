@@ -65,4 +65,12 @@ internal interface ILeafAppendFence
     /// It is not superseded, so it does not deactivate.
     /// </summary>
     void OnClaimsExhausted();
+
+    /// <summary>
+    /// A whole append call failed with a definite refusal that allocated nothing at any
+    /// partition (<see cref="WalFencedAppendDispatch.IsUnallocatedRefusal"/>; #5708), so
+    /// the activation has no own record of it to apply and may release its count. Called
+    /// off the grain turn, so an implementation must be thread-safe.
+    /// </summary>
+    void OnRefusedUnallocated();
 }
