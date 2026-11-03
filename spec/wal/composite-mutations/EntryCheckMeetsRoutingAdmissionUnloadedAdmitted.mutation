@@ -1,0 +1,14 @@
+# Pairs with EntryCheckMeetsRoutingAdmission (E -> R). E's entry check loses its
+# loaded-entry conjunct for S, so after the purge unloads S's entry a straddler is admitted.
+MODULE: EntryCheckMeetsRoutingAdmissionUnloadedAdmitted
+TARGET: EntryCheckMeetsRoutingAdmission
+CLASS: Invariant
+SUMMARY: E's entry check admits a straddler on an unloaded entry
+PERTURBS: StraddlerAlloc
+
+--- FIND
+        /\ EAppendLoaded("S")
+        /\ EAppendAdmits("S", s)
+--- REPLACE
+        /\ EAppendAdmits("S", s)
+--- END

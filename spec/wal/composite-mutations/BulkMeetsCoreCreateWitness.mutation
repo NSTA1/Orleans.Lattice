@@ -1,0 +1,14 @@
+# Witness for BulkMeetsCoreCreate. The edge's check is replaced by FALSE, so the
+# invariant fails exactly when a kept step of its kind - a bulk birth - is
+# reachable under every guarantee. A clean base run with this mutant red
+# shows the edge was checked on real steps, not vacuously.
+MODULE: BulkMeetsCoreCreateWitness
+TARGET: BulkMeetsCoreCreate
+CLASS: Invariant
+SUMMARY: a bulk birth is reachable: the edge's check is not vacuous
+
+--- FIND
+Fails("BulkMeetsCoreCreate", CCreate)
+--- REPLACE
+Fails("BulkMeetsCoreCreate", FALSE)
+--- END

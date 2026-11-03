@@ -1,0 +1,14 @@
+# Pairs with TypeOK. The hand-off window budget is dropped, so the foreign author
+# opens more windows than the vocabulary's domain declares; the mutation checks
+# that the bound on windows is real.
+MODULE: TypeOkWindowsUnbounded
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: the foreign author opens windows past the budget
+
+--- FIND
+    /\ ~hoOpen
+    /\ windows < MaxWindows
+--- REPLACE
+    /\ ~hoOpen
+--- END

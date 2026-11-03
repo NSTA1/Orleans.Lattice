@@ -171,4 +171,36 @@ kept as documented redundancy, never as mutation files.
 - `WalAppendEpoch` and its `AppendEpochRefinement.md` are the worked template.
 - **The composite check** (member 6c) is one tiny configuration composing the five
   modules at minimal constants, well under 1M states, run in CI. It catches a
-  guarantee that does not meet the assumption that relies on it.
+  guarantee that does not meet the assumption that relies on it. It is
+  [`WalLiveAdvanceComposite`](WalLiveAdvanceComposite.tla); the table below maps each
+  edge to it.
+
+## The composite check
+
+[`WalLiveAdvanceComposite`](WalLiveAdvanceComposite.tla) keeps a step of the vocabulary only
+if every guarantee above still holds after it. It checks each edge as an invariant that a kept
+step never fails the assumption its consumer makes.
+
+Each edge has two mutations:
+- one that weakens the guarantee the edge relies on, which must turn the edge red;
+- a witness (`<edge invariant>Witness`), which shows a step of its kind is reachable.
+
+The composite's refinement note,
+[`LiveAdvanceCompositeRefinement.md`](LiveAdvanceCompositeRefinement.md), tables the copied
+formulas and the scope cuts.
+
+| Edge | Composite invariant | Weakening mutation |
+|------|---------------------|--------------------|
+| E -> H | `EntryCheckMeetsHandOffAdmission` | `EntryCheckMeetsHandOffAdmissionUnloadedAdmitted` |
+| E -> H | `ClaimHeadMeetsHandOffClose` | `ClaimHeadMeetsHandOffCloseHeadUncovered` |
+| E -> R | `EntryCheckMeetsRoutingAdmission` | `EntryCheckMeetsRoutingAdmissionUnloadedAdmitted` |
+| E -> R | `ClaimWriteMeetsRoutingClaim` | `ClaimWriteMeetsRoutingClaimBelowFloor` |
+| E -> R | `ClaimHeadMeetsRoutingInit` | `ClaimHeadMeetsRoutingInitHeadUncovered` |
+| E -> C | `EpochMeetsCoreClaim` | `EpochMeetsCoreClaimHeadUncovered` |
+| E -> C | `EpochMeetsCoreOwnAlloc` | `EpochMeetsCoreOwnAllocSupersededAppends`, `EpochMeetsCoreOwnAllocEpochsShared` |
+| H -> C | `HandOffMeetsCoreForeignAlloc` | `HandOffMeetsCoreForeignAllocUnbounded` |
+| H -> C | `HandOffMeetsCoreClose` | `HandOffMeetsCoreCloseHeadUnbounded` |
+| H -> C | `RoutingMeetsCoreInit` | `RoutingMeetsCoreInitHeadsRegress` |
+| R -> C | `RoutingMeetsCoreStraddler` | `RoutingMeetsCoreStraddlerUnbounded` |
+| R -> C | `RoutingMeetsCoreInit` | `RoutingMeetsCoreInitStraddlerUncovered` |
+| B -> C | `BulkMeetsCoreCreate` | `BulkMeetsCoreCreateHintUnbounded` |

@@ -1,0 +1,14 @@
+# Witness for RoutingMeetsCoreInit. The edge's check is replaced by FALSE, so the
+# invariant fails exactly when a kept step of its kind - a first initialisation - is
+# reachable under every guarantee. A clean base run with this mutant red
+# shows the edge was checked on real steps, not vacuously.
+MODULE: RoutingMeetsCoreInitWitness
+TARGET: RoutingMeetsCoreInit
+CLASS: Invariant
+SUMMARY: a first initialisation is reachable: the edge's check is not vacuous
+
+--- FIND
+Fails("RoutingMeetsCoreInit", CMarkInit)
+--- REPLACE
+Fails("RoutingMeetsCoreInit", FALSE)
+--- END

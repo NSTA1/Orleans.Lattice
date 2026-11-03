@@ -1,0 +1,23 @@
+# Pairs with EpochMeetsCoreOwnAlloc (E -> C). RaisedEpochUnique is dropped, so two
+# activations hold the highest epoch and the one the core does not take as current appends.
+MODULE: EpochMeetsCoreOwnAllocEpochsShared
+TARGET: EpochMeetsCoreOwnAlloc
+CLASS: Invariant
+SUMMARY: two activations may hold the same raised epoch
+
+--- FIND
+Guarantees ==
+    /\ ClaimHeadCoversPriorAppends
+    /\ RaisedEpochUnique
+    /\ StaleEpochNeverAppends
+    /\ HandOffBound
+    /\ StraddlerBelowInit
+    /\ BulkHintBound
+--- REPLACE
+Guarantees ==
+    /\ ClaimHeadCoversPriorAppends
+    /\ StaleEpochNeverAppends
+    /\ HandOffBound
+    /\ StraddlerBelowInit
+    /\ BulkHintBound
+--- END

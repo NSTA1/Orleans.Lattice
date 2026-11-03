@@ -211,6 +211,8 @@ public sealed partial class TlcCiShardTests
                         ? TlcCiShard.WalBulkSwitch
                         : module.Name == "WalLiveAdvanceCore"
                         ? TlcCiShard.WalLiveAdvanceCore
+                        : module.Name == "WalLiveAdvanceComposite"
+                        ? TlcCiShard.WalLiveAdvanceComposite
                         : module.Name == "SchemaViewComposition"
                         ? TlcCiShard.SchemaView
                         : module.Name == "BackupRetention"

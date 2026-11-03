@@ -262,6 +262,13 @@
         "note": "WalLiveAdvanceCore (epic #5605, live-advance module C): base 778,329 states, Restart 3,052,664, GateFlip 3,373,761, Recreate 4,032,667 and Bulk 875,431 variants, and 28 mutations co-located with their base, 33 cases; no case exceeds the 5M-state budget TlcCiShardTests pins. "
       },
       {
+        "shard": "formal-tlc-wal-live-advance-composite",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardWalLiveAdvanceComposite"],
+        "note": "WalLiveAdvanceComposite (epic #5605, member 6c): the five live-advance modules' interface check, base 552,598 states and 27 mutations co-located with their base, 28 cases. Measured at 8 m 11 s of tests, 8.67 minutes of dotnet test, locally on four CPUs with two TLC slots while five edges were still red, so every control launched separately; an upper bound until re-measured green."
+      },
+      {
         "shard": "formal-tlc-shard-ownership",
         "tlc": true,
         "tiers": ["deterministic"],

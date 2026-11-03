@@ -1,0 +1,15 @@
+# Witness for ClaimWriteMeetsRoutingClaim. The edge's check is replaced by FALSE, so the
+# invariant fails exactly when a kept step of its kind - a re-presented claim of S - is
+# reachable under every guarantee. A clean base run with this mutant red
+# shows the edge was checked on real steps, not vacuously.
+MODULE: ClaimWriteMeetsRoutingClaimWitness
+TARGET: ClaimWriteMeetsRoutingClaim
+CLASS: Invariant
+SUMMARY: a re-presented claim of S is reachable: the edge's check is not vacuous
+
+--- FIND
+        /\ broken' = broken \cup Fails("ClaimWriteMeetsRoutingClaim",
+                                         i # "S" \/ ClaimAdmits("S", [j \in Inits |-> s], retired, fence))
+--- REPLACE
+        /\ broken' = broken \cup Fails("ClaimWriteMeetsRoutingClaim", i # "S")
+--- END

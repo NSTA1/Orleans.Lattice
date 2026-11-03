@@ -20,6 +20,7 @@ cores in the product assembly, and a Coyote model that executes those cores.
 | [`WalRoutingFloor.tla`](WalRoutingFloor.tla) | The routing floor of the fenced live checkpoint advance (epic #5605): a tree's purge and re-creation keeping every write the purged incarnation admitted below the close the re-created incarnation's first initialisation records, and every live shard root's routing generation above its own floor - the per-initiator floors in the row and at the WAL, the claim where a floor is checked, the seam retry that never re-stamps (#5705), and the re-seed catch-up after a purge that finished on 10.2.0 (#5716). The third module promoted from the design draft. See [below](#walroutingfloor). |
 | [`WalBulkSwitch.tla`](WalBulkSwitch.tla) | The bulk switch of the fenced live checkpoint advance: a bulk append's leaf born from the old rightmost leaf's range - the birth hint stored with the switch's open token, the run's hint and the fence that folds its completed switches, the drain before the narrow, and the relocation of the rows the range held (copy, deliver, drop) - against a crash of the shard root, a drain past its deadline and a foreign record of the range the old leaf replays, with the hint capped at its read frontier. See [below](#walbulkswitch). |
 | [`WalLiveAdvanceCore.tla`](WalLiveAdvanceCore.tla) | The core of the same live advance: when a leaf's activation is armed to advance its read position over its own applied appends without reading the WAL - its raised claim, its replay to the claim head and to the last close's heads, no open or uninitialised marker, every reported unstamped append read, every own append applied - and the shared snapshot and GC trim that follow, with the other promoted modules' guarantees as environment constraints. The sink of their assume-guarantee graph. See [below](#walliveadvancecore). |
+| [`WalLiveAdvanceComposite.tla`](WalLiveAdvanceComposite.tla) | The interface check of the five promoted modules: every producer guarantee, copied from its module, as a step constraint, and every assumption the hand-off, routing-floor and core modules make of it as an edge invariant, over the contract's vocabulary at minimal constants. A step the guarantees allow and an assumption forbids is an interface mismatch. See [below](#walliveadvancecomposite). |
 
 They are separate modules because a move touches none of the leaf state, pin
 retirement only the leaf's lifecycle, not its replay, and the append-epoch fence
@@ -55,6 +56,7 @@ directory, and the draft keeps every design mutation as the record each module t
 | `WalRoutingFloor` | 3 | 1 | 12 | 17 | 14 | 10,704 |
 | `WalBulkSwitch` | 4 | 0 | 16 | 19 | 18 | 39,110 |
 | `WalLiveAdvanceCore` | 5 | 1 | 20 | 31 | 24 | 778,329 |
+| `WalLiveAdvanceComposite` | 13 | 0 | 15 | 27 | 15 | 552,598 |
 
 `Actions` counts the disjuncts of `Next`, including the non-behavioural `Stutter`
 of `WalMove`, `WalAppendEpoch`, `WalHandOffFence`, `WalRoutingFloor`, `WalBulkSwitch` and `WalLiveAdvanceCore`. `Behaviour rows` counts the action rows of the
@@ -70,6 +72,8 @@ depth 26), 3,373,761 (`GateFlip`, depth 25), 3,693,715 (`Recreate`, depth 26),
 4,638,713 (`RecreateSurvivor`, depth 26), 1,622,161 (`RecreateSurvivorMixed`, depth 25)
 and 1,114,185 (`Bulk`, depth 25) distinct states.
 `WalBulkSwitch` searches to depth 22.
+`WalLiveAdvanceComposite`'s actions are non-behavioural interface steps, which the five
+modules map to production, except the three WAL shard checks its edges rest on.
 
 `WalDurability` has a two-fault variant configuration, `WalDurability.TwoFaults.cfg`
 (see "Variant configurations" in [`../README.md`](../README.md)). It checks every
@@ -149,6 +153,9 @@ distinct states to depth 21, about fifteen seconds on two workers.
 | `WalBulkSwitch.tla` / `.cfg` / `.manifest.json` | The bulk switch module, its TLC model and its manifest. |
 | [`bulk-switch-mutations/`](bulk-switch-mutations/) | One or more deliberate defects per property and per action of `WalBulkSwitch`. |
 | [`BulkSwitchRefinement.md`](BulkSwitchRefinement.md) | `WalBulkSwitch` mapped to production, and its interface. |
+| `WalLiveAdvanceComposite.tla` / `.cfg` / `.manifest.json` | The interface check of the five promoted modules, its TLC model and its manifest. |
+| [`composite-mutations/`](composite-mutations/) | For each edge invariant, a witness that a step of its kind is reachable, and a weakening of each guarantee it relies on. |
+| [`LiveAdvanceCompositeRefinement.md`](LiveAdvanceCompositeRefinement.md) | `WalLiveAdvanceComposite`'s edges, each copied guarantee and assumption with its source, its scope cuts and its open findings. |
 
 ## Properties checked
 
@@ -624,4 +631,71 @@ abstraction gaps list them.
 ```powershell
 java -cp C:\path\to\tla2tools.jar tlc2.TLC -workers 2 -config WalLiveAdvanceCore.cfg WalLiveAdvanceCore.tla
 java -cp C:\path\to\tla2tools.jar tlc2.TLC -workers 2 -config WalLiveAdvanceCore.Recreate.cfg WalLiveAdvanceCore.tla
+```
+
+## WalLiveAdvanceComposite
+
+`WalLiveAdvanceComposite` checks the interface of the five modules promoted from the design
+draft (epic #5605): that every guarantee in
+[`LiveAdvanceInterface.md`](LiveAdvanceInterface.md)'s graph meets the assumption that
+relies on it.
+
+Each module checks its own guarantees, and models the others only as an environment in the
+form they guarantee. A guarantee weaker than the assumption that relies on it is therefore
+invisible to every one of them. This module is where it shows.
+
+Its state is the contract's vocabulary only:
+- one partition's allocator and authors;
+- the claims of L's activations, of a foreign author `F`, and of the purged incarnation's
+  shard root `S`;
+- L's marker;
+- a purge of either kind, with the re-seed catch-up;
+- the first initialisation;
+- a bulk birth.
+
+Each step is generated freely within the vocabulary, and kept only if every producer
+guarantee still holds after it. The guarantees are copied from their modules, and so is each
+consumer's environment guard. An edge invariant holds unless a kept step of its kind fails
+that guard.
+
+`LiveAdvanceCompositeTests` pins every copy to its source, after the identifier renames it
+lists, so a module and its copy cannot drift apart.
+
+| Property | Kind | Meaning |
+|----------|------|---------|
+| `TypeOK` | Invariant | State stays well-typed. |
+| `EntryCheckMeetsHandOffAdmission` | Invariant | E -> H: a foreign stamped append E's entry check admits is one H's admission admits. |
+| `ClaimHeadMeetsHandOffClose` | Invariant | E -> H: a close's re-claim head lies above every stamped foreign append. |
+| `EntryCheckMeetsRoutingAdmission` | Invariant | E -> R: a straddler E's entry check admits is one R's admission admits. |
+| `ClaimWriteMeetsRoutingClaim` | Invariant | E -> R: a re-presented claim E's claim write admits is one R's claim admits. |
+| `ClaimHeadMeetsRoutingInit` | Invariant | E -> R: the first initialisation re-claims at the allocator head. |
+| `EpochMeetsCoreClaim` | Invariant | E -> C: a claim E allows is one C's environment allows. |
+| `EpochMeetsCoreOwnAlloc` | Invariant | E -> C: an own append E admits comes from C's current activation. |
+| `HandOffMeetsCoreForeignAlloc` | Invariant | H -> C: a foreign append H allows is one C's environment allows. |
+| `HandOffMeetsCoreClose` | Invariant | H -> C: a close H allows records heads C's environment allows. |
+| `RoutingMeetsCoreStraddler` | Invariant | R -> C: a straddler R allows is one C's environment allows. |
+| `RoutingMeetsCoreInit` | Invariant | R, H -> C: a first initialisation R and H allow records heads C's environment allows. |
+| `BulkMeetsCoreCreate` | Invariant | B -> C: a birth B allows is one C's environment allows. |
+
+The base checks every edge in well under a minute. Each edge has a witness mutation, which
+shows that a step of its kind is reachable. Each guarantee an edge relies on also has a
+mutation that weakens it, which must turn the edge red.
+
+[`LiveAdvanceCompositeRefinement.md`](LiveAdvanceCompositeRefinement.md) tables these
+mutations. It also records:
+- the two redundancy checks;
+- the scope cuts: one restart, a purge never after a bulk birth, two offsets and one window;
+- the module configurations that cover what the cuts drop.
+
+### What it covers, and what it does not
+
+It covers every assumption edge of the graph, at the vocabulary's level. It does NOT:
+- re-check any module's own guarantees;
+- model any module's mechanism beyond what its guarantees state;
+- relate the vocabulary to production.
+
+The five modules' notes do that.
+
+```powershell
+java -cp C:\path\to\tla2tools.jar tlc2.TLC -workers 2 -config WalLiveAdvanceComposite.cfg WalLiveAdvanceComposite.tla
 ```
