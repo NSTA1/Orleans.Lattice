@@ -142,7 +142,10 @@ internal sealed partial class ShardRootGrain
     {
         var fenceHeads = await grainFactory.GetGrain<ITreeRangeDeleteFenceGrain>(TreeId).EnsureInitialisedAsync();
         var ownHeads = await ClaimRoutingGenerationEverywhereAsync(generation);
-        var heads = HandOffMarkerCore.MaxHeads(ownHeads, fenceHeads);
+        // THROWAWAY (#5605 6c follow-up N1): the recreation close records zero heads,
+        // to prove the InitHeadCoversPriorAllocations detector red in CI. Never merge.
+        _ = fenceHeads;
+        var heads = new long[ownHeads.Length];
         await UpdateHandOffMarkerAsync(m => HandOffMarkerCore.Close(m, RecreationFenceToken(floor), heads));
     }
 
