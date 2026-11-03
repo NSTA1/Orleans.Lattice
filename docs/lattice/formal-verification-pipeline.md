@@ -69,7 +69,8 @@ How to read the columns:
   package.
 - **Exhaustive TLC** is every base, variant and mutation case of the modules
   that run, routed onto the `"tlc": true` shards. Each module promoted from the
-  live checkpoint advance's design model (epic #5605) has a shard of its own,
+  live checkpoint advance's design model (epic #5605), and the composite interface
+  check that joins them, has a shard of its own,
   routed by its exact module name in `TlcCiShard`, holding its base, variants and
   mutations together, so its base serves its mutations' controls and the module
   never lengthens another shard.

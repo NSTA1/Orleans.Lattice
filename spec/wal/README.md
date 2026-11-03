@@ -304,7 +304,12 @@ but takes over seven minutes, and `GateFlip` and `Recreate` are outside its prem
 CI checks a purge's unclaimed survivor with a hand-off window and, separately, with a
 10.2.0 silo. The combination of both was checked locally and is clean at 8,913,193 states
 (232 seconds), but is kept out of CI only for the 5M-state case budget.
-## How to run TLC
+
+The composite interface check ([gaps and scope cuts](LiveAdvanceCompositeRefinement.md#scope-cuts))
+has four scope cuts of its own: one WAL shard restart; no purge after a bulk birth (no
+module combines the two either); no step for the bulk switch's own close, which no B
+guarantee states; and two offsets with one hand-off window, which its witness mutations
+show reach every edge.## How to run TLC
 
 ```powershell
 java -cp C:\path\to\tla2tools.jar tlc2.TLC -config WalDurability.cfg WalDurability.tla

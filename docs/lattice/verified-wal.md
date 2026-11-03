@@ -230,7 +230,10 @@ TLA+ specification in [`spec/wal/`](../../spec/wal/README.md):
   token and capped at the old leaf's read frontier, the drain before the narrow, the
   relocation of the rows the range held, and the batched close, against a crash of the
   shard root and a drain past its deadline. It is the fifth module promoted from that
-  draft.
+  draft;
+- `WalLiveAdvanceComposite.tla`, the interface check of those five modules: every
+  producer guarantee, copied from its module, as a constraint on freely generated steps,
+  checked against every assumption a consumer module takes of it.
 
 It follows the pattern of the atomic-commit specification: every property and every
 action has a mutation that makes a property fire, and a refinement note maps each
@@ -341,10 +344,15 @@ current activation has fallen off the log, where production's stale latch (#3477
 over.
 
 Because each module checks its side of an edge separately, a guarantee could be stated
-more weakly than the assumption that relies on it. A composite check (#5774) closes that
-gap: one small configuration composes the five modules at minimal constants, generates
-each step freely within the vocabulary, keeps it only if every producer's guarantee
-still holds, and checks every consumer's environment guard against it, edge by edge.
+more weakly than the assumption that relies on it. The composite interface check,
+`WalLiveAdvanceComposite` (#5774), closes that gap: one small configuration (131,423
+distinct states) generates each step freely within the shared vocabulary, keeps it only
+if every producer's guarantee still holds, and checks every consumer's environment guard
+against it, on each of the twelve edges. Its first runs found five places where a module
+assumed more than its producer guaranteed (F1 to F5, in the
+[composite's note](../../spec/wal/LiveAdvanceCompositeRefinement.md#findings)); all were
+closed by widening the consumer or strengthening the producer, and every edge is now
+clean.
 
 Every module, and the composite, runs on a TLC shard of its own, sized by measurement.
 Each CI case stays within about five million states and twenty minutes, so combinations

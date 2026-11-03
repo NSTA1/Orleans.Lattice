@@ -408,7 +408,8 @@ gaps, states its full scope.
     and a completed purge's tree-level tail re-driven onto a reused tree id
     (`WalPinRetirement`); and the fenced live checkpoint advance, as five modules
     joined by an assume-guarantee contract
-    ([`LiveAdvanceInterface.md`](../../spec/wal/LiveAdvanceInterface.md)):
+    ([`LiveAdvanceInterface.md`](../../spec/wal/LiveAdvanceInterface.md)) and a sixth
+    that checks the contract:
     - the append epoch (`WalAppendEpoch`): an activation's claim, its bump, stale
       and unloaded rejections and re-presented claim, against a WAL shard
       restart, another leaf's retirement and the leaf's three-step clear;
@@ -432,7 +433,10 @@ gaps, states its full scope.
       the applied-prefix tracker and the unstamped watermark with its restart
       reset and self-report, with the other four modules' guarantees as
       environment constraints, and that a newborn leaf's pin eventually becomes
-      usable without a replay from -1.
+      usable without a replay from -1;
+    - the composite interface check (`WalLiveAdvanceComposite`): every producer
+      guarantee as a step constraint, checked against every assumption a consumer
+      takes of it, edge by edge.
   - **Does not cover:** more than two partitions; splits, resharding and saga
     state, except where a live-advance module models a split's or a bulk switch's
     hand-off; replication consumers, beyond their effect on the trim floor; for pin
