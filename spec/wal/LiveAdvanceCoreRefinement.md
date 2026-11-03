@@ -30,8 +30,9 @@ with a straddler of the purged incarnation and the re-created incarnation's firs
 initialisation (`Recreate`, R and H), and a bulk-born leaf (`Bulk`, B). The core owns
 `Armed(a)`, `LiveAdvance`, `Replay`, `Capture`, `GcTrim`, the applied-prefix tracker
 (`mine`, and the in-flight own appends), the unstamped watermark with its restart reset and
-self-report, and the duplicate. Safety only: the armed-newborn liveness property is member
-6b's, and the module carries no fairness.
+self-report, and the duplicate. The base also checks one liveness property,
+`NewbornPinEventuallyUsable`, under `LiveSpec`'s explicit fairness; the variants check
+safety only.
 
 ## Interface
 
@@ -72,8 +73,9 @@ weaken each one in turn and go red, so each is load-bearing.
   straddler (`ReadPositionHonestAssumeCloseReplacesHeads`, red in `Recreate`).
 - **Guarantees.** Four, each a checked invariant of the base and every variant, consumed
   by no other module: `ReadPositionHonest`, `SnapshotHonest`, `NoTrimPastAcked` and
-  `OldNeverRejected`. Member 6b adds the armed-newborn liveness property; the spec keeps
-  `Armed(a)` a top-level operator for it.
+  `OldNeverRejected`; and one liveness property of the base,
+  `NewbornPinEventuallyUsable`, the armed newborn's pin becoming usable without a
+  replay from `-1`.
 - **The graph.** E <- H, E <- R, and {E, H, R, B} <- C, where E is `WalAppendEpoch`,
   H `WalHandOffFence`, R `WalRoutingFloor` and B `WalBulkSwitch`; an arrow points from the
   module that assumes to the module that guarantees. C assumes every other module and is
@@ -132,6 +134,7 @@ weaken each one in turn and go red, so each is load-bearing.
 | `ReadPositionHonest` | No running activation's checkpoint passes a durable entry it owns and does not hold, acknowledged or not, whoever appended it: a duplicate, a foreign author, a straddler, a 10.2.0 silo or itself. | Yes: `LiveCheckpointAdvanceIntegrationTests.A_stale_duplicates_append_before_the_claim_is_read_before_the_leaf_advances_past_it`, `LiveCheckpointAdvanceIntegrationTests.A_foreign_unstamped_append_reported_after_arming_is_read_by_replay`, `LiveCheckpointAdvanceIntegrationTests.An_orphans_append_is_unstamped_so_the_reachable_owner_reads_it_before_it_advances`, `BPlusLeafGrainTests.A_close_head_above_the_checkpoint_holds_the_advance_until_a_replay_reaches_it` and `LeafLiveAdvanceCoreTests.The_advance_is_taken_exactly_when_the_leaf_is_armed`. |
 | `SnapshotHonest` | The shared snapshot never claims coverage of a durable entry it lacks: the live advance never passes an own append still in flight. | Yes: `BPlusLeafGrainTests.A_live_advance_waits_until_every_issued_append_is_applied`, `BPlusLeafGrainTests.A_failed_append_turns_the_live_advance_off_for_the_activation` and `LeafLiveAdvanceCoreTests.Each_quiescence_condition_holds_the_advance`. |
 | `NoTrimPastAcked` | The GC never trims an acknowledged append the leaf's snapshot lacks, after a live advance as after a replay. | Yes: `LiveCheckpointAdvanceIntegrationTests.A_live_written_leaf_banks_its_snapshot_without_a_replay_drive`, `LiveCheckpointAdvanceIntegrationTests.A_stale_duplicates_append_before_the_claim_is_read_before_the_leaf_advances_past_it` and `BPlusLeafGrainTests.The_coverage_lag_tick_makes_a_live_written_leafs_pin_usable_without_a_replay`. |
+| `NewbornPinEventuallyUsable` | A live-written leaf's own applied appends are eventually covered by its banked snapshot, so its WAL pin becomes usable without a replay from `-1`: the leaf arms, advances live and the coverage-lag tick captures. | Yes: `BPlusLeafGrainTests.The_coverage_lag_tick_makes_a_live_written_leafs_pin_usable_without_a_replay` and `LiveCheckpointAdvanceIntegrationTests.A_live_written_leaf_banks_its_snapshot_without_a_replay_drive`. |
 | `OldNeverRejected` | An unstamped append - a 10.2.0 silo's, or any while the gate is closed - is never rejected by the append fence. | Yes: `WalShardGrainTests.Unstamped_appends_are_always_admitted_and_reported` and `WalAppendFenceMixedVersionTests.The_existing_unstamped_methods_keep_working_on_the_older_build`. |
 
 ## Excluded properties
@@ -144,14 +147,67 @@ weaken each one in turn and go red, so each is load-bearing.
 
 ## Property classification (issue #2321)
 
-All five checked properties are state safety, reached and checked on the base and
-re-checked in each variant. The base carries the duplicate, one hand-off window and a
+`TypeOK` and the four invariants are state safety, reached and checked on the base and
+re-checked in each variant. `NewbornPinEventuallyUsable` is liveness, checked on the base
+and re-checked in `Bulk`, whose bulk-born leaf is a newborn too; the other variants leave
+it out (below). The base carries the duplicate, one hand-off window and a
 10.2.0 silo's append; each variant adds one environment (a restart, own unstamped appends,
 the purge, a bulk birth), because the combinations are larger than the CI budget allows
 for one case. The design model's combined configurations stay as local evidence in the
-design note. Liveness is not checked here: the armed-newborn liveness property is member
-6b's. Every experiment is an anchored perturbation. Six edit the `Armed` predicate rather
-than an action, so they name no perturbed action: `ReadPositionHonestNoClaimHeadReplay`,
+design note.
+
+**The liveness property** (member 6b) is the design note's: under weak fairness of the
+claim, replay, apply and live-advance steps, an armed activation's newborn pin eventually
+becomes usable without a replay from `-1`. It is checked as `<>[]`: eventually, always,
+the shared snapshot covers every durable own append. The base cfg's specification is
+`LiveSpec`, `Spec` with one condition, `WF_vars(Progress)`:
+- `Progress` is the disjunction of the leaf's own steps (`Claim`, `Land`, `LiveAdvance`,
+  `Capture`), the environment steps that end a hold (`Close`, `Create`, `MarkInit`), and
+  a replay **only while a bound the arming list names lies above the read position**
+  (`ReplayNeeded`: the claim head, the close heads, a reported unstamped offset).
+  This is a **deliberate under-approximation**, not a statement about production:
+  production's starvation drive also replays from the checkpoint to the head, over the
+  leaf's own appends. The property assumes no replay beyond the arming bounds, so it
+  shows that the live advance alone makes the pin usable; the starvation drive is a
+  further fallback it does not rely on. It is what keeps the property non-vacuous: with
+  replay fair unconditionally, `NewbornPinEventuallyUsableAdvanceNeverFires` comes out
+  clean (778,329 states, checked by the independent review). Weakening a fairness
+  assumption only strengthens a liveness claim, so the restriction is sound.
+- One condition over the disjunction forces the same quiescent end as one per step,
+  and costs TLC one temporal branch instead of eleven. **Precondition:** every step but
+  `Stutter` can be taken only finitely often in every configuration (`next` is bounded;
+  each one-shot environment step fires once; `ForeignOpen` is bounded by `MaxWindows`;
+  `Land` and `HandOff` consume their offsets; `rp`, `snapCov` and `floor` only rise,
+  within bounds). A configuration with an unbounded step would need one condition per
+  step.
+- **Exclusion:** the property is discharged once the current activation has fallen off
+  the log (`CurrentFellOffLog`: the GC trimmed an entry it must still replay). The state
+  is reachable in production: the leaf's WAL pin is one per-leaf row merged
+  monotonic-max, so a duplicate activation's capture can raise it past the current
+  activation's checkpoint and let the GC trim past it. Production's response is the
+  existing #3477 path: the partition latches stale and refuses hints and the live
+  advance, and deactivation clears it, the reactivation rehydrating from the newer
+  snapshot. The gap register below records the exclusion and the detectors that pin
+  that path. Without the exclusion TLC reports exactly this behaviour; with the GC
+  additionally bounded by every running activation's read position, the property holds
+  without it (550,843 states, checked by the independent review).
+- **Cost, measured** (tla2tools v1.7.4, two workers, liveness included): the base finds
+  778,329 distinct states to depth 25 in 1 minute 27 seconds, and `Bulk` 875,431 in 2
+  minutes 19 seconds. Stated as three leads-to formulas the base took 4 minutes, and with
+  one fairness condition per step as well, 11.
+- **Bounded out:** `Restart` holds the property too, but takes 7 minutes 18 seconds
+  locally, too close to the 20-minute case budget on a CI runner, so it checks safety
+  only. `GateFlip` and `Recreate` are outside the property's premise, a leaf born while
+  the gate is open: `GateFlip`'s own appends are made under a closed gate view, and
+  `Recreate` ends the newborn's incarnation.
+- Its two experiments each break progress and go red in about five seconds:
+  `NewbornPinEventuallyUsableAdvanceNeverFires` (the live advance never enabled, as
+  before #5572) and `NewbornPinEventuallyUsableArmingNeverEnabled` (the claim-head
+  conjunct asks for a read the driven replay never reaches).
+
+Every experiment is an anchored perturbation. Seven edit the `Armed` predicate rather
+than an action, so they name no perturbed action: `NewbornPinEventuallyUsableArmingNeverEnabled`,
+`ReadPositionHonestNoClaimHeadReplay`,
 `SnapshotHonestNoOwnTracker`, `ReadPositionHonestUnstampedNotReported`,
 `ReadPositionHonestNoMarkerInit`, `ReadPositionHonestArmsUnderOpenMarker` and
 `ReadPositionHonestArmsBelowCloseHead`. `NoTrimPastAckedLiveAdvance5578` edits both the
@@ -185,6 +241,31 @@ mutation directory, which holds only experiments that must go red.
 
 ## Deliberate abstraction gaps
 
+- **The liveness property excludes a current activation that has fallen off the log.**
+  `NewbornPinEventuallyUsable` is discharged by `CurrentFellOffLog`: the GC trimmed an
+  entry the current activation must still replay. Production reaches that state through a
+  duplicate activation. The leaf's WAL pin is one per-leaf row merged monotonic-max
+  (`WalMaterialiserPinGrain`), so the duplicate's capture raises it past the current
+  activation's checkpoint and the GC trims past it. Production's response is the
+  existing #3477 path: the replay throws `LeafProjectionStaleException`, the warm rescue
+  (`BPlusLeafGrain.TryRescueWarmStaleLeafAsync`) declines, and the partition is latched
+  stale (`BPlusLeafGrain.LatchProjectionStaleDrive`). The latch
+  (`BPlusLeafGrain.IsPartitionStaleLatched`) refuses checkpoint hints and the live advance
+  until deactivation, and the reactivation rehydrates from the newer snapshot. No
+  progress is owed meanwhile. The path is driven end to end, with the real WAL store, pin
+  grain, snapshot storage and GC, by
+  `BPlusLeafGrainTests.A_duplicate_activations_pin_trims_the_current_activation_off_the_log_and_it_latches_stale`
+  (the latch, the refused hint and the refused live advance) and
+  `BPlusLeafGrainTests.A_reactivation_after_the_duplicate_trim_rehydrates_the_newer_snapshot_and_loses_no_key`
+  (every key of both activations served after the rehydrate). Disabling the latch turns
+  both red. The latch's own detectors are
+  `BPlusLeafGrainTests.A_stale_latched_partition_never_live_advances`,
+  `BPlusLeafGrainTests.A_checkpoint_hint_does_not_advance_a_stale_latched_partition` and
+  `BPlusLeafGrainTests.A_latched_stale_leaf_still_faults_a_direct_drive_without_replaying`;
+  rehydrating from a newer snapshot is pinned by
+  `BPlusLeafGrainTests.Activation_rehydrates_cache_from_snapshot_when_offset_exceeds_checkpoint`
+  and `LeafSnapshotRehydrateIntegrationTests.Snapshot_capture_persists_blob_and_rehydrate_serves_keys_after_deactivation`.
+  Production symbols: `WalMaterialiserPinGrain`, `LeafProjectionStaleException`, `BPlusLeafGrain.TryRescueWarmStaleLeafAsync`, `BPlusLeafGrain.LatchProjectionStaleDrive`, `BPlusLeafGrain.IsPartitionStaleLatched`.
 - **Production holds the advance in more cases than `Armed`.** The model arms on the
   design's six conditions. Production also holds the advance while a saga prepare is
   pending, while another replay or a warm rescue is in flight, while the partition is

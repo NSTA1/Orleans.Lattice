@@ -54,7 +54,7 @@ directory, and the draft keeps every design mutation as the record each module t
 | `WalHandOffFence` | 3 | 1 | 17 | 21 | 19 | 8,826 |
 | `WalRoutingFloor` | 3 | 0 | 12 | 16 | 13 | 10,704 |
 | `WalBulkSwitch` | 4 | 0 | 16 | 19 | 18 | 39,110 |
-| `WalLiveAdvanceCore` | 5 | 0 | 20 | 28 | 23 | 778,329 |
+| `WalLiveAdvanceCore` | 5 | 1 | 20 | 30 | 24 | 778,329 |
 
 `Actions` counts the disjuncts of `Next`, including the non-behavioural `Stutter`
 of `WalMove`, `WalAppendEpoch`, `WalHandOffFence`, `WalRoutingFloor`, `WalBulkSwitch` and `WalLiveAdvanceCore`. `Behaviour rows` counts the action rows of the
@@ -139,7 +139,7 @@ distinct states to depth 21, about fifteen seconds on two workers.
 | `WalLiveAdvanceCore.Restart.cfg` | The live-advance core with a WAL shard restart, checked against every invariant. |
 | `WalLiveAdvanceCore.GateFlip.cfg` | The live-advance core with own unstamped appends by any running activation, checked against every invariant. |
 | `WalLiveAdvanceCore.Recreate.cfg` | The live-advance core with the tree purged and re-created, a straddler and the first initialisation, checked against every invariant. |
-| `WalLiveAdvanceCore.Bulk.cfg` | The live-advance core with a bulk-born leaf, checked against every invariant. |
+| `WalLiveAdvanceCore.Bulk.cfg` | The live-advance core with a bulk-born leaf, checked against every invariant and the liveness property. |
 | [`live-advance-core-mutations/`](live-advance-core-mutations/) | One or more deliberate defects per property and per action of `WalLiveAdvanceCore`, and one weakening of each assumption it takes. |
 | [`LiveAdvanceCoreRefinement.md`](LiveAdvanceCoreRefinement.md) | `WalLiveAdvanceCore` mapped to production, and its interface: each assumption with the guarantee and module that discharge it. |
 | [`HandOffFenceRefinement.md`](HandOffFenceRefinement.md) | `WalHandOffFence` mapped to production, and its interface: E's entry check assumed, `HandOffBound`, `AbsentMarkerHolds` and `CloseHeadMonotone` guaranteed. |
@@ -584,18 +584,22 @@ itself ([the interface](LiveAdvanceCoreRefinement.md#interface)).
 | `SnapshotHonest` | Invariant | The shared snapshot never claims coverage of a durable entry it lacks. |
 | `NoTrimPastAcked` | Invariant | The GC never trims an acknowledged append the snapshot lacks. |
 | `OldNeverRejected` | Invariant | An unstamped append is never rejected. |
+| `NewbornPinEventuallyUsable` | Liveness | Under fairness of the leaf's own steps, with replay fair only toward a bound the arming list names, the shared snapshot eventually covers every own append, so the newborn's pin becomes usable without a replay from -1. |
 
 The base checks every property with the duplicate, one hand-off window and a 10.2.0 silo's
-unstamped append (about twenty seconds on two workers). Each variant adds one environment:
+unstamped append, the liveness property under `LiveSpec`'s single fairness condition
+(about a minute and a half on two workers). Each variant adds one environment:
 `WalLiveAdvanceCore.Restart.cfg` a WAL shard restart, `WalLiveAdvanceCore.GateFlip.cfg` own
 unstamped appends, `WalLiveAdvanceCore.Recreate.cfg` the purge with a straddler and the first
 initialisation, and `WalLiveAdvanceCore.Bulk.cfg` a bulk-born leaf (each between twenty
-seconds and a minute and a half). The design model's larger combined configurations stay as
+seconds and a minute and a half; `Bulk` also re-checks the liveness property, in about
+two and a half minutes). The design model's larger combined configurations stay as
 local evidence in the design note. Seven of the design draft's mutations moved here; the
 refinement note lists them, the assumption mutations that weaken each assumption in turn,
 and the one redundancy check this module keeps, which stays clean and so is not in its
-mutation directory. Liveness, the armed newborn's pin becoming usable, is added by member
-6b.
+mutation directory. The refinement note's property classification gives the fairness,
+the one exclusion (a current activation that has fallen off the log) and the measured
+cost of the liveness check.
 
 ### What it covers, and what it does not
 

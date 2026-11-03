@@ -126,8 +126,8 @@ C models the other modules only as environment constraints:
   watermark and self-report model it.
 
 C then checks `ReadPositionHonest`, `SnapshotHonest` and `NoTrimPastAcked` over
-`Armed(a)` and the live advance, and member 6b adds the armed-newborn liveness
-property.
+`Armed(a)` and the live advance, and the armed-newborn liveness property,
+`NewbornPinEventuallyUsable`, on its base configuration.
 
 ## Where each design mutation goes
 

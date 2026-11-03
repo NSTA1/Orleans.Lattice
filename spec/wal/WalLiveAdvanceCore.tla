@@ -31,8 +31,9 @@
 (* the applied-prefix tracker, the unstamped watermark and self-report,   *)
 (* and the duplicate activation.                                          *)
 (*                                                                         *)
-(* Safety only. The armed-newborn liveness property is added later (epic *)
-(* #5605, member 6b); nothing here assumes fairness.                       *)
+(* Safety, and one liveness property, NewbornPinEventuallyUsable (epic    *)
+(* #5605, member 6b), checked under LiveSpec's explicit fairness on the   *)
+(* base configuration only.                                                *)
 (*                                                                         *)
 (* See LiveAdvanceCoreRefinement.md for the mapping to production, the    *)
 (* interface, and what this model does NOT cover.                          *)
@@ -475,6 +476,47 @@ Next ==
 Spec == Init /\ [][Next]_vars
 
 (***************************************************************************)
+(* Fairness, for NewbornPinEventuallyUsable. Weak fairness of the leaf's  *)
+(* own steps - its claim, the apply of an append, the live advance and the *)
+(* snapshot's capture - and of the environment steps that end a hold: a   *)
+(* close, a bulk switch's creation, the first initialisation. A replay is *)
+(* fair only while a bound the arming list names lies above the read      *)
+(* position (ReplayNeeded). That is a deliberate under-approximation:     *)
+(* production's starvation drive also replays from the checkpoint to the  *)
+(* head, over the leaf's own appends, but the property does not rely on   *)
+(* it, so it shows the live advance alone makes the pin usable. With       *)
+(* replay fair unconditionally the property holds with no live advance at *)
+(* all. Weakening a fairness assumption only strengthens the claim.       *)
+(* Precondition: every step of Progress, and every other step but         *)
+(* Stutter, can be taken only finitely often in every configuration, so   *)
+(* one condition over the disjunction forces what one per step would. A   *)
+(* configuration with an unbounded step needs a condition per step.       *)
+(***************************************************************************)
+ReplayNeeded(a) ==
+    \/ claimed[a] /\ rp[a] < claimHead[a] - 1
+    \/ rp[a] < hoClosedAt - 1
+    \/ rp[a] < seenU[a]
+
+Progress ==
+    \/ \E a \in Acts :
+        \/ Claim(a)
+        \/ ReplayNeeded(a) /\ Replay(a)
+        \/ LiveAdvance(a)
+        \/ Capture(a)
+    \/ \E o \in Offs : Land(o)
+    \/ Close
+    \/ Create
+    \/ MarkInit
+
+(* One weak-fairness condition over the disjunction. Given the finiteness  *)
+(* precondition above, a fair behaviour ends in a state where no Progress  *)
+(* step is enabled: exactly what one condition per step would force, at a  *)
+(* fraction of TLC's liveness cost.                                        *)
+Fairness == WF_vars(Progress)
+
+LiveSpec == Spec /\ Fairness
+
+(***************************************************************************)
 (* The core's guarantees.                                                  *)
 (***************************************************************************)
 
@@ -496,4 +538,23 @@ NoTrimPastAcked ==
 (* An unstamped append - a 10.2.0 silo's, or any while the gate is        *)
 (* closed - is never rejected.                                             *)
 OldNeverRejected == ~oldRejected
+
+(* The current activation has fallen off the log: the GC trimmed an entry *)
+(* it must still replay. It is reachable in production too: the leaf's WAL *)
+(* pin is one per-leaf row merged monotonic-max, so a duplicate            *)
+(* activation's capture can raise it past the current activation's         *)
+(* checkpoint. Production's response is the existing #3477 path: the       *)
+(* partition latches stale and refuses hints and the live advance, and     *)
+(* deactivation clears it, the reactivation rehydrating from the newer     *)
+(* snapshot. No progress is owed by the stale activation meanwhile.        *)
+CurrentFellOffLog == cur \in up /\ rp[cur] + 1 < floor
+
+(* The armed newborn (LiveAdvanceDesign.md, member 6): every own append    *)
+(* that becomes durable is eventually covered by the shared snapshot, so   *)
+(* the leaf's pin becomes usable without a replay from -1, unless the      *)
+(* current activation has fallen off the log. Under LiveSpec only the live *)
+(* advance carries the read position past the arming bounds, so this holds *)
+(* only if the newborn eventually arms and advances.                       *)
+NewbornPinEventuallyUsable ==
+    <>[](CurrentFellOffLog \/ \A o \in durable : author[o] \in Acts => snapCov >= o)
 =============================================================================

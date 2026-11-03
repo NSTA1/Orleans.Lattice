@@ -212,8 +212,9 @@ TLA+ specification in [`spec/wal/`](../../spec/wal/README.md):
   the WAL, and the shared snapshot and GC trim that follow, with the epoch, hand-off,
   routing-floor and bulk-switch fences as environment constraints in the form their
   modules guarantee, and the unstamped watermark, its restart reset and the own
-  unstamped append's self-report modelled directly. It is the fourth module
-  promoted from that draft;
+  unstamped append's self-report modelled directly. It also checks that a newborn
+  leaf's pin eventually becomes usable without a replay from -1, under fairness of
+  the leaf's own steps. It is the fourth module promoted from that draft;
 - `WalBulkSwitch.tla`, the bulk switch of the same advance: a bulk append's leaf born
   from the old rightmost leaf's range with the birth hint stored with its switch's open
   token and capped at the old leaf's read frontier, the drain before the narrow, the
