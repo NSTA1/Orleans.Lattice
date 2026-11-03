@@ -68,7 +68,7 @@ distinct states to depth 23. `WalRoutingFloor` searches to depth 15, and its
 `WalLiveAdvanceCore` searches to depth 25; its variants find 3,052,664 (`Restart`,
 depth 26), 3,373,761 (`GateFlip`, depth 25), 3,693,715 (`Recreate`, depth 26),
 4,638,713 (`RecreateSurvivor`, depth 26), 1,622,161 (`RecreateSurvivorMixed`, depth 25)
-and 1,049,841 (`Bulk`, depth 25) distinct states.
+and 1,114,185 (`Bulk`, depth 25) distinct states.
 `WalBulkSwitch` searches to depth 22.
 
 `WalDurability` has a two-fault variant configuration, `WalDurability.TwoFaults.cfg`
@@ -577,8 +577,8 @@ only while the marker is open or not initialised, below the heads a close record
 is, which the marker max-merges so they never decrease, and an absent marker holds the leaf
 (`WalHandOffFence`); a straddler of a purged incarnation only before the re-created
 incarnation's first initialisation, which records a head above every earlier allocation
-(`WalRoutingFloor`); and a bulk-born leaf starts at or below its birth hint holding every
-record at or below its read position (`WalBulkSwitch`). It models the unstamped watermark itself: a 10.2.0 silo's
+(`WalRoutingFloor`); and a bulk-born leaf holds every record at or below its birth read
+position (`WalBulkSwitch`). It models the unstamped watermark itself: a 10.2.0 silo's
 append is always admitted and raises it, every stamped response reports it, a WAL shard
 restart resets it to the recovered head minus one, and an own unstamped append reports
 itself ([the interface](LiveAdvanceCoreRefinement.md#interface)).

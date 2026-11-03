@@ -133,8 +133,9 @@ C models the other modules only as environment constraints:
 - **Straddler appends** satisfy `StraddlerBelowInit`, and the first initialisation
   covers every earlier allocation (`InitHeadCoversPriorAllocations`).
 - **A bulk-born leaf's birth** satisfies `BulkHintBound` and nothing more: its read
-  position may be anywhere at or below its hint minus one (#5752's cap, a timed-out
-  or partial relocation), holding every record at or below it.
+  position may be anywhere, so long as it holds every record at or below it. B's
+  protocol starts it at or below the hint minus one (#5752's cap, a timed-out or
+  partial relocation), but that is not a guarantee B states.
 - **Unstamped appends** are always reported, and raise every reader's `seenU` before
   it arms. This is the stamp census's obligation, and the core's own unstamped
   watermark and self-report model it.

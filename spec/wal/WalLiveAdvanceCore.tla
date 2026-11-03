@@ -20,8 +20,8 @@
 (*  - Straddler appends (R): allocated only after a purge and before the   *)
 (*    re-created incarnation's first initialisation, which records a head *)
 (*    above every allocation before it.                                   *)
-(*  - A bulk-born leaf (B): born at or below its birth hint, holding every *)
-(*    record at or below its read position, with its marker open.         *)
+(*  - A bulk-born leaf (B): born holding every record at or below its     *)
+(*    read position, with its marker open.                                *)
 (*  - Unstamped appends: always admitted and always reported. The core    *)
 (*    models the partition's unstamped watermark itself, its reset on a   *)
 (*    WAL shard restart, and an activation's own unstamped append         *)
@@ -186,9 +186,9 @@ Init ==
 
 (***************************************************************************)
 (* B's BulkHintBound, as an environment step. Create: the bulk-born leaf's *)
-(* first activation, its read position anywhere from -1 to just below the *)
-(* birth hint (#5752's cap, or a timed-out or partial relocation, starts  *)
-(* it lower), holding every record at or below it and possibly more.      *)
+(* first activation, its read position anywhere it holds every record at *)
+(* or below, and possibly more: BulkHintBound exactly. B's protocol starts *)
+(* it at or below its birth hint, but B does not guarantee that.           *)
 (***************************************************************************)
 Allocated == {o \in Offs : author[o] # NoAuthor}
 
@@ -196,7 +196,7 @@ Create ==
     /\ phase = "window"
     /\ phase' = "live"
     /\ up' = {"a1"}
-    /\ \E r \in -1..(hint - 1), held \in SUBSET Allocated :
+    /\ \E r \in -1..(next - 1), held \in SUBSET Allocated :
         /\ \A o \in Allocated : o <= r => o \in held
         /\ cache' = [cache EXCEPT !["a1"] = held]
         /\ rp' = [rp EXCEPT !["a1"] = r]

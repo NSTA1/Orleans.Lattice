@@ -16,6 +16,6 @@
     "Recreate": { "distinctStates": 3693715 },
     "RecreateSurvivor": { "distinctStates": 4638713 },
     "RecreateSurvivorMixed": { "distinctStates": 1622161 },
-    "Bulk": { "distinctStates": 1049841 }
+    "Bulk": { "distinctStates": 1114185 }
   }
 }
