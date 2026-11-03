@@ -40,6 +40,9 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </summary>
 public partial class BPlusLeafGrainTests
 {
+    /// <summary>How long <see cref="QuiescentReplayGateAsync"/> waits for other replays to return their permits.</summary>
+    private static readonly TimeSpan QuiescenceBudget = TimeSpan.FromSeconds(15);
+
     /// <summary>
     /// Sizes the process-wide gate if it is not sized yet and returns it,
     /// asserting it is quiescent - every permit in circulation and nothing
@@ -47,6 +50,15 @@ public partial class BPlusLeafGrainTests
     /// test that withheld against an already-depressed baseline would compare
     /// against the wrong number and could pass for the wrong reason.
     /// </summary>
+    /// <remarks>
+    /// The gate is process-wide, so another fixture's leaves can still be
+    /// replaying through it when this one starts: an in-process cluster's cold
+    /// activations hold permits for the length of their replay (#5758). The
+    /// quiescence is therefore <b>waited for</b>, within
+    /// <see cref="QuiescenceBudget"/>, before it is asserted. A permit that is
+    /// still held at the end of the budget is not transient - a leaked permit, or
+    /// a replay another test left hung - and fails the same assertion as before.
+    /// </remarks>
     private static async Task<SemaphoreSlim> QuiescentReplayGateAsync(int? permitCeiling = null)
     {
         var (warmGrain, warmState, _, _) = CreateGrainWithSnapshotAndCoordinator(
@@ -65,6 +77,14 @@ public partial class BPlusLeafGrainTests
         Assert.That(gate, Is.Not.Null,
             "a completed activation with a tree id must have sized the process-wide replay gate");
 
+        var deadline = Environment.TickCount64 + (long)QuiescenceBudget.TotalMilliseconds;
+        while ((BPlusLeafGrain.WithheldReplayPermitsForTest != 0
+                || gate!.CurrentCount != BPlusLeafGrain.ReplayConcurrencyCeilingForTest)
+            && Environment.TickCount64 < deadline)
+        {
+            await Task.Delay(20);
+        }
+
         Assert.That(BPlusLeafGrain.WithheldReplayPermitsForTest, Is.Zero,
             "the gate must start this test with nothing withheld - a leaked withholding from an "
             + "earlier test would silently move every baseline below");
@@ -73,6 +93,36 @@ public partial class BPlusLeafGrainTests
             + "below is the real one");
 
         return gate;
+    }
+
+    [Test]
+    [NonParallelizable]
+    public async Task The_quiescence_precondition_waits_for_another_replays_permits_to_return()
+    {
+        // #5758: another fixture's replays hold permits of the process-wide gate for
+        // the length of their replay. The precondition waits for them to come back
+        // rather than failing the seeding test that happened to start meanwhile.
+        var gate = await QuiescentReplayGateAsync();
+        var ceiling = BPlusLeafGrain.ReplayConcurrencyCeilingForTest;
+        Assert.That(ceiling, Is.GreaterThan(3), "the warm activation needs a permit while three are held");
+        for (var i = 0; i < 3; i++)
+            Assert.That(gate.Wait(0), Is.True);
+
+        var released = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(500));
+            gate.Release(3);
+        });
+        try
+        {
+            var again = await QuiescentReplayGateAsync();
+            Assert.That(again.CurrentCount, Is.EqualTo(ceiling),
+                "the precondition held once the other replays had returned their permits");
+        }
+        finally
+        {
+            await released;
+        }
     }
 
     [Test]
