@@ -16,11 +16,15 @@ namespace Orleans.Lattice;
 /// Derives from <see cref="InvalidOperationException"/> with the message the
 /// untyped refusal always carried, so every existing catcher and status mapping
 /// treats it exactly as before. That base needs the no-op same-silo copier below.
+/// It implements <see cref="ILatticeDomainFault"/> because it is a deliberate
+/// refusal, so a handler written for a framework failure can decline it: a
+/// requested resize undo that meets it stays pending and retries on the next tick,
+/// instead of being withdrawn as unrecoverable.
 /// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LatticeAliasOperationInProgress)]
-internal sealed class LatticeAliasOperationInProgressException : InvalidOperationException
+internal sealed class LatticeAliasOperationInProgressException : InvalidOperationException, ILatticeDomainFault
 {
     /// <summary>Initialises a new instance with no message and empty identities.</summary>
     public LatticeAliasOperationInProgressException()
