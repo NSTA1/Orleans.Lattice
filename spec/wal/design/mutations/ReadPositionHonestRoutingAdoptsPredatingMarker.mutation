@@ -1,0 +1,26 @@
+# A purge that finished on 10.2.0 leaves L's shard root's marker row initialised,
+# with the purged incarnation's generation, and raises no floor (#5697 review, S2).
+# The new-build shard root re-seeding the purged tombstone adopts the row: it keeps
+# the generation and skips the first-initialisation fence. A straddling write of the
+# purged incarnation, stamped with that generation, is then admitted above the heads
+# L re-arms from, and L advances past it. The #5641 shape, on generations.
+MODULE: ReadPositionHonestRoutingAdoptsPredatingMarker
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: re-creation adopts a marker row that predates the incarnation
+PERTURBS: CatchUp
+BOUNDS: WithRecreate = TRUE, WithSecondInitiator = FALSE, WithLegacyPurge = TRUE, WithDuplicate = FALSE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+    /\ ~fMarkNew
+    /\ LET rc == Max2(rFloor, Max2(fEpoch, fFence)) IN
+        /\ rc < MaxEpoch
+        /\ rFloor' = rc
+        /\ r2Floor' = r2Floor
+    /\ mInit' = FALSE
+    /\ fSeeded' = (fSeeded /\ fCaught)
+--- REPLACE
+    /\ ~fMarkNew
+\* MUTATION: the predating marker is adopted: its generation and initialised flag are kept.
+    /\ UNCHANGED <<rFloor, r2Floor, mInit, fSeeded>>
+--- END
