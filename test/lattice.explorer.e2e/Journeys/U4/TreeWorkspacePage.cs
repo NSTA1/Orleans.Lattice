@@ -17,8 +17,14 @@ public sealed class TreeWorkspacePage(ShellPage shell)
     /// <summary>How the History timeline writes a revision's time: <c>2026-10-31 14:00:05 UTC</c>.</summary>
     private const string TimelineTimeFormat = "yyyy-MM-dd HH:mm:ss 'UTC'";
 
-    /// <summary>How long a History read may take to draw the timeline: one state-API read, which on a busy estate outlasts the default expectation.</summary>
-    private static readonly LocatorAssertionsToBeVisibleOptions TimelineLoads = new() { Timeout = 60_000 };
+    /// <summary>
+    /// How long a state-API read behind a panel (the keys, an entry, a key's history) may take to
+    /// end, in its result or the panel's failure state: three 30-second server timeouts (the first
+    /// attempt and the state client's two transient retries), plus margin.
+    /// </summary>
+    public static readonly float ServerReadBound = (float)TimeSpan.FromSeconds(120).TotalMilliseconds;
+
+    private static readonly LocatorAssertionsToBeVisibleOptions ServerReadEnds = new() { Timeout = ServerReadBound };
 
     /// <summary>How the As of field takes an instant.</summary>
     private const string InstantFormat = "yyyy-MM-ddTHH:mm:ssZ";
@@ -67,6 +73,45 @@ public sealed class TreeWorkspacePage(ShellPage shell)
     /// <summary>The History panel's failure state, which offers <b>Try again</b>.</summary>
     public ILocator HistoryDidNotLoad => Content.GetByRole(AriaRole.Heading, new() { Name = "The history did not load", Exact = true });
 
+    /// <summary>The Keys tab's key links. Only a key link carries a title: the tree header's owner link shares the class (#5509).</summary>
+    public ILocator KeyLinks => Content.Locator("a.lt-data-key[title]");
+
+    /// <summary>The Keys panel's failure state, which offers <b>Try again</b>.</summary>
+    public ILocator KeysDidNotLoad => Content.GetByRole(AriaRole.Heading, new() { Name = "The keys did not load", Exact = true });
+
+    /// <summary>
+    /// Waits for the Keys tab's scan to end: <paramref name="drawn"/> (by default the first key)
+    /// visible, or the panel's failure state. Returns whether the scan drew.
+    /// </summary>
+    /// <param name="drawn">What the Keys tab shows once the scan succeeds, or <see langword="null"/> for any key.</param>
+    public async Task<bool> KeysSettledAsync(ILocator? drawn = null)
+    {
+        await Expect((drawn ?? KeyLinks.First).Or(KeysDidNotLoad).First).ToBeVisibleAsync(ServerReadEnds);
+        return !await KeysDidNotLoad.IsVisibleAsync();
+    }
+
+    /// <summary>
+    /// Waits for a History read to end: <paramref name="drawn"/> visible, or the panel's failure
+    /// state. Returns whether the read drew.
+    /// </summary>
+    /// <param name="drawn">What the History tab shows once the read succeeds.</param>
+    public async Task<bool> HistorySettledAsync(ILocator drawn)
+    {
+        ArgumentNullException.ThrowIfNull(drawn);
+        await Expect(drawn.Or(HistoryDidNotLoad).First).ToBeVisibleAsync(ServerReadEnds);
+        return !await HistoryDidNotLoad.IsVisibleAsync();
+    }
+
+    /// <summary>As <see cref="HistorySettledAsync"/>, failing with the panel's own words when the read did not draw.</summary>
+    /// <param name="drawn">What the History tab shows once the read succeeds.</param>
+    public async Task ExpectHistoryDrawnAsync(ILocator drawn)
+    {
+        if (!await HistorySettledAsync(drawn))
+        {
+            Assert.Fail("The History panel said the history did not load: " + await HistoryDidNotLoad.Locator("xpath=..").InnerTextAsync());
+        }
+    }
+
     /// <summary>Opens the tree from the Data directory, filtering it by name first.</summary>
     /// <param name="tree">The tree's logical id.</param>
     public async Task OpenFromDirectoryAsync(string tree)
@@ -112,6 +157,11 @@ public sealed class TreeWorkspacePage(ShellPage shell)
         await search.PressAsync("Enter");
         await Expect(Page).ToHaveURLAsync(new Regex("[?&]prefix="));
         var link = Content.Locator($"a.lt-data-key[title=\"{key}\"]");
+        if (!await KeysSettledAsync(link))
+        {
+            Assert.Fail($"The Keys panel said the keys under '{prefix}' did not load: " + await KeysDidNotLoad.Locator("xpath=..").InnerTextAsync());
+        }
+
         if (await Shell.IsCompactAsync())
         {
             await Content.GetByText(key, new() { Exact = true }).First.ClickAsync();
@@ -120,7 +170,7 @@ public sealed class TreeWorkspacePage(ShellPage shell)
 
         await link.ClickAsync();
         await Expect(Page).ToHaveURLAsync(new Regex("[?&]key=" + Regex.Escape(Uri.EscapeDataString(key)).Replace("%2F", "(%2F|/)", StringComparison.Ordinal) + "(&|$)"));
-        await Expect(Content.Locator("section.lt-data-entry .lt-data-entry__key")).ToHaveTextAsync(key);
+        await Expect(Content.Locator("section.lt-data-entry .lt-data-entry__key")).ToHaveTextAsync(key, new() { Timeout = ServerReadBound });
         await Expect(Content.GetByRole(AriaRole.Link, new() { Name = "History of this key", Exact = true })).ToBeVisibleAsync();
     }
 
@@ -161,11 +211,11 @@ public sealed class TreeWorkspacePage(ShellPage shell)
         await Expect(Content.GetByRole(AriaRole.Heading, new() { NameRegex = new Regex("^History of ") })).ToContainTextAsync(key);
         if (!requireRevisions)
         {
-            await Expect(Revisions.Or(Content.GetByRole(AriaRole.Heading, new() { Name = "No revisions", Exact = true })).First).ToBeVisibleAsync(TimelineLoads);
+            await ExpectHistoryDrawnAsync(Revisions.Or(Content.GetByRole(AriaRole.Heading, new() { Name = "No revisions", Exact = true })).First);
             return;
         }
 
-        await Expect(Revisions.First).ToBeVisibleAsync(TimelineLoads);
+        await ExpectHistoryDrawnAsync(Revisions.First);
         await Expect(RevisionCount).ToHaveTextAsync(new Regex(@"^\d[\d,]* revisions?( so far)?$"));
     }
 
@@ -176,9 +226,13 @@ public sealed class TreeWorkspacePage(ShellPage shell)
         return [.. texts.Select(text => DateTimeOffset.ParseExact(text.Trim(), TimelineTimeFormat, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal))];
     }
 
-    /// <summary>Types <paramref name="instant"/> into <b>As of</b>, chooses <b>Show as of</b>, and waits for the point-in-time view.</summary>
+    /// <summary>
+    /// Types <paramref name="instant"/> into <b>As of</b>, chooses <b>Show as of</b>, and waits for
+    /// the point-in-time read to end. Returns whether it drew, with one revision marked in effect;
+    /// otherwise the panel shows its failure state.
+    /// </summary>
     /// <param name="instant">The instant, in whole seconds.</param>
-    public async Task ShowAsOfAsync(DateTimeOffset instant)
+    public async Task<bool> ShowAsOfAsync(DateTimeOffset instant)
     {
         var text = instant.ToUniversalTime().ToString(InstantFormat, CultureInfo.InvariantCulture);
         await AsOf.FillAsync(text);
@@ -186,18 +240,39 @@ public sealed class TreeWorkspacePage(ShellPage shell)
         await Expect(Page).ToHaveURLAsync(new Regex("[?&]at=" + Regex.Escape(Uri.EscapeDataString(text)) + "(&|$)"));
         var readable = instant.ToUniversalTime().ToString(TimelineTimeFormat, CultureInfo.InvariantCulture);
         await Expect(Content.GetByText("Showing the key as it stood at " + readable)).ToBeVisibleAsync();
-        await Expect(RevisionInEffect).ToHaveCountAsync(1, new() { Timeout = 60_000 });
+        if (!await HistorySettledAsync(RevisionInEffect))
+        {
+            return false;
+        }
+
+        await Expect(RevisionInEffect).ToHaveCountAsync(1);
+        return true;
     }
 
-    /// <summary>Chooses <b>Latest</b>, leaving the point-in-time view.</summary>
-    public async Task ShowLatestAsync()
+    /// <summary>
+    /// Chooses <b>Latest</b>, leaving the point-in-time view, and waits for the re-read to end.
+    /// Returns whether the timeline was drawn again; otherwise the panel shows its failure state.
+    /// </summary>
+    public async Task<bool> ShowLatestAsync()
     {
         await Content.GetByRole(AriaRole.Button, new() { Name = "Latest", Exact = true }).ClickAsync();
         await Expect(Page).Not.ToHaveURLAsync(new Regex("[?&]at="));
         await Expect(Content.GetByText("Showing the key as it stood at")).ToHaveCountAsync(0);
         await Expect(RevisionInEffect).ToHaveCountAsync(0);
         await Expect(AsOf).ToHaveValueAsync(string.Empty);
-        await Expect(Revisions.First).ToBeVisibleAsync(TimelineLoads);
+        return await HistorySettledAsync(Revisions.First);
+    }
+
+    /// <summary>
+    /// Chooses <b>Load older revisions</b> and waits for the next page to end. Returns whether the
+    /// count grew past <paramref name="before"/>; otherwise the panel shows its failure state.
+    /// </summary>
+    /// <param name="before">The revision count before the click.</param>
+    public async Task<bool> LoadOlderAsync(int before)
+    {
+        await LoadOlder.ClickAsync();
+        var grown = RevisionCount.Filter(new() { HasNotTextRegex = new Regex("^" + before.ToString(CultureInfo.InvariantCulture) + " ") });
+        return await HistorySettledAsync(grown);
     }
 
     /// <summary>Turns the History tab's <b>Follow new revisions</b> switch off, so the timeline holds still.</summary>

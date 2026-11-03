@@ -27,6 +27,13 @@ internal sealed class TransientReadRetryInterceptor : Interceptor
     private static readonly TimeSpan[] Backoff =
         [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(20)];
 
+    /// <summary>
+    /// The deadline each attempt carries when its caller set none (#5736): above the gateway's
+    /// 100-second proxy timeout, so a healthy call never reaches it, while a call that never
+    /// returns fails here instead of hanging the test host until its blame timeout.
+    /// </summary>
+    internal static readonly TimeSpan AttemptDeadline = TimeSpan.FromSeconds(120);
+
     /// <summary>The shared instance.</summary>
     public static TransientReadRetryInterceptor Instance { get; } = new();
 
@@ -38,7 +45,7 @@ internal sealed class TransientReadRetryInterceptor : Interceptor
     {
         if (!IsRead(context.Method.Name))
         {
-            return continuation(request, context);
+            return continuation(request, Bounded(context));
         }
 
         var response = RetryAsync(request, context, continuation);
@@ -62,7 +69,7 @@ internal sealed class TransientReadRetryInterceptor : Interceptor
             var clock = System.Diagnostics.Stopwatch.StartNew();
             try
             {
-                using var call = continuation(request, context);
+                using var call = continuation(request, Bounded(context));
                 return await call.ResponseAsync.ConfigureAwait(false);
             }
             catch (RpcException ex) when (attempt < Backoff.Length && ShouldRetry(context.Method.Name, ex.StatusCode))
@@ -77,6 +84,17 @@ internal sealed class TransientReadRetryInterceptor : Interceptor
     /// <param name="method">The gRPC method name.</param>
     /// <param name="code">The status the call failed with.</param>
     internal static bool ShouldRetry(string method, StatusCode code) => IsRead(method) && IsTransient(code);
+
+    /// <summary>
+    /// <paramref name="context"/> with a deadline of <see cref="AttemptDeadline"/> from now, unless
+    /// the caller set one: a fresh deadline per attempt, so a retry is not born expired.
+    /// </summary>
+    internal static ClientInterceptorContext<TRequest, TResponse> Bounded<TRequest, TResponse>(ClientInterceptorContext<TRequest, TResponse> context)
+        where TRequest : class
+        where TResponse : class =>
+        context.Options.Deadline is null
+            ? new ClientInterceptorContext<TRequest, TResponse>(context.Method, context.Host, context.Options.WithDeadline(DateTime.UtcNow + AttemptDeadline))
+            : context;
 
     private static bool IsRead(string method) =>
         ReadPrefixes.Any(prefix => method.StartsWith(prefix, StringComparison.Ordinal));
