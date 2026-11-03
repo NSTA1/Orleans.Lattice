@@ -481,10 +481,16 @@ Spec == Init /\ [][Next]_vars
 (* snapshot's capture - and of the environment steps that end a hold: a   *)
 (* close, a bulk switch's creation, the first initialisation. A replay is *)
 (* fair only while a bound the arming list names lies above the read      *)
-(* position (ReplayNeeded): production replays a live leaf only when its  *)
-(* claim head, a close's heads or a reported unstamped offset requires   *)
-(* it, never to catch up over its own appends. So any progress past those *)
-(* bounds is the live advance's, not a replay's.                          *)
+(* position (ReplayNeeded). That is a deliberate under-approximation:     *)
+(* production's starvation drive also replays from the checkpoint to the  *)
+(* head, over the leaf's own appends, but the property does not rely on   *)
+(* it, so it shows the live advance alone makes the pin usable. With       *)
+(* replay fair unconditionally the property holds with no live advance at *)
+(* all. Weakening a fairness assumption only strengthens the claim.       *)
+(* Precondition: every step of Progress, and every other step but         *)
+(* Stutter, can be taken only finitely often in every configuration, so   *)
+(* one condition over the disjunction forces what one per step would. A   *)
+(* configuration with an unbounded step needs a condition per step.       *)
 (***************************************************************************)
 ReplayNeeded(a) ==
     \/ claimed[a] /\ rp[a] < claimHead[a] - 1
@@ -502,11 +508,10 @@ Progress ==
     \/ Create
     \/ MarkInit
 
-(* One weak-fairness condition over the disjunction. Every step of         *)
-(* Progress, and every other step but Stutter, can be taken only finitely  *)
-(* often, so a fair behaviour ends in a state where no Progress step is    *)
-(* enabled: exactly what one condition per step would force, at a fraction *)
-(* of TLC's liveness cost.                                                 *)
+(* One weak-fairness condition over the disjunction. Given the finiteness  *)
+(* precondition above, a fair behaviour ends in a state where no Progress  *)
+(* step is enabled: exactly what one condition per step would force, at a  *)
+(* fraction of TLC's liveness cost.                                        *)
 Fairness == WF_vars(Progress)
 
 LiveSpec == Spec /\ Fairness
@@ -535,10 +540,13 @@ NoTrimPastAcked ==
 OldNeverRejected == ~oldRejected
 
 (* The current activation has fallen off the log: the GC trimmed an entry *)
-(* it must still replay. Production latches such a partition stale and    *)
-(* holds its pin for an operator (issue #3477), so no progress is owed.   *)
-(* The model reaches it only through a duplicate that activated from an   *)
-(* older snapshot, because its GC trims to the shared snapshot alone.     *)
+(* it must still replay. It is reachable in production too: the leaf's WAL *)
+(* pin is one per-leaf row merged monotonic-max, so a duplicate            *)
+(* activation's capture can raise it past the current activation's         *)
+(* checkpoint. Production's response is the existing #3477 path: the       *)
+(* partition latches stale and refuses hints and the live advance, and     *)
+(* deactivation clears it, the reactivation rehydrating from the newer     *)
+(* snapshot. No progress is owed by the stale activation meanwhile.        *)
 CurrentFellOffLog == cur \in up /\ rp[cur] + 1 < floor
 
 (* The armed newborn (LiveAdvanceDesign.md, member 6): every own append    *)

@@ -165,18 +165,32 @@ the shared snapshot covers every durable own append. The base cfg's specificatio
   `Capture`), the environment steps that end a hold (`Close`, `Create`, `MarkInit`), and
   a replay **only while a bound the arming list names lies above the read position**
   (`ReplayNeeded`: the claim head, the close heads, a reported unstamped offset).
-  Production replays a live leaf only when such a bound requires it, never to catch up
-  over its own appends; with replay fair unconditionally the property would hold with no
-  live advance at all.
+  This is a **deliberate under-approximation**, not a statement about production:
+  production's starvation drive also replays from the checkpoint to the head, over the
+  leaf's own appends. The property assumes no replay beyond the arming bounds, so it
+  shows that the live advance alone makes the pin usable; the starvation drive is a
+  further fallback it does not rely on. It is what keeps the property non-vacuous: with
+  replay fair unconditionally, `NewbornPinEventuallyUsableAdvanceNeverFires` comes out
+  clean (778,329 states, checked by the independent review). Weakening a fairness
+  assumption only strengthens a liveness claim, so the restriction is sound.
 - One condition over the disjunction forces the same quiescent end as one per step,
-  because every step but `Stutter` can be taken only finitely often, and it costs TLC one
-  temporal branch instead of eleven.
+  and costs TLC one temporal branch instead of eleven. **Precondition:** every step but
+  `Stutter` can be taken only finitely often in every configuration (`next` is bounded;
+  each one-shot environment step fires once; `ForeignOpen` is bounded by `MaxWindows`;
+  `Land` and `HandOff` consume their offsets; `rp`, `snapCov` and `floor` only rise,
+  within bounds). A configuration with an unbounded step would need one condition per
+  step.
 - **Exclusion:** the property is discharged once the current activation has fallen off
-  the log (`CurrentFellOffLog`: the GC trimmed an entry it must still replay).
-  Production latches such a partition stale and holds its pin for an operator (#3477),
-  so no progress is owed. The model reaches it only through a duplicate activated from
-  an older snapshot, because its `GcTrim` trims to the shared snapshot alone; without the
-  exclusion TLC reports exactly that behaviour.
+  the log (`CurrentFellOffLog`: the GC trimmed an entry it must still replay). The state
+  is reachable in production: the leaf's WAL pin is one per-leaf row merged
+  monotonic-max, so a duplicate activation's capture can raise it past the current
+  activation's checkpoint and let the GC trim past it. Production's response is the
+  existing #3477 path: the partition latches stale and refuses hints and the live
+  advance, and deactivation clears it, the reactivation rehydrating from the newer
+  snapshot. The gap register below records the exclusion and the detectors that pin
+  that path. Without the exclusion TLC reports exactly this behaviour; with the GC
+  additionally bounded by every running activation's read position, the property holds
+  without it (550,843 states, checked by the independent review).
 - **Cost, measured** (tla2tools v1.7.4, two workers, liveness included): the base finds
   778,329 distinct states to depth 25 in 1 minute 27 seconds, and `Bulk` 875,431 in 2
   minutes 19 seconds. Stated as three leads-to formulas the base took 4 minutes, and with
@@ -227,6 +241,31 @@ mutation directory, which holds only experiments that must go red.
 
 ## Deliberate abstraction gaps
 
+- **The liveness property excludes a current activation that has fallen off the log.**
+  `NewbornPinEventuallyUsable` is discharged by `CurrentFellOffLog`: the GC trimmed an
+  entry the current activation must still replay. Production reaches that state through a
+  duplicate activation. The leaf's WAL pin is one per-leaf row merged monotonic-max
+  (`WalMaterialiserPinGrain`), so the duplicate's capture raises it past the current
+  activation's checkpoint and the GC trims past it. Production's response is the
+  existing #3477 path: the replay throws `LeafProjectionStaleException`, the warm rescue
+  (`BPlusLeafGrain.TryRescueWarmStaleLeafAsync`) declines, and the partition is latched
+  stale (`BPlusLeafGrain.LatchProjectionStaleDrive`). The latch
+  (`BPlusLeafGrain.IsPartitionStaleLatched`) refuses checkpoint hints and the live advance
+  until deactivation, and the reactivation rehydrates from the newer snapshot. No
+  progress is owed meanwhile. The path is driven end to end, with the real WAL store, pin
+  grain, snapshot storage and GC, by
+  `BPlusLeafGrainTests.A_duplicate_activations_pin_trims_the_current_activation_off_the_log_and_it_latches_stale`
+  (the latch, the refused hint and the refused live advance) and
+  `BPlusLeafGrainTests.A_reactivation_after_the_duplicate_trim_rehydrates_the_newer_snapshot_and_loses_no_key`
+  (every key of both activations served after the rehydrate). Disabling the latch turns
+  both red. The latch's own detectors are
+  `BPlusLeafGrainTests.A_stale_latched_partition_never_live_advances`,
+  `BPlusLeafGrainTests.A_checkpoint_hint_does_not_advance_a_stale_latched_partition` and
+  `BPlusLeafGrainTests.A_latched_stale_leaf_still_faults_a_direct_drive_without_replaying`;
+  rehydrating from a newer snapshot is pinned by
+  `BPlusLeafGrainTests.Activation_rehydrates_cache_from_snapshot_when_offset_exceeds_checkpoint`
+  and `LeafSnapshotRehydrateIntegrationTests.Snapshot_capture_persists_blob_and_rehydrate_serves_keys_after_deactivation`.
+  Production symbols: `WalMaterialiserPinGrain`, `LeafProjectionStaleException`, `BPlusLeafGrain.TryRescueWarmStaleLeafAsync`, `BPlusLeafGrain.LatchProjectionStaleDrive`, `BPlusLeafGrain.IsPartitionStaleLatched`.
 - **Production holds the advance in more cases than `Armed`.** The model arms on the
   design's six conditions. Production also holds the advance while a saga prepare is
   pending, while another replay or a warm rescue is in flight, while the partition is
