@@ -40,7 +40,7 @@ public sealed class ViewAdministrationJourneyTests : UiTestBase
         await Expect(dialog).ToBeVisibleAsync();
         await Expect(page).ToHaveURLAsync(new System.Text.RegularExpressions.Regex("new=view"));
         var provider = dialog.Locator("select[data-lt-view-provider]");
-        await Expect(provider.Locator("option")).ToHaveTextAsync([WorldViewProviders.MarkedCopy, WorldViewProviders.PlainCopy]);
+        await Expect(provider.Locator("option")).ToHaveTextAsync([LatticeHistoryView.ProviderKey, WorldViewProviders.MarkedCopy, WorldViewProviders.PlainCopy]);
         await Expect(dialog).ToContainTextAsync("Copies each entry, appending a marker to its value");
         await ShotAsync(page, "new-view-lists-providers-with-descriptions");
 
