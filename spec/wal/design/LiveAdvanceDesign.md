@@ -976,24 +976,45 @@ replay. So consecutive append chunks on a shard reuse the previous chunk's hint,
 heads of the fence they fold, and read the partitions' heads only at the start of a
 run. A resumed operation's stored hint always wins (S7, below).
 
-**The hint is capped at the old leaf's checkpoint (#5752).** Rows the old leaf O holds
+**The hint is capped at the old leaf's applied frontier (#5752).** Rows the old leaf O holds
 are relocated into the bulk-born leaf, and O's own admitted mutations are drained before
 its bound narrows, but a record of the range that **another author** appended below the
 heads, and that O has not yet applied, would be applied by neither leaf: O stops
 declaring the range at the narrow, and the new leaf would start above it. So the hint is
-capped, per partition, at O's checkpoint, in the same serial turn that captures the heads.
+capped, per partition, at O's applied frontier: the highest offset `f` such that O's
+activation has applied every record of its range at or below `f`. That is O's
+**in-memory** frontier, not its persisted checkpoint. A hot leaf's persisted checkpoint
+can sit at `-1`, and capping at it turns every switch into a full-log replay and a
+tree-wide block pin. The frontier is:
+- set by the activation's replay barrier to the head the barrier replayed to, minus one,
+  once that replay completes. An offset is assigned only at admission, so every record
+  below the head read at that moment is already admitted;
+- advanced by later replay, and by the live advance only when armed
+  (`ReadPositionHonest`);
+- never raised by an own append applied in memory. Taking the highest applied offset
+  instead would skip a foreign record between the frontier and that append.
+
+O's frontier is read **no later than** the copy of O's rows that the switch hands to the
+new leaf, so that the copy holds every record at or below it. A frontier read after the
+copy could exceed it. If O's activation has no frontier, because its replay barrier has
+not completed, no hint is applied, and the switch takes 10.2.0's path. The cap's offsets
+are inclusive and start at `0`, so `-1` (or an absent value), and never `0`, means "none
+applied". A hint of `0` means record 0 is applied.
+
 The units matter, because the two are stated differently:
 - **In checkpoint terms** (production): a leaf's checkpoint is inclusive, and it replays
   the offsets above it, while a captured head is exclusive, the next offset to assign. So
   a head becomes a birth checkpoint as `head - 1` (stamping the head verbatim skips the
-  record at exactly that offset, #5760), and the cap is `min(head - 1, checkpoint of O)`.
-  Adding one to O's checkpoint would skip exactly the first record O never applied.
+  record at exactly that offset, #5760), and the cap is `min(head - 1, frontier of O)`.
+  Adding one to O's frontier would skip exactly the first record O never applied.
 - **In head terms** (the `WalBulkSwitch` model): a head is exclusive, the next offset to
   assign, and the born leaf's read position is the hint minus one. The same cap is
-  `min(heads, rpO + 1)`, where `rpO` is the last offset O replayed.
+  `min(heads, rpO + 1)`, where `rpO` is the last offset O replayed. It is O's in-memory
+  frontier: `ReplayO` advances it, and the same step adds the record to the rows that the
+  copy hands back. The model does not persist it.
 
 A lower hint is never above an unapplied record; it only lengthens the new leaf's replay,
-and with the live advance O's checkpoint sits near the head.
+and with the live advance O's frontier sits near the head.
 
 **The hint survives a crash (S7).** The hint is written to the shard root's
 `_lattice_shard-handoff` row, keyed by the bulk operation id, in the serial turn that
