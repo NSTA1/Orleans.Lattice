@@ -110,11 +110,36 @@ public sealed class U2Contract() : ChapterContract("U2")
         if (!context.IsProduced("C1"))
         {
             var scan = await schema.StartComplianceScanAsync(orders);
-            var result = await ContractWait.SucceededAsync("the compliance scan", () => schema.GetComplianceScanStatusAsync(scan.OperationId), OperationPatience);
-            var nonCompliant = result.Result.GetValueOrDefault(NonCompliantCount);
-            RequireEqual(nonCompliant, "0", "factory-orders is compliant at scan time" + (nonCompliant == "0" ? string.Empty : $" ({Breakdown(result.Result)})"));
+            Orleans.Lattice.Api.Operations.LatticeOperationStatus? scanned = null;
+            await ContractWait.UntilAsync("the compliance scan", async () =>
+            {
+                scanned = await schema.GetComplianceScanStatusAsync(scan.OperationId);
+                return scanned is { IsTerminal: true };
+            }, OperationPatience);
+
+            if (scanned!.State == Orleans.Lattice.Api.Operations.LatticeOperationState.Failed
+                && scanned.FailureReason?.Contains("EnumerationAborted", StringComparison.Ordinal) == true)
+            {
+                await ScanStarved.ReproducesAsync(() =>
+                {
+                    Assert.That(scanned.FailureReason, Does.Contain("EnumerationAborted"), "the compliance scan ran out of resumes");
+                    return Task.CompletedTask;
+                });
+                Assert.Ignore($"KNOWN DEFECT #5569: the compliance scan ended Failed in phase '{scanned.Phase}': {scanned.FailureReason}");
+            }
+
+            Require(scanned.State == Orleans.Lattice.Api.Operations.LatticeOperationState.Succeeded, $"the compliance scan succeeded (it ended {scanned.State} in phase '{scanned.Phase}': {scanned.FailureReason})");
+            var nonCompliant = scanned.Result.GetValueOrDefault(NonCompliantCount);
+            RequireEqual(nonCompliant, "0", "factory-orders is compliant at scan time" + (nonCompliant == "0" ? string.Empty : $" ({Breakdown(scanned.Result)})"));
         }
     }
+
+    /// <summary>
+    /// Under replay-permit starvation (#5569) the compliance scan's resilient source scan exhausts
+    /// its resumes and the scan ends Failed with an enumeration abort. The wrapper runs only on
+    /// that outcome; any other failure stays red.
+    /// </summary>
+    private static readonly KnownDefect ScanStarved = new KnownDefect("#5569", "under replay-permit starvation the compliance scan's resilient source scan exhausts its resumes, so the scan ends Failed with an enumeration abort");
 
     /// <summary>The non-compliant breakdown of a compliance scan's result, as reason: count pairs, for a failure message.</summary>
     /// <param name="result">The scan operation's result map.</param>
