@@ -173,10 +173,12 @@ internal sealed partial class ShardRootGrain
     /// <see langword="false"/> for a bulk append, whose switch the run's fence closes.
     /// </param>
     /// <param name="readFrontier">
-    /// For a bulk append, the old rightmost leaf's replay frontier when it narrowed: the
-    /// hint is applied capped at it per partition (issue #5752), so a record of the
-    /// appended range that the old leaf never applied is replayed by the appended leaf
-    /// that owns it. <see langword="null"/> for a bulk load, which applies its hint uncapped.
+    /// The replay frontier of the leaves whose range the new leaves take over: for a bulk
+    /// append, the old rightmost leaf's when it narrowed (issue #5752); for a bulk load,
+    /// the per-partition minimum over the leaves of the root it replaced (issue #5766).
+    /// The hint is applied capped at it per partition, so a record of the range that
+    /// those leaves never applied is replayed by the new leaf that owns it. With none,
+    /// no hint is applied and the new leaves read from the log's start, as in 10.2.0.
     /// </param>
     private async Task FinishBulkSwitchAsync(
         string operationId,
@@ -197,9 +199,9 @@ internal sealed partial class ShardRootGrain
             return;
         }
 
-        if (hint is not null && relocated && leaves.Count > 0)
+        if (hint is not null && relocated && readFrontier is not null && leaves.Count > 0)
         {
-            var applied = readFrontier is null ? hint : CapAtReadFrontier(hint, readFrontier);
+            var applied = CapAtReadFrontier(hint, readFrontier);
             await BoundedFanOut.ForEachAsync(
                 leaves,
                 BoundedFanOut.DefaultWidth,

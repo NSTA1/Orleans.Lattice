@@ -134,7 +134,7 @@ public partial class BPlusLeafGrainTests
         "SetManyWherePredicateStampedAsync", "ApplyCrdtDeltaStampedAsync", "ApplyCrdtDeltaManyStampedAsync",
         "DeleteStampedAsync", "DeleteTrackedStampedAsync", "DeleteRangeAndNextSiblingStampedAsync",
         // Range and enumeration reads.
-        "CountAsync", "CountAndNextSiblingAsync", "GetAppendTailAsync", "GetStatsAsync", "GetStatsAndNextSiblingAsync", "GetKeysAsync", "GetKeysAndNextSiblingAsync", "GetEntriesAsync",
+        "CountAsync", "CountAndNextSiblingAsync", "GetAppendTailAsync", "CopyRowsForBulkLoadAsync", "GetStatsAsync", "GetStatsAndNextSiblingAsync", "GetKeysAsync", "GetKeysAndNextSiblingAsync", "GetEntriesAsync",
         "GetLiveEntriesAsync", "GetLiveRawEntriesAsync", "GetLiveRawEntriesAndNextSiblingAsync",
         "GetBootstrapCaptureAsync", "GetLiveRawEntriesAndPendingAsync",
         // Replication and delta seams.

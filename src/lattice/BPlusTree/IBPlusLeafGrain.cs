@@ -875,6 +875,16 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
         List<GraftEntry>? relocationTargets = null);
 
     /// <summary>
+    /// Returns, in one turn, a copy of every row this leaf holds, tombstones included,
+    /// and its replay frontier read before the copy (issue #5766). A shard's bulk load
+    /// calls it on each leaf of the root it replaced: it merges the rows into the
+    /// loaded tree and caps the loaded leaves' read position at the lowest frontier,
+    /// so a record of their range that another author appended and this leaf never
+    /// applied is replayed by the loaded leaf that owns it. Changes nothing.
+    /// </summary>
+    Task<LeafNarrowResult> CopyRowsForBulkLoadAsync();
+
+    /// <summary>
     /// Drops the rows a bulk-append graft has relocated out of this leaf (issue
     /// #5610): each named key whose row this leaf no longer declares and still
     /// holds at exactly the stamp given. A row rewritten since, or one inside the

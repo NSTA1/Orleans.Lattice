@@ -1697,7 +1697,11 @@ and below the heads. So a new leaf never starts reading higher than that: per WA
 partition, an appended leaf applies the lower of the birth hint and the old rightmost
 leaf's checkpoint, read in the same step that narrows it, and a split sibling the lower
 of the heads and its donor's checkpoint, read before the division's intent is persisted
-([#5752](https://github.com/NSTA1/Orleans.Lattice/issues/5752)). The checkpoint is
+([#5752](https://github.com/NSTA1/Orleans.Lattice/issues/5752)), and a bulk load's leaves
+the lower of the birth hint and the lowest checkpoint of the leaves of the root the load
+replaced, each read in the same call that copies that leaf's rows into the loaded tree
+([#5766](https://github.com/NSTA1/Orleans.Lattice/issues/5766)); a load that replaced no
+root, or whose replaced leaf is hosted by an older build, applies no hint. The checkpoint is
 inclusive - a leaf replays every record above it - so it is taken as it is: one above
 it is exactly the first record the old leaf had not applied. Before the narrow the old
 leaf still declares the whole range, so its replay applies such records rather than

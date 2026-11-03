@@ -95,6 +95,9 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         // A leaf that narrows and strands nothing; null would mean "not narrowed".
         leaf.NarrowHighKeyAsync(Arg.Any<string>(), Arg.Any<GrainId?>(), Arg.Any<List<GraftEntry>?>())
             .Returns(_ => Task.FromResult<LeafNarrowResult?>(new LeafNarrowResult { ReadFrontier = UncappedFrontier }));
+        // A leaf of a replaced root that holds no row, with an uncapping frontier.
+        leaf.CopyRowsForBulkLoadAsync()
+            .Returns(_ => Task.FromResult(new LeafNarrowResult { ReadFrontier = UncappedFrontier }));
         return leaf;
     }
 
@@ -104,6 +107,10 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
     /// <summary>A narrow that handed back <paramref name="rows"/> with an uncapping frontier.</summary>
     private static Task<LeafNarrowResult?> Narrowed(List<LwwEntry> rows) =>
         Task.FromResult<LeafNarrowResult?>(new LeafNarrowResult { Rows = rows, ReadFrontier = UncappedFrontier });
+
+    /// <summary>A replaced-root leaf that holds <paramref name="rows"/>, with frontier <paramref name="frontier"/>.</summary>
+    private static Task<LeafNarrowResult> CopiedForLoad(List<LwwEntry> rows, long[]? frontier = null) =>
+        Task.FromResult(new LeafNarrowResult { Rows = rows, ReadFrontier = frontier ?? UncappedFrontier });
 
     private static IBPlusInternalGrain MakeInternal(Guid key)
     {

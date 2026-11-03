@@ -172,4 +172,28 @@ public partial class BPlusLeafGrainTests
         Assert.That(result?.ReadFrontier?[0], Is.EqualTo(3),
             "the original reports how far it replayed, below the duplicate's records, not how far the log has grown");
     }
+
+    [Test]
+    public async Task CopyRowsForBulkLoad_hands_back_every_row_and_the_frontier_read_before_them()
+    {
+        // Issue #5766: the bulk load caps its loaded leaves at this frontier.
+        var state = new FakePersistentState<LeafNodeState>();
+        state.State.ProjectionCheckpointOffset = 30;
+        state.State.ProjectionCheckpointOffsetAssigned = true;
+        var grain = CreateGrain(state);
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("z", Encoding.UTF8.GetBytes("2"));
+        await grain.DeleteAsync("z");
+
+        var copied = await grain.CopyRowsForBulkLoadAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copied.Rows.Select(r => r.Key), Is.EqualTo(new[] { "a", "z" }), "every row, tombstones included");
+            Assert.That(copied.Rows.Single(r => r.Key == "z").IsTombstone, Is.True);
+            Assert.That(copied.ReadFrontier![0], Is.EqualTo(30), "the in-memory checkpoint");
+            Assert.That(copied.ReadFrontier.Skip(1), Is.All.EqualTo(-1), "a partition never replayed reports none");
+        });
+        Assert.That(await grain.GetAsync("a"), Is.Not.Null, "the copy changes nothing");
+    }
 }

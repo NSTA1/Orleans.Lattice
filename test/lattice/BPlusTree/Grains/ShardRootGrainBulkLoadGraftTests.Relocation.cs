@@ -171,11 +171,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
             Task.FromResult(new LeafStats()),
             Task.FromResult(new LeafStats { LiveKeys = 1 }));
         var stamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
-        seededLeaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(Task.FromResult(new StateDelta
-        {
-            Entries = new Dictionary<string, LwwValue<byte[]>> { ["k0001"] = LwwValue<byte[]>.Create([9], stamp) },
-            Version = new VersionVector(),
-        }));
+        seededLeaf.CopyRowsForBulkLoadAsync().Returns(CopiedForLoad([new LwwEntry("k0001", LwwValue<byte[]>.Create([9], stamp))]));
 
         await h.Grain.BulkLoadRawAsync("load", RawEntries(2));
 
@@ -273,26 +269,20 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         seededLeaf.GetStatsAsync().Returns(
             Task.FromResult(new LeafStats()),
             Task.FromResult(new LeafStats { LiveKeys = 1 }));
-        seededLeaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(Task.FromResult(new StateDelta
-        {
-            Entries = new Dictionary<string, LwwValue<byte[]>>
-            {
-                ["k0001"] = LwwValue<byte[]>.Create([9], HybridLogicalClock.Tick(HybridLogicalClock.Zero)),
-            },
-            Version = new VersionVector(),
-        }));
+        seededLeaf.CopyRowsForBulkLoadAsync().Returns(CopiedForLoad(
+            [new LwwEntry("k0001", LwwValue<byte[]>.Create([9], HybridLogicalClock.Tick(HybridLogicalClock.Zero)))]));
 
         var inFlight = h.Grain.BeginBatchWrite();
         var load = h.Grain.BulkLoadRawAsync("load", RawEntries(2));
 
         Assert.That(load.IsCompleted, Is.False, "the load waits for the batch write admitted before it published");
-        await seededLeaf.DidNotReceive().GetDeltaSinceAsync(Arg.Any<VersionVector>());
+        await seededLeaf.DidNotReceive().CopyRowsForBulkLoadAsync();
         await seededLeaf.DidNotReceive().ClearGrainStateAsync();
 
         h.Grain.EndBatchWrite(inFlight);
         await load;
 
-        await seededLeaf.Received(1).GetDeltaSinceAsync(Arg.Any<VersionVector>());
+        await seededLeaf.Received(1).CopyRowsForBulkLoadAsync();
         await seededLeaf.Received(1).ClearGrainStateAsync();
     }
 }
