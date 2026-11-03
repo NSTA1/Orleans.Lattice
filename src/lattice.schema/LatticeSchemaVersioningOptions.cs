@@ -17,12 +17,12 @@ public sealed class LatticeSchemaVersioningOptions
     /// whatever version tag they carry. When <c>true</c>, intercepted
     /// system-origin writes are inspected and an item whose version cannot be
     /// upcast to the tree's target is dead-lettered for any tree whose config also
-    /// sets <see cref="LatticeSchemaVersionConfig.StrictIngest"/>. Replicated
-    /// typed-CRDT deltas, replicated atomic-batch entries and the rows a receiver
-    /// bootstrap drains from a peer's export reach the interceptor; a steady-state
-    /// plain last-writer-wins replication apply, a backup restore and a tree
-    /// merge bypass write interception and are not made schema-version checked by
-    /// this switch.
+    /// sets <see cref="LatticeSchemaVersionConfig.StrictIngest"/>. Every
+    /// replicated entry reaches the interceptor - a plain last-writer-wins write,
+    /// a typed-CRDT delta, an atomic-batch entry, and a row a receiver bootstrap
+    /// drains from a peer's export - and an admitted plain write keeps the tag it
+    /// carries, never re-stamped. A backup restore and a tree merge bypass write
+    /// interception and are not made schema-version checked by this switch.
     /// </summary>
     public bool StrictIngest { get; set; }
 

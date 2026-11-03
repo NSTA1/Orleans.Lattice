@@ -13,11 +13,15 @@ the store write is awaited, and storage failure or cancellation propagates to
 the intercepted write. Diversion does not acknowledge an item that could not
 be recorded. An operator inspects the recorded item out of band. Only
 ingest that reaches a tree's write operations can land here, which in practice is
-a replicated typed-CRDT entry, an entry of a replicated atomic batch, or a row a
-receiver bootstrap drains from a peer's export; a steady-state plain
-(non-atomic) last-writer-wins replication apply and a backup restore write below
-the strict check and never produce an entry (see
-[strict-mode ingest](schema-enforcement.md#strict-mode-ingest)). A dead-lettered
+any replicated entry - a plain last-writer-wins write (whether a single entry, a
+merged batch, an anti-entropy repair re-ship or a write routed to a bootstrap
+copy), a typed-CRDT entry, an entry of a replicated atomic batch, or a row a
+receiver bootstrap drains from a peer's export - and is filed under the logical
+tree's id. A backup restore writes below the strict check and never produces an
+entry (see [strict-mode ingest](schema-enforcement.md#strict-mode-ingest)). With
+anti-entropy auto-remediation on (off by default), a diverted plain row is
+re-shipped every probe round and files another record each time
+([#5714](https://github.com/NSTA1/Orleans.Lattice/issues/5714)). A dead-lettered
 entry of a replicated atomic batch is left out of that batch, and the receiver
 commits the batch's other entries. The entry's dead-letter record is an ordinary
 committed write to the `sys-schema-dlq` tree in its own right: it is not part of
@@ -55,7 +59,7 @@ The source is one of:
 
 | `LatticeSchemaDeadLetterSource` | Meaning |
 |---|---|
-| `Replication` | A system-origin ingested item other than a bulk-load item - in practice a replicated typed-CRDT delta or full-state row, or an entry of a replicated atomic batch - failed strict validation. |
+| `Replication` | A system-origin ingested item other than a bulk-load item - in practice a replicated plain last-writer-wins write, a replicated typed-CRDT delta or full-state row, or an entry of a replicated atomic batch - failed strict validation. |
 | `Restore` | A bulk-load item (`BulkLoadAsync` or `BulkAppendChunkAsync`) arriving as system-origin ingest failed enforcement's strict validation. No shipped ingest path issues one - a backup restore writes below the strict check - so in practice this source does not occur. |
 | `LocalRejected` | Reserved for a rejected local write retained for inspection. Not produced by the current release, which fails local writes closed (see below). |
 

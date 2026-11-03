@@ -15,10 +15,10 @@ The package ships independent, strictly opt-in capabilities:
   `TypeOf`, `Length`, `Every`, and `Self` predicate kinds), managed through
   `ILatticeSchemaAdmin`. A non-compliant local write throws
   `LatticeSchemaViolationException`; under strict ingest a non-compliant
-  ingested item that reaches the check (a replicated typed-CRDT entry, or an
-  entry of a replicated atomic batch) is dead-lettered instead of applied, while
-  a plain (non-atomic) last-writer-wins replication apply and a backup restore
-  write below the check and are not validated. Existing data
+  ingested item that reaches the check (a replicated plain last-writer-wins
+  write, typed-CRDT entry, or entry of a replicated atomic batch) is
+  dead-lettered instead of applied, while a backup restore writes below the
+  check and is not validated. Existing data
   is brought into compliance by a shadow-build-and-cutover remediation
   (`ILatticeSchemaRemediationAdmin`), and `ILatticeSchemaComplianceAdmin` audits a
   tree without changing it.

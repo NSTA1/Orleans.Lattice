@@ -2873,7 +2873,7 @@ capabilities:
         source: "docs/lattice.schema/schema-enforcement.md"
       - statement: "A local write of a non-compliant value throws LatticeSchemaViolationException and is never persisted."
         source: "docs/lattice.schema/schema-enforcement.md"
-      - statement: "Strict ingest diverts a non-compliant replicated typed-CRDT entry or replicated atomic-batch entry that reaches the write interceptor to the dead-letter queue instead of applying it; backup restore, tree merge, and plain last-writer-wins replication apply outside atomic batch are stored unchecked."
+      - statement: "Strict ingest diverts a non-compliant replicated entry (plain last-writer-wins, typed-CRDT or atomic-batch) to the dead-letter queue instead of applying it, and stores an admitted plain write verbatim; backup restore and tree merge are stored unchecked."
         source: "docs/lattice.schema/schema-enforcement.md"
       - statement: "Schema versioning prepends a self-describing schema id and version envelope for opted-in trees."
         source: "docs/lattice.schema/schema-versioning.md"
