@@ -72,12 +72,41 @@ public sealed partial class DataStewardJourney
         await import.Done.ClickAsync();
         await Expect(import.Dialog).ToHaveCountAsync(0);
         var data = ContractFacades.Of(_context, Personas.Priya.Id).Data;
-        await ContractCalls.SetManyAsync(data, archive, StoryData.Archive);
+        await WriteArchiveWhileAdvancingAsync(data, archive);
         Assert.That(await ContractCalls.CountPrefixAsync(data, archive, "order/"), Is.EqualTo(Names.Files.ArchiveRows), "the stand-in wrote every row of the archive");
 
         await _priya.Page.ReloadAsync();
         await Expect(_tree.KeyLinks.First).ToHaveTextAsync(StoryData.Archive[0].Key, new() { Timeout = 120_000 });
         await CheckpointAsync("8", "archive-keys", "The new tree holds the October orders, written through the Data API in place of the starved seed");
+    }
+
+    /// <summary>
+    /// Writes the archive through the Data API in batches, judged by whether the writing advances,
+    /// not by one fixed window: a transient failure (#5743 maps a grain timeout to DeadlineExceeded
+    /// or Unavailable) retries the batch, and the wait fails only when no batch lands for three
+    /// minutes, or the whole write runs past fifteen.
+    /// </summary>
+    private static async Task WriteArchiveWhileAdvancingAsync(Api.Data.Grpc.LatticeDataApiGrpcClient data, string archive)
+    {
+        var batches = StoryData.Archive.Chunk(100).ToArray();
+        var written = 0;
+        await ContractWait.UntilAdvancingAsync(
+            $"writing the archive to {archive}",
+            async () =>
+            {
+                var batch = batches[written];
+                await data.SetManyAsync(new Api.Data.Grpc.DataSetManyRequest
+                {
+                    TreeId = archive,
+                    Upserts = [.. batch.Select(entry => new Api.Data.DataEntry { Key = entry.Key, Value = entry.Value })],
+                });
+                written++;
+                return written == batches.Length;
+            },
+            () => written,
+            stall: TimeSpan.FromMinutes(3),
+            ceiling: TimeSpan.FromMinutes(15),
+            () => $"{written} of {batches.Length} batches of 100 written");
     }
 
     private async Task CancelAnOversizedImportAndDeleteItsTreeAsync()
