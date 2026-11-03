@@ -285,6 +285,9 @@ internal sealed partial class BPlusLeafGrain
                 return false;
             }
 
+            // RED-PROOF #5768: the snapshot taken after the marker read, not before it.
+            ownHigh = SnapshotLiveAdvanceCandidates()!;
+
             var low = state.State.LowKeyInclusive;
             var high = state.State.HighKeyExclusive;
             var advanced = false;
