@@ -54,7 +54,7 @@ internal sealed class AppsAreaPage(PersonaSession session)
 
         for (var attempt = 0; ; attempt++)
         {
-            await Expect(YourApps.Or(session.Shell.Content.GetByRole(AriaRole.Heading, new() { Name = "No apps yet" }))).ToBeVisibleAsync(new() { Timeout = 60_000 });
+            await Expect(YourApps.Or(session.Shell.Content.GetByRole(AriaRole.Heading, new() { Name = "No apps yet" })).Or(PanelSettled.Failure(session.Shell.Content)).First).ToBeVisibleAsync(new() { Timeout = PanelSettled.BoundMs });
             if (await TaskBoardRow.IsVisibleAsync() || attempt >= 10)
             {
                 break;
@@ -78,7 +78,7 @@ internal sealed class AppsAreaPage(PersonaSession session)
     /// <summary>Asserts Your apps lists nothing: no enabled app grants the caller a role.</summary>
     public async Task ExpectNoAppsAsync()
     {
-        await Expect(session.Shell.Content.GetByRole(AriaRole.Heading, new() { Name = "No apps yet", Exact = true })).ToBeVisibleAsync();
+        await PanelSettled.ExpectDrawnAsync(session.Shell.Content.GetByRole(AriaRole.Heading, new() { Name = "No apps yet", Exact = true }), PanelSettled.Failure(session.Shell.Content), "the caller's apps");
         await Expect(session.Shell.Content.GetByText(TaskBoard)).ToHaveCountAsync(0);
     }
 

@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using Microsoft.Playwright;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Checkpoints;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Sessions;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Shell;
 using static Microsoft.Playwright.Assertions;
@@ -20,6 +21,15 @@ internal sealed class TaskBoardWindow
     public const string Address = "/apps/task-board/window";
 
     private static readonly string[] Columns = ["todo", "doing", "done"];
+
+    /// <summary>How long the board's read may take: the AppKit's 30 s bridge request, and margin.</summary>
+    private static readonly TimeSpan ReadPatience = TimeSpan.FromSeconds(45);
+
+    private static readonly Regex CountPattern = new(@"^\(\d+\)$");
+
+    private static readonly Regex ReadFailed = new(@"^The board could not be read \((?<code>[^)]+)\)\.$");
+
+    private static readonly KnownDefect StarvedFirstRead = new KnownDefect("#5569", "under replay-permit starvation the first read of the task board's idle tree outlasts the AppKit's 30 s bridge request, so the board says it could not be read (unavailable)");
 
     private readonly Func<JourneyRecorder, string, string, string, Task> _capture;
     private readonly Func<Task<TaskBoardServerView>>? _readServer;
@@ -94,6 +104,7 @@ internal sealed class TaskBoardWindow
     /// at once, with what the cluster answered for the persona: every silo answers the persona's
     /// workspace from a registry snapshot current with every write that returned before the read
     /// began (#5595), so a window that refuses an app the persona holds is a defect, not a wait.
+    /// Then waits for the board's first read of its tree (see <see cref="WaitForFirstReadAsync"/>).
     /// </summary>
     public async Task WaitForBoardAsync()
     {
@@ -133,10 +144,110 @@ internal sealed class TaskBoardWindow
             await Task.Delay(TimeSpan.FromMilliseconds(250));
         }
 
+        await WaitForFirstReadAsync();
+    }
+
+    /// <summary>
+    /// Waits for the board's first read of its tree. The board draws every column's count once
+    /// the read answers, or says in its status line that the board could not be read: the
+    /// AppKit gives a bridge request 30 s, so <see cref="ReadPatience"/> covers the board's own
+    /// failure path. Under replay-permit starvation (#5569) an idle tree's first read can outlast
+    /// that request; that read fails <c>unavailable</c>, and the board's Refresh reads it again,
+    /// which must then succeed. Any other failure fails at once, with what the cluster answered.
+    /// </summary>
+    private async Task WaitForFirstReadAsync()
+    {
+        var failure = await WaitForReadAsync(allowFailure: true);
+        if (failure is null)
+        {
+            return;
+        }
+
+        var code = failure.Groups["code"].Value;
+        if (code != "unavailable")
+        {
+            await FailReadAsync(failure.Value);
+        }
+
+        await StarvedFirstRead.ReproducesAsync(() =>
+        {
+            Assert.That(code, Is.EqualTo("unavailable"), "the board's first read timed out");
+            return Task.CompletedTask;
+        });
+
+        // The status keeps the failure until the second read answers, so only success ends the wait.
+        await Board.Locator("#tb-refresh").ClickAsync();
+        if (await WaitForReadAsync(allowFailure: false) is not null)
+        {
+            await FailReadAsync(await Status.InnerTextAsync());
+        }
+    }
+
+    /// <summary>
+    /// Polls until the board has drawn every column's count with an empty status line (the read
+    /// answered), or, when <paramref name="allowFailure"/> is set, until the status line says the
+    /// board could not be read. Returns the failure, or <see langword="null"/> once the read
+    /// answered. Past <see cref="ReadPatience"/> it returns the failure still shown, or fails.
+    /// </summary>
+    private async Task<Match?> WaitForReadAsync(bool allowFailure)
+    {
+        var deadline = DateTime.UtcNow + ReadPatience;
+        while (true)
+        {
+            var status = (await Status.InnerTextAsync()).Trim();
+            var failed = ReadFailed.Match(status);
+            if (failed.Success && (allowFailure || DateTime.UtcNow > deadline))
+            {
+                return failed;
+            }
+
+            if (status.Length == 0 && await CountsDrawnAsync())
+            {
+                return null;
+            }
+
+            if (DateTime.UtcNow > deadline)
+            {
+                await FailReadAsync($"the board drew no counts within {ReadPatience.TotalSeconds:0} s (status: '{status}')");
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(250));
+        }
+    }
+
+    /// <summary>
+    /// Waits for a write's outcome in the board's status line: <paramref name="success"/>, or the
+    /// board's own failure (<paramref name="failurePrefix"/> and its code), bounded by the AppKit's
+    /// 30 s bridge request (<see cref="ReadPatience"/>); a failure fails at once.
+    /// </summary>
+    private async Task ExpectWriteAsync(string success, string failurePrefix)
+    {
+        var outcome = new Regex("^(" + Regex.Escape(success) + "|" + Regex.Escape(failurePrefix) + @" \([^)]+\)\.)$");
+        await Expect(Status).ToHaveTextAsync(outcome, new() { Timeout = (float)ReadPatience.TotalMilliseconds });
+        var status = (await Status.InnerTextAsync()).Trim();
+        if (status != success)
+        {
+            await FailReadAsync($"the write ended '{status}'");
+        }
+    }
+
+    private async Task<bool> CountsDrawnAsync()
+    {
         foreach (var column in Columns)
         {
-            await Expect(Board.Locator("#tb-count-" + column)).ToHaveTextAsync(new Regex(@"^\(\d+\)$"));
+            if (!CountPattern.IsMatch(await Board.Locator("#tb-count-" + column).InnerTextAsync()))
+            {
+                return false;
+            }
         }
+
+        return true;
+    }
+
+    private async Task FailReadAsync(string what)
+    {
+        var server = _readServer is null ? "not read" : (await _readServer()).ToString();
+        Assert.Fail($"The task board at {Page.Url}: {what.ReplaceLineEndings(" ")}. Server: {server}.");
     }
 
     /// <summary>Asserts the window stands alone: no header, address line or directory spine around the frame.</summary>
@@ -186,7 +297,7 @@ internal sealed class TaskBoardWindow
     {
         await Board.Locator("#tb-add-title").FillAsync(title);
         await Board.Locator("#tb-add-button").ClickAsync();
-        await Expect(Status).ToHaveTextAsync($"Added \"{title}\" to To do.");
+        await ExpectWriteAsync($"Added \"{title}\" to To do.", "The task could not be added");
         var card = Card("todo", title);
         await Expect(card).ToHaveCountAsync(1);
         return await card.GetAttributeAsync("data-id") ?? throw new InvalidOperationException($"The card '{title}' carries no task id.");
@@ -208,7 +319,7 @@ internal sealed class TaskBoardWindow
     public async Task MoveSelectedAsync(string title, string column, string columnName)
     {
         await Board.Locator($"#tb-detail-actions [data-move=\"{column}\"]").ClickAsync();
-        await Expect(Status).ToHaveTextAsync($"Moved \"{title}\" to {columnName}.");
+        await ExpectWriteAsync($"Moved \"{title}\" to {columnName}.", "The task could not be moved");
         await Expect(Card(column, title)).ToHaveCountAsync(1);
         await Expect(Board.Locator("#tb-detail-column")).ToHaveTextAsync($"In {columnName}.");
     }
@@ -219,7 +330,8 @@ internal sealed class TaskBoardWindow
     /// <param name="columnName">The column's name, as the board writes it.</param>
     public async Task ExpectDetailAsync(string title, string key, string columnName)
     {
-        await Expect(Board.Locator("#tb-detail")).ToBeVisibleAsync();
+        // A deep link selects its task once the board's read has brought it in.
+        await Expect(Board.Locator("#tb-detail")).ToBeVisibleAsync(new() { Timeout = (float)ReadPatience.TotalMilliseconds });
         await Expect(Board.Locator("#tb-detail-title")).ToHaveTextAsync(title);
         await Expect(Board.Locator("#tb-detail-key")).ToHaveTextAsync(key);
         await Expect(Board.Locator("#tb-detail-column")).ToHaveTextAsync($"In {columnName}.");
