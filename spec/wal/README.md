@@ -52,9 +52,9 @@ directory, and the draft keeps every design mutation as the record each module t
 | `WalPinRetirement` | 3 | 3 | 25 | 31 | 30 | 284,019 |
 | `WalAppendEpoch` | 5 | 0 | 17 | 23 | 20 | 150,706 |
 | `WalHandOffFence` | 3 | 1 | 17 | 21 | 19 | 8,826 |
-| `WalRoutingFloor` | 3 | 0 | 12 | 16 | 13 | 10,704 |
+| `WalRoutingFloor` | 3 | 1 | 12 | 17 | 14 | 10,704 |
 | `WalBulkSwitch` | 4 | 0 | 16 | 19 | 18 | 39,110 |
-| `WalLiveAdvanceCore` | 5 | 1 | 20 | 30 | 24 | 778,329 |
+| `WalLiveAdvanceCore` | 5 | 1 | 20 | 31 | 24 | 778,329 |
 
 `Actions` counts the disjuncts of `Next`, including the non-behavioural `Stutter`
 of `WalMove`, `WalAppendEpoch`, `WalHandOffFence`, `WalRoutingFloor`, `WalBulkSwitch` and `WalLiveAdvanceCore`. `Behaviour rows` counts the action rows of the
@@ -66,8 +66,9 @@ TLC's count for the module's own cfg. `WalDurability` searches to depth 35 and
 distinct states to depth 23. `WalRoutingFloor` searches to depth 15, and its
 `WideGenerations` variant finds 24,084 distinct states to depth 15.
 `WalLiveAdvanceCore` searches to depth 25; its variants find 3,052,664 (`Restart`,
-depth 26), 3,373,761 (`GateFlip`, depth 25), 4,032,667 (`Recreate`, depth 27) and
-875,431 (`Bulk`, depth 25) distinct states.
+depth 26), 3,373,761 (`GateFlip`, depth 25), 3,693,715 (`Recreate`, depth 26),
+4,638,713 (`RecreateSurvivor`, depth 26), 1,622,161 (`RecreateSurvivorMixed`, depth 25)
+and 1,114,185 (`Bulk`, depth 25) distinct states.
 `WalBulkSwitch` searches to depth 22.
 
 `WalDurability` has a two-fault variant configuration, `WalDurability.TwoFaults.cfg`
@@ -132,13 +133,15 @@ distinct states to depth 21, about fifteen seconds on two workers.
 | `WalHandOffFence.WideWindows.cfg` | The hand-off fence module with four offsets, generations up to 4 and three windows, checked against every invariant and the action property. |
 | [`handoff-fence-mutations/`](handoff-fence-mutations/) | One or more deliberate defects per property and per action of `WalHandOffFence`. |
 | `WalRoutingFloor.tla` / `.cfg` / `.manifest.json` | The routing-floor module, its TLC model and its manifest. |
-| `WalRoutingFloor.WideGenerations.cfg` | The routing-floor module with the purged incarnation's generations up to 3, checked against every invariant. |
+| `WalRoutingFloor.WideGenerations.cfg` | The routing-floor module with the purged incarnation's generations up to 3, checked against every invariant and the action property. |
 | [`routing-floor-mutations/`](routing-floor-mutations/) | One or more deliberate defects per property and per action of `WalRoutingFloor`. |
 | [`RoutingFloorRefinement.md`](RoutingFloorRefinement.md) | `WalRoutingFloor` mapped to production, and its interface. |
 | `WalLiveAdvanceCore.tla` / `.cfg` / `.manifest.json` | The live-advance core module, its TLC model and its manifest. |
 | `WalLiveAdvanceCore.Restart.cfg` | The live-advance core with a WAL shard restart, checked against every invariant. |
 | `WalLiveAdvanceCore.GateFlip.cfg` | The live-advance core with own unstamped appends by any running activation, checked against every invariant. |
-| `WalLiveAdvanceCore.Recreate.cfg` | The live-advance core with the tree purged and re-created, a straddler and the first initialisation, checked against every invariant. |
+| `WalLiveAdvanceCore.Recreate.cfg` | The live-advance core with the tree purged and re-created, a straddler and the first initialisation, for purges that find the born activation claimed, checked against every invariant. |
+| `WalLiveAdvanceCore.RecreateSurvivor.cfg` | The same purge for purges that find the born activation unclaimed, which may then claim as the re-created incarnation's, without the 10.2.0 silo, checked against every invariant. |
+| `WalLiveAdvanceCore.RecreateSurvivorMixed.cfg` | The unclaimed-survivor purge with the 10.2.0 silo and no hand-off window, checked against every invariant. |
 | `WalLiveAdvanceCore.Bulk.cfg` | The live-advance core with a bulk-born leaf, checked against every invariant and the liveness property. |
 | [`live-advance-core-mutations/`](live-advance-core-mutations/) | One or more deliberate defects per property and per action of `WalLiveAdvanceCore`, and one weakening of each assumption it takes. |
 | [`LiveAdvanceCoreRefinement.md`](LiveAdvanceCoreRefinement.md) | `WalLiveAdvanceCore` mapped to production, and its interface: each assumption with the guarantee and module that discharge it. |
@@ -479,13 +482,15 @@ initiator's floor (#5716).
 
 It is module R of the five promoted modules: it assumes only `WalAppendEpoch`'s
 entry check, as an environment constraint, and the core module assumes its
-`StraddlerBelowInit` ([the interface](RoutingFloorRefinement.md#interface)).
+`StraddlerBelowInit` and `InitHeadCoversPriorAllocations`
+([the interface](RoutingFloorRefinement.md#interface)).
 
 | Property | Kind | Meaning |
 |----------|------|---------|
 | `TypeOK` | Invariant | State stays well-typed. |
 | `StraddlerBelowInit` | Invariant | Whenever the leaf's marker reads initialised after the re-creation, every offset allocated to a shard root of the purged incarnation lies below the close the re-created incarnation's first initialisation recorded. |
 | `LiveGenerationAboveFloor` | Invariant | Every live shard root's routing generation is above its own routing floor. |
+| `InitHeadCoversPriorAllocations` | Action property | The re-created incarnation's first initialisation records a head above every offset allocated before it, whoever allocated it. |
 
 The base checks every property with both purge kinds, a second shard root and a WAL
 shard restart on (about a second); `WalRoutingFloor.WideGenerations.cfg` re-checks
@@ -567,12 +572,13 @@ It is the last of the five modules promoted from the design draft, and the sink 
 assume-guarantee graph ([`LiveAdvanceInterface.md`](LiveAdvanceInterface.md)). It assumes
 every guarantee of the other four and models each only as an environment constraint in the
 form stated there: only the current activation's stamped appends are allocated, at or above
-its claim head (`WalAppendEpoch`); foreign appends only while the marker is open, below the
-heads a close records, which the marker max-merges so they never decrease, and an absent
-marker holds the leaf (`WalHandOffFence`); a straddler
-of a purged incarnation only before the re-created incarnation's first initialisation
-records its heads (`WalRoutingFloor`); and a bulk-born leaf holds every record below its
-birth hint (`WalBulkSwitch`). It models the unstamped watermark itself: a 10.2.0 silo's
+its claim head, and a purge retires every raised epoch (`WalAppendEpoch`); foreign appends
+only while the marker is open or not initialised, below the heads a close records once it
+is, which the marker max-merges so they never decrease, and an absent marker holds the leaf
+(`WalHandOffFence`); a straddler of a purged incarnation only before the re-created
+incarnation's first initialisation, which records a head above every earlier allocation
+(`WalRoutingFloor`); and a bulk-born leaf holds every record at or below its birth read
+position (`WalBulkSwitch`). It models the unstamped watermark itself: a 10.2.0 silo's
 append is always admitted and raises it, every stamped response reports it, a WAL shard
 restart resets it to the recovered head minus one, and an own unstamped append reports
 itself ([the interface](LiveAdvanceCoreRefinement.md#interface)).
@@ -590,10 +596,11 @@ The base checks every property with the duplicate, one hand-off window and a 10.
 unstamped append, the liveness property under `LiveSpec`'s single fairness condition
 (about a minute and a half on two workers). Each variant adds one environment:
 `WalLiveAdvanceCore.Restart.cfg` a WAL shard restart, `WalLiveAdvanceCore.GateFlip.cfg` own
-unstamped appends, `WalLiveAdvanceCore.Recreate.cfg` the purge with a straddler and the first
-initialisation, and `WalLiveAdvanceCore.Bulk.cfg` a bulk-born leaf (each between twenty
-seconds and a minute and a half; `Bulk` also re-checks the liveness property, in about
-two and a half minutes). The design model's larger combined configurations stay as
+unstamped appends, the purge with a straddler and the first initialisation in three
+slices (`WalLiveAdvanceCore.Recreate.cfg`, `.RecreateSurvivor.cfg` and
+`.RecreateSurvivorMixed.cfg`, by whether the purge finds the born activation claimed), and
+`WalLiveAdvanceCore.Bulk.cfg` a bulk-born leaf (each between a minute and three; `Bulk`
+also re-checks the liveness property). The design model's larger combined configurations stay as
 local evidence in the design note. Seven of the design draft's mutations moved here; the
 refinement note lists them, the assumption mutations that weaken each assumption in turn,
 and the one redundancy check this module keeps, which stays clean and so is not in its

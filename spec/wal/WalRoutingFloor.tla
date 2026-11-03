@@ -356,4 +356,13 @@ StraddlerBelowInit ==
 (* the row's, so the row is the stronger bound.                            *)
 LiveGenerationAboveFloor ==
     \A i \in Inits : live[i] => gen[i] > rowFloor[i]
+
+(* The first initialisation records a head above every offset allocated    *)
+(* before it, whoever allocated it: the head is its claim's, the allocator *)
+(* head at the claim (E's ClaimHeadCoversPriorAppends), not a bound on any *)
+(* one author's appends. Every allocation here is a straddler, but the     *)
+(* core relies on the same head for a foreign record a window the purge    *)
+(* left open holds.                                                        *)
+InitHeadCoversPriorAllocations ==
+    [][~mInit /\ mInit' => \A o \in Offs : author[o] # NoAuthor => o < closedAt']_vars
 =============================================================================

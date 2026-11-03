@@ -52,13 +52,22 @@ the design model ([`LiveAdvanceInterface.md`](LiveAdvanceInterface.md)).
   assumption is load-bearing here. The routing generation runs the same claim code
   as the leaf epoch (`WalShardGrain.ClaimCoreAsync`); `WalAppendEpoch`'s note gives
   that refinement argument.
-- **Guarantees.** Two, each a checked invariant of the base and the variant:
+- **Guarantees.** Three, each checked on the base and the variant: two invariants
+  and an action property.
   - `StraddlerBelowInit`: whenever L's marker reads initialised after the
     re-creation, every offset allocated to a shard root of the purged incarnation
     lies below the close the re-created incarnation's first initialisation
     recorded. A straddler is allocated before that close, or not at all.
   - `LiveGenerationAboveFloor`: every live shard root's current generation is
     above its own routing floor.
+  - `InitHeadCoversPriorAllocations`: the re-created incarnation's first
+    initialisation records a head above every offset allocated before it, whoever
+    allocated it. `FirstInit` records the allocator head at its claim, so the bound
+    does not depend on who appended; every allocation in this model is a
+    straddler, but the core relies on the same head for a foreign record in a
+    window the purge left open, which nothing else bounds while the marker is not
+    initialised (`HandOffBound` is conditioned on the marker reading closed). Added
+    for member 6c's composite check, which found the core assuming it unstated.
 - **The shared vocabulary.**
 
   | Interface | Here |
@@ -72,7 +81,8 @@ the design model ([`LiveAdvanceInterface.md`](LiveAdvanceInterface.md)).
   | L's marker `closedAt` | `closedAt`, the head the re-created incarnation's first initialisation recorded. |
   | `claimHead[a]`, `seenU[a]` | Not modelled: E and C own them. |
 
-- **Who assumes what.** C assumes `StraddlerBelowInit` of every straddler append.
+- **Who assumes what.** C assumes `StraddlerBelowInit` of every straddler append, and
+  `InitHeadCoversPriorAllocations` of its first initialisation's head.
   `LiveGenerationAboveFloor` is what keeps that assumption from being met by
   refusing the live tree's own writes: no module assumes it, but its failure is a
   live tree whose every write #5705's guard fails as deleted.
@@ -120,6 +130,7 @@ the design model ([`LiveAdvanceInterface.md`](LiveAdvanceInterface.md)).
 | Spec property | Production property | Detector |
 |---------------|--------------------|----------|
 | `StraddlerBelowInit` | A write a purged incarnation admitted is never allocated at L's partition above the close the re-created incarnation's first initialisation recorded, so a re-created leaf that has replayed to that close never advances past it unread. | Yes: `WalShardGrainTests.A_straddling_initiator_of_the_purged_incarnation_is_refused_after_re_creation`, `ShardRootPurgedIncarnationTests.A_write_admitted_under_a_purged_generation_is_not_re_admitted_under_the_re_created_one` and `TreeFenceRowPurgeIntegrationTests.A_tree_re_created_after_a_purge_that_retired_nothing_never_adopts_its_markers`. |
+| `InitHeadCoversPriorAllocations` | The re-created incarnation's first initialisation records, as its close, the claim heads its fence returned: the allocator head at each partition when it claimed, above every offset allocated there before, whoever allocated it. | Yes: `TreeFenceRowPurgeIntegrationTests.A_purge_retires_every_fence_row_and_the_re_created_tree_starts_above_the_floor`, which reads every partition's allocator head after the purge and before the re-creation and asserts the recreation close's heads are at or above it; recording any lower head turns it red. |
 | `LiveGenerationAboveFloor` | A live shard root's routing generation is always above its own routing floor, so the WAL never refuses its claims and #5705's guard never fails its writes as deleted. | Yes: `TreeFenceRowPurgeIntegrationTests.A_purge_retires_every_fence_row_and_the_re_created_tree_starts_above_the_floor`, `ShardRootPurgedIncarnationTests.A_later_shards_catch_up_never_covers_an_earlier_shards_live_generation` and `ShardRootPurgedIncarnationTests.A_duplicate_activation_re_seeding_the_same_incarnation_leaves_its_siblings_live_marker_alone`. |
 
 ## Excluded properties
@@ -132,7 +143,8 @@ the design model ([`LiveAdvanceInterface.md`](LiveAdvanceInterface.md)).
 
 ## Property classification (issue #2321)
 
-All three checked properties are state safety, reached and checked on the base
+`TypeOK` and the two invariants are state safety, and `InitHeadCoversPriorAllocations` is
+an action property; all four are reached and checked on the base
 (10,704 distinct states, depth 15) and re-checked in the `WideGenerations` variant
 (24,084 distinct states, depth 15). Every environment step is on in the base, so
 nothing is bounded out; the variant widens the purged incarnation's generations so

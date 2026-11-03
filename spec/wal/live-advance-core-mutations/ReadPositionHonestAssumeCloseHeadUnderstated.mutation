@@ -10,7 +10,7 @@ PERTURBS: Close
 
 --- FIND
     /\ hoOpen' = FALSE
-    /\ \E h \in HeadsAbove({Foreign}) : hoClosedAt' = Max2(hoClosedAt, h)
+    /\ \E h \in IF mInit THEN HeadsAbove({Foreign}) ELSE 0..next : hoClosedAt' = Max2(hoClosedAt, h)
 --- REPLACE
     /\ hoOpen' = FALSE
 \* MUTATION: the heads may be understated.

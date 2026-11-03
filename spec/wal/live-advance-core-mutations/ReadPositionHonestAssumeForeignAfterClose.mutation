@@ -10,7 +10,7 @@ PERTURBS: ForeignAlloc
 
 --- FIND
 ForeignAlloc ==
-    /\ hoOpen
+    /\ hoOpen \/ ~mInit
 
 --- REPLACE
 ForeignAlloc ==

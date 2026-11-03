@@ -7,7 +7,7 @@ TARGET: ReadPositionHonest
 CLASS: Invariant
 SUMMARY: a straddler is allocated whether or not the re-created incarnation has initialised
 PERTURBS: StraddlerAlloc
-BOUNDS: WithRecreate = TRUE
+BOUNDS: WithRecreate = TRUE, WithUnclaimedSurvivor = FALSE
 
 --- FIND
     /\ recreated

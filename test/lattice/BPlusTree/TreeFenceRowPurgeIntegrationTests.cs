@@ -172,6 +172,21 @@ public sealed class TreeFenceRowPurgeIntegrationTests
             }
         });
 
+        // Every offset allocated before the re-created incarnation's first
+        // initialisation, the purged incarnation's included, lies below each partition's
+        // allocator head now (InitHeadCoversPriorAllocations, spec/wal/WalRoutingFloor.tla).
+        var partitionCount = await PartitionsAsync(Name);
+        var allocatedBeforeInit = new long[partitionCount];
+        for (var partition = 0; partition < partitionCount; partition++)
+        {
+            allocatedBeforeInit[partition] = await _cluster.Client
+                .GetGrain<IWalShardGrain>($"{Name}/{partition}")
+                .GetNextSequenceAsync(CancellationToken.None);
+        }
+
+        Assert.That(allocatedBeforeInit, Has.Some.GreaterThan(0L),
+            "precondition: the purged incarnation allocated at some partition, so the head bound below is not vacuous");
+
         // The id is reused: a write registers a new tree. Its first initialisation is a
         // fence: before any range delete, every shard root and the range-delete fence
         // have claimed above the floor at every partition, and the heads are recorded.
@@ -197,6 +212,9 @@ public sealed class TreeFenceRowPurgeIntegrationTests
                 Assert.That(close?.Heads ?? [], Has.Length.EqualTo(partitions), "with one head per partition");
                 for (var partition = 0; partition < partitions; partition++)
                 {
+                    Assert.That(close?.Heads.ElementAtOrDefault(partition) ?? -1, Is.GreaterThanOrEqualTo(allocatedBeforeInit[partition]),
+                        $"partition {partition}: shard {shard}'s first initialisation records a head above every offset allocated before it, "
+                        + "the claim's allocator head, not a bound on any one author's appends");
                     Assert.That(fencedAtInit.GetValueOrDefault((partition, WalRoutingInitiator.ShardRoot(shard))), Is.EqualTo(floor + 1),
                         $"partition {partition}: shard {shard}'s seeded generation is claimed before its marker reads initialised");
                     Assert.That(fencedAtInit.GetValueOrDefault((partition, WalRoutingInitiator.TreeRangeDelete)), Is.GreaterThan(floor),
