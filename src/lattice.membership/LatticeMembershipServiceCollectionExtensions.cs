@@ -120,6 +120,11 @@ public static class LatticeMembershipServiceCollectionExtensions
         builder.Services.AddSingleton<IHostedService>(
             sp => sp.GetRequiredService<MembershipEpochSynchronizer>());
 
+        // A restore or re-seed cutover swaps a membership tree's alias and publishes
+        // no mutation, so the same instance publishes alias changes too (#5731).
+        builder.Services.AddSingleton<ITreeAliasObserver>(
+            sp => sp.GetRequiredService<MembershipEpochSynchronizer>());
+
         // Replace the core anonymous default with the real context. A plain
         // AddSingleton is last-wins for a single-service resolve, so the core
         // NullLatticeMembershipContext (registered via TryAddSingleton) is

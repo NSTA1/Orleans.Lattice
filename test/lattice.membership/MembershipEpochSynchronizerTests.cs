@@ -177,6 +177,33 @@ public sealed class MembershipEpochSynchronizerTests
     }
 
     [Test]
+    public async Task An_alias_change_of_a_membership_tree_advances_the_cluster_epoch()
+    {
+        // #5731: a restore or re-seed cutover replaces the tree's contents by an
+        // alias swap, which publishes no mutation.
+        var rig = Rig.Create();
+
+        await rig.Synchronizer.OnTreeAliasChangedAsync(AliasChange(MembershipConstants.GroupsTree), default);
+        await rig.Synchronizer.PublishLoop.WaitAsync(TimeSpan.FromSeconds(30));
+
+        _ = rig.Epoch.Received(1).AdvanceAsync();
+    }
+
+    [Test]
+    public async Task An_alias_change_of_any_other_tree_publishes_nothing()
+    {
+        var rig = Rig.Create();
+
+        await rig.Synchronizer.OnTreeAliasChangedAsync(AliasChange("orders"), default);
+        await rig.Synchronizer.PublishLoop.WaitAsync(TimeSpan.FromSeconds(30));
+
+        _ = rig.Epoch.DidNotReceive().AdvanceAsync();
+    }
+
+    private static TreeAliasChange AliasChange(string treeId) =>
+        new() { TreeId = treeId, OldPhysicalTreeId = treeId, NewPhysicalTreeId = treeId + "/resized/copy" };
+
+    [Test]
     public async Task A_write_to_any_other_tree_publishes_nothing()
     {
         var rig = Rig.Create();

@@ -48,7 +48,7 @@ namespace Orleans.Lattice.Apps;
 /// is still honoured by the first evaluation that starts after the write is acknowledged.
 /// </para>
 /// </remarks>
-internal sealed class CompiledAppRegistrySnapshotMaintainer : IMutationObserver, IAppRegistryProjection, IDisposable
+internal sealed class CompiledAppRegistrySnapshotMaintainer : IMutationObserver, ITreeAliasObserver, IAppRegistryProjection, IDisposable
 {
     private static readonly TimeSpan InitialPublishRetryDelay = TimeSpan.FromMilliseconds(50);
     private static readonly TimeSpan MaxPublishRetryDelay = TimeSpan.FromSeconds(1);
@@ -391,6 +391,28 @@ internal sealed class CompiledAppRegistrySnapshotMaintainer : IMutationObserver,
         }
 
         ScheduleRebuild();
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// A restore, resize or re-seed cutover replaces the registry tree's contents by an alias
+    /// swap, which publishes no mutation, so it is published as a registry change (#5731). Runs
+    /// on the registry grain's turn, so it only schedules the advance and the rebuild: one
+    /// ordinal comparison for every other tree.
+    /// </remarks>
+    public Task OnTreeAliasChangedAsync(TreeAliasChange change, CancellationToken cancellationToken)
+    {
+        if (string.Equals(change.TreeId, AppRegistryTreeNames.RegistryTree, StringComparison.Ordinal))
+        {
+            if (_epochSource is not null)
+            {
+                SchedulePublish();
+            }
+
+            ScheduleRebuild();
+        }
+
+        return Task.CompletedTask;
     }
 
     /// <summary>
