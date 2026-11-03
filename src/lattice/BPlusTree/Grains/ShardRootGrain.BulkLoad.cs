@@ -1071,7 +1071,7 @@ internal sealed partial class ShardRootGrain
             return false;
         }
 
-        if (stranded is null && separator.Length < 0) // RED-PROOF T3
+        if (stranded is null)
         {
             // Review B1 of #5702: the leaf could not drain the writes it admitted
             // before the narrow within its deadline, so it narrowed nothing. The
@@ -1079,7 +1079,7 @@ internal sealed partial class ShardRootGrain
             return false;
         }
 
-        if (stranded is not { Count: > 0 })
+        if (stranded.Count == 0)
             return true;
 
         await RelocateIntoGraftedLeavesAsync(graft, stranded);
