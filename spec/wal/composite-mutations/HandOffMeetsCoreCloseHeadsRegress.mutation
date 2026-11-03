@@ -1,0 +1,13 @@
+# Pairs with HandOffMeetsCoreClose (H -> C). CloseHeadMonotone is dropped, so after the
+# re-created incarnation's first initialisation records a head, a later window's close
+# records a lower one and lowers the heads L's marker requires.
+MODULE: HandOffMeetsCoreCloseHeadsRegress
+TARGET: HandOffMeetsCoreClose
+CLASS: Invariant
+SUMMARY: CloseHeadMonotone is dropped
+
+--- FIND
+    /\ (~recreated /\ recreated' /\ ~legacy') \/ CloseHeadMonotone
+--- REPLACE
+    /\ TRUE
+--- END

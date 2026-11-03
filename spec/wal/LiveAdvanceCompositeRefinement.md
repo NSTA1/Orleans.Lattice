@@ -34,7 +34,7 @@ bulk-born leaf any read position and any held records.
 `Next` keeps a step only if every producer guarantee still holds after it. Each edge
 invariant then holds unless a kept step of its kind fails the assumption its consumer makes.
 A red edge is therefore a step the producers allow and the consumer does not model. The base
-has 138,603 distinct states and is checked in seconds.
+has 131,423 distinct states and is checked in seconds.
 
 ## Scope cuts
 
@@ -46,6 +46,11 @@ covered by a module's own configuration or by no module at all, as stated.
   restart against their own environments.
 - **A purge never follows a bulk birth.** No module combines the two either: C's `Recreate`
   and `Bulk` variants are separate configurations, and B models no purge.
+- **The bulk switch's own close is not a step.** The composite's `Close` is `F`'s, of a window
+  `F` opened (`fWin`); while a bulk switch creates L the open window is the switch's, so `F`
+  opens none. C's `Close` guard `phase = "live"` therefore holds of every kept close. B's
+  protocol closes the switch's token only once its graft is no longer pending, after the
+  birth, but no B guarantee states that, so no edge checks the switch's close.
 - **Two offsets, one hand-off window.** The modules check three or four offsets
   (`WalBulkSwitch.cfg`) and up to three windows (`WalHandOffFence.WideWindows.cfg`). The
   composite's edges each need one stamped append of each kind before or after one close or
@@ -72,7 +77,7 @@ or more edge invariants. The columns are:
 | E -> C | `EpochMeetsCoreClaim` | `ClaimHeadCoversPriorAppends`, `RaisedEpochUnique`, the claim raise's guards (`ClaimRaise`) | C's `Claim` | `EpochMeetsCoreClaimHeadUncovered`, `EpochMeetsCoreClaimRetiredEpochRaised` | `EpochMeetsCoreClaimWitness` |
 | E -> C | `EpochMeetsCoreOwnAlloc` | `StaleEpochNeverAppends`, `RaisedEpochUnique` | C's `OwnAlloc` guard | `EpochMeetsCoreOwnAllocSupersededAppends`, `EpochMeetsCoreOwnAllocEpochsShared` | `EpochMeetsCoreOwnAllocWitness` |
 | H -> C | `HandOffMeetsCoreForeignAlloc` | `HandOffBound` | C's `ForeignAlloc` guard | `HandOffMeetsCoreForeignAllocUnbounded` | `HandOffMeetsCoreForeignAllocWitness` |
-| H -> C | `HandOffMeetsCoreClose` | `HandOffBound` | C's `Close` | `HandOffMeetsCoreCloseHeadUnbounded` | `HandOffMeetsCoreCloseWitness` |
+| H -> C | `HandOffMeetsCoreClose` | `HandOffBound`, `CloseHeadMonotone` | C's `Close` | `HandOffMeetsCoreCloseHeadUnbounded`, `HandOffMeetsCoreCloseHeadsRegress` | `HandOffMeetsCoreCloseWitness` |
 | R -> C | `RoutingMeetsCoreStraddler` | `StraddlerBelowInit` | C's `StraddlerAlloc` guard | `RoutingMeetsCoreStraddlerUnbounded` | `RoutingMeetsCoreStraddlerWitness` |
 | R -> C | `RoutingMeetsCoreInit` | `InitHeadCoversPriorAllocations` | C's `MarkInit` | `RoutingMeetsCoreInitHeadUncovered` | `RoutingMeetsCoreInitWitness` |
 | B -> C | `BulkMeetsCoreCreate` | `BulkHintBound` | C's `Create` | `BulkMeetsCoreCreateHintUnbounded` | `BulkMeetsCoreCreateWitness` |
@@ -85,7 +90,7 @@ or more edge invariants. The columns are:
 | `up`, `dupUsed` | L's running activations, and the duplicate's budget | C's `up`. |
 | `epoch`, `cstage`, `claimHead`, `prior`, `maxClaimed`, `lRetired`, `staleAccepted` | E's claims, over L's activations and the two initiators, with E's ghosts | E's variables of the same names, generalised from L's activations to every claimant as the interface's entry check states; `cstage` keeps only the raised stage. |
 | `memFence`, `fence`, `retired` | E's loaded entry, durable entry and floor, per initiator | The shard's loaded generation entry (`WalShardGrain._generationEntries`), the durable row `WalAppendFenceRows.GenerationGrainType`, and the floor `WalShardGrain.GenerationFloorLocked`. These are E's `memFence`, `fence` and `retired`, H's `fFence`, and R's `loaded`, `entryRow` and `walFloor`. |
-| `mInit`, `hoOpen`, `hoClosedAt`, `windows` | L's marker | `LeafHandOffState.Initialised` and `ShardHandOffState.Initialised`, read with `HandOffMarkerCore.IsHeldOpen` and `HandOffMarkerCore.RequiredHead`. These are H's variables of the same names, and R's `mInit` and `closedAt`. |
+| `mInit`, `hoOpen`, `hoClosedAt`, `windows`, `fWin` | L's marker, and whether its open window is `F`'s rather than the bulk switch's | `LeafHandOffState.Initialised` and `ShardHandOffState.Initialised`, read with `HandOffMarkerCore.IsHeldOpen` and `HandOffMarkerCore.RequiredHead`. These are H's variables of the same names, and R's `mInit` and `closedAt`. |
 | `recreated`, `legacy`, `caught`, `reinit`, `pGen` | The purge, its kind, the catch-up, the first initialisation, and the generation `S` held at the purge | R's `recreated`, `legacy` and `caught`; C's `recreated` and `reinit`. |
 | `phase`, `hint`, `born`, `cache`, `rp` | The bulk birth: L's birth hint, and the bulk-born activation's records and read position | C's `phase`, `hint`, `cache` and `rp`; B's `nUp`, `heldN` and `rpN`. |
 | `restarted` | The restart's budget | Modelling device. |
@@ -120,18 +125,18 @@ apart.
 
 | Spec property | Production property | Detector |
 |---------------|---------------------|----------|
-| `EntryCheckMeetsHandOffAdmission` | A foreign author's stamped append that the WAL shard's entry check admits is one the hand-off fence's model admits. | Yes: `LiveAdvanceCompositeTests.Each_copied_formula_matches_its_source` |
-| `ClaimHeadMeetsHandOffClose` | A hand-off close's re-claim returns a head above every stamped foreign append, as the hand-off fence's model assumes. | Yes: `LiveAdvanceCompositeTests.Each_copied_formula_matches_its_source` |
-| `EntryCheckMeetsRoutingAdmission` | A straddler that the WAL shard's entry check admits is one the routing floor's model admits. | Yes: `LiveAdvanceCompositeTests.Each_copied_formula_matches_its_source` |
-| `ClaimWriteMeetsRoutingClaim` | A re-presented routing claim that the WAL shard's claim write admits is one the routing floor's model admits. | Yes: `LiveAdvanceCompositeTests.Each_copied_formula_matches_its_source` |
-| `ClaimHeadMeetsRoutingInit` | The re-created incarnation's first initialisation re-claims at the allocator head, as the routing floor's model assumes. | Yes: `LiveAdvanceCompositeTests.Each_copied_formula_matches_its_source` |
-| `EpochMeetsCoreClaim` | A claim the append-epoch fence allows is one the core's environment allows. | Yes: `LiveAdvanceCompositeTests.Each_copied_formula_matches_its_source` |
-| `EpochMeetsCoreOwnAlloc` | An own stamped append the append-epoch fence admits comes from the activation the core takes as current. | Yes: `LiveAdvanceCompositeTests.Each_copied_formula_matches_its_source` |
-| `HandOffMeetsCoreForeignAlloc` | A foreign stamped append the hand-off fence allows is one the core's environment allows. | Yes: `LiveAdvanceCompositeTests.Each_copied_formula_matches_its_source` |
-| `HandOffMeetsCoreClose` | A close the hand-off fence allows records heads the core's environment allows. | Yes: `LiveAdvanceCompositeTests.Each_copied_formula_matches_its_source` |
-| `RoutingMeetsCoreStraddler` | A straddler the routing floor allows is one the core's environment allows. | Yes: `LiveAdvanceCompositeTests.Each_copied_formula_matches_its_source` |
-| `RoutingMeetsCoreInit` | A first initialisation the routing floor and the hand-off fence allow records heads the core's environment allows. | Yes: `LiveAdvanceCompositeTests.Each_copied_formula_matches_its_source` |
-| `BulkMeetsCoreCreate` | A birth the bulk switch allows is one the core's environment allows. | Yes: `LiveAdvanceCompositeTests.Each_copied_formula_matches_its_source` |
+| `EntryCheckMeetsHandOffAdmission` | A foreign author's stamped append that the WAL shard's entry check admits is one the hand-off fence's model admits. | Yes: `LiveAdvanceCompositeTests.Each_composite_copy_equals_its_source` |
+| `ClaimHeadMeetsHandOffClose` | A hand-off close's re-claim returns a head above every stamped foreign append, as the hand-off fence's model assumes. | Yes: `LiveAdvanceCompositeTests.Each_composite_copy_equals_its_source` |
+| `EntryCheckMeetsRoutingAdmission` | A straddler that the WAL shard's entry check admits is one the routing floor's model admits. | Yes: `LiveAdvanceCompositeTests.Each_composite_copy_equals_its_source` |
+| `ClaimWriteMeetsRoutingClaim` | A re-presented routing claim that the WAL shard's claim write admits is one the routing floor's model admits. | Yes: `LiveAdvanceCompositeTests.Each_composite_copy_equals_its_source` |
+| `ClaimHeadMeetsRoutingInit` | The re-created incarnation's first initialisation re-claims at the allocator head, as the routing floor's model assumes. | Yes: `LiveAdvanceCompositeTests.Each_composite_copy_equals_its_source` |
+| `EpochMeetsCoreClaim` | A claim the append-epoch fence allows is one the core's environment allows. | Yes: `LiveAdvanceCompositeTests.Each_composite_copy_equals_its_source` |
+| `EpochMeetsCoreOwnAlloc` | An own stamped append the append-epoch fence admits comes from the activation the core takes as current. | Yes: `LiveAdvanceCompositeTests.Each_composite_copy_equals_its_source` |
+| `HandOffMeetsCoreForeignAlloc` | A foreign stamped append the hand-off fence allows is one the core's environment allows. | Yes: `LiveAdvanceCompositeTests.Each_composite_copy_equals_its_source` |
+| `HandOffMeetsCoreClose` | A close the hand-off fence allows records heads the core's environment allows. | Yes: `LiveAdvanceCompositeTests.Each_composite_copy_equals_its_source` |
+| `RoutingMeetsCoreStraddler` | A straddler the routing floor allows is one the core's environment allows. | Yes: `LiveAdvanceCompositeTests.Each_composite_copy_equals_its_source` |
+| `RoutingMeetsCoreInit` | A first initialisation the routing floor and the hand-off fence allow records heads the core's environment allows. | Yes: `LiveAdvanceCompositeTests.Each_composite_copy_equals_its_source` |
+| `BulkMeetsCoreCreate` | A birth the bulk switch allows is one the core's environment allows. | Yes: `LiveAdvanceCompositeTests.Each_composite_copy_equals_its_source` |
 
 ## Excluded properties
 
@@ -145,9 +150,10 @@ These record which guarantee carries an edge when another guarantee already impl
 
 | Check | Result |
 |-------|--------|
-| `CloseHeadMonotone` | Not load-bearing on any edge. The composite has one hand-off window, so a foreign close never follows another close in one incarnation, and the first initialisation's head lies above every prior allocation (`InitHeadCoversPriorAllocations`), so it never lowers the heads an earlier close recorded. It stays a step constraint because it is H's guarantee. |
 | `StraddlerBelowInit` on `RoutingMeetsCoreInit` | Not load-bearing: `InitHeadCoversPriorAllocations` covers every prior allocation, straddlers included. It carries `RoutingMeetsCoreStraddler` instead (`RoutingMeetsCoreStraddlerUnbounded`). |
-| `ClaimHeadCoversPriorAppends` on the close heads | The head a re-claim returns is the allocator head, so E's guarantee alone discharges H's `CloseHeads` and R's first-initialisation head. |
+
+`ClaimHeadCoversPriorAppends` is not a redundancy: it is the guarantee both
+`ClaimHeadMeetsHandOffClose` and `ClaimHeadMeetsRoutingInit` rely on, as the edge table shows.
 
 ## Findings
 

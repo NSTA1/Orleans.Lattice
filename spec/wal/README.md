@@ -56,7 +56,7 @@ directory, and the draft keeps every design mutation as the record each module t
 | `WalRoutingFloor` | 3 | 1 | 12 | 17 | 14 | 10,704 |
 | `WalBulkSwitch` | 4 | 0 | 16 | 19 | 18 | 39,110 |
 | `WalLiveAdvanceCore` | 5 | 1 | 20 | 31 | 24 | 778,329 |
-| `WalLiveAdvanceComposite` | 13 | 0 | 15 | 27 | 15 | 138,603 |
+| `WalLiveAdvanceComposite` | 13 | 0 | 15 | 28 | 15 | 131,423 |
 
 `Actions` counts the disjuncts of `Next`, including the non-behavioural `Stutter`
 of `WalMove`, `WalAppendEpoch`, `WalHandOffFence`, `WalRoutingFloor`, `WalBulkSwitch` and `WalLiveAdvanceCore`. `Behaviour rows` counts the action rows of the
@@ -683,8 +683,8 @@ mutation that weakens it, which must turn the edge red.
 
 [`LiveAdvanceCompositeRefinement.md`](LiveAdvanceCompositeRefinement.md) tables these
 mutations. It also records:
-- the two redundancy checks;
-- the scope cuts: one restart, a purge never after a bulk birth, two offsets and one window;
+- the redundancy check;
+- the scope cuts: one restart, a purge never after a bulk birth, the bulk switch's own close, two offsets and one window;
 - the module configurations that cover what the cuts drop.
 
 ### What it covers, and what it does not

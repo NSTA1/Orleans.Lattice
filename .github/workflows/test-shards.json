@@ -266,7 +266,7 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardWalLiveAdvanceComposite"],
-        "note": "WalLiveAdvanceComposite (epic #5605, member 6c): the five live-advance modules' interface check, base 138,603 states and 27 mutations co-located with their base, 28 cases. Measured locally on four CPUs (process affinity) with two TLC slots of two workers, Java 17, as the CI legs run: 47 s of tests, 0.94 minutes of dotnet test."
+        "note": "WalLiveAdvanceComposite (epic #5605, member 6c): the five live-advance modules' interface check, base 131,423 states and 28 mutations co-located with their base, 29 cases. Measured locally on four CPUs (process affinity) with two TLC slots of two workers, Java 17, as the CI legs run: 43 s of tests, 0.88 minutes of dotnet test."
       },
       {
         "shard": "formal-tlc-shard-ownership",

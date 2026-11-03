@@ -59,6 +59,7 @@ VARIABLES
     hoOpen,        \* H: L's marker is open
     hoClosedAt,    \* H: the maximum of the heads the marker's closes recorded
     windows,       \* H: hand-off windows opened so far
+    fWin,          \* H: the open window, if any, is F's: the bulk switch's own window is not
     recreated,     \* R: the tree has been purged and re-created
     legacy,        \* R: the purge finished on 10.2.0
     caught,        \* R: the re-seed catch-up ran after a 10.2.0 purge
@@ -73,7 +74,7 @@ VARIABLES
     broken         \* the edges a kept step has failed: empty unless an assumption fails
 
 eVars == <<epoch, cstage, claimHead, prior, maxClaimed, lRetired, staleAccepted, memFence, fence, retired>>
-hVars == <<mInit, hoOpen, hoClosedAt, windows>>
+hVars == <<mInit, hoOpen, hoClosedAt, windows, fWin>>
 rVars == <<recreated, legacy, caught, reinit, pGen>>
 bVars == <<phase, hint, born, cache, rp>>
 vars == <<next, author, up, dupUsed, restarted, eVars, hVars, rVars, bVars, broken>>
@@ -116,6 +117,7 @@ TypeOK ==
     /\ hoOpen \in BOOLEAN
     /\ hoClosedAt \in 0..MaxOff
     /\ windows \in 0..MaxWindows
+    /\ fWin \in BOOLEAN
     /\ recreated \in BOOLEAN
     /\ legacy \in BOOLEAN
     /\ caught \in BOOLEAN
@@ -141,6 +143,7 @@ Init ==
         /\ up = IF bulk THEN {} ELSE {"a1"}
         /\ hoOpen = bulk
         /\ windows = IF bulk THEN 1 ELSE 0
+    /\ fWin = FALSE
     /\ dupUsed = FALSE
     /\ restarted = FALSE
     /\ epoch = [c \in Claimants |-> IF c \in Inits THEN 1 ELSE 0]
@@ -250,10 +253,13 @@ claimed == [c \in Claimants |-> cstage[c] = 3]
 cur == IF \E a \in up : CanAppend(a) /\ epoch[a] = maxClaimed
        THEN CHOOSE a \in up : CanAppend(a) /\ epoch[a] = maxClaimed
        ELSE NoAct
-stale == {a \in Acts : claimed[a] /\ ~CanAppend(a)}
+stale == {a \in Acts : claimed[a] /\ (epoch[a] < maxClaimed \/ epoch[a] <= lRetired)}
 
 \* C (WalLiveAdvanceCore): the heads a close may record.
 HeadsAbove(S) == {h \in 0..next : \A o \in Offs : o < next /\ author[o] \in S => o < h}
+
+\* R: FirstInit's close records the allocator head.
+RInitHead == claimHead'["S"] = next
 
 \* The entry H's guard reads: the loaded one, or the durable one it loads.
 HEntry(i) == IF memFence[i] = Unloaded THEN fence[i] ELSE memFence[i]
@@ -265,13 +271,25 @@ CClaim(a) ==
     /\ ~claimed[a]
     /\ claimHead' = [claimHead EXCEPT ![a] = next]
     /\ cur' = a
-COwnAlloc(a) == a \in up /\ cur = a
+    /\ stale' = IF cur \in Acts THEN stale \cup {cur} ELSE stale
+COwnAlloc(a) ==
+    /\ a \in up
+    /\ cur = a
 CForeignAlloc == hoOpen \/ ~mInit
-CClose == \E h \in IF mInit THEN HeadsAbove({Foreign}) ELSE 0..next : hoClosedAt' = Max2(hoClosedAt, h)
-CStraddlerAlloc == recreated /\ ~reinit
-CMarkInit == \E h \in HeadsAbove({Foreign, Straddler}) : hoClosedAt' = Max2(hoClosedAt, h)
+CClose ==
+    /\ phase = "live"
+    /\ hoOpen
+    /\ \E h \in IF mInit THEN HeadsAbove({Foreign}) ELSE 0..next : hoClosedAt' = Max2(hoClosedAt, h)
+CStraddlerAlloc ==
+    /\ recreated
+    /\ ~reinit
+CMarkInit ==
+    /\ recreated
+    /\ ~mInit
+    /\ \E h \in HeadsAbove({Foreign, Straddler}) : hoClosedAt' = Max2(hoClosedAt, h)
 CCreate ==
-    \E r \in -1..(next - 1), held \in SUBSET Allocated :
+    /\ phase = "window"
+    /\ \E r \in -1..(next - 1), held \in SUBSET Allocated :
         /\ \A o \in Allocated : o <= r => o \in held
         /\ cache' = [cache EXCEPT !["a1"] = held]
         /\ rp' = [rp EXCEPT !["a1"] = r]
@@ -327,6 +345,7 @@ ForeignOpen ==
     /\ windows < MaxWindows
     /\ hoOpen' = TRUE
     /\ windows' = windows + 1
+    /\ fWin' = TRUE
     /\ UNCHANGED <<next, author, up, dupUsed, eVars, mInit, hoClosedAt, rVars, bVars, broken>>
     /\ UNCHANGED restarted
 
@@ -345,9 +364,10 @@ ForeignAlloc ==
     /\ UNCHANGED restarted
 
 (* Close: F re-claims a generation E's claim write admits, reading any   *)
-(* head, and L's marker closes recording any head.                       *)
+(* head, and the window F opened closes, L's marker recording any head.  *)
 Close ==
     /\ hoOpen
+    /\ fWin
     /\ \E g \in 1..MaxEpoch, h \in 0..next, v \in 0..next :
         /\ EClaimAboveFloor("F", g)
         /\ EClaimAboveEntry("F", g)
@@ -361,6 +381,7 @@ Close ==
     /\ broken' = broken \cup Fails("ClaimHeadMeetsHandOffClose", claimHead'["F"] \in CloseHeads)
                            \cup Fails("HandOffMeetsCoreClose", CClose)
     /\ UNCHANGED <<next, author, up, dupUsed, cstage, maxClaimed, lRetired, staleAccepted, retired>>
+    /\ fWin' = FALSE
     /\ UNCHANGED <<mInit, windows, rVars, bVars>>
     /\ UNCHANGED restarted
 
@@ -405,6 +426,7 @@ Purge ==
     /\ hoOpen' = FALSE
     /\ hoClosedAt' = 0
     /\ UNCHANGED <<next, author, up, dupUsed, epoch, cstage, claimHead, prior, maxClaimed, staleAccepted>>
+    /\ fWin' = FALSE
     /\ UNCHANGED <<windows, legacy, caught, reinit, bVars, broken>>
     /\ UNCHANGED restarted
 
@@ -429,7 +451,7 @@ CatchUp ==
     /\ ~caught
     /\ caught' = TRUE
     /\ mInit' = FALSE
-    /\ UNCHANGED <<next, author, up, dupUsed, eVars, hoOpen, hoClosedAt, windows>>
+    /\ UNCHANGED <<next, author, up, dupUsed, eVars, hoOpen, hoClosedAt, windows, fWin>>
     /\ UNCHANGED <<recreated, legacy, reinit, pGen, bVars, broken>>
     /\ UNCHANGED restarted
 
@@ -467,10 +489,10 @@ FirstInit ==
     /\ prior' = [prior EXCEPT !["S"] = Allocated]
     /\ mInit' = TRUE
     /\ reinit' = TRUE
-    /\ broken' = broken \cup Fails("ClaimHeadMeetsRoutingInit", claimHead'["S"] = next)
+    /\ broken' = broken \cup Fails("ClaimHeadMeetsRoutingInit", RInitHead)
                            \cup Fails("RoutingMeetsCoreInit", CMarkInit)
     /\ UNCHANGED <<next, author, up, dupUsed, cstage, maxClaimed, lRetired, staleAccepted, retired>>
-    /\ UNCHANGED <<hoOpen, windows, recreated, legacy, caught, pGen, bVars>>
+    /\ UNCHANGED <<hoOpen, windows, fWin, recreated, legacy, caught, pGen, bVars>>
     /\ UNCHANGED restarted
 
 (* Birth: the bulk switch creates L, its first activation born with any   *)

@@ -8,7 +8,7 @@ CLASS: Invariant
 SUMMARY: a first initialisation is reachable: the edge's check is not vacuous
 
 --- FIND
-Fails("ClaimHeadMeetsRoutingInit", claimHead'["S"] = next)
+Fails("ClaimHeadMeetsRoutingInit", RInitHead)
 --- REPLACE
 Fails("ClaimHeadMeetsRoutingInit", FALSE)
 --- END

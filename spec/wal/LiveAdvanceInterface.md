@@ -199,7 +199,7 @@ formulas and the scope cuts.
 | E -> C | `EpochMeetsCoreClaim` | `EpochMeetsCoreClaimHeadUncovered`, `EpochMeetsCoreClaimRetiredEpochRaised` |
 | E -> C | `EpochMeetsCoreOwnAlloc` | `EpochMeetsCoreOwnAllocSupersededAppends`, `EpochMeetsCoreOwnAllocEpochsShared` |
 | H -> C | `HandOffMeetsCoreForeignAlloc` | `HandOffMeetsCoreForeignAllocUnbounded` |
-| H -> C | `HandOffMeetsCoreClose` | `HandOffMeetsCoreCloseHeadUnbounded` |
+| H -> C | `HandOffMeetsCoreClose` | `HandOffMeetsCoreCloseHeadUnbounded`, `HandOffMeetsCoreCloseHeadsRegress` |
 | R -> C | `RoutingMeetsCoreStraddler` | `RoutingMeetsCoreStraddlerUnbounded` |
 | R -> C | `RoutingMeetsCoreInit` | `RoutingMeetsCoreInitHeadUncovered` |
 | B -> C | `BulkMeetsCoreCreate` | `BulkMeetsCoreCreateHintUnbounded` |
