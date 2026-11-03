@@ -106,6 +106,7 @@ distinct states to depth 21, about fifteen seconds on two workers.
 | [`perturbations/`](perturbations/README.md) | Production perturbations for `WalPinRetirement`'s detectors. |
 | `WalAppendEpoch.tla` / `.cfg` / `.manifest.json` | The append-epoch fence module, its TLC model and its manifest. |
 | `WalAppendEpoch.WideEpochs.cfg` | The append-epoch fence module with epochs up to 4, checked against every invariant. |
+| `LiveAdvanceInterface.md` | The assume-guarantee contract between the five live-advance modules (`WalAppendEpoch` and the four that follow): the graph, the shared vocabulary, each guarantee and what the core assumes. |
 | [`append-epoch-mutations/`](append-epoch-mutations/) | One or more deliberate defects per property and per action of `WalAppendEpoch`. |
 | [`AppendEpochRefinement.md`](AppendEpochRefinement.md) | `WalAppendEpoch` mapped to production, and the interface the other promoted modules assume. |
 
