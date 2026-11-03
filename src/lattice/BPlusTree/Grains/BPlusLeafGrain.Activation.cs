@@ -2159,6 +2159,13 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private void LatchProjectionStaleDrive(int partitionCount, LeafProjectionStaleException fault)
     {
+        // THROWAWAY (#5605 6b review S1): the stale latch disabled, to prove the
+        // duplicate-activation fall-off detectors go red in CI. Never merge.
+        if (partitionCount >= 0)
+        {
+            return;
+        }
+
         var signature = ComputePersistedCheckpointSignature(partitionCount);
         if (_projectionStaleDriveLatch is { } existing
             && existing.PersistedCheckpointSignature == signature)
