@@ -115,6 +115,11 @@ public sealed class ImmutableGrainBoundaryContractTests : ImmutableGrainBoundary
             // Epic #5605 member 4: CloseHeads is a fresh array per call (HandOffMarkerCore.RequiredHeads
             // clones), and the leaf only reads it, per partition, for the one advance it decides.
             ["Orleans.Lattice.BPlusTree.LeafLiveAdvanceView"] = ReadModel,
+            // Epic #5605 member 3 (#5752, #5755): Rows and ReadFrontier are built fresh by
+            // NarrowHighKeyAsync for one call (CopyRowsAtOrAbove, a new frontier array); the
+            // leaf keeps no reference, and the shard root only reads them to relocate the rows
+            // and to cap a hint into a new array.
+            ["Orleans.Lattice.BPlusTree.LeafNarrowResult"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.LeafLiveRawEntriesPage"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.LeafPendingMutationsPage"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.Grains.WalShardPage"] = ReadModel,

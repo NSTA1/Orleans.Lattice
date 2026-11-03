@@ -115,7 +115,12 @@ internal sealed partial class ShardRootGrain
             fenceHeads = await FenceBulkSwitchesAsync(drainBatchWrites: true);
         }
 
-        var hint = stored ?? fenceHeads ?? _bulkRunHint ?? await CaptureBulkBirthHeadsAsync();
+        // Heads are exclusive and a hint is an inclusive checkpoint, so every head
+        // becomes a hint one below it (issue #5760); a stored or run hint already is.
+        var hint = stored
+            ?? (fenceHeads is null ? null : BPlusLeafGrain.HeadsAsCheckpoints(fenceHeads))
+            ?? _bulkRunHint
+            ?? BPlusLeafGrain.HeadsAsCheckpoints(await CaptureBulkBirthHeadsAsync());
         var token = BulkHandOffToken(operationId);
         var opened = false;
         var closed = 0;

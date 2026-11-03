@@ -1069,8 +1069,8 @@ internal sealed partial class BPlusLeafGrain
             // replayed, read now, before the intent is persisted: until then the leaf
             // still declares the whole range, so its replay applies every such record
             // rather than stepping past it. This leaf's own advance keeps the heads.
-            donorHeads = walHeadsAtSplit;
-            walHeadsAtSplit = CapAtOwnReadFrontier(walHeadsAtSplit);
+            donorHeads = HeadsAsCheckpoints(walHeadsAtSplit);
+            walHeadsAtSplit = CapAtOwnReadFrontier(donorHeads);
         }
 
         state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitInProgress);
@@ -1096,13 +1096,28 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
-    /// Captures the current WAL head offset across every partition for
-    /// the leaf's tree. Returns a non-null array whose length is the
-    /// configured <see cref="LatticeOptions.WalPartitions"/>; entry
-    /// <c>i</c> is the head of partition <c>i</c> at capture time.
+    /// The read position a leaf born now may take from WAL heads read now (issue #5760):
+    /// per partition, the head minus one. A head is exclusive - the next offset the log
+    /// will assign - while a checkpoint is inclusive - the leaf replays every record
+    /// above it - so a head stamped as it is would skip the record first allocated at
+    /// it, which, written by another author, no leaf would then apply. At most one
+    /// record is re-applied instead, which last-writer-wins makes idempotent. A head of
+    /// 0 becomes -1, the "nothing applied" sentinel.
     /// </summary>
+    internal static long[] HeadsAsCheckpoints(long[] heads)
+    {
+        var checkpoints = new long[heads.Length];
+        for (var p = 0; p < checkpoints.Length; p++)
+        {
+            checkpoints[p] = heads[p] - 1;
+        }
+
+        return checkpoints;
+    }
+
     /// <summary>
-    /// A copy of <paramref name="heads"/> with each lowered to this leaf's projection
+    /// A copy of <paramref name="heads"/> - already in checkpoint space, see
+    /// <see cref="HeadsAsCheckpoints"/> - with each lowered to this leaf's projection
     /// checkpoint for that partition (issue #5752). Both are inclusive checkpoints - a
     /// leaf replays every record above its own - so a record at the checkpoint plus one,
     /// the first this leaf has not applied, is replayed by a leaf that starts there.
@@ -1118,6 +1133,12 @@ internal sealed partial class BPlusLeafGrain
         return capped;
     }
 
+    /// <summary>
+    /// Captures the current WAL head offset across every partition for
+    /// the leaf's tree. Returns a non-null array whose length is the
+    /// configured <see cref="LatticeOptions.WalPartitions"/>; entry
+    /// <c>i</c> is the head of partition <c>i</c> at capture time.
+    /// </summary>
     private async Task<long[]> CaptureWalHeadsByPartitionAsync(string treeId)
     {
         var options = await GetOptionsAsync();

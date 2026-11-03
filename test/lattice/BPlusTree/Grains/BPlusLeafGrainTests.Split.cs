@@ -511,10 +511,11 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task Split_advances_donor_checkpoint_to_wal_head()
+    public async Task Split_advances_donor_checkpoint_to_one_below_the_wal_head()
     {
         // Issue #5752 caps the sibling's read position only; the donor still advances
-        // to the heads it read, even from below its own frontier.
+        // to the heads it read, even from below its own frontier - one below each, as a
+        // head is exclusive and a checkpoint inclusive (issue #5760).
         var (grain, state, _, _) = BuildSplitFixture(walHead: 42L);
         SeedDonorFrontier(state, 30);
 
@@ -524,7 +525,8 @@ public partial class BPlusLeafGrainTests
         var result = await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
 
         Assert.That(result, Is.Not.Null, "split should have occurred");
-        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(42L));
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(41L),
+            "a checkpoint at the head would skip the record first allocated there");
     }
 
     [Test]
@@ -547,10 +549,13 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task Split_stamps_the_sibling_hint_no_higher_than_the_wal_head()
+    public async Task Split_stamps_the_sibling_hint_one_below_the_wal_head()
     {
         // The other half of the minimum: a donor whose checkpoint is above the head
-        // read for the split hands the sibling the head.
+        // read for the split hands the sibling one below the head (issue #5760). The
+        // head is the next offset the log assigns, so a sibling checkpointed at it would
+        // skip the record allocated there, which, written by another author, no leaf
+        // would then apply.
         var (grain, state, siblingMock, _) = BuildSplitFixture(walHead: 42L);
         SeedDonorFrontier(state, 50);
 
@@ -561,7 +566,7 @@ public partial class BPlusLeafGrainTests
 
         Assert.That(result, Is.Not.Null, "split should have occurred");
         await siblingMock.Received(1).SetCheckpointOffsetHintsAsync(
-            Arg.Is<long[]>(heads => heads.Length == 1 && heads[0] == 42L));
+            Arg.Is<long[]>(heads => heads.Length == 1 && heads[0] == 41L));
     }
 
     [Test]

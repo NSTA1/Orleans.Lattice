@@ -20,6 +20,12 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
     private const long BirthHead = 40;
     private const long CloseHead = 90;
 
+    /// <summary>
+    /// The hint a bulk operation stores from <see cref="BirthHead"/>: one below it, as a head
+    /// is exclusive and a hint an inclusive checkpoint (issue #5760).
+    /// </summary>
+    private const long BirthHint = BirthHead - 1;
+
     private sealed record HintRig(Harness H, EnumerableMemoryGrainStorage Storage, IWalShardGrain Wal, ILeafReplayCoordinatorGrain Coordinator);
 
     /// <summary>
@@ -95,7 +101,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         Assert.That(atBirth, Is.Not.Empty, "precondition: the append created leaves");
         Assert.Multiple(() =>
         {
-            Assert.That(atBirth.All(m => m.BulkBirthHints.TryGetValue("op-hint", out var hint) && hint.Length > 0 && hint.All(x => x == BirthHead)), Is.True,
+            Assert.That(atBirth.All(m => m.BulkBirthHints.TryGetValue("op-hint", out var hint) && hint.Length > 0 && hint.All(x => x == BirthHint)), Is.True,
                 "the hint is durable before any appended leaf is born");
             Assert.That(atBirth.All(m => m.Open.TryGetValue("bulk:op-hint", out var range) && range.LowInclusive == "k0000" && range.HighExclusive is null), Is.True,
                 "the marker is open over the appended range before any appended leaf is born");
@@ -134,7 +140,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         Assert.That(appended, Has.Count.EqualTo(3), "precondition: three appended leaves");
         foreach (var (low, leaf) in appended)
         {
-            Assert.That(HintAppliedTo(leaf), Is.Not.Empty.And.All.EqualTo(BirthHead), $"the appended leaf at {low} reads from the hint");
+            Assert.That(HintAppliedTo(leaf), Is.Not.Empty.And.All.EqualTo(BirthHint), $"the appended leaf at {low} reads from one below the head it captured (#5760)");
         }
 
         Assert.That(HintAppliedTo(rig.H.Leaf(existing)), Is.Null, "the old rightmost leaf keeps its read position");
@@ -330,7 +336,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
 
         var loaded = rig.H.Leaves.Values.Where(l => l != seededLeaf && HintAppliedTo(l) is not null).ToList();
         Assert.That(loaded, Has.Count.EqualTo(3), "every loaded leaf reads from the hint");
-        Assert.That(loaded.SelectMany(l => HintAppliedTo(l)!), Is.All.EqualTo(BirthHead));
+        Assert.That(loaded.SelectMany(l => HintAppliedTo(l)!), Is.All.EqualTo(BirthHint));
 
         // The replaced root's rows are merged into the loaded tree before any loaded
         // leaf's read position moves past them.
@@ -396,7 +402,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
             Assert.That(marker.Open.Keys, Is.EqualTo(new[] { "bulk:op-next" }), "the abandoned switch is closed; the new one waits for its run's fence");
             Assert.That(marker.Closes.Single(c => c.Token == "bulk:abandoned").Heads, Is.Not.Empty.And.All.EqualTo(CloseHead));
             Assert.That(marker.BulkBirthHints.Keys, Is.EqualTo(new[] { "op-next" }), "the abandoned hint is removed with its close");
-            Assert.That(marker.BulkBirthHints["op-next"], Is.All.EqualTo(CloseHead),
+            Assert.That(marker.BulkBirthHints["op-next"], Is.All.EqualTo(CloseHead - 1),
                 "the close is folded into the open: the new switch's hint is the fence's heads, read no later than its first leaf's birth");
         });
     }
@@ -478,7 +484,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
             Assert.That(marker.Closes.Count(c => c.Token.StartsWith("bulk:chunk-", StringComparison.Ordinal)), Is.EqualTo(ShardRootGrain.BulkSwitchesPerFence));
             Assert.That(marker.Closes.SelectMany(c => c.Heads), Is.All.EqualTo(CloseHead));
             Assert.That(marker.BulkBirthHints.Keys, Is.EqualTo(new[] { "chunk-next" }), "the closed switches' hints are removed");
-            Assert.That(hint, Is.All.EqualTo(CloseHead), "the new chunk takes the fence's heads as its hint");
+            Assert.That(hint, Is.All.EqualTo(CloseHead - 1), "the new chunk takes one below the fence's heads as its hint (#5760)");
             Assert.That(rig.Storage.Writes - writesBefore, Is.EqualTo(2), "the generation raise, then one write that closes the run and opens the chunk");
         });
     }
@@ -566,7 +572,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
             {
                 Assert.That(applied![0], Is.EqualTo(BirthHead - 10), "capped at the frontier, not at the frontier plus one");
                 Assert.That(applied[1], Is.EqualTo(-1), "a partition the old leaf never replayed is replayed from the start");
-                Assert.That(applied.Skip(2), Is.All.EqualTo(BirthHead), "the hint where it is the lower");
+                Assert.That(applied.Skip(2), Is.All.EqualTo(BirthHint), "the hint, one below the head, where it is the lower");
             });
         }
     }

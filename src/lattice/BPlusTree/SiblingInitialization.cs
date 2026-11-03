@@ -92,7 +92,9 @@ internal readonly record struct SiblingInitialization
     /// bound). Indexed by WAL partition, in the same offset space as
     /// <c>ILeafProjection.SetCheckpointOffsetAsync</c> - these are the very
     /// values the donor goes on to stamp through
-    /// <c>SetCheckpointOffsetHintsAsync</c>.
+    /// <c>SetCheckpointOffsetHintsAsync</c>: one below each head read, as a head is
+    /// exclusive and a checkpoint inclusive (issue #5760), and no higher than the
+    /// donor's own checkpoint (issue #5752).
     /// <para>
     /// <b>Why the birth pin needs them (issue #3094).</b> The sibling seeds a
     /// durable materialiser pin before the donor's <c>MergeEntriesAsync</c>

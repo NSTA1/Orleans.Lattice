@@ -1641,8 +1641,8 @@ or reshard shadow forward, a fan-out begun while the gate was closed, an older
 caller - is appended unstamped, by design. The record, its result and its feed are
 unchanged; range-delete records are fenced, never clipped.
 
-**The bulk birth hint.** A bulk load or bulk append records a **birth hint** - a head
-of every WAL partition read before its first leaf is born - in the shard's marker row,
+**The bulk birth hint.** A bulk load or bulk append records a **birth hint** - one below
+a head of every WAL partition read before its first leaf is born - in the shard's marker row,
 in the same write that opens its marker and before it creates its first leaf; a resume
 of the same operation reuses the stored hint. A lower hint is never above a record the
 leaf has not applied, it only lengthens the replay, so the consecutive chunks of a
@@ -1704,7 +1704,17 @@ leaf still declares the whole range, so its replay applies such records rather t
 stepping past them; after it, a replay steps past them, which is why a graft resumed
 on a leaf an earlier attempt already narrowed applies no hint. A lower read position
 only lengthens the new leaf's first replay. The donor of a split still advances its own
-checkpoint to the heads it read.
+checkpoint from the heads it read.
+
+**A head is one past a checkpoint.** A WAL head is exclusive - the next offset the log
+will assign - while a leaf's checkpoint is inclusive - the last offset it has applied, and
+it replays every record above it. So every head a split or a bulk operation reads becomes
+a read position one below it, for the split sibling, the split donor's own advance, the
+sibling's birth pin and the bulk birth hint alike
+([#5760](https://github.com/NSTA1/Orleans.Lattice/issues/5760)). Taken as it is, a head
+would skip the record first allocated at it, which, written by another author, no leaf
+would then apply; one below re-applies at most one record, which last-writer-wins makes
+idempotent.
 
 **Coordinator terminals** carry the coordinator-terminal stamp class described in
 [Append epoch fencing](#append-epoch-fencing), so a saga does not raise the reported
