@@ -1,0 +1,20 @@
+# Pairs with the assumption on E: the entry check. The WAL admits a stamped
+# append from any loaded entry, without comparing the stamp with it. After a
+# purge that finished on 10.2.0 the WAL-side floor is not raised, so the claim
+# the re-created incarnation's first initialisation makes is the only fence on
+# the purged incarnation's generation, and without the check a straddler of L's
+# own shard root is allocated above the recorded close. The assumption is
+# load-bearing.
+MODULE: StraddlerBelowInitNoEntryCheck
+TARGET: StraddlerBelowInit
+CLASS: Invariant
+SUMMARY: the WAL admits a stamped append below its loaded generation entry
+PERTURBS: Alloc
+
+--- FIND
+    /\ loaded[i] # Unloaded
+    /\ pstamp[i] >= loaded[i]
+--- REPLACE
+    /\ loaded[i] # Unloaded
+\* MUTATION: the stamp is not compared with the loaded entry.
+--- END

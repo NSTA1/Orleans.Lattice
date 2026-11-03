@@ -1,0 +1,16 @@
+{
+  "mutations": "routing-floor-mutations",
+  "refinement": "RoutingFloorRefinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 3,
+    "properties": 0,
+    "actions": 12,
+    "mutations": 16,
+    "behaviourRows": 13,
+    "distinctStates": 10704
+  },
+  "variants": {
+    "WideGenerations": { "distinctStates": 24084 }
+  }
+}

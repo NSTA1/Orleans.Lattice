@@ -200,7 +200,13 @@ TLA+ specification in [`spec/wal/`](../../spec/wal/README.md):
   opened before the first admission, stamped at admission, and closed by a fence that
   re-claims the initiator's generation and records the allocator head - with another
   shard's range-delete walk, a WAL shard restart and a hand-off in flight across the
-  fence gate's opening. It is the second module promoted from that draft.
+  fence gate's opening. It is the second module promoted from that draft;
+- `WalRoutingFloor.tla`, the routing floor of the same advance: a tree's purge
+  raising every shard root's routing floor before it retires their rows, the floor
+  checked where a generation is claimed, a straddling write's seam retry that never
+  re-stamps it, and the re-created incarnation's first initialisation, against a
+  second shard root, a purge that finished on 10.2.0 with the re-seed catch-up, and
+  a WAL shard restart. It is the third module promoted from that draft.
 
 It follows the pattern of the atomic-commit specification: every property and every
 action has a mutation that makes a property fire, and a refinement note maps each
