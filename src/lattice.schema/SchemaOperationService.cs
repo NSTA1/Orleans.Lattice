@@ -1,4 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.Operations;
 
 namespace Orleans.Lattice.Schema;
@@ -67,7 +69,8 @@ internal sealed class SchemaOperationService(
             Start(tenantId, operationId, SchemaOperationKinds.Remediation, treeId, RemediationPhases),
             async (progress, ct) =>
             {
-                var accepted = await grain.AcceptAsync(transform, targetPolicy, operationId).ConfigureAwait(false);
+                var accepted = await AcceptAsync(
+                    treeId, () => grain.AcceptAsync(transform, targetPolicy, operationId), ct).ConfigureAwait(false);
                 return await SchemaRemediationDriver.DriveAsync(grain, accepted, progress, ct).ConfigureAwait(false);
             },
             ToCompletion);
@@ -97,8 +100,8 @@ internal sealed class SchemaOperationService(
             Start(tenantId, operationId, SchemaOperationKinds.Migration, treeId, RemediationPhases),
             async (progress, ct) =>
             {
-                var accepted = await grain
-                    .AcceptVersionMigrationAsync(config.SchemaId, config.TargetVersion, operationId)
+                var accepted = await AcceptAsync(
+                    treeId, () => grain.AcceptVersionMigrationAsync(config.SchemaId, config.TargetVersion, operationId), ct)
                     .ConfigureAwait(false);
                 return await SchemaRemediationDriver.DriveAsync(grain, accepted, progress, ct).ConfigureAwait(false);
             },
@@ -141,13 +144,27 @@ internal sealed class SchemaOperationService(
             async (progress, ct) =>
             {
                 var advanced = await versions.AdvanceTargetVersionAsync(treeId, newTargetVersion, ct).ConfigureAwait(false);
-                var accepted = await grain
-                    .AcceptVersionMigrationAsync(advanced.SchemaId, advanced.TargetVersion, operationId)
+                var accepted = await AcceptAsync(
+                    treeId, () => grain.AcceptVersionMigrationAsync(advanced.SchemaId, advanced.TargetVersion, operationId), ct)
                     .ConfigureAwait(false);
                 return await SchemaRemediationDriver.DriveAsync(grain, accepted, progress, ct).ConfigureAwait(false);
             },
             ToCompletion).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Accepts a remediation, waiting behind another alias operation that holds the tree's
+    /// alias reservation for at most <see cref="LatticeSchemaEnforcementOptions.AliasReservationWaitTimeout"/> (#5750).
+    /// </summary>
+    private Task<LatticeSchemaRemediationReport> AcceptAsync(
+        string treeId, Func<Task<LatticeSchemaRemediationReport>> accept, CancellationToken cancellationToken) =>
+        SchemaRemediationDriver.AcceptAsync(
+            treeId,
+            accept,
+            (services.GetService<IOptions<LatticeSchemaEnforcementOptions>>()?.Value ?? new LatticeSchemaEnforcementOptions())
+                .AliasReservationWaitTimeout,
+            services.GetService<ILogger<SchemaOperationService>>(),
+            cancellationToken);
 
     private Task<LatticeOperationLaunch<LatticeSchemaRemediationReport>> ReplayAsync(
         string tenantId, string operationId, string kind, string treeId, IReadOnlyList<string> phases) =>

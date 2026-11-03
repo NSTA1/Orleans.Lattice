@@ -72,4 +72,17 @@ public sealed class LatticeSchemaEnforcementOptions
     /// cost of more frequent checks. Must be positive. Defaults to one second.
     /// </summary>
     public TimeSpan PropagationInterval { get; set; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// How long a tracked schema remediation or migration waits to be accepted while
+    /// another alias operation holds the tree's alias reservation: a resize, a
+    /// replication bootstrap copy, a restore or its revert, or another remediation.
+    /// The reservation is released when that operation completes, so the refusal is
+    /// transient. While it waits, the operation stays <c>Running</c> in its first
+    /// phase and can be cancelled. Once the wait would pass this ceiling, the
+    /// operation fails with the refusal, which names the holding operation. Zero or
+    /// a negative value fails on the first refusal, without waiting. The blocking
+    /// in-process verbs never wait. Defaults to 15 minutes.
+    /// </summary>
+    public TimeSpan AliasReservationWaitTimeout { get; set; } = TimeSpan.FromMinutes(15);
 }
