@@ -151,15 +151,17 @@ OUTLINE_CHAPTER = re.compile(r'\bChapter\(\s*"([A-Za-z]\d+)"\s*,\s*\d+\s*,\s*"(?
 JOURNEY_FOLDER = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
 # The harness leg carries the east-region and Fabrikam estate fixtures (#5362). A contract
 # leg establishes up to its whole storyline on one estate, as a conformance shard does.
-TIMEOUTS = {"harness": 60, "isolated": 45, "contract": 60, "story": 150}
+TIMEOUTS = {"harness": 60, "isolated": 60, "contract": 60, "story": 150}
 # Each leg's `estimate` is its timeout. runner-overflow.py reads it only to send the
 # longest legs to the self-hosted pool first, so an upper bound orders them as well.
 # Each leg's `hang` is its per-test hang budget in minutes (dotnet test
 # --blame-hang-timeout). The blame collector times a whole test, not its silence. A contract
 # case establishes every chapter before its own (C3 consumes the whole Contoso storyline), and
 # so does an isolated case: U4 consumes A2 to U6, whose establishment alone can take 18 minutes
-# on a loaded runner (#5735), so both carry the longest budget.
-HANGS = {"harness": 20, "isolated": 30, "contract": 30, "story": 20}
+# on a loaded runner (#5735). A contract case for C3 or C4 establishes the whole storyline
+# first and has taken 28 minutes or more under replay-permit starvation (#5569), so both
+# carry 50 minutes, inside their 60-minute job timeouts.
+HANGS = {"harness": 20, "isolated": 50, "contract": 50, "story": 20}
 
 
 class PlanError(Exception):
