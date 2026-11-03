@@ -1,0 +1,14 @@
+# Pairs with HintOnlyWhileOpen. Design section 3 (S7): the hint row is removed
+# when the switch's token closes, in the same write.
+MODULE: HintOnlyWhileOpenCloseKeepsHint
+TARGET: HintOnlyWhileOpen
+CLASS: Invariant
+SUMMARY: the batched close closes a switch without removing its hint
+PERTURBS: Close
+
+--- FIND
+    /\ hint' = IF Pending THEN hint ELSE Null
+--- REPLACE
+\* MUTATION: the hint stays.
+    /\ hint' = hint
+--- END

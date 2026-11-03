@@ -1,0 +1,15 @@
+# Pairs with BulkHintBound. Issue #5706 (review B1 of #5702): a commit admitted
+# before the narrow and allocated below the hint is stored after the copy, outside
+# the old leaf's span, so no leaf applies it.
+MODULE: BulkHintBoundNarrowWithoutDrain
+TARGET: BulkHintBound
+CLASS: Invariant
+SUMMARY: the narrow does not drain the commits the old leaf admitted before it
+PERTURBS: Narrow
+
+--- FIND
+    /\ narrowed \/ ~(cst = "flight" /\ cCounted)
+--- REPLACE
+\* MUTATION: no drain.
+    /\ TRUE
+--- END

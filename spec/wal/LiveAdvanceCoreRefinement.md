@@ -74,7 +74,7 @@ weaken each one in turn and go red, so each is load-bearing.
   by no other module: `ReadPositionHonest`, `SnapshotHonest`, `NoTrimPastAcked` and
   `OldNeverRejected`. Member 6b adds the armed-newborn liveness property; the spec keeps
   `Armed(a)` a top-level operator for it.
-- **The graph.** E <- H <- B, E <- R, and {E, H, R, B} <- C, where E is `WalAppendEpoch`,
+- **The graph.** E <- H, E <- R, and {E, H, R, B} <- C, where E is `WalAppendEpoch`,
   H `WalHandOffFence`, R `WalRoutingFloor` and B `WalBulkSwitch`; an arrow points from the
   module that assumes to the module that guarantees. C assumes every other module and is
   assumed by none, so it closes no cycle.

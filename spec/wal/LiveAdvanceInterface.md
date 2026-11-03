@@ -15,10 +15,10 @@ guarantee. The design authority remains [`design/LiveAdvanceDesign.md`](design/L
 | E | `WalAppendEpoch` | nothing | `StaleEpochNeverAppends`, `ClaimHeadCoversPriorAppends`, `RaisedEpochUnique`, `OnlySupersededRefused`, and the entry check |
 | H | `WalHandOffFence` | E's entry check | `HandOffBound`, `AbsentMarkerHolds`, `CloseHeadMonotone` |
 | R | `WalRoutingFloor` | E's entry check | `StraddlerBelowInit`, `LiveGenerationAboveFloor` |
-| B | `WalBulkSwitch` | H's `HandOffBound` and `AbsentMarkerHolds` | `BulkHintBound`, `ContestedKeyAgrees` |
+| B | `WalBulkSwitch` | nothing | `BulkHintBound`, `ContestedKeyAgrees` |
 | C | `WalLiveAdvanceCore` | every guarantee above | `ReadPositionHonest`, `SnapshotHonest`, `NoTrimPastAcked`, and liveness |
 
-The edges are E <- H <- B, E <- R, and {E, H, R, B} <- C. No other edge exists, so
+The edges are E <- H, E <- R, and {E, H, R, B} <- C. No other edge exists, so
 the graph is acyclic. A module that finds it needs a further assumption raises it
 with the design owner before adding it. Adding an edge that closes a cycle is a
 design change, not a modelling choice.

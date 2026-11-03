@@ -61,7 +61,7 @@ once, either here or in the
 | Area | Modules | Mutations | Behaviour rows | Detector tests | Page |
 |------|---------|-----------|----------------|----------------|------|
 | Single-cluster atomic commit | 1 | 21 | 17 | 40 | [Verified Atomic-Commit](verified-atomic-commit.md) |
-| WAL durability lifecycle | 7 | 180 | 162 | 290 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
+| WAL durability lifecycle | 8 | 199 | 180 | 321 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
 | Shard ownership | 5 | 124 | 124 | 201 | [Verified Shard Ownership](verified-shard-ownership.md) |
 | Cross-cluster atomic visibility | 1 | 66 | 43 | 150 | [Verified Atomic-Commit: the replicated half](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | 4 | 91 | 71 | 206 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
@@ -416,7 +416,11 @@ gaps, states its full scope.
     and the live advance's core - an activation's arming, the live advance over
     its own applied appends, replay, the shared snapshot and the GC trim, the
     applied-prefix tracker and the unstamped watermark with its restart reset and
-    self-report - with the other fences as environment constraints.
+    self-report - with the other fences as environment constraints; and the bulk
+    switch - a bulk append's leaf born from the old rightmost leaf's range with its
+    birth hint capped at the old leaf's read frontier, the drain before the narrow,
+    the relocation of the rows the range held and the batched close - against a
+    crash of the shard root and a drain past its deadline.
   - **Does not cover:** more than two partitions; splits, resharding and saga
     state; replication consumers, beyond their effect on the trim floor; for pin
     retirement, several leaves or partitions per leaf, the pin's HLC frontier and
@@ -434,7 +438,9 @@ gaps, states its full scope.
     write spanning a purge that finished on 10.2.0; for the live advance's
     core, the other fences' own mechanisms, the holds production adds beyond the
     design's arming list, the split between the marker read and the stamp,
-    re-claims, or combined environments.
+    re-claims, or combined environments; for the bulk switch, several keys or
+    appended leaves, the re-delivery skip, a bulk load, the close's fence, or the
+    relocation's shadow markers.
 - **Shard ownership** ([`spec/shard-ownership/`](../../spec/shard-ownership/README.md)).
   - **Covers:** who serves a key across an adaptive split, an online shard
     fold, an online reshard, an online resize and its undo, with stale routers

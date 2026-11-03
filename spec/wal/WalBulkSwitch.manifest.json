@@ -1,0 +1,13 @@
+{
+  "mutations": "bulk-switch-mutations",
+  "refinement": "BulkSwitchRefinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 4,
+    "properties": 0,
+    "actions": 16,
+    "mutations": 19,
+    "behaviourRows": 18,
+    "distinctStates": 39110
+  }
+}

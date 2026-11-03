@@ -1,0 +1,15 @@
+# Pairs with BulkHintBound. The old leaf's replay advances its read position past
+# a foreign record of its range without applying it, so the capped hint lies
+# above a record no leaf holds.
+MODULE: BulkHintBoundReplayOSkipsRecord
+TARGET: BulkHintBound
+CLASS: Invariant
+SUMMARY: the old leaf's replay advances past a foreign record without applying it
+PERTURBS: ReplayO
+
+--- FIND
+    /\ rowsO' = IF author[rpO + 1] = "f" /\ ~narrowed THEN rowsO \cup {rpO + 1} ELSE rowsO
+--- REPLACE
+\* MUTATION: the record is not applied.
+    /\ rowsO' = rowsO
+--- END
