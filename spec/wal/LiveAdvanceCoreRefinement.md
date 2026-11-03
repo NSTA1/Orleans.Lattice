@@ -177,8 +177,9 @@ that finds `a1` unclaimed. The base and the other variants allow both.
 - `Recreate` checks the claimed purge with the full environment: 3,693,715 states.
 - `RecreateSurvivor` checks the unclaimed survivor without the 10.2.0 silo: 4,638,713.
 - `RecreateSurvivorMixed` checks it with the silo and no hand-off window: 1,622,161.
-- **Bounded out:** the unclaimed survivor with both a hand-off window and the silo, about
-  7.6M states; the gap register below records it.
+- **Bounded out of CI:** the unclaimed survivor with both a hand-off window and the silo.
+  It was checked locally and is clean at 8,913,193 distinct states (232 seconds), which is
+  over the 5M-state case budget; the gap register below records it.
 
 Measured with tla2tools v1.7.4 on two workers, the three slices take 2 minutes, 3
 minutes and 1 minute.
@@ -293,7 +294,8 @@ reason as the one above.
   (the latch, the refused hint and the refused live advance) and
   `BPlusLeafGrainTests.A_reactivation_after_the_duplicate_trim_rehydrates_the_newer_snapshot_and_loses_no_key`
   (every key of both activations served after the rehydrate). Disabling the latch turns
-  both red. The latch's own detectors are
+  both red, and that red proof ran in CI: run 41693299334 failed all four
+  parameterised cases of those two tests. The latch's own detectors are
   `BPlusLeafGrainTests.A_stale_latched_partition_never_live_advances`,
   `BPlusLeafGrainTests.A_checkpoint_hint_does_not_advance_a_stale_latched_partition` and
   `BPlusLeafGrainTests.A_latched_stale_leaf_still_faults_a_direct_drive_without_replaying`;
@@ -301,10 +303,11 @@ reason as the one above.
   `BPlusLeafGrainTests.Activation_rehydrates_cache_from_snapshot_when_offset_exceeds_checkpoint`
   and `LeafSnapshotRehydrateIntegrationTests.Snapshot_capture_persists_blob_and_rehydrate_serves_keys_after_deactivation`.
   Production symbols: `WalMaterialiserPinGrain`, `LeafProjectionStaleException`, `BPlusLeafGrain.TryRescueWarmStaleLeafAsync`, `BPlusLeafGrain.LatchProjectionStaleDrive`, `BPlusLeafGrain.IsPartitionStaleLatched`.
-- **A purge's unclaimed survivor is not checked with both a hand-off window and a 10.2.0 silo.**
+- **CI does not check a purge's unclaimed survivor with both a hand-off window and a 10.2.0 silo.**
   When the purge finds the born activation unclaimed, it may claim afterwards as the
-  re-created incarnation's. That slice with every other environment of `Recreate` is
-  about 7.6M states, over the 5M-state case budget, and cannot be cut further by
+  re-created incarnation's. That slice with every other environment of `Recreate` was
+  checked locally and is clean at 8,913,193 distinct states (232 seconds), but it is over
+  the 5M-state case budget, and cannot be cut further by
   scenario: splitting it by whether the window opens, or the silo appends, before or
   after the purge, or by whether the duplicate exists at the purge, leaves each half at
   6.5M to 7.5M, because those reachable states coincide whatever the order of the
@@ -314,8 +317,8 @@ reason as the one above.
   survivor adds to the purge - its claim after it, its own appends, and the claim head,
   close heads and reported unstamped offsets it must read before it arms - meets each
   of those environments in one of them. Only an interleaving needing a foreign record
-  and the silo's append at once, around the survivor's claim, is unchecked; the
-  claimed purge (`Recreate`) checks that interleaving for every other activation.
+  and the silo's append at once, around the survivor's claim, is left to the local check;
+  the claimed purge (`Recreate`) checks that interleaving in CI for every other activation.
   No production symbol: a model-budget scoping of which environments one configuration combines, not a production mechanism.
 - **Production holds the advance in more cases than `Armed`.** The model arms on the
   design's six conditions. Production also holds the advance while a saga prepare is
