@@ -128,6 +128,13 @@ lattice	formal-tlc-scheduling-shipping-variants	deterministic	19.76
 lattice	formal-tlc-shard-ownership	deterministic	5.40
 lattice	formal-tlc-convergence	deterministic	4.77
 lattice	formal-tlc-replication-wal	deterministic	13.98
+# The live-advance shards (epic #5605, member 6c): one per module, measured
+# locally on four CPUs (process affinity) at the default two TLC slots, Java
+# 17; dotnet test wall-clock including its start. Estimates until measured on CI.
+lattice	formal-tlc-wal-append-epoch	deterministic	1.05
+lattice	formal-tlc-wal-handoff-fence	deterministic	0.64
+lattice	formal-tlc-wal-routing-floor	deterministic	0.59
+lattice	formal-tlc-wal-live-advance-core	deterministic	8.48
 lattice	formal-tlc-rebootstrap	deterministic	15.68
 lattice	formal-tlc-atomic	deterministic	14.93
 lattice	formal-tlc-atomic-variants-1	deterministic	9.45

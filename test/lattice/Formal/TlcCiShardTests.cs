@@ -201,6 +201,14 @@ public sealed partial class TlcCiShardTests
                             ? TlcCiShard.SchedulingWorkloadB : TlcCiShard.Scheduling
                         : module.Name.StartsWith("Replication", StringComparison.Ordinal)
                         ? TlcCiShard.ReBootstrap
+                        : module.Name == "WalAppendEpoch"
+                        ? TlcCiShard.WalAppendEpoch
+                        : module.Name == "WalHandOffFence"
+                        ? TlcCiShard.WalHandOffFence
+                        : module.Name == "WalRoutingFloor"
+                        ? TlcCiShard.WalRoutingFloor
+                        : module.Name == "WalLiveAdvanceCore"
+                        ? TlcCiShard.WalLiveAdvanceCore
                         : module.Name == "SchemaViewComposition"
                         ? TlcCiShard.SchemaView
                         : module.Name == "BackupRetention"

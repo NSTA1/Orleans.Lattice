@@ -35,8 +35,24 @@ internal static class TlcCiShard
     /// <summary>The Replication EventualConvergence* temporal mutants.</summary>
     public const string Convergence = "TlcShardConvergence";
 
-    /// <summary>The other Replication mutants, plus the mutants of every Wal* module, and the Replication, WalDurability and WalMove bases.</summary>
+    /// <summary>
+    /// The other Replication mutants, plus the mutants of every Wal* module
+    /// without a shard of its own (<see cref="LiveAdvanceCategory"/>), and the
+    /// Replication, WalDurability, WalMove and WalPinRetirement bases.
+    /// </summary>
     public const string ReplicationWal = "TlcShardReplicationWal";
+
+    /// <summary>Every base, variant and mutation of <c>WalAppendEpoch</c>, the live-advance append-epoch module (epic #5605, E).</summary>
+    public const string WalAppendEpoch = "TlcShardWalAppendEpoch";
+
+    /// <summary>Every base, variant and mutation of <c>WalHandOffFence</c>, the live-advance hand-off fence module (epic #5605, H).</summary>
+    public const string WalHandOffFence = "TlcShardWalHandOffFence";
+
+    /// <summary>Every base, variant and mutation of <c>WalRoutingFloor</c>, the live-advance routing-floor module (epic #5605, R).</summary>
+    public const string WalRoutingFloor = "TlcShardWalRoutingFloor";
+
+    /// <summary>The base and every mutation of <c>WalLiveAdvanceCore</c>, the live-advance core module (epic #5605, C).</summary>
+    public const string WalLiveAdvanceCore = "TlcShardWalLiveAdvanceCore";
 
     /// <summary>The mutants of every ShardOwnership* module, and the bases of all but ShardOwnership itself.</summary>
     public const string ShardOwnership = "TlcShardShardOwnership";
@@ -201,7 +217,8 @@ internal static class TlcCiShard
          MaterialisedViewResolvedIdentity, MaterialisedViewJointRepair, MaterialisedViewNumeric,
          AntiEntropy, AntiEntropy2, AntiEntropy3, TreeLifecycle, Aliasing, SplitGate,
          Scheduling, SchedulingWorkloadB, SchedulingReplayTwoPartitions, SchedulingShipping, SchedulingShippingVariants,
-         Schema, SchemaView];
+         Schema, SchemaView,
+         WalAppendEpoch, WalHandOffFence, WalRoutingFloor, WalLiveAdvanceCore];
 
     private static readonly Lazy<IReadOnlyDictionary<(string Module, string Variant), string>> AtomicVariantCategories =
         new(CreateAtomicVariantCategories, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -224,6 +241,10 @@ internal static class TlcCiShard
         if (SchemaCategory(name) is { } schemaCategory)
         {
             return schemaCategory;
+        }
+        if (LiveAdvanceCategory(name) is { } liveAdvanceCategory)
+        {
+            return liveAdvanceCategory;
         }
         if (string.Equals(name, "AntiEntropy", StringComparison.Ordinal))
         {
@@ -286,7 +307,8 @@ internal static class TlcCiShard
     public static string? OfModule(SpecModule module)
     {
         ArgumentNullException.ThrowIfNull(module);
-        return SchedulingCategory(module) ?? SchemaCategory(module.Name) ?? LifecycleCategory(module.Name) ?? CoLocatedBaseCategory(module);
+        return SchedulingCategory(module) ?? SchemaCategory(module.Name) ?? LiveAdvanceCategory(module.Name)
+            ?? LifecycleCategory(module.Name) ?? CoLocatedBaseCategory(module);
     }
 
     /// <summary>
@@ -359,6 +381,11 @@ internal static class TlcCiShard
         if (SchemaCategory(module.Name) is { } schemaCategory)
         {
             return schemaCategory;
+        }
+
+        if (LiveAdvanceCategory(module.Name) is { } liveAdvanceCategory)
+        {
+            return liveAdvanceCategory;
         }
 
         if (string.Equals(module.Name, "AntiEntropy", StringComparison.Ordinal)
@@ -442,6 +469,25 @@ internal static class TlcCiShard
         string.Equals(name, "SchemaViewComposition", StringComparison.Ordinal) ? SchemaView
         : name.StartsWith("Schema", StringComparison.Ordinal) ? Schema
         : null;
+
+    /// <summary>
+    /// The dedicated shard of a live-advance module (epic #5605), or
+    /// <see langword="null"/>. Each module promoted from the live-advance design
+    /// model gets a measured shard of its own holding its base, variants and
+    /// mutations together, so its base serves its mutations' full-bound controls
+    /// and it never lengthens <see cref="ReplicationWal"/> or the catch-all.
+    /// Listed by exact name, never by the <c>Wal</c> prefix, because each shard
+    /// is a measured decision and the per-case costs live in its
+    /// <c>test-shards.json</c> note.
+    /// </summary>
+    private static string? LiveAdvanceCategory(string name) => name switch
+    {
+        "WalAppendEpoch" => WalAppendEpoch,
+        "WalHandOffFence" => WalHandOffFence,
+        "WalRoutingFloor" => WalRoutingFloor,
+        "WalLiveAdvanceCore" => WalLiveAdvanceCore,
+        _ => null,
+    };
 
     private static string? LifecycleCategory(string name) =>
         name == "MaterialisedViewFence" ? MaterialisedViewFence
