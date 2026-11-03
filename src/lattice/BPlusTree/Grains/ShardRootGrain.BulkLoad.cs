@@ -1010,7 +1010,7 @@ internal sealed partial class ShardRootGrain
         var newLeafIds = new GrainId[graft.NewLeaves.Count];
         for (var i = 0; i < newLeafIds.Length; i++)
             newLeafIds[i] = graft.NewLeaves[i].LeafId;
-        await FinishBulkSwitchAsync(graft.OperationId, newLeafIds, relocated, closeNow: true); // RED-PROOF R9
+        await FinishBulkSwitchAsync(graft.OperationId, newLeafIds, relocated, closeNow: false);
 
         state.State.PendingBulkGraft = null;
         state.State.LastCompletedBulkOperationId = graft.OperationId;
