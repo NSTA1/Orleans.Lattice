@@ -705,6 +705,12 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
             // mapping is the same PermissionDenied the shared ladder below applies.
             throw ToRpcException(exception, context);
         }
+        catch (LatticeSaturatedException exception)
+        {
+            // Named on its own so the saturation contract gate sees the clause (#5723); the
+            // shared ladder below maps it to ResourceExhausted.
+            throw ToRpcException(exception, context);
+        }
         catch (Exception exception) when (exception is not RpcException)
         {
             throw ToRpcException(exception, context);
@@ -905,6 +911,12 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
             // mapping is the same PermissionDenied the shared ladder below applies.
             throw ToRpcException(exception, context);
         }
+        catch (LatticeSaturatedException exception)
+        {
+            // Named on its own so the saturation contract gate sees the clause (#5723); the
+            // shared ladder below maps it to ResourceExhausted.
+            throw ToRpcException(exception, context);
+        }
         catch (Exception exception) when (exception is not RpcException)
         {
             throw ToRpcException(exception, context);
@@ -938,6 +950,10 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
                 // the chunk were not strictly ascending. InvalidArgument mirrors the
                 // local ArgumentException mapping.
                 return new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+            case LatticeSaturatedException:
+                // Storage back-pressure is a deliberate "busy, retry later" refusal (#5723):
+                // report the retryable ResourceExhausted, not the precondition arm below.
+                return new RpcException(new Status(StatusCode.ResourceExhausted, "The store is busy (storage back-pressure) and the request was refused. Retry after a short backoff."));
             case InvalidOperationException ex:
                 // A precondition failure surfaced by the composed facade. The message
                 // is safe and actionable (no secrets), so surface it as

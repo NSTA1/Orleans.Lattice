@@ -67,6 +67,12 @@ internal sealed class LatticeAppCatalogGrpcService(
         {
             throw new RpcException(new Status(StatusCode.NotFound, "The requested app or version was not found."));
         }
+        catch (LatticeSaturatedException)
+        {
+            // Storage back-pressure is a deliberate "busy, retry later" refusal (#5723):
+            // report the retryable ResourceExhausted, not a precondition or server fault.
+            throw new RpcException(new Status(StatusCode.ResourceExhausted, "The store is busy (storage back-pressure) and the request was refused. Retry after a short backoff."));
+        }
         catch (InvalidOperationException ex)
         {
             logger.LogWarning(ex, "Api.Apps: precondition failed for {Method}.", context.Method);

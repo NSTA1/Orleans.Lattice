@@ -470,6 +470,12 @@ internal sealed partial class LatticeTenantAdminGrpcService : LatticeTenantAdmin
         {
             throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
         }
+        catch (LatticeSaturatedException)
+        {
+            // Storage back-pressure is a deliberate "busy, retry later" refusal (#5723):
+            // report the retryable ResourceExhausted, not a precondition or server fault.
+            throw new RpcException(new Status(StatusCode.ResourceExhausted, "The store is busy (storage back-pressure) and the request was refused. Retry after a short backoff."));
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Api.TenantAdmin: gRPC tenant-usage call to {Method} failed.", context.Method);
@@ -589,6 +595,12 @@ internal sealed partial class LatticeTenantAdminGrpcService : LatticeTenantAdmin
         {
             throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
         }
+        catch (LatticeSaturatedException)
+        {
+            // Storage back-pressure is a deliberate "busy, retry later" refusal (#5723):
+            // report the retryable ResourceExhausted, not a precondition or server fault.
+            throw new RpcException(new Status(StatusCode.ResourceExhausted, "The store is busy (storage back-pressure) and the request was refused. Retry after a short backoff."));
+        }
         catch (InvalidOperationException ex)
         {
             throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
@@ -680,6 +692,12 @@ internal sealed partial class LatticeTenantAdminGrpcService : LatticeTenantAdmin
         catch (ReservedTenantOperationException ex)
         {
             throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
+        catch (LatticeSaturatedException)
+        {
+            // Storage back-pressure is a deliberate "busy, retry later" refusal (#5723):
+            // report the retryable ResourceExhausted, not a precondition or server fault.
+            throw new RpcException(new Status(StatusCode.ResourceExhausted, "The store is busy (storage back-pressure) and the request was refused. Retry after a short backoff."));
         }
         catch (InvalidOperationException ex)
         {
@@ -782,6 +800,12 @@ internal sealed partial class LatticeTenantAdminGrpcService : LatticeTenantAdmin
         {
             throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
         }
+        catch (LatticeSaturatedException)
+        {
+            // Storage back-pressure is a deliberate "busy, retry later" refusal (#5723):
+            // report the retryable ResourceExhausted, not a precondition or server fault.
+            throw new RpcException(new Status(StatusCode.ResourceExhausted, "The store is busy (storage back-pressure) and the request was refused. Retry after a short backoff."));
+        }
         catch (InvalidOperationException ex)
         {
             throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
@@ -848,6 +872,12 @@ internal sealed partial class LatticeTenantAdminGrpcService : LatticeTenantAdmin
             // can never be its target (for example delete or suspend). It is a
             // precondition failure, not a bad argument.
             throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
+        catch (LatticeSaturatedException)
+        {
+            // Storage back-pressure is a deliberate "busy, retry later" refusal (#5723):
+            // report the retryable ResourceExhausted, not a precondition or server fault.
+            throw new RpcException(new Status(StatusCode.ResourceExhausted, "The store is busy (storage back-pressure) and the request was refused. Retry after a short backoff."));
         }
         catch (InvalidOperationException ex)
         {
@@ -927,6 +957,12 @@ internal sealed partial class LatticeTenantAdminGrpcService : LatticeTenantAdmin
         catch (LatticeTenantAccessDeniedException ex)
         {
             throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
+        catch (LatticeSaturatedException)
+        {
+            // Storage back-pressure is a deliberate "busy, retry later" refusal (#5723):
+            // report the retryable ResourceExhausted, not a precondition or server fault.
+            throw new RpcException(new Status(StatusCode.ResourceExhausted, "The store is busy (storage back-pressure) and the request was refused. Retry after a short backoff."));
         }
         catch (Exception ex)
         {

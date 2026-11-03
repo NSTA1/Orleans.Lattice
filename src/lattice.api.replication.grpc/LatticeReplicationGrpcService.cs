@@ -340,6 +340,12 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         {
             throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
         }
+        catch (LatticeSaturatedException)
+        {
+            // Storage back-pressure is a deliberate "busy, retry later" refusal (#5723):
+            // report the retryable ResourceExhausted, not a precondition or server fault.
+            throw new RpcException(new Status(StatusCode.ResourceExhausted, "The store is busy (storage back-pressure) and the request was refused. Retry after a short backoff."));
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Api.Replication: gRPC call to {Method} failed.", context.Method);
