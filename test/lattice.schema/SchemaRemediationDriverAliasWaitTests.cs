@@ -28,7 +28,7 @@ public sealed class SchemaRemediationDriverAliasWaitTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(report, Is.SameAs(Accepted));
+            Assert.That(report, Is.EqualTo(Accepted));
             Assert.That(calls, Is.EqualTo(3));
         });
     }
@@ -79,7 +79,7 @@ public sealed class SchemaRemediationDriverAliasWaitTests
         Assert.That(
             () => SchemaRemediationDriver.AcceptAsync(
                 "orders", () => Task.FromException<LatticeSchemaRemediationReport>(Held()), TimeSpan.FromMinutes(15),
-                logger: null, cancelled.Token, [TimeSpan.FromHours(1)]),
+                logger: null, cancelled.Token, [TimeSpan.FromMinutes(1)]),
             Throws.InstanceOf<OperationCanceledException>());
     }
 

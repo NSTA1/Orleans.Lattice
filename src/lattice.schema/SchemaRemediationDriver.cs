@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Operations;
 
@@ -44,7 +45,7 @@ internal static class SchemaRemediationDriver
     /// <param name="cancellationToken">Cancels the wait.</param>
     /// <param name="backoff">The delays between attempts; <see cref="AliasWaitBackoff"/> by default.</param>
     /// <returns>The accepted report.</returns>
-    internal static Task<LatticeSchemaRemediationReport> AcceptAsync(
+    internal static async Task<LatticeSchemaRemediationReport> AcceptAsync(
         string treeId,
         Func<Task<LatticeSchemaRemediationReport>> accept,
         TimeSpan ceiling,
@@ -53,7 +54,31 @@ internal static class SchemaRemediationDriver
         IReadOnlyList<TimeSpan>? backoff = null)
     {
         ArgumentNullException.ThrowIfNull(accept);
-        return accept();
+        backoff ??= AliasWaitBackoff;
+        var started = Stopwatch.GetTimestamp();
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return await accept().ConfigureAwait(false);
+            }
+            catch (LatticeAliasOperationInProgressException refused)
+            {
+                // The holder releases the reservation when it completes (for example a
+                // replication bootstrap copy), so the refusal is transient: back off and
+                // accept again, unless the next wait would pass the ceiling.
+                var delay = backoff[Math.Min(attempt, backoff.Count - 1)];
+                if (Stopwatch.GetElapsedTime(started) + delay > ceiling)
+                {
+                    throw;
+                }
+
+                logger?.LogInformation(
+                    "Schema remediation of tree {TreeId} is waiting for alias operation {Holder} to finish before it starts.",
+                    treeId, refused.HolderOperationId);
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+            }
+        }
     }
 
     /// <summary>

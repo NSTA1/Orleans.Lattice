@@ -176,7 +176,8 @@ public sealed class ShadowCutoverShardMapIntegrationTests
 
         try
         {
-            Assert.ThrowsAsync<InvalidOperationException>(() => _fixture.Restore.RevertRestoreAsync(restore));
+            // The held reservation's typed refusal (#5750) is an InvalidOperationException.
+            Assert.CatchAsync<InvalidOperationException>(() => _fixture.Restore.RevertRestoreAsync(restore));
             Assert.That(await Registry.ResolveAsync(target), Is.EqualTo(restore.ShadowPhysicalTreeId),
                 "a refused revert must leave the alias on the restored copy");
         }
