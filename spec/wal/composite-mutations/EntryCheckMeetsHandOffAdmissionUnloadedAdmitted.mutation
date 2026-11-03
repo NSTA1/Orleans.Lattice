@@ -1,0 +1,15 @@
+# Pairs with EntryCheckMeetsHandOffAdmission (E -> H). E's entry check loses its loaded-entry
+# conjunct for F, so after a restart F's superseded stamp is admitted below the durable
+# entry H's admission reads.
+MODULE: EntryCheckMeetsHandOffAdmissionUnloadedAdmitted
+TARGET: EntryCheckMeetsHandOffAdmission
+CLASS: Invariant
+SUMMARY: E's entry check admits a foreign append on an unloaded entry
+PERTURBS: ForeignAlloc
+
+--- FIND
+        /\ EAppendLoaded("F")
+        /\ EAppendAdmits("F", s)
+--- REPLACE
+        /\ EAppendAdmits("F", s)
+--- END

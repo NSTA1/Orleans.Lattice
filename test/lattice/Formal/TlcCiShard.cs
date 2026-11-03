@@ -57,6 +57,9 @@ internal static class TlcCiShard
     /// <summary>The base and every mutation of <c>WalLiveAdvanceCore</c>, the live-advance core module (epic #5605, C).</summary>
     public const string WalLiveAdvanceCore = "TlcShardWalLiveAdvanceCore";
 
+    /// <summary>The base and every mutation of <c>WalLiveAdvanceComposite</c>, the live-advance modules' interface check (epic #5605, member 6c).</summary>
+    public const string WalLiveAdvanceComposite = "TlcShardWalLiveAdvanceComposite";
+
     /// <summary>The mutants of every ShardOwnership* module, and the bases of all but ShardOwnership itself.</summary>
     public const string ShardOwnership = "TlcShardShardOwnership";
 
@@ -221,7 +224,7 @@ internal static class TlcCiShard
          AntiEntropy, AntiEntropy2, AntiEntropy3, TreeLifecycle, Aliasing, SplitGate,
          Scheduling, SchedulingWorkloadB, SchedulingReplayTwoPartitions, SchedulingShipping, SchedulingShippingVariants,
          Schema, SchemaView,
-         WalAppendEpoch, WalHandOffFence, WalRoutingFloor, WalBulkSwitch, WalLiveAdvanceCore];
+         WalAppendEpoch, WalHandOffFence, WalRoutingFloor, WalBulkSwitch, WalLiveAdvanceCore, WalLiveAdvanceComposite];
 
     private static readonly Lazy<IReadOnlyDictionary<(string Module, string Variant), string>> AtomicVariantCategories =
         new(CreateAtomicVariantCategories, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -490,6 +493,7 @@ internal static class TlcCiShard
         "WalRoutingFloor" => WalRoutingFloor,
         "WalBulkSwitch" => WalBulkSwitch,
         "WalLiveAdvanceCore" => WalLiveAdvanceCore,
+        "WalLiveAdvanceComposite" => WalLiveAdvanceComposite,
         _ => null,
     };
 

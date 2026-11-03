@@ -14,6 +14,7 @@ public sealed partial class TlcCiShardTests
     [TestCase("WalRoutingFloor", TlcCiShard.WalRoutingFloor)]
     [TestCase("WalBulkSwitch", TlcCiShard.WalBulkSwitch)]
     [TestCase("WalLiveAdvanceCore", TlcCiShard.WalLiveAdvanceCore)]
+    [TestCase("WalLiveAdvanceComposite", TlcCiShard.WalLiveAdvanceComposite)]
     public void Live_advance_module_routes_every_case_to_its_own_shard_with_its_base(string name, string expected)
     {
         var module = Module(name);
@@ -37,7 +38,7 @@ public sealed partial class TlcCiShardTests
     [Test]
     public void Live_advance_modules_each_have_a_distinct_shard()
     {
-        var shards = new[] { "WalAppendEpoch", "WalHandOffFence", "WalRoutingFloor", "WalBulkSwitch", "WalLiveAdvanceCore" }
+        var shards = new[] { "WalAppendEpoch", "WalHandOffFence", "WalRoutingFloor", "WalBulkSwitch", "WalLiveAdvanceCore", "WalLiveAdvanceComposite" }
             .Select(name => TlcCiShard.OfModule(Module(name)))
             .ToArray();
 
@@ -55,6 +56,7 @@ public sealed partial class TlcCiShardTests
     [TestCase("WalRoutingFloor")]
     [TestCase("WalBulkSwitch")]
     [TestCase("WalLiveAdvanceCore")]
+    [TestCase("WalLiveAdvanceComposite")]
     public void Live_advance_module_declares_no_case_above_the_ci_state_budget(string name)
     {
         var module = Module(name);

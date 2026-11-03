@@ -1,0 +1,12 @@
+# Pairs with EpochMeetsCoreOwnAlloc (E -> C). StaleEpochNeverAppends no longer counts an
+# epoch below the highest raised one as stale, so a superseded activation appends.
+MODULE: EpochMeetsCoreOwnAllocSupersededAppends
+TARGET: EpochMeetsCoreOwnAlloc
+CLASS: Invariant
+SUMMARY: a superseded activation's own append is not stale
+
+--- FIND
+EStaleUpdate(a) == staleAccepted' = (staleAccepted \/ epoch[a] < maxClaimed \/ epoch[a] <= lRetired)
+--- REPLACE
+EStaleUpdate(a) == staleAccepted' = (staleAccepted \/ epoch[a] <= lRetired)
+--- END

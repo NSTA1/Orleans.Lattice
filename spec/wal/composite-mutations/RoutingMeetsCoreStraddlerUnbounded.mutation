@@ -1,0 +1,24 @@
+# Pairs with RoutingMeetsCoreStraddler (R -> C). StraddlerBelowInit is dropped, so after a
+# 10.2.0 purge a straddler is allocated after the re-created incarnation's first
+# initialisation.
+MODULE: RoutingMeetsCoreStraddlerUnbounded
+TARGET: RoutingMeetsCoreStraddler
+CLASS: Invariant
+SUMMARY: StraddlerBelowInit is dropped
+
+--- FIND
+Guarantees ==
+    /\ ClaimHeadCoversPriorAppends
+    /\ RaisedEpochUnique
+    /\ StaleEpochNeverAppends
+    /\ HandOffBound
+    /\ StraddlerBelowInit
+    /\ BulkHintBound
+--- REPLACE
+Guarantees ==
+    /\ ClaimHeadCoversPriorAppends
+    /\ RaisedEpochUnique
+    /\ StaleEpochNeverAppends
+    /\ HandOffBound
+    /\ BulkHintBound
+--- END
