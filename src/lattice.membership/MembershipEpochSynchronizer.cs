@@ -38,7 +38,7 @@ namespace Orleans.Lattice.Membership;
 /// cache lifetime.
 /// </para>
 /// </remarks>
-internal sealed class MembershipEpochSynchronizer : IHostedService, IMutationObserver
+internal sealed class MembershipEpochSynchronizer : IHostedService, IMutationObserver, ITreeAliasObserver
 {
     /// <summary>How often each silo reads the cluster-wide epoch by default.</summary>
     internal static readonly TimeSpan DefaultPollInterval = TimeSpan.FromSeconds(1);
@@ -157,6 +157,23 @@ internal sealed class MembershipEpochSynchronizer : IHostedService, IMutationObs
     public Task OnMutationAsync(LatticeMutation mutation, CancellationToken cancellationToken)
     {
         if (mutation.TreeId is { } treeId
+            && treeId.StartsWith(MembershipConstants.TreePrefix, StringComparison.Ordinal))
+        {
+            SchedulePublish();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// A restore, resize or re-seed cutover replaces the tree's contents by an alias
+    /// swap, which publishes no mutation, so an alias change of a membership tree is published
+    /// as a change too (#5731). Only schedules: one ordinal prefix test for every other tree.
+    /// </remarks>
+    public Task OnTreeAliasChangedAsync(TreeAliasChange change, CancellationToken cancellationToken)
+    {
+        if (change.TreeId is { } treeId
             && treeId.StartsWith(MembershipConstants.TreePrefix, StringComparison.Ordinal))
         {
             SchedulePublish();

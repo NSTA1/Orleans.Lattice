@@ -299,6 +299,7 @@ public sealed class AppCatalogWorkspaceGrpcRoundTripTests
     [TestCase(typeof(ArgumentException), StatusCode.InvalidArgument)]
     [TestCase(typeof(KeyNotFoundException), StatusCode.NotFound)]
     [TestCase(typeof(InvalidOperationException), StatusCode.FailedPrecondition)]
+    [TestCase(typeof(LatticeSaturatedException), StatusCode.ResourceExhausted)]
     [TestCase(typeof(OperationCanceledException), StatusCode.Cancelled)]
     [TestCase(typeof(NotSupportedException), StatusCode.Internal)]
     public void Facade_failures_map_to_fixed_sanitised_statuses(Type exceptionType, StatusCode expected)

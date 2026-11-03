@@ -83,6 +83,42 @@ public sealed class CompiledAppRegistrySnapshotMaintainerCrossSiloTests
     }
 
     [Test]
+    public async Task A_registry_alias_change_is_published_like_a_write_and_seen_by_the_other_silo()
+    {
+        // #5731: a restore or re-seed cutover replaces the registry tree's contents by an alias swap,
+        // which publishes no mutation. The enable below stands in for contents the change feed never
+        // reported.
+        await _registry.InstallAsync(AppRegistryTestData.Request());
+        await WarmBothAsync();
+        await _registry.EnableAsync(TenantId.Default, AppRegistryTestData.Slug);
+
+        await _committing.OnTreeAliasChangedAsync(
+            new TreeAliasChange
+            {
+                TreeId = AppRegistryTreeNames.RegistryTree,
+                OldPhysicalTreeId = AppRegistryTreeNames.RegistryTree,
+                NewPhysicalTreeId = AppRegistryTreeNames.RegistryTree + "/resized/copy",
+            },
+            CancellationToken.None);
+        await _committing.PublishLoop;
+
+        Assert.That(_epoch.Current.Version, Is.EqualTo(1), "the cutover advanced the cluster epoch");
+        var snapshot = await _otherEvaluator.GetSnapshotAsync(CancellationToken.None);
+        Assert.That(snapshot.GetEnabledTenantApps(TenantId.Default).Select(r => r.Slug), Is.EqualTo(new[] { AppRegistryTestData.Slug }));
+    }
+
+    [Test]
+    public async Task An_alias_change_of_another_tree_publishes_nothing()
+    {
+        await _committing.OnTreeAliasChangedAsync(
+            new TreeAliasChange { TreeId = "a/notes/pages", OldPhysicalTreeId = "a/notes/pages", NewPhysicalTreeId = "x" },
+            CancellationToken.None);
+
+        Assert.That(_epoch.Current.Version, Is.Zero);
+        Assert.That(_committing.PublishLoop.IsCompleted, Is.True);
+    }
+
+    [Test]
     public async Task An_unchanged_cluster_epoch_reuses_the_snapshot()
     {
         await WarmBothAsync();

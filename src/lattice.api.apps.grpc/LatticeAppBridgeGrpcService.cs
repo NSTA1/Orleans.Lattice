@@ -61,6 +61,11 @@ internal sealed class LatticeAppBridgeGrpcService(
         {
             throw new RpcException(AppBridgeGrpcStatus.ToStatus(AppBridgeFailure.Denied));
         }
+        catch (LatticeSaturatedException)
+        {
+            // Storage back-pressure (#5723): the bridge's retryable failure, named so the saturation gate sees it.
+            throw new RpcException(AppBridgeGrpcStatus.ToStatus(AppBridgeFailure.Unavailable));
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "Api.Apps: gRPC call to {Method} failed.", context.Method);
@@ -101,6 +106,11 @@ internal sealed class LatticeAppBridgeGrpcService(
         catch (LatticeTenantAccessDeniedException)
         {
             throw new RpcException(AppBridgeGrpcStatus.ToStatus(AppBridgeFailure.Denied));
+        }
+        catch (LatticeSaturatedException)
+        {
+            // Storage back-pressure (#5723): the bridge's retryable failure, named so the saturation gate sees it.
+            throw new RpcException(AppBridgeGrpcStatus.ToStatus(AppBridgeFailure.Unavailable));
         }
         catch (Exception ex)
         {

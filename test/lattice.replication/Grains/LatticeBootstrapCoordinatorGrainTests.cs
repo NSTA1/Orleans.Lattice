@@ -48,10 +48,16 @@ public partial class LatticeBootstrapCoordinatorGrainTests
             ILatticeMergeModeResolver? mergeResolver = null,
             LatticeReplicationOptions? replicationOptions = null,
             IReadOnlyDictionary<string, HybridLogicalClock>? localOldestByOrigin = null,
-            FakeBootstrapReadFence? readFence = null)
+            FakeBootstrapReadFence? readFence = null,
+            IServiceProvider? activationServices = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("bootstrap-coordinator", treeName));
+        if (activationServices is not null)
+        {
+            context.ActivationServices.Returns(activationServices);
+        }
+
         var factory = Substitute.For<IGrainFactory>();
         var degradedFrontier = HighWaterMarkTestGrains.DegradedTreeFrontier();
         factory.GetGrain<IReplicationTreeFrontierGrain>(Arg.Any<string>()).Returns(degradedFrontier);

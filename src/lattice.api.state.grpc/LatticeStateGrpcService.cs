@@ -417,6 +417,12 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         {
             throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
         }
+        catch (LatticeSaturatedException)
+        {
+            // Storage back-pressure is a deliberate "busy, retry later" refusal (#5723):
+            // report the retryable ResourceExhausted, not a precondition or server fault.
+            throw new RpcException(new Status(StatusCode.ResourceExhausted, "The store is busy (storage back-pressure) and the request was refused. Retry after a short backoff."));
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Api.State: gRPC change subscription for tree {TreeId} failed.", request.TreeId);
@@ -476,6 +482,12 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         {
             throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
         }
+        catch (LatticeSaturatedException)
+        {
+            // Storage back-pressure is a deliberate "busy, retry later" refusal (#5723):
+            // report the retryable ResourceExhausted, not a precondition or server fault.
+            throw new RpcException(new Status(StatusCode.ResourceExhausted, "The store is busy (storage back-pressure) and the request was refused. Retry after a short backoff."));
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Api.State: gRPC metrics subscription failed.");
@@ -525,6 +537,12 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         catch (LatticeTenantAccessDeniedException ex)
         {
             throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
+        catch (LatticeSaturatedException)
+        {
+            // Storage back-pressure is a deliberate "busy, retry later" refusal (#5723):
+            // report the retryable ResourceExhausted, not a precondition or server fault.
+            throw new RpcException(new Status(StatusCode.ResourceExhausted, "The store is busy (storage back-pressure) and the request was refused. Retry after a short backoff."));
         }
         catch (Exception ex)
         {

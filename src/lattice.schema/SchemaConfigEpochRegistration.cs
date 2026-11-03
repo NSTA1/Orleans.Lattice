@@ -34,5 +34,10 @@ internal static class SchemaConfigEpochRegistration
             sp => sp.GetRequiredService<SchemaConfigEpochSynchronizer<TCache>>());
         services.AddSingleton<IHostedService>(
             sp => sp.GetRequiredService<SchemaConfigEpochSynchronizer<TCache>>());
+
+        // A restore or re-seed cutover swaps the configuration tree's alias and
+        // publishes no mutation, so alias changes are published too (#5731).
+        services.AddSingleton<ITreeAliasObserver>(
+            sp => sp.GetRequiredService<SchemaConfigEpochSynchronizer<TCache>>());
     }
 }

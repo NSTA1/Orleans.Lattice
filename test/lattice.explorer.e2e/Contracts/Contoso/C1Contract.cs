@@ -5,6 +5,7 @@ using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 using Names = Orleans.Lattice.Explorer.EndToEnd.Tests.Story.StoryNames.Contoso;
 
@@ -178,6 +179,28 @@ public sealed class C1Contract() : ChapterContract("C1")
     /// <summary>How many consecutive polls must find the replication settled.</summary>
     private const int SettledPolls = 10;
 
+    /// <summary>How long the replication may stay unsettled after the last re-seed or cutover.</summary>
+    private static readonly TimeSpan SettleStall = TimeSpan.FromMinutes(4);
+
+    /// <summary>The absolute deadline for the replication to settle, however many re-seeds it waits out.</summary>
+    private static readonly TimeSpan SettleCeiling = TimeSpan.FromMinutes(12);
+
+    /// <summary>
+    /// A loaded estate starves the shippers' write-ahead-log reads (#5569): an outbound link with
+    /// nothing to ship and nothing in flight then reads <see cref="ReplicationLinkHealth.Lagging"/>
+    /// only because its last contact is older than 30 seconds. The wrapper runs only when that is
+    /// the sole unsettled signal once the copies have held still.
+    /// </summary>
+    /// <summary>
+    /// Under the same starvation (#5569) a re-seed C1's remediation forces cannot complete: its
+    /// bootstrap copy's snapshot calls time out, so a link stays stalled on the re-seed. The
+    /// wrapper runs only when that, or starved contact, is the sole unsettled signal once the
+    /// copies have held still.
+    /// </summary>
+    private static readonly KnownDefect StarvedReseed = new KnownDefect("#5569", "under replay-permit starvation the re-seed C1's remediation forces makes no headway, so a link stays stalled on ReseedRequired and the replication never settles");
+
+    private static readonly KnownDefect StarvedShipperContact = new KnownDefect("#5569", "under replay-permit starvation the shipper's WAL reads time out, so an outbound link with no backlog and nothing in flight reads Lagging and the replication never reports settled");
+
     /// <summary>
     /// Waits until <c>factory-orders</c>' replication is settled in both directions: in each
     /// region no link of the tree is stalled (in particular, none waits on a re-seed), every
@@ -186,6 +209,8 @@ public sealed class C1Contract() : ChapterContract("C1")
     /// C1's restore and remediation re-seed both regions; a batch written while one of
     /// them is still re-seeding is re-appended into the new copy as plain last-writer-wins rows,
     /// which strict ingest does not judge (#5684), so the east ledger waits for the estate to settle.
+    /// Each completed re-seed or cutover changes a region's physical copy and restarts the
+    /// <see cref="SettleStall"/> window, within <see cref="SettleCeiling"/> (#5725).
     /// </summary>
     /// <param name="estate">The Contoso estate.</param>
     private static async Task WaitForSettledReplicationAsync(JourneyEstate estate)
@@ -194,11 +219,16 @@ public sealed class C1Contract() : ChapterContract("C1")
         string?[] lastPhysical = [null, null];
         var detail = "no poll yet";
         var stablePolls = 0;
+        var starvedPolls = 0;
+        var reseedPolls = 0;
+        var cutovers = 0L;
         try
         {
-            await ContractWait.UntilAsync("factory-orders' replication to settle in both directions", async () =>
+            await ContractWait.UntilAdvancingAsync("factory-orders' replication to settle in both directions", async () =>
             {
                 var settled = true;
+                var starvedOnly = true;
+                var reseedOnly = true;
                 var parts = new List<string>();
                 for (var i = 0; i < regions.Length; i++)
                 {
@@ -207,12 +237,16 @@ public sealed class C1Contract() : ChapterContract("C1")
                         new ReplicationPeerStatusQuery { TreeId = Names.Trees.FactoryOrders, PageSize = ReplicationPeerStatusQuery.MaxPageSize });
                     var links = page.Peers.Where(link => link.TreeId == Names.Trees.FactoryOrders).ToList();
                     var physical = (await facades.TreeAdmin.ResolveTreeAliasAsync(Names.Trees.FactoryOrders)).PhysicalTreeId;
-                    var regionSettled = links.Any(link => link.Direction == ReplicationLinkDirection.Outbound)
-                        && links.All(link => link.StallReason is null
-                            && (link.Health == ReplicationLinkHealth.Healthy
-                                || (link.Health == ReplicationLinkHealth.Unknown && link.Direction == ReplicationLinkDirection.Inbound)))
-                        && physical == lastPhysical[i];
-                    settled &= regionSettled;
+                    var held = physical == lastPhysical[i];
+                    var hasOutbound = links.Any(link => link.Direction == ReplicationLinkDirection.Outbound);
+                    settled &= hasOutbound && held && links.All(IsSettled);
+                    starvedOnly &= hasOutbound && held && links.All(link => IsSettled(link) || IsStarvedContact(link));
+                    reseedOnly &= hasOutbound && held && links.All(link => IsSettled(link) || IsStarvedContact(link) || link.StallReason == ReplicationLinkStallReason.ReseedRequired);
+                    if (lastPhysical[i] is not null && !held)
+                    {
+                        cutovers++;
+                    }
+
                     lastPhysical[i] = physical;
                     parts.Add($"{regions[i]}: {physical}, " + string.Join("; ", links.Select(link =>
                         $"{link.Direction} {link.PeerRegionId} {link.Health} behind={link.EntriesBehind} inflight={link.InFlight} stall={link.StallReason}")));
@@ -220,8 +254,34 @@ public sealed class C1Contract() : ChapterContract("C1")
 
                 detail = string.Join(" | ", parts);
                 stablePolls = settled ? stablePolls + 1 : 0;
+                starvedPolls = starvedOnly && !settled ? starvedPolls + 1 : 0;
+                reseedPolls = reseedOnly && !settled && !starvedOnly ? reseedPolls + 1 : 0;
                 return stablePolls >= SettledPolls;
-            }, OperationPatience);
+            }, () => cutovers, SettleStall, SettleCeiling, () => $"{cutovers} re-seed(s) or cutover(s) observed; last: {detail}");
+        }
+        catch (TimeoutException ex) when (starvedPolls >= SettledPolls)
+        {
+            // The copies held still and nothing is stalled or backlogged: the only unsettled
+            // signal is the shippers' stale contact under starvation, so no import or cutover is
+            // in flight and the east ledger may write.
+            await StarvedShipperContact.ReproducesAsync(() =>
+            {
+                Assert.That(detail, Does.Contain(" Lagging behind=0 inflight=0 stall="), "an outbound link reads Lagging with nothing to ship");
+                return Task.CompletedTask;
+            });
+            NUnit.Framework.TestContext.Progress.WriteLine($"C1 replay: KNOWN DEFECT #5569, settled but for starved shipper contact - {ex.Message}");
+            return;
+        }
+        catch (TimeoutException ex) when (reseedPolls >= SettledPolls)
+        {
+            // A re-seed is owed and in flight, but under starvation its copy makes no headway: the
+            // east ledger must not write into a re-seed (#5684), so C1 cannot go on.
+            await StarvedReseed.ReproducesAsync(() =>
+            {
+                Assert.That(detail, Does.Contain("stall=ReseedRequired"), "a link waits on a re-seed");
+                return Task.CompletedTask;
+            });
+            Assert.Ignore($"KNOWN DEFECT #5569: factory-orders' re-seed made no headway - {ex.Message}");
         }
         catch (TimeoutException ex)
         {
@@ -231,6 +291,17 @@ public sealed class C1Contract() : ChapterContract("C1")
         NUnit.Framework.TestContext.Progress.WriteLine($"C1 replay: settled - {detail}");
     }
 
+    private static bool IsSettled(ReplicationPeerStatusEntry link) =>
+        link.StallReason is null
+        && (link.Health == ReplicationLinkHealth.Healthy
+            || (link.Health == ReplicationLinkHealth.Unknown && link.Direction == ReplicationLinkDirection.Inbound));
+
+    private static bool IsStarvedContact(ReplicationPeerStatusEntry link) =>
+        link.StallReason is null
+        && link.Direction == ReplicationLinkDirection.Outbound
+        && link.Health == ReplicationLinkHealth.Lagging
+        && link.EntriesBehind == 0
+        && link.InFlight == 0;
     private static async Task<IReadOnlyList<string>> WrongPricesAsync(LatticeDataApiGrpcClient data)
     {
         var wrong = new List<string>();

@@ -204,6 +204,9 @@ internal abstract class LatticeBackupGrpcServiceBase
 /// </summary>
 internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
 {
+    private const string SaturatedDetail =
+        "The backup store is busy (storage back-pressure) and the request was refused. Retry after a short backoff.";
+
     private readonly ILatticeBackupControl _control;
     private readonly ILatticeBackupOperations? _operations;
     private readonly ILatticeBackupApiCredentialBridge _credentialBridge;
@@ -374,6 +377,13 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         catch (LatticeBackupTenantIsolationException ex)
         {
             throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
+        catch (LatticeSaturatedException)
+        {
+            // Storage back-pressure: the store refused the call on purpose and asks the
+            // caller to back off. Report it as the canonical retryable "busy" code, as
+            // the Data facade does, never as an opaque server fault (#5722).
+            throw new RpcException(new Status(StatusCode.ResourceExhausted, SaturatedDetail));
         }
         catch (Exception ex)
         {
@@ -556,6 +566,13 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         {
             throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
         }
+        catch (LatticeSaturatedException)
+        {
+            // Storage back-pressure: the store refused the call on purpose and asks the
+            // caller to back off. Report it as the canonical retryable "busy" code, as
+            // the Data facade does, never as an opaque server fault (#5722).
+            throw new RpcException(new Status(StatusCode.ResourceExhausted, SaturatedDetail));
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Api.Backup: gRPC artifact export for backup {BackupId} failed.", request.BackupId);
@@ -670,6 +687,11 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         catch (ArgumentException ex)
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+        catch (LatticeSaturatedException)
+        {
+            // Storage back-pressure (#5722); see the catalog stream above.
+            throw new RpcException(new Status(StatusCode.ResourceExhausted, SaturatedDetail));
         }
         catch (Exception ex) when (BackupReminderResilience.IsTransientReminderFailure(ex))
         {
