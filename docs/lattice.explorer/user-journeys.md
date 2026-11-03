@@ -236,19 +236,21 @@ linked to an open issue.
 
 ### Wrapper census at landing
 
-At phase 1's landing the journeys carry no `KnownGap` wrappers and the following
-`KnownDefect` wrappers, every one linked to an open issue:
+At the follow-ups landing (epic [#5661](https://github.com/NSTA1/Orleans.Lattice/issues/5661)) the journeys and chapter contracts carry no `KnownGap` wrappers, no chapter-level `KnownDefectIssues` entries, and the following `KnownDefect` wrappers. Each wraps only the failure branch it names, so a healthy run stays strict:
 
 | Issue | Where | Step | Symptom the wrapper asserts |
 |---|---|---|---|
-| [#5676](https://github.com/NSTA1/Orleans.Lattice/issues/5676) | `Journeys/A7/GoingMultiRegionJourney.cs` | A7.7 (story only) | In the story estate east's `factory-orders` does not converge on west's live keys within the story window; the isolated leg asserts equality strictly. |
-| [#5595](https://github.com/NSTA1/Orleans.Lattice/issues/5595) | `Journeys/U3/TaskBoardTeamJourney.cs` | U3.1 | The apps workspace answers the task board's editor with no apps, so its window shows a not-found page. |
-| [#5595](https://github.com/NSTA1/Orleans.Lattice/issues/5595) | `Journeys/U5/PersonalisingTheConsoleJourney.cs` (2 sites) | U5 step 3 | The apps workspace answers a nested-group viewer with no apps, so `a/` completions omit the task board. |
-| [#5613](https://github.com/NSTA1/Orleans.Lattice/issues/5613) | `Journeys/U1/DataStewardJourney.Operate.cs` | U1 step 12 | A tag-index reconcile by a caller with Admin on the index tree fails in its repair phase. The step waits for either outcome and wraps only a failed reconcile, because the defect does not reproduce on every run. |
-| [#5675](https://github.com/NSTA1/Orleans.Lattice/issues/5675) | `Journeys/U4/AuditorsReviewChapter.cs`, used in `AuditorsReviewChapter.Data.cs` | U4 step 3 | The History read of the line feed's latest reading times out behind a replay on a saturated WAL shard. The step waits for either the timeline or the panel's failure state and wraps only the failure, because the defect does not reproduce on every run. |
-| [#5534](https://github.com/NSTA1/Orleans.Lattice/issues/5534) | `Story/ContosoStoryTests.cs`, `Contracts/ContosoContractConformanceTests.cs` | C1 stand-in | A coordinated restore causes repeated re-seeds, and C1's withheld east batch bypasses strict-ingest diversion. C1 is phase 2 work. |
+| [#5569](https://github.com/NSTA1/Orleans.Lattice/issues/5569) | `Journeys/U1/DataStewardJourney.Files.cs` | U1 step 8 | Under replay-permit starvation the seed's bulk appends time out, so the Import dialog says it could not seed the tree. |
+| [#5569](https://github.com/NSTA1/Orleans.Lattice/issues/5569) | `Journeys/U1/DataStewardJourney.History.cs` | U1 steps 4 and 7 | The change-history view's drain lags its source by minutes, so a revision just written is not yet in History; the server's entry history is the oracle. |
+| [#5569](https://github.com/NSTA1/Orleans.Lattice/issues/5569) | `Journeys/U1/DataStewardJourney.Operate.cs` | U1 step 12 | The orders-by-status view's drain lags its source, so the view does not yet reflect the edit. |
+| [#5569](https://github.com/NSTA1/Orleans.Lattice/issues/5569) | `Journeys/U3/TaskBoardWindow.cs` | U3 step 1 | The first read of the task board's idle tree outlasts the AppKit's 30 s bridge request, so the board says it could not be read. |
+| [#5675](https://github.com/NSTA1/Orleans.Lattice/issues/5675) | `Journeys/U4/AuditorsReviewChapter.cs` | U4 step 3 | The WAL-window History read of the line feed's latest reading times out behind a replay on a saturated WAL shard. |
+| [#5569](https://github.com/NSTA1/Orleans.Lattice/issues/5569) | `Contracts/Contoso/A10Contract.cs` | A10 verify | The backup-catalogue index view's leaves are refused replay admission, so no catalogue listing read succeeds. A short listing stays strict. |
+| [#5569](https://github.com/NSTA1/Orleans.Lattice/issues/5569) | `Contracts/Contoso/U2Contract.cs` (2 sites) | U2 migrate and verify | A whole-tree migration stops advancing while still running, or the compliance scan exhausts its resumes and ends with an enumeration abort. |
+| [#5569](https://github.com/NSTA1/Orleans.Lattice/issues/5569) | `Contracts/Contoso/C1Contract.cs` (2 sites) | C1 settle | The re-seed C1's remediation forces makes no headway, or a shipper's WAL reads time out, so the replication never reports settled. |
+| [#5729](https://github.com/NSTA1/Orleans.Lattice/issues/5729) | `Contracts/Contoso/C3Contract.cs` | C3 teardown | `DropView` times out behind the view maintainer's post-swap rebuild, which holds the grain turn and cannot be cancelled. |
 
-That is nine wrapper sites over six open issues. The authoritative list for any
+That is eleven wrapper sites over three open issues. #5569 and #5675 are the replay-permit starvation that epic [#5605](https://github.com/NSTA1/Orleans.Lattice/issues/5605) is fixing; those wrappers are removed once it lands. The authoritative list for any
 run is the one `PendingWrapperGateTests` publishes in that run's job summary.
 
 ## Phase 2
