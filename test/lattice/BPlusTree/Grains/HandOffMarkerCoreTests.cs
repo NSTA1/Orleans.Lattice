@@ -53,6 +53,24 @@ public sealed class HandOffMarkerCoreTests
     }
 
     [Test]
+    public void A_later_close_with_lower_heads_never_lowers_the_required_heads()
+    {
+        var marker = new ShardHandOffState();
+        HandOffMarkerCore.Open(marker, "init", null, null);
+        HandOffMarkerCore.Close(marker, "init", [8, 4]);
+        HandOffMarkerCore.Open(marker, "window", "a", "c");
+        HandOffMarkerCore.Close(marker, "window", [3, 6]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(HandOffMarkerCore.RequiredHeads(marker, "a", "b"), Is.EqualTo(new long[] { 8, 6 }),
+                "a close with lower heads at a partition keeps the earlier close's head there");
+            Assert.That(HandOffMarkerCore.RequiredHead(marker, "a", "b", 0), Is.EqualTo(8));
+            Assert.That(HandOffMarkerCore.RequiredHead(marker, "a", "b", 1), Is.EqualTo(6));
+        });
+    }
+
+    [Test]
     public void Required_heads_cover_only_overlapping_closes_and_every_evicted_one()
     {
         var marker = new ShardHandOffState();

@@ -47,7 +47,8 @@ design model.
   clause that a claim at or below `floor(i)` is never raised is not exercised; it is
   the routing-floor module's. The module reads no state of E: the entry check is the
   shape of these actions, not an import.
-- **Guarantees.** Two, each a checked invariant of the base and the variant:
+- **Guarantees.** Three, each checked in the base and the variant: two invariants
+  and an action property.
   - `HandOffBound`: whenever L's marker reads closed (its state is initialised and no
     window is open), every stamped foreign append - `Foreign(i)` in the interface's
     vocabulary, author `f` or `g` here - lies below the head its last close recorded.
@@ -57,6 +58,12 @@ design model.
     at admission, a re-stamp, a restart in between).
   - `AbsentMarkerHolds`: L's marker state is initialised only while no hand-off begun
     without a marker is in flight, so an absent or uninitialised marker holds L.
+  - `CloseHeadMonotone`: the heads L's marker requires, `closedAt`, never decrease.
+    `Close` records any head up to the allocator's above every stamped foreign
+    append - the weakest head E's re-claim allows, since the claim head covers every
+    append before it - and max-merges it into `closedAt`, as production's
+    `HandOffMarkerCore.RequiredHead` does. A later window whose own appends all lie
+    below a lower head therefore cannot release an owner an earlier close holds.
 - **The vocabulary.**
 
   | Interface | Here |
@@ -71,8 +78,8 @@ design model.
   | L's marker: `initialised`, `open`, `closedAt` | `mInit`, `hoOpen`, `hoClosedAt`. |
   | `claimHead[a]`, `seenU[a]` | Not modelled: C's. |
 
-- **Who assumes what.** B assumes both guarantees for the bulk switch's marker; C
-  assumes both for every foreign append, and owns the arming that reads the marker
+- **Who assumes what.** B assumes the first two guarantees for the bulk switch's
+  marker; C assumes all three for every foreign append and close, and owns the arming that reads the marker
   and replays to its heads. The graph is E <- H <- B, E <- R, and {E, H, R, B} <- C,
   where an arrow points from the module that assumes to the module that guarantees.
 
@@ -81,7 +88,7 @@ design model.
 | Spec variable | Protocol role | Code counterpart |
 |---------------|---------------|------------------|
 | `next`, `author` | The WAL shard's allocator, and the kind of author each offset went to | `WalShardGrain._nextOffset`, assigned under the shard's state lock. |
-| `hoOpen`, `hoClosedAt` | L's marker: a window open over L's range, and the heads its last close recorded | The durable marker rows: `ShardHandOffState` (row `_lattice_shard-handoff`, through `HandOffMarkerRows.UpdateShardAsync`) for shard-level hand-offs and `LeafHandOffState` for a split's; `ShardHandOffState.Open` and `ShardHandOffState.Closes`, read through `HandOffMarkerCore.IsHeldOpen` and `HandOffMarkerCore.RequiredHeads`. |
+| `hoOpen`, `hoClosedAt` | L's marker: a window open over L's range, and the maximum of the heads its closes recorded | The durable marker rows: `ShardHandOffState` (row `_lattice_shard-handoff`, through `HandOffMarkerRows.UpdateShardAsync`) for shard-level hand-offs and `LeafHandOffState` for a split's; `ShardHandOffState.Open` and `ShardHandOffState.Closes`, read through `HandOffMarkerCore.IsHeldOpen` and `HandOffMarkerCore.RequiredHeads` (per partition, `HandOffMarkerCore.RequiredHead`), the maximum over every retained close and `ShardHandOffState.CompactedHeads`. |
 | `windows` | Hand-off windows opened so far | Modelling device. |
 | `fAdmit` | The initiator is admitting writes for L's range | The initiator's own phase: a split donor's span before its narrow, a migration's `ShardSplitInProgress` before its reject phase, an open `TreeRangeDeleteIntent`. |
 | `fpend`, `fkind`, `fstamp` | A write admitted and not yet allocated or rejected: its kind and the generation it was admitted under | A stamped call in flight carrying `WalRoutingStamp.Generation` (and, for a leaf initiator, `WalRoutingStamp.AdmissionMark`). |
@@ -102,7 +109,7 @@ design model.
 | `ForeignAdmit(k)` | Admit a point or batch write while admitting, stamped in the same step with the current generation, or an admission mark | `ShardRootGrain.AdmissionRoutingStamp`, taken with the phase check; a leaf's `BPlusLeafGrain.StampedRouting`, which captures `WalRoutingStamp.AdmissionMark` from `LeafAppendEpochFence.HandOffCloses`. | Yes: `ShardRoutingGenerationIntegrationTests.Client_writes_are_stamped_with_the_shard_routing_generation_never_appended_unstamped`, `BPlusLeafGrainTests.A_stamped_write_appends_with_the_leafs_own_admission_mark_not_its_callers` and `BPlusLeafGrainTests.A_backstop_append_carries_an_admission_mark_captured_before_its_span_check`. |
 | `ForeignAlloc` | The WAL shard allocates a stamped append at or above the initiator's loaded entry | `WalShardGrain.AdmitStampLocked` with `WalAppendFenceCore.IsGenerationAdmitted`, under the lock that assigns `WalShardGrain._nextOffset`. | Yes: `WalAppendFenceCoreTests.A_routing_generation_is_admitted_only_from_a_loaded_current_entry` and `WalShardGrainTests.Routing_generations_are_fenced_and_durable`. |
 | `ForeignReject` | A stamped append below the entry is rejected, allocating nothing, and retried at its seam | `WalShardGrain.AdmitStampLocked` returns `WalAppendFenceOutcome.StaleGeneration`; the caller sees `WalRoutingGenerationStaleException` and `ShardRootGrain.NextRoutingRetryAsync` re-admits; a leaf's own pre-close write is a self-fence (`LeafAppendEpochFence.OnAdmitted`). | Yes: `WalCommitLogWriterTests.A_stale_generation_point_append_is_reported_refused_without_allocation`, `WalCommitLogWriterTests.A_self_fenced_point_append_is_reported_refused_without_allocation` and `ShardRoutingGenerationIntegrationTests.A_write_admitted_under_a_re_claimed_generation_is_retried_from_the_shard_root_and_succeeds`. |
-| `Close` | Stop admitting, bump and re-claim the generation (raising the entry and reading the head in one step), and close the marker with that head | `ShardRootGrain.CloseShardMarkerAsync` through `ShardRootGrain.RaiseAndReclaimRoutingGenerationAsync` and `ShardRootGrain.ClaimRoutingGenerationEverywhereAsync`, then `HandOffMarkerCore.Close`; a split's `BPlusLeafGrain.CloseSplitHandOffAsync`; the range delete's `TreeRangeDeleteFenceGrain.CloseCoreAsync`. The re-claim waits out a stamped batch still assigning offsets (`WalShardGrain.GenerationBatchDrainLocked`). | Yes: `HandOffMarkerCoreTests.A_close_records_the_fence_heads_over_the_hand_off_range_and_never_reopens`, `ShardRoutingGenerationIntegrationTests.A_slot_migration_opens_its_marker_on_the_target_and_closes_it_by_the_donors_re_claim`, `WalShardGrainTests.A_generation_re_claim_never_splits_a_generation_stamped_batch` and `LeafAppendEpochFenceTests.A_hand_off_close_with_the_gate_view_closed_after_stamping_leaves_the_marker_open`. |
+| `Close` | Stop admitting, bump and re-claim the generation (raising the entry and reading the head in one step), and close the marker with a head at or below it and above every stamped foreign append, max-merged with the heads earlier closes recorded | `ShardRootGrain.CloseShardMarkerAsync` through `ShardRootGrain.RaiseAndReclaimRoutingGenerationAsync` and `ShardRootGrain.ClaimRoutingGenerationEverywhereAsync`, then `HandOffMarkerCore.Close`, which appends the close and folds an evicted one into `ShardHandOffState.CompactedHeads` by a per-partition maximum; a split's `BPlusLeafGrain.CloseSplitHandOffAsync`; the range delete's `TreeRangeDeleteFenceGrain.CloseCoreAsync`. The re-claim waits out a stamped batch still assigning offsets (`WalShardGrain.GenerationBatchDrainLocked`). | Yes: `HandOffMarkerCoreTests.A_close_records_the_fence_heads_over_the_hand_off_range_and_never_reopens`, `ShardRoutingGenerationIntegrationTests.A_slot_migration_opens_its_marker_on_the_target_and_closes_it_by_the_donors_re_claim`, `WalShardGrainTests.A_generation_re_claim_never_splits_a_generation_stamped_batch`, `LeafAppendEpochFenceTests.A_hand_off_close_with_the_gate_view_closed_after_stamping_leaves_the_marker_open` and `HandOffMarkerCoreTests.A_later_close_with_lower_heads_never_lowers_the_required_heads`. |
 | `Restart` | A WAL shard reactivation, or a move's cutover; the generation entry is a durable row and survives | The row `WalAppendFenceRows.GenerationGrainType`, reloaded by a re-presented `WalShardGrain.ClaimRoutingGenerationAsync`. **Environment:** once in the model. | Yes: `WalShardGrainTests.A_generation_entry_is_unloaded_until_re_presented_after_a_restart` and `WalShardGrainTests.Routing_generations_are_fenced_and_durable`. |
 | `GAdmit` | Another shard's walk is stamped with the tree's range-delete generation only under an open intent | `TreeRangeDeleteFenceGrain.OpenIntentAsync` hands out the generation; `ShardRootGrain.DeleteRangeBoundedCoreAsync` stamps the walk with `WalRoutingStamp.ForTreeRangeDelete` only when it carries an intent, and appends a walk with none unstamped. | Yes: `TreeRangeDeleteFenceIntegrationTests.A_range_delete_is_fenced_at_the_tree_and_closes_every_shard_marker_with_its_heads` and `TreeRangeDeleteFenceIntegrationTests.An_unfenced_walk_through_the_existing_method_is_appended_unstamped`. |
 | `GAlloc` | The walk's stamped append is allocated at or above the tree generation's entry | `WalShardGrain.AdmitStampLocked` with `WalAppendFenceCore.IsGenerationAdmitted` for the range-delete initiator. | Yes: `TreeRangeDeleteFenceGrainTests.The_first_intent_is_handed_a_generation_claimed_at_every_partition` and `TreeRangeDeleteFenceIntegrationTests.A_range_delete_is_fenced_at_the_tree_and_closes_every_shard_marker_with_its_heads`. |
@@ -121,6 +128,7 @@ design model.
 | Spec property | Production property | Detector |
 |---------------|--------------------|----------|
 | `HandOffBound` | Once a hand-off's marker closes, every record its initiator appended under the fence that the owner holds lies below the recorded heads, so an owner that replays to them before arming passes no foreign record it has not applied. | Yes: `ShardRoutingGenerationIntegrationTests.A_slot_migration_opens_its_marker_on_the_target_and_closes_it_by_the_donors_re_claim`, `TreeRangeDeleteFenceIntegrationTests.A_range_delete_is_fenced_at_the_tree_and_closes_every_shard_marker_with_its_heads`, `LeafHandOffFenceIntegrationTests.Every_split_opens_its_marker_at_the_siblings_birth_and_closes_it_by_the_donors_bump` and `BPlusLeafGrainTests.A_close_head_above_the_checkpoint_holds_the_advance_until_a_replay_reaches_it`. |
+| `CloseHeadMonotone` | The heads an owner must replay to before it re-arms never decrease: a later close with lower heads, or the eviction of a retained close, leaves the maximum in force. | Yes: `HandOffMarkerCoreTests.A_later_close_with_lower_heads_never_lowers_the_required_heads` and `HandOffMarkerCoreTests.Required_heads_cover_only_overlapping_closes_and_every_evicted_one`. |
 | `AbsentMarkerHolds` | An absent or uninitialised marker never reads as closed: its owner is held until the marker state is initialised, which happens only with no marker-less hand-off in flight. | Yes: `ShardRoutingGenerationIntegrationTests.A_shard_root_with_a_migration_in_flight_leaves_its_marker_uninitialised`, `BPlusLeafGrainTests.An_uninitialised_leaf_marker_holds_until_the_leaf_adopts_its_shards_flag` and `HandOffMarkerRowRoundTripTests.An_absent_marker_reads_as_uninitialised_with_nothing_open`. |
 
 ## Excluded properties
@@ -133,8 +141,12 @@ design model.
 
 ## Property classification (issue #2321)
 
-All three checked properties are state safety, reached and checked on the base and
-re-checked in the `WideWindows` variant. Every environment step is on in the base,
+`TypeOK` and the two invariants are state safety, and `CloseHeadMonotone` is an action
+property; all four are checked on the base and re-checked in the `WideWindows` variant.
+A close may choose a head below the allocator's only once a walk has gone on
+unstamped, which takes a close to reject it, so a head below an earlier close's needs a
+third close of L; the base's generations allow two. The property's mutation therefore
+runs with the variant's three windows and four generations. Every environment step is on in the base,
 and the initial state may or may not carry a marker-less hand-off, so nothing is
 bounded out; the variant adds an offset, a generation and a third window. Liveness is
 not checked here: that a close eventually lands, under fair storage and the fence

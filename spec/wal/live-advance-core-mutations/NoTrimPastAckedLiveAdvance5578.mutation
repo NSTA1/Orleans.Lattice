@@ -1,0 +1,37 @@
+# Issue #5578's design, reproduced: the advance is armed by the born rule or by
+# reaching the activation's first own append, and appends need no claim, so a
+# stale duplicate keeps appending. Its acknowledged entry is passed, captured
+# out of the shared snapshot and trimmed. Moved from the design's mutation of the
+# same name; the epoch check it also removed is the environment's here, so the
+# edit to OwnAlloc removes the current-activation constraint instead.
+MODULE: NoTrimPastAckedLiveAdvance5578
+TARGET: NoTrimPastAcked
+CLASS: Invariant
+SUMMARY: #5578 exactly: arming by birth or by a read position within one of an own append, with no claim and no current-activation check
+PERTURBS: OwnAlloc
+
+--- FIND
+Armed(a) ==
+    /\ claimed[a]
+    /\ mInit
+    /\ rp[a] >= claimHead[a] - 1
+    /\ ~hoOpen
+    /\ rp[a] >= hoClosedAt - 1
+    /\ rp[a] >= seenU[a]
+    /\ \A o \in inflight : author[o] # a
+--- REPLACE
+\* MUTATION: #5578's arming rule, with its applied-prefix tracker.
+Armed(a) ==
+    /\ a = "a1" \/ \E o \in mine[a] : rp[a] >= o - 1
+    /\ \A o \in inflight : author[o] # a
+--- END
+
+--- FIND
+    /\ a \in up
+    /\ cur = a
+    /\ next < MaxOff
+--- REPLACE
+    /\ a \in up
+\* MUTATION: no claim; any running activation appends stamped.
+    /\ next < MaxOff
+--- END

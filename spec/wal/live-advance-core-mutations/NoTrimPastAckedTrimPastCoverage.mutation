@@ -1,0 +1,15 @@
+# The GC trims one entry past the snapshot's coverage.
+MODULE: NoTrimPastAckedTrimPastCoverage
+TARGET: NoTrimPastAcked
+CLASS: Invariant
+SUMMARY: the GC trims the entry just above the snapshot's coverage
+PERTURBS: GcTrim
+
+--- FIND
+    /\ floor <= snapCov
+
+--- REPLACE
+\* MUTATION: one entry past the coverage.
+    /\ floor <= snapCov + 1
+
+--- END

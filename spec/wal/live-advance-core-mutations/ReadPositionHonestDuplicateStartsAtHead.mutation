@@ -1,0 +1,14 @@
+# A duplicate activation starts its read position at the WAL head instead of the
+# shared snapshot's coverage, passing entries it never read.
+MODULE: ReadPositionHonestDuplicateStartsAtHead
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the duplicate activation starts at the allocator head, not at the snapshot
+PERTURBS: Duplicate
+
+--- FIND
+    /\ rp' = [rp EXCEPT !["a2"] = snapCov]
+--- REPLACE
+\* MUTATION: the read position is the head, not the snapshot's coverage.
+    /\ rp' = [rp EXCEPT !["a2"] = next - 1]
+--- END

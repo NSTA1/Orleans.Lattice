@@ -16,6 +16,6 @@ PERTURBS: OtherIntentClose
     /\ fFence' = fEpoch + 1
 \* MUTATION: it closes L's marker too.
     /\ hoOpen' = FALSE
-    /\ hoClosedAt' = next
+    /\ \E h \in CloseHeads : hoClosedAt' = Max2(hoClosedAt, h)
     /\ UNCHANGED <<next, author, windows, fAdmit, fpend, fkind, fstamp, restarted>>
 --- END

@@ -1,0 +1,16 @@
+# Weakens E's ClaimHeadCoversPriorAppends in this module's environment: the raise
+# returns a claim head below the allocator head, so an append another activation
+# made before the raise lies at or above it. The core replays only to the head, so
+# a live advance passes that append. Shows the assumption is load-bearing.
+MODULE: ReadPositionHonestAssumeClaimHeadBelowAllocator
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the claim head is any offset at or below the allocator head
+PERTURBS: Claim
+
+--- FIND
+    /\ claimHead' = [claimHead EXCEPT ![a] = next]
+--- REPLACE
+\* MUTATION: the claim head may lie below the allocator head.
+    /\ \E h \in 0..next : claimHead' = [claimHead EXCEPT ![a] = h]
+--- END

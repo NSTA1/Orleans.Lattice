@@ -1,0 +1,16 @@
+# The open-marker conjunct of Armed dropped: the core's own guard, distinct from
+# H's guarantee. An activation arms while a hand-off window is open, and its live
+# advance passes a foreign record the window allocated below its own append. It
+# edits the Armed predicate, so it names no perturbed action.
+MODULE: ReadPositionHonestArmsUnderOpenMarker
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the activation arms while L's marker is open
+
+--- FIND
+    /\ ~hoOpen
+    /\ rp[a] >= hoClosedAt - 1
+--- REPLACE
+\* MUTATION: an open marker does not hold the advance.
+    /\ rp[a] >= hoClosedAt - 1
+--- END

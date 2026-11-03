@@ -15,10 +15,10 @@ PERTURBS: Close
 --- FIND
     /\ fEpoch' = fEpoch + 1
     /\ fFence' = fEpoch + 1
-    /\ hoClosedAt' = next
+    /\ \E h \in CloseHeads : hoClosedAt' = Max2(hoClosedAt, h)
 --- REPLACE
     /\ fEpoch' = fEpoch + 1
 \* MUTATION: no fence: the shard's entry for the initiator is not raised.
     /\ fFence' = fFence
-    /\ hoClosedAt' = next
+    /\ \E h \in CloseHeads : hoClosedAt' = Max2(hoClosedAt, h)
 --- END

@@ -1,0 +1,15 @@
+# The applied-prefix tracker records an own append whose apply failed: the offset
+# reaches the tracker but the projection never holds it. The live advance then
+# passes the activation's own durable entry.
+MODULE: ReadPositionHonestTrackerCountsFailedApply
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: an own append is recorded by the tracker without being applied
+PERTURBS: Land
+
+--- FIND
+       THEN /\ cache' = [cache EXCEPT ![author[o]] = @ \cup {o}]
+--- REPLACE
+\* MUTATION: the apply fails, but the tracker records the offset.
+       THEN /\ cache' = cache
+--- END

@@ -1,0 +1,20 @@
+# Weakens H's AbsentMarkerHolds in this module's environment: the purge deletes
+# L's marker, but the absent marker reads as initialised and closed. A straddler of
+# the purged incarnation is then allocated while nothing holds L, and the
+# re-created incarnation's live advance passes it. Shows the assumption is
+# load-bearing.
+MODULE: ReadPositionHonestAssumeUninitialisedMarkerClosed
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the purge deletes L's marker but its state still reads initialised
+PERTURBS: Recreate
+BOUNDS: WithRecreate = TRUE
+
+--- FIND
+    /\ recreated' = TRUE
+    /\ mInit' = FALSE
+--- REPLACE
+    /\ recreated' = TRUE
+\* MUTATION: the absent marker reads initialised.
+    /\ mInit' = mInit
+--- END

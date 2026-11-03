@@ -1,0 +1,16 @@
+# The claim-head conjunct of Armed dropped: an activation arms without replaying
+# to the head its claim returned, so it passes another activation's appends
+# below it. Moved from the design's mutation of the same name. It edits the Armed
+# predicate, not an action, so it names no perturbed action.
+MODULE: ReadPositionHonestNoClaimHeadReplay
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the activation arms without replaying to its claim head
+
+--- FIND
+    /\ mInit
+    /\ rp[a] >= claimHead[a] - 1
+--- REPLACE
+    /\ mInit
+\* MUTATION: no replay to the claim head.
+--- END

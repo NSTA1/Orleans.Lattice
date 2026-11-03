@@ -13,11 +13,11 @@ PERTURBS: Close
 
 --- FIND
     /\ fFence' = fEpoch + 1
-    /\ hoClosedAt' = next
+    /\ \E h \in CloseHeads : hoClosedAt' = Max2(hoClosedAt, h)
     /\ hoOpen' = FALSE
 --- REPLACE
     /\ fFence' = fEpoch + 1
-\* MUTATION: the head is recorded as -1 (closedAt 0), as for a never-claimed partition.
-    /\ hoClosedAt' = 0
+\* MUTATION: the head is recorded as -1 (closedAt 0), as for a never-claimed partition, and max-merged.
+    /\ hoClosedAt' = Max2(hoClosedAt, 0)
     /\ hoOpen' = FALSE
 --- END

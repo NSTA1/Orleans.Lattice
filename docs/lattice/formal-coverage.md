@@ -61,7 +61,7 @@ once, either here or in the
 | Area | Modules | Mutations | Behaviour rows | Detector tests | Page |
 |------|---------|-----------|----------------|----------------|------|
 | Single-cluster atomic commit | 1 | 21 | 17 | 40 | [Verified Atomic-Commit](verified-atomic-commit.md) |
-| WAL durability lifecycle | 6 | 151 | 138 | 262 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
+| WAL durability lifecycle | 7 | 180 | 162 | 290 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
 | Shard ownership | 5 | 124 | 124 | 201 | [Verified Shard Ownership](verified-shard-ownership.md) |
 | Cross-cluster atomic visibility | 1 | 66 | 43 | 150 | [Verified Atomic-Commit: the replicated half](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | 4 | 91 | 71 | 206 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
@@ -412,7 +412,11 @@ gaps, states its full scope.
     claimed, a straddling write's seam retry that never re-stamps it, and the
     re-created incarnation's first initialisation - against a second shard root,
     a purge that finished on 10.2.0 with the re-seed catch-up, and a WAL shard
-    restart.
+    restart;
+    and the live advance's core - an activation's arming, the live advance over
+    its own applied appends, replay, the shared snapshot and the GC trim, the
+    applied-prefix tracker and the unstamped watermark with its restart reset and
+    self-report - with the other fences as environment constraints.
   - **Does not cover:** more than two partitions; splits, resharding and saga
     state; replication consumers, beyond their effect on the trim floor; for pin
     retirement, several leaves or partitions per leaf, the pin's HLC frontier and
@@ -427,7 +431,10 @@ gaps, states its full scope.
     and its replay, a close with the gate view closed, or seam retries; for the
     routing floor, the range-delete fence as a separate initiator, the purge's
     steps as separate actions, or the mixed-version residue of a cross-shard
-    write spanning a purge that finished on 10.2.0.
+    write spanning a purge that finished on 10.2.0; for the live advance's
+    core, the other fences' own mechanisms, the holds production adds beyond the
+    design's arming list, the split between the marker read and the stamp,
+    re-claims, or combined environments.
 - **Shard ownership** ([`spec/shard-ownership/`](../../spec/shard-ownership/README.md)).
   - **Covers:** who serves a key across an adaptive split, an online shard
     fold, an online reshard, an online resize and its undo, with stale routers
