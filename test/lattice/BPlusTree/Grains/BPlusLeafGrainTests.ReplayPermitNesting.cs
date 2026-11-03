@@ -211,14 +211,20 @@ public partial class BPlusLeafGrainTests
                     "the permit is in the gate exactly once: the resolve returned it and the abandoned frame did not release it again");
             });
 
+            Assert.That(grain.ReplayPermitsSuspendedForTest, Is.EqualTo(1), "precondition: the detached replay still has the permit out");
             park.TrySetResult();
             var deadline = Stopwatch.StartNew();
-            while (BPlusLeafGrain.QueuedReplayPermitWaitersForTest > 0 && deadline.Elapsed < TimeSpan.FromSeconds(5))
+            while (grain.ReplayPermitsSuspendedForTest > 0 && deadline.Elapsed < TimeSpan.FromSeconds(5))
                 await Task.Delay(20);
-            await Task.Delay(200);
 
-            Assert.That(gate.CurrentCount, Is.EqualTo(1),
-                "the detached replay re-took the permit after its frame ended and released it, leaving the gate whole");
+            Assert.Multiple(() =>
+            {
+                Assert.That(grain.ReplayPermitsSuspendedForTest, Is.Zero, "the detached replay's resume completed");
+                Assert.That(BPlusLeafGrain.QueuedReplayPermitWaitersForTest, Is.Zero, "the resume left the queue");
+                Assert.That(gate.CurrentCount, Is.EqualTo(1),
+                    "the detached replay re-took the permit after its frame ended and released it, leaving the gate whole");
+                Assert.That(BPlusLeafGrain.ReplayPermitCensusCountForTest, Is.Zero, "no holder is left in the census");
+            });
         }
         finally
         {

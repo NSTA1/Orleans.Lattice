@@ -16,13 +16,14 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// every other activation on the silo queues or is refused meanwhile.
 /// </para>
 /// <para>
-/// The activation replay resolves its shard map before it takes a permit. The
-/// forward, the status resolve and any shard-map lookup still made under a permit
-/// return the permit to the gate for the length of the call and queue for it again
+/// The shard-map lookup, the forward and the status resolve each return the
+/// permit to the gate for the length of the call and queue for it again
 /// afterwards, in FIFO order behind any waiter already queued. That keeps the
 /// replay's apply order and its flush and reconciliation steps unchanged. The
 /// replay is still inside its barrier while the permit is out, so the activation
-/// serves nothing in the gap.
+/// serves nothing in the gap. The shard-map lookup stays after the acquisition
+/// rather than moving ahead of the queue wait: a map read before the wait could
+/// predate a reshard and filter out records for a slot this shard now owns.
 /// </para>
 /// </summary>
 internal sealed partial class BPlusLeafGrain
@@ -61,6 +62,9 @@ internal sealed partial class BPlusLeafGrain
     private GrainId CensusGrainId => context.GrainId;
 
     private string? CensusTreeId => state.State.TreeId;
+
+    /// <summary>Test view of how many of this activation's replays have their permit out.</summary>
+    internal int ReplayPermitsSuspendedForTest => Volatile.Read(ref _replayPermitsSuspended);
 
     /// <summary>Test view of whether this activation's replay barrier has been satisfied.</summary>
     internal bool ReplayBarrierSatisfiedForTest => _replayBarrierSatisfied;
@@ -182,10 +186,25 @@ internal sealed partial class BPlusLeafGrain
     private async Task ResumeReplayPermitAsync(object suspended)
     {
         var lease = (ReplayPermitLease)suspended;
+        var queuedAt = Stopwatch.GetTimestamp();
         NoteReplayPermitArrival();
         try
         {
-            await lease.Gate.WaitAsync().ConfigureAwait(true);
+            var permitWaitScope = LatticeMetrics.EnterWalReplayPermitWait(CensusTreeId);
+            try
+            {
+                await lease.Gate.WaitAsync().ConfigureAwait(true);
+
+                // Recorded as an ordinary acquisition, so the queue's progress
+                // stamp and smoothed wait see a re-take exactly as they see a
+                // first take; otherwise sustained re-takes would read as a queue
+                // that is not draining.
+                RecordReplayPermitQueueWait(queuedAt, LatticeMetrics.PermitQueueWaitAcquired);
+            }
+            finally
+            {
+                permitWaitScope.Dispose();
+            }
         }
         finally
         {

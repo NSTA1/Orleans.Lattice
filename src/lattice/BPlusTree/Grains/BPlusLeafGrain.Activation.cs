@@ -3300,13 +3300,6 @@ internal sealed partial class BPlusLeafGrain
             _coldRebuildPending = replayStart == LeafReplayStartPolicy.Start.Cold;
             _cacheUnanchored = _coldRebuildPending;
 
-            // Resolved before the permit is taken (issue #5775): the registry is
-            // backed by a system tree whose leaves replay under this same gate, so
-            // a lookup made while holding a permit can wait on a permit itself.
-            var replayShardMap = string.IsNullOrEmpty(state.State.TreeId)
-                ? null
-                : await ResolveReplayShardMapAsync(state.State.TreeId);
-
             using (AwaitDiagnostics.Begin("leaf.replay.permit", context.GrainId))
             {
                 replayPermit = await AcquireReplayPermitAsync(cancellationToken);
@@ -3391,7 +3384,7 @@ internal sealed partial class BPlusLeafGrain
                 context.GrainId,
                 AwaitDiagnostics.Enabled ? (replayCheckpointOverride == -1L ? "cold" : "warm") : null))
             {
-                advanced = await ReplayWalSinceCheckpointAsync(replayCheckpointOverride, cancellationToken, shardMapResolved: true, replayShardMap);
+                advanced = await ReplayWalSinceCheckpointAsync(replayCheckpointOverride, cancellationToken);
             }
 
             // The replay read the whole window to head, so a cold rebuild has
@@ -4027,15 +4020,14 @@ internal sealed partial class BPlusLeafGrain
     /// than by density.
     /// </para>
     /// </remarks>
-    private async Task<bool> ReplayWalSinceCheckpointAsync(
-        long? checkpointOverride, CancellationToken cancellationToken, bool shardMapResolved = false, ShardMap? shardMap = null)
+    private async Task<bool> ReplayWalSinceCheckpointAsync(long? checkpointOverride, CancellationToken cancellationToken)
     {
         _warmCacheReplaysInFlight++;
         if (_warmCacheReplaysInFlight != 1)
             _warmCacheReplayFailed = true;
         try
         {
-            return await ReplayWalSinceCheckpointCoreAsync(checkpointOverride, cancellationToken, shardMapResolved, shardMap);
+            return await ReplayWalSinceCheckpointCoreAsync(checkpointOverride, cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -4183,8 +4175,7 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <inheritdoc cref="ReplayWalSinceCheckpointAsync"/>
-    private async Task<bool> ReplayWalSinceCheckpointCoreAsync(
-        long? checkpointOverride, CancellationToken cancellationToken, bool shardMapResolved, ShardMap? shardMap)
+    private async Task<bool> ReplayWalSinceCheckpointCoreAsync(long? checkpointOverride, CancellationToken cancellationToken)
     {
         var treeId = state.State.TreeId;
         if (string.IsNullOrEmpty(treeId))
@@ -4210,9 +4201,10 @@ internal sealed partial class BPlusLeafGrain
         // only trusted when it actually references this leaf's shard, so a
         // registry hiccup or a foreign physical shard space can never cause a
         // leaf to reject its own writes - in that case replay falls back to
-        // the legacy stamp-based axis. The activation replay resolves it before
-        // taking its permit (issue #5775) and hands it in here.
-        var replayShardMap = shardMapResolved ? shardMap : await ResolveReplayShardMapAsync(treeId);
+        // the legacy stamp-based axis. It is read after the permit is taken, so
+        // ownership is captured as of the replay itself; the lookup returns the
+        // permit for the call (issue #5775).
+        var replayShardMap = await ResolveReplayShardMapAsync(treeId);
 
         // The ownership every partition's slices are judged by AND filtered by
         // (issue #3565), captured from one read of the leaf's state. A resident
@@ -7800,8 +7792,8 @@ internal sealed partial class BPlusLeafGrain
         }
         finally
         {
-            // A lookup still made under a permit (the starvation drive's replay)
-            // returns it for the call (issue #5775).
+            // The lookup is made under the replay's permit, after acquisition so
+            // the map is current; it returns the permit for the call (issue #5775).
             if (suspended is not null)
                 await ResumeReplayPermitAsync(suspended);
         }
