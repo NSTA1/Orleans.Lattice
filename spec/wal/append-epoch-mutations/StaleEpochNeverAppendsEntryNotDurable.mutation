@@ -1,0 +1,18 @@
+# Pairs with StaleEpochNeverAppends. The entry is not durable: a WAL shard
+# restart loses it with the in-memory entry, so a superseded activation's claim,
+# still in flight or re-presented, raises its old epoch over the empty entry and
+# appends.
+MODULE: StaleEpochNeverAppendsEntryNotDurable
+TARGET: StaleEpochNeverAppends
+CLASS: Invariant
+SUMMARY: a WAL shard restart loses the durable entry
+PERTURBS: Restart
+
+--- FIND
+    /\ memFence' = Unloaded
+    /\ UNCHANGED fence
+--- REPLACE
+    /\ memFence' = Unloaded
+\* MUTATION: the entry does not survive the restart.
+    /\ fence' = 0
+--- END

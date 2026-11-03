@@ -1,0 +1,30 @@
+# Pairs with ClaimHeadCoversPriorAppends. The claim head is read when the entry is
+# written, not under the lock that raises the in-memory entry. An append the
+# superseded activation makes between the write and the raise lies above the
+# head the raised activation replays to.
+MODULE: ClaimHeadCoversPriorAppendsHeadAtWrite
+TARGET: ClaimHeadCoversPriorAppends
+CLASS: Invariant
+SUMMARY: the claim head is read at the entry write instead of at the raise
+PERTURBS: ClaimWrite, ClaimRaise
+
+--- FIND
+    /\ fence' = Max2(fence, epoch[a])
+    /\ cstage' = [cstage EXCEPT ![a] = 2]
+    /\ UNCHANGED <<rowEpoch, rowInc, up, seen, seenInc, epoch, claimHead, prior, dupUsed>>
+--- REPLACE
+    /\ fence' = Max2(fence, epoch[a])
+    /\ cstage' = [cstage EXCEPT ![a] = 2]
+\* MUTATION: the head is read with the entry write.
+    /\ claimHead' = [claimHead EXCEPT ![a] = next]
+    /\ UNCHANGED <<rowEpoch, rowInc, up, seen, seenInc, epoch, prior, dupUsed>>
+--- END
+
+--- FIND
+    /\ claimHead' = [claimHead EXCEPT ![a] = next]
+    /\ prior'
+--- REPLACE
+\* MUTATION: the raise returns the head the write read.
+    /\ UNCHANGED claimHead
+    /\ prior'
+--- END

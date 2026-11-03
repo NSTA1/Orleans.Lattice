@@ -61,7 +61,7 @@ once, either here or in the
 | Area | Modules | Mutations | Behaviour rows | Detector tests | Page |
 |------|---------|-----------|----------------|----------------|------|
 | Single-cluster atomic commit | 1 | 21 | 17 | 40 | [Verified Atomic-Commit](verified-atomic-commit.md) |
-| WAL durability lifecycle | 3 | 92 | 87 | 190 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
+| WAL durability lifecycle | 4 | 115 | 107 | 218 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
 | Shard ownership | 5 | 124 | 124 | 201 | [Verified Shard Ownership](verified-shard-ownership.md) |
 | Cross-cluster atomic visibility | 1 | 66 | 43 | 150 | [Verified Atomic-Commit: the replicated half](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | 4 | 84 | 64 | 195 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
@@ -399,14 +399,21 @@ gaps, states its full scope.
     sweep and the starvation drive, with their token, leaf read and fenced removal
     as separate steps and two sweepers racing - against a leaf's fold, purge,
     discard and re-creation under the same grain id, and a completed purge's
-    tree-level tail re-driven onto a reused tree id.
+    tree-level tail re-driven onto a reused tree id; and the append-epoch fence of
+    the fenced live checkpoint advance - one leaf's activations claiming an epoch
+    at a WAL partition, with its bump, stale and unloaded rejections and
+    re-presented claim - against a WAL shard restart, another leaf's retirement
+    and the leaf's three-step clear.
   - **Does not cover:** more than two partitions; splits, resharding and saga
     state; replication consumers, beyond their effect on the trim floor; for pin
     retirement, several leaves or partitions per leaf, the pin's HLC frontier and
     override holds, the in-memory cursor registry, the order of the steps
     inside a purge's tree-level tail, and a resized tree's logical purge
     completion (both pinned by tests instead), or how long a live leaf's pin
-    stays at the block value before its first WAL replay.
+    stays at the block value before its first WAL replay; for the append-epoch
+    fence, the fence gate and its unstamped fallback, the hand-off, routing,
+    bulk and replay halves of the live advance, multi-entry stamped batches, or
+    the leaf's gate that serialises its own clear with its claims.
 - **Shard ownership** ([`spec/shard-ownership/`](../../spec/shard-ownership/README.md)).
   - **Covers:** who serves a key across an adaptive split, an online shard
     fold, an online reshard, an online resize and its undo, with stale routers

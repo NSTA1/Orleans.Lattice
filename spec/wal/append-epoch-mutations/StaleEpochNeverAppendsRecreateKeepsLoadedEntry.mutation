@@ -1,0 +1,19 @@
+# Pairs with StaleEpochNeverAppends. L's clear raises the floor and deletes the
+# entry row, but leaves the WAL shard's loaded entry in memory. With no floor
+# check on the append path (#5635), a surviving activation of the cleared
+# incarnation keeps appending at an epoch the clear retired. Retirement must go
+# through the WAL shard activation and remove the loaded entry.
+MODULE: StaleEpochNeverAppendsRecreateKeepsLoadedEntry
+TARGET: StaleEpochNeverAppends
+CLASS: Invariant
+SUMMARY: the clear's retirement leaves the WAL shard's loaded entry in place
+PERTURBS: ClearRetire
+
+--- FIND
+    /\ fence' = 0
+    /\ memFence' = Unloaded
+--- REPLACE
+    /\ fence' = 0
+\* MUTATION: the loaded entry survives the retirement.
+    /\ memFence' = memFence
+--- END
