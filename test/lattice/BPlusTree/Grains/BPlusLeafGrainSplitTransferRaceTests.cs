@@ -130,22 +130,70 @@ public sealed class BPlusLeafGrainSplitTransferRaceTests
         return writer;
     }
 
+    /// <summary>
+    /// A commit-log writer whose next append after each call of <paramref name="arm"/>
+    /// parks on its own release, in order; every other append passes straight through.
+    /// </summary>
+    private static ICommitLogWriter CreateQueueParkingWriter(
+        int parkedAppends, out Action arm, out TaskCompletionSource[] parked, out TaskCompletionSource[] release)
+    {
+        var parkedSources = new TaskCompletionSource[parkedAppends];
+        var releaseSources = new TaskCompletionSource[parkedAppends];
+        for (var i = 0; i < parkedAppends; i++)
+        {
+            parkedSources[i] = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            releaseSources[i] = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        parked = parkedSources;
+        release = releaseSources;
+        var next = -1;
+        var armed = false;
+        var writer = Substitute.For<ICommitLogWriter>();
+        writer.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
+            .Returns(async _ =>
+            {
+                if (armed && next + 1 < parkedSources.Length)
+                {
+                    armed = false;
+                    var slot = Interlocked.Increment(ref next);
+                    parkedSources[slot].TrySetResult();
+                    await releaseSources[slot].Task;
+                }
+
+                return 0L;
+            });
+        writer.AppendManyAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
+            .Returns(ci => Task.FromResult<IReadOnlyList<long>>(new long[((IReadOnlyList<WalRecord>)ci[0]).Count]));
+        arm = () => armed = true;
+        return writer;
+    }
+
+    private static long MutationEpoch(BPlusLeafGrain grain) =>
+        (long)typeof(BPlusLeafGrain)
+            .GetField("_mutationEpoch", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(grain)!;
+
     [Test]
     public async Task Split_carries_a_row_overwritten_during_its_transfer_to_the_sibling()
     {
-        var writer = CreateParkingWriter(out var arm, out var parked, out var release);
+        // Issue #5706: a split drains the writes admitted before it reads the WAL heads,
+        // so an overwrite admitted that early applies before the transfer reads rows. The
+        // #3523 race is still open to a write admitted while the drain waits: it passes
+        // every split-in-progress check (no intent is persisted yet) and is not waited for.
+        var writer = CreateQueueParkingWriter(2, out var arm, out var parked, out var release);
         var harness = CreateHarness(writer);
         await FillToCapacityAsync(harness.Grain);
-
-        // A foreground overwrite of "c" is admitted before the split starts and
-        // parks in its WAL append, past every split-in-progress check.
         arm();
-        var overwrite = harness.Grain.SetAsync("c", Encoding.UTF8.GetBytes("3-newer"));
-        await parked.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
-        // Its append completes while the batch holding "c" is in flight to the
-        // sibling: after the split read the row, before it removed it.
+        // An earlier write, admitted before the split and parked in its append, holds the
+        // split in its drain.
+        var earlier = harness.Grain.SetAsync("b", Encoding.UTF8.GetBytes("2-newer"));
+        await parked[0].Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var epochBefore = MutationEpoch(harness.Grain);
+
         var released = false;
+        Task<SplitResult?>? overwrite = null;
         harness.Sibling.MergeEntriesAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>())
             .Returns(new Func<NSubstitute.Core.CallInfo, Task<SplitResult?>>(async ci =>
             {
@@ -153,15 +201,34 @@ public sealed class BPlusLeafGrainSplitTransferRaceTests
                 harness.Merged.Add(new Dictionary<string, LwwValue<byte[]>>(batch));
                 if (!released && batch.ContainsKey("c"))
                 {
+                    // Its append completes while the batch holding "c" is in flight to
+                    // the sibling: after the split read the row, before it removed it.
                     released = true;
-                    release.TrySetResult();
-                    await overwrite.WaitAsync(TimeSpan.FromSeconds(10));
+                    release[1].TrySetResult();
+                    await overwrite!.WaitAsync(TimeSpan.FromSeconds(10));
                 }
 
                 return null;
             }));
 
-        var result = await harness.Grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+        var dividing = harness.Grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (MutationEpoch(harness.Grain) == epochBefore && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(5);
+        }
+
+        Assert.That(MutationEpoch(harness.Grain), Is.GreaterThan(epochBefore), "precondition: the split is in its drain");
+
+        // Admitted while the drain waits, so the drain does not wait for it.
+        arm();
+        overwrite = harness.Grain.SetAsync("c", Encoding.UTF8.GetBytes("3-newer"));
+        await parked[1].Task.WaitAsync(TimeSpan.FromSeconds(10));
+        release[0].TrySetResult();
+        await earlier.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var result = await dividing.WaitAsync(TimeSpan.FromSeconds(10));
+        await overwrite.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.That(result, Is.Not.Null, "the overflowing write must split");
         Assert.That(string.CompareOrdinal(result!.PromotedKey, "c"), Is.LessThanOrEqualTo(0),

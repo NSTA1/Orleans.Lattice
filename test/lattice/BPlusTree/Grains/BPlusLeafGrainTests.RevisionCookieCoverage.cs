@@ -348,7 +348,7 @@ public partial class BPlusLeafGrainTests
             "SplitAsync not found - was it renamed? It is the division entry point, and "
             + "driving it directly is what isolates the transfer from a triggering write");
 
-        await (Task<SplitResult>)split!.Invoke(grain, [])!;
+        await (Task<SplitResult>)split!.Invoke(grain, [0])!;
 
         // Vacuity control, and it is load-bearing: the cookie assertion below
         // reddens identically whether the division moved rows without bumping

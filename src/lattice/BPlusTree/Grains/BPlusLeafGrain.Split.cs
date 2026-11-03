@@ -43,12 +43,12 @@ internal sealed partial class BPlusLeafGrain
     /// unaffected.
     /// </para>
     /// </summary>
-    private async Task<SplitResult?> SplitIfNeededUnderGateAsync(int maxLeafKeys, long maxLeafBytes = 0)
+    private async Task<SplitResult?> SplitIfNeededUnderGateAsync(int maxLeafKeys, long maxLeafBytes, int ownMutationScopes)
     {
         SplitResult? result;
         using (AwaitDiagnostics.Begin("leaf.split", context.GrainId, AwaitDiagnostics.Enabled ? "keys=" + maxLeafKeys : null))
         {
-            result = await SplitIfNeededHoldingGateAsync(maxLeafKeys, maxLeafBytes);
+            result = await SplitIfNeededHoldingGateAsync(maxLeafKeys, maxLeafBytes, ownMutationScopes);
         }
 
         if (result is not null)
@@ -148,7 +148,7 @@ internal sealed partial class BPlusLeafGrain
         }
     }
 
-    private async Task<SplitResult?> SplitIfNeededHoldingGateAsync(int maxLeafKeys, long maxLeafBytes)
+    private async Task<SplitResult?> SplitIfNeededHoldingGateAsync(int maxLeafKeys, long maxLeafBytes, int ownMutationScopes)
     {
         // Non-blocking acquire: the loser of the race does NOT wait for
         // the in-flight split's cross-grain migration to drain. Its
@@ -179,7 +179,7 @@ internal sealed partial class BPlusLeafGrain
             // completion is the continuation of a division LeafSplits already
             // counted and must land on `recovered`, not `divided` (issue #2860).
             var resuming = HasInterruptedSplit;
-            var result = await SplitAsync();
+            var result = await SplitAsync(ownMutationScopes);
             if (result is null)
             {
                 // SplitAsync already recorded the decline outcome.
@@ -339,6 +339,7 @@ internal sealed partial class BPlusLeafGrain
         // build predates the guard", and the second is the reading they need
         // when a key has frozen. A measured zero settles it.
         RecordSplitAttempt(LatticeMetrics.LeafSplitNoAdmissiblePivot, 0);
+        RecordSplitAttempt(LatticeMetrics.LeafSplitCommitsInFlight, 0);
 
         // And the recovery arm (issue #2860). A division completed by the
         // recovery path is the one most likely to occur on a restart-dominated
@@ -390,7 +391,8 @@ internal sealed partial class BPlusLeafGrain
             // A contended gate returns null, as does a re-check that finds the
             // leaf already back under bound. Either way there is no progress to
             // make on this turn, so stop rather than spin.
-            var split = await SplitIfNeededUnderGateAsync(maxLeafKeys, maxLeafBytes);
+            // Not inside a mutation of this leaf: the capture seam's own turn.
+            var split = await SplitIfNeededUnderGateAsync(maxLeafKeys, maxLeafBytes, ownMutationScopes: 0);
             if (split is null)
             {
                 break;
@@ -875,7 +877,13 @@ internal sealed partial class BPlusLeafGrain
         }
     }
 
-    private async Task<SplitResult?> SplitAsync()
+    /// <param name="ownMutationScopes">
+    /// How many of this leaf's mutation scopes the caller holds: <c>1</c> when a
+    /// mutation divides the leaf after applying its rows, <c>0</c> otherwise. The
+    /// division waits for every other mutation admitted before its head capture
+    /// (issue #5706).
+    /// </param>
+    private async Task<SplitResult?> SplitAsync(int ownMutationScopes)
     {
         using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
@@ -1036,6 +1044,20 @@ internal sealed partial class BPlusLeafGrain
         if (!string.IsNullOrEmpty(treeId))
         {
             walHeadsAtSplit = await CaptureWalHeadsByPartitionAsync(treeId);
+
+            // Issue #5706. The heads become the sibling's read position, and this
+            // leaf narrows to the split key before the division completes. A commit
+            // admitted before the capture may hold a record below the heads that
+            // this leaf has not applied yet; if the activation died after the narrow,
+            // this leaf's replay would skip it as out of span and the sibling's would
+            // start above it. So every such commit applies before the division
+            // begins. Nothing is persisted yet, so a drain that does not finish
+            // declines the division, which the next write retries.
+            if (!await DrainMutationsAdmittedBeforeAsync(ownMutationScopes))
+            {
+                RecordSplitAttempt(LatticeMetrics.LeafSplitCommitsInFlight);
+                return null;
+            }
         }
 
         state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitInProgress);
@@ -1097,9 +1119,10 @@ internal sealed partial class BPlusLeafGrain
     /// Completes (or resumes) a split whose intent has already been persisted.
     /// Safe to call multiple times - MergeEntriesAsync is idempotent (LWW merge).
     /// On the recovery path (caller does not hold captured WAL heads) the
-    /// optional <paramref name="walHeadsAtSplit"/> is omitted; the recovery
-    /// branch reads the current WAL heads fresh, which is still safe - a
-    /// later head only causes the sibling to skip more replay, never less.
+    /// optional <paramref name="walHeadsAtSplit"/> is omitted and no read
+    /// position is applied to either leaf (issue #5706): heads read now could lie
+    /// above a commit admitted before them and not yet applied, which a recovery
+    /// cannot drain, so the sibling replays its range from the log's start.
     /// </summary>
     private async Task<SplitResult> CompleteSplitAsync(long[]? walHeadsAtSplit = null)
     {
@@ -1120,19 +1143,13 @@ internal sealed partial class BPlusLeafGrain
         var newLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(siblingId);
         var splitDiag = AwaitDiagnostics.Enabled ? "sibling=" + siblingId : null;
 
-        // Fresh per-partition WAL-head reads on the recovery path.
+        // The recovery path has no heads (issue #5706). Heads read now would lie
+        // above any commit this activation admitted before them and has not applied
+        // yet, and the recovery cannot drain those: a mutation waiting for the gate
+        // this completion holds is one of them. So a resumed division gives the
+        // sibling no read position, and it replays its range from the log's start,
+        // and the donor keeps its own; both see every record they own.
         long[]? resolvedHeads = walHeadsAtSplit;
-        if (resolvedHeads is null)
-        {
-            var treeId = state.State.TreeId;
-            if (!string.IsNullOrEmpty(treeId))
-            {
-                using (AwaitDiagnostics.Begin("leaf.split.wal-heads", context.GrainId, splitDiag))
-                {
-                    resolvedHeads = await CaptureWalHeadsByPartitionAsync(treeId);
-                }
-            }
-        }
 
         var oldNextId = state.State.OldNextSibling;
 

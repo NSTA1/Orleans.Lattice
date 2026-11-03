@@ -200,7 +200,7 @@ public sealed partial class BPlusLeafGrainBoundedSplitTransferTests
             method,
             Is.Not.Null,
             "SplitAsync not found - was it renamed? It is the division entry point issue #2771 repairs.");
-        return (Task<SplitResult>)method!.Invoke(grain, [])!;
+        return (Task<SplitResult>)method!.Invoke(grain, [0])!;
     }
 
     // ---------------------------------------------------------------

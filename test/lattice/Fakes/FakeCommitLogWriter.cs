@@ -55,6 +55,16 @@ internal sealed class FakeCommitLogWriter : ICommitLogWriter
     /// </summary>
     public TimeSpan DelayPerAppend { get; set; } = TimeSpan.Zero;
 
+    /// <summary>
+    /// When set, the next <see cref="AppendAsync"/> call waits for it before recording
+    /// its record, and signals <see cref="AppendHeld"/> when it starts waiting: a commit
+    /// held between its WAL append and its apply (issue #5706). Cleared when it fires.
+    /// </summary>
+    public TaskCompletionSource? HoldNextAppend { get; set; }
+
+    /// <summary>Completed once an append is held by <see cref="HoldNextAppend"/>.</summary>
+    public TaskCompletionSource AppendHeld { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     /// <inheritdoc />
     public async Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken = default)
     {
@@ -65,6 +75,12 @@ internal sealed class FakeCommitLogWriter : ICommitLogWriter
         }
         if (DelayPerAppend > TimeSpan.Zero)
             await Task.Delay(DelayPerAppend, cancellationToken);
+        if (HoldNextAppend is { } hold)
+        {
+            HoldNextAppend = null;
+            AppendHeld.TrySetResult();
+            await hold.Task;
+        }
         Appended.Add(entry);
         return Appended.Count - 1;
     }

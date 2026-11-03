@@ -582,7 +582,7 @@ internal sealed partial class BPlusLeafGrain
         SplitResult? splitResult = null;
         if (batch is null && IsLeafOverCapacity(options.MaxLeafKeys, options.MaxLeafBytes))
         {
-            splitResult = await SplitAsync();
+            splitResult = await SplitAsync(ownMutationScopes: 1);
             if (splitResult is not null)
             {
                 await PublishSplitDigestAsync(splitResult.PromotedKey);
@@ -729,7 +729,7 @@ internal sealed partial class BPlusLeafGrain
         SplitResult? splitResult = null;
         if (IsLeafOverCapacity(options.MaxLeafKeys, options.MaxLeafBytes))
         {
-            splitResult = await SplitAsync();
+            splitResult = await SplitAsync(ownMutationScopes: 1);
             if (splitResult is not null)
             {
                 await PublishSplitDigestAsync(splitResult.PromotedKey);

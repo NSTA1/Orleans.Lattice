@@ -841,10 +841,16 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// handed the same rows again when the graft is re-driven. A converged leaf
     /// returns an empty list.
     /// </para>
+    /// <para>
+    /// Returns <see langword="null"/>, having changed nothing, when the leaf would
+    /// narrow but writes it admitted earlier were still unapplied at its drain
+    /// deadline (issue #5706): narrowing then could leave such a write's record
+    /// unapplied by every leaf. The caller links without narrowing, as 10.2.0 does.
+    /// </para>
     /// </summary>
     /// <param name="highKeyExclusive">The new exclusive high bound. Must not be <see langword="null"/>.</param>
     /// <param name="nextSibling">The successor to link with the narrowed bound, or <see langword="null"/> to leave the successor unchanged.</param>
-    Task<List<LwwEntry>> NarrowHighKeyAsync(string highKeyExclusive, GrainId? nextSibling = null);
+    Task<List<LwwEntry>?> NarrowHighKeyAsync(string highKeyExclusive, GrainId? nextSibling = null);
 
     /// <summary>
     /// Drops the rows a bulk-append graft has relocated out of this leaf (issue

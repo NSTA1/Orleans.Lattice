@@ -1395,7 +1395,7 @@ internal sealed partial class BPlusLeafGrain(
             }
             else if (IsLeafOverCapacity(options.MaxLeafKeys, options.MaxLeafBytes))
             {
-                splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys, options.MaxLeafBytes);
+                splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys, options.MaxLeafBytes, ownMutationScopes: 1);
             }
         }
         RecordCommitStep("apply", applyStartTicks);
@@ -2020,7 +2020,7 @@ internal sealed partial class BPlusLeafGrain(
             }
             if (IsLeafOverCapacity(options.MaxLeafKeys, options.MaxLeafBytes))
             {
-                splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys, options.MaxLeafBytes);
+                splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys, options.MaxLeafBytes, ownMutationScopes: 1);
             }
             if (stranded is not null)
             {
@@ -2997,13 +2997,37 @@ internal sealed partial class BPlusLeafGrain(
         }
     }
 
+    private bool WouldNarrowHighKey(string highKeyExclusive) =>
+        state.State.HighKeyExclusive is not { } high || string.CompareOrdinal(high, highKeyExclusive) > 0;
+
     /// <inheritdoc />
-    public async Task<List<LwwEntry>> NarrowHighKeyAsync(string highKeyExclusive, GrainId? nextSibling = null)
+    public async Task<List<LwwEntry>?> NarrowHighKeyAsync(string highKeyExclusive, GrainId? nextSibling = null)
     {
         using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
         await AwaitReplayBarrierAsync();
         ArgumentNullException.ThrowIfNull(highKeyExclusive);
+
+        // Issue #5706: the graft captured the appended leaves' birth hint before it
+        // called here, so every commit this leaf admitted before now may hold a
+        // record below the hint. Each must have applied before the bound narrows,
+        // or a death in between leaves its record unapplied by every leaf. Drained
+        // outside the split gate, which a mutation may itself be waiting for, and
+        // only when this call would narrow: a leaf a first attempt already narrowed
+        // forwards every later out-of-span write, so it has nothing to wait for.
+        // A drain that misses its deadline narrows nothing and returns null, and
+        // the graft takes the 10.2.0 path (review B1 of #5702): a slow commit never
+        // fails a bulk chunk that succeeded on 10.2.0.
+        var drained = false;
+        if (WouldNarrowHighKey(highKeyExclusive))
+        {
+            if (!await DrainMutationsAdmittedBeforeAsync(allowance: 0))
+            {
+                return null;
+            }
+
+            drained = true;
+        }
 
         // See SetNextSiblingAsync above for the gate rationale.
         await _splitGate.WaitAsync().ConfigureAwait(true);
@@ -3020,7 +3044,13 @@ internal sealed partial class BPlusLeafGrain(
             // bound a later graft has already narrowed further.
             var prevHighKey = state.State.HighKeyExclusive;
             var prevNext = state.State.NextSibling;
-            var narrow = prevHighKey is null || string.CompareOrdinal(prevHighKey, highKeyExclusive) > 0;
+            var narrow = WouldNarrowHighKey(highKeyExclusive);
+            if (narrow && !drained)
+            {
+                // A widening (a reclaim absorbing a neighbour) ran between the check
+                // above and the gate. Nothing is narrowed without a drain.
+                return null;
+            }
 
             // Issue #5654: the successor is linked in the same persist that narrows
             // the bound. A write for a key at or above the bound that still routes
@@ -3105,8 +3135,13 @@ internal sealed partial class BPlusLeafGrain(
             {
                 // Class B revert: the graft is still owed, and its resume hands
                 // these rows back again.
+                // Only where nothing has taken the key's place since: a write stored
+                // over it during the persist is the newer row and stays.
                 foreach (var (key, row) in dropped)
-                    StoreEntry(key, row);
+                {
+                    if (!Cache.TryGetRow(key, out _))
+                        StoreEntry(key, row);
+                }
                 BumpLocalRevision();
                 throw;
             }
@@ -4596,7 +4631,7 @@ internal sealed partial class BPlusLeafGrain(
         var mergeOptions = await GetOptionsAsync();
         if (IsLeafOverCapacity(mergeOptions.MaxLeafKeys, mergeOptions.MaxLeafBytes))
         {
-            splitResult = await SplitIfNeededUnderGateAsync(mergeOptions.MaxLeafKeys, mergeOptions.MaxLeafBytes);
+            splitResult = await SplitIfNeededUnderGateAsync(mergeOptions.MaxLeafKeys, mergeOptions.MaxLeafBytes, ownMutationScopes: 1);
         }
 
         if (stranded is not null)
