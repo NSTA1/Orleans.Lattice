@@ -984,9 +984,10 @@ declaring the range at the narrow, and the new leaf would start above it. So the
 capped, per partition, at O's checkpoint, in the same serial turn that captures the heads.
 The units matter, because the two are stated differently:
 - **In checkpoint terms** (production): a leaf's checkpoint is inclusive, and it replays
-  the offsets above it; the hint is stamped verbatim as the bulk-born leaf's checkpoint.
-  The cap is `min(hint, checkpoint of O)`. Adding one would skip exactly the first record
-  O never applied.
+  the offsets above it, while a captured head is exclusive, the next offset to assign. So
+  a head becomes a birth checkpoint as `head - 1` (stamping the head verbatim skips the
+  record at exactly that offset, #5760), and the cap is `min(head - 1, checkpoint of O)`.
+  Adding one to O's checkpoint would skip exactly the first record O never applied.
 - **In head terms** (the `WalBulkSwitch` model): a head is exclusive, the next offset to
   assign, and the born leaf's read position is the hint minus one. The same cap is
   `min(heads, rpO + 1)`, where `rpO` is the last offset O replayed.
