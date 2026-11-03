@@ -14,12 +14,14 @@ namespace Orleans.Lattice.Testing;
 /// (the response did not arrive in time, so the call's outcome is unknown) or an
 /// <c>OrleansMessageRejectionException</c>, whose subtypes include
 /// <c>SiloUnavailableException</c> (the target silo was unavailable, or the message
-/// was rejected before it ran). Neither is a server bug. A binding with no arm for
+/// was rejected before it ran), or an <c>EnumerationAbortedException</c> (a remote
+/// enumerator was lost because its grain deactivated mid-read). None is a server bug.
+/// A binding with no arm for
 /// them reports them as <c>Internal</c>, logged as a server error, so a client
 /// cannot tell a transient fault it should retry or reconcile from a defect.
 /// </para>
 /// <para>
-/// A facade maps the timeout to <c>DeadlineExceeded</c> and the rejection to
+/// A facade maps the timeout to <c>DeadlineExceeded</c> and the other two to
 /// <c>Unavailable</c>. Nothing faults when an arm is missing, so only a structural
 /// guard keeps a new binding from reintroducing the opaque mapping. A filtered
 /// <c>catch (Exception) when (...)</c> does not count: the clause must name the type.
@@ -31,6 +33,7 @@ public abstract class GrpcTransientFaultMappingContractTestsBase
     [
         nameof(TimeoutException),
         "OrleansMessageRejectionException",
+        "EnumerationAbortedException",
     ];
 
     /// <summary>The package assembly whose gRPC facade services are audited.</summary>
@@ -58,9 +61,10 @@ public abstract class GrpcTransientFaultMappingContractTestsBase
         }
 
         Assert.That(offenders, Is.Empty,
-            "A grain-call timeout (outcome unknown) and a silo-unavailable or rejected message (retryable) are "
-            + "transient cluster faults and must be mapped explicitly on every binding (DeadlineExceeded and "
-            + "Unavailable for a facade), never left to a generic handler that reports them as Internal. Offenders:"
+            "A grain-call timeout (outcome unknown), a silo-unavailable or rejected message and an aborted remote "
+            + "enumeration (retryable) are transient cluster faults and must be mapped explicitly on every binding "
+            + "(DeadlineExceeded and Unavailable for a facade), never left to a generic handler that reports them as "
+            + "Internal. Offenders:"
             + Environment.NewLine + string.Join(Environment.NewLine, offenders));
     }
 }
