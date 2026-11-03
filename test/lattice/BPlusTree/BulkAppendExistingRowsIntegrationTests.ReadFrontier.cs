@@ -67,6 +67,40 @@ public sealed partial class BulkAppendExistingRowsIntegrationTests
         await AssertTreeHoldsExactlyAsync(tree, expected, "after every leaf replayed from its read position");
     }
 
+    [Test]
+    public async Task BulkLoad_leaves_replay_a_record_of_their_range_the_replaced_root_never_applied()
+    {
+        // Issue #5766: the bulk load's leaves start no higher than the replaced root's
+        // frontier. The root leaf replays to its partition's head, is left empty, and
+        // then another author (here, as a duplicate activation of that leaf would)
+        // appends a key of the loaded range at the root's frontier plus one.
+        const string treeId = "load-hint-foreign-record";
+        const string foreignKey = "k0002x";
+        var (shard, tree) = await SingleShardTreeAsync(treeId);
+        var partitions = await SiloServices().GetRequiredService<LatticeOptionsResolver>().GetWalPartitionsAsync(treeId);
+        var partition = WalPartitionHash.Compute(foreignKey, partitions);
+        var seed = Enumerable.Range(0, 10_000).Select(i => $"a{i:D4}")
+            .First(k => WalPartitionHash.Compute(k, partitions) == partition);
+
+        // A record on the foreign key's partition that the root leaf replays past,
+        // after which the root holds nothing, so the load accepts the shard.
+        await tree.SetAsync(seed, Utf8("seed"));
+        await tree.DeleteAsync(seed);
+        var root = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>((await shard.GetLeftmostLeafIdAsync())!.Value);
+        await root.CompactTombstonesAsync(TimeSpan.Zero);
+        await DeactivateEveryLeafAsync(shard);
+        Assert.That(await tree.GetAsync(seed), Is.Null, "precondition: the root replayed and holds no row");
+        Assert.That(await tree.CountAsync(), Is.Zero, "precondition: the shard is empty");
+
+        await AppendForeignRecordAsync(treeId, foreignKey, "foreign");
+        await tree.BulkLoadAsync(Entries(0, 5, "b"));
+
+        var expected = Expected(0, 5, "b");
+        expected[foreignKey] = "foreign";
+        await AssertSwitchesClosedAsync(treeId);
+        await DeactivateEveryLeafAsync(shard);
+        await AssertTreeHoldsExactlyAsync(tree, expected, "after every leaf replayed from its read position");
+    }
     /// <summary>
     /// Writes one key per WAL partition, all with <paramref name="prefix"/>, so every
     /// partition holds a record a replay can advance over.

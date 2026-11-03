@@ -3063,6 +3063,23 @@ internal sealed partial class BPlusLeafGrain(
         }
     }
 
+    /// <inheritdoc />
+    public async Task<LeafNarrowResult> CopyRowsForBulkLoadAsync()
+    {
+        await AwaitReplayBarrierAsync();
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
+        var partitionCount = Math.Max(1, (await GetOptionsAsync()).WalPartitions);
+
+        // Issue #5766: the frontier and the rows are read in one synchronous step,
+        // frontier first, so every record at or below it is in the rows and every
+        // record this leaf has not applied lies above it.
+        var frontier = new long[partitionCount];
+        for (var p = 0; p < frontier.Length; p++)
+            frontier[p] = GetCurrentCheckpointForPartition(p);
+
+        return new LeafNarrowResult { Rows = CopyRowsAtOrAbove(string.Empty), ReadFrontier = frontier };
+    }
+
     private bool WouldNarrowHighKey(string highKeyExclusive) =>
         state.State.HighKeyExclusive is not { } high || string.CompareOrdinal(high, highKeyExclusive) > 0;
 

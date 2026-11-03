@@ -67,11 +67,13 @@ internal sealed partial class ShardRootGrain
         });
 
         var replaced = await FinalizeBulkLoadTreeAsync(operationId, leafIds, separators, maxChildren);
-        await RetireReplacedRootAsync(seededRoot, replaced);
+        var readFrontier = await RetireReplacedRootAsync(seededRoot, replaced);
 
         // Every row the shard held before the switch is now in the loaded tree, so
-        // the leaves may read from the birth hint; the switch closes by fence.
-        await FinishBulkSwitchAsync(operationId, leafIds, relocated: true, closeNow: true);
+        // the leaves may read from the birth hint, capped at the replaced root's
+        // frontier (issue #5766); with no frontier they read from the log's start.
+        // The switch closes by fence.
+        await FinishBulkSwitchAsync(operationId, leafIds, relocated: readFrontier is not null, closeNow: true, readFrontier);
     }
 
     /// <inheritdoc />
@@ -129,11 +131,11 @@ internal sealed partial class ShardRootGrain
         });
 
         var replaced = await FinalizeBulkLoadTreeAsync(operationId, leafIds, separators, maxChildren);
-        await RetireReplacedRootAsync(seededRoot, replaced);
+        var readFrontier = await RetireReplacedRootAsync(seededRoot, replaced);
 
-        // Every row the shard held before the switch is now in the loaded tree, so
-        // the leaves may read from the birth hint; the switch closes by fence.
-        await FinishBulkSwitchAsync(operationId, leafIds, relocated: true, closeNow: true);
+        // As BulkLoadAsync: the hint is capped at the replaced root's frontier (issue
+        // #5766), and with no frontier the leaves read from the log's start.
+        await FinishBulkSwitchAsync(operationId, leafIds, relocated: readFrontier is not null, closeNow: true, readFrontier);
     }
 
     /// <summary>
@@ -229,10 +231,10 @@ internal sealed partial class ShardRootGrain
     /// or orphan-repair pass and swept by a purge.
     /// </para>
     /// </remarks>
-    private async Task RetireReplacedRootAsync(GrainId? seededRoot, ReplacedBulkRoot replaced)
+    private async Task<long[]?> RetireReplacedRootAsync(GrainId? seededRoot, ReplacedBulkRoot replaced)
     {
         var rootId = replaced.RootId ?? seededRoot;
-        if (rootId is not { } root || state.State.RootNodeId == root) return;
+        if (rootId is not { } root || state.State.RootNodeId == root) return null;
 
         // The loaded root is published, so a batch write admitted from here on
         // routes into the loaded tree. Wait out the ones admitted before, which may
@@ -241,24 +243,85 @@ internal sealed partial class ShardRootGrain
         await DrainBatchWritesAdmittedBeforeAsync();
 
         var leafIds = await CollectReplacedLeavesAsync(root, replaced.RootId is null || replaced.WasLeaf);
+        long[]? frontier = null;
+        var frontierKnown = true;
         foreach (var leafId in leafIds)
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            var stats = await leaf.GetStatsAsync();
-            if (stats.LiveKeys != 0 || stats.Tombstones != 0)
+            var (rows, leafFrontier) = await ReadReplacedLeafAsync(leaf);
+            if (leafFrontier is null)
+                frontierKnown = false;
+            else if (frontier is null)
+                frontier = leafFrontier;
+            else
+                MinPerPartitionInPlace(frontier, leafFrontier);
+
+            if (rows is { Count: > 0 })
             {
-                var delta = await leaf.GetDeltaSinceAsync(new VersionVector());
-                if (delta.Entries.Count > 0)
-                {
-                    var rows = new Dictionary<string, LwwValue<byte[]>>(delta.Entries, StringComparer.Ordinal);
-                    // Epic #5605: no phase check admitted these rows, so they carry no
-                    // routing generation and are appended unstamped (S3).
-                    await MergeRoutedAsync(rows, isCrossShardMigration: false, WalRoutingStamp.Unstamped);
-                    RecordBulkRelocation(rows.Count, LatticeMetrics.BulkRelocationReplacedRoot);
-                }
+                // Epic #5605: no phase check admitted these rows, so they carry no
+                // routing generation and are appended unstamped (S3).
+                await MergeRoutedAsync(rows, isCrossShardMigration: false, WalRoutingStamp.Unstamped);
+                RecordBulkRelocation(rows.Count, LatticeMetrics.BulkRelocationReplacedRoot);
             }
 
             await ClearRemovedLeafAsync(leafId, "replaced bulk-load root");
+        }
+
+        return frontierKnown ? frontier : null;
+    }
+
+    /// <summary>
+    /// Reads a leaf of the root a bulk load replaced: its rows, and, while every silo
+    /// serves <see cref="IBPlusLeafGrain.CopyRowsForBulkLoadAsync"/>, its replay
+    /// frontier read before them, in one call (issue #5766). An older silo answers that
+    /// method with a definite unknown-method fault, or the gate is closed, and the rows
+    /// are read as 10.2.0 reads them, with no frontier, so the load applies no hint.
+    /// </summary>
+    private async Task<(Dictionary<string, LwwValue<byte[]>>? Rows, long[]? Frontier)> ReadReplacedLeafAsync(IBPlusLeafGrain leaf)
+    {
+        if (BulkGraftSeamsAvailable)
+        {
+            try
+            {
+                var copied = await leaf.CopyRowsForBulkLoadAsync();
+                Dictionary<string, LwwValue<byte[]>>? copiedRows = null;
+                if (copied.Rows.Count > 0)
+                {
+                    copiedRows = new Dictionary<string, LwwValue<byte[]>>(copied.Rows.Count, StringComparer.Ordinal);
+                    foreach (var row in copied.Rows)
+                        copiedRows[row.Key] = row.ToLwwValue();
+                }
+
+                return (copiedRows, copied.ReadFrontier);
+            }
+            catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
+            {
+                // An older silo joined and hosts the leaf before the gate saw it.
+            }
+        }
+
+        var stats = await leaf.GetStatsAsync();
+        if (stats.LiveKeys == 0 && stats.Tombstones == 0)
+            return (null, null);
+
+        var delta = await leaf.GetDeltaSinceAsync(new VersionVector());
+        return delta.Entries.Count > 0
+            ? (new Dictionary<string, LwwValue<byte[]>>(delta.Entries, StringComparer.Ordinal), null)
+            : (null, null);
+    }
+
+    /// <summary>
+    /// Lowers each partition of <paramref name="minimum"/> to <paramref name="frontier"/>'s,
+    /// in place, so the minimum over a replaced root's leaves allocates nothing beyond the
+    /// first leaf's own array. A partition <paramref name="frontier"/> lacks reads as -1,
+    /// no frontier; one <paramref name="minimum"/> lacks already reads as -1 where the hint
+    /// is capped.
+    /// </summary>
+    internal static void MinPerPartitionInPlace(long[] minimum, long[] frontier)
+    {
+        for (var p = 0; p < minimum.Length; p++)
+        {
+            minimum[p] = Math.Min(minimum[p], p < frontier.Length ? frontier[p] : -1);
         }
     }
 

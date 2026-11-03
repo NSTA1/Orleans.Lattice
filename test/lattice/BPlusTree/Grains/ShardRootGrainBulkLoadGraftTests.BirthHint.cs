@@ -323,14 +323,8 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         seededLeaf.GetStatsAsync().Returns(
             Task.FromResult(new LeafStats()),
             Task.FromResult(new LeafStats { LiveKeys = 1 }));
-        seededLeaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(Task.FromResult(new StateDelta
-        {
-            Entries = new Dictionary<string, LwwValue<byte[]>>
-            {
-                ["k0001"] = LwwValue<byte[]>.Create([9], HybridLogicalClock.Tick(HybridLogicalClock.Zero)),
-            },
-            Version = new VersionVector(),
-        }));
+        seededLeaf.CopyRowsForBulkLoadAsync().Returns(CopiedForLoad(
+            [new LwwEntry("k0001", LwwValue<byte[]>.Create([9], HybridLogicalClock.Tick(HybridLogicalClock.Zero)))]));
 
         await rig.H.Grain.BulkLoadRawAsync("load", RawEntries(5));
 
@@ -342,7 +336,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         // leaf's read position moves past them.
         Received.InOrder(() =>
         {
-            seededLeaf.GetDeltaSinceAsync(Arg.Any<VersionVector>());
+            seededLeaf.CopyRowsForBulkLoadAsync();
             loaded[0].SetCheckpointOffsetHintsAsync(Arg.Any<long[]>());
         });
 
@@ -613,5 +607,101 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         var targets = (List<GraftEntry>?)call.GetArguments()[2];
         Assert.That(targets?.Select(e => (e.SeparatorKey, e.LeafId)), Is.EqualTo(expected),
             "every appended leaf, by separator, in order");
+    }
+
+    private static (HintRig Rig, IBPlusLeafGrain Seeded) CreateLoadRig()
+    {
+        var rig = CreateHintRig();
+        var seeded = rig.H.AddLeaf();
+        var seededLeaf = rig.H.Leaf(seeded);
+        rig.H.State.State.RootNodeId = seeded;
+        rig.H.State.State.RootIsLeaf = true;
+        seededLeaf.GetStatsAsync().Returns(Task.FromResult(new LeafStats()));
+        return (rig, seededLeaf);
+    }
+
+    [Test]
+    public async Task A_bulk_load_applies_its_hint_capped_per_partition_at_the_replaced_roots_frontier()
+    {
+        // Issue #5766: a record of the loaded range that another author appended below
+        // the hint and the replaced root never applied lies above the replaced root's
+        // frontier; a loaded leaf starting at the hint would skip it, and the replaced
+        // root, cleared, never applies it.
+        var (rig, seededLeaf) = CreateLoadRig();
+        var frontier = Enumerable.Repeat(BirthHead + 5, 64).ToArray();
+        frontier[0] = BirthHead - 10;
+        frontier[1] = -1;
+        seededLeaf.CopyRowsForBulkLoadAsync().Returns(CopiedForLoad([], frontier));
+
+        await rig.H.Grain.BulkLoadRawAsync("load", RawEntries(5));
+
+        var loaded = rig.H.Leaves.Values.Where(l => l != seededLeaf && HintAppliedTo(l) is not null).ToList();
+        Assert.That(loaded, Has.Count.EqualTo(3), "precondition: every loaded leaf is hinted");
+        foreach (var applied in loaded.Select(l => HintAppliedTo(l)!))
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(applied[0], Is.EqualTo(BirthHead - 10), "capped at the frontier, not the frontier plus one");
+                Assert.That(applied[1], Is.EqualTo(-1), "no frontier: that partition is replayed from the start");
+                Assert.That(applied.Skip(2), Is.All.EqualTo(BirthHint), "the hint where it is the lower");
+            });
+        }
+    }
+
+    [Test]
+    public async Task A_bulk_load_with_no_replaced_root_applies_no_hint()
+    {
+        // No leaf declared the range before the load, so none can say how far it had
+        // replayed: the loaded leaves read from the log's start, as in 10.2.0.
+        var rig = CreateHintRig();
+
+        await rig.H.Grain.BulkLoadRawAsync("load", RawEntries(5));
+
+        Assert.That(rig.H.Leaves.Values, Is.Not.Empty, "precondition: the load created leaves");
+        foreach (var leaf in rig.H.Leaves.Values)
+        {
+            Assert.That(HintAppliedTo(leaf), Is.Null);
+        }
+
+        Assert.That((await ShardMarkerAsync(rig)).Open, Is.Empty, "the switch still closes");
+    }
+
+    [Test]
+    public async Task A_bulk_load_whose_replaced_root_answers_method_unknown_reads_it_as_10_2_0_and_applies_no_hint()
+    {
+        var (rig, seededLeaf) = CreateLoadRig();
+        var unknown = new TypeLoadException(WalAppendFenceMethodProbe.UnresolvedAliasPrefix + " 'inv.lattice.leaf.copyrows'");
+        seededLeaf.CopyRowsForBulkLoadAsync().Returns(Task.FromException<LeafNarrowResult>(unknown));
+        seededLeaf.GetStatsAsync().Returns(
+            Task.FromResult(new LeafStats()),
+            Task.FromResult(new LeafStats { LiveKeys = 1 }));
+        seededLeaf.GetDeltaSinceAsync(Arg.Any<VersionVector>()).Returns(Task.FromResult(new StateDelta
+        {
+            Entries = new Dictionary<string, LwwValue<byte[]>>
+            {
+                ["k0001"] = LwwValue<byte[]>.Create([9], HybridLogicalClock.Tick(HybridLogicalClock.Zero)),
+            },
+            Version = new VersionVector(),
+        }));
+
+        await rig.H.Grain.BulkLoadRawAsync("load", RawEntries(5));
+
+        foreach (var leaf in rig.H.Leaves.Values)
+        {
+            Assert.That(HintAppliedTo(leaf), Is.Null, "no frontier from an older silo, so no hint");
+        }
+
+        await seededLeaf.Received(1).GetDeltaSinceAsync(Arg.Any<VersionVector>());
+        await seededLeaf.Received(1).ClearGrainStateAsync();
+    }
+
+    [Test]
+    public void The_replaced_roots_frontier_is_the_lowest_of_its_leaves_per_partition()
+    {
+        long[] minimum = [5, 9, 7];
+        ShardRootGrain.MinPerPartitionInPlace(minimum, [6, 2]);
+
+        Assert.That(minimum, Is.EqualTo(new long[] { 5, 2, -1 }),
+            "a partition one leaf does not report reads as -1, no frontier");
     }
 }

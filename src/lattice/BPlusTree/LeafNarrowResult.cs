@@ -1,10 +1,11 @@
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
-/// What <see cref="IBPlusLeafGrain.NarrowHighKeyAsync"/> hands back to a shard's bulk
-/// graft once the old rightmost leaf has stopped declaring the appended keyspace: the
-/// rows it held there, for the graft to relocate, and how far it had replayed the WAL
-/// when it narrowed. Not part of the end-user API surface.
+/// What a leaf hands a shard's bulk operation whose new leaves take over its range: the
+/// rows it held there, for the operation to relocate, and how far it had replayed the
+/// WAL when they were read. <see cref="IBPlusLeafGrain.NarrowHighKeyAsync"/> returns it
+/// to a bulk graft and <see cref="IBPlusLeafGrain.CopyRowsForBulkLoadAsync"/> to a bulk
+/// load. Not part of the end-user API surface.
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LeafNarrowResult)]
@@ -25,7 +26,7 @@ internal sealed record LeafNarrowResult
     /// the heads is a hint that is not capped, so on such a leaf the frontier carries
     /// that residue (issue #5756). Every record of the narrowed-away range the leaf had not applied lies
     /// above it, so an appended leaf that starts no higher replays every one.
-    /// <see langword="null"/> when this call did not narrow - the leaf was already
+    /// <see langword="null"/> when a narrow did not narrow - the leaf was already
     /// narrowed by an earlier attempt, after which its replay may have stepped past a
     /// record of that range - so no read position can be inferred.
     /// </summary>
