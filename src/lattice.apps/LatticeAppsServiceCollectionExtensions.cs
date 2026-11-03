@@ -114,6 +114,10 @@ public static partial class LatticeAppsServiceCollectionExtensions
         // AddSingleton<IMutationObserver> is not idempotent under TryAdd, hence the marker above.
         services.TryAddSingleton<CompiledAppRegistrySnapshotMaintainer>();
         services.AddSingleton<IMutationObserver>(sp => sp.GetRequiredService<CompiledAppRegistrySnapshotMaintainer>());
+
+        // A restore or re-seed cutover swaps the registry tree's alias and publishes no mutation,
+        // so the same instance republishes on the registry tree's alias changes (#5731).
+        services.AddSingleton<ITreeAliasObserver>(sp => sp.GetRequiredService<CompiledAppRegistrySnapshotMaintainer>());
         services.TryAddSingleton<IAppRegistryProjection>(sp => sp.GetRequiredService<CompiledAppRegistrySnapshotMaintainer>());
 
         // Each silo leases its snapshot from the registry epoch grain, which pushes every advance to it

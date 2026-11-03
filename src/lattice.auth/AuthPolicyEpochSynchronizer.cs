@@ -29,7 +29,7 @@ namespace Orleans.Lattice.Auth;
 /// one small grain call per interval and no rebuild.
 /// </para>
 /// </remarks>
-internal sealed class AuthPolicyEpochSynchronizer : IHostedService, IMutationObserver
+internal sealed class AuthPolicyEpochSynchronizer : IHostedService, IMutationObserver, ITreeAliasObserver
 {
     /// <summary>How often each silo reads the cluster-wide epoch by default.</summary>
     internal static readonly TimeSpan DefaultPollInterval = TimeSpan.FromSeconds(1);
@@ -137,6 +137,22 @@ internal sealed class AuthPolicyEpochSynchronizer : IHostedService, IMutationObs
     public Task OnMutationAsync(LatticeMutation mutation, CancellationToken cancellationToken)
     {
         if (string.Equals(mutation.TreeId, AuthConstants.PolicyTree, StringComparison.Ordinal))
+        {
+            SchedulePublish();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// A restore, resize or re-seed cutover replaces the tree's contents by an alias
+    /// swap, which publishes no mutation, so an alias change of the policy tree is published
+    /// as a change too (#5731). Only schedules: one ordinal comparison for every other tree.
+    /// </remarks>
+    public Task OnTreeAliasChangedAsync(TreeAliasChange change, CancellationToken cancellationToken)
+    {
+        if (string.Equals(change.TreeId, AuthConstants.PolicyTree, StringComparison.Ordinal))
         {
             SchedulePublish();
         }

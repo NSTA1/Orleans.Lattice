@@ -125,6 +125,12 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         builder.Services.AddSingleton<IHostedService>(
             sp => sp.GetRequiredService<ReplicationConfigEpochSynchronizer>());
 
+        // A re-seed cutover replaces the config tree's contents by an alias swap,
+        // which publishes no mutation, so the same instance also recompiles on
+        // the config tree's alias changes (#5731).
+        builder.Services.AddSingleton<ITreeAliasObserver>(
+            sp => sp.GetRequiredService<ReplicationConfigEpochSynchronizer>());
+
         // The runtime enable/disable authoring seam the API facade depends on to
         // author per-tree enablement into the config OR-Map. Registered here
         // because it composes the config store, the precondition validator, the
