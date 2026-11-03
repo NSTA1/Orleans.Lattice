@@ -29,8 +29,6 @@ namespace Orleans.Lattice.Testing;
 /// </remarks>
 public abstract class GrpcSaturationMappingContractTestsBase
 {
-    private const string ServiceTypeSuffix = "GrpcService";
-
     private const string SaturationTypeName = "LatticeSaturatedException";
 
     /// <summary>The package assembly whose gRPC facade services are audited.</summary>
@@ -43,17 +41,10 @@ public abstract class GrpcSaturationMappingContractTestsBase
     [Test]
     public void Every_grpc_facade_service_maps_storage_back_pressure()
     {
-        var services = PackageAssembly.GetTypes()
-            .Where(t => t.IsClass && !t.IsAbstract && t.Name.EndsWith(ServiceTypeSuffix, StringComparison.Ordinal))
-            .OrderBy(t => t.FullName, StringComparer.Ordinal)
-            .ToList();
-
-        Assert.That(services, Is.Not.Empty,
-            $"No '*{ServiceTypeSuffix}' types were discovered in {PackageAssembly.GetName().Name}; "
-            + "the guard would be inert. Verify PackageAssembly.");
+        var services = GrpcFacadeCatchClauses.DiscoverServices(PackageAssembly);
 
         var offenders = services
-            .Where(service => !Catches(service, SaturationTypeName))
+            .Where(service => !GrpcFacadeCatchClauses.Catches(service, SaturationTypeName))
             .Select(service => $"{service.FullName}: no catch clause for {SaturationTypeName}.")
             .ToList();
 
@@ -62,60 +53,5 @@ public abstract class GrpcSaturationMappingContractTestsBase
             + "binding (ResourceExhausted for a facade), never left to a generic handler that reports it as "
             + "Internal or FailedPrecondition. Offenders:"
             + Environment.NewLine + string.Join(Environment.NewLine, offenders));
-    }
-
-    private static bool Catches(Type service, string exceptionTypeName)
-    {
-        const BindingFlags Members = BindingFlags.Instance | BindingFlags.Static
-            | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
-
-        var candidates = new List<Type> { service };
-        candidates.AddRange(service.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic));
-
-        foreach (var type in candidates)
-        {
-            foreach (var method in type.GetMethods(Members))
-            {
-                MethodBody? body;
-                try
-                {
-                    body = method.GetMethodBody();
-                }
-                catch (Exception)
-                {
-                    continue;
-                }
-
-                if (body is null)
-                {
-                    continue;
-                }
-
-                foreach (var clause in body.ExceptionHandlingClauses)
-                {
-                    if (clause.Flags != ExceptionHandlingClauseOptions.Clause)
-                    {
-                        continue;
-                    }
-
-                    Type? caught;
-                    try
-                    {
-                        caught = clause.CatchType;
-                    }
-                    catch (Exception)
-                    {
-                        continue;
-                    }
-
-                    if (caught is not null && string.Equals(caught.Name, exceptionTypeName, StringComparison.Ordinal))
-                    {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        return false;
     }
 }
