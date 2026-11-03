@@ -39,8 +39,19 @@ design change, not a modelling choice.
     gate view, the coordinator-terminal class, or an unreachable leaf (#5709). It
     is always reported.
 - **An initiator's entry and floor** at the partition are `entry(i)` and
-  `floor(i)`. A stamp `s` is admitted if and only if `s >= entry(i)` and
-  `s > floor(i)`.
+  `floor(i)`. For a leaf epoch the floor is the partition's shared retired floor;
+  for a routing generation it is the initiator's own routing floor.
+  - **An append** stamped `s` is admitted if and only if `entry(i)` is loaded and
+    `s >= entry(i)` (`IsEpochAdmitted`, `IsGenerationAdmitted`). The floor is
+    **never** checked on the append path: checking it there refuses a live
+    activation another leaf's retirement overtook (#5635), and would not refine
+    production.
+  - **A claim** of `s` is written and raised only above `floor(i)`, and above
+    `entry(i)` or equal to it as a re-presentation (`DecideClaimWrite`,
+    `IsRaiseAdmitted`).
+  - **Retirement** raises `floor(i)` and unloads `entry(i)` before deleting it, so
+    a retired stamp's next append is refused as unloaded, and the re-claim it then
+    makes meets the floor.
 - **L's marker** has the states `initialised`, `open`, and `closedAt`, the
   per-partition heads its last close recorded.
 - **Per activation**, `claimHead[a]` is the head a's claim returned, and
@@ -60,9 +71,12 @@ invariant (or, for the entry check, by the action guards its mutations break).
   raised epoch.
 - `OnlySupersededRefused`: only a superseded activation is ever refused.
 - **The entry check**, which H and R assume: the first two guarantees,
-  generalised to any initiator `i`. A stamp below `entry(i)` is never allocated,
-  and a re-claim raises `entry(i)` in the same step that reads the allocator head
-  it returns, so every allocation before the re-claim lies below that head.
+  generalised to any initiator `i`. An append stamped below `entry(i)`, or with
+  `entry(i)` unloaded, is never allocated; a claim at or below `floor(i)` is never
+  raised; and a re-claim raises `entry(i)` in the same step that reads the
+  allocator head it returns, so every allocation before the re-claim lies below
+  that head. `WalAppendEpoch` checks it for leaf epochs; its note gives the
+  refinement argument for routing generations, which run the same claim code.
 
 **H, `WalHandOffFence`**
 - `HandOffBound`: a `Foreign(i)` offset is allocated only while L's marker for the

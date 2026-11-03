@@ -60,6 +60,30 @@ the design model.
   `WalLiveAdvanceCore`; an arrow points from the module that assumes to the module
   that guarantees. Every module's assumptions are guarantees of modules that
   assume nothing of it, so the graph is acyclic.
+- **The entry check for routing generations (refinement argument).** This module
+  models leaf epochs only. The routing-generation path that H and R assume runs
+  the same code, so the module's check covers it by refinement:
+  - **One claim path.** `WalShardGrain.ClaimCoreAsync` is generic over the epoch
+    and generation tables. It makes the same `WalAppendFenceCore.DecideClaimWrite`
+    and `WalAppendFenceCore.IsRaiseAdmitted` decisions under the same lock that
+    assigns offsets, returning the allocator head. The only difference is the
+    floor: the partition's shared `_epochFloor` for a leaf epoch,
+    `GenerationFloorLocked(initiator)` for a routing generation.
+  - **One append rule.** `WalAppendFenceCore.IsGenerationAdmitted` admits a stamp
+    only from a loaded entry it is not below, exactly as
+    `WalAppendFenceCore.IsEpochAdmitted` does. Neither reads a floor.
+  - **One retirement order.** `WalShardGrain.RetireRoutingGenerationsAsync` raises
+    the floor in memory and unloads the entries before deleting a row, as a leaf
+    retirement does.
+  - **What does not carry over.** A generation has no epoch row and no conditional
+    row write, so `RaisedEpochUnique` and `OnlySupersededRefused` are leaf-epoch
+    guarantees only. H and R assume only the entry check.
+  - **Detectors on the generation path:**
+    - `WalAppendFenceCoreTests.A_routing_generation_is_admitted_only_from_a_loaded_current_entry`;
+    - `WalShardGrainTests.Routing_generations_are_fenced_and_durable`;
+    - `WalShardGrainTests.Retiring_routing_generations_deletes_every_entry_under_a_floor_that_covers_them`;
+    - `WalShardGrainTests.The_floor_is_durable_before_any_generation_row_is_deleted_and_a_re_drive_finishes`;
+    - `WalShardGrainTests.A_generation_initialised_without_reading_the_floor_is_refused_at_its_first_claim`.
 - **Who assumes what.** H and R assume E's entry check (`StaleEpochNeverAppends`
   and `ClaimHeadCoversPriorAppends`); C assumes all four guarantees, and owns the
   read-position, snapshot, trim and liveness properties the design model checked
@@ -173,6 +197,20 @@ against this module, checking `TypeOK` with each of the four guarantees.
 | `OnlySupersededRefusedEntryRefusalStops` | Kept: only a floor refusal bumps (in `CanBump` and in `ClaimBump`'s guard), so an entry refusal stops the activation even while its row holds. | Clean against all four guarantees. Since #5641 the floor refuses the purge straddle first, and a witness run confirms no entry refusal ever meets a held row here. |
 | `OnlySupersededRefusedEtagByValue` | Kept: the row compares ignore the incarnation. | Clean against all four guarantees: a pre-clear activation whose read matches a recurring value claims as the re-created incarnation would. |
 | `ReadPositionHonestArmsWithoutClaim` | Dropped: arming and read positions are the core module's. | Not applicable here. |
+
+## Redundancy checks: the bump's guards
+
+`ClaimBump`'s semantic guards are redundant in the same sense (#5745 review, S3).
+Each was removed alone, and every invariant stayed clean:
+
+| Guard removed | Result | Why it is kept |
+|---------------|--------|----------------|
+| `RowHolds(a)`: the bump writes the row only while the activation's ETag holds | Clean | Without it, a superseded activation's bump displaces its successor. That is only another fresh claim, which the entry write and raise already make safe, so no invariant notices. Production's bump is a conditional write on the activation's last ETag (#5633), so a superseded activation stops instead of churning the row. It is kept for fidelity and to bound needless supersession. |
+| The floor term of `BumpEpoch` (`retired`) | Clean | A bump at or below the floor is refused again at its next entry write, and the activation bumps again. The term makes one round enough. |
+| The entry terms of `BumpEpoch` (`fence`, `memFence`) | Clean | The same argument at the entry: a bump at or below the entry is refused again at its write and raise. The terms make one round enough. |
+
+The bump's bound (`BumpEpoch <= MaxEpoch`) is the only part whose removal is red
+(`TypeOK`), because it keeps the epoch inside the model's domain.
 
 ## Deliberate abstraction gaps
 
