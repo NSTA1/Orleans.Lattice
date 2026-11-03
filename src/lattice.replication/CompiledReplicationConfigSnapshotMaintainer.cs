@@ -123,7 +123,13 @@ internal sealed class CompiledReplicationConfigSnapshotMaintainer : IMutationObs
         return CurrentEpoch;
     }
 
-    private void ScheduleRebuild()
+    /// <summary>
+    /// Schedules a coalesced background rebuild without blocking the caller. Used
+    /// by the change-feed hook and by the config tree's alias-change hook
+    /// (<see cref="ReplicationConfigEpochSynchronizer"/>), since a re-seed cutover
+    /// replaces the tree's contents without publishing a mutation (#5731).
+    /// </summary>
+    internal void ScheduleRebuild()
     {
         while (true)
         {

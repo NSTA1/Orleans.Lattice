@@ -1,0 +1,16 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. A cutover that leaves the
+# receiver on its original tree discards the import, so a write behind the trim point
+# reaches the receiver by no path.
+MODULE: EventualConvergenceCutoverKeepsLiveTree
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: the cutover keeps the original tree instead of the drained copy, so the import is lost
+PERTURBS: Cutover
+BOUNDS: Mutual = TRUE
+
+--- FIND
+    /\ reg' = [reg EXCEPT ![x] = cp[x]]
+--- REPLACE
+\* MUTATION: the cutover does not replace the tree with the copy.
+    /\ reg' = reg
+--- END

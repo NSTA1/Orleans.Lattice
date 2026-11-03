@@ -1,0 +1,15 @@
+# Pairs with StrictAdmitsOnlyServable in SchemaCrossRegion. Reproduces production before #5684's
+# fix (option A): strict ingest judged only typed-CRDT deltas and atomic-batch entries, so a plain
+# last-writer-wins replicated write whose body the receiver's policy refuses was stored and served.
+MODULE: StrictAdmitsOnlyServableLwwUnjudged
+TARGET: StrictAdmitsOnlyServable
+CLASS: Invariant
+SUMMARY: strict ingest does not judge a plain replicated write, so a refused body is admitted
+PERTURBS: Deliver
+
+--- FIND
+       ELSE IF Checked(e)
+--- REPLACE
+\* MUTATION: a plain write merges below the write check.
+       ELSE IF Checked(e) /\ kind[e] # "Lww"
+--- END

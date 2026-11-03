@@ -18,18 +18,18 @@ namespace Orleans.Lattice.Replication.Tests;
 /// are region-local: the receiver judges what it ingests by its own policy and
 /// its own catalog, never by the source's.
 /// <para>
-/// A plain LWW entry is merged below the write choke point, so the receiver
-/// ingests it verbatim whatever it is stamped at; a value stamped past the
-/// receiver's target is stored as delivered and its read fails explicitly until
-/// the receiver holds the definition, after which it reads. A typed-CRDT delta
-/// and an LWW entry of a replicated atomic batch are judged at the choke point
-/// under strict ingest: what the receiver cannot serve (stamped past its target,
+/// Every replicated entry is judged at the write choke point under strict ingest:
+/// a plain LWW entry (#5684), a typed-CRDT delta and an entry of a replicated
+/// atomic batch alike. What the receiver cannot serve (stamped past its target,
 /// or refused by its policy) is diverted to the schema dead-letter queue exactly
 /// once and not applied, an older CRDT delta is lifted to the target once at
-/// ingest, and the rest of the atomic batch commits. A tree without strict
-/// ingest trusts the stamp. The real canonical applier, dead-letter decorator,
-/// transaction registry, schema stores and grains run; peer entries are
-/// synthesized as the source region would ship them.
+/// ingest, and the rest of an atomic batch commits. An admitted plain LWW entry
+/// is stored verbatim, never re-stamped. A tree without strict ingest trusts the
+/// stamp: a plain entry stamped past the receiver's target is stored as
+/// delivered and its read fails explicitly until the receiver holds the
+/// definition, after which it reads. The real canonical applier, dead-letter
+/// decorator, transaction registry, schema stores and grains run; peer entries
+/// are synthesized as the source region would ship them.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -156,14 +156,14 @@ public sealed class SchemaCrossRegionIngestIntegrationTests
     private Task UseVersionConfigAsync(string tree, uint target, bool strictIngest) =>
         _versionAdmin.SetVersionConfigAsync(tree, new LatticeSchemaVersionConfig(SchemaId, target, strictIngest));
 
-    private Task UseStatusPolicyAsync(string tree) =>
+    private Task UseStatusPolicyAsync(string tree, bool strictIngest = true) =>
         _schemaAdmin.SetPolicyAsync(tree, new LatticeSchemaPolicy(
             new[]
             {
                 LatticeSchemaRule.Json(),
                 LatticeSchemaRule.Regex("^(open|closed)$", memberPath: "status"),
             },
-            strictIngest: true));
+            strictIngest: strictIngest));
 
     private ILattice Lattice(string tree) => _cluster.Client.GetGrain<ILattice>(tree);
 
@@ -213,12 +213,74 @@ public sealed class SchemaCrossRegionIngestIntegrationTests
     }
 
     [Test]
-    public async Task Plain_lww_entry_stamped_past_the_receivers_target_is_stored_verbatim_under_strict_ingest_and_its_read_fails_explicitly()
+    public async Task Plain_lww_entry_stamped_past_the_receivers_target_is_dead_lettered_under_strict_ingest_and_not_stored()
     {
-        const string tree = "xr-lww-verbatim";
+        const string tree = "xr-lww-strict-newer";
         const string key = "newer";
         await UseStatusPolicyAsync(tree);
         await UseVersionConfigAsync(tree, target: 1, strictIngest: true);
+
+        await DeliverAsync(PlainSet(tree, key, Stamped(2, Open), 1_000));
+
+        var stored = await StoredAsync(tree, key);
+        var deadLettered = await DeadLettersForAsync(tree, key);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stored, Is.Null, "under strict ingest a plain LWW entry the receiver cannot serve is not stored (#5684)");
+            Assert.That(deadLettered, Is.EqualTo(1), "it is diverted to the dead letters once");
+        });
+    }
+
+    [Test]
+    public async Task Plain_lww_entry_the_receivers_policy_refuses_is_dead_lettered_under_strict_ingest_and_not_stored()
+    {
+        const string tree = "xr-lww-strict-refused";
+        const string key = "pending";
+        await UseStatusPolicyAsync(tree);
+
+        await DeliverAsync(PlainSet(tree, key, Pending, 1_000));
+
+        var stored = await StoredAsync(tree, key);
+        var deadLettered = await DeadLettersForAsync(tree, key);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stored, Is.Null, "a plain LWW entry the receiver's strict policy refuses is not stored (#5684)");
+            Assert.That(deadLettered, Is.EqualTo(1), "it is diverted to the dead letters once");
+        });
+    }
+
+    [Test]
+    public async Task Plain_lww_entry_admitted_under_strict_ingest_is_stored_verbatim_and_never_re_stamped()
+    {
+        const string tree = "xr-lww-strict-verbatim";
+        await UseStatusPolicyAsync(tree);
+        await UseVersionConfigAsync(tree, target: 2, strictIngest: true);
+        var stampedBelow = Stamped(1, Open);
+
+        await DeliverAsync(PlainSet(tree, "stamped", stampedBelow, 1_000));
+        await DeliverAsync(PlainSet(tree, "unstamped", Open, 1_001));
+
+        var stamped = await StoredAsync(tree, "stamped");
+        var unstamped = await StoredAsync(tree, "unstamped");
+        var deadLetters = await _schemaAdmin.CountDeadLettersAsync(tree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stamped, Is.EqualTo(stampedBelow), "an admitted plain entry keeps the source's stamp");
+            Assert.That(unstamped, Is.EqualTo(Open), "an admitted unstamped plain entry is not stamped at ingest");
+            Assert.That(deadLetters, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task Plain_lww_entry_stamped_past_the_target_of_a_tree_without_strict_ingest_is_stored_verbatim_and_its_read_fails_explicitly()
+    {
+        const string tree = "xr-lww-verbatim";
+        const string key = "newer";
+        await UseStatusPolicyAsync(tree, strictIngest: false);
+        await UseVersionConfigAsync(tree, target: 1, strictIngest: false);
         var delivered = Stamped(2, Open);
 
         await DeliverAsync(PlainSet(tree, key, delivered, 1_000));
@@ -239,23 +301,22 @@ public sealed class SchemaCrossRegionIngestIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(stored, Is.EqualTo(delivered),
-                "a plain LWW entry is merged below the write choke point, so it is stored as delivered: still stamped past the target, neither re-stamped nor stripped");
+                "a tree without strict ingest trusts a plain LWW entry: it is stored as delivered, neither re-stamped nor stripped");
             Assert.That(StampOf(stored), Is.EqualTo(2u), "the stored value keeps the source's stamp");
-            Assert.That(deadLetters, Is.Zero, "a plain LWW entry is not judged at ingest, so nothing is dead-lettered");
+            Assert.That(deadLetters, Is.Zero, "nothing is dead-lettered without strict ingest");
             Assert.That(read, Is.Null, "a value the receiver holds no definition for is never served as a value");
             Assert.That(readFailure, Is.TypeOf<NotSupportedException>(),
                 "reading a value stamped past the receiver's target fails explicitly until the receiver holds the definition");
         });
     }
-
     [Test]
     public async Task Plain_lww_entry_stamped_past_the_receivers_target_becomes_readable_once_the_receiver_advances_to_it()
     {
         const string tree = "xr-lww-advance";
         const string newerKey = "newer";
         const string olderKey = "older";
-        await UseStatusPolicyAsync(tree);
-        await UseVersionConfigAsync(tree, target: 1, strictIngest: true);
+        await UseStatusPolicyAsync(tree, strictIngest: false);
+        await UseVersionConfigAsync(tree, target: 1, strictIngest: false);
         var newer = Stamped(2, Open);
         var older = Stamped(1, Open);
 

@@ -219,4 +219,89 @@ public class LatticeSchemaWriteInterceptorTests
         Assert.That(() => new LatticeSchemaWriteInterceptor(provider, dlq, null!, TimeProvider.System), Throws.ArgumentNullException);
         Assert.That(() => new LatticeSchemaWriteInterceptor(provider, dlq, options, null!), Throws.ArgumentNullException);
     }
+
+    [Test]
+    public async Task JudgesReplicatedWritesAsync_is_true_only_for_a_tree_whose_policy_is_strict()
+    {
+        var (strict, _, _) = Create(JsonPolicy(strictIngest: true), strictIngestEnabled: true);
+        var (trusted, _, _) = Create(JsonPolicy(strictIngest: false), strictIngestEnabled: true);
+        var (ungoverned, _, _) = Create(compiled: null, strictIngestEnabled: true);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await strict.JudgesReplicatedWritesAsync("orders"), Is.True);
+            Assert.That(await trusted.JudgesReplicatedWritesAsync("orders"), Is.False);
+            Assert.That(await ungoverned.JudgesReplicatedWritesAsync("orders"), Is.False);
+        });
+    }
+
+    [Test]
+    public async Task OnWriteAsync_trusts_a_system_origin_write_to_a_tree_that_is_not_strict_without_validating_it()
+    {
+        var (interceptor, dlq, _) = Create(JsonPolicy(strictIngest: false), strictIngestEnabled: true);
+
+        LatticeWriteDecision decision;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            decision = await interceptor.OnWriteAsync(Request(Utf8("not json"), LatticeOperation.Write | LatticeOperation.Replication));
+        }
+
+        Assert.That(decision.Kind, Is.EqualTo(LatticeWriteDecisionKind.Accept));
+        await dlq.DidNotReceive().AppendAsync(Arg.Any<string>(), Arg.Any<LatticeSchemaDeadLetterEntry>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task OnWriteAsync_dead_letters_a_refused_plain_replicated_write_to_a_strict_tree()
+    {
+        var (interceptor, dlq, _) = Create(JsonPolicy(strictIngest: true), strictIngestEnabled: true);
+
+        LatticeWriteDecision decision;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            decision = await interceptor.OnWriteAsync(Request(Utf8("not json"), LatticeOperation.Write | LatticeOperation.Replication));
+        }
+
+        Assert.That(decision.Kind, Is.EqualTo(LatticeWriteDecisionKind.DeadLetter));
+        await dlq.Received(1).AppendAsync(
+            "orders",
+            Arg.Is<LatticeSchemaDeadLetterEntry>(e => e.Source == LatticeSchemaDeadLetterSource.Replication),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task The_replicated_write_gate_and_a_trusted_tree_allocate_nothing_on_a_cache_hit()
+    {
+        var store = Substitute.For<ILatticeSchemaPolicyStore>();
+        store.GetPolicyAsync("trusted", Arg.Any<CancellationToken>())
+            .Returns(new LatticeSchemaPolicy(new[] { LatticeSchemaRule.Json() }, strictIngest: false));
+        var provider = new LatticeSchemaPolicyProvider(store, Options.Create(new LatticeSchemaEnforcementOptions { StrictIngest = true }));
+        var interceptor = new LatticeSchemaWriteInterceptor(
+            provider,
+            Substitute.For<ILatticeSchemaDeadLetterStore>(),
+            Options.Create(new LatticeSchemaEnforcementOptions()),
+            TimeProvider.System);
+        var request = new LatticeWriteRequest("trusted", "k", Utf8("not json"), LatticeOperation.Write | LatticeOperation.Replication);
+
+        // Warm the policy cache and the JIT outside the measured window.
+        Assert.That(await interceptor.JudgesReplicatedWritesAsync("trusted"), Is.False);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            for (var i = 0; i < 100; i++)
+            {
+                _ = interceptor.OnWriteAsync(in request).Result;
+                _ = interceptor.JudgesReplicatedWritesAsync("trusted").Result;
+            }
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var kinds = 0;
+            for (var i = 0; i < 1_000; i++)
+            {
+                kinds += (int)interceptor.OnWriteAsync(in request).Result.Kind;
+                kinds += interceptor.JudgesReplicatedWritesAsync("trusted").Result ? 1 : 0;
+            }
+
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.That(allocated, Is.Zero, $"no allocation on a cached, trusted tree ({kinds})");
+        }
+    }
 }

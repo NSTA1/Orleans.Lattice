@@ -467,20 +467,26 @@ public partial class DataKeysPanel : IDisposable
         }
     }
 
-    private void SetLive(bool live)
+    private async Task SetLiveAsync(bool live)
     {
         _live = live;
         _liveNote = null;
         _liveRestartable = false;
-        RestartFollow();
+        if (RestartFollow())
+        {
+            await CatchUpAsync();
+        }
     }
 
-    private void RestartLive()
+    private async Task RestartLiveAsync()
     {
         _live = true;
         _liveNote = null;
         _liveRestartable = false;
-        RestartFollow();
+        if (RestartFollow())
+        {
+            await CatchUpAsync();
+        }
     }
 
     private void StopFollow()
@@ -488,12 +494,13 @@ public partial class DataKeysPanel : IDisposable
         _follows.Renew();
     }
 
-    private void RestartFollow()
+    /// <summary>Follows the tree's change feed from now on; false when live updates are not followed.</summary>
+    private bool RestartFollow()
     {
         StopFollow();
         if (_lifetime.IsLeft || !_followAvailable || !_live || _mode != EntryScanMode.Live || _client is null || Workspace is not { } workspace)
         {
-            return;
+            return false;
         }
 
         var prefix = ActiveTagFilter is null ? workspace.Prefix : null;
@@ -505,6 +512,7 @@ public partial class DataKeysPanel : IDisposable
             IncludeMaintenance = false,
         };
         _ = FollowAsync(_client, request, _follows.Token);
+        return true;
     }
 
     private async Task FollowAsync(ILatticeStateClient client, StateObserveRequest request, CancellationToken cancellationToken)
@@ -557,6 +565,16 @@ public partial class DataKeysPanel : IDisposable
             _entryVersion++;
         }
 
+        await CatchUpAsync();
+    }
+
+    /// <summary>
+    /// Brings the table up to date with the tree: the first page is read again, and a
+    /// later page is marked as possibly changed. A resumed follow only sees changes made
+    /// from then on, so this also picks up the writes made while live updates were off.
+    /// </summary>
+    private async Task CatchUpAsync()
+    {
         if (_pager is null || _pager.PageIndex > 0)
         {
             _stale = true;

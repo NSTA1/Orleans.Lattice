@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Options;
+
 namespace Orleans.Lattice.Schema;
 
 /// <summary>
@@ -32,12 +34,28 @@ namespace Orleans.Lattice.Schema;
 /// tree's target - or one whose version cannot be upcast to the target - surfaces
 /// <see cref="NotSupportedException"/>, mirroring the unknown-compressor case.
 /// </para>
+/// <para>
+/// <b>Stale cached target (#5711).</b> A target advance reaches every other silo
+/// only within <see cref="LatticeSchemaVersioningOptions.PropagationInterval"/>, but
+/// the silo that served it stamps writes at the new target at once. So a value
+/// stamped above this silo's cached target may be current rather than newer. Before
+/// refusing it, the decoder re-reads the tree's config once. The re-read is
+/// single-flight per tree: concurrent decodes share one version-store read. After a
+/// re-read, no other re-read of that tree starts for one propagation interval, so a
+/// value that really is newer than the target costs at most one store read per tree
+/// per interval. The hot path (an un-stamped value, or one at or below the target)
+/// never takes this path.
+/// </para>
 /// </remarks>
 internal sealed class LatticeSchemaVersionDecoder(
     ILatticeSchemaVersionProvider provider,
     ILatticeSchemaRegistry registry,
-    SchemaRuntimeRegistry? runtimeRegistry = null) : ILatticeValueDecoder
+    SchemaRuntimeRegistry? runtimeRegistry = null,
+    IOptions<LatticeSchemaVersioningOptions>? options = null,
+    TimeProvider? timeProvider = null) : ILatticeValueDecoder
 {
+    private readonly SchemaVersionConfigRereads _rereads = new(provider, options, timeProvider);
+
     /// <inheritdoc />
     public bool IsActive(string treeId) => true;
 
@@ -61,6 +79,10 @@ internal sealed class LatticeSchemaVersionDecoder(
         var body = LatticeSchemaEnvelope.StripToBody(storedValue);
 
         var config = await provider.GetConfigAsync(treeId, ct).ConfigureAwait(false);
+        if (config is { } cached && cached.SchemaId == schemaId && storedVersion > cached.TargetVersion)
+        {
+            config = await _rereads.RereadAsync(treeId, cached).ConfigureAwait(false);
+        }
 
         // Without a matching config the target version is unknown; the value is still
         // self-describing, so return its stored-version body rather than guessing.
@@ -111,6 +133,11 @@ internal sealed class LatticeSchemaVersionDecoder(
         }
 
         var body = storedValue.AsMemory(LatticeSchemaEnvelope.HeaderLength);
+        if (config is { } cached && cached.SchemaId == schemaId && storedVersion > cached.TargetVersion)
+        {
+            config = await _rereads.RereadAsync(treeId, cached).ConfigureAwait(false);
+        }
+
         if (config is not { } version)
         {
             return new SchemaRestampInput(body, Stamped: false, 0, 0);

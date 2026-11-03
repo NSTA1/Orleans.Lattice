@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Views;
@@ -16,6 +17,22 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal sealed partial class LatticeGrain
 {
+    /// <summary>
+    /// How long this activation remembers that the durable view registry holds no
+    /// history view for its tree, so a tree without one does not pay a registry call
+    /// per history read. A history view created meanwhile is found once it lapses, or
+    /// at once on a silo whose catalog already holds it.
+    /// </summary>
+    internal static readonly TimeSpan DurableHistoryViewMissTtl = TimeSpan.FromSeconds(30);
+
+    private long _durableHistoryViewMissUntil;
+
+    // The durable record last resolved to this tree's history view, and what it
+    // resolved to: a read whose lookup returns the same record reuses it rather
+    // than re-hydrating the projection.
+    private RuntimeViewRegistration? _durableHistoryRecord;
+    private ViewRegistration? _durableHistoryRegistration;
+
     /// <inheritdoc />
     public async Task<EntryHistoryPage> ScanEntryHistoryAsync(
         string key,
@@ -51,13 +68,83 @@ internal sealed partial class LatticeGrain
             };
         }
 
-        var registration = TryFindHistoryView();
+        var registration = TryFindHistoryView() ?? await TryResolveDurableHistoryViewAsync(cancellationToken);
         if (registration is not null)
         {
             return await ScanHistoryViewAsync(registration, key, fromHlc, toHlc, effectiveLimit, continuation, cancellationToken);
         }
 
         return await ScanWalWindowAsync(key, fromHlc, toHlc, effectiveLimit, continuation, cancellationToken);
+    }
+
+    /// <summary>
+    /// Finds this tree's history view in the cluster-wide durable runtime-view
+    /// registry when this silo's in-memory catalog has no entry for it: a runtime
+    /// view is registered in the catalog of the silo that created it (or one where
+    /// its maintainer re-hydrated), so a history read served on any other silo
+    /// would otherwise fall back to the write-ahead-log window. The resolved
+    /// registration serves this read only and is not added to the catalog.
+    /// Returns <see langword="null"/> when views are not registered, no durable
+    /// history view sources this tree, or the registry cannot be read.
+    /// </summary>
+    private async Task<ViewRegistration?> TryResolveDurableHistoryViewAsync(CancellationToken cancellationToken)
+    {
+        if (services.GetService<IViewCatalog>() is null
+            || services.GetService<RuntimeViewProjectionProviderCatalog>() is not { } providers)
+        {
+            return null;
+        }
+
+        // Most trees have no history view: remember a miss for a while, so their history
+        // reads do not each pay a registry call.
+        if (Environment.TickCount64 < _durableHistoryViewMissUntil)
+        {
+            return null;
+        }
+
+        RuntimeViewRegistration[] records;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // The registry filters to this tree's candidates, so the read transfers
+            // and allocates only those, not every runtime view in the cluster.
+            records = await grainFactory.GetGrain<IViewRegistryGrain>(IViewRegistryGrain.SingletonKey)
+                .ListAccumulativeBySourceAsync(TreeId);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Tree '{TreeId}' could not read the durable view registry for its history view; reading the write-ahead-log window instead.", TreeId);
+            return null;
+        }
+
+        foreach (var record in records)
+        {
+            // The registry already filters; re-check, since the answer crossed the wire.
+            if (!record.Accumulative
+                || record.IsAggregation
+                || !string.Equals(record.SourceTreeId, TreeId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (_durableHistoryRegistration is { } cached && record.Equals(_durableHistoryRecord))
+            {
+                return cached;
+            }
+
+            if (RuntimeViewRehydrator.Resolve(record, services, providers, logger) is { Projection: HistoryLatticeViewProjection } registration)
+            {
+                _durableHistoryRecord = record;
+                _durableHistoryRegistration = registration;
+                return registration;
+            }
+        }
+
+        _durableHistoryRecord = null;
+        _durableHistoryRegistration = null;
+        _durableHistoryViewMissUntil = Environment.TickCount64 + (long)DurableHistoryViewMissTtl.TotalMilliseconds;
+        return null;
     }
 
     /// <summary>

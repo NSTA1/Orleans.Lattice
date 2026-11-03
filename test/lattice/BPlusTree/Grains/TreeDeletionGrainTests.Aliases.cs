@@ -158,7 +158,7 @@ public partial class TreeDeletionGrainTests
         var (grain, _, _, _, _) = CreateGrain();
         await grain.BeginAliasChangeAsync("restore-1");
         await grain.BeginAliasChangeAsync("restore-1");
-        Assert.ThrowsAsync<InvalidOperationException>(() => grain.BeginAliasChangeAsync("resize-2"));
+        Assert.ThrowsAsync<LatticeAliasOperationInProgressException>(() => grain.BeginAliasChangeAsync("resize-2"));
         Assert.ThrowsAsync<InvalidOperationException>(() => grain.DeleteTreeAsync());
         await grain.EndAliasChangeAsync("stale");
         Assert.ThrowsAsync<InvalidOperationException>(() => grain.DeleteTreeAsync());
@@ -170,6 +170,25 @@ public partial class TreeDeletionGrainTests
         await grain.EndAliasChangeAsync("resize-2");
         await grain.DeleteTreeAsync();
         Assert.ThrowsAsync<InvalidOperationException>(() => grain.BeginAliasChangeAsync("resize-2"));
+    }
+
+    [Test]
+    public async Task A_held_alias_reservation_is_refused_with_the_typed_transient_refusal_naming_its_holder()
+    {
+        // Issue #5750: a caller that may wait (a tracked schema operation) recognises
+        // the refusal by type; the message is the one the untyped refusal carried.
+        var (grain, _, _, _, _) = CreateGrain();
+        await grain.BeginAliasChangeAsync("resize:bootstrap");
+
+        var refused = Assert.ThrowsAsync<LatticeAliasOperationInProgressException>(() => grain.BeginAliasChangeAsync("remediation:abc"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(refused!.TreeId, Is.EqualTo(TreeId));
+            Assert.That(refused.HolderOperationId, Is.EqualTo("resize:bootstrap"));
+            Assert.That(refused.Message, Is.EqualTo(
+                $"Tree '{TreeId}' has alias operation 'resize:bootstrap' in progress; retry after it completes."));
+        });
     }
 
     [Test]

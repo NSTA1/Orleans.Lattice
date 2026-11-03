@@ -31,14 +31,17 @@ public sealed partial class AuditorsReviewChapter
         var shell = dana.Shell;
         var content = shell.Content;
         await shell.GoToAreaAsync("schema");
+        // The address changes before the Schema page replaces the previous area's content, which
+        // also links factory-orders (to its Data workspace): wait for the Schema page first.
+        await shell.ExpectHeadingAsync("Schema");
         var link = content.GetByRole(AriaRole.Link, new() { Name = Names.Trees.FactoryOrders, Exact = true }).First;
         await Expect(link).ToBeVisibleAsync();
         await link.ClickAsync();
         await Expect(shell.Heading).ToHaveTextAsync(Names.Trees.FactoryOrders);
 
         var tab = (string title) => content.GetByRole(AriaRole.Tab, new() { Name = title, Exact = true });
-        await Expect(tab("Policy")).ToHaveAttributeAsync("aria-selected", "true");
-        await Expect(content.GetByRole(AriaRole.Columnheader, new() { Name = "Requirement", Exact = true })).ToBeVisibleAsync();
+        await Expect(tab("Policy")).ToHaveAttributeAsync("aria-selected", "true", new() { Timeout = Loads.Timeout });
+        await Expect(content.GetByRole(AriaRole.Columnheader, new() { Name = "Requirement", Exact = true })).ToBeVisibleAsync(Loads);
         await Expect(content.GetByRole(AriaRole.Button, new() { Name = "Edit policy", Exact = true })).ToHaveCountAsync(0);
         await Expect(content.GetByRole(AriaRole.Button, new() { Name = "Clear policy", Exact = true })).ToHaveCountAsync(0);
         await SnapAsync(dana, "6", "policy", "factory-orders' policy, readable, with no Edit policy or Clear policy");

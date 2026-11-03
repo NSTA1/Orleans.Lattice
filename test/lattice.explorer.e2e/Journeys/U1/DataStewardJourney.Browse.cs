@@ -1,8 +1,12 @@
 using System.Text.RegularExpressions;
 using Microsoft.Playwright;
+using Orleans.Lattice.Api.Data;
+using Orleans.Lattice.Api.Data.Grpc;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.FeatureCoverage;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 using static Microsoft.Playwright.Assertions;
 using Names = Orleans.Lattice.Explorer.EndToEnd.Tests.Story.StoryNames.Contoso;
 
@@ -17,10 +21,10 @@ public sealed partial class DataStewardJourney
     /// <summary>The trees priya reads through <c>stewards-factory</c>, as the directory lists them.</summary>
     private static readonly string[] FactoryTrees = [Names.Trees.FactoryOrders, Names.Trees.FactoryTelemetry, Names.Trees.FactoryLines];
 
-    /// <summary>A name the directory may show priya: a factory tree, the orders alias, the view over the orders, or the tag index's tree.</summary>
+    /// <summary>A name the directory may show priya: a factory tree, the orders alias, a view over the orders, or the tag index's tree.</summary>
     private static bool IsFactoryName(string name) =>
         name.StartsWith("factory-", StringComparison.Ordinal)
-        || name is Names.Aliases.Orders or Names.Views.OrdersByStatus or "tag-" + Names.TagIndexes.OrderStatus;
+        || name is Names.Aliases.Orders or Names.Views.OrdersByStatus or Names.Views.OrdersHistory or "tag-" + Names.TagIndexes.OrderStatus;
 
     private async Task SignInAndBrowseTheDirectoryAsync()
     {
@@ -36,14 +40,27 @@ public sealed partial class DataStewardJourney
         });
         await CheckpointAsync("1", "spine", "priya is signed in; the spine offers what stewards-factory permits");
 
+        // In the story A5 has installed the task board and bound its editor role to
+        // data-stewards, so priya also reads the board's tree. Only the tree A5 recorded is
+        // allowed, and only when the run's ledger holds it.
+        var taskBoardTree = _context.Ledger.TryGet(StoryKeys.TaskBoardTree, out var recorded) ? recorded : null;
         await _directory.OpenAsync();
         var names = await _directory.NamesAsync();
         Assert.Multiple(() =>
         {
             Assert.That(names, Is.SupersetOf(FactoryTrees), "the factory trees stewards-factory lets priya read");
-            Assert.That(names.Where(name => !IsFactoryName(name)), Is.Empty, "only factory trees, and what reads from them, are listed");
+            Assert.That(
+                names.Where(name => !IsFactoryName(name) && name != taskBoardTree),
+                Is.Empty,
+                "only factory trees, what reads from them and, once A5 has granted data-stewards the task board, its tree are listed");
+            if (taskBoardTree is not null)
+            {
+                Assert.That(names, Does.Contain(taskBoardTree), "A5 bound the task board's editor role to data-stewards, so priya reads its tree");
+            }
         });
-        await CheckpointAsync("1", "directory", "The Data directory lists only the factory trees and the view over the orders");
+        await CheckpointAsync("1", "directory", taskBoardTree is null
+            ? "The Data directory lists only the factory trees and the views over the orders"
+            : "The Data directory lists the factory trees, the views over the orders and the task board's tree A5 granted data-stewards");
 
         await _directory.FilterAsync("telemetry");
         Assert.That(await _directory.NamesAsync(), Does.Contain(Names.Trees.FactoryTelemetry));
@@ -53,8 +70,9 @@ public sealed partial class DataStewardJourney
 
         await _directory.ShowAsync("Views");
         await Expect(_directory.Row(Names.Views.OrdersByStatus)).ToHaveCountAsync(1);
+        await Expect(_directory.Row(Names.Views.OrdersHistory)).ToHaveCountAsync(1);
         await Expect(_directory.Row(Names.Trees.FactoryOrders)).ToHaveCountAsync(0);
-        await CheckpointAsync("1", "views-only", "Show: Views lists the orders-by-status view alone");
+        await CheckpointAsync("1", "views-only", "Show: Views lists the views over the orders alone: orders-by-status and orders-history");
 
         await _directory.ShowAsync("Trees");
         await Expect(_directory.Row(Names.Trees.FactoryOrders)).ToHaveCountAsync(1);
@@ -93,14 +111,15 @@ public sealed partial class DataStewardJourney
         await _tree.WaitForKeysAsync();
         await CheckpointAsync("2", "completed-tree", "Accepting the completion opens factory-orders");
 
-        // The alias: orders names the same tree. Her grant names factory-orders, not orders,
-        // and the alias is filtered out of her catalogue (#5597).
-        await new KnownDefect("#5597", "a caller granted only on factory-orders cannot reach it through its alias orders").ReproducesAsync(async () =>
-        {
-            await _priya.Shell.GotoAsync("/data/" + Names.Aliases.Orders);
-            await Expect(_priya.Shell.Heading).ToHaveTextAsync("Nothing lives at this address");
-        });
-        await CheckpointAsync("2", "alias", "/data/orders reads Nothing lives at this address for her (#5597)");
+        // The alias: orders names the same tree. A read is authorized on the name it addresses,
+        // so stewards-factory grants her orders as well as factory-orders (#5597).
+        await _priya.Shell.GotoAsync("/data/" + Names.Aliases.Orders);
+        await Expect(_tree.Heading).ToHaveTextAsync(Names.Aliases.Orders);
+        await _tree.WaitForKeysAsync();
+        await _tree.SetPrefixAsync("order/00");
+        Assert.That(await _tree.KeysAsync(), Has.Count.EqualTo(25), "the orders alias reads the seeded factory-orders keys");
+        Coverage.Hit("use-case:data/alias-resolution");
+        await CheckpointAsync("2", "alias", "/data/orders reaches factory-orders through the alias");
         await _priya.Shell.GotoAsync("/data/" + Names.Trees.FactoryOrders);
         await Expect(_tree.Heading).ToHaveTextAsync(Names.Trees.FactoryOrders);
         await _tree.WaitForKeysAsync();
@@ -112,8 +131,7 @@ public sealed partial class DataStewardJourney
         await CheckpointAsync("2", "prefix", "The prefix filter shows the seeded orders, 25 to a page");
 
         var first = await _tree.KeysAsync();
-        await _tree.NextPage.ClickAsync();
-        await Expect(_tree.PagePosition).ToHaveTextAsync("Page 2");
+        await _tree.NextPageAsync(2);
         await Expect(_tree.KeyLinks.First).Not.ToHaveTextAsync(first[0]);
         await Expect(_tree.RangeStatus).ToHaveTextAsync(new Regex("^26-"));
         var second = await _tree.KeysAsync();
@@ -158,28 +176,38 @@ public sealed partial class DataStewardJourney
 
         await _tree.SetLiveUpdatesAsync(false);
         await Task.Delay(TimeSpan.FromSeconds(1));
-        var paused = await _tree.KeyLinks.CountAsync();
-        var written = (await _context.Estate.LineFeed.StatusAsync()).OrdersWritten;
-        await _context.Estate.LineFeed.WaitUntilAsync(status => status.OrdersWritten >= written + 4, TimeSpan.FromSeconds(60));
+        var shown = await _tree.KeysAsync();
+        var paused = shown.Count;
+        // The line feed opens the decade's remaining orders while the table is paused: wait
+        // until the Data API holds keys under the prefix that the table does not show.
+        var meanwhile = await KeysWrittenSinceAsync(prefix, shown, TimeSpan.FromSeconds(60));
         await Task.Delay(TimeSpan.FromSeconds(2));
         Assert.That(await _tree.KeyLinks.CountAsync(), Is.EqualTo(paused), "paused, the table holds still while the line feed writes");
         await CheckpointAsync("3", "paused", "Live updates paused: the table holds still while the line feed writes");
 
+        // #5647: resuming reads the page again, so the orders written while paused arrive
+        // even if no further write reaches the prefix after the resume.
         await _tree.SetLiveUpdatesAsync(true);
-        await Expect(_tree.KeyLinks).Not.ToHaveCountAsync(paused, new() { Timeout = 60_000 });
+        foreach (var key in meanwhile)
+        {
+            await Expect(_tree.KeyLinks.Filter(new() { HasTextRegex = new Regex("^" + Regex.Escape(key) + "$") }))
+                .ToHaveCountAsync(1, new() { Timeout = 60_000 });
+        }
+
         Coverage.Hit("use-case:data/live-updates");
         await CheckpointAsync("3", "resumed", "Live updates on again: the orders written meanwhile arrive");
 
         // The cursor: page 2 of the seeded orders, left idle past the cursor's lifetime.
         await _tree.SetPrefixAsync("order/00");
         await _tree.SetPageSizeAsync(25);
-        await _tree.NextPage.ClickAsync();
-        await Expect(_tree.PagePosition).ToHaveTextAsync("Page 2");
+        await _tree.NextPageAsync(2);
         await ExpireTheCursorAsync();
         await CheckpointAsync("3", "cursor-expired", "Left idle past its lifetime, the scan's cursor has expired");
 
         await _tree.RestartFromFirstPage.ClickAsync();
-        await Expect(_tree.PagePosition).ToHaveTextAsync("Page 1");
+
+        // The pager moves to page 1 only once the new scan's first page is read.
+        await _tree.KeysDrawnAsync(_tree.PagePosition.Filter(new() { HasTextRegex = new Regex("^Page 1$") }), "the restarted scan's first page");
         await Expect(_tree.KeyLinks.First).ToHaveTextAsync(Names.Orders.Key(1), new() { Timeout = 60_000 });
         Coverage.Hit("use-case:data/cursor-expiry");
         await CheckpointAsync("3", "restarted", "Restart from the first page recovers the scan");
@@ -202,7 +230,7 @@ public sealed partial class DataStewardJourney
             var position = await TextNowAsync(_tree.PagePosition);
             await Task.Delay(CursorIdle);
             await _tree.NextPage.ClickAsync();
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+            var deadline = DateTime.UtcNow + PanelSettled.Bound;
             while (DateTime.UtcNow < deadline)
             {
                 if (await _tree.CursorExpired.IsVisibleAsync())
@@ -254,6 +282,34 @@ public sealed partial class DataStewardJourney
         catch (TimeoutException)
         {
             return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Waits until the Data API holds keys under <paramref name="prefix"/> that are not in
+    /// <paramref name="shown"/>, and returns them. It reads the cluster as the administrator,
+    /// so it is the ground truth the paused table is compared with.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> KeysWrittenSinceAsync(string prefix, IReadOnlyList<string> shown, TimeSpan timeout)
+    {
+        var data = LatticeDataApiGrpcClient.Create(_context.Estate.Invoker(), JourneyEstate.Serialization);
+        var end = prefix[..^1] + (char)(prefix[^1] + 1);
+        var deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            var page = await data.ReadRangeAsync(new DataRangeRequest { TreeId = Names.Trees.FactoryOrders, StartInclusive = prefix, EndExclusive = end, PageSize = 100 });
+            var added = page.Entries.Select(entry => entry.Key).Where(key => !shown.Contains(key, StringComparer.Ordinal)).ToList();
+            if (added.Count > 0)
+            {
+                return added;
+            }
+
+            if (DateTime.UtcNow >= deadline)
+            {
+                Assert.Fail($"U1.3: the line feed wrote no order under {prefix} in {timeout.TotalSeconds:0} s beyond the {shown.Count} the table showed: {await _context.Estate.LineFeed.StatusAsync()}");
+            }
+
+            await Task.Delay(500);
         }
     }
 

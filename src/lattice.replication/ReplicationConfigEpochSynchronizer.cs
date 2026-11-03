@@ -33,8 +33,18 @@ namespace Orleans.Lattice.Replication;
 /// one small grain call per interval and no rebuild. Mirrors the authorization
 /// package's policy-epoch synchronizer.
 /// </para>
+/// <para>
+/// <b>Cutover.</b> A re-seed of the config tree stages on a shadow copy and then
+/// swaps the tree's alias onto it. Rows the import and live inbound shipments
+/// applied to the copy were never visible to a rebuild, and the swap itself
+/// publishes no mutation, so an enrolment that arrived that way stayed in the
+/// tree but out of every silo's snapshot (#5731). The synchronizer therefore
+/// also observes the registry's alias changes: a change of the config tree's
+/// physical identity rebuilds this silo's snapshot and publishes an advance, as
+/// a config write does.
+/// </para>
 /// </remarks>
-internal sealed class ReplicationConfigEpochSynchronizer : IHostedService, IMutationObserver
+internal sealed class ReplicationConfigEpochSynchronizer : IHostedService, IMutationObserver, ITreeAliasObserver
 {
     /// <summary>How often each silo reads the cluster-wide epoch by default.</summary>
     internal static readonly TimeSpan DefaultPollInterval = TimeSpan.FromSeconds(1);
@@ -143,6 +153,23 @@ internal sealed class ReplicationConfigEpochSynchronizer : IHostedService, IMuta
     {
         if (string.Equals(mutation.TreeId, LatticeSystemTreeNames.ReplicationConfig, StringComparison.Ordinal))
         {
+            SchedulePublish();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Fired by the registry after the new alias is persisted, so the rebuild it
+    /// schedules reads the copy now serving the tree. Only schedules: one ordinal
+    /// comparison for every other tree.
+    /// </remarks>
+    public Task OnTreeAliasChangedAsync(TreeAliasChange change, CancellationToken cancellationToken)
+    {
+        if (string.Equals(change.TreeId, LatticeSystemTreeNames.ReplicationConfig, StringComparison.Ordinal))
+        {
+            _maintainer.ScheduleRebuild();
             SchedulePublish();
         }
 

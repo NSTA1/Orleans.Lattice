@@ -130,17 +130,27 @@ public sealed partial class ShellPage
             return SignInDialog;
         }
 
-        if (await IsCompactAsync())
-        {
-            await OpenMenuAsync();
-            await MenuSheet.GetByRole(AriaRole.Button, new() { Name = "Sign in", Exact = true }).First.ClickAsync();
-        }
-        else
-        {
-            await Banner.GetByRole(AriaRole.Button, new() { Name = "Sign in", Exact = true }).First.ClickAsync();
-        }
+        await JourneyBrowser.OpenDialogAsync(
+            Page,
+            SignInDialog,
+            async () =>
+            {
+                var click = new LocatorClickOptions { Timeout = (float)JourneyBrowser.DialogAttempt.TotalMilliseconds };
+                if (await IsCompactAsync())
+                {
+                    if (!await MenuSheet.IsVisibleAsync())
+                    {
+                        await OpenMenuAsync();
+                    }
 
-        await Expect(SignInDialog).ToBeVisibleAsync();
+                    await MenuSheet.GetByRole(AriaRole.Button, new() { Name = "Sign in", Exact = true }).First.ClickAsync(click);
+                }
+                else
+                {
+                    await Banner.GetByRole(AriaRole.Button, new() { Name = "Sign in", Exact = true }).First.ClickAsync(click);
+                }
+            },
+            "the sign-in dialog");
         return SignInDialog;
     }
 

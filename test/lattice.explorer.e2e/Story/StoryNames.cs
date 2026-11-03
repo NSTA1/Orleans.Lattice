@@ -122,6 +122,12 @@ public static class StoryNames
         {
             /// <summary>The stewards' status view over <see cref="Trees.FactoryOrders"/> (A3).</summary>
             public const string OrdersByStatus = "orders-by-status";
+
+            /// <summary>
+            /// The change-history view over <see cref="Trees.FactoryOrders"/>, created by A3 through the
+            /// built-in history provider before the seed, so U4 can show an order as it stood before U2.
+            /// </summary>
+            public const string OrdersHistory = "orders-history";
         }
 
         /// <summary>Tag indexes.</summary>

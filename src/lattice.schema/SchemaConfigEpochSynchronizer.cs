@@ -35,7 +35,7 @@ namespace Orleans.Lattice.Schema;
 /// </para>
 /// </remarks>
 /// <typeparam name="TCache">The provider cache this instance keeps current.</typeparam>
-internal sealed class SchemaConfigEpochSynchronizer<TCache> : IHostedService, IMutationObserver
+internal sealed class SchemaConfigEpochSynchronizer<TCache> : IHostedService, IMutationObserver, ITreeAliasObserver
     where TCache : class, ISchemaConfigCache
 {
     private static readonly TimeSpan InitialPublishRetryDelay = TimeSpan.FromMilliseconds(50);
@@ -136,6 +136,22 @@ internal sealed class SchemaConfigEpochSynchronizer<TCache> : IHostedService, IM
     public Task OnMutationAsync(LatticeMutation mutation, CancellationToken cancellationToken)
     {
         if (string.Equals(mutation.TreeId, _configTree, StringComparison.Ordinal))
+        {
+            SchedulePublish();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// A restore, resize or re-seed cutover replaces the tree's contents by an alias
+    /// swap, which publishes no mutation, so an alias change of the configuration tree is published
+    /// as a change too (#5731). Only schedules: one ordinal comparison for every other tree.
+    /// </remarks>
+    public Task OnTreeAliasChangedAsync(TreeAliasChange change, CancellationToken cancellationToken)
+    {
+        if (string.Equals(change.TreeId, _configTree, StringComparison.Ordinal))
         {
             SchedulePublish();
         }

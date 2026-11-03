@@ -78,6 +78,22 @@ internal sealed class DataImportDialog(IPage page, string tree)
     public Task WaitForStateAsync(string state, float timeout = 120_000) =>
         Expect(State).ToHaveAttributeAsync("data-lt-import-state", state, new() { Timeout = timeout });
 
+    /// <summary>
+    /// Waits until the run ends, in <paramref name="state"/> or any other end (failed, stopped,
+    /// cancelled), and fails with the dialog's words when it ended otherwise.
+    /// </summary>
+    /// <param name="state">The end expected.</param>
+    /// <param name="timeout">How long the run may take, in milliseconds.</param>
+    public async Task ExpectEndAsync(string state, float timeout)
+    {
+        await Expect(State).ToHaveAttributeAsync("data-lt-import-state", new System.Text.RegularExpressions.Regex("^(succeeded|failed|stopped|cancelled)$"), new() { Timeout = timeout });
+        var ended = await State.GetAttributeAsync("data-lt-import-state");
+        if (ended != state)
+        {
+            Assert.Fail($"The import into {tree} ended {ended}, not {state}: {(await Dialog.InnerTextAsync()).ReplaceLineEndings(" ")}");
+        }
+    }
+
     /// <summary>The committed count the dialog reports.</summary>
     public async Task<long> CommittedAsync() =>
         long.Parse((await Committed.GetAttributeAsync("data-lt-import-committed"))!, System.Globalization.CultureInfo.InvariantCulture);

@@ -1,0 +1,20 @@
+# Pairs with EventualKept in ReplicationReBootstrap. Reproduces production before the
+# fix for #5689 (found under #5684): the applier's exact-identity dedupe memory was
+# keyed by tree alone, so it outlived a shadow copy the drain had applied a row into.
+# In a mutual re-seed, s applies r's row into copy 1; r cuts over to its own re-seed
+# copy, so s's export fails and copy 1 is discarded; s re-drives into copy 2 and the
+# same row is acknowledged as a duplicate without being applied, so s cuts over
+# without it.
+MODULE: EventualKeptDedupeOutlivesShadowCopy
+TARGET: EventualKept
+CLASS: Temporal
+SUMMARY: the drain's dedupe memory is not scoped to the shadow copy, so a re-driven drain skips a row the aborted copy took with it
+PERTURBS: ShadowRow
+BOUNDS: Mutual = TRUE
+
+--- FIND
+           seen == [w |-> Id(u), c |-> cid[x]] \in dd[x]
+--- REPLACE
+\* MUTATION: an identity applied into any earlier copy of the tree counts as seen.
+           seen == \E m \in dd[x] : m.w = Id(u)
+--- END

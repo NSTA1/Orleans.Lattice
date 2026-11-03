@@ -11,7 +11,8 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts.Contoso;
 /// <summary>
 /// A3, provisioning the factory (#5374). Produces <c>factory-orders</c> (4 shards, full-value
 /// history retention set before any order is written, the 240
-/// orders of <see cref="StoryData.Orders"/>, alias <c>orders</c>, publish-events on - the
+/// orders of <see cref="StoryData.Orders"/>, the <c>orders-history</c> change-history view from
+/// the built-in provider, created before the seed, alias <c>orders</c>, publish-events on - the
 /// tunable step 6 changes - the <c>orders-by-status</c> view over the silo's
 /// <c>order-status</c> provider, the line feed attached and the <c>order-status</c> tag index
 /// reconciled), <c>factory-lines</c> (<see cref="StoryData.Lines"/>), a 7-day history
@@ -24,6 +25,12 @@ public sealed class A3Contract() : ChapterContract("A3")
 
     /// <summary>The runtime view provider <c>orders-by-status</c> is created from, and its payload.</summary>
     public const string ViewProviderKey = "order-status";
+
+    /// <summary>
+    /// The library's built-in change-history provider (<c>LatticeHistoryView.ProviderKey</c>, #5611),
+    /// which <c>orders-history</c> is created from with an empty JSON object as its payload.
+    /// </summary>
+    public const string HistoryProviderKey = "orleans.lattice.history.v1";
 
     /// <summary>The telemetry's history retention window (step 6).</summary>
     public static readonly TimeSpan TelemetryRetention = TimeSpan.FromDays(7);
@@ -43,9 +50,23 @@ public sealed class A3Contract() : ChapterContract("A3")
         await admin.CreateTreeAsync(Names.Trees.FactoryOrders, shardCount: OrdersShardCount);
 
         // Retention is stamped per revision at write time, so it is set before the seed (U4 reads
-        // an earlier value through Show as of).
+        // an earlier value through Show as of). The change-history view is created before the
+        // seed too, so it records every order's first revision.
         await admin.SetHistoryRetentionAsync(Names.Trees.FactoryOrders, OrdersRetentionMode, null);
-        await ContractCalls.SetManyAsync(facades.Data, Names.Trees.FactoryOrders, StoryData.Orders);
+        await admin.CreateViewAsync(Names.Views.OrdersHistory, Names.Trees.FactoryOrders, HistoryProviderKey, "{}"u8.ToArray());
+        await ContractWait.UntilAsync("orders-history to be ready", async () =>
+            !string.IsNullOrEmpty((await admin.GetViewStatusAsync(Names.Views.OrdersHistory)).ActiveTreeId));
+        // Seeded as the journey's import seeds them: a bulk load, whose rows carry its own
+        // zero-based stamps rather than the wall clock's (#5683). A re-run over a partial
+        // establish, which a bulk load would refuse, upserts them instead.
+        if (await ContractCalls.CountPrefixAsync(facades.Data, Names.Trees.FactoryOrders, "order/") == 0)
+        {
+            await ContractCalls.BulkLoadAsync(admin, Names.Trees.FactoryOrders, StoryData.Orders);
+        }
+        else
+        {
+            await ContractCalls.SetManyAsync(facades.Data, Names.Trees.FactoryOrders, StoryData.Orders);
+        }
 
         await admin.CreateTreeAsync(Names.Trees.FactoryLines);
         await ContractCalls.SetManyAsync(facades.Data, Names.Trees.FactoryLines, StoryData.Lines);
@@ -111,6 +132,10 @@ public sealed class A3Contract() : ChapterContract("A3")
             var view = await admin.GetViewStatusAsync(Names.Views.OrdersByStatus);
             RequireEqual(view.SourceTreeId, Names.Trees.FactoryOrders, "orders-by-status projects factory-orders");
             Require(!string.IsNullOrEmpty(view.ActiveTreeId), "orders-by-status is ready");
+
+            var history = await admin.GetViewStatusAsync(Names.Views.OrdersHistory);
+            RequireEqual(history.SourceTreeId, Names.Trees.FactoryOrders, "orders-history records factory-orders");
+            Require(!string.IsNullOrEmpty(history.ActiveTreeId), "orders-history is ready");
         }
 
         var index = await admin.GetTagIndexStatusAsync(Names.TagIndexes.OrderStatus);

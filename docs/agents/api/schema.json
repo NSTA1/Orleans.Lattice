@@ -547,7 +547,7 @@
           "name": "StrictIngest",
           "type": "bool",
           "required": false,
-          "notes": "When true, intercepted system-origin writes are re-validated and non-compliant items are dead-lettered; replicated typed-CRDT deltas and replicated atomic-batch entries are intercepted, but plain last-writer-wins replication apply, backup restore and tree merge bypass write interception."
+          "notes": "When true, intercepted system-origin writes are re-validated and non-compliant items are dead-lettered; every replicated entry (plain last-writer-wins, typed-CRDT delta or atomic-batch entry) is intercepted, but backup restore and tree merge bypass write interception."
         }
       ],
       "source": "src/lattice.schema/LatticeSchemaPolicy.cs#LatticeSchemaPolicy"
@@ -2079,6 +2079,22 @@
       "retryable": false,
       "meaning": "The request or authorization check was cancelled.",
       "source": "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs#InvokeAsync"
+    },
+    {
+      "id": "cluster-timeout",
+      "type": "TimeoutException",
+      "grpc_status": "DeadlineExceeded",
+      "retryable": false,
+      "meaning": "A grain call timed out inside the cluster, so the outcome is unknown and a write may already have applied. Retry an idempotent read; confirm state before retrying a write (#5742).",
+      "source": "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs"
+    },
+    {
+      "id": "cluster-unavailable",
+      "type": "OrleansMessageRejectionException (including SiloUnavailableException) or EnumerationAbortedException",
+      "grpc_status": "Unavailable",
+      "retryable": true,
+      "meaning": "A silo was unavailable or rejected the message, or a remote enumerator was lost to a grain deactivation mid-read: a transient cluster fault. Retry after a short backoff (#5742).",
+      "source": "src/lattice.api.schema.grpc/LatticeSchemaGrpcService.cs"
     },
     {
       "id": "failed-precondition",

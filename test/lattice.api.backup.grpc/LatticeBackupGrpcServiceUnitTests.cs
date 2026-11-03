@@ -214,6 +214,7 @@ public sealed partial class LatticeBackupGrpcServiceUnitTests
         yield return new TestCaseData(new LatticeBackupTenantIsolationException("cross-tenant"), StatusCode.PermissionDenied).SetName("BackupTenantIsolation_maps_to_PermissionDenied");
         yield return new TestCaseData(new TimeoutException("The operation has timed out."), StatusCode.Unavailable).SetName("TransientReminderTimeout_maps_to_Unavailable");
         yield return new TestCaseData(new InvalidOperationException("Reminder Service is still initializing and it is taking a long time. Please retry again later."), StatusCode.Unavailable).SetName("ReminderStillInitializing_maps_to_Unavailable");
+        yield return new TestCaseData(new LatticeSaturatedException("busy", "t"), StatusCode.ResourceExhausted).SetName("Saturated_maps_to_ResourceExhausted");
         yield return new TestCaseData(new InvalidTimeZoneException("boom"), StatusCode.Internal).SetName("Unexpected_maps_to_Internal");
     }
 
@@ -331,6 +332,7 @@ public sealed partial class LatticeBackupGrpcServiceUnitTests
         yield return new TestCaseData(new KeyNotFoundException("x"), StatusCode.NotFound).SetName("Export_KeyNotFound_maps_to_NotFound");
         yield return new TestCaseData(new ArgumentException("x"), StatusCode.InvalidArgument).SetName("Export_Argument_maps_to_InvalidArgument");
         yield return new TestCaseData(new LatticeAuthorizationDeniedException("x"), StatusCode.PermissionDenied).SetName("Export_AuthorizationDenied_maps_to_PermissionDenied");
+        yield return new TestCaseData(new LatticeSaturatedException("busy", "t"), StatusCode.ResourceExhausted).SetName("Export_Saturated_maps_to_ResourceExhausted");
         yield return new TestCaseData(new InvalidTimeZoneException("x"), StatusCode.Internal).SetName("Export_Unexpected_maps_to_Internal");
     }
 
@@ -385,6 +387,7 @@ public sealed partial class LatticeBackupGrpcServiceUnitTests
     {
         yield return new TestCaseData(new ArgumentException("x"), StatusCode.InvalidArgument).SetName("Stream_Argument_maps_to_InvalidArgument");
         yield return new TestCaseData(new LatticeAuthorizationDeniedException("x"), StatusCode.PermissionDenied).SetName("Stream_AuthorizationDenied_maps_to_PermissionDenied");
+        yield return new TestCaseData(new LatticeSaturatedException("busy", "t"), StatusCode.ResourceExhausted).SetName("Stream_Saturated_maps_to_ResourceExhausted");
         yield return new TestCaseData(new InvalidTimeZoneException("x"), StatusCode.Internal).SetName("Stream_Unexpected_maps_to_Internal");
     }
 

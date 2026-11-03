@@ -49,7 +49,11 @@ internal sealed partial class TreeDeletionGrain
         if (await IsDeletedAsync() || state.State.LocalDeleteTargetPinned)
             throw Refuse($"Tree '{TreeId}' is logically deleted; recover it before changing its alias.");
         if (state.State.AliasOperationId is { } active && active != operationId)
-            throw Refuse($"Tree '{TreeId}' has alias operation '{active}' in progress; retry after it completes.");
+        {
+            logger.LogWarning(
+                "Tree lifecycle operation refused: tree {TreeId} has alias operation {Holder} in progress.", TreeId, active);
+            throw new LatticeAliasOperationInProgressException(TreeId, active);
+        }
         if (state.State.AliasOperationId == operationId) return;
         state.State.AliasOperationId = operationId;
         try { await PersistAsync(); }

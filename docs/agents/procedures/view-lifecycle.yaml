@@ -31,7 +31,7 @@ preconditions:
     check: "The source is a directly writable tree: not a materialised-view tree, not in the reserved '_lattice_' system namespace, and not a tenant-scoped id the active tenant does not own."
     source: "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#LatticeTreeAdmin.CreateViewAsync"
   - id: provider-registered
-    check: "The provider key is registered on the host through AddRuntimeProjectionProvider, or is the built-in filter-only predicate provider key orleans.lattice.predicate.v1; the payload is at most 65536 bytes (base64-encoded on the MCP tool)."
+    check: "The provider key is registered on the host through AddRuntimeProjectionProvider, or is a built-in key: the change-history provider orleans.lattice.history.v1 (payload an empty JSON object, {}, which is e30= base64-encoded), or the filter-only predicate provider orleans.lattice.predicate.v1, which is not offered for operator creation. The payload is at most 65536 bytes (base64-encoded on the MCP tool)."
     source: "src/lattice/Views/LatticeViewsServiceCollectionExtensions.cs#PredicateRuntimeViewProjectionCodec.ProviderKey"
   - id: projection-from-provider
     check: "Projection kind (filter or aggregation), accumulative shape and projection version are derived by the provider on the target cluster and cannot be supplied by the caller."

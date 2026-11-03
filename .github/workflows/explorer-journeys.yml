@@ -27,6 +27,10 @@ name: Explorer Journeys
 #                      no shared file. A pull request touching only Journeys/<id>/
 #                      runs that leg; a change to the Explorer, the harness, the
 #                      hosts, a facade or this lane runs every leg.
+#   contract-<chapter> one per story-only chapter (a contract, no Journeys/<id>
+#                      folder; #5660): that chapter's case of its storyline's
+#                      contract conformance fixture alone on a fresh estate. Run
+#                      by the `legs` job like any other leg.
 #   story-contoso, story-fabrikam
 #                      the storyline run in order on one estate. ADVISORY and
 #                      NOT run on an ordinary pull request (user decision on
@@ -492,13 +496,14 @@ jobs:
       - name: Run the leg
         env:
           FILTER: ${{ matrix.filter }}
+          HANG: ${{ matrix.hang || 20 }}
         run: |
           dotnet test "$E2E_PROJECT" --no-build --configuration Release \
             --filter "$FILTER" \
             --results-directory "$RESULTS" \
             --logger "trx;LogFileName=$LEG.trx" \
             --logger "console;verbosity=normal" \
-            --blame-hang-timeout 20m --blame-hang-dump-type none
+            --blame-hang-timeout "${HANG}m" --blame-hang-dump-type none
 
       # The leg's counts, every journey's ordered screenshot manifest and the
       # leg's coverage hits, in the job summary; the pending-wrapper list and

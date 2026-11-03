@@ -40,11 +40,11 @@ internal sealed class DataDirectoryPage(PersonaSession session)
         await WaitForListingAsync();
     }
 
-    /// <summary>Waits until the listing has rows.</summary>
+    /// <summary>Waits until the listing has rows, or fails with the directory's failure state.</summary>
     public async Task WaitForListingAsync()
     {
-        await Expect(Content.Locator(".lt-skeleton")).ToHaveCountAsync(0, new() { Timeout = 60_000 });
-        await Expect(Rows.First).ToBeVisibleAsync();
+        await PanelSettled.ExpectDrawnAsync(Rows.First, PanelSettled.Failure(Content), "the Data directory's listing");
+        await Expect(Content.Locator(".lt-skeleton")).ToHaveCountAsync(0, new() { Timeout = PanelSettled.BoundMs });
     }
 
     /// <summary>The names in the listing, in order.</summary>

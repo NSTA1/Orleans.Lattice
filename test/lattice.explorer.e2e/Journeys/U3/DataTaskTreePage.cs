@@ -40,7 +40,8 @@ internal sealed class DataTaskTreePage(PersonaSession session, string tree)
         await session.Shell.GoToAreaAsync("data");
         await session.Shell.ExpectHeadingAsync("Data");
         await session.Shell.Content.GetByLabel("Filter trees and views").FillAsync("task-board");
-        await Expect(DirectoryRow).ToHaveCountAsync(1, new() { Timeout = 60_000 });
+        await PanelSettled.ExpectDrawnAsync(DirectoryRow, PanelSettled.Failure(session.Shell.Content), "the task board's tree in the Data directory");
+        await Expect(DirectoryRow).ToHaveCountAsync(1);
     }
 
     /// <summary>Asserts the directory's App column names the task board for the tree, linking to the app.</summary>
@@ -63,6 +64,7 @@ internal sealed class DataTaskTreePage(PersonaSession session, string tree)
         await Expect(session.Page).ToHaveURLAsync(new Regex("/data/" + Regex.Escape(tree) + @"(\?|$)"));
         await Expect(session.Shell.Content.GetByRole(AriaRole.Tab, new() { Name = "Keys", Exact = true })).ToHaveAttributeAsync("aria-selected", "true");
         await Expect(LiveUpdates).ToHaveAttributeAsync("aria-checked", "true");
+        await PanelSettled.ExpectDrawnAsync(Keys.Or(session.Shell.Content.Locator(".lt-table-empty .lt-table__empty")).First, PanelSettled.Failure(session.Shell.Content), "the task board tree's keys");
         await session.Page.EvaluateAsync($"() => {{ {Marker} = true; }}");
     }
 
@@ -74,7 +76,7 @@ internal sealed class DataTaskTreePage(PersonaSession session, string tree)
     /// <param name="keys">The keys, in any order.</param>
     public async Task ExpectKeysAsync(IReadOnlyCollection<string> keys)
     {
-        await Expect(Keys).ToHaveCountAsync(keys.Count, new() { Timeout = 60_000 });
+        await Expect(Keys).ToHaveCountAsync(keys.Count, new() { Timeout = PanelSettled.BoundMs });
         foreach (var key in keys)
         {
             await Expect(session.Shell.Content.Locator($"a.lt-data-key[title=\"{key}\"]")).ToHaveCountAsync(1);

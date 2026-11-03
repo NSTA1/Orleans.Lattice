@@ -411,6 +411,17 @@ source silo as an ordinary grain call, it reaches the shipper even while the
 inter-site delivery edge is partitioned, so the rebind is applied the moment
 the swap commits rather than after the edge heals.
 
+The observer notifies shippers only for a tree that has replication
+configuration on this cluster: a merge mode, a static `ReplicatedTrees` entry,
+or a runtime configuration row, enabled or not. An operator alias usually names
+a tree that is not enrolled itself, and a write addressed through the alias is
+logged under the alias target, so the target's own shipper ships it under the
+target's id. A shipper keyed by the alias name would ship the target's log under
+the alias id, which a receiver rejects as not enrolled ([#5676](https://github.com/NSTA1/Orleans.Lattice/issues/5676)).
+A shipper that finds its tree has no configuration and is an alias or not a
+registered tree is such a stray: it ships nothing, withdraws from the log through
+the peer-removal path, drops its peer's cross-tree enrolment and deactivates.
+
 A coarse backstop resolve
 (`LatticeReplicationOptions.ShipSourceIdentityBackstopInterval`, default 30 s)
 is the only path that still reads the registry, and it runs solely as a

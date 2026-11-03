@@ -179,6 +179,15 @@ read as coverage of another (#2324):
   saga record's, which this module does not model (above); see
   [Dead-letter queue](../../docs/lattice.replication/dead-letter-queue.md).
   Production symbols: `ILatticeReplicationDeadLetters.ReleaseQuarantinedSagaAsync`.
+- **Shippers exist only for configured trees.** The module has one shipper per
+  enrolled tree and nothing else. Production keeps it that way: the alias
+  observer rebinds shippers only for a tree with replication configuration,
+  and a stray shipper (a never-configured name that is an alias or not a
+  registered tree, as an older alias observer created) ships nothing,
+  withdraws from the log and deactivates (#5676). A write addressed through
+  an operator alias is logged under the alias target, so it is shipped by the
+  target's own shipper.
+  Production symbols: `ReplicationTreeAliasObserver`, `ReplicationShipperGrain`.
 - **Empty-origin records and the change feed.** Every write in the model
   carries an origin, which is what `WalCommitLogWriter` stamps on a replicated
   tree. Durability-only records with an empty origin, which the shipper drops
@@ -257,5 +266,14 @@ read as coverage of another (#2324):
   production mechanism.
 - **Receive fence, enrolment and tenant gates, merge-mode mismatch.** These
   defer or refuse entries for reasons outside convergence and are not modelled.
+  The enrolment gate drops (and acknowledges) every entry a receiver is shipped
+  before its own enrolment lands; that loss is repaired only by a snapshot, which
+  is the model's operator `Bootstrap`. An enable that names a bootstrap source
+  issues that request whether or not the tree is already enrolled locally
+  (#5557, #5594), skipping it only when a bootstrap from that source is
+  already in flight. Residual gap: a receiver enrolled purely by
+  convergence, with no enable call of its own, still waits for an operator
+  re-seed or the fall-off auto-bootstrap to receive the source's pre-enrolment
+  rows.
   No production symbol: the gap is a modelling abstraction with no single
   production owner.

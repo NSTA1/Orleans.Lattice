@@ -3,16 +3,16 @@
   "refinement": "SchemaCrossRegionRefinement.md",
   "nonBehaviouralActions": ["Stutter", "Fault", "Recover"],
   "counts": {
-    "invariants": 3,
+    "invariants": 4,
     "properties": 9,
-    "actions": 8,
-    "mutations": 17,
-    "behaviourRows": 16,
-    "distinctStates": 47890
+    "actions": 10,
+    "mutations": 21,
+    "behaviourRows": 19,
+    "distinctStates": 47924
   },
   "variants": {
     "ThreeEntries": {
-      "distinctStates": 1685138
+      "distinctStates": 1721668
     }
   }
 }

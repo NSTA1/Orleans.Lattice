@@ -28,4 +28,8 @@ internal sealed class NullLatticeWriteInterceptor : ILatticeWriteInterceptor
         in LatticeWriteRequest request,
         CancellationToken cancellationToken = default) =>
         AcceptResult;
+
+    /// <inheritdoc />
+    public ValueTask<bool> JudgesReplicatedWritesAsync(string treeId, CancellationToken cancellationToken = default) =>
+        new(false);
 }
