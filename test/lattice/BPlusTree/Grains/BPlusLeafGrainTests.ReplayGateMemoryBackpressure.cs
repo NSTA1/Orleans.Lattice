@@ -40,6 +40,9 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </summary>
 public partial class BPlusLeafGrainTests
 {
+    /// <summary>How long <see cref="QuiescentReplayGateAsync"/> waits for other replays to return their permits.</summary>
+    private static readonly TimeSpan QuiescenceBudget = TimeSpan.FromSeconds(15);
+
     /// <summary>
     /// Sizes the process-wide gate if it is not sized yet and returns it,
     /// asserting it is quiescent - every permit in circulation and nothing
@@ -56,9 +59,6 @@ public partial class BPlusLeafGrainTests
     /// still held at the end of the budget is not transient - a leaked permit, or
     /// a replay another test left hung - and fails the same assertion as before.
     /// </remarks>
-    /// <summary>How long <see cref="QuiescentReplayGateAsync"/> waits for other replays to return their permits.</summary>
-    private static readonly TimeSpan QuiescenceBudget = TimeSpan.FromSeconds(15);
-
     private static async Task<SemaphoreSlim> QuiescentReplayGateAsync(int? permitCeiling = null)
     {
         var (warmGrain, warmState, _, _) = CreateGrainWithSnapshotAndCoordinator(
