@@ -330,16 +330,17 @@ check exhaustively, and they fit together through a written assume-guarantee con
 |--------|----------------|---------|
 | E, `WalAppendEpoch` | A superseded or retired activation never appends, a claim's head covers every earlier allocation, no two live activations share an epoch, and only a superseded activation is ever refused. | nothing |
 | H, `WalHandOffFence` | A foreign writer's record lands while the owner's marker is open or below the heads its close recorded, an absent or uninitialised marker holds the owner, and close heads only rise. | E's entry check |
-| R, `WalRoutingFloor` | A write of a purged tree lands below the heads the re-created tree's first initialisation recorded, and every live shard root's routing generation stays above its own floor. | E's entry check |
+| R, `WalRoutingFloor` | A write of a purged tree lands below the heads the re-created tree's first initialisation recorded, those heads lie above every record already allocated in the partition (`InitHeadCoversPriorAllocations`), and every live shard root's routing generation stays above its own floor. | E's entry check |
 | B, `WalBulkSwitch` | A bulk-born leaf's birth read position is at or below every record of its range it does not hold, and the leaf resolves a contested key as every WAL reader does. | nothing |
-| C, `WalLiveAdvanceCore` | An armed activation's read position never passes a record it does not hold, the shared snapshot is honest, the GC never trims an acknowledged entry the snapshot lacks, and a newborn leaf's pin eventually becomes usable without a replay from the start. | every guarantee above |
+| C, `WalLiveAdvanceCore` | No running activation's read position ever passes a record it does not hold, whether it advances by replay or, once armed, by the live advance; the shared snapshot is honest, the GC never trims an acknowledged entry the snapshot lacks, and a newborn leaf's pin eventually becomes usable without a replay from the start. | every guarantee above |
 
 The graph is E <- H, E <- R and {E, H, R, B} <- C: an arrow points from the module that
 assumes to the module that guarantees, and no other edge exists, so it is acyclic. A
 module takes another's guarantee only as an environment constraint in the interface's
 exact form, never by importing its state. The core's liveness property,
-`NewbornPinEventuallyUsable`, holds under weak fairness of the leaf's own steps, with
-replay assumed only as far as the arming bounds require; it is discharged once the
+`NewbornPinEventuallyUsable`, holds under weak fairness of the leaf's own steps and of the
+environment steps that end a hold (a close, the bulk birth, the marker's initialisation),
+with replay assumed only as far as the arming bounds require; it is discharged once the
 current activation has fallen off the log, where production's stale latch (#3477) takes
 over.
 
@@ -369,6 +370,14 @@ on `main` as a whole:
 
 | Issue | Defect |
 |-------|--------|
+| #5610 | A bulk append grafted its leaves without checking the keys the old rightmost leaf already held, so rows at or above the first separator became unroutable. Fixed by #5646: the graft relocates them into the appended leaves and never refuses the chunk; #5677 persists the old leaf's drop. |
+| #5614 | A streamed bulk load intermittently committed duplicate or orphan rows, so counts and scans disagreed with what was loaded. Fixed by #5646, with the relocation of #5610. |
+| #5634 | The WAL append fence's rows leaked when a 10.2.0 silo retired a fenced leaf, because nothing could enumerate them. Fixed by #5653: a directory of fenced leaves and a sweep that retires the orphans. |
+| #5642 | A batch write admitted during a bulk load landed on the replaced seeded root and was unreadable until a replay. Fixed by #5646: the load drains the batch writes admitted before it and merges the replaced root's rows. |
+| #5643 | An activation's own epoch bump deactivated it when its in-flight appends met the raised entry. Fixed by #5644: the activation's own stale appends are self-fenced and re-admitted, not a supersession. |
+| #5654 | A write above the edge between a bulk graft's narrow and its link failed open onto the old leaf and was unreadable on the origin. Fixed by #5646: the narrow and the link are one persist. |
+| #5656 | The append-fence sweep never reached orphans past the first 1,024 listed leaves. Fixed by #5653: each sweep resumes after the last leaf the previous one examined and wraps around, so every listed leaf is examined in turn. |
+| #5657 | The append-fence retirement kept the loaded entry when the entry delete or delist failed after the floor raise. Fixed by #5653: once the floor is raised, the loaded entry is removed whatever fails next. |
 | #5662 | A split's close bumped its epoch in a race with a floor refusal's bump on the same epoch row, and superseded its own activation. |
 | #5663 | A shard root whose routing generation fell behind a partition's durable row made every write retry until it timed out. |
 | #5664 | A hand-off's close heads could miss the donor's appends: a stamp taken at dispatch, a partition reset by an unloaded rejection, or the gate-view fallback. |

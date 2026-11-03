@@ -454,7 +454,8 @@ gaps, states its full scope.
     environments larger than one CI case, which are checked in separate
     variants or, for one, locally. The
     [gap register](../../spec/wal/README.md#the-live-advances-gap-register) lists
-    every module's gaps.- **Shard ownership** ([`spec/shard-ownership/`](../../spec/shard-ownership/README.md)).
+    every module's gaps.
+- **Shard ownership** ([`spec/shard-ownership/`](../../spec/shard-ownership/README.md)).
   - **Covers:** who serves a key across an adaptive split, an online shard
     fold, an online reshard, an online resize and its undo, with stale routers
     and an atomic write bound to one physical copy; a fold back onto the shard a
@@ -654,7 +655,7 @@ area's list is the authoritative one. The separately listed interrupted-shadow d
 
 | Area | Defects | Full list |
 |------|---------|-----------|
-| WAL durability lifecycle | #4450, #4451, #4456, #4467, #4523, #4525, #4621, #4622, #4634, #4641, #4654, #4669, #4699, #4700, #5358, #5416, #5417, #5458, #5459, #5662, #5663, #5664, #5668, #5705, #5706, #5708, #5709, #5716, #5752, #5755, #5756, #5760, #5766 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
+| WAL durability lifecycle | #4450, #4451, #4456, #4467, #4523, #4525, #4621, #4622, #4634, #4641, #4654, #4669, #4699, #4700, #5358, #5416, #5417, #5458, #5459, #5610, #5614, #5634, #5642, #5643, #5654, #5656, #5657, #5662, #5663, #5664, #5668, #5705, #5706, #5708, #5709, #5716, #5752, #5755, #5756, #5760, #5766 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
 | Shard ownership | #4452, #4453, #4454, #4455, #4473, #4474, #4475, #4503, #4522, #4545, #4564, #4611, #4613, #4618, #4619, #4689 | [`spec/shard-ownership/`](../../spec/shard-ownership/README.md#defects-this-area-found) |
 | Cross-cluster atomic visibility | #4480, #4481, #4482, #4508, #4511, #4526, #4533, #4534, #4591, #4627, #4664, #4683, #4684, #4685 | [Verified Atomic-Commit](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | #4463, #4464, #4465, #4504, #4537, #4549, #4585, #4586, #4587, #4603, #4604, #4614, #4615, #4673, #4707, #5689 | [`spec/replication/`](../../spec/replication/README.md#production-defects-this-module-found) |
