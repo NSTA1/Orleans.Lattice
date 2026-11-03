@@ -926,6 +926,9 @@ internal sealed partial class BPlusLeafGrain
                     options.WalMaterialiserMaxConcurrentReplays,
                     Environment.ProcessorCount,
                     ContainerCpuGrant.Read());
+                var ceilingCap = Volatile.Read(ref ReplayCeilingCapForTest);
+                if (ceilingCap > 0 && max > ceilingCap)
+                    max = ceilingCap;
                 _replayConcurrencyGate = new SemaphoreSlim(max, max);
                 _replayConcurrencyCeiling = max;
                 Volatile.Write(ref _withheldReplayPermits, 0);
@@ -1626,6 +1629,12 @@ internal sealed partial class BPlusLeafGrain
         var options = await GetOptionsAsync();
         var gate = ResolveReplayConcurrencyGate(options, ResolveLogger);
 
+        // Read here, while the activation is known valid and before any permit
+        // is taken: from the queue wait to the release, the permit path tags with
+        // these and never reads state (issue #5775).
+        _replayPermitTreeId = state.State.TreeId;
+        _replayPermitMetricTreeId = MetricTreeId;
+
         // ADMISSION CONTROL (issue #3284). Read BEFORE the counter below is
         // incremented and before the wait is entered, because the whole point is
         // to keep this activation out of a queue it cannot reach the head of: 87
@@ -1916,6 +1925,8 @@ internal sealed partial class BPlusLeafGrain
         _replayAdmissionPhase = ReplayAdmissionPhase.ResolvingOptions;
         var options = await GetOptionsAsync();
         var gate = ResolveReplayConcurrencyGate(options, ResolveLogger);
+        _replayPermitTreeId = state.State.TreeId;
+        _replayPermitMetricTreeId = MetricTreeId;
 
         cancellationToken.ThrowIfCancellationRequested();
         if (!TryAcquireStarvationReplayPermit(gate, origin))
@@ -2888,10 +2899,13 @@ internal sealed partial class BPlusLeafGrain
         var elapsed = Stopwatch.GetElapsedTime(queuedAt);
         NoteReplayPermitQueueWait(elapsed, acquired: outcome.Equals(LatticeMetrics.PermitQueueWaitAcquired));
 
-        var treeId = state.State.TreeId;
+        // Tagged from the values cached before the wait: this runs after the
+        // permit is taken, when a state read on an invalidated activation would
+        // throw and strand it (issue #5775).
+        var treeId = _replayPermitTreeId;
         LatticeMetrics.WalReplayPermitQueueWait.Record(
             elapsed.TotalMilliseconds,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, _replayPermitMetricTreeId ?? string.Empty),
             outcome,
             LatticeTenantLabel.ForTree(treeId));
     }
@@ -3605,10 +3619,15 @@ internal sealed partial class BPlusLeafGrain
                 //
                 // The replay is awaited inline and every nested call re-takes the
                 // permit in its own finally, so this frame always holds it here.
+                //
+                // The tags come from the values cached before the queue wait, not
+                // from state: the activation may have been invalidated during the
+                // replay, and a state read here would throw before the release and
+                // strand the permit for the life of the process (issue #5775).
                 ExitReplayPermitScope(replayPermitCensusSlot);
                 FinishReplayPermit(
                     replayPermit, withholdReplayPermitOnPressure, replayCompletedCleanly,
-                    replayPermitAcquiredAt, MetricTreeId, state.State.TreeId, replayServiceHold);
+                    replayPermitAcquiredAt, _replayPermitMetricTreeId ?? string.Empty, _replayPermitTreeId, replayServiceHold);
             }
         }
 

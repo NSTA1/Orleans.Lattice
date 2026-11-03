@@ -234,6 +234,120 @@ public partial class BPlusLeafGrainTests
     }
     [Test]
     [NonParallelizable]
+    public async Task An_activation_invalidated_while_its_permit_is_out_returns_the_permit_exactly_once()
+    {
+        BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        try
+        {
+            IGrainFactory? grainFactory = null;
+            var coordinator = BuildCoordinator(head: 1, new CommitLogSliceEntry(0, BuildCommittedSet("a", [1])));
+            var (grain, state, _, _) = CreateGrainWithMaterialiser(
+                coordinator,
+                persistedCheckpoint: -1,
+                maxConcurrentReplays: 1,
+                seedState: s => s.ShardIndex = 0,
+                configureGrainFactory: factory => grainFactory = factory);
+
+            // The activation is invalidated while the registry lookup has the
+            // replay's permit out, so every later state read throws, as Orleans'
+            // runtime-context guard does: the re-take and the frame's release must
+            // not depend on one.
+            var registry = grainFactory!.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            registry.GetShardMapAsync(Arg.Any<string>()).Returns(_ =>
+            {
+                state.ThrowOnStateAccess = new InvalidOperationException("Attempt to access an invalid activation");
+                return Task.FromResult<ShardMap?>(null);
+            });
+
+            Exception? activationFault = null;
+            try
+            {
+                await ActivateAsync(grain);
+            }
+            catch (Exception ex)
+            {
+                activationFault = ex;
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(activationFault, Is.Not.Null, "precondition: the invalidated activation failed");
+                Assert.That(grain.ReplayPermitsSuspendedForTest, Is.Zero, "the lookup's resume completed");
+                Assert.That(BPlusLeafGrain.ReplayConcurrencyGateForTest!.CurrentCount, Is.EqualTo(1),
+                    "the one permit is back in the gate, neither stranded nor released twice");
+                Assert.That(BPlusLeafGrain.QueuedReplayPermitWaitersForTest, Is.Zero, "nothing is left queued");
+                Assert.That(BPlusLeafGrain.ReplayPermitCensusCountForTest, Is.Zero, "no holder is left in the census");
+            });
+        }
+        finally
+        {
+            BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        }
+    }
+
+    [Test]
+    [NonParallelizable]
+    public async Task An_activation_invalidated_while_queued_for_a_permit_returns_the_permit_it_is_granted()
+    {
+        BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        var held = false;
+        SemaphoreSlim? gate = null;
+        try
+        {
+            var (first, _, _, _) = CreateGrainWithMaterialiser(
+                BuildCoordinator(head: 1, new CommitLogSliceEntry(0, BuildCommittedSet("a", [1]))),
+                persistedCheckpoint: -1,
+                maxConcurrentReplays: 1);
+            await ActivateAsync(first);
+            gate = BPlusLeafGrain.ReplayConcurrencyGateForTest!;
+            Assert.That(gate.CurrentCount, Is.EqualTo(1), "precondition: the gate holds one permit");
+
+            await gate.WaitAsync();
+            held = true;
+            var (second, state, _, _) = CreateGrainWithMaterialiser(
+                BuildCoordinator(head: 1, new CommitLogSliceEntry(0, BuildCommittedSet("b", [1]))),
+                persistedCheckpoint: -1,
+                maxConcurrentReplays: 1);
+            var activation = ActivateAsync(second);
+            var deadline = Stopwatch.StartNew();
+            while (BPlusLeafGrain.QueuedReplayPermitWaitersForTest == 0 && deadline.Elapsed < TimeSpan.FromSeconds(5))
+                await Task.Delay(10);
+            Assert.That(BPlusLeafGrain.QueuedReplayPermitWaitersForTest, Is.EqualTo(1), "precondition: the second activation is queued");
+
+            // Invalidated while it waits, then granted the permit: nothing between
+            // the grant and the release may read state.
+            state.ThrowOnStateAccess = new InvalidOperationException("Attempt to access an invalid activation");
+            held = false;
+            gate.Release();
+
+            Exception? activationFault = null;
+            try
+            {
+                await activation.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            catch (Exception ex)
+            {
+                activationFault = ex;
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(activationFault, Is.Not.Null.And.Not.InstanceOf<TimeoutException>(), "precondition: the invalidated activation failed promptly");
+                Assert.That(gate.CurrentCount, Is.EqualTo(1), "the granted permit is back in the gate");
+                Assert.That(BPlusLeafGrain.QueuedReplayPermitWaitersForTest, Is.Zero, "nothing is left queued");
+                Assert.That(BPlusLeafGrain.ReplayPermitCensusCountForTest, Is.Zero, "no holder is left in the census");
+            });
+        }
+        finally
+        {
+            if (held)
+                gate?.Release();
+            BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        }
+    }
+
+    [Test]
+    [NonParallelizable]
     public void The_no_progress_refusal_names_the_permit_holders()
     {
         BPlusLeafGrain.ResetReplayConcurrencyGateForTest();

@@ -59,9 +59,28 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     internal static Action<BPlusLeafGrain>? ReplayPermitSuspendedForTest;
 
+    /// <summary>
+    /// Test-only cap on the replay gate's ceiling, applied when the gate is sized;
+    /// zero leaves the resolved ceiling. A low cap makes a nested permit wait
+    /// deterministic rather than load-dependent (issue #5775).
+    /// </summary>
+    internal static int ReplayCeilingCapForTest;
+
+    /// <summary>
+    /// The tree id and metric tree id the permit path tags with, read from state
+    /// before the queue wait. Everything between taking a permit and returning it
+    /// reads these rather than grain state: an activation can be invalidated while
+    /// its replay waits, and a state read then throws, which once stranded the
+    /// permit for the life of the process (issue #5775).
+    /// </summary>
+    private string? _replayPermitTreeId;
+
+    /// <inheritdoc cref="_replayPermitTreeId"/>
+    private string? _replayPermitMetricTreeId;
+
     private GrainId CensusGrainId => context.GrainId;
 
-    private string? CensusTreeId => state.State.TreeId;
+    private string? CensusTreeId => _replayPermitTreeId;
 
     /// <summary>Test view of how many of this activation's replays have their permit out.</summary>
     internal int ReplayPermitsSuspendedForTest => Volatile.Read(ref _replayPermitsSuspended);
@@ -182,6 +201,14 @@ internal sealed partial class BPlusLeafGrain
     /// to the frame that releases it. It strands nothing, because the replay holds
     /// no permit while it waits. If that frame has ended meanwhile, the permit
     /// just taken is released at once.
+    /// <para>
+    /// Nothing between the wait and the hand-back can throw: the lease changes
+    /// state first, and the bookkeeping after it reads no grain state. The
+    /// activation may have been invalidated while it waited, and a state read
+    /// would then throw with the permit taken but the lease still out, so the
+    /// frame would release the permit it no longer held and the re-take would
+    /// never be returned.
+    /// </para>
     /// </summary>
     private async Task ResumeReplayPermitAsync(object suspended)
     {
@@ -194,12 +221,6 @@ internal sealed partial class BPlusLeafGrain
             try
             {
                 await lease.Gate.WaitAsync().ConfigureAwait(true);
-
-                // Recorded as an ordinary acquisition, so the queue's progress
-                // stamp and smoothed wait see a re-take exactly as they see a
-                // first take; otherwise sustained re-takes would read as a queue
-                // that is not draining.
-                RecordReplayPermitQueueWait(queuedAt, LatticeMetrics.PermitQueueWaitAcquired);
             }
             finally
             {
@@ -214,6 +235,11 @@ internal sealed partial class BPlusLeafGrain
 
         if (Interlocked.CompareExchange(ref lease.State, ReplayPermitLease.Held, ReplayPermitLease.Out) != ReplayPermitLease.Out)
             lease.Gate.Release();
+
+        // Recorded as an ordinary acquisition, so the queue's progress stamp and
+        // smoothed wait see a re-take exactly as they see a first take; otherwise
+        // sustained re-takes would read as a queue that is not draining.
+        RecordReplayPermitQueueWait(queuedAt, LatticeMetrics.PermitQueueWaitAcquired);
     }
     /// <summary>
     /// Describes the activations recorded as holding a permit, for the
@@ -253,6 +279,12 @@ internal sealed partial class BPlusLeafGrain
         var overflow = Volatile.Read(ref _replayPermitCensusOverflow);
         if (overflow > 0)
             text.Append(' ').Append(overflow).Append(" beyond the census bound;");
+
+        text.Append(" free permits ")
+            .Append(Volatile.Read(ref _replayConcurrencyGate)?.CurrentCount ?? 0)
+            .Append(", queued waiters ")
+            .Append(QueuedReplayPermitWaiters)
+            .Append('.');
 
         return text.ToString();
     }
