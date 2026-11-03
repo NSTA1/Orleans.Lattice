@@ -3019,11 +3019,11 @@ internal sealed partial class BPlusLeafGrain(
         // the graft takes the 10.2.0 path (review B1 of #5702): a slow commit never
         // fails a bulk chunk that succeeded on 10.2.0.
         var drained = false;
-        if (WouldNarrowHighKey(highKeyExclusive))
+        if (WouldNarrowHighKey(highKeyExclusive) || highKeyExclusive.Length > 0) // RED-PROOF T2
         {
             if (!await DrainMutationsAdmittedBeforeAsync(allowance: 0))
             {
-                return null;
+                throw new TimeoutException("RED-PROOF T1"); // RED-PROOF T1
             }
 
             drained = true;

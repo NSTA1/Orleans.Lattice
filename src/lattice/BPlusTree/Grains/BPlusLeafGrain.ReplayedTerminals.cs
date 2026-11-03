@@ -106,7 +106,7 @@ internal sealed partial class BPlusLeafGrain
         // Issue #5706 (review S1 of #5702): the prepared records below are data-keyed
         // and applied after their append, so a narrow or a division must wait for
         // them as for any write. This path never divides the leaf.
-        using var _mutationScope = EnterMutationScope();
+        // RED-PROOF T4: no mutation scope.
 
         var records = new List<WalRecord>(preparedMutations.Count + 1);
         foreach (var mutation in preparedMutations)
