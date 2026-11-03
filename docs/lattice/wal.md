@@ -1705,9 +1705,15 @@ stepping past them; after it, a replay steps past them, which is why a graft res
 on a leaf an earlier attempt already narrowed applies no hint. A lower read position
 only lengthens the new leaf's first replay.
 
-The old leaf's frontier is its in-memory projection checkpoint, which only its replay
-moves - to the end of its activation replay, then by any later replay - and never its
-own writes, so it is contiguous: every record at or below it has been applied. A
+The old leaf's frontier is its in-memory projection checkpoint. Its replay moves it -
+to the end of its activation replay, then by any later replay - and the live advance
+moves it over the leaf's own writes only while armed, behind the append fences; a write
+applied in memory never moves it on its own. A checkpoint hint also moves it: a split
+sibling's or bulk-born leaf's read position, which is capped as described here, and a
+split donor's own advance to one below the heads it read, which is not (#5756). So
+the frontier is contiguous - every record at or below it has been applied - except on
+a leaf whose checkpoint a donor's advance has moved, and a later cap at such a leaf's
+frontier inherits #5756's residue. A
 partition on which the old leaf has scanned nothing (it activated on an empty partition
 and has not replayed since, or was born from such a leaf) has no frontier, reported as
 -1. There an appended leaf applies no hint, as in 10.2.0. A split sibling instead keeps
