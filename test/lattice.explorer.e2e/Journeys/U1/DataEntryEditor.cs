@@ -45,7 +45,26 @@ internal sealed class DataEntryEditor(IPage page, string title)
     public async Task WaitOpenAsync()
     {
         await Expect(Dialog).ToBeVisibleAsync();
-        await Expect(Value).ToBeVisibleAsync(new() { Timeout = 30_000 });
+        await PanelSettled.ExpectDrawnAsync(Value, PanelSettled.Failure(Dialog), "the editor's value");
+    }
+
+    /// <summary>Waits for the schema preview's verdict on the draft, which the cluster evaluates, and asserts it passes.</summary>
+    public async Task ExpectSchemaPassesAsync()
+    {
+        await Expect(SchemaPasses.Or(SchemaFails).First).ToBeVisibleAsync(new() { Timeout = PanelSettled.BoundMs });
+        await Expect(SchemaPasses).ToBeVisibleAsync();
+    }
+
+    /// <summary>
+    /// Submits and waits for the save's outcome: the dialog closes, or it shows the cluster's
+    /// refusal or the concurrent-change warning. Returns whether it closed.
+    /// </summary>
+    public async Task<bool> SubmitAsync()
+    {
+        await Submit.ClickAsync();
+        var settled = Dialog.Filter(new() { HasNot = page.Locator(".lt-data-editor__error, .lt-data-editor__conflict") });
+        await Expect(settled).ToHaveCountAsync(0, new() { Timeout = PanelSettled.BoundMs });
+        return await Dialog.CountAsync() == 0;
     }
 
     /// <summary>Replaces the draft with <paramref name="text"/>.</summary>
@@ -56,10 +75,12 @@ internal sealed class DataEntryEditor(IPage page, string title)
         await Expect(Value).ToHaveValueAsync(text);
     }
 
-    /// <summary>Saves and waits for the dialog to close.</summary>
+    /// <summary>Saves and waits for the dialog to close; a refusal or a conflict fails with the dialog's words.</summary>
     public async Task SaveAndCloseAsync()
     {
-        await Submit.ClickAsync();
-        await Expect(Dialog).ToHaveCountAsync(0, new() { Timeout = 30_000 });
+        if (!await SubmitAsync())
+        {
+            Assert.Fail("The save did not land: " + (await Refusal.Or(Conflict).First.InnerTextAsync()).ReplaceLineEndings(" "));
+        }
     }
 }

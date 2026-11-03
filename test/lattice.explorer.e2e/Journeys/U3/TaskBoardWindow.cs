@@ -330,7 +330,8 @@ internal sealed class TaskBoardWindow
     /// <param name="columnName">The column's name, as the board writes it.</param>
     public async Task ExpectDetailAsync(string title, string key, string columnName)
     {
-        await Expect(Board.Locator("#tb-detail")).ToBeVisibleAsync();
+        // A deep link selects its task once the board's read has brought it in.
+        await Expect(Board.Locator("#tb-detail")).ToBeVisibleAsync(new() { Timeout = (float)ReadPatience.TotalMilliseconds });
         await Expect(Board.Locator("#tb-detail-title")).ToHaveTextAsync(title);
         await Expect(Board.Locator("#tb-detail-key")).ToHaveTextAsync(key);
         await Expect(Board.Locator("#tb-detail-column")).ToHaveTextAsync($"In {columnName}.");

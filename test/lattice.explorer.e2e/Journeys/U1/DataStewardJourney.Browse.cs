@@ -131,8 +131,7 @@ public sealed partial class DataStewardJourney
         await CheckpointAsync("2", "prefix", "The prefix filter shows the seeded orders, 25 to a page");
 
         var first = await _tree.KeysAsync();
-        await _tree.NextPage.ClickAsync();
-        await Expect(_tree.PagePosition).ToHaveTextAsync("Page 2");
+        await _tree.NextPageAsync(2);
         await Expect(_tree.KeyLinks.First).Not.ToHaveTextAsync(first[0]);
         await Expect(_tree.RangeStatus).ToHaveTextAsync(new Regex("^26-"));
         var second = await _tree.KeysAsync();
@@ -201,23 +200,14 @@ public sealed partial class DataStewardJourney
         // The cursor: page 2 of the seeded orders, left idle past the cursor's lifetime.
         await _tree.SetPrefixAsync("order/00");
         await _tree.SetPageSizeAsync(25);
-        await _tree.NextPage.ClickAsync();
-        await Expect(_tree.PagePosition).ToHaveTextAsync("Page 2");
+        await _tree.NextPageAsync(2);
         await ExpireTheCursorAsync();
         await CheckpointAsync("3", "cursor-expired", "Left idle past its lifetime, the scan's cursor has expired");
 
         await _tree.RestartFromFirstPage.ClickAsync();
 
-        // The pager moves to page 1 only once the new scan's first page is read; under #5569 that
-        // read can take up to three server timeouts, or end in the tab's own failure state.
-        var firstPage = _tree.PagePosition.Filter(new() { HasTextRegex = new Regex("^Page 1$") });
-        await Expect(firstPage.Or(_tree.KeysDidNotLoad)).ToBeVisibleAsync(new() { Timeout = 120_000 });
-        if (await _tree.KeysDidNotLoad.IsVisibleAsync())
-        {
-            Assert.Fail($"Restart from the first page: the keys did not load: {(await _tree.KeysDidNotLoad.Locator("xpath=..").InnerTextAsync()).ReplaceLineEndings(" ")}");
-        }
-
-        await Expect(_tree.PagePosition).ToHaveTextAsync("Page 1");
+        // The pager moves to page 1 only once the new scan's first page is read.
+        await _tree.KeysDrawnAsync(_tree.PagePosition.Filter(new() { HasTextRegex = new Regex("^Page 1$") }), "the restarted scan's first page");
         await Expect(_tree.KeyLinks.First).ToHaveTextAsync(Names.Orders.Key(1), new() { Timeout = 60_000 });
         Coverage.Hit("use-case:data/cursor-expiry");
         await CheckpointAsync("3", "restarted", "Restart from the first page recovers the scan");
@@ -240,7 +230,7 @@ public sealed partial class DataStewardJourney
             var position = await TextNowAsync(_tree.PagePosition);
             await Task.Delay(CursorIdle);
             await _tree.NextPage.ClickAsync();
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+            var deadline = DateTime.UtcNow + PanelSettled.Bound;
             while (DateTime.UtcNow < deadline)
             {
                 if (await _tree.CursorExpired.IsVisibleAsync())

@@ -90,14 +90,27 @@ internal sealed class DataTreePage(PersonaSession session)
     /// <summary>The empty state the Keys tab shows when its read fails.</summary>
     public ILocator KeysDidNotLoad => Content.GetByRole(AriaRole.Heading, new() { Name = "The keys did not load", Exact = true });
 
+    /// <summary>Any of the workspace's panels in its failure state ("The keys did not load", "The entry did not load", ...).</summary>
+    public ILocator PanelFailed => PanelSettled.Failure(Content);
+
     /// <summary>The keys on the page.</summary>
     public async Task<IReadOnlyList<string>> KeysAsync() =>
         [.. (await KeyLinks.AllInnerTextsAsync()).Select(key => key.Trim())];
 
     /// <summary>Waits until the keys table has loaded with at least one row.</summary>
-    public async Task WaitForKeysAsync()
+    public Task WaitForKeysAsync() => KeysDrawnAsync(KeyLinks.First, "the keys");
+
+    /// <summary>Waits for the Keys tab's read to end in <paramref name="drawn"/>, failing with the panel's words when it does not.</summary>
+    /// <param name="drawn">What the tab shows once its read succeeds.</param>
+    /// <param name="what">What was awaited.</param>
+    public Task KeysDrawnAsync(ILocator drawn, string what) => PanelSettled.ExpectDrawnAsync(drawn, PanelFailed, what);
+
+    /// <summary>Goes to the next page and waits for it to be read.</summary>
+    /// <param name="page">The page number it reaches.</param>
+    public async Task NextPageAsync(int page)
     {
-        await Expect(KeyLinks.First).ToBeVisibleAsync(new() { Timeout = 60_000 });
+        await NextPage.ClickAsync();
+        await KeysDrawnAsync(PagePosition.Filter(new() { HasTextRegex = new Regex($"^Page {page}$") }), $"page {page} of the keys");
     }
 
     /// <summary>Applies a key prefix through the toolbar and waits for the table to show only keys under it.</summary>
@@ -108,7 +121,7 @@ internal sealed class DataTreePage(PersonaSession session)
         await PrefixInput.FillAsync(prefix);
         await PrefixInput.PressAsync("Enter");
         await Expect(Page).ToHaveURLAsync(new Regex("[?&]prefix=" + Regex.Escape(Uri.EscapeDataString(prefix)) + "(&|$)"));
-        await Expect(RangeStatus).ToContainTextAsync(expectKeys ? "under prefix" : "No keys", new() { Timeout = 30_000 });
+        await KeysDrawnAsync(RangeStatus.Filter(new() { HasText = expectKeys ? "under prefix" : "No keys" }), $"the keys under '{prefix}'");
         if (expectKeys)
         {
             await WaitForKeysAsync();
@@ -134,8 +147,8 @@ internal sealed class DataTreePage(PersonaSession session)
         await PageSize.SelectOptionAsync(text);
         await Expect(PageSize).ToHaveValueAsync(text);
         await Expect(PagePosition).ToHaveTextAsync("Page 1");
-        await Expect(KeyLinks).ToHaveCountAsync(size, new() { Timeout = 30_000 });
-        await Expect(RangeStatus).ToHaveTextAsync(new Regex($"^1-{size}( |$)"), new() { Timeout = 30_000 });
+        await KeysDrawnAsync(RangeStatus.Filter(new() { HasTextRegex = new Regex($"^1-{size}( |$)") }), $"the first page of {size} keys");
+        await Expect(KeyLinks).ToHaveCountAsync(size);
     }
 
     /// <summary>Chooses the scan mode (<c>Live</c> or <c>Snapshot</c>) and waits for the first page.</summary>
@@ -145,7 +158,7 @@ internal sealed class DataTreePage(PersonaSession session)
         await ScanMode.SelectOptionAsync(mode);
         await Expect(ScanMode).ToHaveValueAsync(mode);
         await Expect(PagePosition).ToHaveTextAsync("Page 1");
-        await Expect(RangeStatus).ToHaveTextAsync(new Regex("^1-"), new() { Timeout = 30_000 });
+        await KeysDrawnAsync(RangeStatus.Filter(new() { HasTextRegex = new Regex("^1-") }), $"the first page of a {mode} scan");
         await WaitForKeysAsync();
     }
 
@@ -184,11 +197,18 @@ internal sealed class DataTreePage(PersonaSession session)
     public async Task OpenEntryAsync(string tree, string key)
     {
         await session.Shell.GotoAsync($"/data/{tree}?key={Uri.EscapeDataString(key)}");
-        await Expect(Heading).ToHaveTextAsync(tree);
-        await Expect(Entry.Locator(".lt-data-entry__key")).ToHaveTextAsync(key, new() { Timeout = 60_000 });
-        await Expect(EntryValue).ToBeVisibleAsync();
+        await Expect(Heading).ToHaveTextAsync(tree, new() { Timeout = PanelSettled.BoundMs });
+        await ExpectEntryAsync(key);
         Coverage.Hit("query:shell.key");
         Coverage.Hit("use-case:data/entry-view");
+    }
+
+    /// <summary>Waits for the entry panel to show <paramref name="key"/> and its value, read from the server.</summary>
+    /// <param name="key">The key.</param>
+    public async Task ExpectEntryAsync(string key)
+    {
+        await PanelSettled.ExpectDrawnAsync(Entry.Locator(".lt-data-entry__key").Filter(new() { HasTextRegex = new Regex("^\\s*" + Regex.Escape(key) + "\\s*$") }), PanelFailed, $"the entry {key}");
+        await PanelSettled.ExpectDrawnAsync(EntryValue, PanelFailed, $"the value of {key}");
     }
 
     // ----- Heading actions -----

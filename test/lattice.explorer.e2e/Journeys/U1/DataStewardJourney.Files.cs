@@ -46,7 +46,7 @@ public sealed partial class DataStewardJourney
 
         await import.Done.ClickAsync();
         await Expect(import.Dialog).ToHaveCountAsync(0);
-        await Expect(_tree.KeyLinks.First).ToHaveTextAsync(StoryData.Archive[0].Key, new() { Timeout = 60_000 });
+        await Expect(_tree.KeyLinks.First).ToHaveTextAsync(StoryData.Archive[0].Key, new() { Timeout = PanelSettled.BoundMs });
         Coverage.Hit("use-case:data/import-csv-new-tree");
         await CheckpointAsync("8", "archive-keys", "The new tree holds the October orders");
     }
@@ -97,7 +97,7 @@ public sealed partial class DataStewardJourney
         await CheckpointAsync("9", "importing", "history-2025.ndjson, 500,000 lines, streams in");
 
         await import.Stop.ClickAsync();
-        await import.WaitForStateAsync("stopped");
+        await import.ExpectEndAsync("stopped", PanelSettled.BoundMs);
         var committed = await import.CommittedAsync();
         var written = committed.ToString("N0", CultureInfo.InvariantCulture) + (committed == 1 ? " entry" : " entries");
         await Expect(import.Result).ToContainTextAsync($"Stopped. {written} were written before the stop, and nothing after it.");
@@ -108,12 +108,12 @@ public sealed partial class DataStewardJourney
         await Expect(import.Dialog).ToHaveCountAsync(0);
         if (committed == 0)
         {
-            await Expect(_tree.EmptyKeys).ToContainTextAsync("This tree holds no keys yet.", new() { Timeout = 30_000 });
+            await Expect(_tree.EmptyKeys).ToContainTextAsync("This tree holds no keys yet.", new() { Timeout = PanelSettled.BoundMs });
         }
         else
         {
             // What was committed is the file's head.
-            await Expect(_tree.KeyLinks.First).ToHaveTextAsync(Names.Orders.Key(1), new() { Timeout = 60_000 });
+            await Expect(_tree.KeyLinks.First).ToHaveTextAsync(Names.Orders.Key(1), new() { Timeout = PanelSettled.BoundMs });
         }
 
         Coverage.Hit("use-case:data/import-cancel");
@@ -123,7 +123,7 @@ public sealed partial class DataStewardJourney
         await CheckpointAsync("9", "delete-confirmation", "Delete tree... asks her to type the tree's name");
         await confirm.GetByRole(AriaRole.Button, new() { Name = "Delete tree", Exact = true }).ClickAsync();
         await ExpectToastAsync($"Tree {history} deleted. It can be recovered until its window closes.");
-        await Expect(_tree.Deleted).ToHaveAttributeAsync("data-lt-tree-deleted", "recoverable");
+        await Expect(_tree.Deleted).ToHaveAttributeAsync("data-lt-tree-deleted", "recoverable", new() { Timeout = PanelSettled.BoundMs });
         Coverage.Hit("use-case:data/tree-delete-recover");
         await CheckpointAsync("9", "deleted", "factory-history is deleted, and recoverable until its window closes");
     }
@@ -148,7 +148,7 @@ public sealed partial class DataStewardJourney
         await CheckpointAsync("10", "upsert-dialog", "corrections.ndjson: 50 lines, upserted into factory-orders");
 
         await import.Start(seed: false).ClickAsync();
-        await import.WaitForStateAsync("succeeded");
+        await import.ExpectEndAsync("succeeded", 300_000);
         Assert.That(await import.CommittedAsync(), Is.EqualTo(Names.Files.CorrectionsApplied));
         await Expect(import.Refused).ToHaveAttributeAsync("data-lt-import-refused", Names.Files.CorrectionsRefused.ToString(CultureInfo.InvariantCulture));
         await Expect(import.RefusedRows).ToHaveCountAsync(Names.Files.CorrectionsRefused);
@@ -190,13 +190,13 @@ public sealed partial class DataStewardJourney
         await CheckpointAsync("11", "export-dialog", $"Export...: prefix {prefix}, as CSV");
 
         await export.Prepare.ClickAsync();
-        await Expect(export.Download).ToBeVisibleAsync();
+        await Expect(export.Download).ToBeVisibleAsync(new() { Timeout = PanelSettled.BoundMs });
         await CheckpointAsync("11", "download-ready", "The download is ready");
 
         var download = await _priya.Page.RunAndWaitForDownloadAsync(() => export.Download.ClickAsync());
         var saved = Path.Combine(_files, download.SuggestedFilename);
         await download.SaveAsAsync(saved);
-        await Expect(export.Result).ToContainTextAsync("Every key in the scope is in the file.", new() { Timeout = 60_000 });
+        await Expect(export.Result).ToContainTextAsync("Every key in the scope is in the file.", new() { Timeout = PanelSettled.BoundMs });
         await CheckpointAsync("11", "export-complete", "The export streams to the end: every key in the scope is in the file");
 
         // She opens the file: a header, the hundred orders under the prefix, and the trailer.
@@ -230,11 +230,11 @@ public sealed partial class DataStewardJourney
         await Expect(create).ToBeVisibleAsync();
         await create.GetByLabel("Tree name", new() { Exact = true }).FillAsync(tree);
         await create.GetByRole(AriaRole.Button, new() { Name = "Review", Exact = true }).ClickAsync();
-        await Expect(create.GetByRole(AriaRole.Button, new() { Name = "Create tree", Exact = true })).ToBeVisibleAsync();
+        await Expect(create.GetByRole(AriaRole.Button, new() { Name = "Create tree", Exact = true })).ToBeVisibleAsync(new() { Timeout = PanelSettled.BoundMs });
         await CheckpointAsync(step, "create-review", $"New tree from file...: {tree}, reviewed before it is created");
 
         await create.GetByRole(AriaRole.Button, new() { Name = "Create tree", Exact = true }).ClickAsync();
-        await Expect(_tree.Heading).ToHaveTextAsync(tree, new() { Timeout = 60_000 });
+        await Expect(_tree.Heading).ToHaveTextAsync(tree, new() { Timeout = PanelSettled.BoundMs });
         await Expect(_priya.Page).ToHaveURLAsync(new Regex("[?&]import=seed(&|$)"));
     }
 }

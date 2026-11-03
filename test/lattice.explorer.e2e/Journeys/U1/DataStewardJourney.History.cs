@@ -20,19 +20,13 @@ public sealed partial class DataStewardJourney
     /// <summary>How long the tab waits for a revision before the server is asked.</summary>
     private static readonly TimeSpan HistoryTabPatience = TimeSpan.FromSeconds(30);
 
-    /// <summary>
-    /// How long the change-history view may take to hold a revision priya wrote: three server
-    /// timeouts and margin, the bound the U4 History waits use (#5737).
-    /// </summary>
-    private static readonly TimeSpan HistoryViewCatchUp = TimeSpan.FromSeconds(120);
-
     private static readonly KnownDefect HistoryViewLags = new KnownDefect("#5569", "under replay-permit starvation the change-history view's drain lags its source by minutes, so a revision priya has just written is not yet in History");
 
     /// <summary>
     /// Waits until the open History tab shows at least <paramref name="count"/> revisions of
     /// <paramref name="key"/> in factory-orders. When the tab does not show them, the server's
     /// history read decides: once it holds them, the page is reloaded and the tab must show them;
-    /// if the view still lacks them after <see cref="HistoryViewCatchUp"/>, that is #5569's view
+    /// if the view still lacks them after <see cref="PanelSettled.Bound"/>, that is #5569's view
     /// lag, recorded as a known defect.
     /// </summary>
     /// <param name="key">The key whose History tab is open.</param>
@@ -64,7 +58,7 @@ public sealed partial class DataStewardJourney
                     Reverse = true,
                 });
                 return last.Revisions.Count >= count;
-            }, HistoryViewCatchUp);
+            }, PanelSettled.Bound);
         }
         catch (System.TimeoutException) when (last is { Bound: EntryHistoryBound.BoundedByAge })
         {
