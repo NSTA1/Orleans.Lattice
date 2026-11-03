@@ -352,6 +352,7 @@ internal static class TypeAliases
     internal const string LeafChainLink = "ol.lcl";
     internal const string LeafDeltaPage = "ol.ldn";
     internal const string LeafPrevChainLink = "ol.lpl";
+    internal const string LeafNarrowResult = "ol.lnr";
     internal const string LeafCompactionPage = "ol.lcn";
     internal const string LeafRangeDeletePage = "ol.lrx";
     internal const string LeafClockPage = "ol.lcq";

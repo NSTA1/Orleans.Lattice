@@ -887,7 +887,7 @@ internal sealed partial class ShardRootGrain
         // relocation that fails part-way is handed the same rows when the graft is
         // resumed. A resume narrows whenever the leaf was already narrowed, even
         // with the gate closed, so it never abandons rows a first attempt stranded.
-        var relocated = await NarrowAndRelocateAsync(graft, existingLeaf);
+        var readFrontier = await NarrowAndRelocateAsync(graft, existingLeaf);
 
         // Re-asserts the link for the 10.2.0 path and for a graft resumed after the
         // narrow; a no-op persist-wise once the narrow linked it.
@@ -1010,7 +1010,7 @@ internal sealed partial class ShardRootGrain
         var newLeafIds = new GrainId[graft.NewLeaves.Count];
         for (var i = 0; i < newLeafIds.Length; i++)
             newLeafIds[i] = graft.NewLeaves[i].LeafId;
-        await FinishBulkSwitchAsync(graft.OperationId, newLeafIds, relocated, closeNow: false);
+        await FinishBulkSwitchAsync(graft.OperationId, newLeafIds, relocated: readFrontier is not null, closeNow: false, readFrontier);
 
         state.State.PendingBulkGraft = null;
         state.State.LastCompletedBulkOperationId = graft.OperationId;
@@ -1039,15 +1039,22 @@ internal sealed partial class ShardRootGrain
     /// that fails, or a shard root that dies before it, leaves the rows on the old
     /// leaf for the resumed graft to be handed again.
     /// <para>
-    /// Returns whether the old leaf was narrowed and every row it held at or above the
-    /// separator was relocated into the appended leaves, so that every row they own was
-    /// appended after the operation's birth hint was captured. Only then may the hint
-    /// become their read position (review N2 of #5646): a row left on the old leaf has
-    /// its records below the hint, and the appended leaves reach it only by replaying
-    /// from the log's start.
+    /// Returns the read position the appended leaves may start from no higher than: the
+    /// old leaf's replay frontier when this call narrowed it and every row it held at
+    /// or above the separator was relocated into the appended leaves. Otherwise
+    /// <see langword="null"/>, and the birth hint is not applied:
+    /// <list type="bullet">
+    /// <item>a row left on the old leaf has its records below the hint, and the appended
+    /// leaves reach it only by replaying from the log's start (review N2 of #5646);</item>
+    /// <item>a record of the range that another author appended below the hint and the
+    /// old leaf never applied - another shard's range-delete walk, or a duplicate
+    /// activation's append - is applied by no leaf unless the appended leaves start at
+    /// or below the old leaf's frontier (issue #5752), and a leaf narrowed by an earlier
+    /// attempt reports none.</item>
+    /// </list>
     /// </para>
     /// </summary>
-    private async Task<bool> NarrowAndRelocateAsync(PendingBulkGraft graft, IBPlusLeafGrain existingLeaf)
+    private async Task<long[]?> NarrowAndRelocateAsync(PendingBulkGraft graft, IBPlusLeafGrain existingLeaf)
     {
         var separator = graft.NewLeaves[0].SeparatorKey;
         if (!BulkGraftSeamsAvailable)
@@ -1056,31 +1063,32 @@ internal sealed partial class ShardRootGrain
             // narrowed the leaf already; its stranded rows must still be moved.
             var high = (await existingLeaf.GetKeyRangeAndNextSiblingAsync()).KeyRange.HighKeyExclusive;
             if (high is null || string.CompareOrdinal(high, separator) > 0)
-                return false;
+                return null;
         }
 
-        List<LwwEntry>? stranded;
+        LeafNarrowResult? narrowed;
         try
         {
-            stranded = await existingLeaf.NarrowHighKeyAsync(separator, graft.NewLeaves[0].LeafId);
+            narrowed = await existingLeaf.NarrowHighKeyAsync(separator, graft.NewLeaves[0].LeafId, graft.NewLeaves);
         }
         catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
         {
             // An older silo joined and hosts the leaf before the gate saw it: the
             // 10.2.0 path, which links without narrowing.
-            return false;
+            return null;
         }
 
-        if (stranded is null)
+        if (narrowed is null)
         {
             // Review B1 of #5702: the leaf could not drain the writes it admitted
             // before the narrow within its deadline, so it narrowed nothing. The
             // 10.2.0 path: link without narrowing, and apply no hint.
-            return false;
+            return null;
         }
 
+        var stranded = narrowed.Rows;
         if (stranded.Count == 0)
-            return true;
+            return narrowed.ReadFrontier;
 
         await RelocateIntoGraftedLeavesAsync(graft, stranded);
 
@@ -1098,7 +1106,7 @@ internal sealed partial class ShardRootGrain
             // the in-memory copy on an older silo's activation is left behind.
         }
 
-        return true;
+        return narrowed.ReadFrontier;
     }
 
     /// <summary>

@@ -167,11 +167,18 @@ internal sealed partial class ShardRootGrain
     /// <see langword="true"/> for a bulk load, which is not part of a run;
     /// <see langword="false"/> for a bulk append, whose switch the run's fence closes.
     /// </param>
+    /// <param name="readFrontier">
+    /// For a bulk append, the old rightmost leaf's replay frontier when it narrowed: the
+    /// hint is applied capped at it per partition (issue #5752), so a record of the
+    /// appended range that the old leaf never applied is replayed by the appended leaf
+    /// that owns it. <see langword="null"/> for a bulk load, which applies its hint uncapped.
+    /// </param>
     private async Task FinishBulkSwitchAsync(
         string operationId,
         IReadOnlyList<GrainId> leaves,
         bool relocated,
-        bool closeNow)
+        bool closeNow,
+        long[]? readFrontier = null)
     {
         if (!HasHandOffStorage())
         {
@@ -187,10 +194,11 @@ internal sealed partial class ShardRootGrain
 
         if (hint is not null && relocated && leaves.Count > 0)
         {
+            var applied = readFrontier is null ? hint : CapAtReadFrontier(hint, readFrontier);
             await BoundedFanOut.ForEachAsync(
                 leaves,
                 BoundedFanOut.DefaultWidth,
-                leafId => grainFactory.GetGrain<IBPlusLeafGrain>(leafId).SetCheckpointOffsetHintsAsync(hint));
+                leafId => grainFactory.GetGrain<IBPlusLeafGrain>(leafId).SetCheckpointOffsetHintsAsync(applied));
         }
 
         if (closeNow)
@@ -376,6 +384,26 @@ internal sealed partial class ShardRootGrain
         {
             LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindBulk, opened: false, TreeId);
         }
+    }
+
+    /// <summary>
+    /// The hint an appended leaf applies: per partition, the lower of the stored hint
+    /// and the old leaf's replay frontier (issue #5752). Both are applied as an
+    /// inclusive checkpoint - the leaf replays every record above it - so the frontier
+    /// is taken as it is, not plus one: a record at the frontier plus one is exactly the
+    /// first the old leaf had not applied. A partition the frontier does not cover reads
+    /// as <c>-1</c>, which the leaf ignores, replaying that partition from the start.
+    /// One array per graft; the stored hint is never mutated.
+    /// </summary>
+    internal static long[] CapAtReadFrontier(long[] hint, long[] readFrontier)
+    {
+        var capped = new long[hint.Length];
+        for (var p = 0; p < capped.Length; p++)
+        {
+            capped[p] = Math.Min(hint[p], p < readFrontier.Length ? readFrontier[p] : -1);
+        }
+
+        return capped;
     }
 
     /// <summary>

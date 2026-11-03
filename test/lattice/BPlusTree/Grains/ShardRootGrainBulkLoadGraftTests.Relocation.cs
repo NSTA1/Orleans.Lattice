@@ -1,5 +1,6 @@
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 using Orleans.Runtime;
@@ -38,7 +39,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         // append now owns: rows a concurrent batch write or a delete left above
         // its highest live key.
         var stamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
-        tail.NarrowHighKeyAsync("k0000", Arg.Any<GrainId?>()).Returns(Task.FromResult(new List<LwwEntry>
+        tail.NarrowHighKeyAsync("k0000", Arg.Any<GrainId?>(), Arg.Any<List<GraftEntry>?>()).Returns(Narrowed(new List<LwwEntry>
         {
             new() { Key = "k0003", Timestamp = stamp, IsTombstone = true },
             new() { Key = "k0009", Value = [7], Timestamp = stamp },
@@ -76,7 +77,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         var firstAppended = ((IGrainBase)appended["k0000"]).GrainContext.GrainId;
         Received.InOrder(() =>
         {
-            tail.NarrowHighKeyAsync("k0000", firstAppended);
+            tail.NarrowHighKeyAsync("k0000", firstAppended, Arg.Any<List<GraftEntry>?>());
             appended["k0004"].MergeEntriesAsync(Arg.Is<Dictionary<string, LwwValue<byte[]>>>(b => b.ContainsKey("k0009")));
             tail.DropRelocatedRowsAsync(Arg.Is<Dictionary<string, HybridLogicalClock>>(d =>
                 d.Count == 2 && d["k0003"] == stamp && d["k0009"] == stamp));
@@ -97,7 +98,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         var tail = h.Leaf(existing);
         tail.GetAppendTailAsync().Returns((2, "a"));
         var stamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
-        tail.NarrowHighKeyAsync("k0000", Arg.Any<GrainId?>()).Returns(_ => Task.FromResult(new List<LwwEntry>
+        tail.NarrowHighKeyAsync("k0000", Arg.Any<GrainId?>(), Arg.Any<List<GraftEntry>?>()).Returns(_ => Narrowed(new List<LwwEntry>
         {
             new() { Key = "k0009", Value = [7], Timestamp = stamp },
         }));
@@ -152,7 +153,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
 
         await h.Grain.BulkAppendAsync("op-1", Pairs(1));
 
-        await tail.Received(1).NarrowHighKeyAsync(separator, Arg.Any<GrainId?>());
+        await tail.Received(1).NarrowHighKeyAsync(separator, Arg.Any<GrainId?>(), Arg.Any<List<GraftEntry>?>());
     }
 
     [Test]
@@ -212,7 +213,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         await h.Grain.BulkAppendAsync("mixed-version", Pairs(5));
 
         await tail.DidNotReceive().GetAppendTailAsync();
-        await tail.DidNotReceive().NarrowHighKeyAsync(Arg.Any<string>(), Arg.Any<GrainId?>());
+        await tail.DidNotReceive().NarrowHighKeyAsync(Arg.Any<string>(), Arg.Any<GrainId?>(), Arg.Any<List<GraftEntry>?>());
         await tail.Received().CountAsync();
         Assert.That(h.State.State.LastCompletedBulkOperationId, Is.EqualTo("mixed-version"));
     }
@@ -232,7 +233,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         await h.Grain.BulkAppendAsync("same-version", Pairs(5));
 
         await tail.Received().GetAppendTailAsync();
-        await tail.Received(1).NarrowHighKeyAsync("k0000", Arg.Any<GrainId?>());
+        await tail.Received(1).NarrowHighKeyAsync("k0000", Arg.Any<GrainId?>(), Arg.Any<List<GraftEntry>?>());
     }
 
     [Test]
@@ -249,7 +250,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         var tail = h.Leaf(existing);
         var unknown = new TypeLoadException(WalAppendFenceMethodProbe.UnresolvedAliasPrefix + " 'inv.lattice.leaf.tail'");
         tail.GetAppendTailAsync().Returns(Task.FromException<(int, string?)>(unknown));
-        tail.NarrowHighKeyAsync(Arg.Any<string>(), Arg.Any<GrainId?>()).Returns(Task.FromException<List<LwwEntry>>(unknown));
+        tail.NarrowHighKeyAsync(Arg.Any<string>(), Arg.Any<GrainId?>(), Arg.Any<List<GraftEntry>?>()).Returns(Task.FromException<LeafNarrowResult?>(unknown));
         tail.CountAsync().Returns(2);
 
         await h.Grain.BulkAppendAsync("racing", Pairs(5));

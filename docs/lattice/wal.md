@@ -1689,6 +1689,23 @@ gives neither leaf a read position and the sibling replays its range from the lo
 start. The marker's close heads do not cover this: they gate the live advance's arming,
 not the read position a new leaf replays from.
 
+**Records another author appended.** The drain covers the old leaf's own writes only.
+A record of the moved range that another author appended - another shard's
+range-delete walk, a duplicate activation of the old leaf, a 10.2.0 silo during an
+upgrade - and that the old leaf has not replayed lies above how far it has replayed,
+and below the heads. So a new leaf never starts reading higher than that: per WAL
+partition, an appended leaf applies the lower of the birth hint and the old rightmost
+leaf's checkpoint, read in the same step that narrows it, and a split sibling the lower
+of the heads and its donor's checkpoint, read before the division's intent is persisted
+([#5752](https://github.com/NSTA1/Orleans.Lattice/issues/5752)). The checkpoint is
+inclusive - a leaf replays every record above it - so it is taken as it is: one above
+it is exactly the first record the old leaf had not applied. Before the narrow the old
+leaf still declares the whole range, so its replay applies such records rather than
+stepping past them; after it, a replay steps past them, which is why a graft resumed
+on a leaf an earlier attempt already narrowed applies no hint. A lower read position
+only lengthens the new leaf's first replay. The donor of a split still advances its own
+checkpoint to the heads it read.
+
 **Coordinator terminals** carry the coordinator-terminal stamp class described in
 [Append epoch fencing](#append-epoch-fencing), so a saga does not raise the reported
 unstamped offset of every partition it touched.
@@ -1718,7 +1735,10 @@ checkpoint-hint call per new leaf, and one generation raise, one generation re-c
 per partition and one marker write to close. Per bulk-append chunk that creates leaves:
 one marker write to open and one checkpoint-hint call per new leaf; the heads are read
 once per run, and the close - one generation raise, one re-claim per partition and one
-marker write - is paid once per eight chunks and once at the run's end. The in-flight
+marker write - is paid once per eight chunks and once at the run's end. The old
+leaf's replay frontier rides the narrow's existing reply, and the read gates of
+relocated rows cost one marker call per saga per appended leaf, only when those rows
+carry saga state. The in-flight
 drain adds two counter updates to each leaf write, on fields the activation already
 owns, and no allocation or call.
 
