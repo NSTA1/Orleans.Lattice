@@ -1,0 +1,19 @@
+# Pairs with HandOffBound. Step (a) of the close is skipped: the initiator keeps
+# admitting writes for the range after its close. A write admitted after the close
+# carries the re-claimed generation, passes the raised entry, and is allocated
+# above the recorded head.
+MODULE: HandOffBoundAdmitAfterClose
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: the initiator admits a write after its close stopped admission
+PERTURBS: ForeignAdmit
+
+--- FIND
+    /\ fAdmit
+    /\ ~closing
+    /\ ~fpend
+--- REPLACE
+\* MUTATION: admission does not stop at the close.
+    /\ ~closing
+    /\ ~fpend
+--- END

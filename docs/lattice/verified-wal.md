@@ -194,7 +194,13 @@ TLA+ specification in [`spec/wal/`](../../spec/wal/README.md):
   in three steps, the bump on a refusal, and the WAL shard refusing a superseded or
   retired activation's append, against a WAL shard restart, another leaf's
   retirement and the leaf's three-step clear. It is the first module promoted from
-  the design draft under `spec/wal/design/`.
+  the design draft under `spec/wal/design/`;
+- `WalHandOffFence.tla`, the hand-off fence of the same advance: a foreign author's
+  writes to a range the owner leaf owns, bounded by the owner's durable marker -
+  opened before the first admission, stamped at admission, and closed by a fence that
+  re-claims the initiator's generation and records the allocator head - with another
+  shard's range-delete walk, a WAL shard restart and a hand-off in flight across the
+  fence gate's opening. It is the second module promoted from that draft.
 
 It follows the pattern of the atomic-commit specification: every property and every
 action has a mutation that makes a property fire, and a refinement note maps each

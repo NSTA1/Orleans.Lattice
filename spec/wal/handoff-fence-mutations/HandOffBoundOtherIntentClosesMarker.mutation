@@ -1,0 +1,21 @@
+# Pairs with HandOffBound. Another range delete's close closes every marker of the
+# tree, not only its own intent's, recording the heads it read. The intent still
+# holding L keeps admitting, and its next write, stamped with the shared
+# re-claimed generation, is allocated above those heads while L's marker reads
+# closed.
+MODULE: HandOffBoundOtherIntentClosesMarker
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: another range delete's close closes the marker of the intent still holding L
+PERTURBS: OtherIntentClose
+
+--- FIND
+    /\ fFence' = fEpoch + 1
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, restarted>>
+--- REPLACE
+    /\ fFence' = fEpoch + 1
+\* MUTATION: it closes L's marker too.
+    /\ hoOpen' = FALSE
+    /\ hoClosedAt' = next
+    /\ UNCHANGED <<next, author, windows, fAdmit, fpend, fkind, fstamp, restarted>>
+--- END

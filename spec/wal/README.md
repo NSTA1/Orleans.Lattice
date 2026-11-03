@@ -16,10 +16,12 @@ cores in the product assembly, and a Coyote model that executes those cores.
 | [`WalMove.tla`](WalMove.tla) | A shard move: a durable fence under a lease and the source activation's fence, quiesce, copy and switch, concurrent with appends, out-of-order flushes, a consumer, the GC, a shard crash and the loss of the move's coordinator. |
 | [`WalPinRetirement.tla`](WalPinRetirement.tla) | The GC retiring orphaned materialiser pins - the bulk orphan sweep and the starvation drive, each taking a token per pin-store key, reading the leaf's durable row and removing through a fence as separate steps, two sweepers racing - against the leaf's fold, purge, discard and re-creation under the same grain id. See [below](#walpinretirement). |
 | [`WalAppendEpoch.tla`](WalAppendEpoch.tla) | The append-epoch fence of the fenced live checkpoint advance (epic #5605): one leaf's activations claiming an epoch at a WAL partition in three steps - the epoch row's conditional write, the durable entry's max-merge and the in-memory raise that returns the claim head - the bump on a refusal, and the shard refusing a superseded or retired activation's append, against a WAL shard restart, another leaf's retirement and the leaf's three-step clear. The first module promoted from the design draft below. See [below](#walappendepoch). |
+| [`WalHandOffFence.tla`](WalHandOffFence.tla) | The hand-off fence of the fenced live checkpoint advance (epic #5605): a foreign author's writes to a range the owner leaf owns - opened under the owner's durable marker, stamped at admission, and closed by a fence that re-claims the initiator's generation and records the allocator head - with point and batch writes, another shard's range-delete walk and rule 3's re-stamp, a WAL shard restart, and a hand-off in flight across the fence gate's opening. The second module promoted from the design draft. See [below](#walhandofffence). |
 
 They are separate modules because a move touches none of the leaf state, pin
 retirement only the leaf's lifecycle, not its replay, and the append-epoch fence
-only which activation may append, not what it reads. Keeping each out of
+only which activation may append, not what it reads, and the hand-off fence only
+which foreign records the owner's marker bounds. Keeping each out of
 `WalDurability` keeps that module small enough to check its liveness properties
 exhaustively within the TLC budget.
 
@@ -31,9 +33,9 @@ live checkpoint advance (issues #5572, #5593, epic #5605), described in
 [`design/LiveAdvanceDesign.md`](design/LiveAdvanceDesign.md). Module discovery reads
 only top-level `.tla` files, so no TLC case runs the draft. Now that the production
 members have landed it is being promoted as five focused modules with an acyclic
-assume-guarantee graph; the first, [`WalAppendEpoch`](#walappendepoch), is in this
-directory, and the draft keeps every design mutation that module did not take until
-the others land.
+assume-guarantee graph; the first two, [`WalAppendEpoch`](#walappendepoch) and
+[`WalHandOffFence`](#walhandofffence), are in this directory, and the draft keeps every
+design mutation until the others land.
 
 ## Counts
 
@@ -43,13 +45,16 @@ the others land.
 | `WalMove` | 5 | 2 | 13 | 18 | 18 | 1,617 |
 | `WalPinRetirement` | 3 | 3 | 25 | 31 | 30 | 284,019 |
 | `WalAppendEpoch` | 5 | 0 | 17 | 23 | 20 | 150,706 |
+| `WalHandOffFence` | 3 | 0 | 17 | 20 | 18 | 8,826 |
 
 `Actions` counts the disjuncts of `Next`, including the non-behavioural `Stutter`
-of `WalMove` and `WalAppendEpoch`. `Behaviour rows` counts the action rows of the
+of `WalMove`, `WalAppendEpoch` and `WalHandOffFence`. `Behaviour rows` counts the action rows of the
 module's refinement note, excluding non-behavioural actions, plus its property rows. `Distinct states` is
 TLC's count for the module's own cfg. `WalDurability` searches to depth 35 and
 `WalMove` to depth 16, with tla2tools v1.7.4. `WalAppendEpoch` searches to depth
 25, and its `WideEpochs` variant finds 495,810 distinct states to depth 26.
+`WalHandOffFence` searches to depth 19, and its `WideWindows` variant finds 47,000
+distinct states to depth 23.
 
 `WalDurability` has a two-fault variant configuration, `WalDurability.TwoFaults.cfg`
 (see "Variant configurations" in [`../README.md`](../README.md)). It checks every
@@ -109,6 +114,10 @@ distinct states to depth 21, about fifteen seconds on two workers.
 | `LiveAdvanceInterface.md` | The assume-guarantee contract between the five live-advance modules (`WalAppendEpoch` and the four that follow): the graph, the shared vocabulary, each guarantee and what the core assumes. |
 | [`append-epoch-mutations/`](append-epoch-mutations/) | One or more deliberate defects per property and per action of `WalAppendEpoch`. |
 | [`AppendEpochRefinement.md`](AppendEpochRefinement.md) | `WalAppendEpoch` mapped to production, and the interface the other promoted modules assume. |
+| `WalHandOffFence.tla` / `.cfg` / `.manifest.json` | The hand-off fence module, its TLC model and its manifest. |
+| `WalHandOffFence.WideWindows.cfg` | The hand-off fence module with four offsets, generations up to 4 and three windows, checked against every invariant. |
+| [`handoff-fence-mutations/`](handoff-fence-mutations/) | One or more deliberate defects per property and per action of `WalHandOffFence`. |
+| [`HandOffFenceRefinement.md`](HandOffFenceRefinement.md) | `WalHandOffFence` mapped to production, and its interface: E's entry check assumed, `HandOffBound` and `AbsentMarkerHolds` guaranteed. |
 
 ## Properties checked
 
@@ -369,4 +378,55 @@ clear's conflicting row delete, which the model shows is load-bearing.
 ```powershell
 java -cp C:\path\to\tla2tools.jar tlc2.TLC -workers 2 -config WalAppendEpoch.cfg WalAppendEpoch.tla
 java -cp C:\path\to\tla2tools.jar tlc2.TLC -workers 2 -config WalAppendEpoch.WideEpochs.cfg WalAppendEpoch.tla
+```
+
+## WalHandOffFence
+
+`WalHandOffFence` models the hand-off fence of the fenced live checkpoint advance
+(epic #5605, [`design/LiveAdvanceDesign.md`](design/LiveAdvanceDesign.md) section 2):
+how a foreign author - a split donor, a reclaim neighbour, a migrating or folding shard
+root, the tree's range-delete fence or a bulk switch - is bounded by the owner leaf's
+durable hand-off marker. The initiator opens the owner's marker before its first
+admission, stamps each write with its generation in the same step that admits it, and
+closes by fence: it stops admitting, bumps and re-claims its generation, which raises
+its entry at the WAL shard and reads the allocator head in one step, and records that
+head as the close. Another shard's range-delete walk carries the same tree generation,
+so one re-claim fences it; a rejected walk re-stamps only while its own intent holds
+the owner (rule 3), and otherwise goes on unstamped. A hand-off begun before the fence
+gate opened has no marker; it opens one when it resumes, and the owner's marker state
+is initialised only once no such hand-off is in flight.
+
+It is module H of the five promoted from the design draft. It assumes only
+`WalAppendEpoch`'s entry check, as an environment constraint, and its two guarantees
+are what the bulk-switch and core modules assume
+([the interface](HandOffFenceRefinement.md#interface)).
+
+| Property | Kind | Meaning |
+|----------|------|---------|
+| `TypeOK` | Invariant | State stays well-typed. |
+| `HandOffBound` | Invariant | Whenever the owner's marker reads closed, every stamped foreign append lies below the head its last close recorded. |
+| `AbsentMarkerHolds` | Invariant | The owner's marker state is initialised only while no hand-off begun without a marker is in flight, so an absent marker holds the owner. |
+
+The base checks every property with every environment step on (about a second on four
+workers); `WalHandOffFence.WideWindows.cfg` re-checks them with four offsets,
+generations up to 4 and three windows (a few seconds). Twelve of the design draft's
+mutations moved here, re-targeted at these properties, and eight more perturb the
+actions the draft had none for; the refinement note lists them, and the redundancy
+check this module keeps.
+
+### What it covers, and what it does not
+
+It covers the marker's open and its fenced close, stamping at admission and the
+admission mark, point and batch writes, the WAL shard's acceptance and rejection on the
+loaded generation entry, its restart, another shard's range-delete walk with its
+re-stamp and unstamped fallback and another intent's close, and a hand-off in flight
+across the gate's opening with the marker initialisation that follows. It does NOT
+cover the owner's own appends, its read of the marker or its replay to the heads (the
+core module's), routing floors and purges, more than one initiator, owner or partition,
+a close with the initiator's gate view closed, multi-entry batches, seam retries, or a
+range delete's deadline reminder; the refinement note's abstraction gaps list them.
+
+```powershell
+java -cp C:\path\to\tla2tools.jar tlc2.TLC -workers 2 -config WalHandOffFence.cfg WalHandOffFence.tla
+java -cp C:\path\to\tla2tools.jar tlc2.TLC -workers 2 -config WalHandOffFence.WideWindows.cfg WalHandOffFence.tla
 ```

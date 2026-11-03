@@ -1,0 +1,16 @@
+{
+  "mutations": "handoff-fence-mutations",
+  "refinement": "HandOffFenceRefinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 3,
+    "properties": 0,
+    "actions": 17,
+    "mutations": 20,
+    "behaviourRows": 18,
+    "distinctStates": 8826
+  },
+  "variants": {
+    "WideWindows": { "distinctStates": 47000 }
+  }
+}

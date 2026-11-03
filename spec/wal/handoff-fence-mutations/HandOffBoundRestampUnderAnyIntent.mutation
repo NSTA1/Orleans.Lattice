@@ -1,0 +1,22 @@
+# Pairs with HandOffBound. Moved from the design's
+# ReadPositionHonestRestampUnderAnyIntent. Markers are range-scoped, so another
+# intent's marker need not cover L: dropping L's marker from the re-stamp's guard
+# stands for an open intent disjoint from L, and the re-stamped walk is allocated
+# above the head L's closed marker recorded.
+MODULE: HandOffBoundRestampUnderAnyIntent
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: a rejected walk re-stamps under any open intent, not only its own
+PERTURBS: GRestamp
+
+--- FIND
+    /\ gst = "rejected"
+    /\ hoOpen
+    /\ ~closing
+    /\ gst' = "repend"
+--- REPLACE
+    /\ gst = "rejected"
+\* MUTATION: any open intent of the tree, not the walk's own.
+    /\ ~closing
+    /\ gst' = "repend"
+--- END
