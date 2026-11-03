@@ -928,4 +928,7 @@ internal static class TypeAliases
 
     /// <summary>Alias for the outcome of a replication version-conditioned set (issue #5265).</summary>
     internal const string ReplicationConditionalSetOutcome = "ol.rco";
+
+    /// <summary>Alias for the transient alias-reservation refusal (issue #5750).</summary>
+    internal const string LatticeAliasOperationInProgress = "ol.aop";
 }

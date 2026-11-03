@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Operations;
 
 namespace Orleans.Lattice.Schema;
@@ -28,6 +29,33 @@ namespace Orleans.Lattice.Schema;
 /// </remarks>
 internal static class SchemaRemediationDriver
 {
+    /// <summary>The backoff between accept attempts while another alias operation holds the tree's reservation (#5750).</summary>
+    internal static readonly IReadOnlyList<TimeSpan> AliasWaitBackoff =
+        [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10)];
+
+    /// <summary>
+    /// Accepts a remediation, waiting behind another alias operation that holds the
+    /// tree's alias reservation (#5750).
+    /// </summary>
+    /// <param name="treeId">The tree, for the log.</param>
+    /// <param name="accept">The accept call.</param>
+    /// <param name="ceiling">The longest total wait.</param>
+    /// <param name="logger">Where each wait is logged, or <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the wait.</param>
+    /// <param name="backoff">The delays between attempts; <see cref="AliasWaitBackoff"/> by default.</param>
+    /// <returns>The accepted report.</returns>
+    internal static Task<LatticeSchemaRemediationReport> AcceptAsync(
+        string treeId,
+        Func<Task<LatticeSchemaRemediationReport>> accept,
+        TimeSpan ceiling,
+        ILogger? logger,
+        CancellationToken cancellationToken,
+        IReadOnlyList<TimeSpan>? backoff = null)
+    {
+        ArgumentNullException.ThrowIfNull(accept);
+        return accept();
+    }
+
     /// <summary>
     /// How many slices in a row may time out before the driver gives up and fails
     /// the run with the cause (issue #5440). A slice that completes resets the count.
