@@ -1,9 +1,10 @@
 # Pairs with HandOffBound. Moved from the design's
-# ReadPositionHonestCloseHeadUnderstated. The close records production's -1
-# (closedAt 0 here) for a partition whose claim a WAL shard restart reset,
-# although the initiator stamped appends there: it should re-claim every partition
-# it claimed in this activation. A stamped append below the allocator head lies at
-# or above the recorded one.
+# ReadPositionHonestCloseHeadUnderstated. It models the effect, not the cause: the
+# close records production's -1 (closedAt 0 here) at a partition where the initiator
+# stamped appends. In production the cause is a partition whose claim a WAL shard
+# restart reset, which the one-partition model does not link to this edit; the
+# close should re-claim every partition it claimed in this activation. A stamped
+# append below the allocator head lies at or above the recorded one.
 MODULE: HandOffBoundCloseHeadUnderstated
 TARGET: HandOffBound
 CLASS: Invariant
