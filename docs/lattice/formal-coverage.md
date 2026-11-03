@@ -61,7 +61,7 @@ once, either here or in the
 | Area | Modules | Mutations | Behaviour rows | Detector tests | Page |
 |------|---------|-----------|----------------|----------------|------|
 | Single-cluster atomic commit | 1 | 21 | 17 | 40 | [Verified Atomic-Commit](verified-atomic-commit.md) |
-| WAL durability lifecycle | 5 | 135 | 125 | 247 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
+| WAL durability lifecycle | 6 | 151 | 138 | 262 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
 | Shard ownership | 5 | 124 | 124 | 201 | [Verified Shard Ownership](verified-shard-ownership.md) |
 | Cross-cluster atomic visibility | 1 | 66 | 43 | 150 | [Verified Atomic-Commit: the replicated half](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | 4 | 84 | 64 | 195 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
@@ -406,7 +406,13 @@ gaps, states its full scope.
     and the leaf's three-step clear; and its hand-off fence - a foreign author's
     writes bounded by the owner's durable marker, stamped at admission and closed
     by a generation re-claim that records the allocator head, with another shard's
-    range-delete walk, a WAL shard restart and a hand-off spanning the fence gate.
+    range-delete walk, a WAL shard restart and a hand-off spanning the fence gate;
+    and its routing floor - a tree's purge raising each shard root's routing
+    floor before it retires their rows, the floor checked where a generation is
+    claimed, a straddling write's seam retry that never re-stamps it, and the
+    re-created incarnation's first initialisation - against a second shard root,
+    a purge that finished on 10.2.0 with the re-seed catch-up, and a WAL shard
+    restart.
   - **Does not cover:** more than two partitions; splits, resharding and saga
     state; replication consumers, beyond their effect on the trim floor; for pin
     retirement, several leaves or partitions per leaf, the pin's HLC frontier and
@@ -418,7 +424,10 @@ gaps, states its full scope.
     bulk and replay halves of the live advance, multi-entry stamped batches, or
     the leaf's gate that serialises its own clear with its claims; for the hand-off
     fence, more than one initiator or partition, the owner's read of the marker
-    and its replay, a close with the gate view closed, or seam retries.
+    and its replay, a close with the gate view closed, or seam retries; for the
+    routing floor, the range-delete fence as a separate initiator, the purge's
+    steps as separate actions, or the mixed-version residue of a cross-shard
+    write spanning a purge that finished on 10.2.0.
 - **Shard ownership** ([`spec/shard-ownership/`](../../spec/shard-ownership/README.md)).
   - **Covers:** who serves a key across an adaptive split, an online shard
     fold, an online reshard, an online resize and its undo, with stale routers

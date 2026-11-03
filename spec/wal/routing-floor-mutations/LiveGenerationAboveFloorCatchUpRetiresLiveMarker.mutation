@@ -1,0 +1,22 @@
+# The catch-up infers that a marker predates the re-created incarnation from its
+# generation or initialised flag, instead of reading the incarnation the marker
+# carries (#5716). A duplicate activation of the shard root re-seeding
+# concurrently runs the catch-up after the first activation has seeded the marker
+# at the floor plus one and run the init fence. It reads that live marker, raises
+# the shard root's floor to its generation and resets it, while the first
+# activation keeps stamping its cached generation, now at the floor: the WAL
+# refuses its claims, and #5705's guard fails a live tree's writes as deleted.
+# Moved from the design's LiveGenerationAboveFloorCatchUpRetiresLiveMarker.
+MODULE: LiveGenerationAboveFloorCatchUpRetiresLiveMarker
+TARGET: LiveGenerationAboveFloor
+CLASS: Invariant
+SUMMARY: the re-seed catch-up retires a marker the re-created incarnation seeded
+PERTURBS: CatchUp
+
+--- FIND
+    /\ caught' = TRUE
+    /\ ~markNew
+--- REPLACE
+    /\ caught' = TRUE
+\* MUTATION: the marker's incarnation is not checked.
+--- END

@@ -1,0 +1,19 @@
+# A shard root activation of the purged incarnation keeps admitting writes after
+# the purge, stamping them with the generation it now reads, instead of refusing
+# operations on a deleted tree before any routing-generation work. Once the
+# re-created incarnation has initialised, that generation is the re-created one,
+# loaded at L's partition, so the write is allocated above the recorded close.
+MODULE: StraddlerBelowInitAdmitAfterPurge
+TARGET: StraddlerBelowInit
+CLASS: Invariant
+SUMMARY: a deleted tree's shard root keeps admitting writes after the purge
+PERTURBS: Admit
+
+--- FIND
+    /\ ~recreated
+    /\ live[i]
+    /\ ~pend[i]
+--- REPLACE
+\* MUTATION: no deleted-tree refusal before the stamp is taken.
+    /\ ~pend[i]
+--- END

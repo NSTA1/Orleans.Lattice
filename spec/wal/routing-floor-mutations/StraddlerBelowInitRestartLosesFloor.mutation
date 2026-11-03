@@ -1,0 +1,16 @@
+# A reactivated WAL shard does not load the routing-floor row, so it holds no
+# floor for any initiator. A cross-shard straddler whose entry the purge retired
+# then re-presents a claim that nothing refuses, and is allocated above L's
+# recorded close. The floor map is loaded once per activation before any claim.
+MODULE: StraddlerBelowInitRestartLosesFloor
+TARGET: StraddlerBelowInit
+CLASS: Invariant
+SUMMARY: a reactivated WAL shard does not load the routing floors
+PERTURBS: Restart
+
+--- FIND
+    /\ walFloor' = rowFloor
+--- REPLACE
+\* MUTATION: the floor map is not loaded.
+    /\ walFloor' = [i \in Inits |-> 0]
+--- END
