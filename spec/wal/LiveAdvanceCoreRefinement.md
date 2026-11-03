@@ -201,8 +201,13 @@ mutation directory, which holds only experiments that must go red.
   marker read is awaited, every target is capped at the snapshot's own high offset, and the
   arming view (`LeafAppendEpochFence.TryGetArmingView`) is read after the marker, so only
   fresher. The model reads the marker in the step that advances, so it cannot express that
-  order, and no detector pins it yet (#5768). The design's `FrozenView`, a superseded
-  activation that keeps the marker state it last saw, is not carried: production reads
+  order. The detector
+  `A_hand_off_opening_during_the_marker_read_cannot_carry_the_advance_past_its_foreign_record`
+  (`BPlusLeafGrainTests.LiveCheckpointAdvance.cs`, #5768) pins it: a hand-off opens while
+  the marker read is in flight, allocates a foreign record, and an own append lands above
+  it, and the advance must stay below that record. Taking the snapshot after the read turns
+  it red. The design's `FrozenView`, a superseded activation that keeps the marker
+  state it last saw, is not carried: production reads
   fresh on every tick, and a superseded activation never arms at all, because
   `LeafAppendEpochFence.TryGetArmingView` answers false once it is stale. The model's
   `Armed` still lets a stale but claimed activation arm, a safe over-approximation.
