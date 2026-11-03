@@ -63,7 +63,6 @@ VARIABLES
     legacy,        \* R: the purge finished on 10.2.0
     caught,        \* R: the re-seed catch-up ran after a 10.2.0 purge
     reinit,        \* R: the re-created incarnation's first initialisation ran
-    purgedUp,      \* the activations of the purged incarnation
     pGen,          \* the generation S held when the tree was purged
     phase,         \* B: "window" while a bulk switch creates L, then "live"
     hint,          \* B: the bulk-born leaf's birth hint
@@ -75,7 +74,7 @@ VARIABLES
 
 eVars == <<epoch, cstage, claimHead, prior, maxClaimed, lRetired, staleAccepted, memFence, fence, retired>>
 hVars == <<mInit, hoOpen, hoClosedAt, windows>>
-rVars == <<recreated, legacy, caught, reinit, purgedUp, pGen>>
+rVars == <<recreated, legacy, caught, reinit, pGen>>
 bVars == <<phase, hint, born, cache, rp>>
 vars == <<next, author, up, dupUsed, restarted, eVars, hVars, rVars, bVars, broken>>
 
@@ -121,7 +120,6 @@ TypeOK ==
     /\ legacy \in BOOLEAN
     /\ caught \in BOOLEAN
     /\ reinit \in BOOLEAN
-    /\ purgedUp \subseteq Acts
     /\ pGen \in Epochs
     /\ phase \in {"window", "live"}
     /\ hint \in 0..MaxOff
@@ -161,7 +159,6 @@ Init ==
     /\ legacy = FALSE
     /\ caught = FALSE
     /\ reinit = FALSE
-    /\ purgedUp = {}
     /\ pGen = 0
     /\ born = FALSE
     /\ cache = [a \in Acts |-> {}]
@@ -183,6 +180,12 @@ EAppendAdmits(a, s) == s >= memFence[a]
 EAlreadyDurable(a, s) == s = fence[a] /\ s >= memFence[a]
 EClaimAboveFloor(a, s) == s > retired[a]
 EClaimAboveEntry(a, s) == s > Max2(fence[a], memFence[a]) \/ EAlreadyDurable(a, s)
+
+\* E: the claim raise's admission (ClaimRaise's guards), for L's activations,
+\* whose entry is at least the highest epoch raised and whose floor is the
+\* highest epoch L's clear retired.
+ERaiseAboveEntry(e) == e >= maxClaimed
+ERaiseAboveFloor(e) == e > lRetired
 
 \* E: ClaimHeadCoversPriorAppends, over every claimant.
 ClaimHeadCoversPriorAppends ==
@@ -209,6 +212,10 @@ rAuthor == [o \in Offs |-> IF author[o] = Straddler THEN Straddler ELSE NoAuthor
 MarkerReadsInit == mInit /\ ~(legacy /\ ~caught)
 StraddlerBelowInit ==
     recreated /\ MarkerReadsInit => \A o \in Offs : rAuthor[o] # NoAuthor => o < hoClosedAt
+
+\* R: InitHeadCoversPriorAllocations, the head L's marker records when it
+\* reads initialised lies above every prior allocation, whoever's.
+InitHeadCoversPriorAllocations == ~mInit /\ mInit' => \A o \in Offs : author[o] # NoAuthor => o < hoClosedAt'
 
 \* B (WalBulkSwitch): BulkHintBound, for the bulk-born activation a1.
 BulkHintBound == born => \A o \in Allocated : o <= rp["a1"] => o \in cache["a1"]
@@ -243,7 +250,7 @@ claimed == [c \in Claimants |-> cstage[c] = 3]
 cur == IF \E a \in up : CanAppend(a) /\ epoch[a] = maxClaimed
        THEN CHOOSE a \in up : CanAppend(a) /\ epoch[a] = maxClaimed
        ELSE NoAct
-stale == {a \in Acts : claimed[a] /\ ~CanAppend(a)} \cup purgedUp
+stale == {a \in Acts : claimed[a] /\ ~CanAppend(a)}
 
 \* C (WalLiveAdvanceCore): the heads a close may record.
 HeadsAbove(S) == {h \in 0..next : \A o \in Offs : o < next /\ author[o] \in S => o < h}
@@ -259,13 +266,15 @@ CClaim(a) ==
     /\ claimHead' = [claimHead EXCEPT ![a] = next]
     /\ cur' = a
 COwnAlloc(a) == a \in up /\ cur = a
-CForeignAlloc == hoOpen
-CClose == \E h \in HeadsAbove({Foreign}) : hoClosedAt' = Max2(hoClosedAt, h)
+CForeignAlloc == hoOpen \/ ~mInit
+CClose == \E h \in IF mInit THEN HeadsAbove({Foreign}) ELSE 0..next : hoClosedAt' = Max2(hoClosedAt, h)
 CStraddlerAlloc == recreated /\ ~reinit
 CMarkInit == \E h \in HeadsAbove({Foreign, Straddler}) : hoClosedAt' = Max2(hoClosedAt, h)
 CCreate ==
-    /\ cache' = [cache EXCEPT !["a1"] = {o \in Offs : author[o] = PreAuthor}]
-    /\ rp' = [rp EXCEPT !["a1"] = hint - 1]
+    \E r \in -1..(hint - 1), held \in SUBSET Allocated :
+        /\ \A o \in Allocated : o <= r => o \in held
+        /\ cache' = [cache EXCEPT !["a1"] = held]
+        /\ rp' = [rp EXCEPT !["a1"] = r]
 
 (***************************************************************************)
 (* The steps. Each is generated freely within the vocabulary; Next keeps  *)
@@ -278,6 +287,8 @@ Claim(a) ==
     /\ a \in up
     /\ cstage[a] = 0
     /\ \E e \in 1..MaxEpoch, h \in 0..next :
+        /\ ERaiseAboveEntry(e)
+        /\ ERaiseAboveFloor(e)
         /\ epoch' = [epoch EXCEPT ![a] = e]
         /\ claimHead' = [claimHead EXCEPT ![a] = h]
     /\ cstage' = [cstage EXCEPT ![a] = 3]
@@ -389,7 +400,6 @@ Purge ==
     /\ fence' = [fence EXCEPT !["S"] = 0]
     /\ memFence' = [memFence EXCEPT !["S"] = Unloaded]
     /\ lRetired' = Max2(lRetired, maxClaimed)
-    /\ purgedUp' = up
     /\ pGen' = epoch["S"]
     /\ mInit' = FALSE
     /\ hoOpen' = FALSE
@@ -407,7 +417,6 @@ LegacyPurge ==
     /\ recreated' = TRUE
     /\ legacy' = TRUE
     /\ lRetired' = Max2(lRetired, maxClaimed)
-    /\ purgedUp' = up
     /\ pGen' = epoch["S"]
     /\ UNCHANGED <<next, author, up, dupUsed, epoch, cstage, claimHead, prior, maxClaimed>>
     /\ UNCHANGED <<staleAccepted, memFence, fence, retired, hVars, caught, reinit, bVars, broken>>
@@ -421,7 +430,7 @@ CatchUp ==
     /\ caught' = TRUE
     /\ mInit' = FALSE
     /\ UNCHANGED <<next, author, up, dupUsed, eVars, hoOpen, hoClosedAt, windows>>
-    /\ UNCHANGED <<recreated, legacy, reinit, purgedUp, pGen, bVars, broken>>
+    /\ UNCHANGED <<recreated, legacy, reinit, pGen, bVars, broken>>
     /\ UNCHANGED restarted
 
 (* StraddlerAlloc: a write S admitted before the purge, under a stamp it *)
@@ -461,7 +470,7 @@ FirstInit ==
     /\ broken' = broken \cup Fails("ClaimHeadMeetsRoutingInit", claimHead'["S"] = next)
                            \cup Fails("RoutingMeetsCoreInit", CMarkInit)
     /\ UNCHANGED <<next, author, up, dupUsed, cstage, maxClaimed, lRetired, staleAccepted, retired>>
-    /\ UNCHANGED <<hoOpen, windows, recreated, legacy, caught, purgedUp, pGen, bVars>>
+    /\ UNCHANGED <<hoOpen, windows, recreated, legacy, caught, pGen, bVars>>
     /\ UNCHANGED restarted
 
 (* Birth: the bulk switch creates L, its first activation born with any   *)
@@ -486,6 +495,7 @@ Stutter == UNCHANGED vars
 Kept ==
     /\ Guarantees'
     /\ (~recreated /\ recreated' /\ ~legacy') \/ CloseHeadMonotone
+    /\ InitHeadCoversPriorAllocations
 
 Next ==
     \/ \E a \in Acts : Claim(a) /\ Kept

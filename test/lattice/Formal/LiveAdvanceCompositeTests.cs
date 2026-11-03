@@ -59,6 +59,9 @@ public sealed class LiveAdvanceCompositeTests
         yield return new(e, "ClaimWrite", "epoch[a] > retired", "EClaimAboveFloor", R("epoch[a]", "s", "retired", "retired[a]"));
         yield return new(e, "ClaimWrite", @"epoch[a] > Max2(fence, memFence) \/ AlreadyDurable(a)", "EClaimAboveEntry",
             R("epoch[a]", "s", "fence", "fence[a]", "memFence", "memFence[a]", "AlreadyDurable(a)", "EAlreadyDurable(a, s)"));
+        yield return new(e, "ClaimRaise", "epoch[a] >= Max2(fence, memFence)", "ERaiseAboveEntry",
+            R("epoch[a]", "e", "Max2(fence, memFence)", "maxClaimed"));
+        yield return new(e, "ClaimRaise", "epoch[a] > retired", "ERaiseAboveFloor", R("epoch[a]", "e", "retired", "lRetired"));
         yield return new(e, "ClaimHeadCoversPriorAppends", null, "ClaimHeadCoversPriorAppends", R("Acts", "Claimants"));
         yield return new(e, "RaisedEpochUnique", null, "RaisedEpochUnique", None);
         yield return new(e, "StaleEpochNeverAppends", null, "StaleEpochNeverAppends", None);
@@ -78,6 +81,9 @@ public sealed class LiveAdvanceCompositeTests
         yield return new(r, "Alloc", "loaded[i] # Unloaded", "RAllocGuard", None);
         yield return new(r, "Alloc", "pstamp[i] >= loaded[i]", "RAllocGuard", None);
         yield return new(r, "ClaimAdmits", null, "ClaimAdmits", None);
+        yield return new(r, "InitHeadCoversPriorAllocations",
+            @"~mInit /\ mInit' => \A o \in Offs : author[o] # NoAuthor => o < closedAt'", "InitHeadCoversPriorAllocations",
+            R("closedAt'", "hoClosedAt'"));
         yield return new(r, "FirstInit", "closedAt' = next", "FirstInit", R("closedAt'", "claimHead'[\"S\"]"));
 
         const string b = "WalBulkSwitch";
@@ -92,15 +98,17 @@ public sealed class LiveAdvanceCompositeTests
         yield return new(c, "Claim", "cur' = a", "CClaim", None);
         yield return new(c, "OwnAlloc", @"a \in up", "COwnAlloc", None);
         yield return new(c, "OwnAlloc", "cur = a", "COwnAlloc", None);
-        yield return new(c, "ForeignAlloc", "hoOpen", "CForeignAlloc", None);
-        yield return new(c, "Close", @"\E h \in HeadsAbove({Foreign}) : hoClosedAt' = Max2(hoClosedAt, h)", "CClose", None);
+        yield return new(c, "ForeignAlloc", @"hoOpen \/ ~mInit", "CForeignAlloc", None);
+        yield return new(c, "Close", @"\E h \in IF mInit THEN HeadsAbove({Foreign}) ELSE 0..next : hoClosedAt' = Max2(hoClosedAt, h)",
+            "CClose", None);
         yield return new(c, "HeadsAbove", null, "HeadsAbove", None);
         yield return new(c, "StraddlerAlloc", "recreated", "CStraddlerAlloc", None);
         yield return new(c, "StraddlerAlloc", "~reinit", "CStraddlerAlloc", None);
         yield return new(c, "MarkInit", @"\E h \in HeadsAbove({Foreign, Straddler}) : hoClosedAt' = Max2(hoClosedAt, h)",
             "CMarkInit", None);
-        yield return new(c, "Create", @"cache' = [cache EXCEPT ![""a1""] = {o \in Offs : author[o] = PreAuthor}]", "CCreate", None);
-        yield return new(c, "Create", @"rp' = [rp EXCEPT ![""a1""] = hint - 1]", "CCreate", None);
+        yield return new(c, "Create",
+            @"\E r \in -1..(hint - 1), held \in SUBSET Allocated : /\ \A o \in Allocated : o <= r => o \in held /\ cache' = [cache EXCEPT ![""a1""] = held] /\ rp' = [rp EXCEPT ![""a1""] = r]",
+            "CCreate", None);
     }
 
     [TestCaseSource(nameof(Copies))]

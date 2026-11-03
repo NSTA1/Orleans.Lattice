@@ -56,7 +56,7 @@ directory, and the draft keeps every design mutation as the record each module t
 | `WalRoutingFloor` | 3 | 1 | 12 | 17 | 14 | 10,704 |
 | `WalBulkSwitch` | 4 | 0 | 16 | 19 | 18 | 39,110 |
 | `WalLiveAdvanceCore` | 5 | 1 | 20 | 31 | 24 | 778,329 |
-| `WalLiveAdvanceComposite` | 13 | 0 | 15 | 27 | 15 | 552,598 |
+| `WalLiveAdvanceComposite` | 13 | 0 | 15 | 27 | 15 | 138,603 |
 
 `Actions` counts the disjuncts of `Next`, including the non-behavioural `Stutter`
 of `WalMove`, `WalAppendEpoch`, `WalHandOffFence`, `WalRoutingFloor`, `WalBulkSwitch` and `WalLiveAdvanceCore`. `Behaviour rows` counts the action rows of the
@@ -674,10 +674,10 @@ lists, so a module and its copy cannot drift apart.
 | `HandOffMeetsCoreForeignAlloc` | Invariant | H -> C: a foreign append H allows is one C's environment allows. |
 | `HandOffMeetsCoreClose` | Invariant | H -> C: a close H allows records heads C's environment allows. |
 | `RoutingMeetsCoreStraddler` | Invariant | R -> C: a straddler R allows is one C's environment allows. |
-| `RoutingMeetsCoreInit` | Invariant | R, H -> C: a first initialisation R and H allow records heads C's environment allows. |
+| `RoutingMeetsCoreInit` | Invariant | R -> C: a first initialisation R allows records heads C's environment allows. |
 | `BulkMeetsCoreCreate` | Invariant | B -> C: a birth B allows is one C's environment allows. |
 
-The base checks every edge in well under a minute. Each edge has a witness mutation, which
+The base checks every edge in seconds. Each edge has a witness mutation, which
 shows that a step of its kind is reachable. Each guarantee an edge relies on also has a
 mutation that weakens it, which must turn the edge red.
 

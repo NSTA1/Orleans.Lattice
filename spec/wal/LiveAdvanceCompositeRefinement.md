@@ -34,7 +34,7 @@ bulk-born leaf any read position and any held records.
 `Next` keeps a step only if every producer guarantee still holds after it. Each edge
 invariant then holds unless a kept step of its kind fails the assumption its consumer makes.
 A red edge is therefore a step the producers allow and the consumer does not model. The base
-has about 0.55M distinct states and is checked in under a minute.
+has 138,603 distinct states and is checked in seconds.
 
 ## Scope cuts
 
@@ -69,12 +69,12 @@ or more edge invariants. The columns are:
 | E -> R | `EntryCheckMeetsRoutingAdmission` | E's entry check | R's `Alloc` guard | `EntryCheckMeetsRoutingAdmissionUnloadedAdmitted` | `EntryCheckMeetsRoutingAdmissionWitness` |
 | E -> R | `ClaimWriteMeetsRoutingClaim` | E's claim write (`ClaimWrite`'s guards, `AlreadyDurable`) | R's `ClaimAdmits` | `ClaimWriteMeetsRoutingClaimBelowFloor` | `ClaimWriteMeetsRoutingClaimWitness` |
 | E -> R | `ClaimHeadMeetsRoutingInit` | `ClaimHeadCoversPriorAppends` | R's `FirstInit` head | `ClaimHeadMeetsRoutingInitHeadUncovered` | `ClaimHeadMeetsRoutingInitWitness` |
-| E -> C | `EpochMeetsCoreClaim` | `ClaimHeadCoversPriorAppends`, `RaisedEpochUnique` | C's `Claim` | `EpochMeetsCoreClaimHeadUncovered` | `EpochMeetsCoreClaimWitness` |
+| E -> C | `EpochMeetsCoreClaim` | `ClaimHeadCoversPriorAppends`, `RaisedEpochUnique`, the claim raise's guards (`ClaimRaise`) | C's `Claim` | `EpochMeetsCoreClaimHeadUncovered`, `EpochMeetsCoreClaimRetiredEpochRaised` | `EpochMeetsCoreClaimWitness` |
 | E -> C | `EpochMeetsCoreOwnAlloc` | `StaleEpochNeverAppends`, `RaisedEpochUnique` | C's `OwnAlloc` guard | `EpochMeetsCoreOwnAllocSupersededAppends`, `EpochMeetsCoreOwnAllocEpochsShared` | `EpochMeetsCoreOwnAllocWitness` |
 | H -> C | `HandOffMeetsCoreForeignAlloc` | `HandOffBound` | C's `ForeignAlloc` guard | `HandOffMeetsCoreForeignAllocUnbounded` | `HandOffMeetsCoreForeignAllocWitness` |
-| H -> C | `HandOffMeetsCoreClose` | `HandOffBound`, `CloseHeadMonotone` | C's `Close` | `HandOffMeetsCoreCloseHeadUnbounded` | `HandOffMeetsCoreCloseWitness` |
+| H -> C | `HandOffMeetsCoreClose` | `HandOffBound` | C's `Close` | `HandOffMeetsCoreCloseHeadUnbounded` | `HandOffMeetsCoreCloseWitness` |
 | R -> C | `RoutingMeetsCoreStraddler` | `StraddlerBelowInit` | C's `StraddlerAlloc` guard | `RoutingMeetsCoreStraddlerUnbounded` | `RoutingMeetsCoreStraddlerWitness` |
-| R -> C, H -> C | `RoutingMeetsCoreInit` | `StraddlerBelowInit`, `HandOffBound`, `CloseHeadMonotone` | C's `MarkInit` | `RoutingMeetsCoreInitStraddlerUncovered`, `RoutingMeetsCoreInitHeadsRegress` | `RoutingMeetsCoreInitWitness` |
+| R -> C | `RoutingMeetsCoreInit` | `InitHeadCoversPriorAllocations` | C's `MarkInit` | `RoutingMeetsCoreInitHeadUncovered` | `RoutingMeetsCoreInitWitness` |
 | B -> C | `BulkMeetsCoreCreate` | `BulkHintBound` | C's `Create` | `BulkMeetsCoreCreateHintUnbounded` | `BulkMeetsCoreCreateWitness` |
 
 ## Variable mapping
@@ -86,7 +86,7 @@ or more edge invariants. The columns are:
 | `epoch`, `cstage`, `claimHead`, `prior`, `maxClaimed`, `lRetired`, `staleAccepted` | E's claims, over L's activations and the two initiators, with E's ghosts | E's variables of the same names, generalised from L's activations to every claimant as the interface's entry check states; `cstage` keeps only the raised stage. |
 | `memFence`, `fence`, `retired` | E's loaded entry, durable entry and floor, per initiator | The shard's loaded generation entry (`WalShardGrain._generationEntries`), the durable row `WalAppendFenceRows.GenerationGrainType`, and the floor `WalShardGrain.GenerationFloorLocked`. These are E's `memFence`, `fence` and `retired`, H's `fFence`, and R's `loaded`, `entryRow` and `walFloor`. |
 | `mInit`, `hoOpen`, `hoClosedAt`, `windows` | L's marker | `LeafHandOffState.Initialised` and `ShardHandOffState.Initialised`, read with `HandOffMarkerCore.IsHeldOpen` and `HandOffMarkerCore.RequiredHead`. These are H's variables of the same names, and R's `mInit` and `closedAt`. |
-| `recreated`, `legacy`, `caught`, `reinit`, `purgedUp`, `pGen` | The purge, its kind, the catch-up, the first initialisation, the purged incarnation's activations, and the generation `S` held at the purge | R's `recreated`, `legacy` and `caught`; C's `recreated` and `reinit`. |
+| `recreated`, `legacy`, `caught`, `reinit`, `pGen` | The purge, its kind, the catch-up, the first initialisation, and the generation `S` held at the purge | R's `recreated`, `legacy` and `caught`; C's `recreated` and `reinit`. |
 | `phase`, `hint`, `born`, `cache`, `rp` | The bulk birth: L's birth hint, and the bulk-born activation's records and read position | C's `phase`, `hint`, `cache` and `rp`; B's `nUp`, `heldN` and `rpN`. |
 | `restarted` | The restart's budget | Modelling device. |
 | `broken` | The edges a kept step has failed | Modelling device for the edge invariants. |
@@ -145,22 +145,25 @@ These record which guarantee carries an edge when another guarantee already impl
 
 | Check | Result |
 |-------|--------|
-| `CloseHeadMonotone` on `HandOffMeetsCoreClose` | Not load-bearing. The composite has one hand-off window, so a foreign close never follows another close in the same incarnation. `CloseHeadMonotone` is load-bearing on `RoutingMeetsCoreInit` instead: a 10.2.0 purge keeps L's marker, so the first initialisation could lower the heads an earlier close recorded (`RoutingMeetsCoreInitHeadsRegress`). |
-| `ClaimHeadCoversPriorAppends` on the close heads | The head a re-claim returns is the allocator head. So E's guarantee alone discharges H's `CloseHeads` and R's first-initialisation head. |
+| `CloseHeadMonotone` | Not load-bearing on any edge. The composite has one hand-off window, so a foreign close never follows another close in one incarnation, and the first initialisation's head lies above every prior allocation (`InitHeadCoversPriorAllocations`), so it never lowers the heads an earlier close recorded. It stays a step constraint because it is H's guarantee. |
+| `StraddlerBelowInit` on `RoutingMeetsCoreInit` | Not load-bearing: `InitHeadCoversPriorAllocations` covers every prior allocation, straddlers included. It carries `RoutingMeetsCoreStraddler` instead (`RoutingMeetsCoreStraddlerUnbounded`). |
+| `ClaimHeadCoversPriorAppends` on the close heads | The head a re-claim returns is the allocator head, so E's guarantee alone discharges H's `CloseHeads` and R's first-initialisation head. |
 
-## Open findings
+## Findings
 
-The first run found five interface gaps. Each is reported to the design owner, and its edge
-stays red until the modules are fixed:
-- **`EpochMeetsCoreClaim` (E -> C).** None of E's guarantees stops an activation that was
-  running at the purge, and never claimed, from claiming afterwards. C's `Recreate` makes it
-  stale.
-- **`HandOffMeetsCoreForeignAlloc` and `HandOffMeetsCoreClose` (H -> C).** H's checked
-  `HandOffBound` is conditional on `MarkerReadsClosed`, so while L's marker is uninitialised it
-  bounds no foreign append or close. C requires the marker to be open, and the close's head to
-  be above every foreign record.
-- **`RoutingMeetsCoreInit` (R, H -> C).** No guarantee bounds the first initialisation's head
-  above a foreign record of a window that is still open. C's `MarkInit` requires it.
-- **`BulkMeetsCoreCreate` (B -> C).** B guarantees only `BulkHintBound`, and its read position
-  may be capped below the hint (#5752). C's `Create` fixes the read position at the hint less
-  one, holding every pre-existing record.
+The first run found five interface gaps (F1 to F4, F2 on two edges). #5776 closed them by
+widening C's environment to the stated guarantees and adding R's
+`InitHeadCoversPriorAllocations`:
+- **F1, `EpochMeetsCoreClaim`.** C's `Recreate` no longer makes an activation that survived the
+  purge unclaimed stale.
+- **F2, `HandOffMeetsCoreForeignAlloc` and `HandOffMeetsCoreClose`.** C admits a foreign append,
+  and a close at any head, while L's marker is uninitialised.
+- **F3, `BulkMeetsCoreCreate`.** C's `Create` takes any read position up to the hint less one
+  with any records covering it.
+- **F4, `RoutingMeetsCoreInit`.** R guarantees the first initialisation's head lies above every
+  prior allocation.
+
+The run against those fixes found one more:
+- **F5, `BulkMeetsCoreCreate` (B -> C).** B's `BulkHintBound` allows a birth read position at
+  or above the hint, over a foreign record of the switch's window that the leaf holds. C's
+  `Create` bounds it below the hint.

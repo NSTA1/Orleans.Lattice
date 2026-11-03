@@ -196,11 +196,10 @@ formulas and the scope cuts.
 | E -> R | `EntryCheckMeetsRoutingAdmission` | `EntryCheckMeetsRoutingAdmissionUnloadedAdmitted` |
 | E -> R | `ClaimWriteMeetsRoutingClaim` | `ClaimWriteMeetsRoutingClaimBelowFloor` |
 | E -> R | `ClaimHeadMeetsRoutingInit` | `ClaimHeadMeetsRoutingInitHeadUncovered` |
-| E -> C | `EpochMeetsCoreClaim` | `EpochMeetsCoreClaimHeadUncovered` |
+| E -> C | `EpochMeetsCoreClaim` | `EpochMeetsCoreClaimHeadUncovered`, `EpochMeetsCoreClaimRetiredEpochRaised` |
 | E -> C | `EpochMeetsCoreOwnAlloc` | `EpochMeetsCoreOwnAllocSupersededAppends`, `EpochMeetsCoreOwnAllocEpochsShared` |
 | H -> C | `HandOffMeetsCoreForeignAlloc` | `HandOffMeetsCoreForeignAllocUnbounded` |
 | H -> C | `HandOffMeetsCoreClose` | `HandOffMeetsCoreCloseHeadUnbounded` |
-| H -> C | `RoutingMeetsCoreInit` | `RoutingMeetsCoreInitHeadsRegress` |
 | R -> C | `RoutingMeetsCoreStraddler` | `RoutingMeetsCoreStraddlerUnbounded` |
-| R -> C | `RoutingMeetsCoreInit` | `RoutingMeetsCoreInitStraddlerUncovered` |
+| R -> C | `RoutingMeetsCoreInit` | `RoutingMeetsCoreInitHeadUncovered` |
 | B -> C | `BulkMeetsCoreCreate` | `BulkMeetsCoreCreateHintUnbounded` |
