@@ -1,0 +1,17 @@
+# Pairs with StaleEpochNeverAppends. The clear reads the epoch row for its ETag
+# but passes no row value to the retirement, so the floor covers the entry only.
+# A pre-clear duplicate that persisted its row but had not yet written its entry
+# then writes the entry above the floor after the clear and appends at an epoch
+# the clear retired (#5641, at the reading site rather than the partition's).
+MODULE: StaleEpochNeverAppendsClearPassesNoRowValue
+TARGET: StaleEpochNeverAppends
+CLASS: Invariant
+SUMMARY: the clear passes no epoch-row value to the retirement
+PERTURBS: ClearRead
+
+--- FIND
+    /\ clrRow' = rowEpoch
+--- REPLACE
+\* MUTATION: the row value read is not passed on.
+    /\ clrRow' = 0
+--- END

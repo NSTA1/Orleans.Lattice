@@ -15,9 +15,11 @@ cores in the product assembly, and a Coyote model that executes those cores.
 | [`WalDurability.tla`](WalDurability.tla) | The leaf side, end to end: append, out-of-order flush and acknowledgement, a shared stream read through per-leaf READ positions, checkpoint persists that can fail, snapshot captures that can fail, durable materialiser pins, the GC trim floor and its block pins, and leaf and shard crashes at any step with recovery from a snapshot or cold. |
 | [`WalMove.tla`](WalMove.tla) | A shard move: a durable fence under a lease and the source activation's fence, quiesce, copy and switch, concurrent with appends, out-of-order flushes, a consumer, the GC, a shard crash and the loss of the move's coordinator. |
 | [`WalPinRetirement.tla`](WalPinRetirement.tla) | The GC retiring orphaned materialiser pins - the bulk orphan sweep and the starvation drive, each taking a token per pin-store key, reading the leaf's durable row and removing through a fence as separate steps, two sweepers racing - against the leaf's fold, purge, discard and re-creation under the same grain id. See [below](#walpinretirement). |
+| [`WalAppendEpoch.tla`](WalAppendEpoch.tla) | The append-epoch fence of the fenced live checkpoint advance (epic #5605): one leaf's activations claiming an epoch at a WAL partition in three steps - the epoch row's conditional write, the durable entry's max-merge and the in-memory raise that returns the claim head - the bump on a refusal, and the shard refusing a superseded or retired activation's append, against a WAL shard restart, another leaf's retirement and the leaf's three-step clear. The first module promoted from the design draft below. See [below](#walappendepoch). |
 
-They are separate modules because a move touches none of the leaf state, and pin
-retirement only the leaf's lifecycle, not its replay. Keeping each out of
+They are separate modules because a move touches none of the leaf state, pin
+retirement only the leaf's lifecycle, not its replay, and the append-epoch fence
+only which activation may append, not what it reads. Keeping each out of
 `WalDurability` keeps that module small enough to check its liveness properties
 exhaustively within the TLC budget.
 
@@ -27,8 +29,11 @@ exhaustively within the TLC budget.
 variant configurations and its `design/mutations/` model the fenced redesign of the
 live checkpoint advance (issues #5572, #5593, epic #5605), described in
 [`design/LiveAdvanceDesign.md`](design/LiveAdvanceDesign.md). Module discovery reads
-only top-level `.tla` files, so no TLC case runs the draft. It becomes the companion
-module `WalLiveAdvance` when the production members land.
+only top-level `.tla` files, so no TLC case runs the draft. Now that the production
+members have landed it is being promoted as five focused modules with an acyclic
+assume-guarantee graph; the first, [`WalAppendEpoch`](#walappendepoch), is in this
+directory, and the draft keeps every design mutation that module did not take until
+the others land.
 
 ## Counts
 
@@ -37,12 +42,14 @@ module `WalLiveAdvance` when the production members land.
 | `WalDurability` | 11 | 4 | 26 | 43 | 39 | 226,592 |
 | `WalMove` | 5 | 2 | 13 | 18 | 18 | 1,617 |
 | `WalPinRetirement` | 3 | 3 | 25 | 31 | 30 | 284,019 |
+| `WalAppendEpoch` | 5 | 0 | 17 | 23 | 20 | 150,706 |
 
-`Actions` counts the disjuncts of `Next`, including `WalMove`'s non-behavioural
-`Stutter`. `Behaviour rows` counts the action rows of the module's refinement note,
-excluding non-behavioural actions, plus its property rows. `Distinct states` is
+`Actions` counts the disjuncts of `Next`, including the non-behavioural `Stutter`
+of `WalMove` and `WalAppendEpoch`. `Behaviour rows` counts the action rows of the
+module's refinement note, excluding non-behavioural actions, plus its property rows. `Distinct states` is
 TLC's count for the module's own cfg. `WalDurability` searches to depth 35 and
-`WalMove` to depth 16, with tla2tools v1.7.4.
+`WalMove` to depth 16, with tla2tools v1.7.4. `WalAppendEpoch` searches to depth
+25, and its `WideEpochs` variant finds 495,810 distinct states to depth 26.
 
 `WalDurability` has a two-fault variant configuration, `WalDurability.TwoFaults.cfg`
 (see "Variant configurations" in [`../README.md`](../README.md)). It checks every
@@ -97,6 +104,11 @@ distinct states to depth 21, about fifteen seconds on two workers.
 | [`pin-retirement-mutations/`](pin-retirement-mutations/) | One or more deliberate defects per property and per action of `WalPinRetirement`. |
 | [`PinRetirementRefinement.md`](PinRetirementRefinement.md) | `WalPinRetirement` mapped to production. |
 | [`perturbations/`](perturbations/README.md) | Production perturbations for `WalPinRetirement`'s detectors. |
+| `WalAppendEpoch.tla` / `.cfg` / `.manifest.json` | The append-epoch fence module, its TLC model and its manifest. |
+| `WalAppendEpoch.WideEpochs.cfg` | The append-epoch fence module with epochs up to 4, checked against every invariant. |
+| `LiveAdvanceInterface.md` | The assume-guarantee contract between the five live-advance modules (`WalAppendEpoch` and the four that follow): the graph, the shared vocabulary, each guarantee and what the core assumes. |
+| [`append-epoch-mutations/`](append-epoch-mutations/) | One or more deliberate defects per property and per action of `WalAppendEpoch`. |
+| [`AppendEpochRefinement.md`](AppendEpochRefinement.md) | `WalAppendEpoch` mapped to production, and the interface the other promoted modules assume. |
 
 ## Properties checked
 
@@ -303,3 +315,58 @@ java -cp C:\path\to\tla2tools.jar tlc2.TLC -config WalPinRetirement.cfg WalPinRe
 
 On six workers the base took about a minute and a half, `OneFault` about a minute and
 `TwoSweepers` about a minute and a half.
+
+## WalAppendEpoch
+
+`WalAppendEpoch` models the epoch fence of the fenced live checkpoint advance (epic
+#5605, [`design/LiveAdvanceDesign.md`](design/LiveAdvanceDesign.md) section 1): which
+activation of a leaf may append at a WAL partition. Before its first append there an
+activation claims an epoch in three steps - it persists the epoch it read plus one to
+the leaf's epoch row as a strict conditional write, the WAL shard max-merges it into
+the leaf's durable entry, and the shard raises its in-memory entry under the lock that
+assigns offsets and returns the allocator head as the claim head. A refusal while the
+row still holds the activation's own write bumps above the refusal and claims again; a
+moved row stops it. The shard admits a stamped append only from a loaded entry and an
+epoch not below it, and never checks the partition's retired floor there (#5635). The
+environment restarts the WAL shard, retires another leaf of the partition, forces bumps
+from a second partition and clears the leaf in production's three steps: read the
+epoch row, retire the entry under a floor of at least the higher of the entry and the
+row (#5641), then delete the row conditionally on the ETag read.
+
+It is the first of five modules promoted from the design draft, and the root of their
+assume-guarantee graph: it assumes nothing, and its four guarantees are what the
+hand-off, routing-floor, bulk-switch and core modules assume
+([the interface](AppendEpochRefinement.md#interface)).
+
+| Property | Kind | Meaning |
+|----------|------|---------|
+| `TypeOK` | Invariant | State stays well-typed. |
+| `StaleEpochNeverAppends` | Invariant | No append is allocated from an epoch below the highest raised one, or at or below an epoch the leaf's clear retired, across a WAL shard restart and the purge straddle. |
+| `ClaimHeadCoversPriorAppends` | Invariant | When a claim is raised, every offset already allocated lies below its claim head. |
+| `RaisedEpochUnique` | Invariant | No two activations that can still append hold the same raised epoch, within an incarnation or across the leaf's clear. |
+| `OnlySupersededRefused` | Invariant | Only a superseded activation is ever refused, at a claim or at an append. |
+
+The base checks every property with every environment step on, at epochs up to 3 (a
+few seconds on two workers); `WalAppendEpoch.WideEpochs.cfg` re-checks them at epochs
+up to 4 (about ten seconds). Thirteen of the design draft's mutations moved here,
+re-targeted at these properties; the refinement note lists them, and the two
+redundancy checks this module keeps, which stay clean and so are not in its mutation
+directory.
+
+### What it covers, and what it does not
+
+It covers the claim's three steps and its bump, stale and unloaded rejections and the
+re-presented claim, a WAL shard restart, another leaf's retirement, bumps forced on a
+second partition, and the leaf's clear with its conditional row delete. It does NOT
+cover the fence gate and the unstamped fallback, markers, foreign authors, routing
+generations, bulk loads, replay and read positions (the other promoted modules'),
+more than one leaf or partition beyond those two environment steps, multi-entry
+stamped batches, the WAL GC's and the sweep's retirement scheduling, or the leaf's gate
+that serialises its own clear with its claims (the model is weaker there). The
+refinement note's abstraction gaps list them; in particular, no test yet drives the
+clear's conflicting row delete, which the model shows is load-bearing.
+
+```powershell
+java -cp C:\path\to\tla2tools.jar tlc2.TLC -workers 2 -config WalAppendEpoch.cfg WalAppendEpoch.tla
+java -cp C:\path\to\tla2tools.jar tlc2.TLC -workers 2 -config WalAppendEpoch.WideEpochs.cfg WalAppendEpoch.tla
+```

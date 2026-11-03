@@ -1,0 +1,16 @@
+# Pairs with OnlySupersededRefused. An activation stops at its claim although its
+# epoch row is as it read it: the conflict check is dropped, so a claimant
+# nothing superseded deactivates.
+MODULE: OnlySupersededRefusedConflictWithoutMove
+TARGET: OnlySupersededRefused
+CLASS: Invariant
+SUMMARY: ClaimConflict stops an activation whose epoch row has not moved
+PERTURBS: ClaimConflict
+
+--- FIND
+    /\ ~RowUnmoved(a)
+    /\ up' = up \ {a}
+--- REPLACE
+\* MUTATION: no conflict needed.
+    /\ up' = up \ {a}
+--- END

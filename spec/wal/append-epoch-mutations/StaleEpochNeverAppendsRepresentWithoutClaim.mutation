@@ -1,0 +1,18 @@
+# Pairs with StaleEpochNeverAppends. An unloaded rejection loads the activation's
+# own epoch into the shard's entry directly, without the claim's entry write and
+# raise checks, so a superseded or cleared activation reloads its old epoch after
+# a WAL shard restart or L's clear unloaded the entry, and appends.
+MODULE: StaleEpochNeverAppendsRepresentWithoutClaim
+TARGET: StaleEpochNeverAppends
+CLASS: Invariant
+SUMMARY: a re-presentation loads the activation's epoch without re-running the claim
+PERTURBS: Represent
+
+--- FIND
+    /\ cstage' = [cstage EXCEPT ![a] = 1]
+    /\ UNCHANGED memFence
+--- REPLACE
+\* MUTATION: the entry is loaded with the activation's epoch, unchecked.
+    /\ memFence' = epoch[a]
+    /\ UNCHANGED cstage
+--- END

@@ -1,0 +1,17 @@
+# Pairs with StaleEpochNeverAppends. After a WAL shard restart, or L's clear,
+# the shard has no loaded entry for L. Accepting an append from a leaf whose entry
+# is not loaded, instead of rejecting it until the leaf re-presents its claim,
+# accepts a superseded or retired activation's epoch.
+MODULE: StaleEpochNeverAppendsUnloadedEntryAccepted
+TARGET: StaleEpochNeverAppends
+CLASS: Invariant
+SUMMARY: the shard accepts an append whose entry it has not loaded
+PERTURBS: OwnAlloc
+
+--- FIND
+    /\ memFence # Unloaded
+    /\ AppendAdmits(a)
+--- REPLACE
+\* MUTATION: an unloaded entry does not hold the append.
+    /\ AppendAdmits(a)
+--- END

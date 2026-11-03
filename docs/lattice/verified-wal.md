@@ -188,7 +188,13 @@ TLA+ specification in [`spec/wal/`](../../spec/wal/README.md):
   removal as separate steps, two sweepers racing - against a leaf's fold, purge,
   discard and re-creation under the same grain id, and against a completed purge's
   tree-level tail re-driven onto a reused tree id or racing a write to the purged
-  shard.
+  shard;
+- `WalAppendEpoch.tla`, the append-epoch fence of the fenced live checkpoint
+  advance (epic #5605): one leaf's activations claiming an epoch at a WAL partition
+  in three steps, the bump on a refusal, and the WAL shard refusing a superseded or
+  retired activation's append, against a WAL shard restart, another leaf's
+  retirement and the leaf's three-step clear. It is the first module promoted from
+  the design draft under `spec/wal/design/`.
 
 It follows the pattern of the atomic-commit specification: every property and every
 action has a mutation that makes a property fire, and a refinement note maps each

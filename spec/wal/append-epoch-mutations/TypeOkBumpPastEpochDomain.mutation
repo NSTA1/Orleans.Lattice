@@ -1,0 +1,17 @@
+# Pairs with TypeOK. The bump's bound is dropped, so a refusal at the top of the
+# epoch domain bumps past it. The bound stands for production's cap on claim
+# rounds (LeafAppendEpochFence.MaxClaimRounds), after which the append goes
+# unstamped; the mutation checks that the domain bound is real.
+MODULE: TypeOkBumpPastEpochDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: the claim bump has no room check and leaves the epoch domain
+PERTURBS: ClaimBump
+
+--- FIND
+    /\ RowHolds(a)
+    /\ BumpEpoch <= MaxEpoch
+--- REPLACE
+    /\ RowHolds(a)
+\* MUTATION: no bound on the bump.
+--- END

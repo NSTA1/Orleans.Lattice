@@ -1,0 +1,18 @@
+# Pairs with RaisedEpochUnique. A new activation stamps with the epoch it reads
+# from the row, without a claim of its own, as #5578's born activation advanced
+# without one: it holds the live activation's epoch, and the shard admits both.
+MODULE: RaisedEpochUniqueDuplicateAdoptsClaim
+TARGET: RaisedEpochUnique
+CLASS: Invariant
+SUMMARY: the duplicate activation adopts the epoch row's value as a raised claim
+PERTURBS: Duplicate
+
+--- FIND
+    /\ seenInc' = [seenInc EXCEPT !["a2"] = rowInc]
+    /\ UNCHANGED <<epoch, cstage>>
+--- REPLACE
+    /\ seenInc' = [seenInc EXCEPT !["a2"] = rowInc]
+\* MUTATION: no claim; the row's epoch is taken as raised.
+    /\ epoch' = [epoch EXCEPT !["a2"] = rowEpoch]
+    /\ cstage' = [cstage EXCEPT !["a2"] = 3]
+--- END

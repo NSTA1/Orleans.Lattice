@@ -1,0 +1,19 @@
+# Pairs with StaleEpochNeverAppends. Another leaf's retirement deletes the
+# partition's entries rather than its own, L's included. A superseded activation
+# of L whose epoch is above the raised floor then re-presents its claim into the
+# empty entry and appends below the epoch L's live activation raised.
+MODULE: StaleEpochNeverAppendsOtherRetireDropsEntries
+TARGET: StaleEpochNeverAppends
+CLASS: Invariant
+SUMMARY: another leaf's retirement deletes and unloads L's entry too
+PERTURBS: RetireOther
+
+--- FIND
+    /\ \E e \in (retired + 1)..MaxEpoch : retired' = e
+    /\ UNCHANGED <<fence, memFence>>
+--- REPLACE
+    /\ \E e \in (retired + 1)..MaxEpoch : retired' = e
+\* MUTATION: the retirement is keyed by partition, not by leaf.
+    /\ fence' = 0
+    /\ memFence' = Unloaded
+--- END
