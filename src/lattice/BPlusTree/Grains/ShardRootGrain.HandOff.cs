@@ -520,6 +520,7 @@ internal sealed partial class ShardRootGrain
 
     /// <summary>Runs the re-seed catch-up as a re-seed of the registration <paramref name="reseedLineage"/> does; test seam (#5716).</summary>
     internal Task RetirePredatingHandOffMarkerForTestingAsync(Guid? reseedLineage) => RetirePredatingHandOffMarkerAsync(reseedLineage);
+
     /// <summary>Forgets every marker read, when the shard re-seeds a purged root for a re-created incarnation (#5705).</summary>
     private void ForgetHandOffMarker()
     {

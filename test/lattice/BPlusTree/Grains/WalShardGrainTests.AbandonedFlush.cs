@@ -34,9 +34,11 @@ public partial class WalShardGrainTests
         var page = await grain.ReadAsync(0L, 256, CancellationToken.None);
         var cursor = page.NextSequence;
 
-        // The abandoned call lands late.
+        // The abandoned call lands late. Its read bound lifts only once the call has
+        // settled, which is after it signals the landing (#5730).
         gate.Open();
         await gate.Landed.Task.WaitAsync(TimeSpan.FromSeconds(15));
+        await WaitForAbandonedWindowsToSettleAsync(gate);
 
         var seenByCursor = page.Entries.Select(e => e.Sequence).ToList();
         var next = await grain.ReadAsync(cursor, 256, CancellationToken.None);
@@ -121,6 +123,7 @@ public partial class WalShardGrainTests
 
         provider.Open();
         await provider.Landed.Task.WaitAsync(TimeSpan.FromSeconds(15));
+        await WaitForAbandonedWindowsToSettleAsync(provider);
         Assert.That((await second.ReadAsync(page.NextSequence, 256, CancellationToken.None)).Entries.Select(e => e.Sequence),
             Is.EqualTo(new[] { 0L, 1L }), "the cursor reader sees the late landing in order");
     }
@@ -291,6 +294,24 @@ public partial class WalShardGrainTests
             Assert.That(settled.HighestOffsetInclusive, Is.EqualTo(1L));
         });
     }
+    /// <summary>
+    /// Waits until no abandoned flush of the shard is outstanding: the precondition for
+    /// a read to see past it (#5730). <see cref="LateLandingWalStorageProvider.Landed"/>
+    /// and <c>Settled</c> fire inside the provider call, before its task completes, and
+    /// the read bound lifts only on that completion. Fails rather than reading early.
+    /// </summary>
+    private static async Task WaitForAbandonedWindowsToSettleAsync(IWalStorageProvider provider)
+    {
+        var windows = WalAbandonedFlushRegistry.For(provider, TreeId, 0);
+        var stopAt = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        while (windows.LowestUnsettledStart() is not null && DateTime.UtcNow < stopAt)
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.That(windows.LowestUnsettledStart(), Is.Null, "precondition: the abandoned call has settled");
+    }
+
     /// <summary>
     /// <see cref="IWalStorageProvider"/> decorator whose call for one offset ignores
     /// cancellation and waits for the test, then either lands or fails: an abandoned
