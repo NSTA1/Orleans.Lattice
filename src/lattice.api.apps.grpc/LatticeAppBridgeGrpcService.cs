@@ -1,6 +1,7 @@
 using Grpc.Core;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Orleans.Runtime;
 
 namespace Orleans.Lattice.Api.Apps.Grpc;
 
@@ -66,6 +67,25 @@ internal sealed class LatticeAppBridgeGrpcService(
             // Storage back-pressure (#5723): the bridge's retryable failure, named so the saturation gate sees it.
             throw new RpcException(AppBridgeGrpcStatus.ToStatus(AppBridgeFailure.Unavailable));
         }
+        catch (TimeoutException ex)
+        {
+            // A grain-call timeout (#5742). The bridge's closed failure vocabulary has no outcome-unknown code, so it
+            // is sent as the retryable Unavailable, but logged as the transient fault it is rather than as an error.
+            logger.LogWarning(ex, "Api.Apps: gRPC call to {Method} timed out inside the cluster; outcome unknown.", context.Method);
+            throw new RpcException(AppBridgeGrpcStatus.ToStatus(AppBridgeFailure.Unavailable));
+        }
+        catch (OrleansMessageRejectionException ex)
+        {
+            // A silo was unavailable or rejected the message (#5742): transient, sent as the retryable Unavailable.
+            logger.LogWarning(ex, "Api.Apps: gRPC call to {Method} hit an unavailable cluster node.", context.Method);
+            throw new RpcException(AppBridgeGrpcStatus.ToStatus(AppBridgeFailure.Unavailable));
+        }
+        catch (EnumerationAbortedException ex)
+        {
+            // A remote enumerator was lost mid-read (#5742): transient, sent as the retryable Unavailable.
+            logger.LogWarning(ex, "Api.Apps: gRPC call to {Method} lost a remote enumeration.", context.Method);
+            throw new RpcException(AppBridgeGrpcStatus.ToStatus(AppBridgeFailure.Unavailable));
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "Api.Apps: gRPC call to {Method} failed.", context.Method);
@@ -110,6 +130,25 @@ internal sealed class LatticeAppBridgeGrpcService(
         catch (LatticeSaturatedException)
         {
             // Storage back-pressure (#5723): the bridge's retryable failure, named so the saturation gate sees it.
+            throw new RpcException(AppBridgeGrpcStatus.ToStatus(AppBridgeFailure.Unavailable));
+        }
+        catch (TimeoutException ex)
+        {
+            // A grain-call timeout (#5742). The bridge's closed failure vocabulary has no outcome-unknown code, so it
+            // is sent as the retryable Unavailable, but logged as the transient fault it is rather than as an error.
+            logger.LogWarning(ex, "Api.Apps: gRPC call to {Method} timed out inside the cluster; outcome unknown.", context.Method);
+            throw new RpcException(AppBridgeGrpcStatus.ToStatus(AppBridgeFailure.Unavailable));
+        }
+        catch (OrleansMessageRejectionException ex)
+        {
+            // A silo was unavailable or rejected the message (#5742): transient, sent as the retryable Unavailable.
+            logger.LogWarning(ex, "Api.Apps: gRPC call to {Method} hit an unavailable cluster node.", context.Method);
+            throw new RpcException(AppBridgeGrpcStatus.ToStatus(AppBridgeFailure.Unavailable));
+        }
+        catch (EnumerationAbortedException ex)
+        {
+            // A remote enumerator was lost mid-read (#5742): transient, sent as the retryable Unavailable.
+            logger.LogWarning(ex, "Api.Apps: gRPC call to {Method} lost a remote enumeration.", context.Method);
             throw new RpcException(AppBridgeGrpcStatus.ToStatus(AppBridgeFailure.Unavailable));
         }
         catch (Exception ex)

@@ -307,7 +307,8 @@ public static class ContractCalls
     /// <summary>Every catalogued backup of <paramref name="treeId"/> (or of every tree), newest first.</summary>
     /// <param name="backup">The Backup API.</param>
     /// <param name="treeId">The tree, or <see langword="null"/> for every tree.</param>
-    public static async Task<IReadOnlyList<BackupManifest>> BackupsAsync(LatticeBackupApiGrpcClient backup, string? treeId = null)
+    /// <param name="cancellationToken">Cuts the read.</param>
+    public static async Task<IReadOnlyList<BackupManifest>> BackupsAsync(LatticeBackupApiGrpcClient backup, string? treeId = null, CancellationToken cancellationToken = default)
     {
         var manifests = new List<BackupManifest>();
         string? token = null;
@@ -319,7 +320,7 @@ public static class ContractCalls
                 PageToken = token,
                 TreeId = treeId,
                 OrderByCreatedDescending = true,
-            });
+            }, cancellationToken);
             manifests.AddRange(page.Entries);
             token = page.NextPageToken;
         }

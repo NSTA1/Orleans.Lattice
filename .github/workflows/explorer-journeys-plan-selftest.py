@@ -678,6 +678,12 @@ class SummaryTests(unittest.TestCase):
         self.assertTrue(all(planner.HANGS[kind] <= planner.HANGS["contract"] for kind in planner.HANGS))
         self.assertTrue(all(planner.HANGS[kind] < planner.TIMEOUTS[kind] for kind in planner.HANGS))
 
+    def test_an_isolated_leg_has_a_contract_legs_hang_budget(self):
+        # An isolated case is one test that establishes every chapter its journey consumes
+        # (U4 consumes the whole Contoso storyline), as a contract case does, and the blame
+        # collector times the whole test, not its silence.
+        self.assertEqual(planner.HANGS["contract"], planner.HANGS["isolated"])
+
     def test_a_longer_chapter_id_does_not_satisfy_a_shorter_one(self):
         write_trx(self.trx, {"total": 1}, [f"{planner.NAMESPACE}.Journeys.A10.Fixture"])
         _, problems = planner.leg_summary("isolated-a1", self.trx, None, f"{planner.NAMESPACE}.Journeys.A1.")

@@ -155,9 +155,11 @@ TIMEOUTS = {"harness": 60, "isolated": 45, "contract": 60, "story": 150}
 # Each leg's `estimate` is its timeout. runner-overflow.py reads it only to send the
 # longest legs to the self-hosted pool first, so an upper bound orders them as well.
 # Each leg's `hang` is its per-test hang budget in minutes (dotnet test
-# --blame-hang-timeout). A contract case establishes every chapter before its own
-# (C3 consumes the whole Contoso storyline), so it runs longest.
-HANGS = {"harness": 20, "isolated": 20, "contract": 30, "story": 20}
+# --blame-hang-timeout). The blame collector times a whole test, not its silence. A contract
+# case establishes every chapter before its own (C3 consumes the whole Contoso storyline), and
+# so does an isolated case: U4 consumes A2 to U6, whose establishment alone can take 18 minutes
+# on a loaded runner (#5735), so both carry the longest budget.
+HANGS = {"harness": 20, "isolated": 30, "contract": 30, "story": 20}
 
 
 class PlanError(Exception):
