@@ -14,7 +14,7 @@ guarantee. The design authority remains [`design/LiveAdvanceDesign.md`](design/L
 |--------|------|---------|------------|
 | E | `WalAppendEpoch` | nothing | `StaleEpochNeverAppends`, `ClaimHeadCoversPriorAppends`, `RaisedEpochUnique`, `OnlySupersededRefused`, and the entry check |
 | H | `WalHandOffFence` | E's entry check | `HandOffBound`, `AbsentMarkerHolds`, `CloseHeadMonotone` |
-| R | `WalRoutingFloor` | E's entry check | `StraddlerBelowInit`, `LiveGenerationAboveFloor` |
+| R | `WalRoutingFloor` | E's entry check | `StraddlerBelowInit`, `LiveGenerationAboveFloor`, `InitHeadCoversPriorAllocations` |
 | B | `WalBulkSwitch` | nothing | `BulkHintBound`, `ContestedKeyAgrees` |
 | C | `WalLiveAdvanceCore` | every guarantee above | `ReadPositionHonest`, `SnapshotHonest`, `NoTrimPastAcked`, and liveness |
 
@@ -85,11 +85,14 @@ for `CloseHeadMonotone`, as an action property).
   refinement argument for routing generations, which run the same claim code.
 
 **H, `WalHandOffFence`**
-- `HandOffBound`: a `Foreign(i)` offset is allocated only while L's marker for the
-  window is open, or below the `closedAt` the window's close recorded. Equivalently,
-  after a close with heads `h`, no write admitted before the close is allocated at
-  or above `h`, whatever stamp, kind (point, batch, range-delete walk) or path
-  (stamp at admission, admission mark, a claim reset by a restart) it took.
+- `HandOffBound`: whenever L's marker reads closed (initialised, and no window
+  open), every `Foreign(i)` offset lies below `closedAt`, whatever stamp, kind
+  (point, batch, range-delete walk) or path (stamp at admission, admission mark, a
+  claim reset by a restart) it took. It is conditioned on the marker reading
+  closed, exactly as H checks it: while the marker is not initialised it says
+  nothing about a foreign allocation or a close's heads, and an absent or
+  uninitialised marker holds L instead (`AbsentMarkerHolds`). A consumer may not
+  read it as "a foreign append is allocated only while the marker is open".
 - `AbsentMarkerHolds`: L's marker reads closed only once it is initialised. An
   absent or uninitialised marker holds L.
 - `CloseHeadMonotone`: within an incarnation of L's marker, `closedAt` never
@@ -104,6 +107,11 @@ for `CloseHeadMonotone`, as an action property).
   not at all.
 - `LiveGenerationAboveFloor`: every live initiator's current generation is above
   its own floor.
+- `InitHeadCoversPriorAllocations`: the re-created incarnation's first
+  initialisation records a `closedAt` above every offset allocated before it,
+  whoever allocated it, a foreign record in a window the purge left open included.
+  Its head is its claim's, the allocator head at the claim, not a bound on any one
+  author's appends.
 
 **B, `WalBulkSwitch`**
 - `BulkHintBound`: a bulk-born leaf's birth read position is at or below every
@@ -115,12 +123,18 @@ for `CloseHeadMonotone`, as an action property).
 ## What C assumes
 
 C models the other modules only as environment constraints:
-- **Own appends** satisfy E's three guarantees.
+- **Own appends** satisfy E's three guarantees. The purge retires every raised
+  epoch, but an activation that never claimed is not refused by E, whose clear finds
+  no row of it: it may claim afterwards as the re-created incarnation's.
 - **Foreign appends** satisfy `HandOffBound` and `AbsentMarkerHolds`, and every
   close and the first initialisation max-merge their heads into `closedAt`
-  (`CloseHeadMonotone`).
-- **Straddler appends** satisfy `StraddlerBelowInit`.
-- **A bulk-born leaf's birth** satisfies `BulkHintBound`.
+  (`CloseHeadMonotone`). While the marker is not initialised, a foreign append may
+  be allocated and a close may record any head.
+- **Straddler appends** satisfy `StraddlerBelowInit`, and the first initialisation
+  covers every earlier allocation (`InitHeadCoversPriorAllocations`).
+- **A bulk-born leaf's birth** satisfies `BulkHintBound` and nothing more: its read
+  position may be anywhere at or below its hint minus one (#5752's cap, a timed-out
+  or partial relocation), holding every record at or below it.
 - **Unstamped appends** are always reported, and raise every reader's `seenU` before
   it arms. This is the stamp census's obligation, and the core's own unstamped
   watermark and self-report model it.

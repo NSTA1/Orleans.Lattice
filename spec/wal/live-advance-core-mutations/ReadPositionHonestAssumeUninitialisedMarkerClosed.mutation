@@ -8,7 +8,7 @@ TARGET: ReadPositionHonest
 CLASS: Invariant
 SUMMARY: the purge deletes L's marker but its state still reads initialised
 PERTURBS: Recreate
-BOUNDS: WithRecreate = TRUE
+BOUNDS: WithRecreate = TRUE, WithUnclaimedSurvivor = FALSE
 
 --- FIND
     /\ recreated' = TRUE

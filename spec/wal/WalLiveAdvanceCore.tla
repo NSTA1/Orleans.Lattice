@@ -14,13 +14,14 @@
 (*    claim head the allocator head at the raise; only the current        *)
 (*    activation allocates a stamped append, so a superseded one never    *)
 (*    allocates again and no two share a raised epoch.                    *)
-(*  - Foreign appends (H): allocated only while L's marker is open; a     *)
-(*    close records the allocator head as closedAt; an uninitialised      *)
-(*    marker holds L.                                                     *)
+(*  - Foreign appends (H): allocated only while L's marker is open or not *)
+(*    initialised; once it is, a close records a head above them,         *)
+(*    max-merged into closedAt; an uninitialised marker holds L.          *)
 (*  - Straddler appends (R): allocated only after a purge and before the   *)
-(*    re-created incarnation's first initialisation records its heads.    *)
-(*  - A bulk-born leaf (B): born holding every record below its birth     *)
-(*    hint, with its marker open.                                         *)
+(*    re-created incarnation's first initialisation, which records a head *)
+(*    above every allocation before it.                                   *)
+(*  - A bulk-born leaf (B): born at or below its birth hint, holding every *)
+(*    record at or below its read position, with its marker open.         *)
 (*  - Unstamped appends: always admitted and always reported. The core    *)
 (*    models the partition's unstamped watermark itself, its reset on a   *)
 (*    WAL shard restart, and an activation's own unstamped append         *)
@@ -46,9 +47,12 @@ EXTENDS Integers, FiniteSets
 (* unstamped append), WithGateFlip (an activation's own unstamped         *)
 (* appends), WithRestart (a WAL shard restart), WithRecreate (L's tree    *)
 (* purged and re-created, with a straddler of the purged incarnation) and *)
-(* WithBulk (L born by a bulk switch).                                     *)
+(* WithBulk (L born by a bulk switch). WithClaimedPurge and               *)
+(* WithUnclaimedSurvivor slice the purge by whether it finds a1 claimed,  *)
+(* to keep each configuration within the TLC budget (see Recreate).       *)
 (***************************************************************************)
-CONSTANTS MaxWindows, WithMixedVersion, WithGateFlip, WithRestart, WithRecreate, WithBulk
+CONSTANTS MaxWindows, WithMixedVersion, WithGateFlip, WithRestart, WithRecreate, WithBulk,
+          WithUnclaimedSurvivor, WithClaimedPurge
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
@@ -182,15 +186,20 @@ Init ==
 
 (***************************************************************************)
 (* B's BulkHintBound, as an environment step. Create: the bulk-born leaf's *)
-(* first activation, holding the rows relocated into it at birth (every   *)
-(* record below the birth hint), its read position just below the hint.   *)
+(* first activation, its read position anywhere from -1 to just below the *)
+(* birth hint (#5752's cap, or a timed-out or partial relocation, starts  *)
+(* it lower), holding every record at or below it and possibly more.      *)
 (***************************************************************************)
+Allocated == {o \in Offs : author[o] # NoAuthor}
+
 Create ==
     /\ phase = "window"
     /\ phase' = "live"
     /\ up' = {"a1"}
-    /\ cache' = [cache EXCEPT !["a1"] = {o \in Offs : author[o] = PreAuthor}]
-    /\ rp' = [rp EXCEPT !["a1"] = hint - 1]
+    /\ \E r \in -1..(hint - 1), held \in SUBSET Allocated :
+        /\ \A o \in Allocated : o <= r => o \in held
+        /\ cache' = [cache EXCEPT !["a1"] = held]
+        /\ rp' = [rp EXCEPT !["a1"] = r]
     /\ UNCHANGED <<walVars, mine, snapCov, snapRows, epochVars, handVars, oldVars>>
     /\ UNCHANGED <<recreated, reinit, spUsed, hint>>
 
@@ -260,8 +269,10 @@ Land(o) ==
 (***************************************************************************)
 (* H's guarantees, as environment steps. ForeignOpen opens L's marker for *)
 (* a hand-off window. ForeignAlloc: a foreign append is allocated only    *)
-(* while the marker is open (HandOffBound). Close records any head up to  *)
-(* the allocator's above every foreign record, the weakest HandOffBound   *)
+(* while the marker is open, or while it is not initialised, where        *)
+(* HandOffBound, conditioned on the marker reading closed, says nothing.  *)
+(* Close records any head up to the allocator's, above every foreign      *)
+(* record once the marker is initialised, the weakest HandOffBound        *)
 (* allows, and the marker max-merges it into closedAt (CloseHeadMonotone). *)
 (* HandOff(o, a) delivers a foreign record to an activation, which is     *)
 (* when it is acknowledged; it may never happen.                          *)
@@ -275,7 +286,7 @@ ForeignOpen ==
     /\ UNCHANGED <<walVars, leafVars, epochVars, mInit, hoClosedAt, oldVars, envVars>>
 
 ForeignAlloc ==
-    /\ hoOpen
+    /\ hoOpen \/ ~mInit
     /\ next < MaxOff
     /\ next' = next + 1
     /\ author' = [author EXCEPT ![next] = Foreign]
@@ -290,7 +301,7 @@ Close ==
     /\ phase = "live"
     /\ hoOpen
     /\ hoOpen' = FALSE
-    /\ \E h \in HeadsAbove({Foreign}) : hoClosedAt' = Max2(hoClosedAt, h)
+    /\ \E h \in IF mInit THEN HeadsAbove({Foreign}) ELSE 0..next : hoClosedAt' = Max2(hoClosedAt, h)
     /\ UNCHANGED <<walVars, leafVars, epochVars, mInit, windows, oldVars, envVars>>
 
 HandOff(o, a) ==
@@ -402,29 +413,33 @@ Restart ==
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, seenU, oldUsed, oldRejected, envVars>>
 
 (***************************************************************************)
-(* The purge, H's AbsentMarkerHolds and R's StraddlerBelowInit, as         *)
-(* environment steps (WithRecreate). Recreate: L's tree is purged and     *)
-(* re-created. L's marker is deleted, so its state is not initialised and *)
-(* holds L. Every running activation belongs to the purged incarnation:   *)
-(* its epoch is retired, so it never claims or appends stamped again; the *)
-(* duplicate, if it has not activated, is the re-created incarnation's.   *)
-(* StraddlerAlloc: a write a shard root of the purged incarnation admitted *)
-(* is allocated, only before the re-created incarnation's first            *)
-(* initialisation. MarkInit: that initialisation records, as a close, any  *)
-(* head above every foreign and straddler record (StraddlerBelowInit),     *)
+(* The purge, H's AbsentMarkerHolds and R's guarantees, as environment    *)
+(* steps (WithRecreate). Recreate: L's tree is purged and re-created. L's *)
+(* marker is deleted, so its state is not initialised and holds L. The    *)
+(* purge retires every raised epoch, so no activation is current: one that *)
+(* claimed never claims again and never appends stamped. One that never   *)
+(* claimed is not refused by E, whose clear finds no row of it, so it may *)
+(* claim and become the re-created incarnation's activation (F1). Which   *)
+(* activations are unclaimed at the purge selects the configuration's     *)
+(* slice: WithUnclaimedSurvivor for a purge that finds a1 unclaimed,      *)
+(* WithClaimedPurge for every other. StraddlerAlloc: a write a shard root *)
+(* of the purged incarnation admitted is allocated, only before the       *)
+(* re-created incarnation's first initialisation. MarkInit: that          *)
+(* initialisation records, as a close, any head above every foreign and   *)
+(* straddler record allocated before it (InitHeadCoversPriorAllocations), *)
 (* max-merged into closedAt, and initialises L's marker state.             *)
 (***************************************************************************)
 Recreate ==
     /\ WithRecreate
     /\ phase = "live"
     /\ ~recreated
+    /\ IF "a1" \in up /\ ~claimed["a1"] THEN WithUnclaimedSurvivor ELSE WithClaimedPurge
     /\ recreated' = TRUE
     /\ mInit' = FALSE
     /\ hoOpen' = FALSE
     /\ hoClosedAt' = 0
     /\ cur' = NoAct
-    /\ stale' = stale \cup up
-    /\ UNCHANGED <<walVars, leafVars, claimed, claimHead, dupUsed, windows, oldVars>>
+    /\ UNCHANGED <<walVars, leafVars, claimed, claimHead, stale, dupUsed, windows, oldVars>>
     /\ UNCHANGED <<reinit, spUsed, phase, hint>>
 
 StraddlerAlloc ==

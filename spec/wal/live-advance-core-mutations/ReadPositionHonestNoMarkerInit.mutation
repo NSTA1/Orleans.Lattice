@@ -8,7 +8,7 @@ MODULE: ReadPositionHonestNoMarkerInit
 TARGET: ReadPositionHonest
 CLASS: Invariant
 SUMMARY: the activation arms while L's marker state is not initialised
-BOUNDS: WithRecreate = TRUE
+BOUNDS: WithRecreate = TRUE, WithUnclaimedSurvivor = FALSE
 
 --- FIND
     /\ claimed[a]

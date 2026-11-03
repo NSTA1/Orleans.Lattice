@@ -1,0 +1,17 @@
+# Weakens R's InitHeadCoversPriorAllocations in this module's environment: the
+# re-created incarnation's first initialisation records a head above every straddler
+# but not above a foreign record a window the purge left open holds. That record is
+# then bounded by nothing, and the re-created incarnation's live advance passes it.
+MODULE: ReadPositionHonestAssumeInitHeadBelowForeign
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the first initialisation's head covers straddlers only
+PERTURBS: MarkInit
+BOUNDS: WithRecreate = TRUE, WithUnclaimedSurvivor = FALSE
+
+--- FIND
+    /\ \E h \in HeadsAbove({Foreign, Straddler}) : hoClosedAt' = Max2(hoClosedAt, h)
+--- REPLACE
+\* MUTATION: the head covers straddlers only.
+    /\ \E h \in HeadsAbove({Straddler}) : hoClosedAt' = Max2(hoClosedAt, h)
+--- END

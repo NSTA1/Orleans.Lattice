@@ -21,13 +21,15 @@ the shared per-leaf snapshot, and append; the GC trims below the snapshot's cove
 Every other author of an entry L owns is environment, constrained exactly by the
 guarantee of the module that owns it: own stamped appends by the current activation only,
 with a claim head equal to the allocator head at the raise (E); foreign appends only while
-L's marker is open, with a close recording the allocator head (H); one hand-off window and
+L's marker is open or not initialised, with a close recording a head above them once it is
+(H); one hand-off window and
 a hand-off that may deliver a foreign record to an activation; a 10.2.0 silo's unstamped
 append, always admitted and raising the partition's unstamped watermark. The base adds
 nothing else. The variants add one environment each: a WAL shard restart (`Restart`), own
 unstamped appends by any running activation (`GateFlip`), L's tree purged and re-created
 with a straddler of the purged incarnation and the re-created incarnation's first
-initialisation (`Recreate`, R and H), and a bulk-born leaf (`Bulk`, B). The core owns
+initialisation (R and H, in three slices: `Recreate`, `RecreateSurvivor` and
+`RecreateSurvivorMixed`), and a bulk-born leaf (`Bulk`, B). The core owns
 `Armed(a)`, `LiveAdvance`, `Replay`, `Capture`, `GcTrim`, the applied-prefix tracker
 (`mine`, and the in-flight own appends), the unstamped watermark with its restart reset and
 self-report, and the duplicate. The base also checks one liveness property,
@@ -46,12 +48,13 @@ weaken each one in turn and go red, so each is load-bearing.
   | Assumption | Guarantee | Discharged by | Here | Weakened by |
   |------------|-----------|---------------|------|-------------|
   | A claim makes one activation current, its head the allocator head at the raise | `ClaimHeadCoversPriorAppends` | E, `WalAppendEpoch` | `Claim(a)` sets `claimHead[a]` to `next` in the step that makes `a` current | `ReadPositionHonestAssumeClaimHeadBelowAllocator` |
-  | A superseded activation never allocates again; no two activations share a raised epoch | `StaleEpochNeverAppends`, `RaisedEpochUnique` | E, `WalAppendEpoch` | `OwnAlloc(a)` requires `cur = a`; a `Claim` makes the previous current activation stale, and a stale one never claims | `ReadPositionHonestAssumeSupersededAllocates` |
-  | A foreign append is allocated only while L's marker is open, or below the `closedAt` its close recorded | `HandOffBound` | H, `WalHandOffFence` | `ForeignAlloc` requires `hoOpen`; `Close` records any head up to `next` above every foreign offset | `ReadPositionHonestAssumeForeignAfterClose` (the allocation) and `ReadPositionHonestAssumeCloseHeadUnderstated` (the close) |
+  | A superseded activation never allocates again; no two activations share a raised epoch | `StaleEpochNeverAppends`, `RaisedEpochUnique` | E, `WalAppendEpoch` | `OwnAlloc(a)` requires `cur = a`; a `Claim` makes the previous current activation stale, and a stale one never claims; the purge retires every raised epoch (`Recreate` leaves no activation current), but an activation that never claimed may claim afterwards, because E's clear finds no row of it | `ReadPositionHonestAssumeSupersededAllocates` |
+  | A foreign append is allocated only while L's marker is open, or below the `closedAt` its close recorded | `HandOffBound` | H, `WalHandOffFence` | `ForeignAlloc` requires `hoOpen`, or the marker not initialised, where H's guarantee is conditioned away; `Close` records any head up to `next` above every foreign offset once the marker is initialised, and any head up to `next` before | `ReadPositionHonestAssumeForeignAfterClose` (the allocation) and `ReadPositionHonestAssumeCloseHeadUnderstated` (the close) |
   | An absent or uninitialised marker holds L | `AbsentMarkerHolds` | H, `WalHandOffFence` | the purge deletes the marker: `mInit` is `FALSE` until the first initialisation | `ReadPositionHonestAssumeUninitialisedMarkerClosed` |
   | Every close, and the first initialisation, max-merges its heads into `closedAt`, so it never decreases within an incarnation of the marker | `CloseHeadMonotone` | H, `WalHandOffFence` | `Close` and `MarkInit` write `Max2(hoClosedAt, h)`; the purge discards the marker, so `Recreate` resets `hoClosedAt` | `ReadPositionHonestAssumeCloseReplacesHeads` |
-  | A straddler is allocated only below the heads the re-created incarnation's first initialisation records | `StraddlerBelowInit` | R, `WalRoutingFloor` | `StraddlerAlloc` requires `~reinit`; `MarkInit` records any head up to `next` above every foreign and straddler offset | `ReadPositionHonestAssumeStraddlerAfterInit` (the allocation) and `ReadPositionHonestAssumeInitHeadsMissing` (the initialisation) |
-  | A bulk-born leaf's birth position is at or below every record of its range it does not hold at birth | `BulkHintBound` | B, `WalBulkSwitch` | `Create` holds every record below the hint and reads from the hint | `ReadPositionHonestAssumeBulkHintAboveUnheld` |
+  | A straddler is allocated only below the heads the re-created incarnation's first initialisation records | `StraddlerBelowInit` | R, `WalRoutingFloor` | `StraddlerAlloc` requires `~reinit` | `ReadPositionHonestAssumeStraddlerAfterInit` (the allocation) and `ReadPositionHonestAssumeInitHeadsMissing` (the initialisation) |
+  | The first initialisation records a head above every offset allocated before it, whoever allocated it | `InitHeadCoversPriorAllocations` | R, `WalRoutingFloor` | `MarkInit` records any head up to `next` above every foreign and straddler offset | `ReadPositionHonestAssumeInitHeadBelowForeign` |
+  | A bulk-born leaf's birth position is at or below every record of its range it does not hold at birth | `BulkHintBound` | B, `WalBulkSwitch` | `Create` picks any read position from `-1` to the hint minus one, and holds every record allocated at or below it: B's guarantee itself, not a birth at the hint, since #5752's cap and a timed-out or partial relocation both start lower | `ReadPositionHonestAssumeBulkHintAboveUnheld` |
   | Every unstamped append is reported | the stamp census | the core itself (the watermark) | `OldAlloc` and `OwnAllocUnstamped` raise `lastU`; a stamped append's response reports it; an own unstamped append reports itself | `ReadPositionHonestAssumeUnstampedUnreported` |
 
   Four readings of the contract are worth stating. `RaisedEpochUnique` and
@@ -63,7 +66,15 @@ weaken each one in turn and go red, so each is load-bearing.
   of the purged incarnation by the first initialisation's heads, which is why
   `ReadPositionHonestAssumeInitHeadsMissing` and
   `ReadPositionHonestAssumeUninitialisedMarkerClosed` both find a counterexample through
-  such a write as well as through a straddler. Finally, a close and the first
+  such a write as well as through a straddler. The environment is exactly each guarantee
+  as its owning module checks it, not the protocol behind it: member 6c's composite check,
+  which copies each producer's guarantees and each of these steps, found five edges where
+  this module had assumed more, and each was widened or the producer's guarantee stated.
+  A never-claimed activation may outlive the purge (E); a foreign append and a close are
+  unconstrained while L's marker is not initialised (H, whose guarantee is conditioned on
+  the marker reading closed); the first initialisation's head covers every earlier
+  allocation (R, `InitHeadCoversPriorAllocations`, stated for this); and a bulk-born
+  leaf may start anywhere at or below its hint (B). Finally, a close and the first
   initialisation record the weakest head their guarantee allows - any head up to `next`
   above the offsets it bounds - rather than `next` itself. Recording `next` would make
   `closedAt` monotone incidentally, as the allocator only grows, so the model would never
@@ -106,14 +117,14 @@ weaken each one in turn and go red, so each is load-bearing.
 
 | Spec action | Protocol step | Code counterpart | Detector |
 |-------------|---------------|------------------|----------|
-| `Create` | **Environment (B's `BulkHintBound`).** A bulk-born leaf's first activation, holding the rows relocated into it, reading from its birth hint under the switch's open marker | `ShardRootGrain.BeginBulkSwitchAsync` takes the hint (`ShardRootGrain.CaptureBulkBirthHeadsAsync`) with the open marker. The leaf is initialised without `SiblingInitialization.WalHeadsAtBirth` and seeds no birth pin; its read position arrives after the relocation, through `ShardRootGrain.FinishBulkSwitchAsync` calling `BPlusLeafGrain.SetCheckpointOffsetHintsAsync`. | Yes: `LiveCheckpointAdvanceIntegrationTests.A_bulk_appended_leaf_arms_once_its_switch_has_closed` and `BulkAppendExistingRowsIntegrationTests.BulkAppend_appended_leaves_start_from_the_birth_hint_and_the_runs_switches_close_by_fence`. |
+| `Create` | **Environment (B's `BulkHintBound`).** A bulk-born leaf's first activation under the switch's open marker, its read position anywhere from `-1` to the hint minus one, holding every record at or below it | `ShardRootGrain.BeginBulkSwitchAsync` takes the hint (`ShardRootGrain.CaptureBulkBirthHeadsAsync`) with the open marker. The leaf is initialised without `SiblingInitialization.WalHeadsAtBirth` and seeds no birth pin; its read position arrives after the relocation, through `ShardRootGrain.FinishBulkSwitchAsync` calling `BPlusLeafGrain.SetCheckpointOffsetHintsAsync`. | Yes: `LiveCheckpointAdvanceIntegrationTests.A_bulk_appended_leaf_arms_once_its_switch_has_closed` and `BulkAppendExistingRowsIntegrationTests.BulkAppend_appended_leaves_start_from_the_birth_hint_and_the_runs_switches_close_by_fence`. |
 | `Claim(a)` | **Environment (E's `ClaimHeadCoversPriorAppends`, `RaisedEpochUnique`).** A claim is raised: the activation becomes current, its claim head is the allocator head, and the one it supersedes never allocates stamped again | E's three-step claim (`AppendEpochRefinement.md`); the core reads its outcome through `LeafAppendEpochFence.TryGetArmingView`, which answers only for a claim under the current epoch of an activation not stale. **Over-approximation:** each activation claims once, and any running activation not stale may claim in any order. | Yes: `LiveCheckpointAdvanceIntegrationTests.A_stale_duplicates_append_before_the_claim_is_read_before_the_leaf_advances_past_it` and `WalShardGrainTests.The_claim_head_is_the_allocator_next_offset`. |
 | `OwnAlloc(a)` | **Environment (E's `StaleEpochNeverAppends`).** The current activation's stamped append is allocated, and its response reports the unstamped watermark | `WalFencedAppendDispatch.AppendPointAsync` and `WalFencedAppendDispatch.AppendBatchAsync` pass the watermark in each stamped response to `LeafAppendEpochFence.OnStampedAppended`. | Yes: `LeafAppendEpochFenceTests.Stamped_responses_raise_the_reported_watermark`, `WalShardGrainTests.Unstamped_appends_are_always_admitted_and_reported` and `BPlusLeafGrainTests.A_reported_unstamped_append_holds_the_advance_until_a_replay_reads_past_it`. |
 | `OwnAllocUnstamped(a)` | An own append made unstamped - a closed gate view, a claim fault or exhausted rounds, an unreachable leaf - by any running activation, always admitted, raising the watermark and reporting itself | `WalFencedAppendDispatch.AppendPointAsync` and `WalFencedAppendDispatch.AppendBatchAsync` call `LeafAppendEpochFence.OnUnstampedAppended` with the offsets an unstamped append returned. | Yes: `LeafAppendEpochFenceTests.Own_unstamped_appends_report_themselves`, `BPlusLeafGrainTests.A_write_through_an_existing_leaf_method_reports_itself_and_holds_the_advance` and `BPlusLeafGrainTests.A_descent_unreachable_leaf_never_claims_and_appends_unstamped_and_reported`. |
 | `Land(o)` | The append becomes durable; an own append is applied, recorded by the tracker and acknowledged | The append site applies, then `BPlusLeafGrain.MarkLiveAppendApplied` releases the count and records the offset in `BPlusLeafGrain._liveOwnHigh`; an apply that throws leaves the count held, which turns the advance off for the activation. | Yes: `BPlusLeafGrainTests.A_live_advance_waits_until_every_issued_append_is_applied` and `BPlusLeafGrainTests.A_failed_append_turns_the_live_advance_off_for_the_activation`. |
 | `ForeignOpen` | **Environment (H).** A hand-off opens L's marker before its first admission. Its only mutation is a `TypeOK` bound (`TypeOkForeignWindowPastBound`): opening only enables `ForeignAlloc`, whose role `ReadPositionHonestAssumeForeignAfterClose` covers | `HandOffMarkerCore.Open`, on the leaf's marker or the shard's (`ShardRootGrain.OpenHandOffMarkerAsync`). | Yes: `HandOffMarkerCoreTests.An_open_is_idempotent_and_holds_only_overlapping_owners` and `BPlusLeafGrainTests.An_open_leaf_marker_holds_the_advance`. |
-| `ForeignAlloc` | **Environment (H's `HandOffBound`).** A foreign append is allocated while L's marker is open | A hand-off initiator's stamped append, admitted at the WAL shard under its epoch or routing generation (`WalShardGrain.AppendStampedAsync`). | Yes: `BPlusLeafGrainTests.An_open_shard_marker_token_holds_only_the_leaves_it_overlaps` and `LeafHandOffFenceIntegrationTests.Every_split_opens_its_marker_at_the_siblings_birth_and_closes_it_by_the_donors_bump`. |
-| `Close` | **Environment (H's `HandOffBound` and `CloseHeadMonotone`).** The close fences and records a head above every foreign record, max-merged into `closedAt` | `HandOffMarkerCore.Close` with the heads the initiator's re-claim returned (`ShardRootGrain.CloseHandOffMarkerAsync`); `HandOffMarkerCore.RequiredHead` takes the maximum over every retained close and the compacted heads. | Yes: `HandOffMarkerCoreTests.A_close_records_the_fence_heads_over_the_hand_off_range_and_never_reopens`, `HandOffMarkerCoreTests.A_later_close_with_lower_heads_never_lowers_the_required_heads` and `BPlusLeafGrainTests.A_close_head_above_the_checkpoint_holds_the_advance_until_a_replay_reaches_it`. |
+| `ForeignAlloc` | **Environment (H's `HandOffBound`).** A foreign append is allocated while L's marker is open, or while it is not initialised, where `HandOffBound` constrains nothing | A hand-off initiator's stamped append, admitted at the WAL shard under its epoch or routing generation (`WalShardGrain.AppendStampedAsync`). | Yes: `BPlusLeafGrainTests.An_open_shard_marker_token_holds_only_the_leaves_it_overlaps` and `LeafHandOffFenceIntegrationTests.Every_split_opens_its_marker_at_the_siblings_birth_and_closes_it_by_the_donors_bump`. |
+| `Close` | **Environment (H's `HandOffBound` and `CloseHeadMonotone`).** The close fences and records a head, above every foreign record once the marker is initialised, max-merged into `closedAt` | `HandOffMarkerCore.Close` with the heads the initiator's re-claim returned (`ShardRootGrain.CloseHandOffMarkerAsync`); `HandOffMarkerCore.RequiredHead` takes the maximum over every retained close and the compacted heads. | Yes: `HandOffMarkerCoreTests.A_close_records_the_fence_heads_over_the_hand_off_range_and_never_reopens`, `HandOffMarkerCoreTests.A_later_close_with_lower_heads_never_lowers_the_required_heads` and `BPlusLeafGrainTests.A_close_head_above_the_checkpoint_holds_the_advance_until_a_replay_reaches_it`. |
 | `HandOff(o, a)` | **Environment.** A foreign record is delivered to an activation, which acknowledges it; it may never happen | The relocation of a hand-off's rows into the owner (a split's transfer, a reclaim's absorb, a bulk graft), which the core sees only as rows already in its projection. **Over-approximation:** any running activation may receive any durable foreign record, at any time. | Yes: `LeafHandOffFenceIntegrationTests.Every_split_opens_its_marker_at_the_siblings_birth_and_closes_it_by_the_donors_bump` and `LeafHandOffFenceIntegrationTests.Every_reclaim_opens_its_marker_on_the_survivor_and_closes_it_after_retiring_the_absorbed_leaf`. |
 | `OldAlloc` | A 10.2.0 silo's unstamped append (or any path the census classes unstamped), always admitted, raising the unstamped watermark | `WalShardGrain.AppendAsync`, whose unstamped shapes have no rejection path (the fence never rejects one), raising `WalShardGrain._unstampedWatermark`. | Yes: `WalShardGrainTests.Unstamped_appends_are_always_admitted_and_reported`, `WalAppendFenceMixedVersionTests.The_existing_unstamped_methods_keep_working_on_the_older_build` and `LiveCheckpointAdvanceIntegrationTests.A_foreign_unstamped_append_reported_after_arming_is_read_by_replay`. |
 | `Replay(a)` | Read and apply the next durable entry, never a trimmed one | `BPlusLeafGrain.ReplayPartitionAsync`, the replay-based advance the core falls back to (`WalDurability`'s `ReadStep`). | Yes: `BPlusLeafGrainTests.A_leaf_that_has_not_read_to_its_claim_head_advances_only_by_replay` and `LiveCheckpointAdvanceIntegrationTests.A_foreign_unstamped_append_reported_after_arming_is_read_by_replay`. |
@@ -122,9 +133,9 @@ weaken each one in turn and go red, so each is load-bearing.
 | `GcTrim` | Trim the next durable entry below the snapshot's coverage | `LatticeWalGc.TrimShardAsync`, bounded by the leaf's pin (`WalDurability`'s `GcTrim`). **Over-approximation:** the model trims to the shared snapshot's coverage alone. | Yes: `LeafDurablePinCoreTests.A_covered_partition_is_entitled_to_the_lower_of_its_persisted_checkpoint_and_coverage` and `BPlusLeafGrainTests.The_coverage_lag_tick_makes_a_live_written_leafs_pin_usable_without_a_replay`. |
 | `Duplicate` | A second activation of L, or the next one, starts from the shared snapshot and must claim before it appends stamped | `BPlusLeafGrain.ExecuteActivationReplayAsync` rehydrates from the snapshot (`BPlusLeafGrain.TryRehydrateFromSnapshotAsync`); its own `LeafAppendEpochFence` claims afresh. **Environment:** once in the model. | Yes: `LiveCheckpointAdvanceIntegrationTests.A_stale_duplicates_append_before_the_claim_is_read_before_the_leaf_advances_past_it` and `BPlusLeafGrainTests.Activation_rehydrates_cache_from_snapshot_when_offset_exceeds_checkpoint`. |
 | `Restart` | A WAL shard restart, a reactivation or a move's cutover, resets the in-memory unstamped watermark to the recovered allocator head minus one | `WalShardGrain.OnActivateAsync` sets `WalShardGrain._unstampedWatermark` from the recovered `WalShardGrain._nextOffset`. **Environment:** once in the model. | Yes: `WalShardGrainTests.The_unstamped_watermark_restarts_at_the_recovered_head`. |
-| `Recreate` | **Environment (H's `AbsentMarkerHolds`).** L's tree is purged and re-created: its marker is deleted and so not initialised, and every running activation belongs to the purged incarnation, whose epoch is retired | The leaf's clear deletes its marker row (`BPlusLeafGrain.ClearHandOffMarkerAsync`, `HandOffMarkerRows.ClearLeafAsync`), and the re-seeded shard root retires a predating marker (`ShardRootGrain.RetirePredatingHandOffMarkerAsync`); the epoch retirement is E's. | Yes: `TreeFenceRowPurgeIntegrationTests.A_purge_retires_every_fence_row_and_the_re_created_tree_starts_above_the_floor`, `TreeFenceRowPurgeIntegrationTests.A_tree_re_created_after_a_purge_that_retired_nothing_never_adopts_its_markers` and `BPlusLeafGrainTests.An_uninitialised_leaf_marker_holds_until_the_leaf_adopts_its_shards_flag`. |
+| `Recreate` | **Environment (H's `AbsentMarkerHolds`).** L's tree is purged and re-created: its marker is deleted and so not initialised, and the purge retires every raised epoch, so no activation is current; one that never claimed may claim afterwards | The leaf's clear deletes its marker row (`BPlusLeafGrain.ClearHandOffMarkerAsync`, `HandOffMarkerRows.ClearLeafAsync`), and the re-seeded shard root retires a predating marker (`ShardRootGrain.RetirePredatingHandOffMarkerAsync`); the epoch retirement is E's. | Yes: `TreeFenceRowPurgeIntegrationTests.A_purge_retires_every_fence_row_and_the_re_created_tree_starts_above_the_floor`, `TreeFenceRowPurgeIntegrationTests.A_tree_re_created_after_a_purge_that_retired_nothing_never_adopts_its_markers` and `BPlusLeafGrainTests.An_uninitialised_leaf_marker_holds_until_the_leaf_adopts_its_shards_flag`. |
 | `StraddlerAlloc` | **Environment (R's `StraddlerBelowInit`).** A write a shard root of the purged incarnation admitted is allocated, only before the re-created incarnation's first initialisation | The WAL refuses a straddler at or below its initiator's routing floor (`WalShardGrain._generationFloors`), and its seam retry never re-stamps it (`ShardRootGrain.ThrowIfAdmittedUnderPurgedIncarnationAsync`). | Yes: `TreeFenceRowPurgeIntegrationTests.A_shard_root_of_a_tree_id_with_a_floor_seeds_and_claims_its_first_generation_above_it` and `TreeFenceRowPurgeIntegrationTests.A_purge_retires_every_fence_row_and_the_re_created_tree_starts_above_the_floor`. |
-| `MarkInit` | **Environment (R and H).** The re-created incarnation's first initialisation claims its seeded generation everywhere, records the heads as a close, max-merged into `closedAt` like any other, and initialises the marker state | `ShardRootGrain.FenceRecreatedIncarnationAsync`, then `ShardRootGrain.TryInitialiseHandOffMarkerAsync`; the leaf adopts the shard's flag in `BPlusLeafGrain.ReadLiveAdvanceHandOffAsync`. | Yes: `TreeFenceRowPurgeIntegrationTests.A_shard_root_of_a_tree_id_with_a_floor_seeds_and_claims_its_first_generation_above_it` and `BPlusLeafGrainTests.An_uninitialised_leaf_marker_holds_until_the_leaf_adopts_its_shards_flag`. |
+| `MarkInit` | **Environment (R's `InitHeadCoversPriorAllocations` and H).** The re-created incarnation's first initialisation claims its seeded generation everywhere, records heads above every earlier allocation as a close, max-merged into `closedAt` like any other, and initialises the marker state | `ShardRootGrain.FenceRecreatedIncarnationAsync`, then `ShardRootGrain.TryInitialiseHandOffMarkerAsync`; the leaf adopts the shard's flag in `BPlusLeafGrain.ReadLiveAdvanceHandOffAsync`. | Yes: `TreeFenceRowPurgeIntegrationTests.A_shard_root_of_a_tree_id_with_a_floor_seeds_and_claims_its_first_generation_above_it` and `BPlusLeafGrainTests.An_uninitialised_leaf_marker_holds_until_the_leaf_adopts_its_shards_flag`. |
 | `Stutter` | Natural termination | Not a protocol step; a stuttering successor so TLC does not report a quiescent state as a deadlock. | Not applicable: not a protocol step, so there is no production behaviour to detect. |
 
 ## Property mapping
@@ -155,6 +166,21 @@ it out (below). The base carries the duplicate, one hand-off window and a
 the purge, a bulk birth), because the combinations are larger than the CI budget allows
 for one case. The design model's combined configurations stay as local evidence in the
 design note.
+
+**The purge, in three slices.** Since the environment admits a never-claimed activation
+that outlives the purge, the purge alone (9,028,464 states) is over the 5M-state case
+budget. Two constants select the purge's shape, decided at the step itself, so the slices
+split the purged behaviours exactly: `WithClaimedPurge` for a purge that finds `a1`
+claimed (with only the duplicate, if any, unclaimed), `WithUnclaimedSurvivor` for one
+that finds `a1` unclaimed. The base and the other variants allow both.
+- `Recreate` checks the claimed purge with the full environment: 3,693,715 states.
+- `RecreateSurvivor` checks the unclaimed survivor without the 10.2.0 silo: 4,638,713.
+- `RecreateSurvivorMixed` checks it with the silo and no hand-off window: 1,622,161.
+- **Bounded out:** the unclaimed survivor with both a hand-off window and the silo, about
+  7.6M states; the gap register below records it.
+
+Measured with tla2tools v1.7.4 on two workers, the three slices take 2 minutes, 3
+minutes and 1 minute.
 
 **The liveness property** (member 6b) is the design note's: under weak fairness of the
 claim, replay, apply and live-advance steps, an armed activation's newborn pin eventually
@@ -234,10 +260,18 @@ clean in the design's legacy hand-off configuration, is red here: with the purge
 environment, the initialised guard is what holds a re-created incarnation while a write of
 the purged one is still allocated, so it is a mutation in this module.
 `ReadPositionHonestArmsWithoutClaim` stays a redundancy check: run locally against this
-module's base and all four variants it is clean, because an activation that has not claimed has only
+module's base and its four variants as member 6a landed them it is clean, because an activation that has not claimed has only
 unstamped own appends, each reporting itself, so it never arms past one. It is kept, as the
 design keeps it, because arming without a claim is meaningless, and it is not in the
 mutation directory, which holds only experiments that must go red.
+
+`ReadPositionHonestAssumePurgeSparesClaimed` is a redundancy check too: with the purge
+leaving the current activation's epoch raised (`Recreate` keeping `cur`), the `Recreate`
+slice stays clean. The core's properties do not tell incarnations apart: the purged
+activation's later appends are its own, applied by it and below every later claim head,
+so retiring the purged epoch protects the re-created tree's identity, which E and R
+check, not any read position here. It is kept out of the mutation directory for the same
+reason as the one above.
 
 ## Deliberate abstraction gaps
 
@@ -266,6 +300,22 @@ mutation directory, which holds only experiments that must go red.
   `BPlusLeafGrainTests.Activation_rehydrates_cache_from_snapshot_when_offset_exceeds_checkpoint`
   and `LeafSnapshotRehydrateIntegrationTests.Snapshot_capture_persists_blob_and_rehydrate_serves_keys_after_deactivation`.
   Production symbols: `WalMaterialiserPinGrain`, `LeafProjectionStaleException`, `BPlusLeafGrain.TryRescueWarmStaleLeafAsync`, `BPlusLeafGrain.LatchProjectionStaleDrive`, `BPlusLeafGrain.IsPartitionStaleLatched`.
+- **A purge's unclaimed survivor is not checked with both a hand-off window and a 10.2.0 silo.**
+  When the purge finds the born activation unclaimed, it may claim afterwards as the
+  re-created incarnation's. That slice with every other environment of `Recreate` is
+  about 7.6M states, over the 5M-state case budget, and cannot be cut further by
+  scenario: splitting it by whether the window opens, or the silo appends, before or
+  after the purge, or by whether the duplicate exists at the purge, leaves each half at
+  6.5M to 7.5M, because those reachable states coincide whatever the order of the
+  steps. It is checked in two halves instead: `RecreateSurvivor` (4,638,713 states) gives
+  the survivor the hand-off window without the silo, and `RecreateSurvivorMixed`
+  (1,622,161) gives it the silo's unstamped append without the window. What the
+  survivor adds to the purge - its claim after it, its own appends, and the claim head,
+  close heads and reported unstamped offsets it must read before it arms - meets each
+  of those environments in one of them. Only an interleaving needing a foreign record
+  and the silo's append at once, around the survivor's claim, is unchecked; the
+  claimed purge (`Recreate`) checks that interleaving for every other activation.
+  No production symbol: a model-budget scoping of which environments one configuration combines, not a production mechanism.
 - **Production holds the advance in more cases than `Armed`.** The model arms on the
   design's six conditions. Production also holds the advance while a saga prepare is
   pending, while another replay or a warm rescue is in flight, while the partition is
