@@ -1200,10 +1200,22 @@ rows into L. So the rule is at the source:
 3. **Tick re-check.** If an advance tick's descent finds the leaf unreachable while no
    marker is open on it, the leaf stops stamping for the rest of the activation.
 
-The residue is the window between a leaf becoming unreachable and its next tick. No
-correct topology change opens it: a reclaim retires the leaf under the epoch floor, and a
-split is under its marker. Only a defect that mints a live orphan would. In the model an
-orphan's append is `OldAlloc` (unstamped, reported), and dropping the report is
+**Losing reachability after the claim is covered without the tick.** A leaf that proved
+itself reachable and claimed can leave descent only through a topology change, and each
+correct one fences it independently of the re-check:
+- **Leaf reclaim.** The absorbed neighbour's entry is retired under the epoch floor in the
+  retire step, before it is unlinked, so every stamped append it makes afterwards is
+  refused at the WAL (section 1, "Retiring entries"); its writes re-route through the
+  survivor, whose marker is open while its range widens.
+- **Split.** The donor stays reachable. The leaf that is unreachable is the sibling, from
+  its birth until its parent learns of it, and it is born under the split's open marker,
+  which holds every owner the split reaches until the donor's fence closes it; an
+  interrupted split's resume re-opens the marker first (rule 1). Unlinking it again
+  requires a reclaim, above.
+
+So the tick's re-check guards only a defect that unlinks a claimed leaf outside these
+paths, and the window between such a defect and the next tick is the residue. In the
+model an orphan's append is `OldAlloc` (unstamped, reported), and dropping the report is
 `ReadPositionHonestUnstampedNotReported`, the same counterexample.
 
 ### 5. Rejections are retried where they are raised
@@ -1753,6 +1765,7 @@ Each production member carries detectors proven red. They land in this order:
 
 | Finding | Resolution |
 |---------|------------|
+| #5704 approval N1: losing reachability between the claim-time proof and the tick | Section 4: reclaim retires the entry under the epoch floor before unlinking, and a split's unreachable sibling is under the split's open marker, so the tick guards only a defect. |
 | #5709: a reachable leaf's live advance can pass an overlapping orphan's appends | Section 4, "An unreachable leaf never stamps": orphan repair never folds rows, so the rule is at the source. A leaf proves reachability by descent before its first claim; an unreachable one appends unstamped (reported), so every leaf sharing the partition replays past its records. A sibling born under an open marker keeps its eager claim, and a tick re-check stops stamping. The model's counterexample is `ReadPositionHonestUnstampedNotReported`. The descent check is named as the orphan signal, subsuming "scan chain flagged". |
 | #5702: a run shares a hint; deferred, batched closes | Section 3: a chunk's hint may be any head read before its first leaf is born, and a run reads heads only at its start. Completed append tokens close in batches by one fence and one marker write. Hand-off table updated. |
 | #5706: a resumed division cannot drain in-flight commits | Section 2: a resumed division applies no read position; the sibling replays from its own start. |
