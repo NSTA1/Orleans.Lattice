@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Grpc.Core;
 using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Operations;
@@ -141,6 +142,59 @@ public static class ContractWait
         return last!.State == LatticeOperationState.Succeeded
             ? last
             : throw new InvalidOperationException($"{what} ended {last.State} in phase '{last.Phase}': {last.FailureReason}");
+    }
+
+    /// <summary>
+    /// Polls a tracked operation until it is terminal while it keeps advancing, and requires it to
+    /// have succeeded: the wait fails only when the operation's phase and completed units have not
+    /// moved for <paramref name="stall"/>, or when <paramref name="ceiling"/> has elapsed, and
+    /// reports the trajectory it observed.
+    /// </summary>
+    /// <param name="what">The operation, for the failure message.</param>
+    /// <param name="status">Reads the operation's status.</param>
+    /// <param name="stall">How long the operation may go without advancing.</param>
+    /// <param name="ceiling">The absolute deadline.</param>
+    /// <param name="last">Receives the last status read, also when the wait times out.</param>
+    /// <returns>The succeeded operation's status.</returns>
+    /// <exception cref="InvalidOperationException">The operation failed or was cancelled.</exception>
+    /// <exception cref="TimeoutException">The operation stalled, or ran past the ceiling.</exception>
+    public static async Task<LatticeOperationStatus> SucceededWhileAdvancingAsync(
+        string what,
+        Func<Task<LatticeOperationStatus?>> status,
+        TimeSpan stall,
+        TimeSpan ceiling,
+        StrongBox<LatticeOperationStatus?>? last = null)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+        last ??= new StrongBox<LatticeOperationStatus?>();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var trajectory = new List<string>();
+        (LatticeOperationState, string, int?, long)? seen = null;
+        var advances = 0L;
+        await UntilAdvancingAsync(
+            what,
+            async () =>
+            {
+                var current = await status();
+                last.Value = current;
+                if (current is not null && (current.State, current.Phase, current.PhaseIndex, current.CompletedUnits) is var key && key != seen)
+                {
+                    seen = key;
+                    advances++;
+                    trajectory.Add($"{current.State}/{current.Phase} {current.CompletedUnits}{(current.TotalUnits is { } total ? $"/{total}" : string.Empty)} at {clock.Elapsed.TotalSeconds:0} s");
+                }
+
+                return current is { IsTerminal: true };
+            },
+            () => advances,
+            stall,
+            ceiling,
+            () => trajectory.Count == 0 ? "no status read" : string.Join(", ", trajectory));
+
+        var done = last.Value!;
+        return done.State == LatticeOperationState.Succeeded
+            ? done
+            : throw new InvalidOperationException($"{what} ended {done.State} in phase '{done.Phase}': {done.FailureReason}");
     }
 
     /// <summary>Runs <paramref name="call"/>, retrying a transient gRPC failure until the deadline.</summary>

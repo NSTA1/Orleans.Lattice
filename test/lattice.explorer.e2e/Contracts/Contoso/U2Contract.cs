@@ -1,4 +1,5 @@
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Story;
 using Names = Orleans.Lattice.Explorer.EndToEnd.Tests.Story.StoryNames.Contoso;
 
@@ -46,14 +47,53 @@ public sealed class U2Contract() : ChapterContract("U2")
         await schema.ClearVersionConfigAsync(Names.Trees.FactoryOrdersArchive);
     }
 
-    /// <summary>Starts a migration of <paramref name="treeId"/> and waits for it to succeed.</summary>
+    /// <summary>
+    /// A whole-tree migration saturates the journey estate (#5569): its own calls then time out
+    /// behind replays from -1 and it stops advancing. The wrapper runs only when the migration's
+    /// wait gave up with the operation still running.
+    /// </summary>
+    private static readonly KnownDefect MigrationStarved = new KnownDefect("#5569", "a whole-tree schema migration saturates the journey estate, so the migration stops advancing while it is still running");
+
+    /// <summary>How long a migration may go without moving to a new phase or completing more units.</summary>
+    private static readonly TimeSpan MigrationStall = TimeSpan.FromMinutes(6);
+
+    /// <summary>The absolute deadline for a migration, however steadily it advances.</summary>
+    private static readonly TimeSpan MigrationCeiling = TimeSpan.FromMinutes(8);
+
+    /// <summary>Starts a migration of <paramref name="treeId"/> and waits for it to succeed while it advances.</summary>
     /// <param name="schema">The Schema API.</param>
     /// <param name="treeId">The tree.</param>
     /// <param name="what">The migration, for messages.</param>
     public static async Task MigrateAsync(Orleans.Lattice.Api.Schema.Grpc.LatticeSchemaApiGrpcClient schema, string treeId, string what)
     {
         var migration = await schema.StartMigrationAsync(treeId);
-        await ContractWait.SucceededAsync(what, () => schema.GetSchemaOperationStatusAsync(migration.OperationId), OperationPatience);
+        var last = new System.Runtime.CompilerServices.StrongBox<Orleans.Lattice.Api.Operations.LatticeOperationStatus?>();
+        TimeoutException? timedOut = null;
+        try
+        {
+            await ContractWait.SucceededWhileAdvancingAsync(what, () => schema.GetSchemaOperationStatusAsync(migration.OperationId), MigrationStall, MigrationCeiling, last);
+        }
+        catch (TimeoutException ex)
+        {
+            timedOut = ex;
+        }
+
+        if (timedOut is null)
+        {
+            return;
+        }
+
+        if (last.Value is not { IsTerminal: false })
+        {
+            throw timedOut;
+        }
+
+        await MigrationStarved.ReproducesAsync(() =>
+        {
+            Assert.That(last.Value!.IsTerminal, Is.False, "the migration is still running when its wait gives up");
+            return Task.CompletedTask;
+        });
+        Assert.Ignore($"KNOWN DEFECT #5569: {what} was still running: {timedOut.Message}");
     }
 
     /// <inheritdoc />

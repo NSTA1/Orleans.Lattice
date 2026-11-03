@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts;
 
 namespace Orleans.Lattice.Explorer.EndToEnd.Tests.SelfTests;
@@ -59,4 +61,50 @@ public sealed class ContractWaitSelfTests
 
         Assert.That(ex!.Message, Does.Contain("ceiling"));
     }
+
+    /// <summary>An operation that keeps completing units outlasts the stall window and its success is returned.</summary>
+    [Test]
+    public async Task An_advancing_operation_outlasts_the_stall_window_and_succeeds()
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var units = 0L;
+
+        var done = await ContractWait.SucceededWhileAdvancingAsync(
+            "the self-test operation",
+            () => Task.FromResult<LatticeOperationStatus?>(Status(clock.Elapsed > Stall * 2 ? LatticeOperationState.Succeeded : LatticeOperationState.Running, ++units)),
+            Stall,
+            TimeSpan.FromMinutes(1));
+
+        Assert.That(done.State, Is.EqualTo(LatticeOperationState.Succeeded));
+    }
+
+    /// <summary>An operation that stops advancing times out, naming its trajectory and leaving its last status readable.</summary>
+    [Test]
+    public void A_stalled_operation_times_out_with_its_last_status()
+    {
+        var last = new StrongBox<LatticeOperationStatus?>();
+
+        var ex = Assert.ThrowsAsync<TimeoutException>(() => ContractWait.SucceededWhileAdvancingAsync(
+            "the self-test operation",
+            () => Task.FromResult<LatticeOperationStatus?>(Status(LatticeOperationState.Running, 3)),
+            Stall,
+            TimeSpan.FromMinutes(1),
+            last));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Message, Does.Contain("made no progress").And.Contain("Running/migrating 3"));
+            Assert.That(last.Value!.IsTerminal, Is.False);
+        });
+    }
+
+    private static LatticeOperationStatus Status(LatticeOperationState state, long units) => new()
+    {
+        OperationId = "op",
+        Kind = "self-test",
+        Scope = new LatticeOperationScope { TenantId = "default" },
+        State = state,
+        Phase = "migrating",
+        CompletedUnits = units,
+    };
 }
