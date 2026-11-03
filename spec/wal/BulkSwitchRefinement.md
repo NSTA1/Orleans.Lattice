@@ -11,6 +11,10 @@ authority is [`design/LiveAdvanceDesign.md`](design/LiveAdvanceDesign.md), secti
 directory it is a documented mapping, not a refinement proof: the gates check its names,
 detectors and coverage, and its claims were checked by reading production.
 
+In plain terms, the module guarantees that a leaf born by a bulk append never starts
+reading the WAL past a record of its range that it does not already hold, and that it
+resolves a key the range already held to the same value every other WAL reader does.
+
 ## Model scope in one paragraph
 
 One WAL partition of four offsets and one key K in the appended range, the contention
@@ -69,7 +73,8 @@ design model ([`LiveAdvanceInterface.md`](LiveAdvanceInterface.md)).
   `rpN` to `Min2(hint - 1, fO)`. Production stores the hint already converted, as the heads
   minus one (`BPlusLeafGrain.HeadsAsCheckpoints`, #5760), and applies
   `min(hint, frontier)`: in checkpoint terms `min(head - 1, O's checkpoint)`, which is the
-  model's `Min2(hint - 1, fO)`.- **Guarantees.** Two, each a checked invariant of the base:
+  model's `Min2(hint - 1, fO)`.
+- **Guarantees.** Two, each a checked invariant of the base:
   - `BulkHintBound`: N's read position is at or below every record of its range it does
     not hold, from its birth through its replay. Rows relocated into it at birth are
     held, by the offset of the record that wrote them.

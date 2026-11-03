@@ -10,6 +10,12 @@ section 2 ("The hand-off fence: other writers"). Like the other notes in this
 directory it is a documented mapping, not a refinement proof: the gates check its
 names, detectors and coverage, and its claims were checked by reading production.
 
+In plain terms, the module guarantees that once a hand-off's marker on L reads closed,
+every record another author appended to L's range under the fence lies below the heads
+the close recorded, so L can replay to those heads and miss nothing; that a missing or
+uninitialised marker never reads as closed; and that the heads L must replay to never
+go down.
+
 ## Model scope in one paragraph
 
 One owner leaf L's hand-off marker at one WAL partition of three offsets (four in the
@@ -163,7 +169,7 @@ initialised marker, and the marker reading closed above stamped foreign appends.
 
 The design model's mutations whose guard lives in this module were moved, re-targeted
 at this module's properties and re-anchored on its text. The design model keeps its
-copies until every module is promoted.
+own copies, as the record each module took its own from.
 
 | Design mutation | Here |
 |-----------------|------|
@@ -180,11 +186,13 @@ copies until every module is promoted.
 | `ReadPositionHonestRestampUnderAnyIntent` | `HandOffBoundRestampUnderAnyIntent`; anchored on `GRestamp`. |
 | `ReadPositionHonestResumeWithoutMarker` | `HandOffBoundResumeWithoutMarker`; anchored on `Resume`. |
 
-The module adds eight of its own, so that every action has a perturbation:
+The module adds nine of its own, so that every action and property has a perturbation:
 `HandOffBoundAdmitAfterClose` (`ForeignAdmit`), `HandOffBoundLazyAdmissionMark`
 (`ForeignAdmit`, `ForeignAlloc`, `ForeignReject`), `HandOffBoundUnstampedFallbackStamped`
 (`GUnstamped`), `HandOffBoundOtherIntentClosesMarker` (`OtherIntentClose`),
 `HandOffBoundCompleteWithoutClose` (`LegacyComplete`),
+`CloseHeadMonotoneCloseOverwritesHeads` (`Close`, with three windows and generations up
+to 4),
 `AbsentMarkerHoldsInitWithHandOffInFlight` (`MarkInit`),
 `AbsentMarkerHoldsInitAtGateOpen` (`OpenGate`) and `TypeOkCloseUnbounded` (`Close`).
 

@@ -12,6 +12,15 @@ decides whether to model-check, how per-module verdict receipts let unchanged
 modules skip TLC, and which gates connect the specifications to the code they
 describe.
 
+What is guaranteed, in short: a pull request that changes anything able to
+alter a TLC verdict model-checks every module whose
+[fingerprint](#fingerprints-and-verdict-receipts) it changes, unless an earlier
+run already passed that module at the identical fingerprint and left a trusted
+receipt; release lines, the nightly lane and a dispatch with receipts
+off check every module regardless. A change that cannot alter a verdict skips
+exhaustive TLC, and what remains outside every check is listed under
+[What a green check means](#what-a-green-check-means-and-what-it-does-not).
+
 [Formal Coverage](formal-coverage.md) says *what* is checked, area by area. This
 page says *how and when* it is checked. The file formats and the gate list for a
 module directory live in [`spec/README.md`](../../spec/README.md).
@@ -68,11 +77,10 @@ How to read the columns:
   checks every perturbation's anchors, row and detectors without building or
   running anything. Only the weekly lane applies the perturbations.
 - A **lightweight** pull request (only `videos/`, `.github/copilot-instructions.md`
-  and files under `.github/workflows/` other than the TLC selection and receipt
-  scripts that
+  and files under `.github/workflows/` other than the TLC routing files that
   [`lightweight-change.py`](../../.github/workflows/lightweight-change.py)
   lists) runs no test leg and no content-gate fixture at all, so it runs neither
-  smoke nor exhaustive TLC. Those listed scripts, the toolchain action and pins,
+  smoke nor exhaustive TLC. Those listed files, the toolchain action and pins,
   and everything under `spec/` are never lightweight; a change to `ci.yml` or
   `coverage.yml` alone is.
 - `ci.yml` can also be dispatched by hand on any branch. That run is evaluated
@@ -94,7 +102,7 @@ that can affect a TLC run into three classes, and
 - **Routing** files decide which job runs which existing case, or provision and
   launch legs: `test-shards.json`, the matrix planners, `tier-scope.py`,
   `TlcCiShard.cs`, the census, the receipt scripts and the workflows that launch
-  TLC legs. A routing-only change runs the smoke case, and the toolchain-free
+  TLC legs. A routing-only change that is not lightweight runs the smoke case, and the toolchain-free
   partition check in `CiMemberPullRequestTieringTests` proves every TLC case is
   still selected by exactly one TLC shard.
 - **Neutral** files never affect a TLC run: refinement notes and READMEs, the
@@ -175,7 +183,7 @@ what a receipt or routing defect would look like.
 
 Each leg also writes a **partial receipt** per module and finished item whose
 cases of that module all passed, even when the leg fails or the run is
-cancelled. The next run of the same scope
+cancelled. A later run that trusts that scope
 assembles a full receipt from one run's partials once they cover the module's
 census, so a cancelled run's completed modules are not paid for twice.
 
@@ -356,8 +364,8 @@ CI gate; see [the spike report](../../spec/atomic-commit/TraceValidation.md).
 ## What a green check means, and what it does not
 
 - **A green pull request into `main` or an integration branch that changed no
-  verdict input** ran the smoke case and
-  the structural gates, not exhaustive TLC. Its diff could not change a verdict,
+  verdict input** ran the structural gates and, when it selected `test/lattice`,
+  the smoke case - not exhaustive TLC. Its diff could not change a verdict,
   which is what the classification guarantees.
 - **A module reported as cached** was not model-checked in this run. A receipt
   says its every census case passed at the identical fingerprint in the named
@@ -452,7 +460,9 @@ against the current `main`.
 - **A module.** Create `spec/<area>/` with the files the
   [module layout](../../spec/README.md#module-layout) lists. Discovery finds it
   with no code change: the module gets a `TlcModule_<Module>` category, runs in
-  the TLC catch-all shard until `TlcCiShard` routes it elsewhere, and has a new
+  the TLC catch-all shard (or, when its name or directory matches one of
+  `TlcCiShard`'s prefix rules, has some or all of its cases routed by that rule) until
+  `TlcCiShard` routes it by name, and has a new
   fingerprint, so the pull request that adds it runs it exhaustively. The same
   pull request adds it to the [`spec/README.md` index](../../spec/README.md#modules)
   and to Formal Coverage's census - a row of the

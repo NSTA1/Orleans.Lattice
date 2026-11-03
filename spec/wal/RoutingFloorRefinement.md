@@ -12,6 +12,12 @@ section 2 ("Purging a tree's fence rows", "The WAL-side floor is load-bearing" a
 documented mapping, not a refinement proof: the gates check its names, detectors
 and coverage, and its claims were checked by reading production.
 
+In plain terms, the module guarantees that after a tree is purged and re-created, a
+write the purged incarnation admitted lands below the heads the re-created
+incarnation's first initialisation records, or not at all; that those heads lie above
+every record already in the partition, whoever wrote it; and that the purge's floors
+never refuse the live tree's own shard roots.
+
 ## Model scope in one paragraph
 
 One owner leaf L at one WAL partition of three offsets, and two shard roots of the
@@ -170,7 +176,7 @@ so no configuration of this module is kept as local-only evidence.
 
 The design model's mutations whose guard lives in this module were moved,
 re-targeted at this module's properties and re-anchored on its text. The design
-draft keeps its copies until every module has landed.
+draft keeps its own copies, as the record each module took its own from.
 
 | Design mutation | Here |
 |-----------------|------|
@@ -184,7 +190,8 @@ draft keeps its copies until every module has landed.
 | `LiveGenerationAboveFloorCatchUpTreeWide` | Same name; anchored on `CatchUp`. |
 | `LiveGenerationAboveFloorRoutingRecreatedAtOne` | Same name; re-anchored from the purge onto `FirstInit`, which seeds the generation here. |
 
-The module adds seven of its own, so every action has one: `StraddlerBelowInitAdmitAfterPurge`
+The module adds eight of its own, so every action and property has one:
+`InitHeadCoversPriorAllocationsStaleHead` (`FirstInit`), `StraddlerBelowInitAdmitAfterPurge`
 (`Admit`), `StraddlerBelowInitNoEntryCheck` and `TypeOkAllocPastOffsetDomain`
 (`Alloc`), `StraddlerBelowInitSkipWithoutIncarnation` (`CatchUpSkip`),
 `StraddlerBelowInitLegacyPurgeCrossShard` (`LegacyPurge`, showing the documented

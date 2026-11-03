@@ -8,6 +8,14 @@ is a documented mapping, not a refinement proof; the same gates check its names,
 detectors and coverage, and none checks its claims - that was done by reading
 production and by perturbing it under each detector.
 
+What the model guarantees, in plain terms: moving a WAL stream to another storage
+provider, while appends, flushes, a reader, the GC, a shard crash and the loss of the
+move's coordinator all interleave, never loses an acknowledged write, never lets a
+reader pass an append still in flight and never reissues an acknowledged offset; and
+a move's fence is never held for ever, so the stream always eventually reaches its
+end with no append in flight. It holds for one move and, in the `TwoMoves` variant, for two moves
+contending for the same stream.
+
 The model's fence has two halves: a DURABLE fence, a record in the WAL placement pin
 under a lease (`WalMoveFence`, carried by `WalPlacementPin`), and the source
 ACTIVATION's in-memory fence, which every new activation re-derives from the durable
@@ -53,11 +61,11 @@ nothing about the source.
 
 | Spec property | Code-level property it abstracts | Detector |
 |---------------|----------------------------------|----------|
-| `MovedStreamKeepsAckedWrites` | A move never loses an acknowledged write: every acknowledged entry is on the stream's current home or below what every reader has consumed. | Yes: `WalMoveDurableFenceIntegrationTests.A_source_activation_lost_after_the_final_quiesce_cannot_acknowledge_an_append_the_flip_strands` and `WalMoveDurableFenceIntegrationTests.A_flip_after_the_source_fence_lapsed_and_served_an_append_is_refused` (the source lost after the copy, on real grains), `LatticeAdminGrainWalMoveTests.A_move_copies_the_delta_when_appends_land_on_the_source_during_the_copy` and `WalMoveQuiesceCoyoteTests.Atomic_fence_check_never_assigns_after_the_fence`. |
+| `MovedStreamKeepsAckedWrites` | A move never loses an acknowledged write: every acknowledged entry is on the stream's current home, or the reader has consumed it and the GC has trimmed it. | Yes: `WalMoveDurableFenceIntegrationTests.A_source_activation_lost_after_the_final_quiesce_cannot_acknowledge_an_append_the_flip_strands` and `WalMoveDurableFenceIntegrationTests.A_flip_after_the_source_fence_lapsed_and_served_an_append_is_refused` (the source lost after the copy, on real grains), `LatticeAdminGrainWalMoveTests.A_move_copies_the_delta_when_appends_land_on_the_source_during_the_copy` and `WalMoveQuiesceCoyoteTests.Atomic_fence_check_never_assigns_after_the_fence`. |
 | `CopyTakenQuiesced` | While the move still holds its durable fence, a copied stream has no append in flight, so nothing can land on the old home between the copy and a flip that is allowed to happen. | Yes: `WalShardGrainTests.AppendAsync_throws_quiescing_while_fenced_for_a_move` and `WalMoveQuiesceCoyoteTests.Atomic_fence_check_never_assigns_after_the_fence`. |
 | `ReaderNeverPassesHole` | No reader passes an append still in flight. | Yes: `WalShippingWatermarkCoyoteTests.Watermark_never_ships_an_offset_above_a_prefix_hole` and `WalShippingWatermarkTests.The_first_in_flight_offset_is_never_exposable_and_the_one_below_it_is`. |
 | `AllocatorNeverReissues` | A recovered allocator never reissues an acknowledged offset. | Yes: `WalOffsetAllocationCoreTests.A_recovered_allocator_resumes_one_past_the_highest_stored_offset` and `WalShardGrainTests.AppendAsync_recovers_offset_counter_from_provider_on_initialization`. |
-| `StreamEventuallyComplete` | A move's fence is always eventually lowered, so appends are not refused for ever. | Yes: `LatticeAdminGrainWalMoveTests.A_cancel_signalled_at_the_flip_stops_the_move_and_releases_the_source` (an aborted move releases its source) and `WalShardGrainTests.An_expired_quiesce_lease_requests_deactivation_so_the_fence_does_not_hold_for_ever` (a lapsed lease retires the fenced activation however the coordinator fares). |
+| `StreamEventuallyComplete` | The stream always eventually reaches its end with no append in flight, whatever moves and crashes intervene: a move's fence is always eventually lowered, so appends are not refused for ever. | Yes: `LatticeAdminGrainWalMoveTests.A_cancel_signalled_at_the_flip_stops_the_move_and_releases_the_source` (an aborted move releases its source) and `WalShardGrainTests.An_expired_quiesce_lease_requests_deactivation_so_the_fence_does_not_hold_for_ever` (a lapsed lease retires the fenced activation however the coordinator fares). |
 | `FenceEventuallyReleased` | A durable fence is never held for ever, including once its coordinator is lost: its lease lapses unconditionally and a source activation releases it. | Yes: `WalMoveDurableFenceIntegrationTests.A_fence_abandoned_by_a_dead_coordinator_refuses_appends_until_its_lease_lapses_then_is_released` (a dead coordinator's fence is released once its lease lapses), `LatticeOptionsResolverWalShardPlacementTests.A_lapsed_fence_is_released_and_the_provider_is_resolved_from_the_pin_the_release_returned` and `WalShardGrainTests.An_expired_quiesce_lease_requests_deactivation_so_the_fence_does_not_hold_for_ever`. |
 
 ## Excluded properties

@@ -11,6 +11,12 @@ in this directory it is a documented mapping, not a refinement proof: the gates
 check its names, detectors and coverage, and its claims were checked by reading
 production.
 
+In plain terms, the module guarantees four things about one leaf's activations at a WAL
+partition: once a newer activation has claimed, or the leaf's clear has retired its
+epochs, an older activation never appends there again; the head a claim returns lies
+above every append made before it; no two activations that can still append share an
+epoch; and the fence only ever refuses an activation that has been superseded.
+
 ## Model scope in one paragraph
 
 One leaf L at one WAL partition of three offsets, with epochs up to 3 (4 in the
@@ -166,8 +172,8 @@ after a bump forced on another partition.
 ## Design mutations moved here
 
 The design model's mutations whose guard lives in this module were moved, re-targeted
-at this module's properties and re-anchored on its text. The others stay with the
-design model until the modules that own their guards are promoted.
+at this module's properties and re-anchored on its text. The design model keeps its
+own copies, as the record each module took its own from.
 
 | Design mutation | Here |
 |-----------------|------|

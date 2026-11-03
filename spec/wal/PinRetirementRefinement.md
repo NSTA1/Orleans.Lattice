@@ -10,6 +10,13 @@ documented mapping, not a refinement proof: the gates check its names, detectors
 and coverage, and its claims were checked by reading production and by perturbing
 it under each detector.
 
+What the model guarantees, in plain terms: the GC's retirement of orphaned pins never
+removes the pin of a leaf that is live or recoverable - including a leaf re-created
+under the same grain id while a retirement was in flight - so the WAL is never
+trimmed past a write such a leaf still needs; a leaf read that faults never retires a
+pin; and, with no environment fault, every orphaned pin is eventually retired unless
+the leaf's grain id is populated again first.
+
 ## Model scope in one paragraph
 
 One leaf grain of one tree publishes a durable materialiser pin under one consumer
@@ -107,8 +114,8 @@ outside the model (see the gaps).
 
 `TypeOK`, `NoTrimPastLiveNeed` and `LivePublisherPinned` are state safety;
 `RetireOnlyHusk` and `UnreadableNeverRetired` are action safety; and
-`OrphanEventuallyRetired` is temporal liveness. All are reached and checked on the
-base. The `OneFault` and `TwoSweepers` variants re-check every state and action
+`OrphanEventuallyRetired` is temporal liveness. All are checked on the base, and
+all but `UnreadableNeverRetired` are reached there. The `OneFault` and `TwoSweepers` variants re-check every state and action
 property with one environment fault and with a second sweeper; liveness is
 **bounded-out** of both for the TLC budget (about eight minutes with two sweepers),
 and stays checked on the base, where an interrupted self-retirement still leaves
@@ -320,5 +327,6 @@ the purge has removed its registry row, and refuses the write until then.
   `WalShardGrainTests.Retirement_raises_the_floor_before_deleting_the_entry` and the
   retirement's reach by
   `LatticeWalGcSchedulerCadenceTests.Retiring_an_orphan_pin_retires_the_leaf_append_epoch_entry_at_its_partition`;
-  the fence's own safety argument is the design model `WalLiveAdvance`.
+  the fence's own safety argument is the checked module `WalAppendEpoch`, mapped in
+  [`AppendEpochRefinement.md`](AppendEpochRefinement.md).
   Production symbols: `WalShardGrain.RetireAppendEpochAsync`, `LatticeWalGcScheduler.RetireAppendEpochEntryAsync`, `BPlusLeafGrain.RetireAppendEpochAsync`.

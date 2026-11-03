@@ -13,6 +13,14 @@ section 4's unstamped watermark and self-report, and "The model". Production lan
 refinement proof: the gates check its names, detectors and coverage, and its claims were
 checked by reading production.
 
+In plain terms, the module guarantees that a leaf's live advance never moves its read
+position past a record of its range it does not hold, whoever wrote that record; that
+the shared snapshot never claims coverage of a record it lacks; that the GC never trims
+an acknowledged append the snapshot lacks; and that the append fence never rejects an
+unstamped append. It also checks that a newborn leaf's WAL pin eventually becomes usable
+through the live advance alone, without a replay from `-1`. It relies on the other four
+modules only through the guarantees they check.
+
 ## Model scope in one paragraph
 
 One leaf L at one WAL partition of three offsets. Its born activation `a1` and one
@@ -32,9 +40,9 @@ initialisation (R and H, in three slices: `Recreate`, `RecreateSurvivor` and
 `RecreateSurvivorMixed`), and a bulk-born leaf (`Bulk`, B). The core owns
 `Armed(a)`, `LiveAdvance`, `Replay`, `Capture`, `GcTrim`, the applied-prefix tracker
 (`mine`, and the in-flight own appends), the unstamped watermark with its restart reset and
-self-report, and the duplicate. The base also checks one liveness property,
-`NewbornPinEventuallyUsable`, under `LiveSpec`'s explicit fairness; the variants check
-safety only.
+self-report, and the duplicate. The base and the `Bulk` variant also check one liveness
+property, `NewbornPinEventuallyUsable`, under `LiveSpec`'s explicit fairness; the other
+variants check safety only.
 
 ## Interface
 
@@ -85,7 +93,7 @@ weaken each one in turn and go red, so each is load-bearing.
   straddler (`ReadPositionHonestAssumeCloseReplacesHeads`, red in `Recreate`).
 - **Guarantees.** Four, each a checked invariant of the base and every variant, consumed
   by no other module: `ReadPositionHonest`, `SnapshotHonest`, `NoTrimPastAcked` and
-  `OldNeverRejected`; and one liveness property of the base,
+  `OldNeverRejected`; and one liveness property, checked on the base and in `Bulk`,
   `NewbornPinEventuallyUsable`, the armed newborn's pin becoming usable without a
   replay from `-1`.
 - **The graph.** E <- H, E <- R, and {E, H, R, B} <- C, where E is `WalAppendEpoch`,
@@ -220,8 +228,9 @@ the shared snapshot covers every durable own append. The base cfg's specificatio
   additionally bounded by every running activation's read position, the property holds
   without it (550,843 states, checked by the independent review).
 - **Cost, measured** (tla2tools v1.7.4, two workers, liveness included): the base finds
-  778,329 distinct states to depth 25 in 1 minute 27 seconds, and `Bulk` 875,431 in 2
-  minutes 19 seconds. Stated as three leads-to formulas the base took 4 minutes, and with
+  778,329 distinct states to depth 25 in 1 minute 27 seconds, and `Bulk` 1,114,185 to
+  depth 25 in 2 minutes 38 seconds (re-measured with TLC 2.19). Stated as three
+  leads-to formulas the base took 4 minutes, and with
   one fairness condition per step as well, 11.
 - **Bounded out:** `Restart` holds the property too, but takes 7 minutes 18 seconds
   locally, too close to the 20-minute case budget on a CI runner, so it checks safety
@@ -337,8 +346,8 @@ reason as the one above.
   arming view (`LeafAppendEpochFence.TryGetArmingView`) is read after the marker, so only
   fresher. The model reads the marker in the step that advances, so it cannot express that
   order. The detector
-  `A_hand_off_opening_during_the_marker_read_cannot_carry_the_advance_past_its_foreign_record`
-  (`BPlusLeafGrainTests.LiveCheckpointAdvance.cs`, #5768) pins it: a hand-off opens while
+  `BPlusLeafGrainTests.A_hand_off_opening_during_the_marker_read_cannot_carry_the_advance_past_its_foreign_record`
+  (#5768) pins it: a hand-off opens while
   the marker read is in flight, allocates a foreign record, and an own append lands above
   it, and the advance must stay below that record. Taking the snapshot after the read turns
   it red. The design's `FrozenView`, a superseded activation that keeps the marker
