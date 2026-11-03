@@ -229,6 +229,31 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
     }
 
     [Test]
+    public async Task A_graft_whose_old_leaf_could_not_drain_in_time_succeeds_links_without_narrowing_and_applies_no_hint()
+    {
+        // Review B1 of #5702: the old leaf's drain missed its deadline, so it narrowed
+        // nothing and returned null. The chunk must still succeed, on the 10.2.0 path.
+        var rig = CreateHintRig();
+        var existing = SeedAppendTail(rig.H);
+        rig.H.Leaf(existing).NarrowHighKeyAsync(Arg.Any<string>(), Arg.Any<GrainId?>())
+            .Returns(Task.FromResult<List<LwwEntry>?>(null));
+
+        await rig.H.Grain.BulkAppendAsync("op-hint", Pairs(5));
+        await rig.H.Grain.CloseBulkSwitchesForTestingAsync();
+
+        var appended = LeavesByBirthLow(rig.H);
+        Assert.That(appended, Is.Not.Empty, "precondition: the append created leaves");
+        foreach (var (low, leaf) in appended)
+        {
+            Assert.That(HintAppliedTo(leaf), Is.Null, $"the appended leaf at {low} keeps reading from the log's start");
+        }
+
+        await rig.H.Leaf(existing).Received().SetNextSiblingAsync(Arg.Any<GrainId?>());
+        await rig.H.Leaf(existing).DidNotReceive().DropRelocatedRowsAsync(Arg.Any<Dictionary<string, HybridLogicalClock>>());
+        Assert.That(rig.H.State.State.PendingBulkGraft, Is.Null, "the graft completed");
+    }
+
+    [Test]
     public async Task A_resumed_graft_with_the_gate_closed_and_the_old_leaf_unnarrowed_does_not_apply_the_hint()
     {
         // Review N2 of #5646, the gate variant: the graft resumes with the gate closed

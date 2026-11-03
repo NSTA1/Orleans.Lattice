@@ -1677,7 +1677,10 @@ covers the key, would both skip it. So the old rightmost leaf, before it narrows
 bulk append's low bound, and a dividing leaf, after it reads the heads that become its
 sibling's read position and before its intent is persisted, both wait for the writes
 they admitted earlier to finish ([#5706](https://github.com/NSTA1/Orleans.Lattice/issues/5706)).
-The wait is bounded: a narrow that times out fails and the graft is resumed, and a
+The wait is bounded. A narrow that times out narrows nothing, and the append links its
+leaves without narrowing and applies no hint, exactly as 10.2.0 does, so a slow write
+never fails a bulk chunk; a leaf an earlier attempt already narrowed forwards its later
+out-of-span writes and does not wait. A
 division that times out is declined (split_attempts outcome commits_in_flight)
 and retried by the next write. A division resumed from its persisted intent cannot
 wait - a write blocked on the gate it holds would be among those it waits for - so it

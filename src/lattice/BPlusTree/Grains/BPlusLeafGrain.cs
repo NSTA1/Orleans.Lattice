@@ -2997,8 +2997,11 @@ internal sealed partial class BPlusLeafGrain(
         }
     }
 
+    private bool WouldNarrowHighKey(string highKeyExclusive) =>
+        state.State.HighKeyExclusive is not { } high || string.CompareOrdinal(high, highKeyExclusive) > 0;
+
     /// <inheritdoc />
-    public async Task<List<LwwEntry>> NarrowHighKeyAsync(string highKeyExclusive, GrainId? nextSibling = null)
+    public async Task<List<LwwEntry>?> NarrowHighKeyAsync(string highKeyExclusive, GrainId? nextSibling = null)
     {
         using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
@@ -3009,12 +3012,21 @@ internal sealed partial class BPlusLeafGrain(
         // called here, so every commit this leaf admitted before now may hold a
         // record below the hint. Each must have applied before the bound narrows,
         // or a death in between leaves its record unapplied by every leaf. Drained
-        // outside the split gate, which a mutation may itself be waiting for.
-        if (!await DrainMutationsAdmittedBeforeAsync(allowance: 0))
+        // outside the split gate, which a mutation may itself be waiting for, and
+        // only when this call would narrow: a leaf a first attempt already narrowed
+        // forwards every later out-of-span write, so it has nothing to wait for.
+        // A drain that misses its deadline narrows nothing and returns null, and
+        // the graft takes the 10.2.0 path (review B1 of #5702): a slow commit never
+        // fails a bulk chunk that succeeded on 10.2.0.
+        var drained = false;
+        if (WouldNarrowHighKey(highKeyExclusive))
         {
-            throw new TimeoutException(
-                $"Leaf {context.GrainId} could not narrow its high bound: commits it admitted earlier were still "
-                + "unapplied after the drain deadline. The bulk graft is resumed by the next operation on the shard.");
+            if (!await DrainMutationsAdmittedBeforeAsync(allowance: 0))
+            {
+                return null;
+            }
+
+            drained = true;
         }
 
         // See SetNextSiblingAsync above for the gate rationale.
@@ -3032,7 +3044,13 @@ internal sealed partial class BPlusLeafGrain(
             // bound a later graft has already narrowed further.
             var prevHighKey = state.State.HighKeyExclusive;
             var prevNext = state.State.NextSibling;
-            var narrow = prevHighKey is null || string.CompareOrdinal(prevHighKey, highKeyExclusive) > 0;
+            var narrow = WouldNarrowHighKey(highKeyExclusive);
+            if (narrow && !drained)
+            {
+                // A widening (a reclaim absorbing a neighbour) ran between the check
+                // above and the gate. Nothing is narrowed without a drain.
+                return null;
+            }
 
             // Issue #5654: the successor is linked in the same persist that narrows
             // the bound. A write for a key at or above the bound that still routes

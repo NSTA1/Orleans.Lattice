@@ -2,6 +2,7 @@ using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Tests.Fakes;
 using Orleans.Runtime;
 using System.Text;
@@ -103,6 +104,124 @@ public partial class BPlusLeafGrainTests
         await siblingMock.DidNotReceive().SetCheckpointOffsetHintsAsync(Arg.Any<long[]>());
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(checkpointBefore),
             "the donor keeps its own read position");
+    }
+
+    [Test]
+    public async Task NarrowHighKey_whose_drain_misses_its_deadline_narrows_nothing_and_returns_null()
+    {
+        // Review B1 of #5702: a commit held past the deadline must not fail the bulk
+        // chunk. The leaf narrows nothing and returns null, and the graft links
+        // without narrowing, as 10.2.0 does.
+        var state = new FakePersistentState<LeafNodeState>();
+        var commitLog = new FakeCommitLogWriter();
+        var grain = CreateGrain(state, commitLog: commitLog);
+        grain.SetMutationDrainDeadlineForTest(TimeSpan.FromMilliseconds(200));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("vb"));
+        var prevNext = state.State.NextSibling;
+
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        commitLog.HoldNextAppend = hold;
+        var write = grain.SetAsync("z", Encoding.UTF8.GetBytes("vz"));
+        await commitLog.AppendHeld.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var writesBefore = state.WriteCount;
+
+        List<LwwEntry>? stranded;
+        try
+        {
+            stranded = await grain.NarrowHighKeyAsync("m", GrainId.Create("leaf", "successor"))
+                .WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            hold.SetResult();
+            await write.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stranded, Is.Null, "a drain that missed its deadline reports that nothing was narrowed");
+            Assert.That(state.State.HighKeyExclusive, Is.Null, "the bound is unchanged");
+            Assert.That(state.State.NextSibling, Is.EqualTo(prevNext), "the successor is unchanged");
+            Assert.That(state.WriteCount, Is.EqualTo(writesBefore), "nothing was persisted by the narrow");
+        });
+    }
+
+    [Test]
+    public async Task NarrowHighKey_on_a_leaf_already_narrowed_does_not_wait_and_hands_back_its_stranded_rows()
+    {
+        // A resumed graft must never take the not-narrowed fallback on a leaf a first
+        // attempt narrowed, or the rows it stranded would be abandoned. Such a leaf
+        // forwards every later out-of-span write, so it has nothing to drain.
+        var commitLog = new FakeCommitLogWriter();
+        var grain = CreateGrain(commitLog: commitLog);
+        grain.SetMutationDrainDeadlineForTest(TimeSpan.FromMilliseconds(200));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("vb"));
+        await grain.SetAsync("z", Encoding.UTF8.GetBytes("vz"));
+        Assert.That((await grain.NarrowHighKeyAsync("m"))!.Select(r => r.Key), Is.EqualTo(new[] { "z" }), "precondition");
+
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        commitLog.HoldNextAppend = hold;
+        var write = grain.SetAsync("c", Encoding.UTF8.GetBytes("vc"));
+        await commitLog.AppendHeld.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        List<LwwEntry>? again;
+        try
+        {
+            again = await grain.NarrowHighKeyAsync("m").WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            hold.SetResult();
+            await write.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+
+        Assert.That(again?.Select(r => r.Key), Is.EqualTo(new[] { "z" }), "the resumed graft is handed the stranded row again");
+    }
+
+    [Test]
+    public async Task NarrowHighKey_waits_for_a_replayed_prepared_commit_admitted_before_it()
+    {
+        // Review S1 of #5702: a replayed terminal appends data-keyed prepared records
+        // and applies them afterwards, so the narrow must wait for it as for any write.
+        var writer = Substitute.For<ICommitLogWriter>();
+        var appended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        writer.AppendManyAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
+            .Returns(async call =>
+            {
+                var count = call.Arg<IReadOnlyList<WalRecord>>().Count;
+                appended.TrySetResult();
+                await release.Task;
+                return (IReadOnlyList<long>)new long[count];
+            });
+        var grain = CreateGrain(commitLog: writer);
+        var txid = Guid.NewGuid();
+        var stamp = new HybridLogicalClock { WallClockTicks = 9000, Counter = 1 };
+        var prepare = new PendingMutationSnapshot
+        {
+            TransactionId = txid,
+            Key = "z",
+            Value = Encoding.UTF8.GetBytes("committed"),
+            Timestamp = stamp,
+        };
+
+        var delivery = grain.ApplyPreparedReplayCommitAsync(txid, [prepare], stamp);
+        await appended.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var narrow = grain.NarrowHighKeyAsync("m");
+        var first = await Task.WhenAny(narrow, Task.Delay(HeldWindow));
+        var pendingWhileHeld = first != narrow;
+
+        release.SetResult();
+        await delivery.WaitAsync(TimeSpan.FromSeconds(10));
+        var stranded = await narrow.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pendingWhileHeld, Is.True, "the narrow waits for the replayed prepare whose record is already in the log");
+            Assert.That(stranded?.Select(r => r.Key), Is.EqualTo(new[] { "z" }),
+                "the replayed row is above the bound, so it is handed back for relocation");
+        });
     }
 
     private static (BPlusLeafGrain Grain, FakePersistentState<LeafNodeState> State, IBPlusLeafGrain SiblingMock)

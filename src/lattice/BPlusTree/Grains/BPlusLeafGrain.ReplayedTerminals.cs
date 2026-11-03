@@ -103,6 +103,11 @@ internal sealed partial class BPlusLeafGrain
             throw new ArgumentException("Every prepare must belong to the replayed transaction.", nameof(preparedMutations));
         await EnsureTerminalWitnessHydratedAsync();
 
+        // Issue #5706 (review S1 of #5702): the prepared records below are data-keyed
+        // and applied after their append, so a narrow or a division must wait for
+        // them as for any write. This path never divides the leaf.
+        using var _mutationScope = EnterMutationScope();
+
         var records = new List<WalRecord>(preparedMutations.Count + 1);
         foreach (var mutation in preparedMutations)
         {

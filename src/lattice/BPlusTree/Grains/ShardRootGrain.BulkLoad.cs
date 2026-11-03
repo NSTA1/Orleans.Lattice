@@ -1071,7 +1071,15 @@ internal sealed partial class ShardRootGrain
             return false;
         }
 
-        if (stranded is not { Count: > 0 })
+        if (stranded is null)
+        {
+            // Review B1 of #5702: the leaf could not drain the writes it admitted
+            // before the narrow within its deadline, so it narrowed nothing. The
+            // 10.2.0 path: link without narrowing, and apply no hint.
+            return false;
+        }
+
+        if (stranded.Count == 0)
             return true;
 
         await RelocateIntoGraftedLeavesAsync(graft, stranded);

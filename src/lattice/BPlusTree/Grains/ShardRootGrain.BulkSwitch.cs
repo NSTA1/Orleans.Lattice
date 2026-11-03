@@ -79,9 +79,6 @@ internal sealed partial class ShardRootGrain
     /// <summary>The one-shot timer that ends a run; registered once, re-armed per chunk.</summary>
     private IGrainTimer? _bulkIdleCloseTimer;
 
-    /// <summary>Set when no timer can be registered (a test harness without a runtime).</summary>
-    private bool _bulkIdleCloseUnavailable;
-
     /// <summary>The token a bulk operation opens on its shard's marker.</summary>
     internal static string BulkHandOffToken(string operationId) => string.Concat("bulk:", operationId);
 
@@ -275,17 +272,15 @@ internal sealed partial class ShardRootGrain
     /// Re-arms the one-shot timer that closes the run's switches once no bulk chunk has
     /// reached the shard for <see cref="BulkSwitchIdleClose"/>. The timer is registered
     /// once per activation and re-armed in place, so a chunk allocates nothing here.
+    /// A registration that fails is retried by the next chunk rather than given up for
+    /// the activation (review N2 of #5702); until one succeeds the switches close at the
+    /// shard's next fence or bulk load, which costs arming liveness, not safety.
     /// </summary>
     private void ArmBulkIdleClose()
     {
         if (_bulkIdleCloseTimer is { } timer)
         {
             timer.Change(BulkSwitchIdleClose, Timeout.InfiniteTimeSpan);
-            return;
-        }
-
-        if (_bulkIdleCloseUnavailable)
-        {
             return;
         }
 
@@ -297,10 +292,10 @@ internal sealed partial class ShardRootGrain
         }
         catch (Exception ex)
         {
-            // A test harness without a grain runtime: the switches stay open until the
-            // next bulk operation closes them.
-            _bulkIdleCloseUnavailable = true;
-            logger.LogDebug(ex, "Could not register the bulk switch idle close on shard {ShardKey}.", context.GrainId.Key.ToString());
+            logger.LogWarning(
+                ex,
+                "Could not register the bulk switch idle close on shard {ShardKey}; the next bulk chunk retries.",
+                context.GrainId.Key.ToString());
         }
     }
 

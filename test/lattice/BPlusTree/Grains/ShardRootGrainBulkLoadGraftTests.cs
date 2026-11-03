@@ -92,6 +92,9 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
 
         leaf.CountAsync().Returns(0);
         leaf.GetAppendTailAsync().Returns((0, (string?)null));
+        // A leaf that narrows and strands nothing; null would mean "not narrowed".
+        leaf.NarrowHighKeyAsync(Arg.Any<string>(), Arg.Any<GrainId?>())
+            .Returns(_ => Task.FromResult<List<LwwEntry>?>([]));
         return leaf;
     }
 

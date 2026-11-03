@@ -135,6 +135,12 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     internal static readonly TimeSpan MutationDrainDeadline = TimeSpan.FromSeconds(10);
 
+    /// <summary>This activation's drain deadline; <see cref="MutationDrainDeadline"/> unless a test shortens it.</summary>
+    private TimeSpan _mutationDrainDeadline = MutationDrainDeadline;
+
+    /// <summary>Test seam: shortens this activation's drain deadline.</summary>
+    internal void SetMutationDrainDeadlineForTest(TimeSpan deadline) => _mutationDrainDeadline = deadline;
+
     /// <summary>
     /// Waits until at most <paramref name="allowance"/> of the mutations admitted
     /// before this call are still in flight (issue #5706). A mutation admitted
@@ -163,6 +169,17 @@ internal sealed partial class BPlusLeafGrain
     /// already applied. Concurrent drains are safe: each counts every mutation
     /// admitted before the latest flip, which only waits for more.
     /// </para>
+    /// <para>
+    /// <b>What is drained.</b> Every path that appends a record for a data key and
+    /// applies it afterwards runs in a mutation scope: the set, delete, batch,
+    /// conditional, merge and CRDT entry points (saga prepares included, which
+    /// commit through them), and the replayed-terminal prepare
+    /// (<c>ApplyPreparedReplayCommitAsync</c>). Two appends are deliberately
+    /// unscoped. The saga terminal backstop (<c>ApplyTxTerminalAsync</c>) appends
+    /// terminal records, which replay applies whatever the span, so no narrow can
+    /// make a leaf skip one. The tombstone reap (<c>CompactTombstonesCoreAsync</c>)
+    /// appends reap records, whose loss only defers a reap.
+    /// </para>
     /// </remarks>
     private ValueTask<bool> DrainMutationsAdmittedBeforeAsync(int allowance)
     {
@@ -179,11 +196,17 @@ internal sealed partial class BPlusLeafGrain
 
     private async Task<bool> WaitForEarlierMutationsAsync(int allowance)
     {
-        var deadline = Task.Delay(MutationDrainDeadline);
+        // One timer for the whole wait, released on every exit (review N1 of #5702):
+        // a drain that completes early leaves no deadline timer behind.
+        using var deadline = new CancellationTokenSource(_mutationDrainDeadline);
         while (_mutationsInEarlierEpochs > allowance)
         {
             _earlierMutationsFell ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            if (await Task.WhenAny(_earlierMutationsFell.Task, deadline) == deadline)
+            try
+            {
+                await _earlierMutationsFell.Task.WaitAsync(deadline.Token);
+            }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested)
             {
                 return false;
             }
