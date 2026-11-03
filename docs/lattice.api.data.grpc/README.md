@@ -105,7 +105,7 @@ The service maps every facade outcome onto an explicit gRPC status rather than l
 | `LatticeTreeBootstrappingException` | `Unavailable` | The tree's replica is being bootstrapped from a snapshot and its reads are fenced until the import completes; transient, so back off and retry. |
 | `OperationCanceledException` | `Cancelled` | The caller's deadline or cancellation token fired. |
 | `TimeoutException` | `DeadlineExceeded` | A grain call timed out inside the cluster, so the outcome is unknown and a write may already have applied. Retry an idempotent read; confirm state before retrying a write. Logged at Warning (#5742). |
-| `OrleansMessageRejectionException` (including `SiloUnavailableException`) | `Unavailable` | A silo was unavailable or rejected the message: a transient cluster fault. Retry after a short backoff. Logged at Warning (#5742). |
+| `OrleansMessageRejectionException` (including `SiloUnavailableException`) or `EnumerationAbortedException` | `Unavailable` | A silo was unavailable or rejected the message, or a remote enumerator was lost to a grain deactivation mid-read: a transient cluster fault. Retry after a short backoff. Logged at Warning (#5742). |
 | anything else | `Internal` | Logged server-side and returned with a generic message, without echoing the exception text. |
 
 A typed counter advance (`CounterIncrement`, `CounterDecrement` or `GCounterIncrement`) that would take a replica's component past `long.MaxValue` throws `OverflowException` before anything is written. The service has no arm for it, so it falls through to `Internal` like an unexpected fault; a negative `Amount` is an `ArgumentOutOfRangeException` and so surfaces as `InvalidArgument`.

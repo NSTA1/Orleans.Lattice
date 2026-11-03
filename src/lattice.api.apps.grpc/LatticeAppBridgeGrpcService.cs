@@ -80,6 +80,12 @@ internal sealed class LatticeAppBridgeGrpcService(
             logger.LogWarning(ex, "Api.Apps: gRPC call to {Method} hit an unavailable cluster node.", context.Method);
             throw new RpcException(AppBridgeGrpcStatus.ToStatus(AppBridgeFailure.Unavailable));
         }
+        catch (EnumerationAbortedException ex)
+        {
+            // A remote enumerator was lost mid-read (#5742): transient, sent as the retryable Unavailable.
+            logger.LogWarning(ex, "Api.Apps: gRPC call to {Method} lost a remote enumeration.", context.Method);
+            throw new RpcException(AppBridgeGrpcStatus.ToStatus(AppBridgeFailure.Unavailable));
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "Api.Apps: gRPC call to {Method} failed.", context.Method);
@@ -137,6 +143,12 @@ internal sealed class LatticeAppBridgeGrpcService(
         {
             // A silo was unavailable or rejected the message (#5742): transient, sent as the retryable Unavailable.
             logger.LogWarning(ex, "Api.Apps: gRPC call to {Method} hit an unavailable cluster node.", context.Method);
+            throw new RpcException(AppBridgeGrpcStatus.ToStatus(AppBridgeFailure.Unavailable));
+        }
+        catch (EnumerationAbortedException ex)
+        {
+            // A remote enumerator was lost mid-read (#5742): transient, sent as the retryable Unavailable.
+            logger.LogWarning(ex, "Api.Apps: gRPC call to {Method} lost a remote enumeration.", context.Method);
             throw new RpcException(AppBridgeGrpcStatus.ToStatus(AppBridgeFailure.Unavailable));
         }
         catch (Exception ex)

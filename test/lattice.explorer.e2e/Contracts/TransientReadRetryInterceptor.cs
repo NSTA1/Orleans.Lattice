@@ -6,8 +6,9 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Contracts;
 /// <summary>
 /// Retries a contract's facade <em>reads</em> that fail transiently. Late in a story the one-host
 /// CI estate is heavily loaded (two west silos, an east silo, a line feed, replication, views
-/// and background maintenance), and a read can outlast the silo's grain call timeout or meet a
-/// silo that is briefly unavailable. Every facade reports those as <see cref="StatusCode.DeadlineExceeded"/>
+/// and background maintenance), and a read can outlast the silo's grain call timeout, meet a
+/// silo that is briefly unavailable, or lose its remote enumeration to a grain deactivation.
+/// Every facade reports those as <see cref="StatusCode.DeadlineExceeded"/>
 /// and <see cref="StatusCode.Unavailable"/> (#5742), and storage back-pressure as
 /// <see cref="StatusCode.ResourceExhausted"/> (#5728).
 /// </summary>

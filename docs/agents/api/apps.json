@@ -2773,10 +2773,10 @@
     },
     {
       "id": "cluster-unavailable",
-      "type": "OrleansMessageRejectionException (including SiloUnavailableException)",
+      "type": "OrleansMessageRejectionException (including SiloUnavailableException) or EnumerationAbortedException",
       "grpc_status": "Unavailable",
       "retryable": true,
-      "meaning": "A silo was unavailable or rejected the message: a transient cluster fault. Retry after a short backoff (#5742).",
+      "meaning": "A silo was unavailable or rejected the message, or a remote enumerator was lost to a grain deactivation mid-read: a transient cluster fault. Retry after a short backoff (#5742).",
       "source": "src/lattice.api.apps.grpc/LatticeAppsGrpcService.cs#InvokeAsync"
     },
     {

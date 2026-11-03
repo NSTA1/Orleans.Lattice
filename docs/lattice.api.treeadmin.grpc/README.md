@@ -201,7 +201,7 @@ The service maps every facade outcome onto an explicit gRPC status rather than l
 | `ArgumentException` | `InvalidArgument` | A malformed or out-of-range argument (including an undefined `TreeSnapshotMode` or `TreeHistoryRetentionMode`, refused with `ArgumentOutOfRangeException`), a reserved tree id, or an unconfirmed purge. |
 | `OperationCanceledException` | `Cancelled` | The caller's deadline or cancellation token fired. |
 | `TimeoutException` | `DeadlineExceeded` | A grain call timed out inside the cluster, so the outcome is unknown and a write may already have applied. Retry an idempotent read; confirm state before retrying a write. Logged at Warning (#5742). |
-| `OrleansMessageRejectionException` (including `SiloUnavailableException`) | `Unavailable` | A silo was unavailable or rejected the message: a transient cluster fault. Retry after a short backoff. Logged at Warning (#5742). |
+| `OrleansMessageRejectionException` (including `SiloUnavailableException`) or `EnumerationAbortedException` | `Unavailable` | A silo was unavailable or rejected the message, or a remote enumerator was lost to a grain deactivation mid-read: a transient cluster fault. Retry after a short backoff. Logged at Warning (#5742). |
 | anything else | `Internal` | Logged server-side and returned with a generic message, without echoing the exception text. |
 
 ## Configuration

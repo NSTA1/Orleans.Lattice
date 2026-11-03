@@ -724,6 +724,12 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
             // shared ladder below maps it to Unavailable.
             throw ToRpcException(exception, context);
         }
+        catch (EnumerationAbortedException exception)
+        {
+            // Named on its own so the transient-fault contract gate sees the clause (#5742); the
+            // shared ladder below maps it to Unavailable.
+            throw ToRpcException(exception, context);
+        }
         catch (Exception exception) when (exception is not RpcException)
         {
             throw ToRpcException(exception, context);
@@ -942,6 +948,12 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
             // shared ladder below maps it to Unavailable.
             throw ToRpcException(exception, context);
         }
+        catch (EnumerationAbortedException exception)
+        {
+            // Named on its own so the transient-fault contract gate sees the clause (#5742); the
+            // shared ladder below maps it to Unavailable.
+            throw ToRpcException(exception, context);
+        }
         catch (Exception exception) when (exception is not RpcException)
         {
             throw ToRpcException(exception, context);
@@ -1006,6 +1018,12 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
             case OrleansMessageRejectionException:
                 _logger.LogWarning(exception, "Api.TreeAdmin: gRPC call to {Method} hit an unavailable cluster node.", context.Method);
                 return new RpcException(new Status(StatusCode.Unavailable, "A cluster node was temporarily unavailable. Retry after a short backoff."));
+
+            // A remote enumerator was lost to a grain deactivation mid-read (#5742): transient,
+            // cleared by reading again, so the retryable Unavailable rather than a server error.
+            case EnumerationAbortedException:
+                _logger.LogWarning(exception, "Api.TreeAdmin: gRPC call to {Method} lost a remote enumeration.", context.Method);
+                return new RpcException(new Status(StatusCode.Unavailable, "A cluster node lost the read in progress. Retry after a short backoff."));
             default:
                 _logger.LogError(exception, "Api.TreeAdmin: gRPC call to {Method} failed.", context.Method);
                 return new RpcException(new Status(StatusCode.Internal, "The tree-administration control-API request failed."));

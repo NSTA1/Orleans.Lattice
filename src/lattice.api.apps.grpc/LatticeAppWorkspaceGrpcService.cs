@@ -91,6 +91,13 @@ internal sealed class LatticeAppWorkspaceGrpcService(
             logger.LogWarning(ex, "Api.Apps: gRPC call to {Method} hit an unavailable cluster node.", context.Method);
             throw new RpcException(new Status(StatusCode.Unavailable, "A cluster node was temporarily unavailable. Retry after a short backoff."));
         }
+        catch (EnumerationAbortedException ex)
+        {
+            // A remote enumerator was lost to a grain deactivation mid-read (#5742): transient,
+            // cleared by reading again, so the retryable Unavailable rather than a server error.
+            logger.LogWarning(ex, "Api.Apps: gRPC call to {Method} lost a remote enumeration.", context.Method);
+            throw new RpcException(new Status(StatusCode.Unavailable, "A cluster node lost the read in progress. Retry after a short backoff."));
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "Api.Apps: gRPC call to {Method} failed.", context.Method);

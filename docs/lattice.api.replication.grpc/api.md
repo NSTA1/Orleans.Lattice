@@ -93,7 +93,7 @@ The peer-status service has no wire records of its own: its `GetPeerStatus` RPC 
 | Malformed request (for example a null or empty tree id) | `InvalidArgument` |
 | Request cancelled | `Cancelled` |
 | Grain-call timeout inside the cluster (outcome unknown; confirm state before retrying a write) | `DeadlineExceeded` |
-| Silo unavailable or message rejected (transient; retry after a short backoff) | `Unavailable` |
+| Silo unavailable, message rejected, or a remote enumeration lost mid-read (transient; retry after a short backoff) | `Unavailable` |
 | Any other fault | `Internal` (with a non-leaking message) |
 
 `GetPeerStatus` follows the same mapping, except that it has no `FailedPrecondition` outcome: a negative page size or a malformed continuation token is `InvalidArgument`.
