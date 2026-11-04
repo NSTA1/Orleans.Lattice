@@ -84,7 +84,7 @@ internal static class SchemaRemediationDriver
                 logger?.LogInformation(
                     "Schema remediation of tree {TreeId} is waiting for alias operation {Holder} to finish before it starts.",
                     treeId, refused.HolderOperationId);
-                if (attempt < 0 && progress is not null)
+                if (attempt == 0 && progress is not null)
                 {
                     await ReportWaitingAsync(progress, cancellationToken).ConfigureAwait(false);
                 }

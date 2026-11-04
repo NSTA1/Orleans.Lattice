@@ -856,7 +856,7 @@ internal sealed class TreeSnapshotGrain(
         // second load behind the first: a completed load completes the copy, and a
         // running one is waited for without spending the retry budget. The first
         // attempt (no retry spent) skips the read, so the healthy path costs nothing.
-        if (offline && state.State.ShardRetries > MaxRetriesPerPhase)
+        if (offline && state.State.ShardRetries > 0)
         {
             switch (await ReadOfflineLoadStatusAsync(shardIndex))
             {

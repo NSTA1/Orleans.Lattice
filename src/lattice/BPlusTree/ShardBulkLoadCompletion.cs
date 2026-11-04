@@ -86,7 +86,6 @@ internal static class ShardBulkLoadCompletion
             catch (TimeoutException ex)
             {
                 timeout = ex;
-                if (timeout is not null) throw;
             }
 
             if (waitStarted == 0)

@@ -50,7 +50,7 @@ internal sealed partial class ShardRootGrain
     /// <inheritdoc />
     public async Task BulkLoadRawAsync(string operationId, List<LwwEntry> sortedEntries)
     {
-        _runningBulkOperationId = null;
+        _runningBulkOperationId = operationId;
         try
         {
             await BulkLoadRawCoreAsync(operationId, sortedEntries);
