@@ -39,21 +39,12 @@ internal sealed partial class ShardRootGrain
         // switch's tail has relocated the replaced root and closed by fence. So Running
         // wins, or a caller could proceed or cut over mid-tail; and a load whose tail
         // faulted reads as not running, or nobody would re-issue it to close the switch.
-        BulkOperationStatus status;
-        if (string.Equals(_runningBulkOperationId, operationId, StringComparison.Ordinal))
-        {
-            status = BulkOperationStatus.Running;
-        }
-        else if (string.Equals(_faultedBulkOperationId, operationId, StringComparison.Ordinal))
-        {
-            status = BulkOperationStatus.NotRunning;
-        }
-        else
-        {
-            status = state.State.LastCompletedBulkOperationId == operationId
-                ? BulkOperationStatus.Completed
+        // RED PROOF (#5815): the pre-S1 order, Completed read first, and no faulted-tail check.
+        var status = state.State.LastCompletedBulkOperationId == operationId
+            ? BulkOperationStatus.Completed
+            : string.Equals(_runningBulkOperationId, operationId, StringComparison.Ordinal)
+                ? BulkOperationStatus.Running
                 : BulkOperationStatus.NotRunning;
-        }
 
         return BulkOperationStatusTasks[(int)status];
     }
@@ -68,7 +59,7 @@ internal sealed partial class ShardRootGrain
         }
         catch
         {
-            NoteBulkLoadFaulted(operationId);
+            // RED PROOF (#5815): the faulted tail is not remembered and arms no idle close.
             throw;
         }
         finally
@@ -88,7 +79,7 @@ internal sealed partial class ShardRootGrain
         }
         catch
         {
-            NoteBulkLoadFaulted(operationId);
+            // RED PROOF (#5815): the faulted tail is not remembered and arms no idle close.
             throw;
         }
         finally

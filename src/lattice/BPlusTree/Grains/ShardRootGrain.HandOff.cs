@@ -409,7 +409,7 @@ internal sealed partial class ShardRootGrain
         var row = await HandOffMarkerRows.ReadShardAsync(HandOffStorage(), TreeId, ShardIndex);
         NoteHandOffMarkerRead(row);
         _handOffMarker = row.State;
-        ArmBulkIdleCloseIfSwitchOpen(row.State);
+        // RED PROOF (#5815): the first marker read arms no idle close.
         return row.State;
     }
 

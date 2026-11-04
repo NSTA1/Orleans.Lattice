@@ -73,7 +73,7 @@ internal sealed partial class ShardRootGrain(
         PrimeScanPageZeroProgressOutcomes();
         PrimeScanChainRegressions();
         PrimeOptimisticReadOutcomes();
-        ArmBulkIdleCloseOnActivation();
+        // RED PROOF (#5815): activation arms no idle close.
         await HealBakedRootIsLeafFlagAsync();
     }
 
