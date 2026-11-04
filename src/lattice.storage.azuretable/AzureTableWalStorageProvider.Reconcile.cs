@@ -126,9 +126,6 @@ public sealed partial class AzureTableWalStorageProvider
                     // The pass may have written TAIL itself, so the commit fence is
                     // reset with the guard and refilled by the next read (issue #5810).
                     activity.Fence.Reset(activity.Overlap, _options.EliminateCandidateRowOnHotPath ? resultingTail : null);
-
-                    await ReclaimFailedBatchesAsync(table, activity, manifestPartitionKey, treeId, shardIndex, resultingTail, cancellationToken)
-                        .ConfigureAwait(false);
                     return;
                 }
                 catch (RequestFailedException ex)
@@ -818,26 +815,14 @@ public sealed partial class AzureTableWalStorageProvider
                 Offset = chunkTail,
                 Payload = null,
             };
-            actions.Add(tailETag is { } etag
-                ? new TableTransactionAction(TableTransactionActionType.UpdateReplace, tail, etag)
-                : new TableTransactionAction(TableTransactionActionType.Add, tail));
-
-            var response = await table.SubmitTransactionAsync(actions, cancellationToken).ConfigureAwait(false);
-            tailETag = response.Value.Count == actions.Count ? response.Value[^1].Headers.ETag : null;
-            if (tailETag is null && end < rollForward.Count)
+            if (end == rollForward.Count)
             {
-                // The response did not carry TAIL's new ETag, so it is read back. A
-                // TAIL that is not the one just written was moved by another writer:
-                // re-plan, as for a refused chunk.
-                var (readTail, readETag) = await ReadTailAsync(table, manifestPartitionKey, cancellationToken).ConfigureAwait(false);
-                if (readTail != chunkTail || readETag is null)
-                {
-                    throw new RequestFailedException(412, "TAIL moved during a reconciliation rollforward.");
-                }
-
-                tailETag = readETag;
+                actions.Add(tailETag is { } etag
+                    ? new TableTransactionAction(TableTransactionActionType.UpdateReplace, tail, etag)
+                    : new TableTransactionAction(TableTransactionActionType.Add, tail));
             }
 
+            var response = await table.SubmitTransactionAsync(actions, cancellationToken).ConfigureAwait(false);
             if (afterChunk is not null)
             {
                 await afterChunk(i / chunkSize).ConfigureAwait(false);
