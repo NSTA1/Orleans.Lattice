@@ -347,9 +347,9 @@ ShardCrash ==
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
     \* An abandoned call dies with the process (in-memory and file providers),
-    \* or can land only at or above the committed tail (Azure Table: phase 2
-    \* commits in offset order and ReconcileAsync rolls a late phase-1 row
-    \* forward in order or back), so no orphan survives to land below a reader.
+    \* or is this process's own (Azure Table: ReconcileAsync rolls a late
+    \* phase-1 row forward in order or back). With one fault a crash and a
+    \* cross-silo move are exclusive, so no hidden call is in motion here.
     /\ orphans' = {}
     /\ hidden' = {}
 
@@ -386,9 +386,11 @@ ActivationLoss ==
 (* the end of every one (ReseedNext), so no offset is handed out beneath  *)
 (* work in motion. A call that never lands leaves a hole readers settle   *)
 (* past (#4621). A hidden call (a predecessor's on another silo) cannot  *)
-(* be seen, so its offset may be reissued: only the store's create-only   *)
-(* refusal then keeps the reissue and the call from displacing each      *)
-(* other (issue #5799's open cross-silo case).                           *)
+(* be seen, so its offset may be reissued. LateLand then assumes it lands *)
+(* only at or above RecoveredNext. Today's Azure Table provider does not  *)
+(* guarantee that: its rows are create-only per batch start and its      *)
+(* overlap check is per instance, so a late batch with another start can  *)
+(* land over a reissue (issue #5810).                                    *)
 (***************************************************************************)
 ReseedNext == Max({RecoveredNext} \cup {o + 1 : o \in orphans \ hidden})
 
@@ -441,9 +443,11 @@ LateLand(o) ==
     /\ o \in orphans
     /\ orphans' = orphans \ {o}
     /\ hidden' = hidden \ {o}
-    \* A hidden call commits only at or above the store's committed tail (the
-    \* Azure Table provider commits phase 2 in offset order and rolls a late
-    \* phase-1 row back below it); otherwise it settles without landing.
+    \* ASSUMED, not a provider guarantee: a hidden call commits only at or
+    \* above RecoveredNext, otherwise it settles without landing. Today's Azure
+    \* Table provider commits phase 2 in offset order per instance only, with
+    \* create-only rows per batch start, so a cross-silo predecessor's late
+    \* batch can land beneath it (issue #5810).
     /\ occ' = IF occ[o] = "none" /\ o >= tail /\ (o \in hidden => o >= RecoveredNext)
               THEN [occ EXCEPT ![o] = "late"] ELSE occ
     /\ UNCHANGED <<next, inflight, tail, acked, resyncing>>
@@ -1087,7 +1091,8 @@ AckedOccupies ==
 \* The allocator never hands out an offset at or below an abandoned call still
 \* in motion that the shard's activation can see: every re-seed starts above
 \* them (issue #5799). A predecessor's call on another silo is invisible to it,
-\* and AckedOccupies then rests on the store's create-only rows alone.
+\* and AckedOccupies then rests on LateLand's cross-silo landing assumption,
+\* which today's Azure Table provider does not guarantee (issue #5810).
 AllocatorAboveOrphans ==
     \A o \in orphans \ hidden : o < next
 

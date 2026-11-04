@@ -62,7 +62,7 @@ public sealed partial class TlcCiShardTests
     [TestCase("ShardOwnershipCutover", TlcCiShard.ShardOwnership)]
     [TestCase("ShardOwnershipFold", TlcCiShard.ShardOwnership)]
     [TestCase("ShardOwnershipRetention", TlcCiShard.ShardOwnership)]
-    [TestCase("WalDurability", TlcCiShard.ReplicationWal)]
+    [TestCase("WalDurability", TlcCiShard.WalDurability)]
     [TestCase("WalMove", TlcCiShard.ReplicationWal)]
     [TestCase("WalPinRetirement", TlcCiShard.ReplicationWal)]
     [TestCase("WalAppendEpoch", TlcCiShard.WalAppendEpoch)]

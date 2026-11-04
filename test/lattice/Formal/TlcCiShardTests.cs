@@ -105,7 +105,7 @@ public sealed partial class TlcCiShardTests
     [TestCase("Replication", "EventualConvergence", TlcCiShard.Convergence)]
     [TestCase("Replication", "BootstrapHandoffLosesNothing", TlcCiShard.ReplicationWal)]
     [TestCase("ReplicationReBootstrap", "", TlcCiShard.ReBootstrap)]
-    [TestCase("WalDurability", "", TlcCiShard.ReplicationWal)]
+    [TestCase("WalDurability", "", TlcCiShard.WalDurability)]
     [TestCase("ShardOwnershipRetention", "", TlcCiShard.ShardOwnership)]
     [TestCase("AtomicCommitCrossCluster", "", TlcCiShard.Atomic)]
     [TestCase("BackupCapture", "", TlcCiShard.Backup)]
