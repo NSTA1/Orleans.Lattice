@@ -159,7 +159,10 @@ public sealed partial class AzureTableWalStorageProvider
     /// effort: a storage failure leaves the remaining batches recorded for the next
     /// reconciliation rather than failing this one, which has already succeeded.
     /// Rows recorded by a process that stops before its next reconciliation stay in
-    /// storage, unreadable: trim follows manifest rows and does not reach them.
+    /// storage for good, unreadable: trim follows manifest rows and does not reach
+    /// them, and neither does a discard of the tree, which is a trim through
+    /// <see cref="long.MaxValue"/>. That is bounded per incident by the batches the
+    /// stopped writer had in flight.
     /// </para>
     /// </summary>
     private static async Task ReclaimFailedBatchesAsync(
@@ -828,7 +831,13 @@ public sealed partial class AzureTableWalStorageProvider
             {
                 // The response did not carry TAIL's new ETag, so it is read back. A
                 // TAIL that is not the one just written was moved by another writer:
-                // re-plan, as for a refused chunk.
+                // re-plan, as for a refused chunk. The comparison is by value only, so
+                // another writer's rewrite of this same value would pass, and that is
+                // harmless: no writer that commits rows can write it next. A fenced
+                // commit's group starts above the TAIL it read, so it lands TAIL above
+                // this value; a stale commit holds an ETag this chunk has already
+                // replaced, so it is refused; and a reconciliation writes TAIL only when
+                // it rolls a batch forward, which also raises it.
                 var (readTail, readETag) = await ReadTailAsync(table, manifestPartitionKey, cancellationToken).ConfigureAwait(false);
                 if (readTail != chunkTail || readETag is null)
                 {
