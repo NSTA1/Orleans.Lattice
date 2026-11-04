@@ -432,45 +432,6 @@ _Assert -Name 'reader: genuine miss is Exists=true, Examinable=true, Toplevel em
 	-Condition ($rMiss.Exists -and $rMiss.Examinable -and [string]::IsNullOrWhiteSpace($rMiss.Toplevel)) `
 	-Detail ("exists={0} examinable={1} toplevel=[{2}]" -f $rMiss.Exists, $rMiss.Examinable, $rMiss.Toplevel)
 
-# --- Filesystem boundary (issue #5785). On a host whose path sits on its own
-#     filesystem, git's default discovery stops at the mount and emits the
-#     mount-point form, which the predicate rightly refuses, so every archive on
-#     a separate volume was refused as unexaminable. The reader must make git
-#     search past the boundary. Most hosts cannot build that state, so `git` is
-#     shadowed here by a function that answers with the exact boundary text
-#     whenever the reader has NOT set GIT_DISCOVERY_ACROSS_FILESYSTEM=1, and
-#     defers to the real git when it has. Drop the reader's pin and this fails.
-$realGit = (Get-Command git -CommandType Application | Select-Object -First 1).Source
-$shellPath = (Get-Process -Id $PID).Path
-$script:_ShadowGitCalls = 0
-function git {
-	$script:_ShadowGitCalls++
-	if ($env:GIT_DISCOVERY_ACROSS_FILESYSTEM -eq '1') {
-		& $realGit @args
-		return
-	}
-	& $shellPath -NoProfile -NonInteractive -Command ("[Console]::Error.WriteLine('fatal: not a git repository (or any parent up to mount point /)'); " +
-		"[Console]::Error.WriteLine('Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).'); exit 128")
-}
-try {
-	$rBoundary = Get-ArchiveGitReading -Path $missDir
-}
-finally {
-	Remove-Item -LiteralPath Function:\git
-}
-
-_Assert -Name 'PRECONDITION the reader ran its probe through the shadowed git' `
-	-Condition ($script:_ShadowGitCalls -gt 0) `
-	-Detail ("shadow calls={0}" -f $script:_ShadowGitCalls)
-
-_Assert -Name 'reader: a path past a filesystem boundary, outside every checkout, is Examinable=true' `
-	-Condition ($rBoundary.Exists -and $rBoundary.Examinable -and [string]::IsNullOrWhiteSpace($rBoundary.Toplevel)) `
-	-Detail ("exists={0} examinable={1} toplevel=[{2}]" -f $rBoundary.Exists, $rBoundary.Examinable, $rBoundary.Toplevel)
-
-_Assert -Name 'archive check: such an archive is NOT refused' `
-	-Condition ((Get-ArchiveDurabilityViolation -ArchiveDestination '/memory-archive' -ArchiveSource $missDir `
-				-ArchiveMountType 'bind' -GitToplevel $rBoundary.Toplevel -IsLinkedWorktree $rBoundary.IsLinkedWorktree `
-				-SourceExistsOnHost $rBoundary.Exists -GitReadingExaminable $rBoundary.Examinable).Count -eq 0)
 
 # --- Orphaned linked worktree: NOT examinable under either supported diagnostic.
 #     Treating the bare phrase as a genuine miss is the fail-open to prevent.
@@ -495,6 +456,68 @@ _Assert -Name 'reader: healthy primary checkout is Examinable=true with a toplev
 _Assert -Name 'reader: a primary checkout is NOT reported as a linked worktree' `
 	-Condition (-not $rHealthy.IsLinkedWorktree) `
 	-Detail ("isLinkedWorktree={0}" -f $rHealthy.IsLinkedWorktree)
+
+# --- Filesystem boundary (issue #5785). On a host whose path sits on its own
+#     filesystem, git's default discovery stops at the mount and emits the
+#     mount-point form without searching above it. The predicate rightly
+#     refuses that form, so the reader must make git search past the boundary.
+#     Most hosts cannot build the state, so `git` is shadowed here by a function
+#     that answers with the exact boundary text whenever the reader has NOT set
+#     GIT_DISCOVERY_ACROSS_FILESYSTEM=1, and defers to the real git when it has.
+#     Two archives are read this way, as if each sat on its own mount:
+#       - one outside every checkout, which must be examinable and NOT refused;
+#       - one INSIDE a checkout, which must still be refused AS a checkout. A
+#         boundary stop must never hide the checkout above it, so this fails
+#         both if the reader's pin is dropped (the reading turns unexaminable)
+#         and if the predicate is relaxed to accept the boundary form.
+$insideCheckoutDir = Join-Path $healthyDir 'memory-archive'
+New-Item -ItemType Directory -Path $insideCheckoutDir | Out-Null
+$realGit = (Get-Command git -CommandType Application | Select-Object -First 1).Source
+$shellPath = (Get-Process -Id $PID).Path
+$script:_ShadowGitCalls = 0
+function git {
+	$script:_ShadowGitCalls++
+	if ($env:GIT_DISCOVERY_ACROSS_FILESYSTEM -eq '1') {
+		& $realGit @args
+		return
+	}
+	& $shellPath -NoProfile -NonInteractive -Command ("[Console]::Error.WriteLine('fatal: not a git repository (or any parent up to mount point /)'); " +
+		"[Console]::Error.WriteLine('Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).'); exit 128")
+}
+try {
+	$rBoundaryOutside = Get-ArchiveGitReading -Path $missDir
+	$rBoundaryInside = Get-ArchiveGitReading -Path $insideCheckoutDir
+}
+finally {
+	Remove-Item -LiteralPath Function:\git
+}
+
+_Assert -Name 'PRECONDITION the reader ran both probes through the shadowed git' `
+	-Condition ($script:_ShadowGitCalls -ge 2) `
+	-Detail ("shadow calls={0}" -f $script:_ShadowGitCalls)
+
+_Assert -Name 'reader: past a filesystem boundary, a path outside every checkout is Examinable=true' `
+	-Condition ($rBoundaryOutside.Exists -and $rBoundaryOutside.Examinable -and [string]::IsNullOrWhiteSpace($rBoundaryOutside.Toplevel)) `
+	-Detail ("exists={0} examinable={1} toplevel=[{2}]" -f $rBoundaryOutside.Exists, $rBoundaryOutside.Examinable, $rBoundaryOutside.Toplevel)
+
+$outsideViolations = (Get-ArchiveDurabilityViolation -ArchiveDestination '/memory-archive' -ArchiveSource $missDir `
+		-ArchiveMountType 'bind' -GitToplevel $rBoundaryOutside.Toplevel -IsLinkedWorktree $rBoundaryOutside.IsLinkedWorktree `
+		-SourceExistsOnHost $rBoundaryOutside.Exists -GitReadingExaminable $rBoundaryOutside.Examinable)
+_Assert -Name 'archive check: an archive on its own mount, outside every checkout, is NOT refused' `
+	-Condition ($outsideViolations.Count -eq 0) `
+	-Detail ($outsideViolations -join ' | ')
+
+_Assert -Name 'reader: past a filesystem boundary, a path inside a checkout reports that checkout as its toplevel' `
+	-Condition ($rBoundaryInside.Examinable -and -not $rBoundaryInside.IsLinkedWorktree `
+			-and ($rBoundaryInside.Toplevel -replace '\\', '/') -eq ($rHealthy.Toplevel -replace '\\', '/')) `
+	-Detail ("examinable={0} toplevel=[{1}] expected=[{2}]" -f $rBoundaryInside.Examinable, $rBoundaryInside.Toplevel, $rHealthy.Toplevel)
+
+$insideViolations = (Get-ArchiveDurabilityViolation -ArchiveDestination '/memory-archive' -ArchiveSource $insideCheckoutDir `
+		-ArchiveMountType 'bind' -GitToplevel $rBoundaryInside.Toplevel -IsLinkedWorktree $rBoundaryInside.IsLinkedWorktree `
+		-SourceExistsOnHost $rBoundaryInside.Exists -GitReadingExaminable $rBoundaryInside.Examinable)
+_Assert -Name 'archive check: an archive on its own mount INSIDE a checkout is still refused, as a checkout' `
+	-Condition ($insideViolations.Count -eq 1 -and $insideViolations[0].Contains('inside the GIT CHECKOUT')) `
+	-Detail ($insideViolations -join ' | ')
 
 # --- Detached HEAD: the corpus is pinned detached and this path runs against
 #     it, so it must read exactly like an attached checkout.
