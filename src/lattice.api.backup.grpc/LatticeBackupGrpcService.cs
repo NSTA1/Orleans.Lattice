@@ -393,6 +393,13 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
             _logger.LogWarning(ex, "Api.Backup: gRPC call to {Method} timed out inside the cluster; outcome unknown.", context.Method);
             throw new RpcException(new Status(StatusCode.DeadlineExceeded, "The request did not complete in time inside the cluster, so its outcome is unknown. Confirm the result before retrying a write."));
         }
+        catch (LatticeWalQuiescingException ex)
+        {
+            // A WAL shard quiesced for a placement move refused the write without committing it
+            // (#5800): transient and self-healing, so the retryable Unavailable, never a server error.
+            _logger.LogWarning(ex, "Api.Backup: gRPC call to {Method} hit a WAL shard quiesced for a placement move.", context.Method);
+            throw new RpcException(new Status(StatusCode.Unavailable, "A storage partition is briefly paused for a placement move and the write was not applied. Retry after a short backoff."));
+        }
         catch (OrleansMessageRejectionException ex)
         {
             // A silo was unavailable or rejected the message (#5742): a transient cluster
@@ -602,6 +609,13 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
             _logger.LogWarning(ex, "Api.Backup: gRPC call to {Method} timed out inside the cluster; outcome unknown.", context.Method);
             throw new RpcException(new Status(StatusCode.DeadlineExceeded, "The request did not complete in time inside the cluster, so its outcome is unknown. Confirm the result before retrying a write."));
         }
+        catch (LatticeWalQuiescingException ex)
+        {
+            // A WAL shard quiesced for a placement move refused the write without committing it
+            // (#5800): transient and self-healing, so the retryable Unavailable, never a server error.
+            _logger.LogWarning(ex, "Api.Backup: gRPC call to {Method} hit a WAL shard quiesced for a placement move.", context.Method);
+            throw new RpcException(new Status(StatusCode.Unavailable, "A storage partition is briefly paused for a placement move and the write was not applied. Retry after a short backoff."));
+        }
         catch (OrleansMessageRejectionException ex)
         {
             // A silo was unavailable or rejected the message (#5742): a transient cluster
@@ -778,6 +792,13 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
             // DeadlineExceeded - never Internal, and never a failure the client may assume.
             _logger.LogWarning(ex, "Api.Backup: gRPC call to {Method} timed out inside the cluster; outcome unknown.", context.Method);
             throw new RpcException(new Status(StatusCode.DeadlineExceeded, "The request did not complete in time inside the cluster, so its outcome is unknown. Confirm the result before retrying a write."));
+        }
+        catch (LatticeWalQuiescingException ex)
+        {
+            // A WAL shard quiesced for a placement move refused the write without committing it
+            // (#5800): transient and self-healing, so the retryable Unavailable, never a server error.
+            _logger.LogWarning(ex, "Api.Backup: gRPC call to {Method} hit a WAL shard quiesced for a placement move.", context.Method);
+            throw new RpcException(new Status(StatusCode.Unavailable, "A storage partition is briefly paused for a placement move and the write was not applied. Retry after a short backoff."));
         }
         catch (OrleansMessageRejectionException ex)
         {
