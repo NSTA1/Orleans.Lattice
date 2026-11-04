@@ -1,0 +1,17 @@
+# #5837, the claimless advance: a split resumed by a new donor activation (a5e2e2ef).
+MODULE: ReadPositionHonestDonorCloseWithoutDeferredBound
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the donor closes the receiver's window with its head but no deferred bound, leaving it to the link: a stale donor write between the close and the link is in no bound
+PERTURBS: DonorClose
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE
+
+--- FIND
+    /\ pend' = TRUE
+    /\ pendGen' = gD + 1
+    /\ UNCHANGED <<walVars, leafVars, epochVars, mInit, windows, oldVars, envVars, armVars>>
+--- REPLACE
+\* MUTATION: the deferred bound waits for the link.
+    /\ UNCHANGED <<pend, pendGen>>
+    /\ UNCHANGED <<walVars, leafVars, epochVars, mInit, windows, oldVars, envVars, armVars>>
+--- END

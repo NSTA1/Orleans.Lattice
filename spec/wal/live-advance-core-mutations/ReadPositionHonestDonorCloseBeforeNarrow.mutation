@@ -9,11 +9,11 @@ BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWi
 --- FIND
     /\ hoOpen
     /\ dNarrowed
-    /\ \A o \in inflight : author[o] # DonorLive
+    /\ \A o \in inflight : o \notin dKnown
     /\ hoOpen' = FALSE
 --- REPLACE
     /\ hoOpen
 \* MUTATION: the close does not wait for the narrow.
-    /\ \A o \in inflight : author[o] # DonorLive
+    /\ \A o \in inflight : o \notin dKnown
     /\ hoOpen' = FALSE
 --- END

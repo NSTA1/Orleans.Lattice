@@ -8,12 +8,12 @@ BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWi
 
 --- FIND
     /\ dNarrowed
-    /\ \A o \in inflight : author[o] # DonorLive
+    /\ \A o \in inflight : o \notin dKnown
     /\ hoOpen' = FALSE
-    /\ hoClosedAt' = Max2(hoClosedAt, Max({-1} \cup {o \in Offs : author[o] = DonorLive}) + 1)
+    /\ hoClosedAt' = Max2(hoClosedAt, Max({-1} \cup DonorCloseCovers) + 1)
 --- REPLACE
     /\ dNarrowed
 \* MUTATION: no drain; the head covers only the donor's writes it has seen land.
     /\ hoOpen' = FALSE
-    /\ hoClosedAt' = Max2(hoClosedAt, Max({-1} \cup {o \in durable : author[o] = DonorLive}) + 1)
+    /\ hoClosedAt' = Max2(hoClosedAt, Max({-1} \cup (DonorCloseCovers \cap durable)) + 1)
 --- END

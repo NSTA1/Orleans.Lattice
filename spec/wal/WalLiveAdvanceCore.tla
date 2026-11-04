@@ -53,7 +53,7 @@ EXTENDS Integers, FiniteSets
 (***************************************************************************)
 CONSTANTS MaxWindows, WithMixedVersion, WithGateFlip, WithRestart, WithRecreate, WithBulk,
           WithUnclaimedSurvivor, WithClaimedPurge, WithPreArm, WithKeyMove, WithFreeAdvance,
-          WithSplitHint, WithSplitBirth
+          WithSplitHint, WithSplitBirth, WithDonorRestart
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
@@ -126,7 +126,9 @@ VARIABLES
     sibRows,      \* the rows the split handed the sibling
     tRecs,        \* the split transfer's records, appended by L under the per-leaf class
     dNarrowed,    \* WithSplitBirth: L's live donor has narrowed its span
-    sDone         \* WithSplitBirth: the donor's stragglers have reached L
+    sDone,        \* WithSplitBirth: the donor's stragglers have reached L
+    dKnown,       \* WithSplitBirth: the moved-key writes the donor's closing activation knows it made
+    dResumed      \* WithDonorRestart: the split was resumed by a new donor activation
 
 walVars == <<next, author, inflight, durable, acked, floor>>
 leafVars == <<up, cache, rp, mine, snapCov, snapRows>>
@@ -134,7 +136,7 @@ epochVars == <<cur, claimed, claimHead, stale, dupUsed>>
 handVars == <<mInit, hoOpen, hoClosedAt, windows>>
 oldVars == <<lastU, seenU, oldUsed, restarted, oldRejected>>
 envVars == <<recreated, reinit, spUsed, phase, hint>>
-xferVars == <<tRecs, dNarrowed, sDone>>
+xferVars == <<tRecs, dNarrowed, sDone, dKnown, dResumed>>
 freeVars == <<sHi, seenS, ft, sh, sibHint, sibRows, xferVars>>
 armVars == <<preArm, seenP, startHead, evStart, evFloor, freeVars>>
 moveVars == <<gD, gL, pend, pendGen, moved, otherMoved, dUsed, reclaims, strayReclaims>>
@@ -196,6 +198,8 @@ TypeOK ==
     /\ tRecs \subseteq Offs
     /\ dNarrowed \in BOOLEAN
     /\ sDone \in BOOLEAN
+    /\ dKnown \subseteq Offs
+    /\ dResumed \in BOOLEAN
 
 (***************************************************************************)
 (* Init. Without WithBulk, L is a new tree's first leaf: a1 is running,   *)
@@ -260,6 +264,8 @@ Init ==
     /\ tRecs = {}
     /\ dNarrowed = FALSE
     /\ sDone = FALSE
+    /\ dKnown = {}
+    /\ dResumed = FALSE
 
 (***************************************************************************)
 (* B's BulkHintBound, as an environment step. Create: the bulk-born leaf's *)
@@ -334,7 +340,7 @@ Claim(a) ==
     /\ cur' = a
     /\ stale' = IF cur \in Acts THEN stale \cup {cur} ELSE stale
     /\ ReportForeign(a)
-    /\ IF pend THEN ResolveDeferred ELSE UNCHANGED <<moveVars, hoClosedAt>>
+    /\ IF pend /\ gD >= pendGen THEN ResolveDeferred ELSE UNCHANGED <<moveVars, hoClosedAt>>
     /\ UNCHANGED <<walVars, leafVars, dupUsed, mInit, hoOpen, windows, oldVars, envVars>>
     /\ UNCHANGED <<preArm, startHead, evStart, evFloor, freeVars>>
 
@@ -346,6 +352,7 @@ Resolve(a) ==
     /\ pend
     /\ ResolveDeferred
     /\ ReportForeign(a)
+    /\ gD >= pendGen
     /\ UNCHANGED <<walVars, leafVars, epochVars, mInit, hoOpen, windows, oldVars, envVars>>
     /\ UNCHANGED <<preArm, startHead, evStart, evFloor, freeVars>>
 
@@ -652,6 +659,11 @@ SplitCommit(a) ==
 (* since the transfer carries the routing generation its span was         *)
 (* established under.                                                      *)
 (***************************************************************************)
+(* The records the donor's close head is above: every append of the donor *)
+(* leaf since the heads, by any of its activations, once the split was     *)
+(* resumed; otherwise the closing activation's own, which are all of them. *)
+DonorCloseCovers == IF dResumed THEN {o \in Offs : author[o] = DonorLive} ELSE dKnown
+
 DonorAlloc ==
     /\ FreeOn
     /\ WithSplitBirth
@@ -661,7 +673,10 @@ DonorAlloc ==
     /\ next' = next + 1
     /\ author' = [author EXCEPT ![next] = DonorLive]
     /\ inflight' = inflight \cup {next}
-    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, oldVars, envVars, armVars, moveVars>>
+    /\ dKnown' = dKnown \cup {next}
+    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dResumed>>
 
 DonorNarrow ==
     /\ FreeOn
@@ -669,17 +684,38 @@ DonorNarrow ==
     /\ ~dNarrowed
     /\ dNarrowed' = TRUE
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
-    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows, tRecs, sDone>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows, tRecs, sDone, dKnown, dResumed>>
 
 DonorClose ==
     /\ FreeOn
     /\ WithSplitBirth
     /\ hoOpen
     /\ dNarrowed
-    /\ \A o \in inflight : author[o] # DonorLive
+    /\ \A o \in inflight : o \notin dKnown
     /\ hoOpen' = FALSE
-    /\ hoClosedAt' = Max2(hoClosedAt, Max({-1} \cup {o \in Offs : author[o] = DonorLive}) + 1)
-    /\ UNCHANGED <<walVars, leafVars, epochVars, mInit, windows, oldVars, envVars, armVars, moveVars>>
+    /\ hoClosedAt' = Max2(hoClosedAt, Max({-1} \cup DonorCloseCovers) + 1)
+    /\ pend' = TRUE
+    /\ pendGen' = gD + 1
+    /\ UNCHANGED <<walVars, leafVars, epochVars, mInit, windows, oldVars, envVars, armVars>>
+    /\ UNCHANGED <<gD, gL, moved, otherMoved, dUsed, reclaims, strayReclaims>>
+
+(* DonorRestart (WithDonorRestart): the donor restarts after taking the    *)
+(* heads and before closing, and a new activation resumes the split from   *)
+(* its durable record. It never learns the old activation's writes, and    *)
+(* the old activation's token is no longer the live one: the WAL counts   *)
+(* its records in the donor's staleHigh, and any still in flight lands    *)
+(* there as a stale donor's write (StaleRouteAlloc).                      *)
+DonorRestart ==
+    /\ FreeOn
+    /\ WithDonorRestart
+    /\ hoOpen
+    /\ ~dResumed
+    /\ dResumed' = TRUE
+    /\ dKnown' = {}
+    /\ sHi' = Max({sHi} \cup {o \in Offs : author[o] = DonorLive})
+    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, seenS, ft, sh, sibHint, sibRows>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone>>
 
 Straggler(a) ==
     /\ FreeOn
@@ -700,7 +736,7 @@ Straggler(a) ==
     /\ ReportStale(a)
     /\ UNCHANGED <<durable, acked, floor, up, rp, mine, snapCov, snapRows, epochVars, handVars>>
     /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected, envVars, moveVars>>
-    /\ UNCHANGED <<preArm, startHead, evStart, evFloor, sHi, ft, sh, sibHint, sibRows, dNarrowed>>
+    /\ UNCHANGED <<preArm, startHead, evStart, evFloor, sHi, ft, sh, sibHint, sibRows, dNarrowed, dKnown, dResumed>>
 
 (* Capture(a): the shared per-leaf snapshot keeps the highest coverage.  *)
 Capture(a) ==
@@ -788,6 +824,7 @@ OtherReceiverArm ==
     /\ WithKeyMove
     /\ moved
     /\ ~otherMoved
+    /\ ~WithSplitBirth
     /\ gD + 1 <= MaxGen
     /\ otherMoved' = TRUE
     /\ gD' = gD + 1
@@ -797,7 +834,7 @@ OtherReceiverArm ==
 
 StaleRouteAlloc ==
     /\ WithKeyMove
-    /\ moved
+    /\ moved \/ WithSplitBirth
     /\ ~dUsed
     /\ next < MaxOff
     /\ 1 >= gL
@@ -812,7 +849,7 @@ StaleRouteAlloc ==
 
 UnroutedAlloc ==
     /\ WithKeyMove
-    /\ moved
+    /\ moved \/ WithSplitBirth
     /\ ~dUsed
     /\ next < MaxOff
     /\ dUsed' = TRUE
@@ -903,6 +940,7 @@ Next ==
     \/ DonorAlloc
     \/ DonorNarrow
     \/ DonorClose
+    \/ DonorRestart
     \/ \E a \in Acts : Straggler(a)
     \/ \E a \in Acts : Capture(a)
     \/ GcTrim

@@ -1,0 +1,13 @@
+# #5837, the claimless advance: a split resumed by a new donor activation (a5e2e2ef).
+MODULE: ReadPositionHonestResumedCloseUsesOnlyOwnHigh
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a split resumed by a new donor activation closes with only that activation's own moved-key high
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithDonorRestart = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE
+
+--- FIND
+DonorCloseCovers == IF dResumed THEN {o \in Offs : author[o] = DonorLive} ELSE dKnown
+--- REPLACE
+\* MUTATION: the resumed close uses only the new activation's own high.
+DonorCloseCovers == dKnown
+--- END
