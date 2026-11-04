@@ -64,6 +64,7 @@ public sealed class ShardRootBootstrapReadFenceClassificationTests
         nameof(IShardRootGrain.BulkAppendAsync),
         nameof(IShardRootGrain.BulkLoadAsync),
         nameof(IShardRootGrain.BulkLoadRawAsync),
+        nameof(IShardRootGrain.GetBulkOperationStatusAsync),
         nameof(IShardRootGrain.ClearDirtyLeavesUpToAsync),
         nameof(IShardRootGrain.ClearRetainedRedirectAsync),
         nameof(IShardRootGrain.ClearRetainedRedirectIfOwnedAsync),

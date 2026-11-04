@@ -1172,21 +1172,21 @@ internal sealed class LatticeBackupRestoreService(
         cancellationToken.ThrowIfCancellationRequested();
         if (progress is not null)
         {
-            await ReplayWithProgressAsync(routing, operationId, pending, progress, registrationLineage).ConfigureAwait(false);
+            await ReplayWithProgressAsync(routing, operationId, pending, progress, registrationLineage, cancellationToken).ConfigureAwait(false);
         }
         else if (pending.Count == 1)
         {
             // Single-shard trees are the dominant shape and have nothing to
             // overlap: keep the direct await rather than building a task array.
             var (onlyShard, onlyEntries) = pending[0];
-            await BulkLoadShardAsync(routing, operationId, onlyShard, onlyEntries, registrationLineage).ConfigureAwait(false);
+            await BulkLoadShardAsync(routing, operationId, onlyShard, onlyEntries, registrationLineage, cancellationToken).ConfigureAwait(false);
         }
         else if (pending.Count > 1)
         {
             await BoundedFanOut.ForEachAsync(
                 pending,
                 BoundedFanOut.DefaultWidth,
-                bucket => BulkLoadShardAsync(routing, operationId, bucket.ShardIndex, bucket.Bucket, registrationLineage)).ConfigureAwait(false);
+                bucket => BulkLoadShardAsync(routing, operationId, bucket.ShardIndex, bucket.Bucket, registrationLineage, cancellationToken)).ConfigureAwait(false);
         }
 
         return total;
@@ -1202,7 +1202,8 @@ internal sealed class LatticeBackupRestoreService(
         string operationId,
         List<(int ShardIndex, List<LwwEntry> Bucket)> pending,
         ILatticeOperationProgress progress,
-        Guid? registrationLineage)
+        Guid? registrationLineage,
+        CancellationToken cancellationToken)
     {
         await progress.ReportAsync(
             BackupOperationPhases.Replaying, 0, pending.Count, BackupOperationUnits.Shards).ConfigureAwait(false);
@@ -1212,7 +1213,7 @@ internal sealed class LatticeBackupRestoreService(
             BoundedFanOut.DefaultWidth,
             async bucket =>
             {
-                await BulkLoadShardAsync(routing, operationId, bucket.ShardIndex, bucket.Bucket, registrationLineage).ConfigureAwait(false);
+                await BulkLoadShardAsync(routing, operationId, bucket.ShardIndex, bucket.Bucket, registrationLineage, cancellationToken).ConfigureAwait(false);
                 await progress.ReportAsync(
                     BackupOperationPhases.Replaying,
                     Interlocked.Increment(ref replayed),
@@ -1265,7 +1266,8 @@ internal sealed class LatticeBackupRestoreService(
         string operationId,
         int shardIndex,
         List<LwwEntry> entries,
-        Guid? registrationLineage)
+        Guid? registrationLineage,
+        CancellationToken cancellationToken)
     {
         var shard = grainFactory.GetGrain<IShardRootGrain>($"{routing.PhysicalTreeId}/{shardIndex}");
         using (LatticeAccessGateContext.EnterSystemOrigin())
@@ -1273,11 +1275,16 @@ internal sealed class LatticeBackupRestoreService(
             // A shadow build stamps the registration it runs under (issue #5813), so
             // a load still in flight after this restore gave up is refused by a
             // purged shard the registry has since re-created under another
-            // registration of the same deterministic shadow id.
+            // registration of the same deterministic shadow id. The stamp covers the
+            // whole completion wait, so a load it re-issues is stamped too.
             using var stamp = registrationLineage is { } lineage
                 ? BulkWriteRegistrationLineage.Stamp(routing.PhysicalTreeId, lineage)
                 : null;
-            await shard.BulkLoadRawAsync($"{operationId}-restore-{shardIndex}", entries).ConfigureAwait(false);
+
+            // A load that outruns the response timeout is waited for, not re-issued
+            // behind itself (#5812).
+            await ShardBulkLoadCompletion.BulkLoadRawAsync(
+                shard, $"{operationId}-restore-{shardIndex}", entries, logger, cancellationToken).ConfigureAwait(false);
         }
     }
 

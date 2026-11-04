@@ -8,7 +8,125 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal sealed partial class ShardRootGrain
 {
+    private static readonly Task<BulkOperationStatus>[] BulkOperationStatusTasks =
+    [
+        Task.FromResult(BulkOperationStatus.NotRunning),
+        Task.FromResult(BulkOperationStatus.Running),
+        Task.FromResult(BulkOperationStatus.Completed),
+    ];
+
+    /// <summary>
+    /// The bulk load running on this activation, read by
+    /// <see cref="GetBulkOperationStatusAsync"/> while the load's own turn is suspended
+    /// (#5812). The shard root is not reentrant, so at most one load runs at a time.
+    /// </summary>
+    private string? _runningBulkOperationId;
+
+    /// <summary>
+    /// A bulk load that published its root and then faulted in its switch's tail, so
+    /// its persisted completion is not the whole of it (review S1 of #5815). It reads
+    /// as not running, so its caller re-issues it, and the re-issue's completed-id
+    /// short-circuit closes the switch. Activation memory only: a fresh activation
+    /// closes the switch by the idle close it arms instead.
+    /// </summary>
+    private string? _faultedBulkOperationId;
+
+    /// <inheritdoc />
+    public Task<BulkOperationStatus> GetBulkOperationStatusAsync(string operationId)
+    {
+        EnsureInternalOrigin(LatticeOperation.BulkLoad);
+        // The load records itself complete when it publishes its root, before its
+        // switch's tail has relocated the replaced root and closed by fence. So Running
+        // wins, or a caller could proceed or cut over mid-tail; and a load whose tail
+        // faulted reads as not running, or nobody would re-issue it to close the switch.
+        BulkOperationStatus status;
+        if (string.Equals(_runningBulkOperationId, operationId, StringComparison.Ordinal))
+        {
+            status = BulkOperationStatus.Running;
+        }
+        else if (string.Equals(_faultedBulkOperationId, operationId, StringComparison.Ordinal))
+        {
+            status = BulkOperationStatus.NotRunning;
+        }
+        else
+        {
+            status = state.State.LastCompletedBulkOperationId == operationId
+                ? BulkOperationStatus.Completed
+                : BulkOperationStatus.NotRunning;
+        }
+
+        return BulkOperationStatusTasks[(int)status];
+    }
+
     public async Task BulkLoadAsync(string operationId, List<KeyValuePair<string, byte[]>> sortedEntries)
+    {
+        _runningBulkOperationId = operationId;
+        try
+        {
+            await BulkLoadCoreAsync(operationId, sortedEntries);
+            ClearFaultedBulkLoad(operationId);
+        }
+        catch
+        {
+            NoteBulkLoadFaulted(operationId);
+            throw;
+        }
+        finally
+        {
+            _runningBulkOperationId = null;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task BulkLoadRawAsync(string operationId, List<LwwEntry> sortedEntries)
+    {
+        _runningBulkOperationId = operationId;
+        try
+        {
+            await BulkLoadRawCoreAsync(operationId, sortedEntries);
+            ClearFaultedBulkLoad(operationId);
+        }
+        catch
+        {
+            NoteBulkLoadFaulted(operationId);
+            throw;
+        }
+        finally
+        {
+            _runningBulkOperationId = null;
+        }
+    }
+
+    private void ClearFaultedBulkLoad(string operationId)
+    {
+        if (string.Equals(_faultedBulkOperationId, operationId, StringComparison.Ordinal))
+        {
+            _faultedBulkOperationId = null;
+        }
+    }
+
+    /// <summary>
+    /// Review S1 of #5815: a load that faulted after it published its root left its
+    /// switch open with its completion persisted. It is remembered so its status reads
+    /// as not running and its caller re-issues it, and the idle close is armed so the
+    /// switch is closed even when nobody does. A load that faulted before it published
+    /// reads as not running already. Runs only on the failure path.
+    /// </summary>
+    private void NoteBulkLoadFaulted(string operationId)
+    {
+        if (state.State.LastCompletedBulkOperationId != operationId)
+        {
+            return;
+        }
+
+        _faultedBulkOperationId = operationId;
+        if (HasHandOffStorage())
+        {
+            ArmBulkIdleClose();
+        }
+    }
+
+    private async Task BulkLoadCoreAsync(string operationId, List<KeyValuePair<string, byte[]>> sortedEntries)
     {
         EnsureInternalOrigin(LatticeOperation.BulkLoad);
         ThrowIfDeleted();
@@ -76,8 +194,7 @@ internal sealed partial class ShardRootGrain
         await FinishBulkSwitchAsync(operationId, leafIds, relocated: readFrontier is not null, closeNow: true, readFrontier);
     }
 
-    /// <inheritdoc />
-    public async Task BulkLoadRawAsync(
+    private async Task BulkLoadRawCoreAsync(
         string operationId,
         List<LwwEntry> sortedEntries)
     {

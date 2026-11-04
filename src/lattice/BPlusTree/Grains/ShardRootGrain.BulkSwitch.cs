@@ -314,6 +314,35 @@ internal sealed partial class ShardRootGrain
         }
     }
 
+    /// <summary>
+    /// Review S1 of #5815: arms the idle close on an activation of a shard that has
+    /// completed a bulk operation, which is the only kind whose switch can have been left
+    /// open by a previous activation (a tail that faulted, or a deactivation before the
+    /// run's close). Reads nothing: the timer reads the marker, and closes only when a
+    /// bulk switch is open. A shard that never bulk-loaded pays one null check.
+    /// </summary>
+    private void ArmBulkIdleCloseOnActivation()
+    {
+        if (state.State.LastCompletedBulkOperationId is not null && HasHandOffStorage())
+        {
+            ArmBulkIdleClose();
+        }
+    }
+
+    /// <summary>
+    /// Arms the idle close when the marker this activation has just read holds an open
+    /// bulk switch, which covers a switch abandoned before its operation completed. Runs
+    /// on the marker's first read by an activation, which happens anyway, so it reads
+    /// nothing; compares as spans, so it allocates nothing.
+    /// </summary>
+    private void ArmBulkIdleCloseIfSwitchOpen(ShardHandOffState marker)
+    {
+        if (marker.Open.Count > 0 && CountCompletedBulkSwitches(marker, currentOperationId: null) > 0)
+        {
+            ArmBulkIdleClose();
+        }
+    }
+
     private async Task OnBulkIdleCloseAsync(CancellationToken cancellationToken)
     {
         try
