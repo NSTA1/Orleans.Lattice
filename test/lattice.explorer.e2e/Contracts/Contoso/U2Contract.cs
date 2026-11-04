@@ -57,25 +57,41 @@ public sealed class U2Contract() : ChapterContract("U2")
     private static readonly TimeSpan RemediationStall = TimeSpan.FromMinutes(3);
 
     /// <summary>
-    /// The hard upper bound on a remediation, however steadily it advances. U2's
-    /// establishment, which the remediation dominates, has passed in 10 s to 270 s on the
-    /// shared contract estate. Ten minutes is more
-    /// than twice the slowest pass, so a slow estate does not fail a remediation that is
-    /// still working, yet one that has not finished by then is not converging. It stays
-    /// far inside the conformance leg's job timeout.
+    /// How long a remediation's backlog (its phase total less its completed values) may go
+    /// without reaching a new low. A build copies the source as it finds it, so live writes
+    /// to keys past its cursor grow the total while it runs; a build that keeps advancing
+    /// but never gains on them would pass the stall check for ever. Five minutes is several
+    /// times the slice cadence, so a converging build sets a new low well inside it.
     /// </summary>
-    private static readonly TimeSpan RemediationCeiling = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan RemediationConvergence = TimeSpan.FromMinutes(5);
 
     /// <summary>
-    /// Waits for a remediation to succeed while it advances: it fails when the operation's
-    /// phase and scanned count stop moving for <see cref="RemediationStall"/>, or at
+    /// The hang guard on a remediation that keeps advancing and converging. It is not a
+    /// length estimate: the stall and convergence checks decide whether a remediation is
+    /// healthy, and this only stops one that would otherwise run into the leg's hang
+    /// timeout. The slowest healthy remediation observed on the contract estate, C1's
+    /// negative-total remediation of the restored orders (run 41771641475), needed about
+    /// 600 s to reach cutover while chasing live line-feed writes; twenty minutes is twice
+    /// that. A contract test may run for 50 minutes (the leg's hang budget,
+    /// <c>HANGS["contract"]</c> in <c>explorer-journeys-plan.py</c>): C3's prerequisites
+    /// up to C1's remediation took about 15 minutes there, so 15 + 20 + 8 (C1's
+    /// re-migration ceiling) + about 4 (C3 itself) is 47, inside it.
+    /// </summary>
+    private static readonly TimeSpan RemediationCeiling = TimeSpan.FromMinutes(20);
+
+    /// <summary>
+    /// Waits for a remediation to succeed while it advances and converges: it fails when
+    /// the operation's phase and scanned count stop moving for <see cref="RemediationStall"/>,
+    /// when its backlog sets no new low for <see cref="RemediationConvergence"/>, or at
     /// <see cref="RemediationCeiling"/>, naming the trajectory it observed.
     /// </summary>
     /// <param name="schema">The Schema API.</param>
     /// <param name="operationId">The remediation's operation id.</param>
     /// <param name="what">The remediation, for messages.</param>
     public static Task AwaitRemediationAsync(Orleans.Lattice.Api.Schema.Grpc.LatticeSchemaApiGrpcClient schema, string operationId, string what) =>
-        ContractWait.SucceededWhileAdvancingAsync(what, () => schema.GetSchemaOperationStatusAsync(operationId), RemediationStall, RemediationCeiling);
+        ContractWait.SucceededWhileAdvancingAsync(
+            what, () => schema.GetSchemaOperationStatusAsync(operationId), RemediationStall, RemediationCeiling,
+            convergence: RemediationConvergence);
 
     /// <summary>
     /// A whole-tree migration saturates the journey estate (#5569): its own calls then time out

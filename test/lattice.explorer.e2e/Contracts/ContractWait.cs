@@ -158,7 +158,8 @@ public static class ContractWait
     /// <summary>
     /// Polls a tracked operation until it is terminal while it keeps advancing, and requires it to
     /// have succeeded: the wait fails only when the operation's phase and completed units have not
-    /// moved for <paramref name="stall"/>, or when <paramref name="ceiling"/> has elapsed, and
+    /// moved for <paramref name="stall"/>, when, given <paramref name="convergence"/>, its backlog
+    /// has set no new low for that long, or when <paramref name="ceiling"/> has elapsed, and
     /// reports the trajectory it observed.
     /// </summary>
     /// <param name="what">The operation, for the failure message.</param>
@@ -166,15 +167,22 @@ public static class ContractWait
     /// <param name="stall">How long the operation may go without advancing.</param>
     /// <param name="ceiling">The absolute deadline.</param>
     /// <param name="last">Receives the last status read, also when the wait times out.</param>
+    /// <param name="convergence">
+    /// How long the operation's backlog - its phase total less its completed units, while the
+    /// phase reports a total - may go without reaching a new low within one phase; unbounded
+    /// when <see langword="null"/>. An operation whose total grows as fast as it completes
+    /// units keeps advancing but never finishes, and only this catches it.
+    /// </param>
     /// <returns>The succeeded operation's status.</returns>
     /// <exception cref="InvalidOperationException">The operation failed or was cancelled.</exception>
-    /// <exception cref="TimeoutException">The operation stalled, or ran past the ceiling.</exception>
+    /// <exception cref="TimeoutException">The operation stalled, stopped converging, or ran past the ceiling.</exception>
     public static async Task<LatticeOperationStatus> SucceededWhileAdvancingAsync(
         string what,
         Func<Task<LatticeOperationStatus?>> status,
         TimeSpan stall,
         TimeSpan ceiling,
-        StrongBox<LatticeOperationStatus?>? last = null)
+        StrongBox<LatticeOperationStatus?>? last = null,
+        TimeSpan? convergence = null)
     {
         ArgumentNullException.ThrowIfNull(status);
         last ??= new StrongBox<LatticeOperationStatus?>();
@@ -182,6 +190,7 @@ public static class ContractWait
         var trajectory = new List<string>();
         (LatticeOperationState, string, int?, long)? seen = null;
         var advances = 0L;
+        var backlog = new Convergence();
         await UntilAdvancingAsync(
             what,
             async () =>
@@ -195,6 +204,14 @@ public static class ContractWait
                     trajectory.Add($"{current.State}/{current.Phase} {current.CompletedUnits}{(current.TotalUnits is { } total ? $"/{total}" : string.Empty)} at {clock.Elapsed.TotalSeconds:0} s");
                 }
 
+                if (current is { IsTerminal: false } && convergence is { } window
+                    && backlog.Observe(current, clock.Elapsed) is var sinceLow && sinceLow > window)
+                {
+                    throw new TimeoutException(
+                        $"Timed out after {clock.Elapsed.TotalSeconds:0} seconds: {what} kept advancing, but its backlog set no new "
+                        + $"low for {window.TotalSeconds:0} seconds, so it is not converging. Progress: {string.Join(", ", trajectory)}.");
+                }
+
                 return current is { IsTerminal: true };
             },
             () => advances,
@@ -206,6 +223,41 @@ public static class ContractWait
         return done.State == LatticeOperationState.Succeeded
             ? done
             : throw new InvalidOperationException($"{what} ended {done.State} in phase '{done.Phase}': {done.FailureReason}");
+    }
+
+    /// <summary>
+    /// Tracks the lowest backlog (total less completed units) an operation has reported in its
+    /// current phase, and when it was set; a new phase starts a new low.
+    /// </summary>
+    private sealed class Convergence
+    {
+        private (string Phase, int? Index)? _phase;
+        private long _low;
+        private TimeSpan _lowAt;
+
+        /// <summary>
+        /// Records <paramref name="status"/> observed at <paramref name="now"/>, and returns how
+        /// long ago the phase's backlog last reached a new low; zero while the phase reports no
+        /// total.
+        /// </summary>
+        public TimeSpan Observe(LatticeOperationStatus status, TimeSpan now)
+        {
+            if (status.TotalUnits is not { } total)
+            {
+                _phase = null;
+                return TimeSpan.Zero;
+            }
+
+            var backlog = total - status.CompletedUnits;
+            if (_phase != (status.Phase, status.PhaseIndex) || backlog < _low)
+            {
+                _phase = (status.Phase, status.PhaseIndex);
+                _low = backlog;
+                _lowAt = now;
+            }
+
+            return now - _lowAt;
+        }
     }
 
     /// <summary>An operation status as state, phase and units, for a timeout's message.</summary>
