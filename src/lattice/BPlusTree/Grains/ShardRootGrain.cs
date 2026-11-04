@@ -3058,7 +3058,7 @@ internal sealed partial class ShardRootGrain(
         return arr;
     }
 
-    private async Task<bool> EnsureRootAsync(bool forWrite = false, bool purgedAnswersEmpty = false)
+    private async Task<bool> EnsureRootAsync(bool forWrite = false, bool purgedAnswersEmpty = false, Guid? admittedLineage = null)
     {
         // Steady-state fast path: once a root exists, short-circuit with
         // zero storage I/O and no gate acquisition. This is the only path
@@ -3071,7 +3071,7 @@ internal sealed partial class ShardRootGrain(
         await _ensureRootGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         try
         {
-            return await EnsureRootSlowWithDeadlineAsync(forWrite, purgedAnswersEmpty);
+            return await EnsureRootSlowWithDeadlineAsync(forWrite, purgedAnswersEmpty, admittedLineage);
         }
         finally
         {
@@ -3123,7 +3123,7 @@ internal sealed partial class ShardRootGrain(
     /// set and the tree has been purged, so the shard has no root and none was
     /// seeded; <see langword="true"/> when the shard has a root.
     /// </returns>
-    private async Task<bool> EnsureRootSlowWithDeadlineAsync(bool forWrite, bool purgedAnswersEmpty)
+    private async Task<bool> EnsureRootSlowWithDeadlineAsync(bool forWrite, bool purgedAnswersEmpty, Guid? admittedLineage)
     {
         // Read from configuration, not a registry resolve: the tree may not be
         // registered until the seed below runs, and a resolve of a purged id
@@ -3134,14 +3134,14 @@ internal sealed partial class ShardRootGrain(
         if (timeout == Timeout.InfiniteTimeSpan)
         {
             return await WarmOptionsIfRootedAsync(
-                await EnsureRootSlowAsync(forWrite, purgedAnswersEmpty).ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext));
+                await EnsureRootSlowAsync(forWrite, purgedAnswersEmpty, admittedLineage).ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext));
         }
 
         using var deadline = new CancellationTokenSource(timeout);
         try
         {
             return await WarmOptionsIfRootedAsync(
-                await EnsureRootSlowAsync(forWrite, purgedAnswersEmpty).WaitAsync(deadline.Token)
+                await EnsureRootSlowAsync(forWrite, purgedAnswersEmpty, admittedLineage).WaitAsync(deadline.Token)
                     .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext));
         }
         catch (OperationCanceledException oce) when (deadline.IsCancellationRequested)
@@ -3180,7 +3180,7 @@ internal sealed partial class ShardRootGrain(
         return rooted;
     }
 
-    private async Task<bool> EnsureRootSlowAsync(bool forWrite, bool purgedAnswersEmpty)
+    private async Task<bool> EnsureRootSlowAsync(bool forWrite, bool purgedAnswersEmpty, Guid? admittedLineage)
     {
         // Re-check under the gate: a turn that lost the race to the gate
         // observes the winner's published RootNodeId and returns without
@@ -3237,6 +3237,17 @@ internal sealed partial class ShardRootGrain(
             {
                 reseedEntry = await registry.GetEntryAsync(TreeId);
                 reseedEntryRead = true;
+
+                // A bulk write admitted under a registration re-seeds only that
+                // registration (issue #5813): if the registry no longer names it -
+                // the orphan-shadow GC unregistered the shadow, or a re-issued
+                // restore registered it again since the admission read - the write
+                // is refused rather than registering the id without the provenance
+                // its builder stamped.
+                if (admittedLineage is not null && reseedEntry?.Lineage != admittedLineage)
+                {
+                    throw new LatticeTreePurgedException(TreeId);
+                }
             }
 
             if (reseed ? reseedEntry is null : !await registry.ExistsAsync(TreeId))
@@ -3541,7 +3552,7 @@ internal sealed partial class ShardRootGrain(
         return PrepareForOperationSlowAsync(forWrite, purgedAnswersEmpty);
     }
 
-    private async Task<bool> PrepareForOperationSlowAsync(bool forWrite, bool purgedAnswersEmpty)
+    private async Task<bool> PrepareForOperationSlowAsync(bool forWrite, bool purgedAnswersEmpty, Guid? admittedLineage = null)
     {
         // Bracketed as a routing mutation (issue #3474): the serial reads that
         // reach here are exempt from the call-filter bracket, yet this path can
@@ -3550,7 +3561,7 @@ internal sealed partial class ShardRootGrain(
         BeginRoutingMutation();
         try
         {
-            if (!await EnsureRootAsync(forWrite, purgedAnswersEmpty))
+            if (!await EnsureRootAsync(forWrite, purgedAnswersEmpty, admittedLineage))
                 return false;
             await ResumePendingPromotionAsync();
             await ResumePendingBulkGraftAsync();
@@ -3581,7 +3592,7 @@ internal sealed partial class ShardRootGrain(
     /// the registry does not name, so a purged copy cannot be re-opened by any
     /// caller.
     /// </summary>
-    private async Task<bool> PrepareForPurgedCopyAsync(bool forWrite, bool purgedAnswersEmpty)
+    private async Task<bool> PrepareForPurgedCopyAsync(bool forWrite, bool purgedAnswersEmpty, Guid? admittedLineage = null)
     {
         var routedLogical = RequestContext.Get(LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey) as string;
         var registry = grainFactory.GetLatticeRegistry();
@@ -3595,6 +3606,12 @@ internal sealed partial class ShardRootGrain(
                     stalePhysicalTreeId: TreeId,
                     destinationPhysicalTreeId: resolved);
             }
+
+            if (admittedLineage is not null
+                && (await registry.GetEntryAsync(TreeId))?.Lineage != admittedLineage)
+            {
+                throw new LatticeTreePurgedException(TreeId);
+            }
         }
         else
         {
@@ -3605,6 +3622,14 @@ internal sealed partial class ShardRootGrain(
             if (!live)
             {
                 if (!forWrite && purgedAnswersEmpty) return false;
+                throw new LatticeTreePurgedException(TreeId);
+            }
+
+            // A bulk write issued under an earlier registration of this id - a load
+            // whose caller gave up before the orphan-shadow GC purged the shadow -
+            // must not land in the registration that re-created it (issue #5813).
+            if (admittedLineage is not null && entry!.Lineage != admittedLineage)
+            {
                 throw new LatticeTreePurgedException(TreeId);
             }
         }
@@ -3632,7 +3657,7 @@ internal sealed partial class ShardRootGrain(
                 heldId);
         }
 
-        return await PrepareForOperationSlowAsync(forWrite, purgedAnswersEmpty);
+        return await PrepareForOperationSlowAsync(forWrite, purgedAnswersEmpty, admittedLineage);
     }
 
     public async Task MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration = false)

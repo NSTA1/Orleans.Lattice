@@ -143,12 +143,19 @@ internal sealed partial class ShardRootGrain
     /// root rather than going through <see cref="PrepareForWriteAsync"/>: a bulk
     /// write to a purged copy proceeds only when the registry names the copy live
     /// again, seeding (and lifting the tombstone) as any write does
-    /// (issue #4503). A no-op on a shard that was never purged.
+    /// (issue #4503). A no-op on a shard that was never purged. A write stamped
+    /// with the registration it was issued under (<see cref="BulkWriteRegistrationLineage"/>)
+    /// is admitted only while the registry still names the copy under that
+    /// registration, so a load whose caller gave up cannot land in a later
+    /// registration of the same id (issue #5813).
     /// </summary>
     private async Task AdmitPurgedCopyForBulkWriteAsync()
     {
         if (!state.State.IsPurged) return;
-        await PrepareForPurgedCopyAsync(forWrite: true, purgedAnswersEmpty: false);
+        await PrepareForPurgedCopyAsync(
+            forWrite: true,
+            purgedAnswersEmpty: false,
+            BulkWriteRegistrationLineage.For(TreeId));
     }
 
     /// <summary>

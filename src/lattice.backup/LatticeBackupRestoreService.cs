@@ -522,18 +522,22 @@ internal sealed class LatticeBackupRestoreService(
         // revertible; the previous tree is left in place until it expires.
         string previousPhysical;
         RoutingInfo shadowRouting;
+        Guid? shadowLineage;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
             // Stamp the shadow tree with restore provenance so the state catalog
             // can classify it as a restore shadow (and group it under the logical
-            // alias) from a first-class fact rather than its name.
-            await registry.RegisterAsync(
+            // alias) from a first-class fact rather than its name. The reply names
+            // the registration the build runs under, whose lineage every shard bulk
+            // load carries (issue #5813).
+            var (_, shadowEntry) = await registry.RegisterAndGetEntryAsync(
                 shadowTreeId,
                 new TreeRegistryEntry
                 {
                     RestoreShadowOfTreeId = targetTreeId,
                     DerivedFrom = targetTreeId,
                 }).ConfigureAwait(false);
+            shadowLineage = shadowEntry?.Lineage;
             // Provenance precedes the reservation so orphan-shadow GC can
             // release it even if this host dies before the first data write.
             await grainFactory.GetGrain<ITreeDeletionGrain>(targetTreeId)
@@ -557,7 +561,7 @@ internal sealed class LatticeBackupRestoreService(
         // keys by HLC and converges correctly into the empty shadow. This mirrors
         // the fast-path gate in RestoreInPlaceAsync.
         var applied = chain.Count == 1 && chain[0].Kind == BackupKind.Full
-            ? await BulkLoadRawAsync(shadowRouting, chain, rangeStart, rangeEnd, operationId, admission, cancellationToken)
+            ? await BulkLoadRawAsync(shadowRouting, chain, rangeStart, rangeEnd, operationId, admission, cancellationToken, shadowLineage)
                 .ConfigureAwait(false)
             : await MergeApplyAsync(shadowRouting, chain, rangeStart, rangeEnd, applyBatchSize, admission, cancellationToken)
                 .ConfigureAwait(false);
@@ -861,6 +865,15 @@ internal sealed class LatticeBackupRestoreService(
         RoutingInfo routing;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
+            // Rotate the shadow's registration lineage before any shard is purged
+            // (issue #5813). The purge fan-out below leaves every purged shard still
+            // registered under the lineage the build stamped onto its bulk loads
+            // until the unregister at the end, so a load whose restore gave up could
+            // otherwise re-seed a purged shard in that window and be stranded by the
+            // unregister. A restore resumed after this GC faults reads the rotated
+            // lineage back from its registration and is admitted as before.
+            await registry.UpdateAsync(shadowPhysicalTreeId, shadowEntry with { Lineage = Guid.NewGuid() })
+                .ConfigureAwait(false);
             routing = await ResolveRetainedRoutingAsync(shadowPhysicalTreeId, cancellationToken).ConfigureAwait(false);
         }
 
@@ -1091,7 +1104,8 @@ internal sealed class LatticeBackupRestoreService(
         string? rangeEnd,
         string operationId,
         IBackupRestoreAdmission? admission,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? registrationLineage = null)
     {
         // Entries stream in ascending key order within each manifest, so grouping
         // by shard preserves the per-shard ascending order BulkLoadRawAsync needs.
@@ -1158,21 +1172,21 @@ internal sealed class LatticeBackupRestoreService(
         cancellationToken.ThrowIfCancellationRequested();
         if (progress is not null)
         {
-            await ReplayWithProgressAsync(routing, operationId, pending, progress).ConfigureAwait(false);
+            await ReplayWithProgressAsync(routing, operationId, pending, progress, registrationLineage).ConfigureAwait(false);
         }
         else if (pending.Count == 1)
         {
             // Single-shard trees are the dominant shape and have nothing to
             // overlap: keep the direct await rather than building a task array.
             var (onlyShard, onlyEntries) = pending[0];
-            await BulkLoadShardAsync(routing, operationId, onlyShard, onlyEntries).ConfigureAwait(false);
+            await BulkLoadShardAsync(routing, operationId, onlyShard, onlyEntries, registrationLineage).ConfigureAwait(false);
         }
         else if (pending.Count > 1)
         {
             await BoundedFanOut.ForEachAsync(
                 pending,
                 BoundedFanOut.DefaultWidth,
-                bucket => BulkLoadShardAsync(routing, operationId, bucket.ShardIndex, bucket.Bucket)).ConfigureAwait(false);
+                bucket => BulkLoadShardAsync(routing, operationId, bucket.ShardIndex, bucket.Bucket, registrationLineage)).ConfigureAwait(false);
         }
 
         return total;
@@ -1187,7 +1201,8 @@ internal sealed class LatticeBackupRestoreService(
         RoutingInfo routing,
         string operationId,
         List<(int ShardIndex, List<LwwEntry> Bucket)> pending,
-        ILatticeOperationProgress progress)
+        ILatticeOperationProgress progress,
+        Guid? registrationLineage)
     {
         await progress.ReportAsync(
             BackupOperationPhases.Replaying, 0, pending.Count, BackupOperationUnits.Shards).ConfigureAwait(false);
@@ -1197,7 +1212,7 @@ internal sealed class LatticeBackupRestoreService(
             BoundedFanOut.DefaultWidth,
             async bucket =>
             {
-                await BulkLoadShardAsync(routing, operationId, bucket.ShardIndex, bucket.Bucket).ConfigureAwait(false);
+                await BulkLoadShardAsync(routing, operationId, bucket.ShardIndex, bucket.Bucket, registrationLineage).ConfigureAwait(false);
                 await progress.ReportAsync(
                     BackupOperationPhases.Replaying,
                     Interlocked.Increment(ref replayed),
@@ -1249,11 +1264,19 @@ internal sealed class LatticeBackupRestoreService(
         RoutingInfo routing,
         string operationId,
         int shardIndex,
-        List<LwwEntry> entries)
+        List<LwwEntry> entries,
+        Guid? registrationLineage)
     {
         var shard = grainFactory.GetGrain<IShardRootGrain>($"{routing.PhysicalTreeId}/{shardIndex}");
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
+            // A shadow build stamps the registration it runs under (issue #5813), so
+            // a load still in flight after this restore gave up is refused by a
+            // purged shard the registry has since re-created under another
+            // registration of the same deterministic shadow id.
+            using var stamp = registrationLineage is { } lineage
+                ? BulkWriteRegistrationLineage.Stamp(routing.PhysicalTreeId, lineage)
+                : null;
             await shard.BulkLoadRawAsync($"{operationId}-restore-{shardIndex}", entries).ConfigureAwait(false);
         }
     }

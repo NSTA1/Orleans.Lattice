@@ -512,7 +512,17 @@ gaps, states its full scope.
     across a whole restore cutover, an operator's explicit backup delete,
     catalog rebuild and scrub (each serialised per backup id with retention, but
     not modelled), mixed-version silos during a rolling upgrade, and retention
-    over a sink shared between clusters.
+    over a sink shared between clusters. Nor does it cover orphan restore-shadow
+    garbage collection - which rotates the shadow's registration lineage, purges
+    every shard and only then unregisters it - or the purged-copy bulk re-admission
+    and re-seed that a re-issued restore of the same deterministic shadow id relies
+    on (#5813). A bulk load is admitted to a purged copy only under the registration
+    lineage it was issued with, and a stamped re-seed never registers the id itself.
+    Not closed by that rule: a stale load reaching a shard that is no longer purged,
+    which needs the shard map or an explicit operation id to differ between attempts,
+    and the new restore to commit and a read to re-seed the shard within the stale
+    message's expiry; and the merge apply path, whose stale write into an
+    unregistered shadow re-registers it without provenance.
 
 - **Materialised-view tail and lifecycle** ([`spec/materialised-views/`](../../spec/materialised-views/README.md)).
   - **Covers:** physical WAL binding, checkpoint and published read-position
