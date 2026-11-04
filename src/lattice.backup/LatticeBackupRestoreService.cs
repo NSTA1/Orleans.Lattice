@@ -1273,11 +1273,16 @@ internal sealed class LatticeBackupRestoreService(
             // A shadow build stamps the registration it runs under (issue #5813), so
             // a load still in flight after this restore gave up is refused by a
             // purged shard the registry has since re-created under another
-            // registration of the same deterministic shadow id.
+            // registration of the same deterministic shadow id. The stamp covers the
+            // whole completion wait, so a load it re-issues is stamped too.
             using var stamp = registrationLineage is { } lineage
                 ? BulkWriteRegistrationLineage.Stamp(routing.PhysicalTreeId, lineage)
                 : null;
-            await shard.BulkLoadRawAsync($"{operationId}-restore-{shardIndex}", entries).ConfigureAwait(false);
+
+            // A load that outruns the response timeout is waited for, not re-issued
+            // behind itself (#5812).
+            await ShardBulkLoadCompletion.BulkLoadRawAsync(
+                shard, $"{operationId}-restore-{shardIndex}", entries, logger).ConfigureAwait(false);
         }
     }
 

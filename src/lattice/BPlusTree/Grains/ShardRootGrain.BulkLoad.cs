@@ -8,7 +8,60 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal sealed partial class ShardRootGrain
 {
+    private static readonly Task<BulkOperationStatus>[] BulkOperationStatusTasks =
+    [
+        Task.FromResult(BulkOperationStatus.NotRunning),
+        Task.FromResult(BulkOperationStatus.Running),
+        Task.FromResult(BulkOperationStatus.Completed),
+    ];
+
+    /// <summary>
+    /// The bulk load running on this activation, read by
+    /// <see cref="GetBulkOperationStatusAsync"/> while the load's own turn is suspended
+    /// (#5812). The shard root is not reentrant, so at most one load runs at a time.
+    /// </summary>
+    private string? _runningBulkOperationId;
+
+    /// <inheritdoc />
+    public Task<BulkOperationStatus> GetBulkOperationStatusAsync(string operationId)
+    {
+        EnsureInternalOrigin(LatticeOperation.BulkLoad);
+        var status = state.State.LastCompletedBulkOperationId == operationId
+            ? BulkOperationStatus.Completed
+            : string.Equals(_runningBulkOperationId, operationId, StringComparison.Ordinal)
+                ? BulkOperationStatus.Running
+                : BulkOperationStatus.NotRunning;
+        return BulkOperationStatusTasks[(int)status];
+    }
+
     public async Task BulkLoadAsync(string operationId, List<KeyValuePair<string, byte[]>> sortedEntries)
+    {
+        _runningBulkOperationId = operationId;
+        try
+        {
+            await BulkLoadCoreAsync(operationId, sortedEntries);
+        }
+        finally
+        {
+            _runningBulkOperationId = null;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task BulkLoadRawAsync(string operationId, List<LwwEntry> sortedEntries)
+    {
+        _runningBulkOperationId = null;
+        try
+        {
+            await BulkLoadRawCoreAsync(operationId, sortedEntries);
+        }
+        finally
+        {
+            _runningBulkOperationId = null;
+        }
+    }
+
+    private async Task BulkLoadCoreAsync(string operationId, List<KeyValuePair<string, byte[]>> sortedEntries)
     {
         EnsureInternalOrigin(LatticeOperation.BulkLoad);
         ThrowIfDeleted();
@@ -76,8 +129,7 @@ internal sealed partial class ShardRootGrain
         await FinishBulkSwitchAsync(operationId, leafIds, relocated: readFrontier is not null, closeNow: true, readFrontier);
     }
 
-    /// <inheritdoc />
-    public async Task BulkLoadRawAsync(
+    private async Task BulkLoadRawCoreAsync(
         string operationId,
         List<LwwEntry> sortedEntries)
     {

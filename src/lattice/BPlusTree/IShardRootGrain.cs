@@ -852,6 +852,21 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task BulkLoadRawAsync(string operationId, List<LwwEntry> sortedEntries);
 
     /// <summary>
+    /// Whether the bulk load <paramref name="operationId"/> is running on this shard,
+    /// has completed, or neither (#5812). A caller whose
+    /// <see cref="BulkLoadRawAsync"/> or <see cref="BulkLoadAsync"/> outran the response
+    /// timeout reads this instead of re-issuing a call that would queue behind the
+    /// first: the shard root is not reentrant, so the re-issued call cannot start
+    /// before the first ends. Interleaves with the running load and reads only
+    /// activation memory and the persisted completion id, so it costs no storage read.
+    /// </summary>
+    /// <param name="operationId">The bulk load's operation id.</param>
+    /// <returns>The load's status on this shard.</returns>
+    [AlwaysInterleave]
+    [ReadOnly]
+    Task<BulkOperationStatus> GetBulkOperationStatusAsync(string operationId);
+
+    /// <summary>
     /// Appends a sorted batch of key-value pairs to the right edge of this shard's
     /// B+ tree. Creates new leaves as needed and propagates separators into
     /// internal nodes. Used by the streaming bulk-load extension method.

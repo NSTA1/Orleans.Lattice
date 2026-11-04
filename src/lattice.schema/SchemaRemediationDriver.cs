@@ -44,6 +44,13 @@ internal static class SchemaRemediationDriver
     /// <param name="logger">Where each wait is logged, or <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancels the wait.</param>
     /// <param name="backoff">The delays between attempts; <see cref="AliasWaitBackoff"/> by default.</param>
+    /// <param name="progress">
+    /// Where the wait is reported, or <see langword="null"/> for none: one
+    /// <see cref="SchemaOperationPhases.WaitingForAliasOperation"/> report on entering
+    /// it, not one per attempt, so the operation's status says why it has not started.
+    /// The driver's first report of the accepted remediation's phase, or the
+    /// operation's terminal status, replaces it on leaving.
+    /// </param>
     /// <returns>The accepted report.</returns>
     internal static async Task<LatticeSchemaRemediationReport> AcceptAsync(
         string treeId,
@@ -51,7 +58,8 @@ internal static class SchemaRemediationDriver
         TimeSpan ceiling,
         ILogger? logger,
         CancellationToken cancellationToken,
-        IReadOnlyList<TimeSpan>? backoff = null)
+        IReadOnlyList<TimeSpan>? backoff = null,
+        ILatticeOperationProgress? progress = null)
     {
         ArgumentNullException.ThrowIfNull(accept);
         backoff ??= AliasWaitBackoff;
@@ -76,6 +84,11 @@ internal static class SchemaRemediationDriver
                 logger?.LogInformation(
                     "Schema remediation of tree {TreeId} is waiting for alias operation {Holder} to finish before it starts.",
                     treeId, refused.HolderOperationId);
+                if (attempt < 0 && progress is not null)
+                {
+                    await ReportWaitingAsync(progress, cancellationToken).ConfigureAwait(false);
+                }
+
                 await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
             }
         }
@@ -227,6 +240,19 @@ internal static class SchemaRemediationDriver
 
     private static bool Follows(LatticeSchemaRemediationReport report, string followed) =>
         string.Equals(report.OperationId, followed, StringComparison.Ordinal);
+
+    private static async Task ReportWaitingAsync(ILatticeOperationProgress progress, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await progress.ReportAsync(SchemaOperationPhases.WaitingForAliasOperation).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The sink refuses reports once cancellation is requested; the wait's own
+            // delay observes the same request.
+        }
+    }
 
     private static async Task ReportAsync(
         ILatticeOperationProgress progress,

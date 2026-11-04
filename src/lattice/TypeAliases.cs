@@ -1016,4 +1016,7 @@ internal static class TypeAliases
 
     /// <summary>Alias for a shard root's answer to a leaf's live-advance read.</summary>
     internal const string LeafLiveAdvanceView = "ol.xlv";
+
+    /// <summary>Alias for a shard root's answer to whether a bulk operation is running or completed (#5812).</summary>
+    internal const string BulkOperationStatus = "ol.xbs";
 }
