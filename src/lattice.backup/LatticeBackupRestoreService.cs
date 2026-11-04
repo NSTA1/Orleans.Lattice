@@ -561,7 +561,7 @@ internal sealed class LatticeBackupRestoreService(
         // keys by HLC and converges correctly into the empty shadow. This mirrors
         // the fast-path gate in RestoreInPlaceAsync.
         var applied = chain.Count == 1 && chain[0].Kind == BackupKind.Full
-            ? await BulkLoadRawAsync(shadowRouting, chain, rangeStart, rangeEnd, operationId, admission, cancellationToken, shadowLineage)
+            ? await BulkLoadRawAsync(shadowRouting, chain, rangeStart, rangeEnd, operationId, admission, cancellationToken, registrationLineage: null)
                 .ConfigureAwait(false)
             : await MergeApplyAsync(shadowRouting, chain, rangeStart, rangeEnd, applyBatchSize, admission, cancellationToken)
                 .ConfigureAwait(false);
