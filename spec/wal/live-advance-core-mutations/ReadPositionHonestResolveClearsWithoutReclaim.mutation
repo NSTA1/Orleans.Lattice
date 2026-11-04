@@ -1,0 +1,23 @@
+# #5833, C2. An activation that armed before a key-moving close clears the deferred head
+# on its marker without the re-claim and without recording a close head: the stale
+# donor's write under the old generation, before or after, is passed.
+MODULE: ReadPositionHonestResolveClearsWithoutReclaim
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: an armed activation clears a deferred head without re-claiming or recording a head
+PERTURBS: Resolve
+BOUNDS: WithKeyMove = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+    /\ cur = a
+    /\ pend
+    /\ ResolveDeferred
+
+--- REPLACE
+    /\ cur = a
+    /\ pend
+\* MUTATION: cleared, not resolved.
+    /\ pend' = FALSE
+    /\ UNCHANGED <<gD, gL, pendGen, moved, otherMoved, dUsed, reclaims, strayReclaims, hoClosedAt>>
+
+--- END

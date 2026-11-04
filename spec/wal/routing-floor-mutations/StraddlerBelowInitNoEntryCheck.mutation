@@ -12,19 +12,11 @@ SUMMARY: the WAL admits a stamped append below its loaded generation entry
 PERTURBS: Alloc
 
 --- FIND
-    /\ UNCHANGED <<recreated, legacy, restarted, mInit, closedAt, markNew, caught, dup>>
-
-Alloc(i) ==
-    /\ UNCHANGED rd
     /\ pend[i]
     /\ next < MaxOff
     /\ loaded[i] # Unloaded
     /\ pstamp[i] >= loaded[i]
 --- REPLACE
-    /\ UNCHANGED <<recreated, legacy, restarted, mInit, closedAt, markNew, caught, dup>>
-
-Alloc(i) ==
-    /\ UNCHANGED rd
     /\ pend[i]
     /\ next < MaxOff
     /\ loaded[i] # Unloaded

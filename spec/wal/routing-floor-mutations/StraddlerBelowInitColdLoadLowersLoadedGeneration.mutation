@@ -9,8 +9,8 @@ SUMMARY: a late cold load lowers a generation a re-claim raised
 PERTURBS: ColdLoadApply
 
 --- FIND
-    /\ loaded' = [loaded EXCEPT ![i] = Max2(@, Max2(rd[i], walFloor[i] + 1))]
+    /\ loaded' = [loaded EXCEPT ![i] = Max2(@, Max2(rd[i], walFloor[i]))]
 --- REPLACE
 \* MUTATION: the load overwrites, never max-merges.
-    /\ loaded' = [loaded EXCEPT ![i] = Max2(rd[i], walFloor[i] + 1)]
+    /\ loaded' = [loaded EXCEPT ![i] = Max2(rd[i], walFloor[i])]
 --- END

@@ -28,6 +28,8 @@ public sealed class LiveAdvanceCompositeTests
 
     private const string Bound = "a model bound, not an assumption about another module";
 
+    private const string FloorOnly = "the read-only cold load's floor-only mark (#5833, C1), which the composite does not yet compose";
+    private const string LazyArm = "the lazy arm (#5833), which the composite does not yet compose";
     private const string Effect = "an effect the composite's own step performs; the edge checks what is admitted, not how it is recorded";
 
     private static readonly Regex Definition = new(
@@ -131,9 +133,11 @@ public sealed class LiveAdvanceCompositeTests
             @"stale' = IF cur \in Acts THEN stale \cup {cur} ELSE stale");
         yield return Of("COwnAlloc", C, "OwnAlloc", None, @"a \in up", "cur = a");
         yield return Of("CForeignAlloc", C, "ForeignAlloc", None, @"hoOpen \/ ~mInit");
-        yield return Of("CClose", C, "Close", None,
+        // The composite composes the eager arm, under which a close covers foreign records
+        // only; the lazy arm's bulk coverage (#5833) is not yet composed.
+        yield return Of("CClose", C, "Close", R("CloseCovers", "{Foreign}"),
             "phase = \"live\"", "hoOpen",
-            @"\E h \in IF mInit THEN HeadsAbove({Foreign}) ELSE 0..next : hoClosedAt' = Max2(hoClosedAt, h)");
+            @"\E h \in IF mInit THEN HeadsAbove(CloseCovers) ELSE 0..next : hoClosedAt' = Max2(hoClosedAt, h)");
         yield return Of("CStraddlerAlloc", C, "StraddlerAlloc", None, "recreated", "~reinit");
         yield return Of("CMarkInit", C, "MarkInit", None,
             "recreated", "~mInit", @"\E h \in HeadsAbove({Foreign, Straddler}) : hoClosedAt' = Max2(hoClosedAt, h)");
@@ -191,6 +195,11 @@ public sealed class LiveAdvanceCompositeTests
         yield return new(Rf, "FirstInit", "live' = [live EXCEPT ![\"s\"] = TRUE]", "R's shard-root liveness, outside the vocabulary");
 
         yield return new(C, "Claim", "claimed' = [claimed EXCEPT ![a] = TRUE]", "the composite raises cstage, from which claimed is derived");
+        yield return new(C, "Claim", "ReportForeign(a)", LazyArm);
+        yield return new(C, "Claim", "IF pend THEN ResolveDeferred ELSE UNCHANGED <<moveVars, hoClosedAt>>", LazyArm);
+        yield return new(C, "OwnAlloc", "ReportForeign(a)", LazyArm);
+        yield return new(Rf, "Alloc", @"fo[i] => pstamp[i] > loaded[i]", FloorOnly);
+        yield return new(Rf, "FirstInit", "fo' = [fo EXCEPT ![\"s\"] = FALSE]", FloorOnly);
         yield return new(C, "OwnAlloc", "next < MaxOff", Bound);
         yield return new(C, "OwnAlloc", "next' = next + 1", Effect);
         yield return new(C, "OwnAlloc", "author' = [author EXCEPT ![next] = a]", Effect);

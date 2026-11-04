@@ -259,21 +259,21 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardWalRoutingFloor"],
-        "note": "WalRoutingFloor (epic #5605, live-advance module R): base 10,704 states, WideGenerations variant 24,084 and 16 mutations co-located with their base, 18 cases. "
+        "note": "WalRoutingFloor (epic #5605, live-advance module R): base 28,956 states, WideGenerations variant 65,151 and 21 mutations co-located with their base, with #5833's read-only cold load, 23 cases. "
       },
       {
         "shard": "formal-tlc-wal-bulk-switch",
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardWalBulkSwitch"],
-        "note": "WalBulkSwitch (epic #5605, live-advance module B): base 1,047,630 states, Skip variant 197,156 and 27 mutations co-located with their base, 29 cases. Measured locally on four CPUs (process affinity) with two TLC slots of two workers, Java 17, as the CI legs run: 1 m of tests, 1.96 minutes of dotnet test."
+        "note": "WalBulkSwitch (epic #5605, live-advance module B): base 1,047,630 states, Skip variant 197,156 and 28 mutations co-located with their base, 30 cases. Measured locally on four CPUs (process affinity) with two TLC slots of two workers, Java 17, as the CI legs run: 1 m of tests, 1.96 minutes of dotnet test."
       },
       {
         "shard": "formal-tlc-wal-live-advance-core",
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardWalLiveAdvanceCore"],
-        "note": "WalLiveAdvanceCore (epic #5605, live-advance module C): base 778,329 states with the armed-newborn liveness property (#5772), Restart 3,052,664, GateFlip 3,373,761, Recreate 3,693,715, RecreateSurvivor 4,638,713, RecreateSurvivorMixed 1,622,161 and Bulk 1,114,185 variants (the purge in three slices and the widened environment of #5776), and 31 mutations co-located with their base, 38 cases; no case exceeds the 5M-state budget TlcCiShardTests pins, and the longest case is the ReadPositionHonestNoSelfReport mutation at 404 s. Measured locally on four CPUs (process affinity) with two TLC slots of two workers, Java 17, as the CI legs run: 15 m 20 s of tests (57 case-minutes), 15.56 minutes of dotnet test."
+        "note": "WalLiveAdvanceCore (epic #5605, live-advance module C): base 2,021,047 states with #5833's lazy arm and the armed-newborn liveness property; the eager arm in Restart 3,052,664, GateFlip 3,373,761, Recreate 3,693,715, RecreateSurvivor 4,638,713, RecreateSurvivorMixed 1,622,161 and Bulk 1,114,185; the lazy arm in KeyMove 1,021,427 (liveness), PreArmRestart 2,262,022, PreArmBulk 2,511,745 (liveness), PreArmRecreate 2,631,557 and PreArmGateFlip 490,073; and 50 mutations co-located with their base, 62 cases. No case exceeds the 5M-state budget TlcCiShardTests pins. The leg time is to be measured on the member pull request's CI leg."
       },
       {
         "shard": "formal-tlc-wal-live-advance-composite",

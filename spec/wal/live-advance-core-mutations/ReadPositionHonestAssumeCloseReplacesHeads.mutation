@@ -12,8 +12,8 @@ PERTURBS: Close
 BOUNDS: WithRecreate = TRUE, WithUnclaimedSurvivor = FALSE, WithPreArm = FALSE
 
 --- FIND
-    /\ \E h \in IF mInit THEN HeadsAbove({Foreign}) ELSE 0..next : hoClosedAt' = Max2(hoClosedAt, h)
+    /\ \E h \in IF mInit THEN HeadsAbove(CloseCovers) ELSE 0..next : hoClosedAt' = Max2(hoClosedAt, h)
 --- REPLACE
 \* MUTATION: the close overwrites the recorded heads.
-    /\ \E h \in IF mInit THEN HeadsAbove({Foreign}) ELSE 0..next : hoClosedAt' = h
+    /\ \E h \in IF mInit THEN HeadsAbove(CloseCovers) ELSE 0..next : hoClosedAt' = h
 --- END

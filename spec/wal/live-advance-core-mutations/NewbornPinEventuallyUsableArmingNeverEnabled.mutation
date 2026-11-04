@@ -7,12 +7,11 @@ MODULE: NewbornPinEventuallyUsableArmingNeverEnabled
 TARGET: NewbornPinEventuallyUsable
 CLASS: Temporal
 SUMMARY: arming asks for a read at the claim head, which no driven replay reaches
+BOUNDS: WithPreArm = FALSE
 
 --- FIND
-    /\ mInit
-    /\ rp[a] >= claimHead[a] - 1
+    /\ IF WithPreArm THEN rp[a] >= seenP[a] ELSE rp[a] >= claimHead[a] - 1
 --- REPLACE
-    /\ mInit
 \* MUTATION: off by one: the record at the claim head must have been read.
-    /\ rp[a] >= claimHead[a]
+    /\ IF WithPreArm THEN rp[a] >= seenP[a] ELSE rp[a] >= claimHead[a]
 --- END

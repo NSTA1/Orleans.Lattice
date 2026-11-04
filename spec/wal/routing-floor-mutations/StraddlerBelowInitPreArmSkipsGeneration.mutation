@@ -8,18 +8,11 @@ SUMMARY: a PreArm append is admitted without its routing generation check
 PERTURBS: PreArmAlloc
 
 --- FIND
-PreArmAlloc(i) ==
-    /\ UNCHANGED rd
-    /\ pend[i]
-    /\ next < MaxOff
+    /\ fo[i] => pstamp[i] > loaded[i]
     /\ loaded[i] # Unloaded
     /\ pstamp[i] >= loaded[i]
-
---- REPLACE
-PreArmAlloc(i) ==
-    /\ UNCHANGED rd
-    /\ pend[i]
     /\ next < MaxOff
+--- REPLACE
 \* MUTATION: no routing generation check.
-
+    /\ next < MaxOff
 --- END

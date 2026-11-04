@@ -1,14 +1,15 @@
-# #5833. Evicting the leaf's foreign-high entry without raising the eviction floor forgets
-# another activation's append. It edits an operator, not an action.
+# #5833. The WAL shard evicts the leaf's foreign-high entry without raising its eviction
+# floor, so foreignHigh forgets another activation's append made before the eviction.
 MODULE: ReadPositionHonestEvictionDropsForeignHigh
 TARGET: ReadPositionHonest
 CLASS: Invariant
 SUMMARY: an evicted foreign-high entry leaves no floor
+PERTURBS: Evict
 BOUNDS: WithRestart = TRUE, MaxWindows = 0
 
 --- FIND
-    Max({startHead - 1, evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}})
+    /\ evFloor' = Max({evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts})
 --- REPLACE
 \* MUTATION: no eviction floor.
-    Max({startHead - 1} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}})
+    /\ UNCHANGED evFloor
 --- END

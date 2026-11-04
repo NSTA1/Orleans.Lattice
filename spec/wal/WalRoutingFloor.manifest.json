@@ -5,12 +5,12 @@
   "counts": {
     "invariants": 3,
     "properties": 1,
-    "actions": 12,
-    "mutations": 17,
-    "behaviourRows": 14,
-    "distinctStates": 10704
+    "actions": 14,
+    "mutations": 21,
+    "behaviourRows": 16,
+    "distinctStates": 28956
   },
   "variants": {
-    "WideGenerations": { "distinctStates": 24084 }
+    "WideGenerations": { "distinctStates": 65151 }
   }
 }

@@ -14,8 +14,10 @@ SUMMARY: the WAL's cold load ignores the initiator's routing floor
 PERTURBS: ColdLoadApply
 
 --- FIND
-    /\ loaded' = [loaded EXCEPT ![i] = Max2(@, Max2(rd[i], walFloor[i] + 1))]
+    /\ loaded' = [loaded EXCEPT ![i] = Max2(@, Max2(rd[i], walFloor[i]))]
+    /\ fo' = [fo EXCEPT ![i] = IF loaded[i] = Unloaded THEN rd[i] <= walFloor[i] ELSE @]
 --- REPLACE
 \* MUTATION: the WAL-side floor is not taken.
     /\ loaded' = [loaded EXCEPT ![i] = Max2(@, rd[i])]
+    /\ UNCHANGED fo
 --- END
