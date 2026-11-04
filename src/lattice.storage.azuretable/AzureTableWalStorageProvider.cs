@@ -2185,14 +2185,15 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // never the folded highest offset, which counts batches this instance has
         // accepted but not committed: those start above TAIL and are left alone.
         // A steady trim sweeps from the previous watermark's batch; the first trim of
-        // the shard on this instance, and one that reaches TAIL - a discard, or a
-        // consumer caught up - sweeps from the first partition.
+        // the shard on this instance, and the first once TrimFullSweepInterval has
+        // passed, sweep from the first partition.
         var sweepMark = Math.Min(throughOffsetInclusive, persistedTail);
         var sweptFrom = long.MaxValue;
         string? unexpectedRow = null;
         if (sweepMark >= 0L)
         {
-            var full = sweepMark >= persistedTail || !_fullySweptShards.ContainsKey(manifestPartitionKey);
+            var full = IsFullSweepDue(manifestPartitionKey);
+            var sweepStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
             // A batch holding an offset above the lower of the two marks starts at most
             // MaxEntriesPerBatch - 1 below it; everything wholly below was trimmed before.
             sweptFrom = full ? 0L : Math.Max(0L, Math.Min(previousWatermark, sweepMark) - MaxEntriesPerBatch + 1L);
@@ -2200,7 +2201,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                 .ConfigureAwait(false);
             if (full)
             {
-                _fullySweptShards.TryAdd(manifestPartitionKey, 0);
+                NoteFullSweep(manifestPartitionKey, sweepStartedAt);
             }
         }
 

@@ -100,6 +100,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Storage - Azure Table WAL commit fence.** A stale writer on a WAL partition, such as a predecessor activation still running after a silo failure or a WAL move, can no longer commit a batch over offsets another writer acknowledged, or lower the stored tail. Every completion now writes the tail conditionally on the ETag the instance last saw, at no extra round trip. Every release through 10.2.0 is exposed; finish a rolling upgrade before relying on the fence. ([#5810](https://github.com/NSTA1/Orleans.Lattice/issues/5810)) (`Orleans.Lattice.Storage.AzureTable`)
 
+- **Storage - Azure Table WAL trim reclaims orphaned entries.** Trim now also deletes, below the committed tail, the entry rows of appends whose commit never landed, which previously stayed in storage for good. `AzureTableWalStorageOptions.TrimFullSweepInterval` (default 6 hours) bounds how often a trim sweeps from the start of the log. ([#5810](https://github.com/NSTA1/Orleans.Lattice/issues/5810)) (`Orleans.Lattice.Storage.AzureTable`)
+
 - **Explorer - Schema validation.** Rule cards reject reversed large-integer bounds without rounding valid constants. Semantic-version cards reject empty identifiers and leading-zero numeric prereleases; saved patterns remain unchanged when reopened. ([#5347](https://github.com/NSTA1/Orleans.Lattice/issues/5347)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Telemetry charts.** Finite readings retain finite SVG paths, axis ticks and labels even at very large or subnormal magnitudes. ([#5347](https://github.com/NSTA1/Orleans.Lattice/issues/5347)) (`Orleans.Lattice.Explorer.UI`)

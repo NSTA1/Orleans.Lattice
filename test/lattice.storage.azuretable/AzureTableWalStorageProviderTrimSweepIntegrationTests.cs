@@ -111,11 +111,12 @@ public sealed class AzureTableWalStorageProviderTrimSweepIntegrationTests
     }
 
     [Test]
-    public async Task A_steady_trim_sweeps_from_the_previous_watermark_and_a_trim_to_tail_from_the_first_partition()
+    public async Task A_steady_trim_sweeps_from_the_previous_watermark_and_a_new_instance_from_the_first_partition()
     {
         // C3: a steady trim sweeps only from the batch holding the previous
-        // watermark's successor, so a leak wholly below it is left; a trim that
-        // reaches TAIL - a discard is one - sweeps the whole committed prefix.
+        // watermark's successor, so a leak wholly below it is left; the first trim of
+        // the shard on a new provider instance - after a restart - sweeps the whole
+        // committed prefix.
         await using var writer = CreateProvider();
         for (var start = 0L; start < 400L; start += 100L)
         {
@@ -132,15 +133,36 @@ public sealed class AzureTableWalStorageProviderTrimSweepIntegrationTests
 
         var head = await writer.GetHighestOffsetAsync(TreeId, 0, CancellationToken.None);
         await writer.TrimAsync(TreeId, 0, head, CancellationToken.None);
-        var afterDiscard = await CountRowsAsync(TreeId, 0, 10);
+        var afterSteadyTrimToHead = await CountRowsAsync(TreeId, 0, 10);
+
+        await using var restarted = CreateProvider();
+        await restarted.TrimAsync(TreeId, 0, head, CancellationToken.None);
+        var afterRestart = await CountRowsAsync(TreeId, 0, 10);
 
         Assert.Multiple(() =>
         {
             Assert.That(inSpan, Is.Zero, "a steady trim left a leak inside the span it trimmed");
             Assert.That(belowSpan, Is.EqualTo(1), "a steady trim swept below the previous watermark's batch");
             Assert.That(head, Is.EqualTo(399L));
-            Assert.That(afterDiscard, Is.Zero, "a trim through the head left a leak below the watermark");
+            Assert.That(afterSteadyTrimToHead, Is.EqualTo(1), "a trim to TAIL inside the full-sweep interval swept from the first partition");
+            Assert.That(afterRestart, Is.Zero, "the first trim on a new instance left a leak below the watermark");
         });
+    }
+
+    [Test]
+    public async Task A_full_sweep_interval_of_zero_makes_every_trim_sweep_from_the_first_partition()
+    {
+        await using var writer = CreateProvider(fullSweepInterval: TimeSpan.Zero);
+        for (var start = 0L; start < 300L; start += 100L)
+        {
+            await writer.AppendBatchAsync(TreeId, 0, Entries(TreeId, start, 100), CancellationToken.None);
+        }
+
+        await writer.TrimAsync(TreeId, 0, 199L, CancellationToken.None);
+        await SynthesiseOrphanAsync(TreeId, 0, 10L);
+        await writer.TrimAsync(TreeId, 0, 250L, CancellationToken.None);
+
+        Assert.That(await CountRowsAsync(TreeId, 0, 10), Is.Zero, "a trim after the interval passed did not sweep from the first partition");
     }
 
     [Test]
@@ -234,7 +256,7 @@ public sealed class AzureTableWalStorageProviderTrimSweepIntegrationTests
         });
     }
 
-    private AzureTableWalStorageProvider CreateProvider(PhaseTwoGate? gate = null) =>
+    private AzureTableWalStorageProvider CreateProvider(PhaseTwoGate? gate = null, TimeSpan? fullSweepInterval = null) =>
         new(
             Options.Create(new AzureTableWalStorageOptions
             {
@@ -242,6 +264,7 @@ public sealed class AzureTableWalStorageProviderTrimSweepIntegrationTests
                 TableName = _tableName,
                 Compression = LatticeCompression.None,
                 PipelinePhaseTwoCommits = false,
+                TrimFullSweepInterval = fullSweepInterval ?? AzureTableWalStorageOptions.DefaultTrimFullSweepInterval,
                 ConfigureClientOptions = gate is null ? null : options => options.AddPolicy(gate, HttpPipelinePosition.PerCall),
             }),
             _serializer);

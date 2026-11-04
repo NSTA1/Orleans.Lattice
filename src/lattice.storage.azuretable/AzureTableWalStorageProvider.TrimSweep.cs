@@ -16,14 +16,26 @@ namespace Orleans.Lattice.Storage.AzureTable;
 public sealed partial class AzureTableWalStorageProvider
 {
     /// <summary>
-    /// The manifest partitions this instance has swept from their first batch
-    /// partition. A steady trim sweeps only the span above the previous trim
-    /// watermark; the first trim of a shard on this instance, and every trim that
-    /// reaches the persisted <c>TAIL</c> (a tree discard is one), sweeps the whole
-    /// committed prefix, which is what reaches a leak that landed below an earlier
-    /// watermark.
+    /// When this instance last swept each manifest partition's batch partitions from
+    /// the first, as a <see cref="System.Diagnostics.Stopwatch"/> timestamp. A steady
+    /// trim sweeps only the span above the previous trim watermark; the first trim of
+    /// a shard on this instance, and the first after
+    /// <see cref="AzureTableWalStorageOptions.TrimFullSweepInterval"/> has passed,
+    /// sweep the whole committed prefix, which is what reaches a leak that landed below
+    /// an earlier watermark.
     /// </summary>
-    private readonly ConcurrentDictionary<string, byte> _fullySweptShards = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, long> _lastFullSweeps = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// True when the next trim of <paramref name="manifestPartitionKey"/> should sweep
+    /// from the first batch partition.
+    /// </summary>
+    private bool IsFullSweepDue(string manifestPartitionKey) =>
+        !_lastFullSweeps.TryGetValue(manifestPartitionKey, out var last)
+        || System.Diagnostics.Stopwatch.GetElapsedTime(last) >= _options.TrimFullSweepInterval;
+
+    private void NoteFullSweep(string manifestPartitionKey, long startedAt) =>
+        _lastFullSweeps[manifestPartitionKey] = startedAt;
 
     /// <summary>
     /// Deletes every entry row at or below <paramref name="sweepMark"/> in the shard's
