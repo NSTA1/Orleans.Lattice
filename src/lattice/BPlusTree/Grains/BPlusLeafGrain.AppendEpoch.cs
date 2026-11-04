@@ -25,6 +25,26 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private static readonly AsyncLocal<ILeafAppendFence?> BulkSeedScope = new();
 
+    /// <summary>
+    /// Ends the bulk-seed scope for the work that calls it (review S2 of #5830). The scope
+    /// is an <see cref="AsyncLocal{T}"/>, so detached work started inside a seed's
+    /// <see cref="MergeEntriesAsync"/> would inherit it and append through the seed's
+    /// fence, unproved. Called first by every such task the leaf starts: the replay a
+    /// seed's barrier wait can re-arm, whose replayed terminals append. Set inside an
+    /// async method, the change stays in that method's flow. Reads one field when no
+    /// scope is set.
+    /// </summary>
+    private static void LeaveBulkSeedScope()
+    {
+        if (BulkSeedScope.Value is not null)
+        {
+            BulkSeedScope.Value = null;
+        }
+    }
+
+    /// <summary>Whether the calling flow is inside a bulk seed's scope; test seam.</summary>
+    internal static bool InBulkSeedScopeForTesting => BulkSeedScope.Value is not null;
+
     /// <inheritdoc />
     public async Task MergeBulkSeedAsync(Dictionary<string, LwwValue<byte[]>> entries, WalRoutingStamp seedRouting)
     {

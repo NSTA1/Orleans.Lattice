@@ -110,6 +110,48 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
     }
 
     [Test]
+    public async Task A_retry_of_an_aborted_never_written_load_onto_a_root_that_replayed_its_seeds_is_refused_not_lost()
+    {
+        // Review S1 of #5830: a never-written load opens no switch, so nothing durable
+        // names its seeds. If anything seeds a root before the retry, that root replays
+        // the aborted seeds by key range, as in 10.2.0, and the retry is refused as
+        // non-empty. Refused, never silent loss: the seeds are readable in that root.
+        var rig = CreateHintRig();
+        var fail = true;
+        rig.H.Factory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>()).Returns(call =>
+        {
+            var leaf = ResolveLeaf(rig.H.Leaves, call.ArgAt<Guid>(0));
+            leaf.MergeBulkSeedAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<WalRoutingStamp>())
+                .Returns(_ => fail ? Task.FromException(new TimeoutException("seed timed out")) : Task.CompletedTask);
+            return leaf;
+        });
+        Assert.ThrowsAsync<TimeoutException>(() => rig.H.Grain.BulkLoadRawAsync("load", RawEntries(5)));
+        Assert.Multiple(async () =>
+        {
+            Assert.That(SeedRoutings(rig.H), Has.All.Matches<WalRoutingStamp>(r => r.ForcesUnstamped),
+                "precondition: the aborted attempt seeded unstamped, which every reader replays by key range");
+            Assert.That((await ShardMarkerAsync(rig)).Open, Is.Empty, "precondition: it opened no switch");
+            Assert.That(rig.H.State.State.RootNodeId, Is.Null, "precondition: it published nothing");
+        });
+
+        // A batch write seeds a root before the retry, and that root replays the seeds.
+        var seeded = rig.H.AddLeaf();
+        rig.H.State.State.RootNodeId = seeded;
+        rig.H.State.State.RootIsLeaf = true;
+        rig.H.Leaf(seeded).GetStatsAsync().Returns(Task.FromResult(new LeafStats { LiveKeys = 2 }));
+        fail = false;
+
+        var refused = Assert.ThrowsAsync<InvalidOperationException>(() => rig.H.Grain.BulkLoadRawAsync("load", RawEntries(5)));
+        Assert.Multiple(async () =>
+        {
+            Assert.That(refused!.Message, Does.Contain("requires an empty shard"), "the retry is refused, loudly");
+            Assert.That(rig.H.State.State.RootNodeId, Is.EqualTo(seeded), "the root holding the replayed seeds is kept");
+            Assert.That(rig.H.State.State.LastCompletedBulkOperationId, Is.Null, "nothing reports the load complete");
+            Assert.That(await rig.H.Grain.GetBulkOperationStatusAsync("load"), Is.EqualTo(BulkOperationStatus.NotRunning));
+        });
+    }
+
+    [Test]
     public void A_load_onto_a_root_with_rows_and_no_open_switch_of_its_own_is_still_refused()
     {
         var rig = CreateHintRig();

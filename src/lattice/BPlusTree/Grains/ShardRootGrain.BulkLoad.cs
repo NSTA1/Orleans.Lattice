@@ -416,6 +416,16 @@ internal sealed partial class ShardRootGrain
     /// loaded tree last-writer-wins, as it relocates a batch write's, and the
     /// operation's own rows carry the same stamps on both sides. The marker is read on
     /// this path only.
+    /// <para>
+    /// <b>No tolerance without a switch (review S1 of #5830).</b> A never-written load
+    /// opens no marker, so nothing durable names its seeds, and a seed record carries no
+    /// author (review C4'). If anything seeds a root after such a load aborts and before
+    /// its retry, that root replays the aborted seeds by key range, as a 10.2.0 reader
+    /// does, and the retry is refused here as non-empty, as it is in 10.2.0. The same
+    /// holds for a switched load whose abandoned switch the idle close has since closed.
+    /// The refusal is loud and loses nothing: the seeds are readable in that root, and
+    /// the load is never reported complete.
+    /// </para>
     /// </remarks>
     private async Task<GrainId?> EnsureEmptyForBulkLoadAsync(string operation, string operationId)
     {

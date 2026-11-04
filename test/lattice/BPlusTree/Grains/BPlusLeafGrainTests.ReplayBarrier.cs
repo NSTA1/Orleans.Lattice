@@ -229,11 +229,13 @@ public partial class BPlusLeafGrainTests
         /// cancellation, which is the case that shows whether criterion 3 holds
         /// structurally or only by the goodwill of every await on the replay path.
         /// </param>
-        internal WedgedReplayLeaf(bool honoursCancellation = true)
+        /// <param name="onHeadRead">Runs in the replay's own flow at each WAL head read.</param>
+        internal WedgedReplayLeaf(bool honoursCancellation = true, Action? onHeadRead = null)
         {
             var coord = Substitute.For<ILeafReplayCoordinatorGrain>();
             coord.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(call =>
             {
+                onHeadRead?.Invoke();
                 if (!honoursCancellation)
                     return _release.Task;
 
