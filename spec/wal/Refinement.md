@@ -148,7 +148,7 @@ are covered by the `WalLogSubscriberTests` idle-read-elision cases.
 | `SnapshotCoverageMonotonic` | Durable snapshot coverage never regresses (`LeafSnapshotStorageGrain.MergeMonotone`). | Yes: `LeafSnapshotStorageGrainTests.SaveAsync_still_merges_a_regressing_capture_that_carries_every_stored_key`. |
 | `PublishedPinWithinPersistedBelief` | A newly published pin never exceeds the persisted checkpoint (#3476). | Yes: `LeafDurablePinCoreTests.A_pending_checkpoint_never_reaches_the_pin_issue_3476` and `BPlusLeafGrainTests.Batched_pin_flush_over_an_unpersisted_advance_publishes_no_pin_past_the_persisted_checkpoint`. |
 | `TailMonotone` | The `TAIL` row never regresses (issue #5810). Without the fence, a stale writer's blind `UpsertReplace` of its own high-water mark regressed it (`TailMonotoneStaleWriterBlindUpsert`). | Yes: `AzureTableWalStorageProviderOverlapIntegrationTests.A_regressed_tail_never_lets_a_recovered_writer_reissue_committed_offsets`. |
-| `RecoverNeverInsideCommitted` | A re-seeded allocator never hands out an offset a committed batch holds (issue #5810). Recovery reads `TAIL` alone, so a regressed `TAIL` escalated to a reissue inside committed data (`RecoverNeverInsideCommittedUnfencedBlindTail`). | Yes: `AzureTableWalStorageProviderOverlapIntegrationTests.A_regressed_tail_never_lets_a_recovered_writer_reissue_committed_offsets`. |
+| `RecoverNeverInsideCommitted` | A re-seeded allocator never hands out an offset a committed batch holds (issue #5810). Recovery reads `TAIL` alone, so a regressed `TAIL` escalated to a reissue inside committed data (`RecoverNeverInsideCommittedUnfencedBlindTailUnstamped`). Two layers keep it, like `AckedOccupies`: the TAIL commit fence with its monotone write, and the recovery re-stamp. Each alone keeps it (see the redundancy checks); the mutation removes both. | Yes: `AzureTableWalStorageProviderOverlapIntegrationTests.A_regressed_tail_never_lets_a_recovered_writer_reissue_committed_offsets`. |
 | `EveryAckedWriteMaterialised` | Every acknowledged write is eventually held by its owner's projection. | Yes: `LeafReplayStartPolicyTests.An_absent_snapshot_over_an_empty_cache_replays_cold` and the bounded-progress assertion of `WalDurabilityLifecycleCoyoteTests.The_lifecycle_loses_no_acknowledged_write_under_crash_anywhere_recovery`, which reports `WalDurabilityLifecycleCoyoteTests.Removing_one_fix_is_caught_by_the_assertion_it_protects` with a replay that stops at the persisted checkpoint (`ReplayStopsAtPersistedCheckpoint`). |
 | `ReclamationEventuallyAdvances` | Once every write is in and the pins can release, everything appended is reclaimed from storage and no append or abandoned call is left outstanding. Stated over storage rather than the tail: a settled hole at the end of the bounded instance holds the tail below the stream's end only because the model has no later write (issue #4621). | Yes: `BPlusLeafGrainTests.Failed_checkpoint_persist_retains_the_pending_advance_for_the_next_flush` (a failed persist does not strand the advance) and `BPlusLeafGrainTests.ProjectionCheckpointOffset_advances_over_entries_the_leaf_skips` (a leaf that owns nothing still advances); at the model level `WalDurabilityLifecycleCoyoteTests.Removing_the_read_position_over_foreign_entries_is_caught_by_the_reclamation_assertion` (issue #2270, reported by `[ReclamationEventuallyAdvances]`). |
 
@@ -248,7 +248,9 @@ until the first checkpoint, not a read-watermark or capture-safety relaxation.
 ## Redundancy checks
 
 The #5799 extension keeps two guards that each protect `AckedOccupies` on their own,
-and the #5810 fence makes the `TAIL` value it writes redundant.
+the #5810 fence makes the `TAIL` value it writes redundant, and the fence and the
+#5825 recovery re-stamp each protect `RecoverNeverInsideCommitted` on their own
+(`RecoverNeverInsideCommittedUnfencedBlindTailUnstamped` removes both and is red).
 Each was run locally with the other kept; neither is a mutation, since each stays
 clean, so neither is in the mutation directory. `AckedOccupiesRewindWithoutCreateOnly`
 removes both together and is red.
@@ -257,7 +259,9 @@ removes both together and is red.
 |-------|------|--------|
 | Re-seed alone | Kept: the store's create-only refusal in `LateLand` (and in `FlushAck`). `Resync` re-seeds to `RecoveredNext`, ignoring the calls in motion. | Clean against `AckedOccupies` in the base (`AllocatorAboveOrphansResyncRewindsToStoreTail` is red on `AllocatorAboveOrphans`): the reissued write and the late call cannot both occupy the offset, so whichever lands first keeps it and the other is refused, unacknowledged. This is #5799's run. The `FlushAck` refusal alone is unreachable under the re-seed, which never reissues an occupied offset. |
 | Create-only alone | Kept: the re-seed past every visible call in motion, and the TAIL commit fence. `LateLand` lands over an occupant, the predecessor's call included. | Clean against `AckedOccupies` in the base, and in `CrossSilo` at the variant's full 1,954,533 states: a predecessor's call can commit only while no other writer has moved `TAIL` since it last read it, so it never reaches an offset the successor has written. |
-| Fence alone, blind `TAIL` | Kept: the TAIL commit fence. Each commit writes `TAIL` from its own instance's highest commit, as the provider's `UpsertReplace` did before #5811, rather than `Max(ct, o)`. | Clean against `TailMonotone` and `RecoverNeverInsideCommitted` in `CrossSilo` at the same 1,954,533 states: an instance whose view of `TAIL` is current is the last writer of `TAIL`, so its own highest commit is `TAIL` and the blind write cannot regress it. `TailMonotoneStaleWriterBlindUpsert` and `RecoverNeverInsideCommittedUnfencedBlindTail` drop the fence as well and are red. |
+| Fence alone, blind `TAIL` | Kept: the TAIL commit fence. Each commit writes `TAIL` from its own instance's highest commit, as the provider's `UpsertReplace` did before #5811, rather than `Max(ct, o)`. | Clean against `TailMonotone` and `RecoverNeverInsideCommitted` in `CrossSilo` at the same 1,954,533 states: an instance whose view of `TAIL` is current is the last writer of `TAIL`, so its own highest commit is `TAIL` and the blind write cannot regress it. `TailMonotoneStaleWriterBlindUpsert` drops the fence as well and is red. |
+| Re-stamp alone | Kept: the recovery re-stamp, with the predecessor's commit still conditional on its view of `TAIL`, which is how the re-stamp refuses it. The successor's own commit takes no fence and writes `TAIL` blind from its own highest commit. | Clean against `RecoverNeverInsideCommitted` in `CrossSilo` at 1,954,533 states, the same as with the fence: once the successor has recovered, no predecessor commit lands, so the successor's own blind write is the highest commit and cannot regress `TAIL`. |
+| Fence alone | Kept: the TAIL commit fence and its monotone write. Recovery reads `TAIL` but does not re-stamp it. | Clean against `RecoverNeverInsideCommitted` in `CrossSilo` at 2,690,971 states: a predecessor's late commit can land after the successor recovered, but it raises `TAIL` monotonically and moves the successor's view out of date, so the successor's next commit is refused and its re-seed reads the raised `TAIL`. `LogPrefixAppliedRecoveryLeavesTailUnstamped` shows the re-stamp is still load-bearing for readers. `RecoverNeverInsideCommittedUnfencedBlindTailUnstamped` removes both layers and is red. |
 
 ## Detectors
 
@@ -355,7 +359,15 @@ from this specification.**
   `ShardRecover`. The exception is a predecessor whose view was already out of date,
   whose batch the successor still commits. That entry lands contiguous above `TAIL`
   before the re-seed, which reads it and re-seeds above it, with no read served in
-  between, so no reader can have passed it.
+  between, so no reader can have passed it. The same holds on the resync path. Phase 1
+  is not fenced, so a predecessor's phase-1 rows at `TAIL + 1` collide with the
+  successor's append there, which is refused and fails the successor into its
+  resync; the resync's reconcile then rolls the predecessor's batch forward,
+  contiguous above `TAIL` and before the re-seed, while reads stay clamped below
+  every unsettled offset. **Bounded out, by the fault budget:** the model's stand-in
+  for that roll-forward, a predecessor's landing during the successor's `Resync`
+  after the successor recovered, needs a second fault, and the `CrossSilo` variant
+  has one.
   Production symbols: `AzureTableWalStorageProvider.ReconcileAsync`, `AzureTableWalStorageProvider.CommitRollForwardAsync`.
 - **A refused batch's rows are outside `occ`.** A batch whose phase-2 commit the
   fence or a collision refused leaves phase-1 entry rows with no manifest row. Reads

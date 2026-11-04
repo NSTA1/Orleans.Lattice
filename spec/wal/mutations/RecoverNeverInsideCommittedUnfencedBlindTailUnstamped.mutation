@@ -5,10 +5,10 @@
 # next re-seed, which reads TAIL alone, hands out an offset a committed batch
 # holds: the regression escalates to a reissue. Recovery does not re-stamp TAIL
 # either (before #5827), so the predecessor's late commit is not refused.
-MODULE: RecoverNeverInsideCommittedUnfencedBlindTail
+MODULE: RecoverNeverInsideCommittedUnfencedBlindTailUnstamped
 TARGET: RecoverNeverInsideCommitted
 CLASS: Action
-SUMMARY: a successor's unfenced commit regresses TAIL and the next re-seed lands inside a committed batch
+SUMMARY: with no fence, a blind TAIL write and no recovery re-stamp, a successor's commit regresses TAIL and the next re-seed lands inside a committed batch
 PERTURBS: FlushAck, ShardRecover
 
 --- FIND
