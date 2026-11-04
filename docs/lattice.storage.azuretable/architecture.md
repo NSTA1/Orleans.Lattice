@@ -102,7 +102,7 @@ Every released `Orleans.Lattice.Storage.AzureTable` up to and including 10.2.0 i
 
 #### Rolling upgrade
 
-The fence changes no stored shape. The tail row keeps its schema and only the way it is written changes, so 10.2.0 silos and newer ones read and write the same table in both directions during a rolling upgrade. A 10.2.0 silo still writes the tail unconditionally, however, so it is not fenced: a newer silo's completion is refused once a 10.2.0 silo has moved the tail, but nothing refuses a stale 10.2.0 writer's completion. Finish the roll before relying on the fence.
+The fence changes no stored shape. The tail row keeps its schema and only the way it is written changes, so 10.2.0 silos and newer ones read and write the same table in both directions during a rolling upgrade. A 10.2.0 silo still writes the tail unconditionally, however, so it is not fenced: a newer silo's completion is refused once a 10.2.0 silo has moved the tail, but nothing refuses a stale 10.2.0 writer's completion. The same holds for the recovery rewrite of the tail: a 10.2.0 writer writes the tail only when it advances, so its late lower completion is not refused. Finish the roll before relying on the fence.
 
 ## Recovery and downgrade safety
 
@@ -112,7 +112,10 @@ On activation, and again after a failed flush, the core WAL grain calls the prov
 - If an interrupted batch is below the tail or above a gap, reconciliation removes it so the next append can use the correct next offset.
 - A batch whose manifest row already exists is committed, even when the stored tail has not caught up with it. Reconciliation keeps it and re-anchors the tail on it; it never rolls a committed batch back.
 - Reconciliation never lowers the stored tail. The tail write is conditional on the tail it read, so a concurrent commit makes the pass retry rather than overwrite. A rollforward larger than one transaction (more than 49 batches) writes the tail in every transaction, each conditional on the ETag the previous one left, so once another writer moves the tail no further transaction of the pass adds a metadata row.
-- Reconciliation is idempotent: a clean shard has no work to do.
+- A pass that rolls nothing forward still rewrites the stored tail at the value it read, conditionally on the ETag it read it with (issue #5825). Completions are committed as they arrive, so a writer can commit a batch while a lower one is still being written and commit the lower one later. A predecessor activation still running after a silo failure or a WAL placement move could otherwise do that after this instance had recovered and its readers had passed the lower offset as a gap, leaving a record below their positions that a replay from the start would apply and they never will. Rewriting the tail moves its ETag, so the [commit fence](#commit-fence) refuses every completion the predecessor makes afterwards. It costs one write per recovery, and none when the tail row does not exist yet.
+- Reconciliation is otherwise idempotent: a clean shard has no other work to do.
+
+Recovery completes before any read is served. On activation the grain reconciles and reads the tail inside its activation, before it accepts any call. Reads can interleave with the post-failure resync, but they are bounded by the head the grain established before the failure, which it raises only after reconciliation and the tail read have completed.
 
 The post-failure call is not quiescent: pipelined completions accepted before the failure may still be committing. Reconciliation is serialised per WAL partition and first waits, on this provider instance, for that partition's in-motion appends, its queued completions, and any completion transaction abandoned on its commit deadline to settle, so it never mistakes a live batch for an orphan. A writer on another process is covered only by the conditional writes above.
 

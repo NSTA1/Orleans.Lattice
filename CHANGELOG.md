@@ -104,6 +104,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Storage - Azure Table WAL trim reclaims orphaned entries.** Trim now also deletes, below the committed tail, the entry rows of appends whose commit never landed, which previously stayed in storage for good. How often a trim sweeps from the start of the log is set by the new `TrimFullSweepInterval` option. ([#5810](https://github.com/NSTA1/Orleans.Lattice/issues/5810)) (`Orleans.Lattice.Storage.AzureTable`)
 
+- **Storage - Azure Table WAL recovery fences a predecessor.** A predecessor writer still running after a silo failure or WAL move can no longer commit a batch below offsets a recovered successor's readers have already passed: recovery rewrites the stored tail so the commit fence refuses it, at the cost of one conditional write per WAL partition recovery and none on the append path. Every release through 10.2.0 is exposed; finish a rolling upgrade before relying on it. ([#5825](https://github.com/NSTA1/Orleans.Lattice/issues/5825)) (`Orleans.Lattice.Storage.AzureTable`)
+
 - **Explorer - Schema validation.** Rule cards reject reversed large-integer bounds without rounding valid constants. Semantic-version cards reject empty identifiers and leading-zero numeric prereleases; saved patterns remain unchanged when reopened. ([#5347](https://github.com/NSTA1/Orleans.Lattice/issues/5347)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Telemetry charts.** Finite readings retain finite SVG paths, axis ticks and labels even at very large or subnormal magnitudes. ([#5347](https://github.com/NSTA1/Orleans.Lattice/issues/5347)) (`Orleans.Lattice.Explorer.UI`)

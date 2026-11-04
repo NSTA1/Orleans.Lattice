@@ -28,7 +28,7 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 /// </para>
 /// </summary>
 [TestFixture]
-public class AzureTableWalStorageProviderTrimReconcileTests
+public partial class AzureTableWalStorageProviderTrimReconcileTests
 {
     private const string TreeId = "tree-recover";
     private const int ShardIndex = 0;
