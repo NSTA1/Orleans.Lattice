@@ -10,11 +10,11 @@ PERTURBS: ActivationLoss
 --- FIND
     /\ resyncing' = "recover"
     /\ faults' = faults + 1
-    /\ UNCHANGED <<next, occ, tail, acked>>
+    /\ UNCHANGED <<next, tail, acked>>
 --- REPLACE
 \* MUTATION: re-seed from the store at once, as a process crash does.
     /\ resyncing' = "no"
     /\ next' = RecoveredNext
     /\ faults' = faults + 1
-    /\ UNCHANGED <<occ, tail, acked>>
+    /\ UNCHANGED <<tail, acked>>
 --- END

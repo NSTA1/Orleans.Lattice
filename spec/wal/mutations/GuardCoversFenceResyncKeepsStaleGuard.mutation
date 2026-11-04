@@ -1,0 +1,25 @@
+# Pairs with GuardCoversFence. The post-failure resync marks the instance's
+# view of TAIL current but re-seeds from its own allocator and the calls in
+# motion, not from the TAIL it read: after a stale commit is refused because a
+# predecessor on another silo moved TAIL, the instance claims offsets at or
+# below the committed tail it has just observed.
+MODULE: GuardCoversFenceResyncKeepsStaleGuard
+TARGET: GuardCoversFence
+CLASS: Invariant
+SUMMARY: the resync refreshes the fence but keeps its stale guard below the observed TAIL
+PERTURBS: Resync
+
+--- FIND
+    /\ inflight = {}
+    /\ next' = ReseedNext
+--- REPLACE
+    /\ inflight = {}
+\* MUTATION: the re-seed ignores the TAIL it read.
+    /\ next' = Max({next} \cup {o + 1 : o \in orphans \ hidden})
+--- END
+--- FIND
+WithCrossSiloMove == FALSE
+--- REPLACE
+\* MUTATION: raises the bound so a lost activation may move to another silo.
+WithCrossSiloMove == TRUE
+--- END

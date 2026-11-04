@@ -1,0 +1,36 @@
+# Pairs with RecoverNeverInsideCommitted. The pre-#5810 phase-2 commit on the
+# successor: no fence, and a blind TAIL upsert from the successor's own highest
+# commit. A predecessor's late batch commits above the successor's recovered
+# allocator; the successor's next commit regresses TAIL beneath it, and the
+# next re-seed, which reads TAIL alone, hands out an offset a committed batch
+# holds: the regression escalates to a reissue.
+MODULE: RecoverNeverInsideCommittedUnfencedBlindTail
+TARGET: RecoverNeverInsideCommitted
+CLASS: Action
+SUMMARY: a successor's unfenced commit regresses TAIL and the next re-seed lands inside a committed batch
+PERTURBS: FlushAck
+
+--- FIND
+       IF /\ ~WithCrossSiloMove \/ curFresh
+          /\ occ[o] = "none" \/ (kind = "ackedMid" /\ occ[o] = "latePrev")
+--- REPLACE
+\* MUTATION: the successor's commit is not conditional on its view of TAIL.
+       IF /\ occ[o] = "none" \/ (kind = "ackedMid" /\ occ[o] = "latePrev")
+--- END
+
+--- FIND
+            /\ ct' = IF WithCrossSiloMove THEN Max({ct, o}) ELSE ct
+            /\ UNCHANGED curFresh
+--- REPLACE
+\* MUTATION: TAIL is upserted from the successor's own highest commit.
+            /\ ct' = IF WithCrossSiloMove
+                     THEN Max({p \in Offs : occ[p] \in {"acked", "ackedMid", "late", "dup"}} \cup {-1, o})
+                     ELSE ct
+            /\ UNCHANGED curFresh
+--- END
+--- FIND
+WithCrossSiloMove == FALSE
+--- REPLACE
+\* MUTATION: raises the bound so a lost activation may move to another silo.
+WithCrossSiloMove == TRUE
+--- END

@@ -62,7 +62,7 @@ once, either here or in the
 | Area | Modules | Mutations | Behaviour rows | Detector tests | Page |
 |------|---------|-----------|----------------|----------------|------|
 | Single-cluster atomic commit | 1 | 21 | 17 | 40 | [Verified Atomic-Commit](verified-atomic-commit.md) |
-| WAL durability lifecycle | 9 | 236 | 202 | 329 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
+| WAL durability lifecycle | 9 | 240 | 206 | 336 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
 | Shard ownership | 5 | 124 | 124 | 201 | [Verified Shard Ownership](verified-shard-ownership.md) |
 | Cross-cluster atomic visibility | 1 | 66 | 43 | 150 | [Verified Atomic-Commit: the replicated half](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | 4 | 91 | 71 | 206 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
@@ -402,7 +402,8 @@ gaps, states its full scope.
     partition shared by two leaves, including snapshot and row loss and a purge,
     and the WAL shard's allocator re-seeded past abandoned flushes still in motion
     after a flush failure or a lost activation, on the same silo or another, with
-    the store's create-only rows (`WalDurability`); a WAL shard move with a durable fence, a shard crash and the
+    the store's create-only rows and, across silos, the Azure Table provider's
+    `TAIL` commit fence (`WalDurability`); a WAL shard move with a durable fence, a shard crash and the
     loss of its coordinator (`WalMove`); the GC's retirement of orphaned
     materialiser pins - the bulk sweep and the starvation drive, with their token,
     leaf read and fenced removal as separate steps and two sweepers racing -
@@ -667,7 +668,7 @@ area's list is the authoritative one. The separately listed interrupted-shadow d
 
 | Area | Defects | Full list |
 |------|---------|-----------|
-| WAL durability lifecycle | #4450, #4451, #4456, #4467, #4523, #4525, #4621, #4622, #4634, #4641, #4654, #4669, #4699, #4700, #5358, #5416, #5417, #5458, #5459, #5610, #5614, #5634, #5642, #5643, #5654, #5656, #5657, #5662, #5663, #5664, #5668, #5705, #5706, #5708, #5709, #5716, #5752, #5755, #5756, #5760, #5766 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
+| WAL durability lifecycle | #4450, #4451, #4456, #4467, #4523, #4525, #4621, #4622, #4634, #4641, #4654, #4669, #4699, #4700, #5358, #5416, #5417, #5458, #5459, #5610, #5614, #5634, #5642, #5643, #5654, #5656, #5657, #5662, #5663, #5664, #5668, #5705, #5706, #5708, #5709, #5716, #5752, #5755, #5756, #5760, #5766, #5810 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
 | Shard ownership | #4452, #4453, #4454, #4455, #4473, #4474, #4475, #4503, #4522, #4545, #4564, #4611, #4613, #4618, #4619, #4689 | [`spec/shard-ownership/`](../../spec/shard-ownership/README.md#defects-this-area-found) |
 | Cross-cluster atomic visibility | #4480, #4481, #4482, #4508, #4511, #4526, #4533, #4534, #4591, #4627, #4664, #4683, #4684, #4685 | [Verified Atomic-Commit](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | #4463, #4464, #4465, #4504, #4537, #4549, #4585, #4586, #4587, #4603, #4604, #4614, #4615, #4673, #4707, #5689 | [`spec/replication/`](../../spec/replication/README.md#production-defects-this-module-found) |

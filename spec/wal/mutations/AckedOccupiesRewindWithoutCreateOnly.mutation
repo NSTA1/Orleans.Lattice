@@ -22,8 +22,9 @@ PERTURBS: Resync, LateLand
 --- END
 
 --- FIND
-    /\ occ' = IF occ[o] = "none" /\ o >= tail /\ (o \in hidden => o >= RecoveredNext)
+               /\ ~WithCrossSiloMove \/ curFresh
+               /\ occ[o] = "none"
 --- REPLACE
 \* MUTATION: no create-only refusal; the late call lands over an occupant.
-    /\ occ' = IF o >= tail /\ (o \in hidden => o >= RecoveredNext)
+               /\ ~WithCrossSiloMove \/ curFresh
 --- END

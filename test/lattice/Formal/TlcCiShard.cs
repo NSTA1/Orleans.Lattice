@@ -47,9 +47,20 @@ internal static class TlcCiShard
     /// The base and every mutation of <c>WalDurability</c>. Its base's liveness
     /// check grew to about 12 minutes with the allocator re-seed of #5803, which
     /// made <see cref="ReplicationWal"/> the run's critical path, so it moved to
-    /// a shard of its own. Its variant configurations stay in the catch-all.
+    /// a shard of its own. Its mutations that raise <c>WithCrossSiloMove</c>
+    /// are in <see cref="WalDurabilityCrossSilo"/>; its variant configurations
+    /// but <c>CrossSilo</c> stay in the catch-all.
     /// </summary>
     public const string WalDurability = "TlcShardWalDurability";
+
+    /// <summary>
+    /// The <c>WalDurability</c> mutations that raise <c>WithCrossSiloMove</c>, and
+    /// its <c>CrossSilo</c> variant configuration (#5810). Each such mutation's
+    /// control runs the raised configuration rather than the base's, so the
+    /// base cannot serve it, and the controls together cost more than the
+    /// WalDurability shard's critical path could absorb.
+    /// </summary>
+    public const string WalDurabilityCrossSilo = "TlcShardWalDurabilityCrossSilo";
 
     /// <summary>Every base, variant and mutation of <c>WalAppendEpoch</c>, the live-advance append-epoch module (epic #5605, E).</summary>
     public const string WalAppendEpoch = "TlcShardWalAppendEpoch";
@@ -224,7 +235,7 @@ internal static class TlcCiShard
 
     /// <summary>Every category <see cref="Of"/>, <see cref="OfModule"/> and <see cref="OfVariant"/> can return.</summary>
     public static IReadOnlyList<string> All { get; } =
-        [Convergence, ReplicationWal, WalDurability, ShardOwnership, ReBootstrap, Atomic, .. AtomicVariantShards, Backup, BackupRetention,
+        [Convergence, ReplicationWal, WalDurability, WalDurabilityCrossSilo, ShardOwnership, ReBootstrap, Atomic, .. AtomicVariantShards, Backup, BackupRetention,
          BPlusCascade,
          MaterialisedViews, MaterialisedViewFence, MaterialisedViewHorizon,
          MaterialisedViewAggregation, MaterialisedViewRebind,
@@ -292,7 +303,7 @@ internal static class TlcCiShard
 
         if (string.Equals(name, "WalDurability", StringComparison.Ordinal))
         {
-            return WalDurability;
+            return RaisesCrossSiloMove(mutation) ? WalDurabilityCrossSilo : WalDurability;
         }
 
         if (name.StartsWith("Wal", StringComparison.Ordinal))
@@ -420,6 +431,12 @@ internal static class TlcCiShard
             return BackupRetention;
         }
 
+        if (string.Equals(module.Name, "WalDurability", StringComparison.Ordinal)
+            && string.Equals(variant, "CrossSilo", StringComparison.Ordinal))
+        {
+            return WalDurabilityCrossSilo;
+        }
+
         if (LifecycleCategory(module.Name) is { } lifecycleCategory)
         {
             return lifecycleCategory;
@@ -461,6 +478,14 @@ internal static class TlcCiShard
 
         return assignments;
     }
+
+    /// <summary>
+    /// Whether <paramref name="mutation"/> raises <c>WalDurability</c>'s
+    /// <c>WithCrossSiloMove</c> bound by a text edit, so its control runs the
+    /// raised configuration (<see cref="WalDurabilityCrossSilo"/>).
+    /// </summary>
+    private static bool RaisesCrossSiloMove(SpecMutation mutation) =>
+        mutation.Edits.Any(edit => edit.Replace.Contains("WithCrossSiloMove == TRUE", StringComparison.Ordinal));
 
     private static bool IsReplicationCompanion(string name) =>
         name.StartsWith("Replication", StringComparison.Ordinal)
