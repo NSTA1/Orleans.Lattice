@@ -2511,6 +2511,11 @@ internal sealed partial class BPlusLeafGrain
                 return LeafStarvationDriveOutcome.AdmissionRefused;
             }
 
+            // A drive runs on a live, already-serving leaf, so unlike an activation
+            // replay it has no closed barrier while a nested call has the permit
+            // out. That is harmless: the drive never closes the barrier, permit or
+            // no permit, so returning the permit changes nothing the leaf serves;
+            // it only lets the nested call's target replay (issue #5775).
             permitCensusSlot = EnterReplayPermitScope(replayPermit);
             acquiredAt = Stopwatch.GetTimestamp();
             serviceHold = BeginReplayServiceRateHold();
@@ -2934,7 +2939,9 @@ internal sealed partial class BPlusLeafGrain
     /// </remarks>
     /// <param name="acquiredAt">The <see cref="Stopwatch.GetTimestamp"/> reading taken as the permit was acquired.</param>
     private void RecordReplayPermitHold(long acquiredAt)
-        => RecordReplayPermitHold(acquiredAt, MetricTreeId, state.State.TreeId);
+        // Tagged from the values cached before the permit was taken, never from
+        // state, which throws on an invalidated activation (issue #5775).
+        => RecordReplayPermitHold(acquiredAt, _replayPermitMetricTreeId ?? string.Empty, _replayPermitTreeId);
 
     /// <summary>
     /// The emission shape of <see cref="RecordReplayPermitHold(long)"/>, static
@@ -3618,16 +3625,31 @@ internal sealed partial class BPlusLeafGrain
                 // happens while there is still heap left to reduce into.
                 //
                 // The replay is awaited inline and every nested call re-takes the
-                // permit in its own finally, so this frame always holds it here.
+                // permit in its own finally, so this frame normally holds it here.
+                // The lease rides the async flow rather than this frame, so the
+                // release still follows the lease, as the starvation drive's does:
+                // a permit out on a nested call is released by that call's resume,
+                // and a memory withhold already counted against it is undone so the
+                // ledger matches the permit that resume returns.
                 //
                 // The tags come from the values cached before the queue wait, not
                 // from state: the activation may have been invalidated during the
                 // replay, and a state read here would throw before the release and
                 // strand the permit for the life of the process (issue #5775).
-                ExitReplayPermitScope(replayPermitCensusSlot);
-                FinishReplayPermit(
-                    replayPermit, withholdReplayPermitOnPressure, replayCompletedCleanly,
-                    replayPermitAcquiredAt, _replayPermitMetricTreeId ?? string.Empty, _replayPermitTreeId, replayServiceHold);
+                var metricTreeId = _replayPermitMetricTreeId ?? string.Empty;
+                if (ExitReplayPermitScope(replayPermitCensusSlot))
+                {
+                    FinishReplayPermit(
+                        replayPermit, withholdReplayPermitOnPressure, replayCompletedCleanly,
+                        replayPermitAcquiredAt, metricTreeId, _replayPermitTreeId, replayServiceHold);
+                }
+                else
+                {
+                    CompleteReplayServiceRateHold(replayServiceHold);
+                    if (withholdReplayPermitOnPressure)
+                        TryRestoreWithheldReplayPermit();
+                    RecordReplayPermitHold(replayPermitAcquiredAt, metricTreeId, _replayPermitTreeId);
+                }
             }
         }
 
