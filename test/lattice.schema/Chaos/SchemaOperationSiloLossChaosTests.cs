@@ -196,7 +196,7 @@ public sealed class SchemaOperationSiloLossChaosTests
 
             if (_armed is { } armed
                 && context.InterfaceMethod?.DeclaringType == typeof(ILattice)
-                && context.MethodName == nameof(ILattice.SetAsync)
+                && context.MethodName is nameof(ILattice.SetAsync) or nameof(ILattice.SetManyAsync)
                 && context.TargetId.Key.ToString() is { } key
                 && key.StartsWith(armed + "/remediated/", StringComparison.Ordinal))
             {

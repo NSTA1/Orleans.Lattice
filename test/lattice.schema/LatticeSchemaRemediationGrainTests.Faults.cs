@@ -196,6 +196,7 @@ public partial class LatticeSchemaRemediationGrainTests
         source.GetRoutingAsync(true).Returns(new ValueTask<RoutingInfo>(
             new RoutingInfo(TreeId, new ShardMap { Slots = new[] { 0 } })));
         var destination = Substitute.For<ILattice>();
+        ForwardBatchesToPointWrites(destination);
         destination.GetRoutingAsync(true).Returns(new ValueTask<RoutingInfo>(
             new RoutingInfo(TreeId + "/remediated/", new ShardMap { Slots = new[] { 0 } })));
         var registryGrain = Substitute.For<ILatticeRegistry>();
