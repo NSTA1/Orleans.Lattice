@@ -273,8 +273,8 @@ from this specification.**
   process. In production a grain reactivation on a live silo keeps the call running,
   and the failure handler re-seeds the allocator in process. Both re-seed past every
   unsettled abandoned window, from a snapshot of the windows taken before the tail
-  read (`WalShardGrain.RecoveredNextOffsetPastAbandoned`,
-  `WalAbandonedFlushRegistry.ShardWindows.HighestUnsettledEndExclusive`). Nor can
+  read (`WalShardGrain.RecoveredNextOffsetPastAbandoned`, over the window ends
+  `WalAbandonedFlushRegistry` records). Nor can
   the model see a reissue at all: `durable` and `acked` are sets of offsets, so
   which write occupies an offset is not represented, and `FlushAck` has no
   create-only refusal. The extension that closes this (`durable` as offset to
@@ -290,6 +290,8 @@ from this specification.**
   `AzureTableWalStorageProviderOverlapIntegrationTests.A_second_writer_reissuing_an_acknowledged_batchs_offsets_is_refused_and_changes_no_row`,
   `A_second_writer_reissuing_the_offsets_of_a_batch_still_in_motion_is_refused` and
   `A_late_manifest_row_from_an_abandoned_submit_never_displaces_an_acknowledged_batch`.
+  Production symbols: `WalShardGrain.RecoveredNextOffsetPastAbandoned`,
+  `WalAbandonedFlushRegistry`.
 
 - **Scheduling and admission.** Weak fairness applies to `ScheduleReplay`, then
   to a requested `ReadStep`, not to an unsolicited WAL read. Each read consumes
