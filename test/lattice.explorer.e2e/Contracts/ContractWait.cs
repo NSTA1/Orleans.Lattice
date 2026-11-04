@@ -129,15 +129,26 @@ public static class ContractWait
     /// <param name="timeout">The deadline; <see cref="DefaultTimeout"/> by default.</param>
     /// <returns>The succeeded operation's status.</returns>
     /// <exception cref="InvalidOperationException">The operation failed or was cancelled.</exception>
+    /// <exception cref="TimeoutException">
+    /// The operation was not terminal in time; the message carries the last status read, so a
+    /// stuck operation and a slow one can be told apart.
+    /// </exception>
     public static async Task<LatticeOperationStatus> SucceededAsync(string what, Func<Task<LatticeOperationStatus?>> status, TimeSpan? timeout = null)
     {
         ArgumentNullException.ThrowIfNull(status);
         LatticeOperationStatus? last = null;
-        await UntilAsync(what, async () =>
+        try
         {
-            last = await status();
-            return last is { IsTerminal: true };
-        }, timeout);
+            await UntilAsync(what, async () =>
+            {
+                last = await status();
+                return last is { IsTerminal: true };
+            }, timeout);
+        }
+        catch (TimeoutException ex)
+        {
+            throw new TimeoutException($"{ex.Message} Last status: {DescribeStatus(last)}.", ex);
+        }
 
         return last!.State == LatticeOperationState.Succeeded
             ? last
@@ -196,6 +207,13 @@ public static class ContractWait
             ? done
             : throw new InvalidOperationException($"{what} ended {done.State} in phase '{done.Phase}': {done.FailureReason}");
     }
+
+    /// <summary>An operation status as state, phase and units, for a timeout's message.</summary>
+    /// <param name="status">The status, or <see langword="null"/> when none was read.</param>
+    /// <returns>The description.</returns>
+    public static string DescribeStatus(LatticeOperationStatus? status) => status is null
+        ? "none read"
+        : $"{status.State}/{status.Phase} {status.CompletedUnits}{(status.TotalUnits is { } total ? $"/{total}" : string.Empty)}";
 
     /// <summary>Runs <paramref name="call"/>, retrying a transient gRPC failure until the deadline.</summary>
     /// <typeparam name="T">The call's result.</typeparam>

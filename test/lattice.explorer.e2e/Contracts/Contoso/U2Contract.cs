@@ -30,7 +30,7 @@ public sealed class U2Contract() : ChapterContract("U2")
         if (!ContosoSchema.SameAs(await schema.GetPolicyAsync(orders), ContosoSchema.OrdersRevised))
         {
             var remediation = await schema.StartRemediationAsync(orders, ContosoSchema.NegativeTotalToZero, ContosoSchema.OrdersBaseline);
-            await ContractWait.SucceededAsync("the negative-total remediation", () => schema.GetSchemaOperationStatusAsync(remediation.OperationId), OperationPatience);
+            await AwaitRemediationAsync(schema, remediation.OperationId, "the negative-total remediation");
             await schema.SetPolicyAsync(orders, ContosoSchema.OrdersRevised);
         }
 
@@ -46,6 +46,36 @@ public sealed class U2Contract() : ChapterContract("U2")
         await schema.ClearPolicyAsync(Names.Trees.FactoryOrdersArchive);
         await schema.ClearVersionConfigAsync(Names.Trees.FactoryOrdersArchive);
     }
+
+    /// <summary>
+    /// How long a remediation may go without its phase or scanned count moving. The driver
+    /// runs one slice at a time, each bounded under the 30 s grain call timeout, reports
+    /// progress after every slice, and fails the run after five consecutive slice timeouts
+    /// (<c>SchemaRemediationDriver.MaxConsecutiveSliceTimeouts</c>): three minutes without a
+    /// change is a remediation that has stopped, not a slow one.
+    /// </summary>
+    private static readonly TimeSpan RemediationStall = TimeSpan.FromMinutes(3);
+
+    /// <summary>
+    /// The hard upper bound on a remediation, however steadily it advances. U2's
+    /// establishment, which the remediation dominates, has passed in 10 s to 270 s on the
+    /// shared contract estate. Ten minutes is more
+    /// than twice the slowest pass, so a slow estate does not fail a remediation that is
+    /// still working, yet one that has not finished by then is not converging. It stays
+    /// far inside the conformance leg's job timeout.
+    /// </summary>
+    private static readonly TimeSpan RemediationCeiling = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Waits for a remediation to succeed while it advances: it fails when the operation's
+    /// phase and scanned count stop moving for <see cref="RemediationStall"/>, or at
+    /// <see cref="RemediationCeiling"/>, naming the trajectory it observed.
+    /// </summary>
+    /// <param name="schema">The Schema API.</param>
+    /// <param name="operationId">The remediation's operation id.</param>
+    /// <param name="what">The remediation, for messages.</param>
+    public static Task AwaitRemediationAsync(Orleans.Lattice.Api.Schema.Grpc.LatticeSchemaApiGrpcClient schema, string operationId, string what) =>
+        ContractWait.SucceededWhileAdvancingAsync(what, () => schema.GetSchemaOperationStatusAsync(operationId), RemediationStall, RemediationCeiling);
 
     /// <summary>
     /// A whole-tree migration saturates the journey estate (#5569): its own calls then time out

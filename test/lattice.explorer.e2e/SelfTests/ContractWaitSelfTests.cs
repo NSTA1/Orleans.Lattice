@@ -98,6 +98,18 @@ public sealed class ContractWaitSelfTests
         });
     }
 
+    /// <summary>An operation not terminal at the deadline times out naming the last status it read.</summary>
+    [Test]
+    public void A_fixed_deadline_wait_names_the_last_status_on_timeout()
+    {
+        var ex = Assert.ThrowsAsync<TimeoutException>(() => ContractWait.SucceededAsync(
+            "the self-test operation",
+            () => Task.FromResult<LatticeOperationStatus?>(Status(LatticeOperationState.Running, 5)),
+            TimeSpan.FromSeconds(1)));
+
+        Assert.That(ex!.Message, Does.Contain("Timed out").And.Contain("Last status: Running/migrating 5."));
+    }
+
     private static LatticeOperationStatus Status(LatticeOperationState state, long units) => new()
     {
         OperationId = "op",
