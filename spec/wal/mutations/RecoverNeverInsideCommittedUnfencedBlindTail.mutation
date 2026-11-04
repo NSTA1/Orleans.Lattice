@@ -3,12 +3,13 @@
 # commit. A predecessor's late batch commits above the successor's recovered
 # allocator; the successor's next commit regresses TAIL beneath it, and the
 # next re-seed, which reads TAIL alone, hands out an offset a committed batch
-# holds: the regression escalates to a reissue.
+# holds: the regression escalates to a reissue. Recovery does not re-stamp TAIL
+# either (before #5827), so the predecessor's late commit is not refused.
 MODULE: RecoverNeverInsideCommittedUnfencedBlindTail
 TARGET: RecoverNeverInsideCommitted
 CLASS: Action
 SUMMARY: a successor's unfenced commit regresses TAIL and the next re-seed lands inside a committed batch
-PERTURBS: FlushAck
+PERTURBS: FlushAck, ShardRecover
 
 --- FIND
        IF /\ ~WithCrossSiloMove \/ curFresh
@@ -28,6 +29,19 @@ PERTURBS: FlushAck
                      ELSE ct
             /\ UNCHANGED curFresh
 --- END
+--- FIND
+    \* commit is refused by the fence (issue #5825).
+    /\ UNCHANGED ct
+    /\ curFresh' = TRUE
+    /\ prevFresh' = FALSE
+--- REPLACE
+    \* commit is refused by the fence (issue #5825).
+\* MUTATION: recovery reads TAIL but does not re-stamp it.
+    /\ UNCHANGED ct
+    /\ curFresh' = TRUE
+    /\ UNCHANGED prevFresh
+--- END
+
 --- FIND
 WithCrossSiloMove == FALSE
 --- REPLACE

@@ -1,0 +1,25 @@
+# Pairs with GuardCoversFence. A new activation's recovery reads and re-stamps
+# TAIL, so its provider instance holds a current view of it, but it re-seeds the
+# allocator from the trim tail and the calls in motion it can see, not from the
+# TAIL it read: after a move to another silo it claims offsets at or below
+# batches its predecessor committed.
+MODULE: GuardCoversFenceRecoveryIgnoresTail
+TARGET: GuardCoversFence
+CLASS: Invariant
+SUMMARY: recovery refreshes the fence but re-seeds below the TAIL it read
+PERTURBS: ShardRecover
+
+--- FIND
+    /\ resyncing = "recover"
+    /\ next' = ReseedNext
+--- REPLACE
+    /\ resyncing = "recover"
+\* MUTATION: the re-seed ignores the TAIL it read.
+    /\ next' = Max({tail} \cup {o + 1 : o \in orphans \ hidden})
+--- END
+--- FIND
+WithCrossSiloMove == FALSE
+--- REPLACE
+\* MUTATION: raises the bound so a lost activation may move to another silo.
+WithCrossSiloMove == TRUE
+--- END
