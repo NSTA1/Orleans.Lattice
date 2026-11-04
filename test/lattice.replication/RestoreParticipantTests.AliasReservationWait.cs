@@ -104,6 +104,53 @@ public partial class RestoreParticipantTests
     }
 
     [Test]
+    public async Task PrepareAsync_set_members_share_one_alias_wait_budget_and_abort_at_its_ceiling()
+    {
+        // Each member is refused for longer than half the ceiling. Waited out member
+        // by member, each would fit under the ceiling and the set would commit, so a
+        // set of refused members could wait the ceiling once per member and outlive the
+        // coordinator's prepare deadline. One budget for the whole prepare aborts it
+        // while the second member waits.
+        var ceiling = TimeSpan.FromSeconds(2);
+        var refusedFor = TimeSpan.FromSeconds(1.1);
+        var firstRefusal = new Dictionary<string, System.Diagnostics.Stopwatch>(StringComparer.Ordinal);
+        var engine = HealthyEngine();
+        engine.BuildShadowAsync(Arg.Any<LatticeRestoreRequest>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                var tree = TreeOf(ci, TreeA);
+                if (!firstRefusal.TryGetValue(tree, out var clock))
+                {
+                    firstRefusal[tree] = clock = System.Diagnostics.Stopwatch.StartNew();
+                }
+
+                return clock.Elapsed < refusedFor
+                    ? Task.FromException<LatticeRestoreResult>(Reserved(tree))
+                    : Task.FromResult(ResultFor(tree));
+            });
+        var participant = new RestoreParticipant(
+            engine,
+            restoreService: null,
+            Capacity(true),
+            FactoryFor(Substitute.For<ISagaWriteFenceGrain>()),
+            NullLogger<RestoreParticipant>.Instance,
+            TwoMemberResolver())
+        {
+            AliasWaitBackoff = [TimeSpan.FromMilliseconds(50)],
+            AliasWaitCeiling = ceiling,
+        };
+
+        var result = await participant.PrepareAsync(SetRequestFor(SetId));
+
+        Assert.That(firstRefusal.Keys, Is.EquivalentTo(new[] { TreeA, TreeB }),
+            "PRECONDITION: the first member waited its refusal out and the second member was reached");
+        Assert.That(result.Vote, Is.EqualTo(SagaVote.Abort),
+            "the members' waits together pass the one ceiling the prepare is allowed, so it must abort");
+        Assert.That(result.Detail, Does.Contain("build failed"));
+        Assert.That(participant.TryGetLocalSetResult(SetId, out _), Is.False, "an aborted set caches no group");
+    }
+
+    [Test]
     public void PrepareAsync_cancelled_while_waiting_for_an_alias_reservation_rethrows_cancellation()
     {
         var engine = HealthyEngine();

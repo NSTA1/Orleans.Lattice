@@ -656,11 +656,12 @@ internal sealed class RestoreParticipant(
         // another alias operation holds the tree's reservation (a replication
         // re-seed, a resize, a remediation) is waited out separately and spends
         // none of that budget (#5791).
+        var aliasWait = new AliasWaitBudget();
         for (var attempt = 1; ; attempt++)
         {
             try
             {
-                var result = await BuildShadowBehindAliasReservationAsync(restoreRequest, request.SagaId, cancellationToken);
+                var result = await BuildShadowBehindAliasReservationAsync(restoreRequest, request.SagaId, aliasWait, cancellationToken);
                 _built[request.SagaId] = result;
                 RecordVote(LatticeReplicationMetrics.SagaReasonCommit);
                 return new SagaParticipantPrepareResult(SagaVote.Commit);
@@ -712,11 +713,16 @@ internal sealed class RestoreParticipant(
     /// <see cref="AliasWaitCeiling"/>, and only then surfaces as a build failure, which
     /// aborts at once rather than spending the build-attempt budget on further waits. A
     /// retried build is idempotent: the shadow is keyed by the deterministic operation id.
+    /// <para>
+    /// The ceiling bounds the whole prepare, not one build: <paramref name="budget"/> is
+    /// shared by every build attempt and every set member of one prepare, and carries the
+    /// time already spent waiting, so a set whose members are refused in turn cannot wait
+    /// the ceiling once per member and outlive the coordinator's prepare deadline.
+    /// </para>
     /// </summary>
     private async Task<LatticeRestoreResult> BuildShadowBehindAliasReservationAsync(
-        LatticeRestoreRequest restoreRequest, string sagaId, CancellationToken cancellationToken)
+        LatticeRestoreRequest restoreRequest, string sagaId, AliasWaitBudget budget, CancellationToken cancellationToken)
     {
-        var started = System.Diagnostics.Stopwatch.GetTimestamp();
         for (var wait = 0; ; wait++)
         {
             try
@@ -726,7 +732,7 @@ internal sealed class RestoreParticipant(
             catch (LatticeAliasOperationInProgressException refused)
             {
                 var delay = AliasWaitBackoff[Math.Min(wait, AliasWaitBackoff.Count - 1)];
-                if (System.Diagnostics.Stopwatch.GetElapsedTime(started) + delay > AliasWaitCeiling)
+                if (budget.Spent + delay > AliasWaitCeiling)
                 {
                     throw;
                 }
@@ -735,9 +741,24 @@ internal sealed class RestoreParticipant(
                     "Restore participant: the shadow build for saga '{SagaId}' is waiting for alias operation '{Holder}' "
                     + "on tree '{TreeId}' to finish.",
                     sagaId, refused.HolderOperationId, refused.TreeId);
-                await Task.Delay(delay, cancellationToken);
+                var waited = System.Diagnostics.Stopwatch.GetTimestamp();
+                try
+                {
+                    await Task.Delay(delay, cancellationToken);
+                }
+                finally
+                {
+                    budget.Spent += System.Diagnostics.Stopwatch.GetElapsedTime(waited);
+                }
             }
         }
+    }
+
+    /// <summary>The time one prepare has spent waiting behind alias reservations, across all its builds.</summary>
+    private sealed class AliasWaitBudget
+    {
+        /// <summary>The waiting time spent so far.</summary>
+        public TimeSpan Spent { get; set; }
     }
 
     /// <inheritdoc />
@@ -975,6 +996,8 @@ internal sealed class RestoreParticipant(
         var built = new List<LatticeRestoreResult>(requests.Count);
         using var authority = EnterPeerAuthority(request, out var peerAuthority);
 
+        // One alias-wait budget for the whole set (#5791): members refused in turn share it.
+        var aliasWait = new AliasWaitBudget();
         foreach (var restoreRequest in requests)
         {
             RestoreAdmissionReport report;
@@ -1029,7 +1052,7 @@ internal sealed class RestoreParticipant(
 
             try
             {
-                built.Add(await BuildShadowBehindAliasReservationAsync(restoreRequest, request.SagaId, cancellationToken));
+                built.Add(await BuildShadowBehindAliasReservationAsync(restoreRequest, request.SagaId, aliasWait, cancellationToken));
             }
             catch (OperationCanceledException)
             {
