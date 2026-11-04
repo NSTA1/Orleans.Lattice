@@ -94,10 +94,11 @@ public partial class LatticeSchemaRemediationGrainTests
     }
 
     [Test]
-    public async Task RunSliceAsync_with_its_time_budget_spent_stops_after_one_value_and_resumes_after_it()
+    public async Task RunSliceAsync_with_its_time_budget_spent_stops_after_one_chunk_and_resumes_after_it()
     {
         var h = CreateGrain(FiveDocuments);
         h.Grain.SliceTimeBudget = TimeSpan.Zero;
+        h.Grain.ChunkSize = 1;
         await h.Grain.AcceptAsync(LatticeValueTransform.Passthrough(), JsonPolicy(), "op-budget");
 
         var steps = new List<(LatticeSchemaRemediationPhase Phase, int Scanned, int? Total)>();
@@ -117,11 +118,15 @@ public partial class LatticeSchemaRemediationGrainTests
             (LatticeSchemaRemediationPhase.DryRun, 2, null),
             (LatticeSchemaRemediationPhase.DryRun, 3, null),
             (LatticeSchemaRemediationPhase.DryRun, 4, null),
+            // A full chunk cannot tell that the source ends with it; the next slice
+            // finds nothing more and finishes the phase.
+            (LatticeSchemaRemediationPhase.DryRun, 5, null),
             (LatticeSchemaRemediationPhase.Build, 0, 5),
             (LatticeSchemaRemediationPhase.Build, 1, 5),
             (LatticeSchemaRemediationPhase.Build, 2, 5),
             (LatticeSchemaRemediationPhase.Build, 3, 5),
             (LatticeSchemaRemediationPhase.Build, 4, 5),
+            (LatticeSchemaRemediationPhase.Build, 5, 5),
             (LatticeSchemaRemediationPhase.Cutover, 5, null),
             (LatticeSchemaRemediationPhase.Completed, 5, null),
         }), "every slice makes progress, and the dry run counts each value once");
@@ -216,6 +221,9 @@ public partial class LatticeSchemaRemediationGrainTests
     public async Task A_faulted_build_slice_banks_the_values_it_wrote_and_the_next_slice_resumes_after_them()
     {
         var h = CreateGrain(FiveDocuments);
+        // Two values per chunk: k1 and k2 are written and banked before the chunk
+        // holding k3 faults (issue #5802 banks per written chunk).
+        h.Grain.ChunkSize = 2;
         await h.Grain.AcceptAsync(LatticeValueTransform.Passthrough(), JsonPolicy(), "op-bank");
         await h.Grain.RunSliceAsync();
         Assert.That(h.State.State.Phase, Is.EqualTo(LatticeSchemaRemediationPhase.Build), "precondition");

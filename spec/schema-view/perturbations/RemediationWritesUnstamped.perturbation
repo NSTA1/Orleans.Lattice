@@ -7,7 +7,7 @@ DETECTORS: SchemaViewCompositionIntegrationTests.Transform_remediation_reproject
 SUMMARY: the remediation build drops the version envelope
 
 --- FIND
-                await destination.SetAsync(entry.Key, input.Restamp(rewritten));
+                        batch.Add(new KeyValuePair<string, byte[]>(entry.Key, value.Input.Restamp(value.Rewritten!)));
 --- REPLACE
-                await destination.SetAsync(entry.Key, rewritten);
+                        batch.Add(new KeyValuePair<string, byte[]>(entry.Key, value.Rewritten!));
 --- END
