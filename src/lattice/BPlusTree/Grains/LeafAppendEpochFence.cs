@@ -65,6 +65,9 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     private readonly object _sync = new();
     private readonly Dictionary<int, PartitionClaim> _partitions = new();
     private readonly Guid _leafId;
+
+    // #5833, revision 2, B1: this activation's token, attributed to every append it makes.
+    private readonly Guid _activation = Guid.NewGuid();
     private readonly IWalAppendFenceGate _gate;
     private readonly IGrainStorage _storage;
     private readonly Action<long> _onSuperseded;
@@ -185,7 +188,9 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 && _partitions.TryGetValue(partition, out var p)
                 && p.ClaimedEpoch == _epoch)
             {
-                claimHead = p.Head;
+                // #5833, revision 2 (B1): an arm's view is bounded by its foreign high,
+                // presented as the head below which the activation must have read.
+                claimHead = p.OnDemand ? p.ForeignHigh + 1 : p.Head;
                 reportedUnstamped = p.ReportedUnstamped;
                 return true;
             }
@@ -214,11 +219,141 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
 
             if (_epoch > 0 && _partitions.TryGetValue(partition, out var claimed) && claimed.ClaimedEpoch == _epoch)
             {
-                return new ValueTask<WalAppendStamp?>(WalAppendStamp.ForLeaf(_leafId, _epoch));
+                return new ValueTask<WalAppendStamp?>(WalAppendStamp.ForLeaf(_leafId, _epoch, _activation));
+            }
+
+            if (_gate.IsPreArmOpen)
+            {
+                // #5833, revision 2: no claim until the leaf arms here (ArmAsync); the
+                // append goes pre-arm, which the partition admits on its routing
+                // generation alone and attributes to this activation.
+                return new ValueTask<WalAppendStamp?>(WalAppendStamp.PreArm(_leafId, _activation));
             }
         }
 
         return ClaimAsync(shard, partition, cancellationToken);
+    }
+
+    /// <summary>Whether this activation has claimed at any partition, eagerly or by an arm.</summary>
+    internal bool HasClaimedAnywhere
+    {
+        get
+        {
+            lock (_sync)
+            {
+                foreach (var p in _partitions.Values)
+                {
+                    if (p.EverClaimed)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Arms this activation at each requested partition (#5833, revision 2): persists the
+    /// activation's epoch once, then claims it at each partition through
+    /// <see cref="IWalShardGrain.ArmAppendEpochAsync"/>, in parallel, resolving a deferred
+    /// hand-off close's generation where one is given. Afterwards the activation stamps
+    /// its appends there, and its arming view reads the foreign high the arm returned.
+    /// </summary>
+    /// <param name="shardFor">The WAL shard grain of a partition.</param>
+    /// <param name="requests">The partitions to arm, each with the deferred generation to resolve there, if any.</param>
+    /// <param name="cancellationToken">The arm's cancellation.</param>
+    /// <returns>
+    /// Per request, the re-claim head of a resolved deferred generation, <c>-1</c> when
+    /// none was given, or <see langword="null"/> when the partition could not be armed;
+    /// it then stays pre-arm, which holds it on the replay-based advance.
+    /// </returns>
+    /// <exception cref="LeafRetiredException">The activation was found superseded.</exception>
+    internal async Task<long?[]> ArmAsync(
+        Func<int, IWalShardGrain> shardFor,
+        IReadOnlyList<(int Partition, WalRoutingInitiator Initiator, long Generation)> requests,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(shardFor);
+        ArgumentNullException.ThrowIfNull(requests);
+        var arms = new Task<long?>[requests.Count];
+        for (var i = 0; i < requests.Count; i++)
+        {
+            var (partition, initiator, generation) = requests[i];
+            arms[i] = ArmPartitionAsync(shardFor(partition), partition, initiator, generation, cancellationToken);
+        }
+
+        await Task.WhenAll(arms).ConfigureAwait(false);
+        var heads = new long?[arms.Length];
+        for (var i = 0; i < arms.Length; i++)
+        {
+            heads[i] = arms[i].Result;
+        }
+
+        return heads;
+    }
+
+    /// <summary>One partition's arm: claim rounds as <see cref="ClaimAsync"/> makes, through the arm call.</summary>
+    private async Task<long?> ArmPartitionAsync(
+        IWalShardGrain shard,
+        int partition,
+        WalRoutingInitiator initiator,
+        long generation,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            for (var round = 1; round <= MaxClaimRounds; round++)
+            {
+                lock (_sync)
+                {
+                    if (_stale)
+                    {
+                        throw LeafRetiredException.ForSupersededActivation(_leafId, _epoch);
+                    }
+                }
+
+                var epoch = await EnsureEpochAsync().ConfigureAwait(false);
+                var result = await shard.ArmAppendEpochAsync(_leafId, epoch, _activation, initiator, generation, cancellationToken).ConfigureAwait(false);
+                if (result.Accepted)
+                {
+                    lock (_sync)
+                    {
+                        if (_epoch != epoch)
+                        {
+                            // A concurrent bump raised the epoch: arm again under it.
+                            continue;
+                        }
+
+                        var p = PartitionLocked(partition);
+                        p.ClaimedEpoch = epoch;
+                        p.EverClaimed = true;
+                        p.Head = result.Head;
+                        p.ForeignHigh = result.ForeignHigh;
+                        p.OnDemand = true;
+                    }
+
+                    return result.ReclaimHead;
+                }
+
+                await RaiseEpochAboveAsync(epoch, result.Refusal).ConfigureAwait(false);
+            }
+        }
+        catch (LeafRetiredException superseded) when (superseded.ActivationSuperseded)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            // Fail safe: the partition stays pre-arm and advances by replay.
+        }
+
+        return null;
     }
 
     /// <inheritdoc />
@@ -412,8 +547,35 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 continue;
             }
 
-            var stamp = await StampForAsync(shardFor(partition), partition, cancellationToken).ConfigureAwait(false);
-            var head = stamp is { } s && s.Epoch >= raised ? ClaimHead(partition) : null;
+            // #5836: a concurrent floor refusal can raise the epoch again between this
+            // partition's re-claim and the head read. The head recorded with the claim is
+            // accepted whenever that claim's epoch is at least the raised one: it bounds
+            // every append stamped below it.
+            if (_gate.IsPreArmOpen)
+            {
+                // #5833: in pre-arm mode a stamp request never claims; the raised epoch is
+                // re-claimed by the arm call, which also refreshes the foreign high.
+                await ArmPartitionAsync(shardFor(partition), partition, WalRoutingInitiator.None, 0, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await StampForAsync(shardFor(partition), partition, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (AfterCloseReclaimForTesting is { } hook)
+            {
+                await hook(partition).ConfigureAwait(false);
+            }
+
+            long? head = null;
+            lock (_sync)
+            {
+                if (_partitions.TryGetValue(partition, out var p) && p.ClaimedEpoch >= raised)
+                {
+                    head = p.Head;
+                }
+            }
+
             heads[partition] = head ?? throw new InvalidOperationException(
                 $"Leaf {_leafId:N} could not re-claim its raised append epoch at WAL partition {partition}; the hand-off stays open.");
         }
@@ -566,7 +728,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                     var p = PartitionLocked(partition);
                     if (_epoch > 0 && p.ClaimedEpoch == _epoch)
                     {
-                        return WalAppendStamp.ForLeaf(_leafId, _epoch);
+                        return WalAppendStamp.ForLeaf(_leafId, _epoch, _activation);
                     }
 
                     claim = p.Claiming ??= ClaimAtPartitionAsync(shard, p, cancellationToken);
@@ -626,6 +788,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                     partition.ClaimedEpoch = epoch;
                     partition.EverClaimed = true;
                     partition.Head = result.Head;
+                    partition.OnDemand = false;
                 }
             }
 
@@ -837,6 +1000,16 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
 
         /// <summary>The allocator head the accepted claim returned.</summary>
         public long Head;
+
+        /// <summary>
+        /// Whether the claim was made by an arm (#5833, revision 2): the activation then
+        /// must have read to <see cref="ForeignHigh"/>, not to <see cref="Head"/>, before it
+        /// may advance live, since its own pre-arm appends below the head are its own.
+        /// </summary>
+        public bool OnDemand;
+
+        /// <summary>The arm's foreign high: the highest offset another activation of the leaf may have allocated here.</summary>
+        public long ForeignHigh = -1;
 
         /// <summary>The highest unstamped offset reported to the activation here, its own included.</summary>
         public long ReportedUnstamped = -1;

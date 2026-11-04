@@ -180,7 +180,7 @@ public sealed partial class ShardRootGrainSplitLinkTests
 
             if (stateName == HandOffMarkerRows.LeafGrainType && grainState.State is LeafHandOffState leaf)
             {
-                foreach (var close in leaf.Closes.Where(c => c.DeferredShard >= 0))
+                foreach (var close in leaf.Closes.Where(c => c.DeferredGeneration > 0))
                 {
                     var shard = await HandOffMarkerRows.ReadShardAsync(inner, treeId, close.DeferredShard);
                     DeferredCloseWrites.Add((close.DeferredShard, close.DeferredGeneration, shard.State.RoutingGeneration));

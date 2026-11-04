@@ -114,6 +114,26 @@ internal static class WalAppendFenceCore
         loaded != Unloaded && generation >= loaded;
 
     /// <summary>
+    /// The value a read-only generation load installs (#5833, revision 2, C1): the
+    /// durable row, never below the routing floor. It is exactly the value the claim
+    /// decisions would read, so a claim after a load is decided as before it. When the
+    /// row is at or below the floor the entry is marked floor-only, and
+    /// <see cref="IsLoadedGenerationAdmitted"/> then admits only above the floor: every
+    /// generation at or below it belongs to a purged incarnation.
+    /// </summary>
+    /// <param name="durable">The durable row's generation; 0 when the row is absent.</param>
+    /// <param name="floor">The initiator's routing floor; 0 when none.</param>
+    public static long LoadedGeneration(long durable, long floor) => Math.Max(durable, floor);
+
+    /// <summary>
+    /// A stamped append's routing-generation check against an entry that may hold a
+    /// floor installed by a read-only load (#5833): admitted at or above the entry, and
+    /// strictly above it when <paramref name="floorOnly"/>, since no claim raised it.
+    /// </summary>
+    public static bool IsLoadedGenerationAdmitted(long generation, long loaded, bool floorOnly) =>
+        IsGenerationAdmitted(generation, loaded) && (!floorOnly || generation > loaded);
+
+    /// <summary>
     /// Whether a record carried under the coordinator-terminal stamp class is
     /// excluded from the partition's unstamped watermark (epic #5605, member 2;
     /// review S2 of revision 3). Only a <c>TxCommit</c> or <c>TxAbort</c> record is:

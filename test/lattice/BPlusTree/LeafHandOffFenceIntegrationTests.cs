@@ -103,7 +103,7 @@ public sealed class LeafHandOffFenceIntegrationTests(bool eagerClaims)
                 Assert.That(split.All(c => c.Heads.Length == partitions), Is.True, "one head per WAL partition");
                 if (eagerClaims)
                 {
-                    Assert.That(split.All(c => c.DeferredShard < 0), Is.True, $"{sibling}: an eager close was deferred");
+                    Assert.That(split.All(c => c.DeferredGeneration == 0), Is.True, $"{sibling}: an eager close was deferred");
                     Assert.That(split.All(c => c.Heads.Any(h => h >= 0)), Is.True,
                         "the donor's bump re-claimed at least the partition it had written");
                 }
@@ -156,7 +156,7 @@ public sealed class LeafHandOffFenceIntegrationTests(bool eagerClaims)
             // Eager mode retires and records heads at close time; pre-arm mode (#5833,
             // C3, C6) raises the shard root's generation and defers every head.
             closesOfTheMode += reclaims.Count(c => eagerClaims
-                ? c.DeferredShard < 0
+                ? c.DeferredGeneration == 0
                 : c.DeferredShard == 0 && c.DeferredGeneration > 0);
         }
 

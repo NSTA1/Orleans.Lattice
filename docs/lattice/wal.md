@@ -1546,6 +1546,55 @@ The fence's counters are `orleans.lattice.wal.append_fence.claims`,
 `.rejections`, `.seam_retries`, `.unstamped_reports` and `.sweeps`; see
 [Metrics](metrics.md).
 
+### Deferred claims: the pre-arm class
+
+Claiming at every partition a leaf writes is paid at every leaf birth and every
+activation, but the claim is needed only by a leaf that advances its checkpoint
+live. While every active silo also advertises the pre-arm capability, a leaf
+therefore defers its claim until it **arms** a partition
+([#5833](https://github.com/NSTA1/Orleans.Lattice/issues/5833)). If a silo without
+that capability joins, the gate closes again and leaves claim eagerly as above.
+
+- **Pre-arm appends.** Until it arms a partition, an activation appends there under
+  the pre-arm class: the stamp names the leaf and a random token per activation,
+  and no epoch. The partition checks no entry and writes no row, so a new or
+  reactivated leaf pays no claim, epoch row or directory write. The routing
+  generation is still checked, as for any stamped append. A write that carries no
+  routing generation is never pre-arm: it goes unstamped and raises the shared
+  watermark.
+- **Attribution.** For each leaf, the partition keeps in memory the two activations
+  with the highest offsets it allocated to that leaf's records, stamped or pre-arm.
+  A pre-arm record never raises the partition's shared unstamped watermark, so
+  unarmed leaves do not hold armed ones back. Instead each stamped append's
+  response reports the highest offset any *other* activation of the same leaf
+  allocated, so a duplicate activation's record is read before the leaf advances
+  over its own. After a restart everything below the recovered head counts as
+  foreign, and the table folds into one floor if it outgrows 16,384 leaves.
+- **The arm.** A leaf arms only when its pin holds the partition's WAL floor: inside a
+  starvation drive (the WAL GC found it holding the floor), or on its snapshot recheck
+  tick when it has live data and no proven checkpoint on any partition. It never arms
+  on a write or a routine checkpoint. A split sibling inherits its donor's checkpoints,
+  capped at the donor's frontier, so it is not in that state and does not arm. The
+  leaf writes its epoch row once, then claims at every partition it is arming in one
+  parallel round, only while no hand-off is open on it. Each claim also returns the
+  leaf's foreign high, which the leaf must have replayed past before it advances live;
+  its own pre-arm records it applied itself.
+- **Deferred hand-off closes.** A split or a consolidation no longer claims at every
+  partition when it closes. The shard root, in its own turn as it links the split or
+  folds the leaf, raises its routing generation without claiming it at any
+  partition, and records the close on the receiving leaf's marker with every head
+  deferred. A deferred head holds that leaf. Its arm then re-claims the generation
+  at the partition, so any write admitted before the raise is either below the
+  re-claim's head or refused, and records that head. Resizes, bulk switches and
+  range deletes still close eagerly.
+
+**Cost with the pre-arm class.** Per leaf birth or activation: nothing until it
+arms. Per stamped or pre-arm append: one further dictionary lookup under the same
+lock. Per split or consolidation: one shard-marker write and the receiver's marker
+read and write. Per arm: the epoch row read and write, one claim per armed
+partition, and one generation-row write per partition only for the first arm there
+after a deferred close.
+
 ## Hand-off fences
 
 The epoch fence above stops a stale duplicate of a leaf. The **hand-off fences**

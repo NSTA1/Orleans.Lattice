@@ -216,10 +216,30 @@ their mutations stay clean under `WithPreArm` (they are red under `WithPreArm = 
   offsets the shared watermark's reset covers.
 
 The liveness property is unchanged in form. Under the lazy arm a claim's fairness is
-conditioned on `ArmTrigger(a)`, an own durable append the shared snapshot does not cover,
-which is the floor-holding pin that arms a leaf in production. So it now says the pin
-becomes usable once the leaf arms on demand, not that it arms at its first write.
-`NewbornPinEventuallyUsableDeferredHeadRefusedBelowLoaded` shows C5 is needed for it.
+conditioned on `ArmTrigger(a)`: an own durable append that no shared snapshot covers, so
+the leaf's pin holds the floor. No safety property reads `ArmTrigger`, so every invariant
+holds for any trigger, including one that fires on every tick. Production arms on two
+signals, each of which implies `ArmTrigger(a)` at the partitions it arms:
+
+- **The starved tick.** On the coverage-lag tick, `BPlusLeafGrain.TryAdvanceLiveCheckpointAsync`
+  finds the leaf holding live data with no proven checkpoint on any partition
+  (`BPlusLeafGrain.IsStarvedOfDurableCheckpoint`), and calls
+  `BPlusLeafGrain.ArmForLiveAdvanceAsync`.
+- **The GC drive.** The WAL GC's floor-holder report names the leaf's pin as holding a
+  partition's floor and drives the leaf (`IBPlusLeafGrain.DriveStarvedCheckpointAsync`, whose
+  drive calls `BPlusLeafGrain.TryAdvanceLiveCheckpointAsync` before it replays). The same
+  drive runs from the coverage-lag timer for a leaf starved of a durable checkpoint.
+
+Either signal arms only the partitions where the leaf has an own append above its
+checkpoint, which is `ArmTrigger(a)` at that partition, and only while `handOff.Clear`
+holds, which is C's `~pend` and its no-open-window guard. An arm restricted to some
+partitions satisfies the arm guard at each partition it arms, and a leaf not armed at a
+partition keeps appending `PreArm` there. The fairness the liveness property needs is that
+one signal recurs while `ArmTrigger(a)` holds, and the GC drive recurs on every pass while
+the pin holds the floor. Firing more often than `ArmTrigger` costs only claims, never
+safety: one epoch row per activation, and the generation re-claims `ReclaimCostBound`
+limits to one per (raise, partition).
+`NewbornPinEventuallyUsableDeferredHeadRefusedBelowLoaded` shows C5 is needed for liveness.
 
 Building the lazy arm found that a bulk-born leaf's pre-switch records above its birth
 read position were covered only by the claim-head replay: under the lazy arm they rest on

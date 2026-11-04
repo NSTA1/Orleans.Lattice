@@ -80,11 +80,166 @@ internal static class HandOffMarkerCore
 
         while (marker.Closes.Count > MaxRetainedCloses)
         {
-            marker.CompactedHeads = MaxHeads(marker.CompactedHeads, marker.Closes[0].Heads);
-            marker.Closes.RemoveAt(0);
+            EvictOldestClose(marker);
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// The head a deferred close (#5833, revision 2) records at every partition until the
+    /// owner's arm resolves it there. It holds the owner: no checkpoint reaches it.
+    /// </summary>
+    public const long DeferredHead = long.MaxValue;
+
+    /// <summary>
+    /// Records the close of <paramref name="token"/> by a deferred fence (C2, C3): the
+    /// hand-off's initiator raised shard root <paramref name="shardIndex"/>'s routing
+    /// generation to <paramref name="generation"/> without re-claiming it, so every one of
+    /// the <paramref name="partitionCount"/> heads is <see cref="DeferredHead"/> until the
+    /// owner's arm re-claims the generation at that partition and records its head
+    /// (<see cref="ResolveDeferred"/>). Returns whether the marker changed.
+    /// </summary>
+    public static bool CloseDeferred(IHandOffMarker marker, string token, int partitionCount, int shardIndex, long generation)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(partitionCount);
+        ArgumentOutOfRangeException.ThrowIfNegative(shardIndex);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(generation);
+        var heads = new long[partitionCount];
+        Array.Fill(heads, DeferredHead);
+        if (!Close(marker, token, heads))
+        {
+            return false;
+        }
+
+        foreach (var close in marker.Closes)
+        {
+            if (string.Equals(close.Token, token, StringComparison.Ordinal))
+            {
+                close.DeferredShard = shardIndex;
+                close.DeferredGeneration = generation;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// The deferred generation the owner of <c>[low, high)</c> must re-claim at
+    /// <paramref name="partition"/> before it may arm there: the highest over every close
+    /// still deferred at that partition, with its shard; <see langword="false"/> when none
+    /// is. Re-claiming the highest resolves every lower one at once (C5).
+    /// </summary>
+    public static bool TryGetPendingDeferred(
+        IHandOffMarker marker,
+        string? ownerLowInclusive,
+        string? ownerHighExclusive,
+        int partition,
+        out int shardIndex,
+        out long generation)
+    {
+        ArgumentNullException.ThrowIfNull(marker);
+        shardIndex = -1;
+        generation = 0;
+        foreach (var close in marker.Closes)
+        {
+            if (close.DeferredGeneration > 0
+                && HeadAt(close.Heads, partition) == DeferredHead
+                && Overlaps(close.LowInclusive, close.HighExclusive, ownerLowInclusive, ownerHighExclusive)
+                && close.DeferredGeneration > generation)
+            {
+                shardIndex = close.DeferredShard;
+                generation = close.DeferredGeneration;
+            }
+        }
+
+        return shardIndex >= 0;
+    }
+
+    /// <summary>
+    /// Records that the owner's arm re-claimed shard root <paramref name="shardIndex"/>'s
+    /// generation <paramref name="generation"/> at <paramref name="partition"/> with head
+    /// <paramref name="head"/>: every close of that shard still deferred there at or below
+    /// that generation now requires <paramref name="head"/>. A close deferred at a higher
+    /// generation, recorded after the arm read the marker, stays deferred. Returns whether
+    /// the marker changed.
+    /// </summary>
+    public static bool ResolveDeferred(IHandOffMarker marker, int partition, int shardIndex, long generation, long head)
+    {
+        ArgumentNullException.ThrowIfNull(marker);
+        ArgumentOutOfRangeException.ThrowIfNegative(head);
+        var changed = false;
+        foreach (var close in marker.Closes)
+        {
+            if (close.DeferredGeneration > 0
+                && close.DeferredShard == shardIndex
+                && close.DeferredGeneration <= generation
+                && HeadAt(close.Heads, partition) == DeferredHead)
+            {
+                close.Heads[partition] = head;
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            marker.Sequence++;
+        }
+
+        return changed;
+    }
+
+    /// <summary>
+    /// Evicts the oldest close into the compacted heads, except that a close still
+    /// deferred at some partition is never folded there, where its hold could not be
+    /// resolved: it is folded into the newest later close deferred by the same shard at an
+    /// equal or higher generation (whose resolution covers it), or, when there is none,
+    /// the oldest close not deferred is evicted instead. A marker of only unresolvable
+    /// deferred closes is left over the bound; that holds the owner, never loses data.
+    /// </summary>
+    private static void EvictOldestClose(IHandOffMarker marker)
+    {
+        for (var i = 0; i < marker.Closes.Count; i++)
+        {
+            var close = marker.Closes[i];
+            if (!IsDeferredAnywhere(close))
+            {
+                marker.CompactedHeads = MaxHeads(marker.CompactedHeads, close.Heads);
+                marker.Closes.RemoveAt(i);
+                return;
+            }
+
+            for (var j = marker.Closes.Count - 1; j > i; j--)
+            {
+                var later = marker.Closes[j];
+                if (later.DeferredShard == close.DeferredShard && later.DeferredGeneration >= close.DeferredGeneration && IsDeferredAnywhere(later))
+                {
+                    later.Heads = MaxHeads(later.Heads, close.Heads);
+                    later.LowInclusive = null;
+                    later.HighExclusive = null;
+                    marker.Closes.RemoveAt(i);
+                    return;
+                }
+            }
+        }
+    }
+
+    private static bool IsDeferredAnywhere(HandOffClose close)
+    {
+        if (close.DeferredGeneration <= 0)
+        {
+            return false;
+        }
+
+        foreach (var head in close.Heads)
+        {
+            if (head == DeferredHead)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>Whether a hand-off open on <paramref name="marker"/> overlaps the owner range <c>[low, high)</c>.</summary>
@@ -196,29 +351,6 @@ internal static class HandOffMarkerCore
     /// <summary>Whether <c>[aLow, aHigh)</c> and <c>[bLow, bHigh)</c> share a key; a null bound is unbounded.</summary>
     public static bool Overlaps(string? aLowInclusive, string? aHighExclusive, string? bLowInclusive, string? bHighExclusive) =>
         LeafReplayOwnership.RangeOverlaps(aLowInclusive ?? string.Empty, aHighExclusive, bLowInclusive, bHighExclusive);
-
-    /// <summary>The head of a deferred close (#5833); surface only in the red proof.</summary>
-    public const long DeferredHead = long.MaxValue;
-
-    /// <summary>Surface only in the red proof (#5833).</summary>
-    public static bool CloseDeferred(IHandOffMarker marker, string token, int partitionCount, int shardIndex, long generation) => false;
-
-    /// <summary>Surface only in the red proof (#5833).</summary>
-    public static bool TryGetPendingDeferred(
-        IHandOffMarker marker,
-        string? ownerLowInclusive,
-        string? ownerHighExclusive,
-        int partition,
-        out int shardIndex,
-        out long generation)
-    {
-        shardIndex = -1;
-        generation = 0;
-        return false;
-    }
-
-    /// <summary>Surface only in the red proof (#5833).</summary>
-    public static bool ResolveDeferred(IHandOffMarker marker, int partition, int shardIndex, long generation, long head) => false;
 
     private static bool IsClosed(IHandOffMarker marker, string token)
     {

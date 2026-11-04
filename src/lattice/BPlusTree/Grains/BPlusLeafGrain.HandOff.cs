@@ -92,6 +92,9 @@ internal sealed partial class BPlusLeafGrain
     private bool IsHandOffGateOpen() =>
         context.ActivationServices?.GetService<IWalAppendFenceGate>() is { IsOpen: true };
 
+    private bool IsPreArmGateOpen() =>
+        context.ActivationServices?.GetService<IWalAppendFenceGate>() is { IsOpen: true, IsPreArmOpen: true };
+
     /// <summary>
     /// Opens this donor's split marker on <paramref name="siblingId"/>, initialising it,
     /// before the sibling's birth write. A no-op while the gate is closed: the sibling is
@@ -144,6 +147,23 @@ internal sealed partial class BPlusLeafGrain
             }
 
             var partitions = await optionsResolver.GetWalPartitionsAsync(treeId);
+            if (IsPreArmGateOpen())
+            {
+                // #5833, revision 2, C6: the shard root closes the sibling's marker by a
+                // deferred fence when it links this split, in its own turn. Only an armed
+                // donor's own epoch-stamped appends need the bump: an unrouted one carries
+                // no generation for the deferred re-claim to fence.
+                if (_appendFence is { } armed && armed.HasClaimedAnywhere)
+                {
+                    await armed.BumpAndReclaimAsync(
+                        partition => grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{partition}"),
+                        partitions,
+                        CancellationToken.None);
+                }
+
+                return;
+            }
+
             var heads = _appendFence is { } fence
                 ? await fence.BumpAndReclaimAsync(
                     partition => grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{partition}"),

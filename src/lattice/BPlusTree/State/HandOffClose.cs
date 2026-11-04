@@ -38,14 +38,18 @@ internal sealed class HandOffClose
     /// <summary>
     /// For a deferred close (#5833, revision 2, C2 and C3), the index of the shard root
     /// whose routing generation the close raised without re-claiming it at the WAL
-    /// partitions; <c>-1</c> for a close fenced at close time. A head still at
-    /// <c>HandOffMarkerCore.DeferredHead</c> holds the owner until its arm re-claims
-    /// <see cref="DeferredGeneration"/> at that partition and records the re-claim's head.
+    /// partitions; meaningful only while <see cref="DeferredGeneration"/> is above 0. A
+    /// head still at <c>HandOffMarkerCore.DeferredHead</c> holds the owner until its arm
+    /// re-claims <see cref="DeferredGeneration"/> at that partition and records the
+    /// re-claim's head.
     /// </summary>
     [Id(5)]
-    public int DeferredShard { get; set; } = -1;
+    public int DeferredShard { get; set; }
 
-    /// <summary>For a deferred close, the routing generation it raised; 0 otherwise.</summary>
+    /// <summary>
+    /// For a deferred close, the routing generation it raised, always at least 1; 0 for a
+    /// close fenced at close time, which is how a deferred close is told apart.
+    /// </summary>
     [Id(6)]
     public long DeferredGeneration { get; set; }
 }

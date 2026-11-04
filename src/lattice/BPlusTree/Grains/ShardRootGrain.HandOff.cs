@@ -211,6 +211,80 @@ internal sealed partial class ShardRootGrain
     private bool IsAppendFenceGateOpen() =>
         context.ActivationServices?.GetService<IWalAppendFenceGate>() is { IsOpen: true };
 
+    /// <summary><see langword="true"/> while this silo's append-fence gate admits the pre-arm class (#5833).</summary>
+    private bool IsPreArmGateOpen() =>
+        context.ActivationServices?.GetService<IWalAppendFenceGate>() is { IsOpen: true, IsPreArmOpen: true };
+
+    /// <summary>
+    /// Closes, by a deferred fence, every leaf split in <paramref name="work"/> whose
+    /// sibling's split marker is still open (#5833, revision 2, C2, C3 and C6). Runs in this
+    /// shard root's own turn, after the links are recorded, so every write admitted under
+    /// the generation it raises routes the moved keys to the sibling: it raises the routing
+    /// generation once, durably and without re-claiming it at the WAL partitions, then
+    /// records each close on its sibling's marker with deferred heads, which hold the
+    /// sibling until its arm re-claims the generation at a partition. No leaf is called.
+    /// Returns the siblings whose close could not be recorded: their donors are not
+    /// acknowledged, so the division re-surfaces and this runs again.
+    /// </summary>
+    private async Task<HashSet<GrainId>?> CloseDeferredSplitHandOffsAsync(List<LinkWork> work)
+    {
+        if (!IsPreArmGateOpen() || !HasHandOffStorage())
+        {
+            return null;
+        }
+
+        var storage = HandOffStorage();
+        HashSet<GrainId>? failed = null;
+        long? raised = null;
+        int? partitions = null;
+        foreach (var item in work)
+        {
+            if (item.Split.Donor is not { } donor || !item.Split.ChildIsLeaf)
+            {
+                continue;
+            }
+
+            var sibling = item.Split.NewSiblingId;
+            var token = BPlusLeafGrain.SplitHandOffToken(donor.GetGuidKey());
+            try
+            {
+                var marker = await HandOffMarkerRows.ReadLeafAsync(storage, sibling.GetGuidKey());
+                if (!marker.State.Open.ContainsKey(token))
+                {
+                    continue;
+                }
+
+                partitions ??= Math.Max(1, await optionsResolver.GetWalPartitionsAsync(TreeId));
+                raised ??= (await UpdateHandOffMarkerAsync(m =>
+                {
+                    m.RoutingGeneration++;
+                    return true;
+                })).RoutingGeneration;
+                var closed = false;
+                await HandOffMarkerRows.UpdateLeafAsync(
+                    storage,
+                    sibling.GetGuidKey(),
+                    m => closed = HandOffMarkerCore.CloseDeferred(m, token, partitions.Value, ShardIndex, raised.Value));
+                if (closed)
+                {
+                    LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindSplit, opened: false, TreeId);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                (failed ??= []).Add(sibling);
+                logger.LogWarning(
+                    ex,
+                    "Shard root {TreeId}/{ShardIndex}: could not close the split marker on sibling {Sibling} by a deferred fence; the division re-surfaces (#5833).",
+                    TreeId,
+                    ShardIndex,
+                    sibling);
+            }
+        }
+
+        return failed;
+    }
+
     /// <summary>
     /// The token an adaptive split or consolidation fold from this shard opens on its
     /// target's marker. Unique per migration: a donor never moves the same slot twice.
@@ -339,11 +413,12 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task CloseReclaimHandOffAsync(GrainId survivorLeafId, GrainId absorbedLeafId)
     {
-        if (WalAppendFenceStorage.Resolve(context.ActivationServices) is not { } storage)
+        if (!HasHandOffStorage())
         {
             return;
         }
 
+        var storage = HandOffStorage();
         var token = ReclaimHandOffToken(absorbedLeafId);
         var survivorKey = survivorLeafId.GetGuidKey();
         try
@@ -355,6 +430,38 @@ internal sealed partial class ShardRootGrain
             }
 
             var partitions = await optionsResolver.GetWalPartitionsAsync(TreeId);
+            if (IsPreArmGateOpen())
+            {
+                // #5833, revision 2 (C3, C6): in this shard root's own turn, raise the
+                // routing generation without re-claiming it, and close the survivor's marker
+                // with deferred heads, which hold it until its arm re-claims the generation.
+                // The absorbed leaf's entries are retired only if it ever claimed: its rows
+                // need collecting, and an unrouted epoch-stamped append of it carries no
+                // generation for the deferred re-claim to fence.
+                var absorbedKey = absorbedLeafId.GetGuidKey();
+                if ((await WalAppendFenceRows.ReadLeafEpochAsync(storage, absorbedKey)).RecordExists)
+                {
+                    await RetireAbsorbedAndCaptureHeadsAsync(grainFactory, TreeId, partitions, absorbedKey);
+                }
+
+                var raised = (await UpdateHandOffMarkerAsync(m =>
+                {
+                    m.RoutingGeneration++;
+                    return true;
+                })).RoutingGeneration;
+                var closedDeferred = false;
+                await HandOffMarkerRows.UpdateLeafAsync(
+                    storage,
+                    survivorKey,
+                    m => closedDeferred = HandOffMarkerCore.CloseDeferred(m, token, Math.Max(1, partitions), ShardIndex, raised));
+                if (closedDeferred)
+                {
+                    LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindReclaim, opened: false, TreeId);
+                }
+
+                return;
+            }
+
             var heads = await RetireAbsorbedAndCaptureHeadsAsync(grainFactory, TreeId, partitions, absorbedLeafId.GetGuidKey());
             var closed = false;
             await HandOffMarkerRows.UpdateLeafAsync(storage, survivorKey, m => closed = HandOffMarkerCore.Close(m, token, heads));
