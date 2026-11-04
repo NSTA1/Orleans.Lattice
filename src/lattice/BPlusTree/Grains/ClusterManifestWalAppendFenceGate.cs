@@ -48,6 +48,9 @@ internal sealed class ClusterManifestWalAppendFenceGate : IWalAppendFenceGate
     }
 
     /// <inheritdoc />
+    public bool IsPreArmOpen => false;
+
+    /// <inheritdoc />
     public bool IsOpen
     {
         get

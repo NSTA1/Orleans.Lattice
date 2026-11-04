@@ -29,7 +29,9 @@ public sealed class WalAppendFenceIntegrationTests
     [OneTimeSetUp]
     public async Task OneTimeSetUp()
     {
-        _fixture = new ClusterFixture();
+        // Eager mode (#5833): every test here supersedes a claimed activation. The
+        // pre-arm counterparts are in WalAppendFencePreArmIntegrationTests.
+        _fixture = new ClusterFixture { EagerAppendFenceClaims = true };
         await _fixture.InitializeAsync();
         _cluster = _fixture.Cluster;
     }

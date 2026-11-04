@@ -32,11 +32,19 @@ public sealed class SmallLeafClusterFixture
 
     public TestCluster Cluster { get; private set; } = null!;
 
+    /// <summary>Runs the cluster's leaves in eager-claim mode (#5833); see <see cref="ClusterFixture.EagerAppendFenceClaims"/>.</summary>
+    public bool EagerAppendFenceClaims { get; init; }
+
     public async Task InitializeAsync()
     {
         var builder = new TestClusterBuilder();
         builder.UseSharedInMemoryWal();
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
+        if (EagerAppendFenceClaims)
+        {
+            builder.AddSiloBuilderConfigurator<EagerAppendFenceSiloConfigurator>();
+        }
+
         Cluster = builder.Build();
         await Cluster.DeployAsync();
         await SharedInMemoryWal.AssertAllSilosShareOneWalAsync(Cluster);

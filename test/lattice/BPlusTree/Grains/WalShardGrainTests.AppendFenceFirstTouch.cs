@@ -41,22 +41,82 @@ public partial class WalShardGrainTests
     public async Task A_stamped_append_under_an_unloaded_generation_loads_it_and_is_admitted()
     {
         // The first stamped append a partition receives under a generation it has not
-        // loaded loads that generation itself, as the writer's re-presentation would,
-        // rather than rejecting it and costing the writer a separate claim call and a
-        // second append.
+        // loaded loads that generation itself, rather than rejecting it and costing the
+        // writer a separate claim call and a second append. The load is read-only
+        // (#5833, revision 2, C1): it writes no row and never raises the entry to the
+        // presented generation, so only an arm or a close re-claims.
         var storage = new EnumerableMemoryGrainStorage();
         var grain = await CreateFencedGrainAsync(storage);
         var initiator = WalRoutingInitiator.ShardRoot(3);
         await grain.ClaimAppendEpochAsync(FenceLeaf, 1, CancellationToken.None);
-        var stamp = new WalAppendStamp(FenceLeaf, 1, initiator, 1);
+        await grain.ClaimRoutingGenerationAsync(initiator, 2, CancellationToken.None);
+        var restarted = await CreateFencedGrainAsync(storage);
+        await restarted.ClaimAppendEpochAsync(FenceLeaf, 1, CancellationToken.None);
 
-        var first = await grain.AppendBatchStampedAsync(new[] { MakeEntry("a") }, stamp, CancellationToken.None);
+        var first = await restarted.AppendBatchStampedAsync(new[] { MakeEntry("a") }, new WalAppendStamp(FenceLeaf, 1, initiator, 5), CancellationToken.None);
         var durable = (await WalAppendFenceRows.ReadGenerationAsync(storage, TreeId, ShardIndex, initiator)).State.Generation;
+        var stillAdmitsDurable = await restarted.AppendStampedAsync(MakeEntry("b"), new WalAppendStamp(FenceLeaf, 1, initiator, 2), CancellationToken.None);
 
         Assert.Multiple(() =>
         {
             Assert.That(first.Outcome, Is.EqualTo(WalAppendFenceOutcome.Admitted), "the first append under an unloaded generation was not admitted");
-            Assert.That(durable, Is.EqualTo(1), "the generation was admitted without being claimed durably");
+            Assert.That(durable, Is.EqualTo(2), "UnloadedGenerationLoadsWithoutClaim: the cold path claimed the presented generation");
+            Assert.That(stillAdmitsDurable.Outcome, Is.EqualTo(WalAppendFenceOutcome.Admitted),
+                "the cold path raised the entry to the presented generation, fencing the durable one's in-flight writes");
+        });
+    }
+
+    [Test]
+    public async Task A_fresh_partition_s_cold_load_writes_no_generation_row_and_admits_above_the_floor_only()
+    {
+        // #5833, revision 2, C1 and C7: an absent row loads the floor, floor-only. A generation at the
+        // floor belongs to a purged incarnation and stays refused, as a claim at the floor
+        // is (ColdLoadAdmitsAtFloor).
+        var storage = new EnumerableMemoryGrainStorage();
+        var initiator = WalRoutingInitiator.ShardRoot(3);
+        await WalAppendFenceRows.RaiseRoutingFloorsAsync(storage, TreeId, new Dictionary<WalRoutingInitiator, long> { [initiator] = 4 });
+        var grain = await CreateFencedGrainAsync(storage);
+        await grain.ClaimAppendEpochAsync(FenceLeaf, 1, CancellationToken.None);
+
+        var atFloor = await grain.AppendStampedAsync(MakeEntry("a"), new WalAppendStamp(FenceLeaf, 1, initiator, 4), CancellationToken.None);
+        var above = await grain.AppendStampedAsync(MakeEntry("b"), new WalAppendStamp(FenceLeaf, 1, initiator, 5), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(atFloor.Outcome, Is.EqualTo(WalAppendFenceOutcome.StaleGeneration), "a generation at the floor was admitted by the cold load");
+            Assert.That(above.Outcome, Is.EqualTo(WalAppendFenceOutcome.Admitted));
+            Assert.That(storage.GrainIds(WalAppendFenceRows.GenerationGrainType), Is.Empty, "the cold load wrote a generation row");
+        });
+    }
+
+    [Test]
+    public async Task A_cold_load_never_lowers_a_generation_a_re_claim_raised()
+    {
+        // #5833, revision 2, C7 (ColdLoadLowersLoadedGeneration): a load whose read of the
+        // row precedes a re-claim's raise must not install the older value after it. The
+        // load's read is held after it has read, until the re-claim finishes or a bound
+        // passes: under the claim gate the re-claim waits for the load, so the bound
+        // releases it; without the gate the re-claim raises first, and only the load's
+        // max-merge keeps the entry at the raised generation.
+        var inner = new EnumerableMemoryGrainStorage();
+        var initiator = WalRoutingInitiator.ShardRoot(3);
+        var seed = await CreateFencedGrainAsync(inner);
+        await seed.ClaimRoutingGenerationAsync(initiator, 1, CancellationToken.None);
+        var storage = new HeldFirstReadStorage(inner, WalAppendFenceRows.GenerationGrainType);
+        var grain = await CreateFencedGrainAsync(storage);
+        await grain.ClaimAppendEpochAsync(FenceLeaf, 1, CancellationToken.None);
+
+        var load = grain.AppendStampedAsync(MakeEntry("a"), new WalAppendStamp(FenceLeaf, 1, initiator, 1), CancellationToken.None);
+        await storage.FirstReadDone.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var reclaim = grain.ClaimRoutingGenerationAsync(initiator, 3, CancellationToken.None);
+        _ = reclaim.ContinueWith(_ => storage.Release.TrySetResult(), TaskScheduler.Default);
+        await Task.WhenAll(load, reclaim);
+        var old = await grain.AppendStampedAsync(MakeEntry("b"), new WalAppendStamp(FenceLeaf, 1, initiator, 1), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reclaim.Result.Accepted, Is.True);
+            Assert.That(old.Outcome, Is.EqualTo(WalAppendFenceOutcome.StaleGeneration), "a cold load lowered the re-claimed generation");
         });
     }
 
@@ -150,6 +210,59 @@ public partial class WalShardGrainTests
         return (result.Accepted, result.Head, result.Refusal);
     }
 
+    [TestCase(0, 0)]
+    [TestCase(0, 2)]
+    [TestCase(3, 0)]
+    [TestCase(3, 2)]
+    [TestCase(2, 3)]
+    [TestCase(3, 3)]
+    public async Task The_memory_decision_after_a_cold_load_equals_the_io_decision(long row, long floor)
+    {
+        // #5833 review of the C1 refinement: the grid of the F1 exactness test, over an
+        // entry a read-only cold load installed - floor-only when the row is not above the
+        // floor. Every re-claim decides exactly as one that reads the row, and admits
+        // exactly what it would after reading it.
+        var initiator = WalRoutingInitiator.ShardRoot(3);
+        for (var value = 1L; value <= Math.Max(row, floor) + 2; value++)
+        {
+            var fast = await ClaimAfterColdLoadAsync(initiator, row, floor, value, fastPath: true);
+            var io = await ClaimAfterColdLoadAsync(initiator, row, floor, value, fastPath: false);
+            Assert.That(fast, Is.EqualTo(io), $"row {row}, floor {floor}, re-claim {value}");
+        }
+    }
+
+    private static async Task<(bool Accepted, long Head, long Refusal, WalAppendFenceOutcome AtValue)> ClaimAfterColdLoadAsync(
+        WalRoutingInitiator initiator, long row, long floor, long value, bool fastPath)
+    {
+        var storage = new EnumerableMemoryGrainStorage();
+        if (floor > 0)
+        {
+            await WalAppendFenceRows.RaiseRoutingFloorAsync(storage, TreeId, initiator, floor);
+        }
+
+        if (row > 0)
+        {
+            var stored = await WalAppendFenceRows.ReadGenerationAsync(storage, TreeId, ShardIndex, initiator);
+            stored.State.Generation = row;
+            await WalAppendFenceRows.WriteAsync(
+                storage,
+                WalAppendFenceRows.GenerationGrainType,
+                WalAppendFenceRows.GenerationKey(TreeId, ShardIndex, initiator.Kind, initiator.Index),
+                stored);
+        }
+
+        var grain = await CreateFencedGrainAsync(storage);
+        grain.DisableLoadedClaimFastPathForTesting = !fastPath;
+        await grain.ClaimAppendEpochAsync(FenceLeaf, 1, CancellationToken.None);
+        var load = await grain.AppendStampedAsync(
+            MakeEntry("load"), new WalAppendStamp(FenceLeaf, 1, initiator, Math.Max(row, floor) + 1), CancellationToken.None);
+        Assert.That(load.Outcome, Is.EqualTo(WalAppendFenceOutcome.Admitted), "precondition: the cold load admitted above the row and floor");
+
+        var result = await grain.ClaimRoutingGenerationAsync(initiator, value, CancellationToken.None);
+        var atValue = await grain.AppendStampedAsync(MakeEntry("probe"), new WalAppendStamp(FenceLeaf, 1, initiator, value), CancellationToken.None);
+        return (result.Accepted, result.Head, result.Refusal, atValue.Outcome);
+    }
+
     [Test]
     public async Task A_re_claim_after_reactivation_reads_no_directory_page_when_its_entry_exists()
     {
@@ -201,6 +314,36 @@ public partial class WalShardGrainTests
     /// Delays reads of one grain type, so concurrent claims all read before any of
     /// them writes, and counts that type's writes and write conflicts.
     /// </summary>
+    /// <summary>
+    /// Holds the first read of <paramref name="grainType"/> after it has read, until
+    /// <see cref="Release"/> or a bound, so a concurrent writer can move the row between
+    /// the read and its caller's use of it.
+    /// </summary>
+    private sealed class HeldFirstReadStorage(IGrainStorage inner, string grainType) : IGrainStorage
+    {
+        private int _reads;
+
+        public TaskCompletionSource FirstReadDone { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
+        {
+            await inner.ReadStateAsync(stateName, grainId, grainState);
+            if (stateName == grainType && Interlocked.Increment(ref _reads) == 1)
+            {
+                FirstReadDone.TrySetResult();
+                await Task.WhenAny(Release.Task, Task.Delay(TimeSpan.FromMilliseconds(500)));
+            }
+        }
+
+        public Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
+            inner.WriteStateAsync(stateName, grainId, grainState);
+
+        public Task ClearStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
+            inner.ClearStateAsync(stateName, grainId, grainState);
+    }
+
     private sealed class SlowRowStorage(IGrainStorage inner, string grainType) : IGrainStorage
     {
         private int _writes;

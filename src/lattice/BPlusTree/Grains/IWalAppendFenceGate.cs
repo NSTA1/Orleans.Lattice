@@ -15,4 +15,12 @@ internal interface IWalAppendFenceGate
     /// <see cref="IWalAppendFenceCapable"/>.
     /// </summary>
     bool IsOpen { get; }
+
+    /// <summary>
+    /// <see langword="true"/> while <see cref="IsOpen"/> and every active silo also
+    /// advertises <see cref="IWalAppendFencePreArmCapable"/> (#5833): a leaf may then
+    /// append under the pre-arm class and claim only when it arms. Closes again if a
+    /// silo without it joins, when leaves claim eagerly once more.
+    /// </summary>
+    bool IsPreArmOpen => false;
 }

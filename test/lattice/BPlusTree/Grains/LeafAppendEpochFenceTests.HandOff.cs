@@ -204,6 +204,49 @@ public sealed partial class LeafAppendEpochFenceTests
         });
     }
 
+    [Test]
+    public async Task A_close_accepts_its_re_claim_when_a_floor_refusal_raises_the_epoch_before_the_head_read()
+    {
+        // #5836: a floor refusal at another partition bumps the epoch again between this
+        // partition's re-claim under the raised epoch and the close's head read. That
+        // claim's head still bounds every append stamped below the raised epoch, so the
+        // close accepts it instead of failing and leaving the marker open.
+        var superseded = new List<long>();
+        var fence = new LeafAppendEpochFence(
+            Leaf,
+            new SettableGate(open: true),
+            new EnumerableMemoryGrainStorage(),
+            superseded.Add,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, "tree"),
+            LatticeTenantLabel.ForTree("tree"));
+        var claimed = Substitute.For<IWalShardGrain>();
+        claimed.ClaimAppendEpochAsync(Leaf, Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(WalAppendFenceClaimResult.Accept(11)));
+        var floored = Substitute.For<IWalShardGrain>();
+        floored.ClaimAppendEpochAsync(Leaf, Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(call => Task.FromResult(call.ArgAt<long>(1) <= 5
+                ? WalAppendFenceClaimResult.Refuse(5)
+                : WalAppendFenceClaimResult.Accept(23)));
+        await fence.StampForAsync(claimed, partition: 0, CancellationToken.None);
+        fence.AfterCloseReclaimForTesting = async partition =>
+        {
+            if (partition == 0)
+            {
+                await fence.StampForAsync(floored, partition: 1, CancellationToken.None);
+            }
+        };
+
+        var heads = await fence.BumpAndReclaimAsync(p => p == 0 ? claimed : floored, partitionCount: 2, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(fence.Epoch, Is.EqualTo(6), "precondition: the floor refusal raised the epoch above the close's");
+            Assert.That(heads, Is.Not.Null);
+            Assert.That(heads![0], Is.EqualTo(11), "the close discarded its re-claim's head because the epoch moved on");
+            Assert.That(superseded, Is.Empty);
+        });
+    }
+
     private static async Task WaitForAsync(Func<bool> condition, TimeSpan? timeout = null)
     {
         var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(10));

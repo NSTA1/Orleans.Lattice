@@ -57,8 +57,8 @@ public partial class WalShardGrainTests
 
         await grain.RetireRoutingGenerationsAsync(shardCount: 1, CancellationToken.None);
 
-        // The stale shard root's write: its entry is gone, and the cold path's
-        // re-presentation (#5831 F2) is refused at the floor, as an explicit one is.
+        // The stale shard root's write: its entry is gone, and the cold path's read-only
+        // load (#5833 C1) installs the floor, floor-only, so it is refused, as an explicit re-claim is.
         var unloaded = await grain.AppendStampedAsync(MakeEntry("stale"), stale, CancellationToken.None);
         var represent = await grain.ClaimRoutingGenerationAsync(shardRoot, 2, CancellationToken.None);
 
@@ -135,7 +135,7 @@ public partial class WalShardGrainTests
         Assert.Multiple(() =>
         {
             Assert.That(unclaimed.Outcome, Is.EqualTo(WalAppendFenceOutcome.StaleGeneration),
-                "nothing is admitted under an unclaimed generation: the cold path's claim (#5831 F2) meets the floor");
+                "nothing is admitted under an unclaimed generation: the cold path's load (#5833 C1) installs the floor, floor-only");
             Assert.That(first.Accepted, Is.False);
             Assert.That(first.Refusal, Is.EqualTo(6), "a fresh activation reads the floor before its first generation claim");
             Assert.That(atFloor.Accepted, Is.False, "a claim at the floor is refused too");

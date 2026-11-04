@@ -121,6 +121,9 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     /// <summary>This activation's <see cref="ClaimFailureBackoff"/>; test seam.</summary>
     internal TimeSpan ClaimFailureBackoffForTesting { get; set; } = ClaimFailureBackoff;
 
+    /// <summary>Invoked by a hand-off close between a partition's re-claim and its head read; test seam (#5836).</summary>
+    internal Func<int, Task>? AfterCloseReclaimForTesting { get; set; }
+
     /// <summary>The epoch this activation holds; 0 before its first claim.</summary>
     internal long Epoch
     {

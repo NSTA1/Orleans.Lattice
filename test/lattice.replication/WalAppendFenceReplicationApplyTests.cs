@@ -2,6 +2,7 @@ using System.Diagnostics.Metrics;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -23,9 +24,10 @@ namespace Orleans.Lattice.Replication.Tests;
 /// live activation, so the apply never fails - the dead-letter decorator records no
 /// failure, parks nothing, and the entry is applied as 10.2.0 applies it.
 /// </summary>
-[TestFixture]
+[TestFixture(false)]
+[TestFixture(true)]
 [Category("Integration")]
-public sealed class WalAppendFenceReplicationApplyTests
+public sealed class WalAppendFenceReplicationApplyTests(bool eagerClaims)
 {
     private const string LocalCluster = "site-a";
     private const string OriginCluster = "remote";
@@ -37,6 +39,11 @@ public sealed class WalAppendFenceReplicationApplyTests
     {
         var builder = new TestClusterBuilder(initialSilosCount: 1);
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
+        if (eagerClaims)
+        {
+            builder.AddSiloBuilderConfigurator<EagerAppendFenceSiloConfigurator>();
+        }
+
         _cluster = builder.Build();
         await _cluster.DeployAsync();
     }
@@ -71,7 +78,14 @@ public sealed class WalAppendFenceReplicationApplyTests
         var tree = _cluster.Client.GetGrain<ILattice>(Tree);
         await tree.SetAsync("seed", Encoding.UTF8.GetBytes("seed"));
         var leaf = new Guid(SHA256.HashData(Encoding.UTF8.GetBytes($"{Tree}/0")).AsSpan(0, 16));
-        var superseding = await SupersedeAsync(Tree, leaf);
+
+        // Eager mode: the live activation is superseded by a newer epoch, so the apply's
+        // first append is refused and the seam retries. Pre-arm mode (#5833): another
+        // activation arms instead, which refuses nothing; the apply's pre-arm append is
+        // admitted and attributed to the live activation, as foreign to the arming one.
+        var superseding = eagerClaims ? await SupersedeAsync(Tree, leaf) : 0;
+        var other = Guid.NewGuid();
+        var beforeApply = eagerClaims ? [] : await ArmAnotherActivationAsync(Tree, leaf, other);
 
         var options = new LatticeReplicationOptions { ClusterId = LocalCluster };
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
@@ -106,15 +120,66 @@ public sealed class WalAppendFenceReplicationApplyTests
 
         var applied = await tree.GetAsync("replicated");
         var row = await WalAppendFenceRows.ReadLeafEpochAsync(Storage, leaf);
+        var reported = false;
+        for (var partition = 0; partition < beforeApply.Length; partition++)
+        {
+            var shard = _cluster.Client.GetGrain<IWalShardGrain>($"{Tree}/{partition}");
+            if (await shard.GetNextSequenceAsync(CancellationToken.None) == beforeApply[partition])
+            {
+                continue;
+            }
+
+            var rearm = await shard.ArmAppendEpochAsync(leaf, 1, other, WalRoutingInitiator.None, 0, CancellationToken.None);
+            reported |= rearm.Accepted && rearm.ForeignHigh >= beforeApply[partition];
+        }
         Assert.Multiple(() =>
         {
             Assert.That(spy.Failures, Is.Empty, "the inner apply never failed, so the decorator counted no failure");
             Assert.That(result.Applied, Is.True);
             Assert.That(Volatile.Read(ref parked), Is.Zero, "nothing was dead-lettered");
             Assert.That(applied is null ? null : Encoding.UTF8.GetString(applied), Is.EqualTo("v"));
-            Assert.That(row.State.Epoch, Is.GreaterThan(superseding),
-                "anti-vacuity: the apply met the superseded activation, and its seam retry reached a fresh one");
+            if (eagerClaims)
+            {
+                Assert.That(row.State.Epoch, Is.GreaterThan(superseding),
+                    "anti-vacuity: the apply met the superseded activation, and its seam retry reached a fresh one");
+            }
+            else
+            {
+                Assert.That(row.RecordExists, Is.False, "the live, unarmed activation claimed to apply");
+                Assert.That(reported, Is.True, "the apply's pre-arm append was not attributed as foreign to the arming activation");
+            }
         });
+    }
+
+    /// <summary>Arms another activation of the leaf at every partition (pre-arm mode); returns each partition's next offset after it.</summary>
+    private async Task<long[]> ArmAnotherActivationAsync(string treeName, Guid leaf, Guid activation)
+    {
+        var partitions = Math.Max(1, await SiloServices.GetRequiredService<LatticeOptionsResolver>().GetWalPartitionsAsync(treeName));
+        var before = new long[partitions];
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            var shard = _cluster.Client.GetGrain<IWalShardGrain>($"{treeName}/{partition}");
+            var arm = await shard.ArmAppendEpochAsync(leaf, 1, activation, WalRoutingInitiator.None, 0, CancellationToken.None);
+            Assert.That(arm.Accepted, Is.True, $"precondition: the other activation armed at partition {partition}");
+            before[partition] = await shard.GetNextSequenceAsync(CancellationToken.None);
+        }
+
+        return before;
+    }
+
+    /// <summary>Test-only (#5833): holds the pre-arm class closed, so the leaves claim eagerly.</summary>
+    private sealed class EagerAppendFenceSiloConfigurator : ISiloConfigurator
+    {
+        public void Configure(ISiloBuilder siloBuilder) =>
+            siloBuilder.Services.Replace(ServiceDescriptor.Singleton<IWalAppendFenceGate>(
+                sp => new EagerGate(ActivatorUtilities.CreateInstance<ClusterManifestWalAppendFenceGate>(sp))));
+
+        private sealed class EagerGate(IWalAppendFenceGate inner) : IWalAppendFenceGate
+        {
+            public bool IsOpen => inner.IsOpen;
+
+            public bool IsPreArmOpen => false;
+        }
     }
 
     /// <summary>Supersedes the leaf's live activation as a newer activation would.</summary>

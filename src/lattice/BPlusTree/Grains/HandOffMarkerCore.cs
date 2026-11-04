@@ -197,6 +197,29 @@ internal static class HandOffMarkerCore
     public static bool Overlaps(string? aLowInclusive, string? aHighExclusive, string? bLowInclusive, string? bHighExclusive) =>
         LeafReplayOwnership.RangeOverlaps(aLowInclusive ?? string.Empty, aHighExclusive, bLowInclusive, bHighExclusive);
 
+    /// <summary>The head of a deferred close (#5833); surface only in the red proof.</summary>
+    public const long DeferredHead = long.MaxValue;
+
+    /// <summary>Surface only in the red proof (#5833).</summary>
+    public static bool CloseDeferred(IHandOffMarker marker, string token, int partitionCount, int shardIndex, long generation) => false;
+
+    /// <summary>Surface only in the red proof (#5833).</summary>
+    public static bool TryGetPendingDeferred(
+        IHandOffMarker marker,
+        string? ownerLowInclusive,
+        string? ownerHighExclusive,
+        int partition,
+        out int shardIndex,
+        out long generation)
+    {
+        shardIndex = -1;
+        generation = 0;
+        return false;
+    }
+
+    /// <summary>Surface only in the red proof (#5833).</summary>
+    public static bool ResolveDeferred(IHandOffMarker marker, int partition, int shardIndex, long generation, long head) => false;
+
     private static bool IsClosed(IHandOffMarker marker, string token)
     {
         foreach (var close in marker.Closes)

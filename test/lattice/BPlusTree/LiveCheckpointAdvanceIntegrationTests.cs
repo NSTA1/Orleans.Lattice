@@ -31,9 +31,10 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// Without the fences each of the last two would be passed over unread, and a WAL trim
 /// would then lose the row for good.
 /// </summary>
-[TestFixture]
+[TestFixture(false)]
+[TestFixture(true)]
 [Category("Integration")]
-public sealed partial class LiveCheckpointAdvanceIntegrationTests
+public sealed partial class LiveCheckpointAdvanceIntegrationTests(bool eagerClaims)
 {
     private const string LatencyTree = "live-advance-latency";
     private const string DuplicateTree = "live-advance-duplicate";
@@ -49,6 +50,13 @@ public sealed partial class LiveCheckpointAdvanceIntegrationTests
     {
         var builder = new TestClusterBuilder(1);
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
+        if (eagerClaims)
+        {
+            // #5833: every test also runs in eager-claim mode, the path while the
+            // pre-arm capability is not advertised by every silo.
+            builder.AddSiloBuilderConfigurator<EagerAppendFenceSiloConfigurator>();
+        }
+
         _cluster = builder.Build();
         await _cluster.DeployAsync();
         var registry = _cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);

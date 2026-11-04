@@ -325,6 +325,10 @@ internal sealed partial class ShardRootGrain
         }
     }
 
+    /// <summary>Runs <see cref="CloseReclaimHandOffAsync"/>; test seam (#5833, the producer order of a deferred reclaim close).</summary>
+    internal Task CloseReclaimHandOffForTestingAsync(GrainId survivorLeafId, GrainId absorbedLeafId) =>
+        CloseReclaimHandOffAsync(survivorLeafId, absorbedLeafId);
+
     /// <summary>
     /// Closes the reclaim hand-off on <paramref name="survivorLeafId"/> by fence: retires
     /// <paramref name="absorbedLeafId"/>'s append-epoch entry at every WAL partition, so
