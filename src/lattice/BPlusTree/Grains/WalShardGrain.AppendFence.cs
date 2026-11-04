@@ -227,11 +227,12 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
     /// <para>
     /// The gate is waiter-driven: each claim takes it in turn and decides for itself, so
     /// no claim shares another's result, fault or cancellation. A waiter waits with its
-    /// own token and the gate is released in <c>finally</c>. A claim holding it is bounded
-    /// by <see cref="LatticeOptions.WalFlushTimeout"/>: a hung storage call delays the
-    /// claims queued behind it by at most that long, after which the next one does its
-    /// own I/O. The abandoned claim may still land; that is a claim completing late,
-    /// which its raise check and the row's ETag condition already handle.
+    /// own token and the gate is released in <c>finally</c>. The gate wait and each storage
+    /// call are bounded by <see cref="LatticeOptions.WalFlushTimeout"/>, so a hung storage
+    /// call delays the claims queued behind it by at most that long; the raise's drain of
+    /// in-flight batches is not, as each batch bounds itself. A storage call that times
+    /// out fails its claim without raising anything, and may still land; the next claim's
+    /// read sees it, and its ETag condition orders it.
     /// </para>
     /// <para>
     /// No circular wait: a claim's raise waits for the initiator's multi-entry stamped
@@ -249,14 +250,26 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
         await EnsureFloorsLoadedAsync(storage).ConfigureAwait(true);
         var key = WalAppendFenceRows.GenerationKey(_treeId, _shardIndex, initiator.Kind, initiator.Index);
         var gate = GenerationGate(initiator);
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(true);
+        var deadline = Options.WalFlushTimeout;
+        TimeSpan? bound = deadline > TimeSpan.Zero && deadline != Timeout.InfiniteTimeSpan ? deadline : null;
+        if (!await gate.WaitAsync(bound ?? Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(true))
+        {
+            throw new TimeoutException(
+                $"WAL shard {_treeId}/{_shardIndex}: a routing-generation claim for {WalAppendFenceRows.InitiatorTag(initiator)} waited "
+                + $"{deadline} for the claim ahead of it.");
+        }
+
         try
         {
-            var claim = ClaimCoreAsync(
+            // Only the gate wait and the storage I/O are bounded (#5831 review, S1): a
+            // raise's drain of the initiator's in-flight batches is bounded per batch
+            // already, and a close's re-claim waiting on a slow batch must finish late,
+            // never fail.
+            return await ClaimCoreAsync(
                 storage,
                 WalAppendFenceRows.GenerationGrainType,
                 key,
-                () => WalAppendFenceRows.ReadGenerationAsync(storage, _treeId, _shardIndex, initiator),
+                () => Bound(WalAppendFenceRows.ReadGenerationAsync(storage, _treeId, _shardIndex, initiator), bound),
                 static row => row.State.Generation,
                 static (row, value) => row.State.Generation = value,
                 GenerationEntries(),
@@ -264,17 +277,18 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
                 generation,
                 epochTable: false,
                 batchLeaf: null,
-                batchInitiator: initiator);
-            var deadline = Options.WalFlushTimeout;
-            return deadline > TimeSpan.Zero && deadline != Timeout.InfiniteTimeSpan
-                ? await claim.WaitAsync(deadline, cancellationToken).ConfigureAwait(true)
-                : await claim.WaitAsync(cancellationToken).ConfigureAwait(true);
+                batchInitiator: initiator,
+                ioBound: bound).ConfigureAwait(true);
         }
         finally
         {
             gate.Release();
         }
     }
+
+    private static Task<T> Bound<T>(Task<T> io, TimeSpan? bound) => bound is { } b ? io.WaitAsync(b) : io;
+
+    private static Task Bound(Task io, TimeSpan? bound) => bound is { } b ? io.WaitAsync(b) : io;
 
     /// <summary>The claim gate of <paramref name="initiator"/>; at most one per shard-level initiator of the tree.</summary>
     private SemaphoreSlim GenerationGate(WalRoutingInitiator initiator)
@@ -713,7 +727,8 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
         long value,
         bool epochTable,
         Guid? batchLeaf,
-        WalRoutingInitiator? batchInitiator)
+        WalRoutingInitiator? batchInitiator,
+        TimeSpan? ioBound = null)
         where TId : notnull
     {
         var listed = false;
@@ -784,7 +799,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
                 setValue(row, value);
                 try
                 {
-                    await WalAppendFenceRows.WriteAsync(storage, grainType, key, row).ConfigureAwait(true);
+                    await Bound(WalAppendFenceRows.WriteAsync(storage, grainType, key, row), ioBound).ConfigureAwait(true);
                 }
                 catch (InconsistentStateException)
                 {
