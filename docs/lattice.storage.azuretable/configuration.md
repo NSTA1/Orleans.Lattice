@@ -90,6 +90,12 @@ siloBuilder.AddAzureTableWalStorage(o =>
 | [`HonorSaturationSignal`](#honorsaturationsignal) | `bool` | `true` |
 | [`SaturationShortCircuitCooldown`](#saturationshortcircuitcooldown) | `TimeSpan` | 2 seconds |
 
+### Trim options
+
+| Option | Type | Default |
+|---|---|---|
+| [`TrimFullSweepInterval`](#trimfullsweepinterval) | `TimeSpan` | 6 hours |
+
 ### Compression options
 
 | Option | Type | Default |
@@ -97,7 +103,7 @@ siloBuilder.AddAzureTableWalStorage(o =>
 | [`Compression`](#compression) | `LatticeCompression` | `Zstd` |
 | [`CompressionMinPayloadBytes`](#compressionminpayloadbytes) | `int` | 256 |
 
-Every non-null default above is also published as a public member of `AzureTableWalStorageOptions`: the constants `DefaultTableName`, `DefaultPipelinePhaseTwoCommits`, `DefaultEliminateCandidateRowOnHotPath`, `DefaultHonorSaturationSignal`, `DefaultPhaseOneTransientRetryMaxAttempts`, `DefaultCompression`, and `DefaultCompressionMinPayloadBytes`, and the `static readonly` `TimeSpan` fields `DefaultRetryNetworkTimeout`, `DefaultPhaseTwoCoalescingWindow`, `DefaultPhaseTwoCommitTimeout`, `DefaultSaturationShortCircuitCooldown`, and `DefaultPhaseOneTransientRetryBaseDelay`. `DefaultPhaseOneTransientRetryMaxDelay` (250 ms) is not an option's default but the fixed cap on the phase-1 retry backoff.
+Every non-null default above is also published as a public member of `AzureTableWalStorageOptions`: the constants `DefaultTableName`, `DefaultPipelinePhaseTwoCommits`, `DefaultEliminateCandidateRowOnHotPath`, `DefaultHonorSaturationSignal`, `DefaultPhaseOneTransientRetryMaxAttempts`, `DefaultCompression`, and `DefaultCompressionMinPayloadBytes`, and the `static readonly` `TimeSpan` fields `DefaultRetryNetworkTimeout`, `DefaultPhaseTwoCoalescingWindow`, `DefaultPhaseTwoCommitTimeout`, `DefaultSaturationShortCircuitCooldown`, `DefaultTrimFullSweepInterval`, and `DefaultPhaseOneTransientRetryBaseDelay`. `DefaultPhaseOneTransientRetryMaxDelay` (250 ms) is not an option's default but the fixed cap on the phase-1 retry backoff.
 
 ## Option guidance
 
@@ -237,6 +243,20 @@ var optionsWithCooldownOverride = new AzureTableWalStorageOptions
 };
 ```
 
+### `TrimFullSweepInterval`
+
+Least time between two trims of one WAL partition, on one provider instance, that sweep its batch partitions from the first rather than from the previous trim watermark. Default is 6 hours. Must be non-negative; `TimeSpan.Zero` makes every trim a full sweep. A provider instance schedules the first full sweep of each WAL partition at a random point within one interval of first trimming it, so a restart does not line up every partition's full sweep at once. A full sweep reaches entry rows that no commit metadata names and that landed below an earlier watermark - the rows a refused or failed append leaves when its writer stops before reconciling - at the cost of extra query pages over the range earlier trims emptied. See [Trim and the sweep](architecture.md#trim-and-the-sweep).
+
+```csharp verify
+using Orleans.Lattice.Storage.AzureTable;
+
+var optionsWithDailyFullSweep = new AzureTableWalStorageOptions
+{
+    ConnectionString = "UseDevelopmentStorage=true",
+    TrimFullSweepInterval = TimeSpan.FromHours(24),
+};
+```
+
 ### `Compression`
 
 Stored WAL payload compression algorithm. Default is `LatticeCompression.Zstd`; set `LatticeCompression.None` to store payloads verbatim. Rows are self-describing, so changing this option affects newly written rows while older rows continue to decode with their recorded tags.
@@ -270,7 +290,7 @@ At first use - when it builds its Azure SDK client and creates the table - the p
 - Credential modes are mutually exclusive.
 - Retry values are within valid ranges.
 - `RetryDelay` does not exceed `RetryMaxDelay` when both are set.
-- `PhaseTwoCoalescingWindow` and `SaturationShortCircuitCooldown` are non-negative.
+- `PhaseTwoCoalescingWindow`, `SaturationShortCircuitCooldown` and `TrimFullSweepInterval` are non-negative.
 - `PhaseTwoCommitTimeout` is positive when set.
 - `CompressionMinPayloadBytes` is non-negative.
 
