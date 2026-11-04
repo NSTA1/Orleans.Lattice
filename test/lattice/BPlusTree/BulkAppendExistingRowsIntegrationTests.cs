@@ -213,6 +213,10 @@ public sealed partial class BulkAppendExistingRowsIntegrationTests(int replayCei
         const string treeId = "bulk-birth-hint-load";
         var (shard, tree) = await SingleShardTreeAsync(treeId);
 
+        // A read seeds the shard's empty root leaf, so the load replaces it under its
+        // switch and applies the birth hint. A load into a shard with no root at all
+        // opens no switch (#5812, B2).
+        Assert.That(await tree.GetAsync("k9999"), Is.Null);
         await tree.BulkLoadAsync(Entries(0, 20, "b"));
 
         var expected = Expected(0, 20, "b");

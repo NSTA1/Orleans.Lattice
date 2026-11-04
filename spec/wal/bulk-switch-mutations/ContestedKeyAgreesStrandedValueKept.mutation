@@ -9,8 +9,8 @@ CLASS: Invariant
 SUMMARY: the owner resolves a contested key without a later-stamped write made before the switch
 
 --- FIND
-OwnerRank == Top({o \in heldN : o <= rpN})
+OwnerRank == Top({o \in heldN : o <= rpN /\ author[o] # "s"})
 --- REPLACE
 \* MUTATION: writes made before the switch are not part of the owner's resolution.
-OwnerRank == Top({o \in heldN : o <= rpN /\ author[o] \notin {"p", "c"}})
+OwnerRank == Top({o \in heldN : o <= rpN /\ author[o] \notin {"p", "c", "s"}})
 --- END

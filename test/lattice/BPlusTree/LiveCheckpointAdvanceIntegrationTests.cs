@@ -33,14 +33,14 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public sealed class LiveCheckpointAdvanceIntegrationTests
+public sealed partial class LiveCheckpointAdvanceIntegrationTests
 {
     private const string LatencyTree = "live-advance-latency";
     private const string DuplicateTree = "live-advance-duplicate";
     private const string UnstampedTree = "live-advance-unstamped";
     private const string OrphanTree = "live-advance-orphan";
     private const string BulkTree = "live-advance-bulk";
-    private static readonly string[] Trees = [LatencyTree, DuplicateTree, UnstampedTree, OrphanTree, BulkTree];
+    private static readonly string[] Trees = [LatencyTree, DuplicateTree, UnstampedTree, OrphanTree, BulkTree, BulkRawTree, BulkGraftTree];
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(45);
     private TestCluster _cluster = null!;
 
@@ -226,12 +226,12 @@ public sealed class LiveCheckpointAdvanceIntegrationTests
         });
     }
 
-    private async Task WaitForBulkSwitchClosedAsync()
+    private async Task WaitForBulkSwitchClosedAsync(string tree = BulkTree)
     {
         var deadline = DateTime.UtcNow + ShardRootGrain.BulkSwitchIdleClose + TimeSpan.FromSeconds(20);
         while (DateTime.UtcNow < deadline)
         {
-            var marker = (await HandOffMarkerRows.ReadShardAsync(Storage, BulkTree, 0)).State;
+            var marker = (await HandOffMarkerRows.ReadShardAsync(Storage, tree, 0)).State;
             if (marker.Open.Count == 0 && marker.BulkBirthHints.Count == 0)
             {
                 return;

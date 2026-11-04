@@ -8,7 +8,7 @@ SUMMARY: the old leaf's replay advances past a foreign record without applying i
 PERTURBS: ReplayO
 
 --- FIND
-    /\ rowsO' = IF author[rpO + 1] = "f" /\ ~narrowed THEN rowsO \cup {rpO + 1} ELSE rowsO
+    /\ rowsO' = IF author[rpO + 1] \in {"f", "s"} /\ ~narrowed THEN rowsO \cup {rpO + 1} ELSE rowsO
 --- REPLACE
 \* MUTATION: the record is not applied.
     /\ rowsO' = rowsO

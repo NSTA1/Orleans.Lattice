@@ -15,7 +15,7 @@ guarantee. The design authority remains [`design/LiveAdvanceDesign.md`](design/L
 | E | `WalAppendEpoch` | nothing | `StaleEpochNeverAppends`, `ClaimHeadCoversPriorAppends`, `RaisedEpochUnique`, `OnlySupersededRefused`, and the entry check |
 | H | `WalHandOffFence` | E's entry check | `HandOffBound`, `AbsentMarkerHolds`, `CloseHeadMonotone` |
 | R | `WalRoutingFloor` | E's entry check | `StraddlerBelowInit`, `LiveGenerationAboveFloor`, `InitHeadCoversPriorAllocations` |
-| B | `WalBulkSwitch` | nothing | `BulkHintBound`, `ContestedKeyAgrees` |
+| B | `WalBulkSwitch` | nothing | `BulkHintBound`, `ContestedKeyAgrees`, `SeedCovered`, `ReplacedRootRelocated` |
 | C | `WalLiveAdvanceCore` | every guarantee above | `ReadPositionHonest`, `SnapshotHonest`, `NoTrimPastAcked`, and liveness |
 
 The edges are E <- H, E <- R, and {E, H, R, B} <- C. No other edge exists, so
@@ -119,6 +119,13 @@ for `CloseHeadMonotone`, as an action property).
   into it at birth are held.
 - `ContestedKeyAgrees`: the owner resolves a contested key to the value every WAL
   reader resolves it to: last writer wins by version.
+- `SeedCovered` (#5812): every record a bulk operation seeds, which claims no append
+  epoch, was admitted under its switch's open marker and lies below the heads the
+  marker's close records, or was reported in the unstamped watermark. For the bulk
+  marker it is the shape of H's `HandOffBound`: a seed is a `Foreign(i)` append of the
+  switch's shard root, allocated while the marker is open.
+- `ReplacedRootRelocated` (#5812): a bulk load published over a root a batch write
+  seeded while it ran has relocated that root under its switch, never overwritten it.
 
 ## What C assumes
 
@@ -136,6 +143,9 @@ C models the other modules only as environment constraints:
   position may be anywhere, so long as it holds every record at or below it. B's
   protocol starts it at or below the hint minus one (#5752's cap, a timed-out or
   partial relocation), but that is not a guarantee B states.
+- **Bulk seeds** satisfy `SeedCovered`: under the bulk marker they are foreign appends
+  that `HandOffBound` covers, and unstamped they are reported like any unstamped
+  append. The composite check does not yet compose this edge; see B's note.
 - **Unstamped appends** are always reported, and raise every reader's `seenU` before
   it arms. This is the stamp census's obligation, and the core's own unstamped
   watermark and self-report model it.

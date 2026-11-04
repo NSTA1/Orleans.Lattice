@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Runtime;
+using Orleans.Lattice.Primitives;
 using Orleans.Storage;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -16,6 +17,48 @@ internal sealed partial class BPlusLeafGrain
 {
     /// <summary>This activation's append fence, created with the commit-log writer.</summary>
     private LeafAppendEpochFence? _appendFence;
+
+    /// <summary>
+    /// The fence a bulk seed in flight on this call appends through instead of the
+    /// activation's own (#5812), so seeding claims nothing. Flows with the seeding call
+    /// only: an interleaved call on the same activation never sees it.
+    /// </summary>
+    private static readonly AsyncLocal<ILeafAppendFence?> BulkSeedScope = new();
+
+    /// <summary>
+    /// Ends the bulk-seed scope for the work that calls it (review S2 of #5830). The scope
+    /// is an <see cref="AsyncLocal{T}"/>, so detached work started inside a seed's
+    /// <see cref="MergeEntriesAsync"/> would inherit it and append through the seed's
+    /// fence, unproved. Called first by every such task the leaf starts: the replay a
+    /// seed's barrier wait can re-arm, whose replayed terminals append. Set inside an
+    /// async method, the change stays in that method's flow. Reads one field when no
+    /// scope is set.
+    /// </summary>
+    private static void LeaveBulkSeedScope()
+    {
+        if (BulkSeedScope.Value is not null)
+        {
+            BulkSeedScope.Value = null;
+        }
+    }
+
+    /// <summary>Whether the calling flow is inside a bulk seed's scope; test seam.</summary>
+    internal static bool InBulkSeedScopeForTesting => BulkSeedScope.Value is not null;
+
+    /// <inheritdoc />
+    public async Task MergeBulkSeedAsync(Dictionary<string, LwwValue<byte[]>> entries, WalRoutingStamp seedRouting)
+    {
+        var previous = BulkSeedScope.Value;
+        BulkSeedScope.Value = new BulkSeedAppendFence(context.GrainId.GetGuidKey(), seedRouting, _appendFence);
+        try
+        {
+            await MergeEntriesAsync(entries);
+        }
+        finally
+        {
+            BulkSeedScope.Value = previous;
+        }
+    }
 
     /// <summary>This activation's append fence, or <see langword="null"/> when it has none; test seam.</summary>
     internal LeafAppendEpochFence? AppendFenceForTesting => _appendFence;
@@ -62,6 +105,14 @@ internal sealed partial class BPlusLeafGrain
     {
         if (_appendFence is not { } fence || !fence.NeedsReachabilityProof)
         {
+            return default;
+        }
+
+        if (BulkSeedScope.Value is not null)
+        {
+            // #5812: a bulk seed claims nothing, so it needs no proof, and its leaf is
+            // not yet published: proving now would fail and latch the leaf unstamped.
+            // The leaf's first live write, once it is reachable, proves instead.
             return default;
         }
 
@@ -204,11 +255,11 @@ internal sealed partial class BPlusLeafGrain
     {
         /// <inheritdoc />
         public Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken = default) =>
-            inner.AppendAsync(entry, fence, cancellationToken);
+            inner.AppendAsync(entry, BulkSeedScope.Value ?? fence, cancellationToken);
 
         /// <inheritdoc />
         public Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken = default) =>
-            inner.AppendManyAsync(entries, fence, cancellationToken);
+            inner.AppendManyAsync(entries, BulkSeedScope.Value ?? fence, cancellationToken);
 
         /// <inheritdoc />
         public Task<long> AppendAsync(WalRecord entry, WalRoutingStamp routing, CancellationToken cancellationToken) =>

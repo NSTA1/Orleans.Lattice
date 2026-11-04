@@ -59,7 +59,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         });
 
         var relocatedTombstone = appended["k0002"].ReceivedCalls()
-            .Where(c => c.GetMethodInfo().Name == nameof(IBPlusLeafGrain.MergeEntriesAsync))
+            .Where(c => c.GetMethodInfo().Name is nameof(IBPlusLeafGrain.MergeEntriesAsync) or nameof(IBPlusLeafGrain.MergeBulkSeedAsync))
             .Select(c => (Dictionary<string, LwwValue<byte[]>>)c.GetArguments()[0]!)
             // The leaf's own bulk entry for k0003 is merged at its birth; the
             // relocated tombstone follows, in the graft.
@@ -78,7 +78,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         Received.InOrder(() =>
         {
             tail.NarrowHighKeyAsync("k0000", firstAppended, Arg.Any<List<GraftEntry>?>());
-            appended["k0004"].MergeEntriesAsync(Arg.Is<Dictionary<string, LwwValue<byte[]>>>(b => b.ContainsKey("k0009")));
+            appended["k0004"].MergeBulkSeedAsync(Arg.Is<Dictionary<string, LwwValue<byte[]>>>(b => b.ContainsKey("k0009")), Arg.Any<Orleans.Lattice.BPlusTree.Grains.WalRoutingStamp>());
             tail.DropRelocatedRowsAsync(Arg.Is<Dictionary<string, HybridLogicalClock>>(d =>
                 d.Count == 2 && d["k0003"] == stamp && d["k0009"] == stamp));
             tail.SetNextSiblingAsync(firstAppended);
@@ -113,7 +113,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
             var leaf = ResolveLeaf(h.Leaves, key);
             if (fresh)
             {
-                leaf.MergeEntriesAsync(Arg.Is<Dictionary<string, LwwValue<byte[]>>>(b => b.ContainsKey("k0009")))
+                leaf.MergeBulkSeedAsync(Arg.Is<Dictionary<string, LwwValue<byte[]>>>(b => b.ContainsKey("k0009")), Arg.Any<Orleans.Lattice.BPlusTree.Grains.WalRoutingStamp>())
                     .Returns(_ => Interlocked.Increment(ref relocations) == 1 ? Task.FromException(failure) : Task.CompletedTask);
             }
 

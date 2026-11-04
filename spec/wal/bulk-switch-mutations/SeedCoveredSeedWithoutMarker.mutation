@@ -1,0 +1,17 @@
+# Pairs with SeedCovered (review C1: open, then seed). A seed stamped with the
+# shard's generation is excluded from the unstamped watermark; with no token open
+# there are no close heads to hold its owner on, so a leaf that can own it may
+# pass it unread.
+MODULE: SeedCoveredSeedWithoutMarker
+TARGET: SeedCovered
+CLASS: Invariant
+SUMMARY: a never-written load stamps its seed with the shard's generation although no switch token is open
+PERTURBS: Create
+BOUNDS: NeverWritten = 1
+
+--- FIND
+    /\ seedGen' = IF tokOpen THEN gen ELSE 0
+--- REPLACE
+\* MUTATION: stamped whatever the token.
+    /\ seedGen' = gen
+--- END

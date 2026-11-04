@@ -37,4 +37,31 @@ internal readonly record struct WalAppendStamp(
 
     /// <summary><see langword="true"/> for the <see cref="CoordinatorTerminal"/> stamp class.</summary>
     public bool IsCoordinatorTerminal => Initiator.Kind == WalRoutingInitiatorKind.CoordinatorTerminal;
+
+    /// <summary>
+    /// The bulk-seed stamp class (#5812; design note section 2, the census row "Bulk
+    /// seeding"): carried by the rows a bulk operation seeds into a leaf it has not yet
+    /// published, under the shard root's open bulk switch. It names no leaf, so the
+    /// seeding leaf claims no append epoch, and it carries the shard root's routing
+    /// generation captured after the switch's marker opened. The WAL shard admits it
+    /// only on a positive match against that generation as it has loaded it, never on
+    /// an absent entry, and does not report it in the unstamped watermark: every leaf
+    /// that can own a seeded row is held on the switch's close heads, and every close
+    /// re-claims the generation at every partition, which refuses a later seed.
+    /// </summary>
+    /// <param name="initiator">The shard root's initiator.</param>
+    /// <param name="generation">Its routing generation, captured after the switch opened.</param>
+    public static WalAppendStamp BulkSeed(WalRoutingInitiator initiator, long generation)
+    {
+        if (initiator.Kind != WalRoutingInitiatorKind.ShardRoot)
+        {
+            throw new ArgumentException("A bulk seed is stamped with a shard root's routing generation.", nameof(initiator));
+        }
+
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(generation);
+        return new(Guid.Empty, 0, initiator, generation);
+    }
+
+    /// <summary><see langword="true"/> for the <see cref="BulkSeed"/> stamp class: no leaf, and a shard root's generation.</summary>
+    public bool IsBulkSeed => LeafId == Guid.Empty && Initiator.Kind == WalRoutingInitiatorKind.ShardRoot;
 }

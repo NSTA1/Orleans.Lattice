@@ -8,8 +8,10 @@ SUMMARY: the birth hint is stored without opening the switch token in the same w
 PERTURBS: Begin
 
 --- FIND
-    /\ tokOpen' = TRUE
+                IN /\ hint' = h
+                   /\ tokOpen' = TRUE
 --- REPLACE
+                IN /\ hint' = h
 \* MUTATION: the token is not opened with the hint.
-           /\ tokOpen' = tokOpen
+                   /\ tokOpen' = tokOpen
 --- END

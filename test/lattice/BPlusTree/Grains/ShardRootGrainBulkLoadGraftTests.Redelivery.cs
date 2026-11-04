@@ -25,7 +25,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
 
     private static string[][] MergedKeySets(IBPlusLeafGrain leaf) =>
         leaf.ReceivedCalls()
-            .Where(c => c.GetMethodInfo().Name == nameof(IBPlusLeafGrain.MergeEntriesAsync))
+            .Where(c => c.GetMethodInfo().Name is nameof(IBPlusLeafGrain.MergeEntriesAsync) or nameof(IBPlusLeafGrain.MergeBulkSeedAsync))
             .Select(c => ((Dictionary<string, LwwValue<byte[]>>)c.GetArguments()[0]!).Keys
                 .Order(StringComparer.Ordinal)
                 .ToArray())
@@ -51,6 +51,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         foreach (var leaf in h.Leaves.Values)
         {
             await leaf.DidNotReceive().MergeEntriesAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>());
+            await leaf.DidNotReceive().MergeBulkSeedAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<Orleans.Lattice.BPlusTree.Grains.WalRoutingStamp>());
             await leaf.DidNotReceive().InitializeSiblingAsync(Arg.Any<SiblingInitialization>());
         }
 

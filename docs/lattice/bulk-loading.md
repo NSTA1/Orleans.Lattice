@@ -98,7 +98,12 @@ under. It is
 **not** re-drivable: each call mints a
 fresh operation id, so re-issuing a load after it (or part of it) has
 completed fails on the shards that already hold data. Only the per-shard retry
-inside a single call is idempotent, so after a crash mid-import restart
+inside a single call is idempotent, and only while nothing else reaches the
+shard: if a shard's load fails part-way and a read or write reaches that shard
+before the retry, the shard's root replays whatever the failed attempt had
+already written, and the retry is refused as non-empty. Nothing is lost - those
+rows are readable - but the load does not complete
+([#5812](https://github.com/NSTA1/Orleans.Lattice/issues/5812)). So after a crash mid-import restart
 against a fresh tree, or drive the import through the resumable chunk protocol
 below. For append-style ingestion that re-flushes batches over time, use
 `SetAsync`, `SetManyAsync`, or the streaming extension below; `BulkLoadAsync`

@@ -1,0 +1,31 @@
+# Pairs with SeedCovered (review C2). A seed the partition admits on a generation
+# it has not positively matched lands after its switch's close heads.
+MODULE: SeedCoveredStaleSeedAllocated
+TARGET: SeedCovered
+CLASS: Invariant
+SUMMARY: a seed whose generation a close has re-claimed is allocated instead of refused
+PERTURBS: SeedRefused
+
+--- FIND
+SeedRefused ==
+    /\ seedSt = "flight"
+    /\ seedGen # 0
+    /\ seedGen < gen
+    /\ seedSt' = "none"
+    /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen,
+                   prevHint, runHint, bulkAt, copied, relocOk, nUp, heldN, rpN, crashed, oUp, midLoad, skip,
+                   published, seedGen, gen, wm, closeHead, seedUnder, aborted>>
+--- REPLACE
+SeedRefused ==
+    /\ seedSt = "flight"
+    /\ seedGen # 0
+    /\ seedGen < gen
+\* MUTATION: a stale seed is admitted (review C2: never on a mismatch).
+    /\ Alloc("s")
+    /\ heldN' = heldN \cup {next}
+    /\ seedUnder' = [seedUnder EXCEPT ![next] = IF tokOpen THEN "open" ELSE "none"]
+    /\ seedSt' = "done"
+    /\ UNCHANGED <<rowsO, rpO, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen,
+                   prevHint, runHint, bulkAt, copied, relocOk, nUp, rpN, crashed, oUp, midLoad, skip,
+                   published, seedGen, gen, wm, closeHead, aborted>>
+--- END

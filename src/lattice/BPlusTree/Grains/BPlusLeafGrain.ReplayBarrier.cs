@@ -389,6 +389,10 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private async Task RunReplayBarrierAsync(CancellationToken cancellationToken)
     {
+        // Review S2 of #5830: a replay re-armed by a bulk seed's barrier wait is detached
+        // work, and its replayed terminals append; it must not append as the seed.
+        LeaveBulkSeedScope();
+
         // Read before the first await. The tree id is what the outcome is tagged
         // by, and a birth seam (SetTreeIdAsync / InitializeSiblingAsync) can now
         // interleave with this task, so sampling it later would tag the same
