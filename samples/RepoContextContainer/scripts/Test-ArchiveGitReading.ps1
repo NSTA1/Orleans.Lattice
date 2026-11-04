@@ -64,8 +64,19 @@ param()
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# Progress markers go to stderr, which the gate captures but never parses, so a run
+# killed at its timeout says how far it got and when (#5783). [Console]::Error is
+# used rather than Write-Error, which would terminate under the Stop preference.
+$script:_Clock = [System.Diagnostics.Stopwatch]::StartNew()
+function _Progress {
+	param([Parameter(Mandatory)] [string] $Step)
+	[Console]::Error.WriteLine(("progress +{0} ms: {1}" -f $script:_Clock.ElapsedMilliseconds, $Step))
+}
+_Progress 'started'
+
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $here '_provenance.ps1')
+_Progress 'loaded _provenance.ps1'
 
 # ---------------------------------------------------------------------------
 # The production reader under test, Get-ArchiveGitReading, lives in
@@ -149,6 +160,7 @@ if ($_missing.Count -gt 0) {
 	throw ("the extracted functions call production functions that were NOT extracted: " +
 		($_missing -join ', ') + ". Add them to `$_extractedNames in this file.")
 }
+_Progress 'extracted the production reader and checked its closure'
 
 # ---------------------------------------------------------------------------
 # The pinned constants are read out of the pure suite rather than re-declared,
@@ -172,6 +184,7 @@ function Get-PinnedConstant {
 $pinnedMiss = Get-PinnedConstant -Name '_gitMissStderr'
 $pinnedOrphan = Get-PinnedConstant -Name '_gitOrphanStderr'
 $pinnedCorrupt = Get-PinnedConstant -Name '_gitCorruptStderr'
+_Progress 'read the pinned constants'
 
 # The load-bearing substrings, matched with .Contains (literal) so the
 # parentheses need no regex escaping. These are what the recognition turns on.
@@ -214,6 +227,7 @@ function _Assert {
 
 function _Section {
 	param([Parameter(Mandatory)] [string] $Name)
+	_Progress $Name
 	Write-Host ''
 	Write-Host $Name -ForegroundColor Cyan
 }
@@ -222,8 +236,13 @@ function _Section {
 # git must be present. A silent skip on an absent git would be counted as
 # coverage, so absence is announced loudly and exits with a distinct code the
 # gate reads as "ignored", never as "passed".
+#
+# -CommandType Application confines the lookup to PATH. Without it Get-Command
+# also resolves cmdlets and functions, which can mean enumerating every module
+# on PSModulePath, an unbounded cost on a host with many installed (#5783).
 # ---------------------------------------------------------------------------
-$gitPresent = $null -ne (Get-Command git -ErrorAction SilentlyContinue)
+$gitPresent = $null -ne (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)
+_Progress ("located git: {0}" -f $gitPresent)
 if (-not $gitPresent) {
 	Write-Host ''
 	Write-Host 'SKIPPED: git was not found on PATH.' -ForegroundColor Yellow
@@ -256,6 +275,7 @@ function Invoke-Git {
 function New-GitRepo {
 	param([switch] $Detached, [switch] $WithLinkedWorktree)
 
+	_Progress ("building a repository (detached: {0}, linked worktree: {1})" -f [bool] $Detached, [bool] $WithLinkedWorktree)
 	$dir = New-ScratchDir
 	Register-Scratch $dir
 	Invoke-Git -Dir $dir -GitArgs @('init', '-q') | Out-Null
