@@ -196,7 +196,8 @@ public sealed class TreeWorkspacePage(ShellPage shell)
         await field.FocusAsync();
         await field.PressSequentiallyAsync(key);
         var option = Page.Locator(".lt-combobox__list [role=option]").Filter(new() { HasText = key });
-        await Expect(option.First).ToBeVisibleAsync();
+        // The picker's options come from a server-side prefix scan, so the wait is a server read's bound (#5737).
+        await Expect(option.First).ToBeVisibleAsync(new() { Timeout = PanelSettled.BoundMs });
         await option.First.ClickAsync();
         await Expect(field).ToHaveValueAsync(key);
         await Content.GetByRole(AriaRole.Button, new() { Name = "Show history", Exact = true }).ClickAsync();
