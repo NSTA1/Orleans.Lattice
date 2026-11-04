@@ -391,7 +391,7 @@ internal sealed partial class BPlusLeafGrain
     {
         // Review S2 of #5830: a replay re-armed by a bulk seed's barrier wait is detached
         // work, and its replayed terminals append; it must not append as the seed.
-        LeaveBulkSeedScope();
+        // RED PROOF (#5830 N2): the re-armed replay keeps the seed scope.
 
         // Read before the first await. The tree id is what the outcome is tagged
         // by, and a birth seam (SetTreeIdAsync / InitializeSiblingAsync) can now
