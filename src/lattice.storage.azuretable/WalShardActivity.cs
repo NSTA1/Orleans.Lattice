@@ -26,4 +26,10 @@ internal sealed class WalShardActivity
     /// offset, without a storage round-trip on the in-order path.
     /// </summary>
     internal WalShardOverlapGuard Overlap { get; } = new();
+
+    /// <summary>
+    /// Orders this instance's phase-2 commits against every other writer of the
+    /// shard through the <c>TAIL</c> row's ETag (issue #5810).
+    /// </summary>
+    internal WalShardCommitFence Fence { get; } = new();
 }

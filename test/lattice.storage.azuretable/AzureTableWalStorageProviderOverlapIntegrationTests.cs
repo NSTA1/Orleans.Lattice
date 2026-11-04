@@ -1,5 +1,7 @@
 using System.Globalization;
 using Azure;
+using Azure.Core;
+using Azure.Core.Pipeline;
 using Azure.Data.Tables;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -347,7 +349,42 @@ public sealed class AzureTableWalStorageProviderOverlapIntegrationTests
             Assert.That(offsets, Is.Unique, "an offset is stored twice");
         });
     }
-    private AzureTableWalStorageProvider CreateProvider() =>
+    [Test]
+    public async Task A_steady_run_of_appends_commits_under_the_fence_with_no_extra_round_trip()
+    {
+        // Issue #5810, steady-path cost: the commit fence rides in the phase-2
+        // transaction the append already makes and is refreshed from that
+        // transaction's own response, so N appends in allocation order make exactly
+        // the 2N transactions they made before (one phase 1, one phase 2 each) and
+        // read nothing. An ETag the service failed to return would invalidate the
+        // fence and send the next append back through a read of TAIL.
+        var requests = new RequestCounter();
+        await using var writer = CreateProvider(requests);
+        await writer.AppendBatchAsync(TreeId, 0, Entries(0, 2), CancellationToken.None);
+        var fence = writer.GetShardActivity(AzureTableWalStorageProvider.BuildManifestPartitionKey(TreeId, 0)).Fence;
+        Assert.That(fence.TryGetGeneration(out var generation), Is.True, "the first commit left the fence without an ETag");
+
+        const int appends = 20;
+        requests.Reset();
+        for (var i = 0; i < appends; i++)
+        {
+            await writer.AppendBatchAsync(TreeId, 0, Entries(2 + (i * 2L), 2), CancellationToken.None);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(requests.Transactions, Is.EqualTo(2 * appends), "transactions per append changed");
+            Assert.That(requests.Other, Is.Zero, "a steady append made a request beyond its two transactions");
+            Assert.That(fence.TryGetGeneration(out var after), Is.True, "a steady commit invalidated the fence");
+            Assert.That(after, Is.EqualTo(generation), "a steady commit advanced the fence generation");
+        });
+    }
+
+    private AzureTableWalStorageProvider CreateProvider() => CreateProvider(requests: null);
+
+    // The default options eliminate the candidate row, so a steady append makes
+    // exactly its phase-1 and phase-2 transactions.
+    private AzureTableWalStorageProvider CreateProvider(RequestCounter? requests) =>
         new(
             Options.Create(new AzureTableWalStorageOptions
             {
@@ -355,8 +392,40 @@ public sealed class AzureTableWalStorageProviderOverlapIntegrationTests
                 TableName = _tableName,
                 Compression = LatticeCompression.None,
                 PipelinePhaseTwoCommits = false,
+                ConfigureClientOptions = requests is null
+                    ? null
+                    : options => options.AddPolicy(requests, HttpPipelinePosition.PerCall),
             }),
             _serializer);
+
+    /// <summary>Counts table transactions (<c>$batch</c>) and every other request.</summary>
+    private sealed class RequestCounter : HttpPipelineSynchronousPolicy
+    {
+        private int _transactions;
+        private int _other;
+
+        public int Transactions => Volatile.Read(ref _transactions);
+
+        public int Other => Volatile.Read(ref _other);
+
+        public void Reset()
+        {
+            Volatile.Write(ref _transactions, 0);
+            Volatile.Write(ref _other, 0);
+        }
+
+        public override void OnSendingRequest(HttpMessage message)
+        {
+            if (message.Request.Uri.Path.EndsWith("$batch", StringComparison.Ordinal))
+            {
+                Interlocked.Increment(ref _transactions);
+            }
+            else
+            {
+                Interlocked.Increment(ref _other);
+            }
+        }
+    }
 
     private async Task SynthesiseUncommittedBatchAsync(long startOffset, int entryCount)
     {

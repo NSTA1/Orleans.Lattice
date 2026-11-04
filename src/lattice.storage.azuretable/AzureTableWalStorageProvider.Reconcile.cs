@@ -123,7 +123,9 @@ public sealed partial class AzureTableWalStorageProvider
                     // batch partition above TAIL and kept none above the
                     // resulting TAIL, so it is the written bound. Without it,
                     // the next append reads the bound afresh.
-                    activity.Overlap.Reset(_options.EliminateCandidateRowOnHotPath ? resultingTail : null);
+                    // The pass may have written TAIL itself, so the commit fence is
+                    // reset with the guard and refilled by the next read (issue #5810).
+                    activity.Fence.Reset(activity.Overlap, _options.EliminateCandidateRowOnHotPath ? resultingTail : null);
                     return;
                 }
                 catch (RequestFailedException ex)
