@@ -12,7 +12,7 @@ cores in the product assembly, and a Coyote model that executes those cores.
 
 | Module | What it specifies |
 |--------|-------------------|
-| [`WalDurability.tla`](WalDurability.tla) | The leaf side, end to end: append, out-of-order flush and acknowledgement, a shared stream read through per-leaf READ positions, checkpoint persists that can fail, snapshot captures that can fail, durable materialiser pins, the GC trim floor and its block pins, and leaf and shard crashes at any step with recovery from a snapshot or cold. |
+| [`WalDurability.tla`](WalDurability.tla) | The leaf side, end to end: append, out-of-order flush and acknowledgement, a shared stream read through per-leaf READ positions, checkpoint persists that can fail, snapshot captures that can fail, durable materialiser pins, the GC trim floor and its block pins, and leaf and shard crashes at any step with recovery from a snapshot or cold; on the WAL side, abandoned flushes still in motion, a lost grain activation whose calls keep running, and the allocator's re-seed past them (#5799). |
 | [`WalMove.tla`](WalMove.tla) | A shard move: a durable fence under a lease and the source activation's fence, quiesce, copy and switch, concurrent with appends, out-of-order flushes, a consumer, the GC, a shard crash and the loss of the move's coordinator. |
 | [`WalPinRetirement.tla`](WalPinRetirement.tla) | The GC retiring orphaned materialiser pins - the bulk orphan sweep and the starvation drive, each taking a token per pin-store key, reading the leaf's durable row and removing through a fence as separate steps, two sweepers racing - against the leaf's fold, purge, discard and re-creation under the same grain id. See [below](#walpinretirement). |
 | [`WalAppendEpoch.tla`](WalAppendEpoch.tla) | The append-epoch fence of the fenced live checkpoint advance (epic #5605): one leaf's activations claiming an epoch at a WAL partition in three steps - the epoch row's conditional write, the durable entry's max-merge and the in-memory raise that returns the claim head - the bump on a refusal, and the shard refusing a superseded or retired activation's append, against a WAL shard restart, another leaf's retirement and the leaf's three-step clear. The first module promoted from the design draft below. See [below](#walappendepoch). |
@@ -50,7 +50,7 @@ and its mutations as the record each module took its own from.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `WalDurability` | 11 | 4 | 26 | 43 | 39 | 226,592 |
+| `WalDurability` | 13 | 4 | 30 | 48 | 44 | 549,523 |
 | `WalMove` | 5 | 2 | 13 | 18 | 18 | 1,617 |
 | `WalPinRetirement` | 3 | 3 | 25 | 31 | 30 | 284,019 |
 | `WalAppendEpoch` | 5 | 0 | 17 | 23 | 20 | 150,706 |
@@ -80,19 +80,27 @@ modules map to production, except the three WAL shard checks its edges rest on.
 `WalDurability` has a two-fault variant configuration, `WalDurability.TwoFaults.cfg`
 (see "Variant configurations" in [`../README.md`](../README.md)). It checks every
 invariant and both action properties with a budget of two faults instead of one:
-1,310,600 distinct states to depth 42. The liveness properties stay at one fault,
-because at two the full configuration takes about ten minutes, past the TLC budget.
+4,317,959 distinct states to depth 42. The liveness properties stay at one fault,
+because at two the full configuration is far past the TLC budget.
 
 Its second variant, `WalDurability.SnapshotLoss.cfg`, lets the environment destroy a
 leaf's durable snapshot (`SnapshotVanish`, issue #4634) or its state row
 (`LeafRowVanish`, issue #4654), and the operator purge the tree (`PurgeClear`), at two
-faults so a snapshot and a row can both vanish. Destroyed data is outside the durability
+faults so a snapshot and a row can both vanish. It turns abandoned flushes and
+activation loss off to stay within the TLC budget (see the refinement note's
+classification). Destroyed data is outside the durability
 properties by construction, so it checks the properties that say the loss is never
 silent - `ReadPositionHonest` above all, carved out only for the writes a purge
-deleted (issue #4700) - with the other safety invariants that still apply: 6,402,166
+deleted (issue #4700) - with the other safety invariants that still apply: 5,070,839
 distinct states to depth 42. A purge marks a leaf before clearing it, and recovery re-creates only
 a marked leaf (`MarkPurge`, `PurgeClear`, `Recover`); the lifecycle resumes once
 recovery has reset every marker.
+
+Its `WalDurability.CrossSilo.cfg` variant lets a lost activation's successor be on
+another silo, which cannot see its predecessor's abandoned calls still in motion
+(issue #5799): every invariant and both action properties, 1,332,305 distinct states
+to depth 36. The base keeps such moves off, because with them its liveness check
+would pass the TLC budget.
 
 The `WalDurability.WarmLeaf.cfg` variant checks every property without faults:
 17,041 distinct states to depth 28. Replay requires a scheduled request, consumed
@@ -118,6 +126,7 @@ distinct states to depth 21, about fifteen seconds on two workers.
 | `WalDurability.WarmLeaf.cfg` | Permanently active leaves, with no faults and all safety and liveness properties. |
 | `WalDurability.TwoFaults.cfg` | The same module checked against its safety properties at two faults. |
 | `WalDurability.SnapshotLoss.cfg` | Snapshot and state-row loss and an operator purge, at two faults, checked against the safety properties that still apply. |
+| `WalDurability.CrossSilo.cfg` | A lost WAL shard activation whose successor is on another silo, checked against every invariant and the action properties. |
 | [`mutations/`](mutations/) | One or more deliberate defects per property and per action of `WalDurability`. |
 | [`Refinement.md`](Refinement.md) | `WalDurability` mapped to production: variables, actions, properties, detectors, classification and gaps. |
 | `WalMove.tla` / `.cfg` / `.manifest.json` | The move module, its TLC model and its manifest. |
@@ -173,6 +182,8 @@ distinct states to depth 21, about fifteen seconds on two workers.
 | `ClearRecorded` | Invariant | Every leaf a purge cleared keeps its own purge marker until recovery re-creates it. |
 | `ShippingNeverSkips` | Invariant | No reader passes an offset still in flight. |
 | `OffsetContiguity` | Invariant | No acknowledged offset is reissued. |
+| `AckedOccupies` | Invariant | An acknowledged write keeps its offset while it is stored: no late-landing abandoned call or reissue displaces it. |
+| `AllocatorAboveOrphans` | Invariant | The allocator never hands out an offset at or below an abandoned call still in motion that the shard's activation can see. |
 | `RecoveryNeverFallsOffLog` | Invariant | No leaf ever latches `LeafProjectionStaleException`. |
 | `PersistedBeliefHonest` | Invariant | A leaf's belief about its persisted checkpoint is what storage holds, or the anchor it started from. |
 | `ReleaseBackedBySnapshot` | Invariant | Every trim entitlement the pin store has published is backed by the leaf's durable snapshot coverage. |
@@ -328,8 +339,9 @@ java -cp C:\path\to\tla2tools.jar tlc2.TLC -config WalMove.cfg WalMove.tla
 
 Pass `-metadir` with a directory outside the repository, or delete the `states/`
 directory TLC leaves beside the module. On two workers `WalDurability` takes about
-four minutes, because it checks two liveness properties over the full state graph;
-its `TwoFaults` variant takes about forty seconds; `WalMove` takes seconds, and its
+twelve minutes, because it checks two liveness properties over the full state graph;
+its `TwoFaults` variant takes about two and a half minutes, `SnapshotLoss` about five and `CrossSilo`
+under one; `WalMove` takes seconds, and its
 `TwoMoves` variant about fifteen.
 
 ## The Coyote companion

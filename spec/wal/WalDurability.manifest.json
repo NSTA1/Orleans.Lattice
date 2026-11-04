@@ -1,18 +1,19 @@
 {
   "mutations": "mutations",
   "refinement": "Refinement.md",
-  "nonBehaviouralActions": ["PurgeSettled"],
+  "nonBehaviouralActions": ["PurgeSettled", "OffsetsExhausted"],
   "counts": {
-    "invariants": 11,
+    "invariants": 13,
     "properties": 4,
-    "actions": 26,
-    "mutations": 43,
-    "behaviourRows": 39,
-    "distinctStates": 226592
+    "actions": 30,
+    "mutations": 48,
+    "behaviourRows": 44,
+    "distinctStates": 549523
   },
   "variants": {
-    "TwoFaults": { "distinctStates": 1310600 },
-    "SnapshotLoss": { "distinctStates": 6402166 },
-    "WarmLeaf": { "distinctStates": 17041 }
+    "TwoFaults": { "distinctStates": 4317959 },
+    "SnapshotLoss": { "distinctStates": 5070839 },
+    "WarmLeaf": { "distinctStates": 17041 },
+    "CrossSilo": { "distinctStates": 1332305 }
   }
 }

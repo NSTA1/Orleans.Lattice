@@ -9,21 +9,23 @@ SUMMARY: an abandoned call is never retired, so it holds the watermark for ever
 PERTURBS: LateLand, SettleHole
 
 --- FIND
-    /\ o \in orphans
     /\ orphans' = orphans \ {o}
-    /\ durable' = IF o \notin durable /\ o >= tail THEN durable \cup {o} ELSE durable
+    /\ hidden' = hidden \ {o}
+    \* A hidden call
 --- REPLACE
 \* MUTATION: a landed call stays in the registry.
-    /\ o \in orphans
     /\ orphans' = orphans
-    /\ durable' = IF o \notin durable /\ o >= tail THEN durable \cup {o} ELSE durable
+    /\ hidden' = hidden
+    \* A hidden call
 --- END
 
 --- FIND
     /\ orphans' = orphans \ {o}
-    /\ UNCHANGED <<next, inflight, durable, tail, acked>>
+    /\ hidden' = hidden \ {o}
+    /\ UNCHANGED <<next, inflight, occ, tail, acked, resyncing>>
 --- REPLACE
 \* MUTATION: a settled call stays in the registry.
     /\ orphans' = orphans
-    /\ UNCHANGED <<next, inflight, durable, tail, acked>>
+    /\ hidden' = hidden
+    /\ UNCHANGED <<next, inflight, occ, tail, acked, resyncing>>
 --- END
