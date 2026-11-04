@@ -29,7 +29,7 @@ internal sealed partial class BPlusLeafGrain
     public async Task MergeBulkSeedAsync(Dictionary<string, LwwValue<byte[]>> entries, WalRoutingStamp seedRouting)
     {
         var previous = BulkSeedScope.Value;
-        BulkSeedScope.Value = new BulkSeedAppendFence(context.GrainId.GetGuidKey(), seedRouting, _appendFence);
+        // RED PROOF (#5812 B): the seed runs outside its scope, so it claims like a live write.
         try
         {
             await MergeEntriesAsync(entries);

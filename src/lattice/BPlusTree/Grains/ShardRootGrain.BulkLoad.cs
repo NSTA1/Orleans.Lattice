@@ -135,11 +135,7 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task FinishCompletedBulkLoadAsync(string operationId)
     {
-        if (string.Equals(_faultedBulkOperationId, operationId, StringComparison.Ordinal))
-        {
-            await WriteShardStateAsync();
-        }
-
+        // RED PROOF (#5829): the re-issue does not persist the completion it reports.
         await FinishBulkSwitchAsync(operationId, [], relocated: false, closeNow: true);
     }
 
@@ -320,20 +316,8 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task<bool> TryPublishNeverWrittenAsync(string operationId, GrainId root, bool rootIsLeaf)
     {
-        await _ensureRootGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
-        try
-        {
-            if (state.State.RootNodeId is not null)
-            {
-                return false;
-            }
-
-            PublishBulkLoadRoot(operationId, root, rootIsLeaf);
-        }
-        finally
-        {
-            _ensureRootGate.Release();
-        }
+        // RED PROOF (#5819): publish without the root-seed gate or the no-root check.
+        PublishBulkLoadRoot(operationId, root, rootIsLeaf);
 
         await WriteShardStateAsync();
         return true;

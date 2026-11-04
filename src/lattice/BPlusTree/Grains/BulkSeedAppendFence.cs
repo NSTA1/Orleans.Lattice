@@ -51,8 +51,9 @@ internal sealed class BulkSeedAppendFence : ILeafAppendFence
     internal bool Stamps => _stamp is not null && !_unstamped;
 
     /// <inheritdoc />
+    // RED PROOF (#5812 B): the seed claims through the leaf's own fence, eagerly.
     public ValueTask<WalAppendStamp?> StampForAsync(IWalShardGrain shard, int partition, CancellationToken cancellationToken) =>
-        new(_unstamped ? null : _stamp);
+        _owner is not null ? _owner.StampForAsync(shard, partition, cancellationToken) : new(_unstamped ? null : _stamp);
 
     /// <inheritdoc />
     public void OnStampedAppended(int partition, long unstampedWatermark)
