@@ -44,8 +44,10 @@ internal sealed partial class BPlusLeafGrain
             //
             // A destination's first await is its replay barrier, so a cold one
             // needs a replay permit to answer; a replay holding one returns it
-            // for the delivery (issue #5775). This leaf is still inside its
-            // replay, so it serves nothing meanwhile.
+            // for the delivery (issue #5775). An activation replay is still inside
+            // its barrier, so the leaf serves nothing meanwhile; a starvation drive
+            // runs on a live leaf whose barrier is already open, so it keeps serving
+            // exactly what it served before the permit went out.
             var suspended = SuspendReplayPermit();
             try
             {
