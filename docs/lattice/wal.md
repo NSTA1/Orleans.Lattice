@@ -1600,6 +1600,14 @@ calls the WAL append stamps with its own epoch, so a
 split's transfers and a relocation, which the receiving leaf appends and applies
 itself, are that leaf's own appends.
 
+A WAL partition that receives a stamped write under a generation it has not loaded
+(a fresh tree, or the partition restarted or moved) claims that generation itself,
+exactly as the writer's re-presented claim would, and then checks the write again
+from the start; a close that re-claimed a higher generation in between still rejects
+it. Claims of one initiator at a partition run one at a time, so a fresh tree's
+concurrent first writes create each generation row once, and a claim of a generation
+the partition already holds needs no storage operation (#5831).
+
 **A split close does not supersede the donor.** The donor's epoch raise rejects its
 own appends stamped before it. Those are **self-fenced**: refused for the caller to
 re-admit under the current epoch, where the narrowed span forwards a moved key to

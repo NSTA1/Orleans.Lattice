@@ -58,6 +58,9 @@ public partial class WalShardGrainTests
     [Test]
     public async Task A_generation_entry_is_unloaded_until_re_presented_after_a_restart()
     {
+        // #5831 F2: a stamped append that meets the entry unloaded claims its own
+        // generation in the cold path, so the current durable generation reloads it
+        // inline and a stale one is refused; neither is admitted unclaimed.
         var storage = new EnumerableMemoryGrainStorage();
         var grain = await CreateFencedGrainAsync(storage);
         var initiator = WalRoutingInitiator.TreeRangeDelete;
@@ -66,17 +69,17 @@ public partial class WalShardGrainTests
 
         var restarted = await CreateFencedGrainAsync(storage);
         await restarted.ClaimAppendEpochAsync(FenceLeaf, 1, CancellationToken.None);
-        var unloaded = await restarted.AppendStampedAsync(MakeEntry("a"), new WalAppendStamp(FenceLeaf, 1, initiator, 3), CancellationToken.None);
+        var staleCold = await restarted.AppendStampedAsync(MakeEntry("a"), new WalAppendStamp(FenceLeaf, 1, initiator, 2), CancellationToken.None);
         var staleRepresent = await restarted.ClaimRoutingGenerationAsync(initiator, 2, CancellationToken.None);
+        var currentCold = await restarted.AppendStampedAsync(MakeEntry("b"), new WalAppendStamp(FenceLeaf, 1, initiator, 3), CancellationToken.None);
         var represent = await restarted.ClaimRoutingGenerationAsync(initiator, 3, CancellationToken.None);
-        var admitted = await restarted.AppendStampedAsync(MakeEntry("b"), new WalAppendStamp(FenceLeaf, 1, initiator, 3), CancellationToken.None);
 
         Assert.Multiple(() =>
         {
-            Assert.That(unloaded.Outcome, Is.EqualTo(WalAppendFenceOutcome.UnloadedGeneration));
+            Assert.That(staleCold.Outcome, Is.EqualTo(WalAppendFenceOutcome.StaleGeneration), "a stale generation cannot reload the entry in the cold path");
             Assert.That(staleRepresent.Accepted, Is.False, "a stale generation cannot reload the entry");
-            Assert.That(represent.Accepted, Is.True, "the current generation, already durable, reloads it");
-            Assert.That(admitted.Outcome, Is.EqualTo(WalAppendFenceOutcome.Admitted));
+            Assert.That(currentCold.Outcome, Is.EqualTo(WalAppendFenceOutcome.Admitted), "the current generation, already durable, reloads it in the cold path");
+            Assert.That(represent.Accepted, Is.True);
         });
     }
 }

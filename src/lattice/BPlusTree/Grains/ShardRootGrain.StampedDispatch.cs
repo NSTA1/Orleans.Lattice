@@ -76,18 +76,35 @@ internal sealed partial class ShardRootGrain
             if (marker.RoutingGeneration == 0)
             {
                 // #5668: above this shard root's routing floor, so a re-created
-                // incarnation never reuses a purged one's generation.
+                // incarnation never reuses a purged one's generation. Read after the
+                // marker, never alongside it: the purge raises the floor before it
+                // deletes the marker, so a marker read absent is followed by a floor
+                // read that covers the purge (#5831 review, B1).
                 floor = await ReadRoutingFloorAsync();
                 var seeded = floor.Value + 1;
+
+                // #5831, F4: with no purged incarnation to fence (floor 0), the seed and
+                // rule 2's initialisation are one write, the rule evaluated on the state
+                // the write is built from and proved current by its ETag condition. With
+                // a floor above 0 they stay two writes, with the recreate fence between.
+                var initialiseWithSeed = floor.Value == 0;
                 marker = await UpdateHandOffMarkerAsync(m =>
                 {
-                    if (m.RoutingGeneration > 0)
+                    var changed = false;
+                    if (m.RoutingGeneration == 0)
                     {
-                        return false;
+                        m.RoutingGeneration = seeded;
+                        changed = true;
                     }
 
-                    m.RoutingGeneration = seeded;
-                    return true;
+                    if (initialiseWithSeed && !m.Initialised && CanInitialiseHandOffMarker())
+                    {
+                        m.Initialised = true;
+                        m.Sequence++;
+                        changed = true;
+                    }
+
+                    return changed;
                 });
             }
 
@@ -108,7 +125,10 @@ internal sealed partial class ShardRootGrain
 
             // Rule 2 ("absence never means closed"): the marker reads initialised
             // only once this shard root has no hand-off of its own in flight.
-            await TryInitialiseHandOffMarkerAsync();
+            if (!marker.Initialised)
+            {
+                await TryInitialiseHandOffMarkerAsync();
+            }
         }
         catch (Exception ex)
         {
@@ -158,6 +178,7 @@ internal sealed partial class ShardRootGrain
             var row = await HandOffMarkerRows.ReadShardAsync(HandOffStorage(), TreeId, ShardIndex);
             NoteHandOffMarkerRead(row);
             _handOffMarker = row.State;
+            _handOffMarkerRow = row;
             return !row.RecordExists;
         }
         catch (Exception ex)

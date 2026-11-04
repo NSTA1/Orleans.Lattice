@@ -385,7 +385,8 @@ public partial class WalShardGrainTests
             Assert.That(reclaim.Accepted, Is.True);
             Assert.That(stale.Outcome, Is.EqualTo(WalAppendFenceOutcome.StaleGeneration));
             Assert.That(current.Outcome, Is.EqualTo(WalAppendFenceOutcome.Admitted));
-            Assert.That(unloaded.Outcome, Is.EqualTo(WalAppendFenceOutcome.UnloadedGeneration));
+            Assert.That(unloaded.Outcome, Is.EqualTo(WalAppendFenceOutcome.Admitted),
+                "#5831 F2: an unloaded initiator's generation is claimed in the cold path, then admitted");
             Assert.That(staleAfterRestart.Accepted, Is.False,
                 "ReadPositionHonestGenerationNotDurable: a restart reloads the higher durable generation");
         });

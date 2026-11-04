@@ -79,6 +79,9 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
 
     /// <summary>Per-leaf claim/retirement gates; created on the first claim.</summary>
     private Dictionary<Guid, LeafGate>? _leafGates;
+
+    /// <summary>Per-initiator routing-generation claim gates (#5831, F1); created on the first claim.</summary>
+    private Dictionary<WalRoutingInitiator, SemaphoreSlim>? _generationGates;
     private SemaphoreSlim?[]? _directoryGates;
 
     /// <summary>The tree's grain storage provider, resolved on first use.</summary>
@@ -164,7 +167,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(epoch);
 
         var storage = FenceStorage();
-        await EnsureEpochFloorLoadedAsync(storage).ConfigureAwait(true);
+        await EnsureFloorsLoadedAsync(storage).ConfigureAwait(true);
         var key = WalAppendFenceRows.EntryKey(_treeId, _shardIndex, leafId);
         WalAppendFenceClaimResult result;
         await EnterLeafGateAsync(leafId).ConfigureAwait(true);
@@ -209,25 +212,129 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
 
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(generation);
 
-        var storage = FenceStorage();
-        await EnsureGenerationFloorLoadedAsync(storage).ConfigureAwait(true);
-        var key = WalAppendFenceRows.GenerationKey(_treeId, _shardIndex, initiator.Kind, initiator.Index);
-        var result = await ClaimCoreAsync(
-            storage,
-            WalAppendFenceRows.GenerationGrainType,
-            key,
-            () => WalAppendFenceRows.ReadGenerationAsync(storage, _treeId, _shardIndex, initiator),
-            static row => row.State.Generation,
-            static (row, value) => row.State.Generation = value,
-            GenerationEntries(),
-            initiator,
-            generation,
-            epochTable: false,
-            batchLeaf: null,
-            batchInitiator: initiator).ConfigureAwait(true);
+        var result = await ClaimRoutingGenerationGatedAsync(initiator, generation, cancellationToken).ConfigureAwait(true);
         RecordFenceClaim(LatticeMetrics.AppendFenceKindGeneration, result.Accepted);
         return result;
     }
+
+    /// <summary>
+    /// A routing-generation claim, one at a time per initiator (#5831, F1). Every
+    /// concurrent write of a fresh tree that meets its shard root's generation unloaded
+    /// presents the same claim; serialised, the first reads and creates the row and each
+    /// later one is decided from what it loaded, so none races another to create it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The gate is waiter-driven: each claim takes it in turn and decides for itself, so
+    /// no claim shares another's result, fault or cancellation. A waiter waits with its
+    /// own token and the gate is released in <c>finally</c>. The gate wait and each storage
+    /// call are bounded by <see cref="LatticeOptions.WalFlushTimeout"/>, so a hung storage
+    /// call delays the claims queued behind it by at most that long; the raise's drain of
+    /// in-flight batches is not, as each batch bounds itself. A storage call that times
+    /// out fails its claim without raising anything, and may still land; the next claim's
+    /// read sees it, and its ETag condition orders it.
+    /// </para>
+    /// <para>
+    /// No circular wait: a claim's raise waits for the initiator's multi-entry stamped
+    /// batches while it holds the gate, so no registered batch may ever wait on it. The
+    /// stamped append's own load (F2) claims before its batch registers, and never holds
+    /// <see cref="_stateGate"/> across the claim; see <see cref="RegisterStampedBatchLocked"/>.
+    /// </para>
+    /// </remarks>
+    private async Task<WalAppendFenceClaimResult> ClaimRoutingGenerationGatedAsync(
+        WalRoutingInitiator initiator,
+        long generation,
+        CancellationToken cancellationToken)
+    {
+        var storage = FenceStorage();
+        await EnsureFloorsLoadedAsync(storage).ConfigureAwait(true);
+        var key = WalAppendFenceRows.GenerationKey(_treeId, _shardIndex, initiator.Kind, initiator.Index);
+        var gate = GenerationGate(initiator);
+        var deadline = Options.WalFlushTimeout;
+        TimeSpan? bound = deadline > TimeSpan.Zero && deadline != Timeout.InfiniteTimeSpan ? deadline : null;
+        if (!await gate.WaitAsync(bound ?? Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(true))
+        {
+            throw new TimeoutException(
+                $"WAL shard {_treeId}/{_shardIndex}: a routing-generation claim for {WalAppendFenceRows.InitiatorTag(initiator)} waited "
+                + $"{deadline} for the claim ahead of it.");
+        }
+
+        try
+        {
+            // Only the gate wait and the storage I/O are bounded (#5831 review, S1): a
+            // raise's drain of the initiator's in-flight batches is bounded per batch
+            // already, and a close's re-claim waiting on a slow batch must finish late,
+            // never fail.
+            return await ClaimCoreAsync(
+                storage,
+                WalAppendFenceRows.GenerationGrainType,
+                key,
+                () => Bound(WalAppendFenceRows.ReadGenerationAsync(storage, _treeId, _shardIndex, initiator), bound),
+                static row => row.State.Generation,
+                static (row, value) => row.State.Generation = value,
+                GenerationEntries(),
+                initiator,
+                generation,
+                epochTable: false,
+                batchLeaf: null,
+                batchInitiator: initiator,
+                ioBound: bound).ConfigureAwait(true);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private static Task<T> Bound<T>(Task<T> io, TimeSpan? bound) => bound is { } b ? io.WaitAsync(b) : io;
+
+    private static Task Bound(Task io, TimeSpan? bound) => bound is { } b ? io.WaitAsync(b) : io;
+
+    /// <summary>The claim gate of <paramref name="initiator"/>; at most one per shard-level initiator of the tree.</summary>
+    private SemaphoreSlim GenerationGate(WalRoutingInitiator initiator)
+    {
+        lock (_stateGate)
+        {
+            _generationGates ??= new Dictionary<WalRoutingInitiator, SemaphoreSlim>();
+            if (!_generationGates.TryGetValue(initiator, out var gate))
+            {
+                gate = new SemaphoreSlim(1, 1);
+                _generationGates[initiator] = gate;
+            }
+
+            return gate;
+        }
+    }
+
+    /// <summary>
+    /// The F2 load (#5831): claims <paramref name="stamp"/>'s generation for a stamped
+    /// append that met it unloaded, as the writer's re-presentation would. Returns
+    /// whether the claim accepted, or <see langword="null"/> when it could not be made,
+    /// in which case the append reports the generation unloaded as before and the writer
+    /// re-presents it. The caller re-runs admission afterwards and never admits on this
+    /// result: a close may re-claim a higher generation in between.
+    /// </summary>
+    private async Task<bool?> LoadStampGenerationAsync(WalAppendStamp stamp, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await ClaimRoutingGenerationGatedAsync(stamp.Initiator, stamp.Generation, cancellationToken).ConfigureAwait(true);
+            RecordFenceClaim(LatticeMetrics.AppendFenceKindGeneration, result.Accepted);
+            if (AfterStampGenerationLoadedForTesting is { } hook)
+            {
+                await hook().ConfigureAwait(true);
+            }
+
+            return result.Accepted;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Invoked after the F2 load accepts and before admission re-runs; test seam (#5831).</summary>
+    internal Func<Task>? AfterStampGenerationLoadedForTesting { get; set; }
 
     /// <inheritdoc />
     public async Task<long> RetireAppendEpochAsync(Guid leafId, long rowEpoch, CancellationToken cancellationToken)
@@ -346,6 +453,31 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
 
             await drain.ConfigureAwait(true);
         }
+    }
+
+    /// <summary>
+    /// Loads the partition's retired-epoch floor and its tree's routing floors, in
+    /// parallel when both are missing (#5831, F3): both are floors, raised before any row
+    /// they cover is deleted, so neither read's order matters to the other, and both
+    /// complete before any entry or generation row is read.
+    /// </summary>
+    private Task EnsureFloorsLoadedAsync(IGrainStorage storage)
+    {
+        bool epoch;
+        bool generation;
+        lock (_stateGate)
+        {
+            epoch = !_epochFloorLoaded;
+            generation = !_generationFloorLoaded;
+        }
+
+        return (epoch, generation) switch
+        {
+            (true, true) => Task.WhenAll(EnsureEpochFloorLoadedAsync(storage), EnsureGenerationFloorLoadedAsync(storage)),
+            (true, false) => EnsureEpochFloorLoadedAsync(storage),
+            (false, true) => EnsureGenerationFloorLoadedAsync(storage),
+            _ => Task.CompletedTask,
+        };
     }
 
     private async Task EnsureGenerationFloorLoadedAsync(IGrainStorage storage)
@@ -595,13 +727,47 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
         long value,
         bool epochTable,
         Guid? batchLeaf,
-        WalRoutingInitiator? batchInitiator)
+        WalRoutingInitiator? batchInitiator,
+        TimeSpan? ioBound = null)
         where TId : notnull
     {
+        var listed = false;
         for (var attempt = 1; ; attempt++)
         {
-            var row = await read().ConfigureAwait(true);
-            var durable = getValue(row);
+            GrainState<TRow>? row = null;
+            long durable;
+            if (attempt == 1 && batchInitiator is not null && !DisableLoadedClaimFastPathForTesting && TryLandedLocked(table, id, value, out var landed))
+            {
+                // #5831, F1: a re-presentation of a value this activation has loaded and
+                // knows durable - read back or written by a write known to have landed -
+                // is decided from that value with no storage op. It cannot need a write
+                // (value <= durable), and the decision below is the one the I/O path
+                // reaches when its read returns that value.
+                durable = landed;
+            }
+            else if (attempt == 1 && batchLeaf is { } leafToList && value == 1 && !IsLoaded(table, id))
+            {
+                // #5831, F3: a leaf's first activation (epoch 1) has no entry at any
+                // partition, so its first claim lists it in parallel with reading the
+                // entry. A later activation re-claims an entry that exists and is listed,
+                // so it reads the entry alone and lists only if absent, as before, rather
+                // than paying a page read on every re-claim. Listing is idempotent and
+                // needs no decision: one left listed by a refused claim is harmless and
+                // swept. The entry is still written only after the listing has landed
+                // (#5634), conditionally on the ETag read, or as a create of an absent row.
+                var listing = DirectoryOpAsync(leafToList, () => WalAppendEpochDirectory.AddAsync(storage, _treeId, _shardIndex, leafToList, DateTime.UtcNow.Ticks));
+                var reading = read();
+                await Task.WhenAll(listing, reading).ConfigureAwait(true);
+                listed = true;
+                row = reading.Result;
+                durable = getValue(row);
+            }
+            else
+            {
+                row = await read().ConfigureAwait(true);
+                durable = getValue(row);
+            }
+
             WalAppendFenceCore.ClaimWriteDecision decision;
             long threshold;
             lock (_stateGate)
@@ -619,7 +785,13 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
 
             if (decision == WalAppendFenceCore.ClaimWriteDecision.Write)
             {
-                if (batchLeaf is { } listedLeaf && !row.RecordExists)
+                if (row is null)
+                {
+                    // Unreachable: the memory decision never writes. Fail safe to the read path.
+                    continue;
+                }
+
+                if (batchLeaf is { } listedLeaf && !row.RecordExists && !listed)
                 {
                     // #5634: listed before the entry row is first written, so every
                     // entry is enumerable by the sweep. Idempotent across retries.
@@ -629,7 +801,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
                 setValue(row, value);
                 try
                 {
-                    await WalAppendFenceRows.WriteAsync(storage, grainType, key, row).ConfigureAwait(true);
+                    await Bound(WalAppendFenceRows.WriteAsync(storage, grainType, key, row), ioBound).ConfigureAwait(true);
                 }
                 catch (InconsistentStateException)
                 {
@@ -689,6 +861,12 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
     /// offsets. Called under <see cref="_stateGate"/> in the step that admitted its
     /// first entry; no allocation.
     /// </summary>
+    /// <remarks>
+    /// Invariant (#5831, F1): a batch registered here never waits on a routing-generation
+    /// claim gate, because a claim holding that gate waits for this batch to drain. The
+    /// stamped append's generation load runs, and releases the gate, before the batch's
+    /// first entry is admitted and registered.
+    /// </remarks>
     private void RegisterStampedBatchLocked(in WalAppendStamp stamp)
     {
         // A bulk seed names no leaf (#5812): only its generation is held, so a close's
@@ -834,6 +1012,43 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
             }
         }
     }
+
+    /// <summary>
+    /// Whether <paramref name="id"/>'s entry is loaded and <paramref name="value"/> is at
+    /// or below the durable value this activation has seen for it, returning that value.
+    /// <see cref="FenceEntry.DurableSeen"/> is raised only by a read, or by a write that
+    /// returned, so it is a value known to have landed (#5831, F1).
+    /// </summary>
+    private bool TryLandedLocked<TId>(Dictionary<TId, FenceEntry> table, TId id, long value, out long landed)
+        where TId : notnull
+    {
+        lock (_stateGate)
+        {
+            if (table.TryGetValue(id, out var entry)
+                && entry.Memory != WalAppendFenceCore.Unloaded
+                && value <= entry.DurableSeen)
+            {
+                landed = entry.DurableSeen;
+                return true;
+            }
+
+            landed = 0;
+            return false;
+        }
+    }
+
+    /// <summary>Whether <paramref name="id"/>'s entry is loaded.</summary>
+    private bool IsLoaded<TId>(Dictionary<TId, FenceEntry> table, TId id)
+        where TId : notnull
+    {
+        lock (_stateGate)
+        {
+            return table.TryGetValue(id, out var entry) && entry.Memory != WalAppendFenceCore.Unloaded;
+        }
+    }
+
+    /// <summary>Forces every routing-generation claim to read its row; test seam (#5831, F1 exactness).</summary>
+    internal bool DisableLoadedClaimFastPathForTesting { get; set; }
 
     /// <summary>One leaf's claim/retirement gate and the number of operations holding or awaiting it.</summary>
     private sealed class LeafGate

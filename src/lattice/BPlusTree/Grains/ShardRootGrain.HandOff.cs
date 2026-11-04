@@ -36,6 +36,15 @@ internal sealed partial class ShardRootGrain
     private ShardHandOffState? _handOffMarker;
 
     /// <summary>
+    /// The marker row as this activation last read it, or last wrote it with a write
+    /// known to have landed, with its ETag (#5831, F4). A changing update is first tried
+    /// as a conditional write against this ETag, saving the read; a conflict - another
+    /// writer, or a purge's delete - falls back to re-reading. Dropped on any failed or
+    /// unknown write, and whenever the marker is written by another path.
+    /// </summary>
+    private GrainState<ShardHandOffState>? _handOffMarkerRow;
+
+    /// <summary>
     /// Whether this activation has seen its marker row exist since it last seeded the
     /// shard's root, and the highest routing generation it saw there (#5705). A row
     /// seen and then found absent, under a routing floor that covers that generation,
@@ -169,17 +178,14 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     internal async Task TryInitialiseHandOffMarkerAsync()
     {
-        if (state.State.SplitInProgress is not null
-            || state.State.PendingBulkGraft is not null
-            || state.State.ShadowForward is not null
-            || !IsAppendFenceGateOpen())
+        if (!CanInitialiseHandOffMarker())
         {
             return;
         }
 
         await UpdateHandOffMarkerAsync(marker =>
         {
-            if (marker.Initialised)
+            if (marker.Initialised || !CanInitialiseHandOffMarker())
             {
                 return false;
             }
@@ -189,6 +195,17 @@ internal sealed partial class ShardRootGrain
             return true;
         });
     }
+
+    /// <summary>
+    /// Rule 2's condition for initialising the marker: no hand-off of this shard root's
+    /// own in flight that may have started without a marker, and the gate open.
+    /// Synchronous, so it can be evaluated in the step that builds a marker write.
+    /// </summary>
+    private bool CanInitialiseHandOffMarker() =>
+        state.State.SplitInProgress is null
+        && state.State.PendingBulkGraft is null
+        && state.State.ShadowForward is null
+        && IsAppendFenceGateOpen();
 
     /// <summary><see langword="true"/> while this silo's append-fence gate is open.</summary>
     private bool IsAppendFenceGateOpen() =>
@@ -409,6 +426,7 @@ internal sealed partial class ShardRootGrain
         var row = await HandOffMarkerRows.ReadShardAsync(HandOffStorage(), TreeId, ShardIndex);
         NoteHandOffMarkerRead(row);
         _handOffMarker = row.State;
+        _handOffMarkerRow = row;
         ArmBulkIdleCloseIfSwitchOpen(row.State);
         return row.State;
     }
@@ -486,6 +504,8 @@ internal sealed partial class ShardRootGrain
         await _handOffGate.WaitAsync();
         try
         {
+            // Written below by another path than UpdateHandOffMarkerAsync (#5831, F4).
+            _handOffMarkerRow = null;
             for (var attempt = 1; ; attempt++)
             {
                 var row = await HandOffMarkerRows.ReadShardAsync(storage, TreeId, ShardIndex);
@@ -544,8 +564,57 @@ internal sealed partial class ShardRootGrain
     private void ForgetHandOffMarker()
     {
         _handOffMarker = null;
+        _handOffMarkerRow = null;
         _handOffMarkerSeen = false;
         _handOffMarkerSeenGeneration = 0;
+    }
+
+    /// <summary>
+    /// The cached-ETag attempt of <see cref="UpdateHandOffMarkerAsync"/> (#5831, F4):
+    /// applies <paramref name="mutate"/> to a copy of the cached row and writes it
+    /// conditionally on the cached ETag. Returns the stored marker when that write
+    /// landed, and <see langword="null"/> to fall back to the read path: no cached row,
+    /// a cached absent row this activation may not re-create (#5705), a mutation that
+    /// changes nothing (decided on a read, never on the cache), or a conflict. Any
+    /// other failure drops the cache and propagates. Called under <see cref="_handOffGate"/>.
+    /// </summary>
+    private async Task<ShardHandOffState?> TryUpdateCachedHandOffMarkerAsync(Func<ShardHandOffState, bool> mutate)
+    {
+        // A host without the serializer's copier (a hand-built activation context)
+        // takes the read path, which needs no copy.
+        if (_handOffMarkerRow is not { } cached
+            || (!cached.RecordExists && _handOffMarkerSeen)
+            || context.ActivationServices?.GetService<Orleans.Serialization.DeepCopier>() is not { } copier)
+        {
+            return null;
+        }
+
+        var row = new GrainState<ShardHandOffState>(copier.Copy(cached.State))
+        {
+            ETag = cached.ETag,
+            RecordExists = cached.RecordExists,
+        };
+        if (!mutate(row.State))
+        {
+            return null;
+        }
+
+        _handOffMarkerRow = null;
+        try
+        {
+            await HandOffMarkerRows.WriteShardAsync(HandOffStorage(), TreeId, ShardIndex, row);
+        }
+        catch (InconsistentStateException)
+        {
+            return null;
+        }
+
+        row.RecordExists = true;
+        _handOffMarkerRow = row;
+        _handOffMarkerSeen = true;
+        _handOffMarkerSeenGeneration = Math.Max(_handOffMarkerSeenGeneration, row.State.RoutingGeneration);
+        _handOffMarker = row.State;
+        return row.State;
     }
 
     private async Task<ShardHandOffState> UpdateHandOffMarkerAsync(Func<ShardHandOffState, bool> mutate)
@@ -553,6 +622,11 @@ internal sealed partial class ShardRootGrain
         await _handOffGate.WaitAsync();
         try
         {
+            if (await TryUpdateCachedHandOffMarkerAsync(mutate) is { } written)
+            {
+                return written;
+            }
+
             ShardHandOffState stored;
             if (_handOffMarkerSeen)
             {
