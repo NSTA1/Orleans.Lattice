@@ -106,6 +106,7 @@ public sealed partial class TlcCiShardTests
     [TestCase("Replication", "BootstrapHandoffLosesNothing", TlcCiShard.ReplicationWal)]
     [TestCase("ReplicationReBootstrap", "", TlcCiShard.ReBootstrap)]
     [TestCase("WalDurability", "", TlcCiShard.WalDurability)]
+    [TestCase("WalDurability", "OffsetWrittenOnce", TlcCiShard.WalDurabilityCrossSilo)]
     [TestCase("ShardOwnershipRetention", "", TlcCiShard.ShardOwnership)]
     [TestCase("AtomicCommitCrossCluster", "", TlcCiShard.Atomic)]
     [TestCase("BackupCapture", "", TlcCiShard.Backup)]
@@ -201,6 +202,8 @@ public sealed partial class TlcCiShardTests
                             ? TlcCiShard.SchedulingWorkloadB : TlcCiShard.Scheduling
                         : module.Name.StartsWith("Replication", StringComparison.Ordinal)
                         ? TlcCiShard.ReBootstrap
+                        : module.Name == "WalDurability" && variant == "CrossSilo"
+                        ? TlcCiShard.WalDurabilityCrossSilo
                         : module.Name == "WalAppendEpoch"
                         ? TlcCiShard.WalAppendEpoch
                         : module.Name == "WalHandOffFence"

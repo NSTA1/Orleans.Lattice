@@ -62,7 +62,6 @@ public sealed partial class TlcCiShardTests
     [TestCase("ShardOwnershipCutover", TlcCiShard.ShardOwnership)]
     [TestCase("ShardOwnershipFold", TlcCiShard.ShardOwnership)]
     [TestCase("ShardOwnershipRetention", TlcCiShard.ShardOwnership)]
-    [TestCase("WalDurability", TlcCiShard.WalDurability)]
     [TestCase("WalMove", TlcCiShard.ReplicationWal)]
     [TestCase("WalPinRetirement", TlcCiShard.ReplicationWal)]
     [TestCase("WalAppendEpoch", TlcCiShard.WalAppendEpoch)]
@@ -83,6 +82,24 @@ public sealed partial class TlcCiShardTests
                 Assert.That(TlcCiShard.Of(module, mutation), Is.EqualTo(expected), mutation.Name);
                 Assert.That(TlcCiShard.SharesBaseShard(module, mutation), Is.True, mutation.Name);
             }
+        });
+    }
+
+    [Test]
+    public void WalDurability_shares_its_base_with_every_mutation_but_those_raising_cross_silo_moves()
+    {
+        var module = Module("WalDurability");
+        var byShard = module.LoadMutations().ToLookup(mutation => TlcCiShard.Of(module, mutation));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(TlcCiShard.OfModule(module), Is.EqualTo(TlcCiShard.WalDurability));
+            Assert.That(byShard[TlcCiShard.WalDurability].All(m => TlcCiShard.SharesBaseShard(module, m)), Is.True);
+            Assert.That(byShard[TlcCiShard.WalDurabilityCrossSilo], Is.Not.Empty);
+            Assert.That(byShard[TlcCiShard.WalDurabilityCrossSilo].Any(m => TlcCiShard.SharesBaseShard(module, m)), Is.False);
+            Assert.That(byShard.Select(group => group.Key), Is.EquivalentTo(new[] { TlcCiShard.WalDurability, TlcCiShard.WalDurabilityCrossSilo }));
+            Assert.That(TlcCiShard.OfVariant(module, "CrossSilo"), Is.EqualTo(TlcCiShard.WalDurabilityCrossSilo));
+            Assert.That(TlcCiShard.OfVariant(module, "TwoFaults"), Is.Null);
         });
     }
 

@@ -1,0 +1,32 @@
+# Pairs with TailMonotone. The pre-#5810 phase-2 commit: no fence, and TAIL is
+# written with a blind upsert of the higher of the batch's end and the
+# instance's own highest commit. A stale predecessor's late batch below the
+# successor's committed tail regresses TAIL.
+MODULE: TailMonotoneStaleWriterBlindUpsert
+TARGET: TailMonotone
+CLASS: Action
+SUMMARY: a stale predecessor's commit blind-upserts TAIL from its own high-water mark
+PERTURBS: LateLand
+
+--- FIND
+       THEN IF /\ o >= tail
+               /\ prevFresh
+--- REPLACE
+\* MUTATION: the predecessor's commit is not conditional on its view of TAIL.
+       THEN IF /\ o >= tail
+--- END
+
+--- FIND
+                 /\ ct' = Max({ct, o})
+                 /\ curFresh' = FALSE
+--- REPLACE
+\* MUTATION: TAIL is upserted from the predecessor's own highest commit.
+                 /\ ct' = Max({p \in Offs : occ[p] \in {"ackedPrev", "latePrev", "dup"}} \cup {-1, o})
+                 /\ curFresh' = FALSE
+--- END
+--- FIND
+WithCrossSiloMove == FALSE
+--- REPLACE
+\* MUTATION: raises the bound so a lost activation may move to another silo.
+WithCrossSiloMove == TRUE
+--- END

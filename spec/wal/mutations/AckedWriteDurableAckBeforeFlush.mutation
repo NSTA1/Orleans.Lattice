@@ -7,7 +7,7 @@ SUMMARY: the acknowledgement point precedes durability
 PERTURBS: FlushAck
 
 --- FIND
-       THEN /\ occ' = [occ EXCEPT ![o] = "acked"]
+       THEN /\ occ' = [occ EXCEPT ![o] = IF occ[o] = "none" THEN kind ELSE "dup"]
             /\ acked' = acked \cup {o}
 --- REPLACE
 \* MUTATION: acknowledged without being stored.

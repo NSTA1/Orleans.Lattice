@@ -224,14 +224,21 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardReplicationWal"],
-        "note": "The other Replication mutants plus the mutants of every Wal* module without a shard of its own (the live-advance modules of epic #5605 and WalDurability have theirs), with the Replication, WalMove and WalPinRetirement bases co-located so they serve the full-bound controls (#5161). With WalDurability still here it held 100 cases in a 29.0-minute item (the job 39.4 minutes) in ci.yml run 41805410702 (#5809), the run's critical path; 77 cases took 14.12 minutes in run 40909619830 (#5166) before WalPinRetirement and the #5803 allocator re-seed. Without WalDurability's 49 cases it is estimated at 16 minutes until measured."
+        "note": "The other Replication mutants plus the mutants of every Wal* module without a shard of its own (the live-advance modules of epic #5605 and WalDurability have theirs), with the Replication, WalMove and WalPinRetirement bases co-located so they serve the full-bound controls (#5161). With WalDurability still here it held 100 cases in a 29.0-minute item (the job 39.4 minutes) in ci.yml run 41805410702 (#5809), the run's critical path; 77 cases took 14.12 minutes in run 40909619830 (#5166) before WalPinRetirement and the #5803 allocator re-seed. Without WalDurability's 49 cases it held 51 cases in a 3.73-minute item in run 41820110344 (#5809), where the Replication, WalMove and WalPinRetirement verdicts were served by trusted receipts; its receipt-free planning figure is 10 minutes."
       },
       {
         "shard": "formal-tlc-wal-durability",
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardWalDurability"],
-        "note": "WalDurability's base (549,523 states with both liveness properties, about 12 minutes on two TLC workers, its longest case) and 48 mutations co-located with it so it serves their full-bound controls (#5161), 49 cases; split out of formal-tlc-replication-wal (#5809), whose critical path its base's growth with the #5803 allocator re-seed had become. Its variant configurations (TwoFaults, SnapshotLoss, WarmLeaf, CrossSilo) stay in the catch-all. Estimated at 15 minutes from a local run of all 53 cases in 17 minutes until measured on its CI leg."
+        "note": "WalDurability's base (420,229 states with both liveness properties, about 10 minutes on two TLC workers, its longest case) and its mutations that keep cross-silo moves off, co-located so the base serves their full-bound controls (#5161), 48 cases; split out of formal-tlc-replication-wal (#5809), whose critical path its base's growth with the #5803 allocator re-seed had become. With 49 cases it took a 25.2-minute item in run 41820110344 (#5809). Its variant configurations but CrossSilo (TwoFaults, SnapshotLoss, WarmLeaf) stay in the catch-all."
+      },
+      {
+        "shard": "formal-tlc-wal-durability-cross-silo",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardWalDurabilityCrossSilo"],
+        "note": "WalDurability's mutations that raise WithCrossSiloMove and its CrossSilo variant (1,954,533 states), 6 cases (#5810, #5825). Each such mutation's control runs the raised configuration, about 2.4M states, which the base cannot serve; five of them took 6.1 minutes locally in parallel. Kept apart so those controls do not lengthen formal-tlc-wal-durability. Estimated at 15 minutes until measured on its CI leg."
       },
       {
         "shard": "formal-tlc-wal-append-epoch",

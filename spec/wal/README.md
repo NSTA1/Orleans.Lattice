@@ -50,7 +50,7 @@ and its mutations as the record each module took its own from.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `WalDurability` | 13 | 4 | 30 | 48 | 44 | 549,523 |
+| `WalDurability` | 15 | 6 | 30 | 52 | 48 | 420,229 |
 | `WalMove` | 5 | 2 | 13 | 18 | 18 | 1,617 |
 | `WalPinRetirement` | 3 | 3 | 25 | 31 | 30 | 284,019 |
 | `WalAppendEpoch` | 5 | 0 | 17 | 23 | 20 | 150,706 |
@@ -80,7 +80,7 @@ modules map to production, except the three WAL shard checks its edges rest on.
 `WalDurability` has a two-fault variant configuration, `WalDurability.TwoFaults.cfg`
 (see "Variant configurations" in [`../README.md`](../README.md)). It checks every
 invariant and both action properties with a budget of two faults instead of one:
-4,317,959 distinct states to depth 42. The liveness properties stay at one fault,
+3,237,411 distinct states to depth 42. The liveness properties stay at one fault,
 because at two the full configuration is far past the TLC budget.
 
 Its second variant, `WalDurability.SnapshotLoss.cfg`, lets the environment destroy a
@@ -98,9 +98,11 @@ recovery has reset every marker.
 
 Its `WalDurability.CrossSilo.cfg` variant lets a lost activation's successor be on
 another silo, which cannot see its predecessor's abandoned calls still in motion
-(issue #5799): every invariant and both action properties, 1,332,305 distinct states
-to depth 36. The base keeps such moves off, because with them its liveness check
-would pass the TLC budget.
+(issue #5799), and whose predecessor's late batches land through that silo's own
+provider instance, held off the successor's batches by the TAIL commit fence (issue
+#5810) and by the successor's re-stamp of `TAIL` on recovery (issue #5825): every
+invariant and all four action properties, 1,954,533 distinct states to depth 35. The base keeps such moves off, because with them its liveness check would
+pass the TLC budget.
 
 The `WalDurability.WarmLeaf.cfg` variant checks every property without faults:
 17,041 distinct states to depth 28. Replay requires a scheduled request, consumed
@@ -184,11 +186,15 @@ distinct states to depth 21, about fifteen seconds on two workers.
 | `OffsetContiguity` | Invariant | No acknowledged offset is reissued. |
 | `AckedOccupies` | Invariant | An acknowledged write keeps its offset while it is stored: no late-landing abandoned call or reissue displaces it. |
 | `AllocatorAboveOrphans` | Invariant | The allocator never hands out an offset at or below an abandoned call still in motion that the shard's activation can see. |
+| `OffsetWrittenOnce` | Invariant | No offset is written twice: two batches with different start offsets never both hold one. |
+| `GuardCoversFence` | Invariant | While an instance's view of `TAIL` is current and no re-seed is pending, its allocator is above `TAIL`. |
 | `RecoveryNeverFallsOffLog` | Invariant | No leaf ever latches `LeafProjectionStaleException`. |
 | `PersistedBeliefHonest` | Invariant | A leaf's belief about its persisted checkpoint is what storage holds, or the anchor it started from. |
 | `ReleaseBackedBySnapshot` | Invariant | Every trim entitlement the pin store has published is backed by the leaf's durable snapshot coverage. |
 | `SnapshotCoverageMonotonic` | Action | Durable snapshot coverage never regresses. |
 | `PublishedPinWithinPersistedBelief` | Action | A newly published pin never exceeds the persisted checkpoint. |
+| `TailMonotone` | Action | The store's `TAIL` row never regresses. |
+| `RecoverNeverInsideCommitted` | Action | A re-seeded allocator never hands out an offset a committed batch holds. |
 | `EveryAckedWriteMaterialised` | Liveness | Every acknowledged write is eventually held by its owner's projection. |
 | `ReclamationEventuallyAdvances` | Liveness | Everything appended is eventually reclaimed from storage, and no append or abandoned call is left outstanding. |
 
@@ -252,6 +258,15 @@ which `WalDurability.tla` abstracts away; `WalPartitionReleaseModel`, a Coyote
 model over the production pin and trim cores, checks them (see the refinement note's
 abstraction gaps).
 
+Extending the model to the allocator's re-seed (#5803) and reviewing that extension
+found two more, in the Azure Table provider across silos. The model reproduced each
+before its fix, and both are fixed:
+
+| Issue | Defect | Mutation |
+|-------|--------|----------|
+| #5825 | The phase-2 worker commits in arrival order, so across a silo move a predecessor's lower batch can commit after its successor recovered and readers passed the offset as a settled hole: the entry appears below them. The #5811 fence does not refuse it, because the successor only read `TAIL`. **Fixed by #5827**: recovery re-stamps `TAIL` under the ETag it read before the activation serves a read, which puts the predecessor's view out of date. | `LogPrefixAppliedRecoveryLeavesTailUnstamped` |
+| #5810 | A predecessor activation's late batch on another silo, starting at a different offset, lands over a successor's acknowledged batch, so every read yields the shared offsets twice; its blind `TAIL` upsert regresses `TAIL`, so the next recovery reissues committed offsets. **Fixed by #5811**: a phase-2 commit is conditional on the `TAIL` ETag its provider instance last observed, under a fence generation that refuses every claim made before a refused write. | `OffsetWrittenOnceStaleWriterUnfenced`, `TailMonotoneStaleWriterBlindUpsert`, `RecoverNeverInsideCommittedUnfencedBlindTailUnstamped` |
+
 When a fix lands, its gap row is removed and its detectors are re-proven red against
 the reproducing mutation.
 
@@ -312,7 +327,7 @@ The epic also recorded one gap in the WAL durability model it builds on:
 `WalDurability` ([gaps](Refinement.md#deliberate-abstraction-gaps)) has no in-process
 resync and no reactivation that keeps an abandoned call running, and cannot tell which
 write occupies an offset, so an allocator re-seeded beneath a call still in motion
-(#5799) is outside it until #5803 extends it.
+(#5799) was outside it until #5803 extended it.
 
 Two cuts are budget bounds rather than abstractions, and the core's
 [property classification](LiveAdvanceCoreRefinement.md#property-classification) names
@@ -341,7 +356,7 @@ Pass `-metadir` with a directory outside the repository, or delete the `states/`
 directory TLC leaves beside the module. On two workers `WalDurability` takes about
 twelve minutes, because it checks two liveness properties over the full state graph;
 its `TwoFaults` variant takes about two and a half minutes, `SnapshotLoss` about five and `CrossSilo`
-under one; `WalMove` takes seconds, and its
+about two; `WalMove` takes seconds, and its
 `TwoMoves` variant about fifteen.
 
 ## The Coyote companion
