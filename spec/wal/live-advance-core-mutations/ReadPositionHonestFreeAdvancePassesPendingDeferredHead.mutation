@@ -1,5 +1,5 @@
 # #5837, the claimless advance and the split hint.
-MODULE: ReadPositionHonestFreeAdvanceIgnoresStaleHigh
+MODULE: ReadPositionHonestFreeAdvancePassesPendingDeferredHead
 TARGET: ReadPositionHonest
 CLASS: Invariant
 SUMMARY: the free advance ignores the staleHigh while a deferred close is pending, so it passes the stale donor's routed record

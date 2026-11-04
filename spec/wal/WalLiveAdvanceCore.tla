@@ -53,7 +53,7 @@ EXTENDS Integers, FiniteSets
 (***************************************************************************)
 CONSTANTS MaxWindows, WithMixedVersion, WithGateFlip, WithRestart, WithRecreate, WithBulk,
           WithUnclaimedSurvivor, WithClaimedPurge, WithPreArm, WithKeyMove, WithFreeAdvance,
-          WithSplitHint
+          WithSplitHint, WithSplitBirth
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
@@ -65,7 +65,8 @@ Straddler == "s"
 PreAuthor == "p"
 NoAuthor == "x"
 StaleDonor == "d"
-Authors == Acts \cup {Foreign, OldAuthor, Straddler, PreAuthor, StaleDonor}
+DonorLive == "v"
+Authors == Acts \cup {Foreign, OldAuthor, Straddler, PreAuthor, StaleDonor, DonorLive}
 MaxGen == 3
 
 Max(S) == CHOOSE x \in S : \A y \in S : y <= x
@@ -122,7 +123,10 @@ VARIABLES
     ft,           \* each activation's fixed free-advance target; -1 none
     sh,           \* the allocator head each activation's split captured; -1 none
     sibHint,      \* the split sibling's hint (inclusive); -1 none
-    sibRows       \* the rows the split handed the sibling
+    sibRows,      \* the rows the split handed the sibling
+    tRecs,        \* the split transfer's records, appended by L under the per-leaf class
+    dNarrowed,    \* WithSplitBirth: L's live donor has narrowed its span
+    sDone         \* WithSplitBirth: the donor's stragglers have reached L
 
 walVars == <<next, author, inflight, durable, acked, floor>>
 leafVars == <<up, cache, rp, mine, snapCov, snapRows>>
@@ -130,7 +134,8 @@ epochVars == <<cur, claimed, claimHead, stale, dupUsed>>
 handVars == <<mInit, hoOpen, hoClosedAt, windows>>
 oldVars == <<lastU, seenU, oldUsed, restarted, oldRejected>>
 envVars == <<recreated, reinit, spUsed, phase, hint>>
-freeVars == <<sHi, seenS, ft, sh, sibHint, sibRows>>
+xferVars == <<tRecs, dNarrowed, sDone>>
+freeVars == <<sHi, seenS, ft, sh, sibHint, sibRows, xferVars>>
 armVars == <<preArm, seenP, startHead, evStart, evFloor, freeVars>>
 moveVars == <<gD, gL, pend, pendGen, moved, otherMoved, dUsed, reclaims, strayReclaims>>
 
@@ -188,6 +193,9 @@ TypeOK ==
     /\ sh \in [Acts -> -1..MaxOff]
     /\ sibHint \in -1..(MaxOff - 1)
     /\ sibRows \subseteq Offs
+    /\ tRecs \subseteq Offs
+    /\ dNarrowed \in BOOLEAN
+    /\ sDone \in BOOLEAN
 
 (***************************************************************************)
 (* Init. Without WithBulk, L is a new tree's first leaf: a1 is running,   *)
@@ -217,9 +225,9 @@ Init ==
     /\ stale = {}
     /\ dupUsed = FALSE
     /\ mInit = TRUE
-    /\ hoOpen = WithBulk
+    /\ hoOpen = (WithBulk \/ WithSplitBirth)
     /\ hoClosedAt = 0
-    /\ windows = IF WithBulk THEN 1 ELSE 0
+    /\ windows = IF WithBulk \/ WithSplitBirth THEN 1 ELSE 0
     /\ lastU = -1
     /\ seenU = [a \in Acts |-> -1]
     /\ oldUsed = FALSE
@@ -249,6 +257,9 @@ Init ==
     /\ sh = [a \in Acts |-> -1]
     /\ sibHint = -1
     /\ sibRows = {}
+    /\ tRecs = {}
+    /\ dNarrowed = FALSE
+    /\ sDone = FALSE
 
 (***************************************************************************)
 (* B's BulkHintBound, as an environment step. Create: the bulk-born leaf's *)
@@ -352,7 +363,7 @@ OwnAlloc(a) ==
     /\ ReportStale(a)
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars>>
     /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected, envVars>>
-    /\ UNCHANGED <<preArm, startHead, evStart, evFloor, moveVars, sHi, ft, sh, sibHint, sibRows>>
+    /\ UNCHANGED <<preArm, startHead, evStart, evFloor, moveVars, sHi, ft, sh, sibHint, sibRows, xferVars>>
 
 (* PreArmAlloc(a) (WithPreArm): an append by an activation that has not   *)
 (* armed, under the PreArm class: no entry check and no row, admitted on  *)
@@ -375,7 +386,7 @@ PreArmAlloc(a) ==
     /\ ReportStale(a)
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars>>
     /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected, envVars>>
-    /\ UNCHANGED <<startHead, evStart, evFloor, moveVars, sHi, ft, sh, sibHint, sibRows>>
+    /\ UNCHANGED <<startHead, evStart, evFloor, moveVars, sHi, ft, sh, sibHint, sibRows, xferVars>>
 
 (* OwnAllocUnstamped(a) (WithGateFlip): an own append made unstamped - a  *)
 (* closed gate view, exhausted claim rounds, a claim fault, or an         *)
@@ -406,7 +417,7 @@ Land(o) ==
        THEN /\ cache' = [cache EXCEPT ![author[o]] = @ \cup {o}]
             /\ mine' = [mine EXCEPT ![author[o]] = @ \cup {o}]
             /\ acked' = acked \cup {o}
-       ELSE /\ acked' = IF author[o] \in {OldAuthor, Straddler, StaleDonor} THEN acked \cup {o} ELSE acked
+       ELSE /\ acked' = IF author[o] \in {OldAuthor, Straddler, StaleDonor, DonorLive} THEN acked \cup {o} ELSE acked
             /\ UNCHANGED <<cache, mine>>
     /\ UNCHANGED <<next, author, floor, up, rp, snapCov, snapRows, epochVars, handVars, oldVars, envVars>>
     /\ UNCHANGED <<armVars, moveVars>>
@@ -433,6 +444,7 @@ ForeignOpen ==
 
 ForeignAlloc ==
     /\ UNCHANGED <<armVars, moveVars>>
+    /\ ~WithSplitBirth
     /\ hoOpen \/ ~mInit
     /\ next < MaxOff
     /\ next' = next + 1
@@ -453,6 +465,7 @@ CloseCovers == IF WithPreArm /\ WithBulk THEN {Foreign, PreAuthor} ELSE {Foreign
 
 Close ==
     /\ UNCHANGED <<armVars, moveVars>>
+    /\ ~WithSplitBirth
     /\ phase = "live"
     /\ hoOpen
     /\ hoOpen' = FALSE
@@ -556,7 +569,7 @@ FreeTarget(a) ==
     /\ ft[a] # Max(mine[a])
     /\ ft' = [ft EXCEPT ![a] = Max(mine[a])]
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
-    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, sh, sibHint, sibRows>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, sh, sibHint, sibRows, xferVars>>
 
 FreeCommit(a) ==
     /\ FreeOn
@@ -572,7 +585,7 @@ FreeCommit(a) ==
     /\ rp' = [rp EXCEPT ![a] = ft[a]]
     /\ ft' = [ft EXCEPT ![a] = -1]
     /\ UNCHANGED <<walVars, up, cache, mine, snapCov, snapRows, epochVars, handVars, oldVars, envVars, moveVars>>
-    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, sh, sibHint, sibRows>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, sh, sibHint, sibRows, xferVars>>
 
 (***************************************************************************)
 (* The split's hint (#5837, D4). SplitHeads(a): L, as a split's donor,    *)
@@ -597,7 +610,7 @@ SplitHeads(a) ==
     /\ ReportStale(a)
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, envVars, moveVars>>
     /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected>>
-    /\ UNCHANGED <<preArm, startHead, evStart, evFloor, sHi, ft, sibHint, sibRows>>
+    /\ UNCHANGED <<preArm, startHead, evStart, evFloor, sHi, ft, sibHint, sibRows, xferVars>>
 
 SplitCommit(a) ==
     /\ FreeOn
@@ -614,7 +627,80 @@ SplitCommit(a) ==
     /\ sibRows' = {o \in cache[a] : o < sh[a]}
     /\ sh' = [sh EXCEPT ![a] = -1]
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
-    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, xferVars>>
+
+(***************************************************************************)
+(* A split-born receiver (#5837, WithSplitBirth). L is born by a split,   *)
+(* its birth window open and its rows at or below its hint (the split's   *)
+(* heads; here nothing) handed to it. Until it narrows, the live donor    *)
+(* still admits writes for L's keys (DonorAlloc), attributed to the donor *)
+(* and so in none of L's bounds. The donor narrows (DonorNarrow), drains  *)
+(* the moved-key mutations it admitted, and closes L's birth window       *)
+(* (DonorClose) with the head one above its own highest moved-key write   *)
+(* since the heads - which it knows from its own append responses and     *)
+(* tracks anyway, for the stragglers - not the partition's head. It      *)
+(* transfers what it applied since the heads to L as stragglers           *)
+(* (Straggler): an append by L's own activation, applied in the same      *)
+(* call, under the per-leaf class: in its tracker and its token's         *)
+(* foreignHigh, never a claim, never the shared watermark (T3). The copy  *)
+(* covers the originals only for the activation that applied it, so it   *)
+(* is not what bounds them: the close head is. Then L is linked: KeyMove, *)
+(* the shard root's raise and deferred head. A stale duplicate of the     *)
+(* donor writes for L's keys under the generation before the link,        *)
+(* attributed to the donor leaf: StaleRouteAlloc, which also stands for a *)
+(* stale duplicate receiver's transfer of keys it no longer owns (T1),    *)
+(* since the transfer carries the routing generation its span was         *)
+(* established under.                                                      *)
+(***************************************************************************)
+DonorAlloc ==
+    /\ FreeOn
+    /\ WithSplitBirth
+    /\ ~dNarrowed
+    /\ \A o \in Offs : author[o] # DonorLive
+    /\ next < MaxOff
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = DonorLive]
+    /\ inflight' = inflight \cup {next}
+    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, oldVars, envVars, armVars, moveVars>>
+
+DonorNarrow ==
+    /\ FreeOn
+    /\ WithSplitBirth
+    /\ ~dNarrowed
+    /\ dNarrowed' = TRUE
+    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows, tRecs, sDone>>
+
+DonorClose ==
+    /\ FreeOn
+    /\ WithSplitBirth
+    /\ hoOpen
+    /\ dNarrowed
+    /\ \A o \in inflight : author[o] # DonorLive
+    /\ hoOpen' = FALSE
+    /\ hoClosedAt' = Max2(hoClosedAt, Max({-1} \cup {o \in Offs : author[o] = DonorLive}) + 1)
+    /\ UNCHANGED <<walVars, leafVars, epochVars, mInit, windows, oldVars, envVars, armVars, moveVars>>
+
+Straggler(a) ==
+    /\ FreeOn
+    /\ WithSplitBirth
+    /\ a \in up
+    /\ ~sDone
+    /\ dNarrowed
+    /\ \A o \in inflight : author[o] # DonorLive
+    /\ next < MaxOff
+    /\ sDone' = TRUE
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = a]
+    /\ inflight' = inflight \cup {next}
+    /\ tRecs' = tRecs \cup {next}
+    /\ cache' = [cache EXCEPT ![a] = @ \cup {o \in durable : author[o] = DonorLive}]
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
+    /\ ReportForeign(a)
+    /\ ReportStale(a)
+    /\ UNCHANGED <<durable, acked, floor, up, rp, mine, snapCov, snapRows, epochVars, handVars>>
+    /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected, envVars, moveVars>>
+    /\ UNCHANGED <<preArm, startHead, evStart, evFloor, sHi, ft, sh, sibHint, sibRows, dNarrowed>>
 
 (* Capture(a): the shared per-leaf snapshot keeps the highest coverage.  *)
 Capture(a) ==
@@ -655,8 +741,9 @@ Restart ==
     /\ restarted' = TRUE
     /\ lastU' = next - 1
     /\ startHead' = IF WithPreArm THEN next ELSE startHead
+    /\ sHi' = IF FreeOn THEN Max2(sHi, next - 1) ELSE sHi
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, seenU, oldUsed, oldRejected, envVars>>
-    /\ UNCHANGED <<preArm, seenP, evStart, evFloor, moveVars, freeVars>>
+    /\ UNCHANGED <<preArm, seenP, evStart, evFloor, moveVars, seenS, ft, sh, sibHint, sibRows, xferVars>>
 
 (* Evict (WithRestart): the WAL shard evicts L's foreign-high entry to     *)
 (* bound memory, raising its eviction floor to the entry's highest offset. *)
@@ -693,6 +780,7 @@ KeyMove ==
     /\ gD' = gD + 1
     /\ pend' = TRUE
     /\ pendGen' = gD + 1
+    /\ WithSplitBirth => ~hoOpen
     /\ UNCHANGED <<gL, otherMoved, dUsed, reclaims, strayReclaims>>
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, armVars>>
 
@@ -720,7 +808,7 @@ StaleRouteAlloc ==
     /\ sHi' = IF FreeOn THEN next ELSE sHi
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, oldVars, envVars>>
     /\ UNCHANGED <<gD, gL, pend, pendGen, moved, otherMoved, reclaims, strayReclaims>>
-    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, seenS, ft, sh, sibHint, sibRows>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, seenS, ft, sh, sibHint, sibRows, xferVars>>
 
 UnroutedAlloc ==
     /\ WithKeyMove
@@ -812,6 +900,10 @@ Next ==
     \/ \E a \in Acts : FreeCommit(a)
     \/ \E a \in Acts : SplitHeads(a)
     \/ \E a \in Acts : SplitCommit(a)
+    \/ DonorAlloc
+    \/ DonorNarrow
+    \/ DonorClose
+    \/ \E a \in Acts : Straggler(a)
     \/ \E a \in Acts : Capture(a)
     \/ GcTrim
     \/ Duplicate
@@ -895,6 +987,21 @@ ReadPositionHonest ==
 (* record at or below its hint.                                            *)
 SiblingHintHonest ==
     \A o \in durable : o <= sibHint => o \in sibRows
+
+(* The split transfer's cost witness (#5837): a record appended under the *)
+(* per-leaf class never raises the partition's shared unstamped watermark. *)
+TransferCostWitness == lastU \notin tRecs
+
+(* The deferred close's cost witness (#5837): a split-born receiver's      *)
+(* resolved deferred head is the stale donor's bound plus one, never the   *)
+(* partition's allocator head.                                             *)
+DeferredHeadCostWitness ==
+    WithSplitBirth => hoClosedAt <= Max2(sHi, Max({-1} \cup {o \in Offs : author[o] = DonorLive})) + 1
+
+(* The widened excuse is for duplicates only: a sole running activation    *)
+(* never falls off the log, since the GC never trims past its own pin.     *)
+SoleActivationNeverFallsOff ==
+    Cardinality(up) = 1 => \A a \in up : rp[a] + 1 >= floor
 
 (* The shared snapshot never claims coverage of a durable entry it lacks. *)
 SnapshotHonest ==

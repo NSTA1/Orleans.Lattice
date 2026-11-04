@@ -1,5 +1,5 @@
 # #5837, the claimless advance and the split hint.
-MODULE: SiblingHintHonestSplitHintViewBeforeHeads
+MODULE: SiblingHintHonestSplitHintBoundsReadBeforeHeads
 TARGET: SiblingHintHonest
 CLASS: Invariant
 SUMMARY: the split reads the donor's view and bounds before it captures the heads

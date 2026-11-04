@@ -1,0 +1,25 @@
+# #5837, the claimless advance: the split transfer and the receiver's close heads.
+MODULE: ReadPositionHonestTransferSpanCheckNotAtomicWithAppend
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the receiver checks its span, splits, then appends the transfer stamped with the generation current at the append: admitted, above every staleHigh
+PERTURBS: StaleRouteAlloc
+BOUNDS: WithFreeAdvance = TRUE, WithKeyMove = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+    /\ next < MaxOff
+    /\ 1 >= gL
+    /\ dUsed' = TRUE
+--- REPLACE
+    /\ next < MaxOff
+\* MUTATION: stamped with the current generation at the append.
+    /\ gD >= gL
+    /\ dUsed' = TRUE
+--- END
+
+--- FIND
+    /\ sHi' = IF FreeOn THEN next ELSE sHi
+--- REPLACE
+\* MUTATION: so not below the raised generation.
+    /\ UNCHANGED sHi
+--- END

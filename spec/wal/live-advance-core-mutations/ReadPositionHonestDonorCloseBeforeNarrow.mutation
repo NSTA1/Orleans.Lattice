@@ -1,0 +1,19 @@
+# #5837, the claimless advance: the split transfer and the receiver's close heads.
+MODULE: ReadPositionHonestDonorCloseBeforeNarrow
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the donor closes before it narrows, so it still admits a write for the receiver's keys above its close head
+PERTURBS: DonorClose
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE
+
+--- FIND
+    /\ hoOpen
+    /\ dNarrowed
+    /\ \A o \in inflight : author[o] # DonorLive
+    /\ hoOpen' = FALSE
+--- REPLACE
+    /\ hoOpen
+\* MUTATION: the close does not wait for the narrow.
+    /\ \A o \in inflight : author[o] # DonorLive
+    /\ hoOpen' = FALSE
+--- END
