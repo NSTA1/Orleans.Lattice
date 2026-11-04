@@ -144,11 +144,22 @@ public sealed class LineFeedTests
         var deadline = DateTime.UtcNow + Patience;
         while (true)
         {
-            var page = await Data.ReadRangeAsync(new Orleans.Lattice.Api.Data.DataRangeRequest
+            Orleans.Lattice.Api.Data.DataRangePage page;
+            try
             {
-                TreeId = "tag-" + LineFeedControl.OrderStatusIndex,
-                PageSize = 100,
-            });
+                page = await Data.ReadRangeAsync(new Orleans.Lattice.Api.Data.DataRangeRequest
+                {
+                    TreeId = "tag-" + LineFeedControl.OrderStatusIndex,
+                    PageSize = 100,
+                });
+            }
+            catch (Grpc.Core.RpcException ex) when (ex.StatusCode is Grpc.Core.StatusCode.DeadlineExceeded or Grpc.Core.StatusCode.Unavailable && DateTime.UtcNow <= deadline)
+            {
+                // The read is idempotent, and the estate is still settling after the fixture's silo restart.
+                await Task.Delay(500);
+                continue;
+            }
+
             if (page.Entries.Count > 0 || DateTime.UtcNow > deadline)
             {
                 return page.Entries.Count;
