@@ -1660,7 +1660,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
             var payload = CompressPayload(segment.AsSpan(), out var compressionTag);
             AccumulateCompressionStats(ref compressionStats, compressionTag, segment.Count, payload.Length);
             actions.Add(new TableTransactionAction(
-                TableTransactionActionType.Add,
+                TableTransactionActionType.UpsertReplace,
                 new AzureTableWalEntity
                 {
                     PartitionKey = partitionKey,
@@ -1719,7 +1719,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         {
             writer.ResetWrittenCount();
             var entity = BuildEntryEntity(partitionKey, entries[i], writer);
-            actions.Add(new TableTransactionAction(TableTransactionActionType.Add, entity));
+            actions.Add(new TableTransactionAction(TableTransactionActionType.UpsertReplace, entity));
             // Account the bytes actually written to the row's Payload
             // column (the compressed length when compression applied) as
             // the stored total so the manifest M-row's PayloadBytes
