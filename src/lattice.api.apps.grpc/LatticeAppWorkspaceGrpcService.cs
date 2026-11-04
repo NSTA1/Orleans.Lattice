@@ -72,6 +72,13 @@ internal sealed class LatticeAppWorkspaceGrpcService(
             // report the retryable ResourceExhausted, not a precondition or server fault.
             throw new RpcException(new Status(StatusCode.ResourceExhausted, "The store is busy (storage back-pressure) and the request was refused. Retry after a short backoff."));
         }
+        catch (LatticeWalQuiescingException ex)
+        {
+            // A WAL shard quiesced for a placement move refused the write without committing it
+            // (#5800): transient and self-healing, so the retryable Unavailable, never a server error.
+            logger.LogWarning(ex, "Api.Apps: gRPC call to {Method} hit a WAL shard quiesced for a placement move.", context.Method);
+            throw new RpcException(new Status(StatusCode.Unavailable, "A storage partition is briefly paused for a placement move and the write was not applied. Retry after a short backoff."));
+        }
         catch (InvalidOperationException ex)
         {
             logger.LogWarning(ex, "Api.Apps: precondition failed for {Method}.", context.Method);

@@ -718,6 +718,12 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
             // shared ladder below maps it to DeadlineExceeded.
             throw ToRpcException(exception, context);
         }
+        catch (LatticeWalQuiescingException exception)
+        {
+            // A WAL shard quiesced for a placement move refused the write without committing it
+            // (#5800): transient and self-healing, so the retryable Unavailable, never a server error.
+            throw ToRpcException(exception, context);
+        }
         catch (OrleansMessageRejectionException exception)
         {
             // Named on its own so the transient-fault contract gate sees the clause (#5742); the
@@ -942,6 +948,12 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
             // shared ladder below maps it to DeadlineExceeded.
             throw ToRpcException(exception, context);
         }
+        catch (LatticeWalQuiescingException exception)
+        {
+            // A WAL shard quiesced for a placement move refused the write without committing it
+            // (#5800): transient and self-healing, so the retryable Unavailable, never a server error.
+            throw ToRpcException(exception, context);
+        }
         catch (OrleansMessageRejectionException exception)
         {
             // Named on its own so the transient-fault contract gate sees the clause (#5742); the
@@ -991,6 +1003,12 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
                 // Storage back-pressure is a deliberate "busy, retry later" refusal (#5723):
                 // report the retryable ResourceExhausted, not the precondition arm below.
                 return new RpcException(new Status(StatusCode.ResourceExhausted, "The store is busy (storage back-pressure) and the request was refused. Retry after a short backoff."));
+            case LatticeWalQuiescingException:
+                // A WAL shard quiesced for a placement move refused the write without committing
+                // it (#5800). It derives from InvalidOperationException, so it is matched before
+                // the precondition arm below: transient and self-healing, hence the retryable Unavailable.
+                _logger.LogWarning(exception, "Api.TreeAdmin: gRPC call to {Method} hit a WAL shard quiesced for a placement move.", context.Method);
+                return new RpcException(new Status(StatusCode.Unavailable, "A storage partition is briefly paused for a placement move and the write was not applied. Retry after a short backoff."));
             case InvalidOperationException ex:
                 // A precondition failure surfaced by the composed facade. The message
                 // is safe and actionable (no secrets), so surface it as
