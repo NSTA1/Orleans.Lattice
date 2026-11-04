@@ -88,10 +88,43 @@ public sealed class U2Contract() : ChapterContract("U2")
     /// <param name="schema">The Schema API.</param>
     /// <param name="operationId">The remediation's operation id.</param>
     /// <param name="what">The remediation, for messages.</param>
-    public static Task AwaitRemediationAsync(Orleans.Lattice.Api.Schema.Grpc.LatticeSchemaApiGrpcClient schema, string operationId, string what) =>
+    /// <param name="aliasWait">
+    /// How to judge the remediation's wait for another operation's alias reservation on its
+    /// tree; see <see cref="ContractWait.ExternalWait"/>. <see langword="null"/> when the
+    /// stall check alone applies.
+    /// </param>
+    public static Task AwaitRemediationAsync(
+        Orleans.Lattice.Api.Schema.Grpc.LatticeSchemaApiGrpcClient schema,
+        string operationId,
+        string what,
+        ContractWait.ExternalWait? aliasWait = null) =>
         ContractWait.SucceededWhileAdvancingAsync(
             what, () => schema.GetSchemaOperationStatusAsync(operationId), RemediationStall, RemediationCeiling,
-            convergence: RemediationConvergence);
+            convergence: RemediationConvergence, externalWait: aliasWait);
+
+    /// <summary>
+    /// How long a remediation may wait in <c>WaitingForAliasOperation</c> on one named holder of
+    /// its tree's alias. After a coordinated restore the peer re-seeds the tree, and the
+    /// re-seed's bootstrap copy reserves the alias for the whole copy: minutes on the contract
+    /// estate (more than eight on main, run 41806502191). Ten minutes lets a slow copy finish,
+    /// still leaves room under <see cref="RemediationCeiling"/>, and the timeout names the
+    /// holder so a copy that never ends is told apart from a remediation that stopped.
+    /// </summary>
+    public static readonly TimeSpan AliasWaitCeiling = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// The alias wait for a remediation of <paramref name="treeId"/>: the holder the harness can
+    /// name is the tree's resize or replication re-seed bootstrap copy, both of which run through
+    /// the tree's resize grain and reserve its alias.
+    /// </summary>
+    /// <param name="admin">The Tree Admin API.</param>
+    /// <param name="treeId">The remediated tree.</param>
+    public static ContractWait.ExternalWait AliasWaitOn(
+        Orleans.Lattice.Api.TreeAdmin.Grpc.LatticeTreeAdminApiGrpcClient admin, string treeId) =>
+        new("WaitingForAliasOperation", AliasWaitCeiling, async () =>
+            await admin.GetResizeStatusAsync(treeId) is { InProgress: true } resize
+                ? $"the resize or re-seed bootstrap copy of {treeId} (undo requested: {resize.UndoRequested})"
+                : null);
 
     /// <summary>
     /// A whole-tree migration saturates the journey estate (#5569): its own calls then time out

@@ -154,6 +154,73 @@ public sealed class ContractWaitSelfTests
 
     private static LatticeOperationStatus Status(LatticeOperationState state, long units, long total) => Status(state, units) with { TotalUnits = total };
 
+    private static ContractWait.ExternalWait Wait(TimeSpan ceiling, Func<string?> holder) =>
+        new("waiting", ceiling, () => Task.FromResult(holder()));
+
+    private static LatticeOperationStatus Waiting() => Status(LatticeOperationState.Running, 0) with { Phase = "waiting" };
+
+    /// <summary>An operation waiting on a named holder outlasts the stall window, and succeeds once the holder lets go.</summary>
+    [Test]
+    public async Task A_wait_on_a_named_holder_does_not_stall()
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        var done = await ContractWait.SucceededWhileAdvancingAsync(
+            "the self-test operation",
+            () => Task.FromResult<LatticeOperationStatus?>(clock.Elapsed > Stall * 3
+                ? Status(LatticeOperationState.Succeeded, 1)
+                : Waiting()),
+            Stall,
+            TimeSpan.FromMinutes(1),
+            externalWait: Wait(TimeSpan.FromMinutes(1), () => "the resize of t"));
+
+        Assert.That(done.State, Is.EqualTo(LatticeOperationState.Succeeded));
+    }
+
+    /// <summary>A wait on a named holder fails at the wait's own ceiling, naming the holder.</summary>
+    [Test]
+    public void A_wait_on_a_named_holder_fails_at_its_ceiling_naming_the_holder()
+    {
+        var ex = Assert.ThrowsAsync<TimeoutException>(() => ContractWait.SucceededWhileAdvancingAsync(
+            "the self-test operation",
+            () => Task.FromResult<LatticeOperationStatus?>(Waiting()),
+            TimeSpan.FromMinutes(1),
+            TimeSpan.FromMinutes(1),
+            externalWait: Wait(Stall, () => "the resize of t")));
+
+        Assert.That(ex!.Message, Does.Contain("waited in waiting").And.Contain("the resize of t"));
+    }
+
+    /// <summary>A wait whose holder the harness cannot name is judged by the stall check as before.</summary>
+    [Test]
+    public void A_wait_on_an_unnamed_holder_still_stalls()
+    {
+        var ex = Assert.ThrowsAsync<TimeoutException>(() => ContractWait.SucceededWhileAdvancingAsync(
+            "the self-test operation",
+            () => Task.FromResult<LatticeOperationStatus?>(Waiting()),
+            Stall,
+            TimeSpan.FromMinutes(1),
+            externalWait: Wait(TimeSpan.FromMinutes(1), () => null)));
+
+        Assert.That(ex!.Message, Does.Contain("made no progress"));
+    }
+
+    /// <summary>A stall after a named wait ends names the holder the operation last waited on.</summary>
+    [Test]
+    public void A_stall_after_a_named_wait_names_the_last_holder()
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        var ex = Assert.ThrowsAsync<TimeoutException>(() => ContractWait.SucceededWhileAdvancingAsync(
+            "the self-test operation",
+            () => Task.FromResult<LatticeOperationStatus?>(clock.Elapsed < Stall ? Waiting() : Status(LatticeOperationState.Running, 4)),
+            Stall,
+            TimeSpan.FromMinutes(1),
+            externalWait: Wait(TimeSpan.FromMinutes(1), () => "the resize of t")));
+
+        Assert.That(ex!.Message, Does.Contain("made no progress").And.Contain("last waiting holder: the resize of t"));
+    }
+
     private static LatticeOperationStatus Status(LatticeOperationState state, long units) => new()
     {
         OperationId = "op",
