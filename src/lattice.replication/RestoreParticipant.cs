@@ -87,11 +87,26 @@ internal sealed class RestoreParticipant(
     /// </summary>
     private const int BuildAttemptBudget = 3;
 
-    /// <summary>Red proof for #5791: the knobs exist, the wait does not.</summary>
-    internal IReadOnlyList<TimeSpan> AliasWaitBackoff { get; init; } = [];
+    /// <summary>
+    /// The backoff between shadow builds refused because another alias operation holds
+    /// the target tree's reservation (#5791), the same schedule #5750 gave tracked
+    /// schema operations.
+    /// </summary>
+    internal static readonly IReadOnlyList<TimeSpan> DefaultAliasWaitBackoff =
+        [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10)];
 
-    /// <summary>Red proof for #5791: the knobs exist, the wait does not.</summary>
-    internal TimeSpan AliasWaitCeiling { get; init; }
+    /// <summary>
+    /// How long a prepare waits behind another alias operation before the refusal is
+    /// treated as a build failure (#5791). It matches #5750's schema default and sits
+    /// well inside the coordinator's one-hour prepare-progress deadline.
+    /// </summary>
+    internal static readonly TimeSpan DefaultAliasWaitCeiling = TimeSpan.FromMinutes(15);
+
+    /// <summary>The backoff between alias-refused builds; tests shorten it.</summary>
+    internal IReadOnlyList<TimeSpan> AliasWaitBackoff { get; init; } = DefaultAliasWaitBackoff;
+
+    /// <summary>The longest a prepare waits behind another alias operation; tests shorten it.</summary>
+    internal TimeSpan AliasWaitCeiling { get; init; } = DefaultAliasWaitCeiling;
 
     /// <summary>
     /// Cutover fence window in seconds. Zero selects the fence grain's own default
@@ -637,12 +652,15 @@ internal sealed class RestoreParticipant(
         // Unfenced, resumable shadow build. The live tree is NOT fenced here: the
         // shadow is materialized from the backup's fixed past cut while live
         // traffic keeps running. A transient failure is retried within a bounded
-        // budget; a permanent one cleans up and votes to abort.
+        // budget; a permanent one cleans up and votes to abort. A refusal because
+        // another alias operation holds the tree's reservation (a replication
+        // re-seed, a resize, a remediation) is waited out separately and spends
+        // none of that budget (#5791).
         for (var attempt = 1; ; attempt++)
         {
             try
             {
-                var result = await engine.BuildShadowAsync(restoreRequest, cancellationToken);
+                var result = await BuildShadowBehindAliasReservationAsync(restoreRequest, request.SagaId, cancellationToken);
                 _built[request.SagaId] = result;
                 RecordVote(LatticeReplicationMetrics.SagaReasonCommit);
                 return new SagaParticipantPrepareResult(SagaVote.Commit);
@@ -665,7 +683,7 @@ internal sealed class RestoreParticipant(
                 return new SagaParticipantPrepareResult(
                     SagaVote.Abort, $"Precondition failed: {ex.Message}");
             }
-            catch (Exception ex) when (attempt < BuildAttemptBudget)
+            catch (Exception ex) when (attempt < BuildAttemptBudget && ex is not LatticeAliasOperationInProgressException)
             {
                 logger.LogWarning(ex,
                     "Restore participant: shadow build attempt {Attempt}/{Budget} failed for saga '{SagaId}'; retrying.",
@@ -681,6 +699,43 @@ internal sealed class RestoreParticipant(
                 RecordVote(LatticeReplicationMetrics.SagaReasonBuildFailed);
                 return new SagaParticipantPrepareResult(
                     SagaVote.Abort, $"Shadow build failed: {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Builds the shadow, waiting behind another alias operation that holds the target
+    /// tree's reservation (#5791). <see cref="LatticeAliasOperationInProgressException"/>
+    /// is a transient refusal - the holder releases the reservation when it completes,
+    /// as a replication re-seed's bootstrap copy does at cutover - so it is retried on
+    /// <see cref="AliasWaitBackoff"/> until the next wait would pass
+    /// <see cref="AliasWaitCeiling"/>, and only then surfaces as a build failure, which
+    /// aborts at once rather than spending the build-attempt budget on further waits. A
+    /// retried build is idempotent: the shadow is keyed by the deterministic operation id.
+    /// </summary>
+    private async Task<LatticeRestoreResult> BuildShadowBehindAliasReservationAsync(
+        LatticeRestoreRequest restoreRequest, string sagaId, CancellationToken cancellationToken)
+    {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        for (var wait = 0; ; wait++)
+        {
+            try
+            {
+                return await engine!.BuildShadowAsync(restoreRequest, cancellationToken);
+            }
+            catch (LatticeAliasOperationInProgressException refused)
+            {
+                var delay = AliasWaitBackoff[Math.Min(wait, AliasWaitBackoff.Count - 1)];
+                if (System.Diagnostics.Stopwatch.GetElapsedTime(started) + delay > AliasWaitCeiling)
+                {
+                    throw;
+                }
+
+                logger.LogInformation(
+                    "Restore participant: the shadow build for saga '{SagaId}' is waiting for alias operation '{Holder}' "
+                    + "on tree '{TreeId}' to finish.",
+                    sagaId, refused.HolderOperationId, refused.TreeId);
+                await Task.Delay(delay, cancellationToken);
             }
         }
     }
@@ -974,7 +1029,7 @@ internal sealed class RestoreParticipant(
 
             try
             {
-                built.Add(await engine!.BuildShadowAsync(restoreRequest, cancellationToken));
+                built.Add(await BuildShadowBehindAliasReservationAsync(restoreRequest, request.SagaId, cancellationToken));
             }
             catch (OperationCanceledException)
             {
