@@ -297,6 +297,12 @@ latch-disabled red proof ran in CI); production
   re-claims; the duplicate's own snapshot and the purge's trim; the unreachable leaf's
   tick re-check.
 
+The epic also recorded one gap in the WAL durability model it builds on:
+`WalDurability` ([gaps](Refinement.md#deliberate-abstraction-gaps)) has no in-process
+resync and no reactivation that keeps an abandoned call running, and cannot tell which
+write occupies an offset, so an allocator re-seeded beneath a call still in motion
+(#5799) is outside it until #5803 extends it.
+
 Two cuts are budget bounds rather than abstractions, and the core's
 [property classification](LiveAdvanceCoreRefinement.md#property-classification) names
 them: the liveness property is checked on the base and `Bulk` only (`Restart` holds it
