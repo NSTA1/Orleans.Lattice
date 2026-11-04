@@ -267,6 +267,86 @@ public sealed class AzureTableWalStorageProviderOverlapIntegrationTests
             Is.EqualTo(new[] { (0L, 1), (1L, 1), (2L, 3), (3L, 3), (4L, 3), (5L, 3) }),
             "every acknowledged offset still holds the write that was acknowledged there, once");
     }
+    [Test]
+    public async Task A_stale_writers_later_batch_never_lands_over_a_successors_acknowledged_batch()
+    {
+        // Issue #5810: a predecessor P (instance A) committed [0,3]. Its in-memory
+        // written bound is 3, so it claims a later batch above it with no I/O. A
+        // successor S (instance B, another silo) acknowledged [4,6] and then [7,9]
+        // meanwhile. P's [5,6] lands in its own batch partition, keyed by start 5,
+        // so nothing in storage collides with S's partition 4: offsets 5 and 6 are
+        // written twice, and P's phase 2 upserts TAIL back to 6.
+        await using var predecessor = CreateProvider();
+        await predecessor.AppendBatchAsync(TreeId, 0, Entries(0, 4, value: 1), CancellationToken.None);
+
+        await using var successor = CreateProvider();
+        await successor.AppendBatchAsync(TreeId, 0, Entries(4, 3, value: 2), CancellationToken.None);
+        await successor.AppendBatchAsync(TreeId, 0, Entries(7, 3, value: 2), CancellationToken.None);
+
+        Exception? refused = null;
+        try
+        {
+            await predecessor.AppendBatchAsync(TreeId, 0, Entries(5, 2, value: 9), CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            refused = ex;
+        }
+
+        await using var reader = CreateProvider();
+        var values = await ReadValuesAsync(reader);
+        var tail = await reader.GetHighestOffsetAsync(TreeId, 0, CancellationToken.None);
+        Assert.Multiple(() =>
+        {
+            Assert.That(refused, Is.Not.Null, "the stale writer's overlapping batch was accepted");
+            Assert.That(values, Is.EqualTo(new[]
+            {
+                (0L, 1), (1L, 1), (2L, 1), (3L, 1), (4L, 2), (5L, 2), (6L, 2), (7L, 2), (8L, 2), (9L, 2),
+            }), "every offset is stored once, holding the acknowledged write");
+            Assert.That(tail, Is.EqualTo(9L), "the stale writer's phase 2 regressed TAIL");
+        });
+    }
+    [Test]
+    public async Task A_regressed_tail_never_lets_a_recovered_writer_reissue_committed_offsets()
+    {
+        // Issue #5810, escalation: the successor S commits [4,9] as one batch, the
+        // stale writer P's [5,6] then upserts TAIL back to 6, and a writer recovered
+        // from storage (reconcile, then the highest offset) resumes at 7, inside S's
+        // committed batch, at a start no batch partition holds.
+        await using var predecessor = CreateProvider();
+        await predecessor.AppendBatchAsync(TreeId, 0, Entries(0, 4, value: 1), CancellationToken.None);
+        await using var successor = CreateProvider();
+        await successor.AppendBatchAsync(TreeId, 0, Entries(4, 6, value: 2), CancellationToken.None);
+        try
+        {
+            await predecessor.AppendBatchAsync(TreeId, 0, Entries(5, 2, value: 9), CancellationToken.None);
+        }
+        catch (Exception)
+        {
+            // Refused: the fence holds.
+        }
+
+        await using var recovered = CreateProvider();
+        await recovered.ReconcileAsync(TreeId, 0, CancellationToken.None);
+        var next = await recovered.GetHighestOffsetAsync(TreeId, 0, CancellationToken.None) + 1;
+        Exception? reissue = null;
+        try
+        {
+            await recovered.AppendBatchAsync(TreeId, 0, Entries(next, 1, value: 7), CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            reissue = ex;
+        }
+
+        await using var reader = CreateProvider();
+        var offsets = (await ReadValuesAsync(reader)).Select(v => v.Offset).ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(next, Is.GreaterThanOrEqualTo(10L), $"recovery resumed at {next}, inside a committed batch");
+            Assert.That(offsets, Is.Unique, "an offset is stored twice");
+        });
+    }
     private AzureTableWalStorageProvider CreateProvider() =>
         new(
             Options.Create(new AzureTableWalStorageOptions
