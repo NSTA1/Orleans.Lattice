@@ -82,7 +82,17 @@ internal sealed class ClusterTreesPage(ShellPage shell)
     public async Task ReviewTreeAsync(string tree, int shards, int leafKeys, int children)
     {
         await CreateDialog.GetByRole(AriaRole.Button, new() { Name = "Review" }).ClickAsync();
-        await Expect(CreateDialog.Locator("[data-lt-create-tree=review]")).ToContainTextAsync(
+
+        // Review first asks the cluster whether the caller may create the name and whether it is
+        // taken, so it ends on the review or on a refusal only once those reads end (PanelSettled).
+        var review = CreateDialog.Locator("[data-lt-create-tree=review]");
+        var refusal = CreateDialog.Locator("[data-lt-create-tree-refusal]");
+        if (!await PanelSettled.SettledAsync(review, refusal))
+        {
+            Assert.Fail($"Review of {tree} was refused: {await refusal.First.InnerTextAsync()}");
+        }
+
+        await Expect(review).ToContainTextAsync(
             $"Create the empty tree {tree} with {shards} physical shards, {leafKeys} keys per leaf and {children} children per internal node.");
     }
 
@@ -94,7 +104,7 @@ internal sealed class ClusterTreesPage(ShellPage shell)
     public async Task CreateTreeAsync(string tree, int shards, int leafKeys, int children)
     {
         await CreateDialog.GetByRole(AriaRole.Button, new() { Name = "Create tree" }).ClickAsync();
-        await shell.ExpectHeadingAsync(tree);
+        await Expect(shell.Heading).ToHaveTextAsync(tree, new() { Timeout = PanelSettled.BoundMs });
         await Expect(shell.Content.Locator("[data-lt-tree-created]")).ToContainTextAsync(
             $"{tree} is new and empty, with {shards} physical shards, {leafKeys} keys per leaf and {children} children per internal node.");
         await Expect(ClusterParts.Toast(shell, $"Tree {tree} created.")).ToHaveCountAsync(1);
