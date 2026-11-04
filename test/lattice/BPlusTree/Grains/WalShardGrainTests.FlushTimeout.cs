@@ -58,10 +58,14 @@ public partial class WalShardGrainTests
             Throws.TypeOf<TimeoutException>());
 
         // The chain has drained; the next append flows through to the
-        // (now un-gated) inner provider and commits at offset 0.
+        // (now un-gated) inner provider. The hung call observes the deadline's
+        // cancellation and settles without landing, so its offset is reused (0)
+        // when it has finished unwinding before the resync reads the tail, and
+        // skipped (1) when it is still unwinding then: the allocator never
+        // re-seeds beneath a call still in motion (issue #5799).
         var offset = await grain.AppendAsync(MakeEntry("b"), CancellationToken.None)
             .WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.That(offset, Is.EqualTo(0L));
+        Assert.That(offset, Is.AnyOf(0L, 1L));
     }
 
     [Test]
@@ -179,9 +183,12 @@ public partial class WalShardGrainTests
 
         // The chain has drained even though the first provider call is
         // still hung; the next append flows through to the inner provider.
+        // It is allocated past the hung window, never offset 0 again: the hung
+        // call may still land there, and a reissued offset would collide with
+        // that landing (issue #5799).
         var offset = await grain.AppendAsync(MakeEntry("b"), CancellationToken.None)
             .WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.That(offset, Is.EqualTo(0L));
+        Assert.That(offset, Is.EqualTo(1L));
     }
 
     /// <summary>

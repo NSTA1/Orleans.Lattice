@@ -435,9 +435,10 @@ internal sealed partial class WalShardGrain(
         // the actual durable tail before the grain accepts appends.
         // Single-transaction backends inherit the interface's default
         // no-op implementation.
+        var abandonedEndBeforeRead = UnsettledAbandonedEnd();
         await _provider.ReconcileAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
         var highest = await _provider.GetHighestOffsetAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
-        _nextOffset = WalOffsetAllocationCore.RecoveredNextOffset(highest);
+        _nextOffset = RecoveredNextOffsetPastAbandoned(highest, abandonedEndBeforeRead);
         // Epic #5605: everything below the recovered head may have been appended
         // unstamped before this activation, so the watermark restarts just below it.
         _unstampedWatermark = _nextOffset - 1;
@@ -680,7 +681,7 @@ internal sealed partial class WalShardGrain(
                 if (slot.Task is { IsCompleted: false } flushTask)
                 {
                     _outstandingProviderWork.Add(flushTask);
-                    AbandonedWindows()?.Add(slot.StartOffset, flushTask);
+                    AbandonedWindows()?.Add(slot.StartOffset, slot.EndOffsetExclusive, flushTask);
                 }
             }
             _inFlight.Clear();
@@ -1388,6 +1389,50 @@ internal sealed partial class WalShardGrain(
     }
 
     /// <summary>
+    /// The offset an allocator re-seeded from the provider's tail hands out next:
+    /// one past <paramref name="highest"/>, and never below the end of a window
+    /// whose provider call this shard abandoned while it is still in motion
+    /// (issue #5799). Such a call can still land its whole window, possibly above a
+    /// gap the failed window left, so an offset reissued beneath its end collides
+    /// with the landing: the provider refuses one of the two, and the shard latches
+    /// that refusal as its sticky failure. Skipping the window leaves at worst a
+    /// hole if the call never lands, which readers pass once it settles (issue
+    /// #4621). The record is process-wide, so a predecessor activation's calls on
+    /// this silo count as well: each registers before its activation finishes
+    /// deactivating, so before a successor on this silo can recover. Used by
+    /// activation recovery and the post-failure resync alike.
+    /// <para>
+    /// <paramref name="abandonedEndBeforeRead"/> is <see cref="UnsettledAbandonedEnd"/>
+    /// taken before the provider's tail was read. A window that lands and settles
+    /// between that read and this call is in neither the tail nor the record any
+    /// more, so only the earlier snapshot keeps the allocator from going back
+    /// beneath it.
+    /// </para>
+    /// </summary>
+    private long RecoveredNextOffsetPastAbandoned(long highest, long? abandonedEndBeforeRead)
+    {
+        var next = WalOffsetAllocationCore.RecoveredNextOffset(highest);
+        if (abandonedEndBeforeRead is { } before && before > next)
+        {
+            next = before;
+        }
+
+        return UnsettledAbandonedEnd() is { } now && now > next ? now : next;
+    }
+
+    /// <summary>
+    /// One past the highest offset of a window this shard abandoned whose provider
+    /// call is still in motion, or <see langword="null"/> when there is none.
+    /// </summary>
+    private long? UnsettledAbandonedEnd()
+    {
+        lock (_stateGate)
+        {
+            return AbandonedWindows()?.HighestUnsettledEndExclusive();
+        }
+    }
+
+    /// <summary>
     /// This shard's record in <see cref="WalAbandonedFlushRegistry"/>, resolved for
     /// the current provider; <see langword="null"/> before initialisation. Read and
     /// cached under <see cref="_stateGate"/>.
@@ -1413,7 +1458,7 @@ internal sealed partial class WalShardGrain(
     /// for while it may still land: for the move quiesce (issue #4525) and for the
     /// read watermark (issue #4621).
     /// </summary>
-    private void TrackAbandonedWindow(long startOffset, Task? work)
+    private void TrackAbandonedWindow(long startOffset, long endOffsetExclusive, Task? work)
     {
         if (work is null || work.IsCompleted)
         {
@@ -1423,7 +1468,7 @@ internal sealed partial class WalShardGrain(
         lock (_stateGate)
         {
             _outstandingProviderWork.Add(work);
-            AbandonedWindows()?.Add(startOffset, work);
+            AbandonedWindows()?.Add(startOffset, endOffsetExclusive, work);
         }
     }
 
@@ -2245,7 +2290,7 @@ internal sealed partial class WalShardGrain(
                     // call itself may still land. Record it so a move quiesce
                     // does not report a stable tail while it is outstanding,
                     // and so no read passes its window until it settles (#4621).
-                    TrackAbandonedWindow(slot.StartOffset, providerCall);
+                    TrackAbandonedWindow(slot.StartOffset, slot.EndOffsetExclusive, providerCall);
                     // Distinguish the two cancellation sources so the
                     // surfaced TimeoutException attributes the trip to
                     // the actually-firing deadline rather than blaming
@@ -2521,6 +2566,11 @@ internal sealed partial class WalShardGrain(
             // flush it was meant to rescue.
             var resyncTimeout = Options.WalFlushTimeout;
 
+            // Snapshot the abandoned windows still in motion before reading the
+            // tail (issue #5799): one that lands and settles after the read is in
+            // neither the tail nor the record by the time the allocator is re-seeded.
+            var abandonedEndBeforeRead = UnsettledAbandonedEnd();
+
             // Reconcile before reading the tail, mirroring activation
             // recovery (OnActivateAsync). A surfaced phase-1 fault can
             // leave durable phase-1 entry rows above the phase-2 TAIL;
@@ -2551,7 +2601,7 @@ internal sealed partial class WalShardGrain(
                 deadline?.Token ?? CancellationToken.None).ConfigureAwait(true);
             lock (_stateGate)
             {
-                _nextOffset = WalOffsetAllocationCore.RecoveredNextOffset(highest);
+                _nextOffset = RecoveredNextOffsetPastAbandoned(highest, abandonedEndBeforeRead);
                 _highestStored = highest;
                 _stickyFailure = null;
             }
@@ -3028,9 +3078,10 @@ internal sealed partial class WalShardGrain(
         // half-committed multi-phase backend state before reading the
         // tail so the test seam exercises the same activation contract
         // production grains use.
+        var abandonedEndBeforeRead = UnsettledAbandonedEnd();
         await provider.ReconcileAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(true);
         var highest = await provider.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(true);
-        _nextOffset = WalOffsetAllocationCore.RecoveredNextOffset(highest);
+        _nextOffset = RecoveredNextOffsetPastAbandoned(highest, abandonedEndBeforeRead);
         // Epic #5605: everything below the recovered head may have been appended
         // unstamped before this activation, so the watermark restarts just below it.
         _unstampedWatermark = _nextOffset - 1;

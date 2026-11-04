@@ -174,6 +174,99 @@ public sealed class AzureTableWalStorageProviderOverlapIntegrationTests
         Assert.That(await ReadOffsetsAsync(_sut), Is.EqualTo(Enumerable.Range(0, 12).Select(i => (long)i).ToArray()));
     }
 
+    // ----- Two writers over one shard (issue #5799) -----
+    //
+    // A WAL shard activation on another silo cannot see this silo's abandoned
+    // provider calls, so the allocator fix cannot stop two writers issuing the same
+    // offsets. These pin that the storage layer fails closed when they do: entry
+    // and manifest rows are insert-only and the replay proof compares content, so a
+    // second batch at the same offsets is refused, never overwrites the first and
+    // is never accepted as a replay of it. An acknowledged batch is never displaced.
+
+    [Test]
+    public async Task A_second_writer_reissuing_an_acknowledged_batchs_offsets_is_refused_and_changes_no_row()
+    {
+        await _sut.AppendBatchAsync(TreeId, 0, Entries(0, 3, value: 1), CancellationToken.None);
+
+        await using var other = CreateProvider();
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                async () => await other.AppendBatchAsync(TreeId, 0, Entries(0, 3, value: 2), CancellationToken.None),
+                Throws.Exception, "same start and length, different content: not a replay");
+            Assert.That(
+                async () => await other.AppendBatchAsync(TreeId, 0, Entries(0, 2, value: 2), CancellationToken.None),
+                Throws.Exception, "same start, shorter: not a replay");
+            Assert.That(
+                async () => await other.AppendBatchAsync(TreeId, 0, Entries(0, 4, value: 2), CancellationToken.None),
+                Throws.Exception, "same start, longer");
+            Assert.That(
+                async () => await other.AppendBatchAsync(TreeId, 0, Entries(1, 3, value: 2), CancellationToken.None),
+                Throws.Exception, "a later start inside the acknowledged batch");
+        });
+
+        await using var reader = CreateProvider();
+        Assert.That(await ReadValuesAsync(reader), Is.EqualTo(new[] { (0L, 1), (1L, 1), (2L, 1) }),
+            "the acknowledged batch is stored exactly once, unchanged");
+    }
+
+    [Test]
+    public async Task A_second_writer_reissuing_the_offsets_of_a_batch_still_in_motion_is_refused()
+    {
+        // The first writer's phase 1 has landed and its phase 2 has not: its batch is
+        // in motion on another silo, invisible to this instance's in-motion guard.
+        await SynthesiseUncommittedBatchAsync(startOffset: 0L, entryCount: 3);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                async () => await _sut.AppendBatchAsync(TreeId, 0, Entries(0, 3, value: 2), CancellationToken.None),
+                Throws.Exception, "same start, different content");
+            Assert.That(
+                async () => await _sut.AppendBatchAsync(TreeId, 0, Entries(2, 2, value: 2), CancellationToken.None),
+                Throws.Exception, "a later start inside the batch in motion");
+        });
+
+        // The first writer's batch then completes; it holds its own content.
+        await _sut.ReconcileAsync(TreeId, 0, CancellationToken.None);
+        await using var reader = CreateProvider();
+        Assert.That(await ReadValuesAsync(reader), Is.EqualTo(new[] { (0L, 1), (1L, 1), (2L, 1) }));
+    }
+
+    [Test]
+    public async Task A_late_manifest_row_from_an_abandoned_submit_never_displaces_an_acknowledged_batch()
+    {
+        // The residual from #5799: an abandoned phase-2 submit that the service applies
+        // after the writer stopped waiting for it lands its manifest row late. Here the
+        // orphan it belongs to, above a gap, was rolled back by a reconcile, the gap
+        // was filled and a batch was acknowledged over the orphan's offsets.
+        await _sut.AppendBatchAsync(TreeId, 0, Entries(0, 2, value: 1), CancellationToken.None);
+        await SynthesiseUncommittedBatchAsync(startOffset: 3L, entryCount: 3);
+        await _sut.ReconcileAsync(TreeId, 0, CancellationToken.None);
+        await _sut.AppendBatchAsync(TreeId, 0, Entries(2, 4, value: 3), CancellationToken.None);
+
+        // The late manifest row for the rolled-back orphan [3, 5] lands.
+        var late = new AzureTableWalEntity
+        {
+            PartitionKey = AzureTableWalStorageProvider.BuildManifestPartitionKey(TreeId, 0),
+            RowKey = AzureTableWalStorageProvider.BuildManifestRowKey(3L),
+            Offset = 5L,
+            Payload = null,
+        };
+        try
+        {
+            await _table.AddEntityAsync(late);
+        }
+        catch (RequestFailedException ex) when (ex.Status == 409)
+        {
+            // Already claimed by a manifest row of its own: refused, which is also fail-closed.
+        }
+
+        await using var reader = CreateProvider();
+        Assert.That(await ReadValuesAsync(reader),
+            Is.EqualTo(new[] { (0L, 1), (1L, 1), (2L, 3), (3L, 3), (4L, 3), (5L, 3) }),
+            "every acknowledged offset still holds the write that was acknowledged there, once");
+    }
     private AzureTableWalStorageProvider CreateProvider() =>
         new(
             Options.Create(new AzureTableWalStorageOptions
@@ -218,7 +311,21 @@ public sealed class AzureTableWalStorageProviderOverlapIntegrationTests
         return offsets.ToArray();
     }
 
+    private static async Task<(long Offset, int Value)[]> ReadValuesAsync(AzureTableWalStorageProvider provider)
+    {
+        var values = new List<(long, int)>();
+        await foreach (var entry in provider.ReadAsync(TreeId, 0, -1L, 1024, CancellationToken.None))
+        {
+            values.Add((entry.Offset, entry.Mutation.Value![0]));
+        }
+
+        return values.ToArray();
+    }
+
     private static WalEntry[] Entries(long startOffset, int count) =>
+        Entries(startOffset, count, value: 1);
+
+    private static WalEntry[] Entries(long startOffset, int count, byte value) =>
         Enumerable.Range(0, count)
             .Select(i => startOffset + i)
             .Select(offset => new WalEntry
@@ -229,7 +336,7 @@ public sealed class AzureTableWalStorageProviderOverlapIntegrationTests
                     TreeId = TreeId,
                     Kind = MutationKind.Set,
                     Key = string.Create(CultureInfo.InvariantCulture, $"k{offset}"),
-                    Value = new byte[] { 1 },
+                    Value = new byte[] { value },
                     Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
                     OriginClusterId = "site-a",
                 },
