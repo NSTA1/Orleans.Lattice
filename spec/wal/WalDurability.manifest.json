@@ -8,12 +8,12 @@
     "actions": 30,
     "mutations": 52,
     "behaviourRows": 48,
-    "distinctStates": 549523
+    "distinctStates": 420229
   },
   "variants": {
-    "TwoFaults": { "distinctStates": 4317959 },
+    "TwoFaults": { "distinctStates": 3237411 },
     "SnapshotLoss": { "distinctStates": 5070839 },
     "WarmLeaf": { "distinctStates": 17041 },
-    "CrossSilo": { "distinctStates": 2417840 }
+    "CrossSilo": { "distinctStates": 1954533 }
   }
 }

@@ -231,14 +231,14 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardWalDurability"],
-        "note": "WalDurability's base (549,523 states with both liveness properties, about 12 minutes on two TLC workers, its longest case) and its mutations that keep cross-silo moves off, co-located so the base serves their full-bound controls (#5161), 48 cases; split out of formal-tlc-replication-wal (#5809), whose critical path its base's growth with the #5803 allocator re-seed had become. With 49 cases it took a 25.2-minute item in run 41820110344 (#5809). Its variant configurations but CrossSilo (TwoFaults, SnapshotLoss, WarmLeaf) stay in the catch-all."
+        "note": "WalDurability's base (420,229 states with both liveness properties, about 10 minutes on two TLC workers, its longest case) and its mutations that keep cross-silo moves off, co-located so the base serves their full-bound controls (#5161), 48 cases; split out of formal-tlc-replication-wal (#5809), whose critical path its base's growth with the #5803 allocator re-seed had become. With 49 cases it took a 25.2-minute item in run 41820110344 (#5809). Its variant configurations but CrossSilo (TwoFaults, SnapshotLoss, WarmLeaf) stay in the catch-all."
       },
       {
         "shard": "formal-tlc-wal-durability-cross-silo",
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardWalDurabilityCrossSilo"],
-        "note": "WalDurability's mutations that raise WithCrossSiloMove and its CrossSilo variant (2,417,840 states), 6 cases (#5810). Each such mutation's control runs the raised configuration, about 2.4M states, which the base cannot serve; five of them took 6.1 minutes locally in parallel. Kept apart so those controls do not lengthen formal-tlc-wal-durability. Estimated at 15 minutes until measured on its CI leg."
+        "note": "WalDurability's mutations that raise WithCrossSiloMove and its CrossSilo variant (1,954,533 states), 6 cases (#5810, #5825). Each such mutation's control runs the raised configuration, about 2.4M states, which the base cannot serve; five of them took 6.1 minutes locally in parallel. Kept apart so those controls do not lengthen formal-tlc-wal-durability. Estimated at 15 minutes until measured on its CI leg."
       },
       {
         "shard": "formal-tlc-wal-append-epoch",

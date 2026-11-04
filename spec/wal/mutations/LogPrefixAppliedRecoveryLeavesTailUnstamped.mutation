@@ -1,0 +1,30 @@
+# Pairs with LogPrefixApplied. The provider before the #5825 fix: a new WAL
+# shard activation only reads TAIL on recovery and does not re-stamp it. A
+# predecessor on another silo, whose instance commits phase 2 in arrival order,
+# still holds a current view of TAIL, so its late commit of a lower batch is not
+# fenced: readers of the successor have passed that offset as a settled hole,
+# and the entry appears beneath them.
+MODULE: LogPrefixAppliedRecoveryLeavesTailUnstamped
+TARGET: LogPrefixApplied
+CLASS: Invariant
+SUMMARY: a recovering activation does not re-stamp TAIL, so a predecessor's late lower batch lands beneath readers
+PERTURBS: ShardRecover
+
+--- FIND
+    \* commit is refused by the fence (issue #5825).
+    /\ UNCHANGED ct
+    /\ curFresh' = TRUE
+    /\ prevFresh' = FALSE
+--- REPLACE
+    \* commit is refused by the fence (issue #5825).
+\* MUTATION: recovery reads TAIL but does not re-stamp it.
+    /\ UNCHANGED ct
+    /\ curFresh' = TRUE
+    /\ UNCHANGED prevFresh
+--- END
+--- FIND
+WithCrossSiloMove == FALSE
+--- REPLACE
+\* MUTATION: raises the bound so a lost activation may move to another silo.
+WithCrossSiloMove == TRUE
+--- END

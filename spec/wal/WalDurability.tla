@@ -383,8 +383,10 @@ ShardCrash ==
     /\ resyncing' = "no"
     /\ faults' = faults + 1
     /\ UNCHANGED <<occ, tail, acked>>
-    /\ UNCHANGED <<ct, prevFresh>>
+    \* The next activation's recovery reads and re-stamps TAIL, as ShardRecover.
+    /\ UNCHANGED ct
     /\ curFresh' = TRUE
+    /\ prevFresh' = FALSE
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
     \* This process's abandoned calls die with it (in-memory and file
@@ -450,11 +452,13 @@ Resync ==
     /\ next' = ReseedNext
     /\ resyncing' = "no"
     /\ UNCHANGED <<inflight, occ, tail, acked, orphans, hidden>>
-    \* The re-seed reads TAIL with its ETag (a refused conditional write's
-    \* detection: the instance's fence generation moves on, so nothing it
-    \* claimed before the read is ever committed).
-    /\ UNCHANGED <<ct, prevFresh>>
+    \* The re-seed's reconcile reads TAIL with its ETag (a refused conditional
+    \* write's detection: the instance's fence generation moves on, so nothing
+    \* it claimed before the read is ever committed) and re-stamps it, as
+    \* ShardRecover does (issue #5825).
+    /\ UNCHANGED ct
     /\ curFresh' = TRUE
+    /\ prevFresh' = FALSE
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
@@ -464,11 +468,14 @@ ShardRecover ==
     /\ next' = ReseedNext
     /\ resyncing' = "no"
     /\ UNCHANGED <<inflight, occ, tail, acked, orphans, hidden>>
-    \* The re-seed reads TAIL with its ETag (a refused conditional write's
-    \* detection: the instance's fence generation moves on, so nothing it
-    \* claimed before the read is ever committed).
-    /\ UNCHANGED <<ct, prevFresh>>
+    \* The new activation reads TAIL with its ETag and, before it serves a
+    \* read, re-stamps it: a conditional write of the same value under that
+    \* ETag, retried after a re-read when it is refused. The new ETag puts
+    \* every other instance's view out of date, so a predecessor's late
+    \* commit is refused by the fence (issue #5825).
+    /\ UNCHANGED ct
     /\ curFresh' = TRUE
+    /\ prevFresh' = FALSE
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
@@ -504,16 +511,16 @@ LateLand(o) ==
     /\ o \in orphans
     /\ orphans' = orphans \ {o}
     /\ hidden' = hidden \ {o}
-    \* A hidden call is the predecessor's: its silo commits phase 2 in offset
-    \* order, so it lands only below no row of its own. Its batch's start is
-    \* create-only; an offset the successor wrote mid-batch is not. Either
+    \* A hidden call is the predecessor's: its instance commits phase 2 in
+    \* arrival order, not offset order, so it may land below a row of its own
+    \* (issue #5825). Its batch's start is create-only; an offset the
+    \* successor wrote mid-batch is not. Either
     \* writer's commit lands only while its view of TAIL is current; otherwise
     \* the conditional TAIL write is refused and the call settles unlanded.
     /\ IF o \in hidden
        THEN IF /\ o >= tail
                /\ prevFresh
                /\ occ[o] \in {"none", "ackedMid"}
-               /\ \A p \in Offs : p > o => occ[p] \in {"none", "acked", "ackedMid", "late"}
             THEN /\ occ' = [occ EXCEPT ![o] = IF occ[o] = "none" THEN "latePrev" ELSE "dup"]
                  /\ ct' = Max({ct, o})
                  /\ curFresh' = FALSE
@@ -574,6 +581,9 @@ ReadStep(l) ==
     /\ up[l]
     /\ ~stale[l]
     /\ replayRequested[l]
+    \* A new WAL shard activation serves no read until its recovery completes
+    \* (WalShardGrain.OnActivateAsync).
+    /\ resyncing # "recover"
     /\ ReadFrom(l) < Watermark
     /\ LET o == ReadFrom(l)
        IN /\ rp' = [rp EXCEPT ![l] = o]

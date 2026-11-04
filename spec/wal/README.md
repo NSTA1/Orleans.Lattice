@@ -50,7 +50,7 @@ and its mutations as the record each module took its own from.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `WalDurability` | 15 | 6 | 30 | 52 | 48 | 549,523 |
+| `WalDurability` | 15 | 6 | 30 | 52 | 48 | 420,229 |
 | `WalMove` | 5 | 2 | 13 | 18 | 18 | 1,617 |
 | `WalPinRetirement` | 3 | 3 | 25 | 31 | 30 | 284,019 |
 | `WalAppendEpoch` | 5 | 0 | 17 | 23 | 20 | 150,706 |
@@ -80,7 +80,7 @@ modules map to production, except the three WAL shard checks its edges rest on.
 `WalDurability` has a two-fault variant configuration, `WalDurability.TwoFaults.cfg`
 (see "Variant configurations" in [`../README.md`](../README.md)). It checks every
 invariant and both action properties with a budget of two faults instead of one:
-4,317,959 distinct states to depth 42. The liveness properties stay at one fault,
+3,237,411 distinct states to depth 42. The liveness properties stay at one fault,
 because at two the full configuration is far past the TLC budget.
 
 Its second variant, `WalDurability.SnapshotLoss.cfg`, lets the environment destroy a
@@ -100,8 +100,8 @@ Its `WalDurability.CrossSilo.cfg` variant lets a lost activation's successor be 
 another silo, which cannot see its predecessor's abandoned calls still in motion
 (issue #5799), and whose predecessor's late batches land through that silo's own
 provider instance, held off the successor's batches by the TAIL commit fence (issue
-#5810): every invariant and all four action properties, 2,417,840 distinct states to
-depth 37. The base keeps such moves off, because with them its liveness check would
+#5810) and by the successor's re-stamp of `TAIL` on recovery (issue #5825): every
+invariant and all four action properties, 1,954,533 distinct states to depth 35. The base keeps such moves off, because with them its liveness check would
 pass the TLC budget.
 
 The `WalDurability.WarmLeaf.cfg` variant checks every property without faults:
@@ -259,11 +259,12 @@ model over the production pin and trim cores, checks them (see the refinement no
 abstraction gaps).
 
 Extending the model to the allocator's re-seed (#5803) and reviewing that extension
-found one more, in the Azure Table provider across silos. The model reproduced it
-before its fix, and it is fixed:
+found two more, in the Azure Table provider across silos. The model reproduced each
+before its fix, and both are fixed:
 
 | Issue | Defect | Mutation |
 |-------|--------|----------|
+| #5825 | The phase-2 worker commits in arrival order, so across a silo move a predecessor's lower batch can commit after its successor recovered and readers passed the offset as a settled hole: the entry appears below them. The #5811 fence does not refuse it, because the successor only read `TAIL`. **Fixed by #5827**: recovery re-stamps `TAIL` under the ETag it read before the activation serves a read, which puts the predecessor's view out of date. | `LogPrefixAppliedRecoveryLeavesTailUnstamped` |
 | #5810 | A predecessor activation's late batch on another silo, starting at a different offset, lands over a successor's acknowledged batch, so every read yields the shared offsets twice; its blind `TAIL` upsert regresses `TAIL`, so the next recovery reissues committed offsets. **Fixed by #5811**: a phase-2 commit is conditional on the `TAIL` ETag its provider instance last observed, under a fence generation that refuses every claim made before a refused write. | `OffsetWrittenOnceStaleWriterUnfenced`, `TailMonotoneStaleWriterBlindUpsert`, `RecoverNeverInsideCommittedUnfencedBlindTail` |
 
 When a fix lands, its gap row is removed and its detectors are re-proven red against

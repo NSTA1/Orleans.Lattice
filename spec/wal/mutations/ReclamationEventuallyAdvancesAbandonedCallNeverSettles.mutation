@@ -11,12 +11,12 @@ PERTURBS: LateLand, SettleHole
 --- FIND
     /\ orphans' = orphans \ {o}
     /\ hidden' = hidden \ {o}
-    \* A hidden call is the predecessor's: its silo commits phase 2 in offset
+    \* A hidden call is the predecessor's: its instance commits phase 2 in
 --- REPLACE
 \* MUTATION: a landed call stays in the registry.
     /\ orphans' = orphans
     /\ hidden' = hidden
-    \* A hidden call is the predecessor's: its silo commits phase 2 in offset
+    \* A hidden call is the predecessor's: its instance commits phase 2 in
 --- END
 
 --- FIND
