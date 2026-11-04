@@ -26,6 +26,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Schema - Alias-reservation wait.** `LatticeSchemaEnforcementOptions.AliasReservationWaitTimeout` (default 15 minutes) bounds how long a tracked remediation or migration waits for another operation's alias reservation on its tree to clear. ([#5750](https://github.com/NSTA1/Orleans.Lattice/issues/5750)) (`Orleans.Lattice.Schema`)
 
+- **Storage - Azure Table WAL trim full-sweep interval.** `AzureTableWalStorageOptions.TrimFullSweepInterval` (default 6 hours) and `AzureTableWalStorageOptions.DefaultTrimFullSweepInterval` set how often a trim of a WAL partition sweeps from the start of the log to reclaim orphaned entry rows. ([#5810](https://github.com/NSTA1/Orleans.Lattice/issues/5810)) (`Orleans.Lattice.Storage.AzureTable`)
+
 - **Tests - Story-only contract legs.** Each story-only chapter (U2, C1-C4) gets an isolated contract leg on a fresh estate, and journey and contract waits now follow real progress instead of fixed deadlines. ([#5660](https://github.com/NSTA1/Orleans.Lattice/issues/5660), [#5724](https://github.com/NSTA1/Orleans.Lattice/issues/5724), [#5725](https://github.com/NSTA1/Orleans.Lattice/issues/5725), [#5735](https://github.com/NSTA1/Orleans.Lattice/issues/5735), [#5736](https://github.com/NSTA1/Orleans.Lattice/issues/5736), [#5738](https://github.com/NSTA1/Orleans.Lattice/issues/5738), [#5739](https://github.com/NSTA1/Orleans.Lattice/issues/5739), [#5744](https://github.com/NSTA1/Orleans.Lattice/issues/5744)) (`repository-wide`)
 
 ### Security
@@ -100,7 +102,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Storage - Azure Table WAL commit fence.** A stale writer on a WAL partition, such as a predecessor activation still running after a silo failure or a WAL move, can no longer commit a batch over offsets another writer acknowledged, or lower the stored tail. Every completion now writes the tail conditionally on the ETag the instance last saw, at no extra round trip. Every release through 10.2.0 is exposed; finish a rolling upgrade before relying on the fence. ([#5810](https://github.com/NSTA1/Orleans.Lattice/issues/5810)) (`Orleans.Lattice.Storage.AzureTable`)
 
-- **Storage - Azure Table WAL trim reclaims orphaned entries.** Trim now also deletes, below the committed tail, the entry rows of appends whose commit never landed, which previously stayed in storage for good. `AzureTableWalStorageOptions.TrimFullSweepInterval` (default 6 hours) bounds how often a trim sweeps from the start of the log. ([#5810](https://github.com/NSTA1/Orleans.Lattice/issues/5810)) (`Orleans.Lattice.Storage.AzureTable`)
+- **Storage - Azure Table WAL trim reclaims orphaned entries.** Trim now also deletes, below the committed tail, the entry rows of appends whose commit never landed, which previously stayed in storage for good. How often a trim sweeps from the start of the log is set by the new `TrimFullSweepInterval` option. ([#5810](https://github.com/NSTA1/Orleans.Lattice/issues/5810)) (`Orleans.Lattice.Storage.AzureTable`)
 
 - **Explorer - Schema validation.** Rule cards reject reversed large-integer bounds without rounding valid constants. Semantic-version cards reject empty identifiers and leading-zero numeric prereleases; saved patterns remain unchanged when reopened. ([#5347](https://github.com/NSTA1/Orleans.Lattice/issues/5347)) (`Orleans.Lattice.Explorer.UI`)
 

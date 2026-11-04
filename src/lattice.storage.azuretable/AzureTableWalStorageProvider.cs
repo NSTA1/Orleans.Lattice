@@ -2184,9 +2184,9 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // manifest row names (issue #5810). The mark is capped at the persisted TAIL,
         // never the folded highest offset, which counts batches this instance has
         // accepted but not committed: those start above TAIL and are left alone.
-        // A steady trim sweeps from the previous watermark's batch; the first trim of
-        // the shard on this instance, and the first once TrimFullSweepInterval has
-        // passed, sweep from the first partition.
+        // A steady trim sweeps from the previous watermark's batch; about once per
+        // TrimFullSweepInterval, at a jittered time, a trim sweeps from the first
+        // partition instead.
         var sweepMark = Math.Min(throughOffsetInclusive, persistedTail);
         var sweptFrom = long.MaxValue;
         string? unexpectedRow = null;

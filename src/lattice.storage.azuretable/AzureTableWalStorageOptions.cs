@@ -676,11 +676,12 @@ public sealed class AzureTableWalStorageOptions
     /// partitions no commit metadata names: the rows a refused or failed append leaves
     /// when its writer stops before reconciling. A steady trim sweeps only the span
     /// above the previous watermark, which covers everything new since the last trim.
-    /// Such rows can also land below an earlier watermark, so the first trim of each
-    /// WAL partition on a provider instance sweeps from the first batch partition, and
-    /// so does a later trim once this interval has passed since the last one did. A
-    /// full sweep may cost extra query pages over the range earlier trims emptied, so
-    /// the interval keeps it occasional.
+    /// Such rows can also land below an earlier watermark, so about once per interval a
+    /// trim of each WAL partition sweeps from the first batch partition instead. The
+    /// first such sweep of a WAL partition a provider instance has not yet trimmed is
+    /// scheduled at a random point within one interval, so a restart does not line up
+    /// every partition's full sweep at once. A full sweep may cost extra query pages
+    /// over the range earlier trims emptied, so the interval keeps it occasional.
     /// </para>
     /// <para>
     /// Default 6 hours. <see cref="TimeSpan.Zero"/> makes every trim a full sweep.

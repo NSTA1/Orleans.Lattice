@@ -245,7 +245,7 @@ var optionsWithCooldownOverride = new AzureTableWalStorageOptions
 
 ### `TrimFullSweepInterval`
 
-Least time between two trims of one WAL partition, on one provider instance, that sweep its batch partitions from the first rather than from the previous trim watermark. Default is 6 hours. Must be non-negative; `TimeSpan.Zero` makes every trim a full sweep. The first trim of each WAL partition on a provider instance is always a full sweep. A full sweep reaches entry rows that no commit metadata names and that landed below an earlier watermark - the rows a refused or failed append leaves when its writer stops before reconciling - at the cost of extra query pages over the range earlier trims emptied. See [Trim and the sweep](architecture.md#trim-and-the-sweep).
+Least time between two trims of one WAL partition, on one provider instance, that sweep its batch partitions from the first rather than from the previous trim watermark. Default is 6 hours. Must be non-negative; `TimeSpan.Zero` makes every trim a full sweep. A provider instance schedules the first full sweep of each WAL partition at a random point within one interval of first trimming it, so a restart does not line up every partition's full sweep at once. A full sweep reaches entry rows that no commit metadata names and that landed below an earlier watermark - the rows a refused or failed append leaves when its writer stops before reconciling - at the cost of extra query pages over the range earlier trims emptied. See [Trim and the sweep](architecture.md#trim-and-the-sweep).
 
 ```csharp verify
 using Orleans.Lattice.Storage.AzureTable;

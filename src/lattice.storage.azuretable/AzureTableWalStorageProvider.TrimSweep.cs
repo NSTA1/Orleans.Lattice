@@ -16,26 +16,59 @@ namespace Orleans.Lattice.Storage.AzureTable;
 public sealed partial class AzureTableWalStorageProvider
 {
     /// <summary>
-    /// When this instance last swept each manifest partition's batch partitions from
-    /// the first, as a <see cref="System.Diagnostics.Stopwatch"/> timestamp. A steady
-    /// trim sweeps only the span above the previous trim watermark; the first trim of
-    /// a shard on this instance, and the first after
-    /// <see cref="AzureTableWalStorageOptions.TrimFullSweepInterval"/> has passed,
-    /// sweep the whole committed prefix, which is what reaches a leak that landed below
-    /// an earlier watermark.
+    /// When the next trim of each manifest partition on this instance sweeps its batch
+    /// partitions from the first, as a <see cref="System.Diagnostics.Stopwatch"/>
+    /// timestamp. A steady trim sweeps only the span above the previous trim watermark;
+    /// the first trim once this time has come sweeps the whole committed prefix, which
+    /// is what reaches a leak that landed below an earlier watermark, and moves it one
+    /// <see cref="AzureTableWalStorageOptions.TrimFullSweepInterval"/> on.
     /// </summary>
-    private readonly ConcurrentDictionary<string, long> _lastFullSweeps = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, long> _nextFullSweeps = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Test seam: the fraction of <see cref="AzureTableWalStorageOptions.TrimFullSweepInterval"/>
+    /// by which a WAL partition first seen by this instance is treated as already
+    /// overdue, drawn from <c>[0, 1)</c>. <c>1</c> makes its first trim a full sweep;
+    /// <c>0</c> defers that sweep a whole interval.
+    /// </summary>
+    internal Func<double> FullSweepJitterForTesting { get; set; } = Random.Shared.NextDouble;
 
     /// <summary>
     /// True when the next trim of <paramref name="manifestPartitionKey"/> should sweep
     /// from the first batch partition.
     /// </summary>
-    private bool IsFullSweepDue(string manifestPartitionKey) =>
-        !_lastFullSweeps.TryGetValue(manifestPartitionKey, out var last)
-        || System.Diagnostics.Stopwatch.GetElapsedTime(last) >= _options.TrimFullSweepInterval;
+    /// <remarks>
+    /// A WAL partition first seen by this instance is scheduled for its first full
+    /// sweep a random fraction of the interval ahead, so the full sweeps of every
+    /// partition a silo serves spread over one interval rather than all landing on the
+    /// first trims after a restart. A leak a stopped process left behind is reclaimed at
+    /// most one interval later; it is never read in the meantime.
+    /// </remarks>
+    private bool IsFullSweepDue(string manifestPartitionKey)
+    {
+        var interval = _options.TrimFullSweepInterval;
+        if (interval <= TimeSpan.Zero)
+        {
+            return true;
+        }
 
-    private void NoteFullSweep(string manifestPartitionKey, long startedAt) =>
-        _lastFullSweeps[manifestPartitionKey] = startedAt;
+        var now = System.Diagnostics.Stopwatch.GetTimestamp();
+        var due = _nextFullSweeps.GetOrAdd(
+            manifestPartitionKey,
+            static (_, state) => After(state.Now, state.Interval, 1d - Math.Clamp(state.Jitter(), 0d, 1d)),
+            (Now: now, Interval: interval, Jitter: FullSweepJitterForTesting));
+        return now >= due;
+    }
+
+    /// <summary>Schedules the next full sweep of the partition one interval after <paramref name="sweepStartedAt"/>.</summary>
+    private void NoteFullSweep(string manifestPartitionKey, long sweepStartedAt) =>
+        _nextFullSweeps[manifestPartitionKey] = After(sweepStartedAt, _options.TrimFullSweepInterval, 1d);
+
+    private static long After(long timestamp, TimeSpan interval, double fraction)
+    {
+        var ticks = fraction * interval.TotalSeconds * System.Diagnostics.Stopwatch.Frequency;
+        return ticks >= long.MaxValue - timestamp ? long.MaxValue : timestamp + (long)ticks;
+    }
 
     /// <summary>
     /// Deletes every entry row at or below <paramref name="sweepMark"/> in the shard's
@@ -45,12 +78,19 @@ public sealed partial class AzureTableWalStorageProvider
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <paramref name="sweepMark"/> never exceeds the persisted <c>TAIL</c>. A batch
-    /// partition starting at or below it is therefore committed, or can never be: the
-    /// phase-2 worker commits in start order, with its manifest row and <c>TAIL</c> in
-    /// one transaction, so a live batch of the shard's writer starts above <c>TAIL</c>,
-    /// and reconciliation rolls forward only a batch starting at <c>TAIL + 1</c>. The
-    /// trim watermark covering every deleted row is durable before this runs.
+    /// Deleting a batch partition that no manifest row names is safe for two reasons,
+    /// one for each side of the persisted <c>TAIL</c>. <paramref name="sweepMark"/> never
+    /// exceeds that <c>TAIL</c>, so no batch above it is touched: neither the batches
+    /// this instance has accepted but not committed, which the reported highest offset
+    /// folds in, nor an interrupted one that reconciliation may still roll forward.
+    /// Below it, a batch can still be live - the phase-2 worker commits whatever has
+    /// arrived, so a batch whose phase 1 is slow can commit after a later one has moved
+    /// <c>TAIL</c> past it - and what keeps such a batch out of reach is
+    /// <see cref="IWalStorageProvider.TrimAsync"/>'s contract: a trim runs only through
+    /// an offset every consumer has acknowledged, which lies below every append still
+    /// in flight, and a discard or a WAL-move trim runs only once the partition takes
+    /// no more writes. The trim watermark covering every deleted row is durable before
+    /// this runs.
     /// </para>
     /// <para>
     /// The query is streamed page by page and each partition's rows are deleted in

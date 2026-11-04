@@ -111,13 +111,14 @@ public sealed class AzureTableWalStorageProviderTrimSweepIntegrationTests
     }
 
     [Test]
-    public async Task A_steady_trim_sweeps_from_the_previous_watermark_and_a_new_instance_from_the_first_partition()
+    public async Task A_steady_trim_sweeps_from_the_previous_watermark_and_a_due_full_sweep_from_the_first_partition()
     {
         // C3: a steady trim sweeps only from the batch holding the previous
-        // watermark's successor, so a leak wholly below it is left; the first trim of
-        // the shard on a new provider instance - after a restart - sweeps the whole
-        // committed prefix.
-        await using var writer = CreateProvider();
+        // watermark's successor, so a leak wholly below it is left, by a trim to TAIL
+        // too and by a restarted instance whose first full sweep is not yet due (the
+        // jitter spreads those over one interval). A trim whose full sweep is due sweeps
+        // the whole committed prefix.
+        await using var writer = CreateProvider(jitter: 0d);
         for (var start = 0L; start < 400L; start += 100L)
         {
             await writer.AppendBatchAsync(TreeId, 0, Entries(TreeId, start, 100), CancellationToken.None);
@@ -135,9 +136,16 @@ public sealed class AzureTableWalStorageProviderTrimSweepIntegrationTests
         await writer.TrimAsync(TreeId, 0, head, CancellationToken.None);
         var afterSteadyTrimToHead = await CountRowsAsync(TreeId, 0, 10);
 
-        await using var restarted = CreateProvider();
-        await restarted.TrimAsync(TreeId, 0, head, CancellationToken.None);
-        var afterRestart = await CountRowsAsync(TreeId, 0, 10);
+        await using (var notYetDue = CreateProvider(jitter: 0d))
+        {
+            await notYetDue.TrimAsync(TreeId, 0, head, CancellationToken.None);
+        }
+
+        var afterRestartNotDue = await CountRowsAsync(TreeId, 0, 10);
+
+        await using var due = CreateProvider(jitter: 1d);
+        await due.TrimAsync(TreeId, 0, head, CancellationToken.None);
+        var afterDue = await CountRowsAsync(TreeId, 0, 10);
 
         Assert.Multiple(() =>
         {
@@ -145,7 +153,8 @@ public sealed class AzureTableWalStorageProviderTrimSweepIntegrationTests
             Assert.That(belowSpan, Is.EqualTo(1), "a steady trim swept below the previous watermark's batch");
             Assert.That(head, Is.EqualTo(399L));
             Assert.That(afterSteadyTrimToHead, Is.EqualTo(1), "a trim to TAIL inside the full-sweep interval swept from the first partition");
-            Assert.That(afterRestart, Is.Zero, "the first trim on a new instance left a leak below the watermark");
+            Assert.That(afterRestartNotDue, Is.EqualTo(1), "a restarted instance swept from the first partition before its jittered full sweep was due");
+            Assert.That(afterDue, Is.Zero, "a trim whose full sweep was due left a leak below the watermark");
         });
     }
 
@@ -256,7 +265,18 @@ public sealed class AzureTableWalStorageProviderTrimSweepIntegrationTests
         });
     }
 
-    private AzureTableWalStorageProvider CreateProvider(PhaseTwoGate? gate = null, TimeSpan? fullSweepInterval = null) =>
+    private AzureTableWalStorageProvider CreateProvider(PhaseTwoGate? gate = null, TimeSpan? fullSweepInterval = null, double? jitter = null)
+    {
+        var provider = CreateProviderCore(gate, fullSweepInterval);
+        if (jitter is { } fraction)
+        {
+            provider.FullSweepJitterForTesting = () => fraction;
+        }
+
+        return provider;
+    }
+
+    private AzureTableWalStorageProvider CreateProviderCore(PhaseTwoGate? gate, TimeSpan? fullSweepInterval) =>
         new(
             Options.Create(new AzureTableWalStorageOptions
             {
