@@ -947,10 +947,11 @@ internal sealed partial class WalShardGrain(
             ReturnSegment(segment);
             throw RefuseBelowFloor(entry.Timestamp, refusedBelow, 1);
         }
-        if (TShape.Stamped && fenceOutcome == WalAppendFenceOutcome.UnloadedGeneration && !generationLoadTried)
+        if (TShape.Stamped && fenceOutcome == WalAppendFenceOutcome.UnloadedGeneration && !generationLoadTried && !stamp.IsBulkSeed)
         {
             // #5831, F2: load the generation here, as the writer's re-presentation
             // would, then run the whole admission again; never admit on the claim.
+            // A bulk seed is excluded (#5812 review C2): it fails closed and re-presents.
             ReturnSegment(segment);
             if (kickFlush)
             {
@@ -1288,11 +1289,12 @@ internal sealed partial class WalShardGrain(
 
                     unstampedWatermark = _unstampedWatermark;
                 }
-                if (TShape.Stamped && i == 0 && fenceOutcome == WalAppendFenceOutcome.UnloadedGeneration && !generationLoadTried)
+                if (TShape.Stamped && i == 0 && fenceOutcome == WalAppendFenceOutcome.UnloadedGeneration && !generationLoadTried && !stamp.IsBulkSeed)
                 {
                     // #5831, F2: nothing of this batch is allocated or registered yet. Load
                     // the generation as the writer's re-presentation would, then run the
                     // first entry's admission again; never admit on the claim's result.
+                    // A bulk seed is excluded (#5812 review C2): it fails closed and re-presents.
                     generationLoadTried = true;
                     if (kickFlush)
                     {
