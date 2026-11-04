@@ -562,13 +562,9 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
     /// </summary>
     private WalAppendFenceOutcome AdmitBulkSeedLocked(in WalAppendStamp stamp)
     {
-        // RED PROOF (#5812 B, C2): an absent generation entry admits the seed.
-        if (_generationEntries is null || !_generationEntries.TryGetValue(stamp.Initiator, out var generation))
-        {
-            return WalAppendFenceOutcome.Admitted;
-        }
-
-        if (generation.Memory == WalAppendFenceCore.Unloaded
+        if (_generationEntries is null
+            || !_generationEntries.TryGetValue(stamp.Initiator, out var generation)
+            || generation.Memory == WalAppendFenceCore.Unloaded
             || generation.Memory < stamp.Generation)
         {
             return WalAppendFenceOutcome.UnloadedGeneration;
@@ -704,8 +700,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
             _epochEntries[stamp.LeafId] = entry;
         }
 
-        // RED PROOF (#5812 B, C2): registration tolerates the absent entry it admitted on.
-        if (stamp.Initiator.IsSet && _generationEntries?.ContainsKey(stamp.Initiator) == true)
+        if (stamp.Initiator.IsSet)
         {
             // Admission found the initiator's entry loaded in this same step.
             var generation = _generationEntries![stamp.Initiator];
