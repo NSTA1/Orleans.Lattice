@@ -120,7 +120,9 @@ public sealed class TreeWorkspacePage(ShellPage shell)
         await Shell.GoToAreaAsync("data");
         await Expect(Shell.Heading).ToHaveTextAsync("Data");
         await Content.GetByLabel("Filter trees and views").FillAsync(tree);
-        var link = Content.GetByRole(AriaRole.Link, new() { Name = tree, Exact = true });
+        // The tree's own row: until the filter applies, the views it feeds link to it from their Source column too.
+        var link = Content.GetByRole(AriaRole.Row, new() { NameRegex = new Regex("^" + Regex.Escape(tree) + " ") })
+            .GetByRole(AriaRole.Link, new() { Name = tree, Exact = true });
         await Expect(link).ToBeVisibleAsync();
         await link.ClickAsync();
         await ExpectOpenAsync(tree);
