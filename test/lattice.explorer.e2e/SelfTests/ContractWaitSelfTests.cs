@@ -110,6 +110,50 @@ public sealed class ContractWaitSelfTests
         Assert.That(ex!.Message, Does.Contain("Timed out").And.Contain("Last status: Running/migrating 5."));
     }
 
+    /// <summary>An operation whose total grows while it gains on it converges, and its success is returned.</summary>
+    [Test]
+    public async Task An_operation_that_gains_on_a_growing_total_converges_and_succeeds()
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var polls = 0L;
+
+        var done = await ContractWait.SucceededWhileAdvancingAsync(
+            "the self-test operation",
+            () =>
+            {
+                polls++;
+                var state = clock.Elapsed > Stall * 2 ? LatticeOperationState.Succeeded : LatticeOperationState.Running;
+                return Task.FromResult<LatticeOperationStatus?>(Status(state, units: 2 * polls, total: 1_000 + polls));
+            },
+            Stall,
+            TimeSpan.FromMinutes(1),
+            convergence: TimeSpan.FromSeconds(1));
+
+        Assert.That(done.State, Is.EqualTo(LatticeOperationState.Succeeded));
+    }
+
+    /// <summary>An operation whose total grows as fast as it advances never converges, and times out naming it.</summary>
+    [Test]
+    public void An_operation_that_advances_but_never_gains_on_its_total_fails_as_not_converging()
+    {
+        var polls = 0L;
+
+        var ex = Assert.ThrowsAsync<TimeoutException>(() => ContractWait.SucceededWhileAdvancingAsync(
+            "the self-test operation",
+            () =>
+            {
+                polls++;
+                return Task.FromResult<LatticeOperationStatus?>(Status(LatticeOperationState.Running, units: polls, total: 100 + polls));
+            },
+            TimeSpan.FromMinutes(1),
+            TimeSpan.FromMinutes(1),
+            convergence: TimeSpan.FromSeconds(1)));
+
+        Assert.That(ex!.Message, Does.Contain("not converging").And.Contain("Running/migrating"));
+    }
+
+    private static LatticeOperationStatus Status(LatticeOperationState state, long units, long total) => Status(state, units) with { TotalUnits = total };
+
     private static LatticeOperationStatus Status(LatticeOperationState state, long units) => new()
     {
         OperationId = "op",
