@@ -87,6 +87,12 @@ internal sealed class RestoreParticipant(
     /// </summary>
     private const int BuildAttemptBudget = 3;
 
+    /// <summary>Red proof for #5791: the knobs exist, the wait does not.</summary>
+    internal IReadOnlyList<TimeSpan> AliasWaitBackoff { get; init; } = [];
+
+    /// <summary>Red proof for #5791: the knobs exist, the wait does not.</summary>
+    internal TimeSpan AliasWaitCeiling { get; init; }
+
     /// <summary>
     /// Cutover fence window in seconds. Zero selects the fence grain's own default
     /// bounded window, keeping a single source of truth for the deadline.
