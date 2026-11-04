@@ -408,7 +408,9 @@ internal sealed partial class ShardRootGrain
 
         var row = await HandOffMarkerRows.ReadShardAsync(HandOffStorage(), TreeId, ShardIndex);
         NoteHandOffMarkerRead(row);
-        return _handOffMarker = row.State;
+        _handOffMarker = row.State;
+        ArmBulkIdleCloseIfSwitchOpen(row.State);
+        return row.State;
     }
 
     /// <summary>Records that this activation read its marker row, when the row exists (#5705).</summary>

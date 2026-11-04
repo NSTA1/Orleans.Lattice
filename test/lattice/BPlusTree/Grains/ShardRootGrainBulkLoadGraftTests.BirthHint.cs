@@ -33,11 +33,15 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
     /// WAL head reads as <see cref="BirthHead"/>, and whose WAL partitions accept a routing
     /// generation claim with head <see cref="CloseHead"/>.
     /// </summary>
-    private static HintRig CreateHintRig(int maxLeafKeys = 2, bool gateOpen = true, bool advancingHeads = false)
+    private static HintRig CreateHintRig(
+        int maxLeafKeys = 2,
+        bool gateOpen = true,
+        bool advancingHeads = false,
+        Orleans.Timers.ITimerRegistry? timers = null)
     {
         var gate = Substitute.For<IWalAppendFenceGate>();
         gate.IsOpen.Returns(gateOpen);
-        var h = CreateHarness(maxLeafKeys, gate);
+        var h = CreateHarness(maxLeafKeys, gate, timers);
         var storage = new EnumerableMemoryGrainStorage();
         h.Grain.UseHandOffStorageForTesting(storage);
 

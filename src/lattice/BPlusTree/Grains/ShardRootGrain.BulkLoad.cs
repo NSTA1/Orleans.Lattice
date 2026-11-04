@@ -22,19 +22,39 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private string? _runningBulkOperationId;
 
+    /// <summary>
+    /// A bulk load that published its root and then faulted in its switch's tail, so
+    /// its persisted completion is not the whole of it (review S1 of #5815). It reads
+    /// as not running, so its caller re-issues it, and the re-issue's completed-id
+    /// short-circuit closes the switch. Activation memory only: a fresh activation
+    /// closes the switch by the idle close it arms instead.
+    /// </summary>
+    private string? _faultedBulkOperationId;
+
     /// <inheritdoc />
     public Task<BulkOperationStatus> GetBulkOperationStatusAsync(string operationId)
     {
         EnsureInternalOrigin(LatticeOperation.BulkLoad);
-        // Running wins: the load records itself complete when it publishes its root,
-        // before its switch's tail has relocated the replaced root and closed by fence,
-        // so a caller that read Completed then could proceed or cut over mid-tail, and
-        // nobody would re-issue the load if the tail then faulted.
-        var status = string.Equals(_runningBulkOperationId, operationId, StringComparison.Ordinal)
-            ? BulkOperationStatus.Running
-            : state.State.LastCompletedBulkOperationId == operationId
+        // The load records itself complete when it publishes its root, before its
+        // switch's tail has relocated the replaced root and closed by fence. So Running
+        // wins, or a caller could proceed or cut over mid-tail; and a load whose tail
+        // faulted reads as not running, or nobody would re-issue it to close the switch.
+        BulkOperationStatus status;
+        if (string.Equals(_runningBulkOperationId, operationId, StringComparison.Ordinal))
+        {
+            status = BulkOperationStatus.Running;
+        }
+        else if (string.Equals(_faultedBulkOperationId, operationId, StringComparison.Ordinal))
+        {
+            status = BulkOperationStatus.NotRunning;
+        }
+        else
+        {
+            status = state.State.LastCompletedBulkOperationId == operationId
                 ? BulkOperationStatus.Completed
                 : BulkOperationStatus.NotRunning;
+        }
+
         return BulkOperationStatusTasks[(int)status];
     }
 
@@ -44,6 +64,12 @@ internal sealed partial class ShardRootGrain
         try
         {
             await BulkLoadCoreAsync(operationId, sortedEntries);
+            ClearFaultedBulkLoad(operationId);
+        }
+        catch
+        {
+            NoteBulkLoadFaulted(operationId);
+            throw;
         }
         finally
         {
@@ -58,10 +84,45 @@ internal sealed partial class ShardRootGrain
         try
         {
             await BulkLoadRawCoreAsync(operationId, sortedEntries);
+            ClearFaultedBulkLoad(operationId);
+        }
+        catch
+        {
+            NoteBulkLoadFaulted(operationId);
+            throw;
         }
         finally
         {
             _runningBulkOperationId = null;
+        }
+    }
+
+    private void ClearFaultedBulkLoad(string operationId)
+    {
+        if (string.Equals(_faultedBulkOperationId, operationId, StringComparison.Ordinal))
+        {
+            _faultedBulkOperationId = null;
+        }
+    }
+
+    /// <summary>
+    /// Review S1 of #5815: a load that faulted after it published its root left its
+    /// switch open with its completion persisted. It is remembered so its status reads
+    /// as not running and its caller re-issues it, and the idle close is armed so the
+    /// switch is closed even when nobody does. A load that faulted before it published
+    /// reads as not running already. Runs only on the failure path.
+    /// </summary>
+    private void NoteBulkLoadFaulted(string operationId)
+    {
+        if (state.State.LastCompletedBulkOperationId != operationId)
+        {
+            return;
+        }
+
+        _faultedBulkOperationId = operationId;
+        if (HasHandOffStorage())
+        {
+            ArmBulkIdleClose();
         }
     }
 

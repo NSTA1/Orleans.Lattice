@@ -132,14 +132,18 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         return node;
     }
 
-    private static Harness CreateHarness(int maxLeafKeys = 2, IWalAppendFenceGate? appendFenceGate = null)
+    private static Harness CreateHarness(
+        int maxLeafKeys = 2,
+        IWalAppendFenceGate? appendFenceGate = null,
+        Orleans.Timers.ITimerRegistry? timers = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("shard", $"{TreeId}/0"));
-        if (appendFenceGate is not null)
+        if (appendFenceGate is not null || timers is not null)
         {
             var services = Substitute.For<IServiceProvider>();
             services.GetService(typeof(IWalAppendFenceGate)).Returns(appendFenceGate);
+            services.GetService(typeof(Orleans.Timers.ITimerRegistry)).Returns(timers);
             context.ActivationServices.Returns(services);
         }
 
