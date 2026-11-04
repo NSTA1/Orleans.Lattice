@@ -20,8 +20,10 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// permit to the gate for the length of the call and queue for it again
 /// afterwards, in FIFO order behind any waiter already queued. That keeps the
 /// replay's apply order and its flush and reconciliation steps unchanged. The
-/// replay is still inside its barrier while the permit is out, so the activation
-/// serves nothing in the gap. The shard-map lookup stays after the acquisition
+/// activation replay is still inside its barrier while the permit is out, so the
+/// activation serves nothing in the gap. A starvation drive runs on a live leaf
+/// whose barrier is already open; it keeps serving as before, and returning the
+/// permit changes nothing it serves. The shard-map lookup stays after the acquisition
 /// rather than moving ahead of the queue wait: a map read before the wait could
 /// predate a reshard and filter out records for a slot this shard now owns.
 /// </para>
