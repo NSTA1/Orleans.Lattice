@@ -580,12 +580,15 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task<ShardHandOffState?> TryUpdateCachedHandOffMarkerAsync(Func<ShardHandOffState, bool> mutate)
     {
-        if (_handOffMarkerRow is not { } cached || (!cached.RecordExists && _handOffMarkerSeen))
+        // A host without the serializer's copier (a hand-built activation context)
+        // takes the read path, which needs no copy.
+        if (_handOffMarkerRow is not { } cached
+            || (!cached.RecordExists && _handOffMarkerSeen)
+            || context.ActivationServices?.GetService<Orleans.Serialization.DeepCopier>() is not { } copier)
         {
             return null;
         }
 
-        var copier = context.ActivationServices.GetRequiredService<Orleans.Serialization.DeepCopier>();
         var row = new GrainState<ShardHandOffState>(copier.Copy(cached.State))
         {
             ETag = cached.ETag,

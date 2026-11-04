@@ -57,7 +57,8 @@ public partial class WalShardGrainTests
 
         await grain.RetireRoutingGenerationsAsync(shardCount: 1, CancellationToken.None);
 
-        // The stale shard root's write: its entry is gone, and re-presenting it is refused.
+        // The stale shard root's write: its entry is gone, and the cold path's
+        // re-presentation (#5831 F2) is refused at the floor, as an explicit one is.
         var unloaded = await grain.AppendStampedAsync(MakeEntry("stale"), stale, CancellationToken.None);
         var represent = await grain.ClaimRoutingGenerationAsync(shardRoot, 2, CancellationToken.None);
 
@@ -68,7 +69,7 @@ public partial class WalShardGrainTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(unloaded.Outcome, Is.EqualTo(WalAppendFenceOutcome.UnloadedGeneration));
+            Assert.That(unloaded.Outcome, Is.EqualTo(WalAppendFenceOutcome.StaleGeneration), "the straddler is refused, never admitted");
             Assert.That(represent.Accepted, Is.False, "a generation of the purged incarnation cannot be re-claimed");
             Assert.That(represent.Refusal, Is.EqualTo(2), "it is refused at the floor, which the shard root raises above");
             Assert.That(recreated.Accepted, Is.True);
@@ -133,7 +134,8 @@ public partial class WalShardGrainTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(unclaimed.Outcome, Is.EqualTo(WalAppendFenceOutcome.UnloadedGeneration), "nothing is admitted under an unclaimed generation");
+            Assert.That(unclaimed.Outcome, Is.EqualTo(WalAppendFenceOutcome.StaleGeneration),
+                "nothing is admitted under an unclaimed generation: the cold path's claim (#5831 F2) meets the floor");
             Assert.That(first.Accepted, Is.False);
             Assert.That(first.Refusal, Is.EqualTo(6), "a fresh activation reads the floor before its first generation claim");
             Assert.That(atFloor.Accepted, Is.False, "a claim at the floor is refused too");
