@@ -516,6 +516,11 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
             return WalAppendFenceOutcome.Admitted;
         }
 
+        if (stamp.IsBulkSeed)
+        {
+            return AdmitBulkSeedLocked(stamp);
+        }
+
         if (_epochEntries is null
             || !_epochEntries.TryGetValue(stamp.LeafId, out var entry)
             || entry.Memory == WalAppendFenceCore.Unloaded)
@@ -544,6 +549,30 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
         }
 
         return WalAppendFenceOutcome.Admitted;
+    }
+
+    /// <summary>
+    /// The bulk-seed class's admission (#5812, review C2): only on a positive match
+    /// against the shard root's routing generation as this partition has loaded it. An
+    /// entry not loaded, or loaded below the seed's generation, is
+    /// <see cref="WalAppendFenceOutcome.UnloadedGeneration"/>: the seed re-presents its
+    /// generation, which loads it while it is current and is refused once a close has
+    /// re-claimed above it. An entry above it is stale: the switch closed. Admission is
+    /// never decided on an absent entry.
+    /// </summary>
+    private WalAppendFenceOutcome AdmitBulkSeedLocked(in WalAppendStamp stamp)
+    {
+        if (_generationEntries is null
+            || !_generationEntries.TryGetValue(stamp.Initiator, out var generation)
+            || generation.Memory == WalAppendFenceCore.Unloaded
+            || generation.Memory < stamp.Generation)
+        {
+            return WalAppendFenceOutcome.UnloadedGeneration;
+        }
+
+        return generation.Memory == stamp.Generation
+            ? WalAppendFenceOutcome.Admitted
+            : WalAppendFenceOutcome.StaleGeneration;
     }
 
     /// <summary>
@@ -662,9 +691,15 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
     /// </summary>
     private void RegisterStampedBatchLocked(in WalAppendStamp stamp)
     {
-        var entry = _epochEntries![stamp.LeafId];
-        entry.InFlightBatches++;
-        _epochEntries[stamp.LeafId] = entry;
+        // A bulk seed names no leaf (#5812): only its generation is held, so a close's
+        // re-claim waits for the seed batch and its records land below the close heads.
+        if (!stamp.IsBulkSeed)
+        {
+            var entry = _epochEntries![stamp.LeafId];
+            entry.InFlightBatches++;
+            _epochEntries[stamp.LeafId] = entry;
+        }
+
         if (stamp.Initiator.IsSet)
         {
             // Admission found the initiator's entry loaded in this same step.

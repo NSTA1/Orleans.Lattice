@@ -62,7 +62,7 @@ once, either here or in the
 | Area | Modules | Mutations | Behaviour rows | Detector tests | Page |
 |------|---------|-----------|----------------|----------------|------|
 | Single-cluster atomic commit | 1 | 21 | 17 | 40 | [Verified Atomic-Commit](verified-atomic-commit.md) |
-| WAL durability lifecycle | 9 | 240 | 206 | 339 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
+| WAL durability lifecycle | 9 | 248 | 213 | 348 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
 | Shard ownership | 5 | 124 | 124 | 201 | [Verified Shard Ownership](verified-shard-ownership.md) |
 | Cross-cluster atomic visibility | 1 | 66 | 43 | 150 | [Verified Atomic-Commit: the replicated half](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | 4 | 91 | 71 | 206 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
@@ -430,7 +430,10 @@ gaps, states its full scope.
       rightmost leaf's range with its birth hint capped at the old leaf's read
       frontier, the drain before the narrow, the relocation of the rows the range
       held and the batched close, against a crash of the shard root and a drain
-      past its deadline;
+      past its deadline; and the bulk seed, which claims no append epoch, admitted
+      under the switch's routing generation and refused once a close re-claims it,
+      or unstamped and reported on a never-written shard, with a batch write seeding
+      a root mid-load and an abandoned attempt and its retry (#5812);
     - the core (`WalLiveAdvanceCore`): an activation's arming, the live advance
       over its own applied appends, replay, the shared snapshot and the GC trim,
       the applied-prefix tracker and the unstamped watermark with its restart

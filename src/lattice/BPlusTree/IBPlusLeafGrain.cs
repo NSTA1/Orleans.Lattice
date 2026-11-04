@@ -1243,6 +1243,21 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task MergeEntriesAsync([Immutable] Dictionary<string, LwwValue<byte[]>> entries);
 
     /// <summary>
+    /// Seeds <paramref name="entries"/> into a leaf a bulk operation has created and not
+    /// yet published (#5812): <see cref="MergeEntriesAsync"/>, except that the appends
+    /// claim no append epoch for this activation. Under an open bulk switch they carry
+    /// the bulk-seed stamp class with the shard root's routing generation,
+    /// <paramref name="seedRouting"/>, captured after the switch's marker opened; with
+    /// no switch they are appended unstamped and reported. The leaf's first epoch claim
+    /// at a partition is therefore made by its first live write, once it is reachable.
+    /// The same caller contract as <see cref="MergeEntriesAsync"/> applies to
+    /// <paramref name="entries"/>.
+    /// </summary>
+    /// <param name="entries">The seeded rows.</param>
+    /// <param name="seedRouting">The shard root's routing for a switched seed, or <see cref="Grains.WalRoutingStamp.Unstamped"/>.</param>
+    Task MergeBulkSeedAsync([Immutable] Dictionary<string, LwwValue<byte[]>> entries, Grains.WalRoutingStamp seedRouting);
+
+    /// <summary>
     /// Returns the sorted list of live (non-tombstoned) keys in this leaf
     /// that fall within the optional [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) range.
     /// If <paramref name="afterExclusive"/> is provided, only keys strictly greater than

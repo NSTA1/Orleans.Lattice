@@ -141,7 +141,7 @@ public partial class BPlusLeafGrainTests
         "GetDeltaSinceAsync", "GetDeltaSinceAndNextSiblingAsync", "GetDeltaSinceCursorAsync", "GetCacheRefreshAsync", "GetDeltaSinceForSlotsAndNextSiblingAsync",
         "GetPendingKeysAsync", "GetPendingMutationsForSlotsAsync", "GetPendingMutationsForSlotsAndNextSiblingAsync",
         "GetOriginalPrepareStampsAsync",
-        "MergeEntriesAsync", "MergeManyAsync", "MergeManyStampedAsync", "GetClockAsync", "GetClockAndNextSiblingAsync",
+        "MergeEntriesAsync", "MergeBulkSeedAsync", "MergeManyAsync", "MergeManyStampedAsync", "GetClockAsync", "GetClockAndNextSiblingAsync",
         // Digests and topology views computed FROM the projection.
         "GetProjectionDigestAsync", "GetProjectionDigestForRangeAsync",
         "GetChildDigestSnapshotAsync", "SetParentAndGetChildDigestSnapshotAsync", "GetTopologyNodeAsync",

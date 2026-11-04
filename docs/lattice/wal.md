@@ -1925,6 +1925,22 @@ Their checkpoint starts at the [bulk birth hint](#hand-off-fences) where one was
 applied, which shortens their activation replay; where none was, they replay from the
 log's start, as before. Arming needs no bulk-specific rule.
 
+A bulk operation seeds its leaves before it publishes them, and **the seed claims no
+append epoch** ([#5812](https://github.com/NSTA1/Orleans.Lattice/issues/5812)). Under
+the open switch the seed carries the shard root's routing generation, read after the
+switch's marker opened. The WAL partition admits it only when that generation matches
+the one it has loaded, never on an absent entry, and does not report it as unstamped:
+every leaf that can own a seeded row is held on the switch until it reads to the close
+heads, and every close re-claims the generation, which refuses a seed still in flight
+from an abandoned attempt. A bulk-born leaf's first claim at a partition is made by its
+first live write, once it is reachable, exactly as a normally born leaf's is. A shard
+with **no root** when a bulk load begins, such as a restore shadow or a snapshot
+destination, has no leaf for a switch to protect: the load opens no marker, stores no
+hint and runs no fence, and seeds unstamped, which every partition admits and reports.
+The load checks, in the same step that publishes its root, that no batch write seeded a
+root meanwhile; if one did, it opens its switch then, relocates that root's rows and
+closes by fence, as on any other shard.
+
 **Rolling upgrades.** Nothing arms while the gate is closed, and the leaf issues no
 marker read and no shard-root call while no partition is claimed, so a shard root on an
 older build is never asked for its view.

@@ -9,12 +9,18 @@ PERTURBS: Create
 
 --- FIND
     /\ nUp' = TRUE
-    /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, hint, tokOpen, prevOpen, prevHint,
-                   runHint, bulkAt, copied, relocOk, heldN, rpN, crashed>>
+    /\ seedSt' = "flight"
 --- REPLACE
     /\ nUp' = TRUE
 \* MUTATION: born at the head.
     /\ rpN' = next - 1
-    /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, hint, tokOpen, prevOpen, prevHint,
-                   runHint, bulkAt, copied, relocOk, heldN, crashed>>
+    /\ seedSt' = "flight"
+--- END
+
+--- FIND
+                   runHint, bulkAt, copied, relocOk, heldN, rpN, crashed, oUp, midLoad, skip, published, gen, wm,
+                   closeHead, seedUnder, aborted>>
+--- REPLACE
+                   runHint, bulkAt, copied, relocOk, heldN, crashed, oUp, midLoad, skip, published, gen, wm,
+                   closeHead, seedUnder, aborted>>
 --- END

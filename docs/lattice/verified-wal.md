@@ -229,8 +229,11 @@ TLA+ specification in [`spec/wal/`](../../spec/wal/README.md):
   from the old rightmost leaf's range with the birth hint stored with its switch's open
   token and capped at the old leaf's read frontier, the drain before the narrow, the
   relocation of the rows the range held, and the batched close, against a crash of the
-  shard root and a drain past its deadline. It is the fifth module promoted from that
-  draft;
+  shard root and a drain past its deadline. Since #5812 it also models the bulk seed,
+  which claims no append epoch: admitted under the switch's routing generation and
+  refused once a close re-claims it, or unstamped and reported on a never-written shard,
+  where a batch write may seed a root while the load runs. It is the fifth module
+  promoted from that draft;
 - `WalLiveAdvanceComposite.tla`, the interface check of those five modules: every
   producer guarantee, copied from its module, as a constraint on freely generated steps,
   checked against every assumption a consumer module takes of it.
@@ -331,7 +334,7 @@ check exhaustively, and they fit together through a written assume-guarantee con
 | E, `WalAppendEpoch` | A superseded or retired activation never appends, a claim's head covers every earlier allocation, no two live activations share an epoch, and only a superseded activation is ever refused. | nothing |
 | H, `WalHandOffFence` | A foreign writer's record lands while the owner's marker is open or below the heads its close recorded, an absent or uninitialised marker holds the owner, and close heads only rise. | E's entry check |
 | R, `WalRoutingFloor` | A write of a purged tree lands below the heads the re-created tree's first initialisation recorded, those heads lie above every record already allocated in the partition (`InitHeadCoversPriorAllocations`), and every live shard root's routing generation stays above its own floor. | E's entry check |
-| B, `WalBulkSwitch` | A bulk-born leaf's birth read position is at or below every record of its range it does not hold, and the leaf resolves a contested key as every WAL reader does. | nothing |
+| B, `WalBulkSwitch` | A bulk-born leaf's birth read position is at or below every record of its range it does not hold, and the leaf resolves a contested key as every WAL reader does; every seed record lies under its switch's marker and below its close heads, or is reported; and a load never publishes over a root a batch write seeded while it ran. | nothing |
 | C, `WalLiveAdvanceCore` | No running activation's read position ever passes a record it does not hold, whether it advances by replay or, once armed, by the live advance; the shared snapshot is honest, the GC never trims an acknowledged entry the snapshot lacks, and a newborn leaf's pin eventually becomes usable without a replay from the start. | every guarantee above |
 
 The graph is E <- H, E <- R and {E, H, R, B} <- C: an arrow points from the module that

@@ -56,7 +56,7 @@ and its mutations as the record each module took its own from.
 | `WalAppendEpoch` | 5 | 0 | 17 | 23 | 20 | 150,706 |
 | `WalHandOffFence` | 3 | 1 | 17 | 21 | 19 | 8,826 |
 | `WalRoutingFloor` | 3 | 1 | 12 | 17 | 14 | 10,704 |
-| `WalBulkSwitch` | 4 | 0 | 16 | 19 | 18 | 39,110 |
+| `WalBulkSwitch` | 6 | 0 | 21 | 27 | 25 | 1,047,630 |
 | `WalLiveAdvanceCore` | 5 | 1 | 20 | 31 | 24 | 778,329 |
 | `WalLiveAdvanceComposite` | 13 | 0 | 15 | 28 | 15 | 131,423 |
 
@@ -73,7 +73,8 @@ distinct states to depth 23. `WalRoutingFloor` searches to depth 15, and its
 depth 26), 3,373,761 (`GateFlip`, depth 25), 3,693,715 (`Recreate`, depth 26),
 4,638,713 (`RecreateSurvivor`, depth 26), 1,622,161 (`RecreateSurvivorMixed`, depth 25)
 and 1,114,185 (`Bulk`, depth 25) distinct states.
-`WalBulkSwitch` searches to depth 22.
+`WalBulkSwitch` searches to depth 29, and its `Skip` variant finds 197,156 distinct
+states to depth 30.
 `WalLiveAdvanceComposite`'s actions are non-behavioural interface steps, which the five
 modules map to production, except the three WAL shard checks its edges rest on.
 
@@ -148,6 +149,7 @@ distinct states to depth 21, about fifteen seconds on two workers.
 | [`AppendEpochRefinement.md`](AppendEpochRefinement.md) | `WalAppendEpoch` mapped to production, and the interface the other promoted modules assume. |
 | `WalHandOffFence.tla` / `.cfg` / `.manifest.json` | The hand-off fence module, its TLC model and its manifest. |
 | `WalHandOffFence.WideWindows.cfg` | The hand-off fence module with four offsets, generations up to 4 and three windows, checked against every invariant and the action property. |
+| `WalBulkSwitch.Skip.cfg` | The bulk switch module on a never-written shard (#5812, B2): no root when the load begins, an unstamped seed, and a batch write that may seed a root mid-load, checked against every invariant. |
 | [`handoff-fence-mutations/`](handoff-fence-mutations/) | One or more deliberate defects per property and per action of `WalHandOffFence`. |
 | `WalRoutingFloor.tla` / `.cfg` / `.manifest.json` | The routing-floor module, its TLC model and its manifest. |
 | `WalRoutingFloor.WideGenerations.cfg` | The routing-floor module with the purged incarnation's generations up to 3, checked against every invariant and the action property. |
@@ -620,8 +622,18 @@ narrowed (#5752), only when every row was relocated. A drain
 past its deadline takes the 10.2.0 path and applies no hint. Completed switches are
 closed in batches by one fence that removes their hints.
 
+The appended leaf's seed of its bulk entry is a WAL record that claims no append epoch
+(#5812): under the open token it carries the bulk-seed stamp class, admitted only on a
+positive match with the routing generation every close re-claims, and unreported; a
+seed still in flight when the operation is abandoned is refused once its switch has
+closed. On a never-written shard (`NeverWritten = 1`, the `Skip` variant) the load opens
+no token and stores no hint, seeds unstamped and reported, and checks in its publish
+that no batch write seeded a root meanwhile, falling back to the switched path if one
+did.
+
 It is module B of the promoted modules' assume-guarantee graph: it assumes nothing, and
-its two guarantees are what the core module assumes of a bulk-born leaf ([the interface](BulkSwitchRefinement.md#interface)).
+its four guarantees are what the core module assumes of a bulk-born leaf and of a bulk
+operation's seed ([the interface](BulkSwitchRefinement.md#interface)).
 
 | Property | Kind | Meaning |
 |----------|------|---------|
@@ -629,8 +641,11 @@ its two guarantees are what the core module assumes of a bulk-born leaf ([the in
 | `BulkHintBound` | Invariant | The appended leaf's read position is at or below every record of its range it does not hold, from its birth through its replay. |
 | `ContestedKeyAgrees` | Invariant | The appended leaf resolves a contested key to the value every WAL reader resolves it to: the later-stamped write wins. |
 | `HintOnlyWhileOpen` | Invariant | A stored birth hint belongs to an open switch. |
+| `SeedCovered` | Invariant | Every seed record is admitted under its switch's open token and below its close heads, or reported in the unstamped watermark. |
+| `ReplacedRootRelocated` | Invariant | A load published over a root a batch write seeded while it ran has relocated that root, never overwritten it (#5819). |
 
-The base checks every property with every environment step on, in about a second.
+The base checks every property with every environment step on, in about fifteen
+seconds at two workers; the `Skip` variant checks them on a never-written shard.
 Three of the design draft's mutations moved here, re-targeted at these properties; the
 refinement note lists them.
 
@@ -639,12 +654,16 @@ refinement note lists them.
 It covers the hint's sources (stored, folded fence, run, fresh), the drain before the
 narrow and its deadline, the relocation's copy, delivery and drop, a crash of the shard
 root before or during the graft, the batched close, an abandoned switch's close, and
-the appended leaf's replay. It does NOT cover several keys or appended leaves, the
-re-delivery skip, a bulk load, the gate closed or an older silo, the close's fence
-(the hand-off module's), or arming; the refinement note's abstraction gaps list them.
+the appended leaf's replay; the seed's admission, its refusal after a close, an
+abandoned attempt and its retry, and a bulk load into a never-written shard with a
+batch write seeding a root mid-load. It does NOT cover several keys or appended leaves,
+the re-delivery skip, the gate closed or an older silo, the close's fence beyond the
+generation's re-claim (the hand-off module's), or arming; the refinement note's
+abstraction gaps list them.
 
 ```powershell
 java -cp C:\path\to\tla2tools.jar tlc2.TLC -workers 2 -config WalBulkSwitch.cfg WalBulkSwitch.tla
+java -cp C:\path\to\tla2tools.jar tlc2.TLC -workers 2 -config WalBulkSwitch.Skip.cfg WalBulkSwitch.tla
 ```
 
 ## WalLiveAdvanceCore

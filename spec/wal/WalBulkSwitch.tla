@@ -35,6 +35,21 @@
 (* two steps, a foreign record of K's range and O's replay of it, a crash *)
 (* of the shard root, and N's replay.                                      *)
 (*                                                                         *)
+(* The seed (#5812, member B). N's bulk entry is a WAL record N appends    *)
+(* before it is published, claiming no append epoch. Under an open switch  *)
+(* it carries the bulk-seed stamp class: the shard root's routing          *)
+(* generation captured after the token opened (review C1), admitted only   *)
+(* on a positive match with the partition's loaded generation (C2), and    *)
+(* not reported in the unstamped watermark. Every close re-claims the      *)
+(* generation, so a seed still in flight from an aborted attempt is        *)
+(* refused once its switch has closed. WithSkip models the never-written   *)
+(* shard (B2): no root at the start, no token and no hint, the seed        *)
+(* unstamped and reported; a batch write may seed a root O mid-load, and   *)
+(* the publish then falls back to the switched path (review Q2). The       *)
+(* guarantee to the core module is SeedCovered: every seed record is       *)
+(* covered by its open marker and below its close heads, or reported, so  *)
+(* every leaf that can own it is gated on it (C3, C4').                   *)
+(*                                                                         *)
 (* See BulkSwitchRefinement.md for the mapping to production, the         *)
 (* interface, and what this model does NOT cover.                         *)
 (***************************************************************************)
@@ -44,16 +59,28 @@ EXTENDS Integers, FiniteSets
 (* Instance. WithRun: the shard holds a completed switch of an earlier     *)
 (* chunk of the run, and possibly the run's hint. WithCrash: the shard     *)
 (* root may die once, before or during the graft. WithTimeout: O's drain   *)
-(* may miss its deadline.                                                  *)
+(* may miss its deadline. NeverWritten = 1 (WithSkip): the shard has no   *)
+(* root when the load begins (#5812, B2); O exists only if a batch write  *)
+(* seeds it.                                                               *)
 (***************************************************************************)
-CONSTANTS WithRun, WithCrash, WithTimeout
+CONSTANTS WithRun, WithCrash, WithTimeout, NeverWritten
+
+ASSUME NeverWritten \in {0, 1}
+
+\* #5812, B2: the shard has no root when the load begins (NeverWritten = 1).
+WithSkip == NeverWritten = 1
 
 MaxOff == 4
 Offs == 0..(MaxOff - 1)
 Null == -1
 NoAuthor == "none"
-\* p: O's write before the switch; c: a commit O admits; f: a foreign record.
-Authors == {"p", "c", "f"}
+\* p: O's write before the switch (or a batch write seeding O mid-load, WithSkip);
+\* c: a commit O admits; f: a foreign record; s: N's seed of its bulk entry.
+Authors == {"p", "c", "f", "s"}
+\* Every close and fold raises the generation; at most five happen in a behaviour.
+MaxGen == 7
+\* How a seed record was admitted: under its open token, reported unstamped, or neither.
+SeedClasses == {"na", "open", "reported", "none"}
 Phases == {"pre", "begun", "retry", "created", "narrowed", "delivered", "dropped", "finished"}
 
 Max(S) == CHOOSE x \in S : \A y \in S : y <= x
@@ -79,10 +106,24 @@ VARIABLES
     nUp,        \* N has been created
     heldN,      \* the rows N holds, by the offset of the record that wrote them
     rpN,        \* N's read position: the last offset it has applied; -1 at the start
-    crashed     \* the shard root has died (WithCrash)
+    crashed,    \* the shard root has died (WithCrash)
+    oUp,        \* O exists: from the start, or seeded by a batch write mid-load (WithSkip)
+    midLoad,    \* O was seeded mid-load by a batch write (WithSkip)
+    skip,       \* the current attempt took the never-written path: no token, no hint
+    published,  \* N is published: linked (append) or swapped in as the root (load)
+    seedSt,     \* N's seed call: "none", "flight" (sent, not allocated), "done"
+    seedGen,    \* the generation the seed in flight carries; 0 for an unstamped seed
+    gen,        \* the shard root's routing generation as the partition has loaded it
+    wm,         \* the partition's unstamped watermark; Null when nothing was reported
+    closeHead,  \* the head the last close of the operation's token recorded; Null before
+    seedUnder,  \* how each allocated seed record was admitted
+    aborted     \* the operation has been abandoned once before publication
 
 vars == <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen,
-          prevHint, runHint, bulkAt, copied, relocOk, nUp, heldN, rpN, crashed>>
+          prevHint, runHint, bulkAt, copied, relocOk, nUp, heldN, rpN, crashed,
+          oUp, midLoad, skip, published, seedSt, seedGen, gen, wm, closeHead, seedUnder, aborted>>
+
+seedVars == <<oUp, midLoad, skip, published, seedSt, seedGen, gen, wm, closeHead, seedUnder, aborted>>
 
 Allocated == {o \in Offs : author[o] # NoAuthor}
 
@@ -108,6 +149,17 @@ TypeOK ==
     /\ heldN \subseteq Offs
     /\ rpN \in -1..(MaxOff - 1)
     /\ crashed \in BOOLEAN
+    /\ oUp \in BOOLEAN
+    /\ midLoad \in BOOLEAN
+    /\ skip \in BOOLEAN
+    /\ published \in BOOLEAN
+    /\ seedSt \in {"none", "flight", "done"}
+    /\ seedGen \in 0..MaxGen
+    /\ gen \in 1..MaxGen
+    /\ wm \in {Null} \cup Offs
+    /\ closeHead \in {Null} \cup 0..MaxOff
+    /\ seedUnder \in [Offs -> SeedClasses]
+    /\ aborted \in BOOLEAN
 
 (* WithRun: an earlier chunk's switch is open with its stored hint (heads  *)
 (* read at the run's start, 0 here), and the activation may still hold the *)
@@ -134,6 +186,17 @@ Init ==
     /\ heldN = {}
     /\ rpN = -1
     /\ crashed = FALSE
+    /\ oUp = ~WithSkip
+    /\ midLoad = FALSE
+    /\ skip = FALSE
+    /\ published = FALSE
+    /\ seedSt = "none"
+    /\ seedGen = 0
+    /\ gen = 1
+    /\ wm = Null
+    /\ closeHead = Null
+    /\ seedUnder = [o \in Offs |-> "na"]
+    /\ aborted = FALSE
 
 Min2(x, y) == IF x <= y THEN x ELSE y
 
@@ -149,17 +212,20 @@ Alloc(a) ==
 (* PreWrite: before the bulk operation begins, O takes a write of K and    *)
 (* stores it with its record.                                              *)
 PreWrite ==
+    /\ oUp
     /\ phase = "pre"
     /\ \A o \in Offs : author[o] # "p"
     /\ Alloc("p")
     /\ rowsO' = rowsO \cup {next}
     /\ UNCHANGED <<rpO, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen, prevHint, runHint,
                    bulkAt, copied, relocOk, nUp, heldN, rpN, crashed>>
+    /\ UNCHANGED seedVars
 
 (* CommitAlloc: O admits a write of K inside its declared span, counts it  *)
 (* among its admitted mutations, and its record is allocated; it is stored *)
 (* on O later (CommitStore). At any time before the narrow.                *)
 CommitAlloc ==
+    /\ oUp
     /\ ~narrowed
     /\ cst = "none"
     /\ Alloc("c")
@@ -167,6 +233,7 @@ CommitAlloc ==
     /\ cCounted' = TRUE
     /\ UNCHANGED <<rowsO, rpO, fO, narrowed, phase, hint, tokOpen, prevOpen, prevHint, runHint,
                    bulkAt, copied, relocOk, nUp, heldN, rpN, crashed>>
+    /\ UNCHANGED seedVars
 
 (* CommitStore: the admitted commit is stored on O. After a narrow it lies *)
 (* outside O's declared span, where nothing reads it or relocates it.      *)
@@ -176,17 +243,20 @@ CommitStore ==
     /\ rowsO' = rowsO \cup {CHOOSE o \in Offs : author[o] = "c"}
     /\ UNCHANGED <<next, author, rpO, fO, narrowed, cCounted, phase, hint, tokOpen, prevOpen, prevHint,
                    runHint, bulkAt, copied, relocOk, nUp, heldN, rpN, crashed>>
+    /\ UNCHANGED seedVars
 
 (* ReplayO: O replays the next record. While it declares K's range it    *)
 (* holds it if another author wrote it (its own records it already        *)
 (* holds); after the narrow its replay filters K out, so it passes the    *)
 (* record without holding it.                                             *)
 ReplayO ==
+    /\ oUp
     /\ rpO + 1 < next
     /\ rpO' = rpO + 1
-    /\ rowsO' = IF author[rpO + 1] = "f" /\ ~narrowed THEN rowsO \cup {rpO + 1} ELSE rowsO
+    /\ rowsO' = IF author[rpO + 1] \in {"f", "s"} /\ ~narrowed THEN rowsO \cup {rpO + 1} ELSE rowsO
     /\ UNCHANGED <<next, author, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen, prevHint,
                    runHint, bulkAt, copied, relocOk, nUp, heldN, rpN, crashed>>
+    /\ UNCHANGED seedVars
 
 (* ForeignAlloc: a record of K's range by another author (a hand-off      *)
 (* initiator), held only by replay: before the narrow O reaches it by its  *)
@@ -196,6 +266,7 @@ ForeignAlloc ==
     /\ Alloc("f")
     /\ UNCHANGED <<rowsO, rpO, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen, prevHint, runHint,
                    bulkAt, copied, relocOk, nUp, heldN, rpN, crashed>>
+    /\ UNCHANGED seedVars
 
 (***************************************************************************)
 (* The switch.                                                             *)
@@ -207,30 +278,121 @@ ForeignAlloc ==
 (* heads are then the hint. The hint and the open token are one write.     *)
 Begin ==
     /\ phase \in {"pre", "retry"}
-    /\ \E cadence \in BOOLEAN :
-        LET fold == prevOpen /\ (cadence \/ (hint = Null /\ runHint = Null))
-            h == IF hint # Null THEN hint
-                 ELSE IF fold THEN next
-                 ELSE IF runHint # Null THEN runHint
-                 ELSE next
-        IN /\ hint' = h
-           /\ tokOpen' = TRUE
-           /\ runHint' = h
-           /\ prevOpen' = (prevOpen /\ ~fold)
-           /\ prevHint' = IF fold THEN Null ELSE prevHint
+    /\ IF WithSkip /\ ~oUp /\ ~tokOpen
+       THEN \* #5812, B2: a never-written shard opens no token and stores no hint.
+            /\ skip' = TRUE
+            /\ UNCHANGED <<hint, tokOpen, runHint, prevOpen, prevHint, gen, closeHead>>
+       ELSE /\ skip' = FALSE
+            /\ \E cadence \in BOOLEAN :
+                LET fold == prevOpen /\ (cadence \/ (hint = Null /\ runHint = Null))
+                    h == IF hint # Null THEN hint
+                         ELSE IF fold THEN next
+                         ELSE IF runHint # Null THEN runHint
+                         ELSE next
+                IN /\ hint' = h
+                   /\ tokOpen' = TRUE
+                   /\ runHint' = h
+                   /\ prevOpen' = (prevOpen /\ ~fold)
+                   /\ prevHint' = IF fold THEN Null ELSE prevHint
+                   \* The fold's fence re-claims the generation at every partition.
+                   /\ gen' = IF fold /\ gen < MaxGen THEN gen + 1 ELSE gen
+            /\ UNCHANGED closeHead
     /\ phase' = "begun"
     /\ bulkAt' = IF bulkAt = Null THEN next ELSE bulkAt
     /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, copied, relocOk, nUp, heldN, rpN,
-                   crashed>>
+                   crashed, oUp, midLoad, published, seedSt, seedGen, wm, seedUnder, aborted>>
 
 (* Create: N is created holding the bulk entry, reading from the log's     *)
 (* start, and the graft intent is persisted.                               *)
 Create ==
     /\ phase = "begun"
+    /\ seedSt # "flight"
     /\ phase' = "created"
     /\ nUp' = TRUE
+    /\ seedSt' = "flight"
+    \* #5812: stamped with the generation read after the token opened (C1); the
+    \* never-written path seeds unstamped.
+    /\ seedGen' = IF tokOpen THEN gen ELSE 0
     /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, hint, tokOpen, prevOpen, prevHint,
-                   runHint, bulkAt, copied, relocOk, heldN, rpN, crashed>>
+                   runHint, bulkAt, copied, relocOk, heldN, rpN, crashed, oUp, midLoad, skip, published, gen, wm,
+                   closeHead, seedUnder, aborted>>
+
+(* SeedAlloc (BPlusLeafGrain.MergeBulkSeedAsync, WalShardGrain's bulk-seed *)
+(* admission): N's seed record is allocated, and N holds it. An unstamped  *)
+(* seed is admitted and reported; a stamped one only on a positive match   *)
+(* with the loaded generation (C2), and is not reported. A seed call that  *)
+(* outran its caller may land here after the operation was abandoned.     *)
+SeedAlloc ==
+    /\ seedSt = "flight"
+    /\ seedGen = 0 \/ seedGen = gen
+    /\ Alloc("s")
+    /\ heldN' = heldN \cup {next}
+    /\ wm' = IF seedGen = 0 THEN next ELSE wm
+    /\ seedUnder' = [seedUnder EXCEPT ![next] =
+                        IF seedGen = 0 THEN "reported" ELSE IF tokOpen THEN "open" ELSE "none"]
+    /\ seedSt' = "done"
+    /\ UNCHANGED <<rowsO, rpO, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen, prevHint, runHint,
+                   bulkAt, copied, relocOk, nUp, rpN, crashed, oUp, midLoad, skip, published, seedGen, gen,
+                   closeHead, aborted>>
+
+(* SeedRefused: a stamped seed whose generation a close has re-claimed     *)
+(* above is refused as stale; nothing is allocated.                        *)
+SeedRefused ==
+    /\ seedSt = "flight"
+    /\ seedGen # 0
+    /\ seedGen < gen
+    /\ seedSt' = "none"
+    /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen,
+                   prevHint, runHint, bulkAt, copied, relocOk, nUp, heldN, rpN, crashed, oUp, midLoad, skip,
+                   published, seedGen, gen, wm, closeHead, seedUnder, aborted>>
+
+(* BatchMidLoad (WithSkip; ShardRootGrain.EnsureRootSlowAsync under a      *)
+(* batch write): before the load publishes, a batch write seeds a root O   *)
+(* on the rootless shard and stores a write of K on it.                    *)
+BatchMidLoad ==
+    /\ WithSkip
+    /\ ~oUp
+    /\ ~published
+    /\ phase \in {"begun", "created", "retry"}
+    /\ Alloc("p")
+    /\ oUp' = TRUE
+    /\ midLoad' = TRUE
+    /\ rowsO' = {next}
+    /\ UNCHANGED <<rpO, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen, prevHint, runHint,
+                   bulkAt, copied, relocOk, nUp, heldN, rpN, crashed, skip, published, seedSt, seedGen, gen, wm,
+                   closeHead, seedUnder, aborted>>
+
+(* Publish (ShardRootGrain.TryPublishNeverWrittenAsync, review Q2): on the *)
+(* never-written path, once the seed is in, the check that the shard has   *)
+(* no root and the swap are one step under the root-seed gate. If a batch  *)
+(* write seeded O first, the load falls back to the switched path: the     *)
+(* token opens now, with no hint, and the relocation follows (Narrow).     *)
+Publish ==
+    /\ phase = "created"
+    /\ skip
+    /\ seedSt = "done"
+    /\ IF ~oUp
+       THEN /\ published' = TRUE
+            /\ phase' = "finished"
+            /\ UNCHANGED <<tokOpen, skip>>
+       ELSE /\ tokOpen' = TRUE
+            /\ skip' = FALSE
+            /\ UNCHANGED <<published, phase>>
+    /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, hint, prevOpen, prevHint, runHint,
+                   bulkAt, copied, relocOk, nUp, heldN, rpN, crashed, oUp, midLoad, seedSt, seedGen, gen, wm,
+                   closeHead, seedUnder, aborted>>
+
+(* Abort: the operation's call fails before publication (a seed outran     *)
+(* the response timeout, say) and its caller retries it from Begin. The    *)
+(* seed may still be in flight; the token stays open until a close.        *)
+Abort ==
+    /\ ~aborted
+    /\ phase \in {"begun", "created"}
+    /\ aborted' = TRUE
+    /\ phase' = "retry"
+    /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, hint, tokOpen, prevOpen, prevHint,
+                   runHint, bulkAt, copied, relocOk, nUp, heldN, rpN, crashed, oUp, midLoad, skip, published,
+                   seedSt, seedGen, gen, wm, closeHead, seedUnder>>
 
 (* Narrow (BPlusLeafGrain.NarrowHighKeyAsync): drain the counted commits   *)
 (* (only when it would narrow), narrow and link, and hand back a copy of   *)
@@ -240,6 +402,9 @@ Create ==
 (* record of the range since, unheld. With no frontier, no hint is applied. *)
 Narrow ==
     /\ phase = "created"
+    /\ oUp
+    /\ ~skip
+    /\ seedSt = "done"
     /\ narrowed \/ ~(cst = "flight" /\ cCounted)
     /\ narrowed' = TRUE
     /\ copied' = rowsO
@@ -248,18 +413,25 @@ Narrow ==
     /\ phase' = "narrowed"
     /\ UNCHANGED <<next, author, rowsO, rpO, cst, cCounted, hint, tokOpen, prevOpen, prevHint, runHint,
                    bulkAt, nUp, heldN, rpN, crashed>>
+    /\ published' = TRUE
+    /\ UNCHANGED <<oUp, midLoad, skip, seedSt, seedGen, gen, wm, closeHead, seedUnder, aborted>>
 
 (* NarrowTimeout: the drain misses its deadline, nothing is narrowed, and  *)
 (* the graft takes the 10.2.0 path: it links N and applies no hint.        *)
 NarrowTimeout ==
     /\ WithTimeout
     /\ phase = "created"
+    /\ ~skip
+    /\ ~midLoad
+    /\ seedSt = "done"
     /\ ~narrowed
     /\ cst = "flight" /\ cCounted
     /\ relocOk' = FALSE
     /\ phase' = "dropped"
     /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, hint, tokOpen, prevOpen, prevHint,
                    runHint, bulkAt, copied, nUp, heldN, rpN, crashed>>
+    /\ published' = TRUE
+    /\ UNCHANGED <<oUp, midLoad, skip, seedSt, seedGen, gen, wm, closeHead, seedUnder, aborted>>
 
 (* Deliver (ShardRootGrain.RelocateIntoGraftedLeavesAsync): the copy is    *)
 (* merged into N with its stamps.                                          *)
@@ -269,6 +441,7 @@ Deliver ==
     /\ phase' = "delivered"
     /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, hint, tokOpen, prevOpen, prevHint,
                    runHint, bulkAt, copied, relocOk, nUp, rpN, crashed>>
+    /\ UNCHANGED seedVars
 
 (* Drop (BPlusLeafGrain.DropRelocatedRowsAsync): only once delivered, O    *)
 (* drops exactly the rows it handed back.                                  *)
@@ -278,6 +451,7 @@ Drop ==
     /\ phase' = "dropped"
     /\ UNCHANGED <<next, author, rpO, fO, narrowed, cst, cCounted, hint, tokOpen, prevOpen, prevHint,
                    runHint, bulkAt, copied, relocOk, nUp, heldN, rpN, crashed>>
+    /\ UNCHANGED seedVars
 
 (* Finish (ShardRootGrain.FinishBulkSwitchAsync): N's read position        *)
 (* becomes the stored hint only when every row was relocated, capped at   *)
@@ -290,6 +464,7 @@ Finish ==
     /\ rpN' = IF relocOk /\ hint # Null THEN Min2(hint - 1, fO) ELSE rpN
     /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, hint, tokOpen, prevOpen, prevHint,
                    runHint, bulkAt, copied, relocOk, nUp, heldN, crashed>>
+    /\ UNCHANGED seedVars
 
 (* Close (ShardRootGrain.CloseBulkSwitchesAsync): one fence closes every   *)
 (* completed switch, every open token but a pending graft's (an abandoned  *)
@@ -304,6 +479,11 @@ Close ==
     /\ runHint' = Null
     /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, phase, bulkAt, copied, relocOk,
                    nUp, heldN, rpN, crashed>>
+    \* Every close re-claims the generation at every partition (C1), refusing a
+    \* later seed of the closed switch, and records its heads.
+    /\ gen' = IF gen < MaxGen THEN gen + 1 ELSE gen
+    /\ closeHead' = IF tokOpen /\ ~Pending THEN next ELSE closeHead
+    /\ UNCHANGED <<oUp, midLoad, skip, published, seedSt, seedGen, wm, seedUnder, aborted>>
 
 (* Crash (WithCrash): the shard root dies once. Its memory goes (the run   *)
 (* hint, the copy). Before the graft intent the client retries the        *)
@@ -318,6 +498,7 @@ Crash ==
     /\ phase' = IF phase = "begun" THEN "retry" ELSE "created"
     /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, hint, tokOpen, prevOpen, prevHint,
                    bulkAt, relocOk, nUp, heldN, rpN>>
+    /\ UNCHANGED seedVars
 
 (* Replay: once its switch is finished, N applies the next record.         *)
 Replay ==
@@ -327,6 +508,7 @@ Replay ==
     /\ heldN' = heldN \cup {rpN + 1}
     /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen,
                    prevHint, runHint, bulkAt, copied, relocOk, nUp, crashed>>
+    /\ UNCHANGED seedVars
 
 (* A behaviour may stop anywhere: this is a safety model.                  *)
 Stutter == UNCHANGED vars
@@ -339,6 +521,11 @@ Next ==
     \/ ReplayO
     \/ Begin
     \/ Create
+    \/ SeedAlloc
+    \/ SeedRefused
+    \/ BatchMidLoad
+    \/ Publish
+    \/ Abort
     \/ Narrow
     \/ NarrowTimeout
     \/ Deliver
@@ -371,8 +558,8 @@ BulkHintBound == nUp => \A o \in Allocated : o <= rpN => o \in heldN
 Ver(o) == 2 * o + 2
 BulkVer == 2 * bulkAt + 1
 Top(S) == IF S = {} \/ BulkVer > Ver(Max(S)) THEN -1 ELSE Max(S)
-OwnerRank == Top({o \in heldN : o <= rpN})
-ReaderRank == Top({o \in Allocated : o <= rpN})
+OwnerRank == Top({o \in heldN : o <= rpN /\ author[o] # "s"})
+ReaderRank == Top({o \in Allocated : o <= rpN /\ author[o] # "s"})
 
 (* The owner resolves the contested key to the value every WAL reader     *)
 (* resolves: last writer wins by version, the later-stamped write wins.   *)
@@ -384,4 +571,20 @@ ContestedKeyAgrees == nUp => OwnerRank = ReaderRank
 HintOnlyWhileOpen ==
     /\ hint # Null => tokOpen
     /\ prevHint # Null => prevOpen
+
+(* #5812, the guarantee to the core module (C1, C3, C4'): every seed       *)
+(* record is admitted under its switch's open token and lies below the     *)
+(* heads its close records, or is reported in the unstamped watermark. A  *)
+(* leaf that can own a seeded row, the old root's included, is held on the *)
+(* marker until it reads to those heads, or reads past every reported      *)
+(* offset before it arms, so no live advance passes a seed it has not read. *)
+SeedCovered ==
+    \A o \in Allocated : author[o] = "s" =>
+        \/ seedUnder[o] = "reported" /\ wm # Null /\ o <= wm
+        \/ seedUnder[o] = "open" /\ (tokOpen \/ (closeHead # Null /\ o < closeHead))
+
+(* #5812, review Q2: a load published over a root a batch write seeded     *)
+(* while it ran has relocated that root: the root was narrowed (its rows    *)
+(* copied, its admissions drained) under the switch, never overwritten.    *)
+ReplacedRootRelocated == published /\ midLoad => narrowed
 =============================================================================

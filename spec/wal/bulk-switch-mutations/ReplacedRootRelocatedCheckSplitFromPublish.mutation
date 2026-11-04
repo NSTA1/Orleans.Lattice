@@ -1,0 +1,18 @@
+# Pairs with ReplacedRootRelocated (review Q2). A batch write that seeded a root
+# between the check and the swap is overwritten: its root is never relocated
+# and keeps admitting writes of a range the loaded tree owns.
+MODULE: ReplacedRootRelocatedCheckSplitFromPublish
+TARGET: ReplacedRootRelocated
+CLASS: Invariant
+SUMMARY: the never-written publish does not re-check, in its swap, that no batch write has seeded a root
+PERTURBS: Publish
+BOUNDS: NeverWritten = 1
+
+--- FIND
+    /\ IF ~oUp
+       THEN /\ published' = TRUE
+--- REPLACE
+\* MUTATION: the check ran earlier, split from the swap by an await.
+    /\ IF TRUE
+       THEN /\ published' = TRUE
+--- END

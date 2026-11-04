@@ -94,7 +94,14 @@ internal sealed partial class ShardRootGrain
     /// or <see langword="null"/> while the gate is closed or the silo provides no marker
     /// storage.
     /// </summary>
-    private async Task<long[]?> BeginBulkSwitchAsync(string operationId, string? lowInclusive)
+    /// <param name="operationId">The bulk operation.</param>
+    /// <param name="lowInclusive">The low bound of the marker's range; <see langword="null"/> for the whole shard.</param>
+    /// <param name="withHint">
+    /// <see langword="false"/> when the operation's leaves were born before this open (the
+    /// never-written fallback of #5812): no hint is stored or applied, so they read from
+    /// the log's start, and only the marker opens.
+    /// </param>
+    private async Task<long[]?> BeginBulkSwitchAsync(string operationId, string? lowInclusive, bool withHint = true)
     {
         if (!IsAppendFenceGateOpen() || !HasHandOffStorage())
         {
@@ -117,10 +124,12 @@ internal sealed partial class ShardRootGrain
 
         // Heads are exclusive and a hint is an inclusive checkpoint, so every head
         // becomes a hint one below it (issue #5760); a stored or run hint already is.
-        var hint = stored
-            ?? (fenceHeads is null ? null : BPlusLeafGrain.HeadsAsCheckpoints(fenceHeads))
-            ?? _bulkRunHint
-            ?? BPlusLeafGrain.HeadsAsCheckpoints(await CaptureBulkBirthHeadsAsync());
+        var hint = !withHint
+            ? null
+            : stored
+                ?? (fenceHeads is null ? null : BPlusLeafGrain.HeadsAsCheckpoints(fenceHeads))
+                ?? _bulkRunHint
+                ?? BPlusLeafGrain.HeadsAsCheckpoints(await CaptureBulkBirthHeadsAsync());
         var token = BulkHandOffToken(operationId);
         var opened = false;
         var closed = 0;
@@ -140,7 +149,11 @@ internal sealed partial class ShardRootGrain
                 }
             }
 
-            changed |= m.BulkBirthHints.TryAdd(operationId, hint);
+            if (hint is not null)
+            {
+                changed |= m.BulkBirthHints.TryAdd(operationId, hint);
+            }
+
             opened = HandOffMarkerCore.Open(m, token, lowInclusive, null);
             return changed | closed > 0 | opened;
         });
@@ -320,6 +333,13 @@ internal sealed partial class ShardRootGrain
     /// open by a previous activation (a tail that faulted, or a deactivation before the
     /// run's close). Reads nothing: the timer reads the marker, and closes only when a
     /// bulk switch is open. A shard that never bulk-loaded pays one null check.
+    /// <para>
+    /// <b>Cost (review N1 of #5815).</b> A completed bulk append records its id too, so
+    /// "has completed a bulk operation" covers every shard a bulk load or a streaming
+    /// import ever touched: most imported shards pay one marker read when the timer
+    /// fires, if no write has read the marker first. That is once per activation, never
+    /// per write.
+    /// </para>
     /// </summary>
     private void ArmBulkIdleCloseOnActivation()
     {

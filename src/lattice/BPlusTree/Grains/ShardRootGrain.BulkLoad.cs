@@ -126,6 +126,23 @@ internal sealed partial class ShardRootGrain
         }
     }
 
+    /// <summary>
+    /// The completed-id short-circuit of a same-operation re-issue: closes the switch the
+    /// load left open. When this activation remembers the load as faulted after it
+    /// published, the publish's own persist may be the step that failed, so the shard-root
+    /// state is persisted before the re-issue reports success (#5829). A fresh activation
+    /// read its completion from storage, so it writes nothing here.
+    /// </summary>
+    private async Task FinishCompletedBulkLoadAsync(string operationId)
+    {
+        if (string.Equals(_faultedBulkOperationId, operationId, StringComparison.Ordinal))
+        {
+            await WriteShardStateAsync();
+        }
+
+        await FinishBulkSwitchAsync(operationId, [], relocated: false, closeNow: true);
+    }
+
     private async Task BulkLoadCoreAsync(string operationId, List<KeyValuePair<string, byte[]>> sortedEntries)
     {
         EnsureInternalOrigin(LatticeOperation.BulkLoad);
@@ -138,27 +155,13 @@ internal sealed partial class ShardRootGrain
             // leaves the marker open and the hint stored. The replaced root is no
             // longer known, so the leaves keep reading from the log's start, which
             // reaches any row it held; the switch is closed without the hint.
-            await FinishBulkSwitchAsync(operationId, [], relocated: false, closeNow: true);
+            await FinishCompletedBulkLoadAsync(operationId);
             return;
         }
 
-        var seededRoot = await EnsureEmptyForBulkLoadAsync(nameof(BulkLoadAsync));
+        var seededRoot = await EnsureEmptyForBulkLoadAsync(nameof(BulkLoadAsync), operationId);
 
         if (sortedEntries.Count == 0) return;
-
-        // Epic #5605, member 3: the switch's birth hint and its marker, stored before
-        // the first leaf is created.
-        await BeginBulkSwitchAsync(operationId, null);
-
-        RecordWrite(sortedEntries.Count);
-
-        var shardKey = context.GrainId.Key.ToString()!;
-        var options = await GetOptionsAsync();
-        var maxLeafKeys = options.MaxLeafKeys;
-        var maxChildren = options.MaxInternalChildren;
-
-        var (leafIds, separators) = PlanBulkLoadLeaves(
-            shardKey, operationId, "bulk", maxLeafKeys, sortedEntries.Count, i => sortedEntries[i].Key);
 
         // Stamp every entry's version in one sequential pass up front. The
         // clock is a strictly increasing sequence, so it cannot be ticked from
@@ -172,7 +175,7 @@ internal sealed partial class ShardRootGrain
             clocks[i] = clock;
         }
 
-        await SeedBulkLoadLeavesAsync(leafIds, separators, maxLeafKeys, sortedEntries.Count, (start, count) =>
+        await RunBulkLoadAsync(operationId, seededRoot, "bulk", sortedEntries.Count, i => sortedEntries[i].Key, (start, count) =>
         {
             var batch = new Dictionary<string, LwwValue<byte[]>>(count);
             for (int j = 0; j < count; j++)
@@ -183,15 +186,6 @@ internal sealed partial class ShardRootGrain
 
             return batch;
         });
-
-        var replaced = await FinalizeBulkLoadTreeAsync(operationId, leafIds, separators, maxChildren);
-        var readFrontier = await RetireReplacedRootAsync(seededRoot, replaced);
-
-        // Every row the shard held before the switch is now in the loaded tree, so
-        // the leaves may read from the birth hint, capped at the replaced root's
-        // frontier (issue #5766); with no frontier they read from the log's start.
-        // The switch closes by fence.
-        await FinishBulkSwitchAsync(operationId, leafIds, relocated: readFrontier is not null, closeNow: true, readFrontier);
     }
 
     private async Task BulkLoadRawCoreAsync(
@@ -208,34 +202,20 @@ internal sealed partial class ShardRootGrain
             // leaves the marker open and the hint stored. The replaced root is no
             // longer known, so the leaves keep reading from the log's start, which
             // reaches any row it held; the switch is closed without the hint.
-            await FinishBulkSwitchAsync(operationId, [], relocated: false, closeNow: true);
+            await FinishCompletedBulkLoadAsync(operationId);
             return;
         }
 
-        var seededRoot = await EnsureEmptyForBulkLoadAsync(nameof(BulkLoadRawAsync));
+        var seededRoot = await EnsureEmptyForBulkLoadAsync(nameof(BulkLoadRawAsync), operationId);
 
         if (sortedEntries.Count == 0) return;
-
-        // Epic #5605, member 3: the switch's birth hint and its marker, stored before
-        // the first leaf is created.
-        await BeginBulkSwitchAsync(operationId, null);
-
-        RecordWrite(sortedEntries.Count);
-
-        var shardKey = context.GrainId.Key.ToString()!;
-        var options = await GetOptionsAsync();
-        var maxLeafKeys = options.MaxLeafKeys;
-        var maxChildren = options.MaxInternalChildren;
 
         // Identical B+ tree assembly to BulkLoadAsync - the only difference is
         // that every entry's LwwValue (HLC version AND ExpiresAtTicks /
         // TTL) flows through verbatim instead of being re-stamped with a fresh
         // zero-based clock. Used by snapshot / restore (TreeSnapshotGrain) so
         // TTL metadata survives the transfer end-to-end.
-        var (leafIds, separators) = PlanBulkLoadLeaves(
-            shardKey, operationId, "bulkraw", maxLeafKeys, sortedEntries.Count, i => sortedEntries[i].Key);
-
-        await SeedBulkLoadLeavesAsync(leafIds, separators, maxLeafKeys, sortedEntries.Count, (start, count) =>
+        await RunBulkLoadAsync(operationId, seededRoot, "bulkraw", sortedEntries.Count, i => sortedEntries[i].Key, (start, count) =>
         {
             var batch = new Dictionary<string, LwwValue<byte[]>>(count);
             for (int j = 0; j < count; j++)
@@ -246,13 +226,136 @@ internal sealed partial class ShardRootGrain
 
             return batch;
         });
+    }
 
-        var replaced = await FinalizeBulkLoadTreeAsync(operationId, leafIds, separators, maxChildren);
+    /// <summary>
+    /// The bottom-up build shared by <see cref="BulkLoadAsync"/> and
+    /// <see cref="BulkLoadRawAsync"/>, once the shard has been found empty.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Switched.</b> A shard that has a root - the empty seeded leaf - opens its
+    /// bulk switch before the first leaf is born (the birth hint and the marker), seeds
+    /// under it with the bulk-seed stamp class, publishes, relocates whatever a batch
+    /// write stored on the replaced root (issue #5642), and closes by fence.
+    /// </para>
+    /// <para>
+    /// <b>Never written (#5812, B2).</b> A shard with no root has no leaf, so it holds
+    /// no row for a switch to protect and no write in flight to drain. It opens no
+    /// marker, captures no hint and runs no fence: its leaves are seeded unstamped,
+    /// which every partition admits and reports, and they read from the log's start as
+    /// a fresh shard's leaves already do. The skip is decided at publish (review Q2):
+    /// with the root-seed gate held, the publish checks that the shard still has no
+    /// root and swaps its own in, in one synchronous segment, so a batch write that
+    /// seeds a root afterwards finds the loaded one, and one that seeded a root first
+    /// sends the load down the switched path: the switch is opened then, without a
+    /// hint, before the root is published, and the seeded root's rows are relocated
+    /// and fenced as they always are. A failed publish persist keeps the published root
+    /// in memory rather than reverting to none.
+    /// </para>
+    /// </remarks>
+    private async Task RunBulkLoadAsync(
+        string operationId,
+        GrainId? seededRoot,
+        string planPrefix,
+        int entryCount,
+        Func<int, string> keyAt,
+        Func<int, int, Dictionary<string, LwwValue<byte[]>>> buildBatch)
+    {
+        var switched = seededRoot is not null || state.State.RootNodeId is not null;
+        var seedRouting = WalRoutingStamp.Unstamped;
+        if (switched)
+        {
+            // Epic #5605, member 3: the switch's birth hint and its marker, stored before
+            // the first leaf is created; the seed is stamped only after the marker is
+            // durably open (review C1).
+            await BeginBulkSwitchAsync(operationId, null);
+            seedRouting = await BulkSeedRoutingAsync(operationId);
+        }
+
+        RecordWrite(entryCount);
+
+        var shardKey = context.GrainId.Key.ToString()!;
+        var options = await GetOptionsAsync();
+        var maxLeafKeys = options.MaxLeafKeys;
+        var maxChildren = options.MaxInternalChildren;
+
+        var (leafIds, separators) = PlanBulkLoadLeaves(shardKey, operationId, planPrefix, maxLeafKeys, entryCount, keyAt);
+        await SeedBulkLoadLeavesAsync(leafIds, separators, maxLeafKeys, entryCount, seedRouting, buildBatch);
+
+        var (root, rootIsLeaf) = await BuildBulkLoadRootAsync(operationId, leafIds, separators, maxChildren);
+        if (!switched)
+        {
+            if (await TryPublishNeverWrittenAsync(operationId, root, rootIsLeaf))
+            {
+                return;
+            }
+
+            // A batch write seeded a root while the load ran: fall back to the switched
+            // path, opening the marker before the root is published. The leaves were
+            // born before this open, so no hint is stored for them.
+            await BeginBulkSwitchAsync(operationId, null, withHint: false);
+        }
+
+        var replaced = PublishBulkLoadRoot(operationId, root, rootIsLeaf);
+        await WriteShardStateAsync();
         var readFrontier = await RetireReplacedRootAsync(seededRoot, replaced);
 
-        // As BulkLoadAsync: the hint is capped at the replaced root's frontier (issue
-        // #5766), and with no frontier the leaves read from the log's start.
+        // Every row the shard held before the switch is now in the loaded tree, so
+        // the leaves may read from the birth hint, capped at the replaced root's
+        // frontier (issue #5766); with no frontier, or no hint, they read from the
+        // log's start. The switch closes by fence.
         await FinishBulkSwitchAsync(operationId, leafIds, relocated: readFrontier is not null, closeNow: true, readFrontier);
+    }
+
+    /// <summary>
+    /// The never-written publish (#5812, B2; review Q2): with the root-seed gate held,
+    /// checks that the shard still has no root and publishes <paramref name="root"/> in
+    /// the same synchronous segment. Returns <see langword="false"/>, publishing
+    /// nothing, when a batch write seeded a root first. Holding the gate means a root
+    /// seed in flight finishes first, and one that starts afterwards finds this root.
+    /// The persist follows outside the gate; if it fails, the published root is kept in
+    /// memory, so a batch write admitted into it is not orphaned, and the same
+    /// operation's retry finds it complete.
+    /// </summary>
+    private async Task<bool> TryPublishNeverWrittenAsync(string operationId, GrainId root, bool rootIsLeaf)
+    {
+        await _ensureRootGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+        try
+        {
+            if (state.State.RootNodeId is not null)
+            {
+                return false;
+            }
+
+            PublishBulkLoadRoot(operationId, root, rootIsLeaf);
+        }
+        finally
+        {
+            _ensureRootGate.Release();
+        }
+
+        await WriteShardStateAsync();
+        return true;
+    }
+
+    /// <summary>
+    /// The routing a seed under <paramref name="operationId"/>'s switch carries: the
+    /// shard root's routing generation, read after the switch's marker opened, and only
+    /// while that marker is open (review C1). Otherwise - the gate closed, the marker not
+    /// open (a gate that opened after the switch began with it closed), or a generation
+    /// that cannot be raised - <see cref="WalRoutingStamp.Unstamped"/>, which seeds
+    /// unstamped and reported.
+    /// </summary>
+    private async Task<WalRoutingStamp> BulkSeedRoutingAsync(string operationId)
+    {
+        await EnsureRoutingGenerationAsync();
+        var routing = AdmissionRoutingStamp();
+        return routing.IsSet
+            && HasHandOffStorage()
+            && (await LoadHandOffMarkerAsync()).Open.ContainsKey(BulkHandOffToken(operationId))
+            ? routing
+            : WalRoutingStamp.Unstamped;
     }
 
     /// <summary>
@@ -298,11 +401,23 @@ internal sealed partial class ShardRootGrain
     /// </para>
     /// </remarks>
     /// <param name="operation">The bulk-load operation name for the refusal message.</param>
+    /// <param name="operationId">The load's operation id.</param>
     /// <returns>
     /// The empty seeded root leaf the load replaces, or <see langword="null"/>
     /// when the shard has no root.
     /// </returns>
-    private async Task<GrainId?> EnsureEmptyForBulkLoadAsync(string operation)
+    /// <remarks>
+    /// One root leaf that holds rows is accepted (#5812, review of the member B design):
+    /// one under this same operation's bulk switch, still open. An earlier attempt of
+    /// the operation seeded its leaves under that switch and stopped before it
+    /// published. The seeded root's range meets the marker, so it is held on the
+    /// switch's close heads and replays the aborted seeds by key range, as a 10.2.0
+    /// reader does. The retry then replaces that root and relocates its rows into the
+    /// loaded tree last-writer-wins, as it relocates a batch write's, and the
+    /// operation's own rows carry the same stamps on both sides. The marker is read on
+    /// this path only.
+    /// </remarks>
+    private async Task<GrainId?> EnsureEmptyForBulkLoadAsync(string operation, string operationId)
     {
         if (state.State.RootNodeId is not { } rootId) return null;
 
@@ -312,6 +427,11 @@ internal sealed partial class ShardRootGrain
         {
             var stats = await grainFactory.GetGrain<IBPlusLeafGrain>(rootId).GetStatsAsync();
             if (stats.LiveKeys == 0 && stats.Tombstones == 0) return rootId;
+            if (HasHandOffStorage()
+                && (await LoadHandOffMarkerAsync()).Open.ContainsKey(BulkHandOffToken(operationId)))
+            {
+                return rootId;
+            }
         }
 
         throw new InvalidOperationException($"{operation} requires an empty shard. This shard already has data.");
@@ -557,7 +677,7 @@ internal sealed partial class ShardRootGrain
     /// grain, and after the collapse no unit writes to a leaf other than its own,
     /// so the units are mutually independent and their completion order is
     /// immaterial. Nothing can observe an intermediate state either: the shard's
-    /// root is published only by <see cref="FinalizeBulkLoadTreeAsync"/>, after
+    /// root is published only by <see cref="PublishBulkLoadRoot"/>, after
     /// this method has returned, and <c>BulkLoadAsync</c> refuses to run against
     /// a shard that already has a root. Within a unit the two calls stay ordered,
     /// because the birth seam must seed the durable materialiser block pin before
@@ -585,6 +705,7 @@ internal sealed partial class ShardRootGrain
         List<string?> separators,
         int maxLeafKeys,
         int entryCount,
+        WalRoutingStamp seedRouting,
         Func<int, int, Dictionary<string, LwwValue<byte[]>>> buildBatch)
     {
         var slots = new int[leafIds.Count];
@@ -620,20 +741,56 @@ internal sealed partial class ShardRootGrain
                 var count = Math.Min(maxLeafKeys, entryCount - start);
                 var leafBatch = buildBatch(start, count);
                 await WalFenceSeamRetry.RunAsync(
-                    () => leaf.MergeEntriesAsync(leafBatch), WalFenceSeamRetry.CallerShardCoordinator, TreeId);
+                    () => MergeBulkSeedAsync(leaf, leafBatch, seedRouting), WalFenceSeamRetry.CallerShardCoordinator, TreeId);
             });
+    }
+
+    /// <summary>
+    /// Seeds <paramref name="batch"/> into a leaf the bulk operation has not yet
+    /// published (#5812), so the seed claims no append epoch for it. A leaf hosted by
+    /// an older build answers the seed method as unknown, and only then is the batch
+    /// merged as before, which claims as it always has.
+    /// </summary>
+    /// <remarks>
+    /// A partition that had not loaded the shard's generation loads it when the seed
+    /// re-presents it. Concurrent seeds re-presenting the same generation can race, and
+    /// the loser is refused at a threshold equal to the generation itself, which is still
+    /// current: the seed is re-sent, as a stamped write is re-admitted after a stale
+    /// generation (member 2). A refusal above the seed's generation means the switch
+    /// closed under it, which fails the seed and the operation. A re-sent seed re-merges
+    /// the same rows, which is idempotent.
+    /// </remarks>
+    private async Task MergeBulkSeedAsync(IBPlusLeafGrain leaf, Dictionary<string, LwwValue<byte[]>> batch, WalRoutingStamp seedRouting)
+    {
+        WalFenceSeamRetry? retry = null;
+        while (true)
+        {
+            try
+            {
+                await leaf.MergeBulkSeedAsync(batch, seedRouting);
+                return;
+            }
+            catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
+            {
+                await leaf.MergeEntriesAsync(batch);
+                return;
+            }
+            catch (WalRoutingGenerationStaleException stale) when (
+                stale.Generation == seedRouting.Generation && stale.Refusal <= seedRouting.Generation)
+            {
+                retry = await WalFenceSeamRetry.NextAsync(retry, WalFenceSeamRetry.CallerShardCoordinator, TreeId);
+            }
+        }
     }
 
     /// <summary>
     /// Shared bottom-up internal-node assembly used by both
     /// <see cref="BulkLoadAsync"/> and <see cref="BulkLoadRawAsync"/>. Builds
-    /// internal nodes from <paramref name="leafIds"/> / <paramref name="separators"/>,
-    /// persists the root, and records <paramref name="operationId"/> as complete.
-    /// Returns the root it replaced, read in the same synchronous step that
-    /// publishes the new one, so a root a concurrent batch write seeded or divided
-    /// while the load ran is the one reported (issue #5642).
+    /// internal nodes from <paramref name="leafIds"/> / <paramref name="separators"/>
+    /// and returns the root, unpublished: nothing reaches it until
+    /// <see cref="PublishBulkLoadRoot"/> swaps it in.
     /// </summary>
-    private async Task<ReplacedBulkRoot> FinalizeBulkLoadTreeAsync(
+    private async Task<(GrainId Root, bool IsLeaf)> BuildBulkLoadRootAsync(
         string operationId,
         List<GrainId> leafIds,
         List<string?> separators,
@@ -641,12 +798,7 @@ internal sealed partial class ShardRootGrain
     {
         if (leafIds.Count == 1)
         {
-            var replacedLeafRoot = new ReplacedBulkRoot(state.State.RootNodeId, state.State.RootIsLeaf);
-            state.State.RootNodeId = leafIds[0];
-            state.State.RootIsLeaf = true;
-            state.State.LastCompletedBulkOperationId = operationId;
-            await WriteShardStateAsync();
-            return replacedLeafRoot;
+            return (leafIds[0], true);
         }
 
         var shardKey = context.GrainId.Key.ToString()!;
@@ -712,11 +864,21 @@ internal sealed partial class ShardRootGrain
             level++;
         }
 
+        return (currentLevel[0].id, false);
+    }
+
+    /// <summary>
+    /// Publishes a built bulk-load root in memory and records <paramref name="operationId"/>
+    /// as complete, returning the root it replaced, read in the same synchronous step,
+    /// so a root a concurrent batch write seeded or divided while the load ran is the one
+    /// reported (issue #5642). The caller persists.
+    /// </summary>
+    private ReplacedBulkRoot PublishBulkLoadRoot(string operationId, GrainId root, bool rootIsLeaf)
+    {
         var replaced = new ReplacedBulkRoot(state.State.RootNodeId, state.State.RootIsLeaf);
-        state.State.RootNodeId = currentLevel[0].id;
-        state.State.RootIsLeaf = false;
+        state.State.RootNodeId = root;
+        state.State.RootIsLeaf = rootIsLeaf;
         state.State.LastCompletedBulkOperationId = operationId;
-        await WriteShardStateAsync();
         return replaced;
     }
 
@@ -836,6 +998,10 @@ internal sealed partial class ShardRootGrain
         // only; the old rightmost leaf is narrowed to its low bound.
         await BeginBulkSwitchAsync(operationId, sortedEntries[idx].Key);
 
+        // #5812: the appended leaves are seeded under the open switch with the bulk-seed
+        // class, so the seed claims no append epoch for a leaf not yet grafted.
+        var seedRouting = await BulkSeedRoutingAsync(operationId);
+
         var graftEntries = new List<GraftEntry>();
         var newLeafCount = 1 + (sortedEntries.Count - idx - 1) / maxLeafKeys;
         var newLeafIds = new GrainId[newLeafCount];
@@ -878,7 +1044,7 @@ internal sealed partial class ShardRootGrain
                 });
             }
             await WalFenceSeamRetry.RunAsync(
-                () => newLeaf.MergeEntriesAsync(batch), WalFenceSeamRetry.CallerShardCoordinator, TreeId);
+                () => MergeBulkSeedAsync(newLeaf, batch, seedRouting), WalFenceSeamRetry.CallerShardCoordinator, TreeId);
             CollectMirroredRows(mirrored, batch);
 
             graftEntries.Add(new GraftEntry { SeparatorKey = separator, LeafId = newId });
@@ -1349,11 +1515,14 @@ internal sealed partial class ShardRootGrain
             batch[row.Key] = row.ToLwwValue();
         }
 
+        // #5812: relocated under the graft's still-open switch, as its seed was, so the
+        // relocation claims no append epoch for an appended leaf either.
+        var seedRouting = await BulkSeedRoutingAsync(graft.OperationId);
         foreach (var (leafId, batch) in byLeaf)
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             await WalFenceSeamRetry.RunAsync(
-                () => leaf.MergeEntriesAsync(batch), WalFenceSeamRetry.CallerShardCoordinator, TreeId);
+                () => MergeBulkSeedAsync(leaf, batch, seedRouting), WalFenceSeamRetry.CallerShardCoordinator, TreeId);
         }
 
         RecordBulkRelocation(rows.Count, LatticeMetrics.BulkRelocationRightmostLeaf);
