@@ -599,7 +599,12 @@ public partial class LatticeSchemaRemediationGrainTests
         Assert.That(report.Reason, Is.Not.Null.And.Not.Empty);
 
         // No destination was built and nothing was cut over: the original is untouched.
+        // The build is never entered, so the destination is never registered, written or
+        // discarded (a build writes nothing before an offender in its chunk, issue #5802).
         await h.Destination.DidNotReceive().SetAsync(Arg.Any<string>(), Arg.Any<byte[]>());
+        await h.Destination.DidNotReceiveWithAnyArgs().SetManyAsync(default!, default);
+        await h.Destination.DidNotReceiveWithAnyArgs().DeleteTreeAsync(default);
+        await h.Registry.DidNotReceive().RegisterAsync(Arg.Is<string>(id => id.StartsWith(TreeId + "/remediated/", StringComparison.Ordinal)), Arg.Any<TreeRegistryEntry?>());
         await h.Registry.DidNotReceive().SwapAliasAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
         await h.PolicyStore.DidNotReceive().SetPolicyAsync(Arg.Any<string>(), Arg.Any<LatticeSchemaPolicy>(), Arg.Any<CancellationToken>());
 

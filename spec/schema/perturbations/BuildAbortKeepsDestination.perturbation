@@ -6,8 +6,8 @@ DETECTORS: LatticeSchemaRemediationGrainTests.RunRemediationPassAsync_build_time
 SUMMARY: a build-time abort keeps its partial destination
 
 --- FIND
-            await DiscardDestinationAsync(destination);
-            await AbortAsync(
+                await DiscardDestinationAsync(destination);
+                await AbortAsync(scanned + 1, offender.Key, offender.Reason, offender.Preview);
 --- REPLACE
-            await AbortAsync(
+                await AbortAsync(scanned + 1, offender.Key, offender.Reason, offender.Preview);
 --- END
