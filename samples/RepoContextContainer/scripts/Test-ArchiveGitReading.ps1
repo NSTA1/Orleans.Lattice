@@ -297,18 +297,22 @@ function New-GitRepo {
 }
 
 # Run `git rev-parse --show-toplevel` exactly as the reader's probe does, under
-# a pinned C locale, and return the raw reading. This is the conformance arm's
-# own probe; it must match the locale the production reader uses or it compares
-# against a different git.
+# a pinned C locale and with discovery crossing filesystem boundaries, and
+# return the raw reading. This is the conformance arm's own probe; it must match
+# the environment the production reader uses or it compares against a different
+# git. Without the boundary pin a temp directory on its own filesystem reads as
+# git's mount-point form rather than the genuine miss (issue #5785).
 function Get-ToplevelProbe {
 	param([Parameter(Mandatory)] [string] $Dir)
 
 	$savedLcAll = $env:LC_ALL
 	$savedLang = $env:LANG
+	$savedAcrossFilesystem = $env:GIT_DISCOVERY_ACROSS_FILESYSTEM
 	$stderrFile = [System.IO.Path]::GetTempFileName()
 	try {
 		$env:LC_ALL = 'C'
 		$env:LANG = 'C'
+		$env:GIT_DISCOVERY_ACROSS_FILESYSTEM = '1'
 		$out = & git -C $Dir rev-parse --show-toplevel 2>$stderrFile
 		$code = $LASTEXITCODE
 		$err = [string] (Get-Content -Raw -LiteralPath $stderrFile -ErrorAction SilentlyContinue)
@@ -317,6 +321,7 @@ function Get-ToplevelProbe {
 	finally {
 		$env:LC_ALL = $savedLcAll
 		$env:LANG = $savedLang
+		$env:GIT_DISCOVERY_ACROSS_FILESYSTEM = $savedAcrossFilesystem
 		Remove-Item -LiteralPath $stderrFile -Force -ErrorAction SilentlyContinue
 	}
 }
@@ -427,6 +432,46 @@ _Assert -Name 'reader: genuine miss is Exists=true, Examinable=true, Toplevel em
 	-Condition ($rMiss.Exists -and $rMiss.Examinable -and [string]::IsNullOrWhiteSpace($rMiss.Toplevel)) `
 	-Detail ("exists={0} examinable={1} toplevel=[{2}]" -f $rMiss.Exists, $rMiss.Examinable, $rMiss.Toplevel)
 
+# --- Filesystem boundary (issue #5785). On a host whose path sits on its own
+#     filesystem, git's default discovery stops at the mount and emits the
+#     mount-point form, which the predicate rightly refuses, so every archive on
+#     a separate volume was refused as unexaminable. The reader must make git
+#     search past the boundary. Most hosts cannot build that state, so `git` is
+#     shadowed here by a function that answers with the exact boundary text
+#     whenever the reader has NOT set GIT_DISCOVERY_ACROSS_FILESYSTEM=1, and
+#     defers to the real git when it has. Drop the reader's pin and this fails.
+$realGit = (Get-Command git -CommandType Application | Select-Object -First 1).Source
+$shellPath = (Get-Process -Id $PID).Path
+$script:_ShadowGitCalls = 0
+function git {
+	$script:_ShadowGitCalls++
+	if ($env:GIT_DISCOVERY_ACROSS_FILESYSTEM -eq '1') {
+		& $realGit @args
+		return
+	}
+	& $shellPath -NoProfile -NonInteractive -Command ("[Console]::Error.WriteLine('fatal: not a git repository (or any parent up to mount point /)'); " +
+		"[Console]::Error.WriteLine('Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).'); exit 128")
+}
+try {
+	$rBoundary = Get-ArchiveGitReading -Path $missDir
+}
+finally {
+	Remove-Item -LiteralPath Function:\git
+}
+
+_Assert -Name 'PRECONDITION the reader ran its probe through the shadowed git' `
+	-Condition ($script:_ShadowGitCalls -gt 0) `
+	-Detail ("shadow calls={0}" -f $script:_ShadowGitCalls)
+
+_Assert -Name 'reader: a path past a filesystem boundary, outside every checkout, is Examinable=true' `
+	-Condition ($rBoundary.Exists -and $rBoundary.Examinable -and [string]::IsNullOrWhiteSpace($rBoundary.Toplevel)) `
+	-Detail ("exists={0} examinable={1} toplevel=[{2}]" -f $rBoundary.Exists, $rBoundary.Examinable, $rBoundary.Toplevel)
+
+_Assert -Name 'archive check: such an archive is NOT refused' `
+	-Condition ((Get-ArchiveDurabilityViolation -ArchiveDestination '/memory-archive' -ArchiveSource $missDir `
+				-ArchiveMountType 'bind' -GitToplevel $rBoundary.Toplevel -IsLinkedWorktree $rBoundary.IsLinkedWorktree `
+				-SourceExistsOnHost $rBoundary.Exists -GitReadingExaminable $rBoundary.Examinable).Count -eq 0)
+
 # --- Orphaned linked worktree: NOT examinable under either supported diagnostic.
 #     Treating the bare phrase as a genuine miss is the fail-open to prevent.
 $rOrphan = Get-ArchiveGitReading -Path $orphanBuild.Worktree
@@ -483,9 +528,11 @@ _Assert -Name 'reader: a non-existent path is Exists=FALSE and Examinable=FALSE'
 #     these two red.
 $savedLcAll = $env:LC_ALL
 $savedLang = $env:LANG
+$savedAcrossFilesystem = $env:GIT_DISCOVERY_ACROSS_FILESYSTEM
 try {
 	$env:LC_ALL = 'argr-sentinel-lc'
 	$env:LANG = 'argr-sentinel-lang'
+	$env:GIT_DISCOVERY_ACROSS_FILESYSTEM = 'argr-sentinel-fs'
 	$null = Get-ArchiveGitReading -Path $healthyDir
 	_Assert -Name 'reader: restores the caller LC_ALL after pinning C for its git call' `
 		-Condition ($env:LC_ALL -eq 'argr-sentinel-lc') `
@@ -493,10 +540,14 @@ try {
 	_Assert -Name 'reader: restores the caller LANG after pinning C for its git call' `
 		-Condition ($env:LANG -eq 'argr-sentinel-lang') `
 		-Detail ("LANG after call=[{0}]" -f $env:LANG)
+	_Assert -Name 'reader: restores the caller GIT_DISCOVERY_ACROSS_FILESYSTEM after pinning it for its git call' `
+		-Condition ($env:GIT_DISCOVERY_ACROSS_FILESYSTEM -eq 'argr-sentinel-fs') `
+		-Detail ("GIT_DISCOVERY_ACROSS_FILESYSTEM after call=[{0}]" -f $env:GIT_DISCOVERY_ACROSS_FILESYSTEM)
 }
 finally {
 	$env:LC_ALL = $savedLcAll
 	$env:LANG = $savedLang
+	$env:GIT_DISCOVERY_ACROSS_FILESYSTEM = $savedAcrossFilesystem
 }
 
 # ---------------------------------------------------------------------------

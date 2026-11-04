@@ -475,6 +475,11 @@ $_gitMissStderr = 'fatal: not a git repository (or any of the parent directories
 $_gitOrphanStderr = 'fatal: not a git repository: C:/dev/main/.git/worktrees/gone'
 $_gitCorruptStderr = 'fatal: invalid gitfile format: C:/dev/broken/.git'
 
+# Captured from git on a CI runner whose temp directory was its own filesystem
+# (issue #5785). Discovery stopped at the mount without searching above it, so
+# this does not say "outside every checkout" and must not be read as if it did.
+$_gitBoundaryStderr = "fatal: not a git repository (or any parent up to mount point /)`nStopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).`n"
+
 _Assert -Name 'a clean toplevel reading is examinable' `
 	-Condition (Test-GitReadingIsExaminable -ExitCode 0 -StandardError '' -Toplevel 'C:\dev\lattice')
 
@@ -489,6 +494,9 @@ _Assert -Name 'and that is not incidental: the bare phrase IS present in that re
 
 _Assert -Name 'a corrupt gitfile is NOT examinable' `
 	-Condition (-not (Test-GitReadingIsExaminable -ExitCode 128 -StandardError $_gitCorruptStderr -Toplevel ''))
+
+_Assert -Name 'a discovery stopped at a FILESYSTEM BOUNDARY is NOT examinable, though it says not a git repository' `
+	-Condition (-not (Test-GitReadingIsExaminable -ExitCode 128 -StandardError $_gitBoundaryStderr -Toplevel ''))
 
 _Assert -Name 'a safe.directory refusal is NOT examinable' `
 	-Condition (-not (Test-GitReadingIsExaminable -ExitCode 128 `
