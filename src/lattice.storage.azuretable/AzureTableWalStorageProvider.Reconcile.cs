@@ -158,11 +158,8 @@ public sealed partial class AzureTableWalStorageProvider
     /// Runs only when a commit has failed, so the steady path pays nothing. Best
     /// effort: a storage failure leaves the remaining batches recorded for the next
     /// reconciliation rather than failing this one, which has already succeeded.
-    /// Rows recorded by a process that stops before its next reconciliation stay in
-    /// storage for good, unreadable: trim follows manifest rows and does not reach
-    /// them, and neither does a discard of the tree, which is a trim through
-    /// <see cref="long.MaxValue"/>. That is bounded per incident by the batches the
-    /// stopped writer had in flight.
+    /// Rows recorded by a process that stops before its next reconciliation are
+    /// reclaimed instead by the trim sweep (<see cref="SweepEntryRowsAsync"/>).
     /// </para>
     /// </summary>
     private static async Task ReclaimFailedBatchesAsync(
