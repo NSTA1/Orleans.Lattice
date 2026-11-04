@@ -111,9 +111,28 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
 
     private sealed class ObservedNaturalGc(ILatticeWalGc inner, IServiceProvider services) : ILatticeWalGc
     {
+        private static readonly AsyncLocal<bool> ExplicitPass = new();
+
+        /// <summary>
+        /// Marks the passes the test itself runs in the current flow, which a
+        /// <see cref="NaturalObservationTrace.HoldNaturalCollection"/> never defers.
+        /// </summary>
+        public static IDisposable Explicit()
+        {
+            ExplicitPass.Value = true;
+            return new ExplicitScope();
+        }
+
         public async Task<LatticeWalGcReport> RunOnceAsync(string treeName, CancellationToken cancellationToken = default)
         {
             var trace = services.GetRequiredService<NaturalObservationTrace>();
+            if (!ExplicitPass.Value && trace.HeldFor(treeName) is { } release)
+            {
+                // A natural pass deferred, not dropped: it runs for real once the hold lifts.
+                trace.Record("natural-gc-deferred", new { treeName });
+                await release.WaitAsync(cancellationToken);
+                trace.Record("natural-gc-resumed", new { treeName });
+            }
             if (!trace.Includes(treeName))
             {
                 return await inner.RunOnceAsync(treeName, cancellationToken);
@@ -137,6 +156,11 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
                 throw;
             }
         }
+
+        private sealed class ExplicitScope : IDisposable
+        {
+            public void Dispose() => ExplicitPass.Value = false;
+        }
     }
 
     private sealed class NaturalObservationTrace(string cluster) : ILoggerProvider
@@ -144,6 +168,44 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
         private readonly ConcurrentQueue<string> _events = new();
         private string[] _trees = [];
         private long _sequence;
+        private NaturalHold? _hold;
+
+        /// <summary>
+        /// Defers every natural (scheduler-driven) collection of <paramref name="logical"/> and
+        /// its physical copies until the returned scope is disposed.
+        /// <para>
+        /// Under the live checkpoint advance (#5605) a bootstrapped copy's leaf publishes a
+        /// materialiser pin covering its imported rows on its own, so a scheduler pass that lands
+        /// between the bootstrap and the test's own capture can legitimately trim the prefix the
+        /// test has yet to observe. Holding natural passes for the setup window restores the
+        /// precondition deterministically without disabling background collection: the deferred
+        /// pass still runs once the hold lifts, and the test's own passes are never held.
+        /// </para>
+        /// </summary>
+        public IDisposable HoldNaturalCollection(string logical)
+        {
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Volatile.Write(ref _hold, new NaturalHold(logical, release));
+            Record("natural-gc-hold", new { logical });
+            return new HoldScope(this, release);
+        }
+
+        public void ReleaseHold(TaskCompletionSource release)
+        {
+            if (Volatile.Read(ref _hold) is { } hold && ReferenceEquals(hold.Release, release))
+            {
+                Volatile.Write(ref _hold, null);
+                Record("natural-gc-release", new { hold.Logical });
+            }
+
+            release.TrySetResult();
+        }
+
+        public Task? HeldFor(string tree) =>
+            Volatile.Read(ref _hold) is { } hold
+                && (tree == hold.Logical || tree.StartsWith(hold.Logical + "/", StringComparison.Ordinal))
+                ? hold.Release.Task
+                : null;
 
         public bool Includes(string tree) => Volatile.Read(ref _trees).Any(logical =>
             tree == logical || tree.StartsWith(logical + "/", StringComparison.Ordinal));
@@ -230,6 +292,16 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
                     stack = new StackTrace().ToString()
                 });
             }
+        }
+    }
+
+    private sealed record NaturalHold(string Logical, TaskCompletionSource Release);
+
+    private sealed class HoldScope(NaturalObservationTrace trace, TaskCompletionSource release) : IDisposable
+    {
+        public void Dispose()
+        {
+            trace.ReleaseHold(release);
         }
     }
 

@@ -24,6 +24,10 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
         const string removed = "Removed";
         var samples = new List<string>();
         using var observation = BeginNaturalObservation(tree, sibling);
+        // Natural passes over the sibling are deferred until the real reverse consumer has registered;
+        // see HoldNaturalCollection.
+        using var naturalHold = NaturalServices(_siteB).GetRequiredService<NaturalObservationTrace>()
+            .HoldNaturalCollection(sibling);
 
         await WriteAsync(tree, sibling);
         LatticeBootstrapCoordinatorGrain.SiblingBoundaryReseedAfter = TimeSpan.FromSeconds(10);
@@ -69,6 +73,7 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
         var consumers = await _siteB.Client.GetGrain<IWalOffsetConsumerRegistryGrain>(physical).GetConsumersAsync();
         RequireProtectionEligible(consumers.Contains(reverse.GetGrainId()),
             "the real reverse pump has not registered; a single observation is not retried");
+        naturalHold.Dispose();
         var consumer = reverse.AsReference<IWalOffsetConsumer>();
         var floor = await consumer.GetDurableReadPositionsAsync(physical);
         RequireProtectionEligible(floor is not null && floor.Length == initial.Length && floor.All(offset => offset >= 0),
