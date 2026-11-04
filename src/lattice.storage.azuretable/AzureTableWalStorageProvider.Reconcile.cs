@@ -324,6 +324,7 @@ public sealed partial class AzureTableWalStorageProvider
 
         if (orphans.Count == 0)
         {
+            await RestampTailAsync(table, manifestPartitionKey, currentTail, tailETag, cancellationToken).ConfigureAwait(false);
             return currentTail;
         }
 
@@ -338,8 +339,14 @@ public sealed partial class AzureTableWalStorageProvider
         // deletes the unsalvageable ones; this also lets the
         // grain-side OnActivateAsync observe the new TAIL even if a
         // subsequent rollback fails on a transient I/O error.
-        if (plan.RollForward.Count > 0)
+        if (plan.RollForward.Count == 0)
         {
+            await RestampTailAsync(table, manifestPartitionKey, currentTail, tailETag, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            // The rollforward writes TAIL conditionally in every transaction, which
+            // fences a predecessor's commits just as RestampTailAsync does.
             await CommitRollForwardAsync(
                 table, manifestPartitionKey, plan.RollForward, currentTail, tailETag, plan.ResultingTail, AfterRollForwardChunkForTesting, cancellationToken)
                 .ConfigureAwait(false);
@@ -351,6 +358,54 @@ public sealed partial class AzureTableWalStorageProvider
         }
 
         return plan.ResultingTail;
+    }
+
+    /// <summary>
+    /// Rewrites <c>TAIL</c> at the value this pass read, conditionally on the ETag it
+    /// read it with, so its ETag changes (issue #5825).
+    /// <para>
+    /// The phase-2 worker commits whatever has arrived, so a writer can commit a batch
+    /// while a lower one is still in phase 1, and then commit the lower one later. A
+    /// predecessor activation still running elsewhere can do that after this instance
+    /// has recovered the shard and its readers have passed the lower offset as a hole,
+    /// leaving a record below their positions that a replay from the start would apply
+    /// and they never will. A predecessor's commits are fenced on the <c>TAIL</c> ETag it
+    /// holds (issue #5810), and merely reading <c>TAIL</c> leaves that ETag current;
+    /// rewriting it refuses every commit the predecessor makes afterwards. Recovery
+    /// runs before the grain serves any read, both on activation and on its
+    /// post-failure resync, so readers cannot pass a hole before the fence has moved.
+    /// </para>
+    /// <para>
+    /// A <c>412</c> means another writer moved <c>TAIL</c> since this pass read it, and
+    /// <see cref="ReconcileAsync"/> re-plans from fresh reads, which see whatever that
+    /// writer committed. Nothing is written when the row is absent: a predecessor that
+    /// last saw it absent commits with a create, which fails once any <c>TAIL</c>
+    /// exists, and until then no reader can have passed an offset. One write per
+    /// recovery, on the cold path only.
+    /// </para>
+    /// </summary>
+    private static async Task RestampTailAsync(
+        TableClient table,
+        string manifestPartitionKey,
+        long currentTail,
+        ETag? tailETag,
+        CancellationToken cancellationToken)
+    {
+        if (tailETag is not { } etag)
+        {
+            return;
+        }
+
+        var tail = new AzureTableWalEntity
+        {
+            PartitionKey = manifestPartitionKey,
+            RowKey = TailRowKey,
+            Offset = currentTail,
+            Payload = null,
+        };
+        await table.SubmitTransactionAsync(
+            new[] { new TableTransactionAction(TableTransactionActionType.UpdateReplace, tail, etag) },
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

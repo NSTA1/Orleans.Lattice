@@ -435,6 +435,11 @@ internal sealed partial class WalShardGrain(
         // the actual durable tail before the grain accepts appends.
         // Single-transaction backends inherit the interface's default
         // no-op implementation.
+        // Ordering (issue #5825): reconciliation also fences a predecessor
+        // activation's late commits (the Azure Table provider rewrites its
+        // tail), so it must complete before the tail read below and before
+        // any read is served. Here that holds by construction: no call,
+        // interleaving or not, reaches the grain until activation completes.
         var abandonedEndBeforeRead = UnsettledAbandonedEnd();
         await _provider.ReconcileAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
         var highest = await _provider.GetHighestOffsetAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
@@ -1374,7 +1379,9 @@ internal sealed partial class WalShardGrain(
             // Never past the highest stored offset + 1: a recovering allocator can
             // issue anything above it again, so a trailing hole stays unexposed
             // until something lands above it (issue #4621).
-            if (_highestStored + 1 < tail)
+            // The read clamp the post-failure resync relies on (issue #5825): see the
+        // ordering note in the failure handler.
+        if (_highestStored + 1 < tail)
             {
                 tail = _highestStored + 1;
             }
@@ -2582,6 +2589,13 @@ internal sealed partial class WalShardGrain(
             // igniting the unprovable-409 conflict storm (#824). A
             // single-transaction backend inherits the interface's no-op
             // ReconcileAsync, so this is free there.
+            //
+            // Ordering (issue #5825): reads interleave with this resync, but
+            // every read is clamped to _highestStored, which is raised only
+            // below, after reconciliation - including its fence on a
+            // predecessor's late commits - and the tail read have completed.
+            // Raising _highestStored any earlier would let a reader pass a
+            // hole before the fence has moved.
             using (var reconcileDeadline = resyncTimeout == Timeout.InfiniteTimeSpan
                 ? null
                 : new CancellationTokenSource(resyncTimeout))
