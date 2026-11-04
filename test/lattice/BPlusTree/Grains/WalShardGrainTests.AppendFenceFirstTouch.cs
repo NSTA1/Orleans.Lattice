@@ -150,6 +150,53 @@ public partial class WalShardGrainTests
         return (result.Accepted, result.Head, result.Refusal);
     }
 
+    [Test]
+    public async Task A_re_claim_after_reactivation_reads_no_directory_page_when_its_entry_exists()
+    {
+        // #5831: only a leaf's first activation (epoch 1) lists itself in parallel with
+        // reading its entry. A reactivated leaf's re-claim finds its entry, which was
+        // listed before it was first written, so it must not pay a directory read.
+        var storage = new ReadCountingStorage(new EnumerableMemoryGrainStorage());
+        var first = await CreateFencedGrainAsync(storage);
+        Assert.That((await first.ClaimAppendEpochAsync(FenceLeaf, 1, CancellationToken.None)).Accepted, Is.True);
+        var listedOnFirstClaim = storage.Reads(WalAppendFenceRows.DirectoryPageGrainType);
+
+        var restarted = await CreateFencedGrainAsync(storage);
+        storage.Reset();
+        var reclaim = await restarted.ClaimAppendEpochAsync(FenceLeaf, 2, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(listedOnFirstClaim, Is.GreaterThan(0), "precondition: the first claim listed the leaf");
+            Assert.That(reclaim.Accepted, Is.True);
+            Assert.That(storage.Reads(WalAppendFenceRows.DirectoryPageGrainType), Is.Zero,
+                "a re-claim whose entry exists read the directory");
+            Assert.That(storage.Reads(WalAppendFenceRows.EntryGrainType), Is.EqualTo(1));
+        });
+    }
+
+    /// <summary>Counts reads per grain type.</summary>
+    private sealed class ReadCountingStorage(IGrainStorage inner) : IGrainStorage
+    {
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _reads = new();
+
+        public int Reads(string grainType) => _reads.TryGetValue(grainType, out var count) ? count : 0;
+
+        public void Reset() => _reads.Clear();
+
+        public Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
+        {
+            _reads.AddOrUpdate(stateName, 1, (_, v) => v + 1);
+            return inner.ReadStateAsync(stateName, grainId, grainState);
+        }
+
+        public Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
+            inner.WriteStateAsync(stateName, grainId, grainState);
+
+        public Task ClearStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
+            inner.ClearStateAsync(stateName, grainId, grainState);
+    }
+
     /// <summary>
     /// Delays reads of one grain type, so concurrent claims all read before any of
     /// them writes, and counts that type's writes and write conflicts.

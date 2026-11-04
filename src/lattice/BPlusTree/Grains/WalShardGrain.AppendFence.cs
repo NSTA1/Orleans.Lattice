@@ -745,14 +745,16 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
                 // reaches when its read returns that value.
                 durable = landed;
             }
-            else if (attempt == 1 && batchLeaf is { } leafToList && !IsLoaded(table, id))
+            else if (attempt == 1 && batchLeaf is { } leafToList && value == 1 && !IsLoaded(table, id))
             {
-                // #5831, F3: a first claim lists the leaf in parallel with reading its
-                // entry. Listing is idempotent and needs no decision: a leaf already
-                // listed (its entry exists) costs a page read only, and one left listed
-                // by a refused claim is harmless and swept. The entry is still written
-                // only after the listing has landed (#5634), conditionally on the ETag
-                // read, or as a create of an absent row.
+                // #5831, F3: a leaf's first activation (epoch 1) has no entry at any
+                // partition, so its first claim lists it in parallel with reading the
+                // entry. A later activation re-claims an entry that exists and is listed,
+                // so it reads the entry alone and lists only if absent, as before, rather
+                // than paying a page read on every re-claim. Listing is idempotent and
+                // needs no decision: one left listed by a refused claim is harmless and
+                // swept. The entry is still written only after the listing has landed
+                // (#5634), conditionally on the ETag read, or as a create of an absent row.
                 var listing = DirectoryOpAsync(leafToList, () => WalAppendEpochDirectory.AddAsync(storage, _treeId, _shardIndex, leafToList, DateTime.UtcNow.Ticks));
                 var reading = read();
                 await Task.WhenAll(listing, reading).ConfigureAwait(true);
