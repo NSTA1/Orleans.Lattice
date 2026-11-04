@@ -751,7 +751,11 @@ internal sealed partial class WalShardGrain(
     /// is checked against the append fence in the locked step that assigns its
     /// offset and reports the watermark.
     /// </summary>
-    private async Task<TResult> AppendCoreAsync<TResult, TShape>(WalRecord entry, WalAppendStamp stamp, CancellationToken cancellationToken)
+    private async Task<TResult> AppendCoreAsync<TResult, TShape>(
+        WalRecord entry,
+        WalAppendStamp stamp,
+        CancellationToken cancellationToken,
+        bool generationLoadTried = false)
         where TShape : struct, ISingleAppendShape<TResult>
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -943,6 +947,30 @@ internal sealed partial class WalShardGrain(
             ReturnSegment(segment);
             throw RefuseBelowFloor(entry.Timestamp, refusedBelow, 1);
         }
+        if (TShape.Stamped && fenceOutcome == WalAppendFenceOutcome.UnloadedGeneration && !generationLoadTried)
+        {
+            // #5831, F2: load the generation here, as the writer's re-presentation
+            // would, then run the whole admission again; never admit on the claim.
+            ReturnSegment(segment);
+            if (kickFlush)
+            {
+                StartFlush();
+            }
+
+            if (await LoadStampGenerationAsync(stamp, cancellationToken).ConfigureAwait(true) is { } accepted)
+            {
+                if (accepted)
+                {
+                    return await AppendCoreAsync<TResult, TShape>(entry, stamp, cancellationToken, generationLoadTried: true).ConfigureAwait(true);
+                }
+
+                fenceOutcome = WalAppendFenceOutcome.StaleGeneration;
+            }
+
+            RecordFenceRejection(fenceOutcome);
+            return TShape.Rejected(fenceOutcome, unstampedWatermark);
+        }
+
         if (fenceOutcome != WalAppendFenceOutcome.Admitted)
         {
             ReturnSegment(segment);
@@ -1104,6 +1132,7 @@ internal sealed partial class WalShardGrain(
         // can fall between two of its entries and leave a partially admitted batch.
         var batchRegistered = false;
         var terminalMisuses = 0;
+        var generationLoadTried = false;
         try
         {
             for (var i = 0; i < count; i++)
@@ -1259,6 +1288,32 @@ internal sealed partial class WalShardGrain(
 
                     unstampedWatermark = _unstampedWatermark;
                 }
+                if (TShape.Stamped && i == 0 && fenceOutcome == WalAppendFenceOutcome.UnloadedGeneration && !generationLoadTried)
+                {
+                    // #5831, F2: nothing of this batch is allocated or registered yet. Load
+                    // the generation as the writer's re-presentation would, then run the
+                    // first entry's admission again; never admit on the claim's result.
+                    generationLoadTried = true;
+                    if (kickFlush)
+                    {
+                        StartFlush();
+                    }
+
+                    if (await LoadStampGenerationAsync(stamp, cancellationToken).ConfigureAwait(true) is { } accepted)
+                    {
+                        if (accepted)
+                        {
+                            fenceOutcome = WalAppendFenceOutcome.Admitted;
+                            i--;
+                            continue;
+                        }
+
+                        fenceOutcome = WalAppendFenceOutcome.StaleGeneration;
+                    }
+
+                    kickFlush = false;
+                }
+
                 if (fenceOutcome != WalAppendFenceOutcome.Admitted)
                 {
                     for (var j = i; j < count; j++)

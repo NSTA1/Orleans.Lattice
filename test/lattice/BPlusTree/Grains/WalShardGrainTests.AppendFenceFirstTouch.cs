@@ -60,6 +60,96 @@ public partial class WalShardGrainTests
         });
     }
 
+    [Test]
+    public async Task A_close_between_the_append_s_generation_load_and_its_admission_rejects_it_as_stale()
+    {
+        // #5831 review, F2: the append's own load of its generation must be followed by
+        // a fresh admission, never admit on the claim's result. A close that re-claims a
+        // higher generation in between fences the append.
+        var storage = new EnumerableMemoryGrainStorage();
+        var grain = await CreateFencedGrainAsync(storage);
+        var initiator = WalRoutingInitiator.ShardRoot(3);
+        await grain.ClaimAppendEpochAsync(FenceLeaf, 1, CancellationToken.None);
+        var closes = 0;
+        grain.AfterStampGenerationLoadedForTesting = async () =>
+        {
+            if (Interlocked.Increment(ref closes) == 1)
+            {
+                var close = await grain.ClaimRoutingGenerationAsync(initiator, 2, CancellationToken.None);
+                Assert.That(close.Accepted, Is.True, "precondition: the close re-claimed the higher generation");
+            }
+        };
+        var before = await grain.GetNextSequenceAsync(CancellationToken.None);
+
+        var single = await grain.AppendStampedAsync(MakeEntry("a"), new WalAppendStamp(FenceLeaf, 1, initiator, 1), CancellationToken.None);
+        var after = await grain.GetNextSequenceAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(closes, Is.EqualTo(1), "the append did not load its generation itself");
+            Assert.That(single.Outcome, Is.EqualTo(WalAppendFenceOutcome.StaleGeneration), "an append was admitted on its claim's result");
+            Assert.That(after, Is.EqualTo(before), "a fenced append allocated an offset");
+        });
+    }
+
+    [Test]
+    public async Task A_batch_whose_generation_a_close_re_claims_after_its_load_is_rejected_unallocated()
+    {
+        var storage = new EnumerableMemoryGrainStorage();
+        var grain = await CreateFencedGrainAsync(storage);
+        var initiator = WalRoutingInitiator.ShardRoot(3);
+        await grain.ClaimAppendEpochAsync(FenceLeaf, 1, CancellationToken.None);
+        grain.AfterStampGenerationLoadedForTesting = async () =>
+            await grain.ClaimRoutingGenerationAsync(initiator, 2, CancellationToken.None);
+        var before = await grain.GetNextSequenceAsync(CancellationToken.None);
+
+        var batch = await grain.AppendBatchStampedAsync(
+            new[] { MakeEntry("a"), MakeEntry("b") }, new WalAppendStamp(FenceLeaf, 1, initiator, 1), CancellationToken.None);
+
+        var after = await grain.GetNextSequenceAsync(CancellationToken.None);
+        Assert.Multiple(() =>
+        {
+            Assert.That(batch.Outcome, Is.EqualTo(WalAppendFenceOutcome.StaleGeneration));
+            Assert.That(batch.AdmittedCount, Is.Zero);
+            Assert.That(after, Is.EqualTo(before), "a fenced batch allocated an offset");
+        });
+    }
+
+    [TestCase(1, 0)]
+    [TestCase(2, 0)]
+    [TestCase(3, 0)]
+    [TestCase(2, 1)]
+    [TestCase(3, 2)]
+    [TestCase(1, 2)]
+    public async Task The_memory_decision_of_a_re_presented_generation_equals_the_io_decision(long initial, long floor)
+    {
+        // #5831 review, F1: a claim decided from the value this activation loaded must
+        // decide exactly as one that reads the row, for every value at or below it.
+        var initiator = WalRoutingInitiator.ShardRoot(3);
+        for (var value = 1L; value <= initial + 1; value++)
+        {
+            var fast = await ClaimTwiceAsync(initiator, initial, value, floor, fastPath: true);
+            var io = await ClaimTwiceAsync(initiator, initial, value, floor, fastPath: false);
+            Assert.That(fast, Is.EqualTo(io), $"initial {initial}, floor {floor}, re-claim {value}");
+        }
+    }
+
+    private static async Task<(bool Accepted, long Head, long Refusal)> ClaimTwiceAsync(
+        WalRoutingInitiator initiator, long initial, long value, long floor, bool fastPath)
+    {
+        var storage = new EnumerableMemoryGrainStorage();
+        if (floor > 0)
+        {
+            await WalAppendFenceRows.RaiseRoutingFloorAsync(storage, TreeId, initiator, floor);
+        }
+
+        var grain = await CreateFencedGrainAsync(storage);
+        grain.DisableLoadedClaimFastPathForTesting = !fastPath;
+        await grain.ClaimRoutingGenerationAsync(initiator, initial, CancellationToken.None);
+        var result = await grain.ClaimRoutingGenerationAsync(initiator, value, CancellationToken.None);
+        return (result.Accepted, result.Head, result.Refusal);
+    }
+
     /// <summary>
     /// Delays reads of one grain type, so concurrent claims all read before any of
     /// them writes, and counts that type's writes and write conflicts.

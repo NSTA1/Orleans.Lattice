@@ -60,6 +60,14 @@ internal static class HandOffMarkerRows
         UpdateAsync(storage, ShardGrainType, ShardKey(treeId, shardIndex), mutate);
 
     /// <summary>
+    /// Writes a shard root's marker conditionally on the ETag <paramref name="row"/>
+    /// carries - a create when it carries none - and leaves the new ETag on it. A
+    /// conflict, a deleted row included, throws <see cref="InconsistentStateException"/>.
+    /// </summary>
+    internal static Task WriteShardAsync(IGrainStorage storage, string treeId, int shardIndex, GrainState<ShardHandOffState> row) =>
+        storage.WriteStateAsync(ShardGrainType, RowId(ShardGrainType, ShardKey(treeId, shardIndex)), row);
+
+    /// <summary>
     /// As <see cref="UpdateShardAsync"/>, but never creates the row: returns
     /// <see langword="null"/> when the shard root's marker row is absent (#5705).
     /// </summary>

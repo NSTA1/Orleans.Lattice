@@ -73,6 +73,39 @@ public sealed class WalAppendFenceFirstTouchCostIntegrationTests
         });
     }
 
+    [Test]
+    public async Task On_a_purged_id_the_first_raise_fences_between_seeding_and_initialising_the_marker()
+    {
+        // #5831 review, F4: the seed and the initialisation are merged only when the
+        // routing floor is 0. Above it, a re-created incarnation's first raise must still
+        // seed, fence (claiming its generations at the WAL partitions), and only then
+        // initialise (#5668).
+        var treeId = $"first-touch-purged-{Guid.NewGuid():N}";
+        var registry = _cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.RegisterAsync(treeId, new TreeRegistryEntry { ShardCount = 1 });
+        var physical = (await _cluster.Client.GetGrain<ILattice>(treeId).GetRoutingAsync()).PhysicalTreeId;
+        await WalAppendFenceRows.RaiseRoutingFloorAsync(Storage, physical, WalRoutingInitiator.ShardRoot(0), 4);
+        Counters.Target = physical;
+
+        Counters.Reset();
+        await _cluster.Client.GetGrain<ILattice>(treeId).SetAsync("k", Encoding.UTF8.GetBytes("v"));
+        var events = Counters.Events();
+
+        var firstMarker = events.FindIndex(e => e.StartsWith("marker", StringComparison.Ordinal));
+        var initialised = events.FindIndex(e => e.StartsWith("marker", StringComparison.Ordinal) && e.EndsWith("init=True", StringComparison.Ordinal));
+        var claims = events.Select((e, i) => (e, i)).Where(x => x.e == "generation-row").Select(x => x.i).ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(firstMarker, Is.GreaterThanOrEqualTo(0), "the marker was never written");
+            Assert.That(events[firstMarker], Is.EqualTo("marker gen=5 init=False"), "the seed was not written on its own, above the floor");
+            Assert.That(initialised, Is.GreaterThan(firstMarker), "the marker was never initialised after its seed");
+            Assert.That(claims.Any(i => i > firstMarker && i < initialised), Is.True,
+                "no generation was claimed at a WAL partition between the seed and the initialisation");
+        });
+    }
+
+    private static CountingStorage Storage { get; } = new();
+
     private sealed record CountSnapshot(IReadOnlyDictionary<string, int> Values)
     {
         public int Get(string key) => Values.TryGetValue(key, out var v) ? v : 0;
@@ -81,13 +114,22 @@ public sealed class WalAppendFenceFirstTouchCostIntegrationTests
     private static class Counters
     {
         private static readonly ConcurrentDictionary<string, int> Values = new();
+        private static readonly ConcurrentQueue<string> Log = new();
 
         /// <summary>Only rows and grains whose id names this tree are counted.</summary>
         public static volatile string Target = "\u0000";
 
         public static void Add(string key) => Values.AddOrUpdate(key, 1, (_, v) => v + 1);
 
-        public static void Reset() => Values.Clear();
+        public static void Reset()
+        {
+            Values.Clear();
+            Log.Clear();
+        }
+
+        public static void Record(string entry) => Log.Enqueue(entry);
+
+        public static List<string> Events() => Log.ToList();
 
         public static CountSnapshot Snapshot() => new(new Dictionary<string, int>(Values));
     }
@@ -105,6 +147,16 @@ public sealed class WalAppendFenceFirstTouchCostIntegrationTests
         public async Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
         {
             var counted = Count("W", stateName, grainId);
+            if (counted)
+            {
+                Counters.Record(grainState.State switch
+                {
+                    ShardHandOffState marker => $"marker gen={marker.RoutingGeneration} init={marker.Initialised}",
+                    _ when stateName == WalAppendFenceRows.GenerationGrainType => "generation-row",
+                    _ => stateName,
+                });
+            }
+
             try
             {
                 await _inner.WriteStateAsync(stateName, grainId, grainState);
@@ -155,8 +207,7 @@ public sealed class WalAppendFenceFirstTouchCostIntegrationTests
     {
         public void Configure(ISiloBuilder siloBuilder)
         {
-            var storage = new CountingStorage();
-            siloBuilder.AddLattice((silo, name) => silo.Services.AddKeyedSingleton<IGrainStorage>(name, (_, _) => storage));
+            siloBuilder.AddLattice((silo, name) => silo.Services.AddKeyedSingleton<IGrainStorage>(name, (_, _) => Storage));
             siloBuilder.ConfigureLattice(o => o.WalPartitions = 1);
             siloBuilder.UseInMemoryReminderService();
             siloBuilder.Services.AddSingleton<IIncomingGrainCallFilter, CallCounter>();
