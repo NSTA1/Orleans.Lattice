@@ -2573,7 +2573,8 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
             _pipelinePhaseTwoTag,
             _options.PhaseTwoCoalescingWindow,
             _options.PhaseTwoCommitTimeout,
-            fence: GetShardActivity(manifestPartitionKey).Fence);
+            fence: GetShardActivity(manifestPartitionKey).Fence,
+            failedBatches: GetShardActivity(manifestPartitionKey).FailedBatches);
         if (_phaseTwoWorkers.TryAdd(manifestPartitionKey, created))
         {
             return created;

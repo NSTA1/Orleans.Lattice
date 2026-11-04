@@ -32,4 +32,9 @@ internal sealed class WalShardActivity
     /// shard through the <c>TAIL</c> row's ETag (issue #5810).
     /// </summary>
     internal WalShardCommitFence Fence { get; } = new();
+
+    /// <summary>
+    /// Batches whose phase-2 commit failed, for the next reconciliation to reclaim.
+    /// </summary>
+    internal WalShardFailedBatches FailedBatches { get; } = new();
 }

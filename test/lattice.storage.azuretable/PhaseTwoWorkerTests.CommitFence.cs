@@ -158,6 +158,39 @@ public partial class PhaseTwoWorkerTests
     }
 
     [Test]
+    public async Task A_failed_commit_records_its_batches_and_the_pending_ones_for_reclaim()
+    {
+        // Review nit N1: the batches of a failed commit have landed their entry rows,
+        // so each is recorded for the reconciliation the failure triggers.
+        var submitter = new FencedSubmitter
+        {
+            Failure = new RequestFailedException(412, "The update condition specified in the request was not satisfied."),
+        };
+        var fence = new WalShardCommitFence();
+        var failed = new WalShardFailedBatches();
+        var generation = fence.Fill(new WalShardOverlapGuard(), new ETag("observed"), tail: 3L, writtenUpperBound: 3L);
+        await using var worker = new PhaseTwoWorker(submitter.SubmitAsync, ManifestPartitionKey, fence, failed);
+
+        Assert.ThrowsAsync<RequestFailedException>(() => worker.EnqueueAsync(4, 5, generation: generation));
+
+        Assert.That(failed.TakeAll(), Is.EqualTo(new[] { (4L, 5L) }));
+        Assert.That(failed.TakeAll(), Is.Null, "taking the recorded batches did not clear them");
+    }
+
+    [Test]
+    public async Task A_successful_commit_records_nothing_for_reclaim()
+    {
+        var fence = new WalShardCommitFence();
+        var failed = new WalShardFailedBatches();
+        var generation = fence.Fill(new WalShardOverlapGuard(), tailETag: null, tail: -1L, writtenUpperBound: -1L);
+        await using var worker = new PhaseTwoWorker(new FencedSubmitter().SubmitAsync, ManifestPartitionKey, fence, failed);
+
+        await worker.EnqueueAsync(0, 1, generation: generation);
+
+        Assert.That(failed.TakeAll(), Is.Null);
+    }
+
+    [Test]
     public async Task A_commit_whose_response_carries_no_etag_invalidates_the_fence()
     {
         var fence = new WalShardCommitFence();
