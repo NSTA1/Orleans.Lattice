@@ -1,0 +1,17 @@
+# Pairs with AllocatorAboveOrphans. Issue #5799's activation-recovery case: a
+# new activation of the WAL shard re-seeds its allocator from the store alone,
+# beneath its predecessor's flushes still in motion.
+MODULE: AllocatorAboveOrphansRecoveryIgnoresPredecessor
+TARGET: AllocatorAboveOrphans
+CLASS: Invariant
+SUMMARY: activation recovery re-seeds from the store, beneath the predecessor's calls in motion
+PERTURBS: ShardRecover
+
+--- FIND
+    /\ resyncing = "recover"
+    /\ next' = ReseedNext
+--- REPLACE
+    /\ resyncing = "recover"
+\* MUTATION: re-seed from the store alone.
+    /\ next' = RecoveredNext
+--- END

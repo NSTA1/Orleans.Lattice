@@ -224,7 +224,14 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardReplicationWal"],
-        "note": "The other Replication mutants plus the mutants of every Wal* module without a shard of its own (the live-advance modules of epic #5605 have theirs), with the Replication, WalDurability and WalMove bases co-located so they serve the full-bound controls (#5161). 77 cases, 56.1 case-minutes in a 14.12-minute item in the receipt-free bucket push run 40909619830 (#5166)."
+        "note": "The other Replication mutants plus the mutants of every Wal* module without a shard of its own (the live-advance modules of epic #5605 and WalDurability have theirs), with the Replication, WalMove and WalPinRetirement bases co-located so they serve the full-bound controls (#5161). With WalDurability still here it held 100 cases in a 29.0-minute item (the job 39.4 minutes) in ci.yml run 41805410702 (#5809), the run's critical path; 77 cases took 14.12 minutes in run 40909619830 (#5166) before WalPinRetirement and the #5803 allocator re-seed. Without WalDurability's 49 cases it is estimated at 16 minutes until measured."
+      },
+      {
+        "shard": "formal-tlc-wal-durability",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardWalDurability"],
+        "note": "WalDurability's base (549,523 states with both liveness properties, about 12 minutes on two TLC workers, its longest case) and 48 mutations co-located with it so it serves their full-bound controls (#5161), 49 cases; split out of formal-tlc-replication-wal (#5809), whose critical path its base's growth with the #5803 allocator re-seed had become. Its variant configurations (TwoFaults, SnapshotLoss, WarmLeaf, CrossSilo) stay in the catch-all. Estimated at 15 minutes from a local run of all 53 cases in 17 minutes until measured on its CI leg."
       },
       {
         "shard": "formal-tlc-wal-append-epoch",

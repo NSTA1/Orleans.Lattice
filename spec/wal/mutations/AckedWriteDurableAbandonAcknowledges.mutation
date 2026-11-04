@@ -10,12 +10,16 @@ PERTURBS: Abandon
 
 --- FIND
     /\ orphans' = orphans \cup {o}
+    /\ UNCHANGED hidden
+    /\ resyncing' = IF resyncing = "no" THEN "resync" ELSE resyncing
     /\ faults' = faults + 1
-    /\ UNCHANGED <<next, durable, tail, acked>>
+    /\ UNCHANGED <<next, occ, tail, acked>>
 --- REPLACE
 \* MUTATION: the abandoned append is acknowledged.
     /\ orphans' = orphans \cup {o}
+    /\ UNCHANGED hidden
+    /\ resyncing' = IF resyncing = "no" THEN "resync" ELSE resyncing
     /\ faults' = faults + 1
     /\ acked' = acked \cup {o}
-    /\ UNCHANGED <<next, durable, tail>>
+    /\ UNCHANGED <<next, occ, tail>>
 --- END

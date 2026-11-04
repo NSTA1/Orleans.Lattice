@@ -37,10 +37,19 @@ internal static class TlcCiShard
 
     /// <summary>
     /// The other Replication mutants, plus the mutants of every Wal* module
-    /// without a shard of its own (<see cref="LiveAdvanceCategory"/>), and the
-    /// Replication, WalDurability, WalMove and WalPinRetirement bases.
+    /// without a shard of its own (<see cref="LiveAdvanceCategory"/> and
+    /// <see cref="WalDurability"/>), and the Replication, WalMove and
+    /// WalPinRetirement bases.
     /// </summary>
     public const string ReplicationWal = "TlcShardReplicationWal";
+
+    /// <summary>
+    /// The base and every mutation of <c>WalDurability</c>. Its base's liveness
+    /// check grew to about 12 minutes with the allocator re-seed of #5803, which
+    /// made <see cref="ReplicationWal"/> the run's critical path, so it moved to
+    /// a shard of its own. Its variant configurations stay in the catch-all.
+    /// </summary>
+    public const string WalDurability = "TlcShardWalDurability";
 
     /// <summary>Every base, variant and mutation of <c>WalAppendEpoch</c>, the live-advance append-epoch module (epic #5605, E).</summary>
     public const string WalAppendEpoch = "TlcShardWalAppendEpoch";
@@ -215,7 +224,7 @@ internal static class TlcCiShard
 
     /// <summary>Every category <see cref="Of"/>, <see cref="OfModule"/> and <see cref="OfVariant"/> can return.</summary>
     public static IReadOnlyList<string> All { get; } =
-        [Convergence, ReplicationWal, ShardOwnership, ReBootstrap, Atomic, .. AtomicVariantShards, Backup, BackupRetention,
+        [Convergence, ReplicationWal, WalDurability, ShardOwnership, ReBootstrap, Atomic, .. AtomicVariantShards, Backup, BackupRetention,
          BPlusCascade,
          MaterialisedViews, MaterialisedViewFence, MaterialisedViewHorizon,
          MaterialisedViewAggregation, MaterialisedViewRebind,
@@ -279,6 +288,11 @@ internal static class TlcCiShard
         if (IsReplicationCompanion(name))
         {
             return ReBootstrap;
+        }
+
+        if (string.Equals(name, "WalDurability", StringComparison.Ordinal))
+        {
+            return WalDurability;
         }
 
         if (name.StartsWith("Wal", StringComparison.Ordinal))
@@ -365,7 +379,8 @@ internal static class TlcCiShard
         "BPlusCascade" => BPlusCascade,
         "ReplicationCausalDelivery" or "ReplicationLowWatermark" or "ReplicationReBootstrap" => ReBootstrap,
         "ShardOwnershipCrdt" or "ShardOwnershipCutover" or "ShardOwnershipFold" or "ShardOwnershipRetention" => ShardOwnership,
-        "Replication" or "WalDurability" or "WalMove" or "WalPinRetirement" => ReplicationWal,
+        "Replication" or "WalMove" or "WalPinRetirement" => ReplicationWal,
+        "WalDurability" => WalDurability,
         _ => null,
     };
 

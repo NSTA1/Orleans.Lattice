@@ -62,7 +62,7 @@ once, either here or in the
 | Area | Modules | Mutations | Behaviour rows | Detector tests | Page |
 |------|---------|-----------|----------------|----------------|------|
 | Single-cluster atomic commit | 1 | 21 | 17 | 40 | [Verified Atomic-Commit](verified-atomic-commit.md) |
-| WAL durability lifecycle | 9 | 231 | 197 | 322 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
+| WAL durability lifecycle | 9 | 236 | 202 | 329 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
 | Shard ownership | 5 | 124 | 124 | 201 | [Verified Shard Ownership](verified-shard-ownership.md) |
 | Cross-cluster atomic visibility | 1 | 66 | 43 | 150 | [Verified Atomic-Commit: the replicated half](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | 4 | 91 | 71 | 206 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
@@ -399,8 +399,10 @@ gaps, states its full scope.
     from a leaf re-created under the same grain id; and a leaf's live checkpoint
     advance never moves its read position past a record it does not hold.
   - **Covers:** a leaf's lifecycle under crash-anywhere recovery, across one WAL
-    partition shared by two leaves, including snapshot and row loss and a purge
-    (`WalDurability`); a WAL shard move with a durable fence, a shard crash and the
+    partition shared by two leaves, including snapshot and row loss and a purge,
+    and the WAL shard's allocator re-seeded past abandoned flushes still in motion
+    after a flush failure or a lost activation, on the same silo or another, with
+    the store's create-only rows (`WalDurability`); a WAL shard move with a durable fence, a shard crash and the
     loss of its coordinator (`WalMove`); the GC's retirement of orphaned
     materialiser pins - the bulk sweep and the starvation drive, with their token,
     leaf read and fenced removal as separate steps and two sweepers racing -

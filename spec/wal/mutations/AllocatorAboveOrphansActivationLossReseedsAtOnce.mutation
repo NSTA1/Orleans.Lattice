@@ -1,0 +1,20 @@
+# Pairs with AllocatorAboveOrphans. The lost activation's provider calls are
+# treated as if they died with it, as a process crash's do: the allocator is
+# re-seeded from the store at once, with those calls still in motion.
+MODULE: AllocatorAboveOrphansActivationLossReseedsAtOnce
+TARGET: AllocatorAboveOrphans
+CLASS: Invariant
+SUMMARY: an activation loss re-seeds like a process crash while its calls are still in motion
+PERTURBS: ActivationLoss
+
+--- FIND
+    /\ resyncing' = "recover"
+    /\ faults' = faults + 1
+    /\ UNCHANGED <<next, occ, tail, acked>>
+--- REPLACE
+\* MUTATION: re-seed from the store at once, as a process crash does.
+    /\ resyncing' = "no"
+    /\ next' = RecoveredNext
+    /\ faults' = faults + 1
+    /\ UNCHANGED <<occ, tail, acked>>
+--- END

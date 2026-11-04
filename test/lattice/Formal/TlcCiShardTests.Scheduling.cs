@@ -61,7 +61,7 @@ public sealed partial class TlcCiShardTests
             Assert.That(TlcCiShard.OfModule(future), Is.EqualTo(TlcCiShard.Scheduling));
             Assert.That(TlcCiShard.Of(future, mutation), Is.EqualTo(TlcCiShard.Scheduling));
             Assert.That(TlcCiShard.OfVariant(future, "FutureVariant"), Is.EqualTo(TlcCiShard.Scheduling));
-            var ordinaryWal = Module("WalDurability");
+            var ordinaryWal = Module("WalMove");
             Assert.That(TlcCiShard.OfModule(ordinaryWal), Is.EqualTo(TlcCiShard.ReplicationWal), "its base is co-located with its mutations (#5161)");
             Assert.That(TlcCiShard.Of(ordinaryWal, mutation), Is.EqualTo(TlcCiShard.ReplicationWal));
             Assert.That(TlcCiShard.OfVariant(ordinaryWal, "FutureVariant"), Is.Null);
