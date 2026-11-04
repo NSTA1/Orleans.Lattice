@@ -6,11 +6,11 @@ MODULE: ReadPositionHonestNoClaimHeadReplay
 TARGET: ReadPositionHonest
 CLASS: Invariant
 SUMMARY: the activation arms without replaying to its claim head
+BOUNDS: WithPreArm = FALSE
 
 --- FIND
-    /\ mInit
-    /\ rp[a] >= claimHead[a] - 1
+    /\ IF WithPreArm THEN rp[a] >= seenP[a] ELSE rp[a] >= claimHead[a] - 1
 --- REPLACE
-    /\ mInit
-\* MUTATION: no replay to the claim head.
+\* MUTATION: no replay to the claim head (the eager rule).
+    /\ IF WithPreArm THEN rp[a] >= seenP[a] ELSE TRUE
 --- END

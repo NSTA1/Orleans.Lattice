@@ -14,7 +14,8 @@ PERTURBS: OwnAlloc
 Armed(a) ==
     /\ claimed[a]
     /\ mInit
-    /\ rp[a] >= claimHead[a] - 1
+    /\ IF WithPreArm THEN rp[a] >= seenP[a] ELSE rp[a] >= claimHead[a] - 1
+    /\ ~pend
     /\ ~hoOpen
     /\ rp[a] >= hoClosedAt - 1
     /\ rp[a] >= seenU[a]

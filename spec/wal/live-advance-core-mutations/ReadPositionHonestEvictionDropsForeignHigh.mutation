@@ -1,0 +1,14 @@
+# #5833. Evicting the leaf's foreign-high entry without raising the eviction floor forgets
+# another activation's append. It edits an operator, not an action.
+MODULE: ReadPositionHonestEvictionDropsForeignHigh
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: an evicted foreign-high entry leaves no floor
+BOUNDS: WithRestart = TRUE, MaxWindows = 0
+
+--- FIND
+    Max({startHead - 1, evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}})
+--- REPLACE
+\* MUTATION: no eviction floor.
+    Max({startHead - 1} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}})
+--- END

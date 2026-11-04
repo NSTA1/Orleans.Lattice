@@ -1,0 +1,20 @@
+# #5833. The WAL shard admits the stale donor's PreArm append without its generation
+# check, after the receiver's arm re-claimed the raised generation.
+MODULE: ReadPositionHonestForeignPreArmAfterReceiverArmed
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a PreArm append under the old generation is admitted after the re-claim
+PERTURBS: StaleRouteAlloc
+BOUNDS: WithKeyMove = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+    /\ ~dUsed
+    /\ next < MaxOff
+    /\ 1 >= gL
+
+--- REPLACE
+    /\ ~dUsed
+    /\ next < MaxOff
+\* MUTATION: no generation check.
+
+--- END

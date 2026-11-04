@@ -82,15 +82,16 @@ VARIABLES
     closedAt,  \* the allocator head L's marker's last close recorded
     markNew,   \* L's marker carries the re-created incarnation's identity (#5716)
     caught,    \* s has re-seeded the purged tombstone (WithLegacyPurge)
-    dup        \* a duplicate activation of s has re-seeded it too
+    dup,       \* a duplicate activation of s has re-seeded it too
+    rd         \* each initiator's cold load in flight: the value it read; Unloaded when none
 
 vars == <<gen, entryRow, loaded, rowFloor, walFloor, live, pend, pstamp, next, author,
-          recreated, legacy, restarted, mInit, closedAt, markNew, caught, dup>>
+          recreated, legacy, restarted, mInit, closedAt, markNew, caught, dup, rd>>
 
 TypeOK ==
     /\ gen \in [Inits -> Gens]
     /\ entryRow \in [Inits -> Gens]
-    /\ loaded \in [Inits -> {Unloaded} \cup Gens]
+    /\ loaded \in [Inits -> {Unloaded} \cup 0..(MaxGen + 1)]
     /\ rowFloor \in [Inits -> Gens]
     /\ walFloor \in [Inits -> Gens]
     /\ live \in [Inits -> BOOLEAN]
@@ -106,6 +107,7 @@ TypeOK ==
     /\ markNew \in BOOLEAN
     /\ caught \in BOOLEAN
     /\ dup \in BOOLEAN
+    /\ rd \in [Inits -> {Unloaded} \cup 0..(MaxGen + 1)]
 
 (* The incarnation to be purged is live: each shard root has claimed its   *)
 (* generation at L's partition, no floor has been raised, and L's marker   *)
@@ -129,6 +131,7 @@ Init ==
     /\ markNew = FALSE
     /\ caught = FALSE
     /\ dup = FALSE
+    /\ rd = [i \in Inits |-> Unloaded]
 
 (***************************************************************************)
 (* The purged incarnation's writes.                                        *)
@@ -136,16 +139,24 @@ Init ==
 (*    with its generation at admission.                                    *)
 (*  Alloc(i): the WAL admits the stamp on i's loaded entry alone - loaded  *)
 (*    and not above the stamp (E's entry check) - and assigns an offset.   *)
-(*  Represent(i): the append met an unloaded entry, so the write's leaf    *)
-(*    re-presents a claim of the stamp. The claim is refused at or below   *)
-(*    i's WAL-side floor, or below the durable entry; otherwise it         *)
-(*    max-merges the durable entry and loads it.                           *)
-(*  Refuse(i): the append was refused, stale against the loaded entry or   *)
-(*    at its re-presented claim. The seam retry finds the stamp at or      *)
-(*    below i's floor and surfaces the deleted tree; it never re-stamps    *)
-(*    (#5705).                                                             *)
+(*  PreArmAlloc(i) (#5833): the same write appended under the PreArm      *)
+(*    class, by a leaf that has not armed. It has no leaf-entry check, but *)
+(*    its routing generation is checked exactly as a stamped append's.     *)
+(*  ColdLoadRead(i), ColdLoadApply(i): the append met an unloaded entry,   *)
+(*    so the WAL shard loads it, read-only (#5833, C1): it reads the       *)
+(*    durable entry, then, under its gate, loads the highest of that read, *)
+(*    i's in-memory floor plus one, and any value loaded meanwhile. It     *)
+(*    writes nothing, and re-runs admission. The read and the load are     *)
+(*    separate steps, so a re-claim or a retirement can land between them: *)
+(*    the max-merge never lowers a value a re-claim raised (C7), and the   *)
+(*    floor taken at the load never re-admits a generation a retirement    *)
+(*    unloaded and floored after the read.                                 *)
+(*  Refuse(i): the append was refused, stale against the loaded entry. The *)
+(*    seam retry finds the stamp at or below i's floor and surfaces the    *)
+(*    deleted tree; it never re-stamps (#5705).                            *)
 (***************************************************************************)
 Admit(i) ==
+    /\ UNCHANGED rd
     /\ Active(i)
     /\ ~recreated
     /\ live[i]
@@ -156,6 +167,7 @@ Admit(i) ==
     /\ UNCHANGED <<recreated, legacy, restarted, mInit, closedAt, markNew, caught, dup>>
 
 Alloc(i) ==
+    /\ UNCHANGED rd
     /\ pend[i]
     /\ next < MaxOff
     /\ loaded[i] # Unloaded
@@ -169,20 +181,38 @@ Alloc(i) ==
 
 ClaimAdmits(i) == pstamp[i] > walFloor[i] /\ pstamp[i] >= entryRow[i]
 
-Represent(i) ==
+PreArmAlloc(i) ==
+    /\ UNCHANGED rd
+    /\ pend[i]
+    /\ next < MaxOff
+    /\ loaded[i] # Unloaded
+    /\ pstamp[i] >= loaded[i]
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = i]
+    /\ pend' = [pend EXCEPT ![i] = FALSE]
+    /\ pstamp' = [pstamp EXCEPT ![i] = 0]
+    /\ UNCHANGED <<gen, entryRow, loaded, rowFloor, walFloor, live>>
+    /\ UNCHANGED <<recreated, legacy, restarted, mInit, closedAt, markNew, caught, dup>>
+
+ColdLoadRead(i) ==
     /\ pend[i]
     /\ loaded[i] = Unloaded
-    /\ pstamp[i] > walFloor[i]
-    /\ pstamp[i] >= entryRow[i]
-    /\ entryRow' = [entryRow EXCEPT ![i] = pstamp[i]]
-    /\ loaded' = [loaded EXCEPT ![i] = pstamp[i]]
-    /\ UNCHANGED <<gen, rowFloor, walFloor, live, pend, pstamp, next, author>>
+    /\ rd[i] = Unloaded
+    /\ rd' = [rd EXCEPT ![i] = entryRow[i]]
+    /\ UNCHANGED <<gen, entryRow, loaded, rowFloor, walFloor, live, pend, pstamp, next, author>>
+    /\ UNCHANGED <<recreated, legacy, restarted, mInit, closedAt, markNew, caught, dup>>
+
+ColdLoadApply(i) ==
+    /\ rd[i] # Unloaded
+    /\ loaded' = [loaded EXCEPT ![i] = Max2(@, Max2(rd[i], walFloor[i] + 1))]
+    /\ rd' = [rd EXCEPT ![i] = Unloaded]
+    /\ UNCHANGED <<gen, entryRow, rowFloor, walFloor, live, pend, pstamp, next, author>>
     /\ UNCHANGED <<recreated, legacy, restarted, mInit, closedAt, markNew, caught, dup>>
 
 Refuse(i) ==
+    /\ UNCHANGED rd
     /\ pend[i]
-    /\ \/ loaded[i] = Unloaded /\ ~ClaimAdmits(i)
-       \/ loaded[i] # Unloaded /\ pstamp[i] < loaded[i]
+    /\ loaded[i] # Unloaded /\ pstamp[i] < loaded[i]
     /\ pstamp[i] <= rowFloor[i]
     /\ pend' = [pend EXCEPT ![i] = FALSE]
     /\ pstamp' = [pstamp EXCEPT ![i] = 0]
@@ -202,6 +232,7 @@ Refuse(i) ==
 (* purged incarnation's shard roots are gone.                              *)
 (***************************************************************************)
 Purge ==
+    /\ UNCHANGED rd
     /\ ~recreated
     /\ recreated' = TRUE
     /\ LET rf == [i \in Inits |-> Max2(rowFloor[i], Max2(gen[i], Max2(entryRow[i], loaded[i])))] IN
@@ -217,6 +248,7 @@ Purge ==
     /\ UNCHANGED <<gen, pend, pstamp, next, author, restarted, caught, dup>>
 
 LegacyPurge ==
+    /\ UNCHANGED rd
     /\ WithLegacyPurge
     /\ ~recreated
     /\ ~pend["s2"]
@@ -237,6 +269,7 @@ LegacyPurge ==
 (* this incarnation's identity, so the re-seed leaves it.                  *)
 (***************************************************************************)
 CatchUp ==
+    /\ UNCHANGED rd
     /\ recreated
     /\ legacy
     /\ ~dup
@@ -252,6 +285,7 @@ CatchUp ==
     /\ UNCHANGED <<recreated, legacy, restarted, closedAt, markNew>>
 
 CatchUpSkip ==
+    /\ UNCHANGED rd
     /\ recreated
     /\ legacy
     /\ ~dup
@@ -273,6 +307,7 @@ CatchUpSkip ==
 (* never exceeds the row's, so the claim is admitted.                      *)
 (***************************************************************************)
 FirstInit ==
+    /\ UNCHANGED rd
     /\ recreated
     /\ ~mInit
     /\ ~legacy \/ caught
@@ -288,6 +323,7 @@ FirstInit ==
     /\ UNCHANGED <<recreated, legacy, restarted, caught, dup>>
 
 S2Init ==
+    /\ UNCHANGED rd
     /\ WithSecondInitiator
     /\ recreated
     /\ ~live["s2"]
@@ -302,8 +338,9 @@ S2Init ==
     /\ UNCHANGED <<recreated, legacy, restarted, mInit, closedAt, markNew, caught, dup>>
 
 (* Restart (WithRestart): the WAL shard reactivates, or a move cuts over.  *)
-(* It loses its loaded entries, which reload only through re-presented     *)
-(* claims, and loads every initiator's floor from the routing-floor row.   *)
+(* It loses its loaded entries and any cold load in flight; an entry      *)
+(* reloads through a cold load. It loads every initiator's floor from the  *)
+(* routing-floor row.                                                      *)
 (* The durable entries are rows in grain storage and survive.              *)
 Restart ==
     /\ WithRestart
@@ -311,6 +348,7 @@ Restart ==
     /\ restarted' = TRUE
     /\ loaded' = [i \in Inits |-> Unloaded]
     /\ walFloor' = rowFloor
+    /\ rd' = [i \in Inits |-> Unloaded]
     /\ UNCHANGED <<gen, entryRow, rowFloor, live, pend, pstamp, next, author>>
     /\ UNCHANGED <<recreated, legacy, mInit, closedAt, markNew, caught, dup>>
 
@@ -320,7 +358,9 @@ Stutter == UNCHANGED vars
 Next ==
     \/ \E i \in Inits : Admit(i)
     \/ \E i \in Inits : Alloc(i)
-    \/ \E i \in Inits : Represent(i)
+    \/ \E i \in Inits : PreArmAlloc(i)
+    \/ \E i \in Inits : ColdLoadRead(i)
+    \/ \E i \in Inits : ColdLoadApply(i)
     \/ \E i \in Inits : Refuse(i)
     \/ Purge
     \/ LegacyPurge

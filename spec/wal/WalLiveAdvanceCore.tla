@@ -52,7 +52,7 @@ EXTENDS Integers, FiniteSets
 (* to keep each configuration within the TLC budget (see Recreate).       *)
 (***************************************************************************)
 CONSTANTS MaxWindows, WithMixedVersion, WithGateFlip, WithRestart, WithRecreate, WithBulk,
-          WithUnclaimedSurvivor, WithClaimedPurge
+          WithUnclaimedSurvivor, WithClaimedPurge, WithPreArm, WithKeyMove
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
@@ -63,7 +63,9 @@ OldAuthor == "o"
 Straddler == "s"
 PreAuthor == "p"
 NoAuthor == "x"
-Authors == Acts \cup {Foreign, OldAuthor, Straddler, PreAuthor}
+StaleDonor == "d"
+Authors == Acts \cup {Foreign, OldAuthor, Straddler, PreAuthor, StaleDonor}
+MaxGen == 3
 
 Max(S) == CHOOSE x \in S : \A y \in S : y <= x
 Max2(x, y) == IF x >= y THEN x ELSE y
@@ -99,7 +101,21 @@ VARIABLES
     spUsed,      \* R: the straddler has been allocated
     phase,       \* B: "window" while a bulk switch is creating L, then "live"
     hint,        \* B: the bulk-born leaf's birth hint
-    oldRejected  \* ghost: an unstamped append was rejected
+    oldRejected,  \* ghost: an unstamped append was rejected
+    preArm,       \* the offsets appended under the PreArm class (#5833)
+    seenP,        \* the leaf-scoped watermark reported to each activation: its foreignHigh
+    startHead,    \* the WAL shard's allocator head when its activation began
+    evStart,      \* the allocator head when L's foreign-high entry was last evicted; 0 never
+    evFloor,      \* the shard's eviction floor: the highest high of an evicted entry
+    gD,           \* the shard root's durable routing generation
+    gL,           \* the generation loaded (claimed) at the partition
+    pend,         \* L's marker holds a deferred close head at the partition
+    pendGen,      \* the generation that deferred head is to re-claim
+    moved,        \* a key-moving close into L has happened
+    otherMoved,   \* a later key-moving close into another receiver, re-claimed by its arm
+    dUsed,        \* the stale donor has made its one write for L's keys
+    reclaims,     \* ghost: generation re-claims an arm wrote at the partition
+    strayReclaims \* ghost: generation claims written anywhere but an arm
 
 walVars == <<next, author, inflight, durable, acked, floor>>
 leafVars == <<up, cache, rp, mine, snapCov, snapRows>>
@@ -107,8 +123,10 @@ epochVars == <<cur, claimed, claimHead, stale, dupUsed>>
 handVars == <<mInit, hoOpen, hoClosedAt, windows>>
 oldVars == <<lastU, seenU, oldUsed, restarted, oldRejected>>
 envVars == <<recreated, reinit, spUsed, phase, hint>>
+armVars == <<preArm, seenP, startHead, evStart, evFloor>>
+moveVars == <<gD, gL, pend, pendGen, moved, otherMoved, dUsed, reclaims, strayReclaims>>
 
-vars == <<walVars, leafVars, epochVars, handVars, oldVars, envVars>>
+vars == <<walVars, leafVars, epochVars, handVars, oldVars, envVars, armVars, moveVars>>
 
 TypeOK ==
     /\ next \in 0..MaxOff
@@ -142,6 +160,20 @@ TypeOK ==
     /\ phase \in {"window", "live"}
     /\ hint \in 0..MaxOff
     /\ oldRejected \in BOOLEAN
+    /\ preArm \subseteq Offs
+    /\ seenP \in [Acts -> -1..(MaxOff - 1)]
+    /\ startHead \in 0..MaxOff
+    /\ evStart \in 0..MaxOff
+    /\ evFloor \in -1..(MaxOff - 1)
+    /\ gD \in 1..MaxGen
+    /\ gL \in 1..MaxGen
+    /\ pend \in BOOLEAN
+    /\ pendGen \in 0..MaxGen
+    /\ moved \in BOOLEAN
+    /\ otherMoved \in BOOLEAN
+    /\ dUsed \in BOOLEAN
+    /\ reclaims \in 0..2
+    /\ strayReclaims \in 0..2
 
 (***************************************************************************)
 (* Init. Without WithBulk, L is a new tree's first leaf: a1 is running,   *)
@@ -183,6 +215,20 @@ Init ==
     /\ spUsed = FALSE
     /\ phase = IF WithBulk THEN "window" ELSE "live"
     /\ oldRejected = FALSE
+    /\ preArm = {}
+    /\ seenP = [a \in Acts |-> -1]
+    /\ startHead = 0
+    /\ evStart = 0
+    /\ evFloor = -1
+    /\ gD = 1
+    /\ gL = 1
+    /\ pend = FALSE
+    /\ pendGen = 0
+    /\ moved = FALSE
+    /\ otherMoved = FALSE
+    /\ dUsed = FALSE
+    /\ reclaims = 0
+    /\ strayReclaims = 0
 
 (***************************************************************************)
 (* B's BulkHintBound, as an environment step. Create: the bulk-born leaf's *)
@@ -193,6 +239,7 @@ Init ==
 Allocated == {o \in Offs : author[o] # NoAuthor}
 
 Create ==
+    /\ UNCHANGED <<armVars, moveVars>>
     /\ phase = "window"
     /\ phase' = "live"
     /\ up' = {"a1"}
@@ -211,6 +258,34 @@ Create ==
 (* RaisedEpochUnique). A superseded activation, or one of a purged        *)
 (* incarnation, never claims again.                                        *)
 (***************************************************************************)
+(***************************************************************************)
+(* The lazy arm (#5833, WithPreArm). foreignHigh is what the WAL shard     *)
+(* returns for an activation of L: the highest offset any OTHER activation *)
+(* of L allocated at the partition, stamped or PreArm, since the shard     *)
+(* began tracking (its top two distinct activations by high offset), and   *)
+(* never below what memory lost: the shard's start head minus one, and the *)
+(* eviction floor.                                                         *)
+(***************************************************************************)
+TrackStart == Max2(startHead, evStart)
+
+ForeignHigh(a) ==
+    Max({startHead - 1, evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}})
+
+(* The report a response carries under the lazy arm; nothing in eager mode. *)
+ReportForeign(a) == seenP' = IF WithPreArm THEN [seenP EXCEPT ![a] = Max2(@, ForeignHigh(a))] ELSE seenP
+
+(* Resolving the deferred close head (C2, C5): the arm re-claims the      *)
+(* deferred generation at the partition in the same step, or takes the    *)
+(* loaded one when a later raise is already re-claimed there, and records  *)
+(* the allocator head as a close head on L's marker. A re-claim writes the *)
+(* generation row only when it raises the loaded value.                   *)
+ResolveDeferred ==
+    /\ pend' = FALSE
+    /\ gL' = Max2(gL, pendGen)
+    /\ reclaims' = reclaims + (IF pendGen > gL THEN 1 ELSE 0)
+    /\ hoClosedAt' = Max2(hoClosedAt, next)
+    /\ UNCHANGED <<gD, pendGen, moved, otherMoved, dUsed, strayReclaims>>
+
 Claim(a) ==
     /\ a \in up
     /\ a \notin stale
@@ -219,7 +294,21 @@ Claim(a) ==
     /\ claimHead' = [claimHead EXCEPT ![a] = next]
     /\ cur' = a
     /\ stale' = IF cur \in Acts THEN stale \cup {cur} ELSE stale
-    /\ UNCHANGED <<walVars, leafVars, dupUsed, handVars, oldVars, envVars>>
+    /\ ReportForeign(a)
+    /\ IF pend THEN ResolveDeferred ELSE UNCHANGED <<moveVars, hoClosedAt>>
+    /\ UNCHANGED <<walVars, leafVars, dupUsed, mInit, hoOpen, windows, oldVars, envVars>>
+    /\ UNCHANGED <<preArm, startHead, evStart, evFloor>>
+
+(* Resolve(a): an armed activation finds a deferred head on its marker    *)
+(* (a key-moving close since it armed) and resolves it by re-arming.       *)
+Resolve(a) ==
+    /\ a \in up
+    /\ cur = a
+    /\ pend
+    /\ ResolveDeferred
+    /\ ReportForeign(a)
+    /\ UNCHANGED <<walVars, leafVars, epochVars, mInit, hoOpen, windows, oldVars, envVars>>
+    /\ UNCHANGED <<preArm, startHead, evStart, evFloor>>
 
 (* OwnAlloc(a): only the current activation's stamped append is allocated. *)
 (* The response reports the partition's unstamped watermark.               *)
@@ -231,14 +320,38 @@ OwnAlloc(a) ==
     /\ author' = [author EXCEPT ![next] = a]
     /\ inflight' = inflight \cup {next}
     /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
+    /\ ReportForeign(a)
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars>>
     /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected, envVars>>
+    /\ UNCHANGED <<preArm, startHead, evStart, evFloor, moveVars>>
+
+(* PreArmAlloc(a) (WithPreArm): an append by an activation that has not   *)
+(* armed, under the PreArm class: no entry check and no row, admitted on  *)
+(* the routing generation it carries (the current one, at or above the    *)
+(* loaded one, so admitted without a claim: C1). It raises only L's       *)
+(* leaf-scoped watermark, never the shared one, and its response reports  *)
+(* the shared watermark as a stamped one does.                             *)
+PreArmAlloc(a) ==
+    /\ WithPreArm
+    /\ a \in up
+    /\ a \notin stale
+    /\ ~claimed[a]
+    /\ next < MaxOff
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = a]
+    /\ inflight' = inflight \cup {next}
+    /\ preArm' = preArm \cup {next}
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
+    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars>>
+    /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected, envVars>>
+    /\ UNCHANGED <<seenP, startHead, evStart, evFloor, moveVars>>
 
 (* OwnAllocUnstamped(a) (WithGateFlip): an own append made unstamped - a  *)
 (* closed gate view, exhausted claim rounds, a claim fault, or an         *)
 (* unreachable leaf - by any running activation, superseded or not. It is *)
 (* always admitted, raises the watermark, and reports itself.              *)
 OwnAllocUnstamped(a) ==
+    /\ UNCHANGED <<armVars, moveVars>>
     /\ WithGateFlip
     /\ a \in up
     /\ next < MaxOff
@@ -262,9 +375,10 @@ Land(o) ==
        THEN /\ cache' = [cache EXCEPT ![author[o]] = @ \cup {o}]
             /\ mine' = [mine EXCEPT ![author[o]] = @ \cup {o}]
             /\ acked' = acked \cup {o}
-       ELSE /\ acked' = IF author[o] \in {OldAuthor, Straddler} THEN acked \cup {o} ELSE acked
+       ELSE /\ acked' = IF author[o] \in {OldAuthor, Straddler, StaleDonor} THEN acked \cup {o} ELSE acked
             /\ UNCHANGED <<cache, mine>>
     /\ UNCHANGED <<next, author, floor, up, rp, snapCov, snapRows, epochVars, handVars, oldVars, envVars>>
+    /\ UNCHANGED <<armVars, moveVars>>
 
 (***************************************************************************)
 (* H's guarantees, as environment steps. ForeignOpen opens L's marker for *)
@@ -278,6 +392,7 @@ Land(o) ==
 (* when it is acknowledged; it may never happen.                          *)
 (***************************************************************************)
 ForeignOpen ==
+    /\ UNCHANGED <<armVars, moveVars>>
     /\ phase = "live"
     /\ ~hoOpen
     /\ windows < MaxWindows
@@ -286,6 +401,7 @@ ForeignOpen ==
     /\ UNCHANGED <<walVars, leafVars, epochVars, mInit, hoClosedAt, oldVars, envVars>>
 
 ForeignAlloc ==
+    /\ UNCHANGED <<armVars, moveVars>>
     /\ hoOpen \/ ~mInit
     /\ next < MaxOff
     /\ next' = next + 1
@@ -297,14 +413,23 @@ ForeignAlloc ==
 (* every allocated offset whose author is in S.                            *)
 HeadsAbove(S) == {h \in 0..next : \A o \in Offs : o < next /\ author[o] \in S => o < h}
 
+(* The authors a close's head is above. A bulk switch's close (WithBulk:  *)
+(* the only window) records the allocator head at its re-claim, so under  *)
+(* the lazy arm, which no longer replays to a claim head, it is also what *)
+(* covers the records the range held before the switch (B's              *)
+(* SwitchCloseCoversPriorAllocations).                                    *)
+CloseCovers == IF WithPreArm /\ WithBulk THEN {Foreign, PreAuthor} ELSE {Foreign}
+
 Close ==
+    /\ UNCHANGED <<armVars, moveVars>>
     /\ phase = "live"
     /\ hoOpen
     /\ hoOpen' = FALSE
-    /\ \E h \in IF mInit THEN HeadsAbove({Foreign}) ELSE 0..next : hoClosedAt' = Max2(hoClosedAt, h)
+    /\ \E h \in IF mInit THEN HeadsAbove(CloseCovers) ELSE 0..next : hoClosedAt' = Max2(hoClosedAt, h)
     /\ UNCHANGED <<walVars, leafVars, epochVars, mInit, windows, oldVars, envVars>>
 
 HandOff(o, a) ==
+    /\ UNCHANGED <<armVars, moveVars>>
     /\ a \in up
     /\ o \in durable
     /\ author[o] = Foreign
@@ -323,6 +448,7 @@ HandOff(o, a) ==
 UnstampedAdmitted == TRUE
 
 OldAlloc ==
+    /\ UNCHANGED <<armVars, moveVars>>
     /\ WithMixedVersion
     /\ phase = "live"
     /\ ~oldUsed
@@ -340,6 +466,7 @@ OldAlloc ==
 
 (* Replay(a): read and apply the next durable entry; never a trimmed one. *)
 Replay(a) ==
+    /\ UNCHANGED <<armVars, moveVars>>
     /\ a \in up
     /\ rp[a] + 1 < MaxOff
     /\ rp[a] + 1 \in durable
@@ -361,13 +488,15 @@ Replay(a) ==
 Armed(a) ==
     /\ claimed[a]
     /\ mInit
-    /\ rp[a] >= claimHead[a] - 1
+    /\ IF WithPreArm THEN rp[a] >= seenP[a] ELSE rp[a] >= claimHead[a] - 1
+    /\ ~pend
     /\ ~hoOpen
     /\ rp[a] >= hoClosedAt - 1
     /\ rp[a] >= seenU[a]
     /\ \A o \in inflight : author[o] # a
 
 LiveAdvance(a) ==
+    /\ UNCHANGED <<armVars, moveVars>>
     /\ a \in up
     /\ mine[a] # {}
     /\ Armed(a)
@@ -377,6 +506,7 @@ LiveAdvance(a) ==
 
 (* Capture(a): the shared per-leaf snapshot keeps the highest coverage.  *)
 Capture(a) ==
+    /\ UNCHANGED <<armVars, moveVars>>
     /\ a \in up
     /\ rp[a] > snapCov
     /\ snapCov' = rp[a]
@@ -385,6 +515,7 @@ Capture(a) ==
 
 (* GcTrim: trim the next durable entry below the leaf's pin, the snapshot's coverage. *)
 GcTrim ==
+    /\ UNCHANGED <<armVars, moveVars>>
     /\ floor <= snapCov
     /\ floor \in durable
     /\ floor' = floor + 1
@@ -393,6 +524,7 @@ GcTrim ==
 (* Duplicate: a second activation of L, or the next one, starts from the   *)
 (* shared snapshot. It must claim before it appends stamped.               *)
 Duplicate ==
+    /\ UNCHANGED <<armVars, moveVars>>
     /\ phase = "live"
     /\ ~dupUsed
     /\ dupUsed' = TRUE
@@ -410,7 +542,85 @@ Restart ==
     /\ ~restarted
     /\ restarted' = TRUE
     /\ lastU' = next - 1
+    /\ startHead' = IF WithPreArm THEN next ELSE startHead
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, seenU, oldUsed, oldRejected, envVars>>
+    /\ UNCHANGED <<preArm, seenP, evStart, evFloor, moveVars>>
+
+(* Evict (WithRestart): the WAL shard evicts L's foreign-high entry to     *)
+(* bound memory, raising its eviction floor to the entry's highest offset. *)
+Evict ==
+    /\ WithRestart
+    /\ WithPreArm
+    /\ evStart = 0
+    /\ next > 0
+    /\ evStart' = next
+    /\ evFloor' = Max({evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts})
+    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, moveVars>>
+
+(***************************************************************************)
+(* A key-moving close into L (#5833, WithKeyMove): a split or a            *)
+(* consolidation hands keys to L. KeyMove: the shard root, in its own turn *)
+(* as it links the split (C6), raises its routing generation, with no WAL  *)
+(* claim, and closes L's marker with a deferred head at the partition: the *)
+(* raised generation, to be re-claimed by L's next arm there (C2, C3).    *)
+(* OtherReceiverArm: a later key-moving close into another receiver, whose *)
+(* arm re-claims that later generation at the partition before L arms     *)
+(* (C5). StaleRouteAlloc: a stale activation of the donor, still routing  *)
+(* L's keys to itself under the generation before the close, appends one  *)
+(* of them as PreArm, admitted while the loaded generation is not above   *)
+(* its stamp. UnroutedAlloc: the stale donor's write for L's keys with no *)
+(* routing stamp, appended truly unstamped and so raising the shared      *)
+(* watermark (C4). Either is the donor's one write.                       *)
+(***************************************************************************)
+KeyMove ==
+    /\ WithKeyMove
+    /\ phase = "live"
+    /\ ~moved
+    /\ moved' = TRUE
+    /\ gD' = gD + 1
+    /\ pend' = TRUE
+    /\ pendGen' = gD + 1
+    /\ UNCHANGED <<gL, otherMoved, dUsed, reclaims, strayReclaims>>
+    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, armVars>>
+
+OtherReceiverArm ==
+    /\ WithKeyMove
+    /\ moved
+    /\ ~otherMoved
+    /\ gD + 1 <= MaxGen
+    /\ otherMoved' = TRUE
+    /\ gD' = gD + 1
+    /\ gL' = gD + 1
+    /\ UNCHANGED <<pend, pendGen, moved, dUsed, reclaims, strayReclaims>>
+    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, armVars>>
+
+StaleRouteAlloc ==
+    /\ WithKeyMove
+    /\ moved
+    /\ ~dUsed
+    /\ next < MaxOff
+    /\ 1 >= gL
+    /\ dUsed' = TRUE
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = StaleDonor]
+    /\ inflight' = inflight \cup {next}
+    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, oldVars, envVars>>
+    /\ UNCHANGED <<gD, gL, pend, pendGen, moved, otherMoved, reclaims, strayReclaims, armVars>>
+
+UnroutedAlloc ==
+    /\ WithKeyMove
+    /\ moved
+    /\ ~dUsed
+    /\ next < MaxOff
+    /\ dUsed' = TRUE
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = StaleDonor]
+    /\ inflight' = inflight \cup {next}
+    /\ lastU' = next
+    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, envVars>>
+    /\ UNCHANGED <<seenU, oldUsed, restarted, oldRejected>>
+    /\ UNCHANGED <<gD, gL, pend, pendGen, moved, otherMoved, reclaims, strayReclaims, armVars>>
 
 (***************************************************************************)
 (* The purge, H's AbsentMarkerHolds and R's guarantees, as environment    *)
@@ -430,6 +640,7 @@ Restart ==
 (* max-merged into closedAt, and initialises L's marker state.             *)
 (***************************************************************************)
 Recreate ==
+    /\ UNCHANGED <<armVars, moveVars>>
     /\ WithRecreate
     /\ phase = "live"
     /\ ~recreated
@@ -443,6 +654,7 @@ Recreate ==
     /\ UNCHANGED <<reinit, spUsed, phase, hint>>
 
 StraddlerAlloc ==
+    /\ UNCHANGED <<armVars, moveVars>>
     /\ recreated
     /\ ~reinit
     /\ ~spUsed
@@ -455,6 +667,7 @@ StraddlerAlloc ==
     /\ UNCHANGED <<recreated, reinit, phase, hint>>
 
 MarkInit ==
+    /\ UNCHANGED <<armVars, moveVars>>
     /\ recreated
     /\ ~mInit
     /\ mInit' = TRUE
@@ -471,6 +684,8 @@ Next ==
     \/ \E a \in Acts : Claim(a)
     \/ \E a \in Acts : OwnAlloc(a)
     \/ \E a \in Acts : OwnAllocUnstamped(a)
+    \/ \E a \in Acts : PreArmAlloc(a)
+    \/ \E a \in Acts : Resolve(a)
     \/ \E o \in Offs : Land(o)
     \/ ForeignOpen
     \/ ForeignAlloc
@@ -483,6 +698,11 @@ Next ==
     \/ GcTrim
     \/ Duplicate
     \/ Restart
+    \/ Evict
+    \/ KeyMove
+    \/ OtherReceiverArm
+    \/ StaleRouteAlloc
+    \/ UnroutedAlloc
     \/ Recreate
     \/ StraddlerAlloc
     \/ MarkInit
@@ -508,13 +728,20 @@ Spec == Init /\ [][Next]_vars
 (* configuration with an unbounded step needs a condition per step.       *)
 (***************************************************************************)
 ReplayNeeded(a) ==
-    \/ claimed[a] /\ rp[a] < claimHead[a] - 1
+    \/ claimed[a] /\ (IF WithPreArm THEN rp[a] < seenP[a] ELSE rp[a] < claimHead[a] - 1)
     \/ rp[a] < hoClosedAt - 1
     \/ rp[a] < seenU[a]
 
+(* ArmTrigger(a) (#5833): under the lazy arm a leaf arms only when it     *)
+(* needs a live advance - its pin holds the WAL floor, i.e. an own durable *)
+(* append the shared snapshot does not yet cover. Claims stay possible at  *)
+(* any time for safety; only their fairness is conditioned on the trigger. *)
+ArmTrigger(a) == ~WithPreArm \/ \E o \in durable : author[o] \in Acts /\ o > snapCov
+
 Progress ==
     \/ \E a \in Acts :
-        \/ Claim(a)
+        \/ ArmTrigger(a) /\ Claim(a)
+        \/ Resolve(a)
         \/ ReplayNeeded(a) /\ Replay(a)
         \/ LiveAdvance(a)
         \/ Capture(a)
@@ -553,6 +780,19 @@ NoTrimPastAcked ==
 (* An unstamped append - a 10.2.0 silo's, or any while the gate is        *)
 (* closed - is never rejected.                                             *)
 OldNeverRejected == ~oldRejected
+
+(* The lazy arm's cost witnesses (#5833). A PreArm append never raises the *)
+(* partition's shared unstamped watermark, so no activation is ever told   *)
+(* to replay past one of its own PreArm appends: on a growing tree, where  *)
+(* unarmed leaves dominate, the shared watermark would otherwise hold every *)
+(* armed leaf of the partition on the replay-based advance.                 *)
+PreArmCostWitness ==
+    \A a \in Acts : seenU[a] \in preArm => author[seenU[a]] # a
+
+(* A key-moving close writes no WAL generation claim, and the deferred     *)
+(* re-claim writes the generation row at most once per raise and           *)
+(* partition: an append never claims a higher generation it carries (C1).  *)
+ReclaimCostBound == strayReclaims = 0 /\ reclaims <= 1
 
 (* The current activation has fallen off the log: the GC trimmed an entry *)
 (* it must still replay. It is reachable in production too: the leaf's WAL *)

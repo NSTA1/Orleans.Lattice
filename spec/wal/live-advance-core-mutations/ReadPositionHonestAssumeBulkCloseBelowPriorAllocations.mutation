@@ -1,0 +1,16 @@
+# #5833. Weakens the assumption on B that a bulk switch's close head is above every
+# record allocated before it. Under the lazy arm a bulk-born leaf no longer replays to a
+# claim head, so a record the range held before the switch, above the leaf's birth read
+# position, is passed. It edits an operator, not an action.
+MODULE: ReadPositionHonestAssumeBulkCloseBelowPriorAllocations
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a bulk switch's close head covers only foreign records
+BOUNDS: WithBulk = TRUE
+
+--- FIND
+CloseCovers == IF WithPreArm /\ WithBulk THEN {Foreign, PreAuthor} ELSE {Foreign}
+--- REPLACE
+\* MUTATION: the close head need cover foreign records only.
+CloseCovers == {Foreign}
+--- END

@@ -587,4 +587,12 @@ SeedCovered ==
 (* while it ran has relocated that root: the root was narrowed (its rows    *)
 (* copied, its admissions drained) under the switch, never overwritten.    *)
 ReplacedRootRelocated == published /\ midLoad => narrowed
+
+(* #5833, the guarantee to the core module under the lazy arm: a switch's *)
+(* close records the allocator head at its re-claim, so its head is above *)
+(* every record allocated before the close, the range's earlier records    *)
+(* and the seeds alike. The core's bulk-born leaf, which no longer replays *)
+(* to a claim head, relies on it for the records it does not hold.        *)
+SwitchCloseCoversPriorAllocations ==
+    [][closeHead' # closeHead => \A o \in Allocated : o < closeHead']_vars
 =============================================================================

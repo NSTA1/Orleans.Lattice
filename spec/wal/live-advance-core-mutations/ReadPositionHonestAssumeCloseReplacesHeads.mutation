@@ -9,7 +9,7 @@ TARGET: ReadPositionHonest
 CLASS: Invariant
 SUMMARY: a close overwrites the heads earlier closes and the initialisation recorded
 PERTURBS: Close
-BOUNDS: WithRecreate = TRUE, WithUnclaimedSurvivor = FALSE
+BOUNDS: WithRecreate = TRUE, WithUnclaimedSurvivor = FALSE, WithPreArm = FALSE
 
 --- FIND
     /\ \E h \in IF mInit THEN HeadsAbove({Foreign}) ELSE 0..next : hoClosedAt' = Max2(hoClosedAt, h)

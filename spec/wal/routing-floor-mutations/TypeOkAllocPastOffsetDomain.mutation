@@ -7,10 +7,18 @@ SUMMARY: the WAL shard's allocator assigns past the partition's offset domain
 PERTURBS: Alloc
 
 --- FIND
+    /\ UNCHANGED <<recreated, legacy, restarted, mInit, closedAt, markNew, caught, dup>>
+
+Alloc(i) ==
+    /\ UNCHANGED rd
     /\ pend[i]
     /\ next < MaxOff
     /\ loaded[i] # Unloaded
 --- REPLACE
+    /\ UNCHANGED <<recreated, legacy, restarted, mInit, closedAt, markNew, caught, dup>>
+
+Alloc(i) ==
+    /\ UNCHANGED rd
     /\ pend[i]
 \* MUTATION: no bound on the allocator.
     /\ loaded[i] # Unloaded

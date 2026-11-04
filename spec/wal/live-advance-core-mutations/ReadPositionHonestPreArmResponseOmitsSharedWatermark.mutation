@@ -1,0 +1,16 @@
+# #5833. A PreArm response does not report the shared unstamped watermark: a 10.2.0
+# silo's append before the arm is never reported to the activation, which passes it.
+MODULE: ReadPositionHonestPreArmResponseOmitsSharedWatermark
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a PreArm response does not report the shared unstamped watermark
+PERTURBS: PreArmAlloc
+
+--- FIND
+    /\ preArm' = preArm \cup {next}
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
+--- REPLACE
+    /\ preArm' = preArm \cup {next}
+\* MUTATION: the shared watermark is not reported.
+    /\ UNCHANGED seenU
+--- END

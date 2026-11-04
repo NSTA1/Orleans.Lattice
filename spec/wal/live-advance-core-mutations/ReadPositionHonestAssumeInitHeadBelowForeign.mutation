@@ -7,7 +7,7 @@ TARGET: ReadPositionHonest
 CLASS: Invariant
 SUMMARY: the first initialisation's head covers straddlers only
 PERTURBS: MarkInit
-BOUNDS: WithRecreate = TRUE, WithUnclaimedSurvivor = FALSE
+BOUNDS: WithRecreate = TRUE, WithUnclaimedSurvivor = FALSE, WithPreArm = FALSE
 
 --- FIND
     /\ \E h \in HeadsAbove({Foreign, Straddler}) : hoClosedAt' = Max2(hoClosedAt, h)

@@ -1,0 +1,25 @@
+# #5833. A PreArm append has no leaf-entry check, and here it skips the routing
+# generation check too: a purged incarnation's straddler appended under the PreArm
+# class is allocated above L's recorded close.
+MODULE: StraddlerBelowInitPreArmSkipsGeneration
+TARGET: StraddlerBelowInit
+CLASS: Invariant
+SUMMARY: a PreArm append is admitted without its routing generation check
+PERTURBS: PreArmAlloc
+
+--- FIND
+PreArmAlloc(i) ==
+    /\ UNCHANGED rd
+    /\ pend[i]
+    /\ next < MaxOff
+    /\ loaded[i] # Unloaded
+    /\ pstamp[i] >= loaded[i]
+
+--- REPLACE
+PreArmAlloc(i) ==
+    /\ UNCHANGED rd
+    /\ pend[i]
+    /\ next < MaxOff
+\* MUTATION: no routing generation check.
+
+--- END

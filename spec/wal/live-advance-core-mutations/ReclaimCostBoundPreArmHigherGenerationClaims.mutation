@@ -1,0 +1,22 @@
+# #5833, C1. An append carrying a generation above the loaded one claims it, as #5835's
+# cold path did: each key-moving close's raise becomes a shard-wide re-claim at the
+# partition's next write, fencing every in-flight lower-generation write of the shard.
+MODULE: ReclaimCostBoundPreArmHigherGenerationClaims
+TARGET: ReclaimCostBound
+CLASS: Invariant
+SUMMARY: a PreArm append carrying a higher generation claims it
+PERTURBS: PreArmAlloc
+BOUNDS: WithKeyMove = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+    /\ UNCHANGED <<seenP, startHead, evStart, evFloor, moveVars>>
+
+(* OwnAllocUnstamped(a)
+--- REPLACE
+\* MUTATION: a higher carried generation is claimed.
+    /\ gL' = gD
+    /\ strayReclaims' = IF gD > gL THEN strayReclaims + 1 ELSE strayReclaims
+    /\ UNCHANGED <<seenP, startHead, evStart, evFloor, gD, pend, pendGen, moved, otherMoved, dUsed, reclaims>>
+
+(* OwnAllocUnstamped(a)
+--- END

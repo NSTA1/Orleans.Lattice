@@ -1,0 +1,16 @@
+# #5833, revision 2's erratum. The read-only cold load loads the initiator's floor
+# itself rather than the floor plus one. Admission is a stamp at or above the loaded
+# value, so a purged incarnation's straddler stamped exactly at the floor is admitted
+# above L's recorded close; the claim it replaced refused at the floor.
+MODULE: StraddlerBelowInitColdLoadAdmitsAtFloor
+TARGET: StraddlerBelowInit
+CLASS: Invariant
+SUMMARY: the cold load loads the floor itself, not the floor plus one
+PERTURBS: ColdLoadApply
+
+--- FIND
+    /\ loaded' = [loaded EXCEPT ![i] = Max2(@, Max2(rd[i], walFloor[i] + 1))]
+--- REPLACE
+\* MUTATION: the floor, not the floor plus one.
+    /\ loaded' = [loaded EXCEPT ![i] = Max2(@, Max2(rd[i], walFloor[i]))]
+--- END
