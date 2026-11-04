@@ -2187,7 +2187,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // A steady trim sweeps from the previous watermark's batch; the first trim of
         // the shard on this instance, and one that reaches TAIL - a discard, or a
         // consumer caught up - sweeps from the first partition.
-        var sweepMark = Math.Min(throughOffsetInclusive, persistedTail);
+        var sweepMark = Math.Min(throughOffsetInclusive, committedTail);
         var sweptFrom = long.MaxValue;
         string? unexpectedRow = null;
         if (sweepMark >= 0L)

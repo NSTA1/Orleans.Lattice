@@ -60,7 +60,7 @@ public sealed partial class AzureTableWalStorageProvider
         var upperPartition = BuildBatchPartitionKey(treeId, shardIndex, sweepMark);
         var shardPrefix = lowerPartition.Substring(0, lowerPartition.Length - 19);
         var filter =
-            $"PartitionKey ge '{Escape(lowerPartition)}' and PartitionKey le '{Escape(upperPartition)}'"
+            $"PartitionKey ge '{BatchPartitionPrefix}|' and PartitionKey le '{Escape(upperPartition)}'"
             + $" and RowKey ge '{BuildEntryRowKey(0L)}' and RowKey le '{BuildEntryRowKey(sweepMark)}'";
 
         string? unexpected = null;
@@ -79,7 +79,7 @@ public sealed partial class AzureTableWalStorageProvider
                 {
                     await SubmitDeletesAsync(table, pending, cancellationToken).ConfigureAwait(false);
                     group = row.PartitionKey;
-                    groupValid = IsSweepablePartition(group, shardPrefix, treeId, shardIndex, lowestStart, sweepMark);
+                    groupValid = true;
                 }
 
                 if (!groupValid || !IsSweepableEntryRow(row.RowKey, sweepMark))
