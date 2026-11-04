@@ -859,6 +859,8 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// first: the shard root is not reentrant, so the re-issued call cannot start
     /// before the first ends. Interleaves with the running load and reads only
     /// activation memory and the persisted completion id, so it costs no storage read.
+    /// A load reads as running until its whole call has ended, its switch's tail
+    /// included, even though it records itself complete when it publishes its root.
     /// </summary>
     /// <param name="operationId">The bulk load's operation id.</param>
     /// <returns>The load's status on this shard.</returns>

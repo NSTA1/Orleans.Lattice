@@ -41,6 +41,33 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
     }
 
     [Test]
+    public async Task A_bulk_load_reads_running_until_its_switch_tail_completes_not_from_its_publish()
+    {
+        // Review S1 of #5815: the load records itself complete when it publishes its
+        // root, before its switch's tail has relocated the replaced root and closed by
+        // fence. A caller reading Completed there could proceed or cut over mid-tail.
+        var rig = CreateHintRig();
+        var close = new TaskCompletionSource<WalAppendFenceClaimResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.Wal.ClaimRoutingGenerationAsync(Arg.Any<WalRoutingInitiator>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(_ => close.Task);
+
+        var load = rig.H.Grain.BulkLoadRawAsync("load", RawEntries(5));
+        TestContext.Out.WriteLine($"DBG completed={load.IsCompleted} faulted={load.IsFaulted} ex={load.Exception?.GetBaseException().Message} running={typeof(ShardRootGrain).GetField("_runningBulkOperationId", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(rig.H.Grain)} calls={rig.Wal.ReceivedCalls().Count()} status={await rig.H.Grain.GetBulkOperationStatusAsync("load")}");
+        Assert.Multiple(async () =>
+        {
+            Assert.That(rig.H.State.State.LastCompletedBulkOperationId, Is.EqualTo("load"),
+                "precondition: the load has published and recorded itself complete");
+            Assert.That(load.IsCompleted, Is.False, "precondition: its switch's close is still in flight");
+            Assert.That(await rig.H.Grain.GetBulkOperationStatusAsync("load"), Is.EqualTo(BulkOperationStatus.Running),
+                "the load is running until its tail completes");
+        });
+
+        close.SetResult(WalAppendFenceClaimResult.Accept(CloseHead));
+        await load;
+        Assert.That(await rig.H.Grain.GetBulkOperationStatusAsync("load"), Is.EqualTo(BulkOperationStatus.Completed));
+    }
+
+    [Test]
     public async Task A_bulk_load_that_faults_reads_not_running()
     {
         var rig = CreateHintRig();

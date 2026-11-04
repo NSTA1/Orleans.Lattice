@@ -861,11 +861,15 @@ internal sealed class TreeSnapshotGrain(
             switch (await ReadOfflineLoadStatusAsync(shardIndex))
             {
                 case BulkOperationStatus.Completed:
+                    _offlineLoadWaitStarted = 0;
                     return (true, null);
                 case BulkOperationStatus.Running:
+                    ThrowIfOfflineLoadWaitExpired(shardIndex);
                     await Task.Delay(OfflineLoadPollInterval);
                     return (false, null);
             }
+
+            _offlineLoadWaitStarted = 0;
         }
 
         var atomicWalk = offline ? new AtomicLeafWalk("SnapshotOfflineCopyShardAsync") : default;
@@ -980,6 +984,40 @@ internal sealed class TreeSnapshotGrain(
     /// </summary>
     internal static readonly TimeSpan OfflineLoadPollInterval = TimeSpan.FromSeconds(1);
 
+    /// <summary>
+    /// When this activation began waiting for a shard's running offline load, as a
+    /// <see cref="Stopwatch"/> timestamp; 0 when it is not waiting. Activation memory
+    /// only: a reactivated snapshot starts the guard again.
+    /// </summary>
+    private long _offlineLoadWaitStarted;
+
+    /// <summary>The shard <see cref="_offlineLoadWaitStarted"/> belongs to.</summary>
+    private int _offlineLoadWaitShard = -1;
+
+    /// <summary>
+    /// The hang guard on waiting for a destination's running offline load (#5812): the
+    /// restore's, <see cref="ShardBulkLoadCompletion.DefaultWaitCeiling"/>. Past it the
+    /// wait fails the copy step with a timeout, which spends the shard's retry.
+    /// </summary>
+    internal TimeSpan OfflineLoadWaitCeiling { get; set; } = ShardBulkLoadCompletion.DefaultWaitCeiling;
+
+    private void ThrowIfOfflineLoadWaitExpired(int shardIndex)
+    {
+        if (_offlineLoadWaitStarted == 0 || _offlineLoadWaitShard != shardIndex)
+        {
+            _offlineLoadWaitStarted = Stopwatch.GetTimestamp();
+            _offlineLoadWaitShard = shardIndex;
+            return;
+        }
+
+        if (Stopwatch.GetElapsedTime(_offlineLoadWaitStarted) >= OfflineLoadWaitCeiling)
+        {
+            _offlineLoadWaitStarted = 0;
+            throw new TimeoutException(
+                $"Snapshot of tree '{SourceTreeId}': shard {shardIndex}'s offline load was still running on the destination after {OfflineLoadWaitCeiling}.");
+        }
+    }
+
     private string OfflineLoadOperationId(int shardIndex) => $"{state.State.OperationId}-snapshot-{shardIndex}";
 
     private IShardRootGrain OfflineDestination(int shardIndex) =>
@@ -987,9 +1025,12 @@ internal sealed class TreeSnapshotGrain(
 
     /// <summary>
     /// The destination's status for this shard's offline load (#5812). A destination
-    /// that cannot answer - a silo still on lattice 10.2.0, which does not know the
-    /// read - reports <see cref="BulkOperationStatus.NotRunning"/>, so the retry
-    /// re-walks and re-issues exactly as it did before.
+    /// on lattice 10.2.0, which answers the read with the definite "method unknown"
+    /// failure, reports <see cref="BulkOperationStatus.NotRunning"/>, so the retry
+    /// re-walks and re-issues exactly as it did before. Any other failure of the read
+    /// is transient and reports <see cref="BulkOperationStatus.Running"/>: the retry
+    /// waits and reads again, within the hang guard, rather than re-issue a load the
+    /// destination may still be running.
     /// </summary>
     private async Task<BulkOperationStatus> ReadOfflineLoadStatusAsync(int shardIndex)
     {
@@ -1005,11 +1046,17 @@ internal sealed class TreeSnapshotGrain(
 
             return status;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
         {
-            Logger.LogDebug(ex, "Snapshot of tree {TreeId}: shard {ShardIndex}'s destination could not report its offline load's status.",
+            Logger.LogDebug(ex, "Snapshot of tree {TreeId}: shard {ShardIndex}'s destination cannot report its offline load's status.",
                 SourceTreeId, shardIndex);
             return BulkOperationStatus.NotRunning;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Snapshot of tree {TreeId}: shard {ShardIndex}'s destination could not report its offline load's status this time; reading again.",
+                SourceTreeId, shardIndex);
+            return BulkOperationStatus.Running;
         }
     }
 

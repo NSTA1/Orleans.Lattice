@@ -84,7 +84,7 @@ public sealed class ShardBulkLoadCompletionTests
     public void A_shard_that_cannot_report_its_status_fails_with_the_original_timeout()
     {
         var shard = ShardTimingOutOnce(out var loads);
-        shard.GetBulkOperationStatusAsync("op").ThrowsAsync(new InvalidOperationException("unknown method"));
+        shard.GetBulkOperationStatusAsync("op").ThrowsAsync(MethodUnknown());
 
         var thrown = Assert.ThrowsAsync<TimeoutException>(() =>
             ShardBulkLoadCompletion.BulkLoadRawAsync(shard, "op", Entries, logger: null, pollBackoff: NoDelay));
@@ -95,6 +95,41 @@ public sealed class ShardBulkLoadCompletionTests
             Assert.That(loads(), Is.EqualTo(1), "a 10.2.0 shard root is not re-issued to, as before");
         });
     }
+
+    [Test]
+    public async Task A_transient_status_read_failure_is_read_again_and_the_load_is_not_reissued()
+    {
+        // Review S2 of #5815: only a 10.2.0 shard root's definite "method unknown" ends
+        // the wait; a read that itself timed out says nothing about the load.
+        var shard = ShardTimingOutOnce(out var loads);
+        shard.GetBulkOperationStatusAsync("op").Returns(
+            Task.FromException<BulkOperationStatus>(new TimeoutException("status read timed out")),
+            Task.FromResult(BulkOperationStatus.Completed));
+
+        await ShardBulkLoadCompletion.BulkLoadRawAsync(shard, "op", Entries, logger: null, pollBackoff: NoDelay);
+
+        Assert.That(loads(), Is.EqualTo(1));
+        await shard.Received(2).GetBulkOperationStatusAsync("op");
+    }
+
+    [Test]
+    public void Cancelling_the_restore_ends_the_wait()
+    {
+        // Review N1 of #5815: the restore's token reaches the wait.
+        var shard = ShardTimingOutOnce(out _);
+        shard.GetBulkOperationStatusAsync("op").Returns(BulkOperationStatus.Running);
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+
+        Assert.That(
+            () => ShardBulkLoadCompletion.BulkLoadRawAsync(
+                shard, "op", Entries, logger: null, cancelled.Token, pollBackoff: [TimeSpan.FromMinutes(1)]),
+            Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    /// <summary>The definite failure a lattice 10.2.0 silo answers an unknown method with.</summary>
+    internal static TypeLoadException MethodUnknown() =>
+        new(Orleans.Lattice.BPlusTree.Grains.WalAppendFenceMethodProbe.UnresolvedAliasPrefix + " 'ol.xbs'");
 
     [Test]
     public void A_load_still_running_past_the_hang_guard_fails()

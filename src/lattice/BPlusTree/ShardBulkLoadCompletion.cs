@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree;
@@ -22,8 +23,9 @@ namespace Orleans.Lattice.BPlusTree;
 /// ends, because every await inside it is itself a bounded grain call or storage
 /// operation over a finite batch, and <see cref="DefaultWaitCeiling"/> is a hang guard
 /// that rethrows the timeout should it not. A shard root that cannot answer the status
-/// read - a silo still on lattice 10.2.0, which does not know the method - rethrows
-/// the original timeout, which is exactly what the caller saw before.
+/// read - a silo still on lattice 10.2.0, which answers with the definite "method
+/// unknown" failure - rethrows the original timeout, which is exactly what the caller
+/// saw before; any other failure of the read is transient and is read again.
 /// </remarks>
 internal static class ShardBulkLoadCompletion
 {
@@ -133,11 +135,20 @@ internal static class ShardBulkLoadCompletion
             {
                 status = await shard.GetBulkOperationStatusAsync(operationId).ConfigureAwait(false);
             }
+            catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
+            {
+                // A shard root on lattice 10.2.0 does not know the read: fail with the
+                // original timeout, as the caller always has.
+                throw new TimeoutException(
+                    $"Bulk load '{operationId}' timed out and its shard root cannot report its status: {ex.Message}",
+                    timeout);
+            }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                throw new TimeoutException(
-                    $"Bulk load '{operationId}' timed out and its shard root could not report its status: {ex.Message}",
-                    timeout);
+                // A transient failure of the read itself (it timed out, or the silo was
+                // busy) says nothing about the load: wait and read again, within the hang
+                // guard.
+                status = BulkOperationStatus.Running;
             }
 
             if (status != BulkOperationStatus.Running)

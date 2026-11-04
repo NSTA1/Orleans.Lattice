@@ -150,7 +150,11 @@ A retry after an offline copy's bulk load outran the response timeout first asks
 the destination shard for that load's status rather than re-reading the source and
 re-issuing it: a completed load completes the copy, and a load still running is
 waited for, about once a second, without spending the shard's retry
-([#5812](https://github.com/NSTA1/Orleans.Lattice/issues/5812)).
+([#5812](https://github.com/NSTA1/Orleans.Lattice/issues/5812)). A load reads as
+complete only once its bulk switch has closed. A status read that fails transiently
+is treated as still running. The wait is bounded at 30 minutes, after which the copy
+step fails with a timeout that spends the retry. A destination on lattice 10.2.0,
+which cannot report a load's status, is re-issued to, as before.
 
 `ILattice.IsSnapshotCompleteAsync` returns `true` once no snapshot of the tree is
 in flight. The tree-admin snapshot status (`ILatticeTreeAdmin.GetSnapshotStatusAsync`,

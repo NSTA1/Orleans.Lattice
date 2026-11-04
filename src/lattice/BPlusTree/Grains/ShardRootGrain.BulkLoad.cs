@@ -26,10 +26,14 @@ internal sealed partial class ShardRootGrain
     public Task<BulkOperationStatus> GetBulkOperationStatusAsync(string operationId)
     {
         EnsureInternalOrigin(LatticeOperation.BulkLoad);
-        var status = state.State.LastCompletedBulkOperationId == operationId
-            ? BulkOperationStatus.Completed
-            : string.Equals(_runningBulkOperationId, operationId, StringComparison.Ordinal)
-                ? BulkOperationStatus.Running
+        // Running wins: the load records itself complete when it publishes its root,
+        // before its switch's tail has relocated the replaced root and closed by fence,
+        // so a caller that read Completed then could proceed or cut over mid-tail, and
+        // nobody would re-issue the load if the tail then faulted.
+        var status = string.Equals(_runningBulkOperationId, operationId, StringComparison.Ordinal)
+            ? BulkOperationStatus.Running
+            : state.State.LastCompletedBulkOperationId == operationId
+                ? BulkOperationStatus.Completed
                 : BulkOperationStatus.NotRunning;
         return BulkOperationStatusTasks[(int)status];
     }
