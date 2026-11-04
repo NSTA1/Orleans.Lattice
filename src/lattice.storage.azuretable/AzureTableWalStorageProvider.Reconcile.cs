@@ -126,6 +126,9 @@ public sealed partial class AzureTableWalStorageProvider
                     // The pass may have written TAIL itself, so the commit fence is
                     // reset with the guard and refilled by the next read (issue #5810).
                     activity.Fence.Reset(activity.Overlap, _options.EliminateCandidateRowOnHotPath ? resultingTail : null);
+
+                    await ReclaimFailedBatchesAsync(table, activity, manifestPartitionKey, treeId, shardIndex, resultingTail, cancellationToken)
+                        .ConfigureAwait(false);
                     return;
                 }
                 catch (RequestFailedException ex)
@@ -138,6 +141,78 @@ public sealed partial class AzureTableWalStorageProvider
         finally
         {
             activity.ReconcileGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Deletes the entry rows of each batch whose phase-2 commit failed on this
+    /// instance and that can no longer become visible: it starts at or below
+    /// <paramref name="resultingTail"/>, so no reconciliation will ever roll it
+    /// forward (only a batch starting at <c>TAIL + 1</c> is), and it has no manifest
+    /// row, so nothing reads it. That is the batch a stale writer's refused commit
+    /// leaves below a successor's <c>TAIL</c> (issue #5810), which the discovery scan,
+    /// confined to partitions above <c>TAIL</c>, never sees. A batch this pass rolled
+    /// forward has a manifest row and is kept; one it rolled back is above the
+    /// resulting <c>TAIL</c> and already gone.
+    /// <para>
+    /// Runs only when a commit has failed, so the steady path pays nothing. Best
+    /// effort: a storage failure leaves the remaining batches recorded for the next
+    /// reconciliation rather than failing this one, which has already succeeded.
+    /// Rows recorded by a process that stops before its next reconciliation stay in
+    /// storage for good, unreadable: trim follows manifest rows and does not reach
+    /// them, and neither does a discard of the tree, which is a trim through
+    /// <see cref="long.MaxValue"/>. That is bounded per incident by the batches the
+    /// stopped writer had in flight.
+    /// </para>
+    /// </summary>
+    private static async Task ReclaimFailedBatchesAsync(
+        TableClient table,
+        WalShardActivity activity,
+        string manifestPartitionKey,
+        string treeId,
+        int shardIndex,
+        long resultingTail,
+        CancellationToken cancellationToken)
+    {
+        if (activity.FailedBatches.TakeAll() is not { } failed)
+        {
+            return;
+        }
+
+        for (var i = 0; i < failed.Count; i++)
+        {
+            var (start, _) = failed[i];
+            if (start > resultingTail)
+            {
+                continue;
+            }
+
+            try
+            {
+                if (await TryReadEntityAsync(table, manifestPartitionKey, BuildManifestRowKey(start), cancellationToken)
+                        .ConfigureAwait(false) is not null)
+                {
+                    continue;
+                }
+
+                var entryFilter =
+                    $"PartitionKey eq '{Escape(BuildBatchPartitionKey(treeId, shardIndex, start))}' and RowKey ge '{EntryRowKeyPrefix}' and RowKey lt 'F'";
+                await DeletePartitionInChunksAsync(table, entryFilter, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                for (var j = i; j < failed.Count; j++)
+                {
+                    activity.FailedBatches.Add(failed[j].Start, failed[j].EndInclusive);
+                }
+
+                if (ex is RequestFailedException)
+                {
+                    return;
+                }
+
+                throw;
+            }
         }
     }
 
@@ -161,6 +236,12 @@ public sealed partial class AzureTableWalStorageProvider
             await worker.AbandonedSubmits.WhenIdleAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
         }
     }
+
+    /// <summary>
+    /// Test seam invoked after each reconciliation rollforward chunk commits, with
+    /// the chunk's index in the pass, so a test can move <c>TAIL</c> between chunks.
+    /// </summary>
+    internal Func<int, Task>? AfterRollForwardChunkForTesting { get; set; }
 
     /// <summary>
     /// Maximum number of plan-and-commit passes
@@ -263,7 +344,7 @@ public sealed partial class AzureTableWalStorageProvider
         if (plan.RollForward.Count > 0)
         {
             await CommitRollForwardAsync(
-                table, manifestPartitionKey, plan.RollForward, currentTail, tailETag, plan.ResultingTail, cancellationToken)
+                table, manifestPartitionKey, plan.RollForward, currentTail, tailETag, plan.ResultingTail, AfterRollForwardChunkForTesting, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -651,24 +732,26 @@ public sealed partial class AzureTableWalStorageProvider
     /// <summary>
     /// Commits the rollforward portion of the plan: deletes each
     /// orphan's phase-0 candidate-row and adds its phase-2 manifest
-    /// row in ascending start-offset order, plus a single TAIL write
-    /// at the end. The work is chunked into transactions of up to 49
-    /// orphans so the 100-action per-transaction cap is respected
-    /// (<c>2 * 49 + 1 = 99</c> actions per chunk); the last chunk
-    /// includes the TAIL write so the visible tail moves atomically
-    /// with the final M-row.
+    /// row in ascending start-offset order. The work is chunked into
+    /// transactions of up to 49 orphans so the 100-action
+    /// per-transaction cap is respected (<c>2 * 49 + 1 = 99</c>
+    /// actions per chunk).
     /// <para>
     /// An <see cref="OrphanBatch.AlreadyCommitted"/> orphan contributes
     /// no M-row add (its row exists), only the delete of any leftover
-    /// candidate-row. The TAIL write is conditional: an
+    /// candidate-row. Every chunk also writes TAIL, conditionally: an
     /// <c>UpdateReplace</c> against the ETag read at the start of the
-    /// pass, or an <c>Add</c> when no TAIL existed, and it is omitted
-    /// when <paramref name="resultingTail"/> does not advance
-    /// <paramref name="currentTail"/>. A TAIL a concurrent committer
-    /// advanced in between therefore fails the transaction with 412 /
-    /// 409 - which <see cref="ReconcileAsync"/> retries from fresh
-    /// reads - instead of being silently lowered, which would expose
-    /// committed offsets for reuse (#3348).
+    /// pass, or an <c>Add</c> when no TAIL existed, and each later chunk
+    /// against the ETag the previous chunk left. Each chunk raises TAIL
+    /// to the end of the contiguous prefix it has committed, and the
+    /// last to <paramref name="resultingTail"/>, never below
+    /// <paramref name="currentTail"/>. A TAIL that a concurrent committer
+    /// moved in between therefore fails the next chunk with 412 / 409 -
+    /// which <see cref="ReconcileAsync"/> retries from fresh reads -
+    /// instead of being silently lowered, which would expose committed
+    /// offsets for reuse (#3348), and no chunk adds a manifest row after
+    /// another writer has moved TAIL, matching the phase-2 commit fence
+    /// (issue #5810).
     /// </para>
     /// </summary>
     private static async Task CommitRollForwardAsync(
@@ -678,16 +761,17 @@ public sealed partial class AzureTableWalStorageProvider
         long currentTail,
         ETag? tailETag,
         long resultingTail,
+        Func<int, Task>? afterChunk,
         CancellationToken cancellationToken)
     {
         // Each orphan contributes at most 2 actions (M-add unless
         // already committed; C-delete only when the orphan was
-        // discovered via its C-row, i.e. HasCandidateRow == true); the
-        // last chunk also carries the shared TAIL write. Worst-case
-        // action count per transaction stays at 2 * 49 + 1 = 99 under
-        // the 100-action cap.
+        // discovered via its C-row, i.e. HasCandidateRow == true); each
+        // chunk also carries the TAIL write. Worst-case action count per
+        // transaction stays at 2 * 49 + 1 = 99 under the 100-action cap.
         const int chunkSize = 49;
 
+        var chunkTail = currentTail;
         for (var i = 0; i < rollForward.Count; i += chunkSize)
         {
             var end = Math.Min(i + chunkSize, rollForward.Count);
@@ -719,33 +803,56 @@ public sealed partial class AzureTableWalStorageProvider
                             Payload = null,
                         }));
                 }
+
+                // The rollforward set is contiguous from TAIL in ascending
+                // order, so the highest end committed so far is a gap-free TAIL.
+                chunkTail = Math.Max(chunkTail, rollForward[j].EndOffsetInclusive);
             }
 
-            // Only the last chunk advances TAIL; intermediate chunks
-            // commit C-delete + M-add pairs only. An intermediate-chunk
-            // crash leaves M-rows above TAIL, which the next pass marks
-            // AlreadyCommitted and rolls TAIL forward over.
-            if (end == rollForward.Count && resultingTail > currentTail)
+            if (end == rollForward.Count)
             {
-                var tail = new AzureTableWalEntity
+                chunkTail = Math.Max(chunkTail, resultingTail);
+            }
+
+            var tail = new AzureTableWalEntity
+            {
+                PartitionKey = manifestPartitionKey,
+                RowKey = TailRowKey,
+                Offset = chunkTail,
+                Payload = null,
+            };
+            actions.Add(tailETag is { } etag
+                ? new TableTransactionAction(TableTransactionActionType.UpdateReplace, tail, etag)
+                : new TableTransactionAction(TableTransactionActionType.Add, tail));
+
+            var response = await table.SubmitTransactionAsync(actions, cancellationToken).ConfigureAwait(false);
+            tailETag = response.Value.Count == actions.Count ? response.Value[^1].Headers.ETag : null;
+            if (tailETag is null && end < rollForward.Count)
+            {
+                // The response did not carry TAIL's new ETag, so it is read back. A
+                // TAIL that is not the one just written was moved by another writer:
+                // re-plan, as for a refused chunk. The comparison is by value only, so
+                // another writer's rewrite of this same value would pass, and that is
+                // harmless: no writer that commits rows can write it next. A fenced
+                // commit's group starts above the TAIL it read, so it lands TAIL above
+                // this value; a stale commit holds an ETag this chunk has already
+                // replaced, so it is refused; and a reconciliation writes TAIL only when
+                // it rolls a batch forward, which also raises it.
+                var (readTail, readETag) = await ReadTailAsync(table, manifestPartitionKey, cancellationToken).ConfigureAwait(false);
+                if (readTail != chunkTail || readETag is null)
                 {
-                    PartitionKey = manifestPartitionKey,
-                    RowKey = TailRowKey,
-                    Offset = resultingTail,
-                    Payload = null,
-                };
-                actions.Add(tailETag is { } etag
-                    ? new TableTransactionAction(TableTransactionActionType.UpdateReplace, tail, etag)
-                    : new TableTransactionAction(TableTransactionActionType.Add, tail));
+                    throw new RequestFailedException(412, "TAIL moved during a reconciliation rollforward.");
+                }
+
+                tailETag = readETag;
             }
 
-            if (actions.Count > 0)
+            if (afterChunk is not null)
             {
-                await table.SubmitTransactionAsync(actions, cancellationToken).ConfigureAwait(false);
+                await afterChunk(i / chunkSize).ConfigureAwait(false);
             }
         }
     }
-
     /// <summary>
     /// Rolls back a single orphan by deleting every entry row in its
     /// batch partition and its phase-0 candidate-row in the manifest

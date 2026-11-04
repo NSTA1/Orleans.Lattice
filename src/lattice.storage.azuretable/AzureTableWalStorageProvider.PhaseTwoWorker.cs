@@ -61,6 +61,12 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     private readonly WalShardCommitFence? _fence;
 
     /// <summary>
+    /// Where the batches of a failed commit are recorded for reconciliation to
+    /// reclaim, or <see langword="null"/> for a test worker that does not track them.
+    /// </summary>
+    private readonly WalShardFailedBatches? _failedBatches;
+
+    /// <summary>
     /// Proves a manifest transaction that failed with 409 / 404 already committed
     /// (see <see cref="AzureTableWalStorageProvider.IsIdempotentPhaseTwoReplayAsync"/>),
     /// or <see langword="null"/> when a failed submit is never re-examined.
@@ -222,7 +228,8 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         TimeSpan coalescingWindow,
         TimeSpan? commitTimeout = null,
         TimeSpan? abandonedSubmitSettleCap = null,
-        WalShardCommitFence? fence = null)
+        WalShardCommitFence? fence = null,
+        WalShardFailedBatches? failedBatches = null)
         : this(
             async (actions, cancellationToken) =>
             {
@@ -244,7 +251,8 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                 return await AzureTableWalStorageProvider.IsIdempotentPhaseTwoReplayAsync(table, actions, cancellationToken)
                     .ConfigureAwait(false);
             },
-            fence)
+            fence,
+            failedBatches)
     {
     }
 
@@ -306,7 +314,8 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     internal PhaseTwoWorker(
         Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task<ETag?>> submit,
         string manifestPartitionKey,
-        WalShardCommitFence fence)
+        WalShardCommitFence fence,
+        WalShardFailedBatches? failedBatches = null)
         : this(
             submit,
             manifestPartitionKey,
@@ -314,7 +323,8 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             shardIndex: 0,
             pipelinePhaseTwoTag: new KeyValuePair<string, object?>(LatticeMetrics.TagPipelinePhaseTwo, false),
             TimeSpan.Zero,
-            fence: fence)
+            fence: fence,
+            failedBatches: failedBatches)
     {
     }
 
@@ -328,10 +338,12 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         TimeSpan? commitTimeout = null,
         TimeSpan? abandonedSubmitSettleCap = null,
         Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task<bool>>? verifyReplay = null,
-        WalShardCommitFence? fence = null)
+        WalShardCommitFence? fence = null,
+        WalShardFailedBatches? failedBatches = null)
     {
         _submit = submit;
         _fence = fence;
+        _failedBatches = failedBatches;
         _verifyReplay = verifyReplay;
         _manifestPartitionKey = manifestPartitionKey;
         _treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
@@ -1015,12 +1027,16 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             // TAIL and committing them would silently advance the
             // pointer past a hole the reconciliation step needs to
             // see.
+            // Every faulted batch's entry rows have landed (phase 2 follows phase 1),
+            // so record each for the reconciliation this fault triggers to reclaim.
             for (var i = 0; i < commits.Count; i++)
             {
+                _failedBatches?.Add(commits[i].StartOffset, commits[i].EndOffsetInclusive);
                 SettleFault(commits[i], ex);
             }
             foreach (var pending in _pending)
             {
+                _failedBatches?.Add(pending.StartOffset, pending.EndOffsetInclusive);
                 SettleFault(pending, ex);
             }
             _pending.Clear();

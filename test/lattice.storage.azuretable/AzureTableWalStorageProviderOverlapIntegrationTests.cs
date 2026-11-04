@@ -380,11 +380,125 @@ public sealed class AzureTableWalStorageProviderOverlapIntegrationTests
         });
     }
 
+    [Test]
+    public async Task A_refused_stale_batchs_entry_rows_are_reclaimed_by_the_reconcile_its_refusal_triggers()
+    {
+        // Issue #5810, review nit N1: the stale writer's refused [5,6] leaves entry rows
+        // in batch partition 5 with no manifest row, below the successor's TAIL, where
+        // the discovery scan (above TAIL only) never looks. The resync its refusal
+        // triggers must delete them, and nothing the successor committed.
+        await using var predecessor = CreateProvider();
+        await predecessor.AppendBatchAsync(TreeId, 0, Entries(0, 4, value: 1), CancellationToken.None);
+        await using var successor = CreateProvider();
+        await successor.AppendBatchAsync(TreeId, 0, Entries(4, 6, value: 2), CancellationToken.None);
+        Assert.That(
+            async () => await predecessor.AppendBatchAsync(TreeId, 0, Entries(5, 2, value: 9), CancellationToken.None),
+            Throws.Exception,
+            "the stale writer's batch was not refused");
+        Assert.That(await CountBatchPartitionRowsAsync(5), Is.EqualTo(2), "the refused batch left no entry rows to reclaim");
+
+        await predecessor.ReconcileAsync(TreeId, 0, CancellationToken.None);
+
+        await using var reader = CreateProvider();
+        var refusedRows = await CountBatchPartitionRowsAsync(5);
+        var committedRows = await CountBatchPartitionRowsAsync(4);
+        var values = await ReadValuesAsync(reader);
+        Assert.Multiple(() =>
+        {
+            Assert.That(refusedRows, Is.Zero, "the refused batch's entry rows leaked");
+            Assert.That(committedRows, Is.EqualTo(6), "reclaim deleted a committed batch's rows");
+            Assert.That(values, Is.EqualTo(new[]
+            {
+                (0L, 1), (1L, 1), (2L, 1), (3L, 1), (4L, 2), (5L, 2), (6L, 2), (7L, 2), (8L, 2), (9L, 2),
+            }));
+        });
+    }
+
+    [Test]
+    public async Task A_failed_commit_that_reconcile_rolls_forward_is_not_reclaimed()
+    {
+        // The reclaim deletes only a failed batch with no manifest row. A batch whose
+        // commit failed but which reconciliation then rolls forward is committed, and
+        // keeps its rows.
+        var faults = new PhaseTwoFault();
+        await using var writer = CreateProvider(requests: null, faults);
+        await writer.AppendBatchAsync(TreeId, 0, Entries(0, 2, value: 1), CancellationToken.None);
+        faults.FailNextPhaseTwo();
+        Assert.That(
+            async () => await writer.AppendBatchAsync(TreeId, 0, Entries(2, 2, value: 2), CancellationToken.None),
+            Throws.Exception);
+
+        await writer.ReconcileAsync(TreeId, 0, CancellationToken.None);
+
+        await using var reader = CreateProvider();
+        var values = await ReadValuesAsync(reader);
+        var tail = await reader.GetHighestOffsetAsync(TreeId, 0, CancellationToken.None);
+        Assert.Multiple(() =>
+        {
+            Assert.That(values, Is.EqualTo(new[] { (0L, 1), (1L, 1), (2L, 2), (3L, 2) }), "a rolled-forward batch was reclaimed");
+            Assert.That(tail, Is.EqualTo(3L));
+        });
+    }
+
+    [Test]
+    public async Task A_tail_moved_between_rollforward_chunks_refuses_the_next_chunk()
+    {
+        // Review nit N3: every rollforward chunk writes TAIL conditionally, chained on
+        // the previous chunk's ETag, so once another writer moves TAIL no further chunk
+        // of the pass adds a manifest row; the pass re-plans from fresh reads instead.
+        // 99 single-entry orphans above TAIL roll forward in chunks of 49, 49 and 1.
+        await _sut.AppendBatchAsync(TreeId, 0, Entries(0, 1), CancellationToken.None);
+        for (var offset = 1L; offset <= 99L; offset++)
+        {
+            await SynthesiseUncommittedBatchAsync(offset, 1);
+        }
+
+        await using var recovering = CreateProvider();
+        var chunks = new List<int>();
+        recovering.AfterRollForwardChunkForTesting = async chunk =>
+        {
+            chunks.Add(chunk);
+            if (chunks.Count == 1)
+            {
+                // Another writer rewrites TAIL with the value it already holds,
+                // which changes only its ETag.
+                var tail = (await _table.GetEntityAsync<AzureTableWalEntity>(
+                    AzureTableWalStorageProvider.BuildManifestPartitionKey(TreeId, 0),
+                    AzureTableWalStorageProvider.TailRowKey)).Value;
+                await _table.UpdateEntityAsync(tail, tail.ETag, TableUpdateMode.Replace);
+            }
+        };
+
+        await recovering.ReconcileAsync(TreeId, 0, CancellationToken.None);
+
+        await using var reader = CreateProvider();
+        var offsets = await ReadOffsetsAsync(reader);
+        var resulting = await reader.GetHighestOffsetAsync(TreeId, 0, CancellationToken.None);
+        Assert.Multiple(() =>
+        {
+            Assert.That(chunks, Is.EqualTo(new[] { 0, 0, 1 }), "a chunk committed after another writer moved TAIL");
+            Assert.That(offsets, Is.EqualTo(Enumerable.Range(0, 100).Select(o => (long)o).ToArray()));
+            Assert.That(resulting, Is.EqualTo(99L));
+        });
+    }
+
+    private async Task<int> CountBatchPartitionRowsAsync(long startOffset)
+    {
+        var partitionKey = AzureTableWalStorageProvider.BuildBatchPartitionKey(TreeId, 0, startOffset);
+        var count = 0;
+        await foreach (var _ in _table.QueryAsync<TableEntity>($"PartitionKey eq '{partitionKey}'", select: new[] { "RowKey" }))
+        {
+            count++;
+        }
+
+        return count;
+    }
+
     private AzureTableWalStorageProvider CreateProvider() => CreateProvider(requests: null);
 
     // The default options eliminate the candidate row, so a steady append makes
     // exactly its phase-1 and phase-2 transactions.
-    private AzureTableWalStorageProvider CreateProvider(RequestCounter? requests) =>
+    private AzureTableWalStorageProvider CreateProvider(RequestCounter? requests, PhaseTwoFault? faults = null) =>
         new(
             Options.Create(new AzureTableWalStorageOptions
             {
@@ -392,11 +506,44 @@ public sealed class AzureTableWalStorageProviderOverlapIntegrationTests
                 TableName = _tableName,
                 Compression = LatticeCompression.None,
                 PipelinePhaseTwoCommits = false,
-                ConfigureClientOptions = requests is null
+                ConfigureClientOptions = requests is null && faults is null
                     ? null
-                    : options => options.AddPolicy(requests, HttpPipelinePosition.PerCall),
+                    : options =>
+                    {
+                        if (requests is not null)
+                        {
+                            options.AddPolicy(requests, HttpPipelinePosition.PerCall);
+                        }
+
+                        if (faults is not null)
+                        {
+                            options.AddPolicy(faults, HttpPipelinePosition.PerCall);
+                        }
+                    },
             }),
             _serializer);
+
+    /// <summary>
+    /// Fails, before it is sent, the second table transaction after it is armed: with
+    /// the candidate row eliminated an append makes its phase-1 transaction and then its
+    /// phase-2 one, so that is the next append's phase 2.
+    /// </summary>
+    private sealed class PhaseTwoFault : HttpPipelineSynchronousPolicy
+    {
+        private int _countdown;
+
+        public void FailNextPhaseTwo() => Volatile.Write(ref _countdown, 2);
+
+        public override void OnSendingRequest(HttpMessage message)
+        {
+            if (message.Request.Uri.Path.EndsWith("$batch", StringComparison.Ordinal)
+                && Volatile.Read(ref _countdown) > 0
+                && Interlocked.Decrement(ref _countdown) == 0)
+            {
+                throw new InvalidOperationException("Injected phase-2 transaction failure.");
+            }
+        }
+    }
 
     /// <summary>Counts table transactions (<c>$batch</c>) and every other request.</summary>
     private sealed class RequestCounter : HttpPipelineSynchronousPolicy
