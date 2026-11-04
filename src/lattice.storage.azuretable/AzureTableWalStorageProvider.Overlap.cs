@@ -1,4 +1,5 @@
 using System.Globalization;
+using Azure;
 using Azure.Data.Tables;
 
 namespace Orleans.Lattice.Storage.AzureTable;
@@ -29,11 +30,12 @@ public sealed partial class AzureTableWalStorageProvider
     /// <paramref name="guard"/> after proving it overlaps no batch
     /// written or in motion at a different start offset. Throws
     /// <see cref="InvalidOperationException"/> on overlap. The claim is
-    /// held only when the method returns normally.
+    /// held only when the method returns normally, and returns the commit
+    /// fence generation it was made under (issue #5810).
     /// </summary>
-    private async Task ClaimOverlapFreeAsync(
+    private async Task<long> ClaimOverlapFreeAsync(
         TableClient table,
-        WalShardOverlapGuard guard,
+        WalShardActivity activity,
         string manifestPartitionKey,
         string treeId,
         int shardIndex,
@@ -41,16 +43,20 @@ public sealed partial class AzureTableWalStorageProvider
         long endOffsetInclusive,
         CancellationToken cancellationToken)
     {
-        if (!guard.IsBounded)
+        var guard = activity.Overlap;
+        if (!activity.Fence.TryGetGeneration(out var generation) || !guard.IsBounded)
         {
-            guard.RaiseBound(await ReadWrittenUpperBoundAsync(
-                table, manifestPartitionKey, treeId, shardIndex, cancellationToken).ConfigureAwait(false));
+            // The bound and the fence are filled from the same read of TAIL, so the
+            // guard's bound covers the TAIL value the fence's ETag was observed with.
+            var (bound, tail, tailETag) = await ReadWrittenUpperBoundAsync(
+                table, manifestPartitionKey, treeId, shardIndex, cancellationToken).ConfigureAwait(false);
+            generation = activity.Fence.Fill(guard, tailETag, tail, bound);
         }
 
         switch (guard.Claim(startOffset, endOffsetInclusive, out var inMotionStart))
         {
             case WalShardOverlapGuard.ClaimOutcome.AboveWritten:
-                return;
+                return generation;
             case WalShardOverlapGuard.ClaimOutcome.Conflict:
                 throw CreateOverlapException(treeId, shardIndex, startOffset, endOffsetInclusive, inMotionStart);
         }
@@ -72,21 +78,24 @@ public sealed partial class AzureTableWalStorageProvider
             guard.Release(startOffset, endOffsetInclusive);
             throw CreateOverlapException(treeId, shardIndex, startOffset, endOffsetInclusive, writtenStart);
         }
+
+        return generation;
     }
 
     /// <summary>
     /// Reads an upper bound on the end offset of every batch written for
     /// the shard: the persisted <c>TAIL</c>, raised by any batch
-    /// partition above it that phase 2 has not committed.
+    /// partition above it that phase 2 has not committed. Also returns
+    /// the <c>TAIL</c> value and ETag it was read with.
     /// </summary>
-    private async Task<long> ReadWrittenUpperBoundAsync(
+    private async Task<(long Bound, long Tail, ETag? TailETag)> ReadWrittenUpperBoundAsync(
         TableClient table,
         string manifestPartitionKey,
         string treeId,
         int shardIndex,
         CancellationToken cancellationToken)
     {
-        var (tail, _) = await ReadTailAsync(table, manifestPartitionKey, cancellationToken).ConfigureAwait(false);
+        var (tail, tailETag) = await ReadTailAsync(table, manifestPartitionKey, cancellationToken).ConfigureAwait(false);
         var bound = tail;
         var aboveTail = await ReadOutstandingBatchPartitionsAboveTailAsync(
             table, treeId, shardIndex, tail, cancellationToken).ConfigureAwait(false);
@@ -98,7 +107,7 @@ public sealed partial class AzureTableWalStorageProvider
             }
         }
 
-        return bound;
+        return (bound, tail, tailETag);
     }
 
     /// <summary>

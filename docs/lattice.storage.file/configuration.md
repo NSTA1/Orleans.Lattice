@@ -43,6 +43,8 @@ siloBuilder.AddFileWalStorage(options =>
 
 Point `RootDirectory` at a path backed by a durable mount - a bind mount or named volume in a container, or a persistent disk on a VM. The directory must be writable by the process identity; a distroless container runs as a non-root user, so the mounted volume must grant that user write access. The provider does not attempt to recover durability if the path is transient (for example a container's writable layer), so state placed there is lost on `docker rm` or an image upgrade.
 
+The data root must belong to one silo. Use local disk, or a volume attached to one host at a time, and never a shared network volume or a root another silo also uses; see [One silo per data root](architecture.md#one-silo-per-data-root).
+
 ## Related
 
 - [Public API](api.md) - the public types and what `AddFileWalStorage` registers.

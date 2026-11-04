@@ -461,19 +461,19 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
 
         // Claim the offsets before the first await so appends issued in
         // allocation order take the no-I/O path in that order.
-        var claimed = activity.Overlap.TryClaimAboveWritten(firstOffset, endOffsetInclusive);
+        var claimed = activity.Fence.TryClaimAboveWritten(activity.Overlap, firstOffset, endOffsetInclusive, out var generation);
         try
         {
             var table = await EnsureTableAsync(cancellationToken).ConfigureAwait(false);
             if (!claimed)
             {
-                await ClaimOverlapFreeAsync(
-                    table, activity.Overlap, manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, cancellationToken)
+                generation = await ClaimOverlapFreeAsync(
+                    table, activity, manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, cancellationToken)
                     .ConfigureAwait(false);
                 claimed = true;
             }
 
-            await AppendClaimedBatchAsync(table, activity, manifestPartitionKey, treeId, shardIndex, entries, firstOffset, endOffsetInclusive, cancellationToken)
+            await AppendClaimedBatchAsync(table, activity, manifestPartitionKey, treeId, shardIndex, entries, firstOffset, endOffsetInclusive, generation, cancellationToken)
                 .ConfigureAwait(false);
         }
         finally
@@ -494,6 +494,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         IReadOnlyList<WalEntry> entries,
         long firstOffset,
         long endOffsetInclusive,
+        long generation,
         CancellationToken cancellationToken)
     {
         var eliminateCandidateRow = _options.EliminateCandidateRowOnHotPath;
@@ -546,7 +547,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
             // Azure Tables transaction cap) into one manifest-partition
             // transaction in strict ascending start-offset order, then
             // upserts TAIL to the group's highest endOffsetInclusive.
-            await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, hasCandidateRow: !eliminateCandidateRow, compressionStats.StoredBytes, cancellationToken).ConfigureAwait(false);
+            await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, hasCandidateRow: !eliminateCandidateRow, compressionStats.StoredBytes, generation, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -599,19 +600,19 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         var activity = GetShardActivity(manifestPartitionKey);
 
         // Claimed before the first await; see AppendBatchAsync.
-        var claimed = activity.Overlap.TryClaimAboveWritten(firstOffset, endOffsetInclusive);
+        var claimed = activity.Fence.TryClaimAboveWritten(activity.Overlap, firstOffset, endOffsetInclusive, out var generation);
         try
         {
             var table = await EnsureTableAsync(cancellationToken).ConfigureAwait(false);
             if (!claimed)
             {
-                await ClaimOverlapFreeAsync(
-                    table, activity.Overlap, manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, cancellationToken)
+                generation = await ClaimOverlapFreeAsync(
+                    table, activity, manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, cancellationToken)
                     .ConfigureAwait(false);
                 claimed = true;
             }
 
-            await AppendClaimedEncodedBatchAsync(table, activity, manifestPartitionKey, treeId, shardIndex, encodedEntries, offsets, firstOffset, endOffsetInclusive, cancellationToken)
+            await AppendClaimedEncodedBatchAsync(table, activity, manifestPartitionKey, treeId, shardIndex, encodedEntries, offsets, firstOffset, endOffsetInclusive, generation, cancellationToken)
                 .ConfigureAwait(false);
         }
         finally
@@ -633,6 +634,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         ReadOnlyMemory<long> offsets,
         long firstOffset,
         long endOffsetInclusive,
+        long generation,
         CancellationToken cancellationToken)
     {
         var batchPartitionKey = BuildBatchPartitionKey(treeId, shardIndex, firstOffset);
@@ -654,7 +656,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
 
             RecordWalCompressionMetrics(treeId, in compressionStats);
 
-            await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, hasCandidateRow: !eliminateCandidateRow, compressionStats.StoredBytes, cancellationToken).ConfigureAwait(false);
+            await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, hasCandidateRow: !eliminateCandidateRow, compressionStats.StoredBytes, generation, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -1275,10 +1277,11 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         long endOffsetInclusive,
         bool hasCandidateRow,
         long payloadBytes,
+        long generation,
         CancellationToken cancellationToken)
     {
         var worker = GetOrCreatePhaseTwoWorker(treeId, shardIndex);
-        var currentTask = worker.EnqueueAsync(firstOffset, endOffsetInclusive, hasCandidateRow, payloadBytes);
+        var currentTask = worker.EnqueueAsync(firstOffset, endOffsetInclusive, hasCandidateRow, payloadBytes, generation);
 
         if (!_options.PipelinePhaseTwoCommits)
         {
@@ -1982,6 +1985,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         }
 
         long persistedTail;
+        ETag? tailETag = null;
         try
         {
             // Point-read the per-shard TAIL row. The phase-2 worker
@@ -1994,11 +1998,16 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                 TailRowKey,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
             persistedTail = response.Value.Offset;
+            tailETag = response.Value.ETag;
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
         {
             persistedTail = -1L;
         }
+
+        // The commit fence (issue #5810) is filled from this read when it holds no ETag.
+        var activity = GetShardActivity(manifestPartitionKey);
+        activity.Fence.Fill(activity.Overlap, tailETag, persistedTail, writtenUpperBound: null);
 
         // Fold in the live worker's accepted ranges. The worker
         // dictionary is keyed by the same manifest partition key, so
@@ -2563,7 +2572,8 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
             shardIndex,
             _pipelinePhaseTwoTag,
             _options.PhaseTwoCoalescingWindow,
-            _options.PhaseTwoCommitTimeout);
+            _options.PhaseTwoCommitTimeout,
+            fence: GetShardActivity(manifestPartitionKey).Fence);
         if (_phaseTwoWorkers.TryAdd(manifestPartitionKey, created))
         {
             return created;

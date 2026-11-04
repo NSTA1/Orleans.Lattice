@@ -10,8 +10,9 @@ public sealed partial class AzureTableWalStorageProvider
 {
     /// <summary>
     /// Decides whether a phase-2 manifest transaction that failed with
-    /// <c>409 EntityAlreadyExists</c> (a manifest-row add) or <c>404 ResourceNotFound</c>
-    /// (a candidate-row delete) is a replay of a transaction that already committed:
+    /// <c>409 EntityAlreadyExists</c> (a manifest-row add), <c>404 ResourceNotFound</c>
+    /// (a candidate-row delete) or <c>412 PreconditionFailed</c> (the fenced <c>TAIL</c>
+    /// write, issue #5810) is a replay of a transaction that already committed:
     /// the SDK retry pipeline resent it after its first attempt landed and the
     /// response was lost (issue #5520).
     /// <para>
@@ -48,16 +49,19 @@ public sealed partial class AzureTableWalStorageProvider
 
             var resident = await TryReadEntityAsync(table, expected.PartitionKey, expected.RowKey, cancellationToken)
                 .ConfigureAwait(false);
-            var effectResident = actions[i].ActionType switch
-            {
-                TableTransactionActionType.Add => resident is not null
-                    && resident.Offset == expected.Offset
-                    && resident.PayloadBytes == expected.PayloadBytes,
-                TableTransactionActionType.Delete => resident is null,
-                TableTransactionActionType.UpsertReplace => resident is not null
-                    && resident.Offset >= expected.Offset,
-                _ => false,
-            };
+            // TAIL is written as a monotonic maximum - an upsert, or under the commit
+            // fence (issue #5810) a conditional replace or a create - so its effect is
+            // resident when the row is at least the value written, whatever the action.
+            var effectResident = expected.RowKey == TailRowKey
+                ? resident is not null && resident.Offset >= expected.Offset
+                : actions[i].ActionType switch
+                {
+                    TableTransactionActionType.Add => resident is not null
+                        && resident.Offset == expected.Offset
+                        && resident.PayloadBytes == expected.PayloadBytes,
+                    TableTransactionActionType.Delete => resident is null,
+                    _ => false,
+                };
             if (!effectResident)
             {
                 return false;
