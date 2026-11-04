@@ -11,12 +11,12 @@ PERTURBS: LateLand, SettleHole
 --- FIND
     /\ orphans' = orphans \ {o}
     /\ hidden' = hidden \ {o}
-    \* A hidden call
+    \* ASSUMED, not a provider guarantee
 --- REPLACE
 \* MUTATION: a landed call stays in the registry.
     /\ orphans' = orphans
     /\ hidden' = hidden
-    \* A hidden call
+    \* ASSUMED, not a provider guarantee
 --- END
 
 --- FIND
