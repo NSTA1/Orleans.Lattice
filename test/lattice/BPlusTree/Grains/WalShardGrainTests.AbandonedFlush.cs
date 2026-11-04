@@ -53,7 +53,9 @@ public partial class WalShardGrainTests
         });
 
         // Once the abandoned call has settled, the shard serves as usual.
-        Assert.That(await grain.AppendAsync(MakeEntry("k2"), CancellationToken.None), Is.EqualTo(2L));
+        var third = await grain.AppendAsync(MakeEntry("k2"), CancellationToken.None);
+        Assert.That(third, Is.EqualTo(2L));
+        await WaitForOwnFlushToSettleAsync(grain, third);
         Assert.That((await grain.ReadAsync(0L, 256, CancellationToken.None)).Entries.Select(e => e.Sequence),
             Is.EqualTo(new[] { 0L, 1L, 2L }));
     }
@@ -153,6 +155,7 @@ public partial class WalShardGrainTests
         var second = await CreateGrainAsync(provider, options);
         factory.GetGrain<IWalShardGrain>($"{TreeId}/0").Returns(second);
         var reissued = await second.AppendAsync(MakeEntry("k1"), CancellationToken.None);
+        await WaitForOwnFlushToSettleAsync(second, reissued);
 
         var seen = (await second.ReadAsync(head, 256, CancellationToken.None)).Entries.Select(e => e.Sequence).ToList();
         Assert.Multiple(() =>
@@ -192,6 +195,7 @@ public partial class WalShardGrainTests
 
         var second = await CreateGrainAsync(provider, options);
         var reissued = await second.AppendAsync(MakeEntry("k1"), CancellationToken.None);
+        await WaitForOwnFlushToSettleAsync(second, reissued);
         var seen = (await second.ReadAsync(head, 256, CancellationToken.None)).Entries.Select(e => e.Sequence).ToList();
 
         Assert.Multiple(() =>
@@ -241,6 +245,7 @@ public partial class WalShardGrainTests
 
         var second = await CreateGrainAsync(provider, options);
         var reissued = await second.AppendAsync(MakeEntry("k1"), CancellationToken.None);
+        await WaitForOwnFlushToSettleAsync(second, reissued);
         var seen = (await second.ReadAsync(head, 256, CancellationToken.None)).Entries.Select(e => e.Sequence).ToList();
 
         Assert.Multiple(() =>
@@ -293,6 +298,27 @@ public partial class WalShardGrainTests
             Assert.That(settled.Quiesced, Is.True, "once the call has settled the tail is stable");
             Assert.That(settled.HighestOffsetInclusive, Is.EqualTo(1L));
         });
+    }
+    /// <summary>
+    /// Waits until the flush of an append the test just awaited has left the shard's
+    /// in-flight chain, the precondition for reading it back (#5796).
+    /// <c>FlushAsync</c> completes the append's acknowledgement before its <c>finally</c>
+    /// removes the slot from the chain, and the readable head stops at the oldest slot
+    /// still in it. Under a grain scheduler the two run in one turn; this harness has no
+    /// scheduler, so the acknowledgement's continuation can read in between. Fails rather
+    /// than reading early.
+    /// </summary>
+    private static async Task WaitForOwnFlushToSettleAsync(WalShardGrain grain, long appended)
+    {
+        var stopAt = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        var head = await grain.GetReadableHeadAsync(CancellationToken.None);
+        while (head <= appended && DateTime.UtcNow < stopAt)
+        {
+            await Task.Delay(10);
+            head = await grain.GetReadableHeadAsync(CancellationToken.None);
+        }
+
+        Assert.That(head, Is.GreaterThan(appended), "precondition: the append's flush has left the in-flight chain");
     }
     /// <summary>
     /// Waits until no abandoned flush of the shard is outstanding: the precondition for
