@@ -1,0 +1,20 @@
+# #5837, the claimless advance and the split hint.
+MODULE: SiblingHintHonestSplitHintWithoutBound
+TARGET: SiblingHintHonest
+CLASS: Invariant
+SUMMARY: the split hands the sibling the heads with no bound check: main's split hint, #5752
+PERTURBS: SplitCommit
+BOUNDS: WithFreeAdvance = TRUE, WithSplitHint = TRUE, MaxWindows = 1
+
+--- FIND
+    /\ sh[a] # -1
+    /\ mInit
+    /\ ~hoOpen
+    /\ rp[a] >= hoClosedAt - 1
+    /\ rp[a] >= seenP[a]
+    /\ rp[a] >= seenU[a]
+    /\ pend => rp[a] >= seenS[a]
+--- REPLACE
+    /\ sh[a] # -1
+\* MUTATION: no view and no bounds.
+--- END

@@ -1,0 +1,21 @@
+# #5837, the claimless advance and the split hint.
+MODULE: ReadPositionHonestFreeAdvanceIgnoresForeignHigh
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the free advance ignores the foreignHigh reported to it, so it passes another activation's record
+PERTURBS: FreeCommit
+BOUNDS: WithFreeAdvance = TRUE
+
+--- FIND
+    /\ rp[a] >= hoClosedAt - 1
+    /\ rp[a] >= seenP[a]
+    /\ rp[a] >= seenU[a]
+    /\ pend => rp[a] >= seenS[a]
+    /\ \A o \in inflight : author[o] = a => o > ft[a]
+--- REPLACE
+    /\ rp[a] >= hoClosedAt - 1
+\* MUTATION: no foreignHigh bound.
+    /\ rp[a] >= seenU[a]
+    /\ pend => rp[a] >= seenS[a]
+    /\ \A o \in inflight : author[o] = a => o > ft[a]
+--- END

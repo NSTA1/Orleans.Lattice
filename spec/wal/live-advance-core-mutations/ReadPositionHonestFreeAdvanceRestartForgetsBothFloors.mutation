@@ -1,0 +1,27 @@
+# #5837. Under the claimless advance an activation learns its bounds only from the
+# responses to its own appends, which carry both the foreignHigh and the shared
+# unstamped watermark, so either restart floor alone covers the offsets a WAL shard
+# restart forgot (ReadPositionHonestPreArmWatermarkNotReset is clean under
+# WithFreeAdvance). Without both, a duplicate's append before the restart is passed.
+MODULE: ReadPositionHonestFreeAdvanceRestartForgetsBothFloors
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a WAL shard restart keeps neither the foreignHigh start-head floor nor the shared watermark's reset
+PERTURBS: Restart
+BOUNDS: WithFreeAdvance = TRUE, WithRestart = TRUE, MaxWindows = 0
+
+--- FIND
+    Max({startHead - 1, evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}})
+--- REPLACE
+\* MUTATION: no shardStartHead - 1 fallback.
+    Max({-1, evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}})
+--- END
+
+--- FIND
+    /\ restarted' = TRUE
+    /\ lastU' = next - 1
+--- REPLACE
+    /\ restarted' = TRUE
+\* MUTATION: the shared watermark is lost with the shard's memory.
+    /\ lastU' = -1
+--- END

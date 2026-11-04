@@ -52,7 +52,8 @@ EXTENDS Integers, FiniteSets
 (* to keep each configuration within the TLC budget (see Recreate).       *)
 (***************************************************************************)
 CONSTANTS MaxWindows, WithMixedVersion, WithGateFlip, WithRestart, WithRecreate, WithBulk,
-          WithUnclaimedSurvivor, WithClaimedPurge, WithPreArm, WithKeyMove
+          WithUnclaimedSurvivor, WithClaimedPurge, WithPreArm, WithKeyMove, WithFreeAdvance,
+          WithSplitHint
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
@@ -115,7 +116,13 @@ VARIABLES
     otherMoved,   \* a later key-moving close into another receiver, re-claimed by its arm
     dUsed,        \* the stale donor has made its one write for L's keys
     reclaims,     \* ghost: generation re-claims an arm wrote at the partition
-    strayReclaims \* ghost: generation claims written anywhere but an arm
+    strayReclaims, \* ghost: generation claims written anywhere but an arm
+    sHi,          \* the WAL shard's staleHigh: the highest offset admitted under the generation a key-moving close raises past
+    seenS,        \* the staleHigh reported to each activation
+    ft,           \* each activation's fixed free-advance target; -1 none
+    sh,           \* the allocator head each activation's split captured; -1 none
+    sibHint,      \* the split sibling's hint (inclusive); -1 none
+    sibRows       \* the rows the split handed the sibling
 
 walVars == <<next, author, inflight, durable, acked, floor>>
 leafVars == <<up, cache, rp, mine, snapCov, snapRows>>
@@ -123,7 +130,8 @@ epochVars == <<cur, claimed, claimHead, stale, dupUsed>>
 handVars == <<mInit, hoOpen, hoClosedAt, windows>>
 oldVars == <<lastU, seenU, oldUsed, restarted, oldRejected>>
 envVars == <<recreated, reinit, spUsed, phase, hint>>
-armVars == <<preArm, seenP, startHead, evStart, evFloor>>
+freeVars == <<sHi, seenS, ft, sh, sibHint, sibRows>>
+armVars == <<preArm, seenP, startHead, evStart, evFloor, freeVars>>
 moveVars == <<gD, gL, pend, pendGen, moved, otherMoved, dUsed, reclaims, strayReclaims>>
 
 vars == <<walVars, leafVars, epochVars, handVars, oldVars, envVars, armVars, moveVars>>
@@ -174,6 +182,12 @@ TypeOK ==
     /\ dUsed \in BOOLEAN
     /\ reclaims \in 0..2
     /\ strayReclaims \in 0..2
+    /\ sHi \in -1..(MaxOff - 1)
+    /\ seenS \in [Acts -> -1..(MaxOff - 1)]
+    /\ ft \in [Acts -> -1..(MaxOff - 1)]
+    /\ sh \in [Acts -> -1..MaxOff]
+    /\ sibHint \in -1..(MaxOff - 1)
+    /\ sibRows \subseteq Offs
 
 (***************************************************************************)
 (* Init. Without WithBulk, L is a new tree's first leaf: a1 is running,   *)
@@ -229,6 +243,12 @@ Init ==
     /\ dUsed = FALSE
     /\ reclaims = 0
     /\ strayReclaims = 0
+    /\ sHi = -1
+    /\ seenS = [a \in Acts |-> -1]
+    /\ ft = [a \in Acts |-> -1]
+    /\ sh = [a \in Acts |-> -1]
+    /\ sibHint = -1
+    /\ sibRows = {}
 
 (***************************************************************************)
 (* B's BulkHintBound, as an environment step. Create: the bulk-born leaf's *)
@@ -274,6 +294,14 @@ ForeignHigh(a) ==
 (* The report a response carries under the lazy arm; nothing in eager mode. *)
 ReportForeign(a) == seenP' = IF WithPreArm THEN [seenP EXCEPT ![a] = Max2(@, ForeignHigh(a))] ELSE seenP
 
+(* The claimless advance (#5837, WithFreeAdvance) runs only under the lazy *)
+(* arm. ReportStale(a): a routed response also carries its initiator's    *)
+(* generation table (D2); the model has one key-moving close, so the      *)
+(* table is the one entry it is read against: the highest offset admitted *)
+(* under the generation the close raises past.                            *)
+FreeOn == WithFreeAdvance /\ WithPreArm
+ReportStale(a) == seenS' = IF FreeOn THEN [seenS EXCEPT ![a] = Max2(@, sHi)] ELSE seenS
+
 (* Resolving the deferred close head (C2, C5): the arm re-claims the      *)
 (* deferred generation at the partition in the same step, or takes the    *)
 (* loaded one when a later raise is already re-claimed there, and records  *)
@@ -283,7 +311,7 @@ ResolveDeferred ==
     /\ pend' = FALSE
     /\ gL' = Max2(gL, pendGen)
     /\ reclaims' = reclaims + (IF pendGen > gL THEN 1 ELSE 0)
-    /\ hoClosedAt' = Max2(hoClosedAt, next)
+    /\ hoClosedAt' = Max2(hoClosedAt, IF FreeOn THEN sHi + 1 ELSE next)
     /\ UNCHANGED <<gD, pendGen, moved, otherMoved, dUsed, strayReclaims>>
 
 Claim(a) ==
@@ -297,7 +325,7 @@ Claim(a) ==
     /\ ReportForeign(a)
     /\ IF pend THEN ResolveDeferred ELSE UNCHANGED <<moveVars, hoClosedAt>>
     /\ UNCHANGED <<walVars, leafVars, dupUsed, mInit, hoOpen, windows, oldVars, envVars>>
-    /\ UNCHANGED <<preArm, startHead, evStart, evFloor>>
+    /\ UNCHANGED <<preArm, startHead, evStart, evFloor, freeVars>>
 
 (* Resolve(a): an armed activation finds a deferred head on its marker    *)
 (* (a key-moving close since it armed) and resolves it by re-arming.       *)
@@ -308,7 +336,7 @@ Resolve(a) ==
     /\ ResolveDeferred
     /\ ReportForeign(a)
     /\ UNCHANGED <<walVars, leafVars, epochVars, mInit, hoOpen, windows, oldVars, envVars>>
-    /\ UNCHANGED <<preArm, startHead, evStart, evFloor>>
+    /\ UNCHANGED <<preArm, startHead, evStart, evFloor, freeVars>>
 
 (* OwnAlloc(a): only the current activation's stamped append is allocated. *)
 (* The response reports the partition's unstamped watermark.               *)
@@ -321,9 +349,10 @@ OwnAlloc(a) ==
     /\ inflight' = inflight \cup {next}
     /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
     /\ ReportForeign(a)
+    /\ ReportStale(a)
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars>>
     /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected, envVars>>
-    /\ UNCHANGED <<preArm, startHead, evStart, evFloor, moveVars>>
+    /\ UNCHANGED <<preArm, startHead, evStart, evFloor, moveVars, sHi, ft, sh, sibHint, sibRows>>
 
 (* PreArmAlloc(a) (WithPreArm): an append by an activation that has not   *)
 (* armed, under the PreArm class: no entry check and no row, admitted on  *)
@@ -342,9 +371,11 @@ PreArmAlloc(a) ==
     /\ inflight' = inflight \cup {next}
     /\ preArm' = preArm \cup {next}
     /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
+    /\ IF FreeOn THEN ReportForeign(a) ELSE UNCHANGED seenP
+    /\ ReportStale(a)
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars>>
     /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected, envVars>>
-    /\ UNCHANGED <<seenP, startHead, evStart, evFloor, moveVars>>
+    /\ UNCHANGED <<startHead, evStart, evFloor, moveVars, sHi, ft, sh, sibHint, sibRows>>
 
 (* OwnAllocUnstamped(a) (WithGateFlip): an own append made unstamped - a  *)
 (* closed gate view, exhausted claim rounds, a claim fault, or an         *)
@@ -504,6 +535,87 @@ LiveAdvance(a) ==
     /\ rp' = [rp EXCEPT ![a] = Max(mine[a])]
     /\ UNCHANGED <<walVars, up, cache, mine, snapCov, snapRows, epochVars, handVars, oldVars, envVars>>
 
+(***************************************************************************)
+(* The claimless advance (#5837, WithFreeAdvance; D3). FreeTarget(a)      *)
+(* fixes the target: the highest own applied append. FreeCommit(a) then   *)
+(* reads L's marker view - after the target is fixed - and advances the   *)
+(* read position to it with no claim, no WAL read and no row, iff:        *)
+(*  - L's marker state is initialised, no window is open, and a has read  *)
+(*    past its closes' heads;                                              *)
+(*  - a has read past the foreignHigh, the shared unstamped watermark     *)
+(*    and, while a deferred close is pending, the staleHigh reported to   *)
+(*    it: the responses to its own appends, the target's included, so     *)
+(*    every record allocated before the target is below them;             *)
+(*  - every own append at or below the target is applied.                 *)
+(***************************************************************************)
+FreeTarget(a) ==
+    /\ FreeOn
+    /\ a \in up
+    /\ mine[a] # {}
+    /\ Max(mine[a]) > rp[a]
+    /\ ft[a] # Max(mine[a])
+    /\ ft' = [ft EXCEPT ![a] = Max(mine[a])]
+    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, sh, sibHint, sibRows>>
+
+FreeCommit(a) ==
+    /\ FreeOn
+    /\ a \in up
+    /\ ft[a] > rp[a]
+    /\ mInit
+    /\ ~hoOpen
+    /\ rp[a] >= hoClosedAt - 1
+    /\ rp[a] >= seenP[a]
+    /\ rp[a] >= seenU[a]
+    /\ pend => rp[a] >= seenS[a]
+    /\ \A o \in inflight : author[o] = a => o > ft[a]
+    /\ rp' = [rp EXCEPT ![a] = ft[a]]
+    /\ ft' = [ft EXCEPT ![a] = -1]
+    /\ UNCHANGED <<walVars, up, cache, mine, snapCov, snapRows, epochVars, handVars, oldVars, envVars, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, sh, sibHint, sibRows>>
+
+(***************************************************************************)
+(* The split's hint (#5837, D4). SplitHeads(a): L, as a split's donor,    *)
+(* captures the allocator head, and the capture returns the same bounds   *)
+(* an append response does, in the same WAL-shard turn. SplitCommit(a):   *)
+(* the donor then reads its marker view and, under FreeCommit's guard     *)
+(* with the head in place of the target, hands the sibling the head minus *)
+(* one (inclusive, #5760) as its hint, with every row it holds below it.  *)
+(* One split per behaviour. The sibling's own later safety rests on its   *)
+(* deferred close; what the hint must give it is SiblingHintHonest.       *)
+(***************************************************************************)
+SplitHeads(a) ==
+    /\ FreeOn
+    /\ WithSplitHint
+    /\ a \in up
+    /\ sibHint = -1
+    /\ sibRows = {}
+    /\ \A b \in Acts : sh[b] = -1
+    /\ sh' = [sh EXCEPT ![a] = next]
+    /\ ReportForeign(a)
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
+    /\ ReportStale(a)
+    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, envVars, moveVars>>
+    /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected>>
+    /\ UNCHANGED <<preArm, startHead, evStart, evFloor, sHi, ft, sibHint, sibRows>>
+
+SplitCommit(a) ==
+    /\ FreeOn
+    /\ a \in up
+    /\ sh[a] # -1
+    /\ mInit
+    /\ ~hoOpen
+    /\ rp[a] >= hoClosedAt - 1
+    /\ rp[a] >= seenP[a]
+    /\ rp[a] >= seenU[a]
+    /\ pend => rp[a] >= seenS[a]
+    /\ \A o \in Offs : o < sh[a] /\ author[o] = a => o \in cache[a]
+    /\ sibHint' = sh[a] - 1
+    /\ sibRows' = {o \in cache[a] : o < sh[a]}
+    /\ sh' = [sh EXCEPT ![a] = -1]
+    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft>>
+
 (* Capture(a): the shared per-leaf snapshot keeps the highest coverage.  *)
 Capture(a) ==
     /\ UNCHANGED <<armVars, moveVars>>
@@ -544,7 +656,7 @@ Restart ==
     /\ lastU' = next - 1
     /\ startHead' = IF WithPreArm THEN next ELSE startHead
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, seenU, oldUsed, oldRejected, envVars>>
-    /\ UNCHANGED <<preArm, seenP, evStart, evFloor, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, evStart, evFloor, moveVars, freeVars>>
 
 (* Evict (WithRestart): the WAL shard evicts L's foreign-high entry to     *)
 (* bound memory, raising its eviction floor to the entry's highest offset. *)
@@ -556,7 +668,7 @@ Evict ==
     /\ evStart' = next
     /\ evFloor' = Max({evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts})
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars>>
-    /\ UNCHANGED <<preArm, seenP, startHead, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, moveVars, freeVars>>
 
 (***************************************************************************)
 (* A key-moving close into L (#5833, WithKeyMove): a split or a            *)
@@ -605,8 +717,10 @@ StaleRouteAlloc ==
     /\ next' = next + 1
     /\ author' = [author EXCEPT ![next] = StaleDonor]
     /\ inflight' = inflight \cup {next}
+    /\ sHi' = IF FreeOn THEN next ELSE sHi
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, oldVars, envVars>>
-    /\ UNCHANGED <<gD, gL, pend, pendGen, moved, otherMoved, reclaims, strayReclaims, armVars>>
+    /\ UNCHANGED <<gD, gL, pend, pendGen, moved, otherMoved, reclaims, strayReclaims>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, seenS, ft, sh, sibHint, sibRows>>
 
 UnroutedAlloc ==
     /\ WithKeyMove
@@ -694,6 +808,10 @@ Next ==
     \/ OldAlloc
     \/ \E a \in Acts : Replay(a)
     \/ \E a \in Acts : LiveAdvance(a)
+    \/ \E a \in Acts : FreeTarget(a)
+    \/ \E a \in Acts : FreeCommit(a)
+    \/ \E a \in Acts : SplitHeads(a)
+    \/ \E a \in Acts : SplitCommit(a)
     \/ \E a \in Acts : Capture(a)
     \/ GcTrim
     \/ Duplicate
@@ -728,20 +846,25 @@ Spec == Init /\ [][Next]_vars
 (* configuration with an unbounded step needs a condition per step.       *)
 (***************************************************************************)
 ReplayNeeded(a) ==
-    \/ claimed[a] /\ (IF WithPreArm THEN rp[a] < seenP[a] ELSE rp[a] < claimHead[a] - 1)
+    \/ (claimed[a] \/ FreeOn) /\ (IF WithPreArm THEN rp[a] < seenP[a] ELSE rp[a] < claimHead[a] - 1)
     \/ rp[a] < hoClosedAt - 1
     \/ rp[a] < seenU[a]
+    \/ FreeOn /\ pend /\ rp[a] < seenS[a]
 
 (* ArmTrigger(a) (#5833): under the lazy arm a leaf arms only when it     *)
 (* needs a live advance - its pin holds the WAL floor, i.e. an own durable *)
 (* append the shared snapshot does not yet cover. Claims stay possible at  *)
 (* any time for safety; only their fairness is conditioned on the trigger. *)
-ArmTrigger(a) == ~WithPreArm \/ \E o \in durable : author[o] \in Acts /\ o > snapCov
+(* Under the claimless advance no claim is fair: the pin must become      *)
+(* usable by the free advance alone.                                       *)
+ArmTrigger(a) == ~WithPreArm \/ (~FreeOn /\ \E o \in durable : author[o] \in Acts /\ o > snapCov)
 
 Progress ==
     \/ \E a \in Acts :
         \/ ArmTrigger(a) /\ Claim(a)
-        \/ Resolve(a)
+        \/ ~FreeOn /\ Resolve(a)
+        \/ FreeTarget(a)
+        \/ FreeCommit(a)
         \/ ReplayNeeded(a) /\ Replay(a)
         \/ LiveAdvance(a)
         \/ Capture(a)
@@ -767,6 +890,11 @@ LiveSpec == Spec /\ Fairness
 (* an owner that skipped one would diverge from its replicas and views.   *)
 ReadPositionHonest ==
     \A a \in up : \A o \in durable : o <= rp[a] => o \in cache[a]
+
+(* The split's hint (#5837, #5752): the sibling is handed every durable  *)
+(* record at or below its hint.                                            *)
+SiblingHintHonest ==
+    \A o \in durable : o <= sibHint => o \in sibRows
 
 (* The shared snapshot never claims coverage of a durable entry it lacks. *)
 SnapshotHonest ==
@@ -802,7 +930,12 @@ ReclaimCostBound == strayReclaims = 0 /\ reclaims <= 1
 (* partition latches stale and refuses hints and the live advance, and     *)
 (* deactivation clears it, the reactivation rehydrating from the newer     *)
 (* snapshot. No progress is owed by the stale activation meanwhile.        *)
-CurrentFellOffLog == cur \in up /\ rp[cur] + 1 < floor
+(* Under the claimless advance (#5837) no activation need ever claim, so   *)
+(* there is no current one to name: the latch applies to whichever running *)
+(* activation has fallen off, as it does in production.                    *)
+CurrentFellOffLog ==
+    IF FreeOn THEN \E a \in up : rp[a] + 1 < floor
+    ELSE cur \in up /\ rp[cur] + 1 < floor
 
 (* The armed newborn (LiveAdvanceDesign.md, member 6): every own append    *)
 (* that becomes durable is eventually covered by the shared snapshot, so   *)

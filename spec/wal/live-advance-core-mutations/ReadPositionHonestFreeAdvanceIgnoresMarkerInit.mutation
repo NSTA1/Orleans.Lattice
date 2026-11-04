@@ -1,0 +1,21 @@
+# #5837, the claimless advance and the split hint.
+MODULE: ReadPositionHonestFreeAdvanceIgnoresMarkerInit
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the free advance runs on an uninitialised marker, so it passes a straddler of the purged incarnation
+PERTURBS: FreeCommit
+BOUNDS: WithFreeAdvance = TRUE, WithRecreate = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+    /\ ft[a] > rp[a]
+    /\ mInit
+    /\ ~hoOpen
+    /\ rp[a] >= hoClosedAt - 1
+    /\ rp[a] >= seenP[a]
+--- REPLACE
+    /\ ft[a] > rp[a]
+\* MUTATION: an uninitialised marker does not hold the advance.
+    /\ ~hoOpen
+    /\ rp[a] >= hoClosedAt - 1
+    /\ rp[a] >= seenP[a]
+--- END
