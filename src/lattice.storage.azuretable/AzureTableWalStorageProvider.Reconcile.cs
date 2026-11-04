@@ -186,12 +186,6 @@ public sealed partial class AzureTableWalStorageProvider
 
             try
             {
-                if (await TryReadEntityAsync(table, manifestPartitionKey, BuildManifestRowKey(start), cancellationToken)
-                        .ConfigureAwait(false) is not null)
-                {
-                    continue;
-                }
-
                 var entryFilter =
                     $"PartitionKey eq '{Escape(BuildBatchPartitionKey(treeId, shardIndex, start))}' and RowKey ge '{EntryRowKeyPrefix}' and RowKey lt 'F'";
                 await DeletePartitionInChunksAsync(table, entryFilter, cancellationToken).ConfigureAwait(false);
