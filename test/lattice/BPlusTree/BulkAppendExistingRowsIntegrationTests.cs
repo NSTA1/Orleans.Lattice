@@ -31,17 +31,33 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// resolve a contested key to the same value (<c>ContestedKeyAgrees</c> in
 /// <c>WalLiveAdvance.tla</c>), and a replay is the owner's own WAL read.
 /// </para>
+/// <para>
+/// The fixture also runs with the per-silo replay gate capped at one permit, so a
+/// replay that holds its permit while it waits on a call needing one, or that
+/// strands its permit, fails here every time instead of only under load
+/// (issue #5775). Every cold read in it is an activation replay that resolves its
+/// shard map from the registry.
+/// </para>
 /// </summary>
-[TestFixture]
+[TestFixture(0)]
+[TestFixture(1)]
 [Category("Integration")]
-public sealed partial class BulkAppendExistingRowsIntegrationTests
+public sealed partial class BulkAppendExistingRowsIntegrationTests(int replayCeiling)
 {
     private SmallLeafClusterFixture _fixture = null!;
     private TestCluster _cluster = null!;
+    private int _previousReplayCeilingCap;
 
     [OneTimeSetUp]
     public async Task OneTimeSetUp()
     {
+        if (replayCeiling > 0)
+        {
+            _previousReplayCeilingCap = BPlusLeafGrain.ReplayCeilingCapForTest;
+            BPlusLeafGrain.ReplayCeilingCapForTest = replayCeiling;
+            BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        }
+
         _fixture = new SmallLeafClusterFixture();
         await _fixture.InitializeAsync();
         _cluster = _fixture.Cluster;
@@ -55,6 +71,11 @@ public sealed partial class BulkAppendExistingRowsIntegrationTests
     public async Task OneTimeTearDown()
     {
         await _fixture.DisposeAsync();
+        if (replayCeiling > 0)
+        {
+            BPlusLeafGrain.ReplayCeilingCapForTest = _previousReplayCeilingCap;
+            BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        }
     }
 
     [Test]
