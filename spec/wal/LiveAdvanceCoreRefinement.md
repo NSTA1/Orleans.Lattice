@@ -255,7 +255,12 @@ against, a claimed orphan's epoch-only writes invisible to the eventual owner (#
 outside this module. Its mutations are therefore structural detectors, not loss
 detectors. `UnlinkedNeverClaimsProvenSiblingClaimsPreLink` (#5866 B2) is the clearest
 case: the base was clean, `ReadPositionHonest` included, while C still admitted that
-claim, so the mutation reaches only `UnlinkedNeverClaims`. The same holds for
+claim. Checked against every other invariant, its mutant is clean in the latch shape
+(1,424,887 states). With another split's link raise it also violates the cost property
+`ReclaimCostBound`: the pre-link claim resolves the donor's bound on that raise, so the
+link's deferred head costs a second re-claim. With `ReclaimCostBound` dropped as well it
+is clean on `ReadPositionHonest` and every loss property (6,619,845 states). It is a
+structural and cost detector, never a loss detector. The same holds for
 `UnlinkedNeverClaimsDeferredSiblingClaims` (#5851 D5).
 
 **The lazy arm (#5833).** `WithPreArm` turns it on. A leaf claims at a partition only
