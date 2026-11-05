@@ -4,7 +4,7 @@ TARGET: ReadPositionHonest
 CLASS: Invariant
 SUMMARY: the donor closes before it narrows, so it still admits a write for the receiver's keys above its close head
 PERTURBS: DonorClose
-BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE
 
 --- FIND
     /\ hoOpen

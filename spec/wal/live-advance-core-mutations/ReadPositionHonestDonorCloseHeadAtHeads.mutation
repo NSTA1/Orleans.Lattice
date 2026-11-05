@@ -4,7 +4,7 @@ TARGET: ReadPositionHonest
 CLASS: Invariant
 SUMMARY: the donor closes the receiver's birth window at the split's heads, relying on the straggler copy, which only the activation that applied it holds
 PERTURBS: DonorClose
-BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE
 
 --- FIND
     /\ hoClosedAt' = Max2(hoClosedAt, Max({-1} \cup DonorCloseCovers) + 1)

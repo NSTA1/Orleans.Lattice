@@ -55,7 +55,7 @@ CONSTANTS MaxWindows, WithMixedVersion, WithGateFlip, WithRestart, WithRecreate,
           WithUnclaimedSurvivor, WithClaimedPurge, WithPreArm, WithKeyMove, WithFreeAdvance,
           WithSplitHint, WithSplitBirth, WithDonorRestart,
           WithDuplicate, WithEvict, WithOrphanForward, WithLatch,
-          WithBirthProof
+          WithBirthProof, WithFwdExclusion
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
@@ -70,7 +70,10 @@ StaleDonor == "d"
 DonorLive == "v"
 OrphanFwd == "w"
 OrphanFwdOnly == "z"
-Authors == Acts \cup {Foreign, OldAuthor, Straddler, PreAuthor, StaleDonor, DonorLive, OrphanFwd, OrphanFwdOnly}
+FwdD == "q"
+NoTag == "none"
+Tags == {"n1", "n2"}
+Authors == Acts \cup {Foreign, OldAuthor, Straddler, PreAuthor, StaleDonor, DonorLive, OrphanFwd, OrphanFwdOnly, FwdD}
 MaxGen == 3
 
 Max(S) == CHOOSE x \in S : \A y \in S : y <= x
@@ -141,7 +144,17 @@ VARIABLES
     tried,        \* WithLatch: a reachability proof has run since orphan repair began
     oWin,         \* WithOrphanForward: the orphan's marker: "open", "pending" (its donor closed it)
     oHops,        \* WithOrphanForward: forwards made so far (the first, then a re-forward by the orphan)
-    birthAct      \* WithBirthProof: L's running activation is the one its birth created
+    birthAct,     \* WithBirthProof: L's running activation is the one its birth created
+    nar,          \* WithFwdExclusion: each activation's narrow, in memory: its tag, or none
+    narWho,       \* the activation that made each activation's narrow
+    npend,        \* each activation's narrow not yet persisted
+    dur,          \* L's durable narrow: its tag, or none
+    durWho,       \* the activation whose narrow is durable, or none
+    fObl,         \* the durable narrow's link obligation
+    fTag,         \* each forward's narrow tag
+    fBy,          \* the activation whose narrow moved each forward's key
+    snapWho,      \* the durable narrow the shared snapshot's span reflects, or none
+    fwdUsed       \* the one forward has been made
 
 walVars == <<next, author, inflight, durable, acked, floor>>
 leafVars == <<up, cache, rp, mine, snapCov, snapRows>>
@@ -149,7 +162,8 @@ epochVars == <<cur, claimed, claimHead, stale, dupUsed>>
 handVars == <<mInit, hoOpen, hoClosedAt, windows>>
 oldVars == <<lastU, seenU, oldUsed, restarted, oldRejected>>
 envVars == <<recreated, reinit, spUsed, phase, hint>>
-latchVars == <<oblig, lRestart, lat, eagerG, repair, tried, oWin, oHops, birthAct>>
+fxVars == <<nar, narWho, npend, dur, durWho, fObl, fTag, fBy, snapWho, fwdUsed>>
+latchVars == <<oblig, lRestart, lat, eagerG, repair, tried, oWin, oHops, birthAct, fxVars>>
 xferVars == <<tRecs, dNarrowed, sDone, dKnown, dResumed, latchVars>>
 freeVars == <<sHi, seenS, ft, sh, sibHint, sibRows, xferVars>>
 armVars == <<preArm, seenP, startHead, evStart, evFloor, freeVars>>
@@ -223,6 +237,16 @@ TypeOK ==
     /\ oWin \in {"open", "pending"}
     /\ oHops \in 0..2
     /\ birthAct \in BOOLEAN
+    /\ nar \in [Acts -> Tags \cup {NoTag}]
+    /\ narWho \in [Acts -> Acts \cup {NoAct}]
+    /\ npend \in [Acts -> BOOLEAN]
+    /\ dur \in Tags \cup {NoTag}
+    /\ durWho \in Acts \cup {NoAct}
+    /\ fObl \in BOOLEAN
+    /\ fTag \in [Offs -> Tags \cup {NoTag}]
+    /\ fBy \in [Offs -> Acts \cup {NoAct}]
+    /\ snapWho \in Acts \cup {NoAct}
+    /\ fwdUsed \in 0..1
 
 (***************************************************************************)
 (* Init. Without WithBulk, L is a new tree's first leaf: a1 is running,   *)
@@ -298,6 +322,16 @@ Init ==
     /\ oWin = "open"
     /\ oHops = 0
     /\ birthAct = WithBirthProof
+    /\ nar = [a \in Acts |-> NoTag]
+    /\ narWho = [a \in Acts |-> NoAct]
+    /\ npend = [a \in Acts |-> FALSE]
+    /\ dur = NoTag
+    /\ durWho = NoAct
+    /\ fObl = FALSE
+    /\ fTag = [o \in Offs |-> NoTag]
+    /\ fBy = [o \in Offs |-> NoAct]
+    /\ snapWho = NoAct
+    /\ fwdUsed = 0
 
 (***************************************************************************)
 (* B's BulkHintBound, as an environment step. Create: the bulk-born leaf's *)
@@ -337,6 +371,16 @@ Create ==
 (***************************************************************************)
 TrackStart == Max2(startHead, evStart)
 
+(* The forward-exclusion relief (#5837, X1-X4; WithFwdExclusion). The tag *)
+(* a narrow stamps on its forwards: unique per narrow (X2), the split's    *)
+(* sibling id. A reader excludes a forward of L's from its foreignHigh     *)
+(* only when its own persisted span is the narrow that moved the key (X1): *)
+(* its in-memory narrow is L's durable one, and the forward carries its   *)
+(* tag. A reader with a stale span counts everything (X3).                 *)
+TagOf(a) == IF a = "a1" THEN "n1" ELSE "n2"
+Persisted(a) == nar[a] # NoTag /\ dur = nar[a]
+FwdExcluded(a, o) == Persisted(a) /\ fTag[o] = nar[a]
+
 (* The token a forward is attributed to its forwarding leaf under (#5837,  *)
 (* condition 4): the empty token, foreign to every activation of L, the    *)
 (* forwarding one included.                                                *)
@@ -345,7 +389,8 @@ FwdToken == "empty"
 
 ForeignHigh(a) ==
     Max({startHead - 1, evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}}
-        \cup {o \in Offs : o >= TrackStart /\ author[o] = OrphanFwd /\ a # FwdToken})
+        \cup {o \in Offs : o >= TrackStart /\ author[o] = OrphanFwd /\ a # FwdToken}
+        \cup {o \in Offs : o >= TrackStart /\ author[o] = FwdD /\ ~FwdExcluded(a, o)})
 
 (* The report a response carries under the lazy arm; nothing in eager mode. *)
 ReportForeign(a) == seenP' = IF WithPreArm THEN [seenP EXCEPT ![a] = Max2(@, ForeignHigh(a))] ELSE seenP
@@ -471,7 +516,7 @@ Land(o) ==
        THEN /\ cache' = [cache EXCEPT ![author[o]] = @ \cup {o}]
             /\ mine' = [mine EXCEPT ![author[o]] = @ \cup {o}]
             /\ acked' = acked \cup {o}
-       ELSE /\ acked' = IF author[o] \in {OldAuthor, Straddler, StaleDonor, DonorLive, OrphanFwd, OrphanFwdOnly} THEN acked \cup {o} ELSE acked
+       ELSE /\ acked' = IF author[o] \in {OldAuthor, Straddler, StaleDonor, DonorLive, OrphanFwd, OrphanFwdOnly, FwdD} THEN acked \cup {o} ELSE acked
             /\ UNCHANGED <<cache, mine>>
     /\ UNCHANGED <<next, author, floor, up, rp, snapCov, snapRows, epochVars, handVars, oldVars, envVars>>
     /\ UNCHANGED <<armVars, moveVars>>
@@ -723,7 +768,7 @@ LinkRestart ==
     /\ lRestart' = TRUE
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
-    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lat, eagerG, repair, tried, oWin, oHops, birthAct>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lat, eagerG, repair, tried, oWin, oHops, birthAct, fxVars>>
 
 (***************************************************************************)
 (* The reachability latch (#5709) on a split-born L after its donor closed *)
@@ -749,7 +794,7 @@ ProveReach ==
     /\ tried' = TRUE
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
-    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, eagerG, repair, oWin, oHops, birthAct>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, eagerG, repair, oWin, oHops, birthAct, fxVars>>
 
 GateToEager ==
     /\ FreeOn
@@ -758,7 +803,7 @@ GateToEager ==
     /\ eagerG' = TRUE
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
-    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, repair, tried, oWin, oHops, birthAct>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, repair, tried, oWin, oHops, birthAct, fxVars>>
 
 (* Reactivate (WithBirthProof): L's birth activation, proven by the call   *)
 (* that performed the birth (P1), deactivates after the donor's close, and *)
@@ -778,7 +823,7 @@ Reactivate ==
     /\ cur' = IF cur = "a1" THEN NoAct ELSE cur
     /\ UNCHANGED <<walVars, leafVars, claimHead, stale, dupUsed, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
-    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, eagerG, repair, tried, oWin, oHops>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, eagerG, repair, tried, oWin, oHops, fxVars>>
 
 StartRepair ==
     /\ FreeOn
@@ -789,7 +834,7 @@ StartRepair ==
     /\ tried' = FALSE
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
-    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, oWin, oHops, birthAct>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, oWin, oHops, birthAct, fxVars>>
 
 (* The records the donor's close head is above: every append of the donor *)
 (* leaf since the heads, by any of its activations, once the split was     *)
@@ -818,7 +863,7 @@ DonorNarrow ==
     /\ oblig' = TRUE
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows, tRecs, sDone, dKnown, dResumed>>
-    /\ UNCHANGED <<lRestart, lat, eagerG, repair, tried, oWin, oHops, birthAct>>
+    /\ UNCHANGED <<lRestart, lat, eagerG, repair, tried, oWin, oHops, birthAct, fxVars>>
 
 (* The generation a donor's deferred bound resolves at (L2): strictly     *)
 (* above the one its writes were admitted under, so only the link's raise, *)
@@ -907,7 +952,7 @@ OrphanForward ==
     /\ inflight' = inflight \cup {next}
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
-    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, repair, tried, oWin, birthAct>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, repair, tried, oWin, birthAct, fxVars>>
 
 (* OrphanClose: the orphan's donor (a2) closes its split window, leaving   *)
 (* its deferred close pending; the link never comes.                       *)
@@ -918,11 +963,74 @@ OrphanClose ==
     /\ oWin' = "pending"
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
-    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, repair, tried, oHops, birthAct>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, repair, tried, oHops, birthAct, fxVars>>
 
+(***************************************************************************)
+(* The forward-exclusion relief's steps (#5837, WithFwdExclusion). L, a    *)
+(* split's donor, may have two activations that each split it: the live   *)
+(* one and a stale duplicate, with different split keys.                  *)
+(*  - NarrowMem(a): a narrows its span in memory, stamping its narrow's    *)
+(*    tag.                                                                 *)
+(*  - PersistNarrow(a): a persists the narrow, with its link obligation,   *)
+(*    conditionally; the first to persist wins, and the other loses its     *)
+(*    persist and keeps only its in-memory narrow.                          *)
+(*  - ForwardMoved(a): a forwards a new acknowledged write of a key its    *)
+(*    narrow moved, under its narrow's tag, to the sibling, attributed to   *)
+(*    L under the empty token; any time after its in-memory narrow,         *)
+(*    whether its persist wins, loses or is still to come. Only a1         *)
+(*    forwards: the two activations are symmetric, and a2 is the one that  *)
+(*    persists or loses the race with it.                                   *)
+(***************************************************************************)
+NarrowMem(a) ==
+    /\ FreeOn
+    /\ WithFwdExclusion
+    /\ a \in up
+    /\ nar[a] = NoTag
+    /\ nar' = [nar EXCEPT ![a] = TagOf(a)]
+    /\ narWho' = [narWho EXCEPT ![a] = a]
+    /\ npend' = [npend EXCEPT ![a] = TRUE]
+    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, repair, tried, oWin, oHops, birthAct>>
+    /\ UNCHANGED <<dur, durWho, fObl, fTag, fBy, snapWho, fwdUsed>>
+
+PersistNarrow(a) ==
+    /\ npend[a]
+    /\ npend' = [npend EXCEPT ![a] = FALSE]
+    /\ IF dur = NoTag
+       THEN /\ dur' = nar[a]
+            /\ durWho' = a
+            /\ fObl' = TRUE
+       ELSE UNCHANGED <<dur, durWho, fObl>>
+    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, repair, tried, oWin, oHops, birthAct>>
+    /\ UNCHANGED <<nar, narWho, fTag, fBy, snapWho, fwdUsed>>
+
+ForwardMoved(a) ==
+    /\ FreeOn
+    /\ WithFwdExclusion
+    /\ a = "a1"
+    /\ a \in up
+    /\ nar[a] # NoTag
+    /\ fwdUsed < 1
+    /\ next < MaxOff
+    /\ fwdUsed' = fwdUsed + 1
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = FwdD]
+    /\ inflight' = inflight \cup {next}
+    /\ fTag' = [fTag EXCEPT ![next] = nar[a]]
+    /\ fBy' = [fBy EXCEPT ![next] = narWho[a]]
+    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, repair, tried, oWin, oHops, birthAct>>
+    /\ UNCHANGED <<nar, narWho, npend, dur, durWho, fObl, snapWho>>
 (* Capture(a): the shared per-leaf snapshot keeps the highest coverage.  *)
 Capture(a) ==
-    /\ UNCHANGED <<armVars, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, moveVars, sHi, seenS, ft, sh, sibHint, sibRows>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, repair, tried, oWin, oHops, birthAct>>
+    /\ UNCHANGED <<nar, narWho, npend, dur, durWho, fObl, fTag, fBy, fwdUsed>>
+    /\ snapWho' = IF Persisted(a) THEN durWho ELSE NoAct
     /\ a \in up
     /\ rp[a] > snapCov
     /\ snapCov' = rp[a]
@@ -940,7 +1048,11 @@ GcTrim ==
 (* Duplicate: a second activation of L, or the next one, starts from the   *)
 (* shared snapshot. It must claim before it appends stamped.               *)
 Duplicate ==
-    /\ UNCHANGED <<armVars, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, moveVars, sHi, seenS, ft, sh, sibHint, sibRows>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, repair, tried, oWin, oHops, birthAct>>
+    /\ UNCHANGED <<npend, dur, durWho, fObl, fTag, fBy, snapWho, fwdUsed>>
+    /\ nar' = [nar EXCEPT !["a2"] = dur]
+    /\ narWho' = [narWho EXCEPT !["a2"] = durWho]
     /\ WithDuplicate
     /\ phase = "live"
     /\ ~dupUsed
@@ -1133,6 +1245,9 @@ Next ==
     \/ \E a \in Acts : Straggler(a)
     \/ OrphanForward
     \/ OrphanClose
+    \/ \E a \in Acts : NarrowMem(a)
+    \/ \E a \in Acts : PersistNarrow(a)
+    \/ \E a \in Acts : ForwardMoved(a)
     \/ \E a \in Acts : Capture(a)
     \/ GcTrim
     \/ Duplicate
@@ -1213,7 +1328,23 @@ LiveSpec == Spec /\ Fairness
 (* not hold. Unacknowledged entries count: a WAL reader applies them, so  *)
 (* an owner that skipped one would diverge from its replicas and views.   *)
 ReadPositionHonest ==
-    \A a \in up : \A o \in durable : o <= rp[a] => o \in cache[a]
+    \A a \in up : \A o \in durable : o <= rp[a] /\ author[o] # FwdD => o \in cache[a]
+
+(* A forward of a key L's narrow moved (#5837, X1-X4). Whether L still owns *)
+(* the key: unless the narrow that moved it is durable with its obligation.*)
+FwdOwnedByL(o) == ~(durWho = fBy[o] /\ fObl)
+
+(* No running activation passes a forward of a key L owns, or of a key its *)
+(* own span still holds, without holding it.                               *)
+ForwardHonest ==
+    \A a \in up : \A o \in durable :
+        author[o] = FwdD /\ o <= rp[a] /\ (FwdOwnedByL(o) \/ ~Persisted(a)) => o \in cache[a]
+
+(* The shared snapshot never covers a forward of a key its span holds, or  *)
+(* of a key L owns, without holding it.                                    *)
+SnapshotForwardHonest ==
+    \A o \in durable :
+        author[o] = FwdD /\ o <= snapCov /\ (FwdOwnedByL(o) \/ snapWho # durWho \/ snapWho = NoAct) => o \in snapRows
 
 (* The split's hint (#5837, #5752): the sibling is handed every durable  *)
 (* record at or below its hint.                                            *)
@@ -1257,12 +1388,12 @@ SoleActivationNeverFallsOff ==
 
 (* The shared snapshot never claims coverage of a durable entry it lacks. *)
 SnapshotHonest ==
-    \A o \in durable : o <= snapCov => o \in snapRows
+    \A o \in durable : o <= snapCov /\ author[o] # FwdD => o \in snapRows
 
 (* The GC never trims an acknowledged append the snapshot lacks, whoever  *)
 (* appended it.                                                            *)
 NoTrimPastAcked ==
-    \A o \in acked : o < floor => o \in snapRows
+    \A o \in acked : o < floor /\ (author[o] # FwdD \/ FwdOwnedByL(o)) => o \in snapRows
 
 (* An unstamped append - a 10.2.0 silo's, or any while the gate is        *)
 (* closed - is never rejected.                                             *)

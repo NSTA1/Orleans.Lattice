@@ -4,7 +4,7 @@ TARGET: SiblingHintHonest
 CLASS: Invariant
 SUMMARY: the split reads the donor's view and bounds before it captures the heads
 PERTURBS: SplitHeads
-BOUNDS: WithFreeAdvance = TRUE, WithSplitHint = TRUE, MaxWindows = 1
+BOUNDS: WithFreeAdvance = TRUE, WithSplitHint = TRUE, WithDuplicate = FALSE, WithMixedVersion = FALSE
 
 --- FIND
     /\ \A b \in Acts : sh[b] = -1

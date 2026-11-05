@@ -4,7 +4,7 @@ TARGET: SiblingHintHonest
 CLASS: Invariant
 SUMMARY: the split hands the sibling the heads with no bound check: main's split hint, #5752
 PERTURBS: SplitCommit
-BOUNDS: WithFreeAdvance = TRUE, WithSplitHint = TRUE, MaxWindows = 1
+BOUNDS: WithFreeAdvance = TRUE, WithSplitHint = TRUE, WithDuplicate = FALSE, WithMixedVersion = FALSE
 
 --- FIND
     /\ sh[a] # -1

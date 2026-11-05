@@ -3,7 +3,7 @@ MODULE: ReadPositionHonestResumedCloseUsesOnlyOwnHigh
 TARGET: ReadPositionHonest
 CLASS: Invariant
 SUMMARY: a split resumed by a new donor activation closes with only that activation's own moved-key high
-BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithDonorRestart = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithDonorRestart = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE
 
 --- FIND
 DonorCloseCovers == IF dResumed THEN {o \in Offs : author[o] = DonorLive} ELSE dKnown

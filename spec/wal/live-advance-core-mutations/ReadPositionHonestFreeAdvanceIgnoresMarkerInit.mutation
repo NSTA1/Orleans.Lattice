@@ -4,7 +4,7 @@ TARGET: ReadPositionHonest
 CLASS: Invariant
 SUMMARY: the free advance runs on an uninitialised marker, so it passes a straddler of the purged incarnation
 PERTURBS: FreeCommit
-BOUNDS: WithFreeAdvance = TRUE, WithRecreate = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+BOUNDS: WithFreeAdvance = TRUE, WithRecreate = TRUE, WithUnclaimedSurvivor = FALSE, MaxWindows = 0, WithMixedVersion = FALSE
 
 --- FIND
     /\ ft[a] > rp[a]

@@ -4,7 +4,7 @@ TARGET: SiblingHintHonest
 CLASS: Invariant
 SUMMARY: the split hands the sibling the exclusive head as an inclusive hint (#5760)
 PERTURBS: SplitCommit
-BOUNDS: WithFreeAdvance = TRUE, WithSplitHint = TRUE, MaxWindows = 1
+BOUNDS: WithFreeAdvance = TRUE, WithSplitHint = TRUE, WithDuplicate = FALSE, WithMixedVersion = FALSE
 
 --- FIND
     /\ sibHint' = sh[a] - 1

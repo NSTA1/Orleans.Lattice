@@ -8,13 +8,13 @@ TARGET: ReadPositionHonest
 CLASS: Invariant
 SUMMARY: a WAL shard restart keeps neither the foreignHigh start-head floor nor the shared watermark's reset
 PERTURBS: Restart
-BOUNDS: WithFreeAdvance = TRUE, WithRestart = TRUE, MaxWindows = 0
+BOUNDS: WithFreeAdvance = TRUE, WithRestart = TRUE, WithEvict = FALSE, MaxWindows = 0
 
 --- FIND
-    Max({startHead - 1, evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}})
+    Max({startHead - 1, evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}}
 --- REPLACE
 \* MUTATION: no shardStartHead - 1 fallback.
-    Max({-1, evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}})
+    Max({-1, evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}}
 --- END
 
 --- FIND

@@ -4,7 +4,7 @@ TARGET: TransferCostWitness
 CLASS: Invariant
 SUMMARY: the transfer is appended unstamped and shared, as C4 has it today: every split raises the partition's shared watermark
 PERTURBS: Straggler
-BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE
 
 --- FIND
     /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]

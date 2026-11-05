@@ -4,7 +4,7 @@ TARGET: ReadPositionHonest
 CLASS: Invariant
 SUMMARY: both: the resumed close uses only its own high, and the old activation's records are not stale
 PERTURBS: DonorRestart
-BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithDonorRestart = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithDonorRestart = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE
 
 --- FIND
 DonorCloseCovers == IF dResumed THEN {o \in Offs : author[o] = DonorLive} ELSE dKnown
