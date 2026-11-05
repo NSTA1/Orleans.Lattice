@@ -1,0 +1,14 @@
+# #5837, the claimless advance and the split hint.
+MODULE: SiblingHintHonestSplitHintAboveHeads
+TARGET: SiblingHintHonest
+CLASS: Invariant
+SUMMARY: the split hands the sibling the exclusive head as an inclusive hint (#5760)
+PERTURBS: SplitCommit
+BOUNDS: WithFreeAdvance = TRUE, WithSplitHint = TRUE, WithDuplicate = FALSE, WithMixedVersion = FALSE
+
+--- FIND
+    /\ sibHint' = sh[a] - 1
+--- REPLACE
+\* MUTATION: the exclusive head as the hint.
+    /\ sibHint' = sh[a]
+--- END

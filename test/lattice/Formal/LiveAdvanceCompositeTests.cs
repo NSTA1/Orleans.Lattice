@@ -30,6 +30,7 @@ public sealed class LiveAdvanceCompositeTests
 
     private const string FloorOnly = "the read-only cold load's floor-only mark (#5833, C1), which the composite does not yet compose";
     private const string LazyArm = "the lazy arm (#5833), which the composite does not yet compose";
+    private const string FreeAdvance = "the claimless advance (#5837), which the composite does not yet compose (#5839)";
     private const string Effect = "an effect the composite's own step performs; the edge checks what is admitted, not how it is recorded";
 
     private static readonly Regex Definition = new(
@@ -196,8 +197,12 @@ public sealed class LiveAdvanceCompositeTests
 
         yield return new(C, "Claim", "claimed' = [claimed EXCEPT ![a] = TRUE]", "the composite raises cstage, from which claimed is derived");
         yield return new(C, "Claim", "ReportForeign(a)", LazyArm);
-        yield return new(C, "Claim", "IF pend THEN ResolveDeferred ELSE UNCHANGED <<moveVars, hoClosedAt>>", LazyArm);
+        yield return new(C, "Claim", "IF pend /\\ gD >= pendGen THEN ResolveDeferred ELSE UNCHANGED <<moveVars, hoClosedAt>>", LazyArm);
+        yield return new(C, "Claim", "LatchAdmitsClaim", FreeAdvance);
         yield return new(C, "OwnAlloc", "ReportForeign(a)", LazyArm);
+        yield return new(C, "OwnAlloc", "ReportStale(a)", FreeAdvance);
+        yield return new(C, "ForeignAlloc", "~WithSplitBirth", FreeAdvance);
+        yield return new(C, "Close", "~WithSplitBirth", FreeAdvance);
         yield return new(Rf, "Alloc", @"fo[i] => pstamp[i] > loaded[i]", FloorOnly);
         yield return new(Rf, "FirstInit", "fo' = [fo EXCEPT ![\"s\"] = FALSE]", FloorOnly);
         yield return new(C, "OwnAlloc", "next < MaxOff", Bound);

@@ -1,0 +1,21 @@
+# #5837, the claimless advance: a split resumed by a new donor activation (a5e2e2ef).
+MODULE: ReadPositionHonestResumedCloseOwnHighOldTokenNotStale
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: both: the resumed close uses only its own high, and the old activation's records are not stale
+PERTURBS: DonorRestart
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithDonorRestart = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE
+
+--- FIND
+DonorCloseCovers == IF dResumed THEN {o \in Offs : author[o] = DonorLive} ELSE dKnown
+--- REPLACE
+\* MUTATION: the resumed close uses only the new activation's own high.
+DonorCloseCovers == dKnown
+--- END
+
+--- FIND
+    /\ sHi' = Max({sHi} \cup {o \in Offs : author[o] = DonorLive})
+--- REPLACE
+\* MUTATION: the old activation's token is still counted as live.
+    /\ UNCHANGED sHi
+--- END

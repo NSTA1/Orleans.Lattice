@@ -1,0 +1,14 @@
+# #5837, the claimless advance and the split hint.
+MODULE: ReadPositionHonestPreArmResponseOmitsForeignHigh
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a PreArm response carries no foreignHigh, so an unarmed activation's free advance passes its duplicate's record
+PERTURBS: PreArmAlloc
+BOUNDS: WithFreeAdvance = TRUE
+
+--- FIND
+    /\ IF FreeOn THEN ReportForeign(a) ELSE UNCHANGED seenP
+--- REPLACE
+\* MUTATION: no foreignHigh on a PreArm response.
+    /\ UNCHANGED seenP
+--- END

@@ -1,0 +1,13 @@
+# #5837: the reachability latch exemption and the split transfer's link obligation.
+MODULE: RepairLatchesPendingExemptionOverridesOrphanRepair
+TARGET: RepairLatches
+CLASS: Invariant
+SUMMARY: the exemption holds while orphan repair re-homes L's range, so the repair's owner misses L's stamped writes (a5e2e2ef's condition 3)
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE, WithLatch = TRUE
+
+--- FIND
+ExemptPending == pend /\ ~eagerG /\ ~repair
+--- REPLACE
+\* MUTATION: orphan repair does not end the exemption.
+ExemptPending == pend /\ ~eagerG
+--- END

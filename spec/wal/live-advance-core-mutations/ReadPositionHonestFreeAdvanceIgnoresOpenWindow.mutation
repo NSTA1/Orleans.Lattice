@@ -1,0 +1,21 @@
+# #5837, the claimless advance and the split hint.
+MODULE: ReadPositionHonestFreeAdvanceIgnoresOpenWindow
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the free advance runs while a hand-off window is open on its marker
+PERTURBS: FreeCommit
+BOUNDS: WithFreeAdvance = TRUE
+
+--- FIND
+    /\ ft[a] > rp[a]
+    /\ mInit
+    /\ ~hoOpen
+    /\ rp[a] >= hoClosedAt - 1
+    /\ rp[a] >= seenP[a]
+--- REPLACE
+    /\ ft[a] > rp[a]
+    /\ mInit
+\* MUTATION: an open window does not hold the advance.
+    /\ rp[a] >= hoClosedAt - 1
+    /\ rp[a] >= seenP[a]
+--- END

@@ -77,6 +77,24 @@ internal static class TlcCiShard
     /// <summary>The base and every mutation of <c>WalLiveAdvanceCore</c>, the live-advance core module (epic #5605, C).</summary>
     public const string WalLiveAdvanceCore = "TlcShardWalLiveAdvanceCore";
 
+    /// <summary>
+    /// The <c>WalLiveAdvanceCore</c> mutations that raise <c>WithFreeAdvance</c> (#5837's
+    /// claimless advance), and its smallest claimless-advance variants. Each such
+    /// mutation's control runs a raised configuration rather than the base's, so the
+    /// base cannot serve it, and together they cost more than the core shard could absorb.
+    /// </summary>
+    public const string WalLiveAdvanceCoreFree = "TlcShardWalLiveAdvanceCoreFree";
+
+    /// <summary>
+    /// The <c>WalLiveAdvanceCore</c> claimless-advance mutations that target
+    /// <c>ReadPositionHonest</c>, split from <see cref="WalLiveAdvanceCoreFree"/>: together
+    /// the two outran a pooled CI job's time limit.
+    /// </summary>
+    public const string WalLiveAdvanceCoreFreeReadPosition = "TlcShardWalLiveAdvanceCoreFreeReadPosition";
+
+    /// <summary>The larger claimless-advance variant configurations of <c>WalLiveAdvanceCore</c> (#5837).</summary>
+    public const string WalLiveAdvanceCoreFreeVariants = "TlcShardWalLiveAdvanceCoreFreeVariants";
+
     /// <summary>The base and every mutation of <c>WalLiveAdvanceComposite</c>, the live-advance modules' interface check (epic #5605, member 6c).</summary>
     public const string WalLiveAdvanceComposite = "TlcShardWalLiveAdvanceComposite";
 
@@ -244,7 +262,8 @@ internal static class TlcCiShard
          AntiEntropy, AntiEntropy2, AntiEntropy3, TreeLifecycle, Aliasing, SplitGate,
          Scheduling, SchedulingWorkloadB, SchedulingReplayTwoPartitions, SchedulingShipping, SchedulingShippingVariants,
          Schema, SchemaView,
-         WalAppendEpoch, WalHandOffFence, WalRoutingFloor, WalBulkSwitch, WalLiveAdvanceCore, WalLiveAdvanceComposite];
+         WalAppendEpoch, WalHandOffFence, WalRoutingFloor, WalBulkSwitch, WalLiveAdvanceCore, WalLiveAdvanceCoreFree,
+         WalLiveAdvanceCoreFreeReadPosition, WalLiveAdvanceCoreFreeVariants, WalLiveAdvanceComposite];
 
     private static readonly Lazy<IReadOnlyDictionary<(string Module, string Variant), string>> AtomicVariantCategories =
         new(CreateAtomicVariantCategories, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -267,6 +286,12 @@ internal static class TlcCiShard
         if (SchemaCategory(name) is { } schemaCategory)
         {
             return schemaCategory;
+        }
+        if (string.Equals(name, "WalLiveAdvanceCore", StringComparison.Ordinal) && RaisesFreeAdvance(mutation))
+        {
+            return string.Equals(mutation.Target, "ReadPositionHonest", StringComparison.Ordinal)
+                ? WalLiveAdvanceCoreFreeReadPosition
+                : WalLiveAdvanceCoreFree;
         }
         if (LiveAdvanceCategory(name) is { } liveAdvanceCategory)
         {
@@ -415,6 +440,12 @@ internal static class TlcCiShard
             return schemaCategory;
         }
 
+        if (string.Equals(module.Name, "WalLiveAdvanceCore", StringComparison.Ordinal)
+            && variant.StartsWith("Free", StringComparison.Ordinal))
+        {
+            return SmallFreeAdvanceVariants.Contains(variant) ? WalLiveAdvanceCoreFree : WalLiveAdvanceCoreFreeVariants;
+        }
+
         if (LiveAdvanceCategory(module.Name) is { } liveAdvanceCategory)
         {
             return liveAdvanceCategory;
@@ -486,6 +517,19 @@ internal static class TlcCiShard
     /// </summary>
     private static bool RaisesCrossSiloMove(SpecMutation mutation) =>
         mutation.Edits.Any(edit => edit.Replace.Contains("WithCrossSiloMove == TRUE", StringComparison.Ordinal));
+
+    /// <summary>
+    /// Whether <paramref name="mutation"/> raises <c>WalLiveAdvanceCore</c>'s
+    /// <c>WithFreeAdvance</c> bound, so its control runs a claimless-advance
+    /// configuration (<see cref="WalLiveAdvanceCoreFree"/>).
+    /// </summary>
+    private static bool RaisesFreeAdvance(SpecMutation mutation) =>
+        mutation.Bounds.Any(bound => string.Equals(bound.Name, "WithFreeAdvance", StringComparison.Ordinal)
+            && string.Equals(bound.Value, "TRUE", StringComparison.Ordinal));
+
+    /// <summary>The claimless-advance variants small enough to share <see cref="WalLiveAdvanceCoreFree"/> with its mutations.</summary>
+    private static readonly HashSet<string> SmallFreeAdvanceVariants =
+        new(["FreeSplitLink", "FreeLatch", "FreeOrphan", "FreeRestartKeyMove", "FreeTagEvict"], StringComparer.Ordinal);
 
     private static bool IsReplicationCompanion(string name) =>
         name.StartsWith("Replication", StringComparison.Ordinal)
