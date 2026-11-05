@@ -257,9 +257,13 @@ public sealed class LiveAdvanceCompositeTests
         ArgumentNullException.ThrowIfNull(action);
 
         var conjuncts = Classifiable(TopLevelConjuncts(DefinitionOf(action.Module, action.Source)));
+        // One source action may be copied more than once under different renames (C's Close
+        // for the eager foreign close and for the bulk switch's close, #5839); a conjunct
+        // either copy takes counts once, and a conjunct both copied and excluded is still caught.
         var classified = Copies()
             .Where(copied => copied.CopyShape == CopyShape.Conjuncts && copied.Module == action.Module && copied.Source == action.Source)
             .SelectMany(copied => copied.Conjuncts.Select(Normalise))
+            .Distinct(StringComparer.Ordinal)
             .Concat(Exclusions()
                 .Where(excluded => excluded.Module == action.Module && excluded.Source == action.Source)
                 .Select(excluded => Normalise(excluded.Conjunct)))

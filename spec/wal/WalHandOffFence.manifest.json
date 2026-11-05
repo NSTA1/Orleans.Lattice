@@ -9,7 +9,7 @@
     "properties": 1,
     "actions": 37,
     "mutations": 48,
-    "behaviourRows": 41,
+    "behaviourRows": 42,
     "distinctStates": 8826
   },
   "variants": {

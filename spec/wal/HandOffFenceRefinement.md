@@ -326,8 +326,16 @@ mutation directory; it was run locally against this module.
   with the tree's range-delete generation (`TreeRangeDeleteFenceGrain`). `DeferredClose`
   therefore runs with the tree walk off; with it on, another intent's close would raise the
   generation the deferred head resolves at, a coupling production does not have. The walk's
-  own fencing is checked in the base and `WideWindows`.
-  Production symbols: `ShardRootGrain.CloseDeferredSplitHandOffsAsync`, `TreeRangeDeleteFenceGrain`.
+  own fencing is checked in the base and `WideWindows`. That loses no real interleaving
+  because the bound on a walk is separate (a5e2e2ef): a record stamped under the tree's
+  range-delete generation is bounded by that range delete's own shard-marker window, whose
+  close heads the receiver's advance checks (`HandOffMarkerCore.HeadAt` over the shard
+  marker's close heads, which the leaf reads with its advance), never by the
+  deferred split close. A walk that writes a moved key while a deferred split close is
+  pending on the receiver therefore holds it until both the range delete's window and the
+  deferred close have closed, pinned by
+  `LeafHandOffFenceIntegrationTests.A_range_delete_walk_during_a_pending_deferred_split_close_holds_the_receiver_until_both_close`.
+  Production symbols: `ShardRootGrain.CloseDeferredSplitHandOffsAsync`, `TreeRangeDeleteFenceGrain`, `HandOffMarkerCore.HeadAt`.
 
 - **#5841: the Dekker pair's storage assumption.** The fix rests on each side's write
   completing before its own read, and on each read being a fresh storage read that
