@@ -333,6 +333,16 @@ internal interface IWalShardGrain : IGrainWithStringKey
     ValueTask<long> GetNextSequenceAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// The consistent cut a splitting leaf reads (#5837, D4): the readable head, the
+    /// highest offset an author other than <paramref name="reader"/>'s activation may have
+    /// allocated for its leaf - with its persisted narrow's forwards excluded and the stale
+    /// high of each donor close it carries included - and the shared unstamped watermark,
+    /// all in one turn. A silo running an earlier build does not have it; the leaf then
+    /// reads the heads alone and caps them at its own frontier, as before.
+    /// </summary>
+    Task<WalSplitCut> GetSplitCutAsync(WalAppendStamp reader, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Returns the head a reader may resume from: one past the highest sequence a
     /// read would expose. It is at or below <see cref="GetNextSequenceAsync"/>,
     /// lower while a flush is in flight, while an abandoned flush may still land,

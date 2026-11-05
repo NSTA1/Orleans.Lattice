@@ -176,4 +176,48 @@ public partial class WalShardGrainTests
             Is.GreaterThanOrEqualTo(record.Offset),
             "an evicted donor's records fell out of the stale high");
     }
+
+    [Test]
+    public async Task A_split_cut_reads_the_head_and_every_bound_in_one_turn()
+    {
+        // SplitHintBoundsReadBeforeHeads (D4): the head and the bounds come from one turn.
+        var grain = await CreateFencedGrainAsync(new EnumerableMemoryGrainStorage());
+        var foreign = await grain.AppendStampedAsync(MakeEntry("f"), PreArmStamp(ActivationB, 1), CancellationToken.None);
+        var donorRecord = await grain.AppendStampedAsync(MakeEntry("d"), WalAppendStamp.PreArm(Donor, OtherToken) with { Initiator = PreArmRoot, Generation = 1 }, CancellationToken.None);
+        var own = await grain.AppendStampedAsync(MakeEntry("o"), PreArmStamp(ActivationA, 1), CancellationToken.None);
+
+        var plain = await grain.GetSplitCutAsync(WalAppendStamp.PreArm(FenceLeaf, ActivationA), CancellationToken.None);
+        var withClose = await grain.GetSplitCutAsync(
+            WalAppendStamp.PreArm(FenceLeaf, ActivationA) with { Close1 = new WalPendingClose(Donor, ClosingToken, PreArmRoot.Index, 1) },
+            CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(plain.Head, Is.EqualTo(own.Offset + 1), "the cut's head is not the readable head");
+            Assert.That(plain.ForeignHigh, Is.EqualTo(foreign.Offset), "another activation's record was not bounded, or the reader's own was");
+            Assert.That(withClose.ForeignHigh, Is.EqualTo(donorRecord.Offset), "a carried close's stale high was not in the cut");
+        });
+    }
+
+    [Test]
+    public async Task A_resumed_close_reads_every_activation_s_records_never_below_the_floor()
+    {
+        // ResumedCloseUsesOnlyOwnHigh and ResumedCloseOwnHighOldTokenNotStale (rule R).
+        var storage = new EnumerableMemoryGrainStorage();
+        var provider = new InMemoryWalStorageProvider();
+        var grain = await CreateFencedGrainAsync(storage, provider);
+        var stale = await grain.AppendStampedAsync(MakeEntry("s"), WalAppendStamp.PreArm(Donor, OtherToken) with { Initiator = PreArmRoot, Generation = 1 }, CancellationToken.None);
+        var live = await grain.AppendStampedAsync(MakeEntry("l"), WalAppendStamp.PreArm(Donor, ClosingToken) with { Initiator = PreArmRoot, Generation = 1 }, CancellationToken.None);
+        var everyActivation = new WalAppendStamp(Donor, 0, WalRoutingInitiator.None, 0);
+
+        var cut = await grain.GetSplitCutAsync(everyActivation, CancellationToken.None);
+        var restarted = await CreateFencedGrainAsync(storage, provider);
+        var afterRestart = await restarted.GetSplitCutAsync(everyActivation, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.ForeignHigh, Is.EqualTo(Math.Max(stale.Offset, live.Offset)), "a resumed close's bound left out an activation's records");
+            Assert.That(afterRestart.ForeignHigh, Is.GreaterThanOrEqualTo(Math.Max(stale.Offset, live.Offset)), "a restart lowered a resumed close's bound below the recovered head");
+        });
+    }
 }

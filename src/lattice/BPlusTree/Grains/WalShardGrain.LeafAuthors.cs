@@ -35,6 +35,31 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </remarks>
 internal sealed partial class WalShardGrain
 {
+    /// <inheritdoc />
+    public Task<WalSplitCut> GetSplitCutAsync(WalAppendStamp reader, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInternalOrigin(LatticeOperation.Read);
+        EnsureInitialized();
+        lock (_stateGate)
+        {
+            var bound = reader.LeafId == Guid.Empty
+                ? _leafAuthorsFloor
+                : ForeignHighLocked(reader.LeafId, reader.Activation, reader.ReaderTag);
+            if (reader.Close1.IsSet)
+            {
+                bound = Math.Max(bound, StaleHighLocked(reader.Close1, reader.LeafId));
+            }
+
+            if (reader.Close2.IsSet)
+            {
+                bound = Math.Max(bound, StaleHighLocked(reader.Close2, reader.LeafId));
+            }
+
+            return Task.FromResult(new WalSplitCut(DurableContiguousTailOffset(), bound, _unstampedWatermark));
+        }
+    }
+
     /// <summary>The most leaves whose authors one shard activation tracks before it folds them into the floor.</summary>
     internal const int MaxLeafAuthors = 16_384;
 

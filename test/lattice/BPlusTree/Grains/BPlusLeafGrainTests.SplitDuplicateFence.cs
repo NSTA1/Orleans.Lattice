@@ -12,8 +12,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// durable before its split fence reads the leaf's epoch row, so either the fence sees a
 /// duplicate's claim, or the duplicate's state check sees the narrowing. It is the code
 /// half of <c>HandOffBoundSplitReadsRowBeforePersist</c> in eager mode; under pre-arm the
-/// shard root fences at link time, which follows the donor's persist by construction
-/// (<see cref="ShardRootGrainSplitLinkTests"/>).
+/// donor fences in its own close, after the same persist (#5837, rule S).
 /// </summary>
 public partial class BPlusLeafGrainTests
 {

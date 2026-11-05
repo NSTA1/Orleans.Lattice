@@ -78,10 +78,10 @@ public sealed class LeafHandOffFenceIntegrationTests(bool eagerClaims)
     public async Task Every_split_opens_its_marker_at_the_siblings_birth_and_closes_it_by_the_modes_fence()
     {
         // Eager mode: the donor's epoch bump closes the sibling's marker with the heads its
-        // re-claims returned. Pre-arm mode (#5833, revision 2, C2, C3, C6): the shard root
-        // raises its routing generation in its own turn as it links the split, and closes
-        // the sibling's marker with every head deferred; the donor, never armed, claims
-        // nothing.
+        // re-claims returned. Pre-arm mode (#5837, rules S and C6): the donor closes its
+        // sibling's marker itself with heads and its deferred bound, the shard root only
+        // raises its routing generation as it links the split, and the donor, never armed,
+        // claims nothing.
         const string Name = "handoff-split";
         var (tree, shard) = await NewTreeAsync(Name);
         var chain = await WalkChainAsync(shard);
@@ -94,7 +94,6 @@ public sealed class LeafHandOffFenceIntegrationTests(bool eagerClaims)
         {
             var marker = await MarkerAsync(sibling);
             var split = marker.Closes.Where(c => c.Token.StartsWith("split:", StringComparison.Ordinal)).ToList();
-            var siblingArmed = (await WalAppendFenceRows.ReadLeafEpochAsync(Storage, sibling.GetGuidKey())).RecordExists;
             Assert.Multiple(() =>
             {
                 Assert.That(marker.Initialised, Is.True, $"{sibling}: a leaf born under the gate initialises its marker at birth");
@@ -109,12 +108,14 @@ public sealed class LeafHandOffFenceIntegrationTests(bool eagerClaims)
                 }
                 else
                 {
-                    Assert.That(split.All(c => c.DeferredShard == 0 && c.DeferredGeneration > 0), Is.True,
-                        $"{sibling}: the split was not closed by the shard root's deferred fence");
-                    Assert.That(split.All(c => c.Heads.All(h => h == HandOffMarkerCore.DeferredHead || (siblingArmed && h >= 0))), Is.True,
-                        $"{sibling}: a deferred close was resolved without an arm");
-                    Assert.That(split.All(c => c.DeferredGeneration <= shardMarker.RoutingGeneration), Is.True,
-                        "a deferred close names a generation the shard root never raised");
+                    Assert.That(split.All(c => c.DonorLeaf != Guid.Empty && c.DonorToken != Guid.Empty && c.DeferredGeneration == 0), Is.True,
+                        $"{sibling}: the split was not closed by its donor with its bound");
+                    Assert.That(split.All(c => c.AdmittedShard == 0 && c.AdmittedGeneration > 0), Is.True,
+                        $"{sibling}: the donor bound names no admitted generation");
+                    Assert.That(split.All(c => c.Heads.All(h => h >= 0)), Is.True,
+                        $"{sibling}: the donor's close left a head unset");
+                    Assert.That(split.All(c => c.AdmittedGeneration <= shardMarker.RoutingGeneration), Is.True,
+                        "a donor bound names a generation the shard root never raised");
                 }
             });
         }

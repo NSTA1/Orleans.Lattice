@@ -125,6 +125,74 @@ internal static class HandOffMarkerCore
     }
 
     /// <summary>
+    /// Records a split donor's close of <paramref name="token"/>, its sibling's birth
+    /// window, with <paramref name="heads"/> and the donor's deferred bound in one marker
+    /// change (#5837, rule S): the donor leaf, the token of the activation closing it, and
+    /// the generation of shard root <paramref name="shardIndex"/> its writes were admitted
+    /// under. Returns whether the marker changed.
+    /// </summary>
+    public static bool CloseWithDonorBound(
+        IHandOffMarker marker, string token, long[] heads, Guid donorLeaf, Guid donorToken, int shardIndex, long generation)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(shardIndex);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(generation);
+        if (donorLeaf == Guid.Empty || donorToken == Guid.Empty)
+        {
+            throw new ArgumentException("A donor bound names the donor leaf and its closing activation.");
+        }
+
+        if (!Close(marker, token, heads))
+        {
+            return false;
+        }
+
+        foreach (var close in marker.Closes)
+        {
+            if (string.Equals(close.Token, token, StringComparison.Ordinal))
+            {
+                close.DonorLeaf = donorLeaf;
+                close.DonorToken = donorToken;
+                close.AdmittedShard = shardIndex;
+                close.AdmittedGeneration = generation;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Adds to <paramref name="pending"/> every donor bound on <paramref name="marker"/>
+    /// that overlaps the owner of <c>[low, high)</c> and has not resolved: its shard is not
+    /// <paramref name="shardIndex"/>, or shard <paramref name="shardIndex"/>'s durable
+    /// routing generation <paramref name="routingGeneration"/> is not above the bound's
+    /// admitted generation (#5837, L2). Returns how many it added.
+    /// </summary>
+    public static int CollectPendingDonorBounds(
+        IHandOffMarker marker,
+        string? ownerLowInclusive,
+        string? ownerHighExclusive,
+        int shardIndex,
+        long routingGeneration,
+        List<WalPendingClose> pending)
+    {
+        ArgumentNullException.ThrowIfNull(marker);
+        ArgumentNullException.ThrowIfNull(pending);
+        var added = 0;
+        foreach (var close in marker.Closes)
+        {
+            if (close.DonorLeaf != Guid.Empty
+                && (close.AdmittedShard != shardIndex || routingGeneration <= close.AdmittedGeneration)
+                && Overlaps(close.LowInclusive, close.HighExclusive, ownerLowInclusive, ownerHighExclusive))
+            {
+                pending.Add(new WalPendingClose(close.DonorLeaf, close.DonorToken, close.AdmittedShard, close.AdmittedGeneration));
+                added++;
+            }
+        }
+
+        return added;
+    }
+
+    /// <summary>
     /// The deferred generation the owner of <c>[low, high)</c> must re-claim at
     /// <paramref name="partition"/> before it may arm there: the highest over every close
     /// still deferred at that partition, with its shard; <see langword="false"/> when none
@@ -202,6 +270,13 @@ internal static class HandOffMarkerCore
         for (var i = 0; i < marker.Closes.Count; i++)
         {
             var close = marker.Closes[i];
+            if (close.DonorLeaf != Guid.Empty)
+            {
+                // #5837: a donor bound is never folded, where it could no longer be
+                // reported; a sibling is born once, so at most one stays.
+                continue;
+            }
+
             if (!IsDeferredAnywhere(close))
             {
                 marker.CompactedHeads = MaxHeads(marker.CompactedHeads, close.Heads);

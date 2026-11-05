@@ -1218,7 +1218,8 @@ internal sealed partial class BPlusLeafGrain(
             // SplitResult.Additional.
             var spanSibling = grainFactory.GetGrain<IBPlusLeafGrain>(spanTarget);
             return SplitResult.Combine(recovered, SplitResult.Forward(await WalFenceSeamRetry.RunAsync(
-                () => WalRoutedLeafCall.StampedOrPlainAsync(
+                () => ForwardedStampedOrPlainAsync(
+                    spanTarget,
                     routing,
                     () => spanSibling.SetStampedAsync(key, value, expiresAtTicks, routing),
                     () => spanSibling.SetAsync(key, value, expiresAtTicks)),
@@ -2205,7 +2206,8 @@ internal sealed partial class BPlusLeafGrain(
                 return new LeafDeleteResult
                 {
                     Deleted = await WalFenceSeamRetry.RunAsync(
-                        () => WalRoutedLeafCall.StampedOrPlainAsync(
+                        () => ForwardedStampedOrPlainAsync(
+                            spanTarget,
                             routing,
                             () => sibling.DeleteStampedAsync(key, routing),
                             () => sibling.DeleteAsync(key)),
@@ -2215,7 +2217,8 @@ internal sealed partial class BPlusLeafGrain(
             }
 
             var forwarded = await WalFenceSeamRetry.RunAsync(
-                () => WalRoutedLeafCall.StampedOrPlainAsync(
+                () => ForwardedStampedOrPlainAsync(
+                    spanTarget,
                     routing,
                     () => sibling.DeleteTrackedStampedAsync(key, routing),
                     () => sibling.DeleteTrackedAsync(key)),
@@ -3337,6 +3340,7 @@ internal sealed partial class BPlusLeafGrain(
 
     public async Task InitializeSiblingAsync(SiblingInitialization init)
     {
+        var bornHere = false;
         using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
         await AwaitReplayBarrierAsync();
@@ -3368,6 +3372,8 @@ internal sealed partial class BPlusLeafGrain(
             var prevMovedSlots = state.State.MovedAwaySlots;
             var prevMovedVsc = state.State.MovedAwayVirtualShardCount;
 
+            // #5837, P1: this call performs the birth only if it seeds the unseeded range.
+            bornHere = state.State.LowKeyInclusive is null && init.LowKeyInclusive is not null;
             var changed = false;
 
             // Tree id: write-once.
@@ -3498,6 +3504,17 @@ internal sealed partial class BPlusLeafGrain(
         finally
         {
             _splitGate.Release();
+        }
+
+        // #5837, P1-P3: a split's own birth, once its persist landed, proves this
+        // activation reachable: its donor's chain reaches it, and the link follows.
+        if (bornHere && init.SplitBirth && IsPreArmGateOpen())
+        {
+            ProveReachableAtSplitBirth();
+            if (init.SpanGeneration > 0 && init.SpanShard >= 0)
+            {
+                _spanRouting = WalRoutingStamp.ForShardRoot(init.SpanShard, init.SpanGeneration);
+            }
         }
 
         // Birth seam (split sibling): durably seed a Zero "block" pin BEFORE the
@@ -4181,7 +4198,31 @@ internal sealed partial class BPlusLeafGrain(
             var walStartTicks = Stopwatch.GetTimestamp();
             try
             {
-                var mergeOffsets = await writer!.AppendManyAsync(new ArraySegment<WalRecord>(walEntries!, 0, walCount));
+                var segment = new ArraySegment<WalRecord>(walEntries!, 0, walCount);
+
+                // #5837, T1 and T3: decided in the same synchronous step as the dispatch,
+                // under the routing-mutation gate this method holds.
+                var transfer = SplitTransferRoutingFor(walEntries!, walCount);
+                IReadOnlyList<long> mergeOffsets;
+                if (transfer.IsSet)
+                {
+                    try
+                    {
+                        mergeOffsets = await AppendManyRoutedAsync(writer!, segment, transfer);
+                    }
+                    catch (WalRoutingGenerationStaleException)
+                    {
+                        // The span's generation was re-claimed; nothing was allocated under
+                        // it, and the transfer is appended unstamped instead, as before.
+                        _spanRouting = default;
+                        mergeOffsets = await writer!.AppendManyAsync(segment);
+                    }
+                }
+                else
+                {
+                    mergeOffsets = await writer!.AppendManyAsync(segment);
+                }
+
                 NoteLiveAppendOffsets(walEntries!, walCount, mergeOffsets);
                 mergeAppended = true;
             }

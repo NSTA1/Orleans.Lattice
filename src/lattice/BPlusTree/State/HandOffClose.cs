@@ -52,4 +52,29 @@ internal sealed class HandOffClose
     /// </summary>
     [Id(6)]
     public long DeferredGeneration { get; set; }
+
+    /// <summary>
+    /// For a split donor's close of its sibling's birth window (#5837, rule S), the donor
+    /// leaf; <see cref="Guid.Empty"/> for any other close. Until the shard root's routing
+    /// generation rises above <see cref="AdmittedGeneration"/>, the sibling must replay
+    /// past the donor's stale high (<c>WalPendingClose</c>) before it advances
+    /// live. Recorded in the same marker write as the close's heads.
+    /// </summary>
+    [Id(7)]
+    public Guid DonorLeaf { get; set; }
+
+    /// <summary>The token of the donor activation that wrote the close; meaningful only with <see cref="DonorLeaf"/>.</summary>
+    [Id(8)]
+    public Guid DonorToken { get; set; }
+
+    /// <summary>The shard root whose routing generation <see cref="AdmittedGeneration"/> is; meaningful only with <see cref="DonorLeaf"/>.</summary>
+    [Id(9)]
+    public int AdmittedShard { get; set; }
+
+    /// <summary>
+    /// The routing generation the donor's writes were admitted under at the close; the
+    /// bound resolves only once the shard root's generation is strictly above it (L2).
+    /// </summary>
+    [Id(10)]
+    public long AdmittedGeneration { get; set; }
 }

@@ -22,45 +22,18 @@ public sealed partial class ShardRootGrainSplitLinkTests
     private const string PreArmTreeId = "split-link-tree";
 
     [Test]
-    public async Task A_deferred_close_is_written_only_after_the_raise_it_defers_is_durable()
+    public async Task A_split_link_raise_claims_nowhere_and_later_admissions_carry_it()
     {
+        // C6: the raise claims at no WAL partition; every write admitted after it carries it.
         var (h, storage, wal, donor, sibling) = await CreatePreArmSplitHarnessAsync();
         ReturnSplit(h, donor, sibling);
 
         await h.Grain.SetAsync("c", [1]);
 
-        Assert.That(storage.DeferredCloseWrites, Is.Not.Empty, "precondition: the link closed the sibling by a deferred fence");
-        var deferred = storage.DeferredCloseWrites.Max(w => w.Generation);
-        Assert.Multiple(() =>
-        {
-            Assert.That(storage.DeferredCloseWrites.All(w => w.DurableGeneration >= w.Generation), Is.True,
-                "every deferred head is written after the shard marker durably carries the generation it defers");
-            Assert.That(h.Grain.AdmissionRoutingStamp().Generation, Is.GreaterThanOrEqualTo(deferred),
-                "every write the shard root admits after the raise carries a generation at or above the deferred one");
-        });
-
-        // C6: the raise claims at no WAL partition; only the receiver's arm re-claims.
+        var raised = (await HandOffMarkerRows.ReadShardAsync(storage, PreArmTreeId, 0)).State.RoutingGeneration;
+        Assert.That(h.Grain.AdmissionRoutingStamp().Generation, Is.GreaterThanOrEqualTo(raised),
+            "a write the shard root admits after the raise carries a generation below it");
         await wal.DidNotReceive().ClaimRoutingGenerationAsync(Arg.Any<WalRoutingInitiator>(), Arg.Any<long>(), Arg.Any<CancellationToken>());
-    }
-
-    [Test]
-    public async Task A_split_link_whose_raise_is_not_durable_writes_no_deferred_close()
-    {
-        var (h, storage, _, donor, sibling) = await CreatePreArmSplitHarnessAsync();
-        ReturnSplit(h, donor, sibling);
-        storage.FailShardMarkerWrites = true;
-
-        try
-        {
-            await h.Grain.SetAsync("c", [1]);
-        }
-        catch (InvalidOperationException)
-        {
-            // The link may surface the injected fault; what matters is what was written.
-        }
-
-        Assert.That(storage.DeferredCloseWrites, Is.Empty,
-            "a deferred head written before the raise is durable would leave a pending re-claim above every generation the shard root stamps after a crash");
     }
 
     [Test]
@@ -168,11 +141,21 @@ public sealed partial class ShardRootGrainSplitLinkTests
     {
         public List<(int Shard, long Generation, long DurableGeneration)> DeferredCloseWrites { get; } = [];
 
+        /// <summary>How many leaf hand-off marker reads reached the store since it was last reset.</summary>
+        public int LeafMarkerReads { get; set; }
+
         /// <summary>When set, every shard marker write throws, so no raise becomes durable.</summary>
         public bool FailShardMarkerWrites { get; set; }
 
-        public Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
-            inner.ReadStateAsync(stateName, grainId, grainState);
+        public Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
+        {
+            if (stateName == HandOffMarkerRows.LeafGrainType)
+            {
+                LeafMarkerReads++;
+            }
+
+            return inner.ReadStateAsync(stateName, grainId, grainState);
+        }
 
         public async Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
         {

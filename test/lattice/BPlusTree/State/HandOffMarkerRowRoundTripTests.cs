@@ -108,6 +108,43 @@ public sealed class HandOffMarkerRowRoundTripTests
     }
 
     [Test]
+    public void A_donor_bound_on_a_leaf_close_round_trips_in_json_and_binary()
+    {
+        // #5837, rule S: the bound is written with the close's heads, so it must survive both serializers.
+        var donor = new Guid("d0000000-0000-0000-0000-0000000005d1");
+        var token = new Guid("c0000000-0000-0000-0000-0000000005c1");
+        var row = new LeafHandOffState
+        {
+            Initialised = true,
+            Closes =
+            {
+                new HandOffClose
+                {
+                    Token = "split:d",
+                    Heads = [7, 8],
+                    DonorLeaf = donor,
+                    DonorToken = token,
+                    AdmittedShard = 2,
+                    AdmittedGeneration = 11,
+                },
+            },
+        };
+
+        foreach (var round in new[] { JsonRoundTrip(row), BinaryRoundTrip(row) })
+        {
+            var close = round.Closes.Single();
+            Assert.Multiple(() =>
+            {
+                Assert.That(close.Heads, Is.EqualTo(new long[] { 7, 8 }));
+                Assert.That(close.DonorLeaf, Is.EqualTo(donor));
+                Assert.That(close.DonorToken, Is.EqualTo(token));
+                Assert.That(close.AdmittedShard, Is.EqualTo(2));
+                Assert.That(close.AdmittedGeneration, Is.EqualTo(11));
+            });
+        }
+    }
+
+    [Test]
     public void Tree_range_delete_fence_state_round_trips_in_json_and_binary()
     {
         var intentId = Guid.NewGuid();

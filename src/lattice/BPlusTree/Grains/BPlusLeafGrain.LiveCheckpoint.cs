@@ -278,7 +278,9 @@ internal sealed partial class BPlusLeafGrain
         // runs for one, and a leaf with live data and no proven checkpoint on any
         // partition holds its floor by construction. Never a write or a routine tick.
         var armDemand = (withinDrive || IsStarvedOfDurableCheckpoint(ownHigh.Length)) && IsPreArmGateOpen();
-        if (!armDemand && !AnyPartitionClaimed(fence, ownHigh.Length))
+
+        // #5837: a pre-arm leaf may also advance claimlessly, on what its appends were reported.
+        if (!armDemand && !AnyPartitionClaimed(fence, ownHigh.Length) && !IsPreArmGateOpen())
         {
             return false;
         }
@@ -314,6 +316,16 @@ internal sealed partial class BPlusLeafGrain
                 }
 
                 var claimRaised = fence.TryGetArmingView(p, out var claimHead, out var unstampedSeen);
+                if (!claimRaised && fence.TryGetPreArmView(p, out var reportedBound))
+                {
+                    // #5837, the claimless advance: every foreign, stale or unrouted record
+                    // below an own append was reported with it, so reading past that bound
+                    // and every close head reads past every other author.
+                    claimRaised = true;
+                    claimHead = reportedBound + 1;
+                    unstampedSeen = reportedBound;
+                }
+
                 var target = LeafLiveAdvanceCore.TargetFor(
                     claimRaised: claimRaised,
                     claimHead: claimHead,
@@ -518,7 +530,13 @@ internal sealed partial class BPlusLeafGrain
             {
                 // #5709: a leaf descent no longer reaches, with no hand-off open on it,
                 // stops stamping for the rest of the activation.
-                if (!view.Reachable && leafMarker.Open.Count == 0 && _appendFence is { } fence)
+                // #5837, the latch exemption: a sibling its donor closed before the link
+                // is deferred while the bound is pending under the pre-arm gate; orphan
+                // repair always latches.
+                var exempt = !view.OrphanRepairInProgress
+                    && IsPreArmGateOpen()
+                    && HoldsPendingDonorBound(leafMarker, view.RoutingGeneration);
+                if (!view.Reachable && leafMarker.Open.Count == 0 && !exempt && _appendFence is { } fence)
                 {
                     StopStampingUnreachable(fence);
                 }
@@ -546,6 +564,15 @@ internal sealed partial class BPlusLeafGrain
             var clear = leafMarker.Initialised
                 && leafMarker.Open.Count == 0
                 && !view.HeldOpen;
+            if (_appendFence is { } closesFence)
+            {
+                // #5837: the donor closes still pending, carried by every later stamp.
+                var pending = _pendingDonorClosesScratch ??= new List<WalPendingClose>(WalAppendStamp.MaxPendingCloses);
+                pending.Clear();
+                HandOffMarkerCore.CollectPendingDonorBounds(leafMarker, low, high, shardIndex, view.RoutingGeneration, pending);
+                closesFence.SetPendingCloses(pending);
+            }
+
             return new LiveAdvanceHandOff(clear, leafMarker, view.CloseHeads);
         }
         catch (Exception ex)
@@ -576,6 +603,9 @@ internal sealed partial class BPlusLeafGrain
 
         return cached;
     }
+
+    /// <summary>Reused by each advance tick's marker read to collect the pending donor closes (#5837).</summary>
+    private List<WalPendingClose>? _pendingDonorClosesScratch;
 
     /// <summary>The hand-off conditions one advance tick read.</summary>
     /// <param name="Clear">The marker state is initialised and nothing overlapping the leaf is open.</param>
