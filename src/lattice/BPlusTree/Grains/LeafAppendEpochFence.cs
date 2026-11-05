@@ -84,6 +84,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     // #5840 review S4: pre-arm split closes this activation counted and has not yet spent
     // on a probed re-claim, and the highest epoch it relinquished at such a close.
     private int _reclaimAllowance;
+    private bool _closeCounted;
     private long _relinquishedEpoch;
 
     // Bumped by every relinquish; a row claim that began under an older value is discarded
@@ -453,6 +454,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     public LeafRetiredException OnStale(WalAppendStamp stamp)
     {
         bool selfFenced;
+        KeyValuePair<string, object?>? outcome = null;
         lock (_sync)
         {
             // Member 2 (design owner, Q1): a stamp below this activation's own current
@@ -477,7 +479,17 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 _reclaimAllowance = 0;
                 RelinquishLocked();
                 selfFenced = true;
+                outcome = LatticeMetrics.ReclaimAllowanceSpentStaleEpoch;
             }
+            else if (!selfFenced && !_stale && _closeCounted && _reclaimAllowance == 0)
+            {
+                outcome = LatticeMetrics.ReclaimAllowanceSupersededAfterClose;
+            }
+        }
+
+        if (outcome is { } allowanceOutcome)
+        {
+            LatticeMetrics.WalAppendFenceReclaimAllowance.Add(1, _treeTag, _tenantTag, allowanceOutcome);
         }
 
         if (selfFenced)
@@ -650,6 +662,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 // races the link: its refusal or row conflict re-claims once instead of
                 // superseding.
                 _reclaimAllowance = 1;
+                _closeCounted = true;
                 RelinquishLocked();
             }
         }
@@ -1109,7 +1122,15 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                     _reclaimAllowance = 0;
                     RelinquishLocked();
                     LatticeMetrics.WalAppendFenceSelfFenced.Add(1, _treeTag, _tenantTag);
+                    LatticeMetrics.WalAppendFenceReclaimAllowance.Add(1, _treeTag, _tenantTag, LatticeMetrics.ReclaimAllowanceSpentRowConflict);
                     throw LeafRetiredException.ForSupersededActivation(_leafId, row.State.Epoch);
+                }
+
+                if (relinquishOnConflict && !_stale && _closeCounted)
+                {
+                    // #5843: the allowance was spent already - by a duplicate's row write before
+                    // the link, typically - so this conflict supersedes the live donor.
+                    LatticeMetrics.WalAppendFenceReclaimAllowance.Add(1, _treeTag, _tenantTag, LatticeMetrics.ReclaimAllowanceSupersededAfterClose);
                 }
             }
 
