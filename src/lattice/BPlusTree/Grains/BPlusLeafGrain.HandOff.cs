@@ -168,9 +168,7 @@ internal sealed partial class BPlusLeafGrain
         for (var i = 0; i < count; i++)
         {
             var key = records[i].Key;
-            if (key is null
-                || (low is not null && string.CompareOrdinal(key, low) < 0)
-                || (high is not null && string.CompareOrdinal(key, high) >= 0))
+            if (key is null) // RED PROOF: no span check
             {
                 return default;
             }
@@ -375,7 +373,7 @@ internal sealed partial class BPlusLeafGrain
 
         // #5837, E1: the open's own row only for the split this activation began, never on a
         // recovery or a re-drive; taken once.
-        var openedRow = splitHeads is not null && _siblingMarkerRow is { } kept && kept.Sibling == siblingId ? kept.Row : null;
+        var openedRow = (Orleans.GrainState<LeafHandOffState>?)null; // RED PROOF: the open's row is never used
         _siblingMarkerRow = null;
         try
         {

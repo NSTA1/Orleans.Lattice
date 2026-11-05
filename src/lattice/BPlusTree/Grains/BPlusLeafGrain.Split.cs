@@ -868,10 +868,8 @@ internal sealed partial class BPlusLeafGrain
             // #5837, L3: under the pre-arm gate only the donor closes its sibling's window,
             // so an unsettled close keeps the obligation; the split re-surfaces and the
             // shard root's link re-drives it.
-            if (!await CloseSplitHandOffAsync(siblingId) && IsPreArmGateOpen())
-            {
-                return;
-            }
+            // RED PROOF: the obligation is retired whatever the close did.
+            await CloseSplitHandOffAsync(siblingId);
 
             state.State.UnlinkedSplitSiblingId = null;
             state.State.UnlinkedSplitKey = null;
@@ -1239,8 +1237,7 @@ internal sealed partial class BPlusLeafGrain
         for (var p = 0; p < hints.Length; p++)
         {
             var current = GetCurrentCheckpointForPartition(p);
-            if (current >= cut[p].ForeignHigh
-                && current >= cut[p].UnstampedWatermark
+            if (current >= cut[p].UnstampedWatermark // RED PROOF: foreign high ignored
                 && current >= HandOffMarkerCore.RequiredHead(handOff.LeafMarker, low, high, p) - 1
                 && current >= HandOffMarkerCore.HeadAt(handOff.ShardCloseHeads, p) - 1)
             {
@@ -1756,6 +1753,7 @@ internal sealed partial class BPlusLeafGrain
         // thrown deadline used to take the SplitResult below with it. The
         // caller publishes through PublishSplitDigestAsync once it has let
         // the gate go.
+        NotePersistedNarrow(WalForwardChain.KeyOf(siblingId)); // RED PROOF: tagged before the persist
         using (AwaitDiagnostics.Begin("leaf.split.persist-final", context.GrainId, splitDiag))
         {
             await PersistAsync();

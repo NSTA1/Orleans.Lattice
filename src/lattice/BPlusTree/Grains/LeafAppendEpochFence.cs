@@ -290,8 +290,9 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             return null;
         }
 
-        return _narrowTag == Guid.Empty && !_close1.IsSet
-            ? stamp
+        // RED PROOF: a forwarded write's stamp drops the pending closes.
+        return stamp.Forwarder != Guid.Empty || (_narrowTag == Guid.Empty && !_close1.IsSet)
+            ? stamp with { ReaderTag = _narrowTag }
             : stamp with { ReaderTag = _narrowTag, Close1 = _close1, Close2 = _close2 };
     }
 
@@ -330,10 +331,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 {
                     _movedAmbiguous = true;
                 }
-                else if (offset > high[partition])
-                {
-                    high[partition] = offset;
-                }
+                // RED PROOF: own moved-key offsets are not recorded.
             }
         }
     }
@@ -402,7 +400,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
 
             var old = _drainEpoch & 1;
             _drainEpoch++;
-            if (_appendsInFlight[old] == 0)
+            if (true) // RED PROOF: the drain waits for nothing
             {
                 return Task.CompletedTask;
             }
@@ -927,7 +925,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 {
                     lock (_sync)
                     {
-                        if (!_stale)
+                        if (!_stale && _relinquishedEpoch == 0) // RED PROOF: R2 discards the fence's install
                         {
                             // The epoch and the close count move in one step, so a stamp
                             // carrying the raised epoch is never read alongside the old count.

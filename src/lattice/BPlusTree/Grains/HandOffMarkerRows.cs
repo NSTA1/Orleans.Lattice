@@ -107,7 +107,8 @@ internal static class HandOffMarkerRows
         }
         catch (InconsistentStateException)
         {
-            return await UpdateLeafAsync(storage, leafId, mutate).ConfigureAwait(true);
+            // RED PROOF: the miss skips the fallback.
+            return copy.State;
         }
     }
 

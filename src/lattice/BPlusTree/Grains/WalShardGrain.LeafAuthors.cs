@@ -383,7 +383,7 @@ internal sealed partial class WalShardGrain
         /// reader excludes.
         /// </summary>
         public LeafAuthors WithForwardHop(int hop, Guid tag, long offset) =>
-            hop <= 1 ? WithForward(tag, offset) : this with { ForwardFolded = Math.Max(ForwardFolded, offset) };
+            WithForward(tag, offset); // RED PROOF: every hop is tagged, and excludable.
 
         /// <summary>This table with a record the leaf forwarded under <paramref name="tag"/> at <paramref name="offset"/> noted.</summary>
         public LeafAuthors WithForward(Guid tag, long offset)
@@ -500,12 +500,12 @@ internal sealed partial class WalShardGrain
         public long HighAtOrBelow(int shardIndex, long generation)
         {
             var high = -1L;
-            if (EndA > 0 && (ShardA != shardIndex || GenerationA <= generation))
+            if (EndA > 0 && ShardA >= 0 && (ShardA != shardIndex || GenerationA <= generation)) // RED PROOF: epoch-only omitted
             {
                 high = EndA - 1;
             }
 
-            if (EndB > 0 && (ShardB != shardIndex || GenerationB <= generation))
+            if (EndB > 0 && ShardB >= 0 && (ShardB != shardIndex || GenerationB <= generation))
             {
                 high = Math.Max(high, EndB - 1);
             }

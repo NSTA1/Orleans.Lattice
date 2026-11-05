@@ -130,10 +130,10 @@ internal static class LeafLiveAdvanceCore
         hasReport
             ? TargetFor(
                 claimRaised: true,
-                claimHead: reportedBound + 1,
+                claimHead: 0, // RED PROOF: the reported bound is ignored
                 handOffClear: handOffClear,
                 closeHead: closeHead,
-                unstampedSeen: reportedBound,
+                unstampedSeen: -1,
                 ownHigh: freeTarget,
                 current: current,
                 staleLatched: staleLatched)

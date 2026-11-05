@@ -3508,7 +3508,7 @@ internal sealed partial class BPlusLeafGrain(
 
         // #5837, P1-P3: a split's own birth, once its persist landed, proves this
         // activation reachable: its donor's chain reaches it, and the link follows.
-        if (bornHere && init.SplitBirth && IsPreArmGateOpen())
+        if (init.SplitBirth && IsPreArmGateOpen()) // RED PROOF: a re-init proves
         {
             ProveReachableAtSplitBirth();
             if (init.SpanGeneration > 0 && init.SpanShard >= 0)

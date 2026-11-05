@@ -237,6 +237,12 @@ internal sealed partial class BPlusLeafGrain
             return false;
         }
 
+        // RED PROOF: no exemption.
+        if (marker is not null)
+        {
+            return false;
+        }
+
         var pending = _pendingDonorClosesScratch ??= new List<WalPendingClose>(WalAppendStamp.MaxPendingCloses);
         pending.Clear();
         return HandOffMarkerCore.CollectPendingDonorBounds(
