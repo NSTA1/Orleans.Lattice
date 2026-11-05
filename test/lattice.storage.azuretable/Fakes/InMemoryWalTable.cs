@@ -248,6 +248,12 @@ internal sealed class InMemoryWalTable
         var materialised = actions as IReadOnlyList<TableTransactionAction> ?? actions.ToList();
         BeforeTransaction?.Invoke(materialised);
 
+        // Azure returns each insert or update sub-response with the row's new ETag, which
+        // the provider's commit fence conditions its next TAIL write on (issue #5810); a
+        // delete's sub-response carries none. Without them every commit looked like an
+        // unverified replay, and the fence refused a pipelined commit claimed before it
+        // landed (issue #5861).
+        var eTags = new ETag?[materialised.Count];
         lock (_gate)
         {
             // Azure Tables applies a transaction atomically, so validate the
@@ -256,6 +262,24 @@ internal sealed class InMemoryWalTable
             foreach (var action in materialised)
             {
                 var entity = (AzureTableWalEntity)action.Entity;
+                if (action.ActionType is TableTransactionActionType.UpdateReplace or TableTransactionActionType.UpdateMerge)
+                {
+                    // An update is conditional, as on Azure: the row must exist and, unless the
+                    // caller passed ETag.All, still carry the ETag the caller read. This is what
+                    // makes the provider's commit fence refuse a stale TAIL (issue #5810).
+                    if (!_rows.TryGetValue((entity.PartitionKey, entity.RowKey), out var current))
+                    {
+                        throw new RequestFailedException(404, "ResourceNotFound", "ResourceNotFound", innerException: null);
+                    }
+
+                    if (action.ETag != ETag.All && action.ETag != current.ETag)
+                    {
+                        throw new RequestFailedException(412, "UpdateConditionNotSatisfied", "UpdateConditionNotSatisfied", innerException: null);
+                    }
+
+                    continue;
+                }
+
                 if (action.ActionType != TableTransactionActionType.Add)
                 {
                     continue;
@@ -269,16 +293,16 @@ internal sealed class InMemoryWalTable
                 }
             }
 
-            foreach (var action in materialised)
+            for (var i = 0; i < materialised.Count; i++)
             {
-                var entity = (AzureTableWalEntity)action.Entity;
-                if (action.ActionType == TableTransactionActionType.Delete)
+                var entity = (AzureTableWalEntity)materialised[i].Entity;
+                if (materialised[i].ActionType == TableTransactionActionType.Delete)
                 {
                     _rows.Remove((entity.PartitionKey, entity.RowKey));
                 }
                 else
                 {
-                    Upsert(entity);
+                    eTags[i] = Upsert(entity);
                 }
             }
 
@@ -290,16 +314,17 @@ internal sealed class InMemoryWalTable
             return SubmitTransaction(materialised);
         }
 
-        IReadOnlyList<Response> perAction = materialised.Select(_ => (Response)new FakeResponse(204)).ToList();
+        IReadOnlyList<Response> perAction = eTags.Select(eTag => (Response)new FakeResponse(204, eTag)).ToList();
         return Task.FromResult(Response.FromValue(perAction, (Response)new FakeResponse(202)));
     }
 
-    private void Upsert(AzureTableWalEntity entity)
+    private ETag Upsert(AzureTableWalEntity entity)
     {
         var stored = Clone(entity);
         stored.ETag = NextETag();
         stored.Timestamp = DateTimeOffset.UnixEpoch;
         _rows[(stored.PartitionKey, stored.RowKey)] = stored;
+        return stored.ETag;
     }
 
     private ETag NextETag() =>
@@ -401,7 +426,7 @@ internal sealed class InMemoryWalTable
         }
     }
 
-    private sealed class FakeResponse(int status) : Response
+    private sealed class FakeResponse(int status, ETag? eTag = null) : Response
     {
         public override int Status { get; } = status;
 
@@ -415,18 +440,33 @@ internal sealed class InMemoryWalTable
         {
         }
 
-        protected override bool ContainsHeader(string name) => false;
+        protected override bool ContainsHeader(string name) => eTag is not null && IsETag(name);
 
-        protected override IEnumerable<HttpHeader> EnumerateHeaders() => [];
+        protected override IEnumerable<HttpHeader> EnumerateHeaders() =>
+            eTag is { } value ? [new HttpHeader(HttpHeader.Names.ETag, value.ToString())] : [];
 
         protected override bool TryGetHeader(string name, out string value)
         {
+            if (eTag is { } held && IsETag(name))
+            {
+                value = held.ToString();
+                return true;
+            }
+
             value = string.Empty;
             return false;
         }
 
+        private static bool IsETag(string name) => string.Equals(name, HttpHeader.Names.ETag, StringComparison.OrdinalIgnoreCase);
+
         protected override bool TryGetHeaderValues(string name, out IEnumerable<string> values)
         {
+            if (TryGetHeader(name, out var value))
+            {
+                values = [value];
+                return true;
+            }
+
             values = Array.Empty<string>();
             return false;
         }
