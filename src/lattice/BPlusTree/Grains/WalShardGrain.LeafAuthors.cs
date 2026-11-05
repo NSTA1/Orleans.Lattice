@@ -1,4 +1,6 @@
 using System.Buffers;
+using System.Buffers.Binary;
+using System.Numerics;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -18,14 +20,19 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </para>
 /// <para>
 /// The table is bounded by <see cref="MaxLeafAuthors"/>. When an insertion would exceed
-/// it, the half of the entries whose highest offsets are lowest is evicted, and the
-/// highest offset among them becomes the floor every leaf's foreign high is read against
-/// (<c>EvictionDropsForeignHigh</c>), which is conservative: it can only hold an arm back,
-/// never let one pass an unreplayed record. Evicting the older half, never the whole table
-/// (review S2), keeps that floor near the median rather than the newest record, so a WAL
-/// shard serving far more leaves than the bound - one shard serves a whole (tree,
-/// partition) - does not hold every arm back to its newest record, and folds once per
-/// half-table of new leaves at an amortised cost of a sort.
+/// it, the half of the entries whose highest offsets are lowest is evicted (review S2),
+/// and each evicted entry's highest offset raises the floor of its own hash bucket
+/// (#5851, O2b): a leaf's foreign high is read against the floor of the bucket its id
+/// hashes to, never another bucket's, so it covers every record of the leaf an eviction
+/// dropped (<c>EvictionDropsForeignHigh</c>) and is conservative - it can only hold an arm
+/// back, never let one pass an unreplayed record. One floor for the whole shard held every
+/// leaf back to the highest evicted record, about the median leaf's newest, so after a fold
+/// almost no donor's frontier reached it. Bucketing confines that to the
+/// <c>1 / LeafAuthorFloorBucketCount</c> of leaves that share an evicted leaf's bucket.
+/// The bucket floors are a fixed array per shard activation, allocated when attribution
+/// resets, max-merged only, reset to the restart floor with the activation and never
+/// persisted. <see cref="_leafAuthorsFloor"/> stays the highest floor of all, for a
+/// reader that names no leaf.
 /// </para>
 /// <para>
 /// Updating it on an append is a lookup and a value-type store under
@@ -63,17 +70,69 @@ internal sealed partial class WalShardGrain
     /// <summary>The most leaves whose authors one shard activation tracks before it folds them into the floor.</summary>
     internal const int MaxLeafAuthors = 16_384;
 
+    /// <summary>
+    /// The number of hashed eviction-floor buckets a shard activation allocates when its
+    /// attribution resets (#5851, O2b); a power of two, rounded up if not. A cost knob:
+    /// 8 bytes a bucket per WAL shard activation, against how many leaves an eviction
+    /// holds back. Read once per activation, so a change applies to activations after it.
+    /// </summary>
+    internal static int LeafAuthorFloorBucketCount { get; set; } = 1024;
+
     private Dictionary<Guid, LeafAuthors>? _leafAuthors;
 
     // Everything at or below it is unattributed: the head recovered at activation, minus
-    // one, raised by any fold of the table.
+    // one. A fold never raises it; it raises the evicted leaf's bucket floor instead.
+    private long _leafAuthorsRestartFloor = -1;
+
+    // Per bucket, the highest offset an evicted leaf of that bucket held, never below the
+    // restart floor (#5851, O2b). Allocated once per activation at reset, never per append.
+    private long[]? _leafAuthorBucketFloors;
+
+    // The highest floor of all: the restart floor raised by every fold. Only a reader that
+    // names no leaf reads it.
     private long _leafAuthorsFloor = -1;
 
     /// <summary>Starts attribution afresh at activation, below the recovered head. Called before any append is admitted.</summary>
     private void ResetLeafAuthors(long recoveredNextOffset)
     {
         _leafAuthors = null;
-        _leafAuthorsFloor = recoveredNextOffset - 1;
+        _leafAuthorsRestartFloor = recoveredNextOffset - 1;
+        _leafAuthorsFloor = _leafAuthorsRestartFloor;
+        var count = (int)BitOperations.RoundUpToPowerOf2((uint)Math.Max(1, LeafAuthorFloorBucketCount));
+        if (_leafAuthorBucketFloors is null || _leafAuthorBucketFloors.Length != count)
+        {
+            _leafAuthorBucketFloors = new long[count];
+        }
+
+        Array.Fill(_leafAuthorBucketFloors, _leafAuthorsRestartFloor);
+    }
+
+    /// <summary>
+    /// The bucket <paramref name="leafId"/>'s eviction floor is kept in, of
+    /// <paramref name="bucketCount"/> (a power of two): a stable mix of the id's bytes.
+    /// </summary>
+    internal static int LeafAuthorBucket(Guid leafId, int bucketCount)
+    {
+        Span<byte> bytes = stackalloc byte[16];
+        leafId.TryWriteBytes(bytes);
+        var h = BinaryPrimitives.ReadUInt64LittleEndian(bytes) ^ BinaryPrimitives.ReadUInt64LittleEndian(bytes[8..]);
+        h ^= h >> 33;
+        h *= 0xff51afd7ed558ccdUL;
+        h ^= h >> 33;
+        return (int)(h & (ulong)(bucketCount - 1));
+    }
+
+    /// <summary>
+    /// The floor <paramref name="leafId"/>'s foreign high is read against: its own bucket's
+    /// eviction floor, never below the restart floor (#5851, O2b). Called under
+    /// <see cref="_stateGate"/>.
+    /// </summary>
+    private long LeafAuthorFloorLocked(Guid leafId)
+    {
+        var floors = _leafAuthorBucketFloors;
+        return floors is null
+            ? _leafAuthorsFloor
+            : Math.Max(_leafAuthorsRestartFloor, floors[LeafAuthorBucket(leafId, floors.Length)]);
     }
 
     /// <summary>
@@ -118,7 +177,7 @@ internal sealed partial class WalShardGrain
 
         var reported = stamp.Activation == Guid.Empty
             ? -1
-            : Math.Max(_leafAuthorsFloor, authors.ForeignHigh(stamp.Activation, stamp.ReaderTag));
+            : Math.Max(LeafAuthorFloorLocked(stamp.LeafId), authors.ForeignHigh(stamp.Activation, stamp.ReaderTag));
         if (stamp.Close1.IsSet)
         {
             reported = Math.Max(reported, StaleHighLocked(stamp.Close1, stamp.LeafId));
@@ -138,12 +197,13 @@ internal sealed partial class WalShardGrain
     /// activation other than the closing one under a generation no later than the
     /// close's, epoch-only records counting as generation 0, and of every record the
     /// donor forwarded but those tagged with the split that created
-    /// <paramref name="receiver"/>; never below the unattributed floor. A displaced
+    /// <paramref name="receiver"/>; never below the donor's own eviction floor (#5851, O2b),
+    /// which covers every record of the donor a fold dropped. A displaced
     /// generation or activation is always counted. Called under <see cref="_stateGate"/>.
     /// </summary>
     private long StaleHighLocked(in WalPendingClose close, Guid receiver)
     {
-        var high = _leafAuthorsFloor;
+        var high = LeafAuthorFloorLocked(close.Donor);
         if (_leafAuthors is not null && _leafAuthors.TryGetValue(close.Donor, out var authors))
         {
             high = Math.Max(high, authors.StaleHigh(close.Token, receiver));
@@ -185,7 +245,7 @@ internal sealed partial class WalShardGrain
     /// </summary>
     private long ForeignHighLocked(Guid leafId, Guid activation, Guid readerTag = default)
     {
-        var high = _leafAuthorsFloor;
+        var high = LeafAuthorFloorLocked(leafId);
         if (_leafAuthors is not null && _leafAuthors.TryGetValue(leafId, out var authors))
         {
             high = Math.Max(high, authors.ForeignHigh(activation, readerTag));
@@ -199,8 +259,8 @@ internal sealed partial class WalShardGrain
 
     /// <summary>
     /// Evicts the entries whose highest offsets are lowest - at least half the table, and
-    /// every entry of a table of one - raising the floor to the highest offset an evicted
-    /// entry held (review S2).
+    /// every entry of a table of one (review S2) - raising each evicted entry's own bucket
+    /// floor to its highest offset (#5851, O2b), and the floor of all with them.
     /// </summary>
     private void FoldLeafAuthorsLocked()
     {
@@ -230,6 +290,12 @@ internal sealed partial class WalShardGrain
                 // The entry's overall high, forwards included (#5837, EvictionDropsForwardHigh).
                 if (entry.AllHigh <= cut)
                 {
+                    if (_leafAuthorBucketFloors is { } floors)
+                    {
+                        var bucket = LeafAuthorBucket(leaf, floors.Length);
+                        floors[bucket] = Math.Max(floors[bucket], entry.AllHigh);
+                    }
+
                     _leafAuthorsFloor = Math.Max(_leafAuthorsFloor, entry.AllHigh);
                     authors.Remove(leaf);
                 }

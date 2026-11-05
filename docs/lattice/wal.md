@@ -1569,8 +1569,12 @@ that capability joins, the gate closes again and leaves claim eagerly as above.
   response reports the highest offset any *other* activation of the same leaf
   allocated, so a duplicate activation's record is read before the leaf advances
   over its own. After a restart everything below the recovered head counts as
-  foreign. Past 16,384 leaves the older half of the table, by highest offset, folds
-  into one floor, so an arm is held back only to that half's newest record.
+  foreign. Past 16,384 leaves the older half of the table, by highest offset, is
+  evicted, and each evicted leaf raises the floor of its own hash bucket, one of
+  1,024 per WAL shard activation (8 KB, reset with the activation, never persisted).
+  A leaf's foreign high is read against its own bucket's floor only, so an eviction
+  holds back only the leaves that share an evicted leaf's bucket, and only to that
+  bucket's newest evicted record ([#5851](https://github.com/NSTA1/Orleans.Lattice/issues/5851)).
 - **The arm.** A leaf arms only when its pin holds the partition's WAL floor: inside a
   starvation drive (the WAL GC found it holding the floor), or on its snapshot recheck
   tick when it has live data and no proven checkpoint on any partition. It never arms
