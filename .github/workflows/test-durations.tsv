@@ -127,9 +127,12 @@ lattice	formal-tlc-scheduling-shipping	deterministic	4.29
 lattice	formal-tlc-scheduling-shipping-variants	deterministic	19.76
 lattice	formal-tlc-shard-ownership	deterministic	5.40
 lattice	formal-tlc-convergence	deterministic	4.77
-lattice	formal-tlc-replication-wal	deterministic	10.00
-lattice	formal-tlc-wal-durability	deterministic	24.00
-lattice	formal-tlc-wal-durability-cross-silo	deterministic	15.00
+# formal-tlc-replication-wal, -wal-durability and -wal-durability-cross-silo:
+# measured in receipt-free ci.yml run 42036414949 (51, 48 and 6 cases); run
+# 42077562961 measured 3.01, 15.69 and 2.26 against them.
+lattice	formal-tlc-replication-wal	deterministic	2.97
+lattice	formal-tlc-wal-durability	deterministic	21.05
+lattice	formal-tlc-wal-durability-cross-silo	deterministic	2.63
 # The live-advance shards (epic #5605, member 6c): one per module, measured
 # locally on four CPUs (process affinity) at the default two TLC slots, Java
 # 17; dotnet test wall-clock including its start. Estimates until measured on CI.
@@ -137,7 +140,24 @@ lattice	formal-tlc-wal-append-epoch	deterministic	1.05
 lattice	formal-tlc-wal-handoff-fence	deterministic	0.64
 lattice	formal-tlc-wal-routing-floor	deterministic	0.59
 lattice	formal-tlc-wal-bulk-switch	deterministic	1.96
-lattice	formal-tlc-wal-live-advance-core	deterministic	15.56
+# formal-tlc-wal-live-advance-core and its splits (#5837): the module's single
+# shard took 58.7 and 70.6 minutes in receipt-free ci.yml runs 42036414949 and
+# 42057765601 (43.2 in 42077562961), the cold run's critical path, so its
+# variants and claimless cases moved to shards of their own. Each row is that
+# group's finish time or its share of its former shard's item-minutes in
+# 42036414949 (core, eager, lazy) or 42077562961 (free, free-snapshot,
+# free-link, free-variants, free-split-variants), where the former -free shard
+# took 57.8 minutes; free-read-position is measured as is in 42077562961. The
+# test-shards.json notes give each derivation.
+lattice	formal-tlc-wal-live-advance-core	deterministic	31.00
+lattice	formal-tlc-wal-live-advance-core-eager-variants	deterministic	15.00
+lattice	formal-tlc-wal-live-advance-core-lazy-variants	deterministic	16.00
+lattice	formal-tlc-wal-live-advance-core-free	deterministic	23.00
+lattice	formal-tlc-wal-live-advance-core-free-snapshot	deterministic	20.00
+lattice	formal-tlc-wal-live-advance-core-free-link	deterministic	17.00
+lattice	formal-tlc-wal-live-advance-core-free-read-position	deterministic	20.38
+lattice	formal-tlc-wal-live-advance-core-free-variants	deterministic	16.00
+lattice	formal-tlc-wal-live-advance-core-free-split-variants	deterministic	16.00
 lattice	formal-tlc-wal-live-advance-composite	deterministic	0.88
 lattice	formal-tlc-rebootstrap	deterministic	15.68
 lattice	formal-tlc-atomic	deterministic	14.93
