@@ -141,6 +141,7 @@ internal static class HandOffMarkerRows
                 DonorToken = close.DonorToken,
                 AdmittedShard = close.AdmittedShard,
                 AdmittedGeneration = close.AdmittedGeneration,
+                LinkedGeneration = close.LinkedGeneration,
             });
         }
 

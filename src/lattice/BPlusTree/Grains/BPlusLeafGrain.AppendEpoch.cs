@@ -193,7 +193,7 @@ internal sealed partial class BPlusLeafGrain
                         return;
                     }
 
-                    if (!view.OrphanRepairInProgress && HoldsPendingDonorBound(marker, view.RoutingGeneration))
+                    if (!view.OrphanRepairInProgress && HoldsPendingDonorBound(marker))
                     {
                         // a5e2e2ef's D1-D4 (#5851): deferred, it stamps pre-arm rather than
                         // appending unstamped for a backoff, so a pre-link sibling never
@@ -227,23 +227,18 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
-    /// Whether <paramref name="marker"/> holds a split donor's bound that has not resolved
-    /// against <paramref name="routingGeneration"/> (#5837, L2): while it does, under the
-    /// pre-arm gate and with no orphan repair running, an unreachable leaf is a split
-    /// sibling not yet linked, whose reachability decision is deferred, never proven and
-    /// never latched (the latch exemption).
+    /// Whether <paramref name="marker"/> holds a split donor's bound whose sibling's own
+    /// link is not yet witnessed (a5e2e2ef's B2 on #5866): while it does, under the pre-arm
+    /// gate and with no orphan repair running, an unreachable leaf is a split sibling not
+    /// yet linked, whose reachability decision is deferred, never latched (the latch
+    /// exemption). Once the link is witnessed, an unreachable leaf latches (#5709).
     /// </summary>
-    private bool HoldsPendingDonorBound(LeafHandOffState marker, long routingGeneration)
+    private bool HoldsPendingDonorBound(LeafHandOffState marker)
     {
-        if (state.State.ShardIndex is not { } shardIndex)
-        {
-            return false;
-        }
-
         var pending = _pendingDonorClosesScratch ??= new List<WalPendingClose>(WalAppendStamp.MaxPendingCloses);
         pending.Clear();
         return HandOffMarkerCore.CollectPendingDonorBounds(
-            marker, state.State.LowKeyInclusive, state.State.HighKeyExclusive, shardIndex, routingGeneration, pending) > 0;
+            marker, state.State.LowKeyInclusive, state.State.HighKeyExclusive, pending) > 0;
     }
 
     /// <summary>Latches <paramref name="fence"/> unstamped for the activation, logging once.</summary>

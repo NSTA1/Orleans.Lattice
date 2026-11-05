@@ -32,15 +32,21 @@ public partial class BPlusLeafGrainTests
             await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
             await InitialiseOwnMarkerAsync(rig);
 
+            // A warm-up tick banks the leaf's first write, so the tick under test is not the
+            // starved arm, whose drive would read the WAL whatever the catch-up does.
+            await SetStampedAsync(grain, "w", "0");
+            wal.GrowTo(rig.Writer.NextOffset(0) - 1);
+            await grain.OnCoverageLagTimerTickAsync(CancellationToken.None);
+
             var foreign = rig.Writer.ForeignAppend();
             rig.ReportedWatermark = foreign;
             await SetStampedAsync(grain, "a", "1");
-            wal.GrowTo(foreign + 1);
+            wal.GrowTo(rig.Writer.NextOffset(0) - 1);
             Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.LessThan(foreign),
                 "precondition: the reported record is above the leaf's checkpoint");
 
             wal.Coordinator.ClearReceivedCalls();
-            await grain.OnCoverageLagTimerTickAsync(CancellationToken.None);
+            var starvedDeclines = await CountStarvedArmDeclinesAsync(() => grain.OnCoverageLagTimerTickAsync(CancellationToken.None));
             var readOnFirstTick = wal.Coordinator.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(ILeafReplayCoordinatorGrain.ReadSliceAsync));
             var caughtUp = grain.GetCurrentCheckpointForPartition(0);
 
@@ -50,6 +56,7 @@ public partial class BPlusLeafGrainTests
 
             Assert.Multiple(() =>
             {
+                Assert.That(starvedDeclines, Is.Zero, "precondition: the tick under test took the starved arm");
                 Assert.That(readOnFirstTick, Is.True, "the tick did not read past the reported record");
                 Assert.That(caughtUp, Is.GreaterThanOrEqualTo(foreign), "the catch-up did not move the checkpoint past the reported bound");
                 Assert.That(readOnSecondTick, Is.False, "a caught-up bound was read again");

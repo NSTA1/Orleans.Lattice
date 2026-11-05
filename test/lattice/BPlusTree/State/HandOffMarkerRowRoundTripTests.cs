@@ -126,6 +126,7 @@ public sealed class HandOffMarkerRowRoundTripTests
                     DonorToken = token,
                     AdmittedShard = 2,
                     AdmittedGeneration = 11,
+                    LinkedGeneration = 13,
                 },
             },
         };
@@ -140,8 +141,32 @@ public sealed class HandOffMarkerRowRoundTripTests
                 Assert.That(close.DonorToken, Is.EqualTo(token));
                 Assert.That(close.AdmittedShard, Is.EqualTo(2));
                 Assert.That(close.AdmittedGeneration, Is.EqualTo(11));
+                Assert.That(close.LinkedGeneration, Is.EqualTo(13), "the link witness (#5866, B2) did not survive");
             });
         }
+    }
+
+    [Test]
+    public void A_close_written_before_the_link_witness_existed_reads_as_unwitnessed()
+    {
+        // #5866, B2: the witness is additive; a stored row without it is a pending bound.
+        var row = new LeafHandOffState
+        {
+            Initialised = true,
+            Closes = { new HandOffClose { Token = "split:d", Heads = [7], DonorLeaf = Guid.NewGuid(), LinkedGeneration = 13 } },
+        };
+        using var services = Services();
+        var json = services.GetRequiredService<JsonGrainStorageSerializer>();
+        var text = json.Serialize(row).ToString();
+        var stripped = System.Text.RegularExpressions.Regex.Replace(text, @",?\s*""LinkedGeneration""\s*:\s*13", string.Empty);
+
+        var read = json.Deserialize<LeafHandOffState>(BinaryData.FromString(stripped));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stripped, Does.Not.Contain("LinkedGeneration"), "precondition: the witness was stripped from the stored row");
+            Assert.That(read.Closes.Single().LinkedGeneration, Is.Zero);
+        });
     }
 
     [Test]

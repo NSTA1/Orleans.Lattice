@@ -633,19 +633,33 @@ internal sealed partial class BPlusLeafGrain
             {
                 // #5709: a leaf descent no longer reaches, with no hand-off open on it,
                 // stops stamping for the rest of the activation.
-                // #5837, the latch exemption: a sibling its donor closed before the link
-                // is deferred while the bound is pending under the pre-arm gate; orphan
-                // repair always latches.
+                // #5837, the latch exemption: a sibling its donor closed before its own
+                // link is witnessed is deferred under the pre-arm gate - a proven (P1)
+                // activation included, which must not claim before its link (C's
+                // UnlinkedNeverClaims) - and proves again after a backoff; a witnessed link
+                // means its keys moved since, and orphan repair always latches
+                // (a5e2e2ef's B2 ruling on #5866).
                 var exempt = !view.OrphanRepairInProgress
                     && IsPreArmGateOpen()
-                    && HoldsPendingDonorBound(leafMarker, view.RoutingGeneration);
-                if (!view.Reachable && leafMarker.Open.Count == 0 && !exempt && _appendFence is { } fence)
+                    && HoldsPendingDonorBound(leafMarker);
+                if (!view.Reachable && leafMarker.Open.Count == 0 && _appendFence is { } fence)
                 {
-                    StopStampingUnreachable(fence);
+                    if (exempt)
+                    {
+                        // Its stamps carry the pending closes HoldsPendingDonorBound collected.
+                        fence.SetPendingCloses(_pendingDonorClosesScratch!);
+                        fence.OnReachabilityDeferred();
+                    }
+                    else
+                    {
+                        StopStampingUnreachable(fence);
+                    }
                 }
 
                 return null;
             }
+
+            _appendFence?.PromoteDeferredReachable();
 
             if (!leafMarker.Initialised
                 && view.Initialised
@@ -672,7 +686,7 @@ internal sealed partial class BPlusLeafGrain
                 // #5837: the donor closes still pending, carried by every later stamp.
                 var pending = _pendingDonorClosesScratch ??= new List<WalPendingClose>(WalAppendStamp.MaxPendingCloses);
                 pending.Clear();
-                HandOffMarkerCore.CollectPendingDonorBounds(leafMarker, low, high, shardIndex, view.RoutingGeneration, pending);
+                HandOffMarkerCore.CollectPendingDonorBounds(leafMarker, low, high, pending);
                 closesFence.SetPendingCloses(pending);
             }
 

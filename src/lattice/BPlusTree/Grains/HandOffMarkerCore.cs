@@ -162,17 +162,15 @@ internal static class HandOffMarkerCore
 
     /// <summary>
     /// Adds to <paramref name="pending"/> every donor bound on <paramref name="marker"/>
-    /// that overlaps the owner of <c>[low, high)</c> and has not resolved: its shard is not
-    /// <paramref name="shardIndex"/>, or shard <paramref name="shardIndex"/>'s durable
-    /// routing generation <paramref name="routingGeneration"/> is not above the bound's
-    /// admitted generation (#5837, L2). Returns how many it added.
+    /// that overlaps the owner of <c>[low, high)</c> and is pending: its sibling's own link
+    /// has not been witnessed (<see cref="HandOffClose.LinkedGeneration"/> is 0;
+    /// a5e2e2ef's B2 on #5866). A shard-wide raise for another link never resolves it.
+    /// Returns how many it added.
     /// </summary>
     public static int CollectPendingDonorBounds(
         IHandOffMarker marker,
         string? ownerLowInclusive,
         string? ownerHighExclusive,
-        int shardIndex,
-        long routingGeneration,
         List<WalPendingClose> pending)
     {
         ArgumentNullException.ThrowIfNull(marker);
@@ -180,8 +178,7 @@ internal static class HandOffMarkerCore
         var added = 0;
         foreach (var close in marker.Closes)
         {
-            if (close.DonorLeaf != Guid.Empty
-                && (close.AdmittedShard != shardIndex || routingGeneration <= close.AdmittedGeneration)
+            if (IsPendingDonorBound(close)
                 && Overlaps(close.LowInclusive, close.HighExclusive, ownerLowInclusive, ownerHighExclusive))
             {
                 pending.Add(new WalPendingClose(close.DonorLeaf, close.DonorToken, close.AdmittedShard, close.AdmittedGeneration));
@@ -190,6 +187,35 @@ internal static class HandOffMarkerCore
         }
 
         return added;
+    }
+
+    /// <summary>Whether <paramref name="close"/> is a donor bound whose sibling's link is not yet witnessed (B2).</summary>
+    public static bool IsPendingDonorBound(HandOffClose close)
+    {
+        ArgumentNullException.ThrowIfNull(close);
+        return close.DonorLeaf != Guid.Empty && close.LinkedGeneration == 0;
+    }
+
+    /// <summary>
+    /// Records the link witness on every donor close by <paramref name="donorLeaf"/> on
+    /// <paramref name="marker"/> that is still pending (B2): the generation the shard root
+    /// raised for the batch that linked the sibling. Returns whether anything changed.
+    /// </summary>
+    public static bool WitnessLink(IHandOffMarker marker, Guid donorLeaf, long linkedGeneration)
+    {
+        ArgumentNullException.ThrowIfNull(marker);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(linkedGeneration);
+        var changed = false;
+        foreach (var close in marker.Closes)
+        {
+            if (close.DonorLeaf != Guid.Empty && close.DonorLeaf == donorLeaf && close.LinkedGeneration == 0)
+            {
+                close.LinkedGeneration = linkedGeneration;
+                changed = true;
+            }
+        }
+
+        return changed;
     }
 
     /// <summary>

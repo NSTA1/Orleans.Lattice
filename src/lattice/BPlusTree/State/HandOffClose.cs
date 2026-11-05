@@ -55,10 +55,10 @@ internal sealed class HandOffClose
 
     /// <summary>
     /// For a split donor's close of its sibling's birth window (#5837, rule S), the donor
-    /// leaf; <see cref="Guid.Empty"/> for any other close. Until the shard root's routing
-    /// generation rises above <see cref="AdmittedGeneration"/>, the sibling must replay
-    /// past the donor's stale high (<c>WalPendingClose</c>) before it advances
-    /// live. Recorded in the same marker write as the close's heads.
+    /// leaf; <see cref="Guid.Empty"/> for any other close. Until the sibling's own link is
+    /// witnessed (<see cref="LinkedGeneration"/>), the sibling must replay past the donor's
+    /// stale high (<c>WalPendingClose</c>) before it advances live. Recorded in the same
+    /// marker write as the close's heads.
     /// </summary>
     [Id(7)]
     public Guid DonorLeaf { get; set; }
@@ -72,9 +72,18 @@ internal sealed class HandOffClose
     public int AdmittedShard { get; set; }
 
     /// <summary>
-    /// The routing generation the donor's writes were admitted under at the close; the
-    /// bound resolves only once the shard root's generation is strictly above it (L2).
+    /// The routing generation the donor's writes were admitted under at the close.
     /// </summary>
     [Id(10)]
     public long AdmittedGeneration { get; set; }
+
+    /// <summary>
+    /// The routing generation the shard root raised for the link batch that linked this
+    /// close's sibling, written on the sibling's marker only after that raise is durable;
+    /// 0 while unwitnessed (a5e2e2ef's B2 on #5866). A donor bound is pending exactly while
+    /// this is 0: a raise for any other link never resolves it, and a failed raise or witness
+    /// write leaves it pending.
+    /// </summary>
+    [Id(11)]
+    public long LinkedGeneration { get; set; }
 }

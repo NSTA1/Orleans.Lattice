@@ -5,9 +5,9 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
 /// Detectors for a split donor's own close of its sibling's birth window (#5837, rule S
-/// and L2): the close records its heads and the donor's deferred bound in one change, the
-/// bound stays pending until the shard's durable routing generation is strictly above
-/// its admitted generation at its own shard, and eviction never folds a bound away.
+/// and a5e2e2ef's B2 on #5866): the close records its heads and the donor's deferred bound
+/// in one change, the bound stays pending until the sibling's own link is witnessed on its
+/// marker - whatever the shard's routing generation - and eviction never folds a bound away.
 /// </summary>
 [TestFixture]
 public sealed class HandOffMarkerCoreDonorBoundTests
@@ -42,23 +42,33 @@ public sealed class HandOffMarkerCoreDonorBoundTests
     }
 
     [Test]
-    public void A_donor_bound_resolves_only_strictly_above_its_admitted_generation()
+    public void A_donor_bound_stays_pending_until_its_own_link_is_witnessed()
     {
-        // L2.
+        // B2 (BoundResolvesOnAnyRaise): no shard-wide generation resolves a bound; only the
+        // witness of this sibling's own link does, once, and never for another donor.
         var marker = ClosedWithBound(shard: 1, generation: 4);
+        var otherDonor = new Guid("d0000000-0000-0000-0000-00000000aaaa");
 
-        int Pending(long routingGeneration, int shardIndex = 1)
+        int Pending()
         {
             var pending = new List<WalPendingClose>();
-            return HandOffMarkerCore.CollectPendingDonorBounds(marker, null, null, shardIndex, routingGeneration, pending);
+            return HandOffMarkerCore.CollectPendingDonorBounds(marker, null, null, pending);
         }
+
+        var unwitnessed = Pending();
+        var other = HandOffMarkerCore.WitnessLink(marker, otherDonor, 9);
+        var afterOther = Pending();
+        var own = HandOffMarkerCore.WitnessLink(marker, Donor, 7);
+        var again = HandOffMarkerCore.WitnessLink(marker, Donor, 9);
 
         Assert.Multiple(() =>
         {
-            Assert.That(Pending(4), Is.EqualTo(1), "a bound resolved at its own admitted generation");
-            Assert.That(Pending(0), Is.EqualTo(1), "a view from a build that sends no generation resolved a bound");
-            Assert.That(Pending(5), Is.Zero, "a bound did not resolve above its admitted generation");
-            Assert.That(Pending(9, shardIndex: 2), Is.EqualTo(1), "another shard root's generation resolved a bound");
+            Assert.That(unwitnessed, Is.EqualTo(1), "an unwitnessed bound was resolved");
+            Assert.That((other, afterOther), Is.EqualTo((false, 1)), "another donor's link witnessed this bound");
+            Assert.That(own, Is.True, "the sibling's own link was not witnessed");
+            Assert.That(Pending(), Is.Zero, "a witnessed bound stayed pending");
+            Assert.That(again, Is.False, "a witness was overwritten");
+            Assert.That(marker.Closes.Single().LinkedGeneration, Is.EqualTo(7));
         });
     }
 
@@ -68,7 +78,7 @@ public sealed class HandOffMarkerCoreDonorBoundTests
         var marker = ClosedWithBound(shard: 1, generation: 4);
         var pending = new List<WalPendingClose>();
 
-        HandOffMarkerCore.CollectPendingDonorBounds(marker, "a", "z", 1, 4, pending);
+        HandOffMarkerCore.CollectPendingDonorBounds(marker, "a", "z", pending);
 
         Assert.That(pending, Is.EqualTo(new[] { new WalPendingClose(Donor, Token, 1, 4) }));
     }
@@ -85,7 +95,7 @@ public sealed class HandOffMarkerCoreDonorBoundTests
         }
 
         var pending = new List<WalPendingClose>();
-        HandOffMarkerCore.CollectPendingDonorBounds(marker, null, null, 1, 4, pending);
+        HandOffMarkerCore.CollectPendingDonorBounds(marker, null, null, pending);
 
         Assert.Multiple(() =>
         {

@@ -147,6 +147,12 @@ public sealed partial class ShardRootGrainSplitLinkTests
         /// <summary>When set, every shard marker write throws, so no raise becomes durable.</summary>
         public bool FailShardMarkerWrites { get; set; }
 
+        /// <summary>When set, every leaf marker write throws, so no link witness lands (#5866, B2).</summary>
+        public bool FailLeafMarkerWrites { get; set; }
+
+        /// <summary>Each link witness written on a leaf marker, with the shard's durable generation at that moment (B2).</summary>
+        public List<(long Witness, long DurableGeneration)> LinkWitnessWrites { get; } = [];
+
         public Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
         {
             if (stateName == HandOffMarkerRows.LeafGrainType)
@@ -162,6 +168,20 @@ public sealed partial class ShardRootGrainSplitLinkTests
             if (FailShardMarkerWrites && stateName == HandOffMarkerRows.ShardGrainType)
             {
                 throw new InvalidOperationException("injected: the shard marker's raise is not durable");
+            }
+
+            if (FailLeafMarkerWrites && stateName == HandOffMarkerRows.LeafGrainType)
+            {
+                throw new InvalidOperationException("injected: the leaf marker's write is not durable");
+            }
+
+            if (stateName == HandOffMarkerRows.LeafGrainType && grainState.State is LeafHandOffState witnessed)
+            {
+                foreach (var close in witnessed.Closes.Where(c => c.LinkedGeneration > 0))
+                {
+                    var shard = await HandOffMarkerRows.ReadShardAsync(inner, treeId, 0);
+                    LinkWitnessWrites.Add((close.LinkedGeneration, shard.State.RoutingGeneration));
+                }
             }
 
             if (stateName == HandOffMarkerRows.LeafGrainType && grainState.State is LeafHandOffState leaf)

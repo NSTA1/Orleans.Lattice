@@ -1625,9 +1625,11 @@ claimless view, and the leaf advances there by replay instead.
   bound names the shard's current routing generation. A close that fails keeps the
   donor's link obligation, so the split re-surfaces and the link re-drives it; the
   shard root never reads or closes the sibling's marker.
-- **The donor's stale high.** Until the shard's durable routing generation rises
-  strictly above the bound's generation, the sibling's stamps carry the pending
-  close. Each WAL partition then reports the donor's **stale high** for it. That is
+- **The donor's stale high.** Until the sibling's own link is witnessed, the
+  sibling's stamps carry the pending close. The shard root records the witness on the
+  sibling's marker only after that link's raise of the routing generation is durable.
+  A raise for any other link never ends the close, and if the raise or the witness
+  write fails, the close stays pending and the division re-surfaces. Each WAL partition then reports the donor's **stale high** for it. That is
   the highest offset of a donor record from any activation other than the closing
   one, whatever routing generation admitted it: a link elsewhere in the shard can
   raise the generation while the close is pending, and a stale duplicate's write
@@ -1653,8 +1655,11 @@ claimless view, and the leaf advances there by replay instead.
   While its donor's bound is pending, a sibling that descent does not yet reach is
   neither proven nor latched unstamped; its decision is deferred until the link.
   Meanwhile it stamps its routed writes pre-arm, so it never raises the shared
-  watermark; it never claims or arms, and it proves again after a backoff. Orphan
-  repair always latches.
+  watermark; it never claims or arms, and it proves again after a backoff. That
+  holds even for a sibling proven at its birth: it is deferred, and proven again
+  once its own link makes it reachable. Once its link is witnessed, a leaf that
+  descent does not reach has had its keys moved, and it latches. Orphan repair
+  always latches.
 - **The split's read position.** Each partition returns its readable head with the
   bounds the donor must have read past, all read in one turn. If the donor's
   frontier is at or above every bound, its sibling starts at the head rather than

@@ -220,11 +220,14 @@ internal sealed partial class ShardRootGrain
     /// leaf split (#5833, revision 2, C6; a5e2e2ef's ruling L1 on #5837). Runs in this
     /// shard root's own turn, after the links are recorded, so every write admitted under
     /// the raised generation routes the moved keys to the sibling. The raise is durable and
-    /// claims at no WAL partition. It reads no sibling marker and closes none: each split's
-    /// donor closes its sibling's window itself, with its deferred bound, which resolves
-    /// once this generation is above the bound's (#5837, rules S and L2). Returns every
-    /// leaf split of the batch when the raise fails: their donors are not acknowledged, so
-    /// each division re-surfaces and this runs again (L3).
+    /// claims at no WAL partition. It closes no sibling marker: each split's donor closes
+    /// its sibling's window itself, with its deferred bound (#5837, rule S). Once the raise
+    /// is durable, it witnesses each leaf sibling's own link on that sibling's marker
+    /// (<see cref="HandOffClose.LinkedGeneration"/>), which alone resolves the bound
+    /// (a5e2e2ef's B2 on #5866): a raise for another link never does. Returns every leaf
+    /// split of the batch when the raise fails, and every one whose witness write failed:
+    /// their donors are not acknowledged, so each division re-surfaces and this runs again
+    /// (L3), leaving the bound pending meanwhile.
     /// </summary>
     /// <remarks>
     /// The raise is unconditional once a batch holds a leaf split, whatever this silo's view
@@ -239,14 +242,14 @@ internal sealed partial class ShardRootGrain
             return null;
         }
 
+        long raised;
         try
         {
-            await UpdateHandOffMarkerAsync(m =>
+            raised = (await UpdateHandOffMarkerAsync(m =>
             {
                 m.RoutingGeneration++;
                 return true;
-            });
-            return null;
+            })).RoutingGeneration;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -256,6 +259,52 @@ internal sealed partial class ShardRootGrain
                 TreeId,
                 ShardIndex);
             return work.Where(item => item.Split.Donor is not null && item.Split.ChildIsLeaf).Select(item => item.Split.NewSiblingId).ToHashSet();
+        }
+
+        return await WitnessSplitLinksAsync(work, raised);
+    }
+
+    /// <summary>
+    /// Writes the link witness <paramref name="generation"/> on each leaf sibling's donor
+    /// close of the batch, in parallel (B2): one marker write per linked sibling, off the
+    /// write path. Returns the siblings whose write failed, or <see langword="null"/>.
+    /// </summary>
+    private async Task<HashSet<GrainId>?> WitnessSplitLinksAsync(List<LinkWork> work, long generation)
+    {
+        var storage = HandOffStorage();
+        var links = work.FindAll(item => item.Split.Donor is not null && item.Split.ChildIsLeaf);
+        var writes = new Task[links.Count];
+        for (var i = 0; i < links.Count; i++)
+        {
+            var donor = WalForwardChain.KeyOf(links[i].Split.Donor!.Value);
+            var sibling = WalForwardChain.KeyOf(links[i].Split.NewSiblingId);
+            writes[i] = donor == Guid.Empty || sibling == Guid.Empty
+                ? Task.CompletedTask
+                : HandOffMarkerRows.UpdateLeafAsync(storage, sibling, m => HandOffMarkerCore.WitnessLink(m, donor, generation));
+        }
+
+        try
+        {
+            await Task.WhenAll(writes);
+            return null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(
+                ex,
+                "Shard root {TreeId}/{ShardIndex}: could not witness a split link on its sibling's marker; those divisions re-surface and their bounds stay pending (#5866, B2).",
+                TreeId,
+                ShardIndex);
+            HashSet<GrainId>? failed = null;
+            for (var i = 0; i < writes.Length; i++)
+            {
+                if (writes[i].IsFaulted || writes[i].IsCanceled)
+                {
+                    (failed ??= []).Add(links[i].Split.NewSiblingId);
+                }
+            }
+
+            return failed;
         }
     }
 

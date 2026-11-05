@@ -1193,17 +1193,33 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     /// <summary>
     /// The activation is a split sibling not yet reached by descent whose marker holds its
     /// donor's pending bound (a5e2e2ef's D1, D4): it stamps pre-arm until it proves again
-    /// after a backoff, never claiming or arming meanwhile. A latched activation stays
-    /// latched (D3).
+    /// after a backoff, never claiming or arming meanwhile. A proven activation - one
+    /// proven at its split birth (P1) - is demoted too, and is proven again once its own
+    /// link makes it reachable (B2 ruling). A latched activation stays latched (D3).
     /// </summary>
     internal void OnReachabilityDeferred()
     {
         lock (_sync)
         {
-            if (_reachability is ReachabilityUnproven or ReachabilityDeferred)
+            if (_reachability is ReachabilityUnproven or ReachabilityDeferred or ReachabilityProven)
             {
                 _reachability = ReachabilityDeferred;
                 _deferredReproveAtTicks = Environment.TickCount64 + (long)ClaimFailureBackoffForTesting.TotalMilliseconds;
+            }
+        }
+    }
+
+    /// <summary>
+    /// A deferred activation that descent now reaches - its own link landed - is proven
+    /// again (a5e2e2ef's B2 ruling); any other state is left alone.
+    /// </summary>
+    internal void PromoteDeferredReachable()
+    {
+        lock (_sync)
+        {
+            if (_reachability == ReachabilityDeferred)
+            {
+                _reachability = ReachabilityProven;
             }
         }
     }
