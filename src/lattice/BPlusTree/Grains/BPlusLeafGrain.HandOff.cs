@@ -155,19 +155,7 @@ internal sealed partial class BPlusLeafGrain
                 // duplicates and closes the sibling's marker by a deferred fence when it
                 // links this split, in its own turn. This activation only counts the close,
                 // so a write it admitted before its narrowing is self-fenced.
-                // RED PROOF (#5841 as filed): only an armed donor bumps.
-                if (_appendFence is { } armed && armed.HasClaimedAnywhere)
-                {
-                    await armed.FenceSplitAsync(
-                        partition => grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{partition}"),
-                        partitions,
-                        CancellationToken.None);
-                }
-                else
-                {
-                    _appendFence?.CountSplitClose();
-                }
-
+                _appendFence?.CountSplitClose();
                 return;
             }
 

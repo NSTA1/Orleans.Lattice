@@ -118,14 +118,33 @@ internal sealed partial class WalShardGrain
             return;
         }
 
-        // RED PROOF: the whole table folds (review S2).
         LeafAuthorFoldsForTesting++;
-        foreach (var entry in authors.Values)
+        var highs = ArrayPool<long>.Shared.Rent(count);
+        try
         {
-            _leafAuthorsFloor = Math.Max(_leafAuthorsFloor, entry.High1);
-        }
+            var i = 0;
+            foreach (var entry in authors.Values)
+            {
+                highs[i++] = entry.High1;
+            }
 
-        authors.Clear();
+            Array.Sort(highs, 0, count);
+
+            // Ties at the cut are evicted with it, so a fold always frees at least half.
+            var cut = highs[count - (count / 2) - 1];
+            foreach (var (leaf, entry) in authors)
+            {
+                if (entry.High1 <= cut)
+                {
+                    _leafAuthorsFloor = Math.Max(_leafAuthorsFloor, entry.High1);
+                    authors.Remove(leaf);
+                }
+            }
+        }
+        finally
+        {
+            ArrayPool<long>.Shared.Return(highs);
+        }
     }
 
     /// <summary>The leaf-author table's size; test seam.</summary>

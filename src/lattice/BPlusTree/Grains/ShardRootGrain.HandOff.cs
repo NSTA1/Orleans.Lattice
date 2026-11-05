@@ -219,26 +219,54 @@ internal sealed partial class ShardRootGrain
         context.ActivationServices?.GetService<IWalAppendFenceGate>() is { IsOpen: true, IsPreArmOpen: true };
 
     /// <summary>
-    /// Closes, by a deferred fence, every leaf split in <paramref name="work"/> whose
-    /// sibling's split marker is still open (#5833, revision 2, C2, C3 and C6). Runs in this
-    /// shard root's own turn, after the links are recorded, so every write admitted under
-    /// the generation it raises routes the moved keys to the sibling: it raises the routing
-    /// generation once, durably and without re-claiming it at the WAL partitions, then
-    /// records each close on its sibling's marker with deferred heads, which hold the
-    /// sibling until its arm re-claims the generation at a partition. No leaf is called.
-    /// Returns the siblings whose close could not be recorded: their donors are not
-    /// acknowledged, so the division re-surfaces and this runs again.
+    /// Raises this shard root's routing generation once for a link batch that contains a
+    /// leaf split, then closes, by a deferred fence, every such split whose sibling's split
+    /// marker is still open (#5833, revision 2, C2, C3 and C6). Runs in this shard root's
+    /// own turn, after the links are recorded, so every write admitted under the generation
+    /// it raises routes the moved keys to the sibling. The raise is durable and claims at no
+    /// WAL partition; each close records deferred heads on its sibling's marker, which hold
+    /// the sibling until its arm re-claims the generation at a partition. Each donor's other
+    /// activations are fenced before its close (#5841, <see cref="LeafSplitDuplicateFence"/>).
+    /// No leaf is called. Returns the siblings whose close could not be recorded - every
+    /// leaf split of the batch when the raise itself fails: their donors are not
+    /// acknowledged, so the division re-surfaces and this runs again, raising again.
     /// </summary>
+    /// <remarks>
+    /// The raise is unconditional once a batch holds a leaf split, whatever this silo's view
+    /// of the gate or of the pre-arm class (a5e2e2ef's ruling L1 on #5837, which also settles
+    /// review S1 of #5840): a donor that saw the pre-arm class left its close to this link, a
+    /// donor whose own close failed left its marker open, and a shard root whose view differs
+    /// from either must still close it. Where nothing is pending the raise is harmless; it
+    /// costs one marker write per batch.
+    /// </remarks>
     private async Task<HashSet<GrainId>?> CloseDeferredSplitHandOffsAsync(List<LinkWork> work)
     {
-        if (!IsPreArmGateOpen() || !HasHandOffStorage())
+        if (!HasHandOffStorage() || !work.Exists(item => item.Split.Donor is not null && item.Split.ChildIsLeaf))
         {
             return null;
         }
 
         var storage = HandOffStorage();
+        long raised;
+        try
+        {
+            raised = (await UpdateHandOffMarkerAsync(m =>
+            {
+                m.RoutingGeneration++;
+                return true;
+            })).RoutingGeneration;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(
+                ex,
+                "Shard root {TreeId}/{ShardIndex}: could not raise its routing generation for a split link; the divisions re-surface (#5833).",
+                TreeId,
+                ShardIndex);
+            return work.Where(item => item.Split.Donor is not null && item.Split.ChildIsLeaf).Select(item => item.Split.NewSiblingId).ToHashSet();
+        }
+
         HashSet<GrainId>? failed = null;
-        long? raised = null;
         int? partitions = null;
         foreach (var item in work)
         {
@@ -258,16 +286,26 @@ internal sealed partial class ShardRootGrain
                 }
 
                 partitions ??= Math.Max(1, await optionsResolver.GetWalPartitionsAsync(TreeId));
-                raised ??= (await UpdateHandOffMarkerAsync(m =>
-                {
-                    m.RoutingGeneration++;
-                    return true;
-                })).RoutingGeneration;
+
+                // #5841, rule A: the donor's narrowing is durable (it returned this split),
+                // so fence every activation of it that claimed before, before the close
+                // releases the sibling. Its later epoch-only appends to the moved keys are
+                // refused; a failure leaves the sibling unclosed and the split re-surfaces.
+                var donorFence = DonorSplitFenceForTesting ?? LeafSplitDuplicateFence.FenceAsync;
+                await donorFence(
+                    storage,
+                    partition => grainFactory.GetGrain<IWalShardGrain>(
+                        string.Concat(TreeId, "/", partition.ToString(System.Globalization.CultureInfo.InvariantCulture))),
+                    partitions.Value,
+                    donor.GetGuidKey(),
+                    null,
+                    null,
+                    CancellationToken.None);
                 var closed = false;
                 await HandOffMarkerRows.UpdateLeafAsync(
                     storage,
                     sibling.GetGuidKey(),
-                    m => closed = HandOffMarkerCore.CloseDeferred(m, token, partitions.Value, ShardIndex, raised.Value));
+                    m => closed = HandOffMarkerCore.CloseDeferred(m, token, partitions.Value, ShardIndex, raised));
                 if (closed)
                 {
                     LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindSplit, opened: false, TreeId);

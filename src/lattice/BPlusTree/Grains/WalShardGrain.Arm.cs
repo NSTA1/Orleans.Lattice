@@ -79,7 +79,7 @@ internal sealed partial class WalShardGrain
             RecordFenceClaim(LatticeMetrics.AppendFenceKindGeneration, result.Accepted);
             if (result.Accepted)
             {
-                return (result.Head, generation); // RED PROOF: the requested generation (review N2)
+                return (result.Head, present);
             }
 
             present = Math.Max(present, result.Refusal);

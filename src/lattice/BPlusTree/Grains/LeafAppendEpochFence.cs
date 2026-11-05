@@ -362,7 +362,8 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             // Fail safe: the partition stays pre-arm and advances by replay.
         }
 
-        // RED PROOF: a failed arm is silent (review N1).
+        // Review N1: a failed arm is counted, never silent; the leaf logs it.
+        LatticeMetrics.WalAppendFenceArmFailures.Add(1, _treeTag, _tenantTag);
         return null;
     }
 
@@ -537,13 +538,6 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
 
         try
         {
-            // RED PROOF (#5841 as filed): the bump only when this activation claimed.
-            if (!HasClaimedAnywhere)
-            {
-                CountSplitClose();
-                return null;
-            }
-
             var heads = await LeafSplitDuplicateFence.FenceAsync(
                 _storage,
                 shardFor,
@@ -878,6 +872,18 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             var row = await WalAppendFenceRows.ReadLeafEpochAsync(_storage, _leafId).ConfigureAwait(false);
             row.State.Epoch++;
             row = await WriteRowOrSupersedeAsync(row).ConfigureAwait(false);
+
+            // #5841, rule A (the claim's half of a Dekker pair with the split fence): only
+            // after the row write has landed, read the leaf's state fresh. A split persists
+            // its narrowing before it reads this row, so either the split saw this write and
+            // fences it, or this read sees the narrowing. An activation whose loaded state is
+            // no longer current holds a stale span: it is superseded here, before it claims
+            // at any partition, and every caller awaiting this claim observes that (A4).
+            if (_loadedStateCurrent is { } current && !await current().ConfigureAwait(false))
+            {
+                MarkStale();
+                throw LeafRetiredException.ForSupersededActivation(_leafId, row.State.Epoch);
+            }
 
             var epoch = row.State.Epoch;
             lock (_sync)
