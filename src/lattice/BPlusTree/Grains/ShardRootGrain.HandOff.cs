@@ -255,16 +255,17 @@ internal sealed partial class ShardRootGrain
                 }
 
                 partitions ??= Math.Max(1, await optionsResolver.GetWalPartitionsAsync(TreeId));
+                var swapped = (await LoadHandOffMarkerAsync()).RoutingGeneration + 1;
+                var closed = false;
+                await HandOffMarkerRows.UpdateLeafAsync(
+                    storage,
+                    sibling.GetGuidKey(),
+                    m => closed = HandOffMarkerCore.CloseDeferred(m, token, partitions.Value, ShardIndex, swapped));
                 raised ??= (await UpdateHandOffMarkerAsync(m =>
                 {
                     m.RoutingGeneration++;
                     return true;
                 })).RoutingGeneration;
-                var closed = false;
-                await HandOffMarkerRows.UpdateLeafAsync(
-                    storage,
-                    sibling.GetGuidKey(),
-                    m => closed = HandOffMarkerCore.CloseDeferred(m, token, partitions.Value, ShardIndex, raised.Value));
                 if (closed)
                 {
                     LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindSplit, opened: false, TreeId);
@@ -444,16 +445,17 @@ internal sealed partial class ShardRootGrain
                     await RetireAbsorbedAndCaptureHeadsAsync(grainFactory, TreeId, partitions, absorbedKey);
                 }
 
-                var raised = (await UpdateHandOffMarkerAsync(m =>
-                {
-                    m.RoutingGeneration++;
-                    return true;
-                })).RoutingGeneration;
+                var raised = (await LoadHandOffMarkerAsync()).RoutingGeneration + 1;
                 var closedDeferred = false;
                 await HandOffMarkerRows.UpdateLeafAsync(
                     storage,
                     survivorKey,
                     m => closedDeferred = HandOffMarkerCore.CloseDeferred(m, token, Math.Max(1, partitions), ShardIndex, raised));
+                await UpdateHandOffMarkerAsync(m =>
+                {
+                    m.RoutingGeneration++;
+                    return true;
+                });
                 if (closedDeferred)
                 {
                     LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindReclaim, opened: false, TreeId);
