@@ -204,7 +204,7 @@ internal sealed partial class BPlusLeafGrain
     /// Returns <see langword="false"/>, leaving the window open, when no routing generation
     /// can be established.
     /// </summary>
-    private async Task<bool> TryCloseWithDonorBoundAsync(
+    private async Task<bool> TryCloseWithDeferredBoundAsync(
         LeafAppendEpochFence fence, IGrainStorage storage, Guid siblingKey, string token, string treeId, int partitions, long[]? splitHeads)
     {
         try
@@ -274,7 +274,7 @@ internal sealed partial class BPlusLeafGrain
             var donor = context.GrainId.GetGuidKey();
             var closed = false;
             await HandOffMarkerRows.UpdateLeafAsync(storage, siblingKey, m =>
-                closed = HandOffMarkerCore.CloseWithDonorBound(m, token, heads, donor, fence.ActivationToken, shardIndex, generation));
+                closed = HandOffMarkerCore.CloseWithDeferredBound(m, token, heads, donor, fence.ActivationToken, shardIndex, generation));
             if (closed)
             {
                 LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindSplit, opened: false, treeId);
@@ -364,7 +364,7 @@ internal sealed partial class BPlusLeafGrain
                 }
 
                 donorFence.CountSplitClose();
-                return await TryCloseWithDonorBoundAsync(donorFence, storage, siblingKey, token, treeId, partitions, splitHeads);
+                return await TryCloseWithDeferredBoundAsync(donorFence, storage, siblingKey, token, treeId, partitions, splitHeads);
             }
 
             // #5841, rule A: the narrowed state is durable, so fence every activation of

@@ -19,7 +19,7 @@ public sealed class HandOffMarkerCoreDonorBoundTests
     {
         var marker = new LeafHandOffState();
         HandOffMarkerCore.Open(marker, "split:d", null, null);
-        HandOffMarkerCore.CloseWithDonorBound(marker, "split:d", [5, 6], Donor, Token, shard, generation);
+        HandOffMarkerCore.CloseWithDeferredBound(marker, "split:d", [5, 6], Donor, Token, shard, generation);
         return marker;
     }
 
@@ -29,7 +29,7 @@ public sealed class HandOffMarkerCoreDonorBoundTests
         var marker = new LeafHandOffState();
         HandOffMarkerCore.Open(marker, "split:d", null, null);
 
-        var closed = HandOffMarkerCore.CloseWithDonorBound(marker, "split:d", [5, 6], Donor, Token, 1, 4);
+        var closed = HandOffMarkerCore.CloseWithDeferredBound(marker, "split:d", [5, 6], Donor, Token, 1, 4);
         var close = marker.Closes.Single();
 
         Assert.Multiple(() =>
@@ -102,9 +102,9 @@ public sealed class HandOffMarkerCoreDonorBoundTests
 
         Assert.Multiple(() =>
         {
-            Assert.Throws<ArgumentException>(() => HandOffMarkerCore.CloseWithDonorBound(marker, "split:d", [1], Guid.Empty, Token, 0, 1));
-            Assert.Throws<ArgumentException>(() => HandOffMarkerCore.CloseWithDonorBound(marker, "split:d", [1], Donor, Guid.Empty, 0, 1));
-            Assert.Throws<ArgumentOutOfRangeException>(() => HandOffMarkerCore.CloseWithDonorBound(marker, "split:d", [1], Donor, Token, 0, 0));
+            Assert.Throws<ArgumentException>(() => HandOffMarkerCore.CloseWithDeferredBound(marker, "split:d", [1], Guid.Empty, Token, 0, 1));
+            Assert.Throws<ArgumentException>(() => HandOffMarkerCore.CloseWithDeferredBound(marker, "split:d", [1], Donor, Guid.Empty, 0, 1));
+            Assert.Throws<ArgumentOutOfRangeException>(() => HandOffMarkerCore.CloseWithDeferredBound(marker, "split:d", [1], Donor, Token, 0, 0));
         });
     }
 }

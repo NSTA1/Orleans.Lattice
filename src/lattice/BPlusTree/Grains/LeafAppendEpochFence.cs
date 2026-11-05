@@ -571,8 +571,8 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     /// <summary>This activation's token, which its stamps carry and a donor bound names (#5837).</summary>
     internal Guid ActivationToken => _activation;
 
-    /// <summary>The persisted narrow tag this activation's stamps carry; test seam.</summary>
-    internal Guid NarrowTagForTesting
+    /// <summary>The persisted narrow tag this activation's stamps carry (#5837, X1, X3, X7).</summary>
+    internal Guid PersistedNarrowTag
     {
         get
         {

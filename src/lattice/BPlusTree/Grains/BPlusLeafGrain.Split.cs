@@ -1053,7 +1053,7 @@ internal sealed partial class BPlusLeafGrain
             // #5837, rule D: armed before the heads, so every own moved-key record
             // allocated after them is noted for the sibling's close.
             ArmSplitCloseWindow(splitKey);
-            var (heads, cut, cutReader) = await CaptureSplitHeadsAsync(treeId);
+            var (heads, cut, cutReader) = await CaptureSplitCutAsync(treeId);
             walHeadsAtSplit = heads;
             closeHeads = heads;
 
@@ -1179,7 +1179,7 @@ internal sealed partial class BPlusLeafGrain
     /// must have read past. Any failure - a partition on an earlier build among them -
     /// reads the heads alone, which the caller caps at the leaf's own frontier as before.
     /// </summary>
-    private async Task<(long[] Heads, WalSplitCut[]? Cut, WalAppendStamp Reader)> CaptureSplitHeadsAsync(string treeId)
+    private async Task<(long[] Heads, WalSplitCut[]? Cut, WalAppendStamp Reader)> CaptureSplitCutAsync(string treeId)
     {
         if (IsPreArmGateOpen() && _appendFence is { } fence && fence.TryGetCutReader(out var reader))
         {

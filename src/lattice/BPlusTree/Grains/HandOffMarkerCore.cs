@@ -131,7 +131,7 @@ internal static class HandOffMarkerCore
     /// the generation of shard root <paramref name="shardIndex"/> its writes were admitted
     /// under. Returns whether the marker changed.
     /// </summary>
-    public static bool CloseWithDonorBound(
+    public static bool CloseWithDeferredBound(
         IHandOffMarker marker, string token, long[] heads, Guid donorLeaf, Guid donorToken, int shardIndex, long generation)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(shardIndex);

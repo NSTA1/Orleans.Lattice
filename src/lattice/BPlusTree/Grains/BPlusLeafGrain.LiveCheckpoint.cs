@@ -316,23 +316,26 @@ internal sealed partial class BPlusLeafGrain
                 }
 
                 var claimRaised = fence.TryGetArmingView(p, out var claimHead, out var unstampedSeen);
-                if (!claimRaised && fence.TryGetPreArmView(p, out var reportedBound))
-                {
+                var closeHead = Math.Max(
+                    HandOffMarkerCore.RequiredHead(handOff.LeafMarker, low, high, p),
+                    HandOffMarkerCore.HeadAt(handOff.ShardCloseHeads, p));
+                var target = !claimRaised
                     // #5837, the claimless advance: every foreign, stale or unrouted record
                     // below an own append was reported with it, so reading past that bound
                     // and every close head reads past every other author.
-                    claimRaised = true;
-                    claimHead = reportedBound + 1;
-                    unstampedSeen = reportedBound;
-                }
-
-                var target = LeafLiveAdvanceCore.TargetFor(
+                    ? LeafLiveAdvanceCore.TryFreeAdvance(
+                        hasReport: fence.TryGetPreArmView(p, out var reportedBound),
+                        reportedBound: reportedBound,
+                        handOffClear: handOff.Clear,
+                        closeHead: closeHead,
+                        freeTarget: LeafLiveAdvanceCore.FreeTarget(ownHigh, p),
+                        current: GetCurrentCheckpointForPartition(p),
+                        staleLatched: IsPartitionStaleLatched(p))
+                    : LeafLiveAdvanceCore.TargetFor(
                     claimRaised: claimRaised,
                     claimHead: claimHead,
                     handOffClear: handOff.Clear,
-                    closeHead: Math.Max(
-                        HandOffMarkerCore.RequiredHead(handOff.LeafMarker, low, high, p),
-                        HandOffMarkerCore.HeadAt(handOff.ShardCloseHeads, p)),
+                    closeHead: closeHead,
                     unstampedSeen: unstampedSeen,
                     ownHigh: ownHigh[p],
                     current: GetCurrentCheckpointForPartition(p),

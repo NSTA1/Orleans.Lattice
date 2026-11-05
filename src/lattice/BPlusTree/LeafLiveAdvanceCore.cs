@@ -93,5 +93,48 @@ internal static class LeafLiveAdvanceCore
             && current >= closeHead - 1
             && current >= unstampedSeen;
         return armed ? ownHigh : -1L;
+    
+    /// <summary>
+    /// The claimless advance's target at a partition (#5837, <c>FreeTarget</c>): the
+    /// highest own applied offset there, fixed from the tracker's snapshot before the
+    /// marker view is read, so every own append it passes predates the read.
+    /// </summary>
+    /// <param name="ownHighSnapshot">The tracker's snapshot, per partition.</param>
+    /// <param name="partition">The partition.</param>
+    public static long FreeTarget(long[] ownHighSnapshot, int partition)
+    {
+        ArgumentNullException.ThrowIfNull(ownHighSnapshot);
+        return partition >= 0 && partition < ownHighSnapshot.Length ? ownHighSnapshot[partition] : -1L;
     }
+
+    /// <summary>
+    /// The claimless advance's commit (#5837, <c>FreeCommit</c>): the target
+    /// <paramref name="freeTarget"/>, or -1 when the leaf may not advance there without a
+    /// claim. It may iff the marker state is initialised with no hand-off open
+    /// (<paramref name="handOffClear"/>), and the read position is at or above every close
+    /// head, the bound its latest stamped response reported - the foreign high, the shared
+    /// watermark and, while a donor close is pending, its stale high, all folded into
+    /// <paramref name="reportedBound"/> - and below the target. A partition with no report
+    /// covering every pending close passes no <paramref name="reportedBound"/> and never
+    /// advances this way.
+    /// </summary>
+    public static long TryFreeAdvance(
+        bool hasReport,
+        long reportedBound,
+        bool handOffClear,
+        long closeHead,
+        long freeTarget,
+        long current,
+        bool staleLatched) =>
+        hasReport
+            ? TargetFor(
+                claimRaised: true,
+                claimHead: reportedBound + 1,
+                handOffClear: handOffClear,
+                closeHead: closeHead,
+                unstampedSeen: reportedBound,
+                ownHigh: freeTarget,
+                current: current,
+                staleLatched: staleLatched)
+            : -1L;
 }
