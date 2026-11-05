@@ -127,6 +127,7 @@ public sealed class LiveAdvanceCompositeTests
         yield return Of("RInitHead", Rf, "FirstInit", R("closedAt'", "claimHead'[\"S\"]"), "closedAt' = next");
 
         yield return Whole("BulkHintBound", B, "BulkHintBound", R("nUp", "born", "rpN", "rp[\"a1\"]", "heldN", "cache[\"a1\"]"));
+        yield return new("SwitchCloseCoversPriorAllocations", B, "SwitchCloseCoversPriorAllocations", CopyShape.ActionProperty, [], R("closeHead", "hoClosedAt"));
 
         yield return Whole("HeadsAbove", C, "HeadsAbove", None);
         yield return Of("CClaim", C, "Claim", None,
@@ -136,9 +137,12 @@ public sealed class LiveAdvanceCompositeTests
         yield return Of("CForeignAlloc", C, "ForeignAlloc", None, @"hoOpen \/ ~mInit");
         yield return Of("CKeyMove", C, "KeyMove", R("gD + 1", "epoch'[\"F\"]"), "pend' = TRUE", "pendGen' = gD + 1");
         yield return Of("CResolveDeferred", C, "ResolveDeferred", None, "pend' = FALSE", "hoClosedAt' = Max2(hoClosedAt, next)");
-        // The composite composes the eager arm, under which a close covers foreign records
-        // only; the lazy arm's bulk coverage (#5833) is not yet composed.
+        // An eager foreign close covers foreign records only; the bulk switch's close is
+        // composed against the lazy arm's bulk coverage (#5833, #5839).
         yield return Of("CClose", C, "Close", R("CloseCovers", "{Foreign}"),
+            "phase = \"live\"", "hoOpen",
+            @"\E h \in IF mInit THEN HeadsAbove(CloseCovers) ELSE 0..next : hoClosedAt' = Max2(hoClosedAt, h)");
+        yield return Of("CBulkClose", C, "Close", R("CloseCovers", "{Foreign, PreAuthor}"),
             "phase = \"live\"", "hoOpen",
             @"\E h \in IF mInit THEN HeadsAbove(CloseCovers) ELSE 0..next : hoClosedAt' = Max2(hoClosedAt, h)");
         yield return Of("CStraddlerAlloc", C, "StraddlerAlloc", None, "recreated", "~reinit");

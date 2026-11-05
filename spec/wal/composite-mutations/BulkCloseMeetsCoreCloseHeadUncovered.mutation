@@ -1,0 +1,15 @@
+# Pairs with BulkCloseMeetsCoreClose (B -> C, #5839): the bulk switch's close covers every prior
+# allocation, the range's earlier records included, as the core's lazy-arm close assumes.
+MODULE: BulkCloseMeetsCoreCloseHeadUncovered
+TARGET: BulkCloseMeetsCoreClose
+CLASS: Invariant
+SUMMARY: SwitchCloseCoversPriorAllocations is dropped, so the bulk close records a head at or below a record the range held before the birth
+
+--- FIND
+    /\ \E v \in 0..next : hoClosedAt' = v
+    /\ SwitchCloseCoversPriorAllocations
+
+--- REPLACE
+    /\ \E v \in 0..next : hoClosedAt' = v
+
+--- END

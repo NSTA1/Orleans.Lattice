@@ -99,7 +99,8 @@ Edges ==
      "RoutingMeetsCoreInit",
      "BulkMeetsCoreCreate",
      "DeferredCloseMeetsCoreResolve",
-     "ColdLoadMeetsCoreStraddler"}
+     "ColdLoadMeetsCoreStraddler",
+     "BulkCloseMeetsCoreClose"}
 
 Fails(edge, ok) == IF ok THEN {} ELSE {edge}
 
@@ -236,7 +237,10 @@ StraddlerBelowInit ==
 \* reads initialised lies above every prior allocation, whoever's.
 InitHeadCoversPriorAllocations == ~mInit /\ mInit' => \A o \in Offs : author[o] # NoAuthor => o < hoClosedAt'
 
-\* B (WalBulkSwitch): BulkHintBound, for the bulk-born activation a1.
+\* B (WalBulkSwitch): BulkHintBound, for the bulk-born activation a1, and
+\* SwitchCloseCoversPriorAllocations, a guarantee of the bulk switch's own
+\* close, so its step keeps it rather than every step.
+SwitchCloseCoversPriorAllocations == hoClosedAt' # hoClosedAt => \A o \in Allocated : o < hoClosedAt'
 BulkHintBound == born => \A o \in Allocated : o <= rp["a1"] => o \in cache["a1"]
 
 \* Every state guarantee, kept after every step. CloseHeadMonotone holds
@@ -307,6 +311,10 @@ CClose ==
     /\ phase = "live"
     /\ hoOpen
     /\ \E h \in IF mInit THEN HeadsAbove({Foreign}) ELSE 0..next : hoClosedAt' = Max2(hoClosedAt, h)
+CBulkClose ==
+    /\ phase = "live"
+    /\ hoOpen
+    /\ \E h \in IF mInit THEN HeadsAbove({Foreign, PreAuthor}) ELSE 0..next : hoClosedAt' = Max2(hoClosedAt, h)
 CStraddlerAlloc ==
     /\ recreated
     /\ ~reinit
@@ -456,6 +464,21 @@ ResolveDeferred(a) ==
     /\ broken' = broken \cup Fails("DeferredCloseMeetsCoreResolve", CResolveDeferred)
     /\ UNCHANGED <<next, author, up, dupUsed, epoch, cstage, maxClaimed, lRetired, staleAccepted, retired>>
     /\ UNCHANGED <<mInit, hoOpen, windows, fWin, pendGen, rVars, bVars>>
+    /\ UNCHANGED restarted
+
+(* BulkClose (#5839): after the birth, the bulk switch closes its own    *)
+(* window on L's marker, recording any head B's close allows: one above  *)
+(* every record allocated before it, the range's earlier records and the *)
+(* seeds alike (SwitchCloseCoversPriorAllocations).                      *)
+BulkClose ==
+    /\ phase = "live"
+    /\ hoOpen
+    /\ ~fWin
+    /\ \E v \in 0..next : hoClosedAt' = v
+    /\ SwitchCloseCoversPriorAllocations
+    /\ hoOpen' = FALSE
+    /\ broken' = broken \cup Fails("BulkCloseMeetsCoreClose", CBulkClose)
+    /\ UNCHANGED <<next, author, up, dupUsed, eVars, mInit, windows, fWin, pend, pendGen, rVars, bVars>>
     /\ UNCHANGED restarted
 
 (* Restart: the WAL shard restarts once and unloads every entry.         *)
@@ -630,6 +653,7 @@ Next ==
     \/ ForeignAlloc /\ Kept
     \/ Close /\ Kept
     \/ DeferredClose /\ Kept
+    \/ BulkClose /\ Kept
     \/ \E a \in Acts : ResolveDeferred(a) /\ Kept
     \/ Restart /\ Kept
     \/ \E i \in Inits : Represent(i) /\ Kept
@@ -663,4 +687,5 @@ RoutingMeetsCoreInit == "RoutingMeetsCoreInit" \notin broken
 BulkMeetsCoreCreate == "BulkMeetsCoreCreate" \notin broken
 DeferredCloseMeetsCoreResolve == "DeferredCloseMeetsCoreResolve" \notin broken
 ColdLoadMeetsCoreStraddler == "ColdLoadMeetsCoreStraddler" \notin broken
+BulkCloseMeetsCoreClose == "BulkCloseMeetsCoreClose" \notin broken
 =============================================================================

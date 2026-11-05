@@ -235,4 +235,5 @@ formulas and the scope cuts.
 | R -> C | `RoutingMeetsCoreInit` | `RoutingMeetsCoreInitHeadUncovered` |
 | B -> C | `BulkMeetsCoreCreate` | `BulkMeetsCoreCreateHintUnbounded` |
 | R -> C | `ColdLoadMeetsCoreStraddler` | `ColdLoadMeetsCoreStraddlerLowersReclaimed` |
+| B -> C | `BulkCloseMeetsCoreClose` | `BulkCloseMeetsCoreCloseHeadUncovered` |
 | H -> C | `DeferredCloseMeetsCoreResolve` | `DeferredCloseMeetsCoreResolveHeadUncovered`, `DeferredCloseMeetsCoreResolveDeferredBeforeRaise` |

@@ -16,13 +16,14 @@
     "DeferredClose",
     "ResolveDeferred",
     "ColdLoad",
+    "BulkClose",
     "Stutter"
   ],
   "counts": {
-    "invariants": 15,
+    "invariants": 16,
     "properties": 0,
-    "actions": 18,
-    "mutations": 33,
+    "actions": 19,
+    "mutations": 35,
     "behaviourRows": 15,
     "distinctStates": 131423
   }
