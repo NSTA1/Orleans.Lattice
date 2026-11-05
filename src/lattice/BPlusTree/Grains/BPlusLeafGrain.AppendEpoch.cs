@@ -195,7 +195,10 @@ internal sealed partial class BPlusLeafGrain
 
                     if (!view.OrphanRepairInProgress && HoldsPendingDonorBound(marker, view.RoutingGeneration))
                     {
-                        fence.OnReachabilityUndecided();
+                        // a5e2e2ef's D1-D4 (#5851): deferred, it stamps pre-arm rather than
+                        // appending unstamped for a backoff, so a pre-link sibling never
+                        // raises the shared watermark; it still never claims or arms.
+                        fence.OnReachabilityDeferred();
                         return;
                     }
                 }

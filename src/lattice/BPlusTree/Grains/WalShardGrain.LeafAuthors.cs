@@ -104,8 +104,7 @@ internal sealed partial class WalShardGrain
             authors = LeafAuthors.Empty;
         }
 
-        var shard = stamp.Initiator.Kind == WalRoutingInitiatorKind.ShardRoot ? stamp.Initiator.Index : -1;
-        authors = authors.With(stamp.Activation, offset, shard, shard >= 0 ? stamp.Generation : 0);
+        authors = authors.With(stamp.Activation, offset);
         _leafAuthors[stamp.LeafId] = authors;
         if (stamp.Forwarder != Guid.Empty)
         {
@@ -147,7 +146,7 @@ internal sealed partial class WalShardGrain
         var high = _leafAuthorsFloor;
         if (_leafAuthors is not null && _leafAuthors.TryGetValue(close.Donor, out var authors))
         {
-            high = Math.Max(high, authors.StaleHigh(close.Token, close.ShardIndex, close.Generation, receiver));
+            high = Math.Max(high, authors.StaleHigh(close.Token, receiver));
         }
 
         return high;
@@ -290,10 +289,8 @@ internal sealed partial class WalShardGrain
     /// records it forwarded to an unlinked sibling (#5837, condition 4), as the highs of
     /// its two highest narrow tags (<c>ForwardTag1</c>, <c>ForwardTag2</c>) and a
     /// <c>ForwardFolded</c> high for every tag displaced from them (X6), which is never
-    /// excluded. For the per-donor stale high, each tracked activation also keeps the
-    /// highs of its two latest generations (<c>Gens1</c>, <c>Gens2</c>), and
-    /// <c>StaleFolded</c> holds every displaced generation's and activation's high, which
-    /// is always counted.
+    /// excluded. For the per-donor stale high, <c>StaleFolded</c> holds every displaced
+    /// activation's high, which is always counted.
     /// </summary>
     internal readonly record struct LeafAuthors(
         Guid Token1,
@@ -305,8 +302,6 @@ internal sealed partial class WalShardGrain
         Guid ForwardTag2 = default,
         long ForwardHigh2 = -1,
         long ForwardFolded = -1,
-        GenerationHighs Gens1 = default,
-        GenerationHighs Gens2 = default,
         long StaleFolded = -1)
     {
         public static LeafAuthors Empty => new(Guid.Empty, -1, Guid.Empty, -1);
@@ -317,21 +312,24 @@ internal sealed partial class WalShardGrain
             Math.Max(ForwardHigh1, ForwardHigh2));
 
         /// <summary>
-        /// The stale high for a close written by <paramref name="closingToken"/> at shard
-        /// <paramref name="shardIndex"/>'s generation <paramref name="generation"/>, seen by
-        /// the receiver <paramref name="receiver"/>; see <c>StaleHighLocked</c>.
+        /// The stale high for a close written by <paramref name="closingToken"/>, seen by the
+        /// receiver <paramref name="receiver"/>; see <c>StaleHighLocked</c>. While the close
+        /// is pending, every record of every other activation counts, whatever routing
+        /// generation admitted it (a5e2e2ef's B1): a link elsewhere in the shard raises the
+        /// generation, and a stale duplicate's moved-key write admitted under the raised one
+        /// still sits above the close head.
         /// </summary>
-        public long StaleHigh(Guid closingToken, int shardIndex, long generation, Guid receiver)
+        public long StaleHigh(Guid closingToken, Guid receiver)
         {
             var high = Math.Max(StaleFolded, ForwardFolded);
             if (High1 >= 0 && (Token1 != closingToken || closingToken == Guid.Empty))
             {
-                high = Math.Max(high, Gens1.HighAtOrBelow(shardIndex, generation));
+                high = Math.Max(high, High1);
             }
 
             if (High2 >= 0 && (Token2 != closingToken || closingToken == Guid.Empty))
             {
-                high = Math.Max(high, Gens2.HighAtOrBelow(shardIndex, generation));
+                high = Math.Max(high, High2);
             }
 
             // Only the receiver's own creating split moved those keys to it (#5837, F2').
@@ -414,147 +412,46 @@ internal sealed partial class WalShardGrain
                 : this with { ForwardFolded = Math.Max(ForwardFolded, ForwardHigh2), ForwardTag2 = tag, ForwardHigh2 = offset };
         }
 
-        /// <summary>This table with <paramref name="activation"/>'s record at <paramref name="offset"/> noted, as an epoch-only record.</summary>
-        public LeafAuthors With(Guid activation, long offset) => With(activation, offset, -1, 0);
-
         /// <summary>
         /// This table with <paramref name="activation"/>'s record at <paramref name="offset"/>
-        /// noted, admitted under shard <paramref name="shardIndex"/>'s generation
-        /// <paramref name="generation"/> (<paramref name="shardIndex"/> -1 and generation 0
-        /// for an epoch-only record).
+        /// noted. A third activation displaces the lower of the two tracked, whose high folds
+        /// into the always-counted <c>StaleFolded</c>.
         /// </summary>
-        public LeafAuthors With(Guid activation, long offset, int shardIndex, long generation)
+        public LeafAuthors With(Guid activation, long offset)
         {
             // 'with' keeps the forward fields (#5837).
-            var folded = StaleFolded;
             if (High1 < 0)
             {
-                return this with
-                {
-                    Token1 = activation,
-                    High1 = offset,
-                    Gens1 = default(GenerationHighs).With(shardIndex, generation, offset, ref folded),
-                    Token2 = Guid.Empty,
-                    High2 = -1,
-                    Gens2 = default,
-                    StaleFolded = folded,
-                };
+                return this with { Token1 = activation, High1 = offset, Token2 = Guid.Empty, High2 = -1 };
             }
 
             if (activation == Token1)
             {
-                var gens = Gens1.With(shardIndex, generation, offset, ref folded);
-                return this with { High1 = Math.Max(High1, offset), Gens1 = gens, StaleFolded = folded };
+                return offset > High1 ? this with { High1 = offset } : this;
             }
 
             if (High2 >= 0 && activation == Token2)
             {
-                var gens = Gens2.With(shardIndex, generation, offset, ref folded);
                 return offset > High1
-                    ? this with { Token1 = activation, High1 = offset, Gens1 = gens, Token2 = Token1, High2 = High1, Gens2 = Gens1, StaleFolded = folded }
-                    : this with { High2 = Math.Max(High2, offset), Gens2 = gens, StaleFolded = folded };
+                    ? this with { Token1 = activation, High1 = offset, Token2 = Token1, High2 = High1 }
+                    : offset > High2 ? this with { High2 = offset } : this;
             }
 
-            // A third activation, or the second's first record: it displaces the lower,
-            // whose generations fold into the always-counted high.
-            var fresh = default(GenerationHighs).With(shardIndex, generation, offset, ref folded);
             if (offset > High1)
             {
                 return this with
                 {
                     Token1 = activation,
                     High1 = offset,
-                    Gens1 = fresh,
                     Token2 = Token1,
                     High2 = High1,
-                    Gens2 = Gens1,
-                    StaleFolded = Math.Max(folded, High2),
+                    StaleFolded = Math.Max(StaleFolded, High2),
                 };
             }
 
             return offset > High2
-                ? this with { Token2 = activation, High2 = offset, Gens2 = fresh, StaleFolded = Math.Max(folded, High2) }
-                : this with { StaleFolded = Math.Max(folded, offset) };
-        }
-    }
-
-    /// <summary>
-    /// One activation's highs for its two latest routing generations (#5837, per-donor
-    /// stale high), each keyed by the shard root whose generation it is (-1 and
-    /// generation 0 for epoch-only records). An empty slot has <c>End</c> 0; a slot's
-    /// high is <c>End - 1</c>.
-    /// </summary>
-    internal readonly record struct GenerationHighs(
-        int ShardA,
-        long GenerationA,
-        long EndA,
-        int ShardB,
-        long GenerationB,
-        long EndB)
-    {
-        /// <summary>
-        /// The highest offset whose generation a close at shard <paramref name="shardIndex"/>'s
-        /// generation <paramref name="generation"/> must count: every slot but one of that
-        /// shard root's later generations.
-        /// </summary>
-        public long HighAtOrBelow(int shardIndex, long generation)
-        {
-            var high = -1L;
-            if (EndA > 0 && (ShardA != shardIndex || GenerationA <= generation))
-            {
-                high = EndA - 1;
-            }
-
-            if (EndB > 0 && (ShardB != shardIndex || GenerationB <= generation))
-            {
-                high = Math.Max(high, EndB - 1);
-            }
-
-            return high;
-        }
-
-        /// <summary>
-        /// These slots with a record at <paramref name="offset"/> noted; a generation they
-        /// displace, or one older than both they hold, is folded into
-        /// <paramref name="folded"/>.
-        /// </summary>
-        public GenerationHighs With(int shardIndex, long generation, long offset, ref long folded)
-        {
-            var end = offset + 1;
-            if (EndA > 0 && ShardA == shardIndex && GenerationA == generation)
-            {
-                return end > EndA ? this with { EndA = end } : this;
-            }
-
-            if (EndB > 0 && ShardB == shardIndex && GenerationB == generation)
-            {
-                return end > EndB ? this with { EndB = end } : this;
-            }
-
-            if (EndA == 0)
-            {
-                return this with { ShardA = shardIndex, GenerationA = generation, EndA = end };
-            }
-
-            if (EndB == 0)
-            {
-                return this with { ShardB = shardIndex, GenerationB = generation, EndB = end };
-            }
-
-            if (generation < GenerationA && generation < GenerationB)
-            {
-                folded = Math.Max(folded, offset);
-                return this;
-            }
-
-            if (GenerationA <= GenerationB)
-            {
-                folded = Math.Max(folded, EndA - 1);
-                return this with { ShardA = shardIndex, GenerationA = generation, EndA = end };
-            }
-
-            folded = Math.Max(folded, EndB - 1);
-            return this with { ShardB = shardIndex, GenerationB = generation, EndB = end };
+                ? this with { Token2 = activation, High2 = offset, StaleFolded = Math.Max(StaleFolded, High2) }
+                : this with { StaleFolded = Math.Max(StaleFolded, offset) };
         }
     }
 }

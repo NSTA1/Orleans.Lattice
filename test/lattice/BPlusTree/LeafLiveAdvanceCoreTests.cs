@@ -150,7 +150,7 @@ public sealed class LeafLiveAdvanceCoreTests
                 var authors = empty.WithForwardHop(hop, readerTag, 7);
                 Assert.That(authors.ForeignHigh(reader, readerTag), Is.EqualTo(7), $"chain hop {hop} was excluded by its own tag");
                 Assert.That(authors.ForeignHigh(reader, Guid.NewGuid()), Is.EqualTo(7), $"chain hop {hop} was excluded by another tag");
-                Assert.That(authors.StaleHigh(Guid.NewGuid(), 0, long.MaxValue, readerTag), Is.EqualTo(7),
+                Assert.That(authors.StaleHigh(Guid.NewGuid(), readerTag), Is.EqualTo(7),
                     $"chain hop {hop} was excluded from a receiver's stale high");
             }
         });

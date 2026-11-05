@@ -124,6 +124,16 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     private const int ReachabilityProven = 1;
     private const int ReachabilityUnreachable = 2;
 
+    /// <summary>
+    /// A split sibling not yet reached by descent whose marker holds its donor's pending
+    /// bound (#5837's latch exemption; a5e2e2ef's D1 on #5851): neither proven nor latched.
+    /// It stamps <see cref="WalAppendStamp.PreArm"/> under the pre-arm gate only, never
+    /// claims, arms or advances claimlessly, and proves again after a backoff.
+    /// </summary>
+    private const int ReachabilityDeferred = 3;
+
+    private long _deferredReproveAtTicks;
+
     /// <summary>Creates the fence for one leaf activation.</summary>
     /// <param name="leafId">The leaf's grain key.</param>
     /// <param name="gate">The silo's view of the fence gate.</param>
@@ -254,6 +264,14 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             if (_stale)
             {
                 throw LeafRetiredException.ForSupersededActivation(_leafId, _epoch);
+            }
+
+            if (IsDeferredStampingLocked())
+            {
+                // D1-D2: a deferred sibling stamps pre-arm, attributed to this activation,
+                // and never reaches a claim; the dispatch still sends an unrouted write
+                // unstamped (C4).
+                return new ValueTask<WalAppendStamp?>(DecorateLocked(WalAppendStamp.PreArm(_leafId, _activation)));
             }
 
             if (!IsGateOpenLocked())
@@ -1109,6 +1127,10 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         IsGateViewOpenLocked()
         && (_reachability == ReachabilityProven || (!_requireReachability && _reachability == ReachabilityUnproven));
 
+    /// <summary>Whether this activation is deferred and may stamp pre-arm now (D1, D2).</summary>
+    private bool IsDeferredStampingLocked() =>
+        _reachability == ReachabilityDeferred && !_stale && IsGateViewOpenLocked() && _gate.IsPreArmOpen;
+
     private bool IsGateViewOpenLocked() =>
         (_gateClosedUntilTicks == 0 || Environment.TickCount64 >= _gateClosedUntilTicks) && _gate.IsOpen;
 
@@ -1135,7 +1157,11 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         {
             lock (_sync)
             {
-                return _requireReachability && _reachability == ReachabilityUnproven && !_stale && IsGateViewOpenLocked();
+                return _requireReachability
+                    && (_reachability == ReachabilityUnproven
+                        || (_reachability == ReachabilityDeferred && Environment.TickCount64 >= _deferredReproveAtTicks))
+                    && !_stale
+                    && IsGateViewOpenLocked();
             }
         }
     }
@@ -1157,9 +1183,39 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     {
         lock (_sync)
         {
-            if (_reachability == ReachabilityUnproven)
+            if (_reachability is ReachabilityUnproven or ReachabilityDeferred)
             {
                 _reachability = ReachabilityProven;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The activation is a split sibling not yet reached by descent whose marker holds its
+    /// donor's pending bound (a5e2e2ef's D1, D4): it stamps pre-arm until it proves again
+    /// after a backoff, never claiming or arming meanwhile. A latched activation stays
+    /// latched (D3).
+    /// </summary>
+    internal void OnReachabilityDeferred()
+    {
+        lock (_sync)
+        {
+            if (_reachability is ReachabilityUnproven or ReachabilityDeferred)
+            {
+                _reachability = ReachabilityDeferred;
+                _deferredReproveAtTicks = Environment.TickCount64 + (long)ClaimFailureBackoffForTesting.TotalMilliseconds;
+            }
+        }
+    }
+
+    /// <summary>Whether the activation is deferred (D1); test seam.</summary>
+    internal bool IsDeferredForTesting
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _reachability == ReachabilityDeferred;
             }
         }
     }

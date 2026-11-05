@@ -1629,9 +1629,9 @@ claimless view, and the leaf advances there by replay instead.
   strictly above the bound's generation, the sibling's stamps carry the pending
   close. Each WAL partition then reports the donor's **stale high** for it. That is
   the highest offset of a donor record from any activation other than the closing
-  one, admitted under a generation no later than the bound's. Records with no
-  routing generation count, as do any admitted under another shard root's
-  generation. Its own forwards are excluded only when they moved keys to this
+  one, whatever routing generation admitted it: a link elsewhere in the shard can
+  raise the generation while the close is pending, and a stale duplicate's write
+  admitted under the raised one still sits above the close head. Its own forwards are excluded only when they moved keys to this
   sibling. A stamp carries at most two pending closes; while more are pending, the
   leaf does not advance claimlessly.
 - **Forwards.** A write a leaf forwards to another leaf before that leaf is linked
@@ -1652,7 +1652,9 @@ claimless view, and the leaf advances there by replay instead.
 - **Reachability.** A sibling born by a split is proven reachable at its birth.
   While its donor's bound is pending, a sibling that descent does not yet reach is
   neither proven nor latched unstamped; its decision is deferred until the link.
-  Orphan repair always latches.
+  Meanwhile it stamps its routed writes pre-arm, so it never raises the shared
+  watermark; it never claims or arms, and it proves again after a backoff. Orphan
+  repair always latches.
 - **The split's read position.** Each partition returns its readable head with the
   bounds the donor must have read past, all read in one turn. If the donor's
   frontier is at or above every bound, its sibling starts at the head rather than

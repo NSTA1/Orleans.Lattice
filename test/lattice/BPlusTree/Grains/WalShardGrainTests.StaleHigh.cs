@@ -6,9 +6,8 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <summary>
 /// Detectors for the WAL shard's per-donor stale high (#5837): the highest offset of a
 /// donor's records a receiver holding the donor's close pending must replay before it
-/// advances live. It counts every activation but the closing one, at generations no later
-/// than the close's (epoch-only records as generation 0, another shard root's generations
-/// always), every displaced generation and activation, and every forward but those tagged
+/// advances live. It counts every activation but the closing one, whatever generation
+/// admitted its records (a5e2e2ef's B1), every displaced activation, and every forward but those tagged
 /// with the split that created the receiver; it is reported on the receiver's append as
 /// the maximum over the closes the stamp carries, and never falls below the restart or
 /// eviction floor.
@@ -20,75 +19,66 @@ public partial class WalShardGrainTests
     private static readonly Guid OtherToken = new("c0000000-0000-0000-0000-0000000000c2");
     private static readonly Guid ThirdToken = new("c0000000-0000-0000-0000-0000000000c3");
 
-    private static WalShardGrain.LeafAuthors Authored(params (Guid Token, long Offset, int Shard, long Generation)[] records)
+    private static WalShardGrain.LeafAuthors Authored(params (Guid Token, long Offset)[] records)
     {
         var authors = WalShardGrain.LeafAuthors.Empty;
-        foreach (var (token, offset, shard, generation) in records)
+        foreach (var (token, offset) in records)
         {
-            authors = authors.With(token, offset, shard, generation);
+            authors = authors.With(token, offset);
         }
 
         return authors;
     }
 
     [Test]
-    public void The_stale_high_excludes_the_closing_activation_and_counts_every_other_at_or_below_the_close()
+    public void The_stale_high_excludes_the_closing_activation_and_counts_every_other()
     {
-        var authors = Authored((OtherToken, 10, 0, 3), (ClosingToken, 20, 0, 3), (OtherToken, 30, 0, 4));
+        var authors = Authored((OtherToken, 10), (ClosingToken, 20), (OtherToken, 30));
 
         Assert.Multiple(() =>
         {
-            Assert.That(authors.StaleHigh(ClosingToken, 0, 4, Guid.Empty), Is.EqualTo(30),
-                "another activation's record at the close's generation was not counted");
-            Assert.That(authors.StaleHigh(ClosingToken, 0, 3, Guid.Empty), Is.EqualTo(10),
-                "a record admitted above the close's generation was counted, or the closing activation's was");
-            Assert.That(authors.StaleHigh(OtherToken, 0, 4, Guid.Empty), Is.EqualTo(20),
+            Assert.That(authors.StaleHigh(ClosingToken, Guid.Empty), Is.EqualTo(30),
+                "another activation's record was not counted");
+            Assert.That(authors.StaleHigh(OtherToken, Guid.Empty), Is.EqualTo(20),
                 "the closing activation is not compared by value");
         });
     }
 
     [Test]
-    public void A_later_generation_of_another_shard_root_is_always_counted()
+    public async Task A_non_closing_record_admitted_at_a_later_generation_is_counted_while_the_close_is_pending()
     {
-        // A leaf that moved shard roots: shard 1's generation 50 is not later than shard 0's generation 3.
-        var authors = Authored((OtherToken, 10, 1, 50), (OtherToken, 20, 0, 9));
-
-        Assert.That(authors.StaleHigh(ClosingToken, 0, 3, Guid.Empty), Is.EqualTo(10),
-            "a record admitted under another shard root's generation was compared against the close's");
-    }
-
-    [Test]
-    public void An_epoch_only_record_counts_as_generation_zero()
-    {
-        var authors = Authored((OtherToken, 10, -1, 0), (OtherToken, 20, 0, 5));
-
-        Assert.That(authors.StaleHigh(ClosingToken, 0, 1, Guid.Empty), Is.EqualTo(10),
-            "an epoch-only record was not counted at every close");
-    }
-
-    [Test]
-    public void A_displaced_generation_is_always_counted()
-    {
-        var authors = Authored((OtherToken, 10, 0, 1), (OtherToken, 20, 0, 2), (OtherToken, 30, 0, 3));
+        // a5e2e2ef's B1 (StaleHighFiltersByAdmittedGeneration): another split's link raises
+        // the shard's generation to g1 after D's close names g; a stale duplicate D' then
+        // takes a moved-key write admitted at g1. It sits above the close head, so the
+        // receiver's stale high must count it, or the receiver advances past an
+        // acknowledged write the GC may then trim.
+        var grain = await CreateFencedGrainAsync(new EnumerableMemoryGrainStorage());
+        var atBound = await grain.AppendStampedAsync(MakeEntry("d1"), WalAppendStamp.PreArm(Donor, OtherToken) with { Initiator = PreArmRoot, Generation = 1 }, CancellationToken.None);
+        await grain.ClaimRoutingGenerationAsync(PreArmRoot, 7, CancellationToken.None);
+        var raised = await grain.AppendStampedAsync(MakeEntry("d2"), WalAppendStamp.PreArm(Donor, OtherToken) with { Initiator = PreArmRoot, Generation = 7 }, CancellationToken.None);
+        var close = new WalPendingClose(Donor, ClosingToken, PreArmRoot.Index, 1);
+        var reported = await grain.AppendStampedAsync(MakeEntry("r"), PreArmStamp(ActivationA, 7) with { Close1 = close }, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
-            Assert.That(authors.StaleHigh(ClosingToken, 0, 0, Guid.Empty), Is.EqualTo(10),
-                "the displaced generation's high was dropped");
-            Assert.That(authors.StaleHigh(ClosingToken, 0, 2, Guid.Empty), Is.EqualTo(20));
+            Assert.That(raised.Offset, Is.GreaterThan(atBound.Offset), "precondition: the later-generation write is the higher");
+            Assert.That(grain.StaleHighForTesting(close, FenceLeaf), Is.GreaterThanOrEqualTo(raised.Offset),
+                "a non-closing activation's record admitted above the close's generation was left out of the stale high");
+            Assert.That(reported.UnstampedWatermark, Is.GreaterThanOrEqualTo(raised.Offset),
+                "the receiver was not told of the stale duplicate's later-generation write");
         });
     }
 
     [Test]
     public void A_displaced_activation_is_always_counted_even_as_the_closing_one()
     {
-        var authors = Authored((ThirdToken, 10, 0, 9), (OtherToken, 20, 0, 9), (ClosingToken, 30, 0, 9));
+        var authors = Authored((ThirdToken, 10), (OtherToken, 20), (ClosingToken, 30));
 
         Assert.Multiple(() =>
         {
-            Assert.That(authors.StaleHigh(ClosingToken, 0, 1, Guid.Empty), Is.EqualTo(10),
-                "a displaced activation's high was dropped");
-            Assert.That(authors.StaleHigh(ThirdToken, 0, 1, Guid.Empty), Is.EqualTo(10),
+            Assert.That(authors.StaleHigh(ClosingToken, Guid.Empty), Is.EqualTo(20),
+                "another activation's high, or the displaced one's, was dropped");
+            Assert.That(authors.StaleHigh(ThirdToken, Guid.Empty), Is.EqualTo(30),
                 "a displaced activation was excluded as the closing one");
             Assert.That(authors.AllHigh, Is.EqualTo(30));
         });
@@ -98,28 +88,28 @@ public partial class WalShardGrainTests
     public void The_stale_high_excludes_only_the_forwards_of_the_split_that_created_the_receiver()
     {
         // StaleHighExcludesOtherTag.
-        var authors = Authored((OtherToken, 5, 0, 1))
+        var authors = Authored((OtherToken, 5))
             .WithForward(NarrowTagOne, 10)
             .WithForward(NarrowTagTwo, 20)
             .WithForward(NarrowTagOne, 30);
 
         Assert.Multiple(() =>
         {
-            Assert.That(authors.StaleHigh(ClosingToken, 0, 1, NarrowTagOne), Is.EqualTo(20),
+            Assert.That(authors.StaleHigh(ClosingToken, NarrowTagOne), Is.EqualTo(20),
                 "a forward of another split was excluded, or the receiver's own was not");
-            Assert.That(authors.StaleHigh(ClosingToken, 0, 1, NarrowTagTwo), Is.EqualTo(30));
-            Assert.That(authors.StaleHigh(ClosingToken, 0, 1, NarrowTagThree), Is.EqualTo(30));
+            Assert.That(authors.StaleHigh(ClosingToken, NarrowTagTwo), Is.EqualTo(30));
+            Assert.That(authors.StaleHigh(ClosingToken, NarrowTagThree), Is.EqualTo(30));
         });
     }
 
     [Test]
     public void Folding_an_activations_generations_keeps_its_forwards()
     {
-        var authors = Authored((OtherToken, 5, 0, 1)).WithForward(NarrowTagOne, 10);
+        var authors = Authored((OtherToken, 5)).WithForward(NarrowTagOne, 10);
 
-        authors = authors.With(ThirdToken, 20, 0, 1).With(ClosingToken, 30, 0, 1);
+        authors = authors.With(ThirdToken, 20).With(ClosingToken, 30);
 
-        Assert.That(authors.StaleHigh(ClosingToken, 0, 1, NarrowTagTwo), Is.EqualTo(20),
+        Assert.That(authors.StaleHigh(ClosingToken, NarrowTagTwo), Is.EqualTo(20),
             "a record of an activation or a forward was lost when the activations were displaced");
     }
 

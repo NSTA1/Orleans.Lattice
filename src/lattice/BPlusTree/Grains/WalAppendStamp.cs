@@ -44,6 +44,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <param name="Close2">A second pending donor close, or unset.</param>
 [GenerateSerializer]
 [Immutable]
+[OmitDefaultMemberValues]
 [Alias(TypeAliases.WalAppendStamp)]
 internal readonly record struct WalAppendStamp(
     [property: Id(0)] Guid LeafId,
