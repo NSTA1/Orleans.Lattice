@@ -5,11 +5,11 @@
     "Stutter"
   ],
   "counts": {
-    "invariants": 5,
+    "invariants": 6,
     "properties": 1,
-    "actions": 34,
-    "mutations": 43,
-    "behaviourRows": 38,
+    "actions": 37,
+    "mutations": 47,
+    "behaviourRows": 41,
     "distinctStates": 8826
   },
   "variants": {
@@ -24,6 +24,9 @@
     },
     "StaleDonorRearmRace": {
       "distinctStates": 64825
+    },
+    "DeferredClose": {
+      "distinctStates": 1
     }
   }
 }

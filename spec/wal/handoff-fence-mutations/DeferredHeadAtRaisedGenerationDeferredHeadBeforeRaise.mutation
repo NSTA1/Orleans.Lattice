@@ -1,0 +1,29 @@
+# #5839 (#5833's lazy key-moving close in H): the shard root raises the routing generation
+# durably, then defers L's close head, and L's arm resolves it.
+MODULE: DeferredHeadAtRaisedGenerationDeferredHeadBeforeRaise
+TARGET: DeferredHeadAtRaisedGeneration
+CLASS: Invariant
+SUMMARY: the deferred head is written before the raise is durable, naming the generation the raise will take, so a crash between the steps leaves L to re-claim a generation the shard root never raised and will later admit under
+PERTURBS: CloseDefer
+BOUNDS: WithPreArm = TRUE, WithDeferredClose = TRUE
+
+--- FIND
+CloseDefer ==
+    /\ dfStage = "raised"
+    /\ hoOpen' = FALSE
+    /\ pend' = TRUE
+    /\ pendGen' = fEpoch
+
+--- REPLACE
+CloseDefer ==
+\* MUTATION: the deferred head first, naming the generation the raise will take.
+    /\ WithDeferredClose
+    /\ hoOpen
+    /\ dfStage = "none"
+    /\ ~pend
+    /\ fEpoch < MaxEpoch
+    /\ hoOpen' = FALSE
+    /\ pend' = TRUE
+    /\ pendGen' = fEpoch + 1
+
+--- END
