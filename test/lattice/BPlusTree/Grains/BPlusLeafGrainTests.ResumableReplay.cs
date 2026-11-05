@@ -126,7 +126,8 @@ public partial class BPlusLeafGrainTests
         int? registryShardCount = null,
         string? registryKey = null,
         ShardMap? registryShardMap = null,
-        SiloStopRoutingLatch? stopLatch = null)
+        SiloStopRoutingLatch? stopLatch = null,
+        Action<LatticeOptions>? configureOptions = null)
     {
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(Arg.Any<string>()).Returns(coordinator);
@@ -177,6 +178,7 @@ public partial class BPlusLeafGrainTests
             WalPartitions = 1,
             MaxDurableUnresolvedReplayWork = maxDurableUnresolvedReplayWork,
         };
+        configureOptions?.Invoke(baseOptions);
         var optionsResolver = TestOptionsResolver.Create(
             baseOptions: baseOptions,
             maxLeafKeys: 128,

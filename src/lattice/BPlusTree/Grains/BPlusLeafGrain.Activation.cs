@@ -4621,6 +4621,16 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
+        // Issue #5851 (O3a). The incremental banks above persisted on the interval alone,
+        // so an advance they recorded in memory may still be pending. A catch-up banks it
+        // once, here at its end, under the ordinary coalescing predicate - the one the
+        // coverage-lag tick also applies - so a catch-up that moved a full entry threshold
+        // persists now, and a shorter one stays pending exactly as it did before.
+        if (IsResidualPendingCheckpointPersistDue(await GetOptionsAsync()))
+        {
+            await projection.FlushCheckpointAsync(cancellationToken);
+        }
+
         if (warmReplayProven && !_warmCacheTopologyChanged && _warmCacheHydrations == 1
             && !_warmCacheReplayFailed && _warmCacheReplaysInFlight == 1)
             _warmCacheProvenOffsets = perPartitionMaxScanned;
@@ -6515,12 +6525,20 @@ internal sealed partial class BPlusLeafGrain
     /// periodic snapshot capture.
     /// </para>
     /// </summary>
+    /// <param name="incremental">
+    /// Whether this is a catch-up replay's incremental bank - a pass-1 slice or a pass-2
+    /// terminal - rather than the apply-failure bank. An incremental bank persists by
+    /// <c>MaterialiserCheckpointInterval</c> alone (issue #5851, O3a): the entry count it
+    /// would otherwise also persist on is the replay's own scan, so a long catch-up paid
+    /// one persist, and one upward digest publish, per few thousand offsets scanned.
+    /// </param>
     private async Task<bool> TryFlushRecoveredCeilingAsync(
         int partition,
         long maxScanned,
         DeferredOffsetLedger deferredOffsets,
         ILeafProjection projection,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool incremental = true)
     {
         if (maxScanned < 0)
             return false;
@@ -6546,9 +6564,23 @@ internal sealed partial class BPlusLeafGrain
         if (ceiling <= GetCurrentCheckpointForPartition(partition))
             return false;
 
-        using (LatticeApplyOffsetContext.BeginScope(partition, ceiling))
+        // Issue #5851 (O3a). The ceiling is recorded in memory as before; only when it
+        // is persisted changes. Every pin, cursor report, fall-off latch and coverage-lag
+        // drive still reads the persisted checkpoint, which this leaves behind for at most
+        // one interval; the replay's final reconciliation records its advance under the
+        // ordinary predicate, so a catch-up that moved a full entry threshold banks at its
+        // end, and a cancelled replay banks what it holds as before.
+        _bankingIncrementalReplayProgress = incremental;
+        try
         {
-            await projection.SetCheckpointOffsetAsync(ceiling, cancellationToken);
+            using (LatticeApplyOffsetContext.BeginScope(partition, ceiling))
+            {
+                await projection.SetCheckpointOffsetAsync(ceiling, cancellationToken);
+            }
+        }
+        finally
+        {
+            _bankingIncrementalReplayProgress = false;
         }
 
         return true;
@@ -6604,7 +6636,8 @@ internal sealed partial class BPlusLeafGrain
                 maxScanned,
                 deferredOffsets,
                 projection,
-                cancellationToken);
+                cancellationToken,
+                incremental: false);
         }
         catch (Exception flushFailure)
         {

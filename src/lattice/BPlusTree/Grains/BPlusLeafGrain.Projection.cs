@@ -524,8 +524,20 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private bool IsCheckpointPersistDue(LatticeOptions options, long pendingEntries) =>
         options.MaterialiserCheckpointInterval == TimeSpan.Zero
-        || pendingEntries >= options.MaterialiserCheckpointEntries
+        || (!_bankingIncrementalReplayProgress && pendingEntries >= options.MaterialiserCheckpointEntries)
         || HasIntervalElapsed(options.MaterialiserCheckpointInterval);
+
+    /// <summary>
+    /// Set while a catch-up replay records an incremental bank (issue #5851, O3a), so
+    /// <see cref="IsCheckpointPersistDue"/> persists it on the interval alone, not on the
+    /// entry count. Spans the one <see cref="ILeafProjection.SetCheckpointOffsetAsync"/>
+    /// call the bank makes, including its awaits, so another persist interleaved on this
+    /// activation in that window is judged without the entry trigger too (review N3).
+    /// That is cost only: such a persist is deferred to the interval, the coverage-lag
+    /// tick or the catch-up's end bank, never made early, and every reader still follows
+    /// the persisted checkpoint.
+    /// </summary>
+    private bool _bankingIncrementalReplayProgress;
 
     /// <summary>
     /// <c>true</c> when this activation holds a pending checkpoint advance that
