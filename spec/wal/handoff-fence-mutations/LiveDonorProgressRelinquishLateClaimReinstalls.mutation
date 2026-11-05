@@ -7,7 +7,7 @@ PERTURBS: LiveClaimDone
 BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE
 
 --- FIND
-             [] relEpoch = 0 -> /\ liveArmed' = TRUE
+             [] relEpoch = 0 /\ lClaim > lEpoch -> /\ liveArmed' = TRUE
 --- REPLACE
 \* MUTATION: the completion installs whatever the relinquish.
              [] ~stale -> /\ liveArmed' = TRUE

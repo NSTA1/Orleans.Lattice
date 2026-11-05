@@ -1,0 +1,16 @@
+# Pairs with DeferredCloseMeetsCoreResolve (H -> C, #5839): the lazy key-moving close raises, defers
+# L's head at the raised generation, and L's arm resolves it at the allocator head.
+MODULE: DeferredCloseMeetsCoreResolveDeferredBeforeRaise
+TARGET: DeferredCloseMeetsCoreResolve
+CLASS: Invariant
+SUMMARY: the deferred head names F's generation before the raise, so L's arm re-claims a generation that does not fence the window's writes
+
+--- FIND
+        /\ epoch' = [epoch EXCEPT !["F"] = g]
+        /\ pendGen' = g
+
+--- REPLACE
+        /\ epoch' = [epoch EXCEPT !["F"] = g]
+        /\ pendGen' = epoch["F"]
+
+--- END

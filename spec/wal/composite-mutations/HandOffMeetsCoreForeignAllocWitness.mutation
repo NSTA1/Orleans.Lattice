@@ -8,7 +8,7 @@ CLASS: Invariant
 SUMMARY: a foreign stamped append is reachable: the edge's check is not vacuous
 
 --- FIND
-Fails("HandOffMeetsCoreForeignAlloc", CForeignAlloc)
+Fails("HandOffMeetsCoreForeignAlloc", pend \/ CForeignAlloc)
 --- REPLACE
-Fails("HandOffMeetsCoreForeignAlloc", FALSE)
+Fails("HandOffMeetsCoreForeignAlloc", pend)
 --- END

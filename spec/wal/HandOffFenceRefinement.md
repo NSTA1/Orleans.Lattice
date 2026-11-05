@@ -53,10 +53,10 @@ design model.
   clause that a claim at or below `floor(i)` is never raised is not exercised; it is
   the routing-floor module's. The module reads no state of E: the entry check is the
   shape of these actions, not an import.
-- **Guarantees.** Five, each checked in the base and the variants: four invariants
+- **Guarantees.** Six, each checked in the base and the variants: five invariants
   and an action property.
-  - `HandOffBound`: whenever L's marker reads closed (its state is initialised and no
-    window is open), every stamped foreign append - `Foreign(i)` in the interface's
+  - `HandOffBound`: whenever L's marker reads closed (its state is initialised, no
+    window is open and no deferred close head is pending), every stamped foreign append - `Foreign(i)` in the interface's
     vocabulary, author `f` or `g` here - lies below the head its last close recorded.
     Checked at every state, this is the interface's form: a `Foreign(i)` offset is
     allocated only while the marker is open, or below the `closedAt` the close
@@ -70,6 +70,10 @@ design model.
     stale-donor variants.
   - `StaleDetectionHonoured` (#5840 S4, R6): a claim probe that finds the live donor
     stale marks it stale, even when the relinquish discards the claim.
+  - `DeferredHeadAtRaisedGeneration` (#5839): the lazy key-moving close raises the
+    shard root's routing generation durably before it records L's deferred head, so a
+    pending deferred head never names a generation above the raised one. It is vacuous
+    outside `DeferredClose`.
   - `CloseHeadMonotone`: the heads L's marker requires, `closedAt`, never decrease.
     `Close` records any head up to the allocator's above every stamped foreign
     append - the weakest head E's re-claim allows, since the claim head covers every
@@ -118,6 +122,7 @@ design model.
 | `dst`, `dEpoch` | A stale duplicate D' of the donor and the epoch its claim wrote | A second activation of D that loaded its state before the split. |
 | `dpend`, `dstamp` | D''s epoch-only write of a moved key, admitted under its epoch | A `WalRoutingStamp.None` append: the PendingTx terminal backstop and the span-forward receive. |
 | `bst`, `bRead` | The split's bump of D's row and the row value it read | The split's conditional row write. |
+| `dfStage`, `pend`, `pendGen` | The lazy key-moving close (#5833, #5839): the shard root's raise done and its deferral not yet written, a deferred close head pending on L's marker, and the routing generation it resolves at | The shard root's `ShardHandOffState.RoutingGeneration` raise; L's marker's deferred close (`HandOffMarkerCore.CloseDeferred`), pending until `HandOffMarkerCore.ResolveDeferred`. |
 | `dRetried` | D' has used its one probed re-claim after a `StaleEpoch` at its own epoch | `LeafAppendEpochFence`'s per-close re-claim allowance. |
 | `lpend`, `lstamp`, `lUsed` | The live donor's write of a moved key admitted before the narrow, and the epoch it was stamped with | A stamped append of the live donor of D (#5840 S4). |
 | `relEpoch` | The epoch the live donor relinquished at its counted pre-arm close; 0 none | `LeafAppendEpochFence._relinquishedEpoch`, set by `LeafAppendEpochFence.RelinquishLocked` from `LeafAppendEpochFence.CountSplitClose`. |
@@ -163,7 +168,10 @@ design model.
 | `LiveStamp` | After the split's bump, the live donor stamps; refused at its current epoch it takes its one probed re-claim, and a second refusal supersedes it | `LeafAppendEpochFence.OnStale` with the per-close allowance. | Yes: `WalShardGrainTests.A_pre_arm_donor_keeps_stamping_after_the_link_fence` and `WalShardGrainTests.The_reclaim_allowance_is_one_per_close_and_never_accumulates`. |
 | `SplitPersist` | The split persists D's narrowed state before it reads D's epoch row, and under pre-arm the live donor's counted close relinquishes its claim locally: its installed epoch and any claim in flight are recorded as the relinquished epoch, its cached row is cleared, and its token is kept | `BPlusLeafGrain.CompleteSplitAsync`, the narrow's persist, which precedes `BPlusLeafGrain.CloseSplitHandOffAsync` (eager) and the split link that runs `ShardRootGrain.CloseDeferredSplitHandOffsAsync` (pre-arm); the relinquish is `LeafAppendEpochFence.CountSplitClose` with `LeafAppendEpochFence.RelinquishLocked`. | Yes: `BPlusLeafGrainTests.SplitReadsRowBeforePersist`, `ShardRootGrainSplitLinkTests.The_split_link_fences_the_donor_before_its_deferred_close` and `WalShardGrainTests.RelinquishKeepsCachedRow`. |
 | `SplitRowRead` | After the narrow is durable, the split reads D's epoch row fresh | `LeafAppendEpochFence.FenceSplitAsync`, run by the donor's live activation in `BPlusLeafGrain.CloseSplitHandOffAsync` (eager), and `LeafSplitDuplicateFence.FenceAsync`, run by the shard root in `ShardRootGrain.CloseDeferredSplitHandOffsAsync` before its raise and its deferred close (pre-arm, whatever the gate view; a failed fence leaves the sibling unclosed and the donor unacknowledged). | Yes: `BPlusLeafGrainTests.SplitReadsRowBeforePersist`, `WalShardGrainTests.BumpOnlyIfSplittingActivationClaimed`, `ShardRootGrainSplitLinkTests.The_split_link_fences_the_donor_before_its_deferred_close`, `ShardRootGrainSplitLinkTests.A_split_link_closes_an_open_sibling_marker_whatever_its_own_view_of_the_pre_arm_class` and `ShardRootGrainSplitLinkTests.A_split_link_whose_donor_fence_fails_leaves_the_sibling_open_and_the_donor_unacknowledged`. |
-| `SplitRowWrite` | If D's durable row exists, whichever activation claimed, the split writes row + 1 conditionally on the value it read, re-reading on a conflict, raises D's entry at every partition to that value, and, in the eager arm, adopts the new row into the live activation (a5e2e2ef's A3) | `LeafSplitDuplicateFence.FenceAsync`, which `LeafAppendEpochFence.FenceSplitAsync` runs with the live activation's adoption. | Yes: `WalShardGrainTests.BumpOnlyIfSplittingActivationClaimed`, `WalShardGrainTests.SplitRowWriteDropsBump` and `WalShardGrainTests.SplitBumpUsesCachedEtag`. |
+| `SplitRowWrite` | If D's durable row exists, whichever activation claimed, the split writes row + 1 conditionally on the value it read, re-reading on a conflict, raises D's entry at every partition to that value, and, in the eager arm and under rule S's donor-side pre-arm fence (`WithDonorFence`), adopts the new row into the live activation (a5e2e2ef's A3) | `LeafSplitDuplicateFence.FenceAsync`, which `LeafAppendEpochFence.FenceSplitAsync` runs with the live activation's adoption. | Yes: `WalShardGrainTests.BumpOnlyIfSplittingActivationClaimed`, `WalShardGrainTests.SplitRowWriteDropsBump` and `WalShardGrainTests.SplitBumpUsesCachedEtag`. |
+| `CloseRaise` | Under pre-arm, a split's or reclaim's close into L stops admitting and raises the shard root's routing generation durably, with no WAL claim (C6) | `ShardRootGrain.CloseDeferredSplitHandOffsAsync` and `ShardRootGrain.CloseReclaimHandOffAsync`, the pre-arm branch: `ShardRootGrain.UpdateHandOffMarkerAsync` raising `RoutingGeneration` in the shard root's own turn. | Yes: `ShardRootGrainSplitLinkTests.A_deferred_close_is_written_only_after_the_raise_it_defers_is_durable` and `ShardRootGrainSplitLinkTests.A_deferred_reclaim_close_is_written_only_after_the_raise_it_defers_is_durable`. |
+| `CloseDefer` | Only after the raise is durable, the close records L's deferred head, the raised generation, and closes L's window; the marker holds L while the head is pending | `HandOffMarkerCore.CloseDeferred`, written by the same shard-root paths after the raise. | Yes: `ShardRootGrainSplitLinkTests.A_split_link_whose_raise_is_not_durable_writes_no_deferred_close`, `ShardRootGrainSplitLinkTests.A_reclaim_whose_raise_is_not_durable_writes_no_deferred_close` and `HandOffMarkerCoreDeferredTests.A_deferred_close_holds_the_owner_at_every_partition_until_resolved`. |
+| `ResolveDeferred` | L's arm re-claims the deferred generation at the partition, or keeps a higher loaded entry when a later raise was already re-claimed there (C5), and records the allocator head as the close head in the same WAL turn | `WalShardGrain.ArmAppendEpochAsync` through `WalShardGrain.ResolveDeferredGenerationAsync`; the leaf records it with `HandOffMarkerCore.TryGetPendingDeferred` and `HandOffMarkerCore.ResolveDeferred`. | Yes: `WalShardGrainTests.An_arm_resolves_a_deferred_generation_so_a_write_admitted_before_it_is_refused`, `WalShardGrainTests.An_arm_resolving_a_deferred_generation_below_a_loaded_one_takes_the_current_head` and `HandOffMarkerCoreDeferredTests.Resolving_at_a_generation_records_the_head_for_lower_closes_only_at_that_partition`. |
 | `Stutter` | Natural termination | Not a protocol step; a stuttering successor so TLC does not report a quiescent state as a deadlock. | Not applicable: not a protocol step, so there is no production behaviour to detect. |
 
 ## Property mapping
@@ -174,6 +182,7 @@ design model.
 | `CloseHeadMonotone` | The heads an owner must replay to before it re-arms never decrease: a later close with lower heads, or the eviction of a retained close, leaves the maximum in force. | Yes: `HandOffMarkerCoreTests.A_later_close_with_lower_heads_never_lowers_the_required_heads` and `HandOffMarkerCoreTests.Required_heads_cover_only_overlapping_closes_and_every_evicted_one`. |
 | `LiveDonorProgress` | Under pre-arm, the split's link-time fence never supersedes the live donor, nor leaves it self-fencing its own appends: only a stale duplicate's claim raising D's row can (#5840 S4, a5e2e2ef's R1-R4). | Yes: `WalShardGrainTests.A_pre_arm_donor_keeps_stamping_after_the_link_fence`, `WalShardGrainTests.RelinquishKeepsCachedRow` and `WalShardGrainTests.RelinquishLateClaimReinstalls`. |
 | `StaleDetectionHonoured` | A claim probe that finds the live donor's state stale marks it stale, even when the relinquish discards the claim: discarding never swallows a real #5841 detection (R6). | Yes: `WalShardGrainTests.RelinquishLateClaimReinstalls`. |
+| `DeferredHeadAtRaisedGeneration` | The lazy close raises before it defers: a pending deferred head never names a generation the shard root has not durably raised, so a crash between the steps cannot leave L re-claiming a generation the shard root will later admit under (#5839). | Yes: `ShardRootGrainSplitLinkTests.A_deferred_close_is_written_only_after_the_raise_it_defers_is_durable` and `ShardRootGrainSplitLinkTests.A_split_link_whose_raise_is_not_durable_writes_no_deferred_close`. |
 | `AbsentMarkerHolds` | An absent or uninitialised marker never reads as closed: its owner is held until the marker state is initialised, which happens only with no marker-less hand-off in flight. | Yes: `ShardRoutingGenerationIntegrationTests.A_shard_root_with_a_migration_in_flight_leaves_its_marker_uninitialised`, `BPlusLeafGrainTests.An_uninitialised_leaf_marker_holds_until_the_leaf_adopts_its_shards_flag` and `HandOffMarkerRowRoundTripTests.An_absent_marker_reads_as_uninitialised_with_nothing_open`. |
 
 ## Excluded properties
@@ -186,8 +195,8 @@ design model.
 
 ## Property classification (issue #2321)
 
-`TypeOK` and the four invariants are state safety, and `CloseHeadMonotone` is an action
-property; all six are checked on the base and re-checked in the `WideWindows` variant.
+`TypeOK` and the five invariants are state safety, and `CloseHeadMonotone` is an action
+property; all seven are checked on the base and re-checked in the `WideWindows` variant.
 The stale duplicate donor of #5841 is checked in two more variants, `StaleDonor`
 (today's eager arm, where the splitting activation has always claimed: 574,540 states)
 and `StaleDonorPreArm` (#5833's pre-arm, where it may not have, with the live donor's
@@ -197,7 +206,13 @@ window; the base leaves it off and keeps its count. `StaleDonorRearmRace` adds a
 epoch with the batch, the tree walk, the legacy hand-off and the restart off (64,825
 states), so the live donor's re-arm race - it re-arms between its counted close and the
 link fence, and its one probed re-claim restores it - is reachable; three epochs run out
-before the re-claim.
+before the re-claim. `StaleDonorDonorFence` (#5839) checks `LiveDonorProgress` under
+#5837's rule S, where the pre-arm fence is the donor's own and adopts the bumped row
+(2,294,406 states). `DeferredClose` (#5839) checks the lazy key-moving close under
+pre-arm: the shard root's raise, its deferred head, and L's resolution, with the base's
+two windows so that a later window's eager close can re-claim above a pending deferred
+head (C5), with the tree walk off, since its range-delete generation is the tree's and not the
+shard root's routing generation the lazy close raises - 3,836 states.
 A close may choose a head below the allocator's only once a walk has gone on
 unstamped, which takes a close to reject it, so a head below an earlier close's needs a
 third close of L; the base's generations allow two. The property's mutation therefore
@@ -279,6 +294,18 @@ R8: a write stamped before the relinquish bumps on a floor refusal), and two wit
 `LiveDonorProgressReclaimAfterRearmRaceWitness` (in `StaleDonorRearmRace`: the donor
 re-arms between its count and the link fence, and its one probed re-claim restores it).
 
+#5839 adds four, run in `DeferredClose`:
+`DeferredHeadAtRaisedGenerationDeferredHeadBeforeRaise` (`CloseDefer`: the deferred head is
+written before the raise is durable),
+`HandOffBoundKeyMovingCloseWithoutGenerationRaise` (`CloseRaise`; mirrors C's),
+`HandOffBoundReceiverArmBelowDeferredReclaimHead` (`ResolveDeferred`; mirrors C's) and
+`HandOffBoundDeferredResolveLowersLoaded` (`ResolveDeferred`: C5, the safety half of C's
+`NewbornPinEventuallyUsableDeferredHeadRefusedBelowLoaded`).
+`LiveDonorProgressDonorFenceDoesNotAdopt` (`SplitRowWrite`, in `StaleDonorDonorFence`): under
+rule S the donor's own fence bumps the row without adopting it, so the donor's in-flight
+write is refused at its current epoch and supersedes it (a5e2e2ef's A3 for the donor-side
+fence).
+
 ## Redundancy checks
 
 The design model kept one guard of this module that its model implies, as a
@@ -291,6 +318,24 @@ mutation directory; it was run locally against this module.
 | `ReadPositionHonestNoMarkerInit` | Kept: `HandOffBound` reads the marker as closed whenever no window is open, ignoring whether its state is initialised. | Clean against `HandOffBound` in the base: rule 1 (a resume opens its marker before its next admission) already bounds every stamped append, so rule 2 is implied here, as in the design. It is kept because a resume path the stamp census misses would otherwise read as closed. |
 
 ## Deliberate abstraction gaps
+
+- **The lazy close shares the initiator's generation with the tree walk (#5839).** H models one
+  initiator generation, `fEpoch`, which stands for a shard root's routing generation and for
+  the tree's range-delete generation alike. In production they are distinct: the lazy
+  key-moving close raises the shard root's routing generation, and the tree walk is stamped
+  with the tree's range-delete generation (`TreeRangeDeleteFenceGrain`). `DeferredClose`
+  therefore runs with the tree walk off; with it on, another intent's close would raise the
+  generation the deferred head resolves at, a coupling production does not have. The walk's
+  own fencing is checked in the base and `WideWindows`. That loses no real interleaving
+  because the bound on a walk is separate (a5e2e2ef): a record stamped under the tree's
+  range-delete generation is bounded by that range delete's own shard-marker window, whose
+  close heads the receiver's advance checks (`HandOffMarkerCore.HeadAt` over the shard
+  marker's close heads, which the leaf reads with its advance), never by the
+  deferred split close. A walk that writes a moved key while a deferred split close is
+  pending on the receiver therefore holds it until both the range delete's window and the
+  deferred close have closed, pinned by
+  `LeafHandOffFenceIntegrationTests.A_range_delete_walk_during_a_pending_deferred_split_close_holds_the_receiver_until_both_close`.
+  Production symbols: `ShardRootGrain.CloseDeferredSplitHandOffsAsync`, `TreeRangeDeleteFenceGrain`, `HandOffMarkerCore.HeadAt`.
 
 - **#5841: the Dekker pair's storage assumption.** The fix rests on each side's write
   completing before its own read, and on each read being a fresh storage read that

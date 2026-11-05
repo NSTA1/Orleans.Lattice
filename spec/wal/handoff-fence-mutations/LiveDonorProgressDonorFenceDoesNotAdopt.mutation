@@ -1,0 +1,19 @@
+# #5837 rule S (a5e2e2ef's A3 for the donor-side fence, #5839): the donor's own split fence adopts
+# the row it bumps into the live activation, so the donor's write admitted before its narrow is
+# refused below its new epoch and self-fences, rather than superseding the donor.
+MODULE: LiveDonorProgressDonorFenceDoesNotAdopt
+TARGET: LiveDonorProgress
+CLASS: Invariant
+SUMMARY: the donor's own split fence bumps D's row on its cached ETag but does not adopt it, so the donor's in-flight write is refused at its current epoch and supersedes it (the SplitBumpUsesCachedEtag shape)
+PERTURBS: SplitRowWrite
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE, WithDonorFence = TRUE
+
+--- FIND
+    /\ IF WithDonorFence /\ liveArmed /\ eRow = bRead /\ SplitBumps(bRead)
+       THEN /\ lEpoch' = bRead + 1
+            /\ lCached' = bRead + 1
+       ELSE UNCHANGED <<lEpoch, lCached>>
+--- REPLACE
+\* MUTATION: the donor's fence does not adopt the bumped row.
+    /\ UNCHANGED <<lEpoch, lCached>>
+--- END
