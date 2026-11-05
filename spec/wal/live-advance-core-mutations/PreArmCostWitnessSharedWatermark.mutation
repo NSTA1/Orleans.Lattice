@@ -9,7 +9,7 @@ PERTURBS: PreArmAlloc
 
 --- FIND
     /\ preArm' = preArm \cup {next}
-    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, ReportU)]
     /\ IF FreeOn THEN ReportForeign(a) ELSE UNCHANGED seenP
     /\ ReportStale(a)
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars>>

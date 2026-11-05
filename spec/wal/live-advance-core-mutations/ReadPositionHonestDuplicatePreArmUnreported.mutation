@@ -8,12 +8,12 @@ SUMMARY: a stamped response does not report foreignHigh
 PERTURBS: OwnAlloc
 
 --- FIND
-    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, ReportU)]
     /\ ReportForeign(a)
     /\ ReportStale(a)
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars>>
 --- REPLACE
-    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, ReportU)]
 \* MUTATION: foreignHigh is not reported.
     /\ UNCHANGED seenP
     /\ ReportStale(a)
