@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Serialization;
 using Orleans.Storage;
@@ -117,6 +118,7 @@ public sealed class HandOffMarkerRowRoundTripTests
         {
             Initialised = true,
             SiblingLinkedGeneration = 13,
+            SiblingLinkedShard = 3,
             Closes =
             {
                 new HandOffClose
@@ -128,6 +130,8 @@ public sealed class HandOffMarkerRowRoundTripTests
                     AdmittedShard = 2,
                     AdmittedGeneration = 11,
                     LinkedGeneration = 13,
+                    LinkedShard = 2,
+                    CarryResolvedAt = [true, false],
                 },
             },
         };
@@ -144,6 +148,9 @@ public sealed class HandOffMarkerRowRoundTripTests
                 Assert.That(close.AdmittedGeneration, Is.EqualTo(11));
                 Assert.That(close.LinkedGeneration, Is.EqualTo(13), "the link witness (#5866, B2) did not survive");
                 Assert.That(round.SiblingLinkedGeneration, Is.EqualTo(13), "the marker-level witness (#5866, G1) did not survive");
+                Assert.That(close.LinkedShard, Is.EqualTo(2), "the witness's shard (#5866, G4 A1) did not survive");
+                Assert.That(round.SiblingLinkedShard, Is.EqualTo(3), "the marker-level witness's shard (#5866, G4 A1) did not survive");
+                Assert.That(close.CarryResolvedAt, Is.EqualTo(new[] { true, false }), "the per-partition carry resolution (#5866, G4) did not survive");
             });
         }
     }
@@ -168,6 +175,31 @@ public sealed class HandOffMarkerRowRoundTripTests
         {
             Assert.That(stripped, Does.Not.Contain("LinkedGeneration"), "precondition: the witness was stripped from the stored row");
             Assert.That(read.Closes.Single().LinkedGeneration, Is.Zero);
+        });
+    }
+
+    [Test]
+    public void A_close_written_before_carry_resolution_existed_reads_as_carried_everywhere()
+    {
+        // #5866, G4: the resolved bits are additive; a stored row without them is carried at
+        // every partition, never resolved, and never null.
+        var row = new LeafHandOffState
+        {
+            Initialised = true,
+            Closes = { new HandOffClose { Token = "split:d", Heads = [7], DonorLeaf = Guid.NewGuid(), CarryResolvedAt = [true] } },
+        };
+        using var services = Services();
+        var json = services.GetRequiredService<JsonGrainStorageSerializer>();
+        var text = json.Serialize(row).ToString();
+        var stripped = System.Text.RegularExpressions.Regex.Replace(text, @",?\s*""CarryResolvedAt""\s*:\s*\[[^\]]*\]", string.Empty);
+
+        var read = json.Deserialize<LeafHandOffState>(BinaryData.FromString(stripped));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stripped, Does.Not.Contain("CarryResolvedAt"), "precondition: the resolved bits were stripped from the stored row");
+            Assert.That(read.Closes.Single().CarryResolvedAt, Is.Not.Null.And.Empty);
+            Assert.That(HandOffMarkerCore.IsCarryResolvedEverywhere(read.Closes.Single(), 1), Is.False);
         });
     }
 

@@ -86,4 +86,24 @@ internal sealed class HandOffClose
     /// </summary>
     [Id(11)]
     public long LinkedGeneration { get; set; }
+
+    /// <summary>
+    /// For a donor close, per WAL partition, whether the sibling's own arm has re-claimed
+    /// the shard root's generation there at or above the link witness, raising this
+    /// close's head there to the re-claim head (a5e2e2ef's G4 on #5866). Until it has, the
+    /// sibling's stamps at that partition keep carrying the close, so its stale high keeps
+    /// bounding a stale route admitted at the old generation; the witness alone never ends
+    /// the carriage. Empty until the first such arm.
+    /// </summary>
+    [Id(12)]
+    public bool[] CarryResolvedAt { get; set; } = [];
+
+    /// <summary>
+    /// The shard root whose raise <see cref="LinkedGeneration"/> witnesses (a5e2e2ef's A1);
+    /// meaningful only while that is above 0. A witness from a shard root other than
+    /// <see cref="AdmittedShard"/> - a reshard or fold between the close and the link -
+    /// resolves no carriage: the close stays carried at every partition.
+    /// </summary>
+    [Id(13)]
+    public int LinkedShard { get; set; }
 }

@@ -78,6 +78,17 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     private WalPendingClose _close2;
     private bool _closesOverCap;
 
+    /// <summary>
+    /// The donor closes still carried, each with the partitions its sibling's arm has
+    /// resolved (a5e2e2ef's G4, A3): a stamp at partition p carries only the closes not
+    /// resolved there. <see cref="_close1"/> and <see cref="_close2"/> are their union, for
+    /// a reader covering every partition (the split's cut).
+    /// </summary>
+    private (WalPendingClose Close, bool[] ResolvedAt)[] _carried = [];
+
+    /// <summary>Whether a donor bound is pending on the leaf's marker as last read: its own link unwitnessed (A6).</summary>
+    private bool _boundPending;
+
     // #5837, rule D: appends in flight by drain epoch, so a split's drain waits only for
     // those that started before its narrow; and, while a split window is armed, the
     // highest own offset per partition of a record whose key moved, and whether an append
@@ -280,7 +291,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 // D1-D2: a deferred sibling stamps pre-arm, attributed to this activation,
                 // and never reaches a claim; the dispatch still sends an unrouted write
                 // unstamped (C4).
-                return new ValueTask<WalAppendStamp?>(DecorateLocked(WalAppendStamp.PreArm(_leafId, _activation)));
+                return new ValueTask<WalAppendStamp?>(DecorateLocked(WalAppendStamp.PreArm(_leafId, _activation), partition));
             }
 
             if (!IsGateOpenLocked())
@@ -290,7 +301,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
 
             if (_epoch > 0 && _partitions.TryGetValue(partition, out var claimed) && claimed.ClaimedEpoch == _epoch)
             {
-                return new ValueTask<WalAppendStamp?>(DecorateLocked(WalAppendStamp.ForLeaf(_leafId, _epoch, _activation)));
+                return new ValueTask<WalAppendStamp?>(DecorateLocked(WalAppendStamp.ForLeaf(_leafId, _epoch, _activation), partition));
             }
 
             if (_gate.IsPreArmOpen)
@@ -298,7 +309,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 // #5833, revision 2: no claim until the leaf arms here (ArmAsync); the
                 // append goes pre-arm, which the partition admits on its routing
                 // generation alone and attributes to this activation.
-                return new ValueTask<WalAppendStamp?>(DecorateLocked(WalAppendStamp.PreArm(_leafId, _activation)));
+                return new ValueTask<WalAppendStamp?>(DecorateLocked(WalAppendStamp.PreArm(_leafId, _activation), partition));
             }
 
             if (_requireReachability && !_markerChecked)
@@ -320,16 +331,52 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     /// write is appended unstamped, for a chain past its bound (C4). Called under
     /// <see cref="_sync"/>.
     /// </summary>
-    private WalAppendStamp? DecorateLocked(WalAppendStamp stamp)
+    private WalAppendStamp? DecorateLocked(WalAppendStamp stamp, int partition)
     {
         if (!WalForwardChain.TryApply(ref stamp, WalForwardChain.Current))
         {
             return null;
         }
 
-        return _narrowTag == Guid.Empty && !_close1.IsSet
+        CarriedAtLocked(partition, out var close1, out var close2, out _);
+        return _narrowTag == Guid.Empty && !close1.IsSet
             ? stamp
-            : stamp with { ReaderTag = _narrowTag, Close1 = _close1, Close2 = _close2 };
+            : stamp with { ReaderTag = _narrowTag, Close1 = close1, Close2 = close2 };
+    }
+
+    /// <summary>
+    /// The first two donor closes carried at <paramref name="partition"/> - not resolved
+    /// there by the sibling's arm (G4, A3) - and whether more are. Called under
+    /// <see cref="_sync"/>; allocates nothing.
+    /// </summary>
+    private void CarriedAtLocked(int partition, out WalPendingClose close1, out WalPendingClose close2, out bool overCap)
+    {
+        close1 = default;
+        close2 = default;
+        overCap = false;
+        var n = 0;
+        foreach (var (close, resolvedAt) in _carried)
+        {
+            if (partition >= 0 && partition < resolvedAt.Length && resolvedAt[partition])
+            {
+                continue;
+            }
+
+            if (n == 0)
+            {
+                close1 = close;
+            }
+            else if (n == 1)
+            {
+                close2 = close;
+            }
+            else
+            {
+                overCap = true;
+            }
+
+            n++;
+        }
     }
 
     /// <inheritdoc />
@@ -495,11 +542,59 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     internal void SetPendingCloses(IReadOnlyList<WalPendingClose> closes)
     {
         ArgumentNullException.ThrowIfNull(closes);
+        var carried = new (WalPendingClose, bool[])[closes.Count];
+        for (var i = 0; i < closes.Count; i++)
+        {
+            carried[i] = (closes[i], []);
+        }
+
+        SetCarriedCloses(carried, boundPending: closes.Count > 0);
+    }
+
+    /// <summary>
+    /// Records the donor closes still carried on the leaf's marker, each with the partitions
+    /// its arm resolved, and whether a donor bound is pending (a5e2e2ef's G4, A3 and A6):
+    /// a stamp at a partition carries only the closes unresolved there, and the leaf
+    /// neither arms nor claims while a bound is pending.
+    /// </summary>
+    internal void SetCarriedCloses(IReadOnlyList<(WalPendingClose Close, bool[] ResolvedAt)> carried, bool boundPending)
+    {
+        ArgumentNullException.ThrowIfNull(carried);
+        var copy = carried.Count == 0 ? [] : new (WalPendingClose, bool[])[carried.Count];
+        for (var i = 0; i < copy.Length; i++)
+        {
+            copy[i] = (carried[i].Close, (bool[])carried[i].ResolvedAt.Clone());
+        }
+
         lock (_sync)
         {
-            _close1 = closes.Count > 0 ? closes[0] : default;
-            _close2 = closes.Count > 1 ? closes[1] : default;
-            _closesOverCap = closes.Count > WalAppendStamp.MaxPendingCloses;
+            _carried = copy;
+            _close1 = copy.Length > 0 ? copy[0].Item1 : default;
+            _close2 = copy.Length > 1 ? copy[1].Item1 : default;
+            _closesOverCap = copy.Length > WalAppendStamp.MaxPendingCloses;
+            _boundPending = boundPending;
+        }
+    }
+
+    /// <summary>Whether any donor close is still carried at some partition (G4): the tick's backstop reads the view while one is.</summary>
+    internal bool HasCarriedClosesForBackstop
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _carried.Length > 0;
+            }
+        }
+    }
+
+    /// <summary>Whether a donor close is carried at <paramref name="partition"/> (G4); test seam.</summary>
+    internal bool IsCarriedAtForTesting(int partition)
+    {
+        lock (_sync)
+        {
+            CarriedAtLocked(partition, out var close1, out _, out _);
+            return close1.IsSet;
         }
     }
 
@@ -514,15 +609,16 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     {
         lock (_sync)
         {
+            CarriedAtLocked(partition, out var close1, out var close2, out var overCap);
             if (!_stale
-                && !_closesOverCap
+                && !overCap
                 && IsGateOpenLocked()
                 && _gate.IsPreArmOpen
                 && _partitions.TryGetValue(partition, out var p)
                 && !(_epoch > 0 && p.ClaimedEpoch == _epoch)
                 && p.Reported
-                && Covers(p, _close1)
-                && Covers(p, _close2))
+                && Covers(p, close1)
+                && Covers(p, close2))
             {
                 reportedBound = p.ReportedUnstamped;
                 return true;
@@ -1256,14 +1352,19 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         }
     }
 
-    /// <summary>Whether a donor close is pending on the leaf's marker as last read (B2); the leaf neither arms nor claims while one is.</summary>
+    /// <summary>
+    /// Whether a donor bound is pending on the leaf's marker as last read - its own link
+    /// unwitnessed (B2, A6); the leaf neither arms nor claims while one is. A witnessed
+    /// close may still be carried (G4): that gates only the stale high, never the arm that
+    /// resolves it.
+    /// </summary>
     internal bool HasPendingCloses
     {
         get
         {
             lock (_sync)
             {
-                return _close1.IsSet;
+                return _boundPending;
             }
         }
     }
@@ -1329,7 +1430,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                     var p = PartitionLocked(partition);
                     if (_epoch > 0 && p.ClaimedEpoch == _epoch)
                     {
-                        return DecorateLocked(WalAppendStamp.ForLeaf(_leafId, _epoch, _activation));
+                        return DecorateLocked(WalAppendStamp.ForLeaf(_leafId, _epoch, _activation), partition);
                     }
 
                     claim = p.Claiming ??= ClaimAtPartitionAsync(shard, p, cancellationToken);

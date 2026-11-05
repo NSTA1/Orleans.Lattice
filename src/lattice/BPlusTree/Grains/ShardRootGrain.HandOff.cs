@@ -280,7 +280,7 @@ internal sealed partial class ShardRootGrain
             var sibling = WalForwardChain.KeyOf(links[i].Split.NewSiblingId);
             writes[i] = donor == Guid.Empty || sibling == Guid.Empty
                 ? Task.CompletedTask
-                : HandOffMarkerRows.UpdateLeafAsync(storage, sibling, m => HandOffMarkerCore.WitnessLink(m, donor, generation));
+                : HandOffMarkerRows.UpdateLeafAsync(storage, sibling, m => HandOffMarkerCore.WitnessLink(m, donor, ShardIndex, generation));
         }
 
         try

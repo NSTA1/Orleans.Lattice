@@ -465,17 +465,41 @@ internal sealed partial class BPlusLeafGrain
     /// so a later activation need not re-claim it. A failed arm leaves its partition
     /// pre-arm, on the replay-based advance.
     /// </summary>
-    private async Task ArmForLiveAdvanceAsync(LeafAppendEpochFence fence, long[] ownHigh, LeafHandOffState marker, string? low, string? high)
+    private async Task<HashSet<int>?> ArmForLiveAdvanceAsync(
+        LeafAppendEpochFence fence, long[] ownHigh, LeafHandOffState marker, string? low, string? high, bool[]? carryOnly = null)
     {
         var treeId = state.State.TreeId!;
         List<(int Partition, WalRoutingInitiator Initiator, long Generation)>? requests = null;
         for (var p = 0; p < ownHigh.Length; p++)
         {
             var deferred = HandOffMarkerCore.TryGetPendingDeferred(marker, low, high, p, out var shard, out var generation);
-            var armed = fence.TryGetArmingView(p, out _, out _);
-            if ((armed && !deferred) || (!armed && ownHigh[p] <= GetCurrentCheckpointForPartition(p)))
+
+            // a5e2e2ef's G4 (A1, A5): a witnessed donor close still carried here is resolved
+            // by this arm's re-claim of its shard's generation at or above the witness - the
+            // re-claim the arm already makes for a deferred close, raised to cover both.
+            if (HandOffMarkerCore.TryGetCarriedWitness(marker, low, high, p, out var carryShard, out var carryGeneration)
+                && (!deferred || carryShard == shard))
             {
-                continue;
+                deferred = true;
+                shard = carryShard;
+                generation = Math.Max(generation, carryGeneration);
+            }
+
+            if (carryOnly is not null)
+            {
+                // The backstop (A4) arms only the partitions it was asked to resolve.
+                if (p >= carryOnly.Length || !carryOnly[p] || !deferred)
+                {
+                    continue;
+                }
+            }
+            else
+            {
+                var armed = fence.TryGetArmingView(p, out _, out _);
+                if ((armed && !deferred) || (!armed && ownHigh[p] <= GetCurrentCheckpointForPartition(p)))
+                {
+                    continue;
+                }
             }
 
             (requests ??= []).Add(deferred
@@ -485,7 +509,7 @@ internal sealed partial class BPlusLeafGrain
 
         if (requests is null)
         {
-            return;
+            return null;
         }
 
         (long Head, long Generation)?[] heads;
@@ -498,7 +522,7 @@ internal sealed partial class BPlusLeafGrain
         }
         catch (LeafRetiredException superseded) when (superseded.ActivationSuperseded)
         {
-            return;
+            return null;
         }
 
         List<(int Partition, int Shard, long Generation, long Head)>? resolved = null;
@@ -524,9 +548,10 @@ internal sealed partial class BPlusLeafGrain
 
         if (resolved is null)
         {
-            return;
+            return null;
         }
 
+        var partitions = ownHigh.Length;
         foreach (var r in resolved)
         {
             HandOffMarkerCore.ResolveDeferred(marker, r.Partition, r.Shard, r.Generation, r.Head);
@@ -534,17 +559,20 @@ internal sealed partial class BPlusLeafGrain
 
         if (HandOffMarkerStorage() is not { } storage)
         {
-            return;
+            return null;
         }
 
         try
         {
+            // A2: the re-claim head the arm's own re-claim returned, and the carry's resolved
+            // bit, land in this one marker write; a failure leaves the partition carried (A3).
             await HandOffMarkerRows.UpdateLeafAsync(storage, context.GrainId.GetGuidKey(), m =>
             {
                 var changed = false;
                 foreach (var r in resolved)
                 {
                     changed |= HandOffMarkerCore.ResolveDeferred(m, r.Partition, r.Shard, r.Generation, r.Head);
+                    changed |= HandOffMarkerCore.ResolveCarried(m, partitions, r.Partition, r.Shard, r.Generation, r.Head);
                 }
 
                 return changed;
@@ -556,7 +584,16 @@ internal sealed partial class BPlusLeafGrain
                 ex,
                 "Leaf {LeafId}: could not record its resolved deferred hand-off heads; a later arm re-claims them (#5833).",
                 context.GrainId);
+            return null;
         }
+
+        var landed = new HashSet<int>();
+        foreach (var r in resolved)
+        {
+            landed.Add(r.Partition);
+        }
+
+        return landed;
     }
 
     /// <summary>
@@ -646,8 +683,8 @@ internal sealed partial class BPlusLeafGrain
                 {
                     if (exempt)
                     {
-                        // Its stamps carry the pending closes HoldsPendingDonorBound collected.
-                        fence.SetPendingCloses(_pendingDonorClosesScratch!);
+                        // Its stamps carry the donor closes still unresolved per partition (G4).
+                        SetCarriedCloses(fence, leafMarker, low, high, boundPending: true);
                         fence.OnReachabilityDeferred();
                     }
                     else
@@ -681,15 +718,16 @@ internal sealed partial class BPlusLeafGrain
                 && !view.HeldOpen;
             if (_appendFence is { } closesFence)
             {
-                // #5837: the donor closes still pending, carried by every later stamp.
-                var pending = _pendingDonorClosesScratch ??= new List<WalPendingClose>(WalAppendStamp.MaxPendingCloses);
-                pending.Clear();
-                HandOffMarkerCore.CollectPendingDonorBounds(leafMarker, low, high, pending);
-                closesFence.SetPendingCloses(pending);
+                // #5837 and a5e2e2ef's G4 (A3, A6): the donor closes still carried, per
+                // partition until the sibling's arm resolves them there, ride every later
+                // stamp; a bound pending - the link unwitnessed - is tracked apart, and alone
+                // gates promotion, arming and claiming.
+                var boundPending = HoldsPendingDonorBound(leafMarker);
+                SetCarriedCloses(closesFence, leafMarker, low, high, boundPending);
 
                 // a5e2e2ef's G2: reachable and witnessed - no bound pending - proves a
                 // deferred activation again; reachable alone (linked, unwitnessed) does not.
-                if (pending.Count == 0)
+                if (!boundPending)
                 {
                     closesFence.PromoteDeferredReachable();
                 }
@@ -768,4 +806,149 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>Test seam: whether the tracker is latched off for this activation.</summary>
     internal bool LiveAdvancePoisonedForTest => _liveAdvancePoisoned;
+
+    /// <summary>
+    /// Records on <paramref name="fence"/> the donor closes still carried on
+    /// <paramref name="marker"/>, each with the partitions its arm resolved, and whether a
+    /// donor bound is pending (a5e2e2ef's G4, A3 and A6). Reuses one scratch list per
+    /// activation; runs on a view read, never on a write.
+    /// </summary>
+    private void SetCarriedCloses(LeafAppendEpochFence fence, LeafHandOffState marker, string? low, string? high, bool boundPending)
+    {
+        var partitions = Math.Max(1, _options?.WalPartitions ?? 1);
+        var carried = _carriedClosesScratch ??= new List<(WalPendingClose Close, bool[] ResolvedAt)>(WalAppendStamp.MaxPendingCloses);
+        carried.Clear();
+        HandOffMarkerCore.CollectCarriedDonorCloses(marker, low, high, partitions, carried);
+        fence.SetCarriedCloses(carried, boundPending);
+
+        // A4: note the witnessed partitions still carried, for the tick's backstop.
+        _carryDemand = null;
+        _carryAwaitsWitness = carried.Count > 0 && boundPending;
+        if (carried.Count == 0 || boundPending)
+        {
+            return;
+        }
+
+        for (var p = 0; p < partitions; p++)
+        {
+            if (HandOffMarkerCore.TryGetCarriedWitness(marker, low, high, p, out _, out var witness))
+            {
+                (_carryDemand ??= new long[partitions])[p] = witness;
+                Interlocked.Increment(ref s_carriedUnresolvedObserved);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether the last view read found a carried close whose bound is still pending: the
+    /// tick re-reads the view until it sees the witness (A4's first tick after it). A close
+    /// carried with no armable witness - a shard mismatch (A1) - leaves this false, so the
+    /// tick does not loop on it.
+    /// </summary>
+    private bool _carryAwaitsWitness;
+
+    private List<(WalPendingClose Close, bool[] ResolvedAt)>? _carriedClosesScratch;
+
+    /// <summary>Per partition, the link witness of a donor close still carried there, as the last view read it (A4); 0 or null for none.</summary>
+    private long[]? _carryDemand;
+
+    /// <summary>Per partition, the witness the backstop last armed for (A4): once per (partition, witness) per activation.</summary>
+    private long[]? _carryBackstopped;
+
+    private static long s_carryBackstopArms;
+
+    private static long s_carriedUnresolvedObserved;
+
+    /// <summary>How many partitions the carry backstop has armed, process-wide (A4); for probes and tests.</summary>
+    internal static long CarryBackstopArmsForProbe => Interlocked.Read(ref s_carryBackstopArms);
+
+    /// <summary>How many carried, witnessed, unresolved partitions view reads have seen, process-wide (A4); for probes and tests.</summary>
+    internal static long CarriedUnresolvedObservedForProbe => Interlocked.Read(ref s_carriedUnresolvedObserved);
+
+    /// <summary>
+    /// The coverage-lag tick's backstop for a witnessed donor close still carried at a
+    /// partition the sibling has no reason to arm at (a5e2e2ef's G4, A4): it arms there,
+    /// re-claiming the close's shard's generation at or above the witness, at most once per
+    /// (partition, witness) per activation; an attempt that does not land re-arms the
+    /// partition for the next tick. Off the write path; reads the marker only when a view
+    /// read has already found such a partition.
+    /// </summary>
+    internal async Task<bool> TryBackstopCarriedClosesAsync()
+    {
+        if (_liveAdvanceInFlight
+            || _appendFence is not { } fence
+            || !IsPreArmGateOpen()
+            || state.State.TreeId is not { Length: > 0 })
+        {
+            return false;
+        }
+
+        if (_carryDemand is null && _carryAwaitsWitness && fence.HasCarriedClosesForBackstop)
+        {
+            // The fence still carries a close whose bound the last view read found pending:
+            // read it again, which notes any partition witnessed since (A4's first tick).
+            _liveAdvanceInFlight = true;
+            try
+            {
+                await ReadLiveAdvanceHandOffAsync();
+            }
+            finally
+            {
+                _liveAdvanceInFlight = false;
+            }
+        }
+
+        if (_carryDemand is not { } demand)
+        {
+            return false;
+        }
+
+        var backstopped = _carryBackstopped ??= new long[demand.Length];
+        bool[]? due = null;
+        for (var p = 0; p < demand.Length && p < backstopped.Length; p++)
+        {
+            if (demand[p] > 0 && backstopped[p] < demand[p])
+            {
+                (due ??= new bool[demand.Length])[p] = true;
+                backstopped[p] = demand[p];
+            }
+        }
+
+        if (due is null)
+        {
+            return false;
+        }
+
+        _liveAdvanceInFlight = true;
+        HashSet<int>? landed = null;
+        try
+        {
+            if (await ReadLiveAdvanceHandOffAsync() is { Clear: true } handOff && !fence.HasPendingCloses)
+            {
+                landed = await ArmForLiveAdvanceAsync(
+                    fence, new long[demand.Length], handOff.LeafMarker, state.State.LowKeyInclusive, state.State.HighKeyExclusive, due);
+            }
+        }
+        finally
+        {
+            _liveAdvanceInFlight = false;
+            for (var p = 0; p < due.Length; p++)
+            {
+                if (due[p])
+                {
+                    if (landed is not null && landed.Contains(p))
+                    {
+                        Interlocked.Increment(ref s_carryBackstopArms);
+                    }
+                    else
+                    {
+                        // N1's rule: an attempt that did not land is owed again.
+                        backstopped[p] = 0;
+                    }
+                }
+            }
+        }
+
+        return landed is { Count: > 0 };
+    }
 }

@@ -3001,6 +3001,11 @@ internal sealed partial class BPlusLeafGrain
         // a usable pin.
         var liveAdvanced = await TryAdvanceLiveCheckpointAsync();
 
+        // a5e2e2ef's G4 (A4, and #5851 comment 6668840949): a witnessed donor close still
+        // carried at a partition is resolved by an arm there at the first tick after the
+        // witness - before any arm below returns early - once per (partition, witness).
+        await TryBackstopCarriedClosesAsync();
+
         if (IsStarvedOfDurableCheckpoint(starvationPartitionCount))
         {
             ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckNoDurableCheckpoint);

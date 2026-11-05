@@ -55,8 +55,8 @@ public sealed class HandOffMarkerCoreDonorBoundTests
         }
 
         var unwitnessed = Pending();
-        var own = HandOffMarkerCore.WitnessLink(marker, Donor, 7);
-        var again = HandOffMarkerCore.WitnessLink(marker, Donor, 9);
+        var own = HandOffMarkerCore.WitnessLink(marker, Donor, 1, 7);
+        var again = HandOffMarkerCore.WitnessLink(marker, Donor, 1, 9);
 
         Assert.Multiple(() =>
         {
@@ -77,7 +77,7 @@ public sealed class HandOffMarkerCoreDonorBoundTests
         var marker = new LeafHandOffState();
         HandOffMarkerCore.Open(marker, "split:d", null, null);
 
-        var witnessed = HandOffMarkerCore.WitnessLink(marker, Donor, 7);
+        var witnessed = HandOffMarkerCore.WitnessLink(marker, Donor, 1, 7);
         HandOffMarkerCore.CloseWithDeferredBound(marker, "split:d", [5], Donor, Token, 1, 4);
         var pending = new List<WalPendingClose>();
 

@@ -121,6 +121,7 @@ internal static class HandOffMarkerRows
             CompactedHeads = (long[])marker.CompactedHeads.Clone(),
             Sequence = marker.Sequence,
             SiblingLinkedGeneration = marker.SiblingLinkedGeneration,
+            SiblingLinkedShard = marker.SiblingLinkedShard,
         };
         foreach (var (token, range) in marker.Open)
         {
@@ -143,6 +144,8 @@ internal static class HandOffMarkerRows
                 AdmittedShard = close.AdmittedShard,
                 AdmittedGeneration = close.AdmittedGeneration,
                 LinkedGeneration = close.LinkedGeneration,
+                CarryResolvedAt = (bool[])close.CarryResolvedAt.Clone(),
+                LinkedShard = close.LinkedShard,
             });
         }
 

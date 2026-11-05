@@ -82,7 +82,7 @@ public partial class BPlusLeafGrainTests
         var deferred = grain.AppendFenceForTesting!.IsDeferredForTesting;
 
         rig.Reachable = true;
-        await rig.SetLeafMarkerAsync(m => HandOffMarkerCore.WitnessLink(m, ClaimlessDonor, 10));
+        await rig.SetLeafMarkerAsync(m => HandOffMarkerCore.WitnessLink(m, ClaimlessDonor, 0, 10));
         await grain.TryAdvanceLiveCheckpointAsync();
 
         var fence = grain.AppendFenceForTesting!;
@@ -90,7 +90,8 @@ public partial class BPlusLeafGrainTests
         {
             Assert.That(deferred, Is.True, "precondition: the sibling was deferred before its link");
             Assert.That(fence.IsReachabilityProvenForTesting, Is.True, "a linked, reachable sibling was not proven again");
-            Assert.That(fence.TryGetCutReader(out var reader) && !reader.Close1.IsSet, Is.True, "a witnessed close stayed pending");
+            Assert.That(fence.HasPendingCloses, Is.False, "a witnessed bound stayed pending");
+            Assert.That(fence.IsCarriedAtForTesting(0), Is.True, "the witness ended the carriage before the sibling's arm (G4)");
         });
     }
 
@@ -101,7 +102,7 @@ public partial class BPlusLeafGrainTests
         var rig = PreArmRig();
         rig.Reachable = false;
         var grain = await BirthProvenSiblingWithPendingCloseAsync(rig);
-        await rig.SetLeafMarkerAsync(m => HandOffMarkerCore.WitnessLink(m, ClaimlessDonor, 10));
+        await rig.SetLeafMarkerAsync(m => HandOffMarkerCore.WitnessLink(m, ClaimlessDonor, 0, 10));
         await SetStampedAsync(grain, "n", "1");
 
         await grain.TryAdvanceLiveCheckpointAsync();
@@ -113,7 +114,8 @@ public partial class BPlusLeafGrainTests
     public async Task A_link_witnessed_before_the_donors_close_leaves_no_close_pending()
     {
         // a5e2e2ef's G1: the witness lands while the donor's token is still open; the
-        // donor closes afterwards. The bound is resolved and the stamps carry no close.
+        // donor closes afterwards. The bound is resolved; the close stays carried until the
+        // sibling's arm resolves it (G4).
         var rig = PreArmRig();
         var grain = CreateGrain(liveAdvance: rig);
         await rig.SetLeafMarkerAsync(m =>
@@ -121,7 +123,7 @@ public partial class BPlusLeafGrainTests
             m.Initialised = true;
             return HandOffMarkerCore.Open(m, "split:donor", null, null);
         });
-        await rig.SetLeafMarkerAsync(m => HandOffMarkerCore.WitnessLink(m, ClaimlessDonor, 10));
+        await rig.SetLeafMarkerAsync(m => HandOffMarkerCore.WitnessLink(m, ClaimlessDonor, 0, 10));
         await rig.SetLeafMarkerAsync(m => HandOffMarkerCore.CloseWithDeferredBound(m, "split:donor", [0], ClaimlessDonor, ClaimlessDonorToken, 0, 1));
         await SetStampedAsync(grain, "a", "1");
 
@@ -131,7 +133,7 @@ public partial class BPlusLeafGrainTests
         Assert.Multiple(() =>
         {
             Assert.That(fence.HasPendingCloses, Is.False, "a close written after its sibling's witnessed link stayed pending");
-            Assert.That(fence.TryGetCutReader(out var reader) && !reader.Close1.IsSet, Is.True, "the stamps carried a resolved close");
+            Assert.That(fence.IsCarriedAtForTesting(0), Is.True, "the witness ended the carriage before the sibling's arm (G4)");
         });
     }
 

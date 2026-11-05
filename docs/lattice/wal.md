@@ -1625,13 +1625,24 @@ claimless view, and the leaf advances there by replay instead.
   bound names the shard's current routing generation. A close that fails keeps the
   donor's link obligation, so the split re-surfaces and the link re-drives it; the
   shard root never reads or closes the sibling's marker.
-- **The donor's stale high.** Until the sibling's own link is witnessed, the
-  sibling's stamps carry the pending close. The shard root records the witness on the
-  sibling's marker only after that link's raise of the routing generation is durable.
-  A raise for any other link never ends the close, and if the raise or the witness
-  write fails, the close stays pending and the division re-surfaces. The witness is
-  kept on the sibling's marker as well as on the close, so a donor close written
-  after the link (a re-driven or recovered close) is resolved at once. Each WAL partition then reports the donor's **stale high** for it. That is
+- **The donor's stale high.** The donor's bound stays pending until the sibling's
+  own link is witnessed. The shard root records the witness on the sibling's marker
+  only after that link's raise of the routing generation is durable. A raise for any
+  other link never resolves the bound, and if the raise or the witness write fails,
+  the bound stays pending and the division re-surfaces. The witness is kept on the
+  sibling's marker as well as on the close, so a donor close written after the link
+  (a re-driven or recovered close) has its bound resolved at once.
+- **Carrying the close.** The witness ends only the bound. The sibling's stamps
+  keep carrying the close at each WAL partition until the sibling arms there,
+  re-claiming the close's shard at a generation at or above the witness. One marker
+  write then raises the close's head at that partition to the head the re-claim
+  returned and marks the partition resolved; a failed write leaves it carried. A
+  re-claim below the witness, or a witness from another shard root, resolves
+  nothing. From the first coverage-lag tick after the witness, the tick arms each
+  carried partition the leaf has no other reason to arm at, once for each partition
+  and witness, and again after a failed attempt; it never re-reads the marker for a
+  close it cannot resolve. While the close is carried, each WAL partition reports
+  the donor's **stale high** for it. That is
   the highest offset of a donor record from any activation other than the closing
   one, whatever routing generation admitted it: a link elsewhere in the shard can
   raise the generation while the close is pending, and a stale duplicate's write

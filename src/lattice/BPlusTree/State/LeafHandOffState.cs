@@ -58,4 +58,8 @@ internal sealed class LeafHandOffState : ILatticeBinaryPersistedState, Orleans.L
     /// </summary>
     [Id(5)]
     public long SiblingLinkedGeneration { get; set; }
+
+    /// <summary>The shard root whose raise <see cref="SiblingLinkedGeneration"/> witnesses (A1); meaningful only while that is above 0.</summary>
+    [Id(6)]
+    public int SiblingLinkedShard { get; set; }
 }
