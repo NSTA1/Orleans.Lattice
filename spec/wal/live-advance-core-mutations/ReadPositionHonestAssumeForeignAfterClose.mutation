@@ -10,10 +10,12 @@ PERTURBS: ForeignAlloc
 
 --- FIND
 ForeignAlloc ==
+    /\ UNCHANGED <<armVars, moveVars>>
     /\ hoOpen \/ ~mInit
 
 --- REPLACE
 ForeignAlloc ==
+    /\ UNCHANGED <<armVars, moveVars>>
 \* MUTATION: no open marker needed.
 
 --- END

@@ -7,7 +7,7 @@ TARGET: ReadPositionHonest
 CLASS: Invariant
 SUMMARY: an own unstamped append does not raise the activation's reported watermark
 PERTURBS: OwnAllocUnstamped
-BOUNDS: WithGateFlip = TRUE
+BOUNDS: WithGateFlip = TRUE, WithPreArm = FALSE
 
 --- FIND
     /\ lastU' = next

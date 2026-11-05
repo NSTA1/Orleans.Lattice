@@ -31,6 +31,16 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// activation rehydrates from the duplicate's newer snapshot.
 /// </para>
 /// <para>
+/// <b>Still reachable under #5841's claim-side probe.</b> The duplicate never claims: it
+/// has no append fence here, exactly as an unarmed pre-arm activation or a claimless one
+/// appends, captures and raises the pin without a claim (#5833, #5837). The probe gates only
+/// a claim, and the current activation claims once, at its first stamped append, while the
+/// leaf state it loaded is still the latest; the duplicate's later persists do not touch a
+/// claim already made. Each activation's state row is modelled apart, so the rig serves the
+/// probe the current activation's own row (<see cref="LiveAdvanceRig.LeafStateEtag"/>), as a
+/// provider shared with it would.
+/// </para>
+/// <para>
 /// <b>What is real.</b> Both activations, the reactivation, the WAL store
 /// (<see cref="InMemoryWalStorageProvider"/>), the replay coordinator, the
 /// fall-off-log detector, the cursor reporter, the pin grain, the snapshot storage
@@ -261,6 +271,7 @@ public partial class BPlusLeafGrainTests
             Assert.That(await scenario.Wal.Reader.GetTailOffsetAsync(scenario.TreeId, 0), Is.EqualTo(1L),
                 "precondition: an established leaf, whose a1 survives only in its snapshot");
 
+            scenario.CurrentRig.LeafStateEtag = () => scenario.CurrentRow.Etag.ToString(System.Globalization.CultureInfo.InvariantCulture);
             scenario.Current = scenario.Activate(
                 new LandedConflictPersistentState<LeafNodeState>(scenario.CurrentRow), scenario.CurrentRig);
             await LeafActivationHarness.ActivateAsync(scenario.Current, CancellationToken.None);
@@ -296,6 +307,8 @@ public partial class BPlusLeafGrainTests
                     "precondition: the current activation rehydrated at 0 and stands below the pin");
                 Assert.That(tail, Is.EqualTo(3L),
                     "precondition: the real GC trimmed through the shared pin, past the current activation's read position");
+                Assert.That(scenario.Duplicate.AppendFenceForTesting, Is.Null,
+                    "precondition: the duplicate raised the pin without ever claiming, as a pre-arm or claimless activation does");
             });
 
             return scenario;

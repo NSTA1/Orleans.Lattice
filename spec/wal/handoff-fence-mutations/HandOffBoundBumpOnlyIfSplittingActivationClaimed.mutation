@@ -1,0 +1,15 @@
+# #5841, the bump's condition narrowed to the splitting activation's own claim. Pre-arm
+# only: outside it the splitting activation has always claimed. It edits an operator,
+# not an action.
+MODULE: HandOffBoundBumpOnlyIfSplittingActivationClaimed
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: a duplicate that claimed before the split, while the splitting activation was unarmed, is not superseded
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE
+
+--- FIND
+SplitBumps(read) == read > 0
+--- REPLACE
+\* MUTATION: only an armed splitting activation bumps.
+SplitBumps(read) == liveArmed
+--- END

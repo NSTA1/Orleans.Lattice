@@ -968,8 +968,14 @@ internal static class TypeAliases
     /// <summary>Alias for the result of an epoch or generation claim at a WAL partition.</summary>
     internal const string WalAppendFenceClaimResult = "ol.xfc";
 
+    /// <summary>Alias for the result of an arm at a WAL partition (#5833).</summary>
+    internal const string WalAppendFenceArmResult = "ol.xfa";
+
     /// <summary>Alias for the append-fence capability marker grain interface.</summary>
     internal const string IWalAppendFenceCapable = "ol.xfk";
+
+    /// <summary>Alias for the pre-arm stamp class capability marker grain interface (#5833).</summary>
+    internal const string IWalAppendFencePreArmCapable = "ol.xfp";
 
     /// <summary>Alias for a page of a WAL partition's append-epoch directory (#5634).</summary>
     internal const string WalAppendEpochDirectoryPageState = "ol.xfd";

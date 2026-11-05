@@ -47,15 +47,18 @@ the design model ([`LiveAdvanceInterface.md`](LiveAdvanceInterface.md)).
 
 - **Assumptions.** E's entry check for routing generations, and nothing else. It
   is modelled as an environment constraint, never by importing E's state, in its
-  three parts: `Alloc(i)` allocates a stamp only from a loaded entry it is not
-  below; a re-presented claim (`Represent(i)`) is raised only above `floor(i)` and
-  at or above the durable entry; and every claim (`Represent(i)`, `FirstInit`,
-  `S2Init`) raises the loaded entry in the same step that reads the allocator head
-  it records. The purge unloads the entries, so a straddler meets an unloaded
-  entry, re-claims and is refused there by the floor.
-  `StraddlerBelowInitNoEntryCheck` drops the first part and
-  `StraddlerBelowInitRoutingWalIgnoresFloor` the second; both go red, so the
-  assumption is load-bearing here. The routing generation runs the same claim code
+  three parts: `Alloc(i)` and `PreArmAlloc(i)` allocate a stamp only from a loaded
+  entry it is not below; an unloaded entry is loaded read-only (#5833, C1) to the
+  highest of the durable entry, `floor(i)` taken at the load, and any value loaded
+  meanwhile, marked floor-only when it raised the entry from unloaded to the floor
+  itself, so a stamp must then be above it (`ColdLoadRead(i)`, `ColdLoadApply(i)`); and every claim (`FirstInit`,
+  `S2Init`) raises the loaded entry in the same step that reads the allocator head it
+  records. The purge unloads the entries, so a straddler meets an unloaded entry, loads
+  it above its floor and is refused. `StraddlerBelowInitNoEntryCheck` drops the first
+  part; `StraddlerBelowInitRoutingWalIgnoresFloor`,
+  `StraddlerBelowInitColdLoadAdmitsAtFloor` and
+  `StraddlerBelowInitColdLoadLowersLoadedGeneration` each drop one term of the second;
+  all go red, so the assumption is load-bearing here. The routing generation runs the same claim code
   as the leaf epoch (`WalShardGrain.ClaimCoreAsync`); `WalAppendEpoch`'s note gives
   that refinement argument.
 - **Guarantees.** Three, each checked on the base and the variant: two invariants
@@ -104,6 +107,8 @@ the design model ([`LiveAdvanceInterface.md`](LiveAdvanceInterface.md)).
 | `entryRow` | Each initiator's durable generation entry at L's partition | `WalRoutingGenerationState.Generation` in the row `WalAppendFenceRows.GenerationGrainType`. |
 | `loaded` | The WAL shard's loaded entry for each initiator | The shard's in-memory generation table; `WalAppendFenceCore.Unloaded` when the activation has not loaded it. |
 | `rowFloor` | Each initiator's floor in the tree's routing-floor row | `TreeRoutingFloorState.Floors` in the row `WalAppendFenceRows.RoutingFloorGrainType`, keyed by initiator tag. |
+| `rd` | A cold load in flight: the durable entry it read, not yet loaded | `WalShardGrain.LoadRoutingGenerationAsync` reads the row outside `_stateGate`, under the initiator's claim gate. |
+| `fo` | The loaded entry is floor-only: a cold load installed the floor itself, so a stamp must be above it until a claim raises it | The entry's floor-only mark, set by `WalShardGrain.LoadRoutingGenerationAsync` only when it raises an unloaded entry and cleared by any raise. |
 | `walFloor` | The WAL shard's in-memory floor for each initiator | `WalShardGrain.GenerationFloorLocked`, merged from the row by `WalShardGrain.MergeGenerationFloorsLocked`. |
 | `live` | Each initiator's live shard-root activation stamps with `gen` | A `ShardRootGrain` activation of a live tree that has seeded its generation. |
 | `pend`, `pstamp` | A write a shard root admitted, and the generation it was stamped with at admission | `ShardRootGrain.AdmissionRoutingStamp`, carried through the write's seam retries. |
@@ -120,7 +125,9 @@ the design model ([`LiveAdvanceInterface.md`](LiveAdvanceInterface.md)).
 |-------------|---------------|------------------|----------|
 | `Admit(i)` | Before the purge, a live shard root admits a write stamped with its generation at admission; a deleted tree's shard root refuses operations first | `ShardRootGrain.AdmissionRoutingStamp` through `ShardRootGrain.EnsureRoutingGenerationAsync`; a deleted tree refuses in `ShardRootGrain.ThrowIfDeleted` before any routing-generation work. | Yes: `ShardRoutingGenerationIntegrationTests.Client_writes_are_stamped_with_the_shard_routing_generation_never_appended_unstamped` and `ShardRootGrainPurgeTests.An_unrouted_operation_on_an_unregistered_purged_copy_is_refused_as_purged`. |
 | `Alloc(i)` | The WAL admits a stamped append on the initiator's loaded entry alone, the stamp not below it, and assigns an offset | `WalShardGrain.AdmitStampLocked` with `WalAppendFenceCore.IsGenerationAdmitted`, under the lock that assigns `WalShardGrain._nextOffset`. | Yes: `WalAppendFenceCoreTests.A_routing_generation_is_admitted_only_from_a_loaded_current_entry` and `WalShardGrainTests.Routing_generations_are_fenced_and_durable`. |
-| `Represent(i)` | An append met an unloaded entry; its leaf re-presents a claim of the stamp, refused at or below the WAL-side floor or below the durable entry, otherwise max-merged and loaded | `WalShardGrain.ClaimRoutingGenerationAsync` through `WalShardGrain.ClaimCoreAsync`, after `WalShardGrain.EnsureGenerationFloorLoadedAsync`. | Yes: `WalShardGrainTests.A_generation_entry_is_unloaded_until_re_presented_after_a_restart` and `WalShardGrainTests.A_straddling_initiator_of_the_purged_incarnation_is_refused_after_re_creation`. |
+| `PreArmAlloc(i)` | The same write appended under the `PreArm` class by a leaf that has not armed (#5833): no leaf-entry check, but its routing generation checked exactly as a stamped append's | `WalShardGrain.AdmitStampLocked`, the `PreArm` branch to `WalShardGrain.AdmitGenerationLocked`. | Yes: `WalShardGrainTests.A_pre_arm_append_under_a_re_claimed_generation_or_at_the_floor_is_refused`. |
+| `ColdLoadRead(i)` | An append met an unloaded entry: the WAL shard reads the durable entry, writing nothing (#5833, C1) | `WalShardGrain.LoadRoutingGenerationAsync`, the row read under the initiator's claim gate. | Yes: `WalShardGrainTests.A_stamped_append_under_an_unloaded_generation_loads_it_and_is_admitted`. |
+| `ColdLoadApply(i)` | Under the shard's gate, the load takes the highest of what it read, `floor(i)` taken now, and any value loaded meanwhile, marking the entry floor-only when it raised it from unloaded and the read was at or below the floor; then admission re-runs (C7) | `WalShardGrain.LoadRoutingGenerationAsync` under `_stateGate`, max-merging `WalAppendFenceCore.LoadedGeneration` into the entry. | Yes: `WalShardGrainTests.A_fresh_partition_s_cold_load_writes_no_generation_row_and_admits_above_the_floor_only` and `WalShardGrainTests.A_cold_load_never_lowers_a_generation_a_re_claim_raised`. |
 | `Refuse(i)` | A refused write's seam retry finds its stamp at or below its initiator's floor and surfaces the deleted tree, never re-stamping it (#5705) | `ShardRootGrain.NextRoutingRetryAsync` calls `ShardRootGrain.ThrowIfAdmittedUnderPurgedIncarnationAsync`, which throws `ShardRootGrain.PurgedIncarnation` before any reload or raise. | Yes: `ShardRootPurgedIncarnationTests.A_write_admitted_under_a_purged_generation_is_not_re_admitted_under_the_re_created_one` and `ShardRootPurgedIncarnationTests.A_write_refused_at_the_floor_never_re_creates_the_purged_marker_at_floor_plus_one`. |
 | `Purge` | Raise every initiator's floor over its own generation and entries before any delete, then retire the entries (raising the WAL-side floors and unloading the loaded entries) and delete L's marker | `TreeRoutingFenceRetirement.RetireAsync` from the purge, with `WalAppendFenceRows.RaiseRoutingFloorsAsync`, `TreeRoutingFenceRetirement.RetireRowsAsync`, `TreeRoutingFenceRetirement.RetireMarkersAsync` and `WalShardGrain.RetireRoutingGenerationsAsync`. **Over-approximation:** the floor is raised over each initiator's own generation; production raises every initiator to the tree's highest, which is at least each one's own. | Yes: `TreeDeletionGrainTests.A_purge_retires_the_fence_rows_before_it_removes_the_registry_entry`, `TreeFenceRowPurgeIntegrationTests.A_purge_retires_every_fence_row_and_the_re_created_tree_starts_above_the_floor`, `WalShardGrainTests.Retiring_routing_generations_deletes_every_entry_under_a_floor_that_covers_them` and `WalShardGrainTests.The_floor_is_durable_before_any_generation_row_is_deleted_and_a_re_drive_finishes`. |
 | `LegacyPurge` | A purge that finished on 10.2.0 retires no row and raises no floor | Not production code of this build: a 10.2.0 silo's purge. **Environment:** a cross-shard straddler spanning it is excluded (see the gaps). | Yes: `TreeFenceRowPurgeIntegrationTests.A_tree_re_created_after_a_purge_that_retired_nothing_never_adopts_its_markers`. |
@@ -184,7 +191,7 @@ draft keeps its own copies, as the record each module took its own from.
 | `ReadPositionHonestRoutingFloorAfterDeletes` | `StraddlerBelowInitRoutingFloorAfterDeletes`; anchored on `Purge`. |
 | `ReadPositionHonestRoutingInitWithoutClaim` | `StraddlerBelowInitRoutingInitWithoutClaim`; anchored on `FirstInit`. |
 | `ReadPositionHonestRoutingPurgeKeepsMarkerInit` | `StraddlerBelowInitRoutingPurgeKeepsMarkerInit`; anchored on `Purge`. |
-| `ReadPositionHonestRoutingWalIgnoresFloor` | `StraddlerBelowInitRoutingWalIgnoresFloor`; anchored on `Represent`, the claim, where the corrected interface puts the floor check. |
+| `ReadPositionHonestRoutingWalIgnoresFloor` | `StraddlerBelowInitRoutingWalIgnoresFloor`; anchored on `ColdLoadApply`, the load, where #5833's read-only cold load takes the floor. |
 | `ReadPositionHonestStraddlerRaiseRecreatesMarker` | `StraddlerBelowInitStraddlerRaiseRecreatesMarker`; anchored on `Refuse`. |
 | `LiveGenerationAboveFloorCatchUpRetiresLiveMarker` | Same name; anchored on `CatchUp`. |
 | `LiveGenerationAboveFloorCatchUpTreeWide` | Same name; anchored on `CatchUp`. |
@@ -205,6 +212,13 @@ is redundant on one path only, and it is not a mutation of its own: after a new-
 purge the WAL-side floor refuses a straddler's re-presented claim whether or not the
 first initialisation claims, so `StraddlerBelowInitRoutingInitWithoutClaim` goes red
 only through a purge that finished on 10.2.0, where the claim is the only fence.
+
+The cold load's read of the durable entry is not load-bearing for `StraddlerBelowInit`
+on its own (#5833): every purged generation is at or below its initiator's floor, and
+the load installs the floor floor-only, so a load that read nothing would still refuse
+every straddler. The read matters for a live initiator's generation above `floor + 1`, which
+this module does not vary after the first initialisation. `ColdLoadRead` is therefore
+perturbed against its domain (`TypeOkColdLoadReadPastGenerationDomain`).
 
 ## Deliberate abstraction gaps
 

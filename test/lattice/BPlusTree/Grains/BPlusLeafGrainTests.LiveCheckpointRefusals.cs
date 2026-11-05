@@ -20,7 +20,7 @@ public partial class BPlusLeafGrainTests
         // admitted before the close is self-fenced and re-admitted by its seam.
         rig.Writer.ForeignAppend();
         rig.ClaimHead = 2;
-        await grain.AppendFenceForTesting!.BumpAndReclaimAsync(_ => rig.Shard, rig.Partitions, CancellationToken.None);
+        await grain.AppendFenceForTesting!.FenceSplitAsync(_ => rig.Shard, rig.Partitions, CancellationToken.None);
         rig.Writer.ThrowNext = LeafRetiredException.ForSupersededActivation(rig.LeafId, 1);
         Assert.ThrowsAsync<LeafRetiredException>(async () => await SetStampedAsync(grain, "b", "2"));
         await SetStampedAsync(grain, "b", "2");

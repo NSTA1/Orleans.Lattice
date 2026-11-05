@@ -70,6 +70,13 @@ internal static class WalFencedAppendDispatch
         for (var attempt = 0; ; attempt++)
         {
             var leafStamp = await fence.StampForAsync(grain, partition, cancellationToken).ConfigureAwait(false);
+            if (leafStamp is { IsPreArm: true } && !routing.IsSet)
+            {
+                // #5833, revision 2, C4: a write with no routing generation is never pre-arm;
+                // it goes unstamped and raises the shared watermark.
+                leafStamp = null;
+            }
+
             if (leafStamp is not null && !routing.ForcesUnstamped && fence.OnAdmitted(routing.AdmissionMark) is { } admittedBeforeClose)
             {
                 // #5664 (a): admitted before a hand-off close this activation has since
@@ -157,6 +164,13 @@ internal static class WalFencedAppendDispatch
         for (var attempt = 0; ; attempt++)
         {
             var leafStamp = await fence.StampForAsync(grain, partition, cancellationToken).ConfigureAwait(false);
+            if (leafStamp is { IsPreArm: true } && !routing.IsSet)
+            {
+                // #5833, revision 2, C4: a write with no routing generation is never pre-arm;
+                // it goes unstamped and raises the shared watermark.
+                leafStamp = null;
+            }
+
             if (leafStamp is not null && !routing.ForcesUnstamped && fence.OnAdmitted(routing.AdmissionMark) is { } admittedBeforeClose)
             {
                 // #5664 (a): admitted before a hand-off close this activation has since

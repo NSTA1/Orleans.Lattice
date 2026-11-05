@@ -11,6 +11,12 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <param name="Epoch">The append epoch the leaf's activation claimed at the partition.</param>
 /// <param name="Initiator">The shard-level initiator whose generation the write was admitted under, or <see cref="WalRoutingInitiator.None"/>.</param>
 /// <param name="Generation">That initiator's routing generation; ignored when <paramref name="Initiator"/> is not set.</param>
+/// <param name="Activation">
+/// The authoring leaf activation's token (#5833, revision 2, B1): a random value per
+/// leaf activation, never persisted. The WAL shard attributes each leaf-authored append
+/// to it, so an arm can tell its own appends from every other activation's. Empty from
+/// a build that does not send it, which counts as foreign to every claimant.
+/// </param>
 [GenerateSerializer]
 [Immutable]
 [Alias(TypeAliases.WalAppendStamp)]
@@ -18,10 +24,36 @@ internal readonly record struct WalAppendStamp(
     [property: Id(0)] Guid LeafId,
     [property: Id(1)] long Epoch,
     [property: Id(2)] WalRoutingInitiator Initiator,
-    [property: Id(3)] long Generation)
+    [property: Id(3)] long Generation,
+    [property: Id(4)] Guid Activation = default)
 {
     /// <summary>A stamp carrying only a leaf's epoch.</summary>
-    public static WalAppendStamp ForLeaf(Guid leafId, long epoch) => new(leafId, epoch, WalRoutingInitiator.None, 0);
+    public static WalAppendStamp ForLeaf(Guid leafId, long epoch, Guid activation = default) =>
+        new(leafId, epoch, WalRoutingInitiator.None, 0, activation);
+
+    /// <summary>
+    /// The pre-arm stamp class (#5833, revision 2): carried by a leaf activation that has
+    /// not armed a live advance at the partition, so it claims no append epoch and writes
+    /// no fence row. It names the leaf and the activation's token, and is sent only with a
+    /// routing generation (<see cref="WalRoutingStamp.Apply"/>), which the WAL shard checks
+    /// as for a stamped append; no entry is checked. The shard attributes the record to
+    /// the activation, and does not raise the shared unstamped watermark for it. One sent
+    /// without a routing generation is admitted unstamped and reported (C4).
+    /// </summary>
+    /// <param name="leafId">The authoring leaf.</param>
+    /// <param name="activation">The activation's token; never empty.</param>
+    public static WalAppendStamp PreArm(Guid leafId, Guid activation)
+    {
+        if (leafId == Guid.Empty || activation == Guid.Empty)
+        {
+            throw new ArgumentException("A pre-arm stamp names a leaf and its activation's token.");
+        }
+
+        return new(leafId, 0, WalRoutingInitiator.None, 0, activation);
+    }
+
+    /// <summary><see langword="true"/> for the <see cref="PreArm"/> stamp class: a leaf, no epoch, an activation token.</summary>
+    public bool IsPreArm => Epoch == 0 && LeafId != Guid.Empty && Activation != Guid.Empty;
 
     /// <summary>
     /// The coordinator-terminal stamp class (epic #5605, member 2; design note section 2,

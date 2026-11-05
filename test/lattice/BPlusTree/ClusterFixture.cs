@@ -12,11 +12,23 @@ public sealed class ClusterFixture
 {
     public TestCluster Cluster { get; private set; } = null!;
 
+    /// <summary>
+    /// Runs the cluster's leaves in eager-claim mode (#5833): the pre-arm class held
+    /// closed, as while a silo without it is in the cluster. For fixtures that assert the
+    /// eager path; each keeps a pre-arm counterpart.
+    /// </summary>
+    public bool EagerAppendFenceClaims { get; init; }
+
     public async Task InitializeAsync()
     {
         var builder = new TestClusterBuilder();
         builder.UseSharedInMemoryWal();
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
+        if (EagerAppendFenceClaims)
+        {
+            builder.AddSiloBuilderConfigurator<EagerAppendFenceSiloConfigurator>();
+        }
+
         builder.AddClientBuilderConfigurator<ClientConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();

@@ -158,6 +158,53 @@ public sealed class ClusterManifestWalAppendFenceGateTests
     }
 
     [Test]
+    public void The_pre_arm_class_opens_only_when_every_active_silo_also_advertises_its_marker_and_closes_again()
+    {
+        // #5833: the pre-arm class closes again if a silo with the fence but without the
+        // pre-arm class joins, so no shard is sent a stamp it reads as an unloaded entry.
+        var manifests = Substitute.For<IClusterManifestProvider>();
+        var membership = Substitute.For<IClusterMembershipService>();
+        var services = new ServiceCollection().AddSerializer().BuildServiceProvider();
+        var resolver = new GrainInterfaceTypeResolver(
+            Array.Empty<IGrainInterfaceTypeProvider>(),
+            services.GetRequiredService<TypeConverter>());
+        var fence = resolver.GetGrainInterfaceType(typeof(IWalAppendFenceCapable));
+        var preArm = resolver.GetGrainInterfaceType(typeof(IWalAppendFencePreArmCapable));
+        var gate = new ClusterManifestWalAppendFenceGate(
+            manifests, membership, resolver, NullLogger<ClusterManifestWalAppendFenceGate>.Instance);
+        static GrainManifest Advertising(params GrainInterfaceType[] markers) => new(
+            ImmutableDictionary<GrainType, GrainProperties>.Empty,
+            markers.ToImmutableDictionary(
+                m => m,
+                _ => new GrainInterfaceProperties(ImmutableDictionary.Create<string, string>(StringComparer.Ordinal))));
+
+        manifests.Current.Returns(new ClusterManifest(
+            new MajorMinorVersion(1, 1),
+            ImmutableDictionary<SiloAddress, GrainManifest>.Empty.Add(SiloA, Advertising(fence, preArm)).Add(SiloB, Advertising(fence, preArm))));
+        membership.CurrentSnapshot.Returns(Members(1, (SiloA, SiloStatus.Active), (SiloB, SiloStatus.Active)));
+        var openBoth = (gate.IsOpen, gate.IsPreArmOpen);
+
+        manifests.Current.Returns(new ClusterManifest(
+            new MajorMinorVersion(1, 2),
+            ImmutableDictionary<SiloAddress, GrainManifest>.Empty.Add(SiloA, Advertising(fence, preArm)).Add(SiloB, Advertising(fence, preArm)).Add(OldSilo, Advertising(fence))));
+        membership.CurrentSnapshot.Returns(Members(2, (SiloA, SiloStatus.Active), (SiloB, SiloStatus.Active), (OldSilo, SiloStatus.Active)));
+        var withFenceOnlySilo = (gate.IsOpen, gate.IsPreArmOpen);
+
+        manifests.Current.Returns(new ClusterManifest(
+            new MajorMinorVersion(1, 3),
+            ImmutableDictionary<SiloAddress, GrainManifest>.Empty.Add(SiloA, Advertising(preArm)).Add(SiloB, Advertising(fence, preArm))));
+        membership.CurrentSnapshot.Returns(Members(3, (SiloA, SiloStatus.Active), (SiloB, SiloStatus.Active)));
+        var preArmWithoutFence = (gate.IsOpen, gate.IsPreArmOpen);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(openBoth, Is.EqualTo((true, true)));
+            Assert.That(withFenceOnlySilo, Is.EqualTo((true, false)), "a silo without the pre-arm class did not close it");
+            Assert.That(preArmWithoutFence, Is.EqualTo((false, false)), "the pre-arm class opened without the fence itself");
+        });
+    }
+
+    [Test]
     public void Closes_when_a_joining_silo_is_active_before_its_manifest_arrives()
     {
         var manifests = Substitute.For<IClusterManifestProvider>();

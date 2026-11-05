@@ -14,10 +14,12 @@ PERTURBS: FirstInit
 --- FIND
     /\ entryRow' = [entryRow EXCEPT !["s"] = Max2(@, gen'["s"])]
     /\ loaded' = [loaded EXCEPT !["s"] = Max2(@, gen'["s"])]
+    /\ fo' = [fo EXCEPT !["s"] = FALSE]
     /\ closedAt' = next
 --- REPLACE
 \* MUTATION: the initialisation claims nothing.
     /\ entryRow' = entryRow
     /\ loaded' = loaded
+    /\ UNCHANGED fo
     /\ closedAt' = next
 --- END

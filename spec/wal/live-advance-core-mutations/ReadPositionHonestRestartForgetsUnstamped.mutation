@@ -7,7 +7,7 @@ TARGET: ReadPositionHonest
 CLASS: Invariant
 SUMMARY: a restarted shard forgets the unstamped appends made before it
 PERTURBS: Restart
-BOUNDS: WithRestart = TRUE
+BOUNDS: WithRestart = TRUE, WithPreArm = FALSE
 
 --- FIND
     /\ lastU' = next - 1

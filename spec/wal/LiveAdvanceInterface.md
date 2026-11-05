@@ -15,7 +15,7 @@ guarantee. The design authority remains [`design/LiveAdvanceDesign.md`](design/L
 | E | `WalAppendEpoch` | nothing | `StaleEpochNeverAppends`, `ClaimHeadCoversPriorAppends`, `RaisedEpochUnique`, `OnlySupersededRefused`, and the entry check |
 | H | `WalHandOffFence` | E's entry check | `HandOffBound`, `AbsentMarkerHolds`, `CloseHeadMonotone` |
 | R | `WalRoutingFloor` | E's entry check | `StraddlerBelowInit`, `LiveGenerationAboveFloor`, `InitHeadCoversPriorAllocations` |
-| B | `WalBulkSwitch` | nothing | `BulkHintBound`, `ContestedKeyAgrees`, `SeedCovered`, `ReplacedRootRelocated` |
+| B | `WalBulkSwitch` | nothing | `BulkHintBound`, `ContestedKeyAgrees`, `SeedCovered`, `ReplacedRootRelocated`, `SwitchCloseCoversPriorAllocations` |
 | C | `WalLiveAdvanceCore` | every guarantee above | `ReadPositionHonest`, `SnapshotHonest`, `NoTrimPastAcked`, and liveness |
 
 The edges are E <- H, E <- R, and {E, H, R, B} <- C. No other edge exists, so
@@ -126,6 +126,10 @@ for `CloseHeadMonotone`, as an action property).
   switch's shard root, allocated while the marker is open.
 - `ReplacedRootRelocated` (#5812): a bulk load published over a root a batch write
   seeded while it ran has relocated that root under its switch, never overwritten it.
+- `SwitchCloseCoversPriorAllocations` (#5833): a switch's close records the allocator
+  head at its re-claim, so its head is above every record allocated before the close.
+  Under the lazy arm a bulk-born leaf no longer replays to a claim head, and this is what
+  covers the records its range held before the switch.
 
 ## What C assumes
 
@@ -149,6 +153,14 @@ C models the other modules only as environment constraints:
 - **Unstamped appends** are always reported, and raise every reader's `seenU` before
   it arms. This is the stamp census's obligation, and the core's own unstamped
   watermark and self-report model it.
+- **The lazy arm (#5833).** A leaf's appends before it arms are `PreArm`: no entry
+  check, admitted on their routing generation. The WAL shard's per-leaf tracking
+  (`foreignHigh`), its restart and eviction floors, the deferred close head a key-moving
+  close leaves and its resolution at the arm (C2, C5), and a stale donor's routed and
+  unrouted writes are modelled in the core itself. Its assumptions on the other modules
+  are that a re-claim only raises the loaded generation (R's cold load, C7) and, for a
+  bulk-born leaf, `SwitchCloseCoversPriorAllocations`. The composite check does not yet
+  compose the lazy arm's edges.
 
 C then checks `ReadPositionHonest`, `SnapshotHonest` and `NoTrimPastAcked` over
 `Armed(a)` and the live advance, and the armed-newborn liveness property,

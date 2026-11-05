@@ -8,6 +8,7 @@ TARGET: ReadPositionHonest
 CLASS: Invariant
 SUMMARY: any activation whose claim was raised allocates, current or superseded
 PERTURBS: OwnAlloc
+BOUNDS: WithPreArm = FALSE
 
 --- FIND
     /\ a \in up

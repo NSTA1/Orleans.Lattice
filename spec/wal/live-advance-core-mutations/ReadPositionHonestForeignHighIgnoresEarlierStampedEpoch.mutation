@@ -1,0 +1,14 @@
+# #5833, review B1. foreignHigh counts PreArm appends only: an earlier activation that
+# armed appended stamped records, and the next activation arms past them. It edits an
+# operator, not an action.
+MODULE: ReadPositionHonestForeignHighIgnoresEarlierStampedEpoch
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: foreignHigh counts PreArm appends only, not an earlier armed activation's stamped ones
+
+--- FIND
+    Max({startHead - 1, evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}})
+--- REPLACE
+\* MUTATION: stamped appends are not counted.
+    Max({startHead - 1, evFloor} \cup {o \in Offs : o >= TrackStart /\ o \in preArm /\ author[o] \in Acts \ {a}})
+--- END

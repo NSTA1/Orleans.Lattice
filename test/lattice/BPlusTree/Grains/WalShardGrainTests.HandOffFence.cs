@@ -58,9 +58,9 @@ public partial class WalShardGrainTests
     [Test]
     public async Task A_generation_entry_is_unloaded_until_re_presented_after_a_restart()
     {
-        // #5831 F2: a stamped append that meets the entry unloaded claims its own
-        // generation in the cold path, so the current durable generation reloads it
-        // inline and a stale one is refused; neither is admitted unclaimed.
+        // #5831 F2 / #5833 C1: a stamped append that meets the entry unloaded loads it
+        // read-only in the cold path, so the current durable generation reloads it inline
+        // and a stale one is refused; neither raises the entry.
         var storage = new EnumerableMemoryGrainStorage();
         var grain = await CreateFencedGrainAsync(storage);
         var initiator = WalRoutingInitiator.TreeRangeDelete;

@@ -1,0 +1,22 @@
+# #5833, C3. A split or consolidation close does not raise the shard root's routing
+# generation: the receiver's arm re-claims the generation the stale donor already holds,
+# so the donor's write is still admitted after the arm.
+MODULE: ReadPositionHonestKeyMovingCloseWithoutGenerationRaise
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a key-moving close does not raise the routing generation
+PERTURBS: KeyMove
+BOUNDS: WithKeyMove = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+    /\ gD' = gD + 1
+    /\ pend' = TRUE
+    /\ pendGen' = gD + 1
+
+--- REPLACE
+\* MUTATION: no raise.
+    /\ UNCHANGED gD
+    /\ pend' = TRUE
+    /\ pendGen' = gD
+
+--- END

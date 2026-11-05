@@ -269,8 +269,16 @@ internal sealed partial class BPlusLeafGrain
             || !IsLiveAdvanceQuiescent(withinDrive)
             || _appendFence is not { } fence
             || !IsLiveAdvanceOverlapExcluded()
-            || SnapshotLiveAdvanceCandidates() is not { } ownHigh
-            || !AnyPartitionClaimed(fence, ownHigh.Length))
+            || SnapshotLiveAdvanceCandidates() is not { } ownHigh)
+        {
+            return false;
+        }
+
+        // #5833, revision 2: the arm's demand is a pin holding the WAL floor - the drive
+        // runs for one, and a leaf with live data and no proven checkpoint on any
+        // partition holds its floor by construction. Never a write or a routine tick.
+        var armDemand = (withinDrive || IsStarvedOfDurableCheckpoint(ownHigh.Length)) && IsPreArmGateOpen();
+        if (!armDemand && !AnyPartitionClaimed(fence, ownHigh.Length))
         {
             return false;
         }
@@ -287,6 +295,14 @@ internal sealed partial class BPlusLeafGrain
 
             var low = state.State.LowKeyInclusive;
             var high = state.State.HighKeyExclusive;
+            if (armDemand && handOff.Clear)
+            {
+                // Never while a hand-off is open on it: a bulk-born leaf arms only after
+                // its switch's close recorded the allocator head (B's
+                // SwitchCloseCoversPriorAllocations).
+                await ArmForLiveAdvanceAsync(fence, ownHigh, handOff.LeafMarker, low, high);
+            }
+
             var advanced = false;
             for (var p = 0; p < ownHigh.Length; p++)
             {
@@ -325,6 +341,109 @@ internal sealed partial class BPlusLeafGrain
             _liveAdvanceInFlight = false;
         }
     }
+    /// <summary>
+    /// Arms this activation where the drive could advance it (#5833, revision 2): every
+    /// partition with an own append above its checkpoint that is not armed, and every armed
+    /// one where a hand-off closed since by a deferred fence. Each arm resolves the highest
+    /// deferred generation pending on the leaf's marker there (C2); the resolution is applied
+    /// to <paramref name="marker"/>, which the advance reads next, and persisted best-effort,
+    /// so a later activation need not re-claim it. A failed arm leaves its partition
+    /// pre-arm, on the replay-based advance.
+    /// </summary>
+    private async Task ArmForLiveAdvanceAsync(LeafAppendEpochFence fence, long[] ownHigh, LeafHandOffState marker, string? low, string? high)
+    {
+        var treeId = state.State.TreeId!;
+        List<(int Partition, WalRoutingInitiator Initiator, long Generation)>? requests = null;
+        for (var p = 0; p < ownHigh.Length; p++)
+        {
+            var deferred = HandOffMarkerCore.TryGetPendingDeferred(marker, low, high, p, out var shard, out var generation);
+            var armed = fence.TryGetArmingView(p, out _, out _);
+            if ((armed && !deferred) || (!armed && ownHigh[p] <= GetCurrentCheckpointForPartition(p)))
+            {
+                continue;
+            }
+
+            (requests ??= []).Add(deferred
+                ? (p, WalRoutingInitiator.ShardRoot(shard), generation)
+                : (p, WalRoutingInitiator.None, 0L));
+        }
+
+        if (requests is null)
+        {
+            return;
+        }
+
+        (long Head, long Generation)?[] heads;
+        try
+        {
+            heads = await fence.ArmAsync(
+                partition => grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{partition}"),
+                requests,
+                CancellationToken.None);
+        }
+        catch (LeafRetiredException superseded) when (superseded.ActivationSuperseded)
+        {
+            return;
+        }
+
+        List<(int Partition, int Shard, long Generation, long Head)>? resolved = null;
+        for (var i = 0; i < requests.Count; i++)
+        {
+            if (heads[i] is null)
+            {
+                // Review N1: counted by the fence; the partition stays pre-arm.
+                ResolveLogger()?.LogDebug(
+                    "Leaf {LeafId}: could not arm at WAL partition {Partition}; it stays pre-arm and advances there by replay until a later arm lands (#5833).",
+                    context.GrainId,
+                    requests[i].Partition);
+                continue;
+            }
+
+            if (requests[i].Initiator.IsSet && heads[i] is { Head: >= 0 } reclaim)
+            {
+                // Review N2: resolved with the generation the re-claim actually claimed,
+                // which also covers a close deferred above the one requested.
+                (resolved ??= []).Add((requests[i].Partition, requests[i].Initiator.Index, Math.Max(requests[i].Generation, reclaim.Generation), reclaim.Head));
+            }
+        }
+
+        if (resolved is null)
+        {
+            return;
+        }
+
+        foreach (var r in resolved)
+        {
+            HandOffMarkerCore.ResolveDeferred(marker, r.Partition, r.Shard, r.Generation, r.Head);
+        }
+
+        if (HandOffMarkerStorage() is not { } storage)
+        {
+            return;
+        }
+
+        try
+        {
+            await HandOffMarkerRows.UpdateLeafAsync(storage, context.GrainId.GetGuidKey(), m =>
+            {
+                var changed = false;
+                foreach (var r in resolved)
+                {
+                    changed |= HandOffMarkerCore.ResolveDeferred(m, r.Partition, r.Shard, r.Generation, r.Head);
+                }
+
+                return changed;
+            });
+        }
+        catch (Exception ex)
+        {
+            ResolveLogger()?.LogDebug(
+                ex,
+                "Leaf {LeafId}: could not record its resolved deferred hand-off heads; a later arm re-claims them (#5833).",
+                context.GrainId);
+        }
+    }
+
     /// <summary>
     /// Whether any partition holds a claim the advance could arm on. When none does - the
     /// gate is closed, as it is throughout a rolling upgrade from a build without the

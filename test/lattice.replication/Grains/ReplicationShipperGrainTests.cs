@@ -426,6 +426,9 @@ public partial class ReplicationShipperGrainTests
         public Task<WalAppendFenceClaimResult> ClaimAppendEpochAsync(Guid leafId, long epoch, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task<WalAppendFenceArmResult> ArmAppendEpochAsync(Guid leafId, long epoch, Guid activation, WalRoutingInitiator deferredInitiator, long deferredGeneration, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<WalAppendFenceClaimResult> ClaimRoutingGenerationAsync(WalRoutingInitiator initiator, long generation, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 

@@ -12,9 +12,13 @@ SUMMARY: the WAL admits a stamped append below its loaded generation entry
 PERTURBS: Alloc
 
 --- FIND
+    /\ pend[i]
+    /\ next < MaxOff
     /\ loaded[i] # Unloaded
     /\ pstamp[i] >= loaded[i]
 --- REPLACE
+    /\ pend[i]
+    /\ next < MaxOff
     /\ loaded[i] # Unloaded
 \* MUTATION: the stamp is not compared with the loaded entry.
 --- END

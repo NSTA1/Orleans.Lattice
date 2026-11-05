@@ -60,8 +60,10 @@ public sealed class WalAppendFenceFirstTouchCostIntegrationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(first.Get("W _lattice_wal-routing-generation"), Is.EqualTo(1),
-                "the first write did not claim its shard root's routing generation at the partition, so the fence is not under test");
+            Assert.That(first.Get("R _lattice_wal-routing-generation"), Is.EqualTo(1),
+                "the first write did not load its shard root's routing generation at the partition, so the fence is not under test");
+            Assert.That(first.Get("W _lattice_wal-routing-generation"), Is.Zero,
+                "#5833 C1: the first write's cold load claimed its generation instead of loading it read-only");
             Assert.That(first.Get("R _lattice_shard-handoff"), Is.EqualTo(1), "the shard root re-read its hand-off marker");
             Assert.That(first.Get("W _lattice_shard-handoff"), Is.EqualTo(1), "the shard root wrote its hand-off marker more than once");
             Assert.That(first.Get("call IWalShardGrain.ClaimRoutingGenerationAsync"), Is.Zero,

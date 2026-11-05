@@ -32,7 +32,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// outside it and take it only to decide and to raise.
 /// </para>
 /// </remarks>
-internal sealed partial class WalShardGrain : IWalAppendFenceCapable
+internal sealed partial class WalShardGrain : IWalAppendFenceCapable, IWalAppendFencePreArmCapable
 {
     /// <summary>How many times a claim or retirement re-reads after losing an ETag race on a row.</summary>
     internal const int MaxFenceRowAttempts = 8;
@@ -307,29 +307,98 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
     }
 
     /// <summary>
-    /// The F2 load (#5831): claims <paramref name="stamp"/>'s generation for a stamped
-    /// append that met it unloaded, as the writer's re-presentation would. Returns
-    /// whether the claim accepted, or <see langword="null"/> when it could not be made,
-    /// in which case the append reports the generation unloaded as before and the writer
+    /// The F2 load (#5831): makes <paramref name="stamp"/>'s initiator loaded for a stamped
+    /// append that met it unloaded. Returns <see langword="true"/> when the caller should
+    /// run admission again, or <see langword="null"/> when the load could not be made, in
+    /// which case the append reports the generation unloaded as before and the writer
     /// re-presents it. The caller re-runs admission afterwards and never admits on this
-    /// result: a close may re-claim a higher generation in between.
+    /// result: a close may re-claim a higher generation in between. A bulk seed never
+    /// reaches it (#5812 review C2).
     /// </summary>
+    /// <remarks>
+    /// #5833 (revision 2, C1): the load is read-only (<see cref="LoadRoutingGenerationAsync"/>).
+    /// It never raises the entry to the presented generation, so a write carrying a
+    /// generation a close raised but has not re-claimed here does not fence the
+    /// initiator's in-flight writes at an arbitrary moment; only an arm and the close
+    /// paths re-claim.
+    /// </remarks>
     private async Task<bool?> LoadStampGenerationAsync(WalAppendStamp stamp, CancellationToken cancellationToken)
     {
         try
         {
-            var result = await ClaimRoutingGenerationGatedAsync(stamp.Initiator, stamp.Generation, cancellationToken).ConfigureAwait(true);
-            RecordFenceClaim(LatticeMetrics.AppendFenceKindGeneration, result.Accepted);
+            await LoadRoutingGenerationAsync(stamp.Initiator, cancellationToken).ConfigureAwait(true);
             if (AfterStampGenerationLoadedForTesting is { } hook)
             {
                 await hook().ConfigureAwait(true);
             }
 
-            return result.Accepted;
+            return true;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return null;
+        }
+    }
+
+    /// <summary>
+    /// The read-only generation load (#5833, revision 2, C1 and C7): reads
+    /// <paramref name="initiator"/>'s durable row and loads <c>max(row, floor)</c>, marked floor-only when the row is not above the floor, into
+    /// its entry, max-merged so it never lowers a value a claim raised. It writes nothing.
+    /// It runs under the initiator's claim gate, so it is ordered with every claim of that
+    /// initiator and never interleaves with a re-claim's read and raise. A purged
+    /// incarnation's generation, at or below the floor, stays refused, as a claim at the
+    /// floor is.
+    /// </summary>
+    private async Task LoadRoutingGenerationAsync(WalRoutingInitiator initiator, CancellationToken cancellationToken)
+    {
+        var storage = FenceStorage();
+        await EnsureFloorsLoadedAsync(storage).ConfigureAwait(true);
+        var gate = GenerationGate(initiator);
+        var deadline = Options.WalFlushTimeout;
+        TimeSpan? bound = deadline > TimeSpan.Zero && deadline != Timeout.InfiniteTimeSpan ? deadline : null;
+        if (!await gate.WaitAsync(bound ?? Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(true))
+        {
+            throw new TimeoutException(
+                $"WAL shard {_treeId}/{_shardIndex}: a routing-generation load for {WalAppendFenceRows.InitiatorTag(initiator)} waited "
+                + $"{deadline} for the claim ahead of it.");
+        }
+
+        try
+        {
+            if (IsLoaded(GenerationEntries(), initiator))
+            {
+                return;
+            }
+
+            var row = await Bound(WalAppendFenceRows.ReadGenerationAsync(storage, _treeId, _shardIndex, initiator), bound).ConfigureAwait(true);
+            lock (_stateGate)
+            {
+                var table = GenerationEntries();
+                var entry = NoteDurableLocked(table, initiator, row.State.Generation);
+                var floor = GenerationFloorLocked(initiator);
+                var loaded = WalAppendFenceCore.LoadedGeneration(row.State.Generation, floor);
+                if (entry.Memory == WalAppendFenceCore.Unloaded)
+                {
+                    // The floor is read here, when the load lands, not when the row was
+                    // read: a purge that retired the entry in between raised it (R). Only a
+                    // load from unloaded marks the entry floor-only.
+                    entry.Memory = loaded;
+                    entry.FloorOnly = row.State.Generation <= floor;
+                    table[initiator] = entry;
+                }
+                else if (entry.Memory < loaded)
+                {
+                    // max(existing, row, floor), never newly floor-only over a value a
+                    // concurrent claim installed.
+                    entry.Memory = loaded;
+                    entry.FloorOnly &= row.State.Generation <= floor;
+                    table[initiator] = entry;
+                }
+            }
+        }
+        finally
+        {
+            gate.Release();
         }
     }
 
@@ -653,6 +722,15 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
             return AdmitBulkSeedLocked(stamp);
         }
 
+        if (stamp.IsPreArm)
+        {
+            // #5833, revision 2: no entry is checked and no row is needed. The routing
+            // generation is checked as for a stamped append, so a purged incarnation's
+            // straddler and a write admitted before a re-claim stay fenced. Without one
+            // the record is admitted unstamped and reported (C4).
+            return stamp.Initiator.IsSet ? AdmitGenerationLocked(stamp) : WalAppendFenceOutcome.Admitted;
+        }
+
         if (_epochEntries is null
             || !_epochEntries.TryGetValue(stamp.LeafId, out var entry)
             || entry.Memory == WalAppendFenceCore.Unloaded)
@@ -665,22 +743,22 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
             return WalAppendFenceOutcome.StaleEpoch;
         }
 
-        if (stamp.Initiator.IsSet)
-        {
-            if (_generationEntries is null
-                || !_generationEntries.TryGetValue(stamp.Initiator, out var generation)
-                || generation.Memory == WalAppendFenceCore.Unloaded)
-            {
-                return WalAppendFenceOutcome.UnloadedGeneration;
-            }
+        return stamp.Initiator.IsSet ? AdmitGenerationLocked(stamp) : WalAppendFenceOutcome.Admitted;
+    }
 
-            if (!WalAppendFenceCore.IsGenerationAdmitted(stamp.Generation, generation.Memory))
-            {
-                return WalAppendFenceOutcome.StaleGeneration;
-            }
+    /// <summary>The routing-generation half of <see cref="AdmitStampLocked"/>, for a stamp whose initiator is set.</summary>
+    private WalAppendFenceOutcome AdmitGenerationLocked(in WalAppendStamp stamp)
+    {
+        if (_generationEntries is null
+            || !_generationEntries.TryGetValue(stamp.Initiator, out var generation)
+            || generation.Memory == WalAppendFenceCore.Unloaded)
+        {
+            return WalAppendFenceOutcome.UnloadedGeneration;
         }
 
-        return WalAppendFenceOutcome.Admitted;
+        return WalAppendFenceCore.IsLoadedGenerationAdmitted(stamp.Generation, generation.Memory, generation.FloorOnly)
+            ? WalAppendFenceOutcome.Admitted
+            : WalAppendFenceOutcome.StaleGeneration;
     }
 
     /// <summary>
@@ -697,6 +775,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
         if (_generationEntries is null
             || !_generationEntries.TryGetValue(stamp.Initiator, out var generation)
             || generation.Memory == WalAppendFenceCore.Unloaded
+            || generation.FloorOnly
             || generation.Memory < stamp.Generation)
         {
             return WalAppendFenceOutcome.UnloadedGeneration;
@@ -846,6 +925,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
                         }
 
                         entry.Memory = value;
+                        entry.FloorOnly = false;
                         table[id] = entry;
                         return WalAppendFenceClaimResult.Accept(_nextOffset);
                     }
@@ -869,9 +949,10 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
     /// </remarks>
     private void RegisterStampedBatchLocked(in WalAppendStamp stamp)
     {
-        // A bulk seed names no leaf (#5812): only its generation is held, so a close's
-        // re-claim waits for the seed batch and its records land below the close heads.
-        if (!stamp.IsBulkSeed)
+        // A bulk seed names no leaf (#5812), and a pre-arm record's leaf holds no claim
+        // (#5833): only the generation is held, so a close's re-claim waits for the batch
+        // and its records land below the close heads.
+        if (!stamp.IsBulkSeed && !stamp.IsPreArm)
         {
             var entry = _epochEntries![stamp.LeafId];
             entry.InFlightBatches++;
@@ -911,8 +992,8 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
                 }
             }
 
-            var leafDone = true;
-            if (_epochEntries is not null && _epochEntries.TryGetValue(leafId, out var entry))
+            var leafDone = !stamp.IsPreArm;
+            if (!stamp.IsPreArm && _epochEntries is not null && _epochEntries.TryGetValue(leafId, out var entry))
             {
                 entry.InFlightBatches--;
                 _epochEntries[leafId] = entry;
@@ -1166,10 +1247,15 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
     /// raises the partition's unstamped watermark: every unstamped append does, and so
     /// does a record sent under the coordinator-terminal class that is not a
     /// <c>TxCommit</c> or <c>TxAbort</c> (member 2, review S2), which is therefore
-    /// admitted unstamped and reported. Called under <see cref="_stateGate"/>.
+    /// admitted unstamped and reported, and a pre-arm record sent without a routing
+    /// generation (#5833, revision 2, C4). A routed pre-arm record never does: it is
+    /// reported only to its own leaf, through <see cref="ForeignHighLocked"/>. Called
+    /// under <see cref="_stateGate"/>.
     /// </summary>
     private static bool RaisesUnstampedWatermark(bool stamped, in WalAppendStamp stamp, in WalRecord entry) =>
-        !stamped || (stamp.IsCoordinatorTerminal && !WalAppendFenceCore.IsCoordinatorTerminalOp(entry.Op));
+        !stamped
+        || (stamp.IsCoordinatorTerminal && !WalAppendFenceCore.IsCoordinatorTerminalOp(entry.Op))
+        || (stamp.IsPreArm && !stamp.Initiator.IsSet);
 
     /// <summary>
     /// Counts records sent under the coordinator-terminal class that were not
@@ -1198,6 +1284,13 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable
     {
         /// <summary>Multi-entry stamped batches of this leaf still assigning offsets.</summary>
         public int InFlightBatches { get; set; }
+
+        /// <summary>
+        /// A routing-generation entry whose <see cref="Memory"/> is the floor a read-only
+        /// load installed, not a claimed value (#5833): admission is then strictly above
+        /// it. Cleared by any raise.
+        /// </summary>
+        public bool FloorOnly { get; set; }
     }
 
     /// <summary>Shapes the result of the single-entry append for its caller.</summary>

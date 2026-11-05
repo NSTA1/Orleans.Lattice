@@ -447,6 +447,7 @@ internal sealed partial class WalShardGrain(
         // Epic #5605: everything below the recovered head may have been appended
         // unstamped before this activation, so the watermark restarts just below it.
         _unstampedWatermark = _nextOffset - 1;
+        ResetLeafAuthors(_nextOffset);
         _highestStored = highest;
         InitializeClockFloor();
         // Construct the per-activation drain cancellation source up-front
@@ -865,6 +866,7 @@ internal sealed partial class WalShardGrain(
         var fenceOutcome = WalAppendFenceOutcome.Admitted;
         var terminalMisuse = false;
         long unstampedWatermark;
+        var leafForeign = -1L;
         lock (_stateGate)
         {
             // Re-check the move fence under the gate: a quiesce may have raised
@@ -893,10 +895,15 @@ internal sealed partial class WalShardGrain(
             else
             {
                 var offset = WalOffsetAllocationCore.Assign(ref _nextOffset);
+                if (TShape.Stamped)
+                {
+                    leafForeign = NoteLeafAuthorLocked(in stamp, offset);
+                }
+
                 if (RaisesUnstampedWatermark(TShape.Stamped, in stamp, in entry))
                 {
                     _unstampedWatermark = offset;
-                    terminalMisuse = TShape.Stamped;
+                    terminalMisuse = TShape.Stamped && stamp.IsCoordinatorTerminal;
                 }
                 _pendingSegments.Add(segment);
                 _pendingOffsets.Add(offset);
@@ -934,7 +941,7 @@ internal sealed partial class WalShardGrain(
                 queueDepth = _pendingSegments.Count;
             }
 
-            unstampedWatermark = _unstampedWatermark;
+            unstampedWatermark = Math.Max(_unstampedWatermark, leafForeign);
         }
         if (fenced)
         {
@@ -949,8 +956,8 @@ internal sealed partial class WalShardGrain(
         }
         if (TShape.Stamped && fenceOutcome == WalAppendFenceOutcome.UnloadedGeneration && !generationLoadTried && !stamp.IsBulkSeed)
         {
-            // #5831, F2: load the generation here, as the writer's re-presentation
-            // would, then run the whole admission again; never admit on the claim.
+            // #5831, F2: load the generation here (read-only, #5833 C1), then run the
+            // whole admission again; never admit on the load.
             // A bulk seed is excluded (#5812 review C2): it fails closed and re-presents.
             ReturnSegment(segment);
             if (kickFlush)
@@ -1128,6 +1135,7 @@ internal sealed partial class WalShardGrain(
         var admittedCount = count;
         var fenceOutcome = WalAppendFenceOutcome.Admitted;
         long unstampedWatermark = -1;
+        var leafForeign = -1L;
         // Epic #5605: a multi-entry stamped batch holds its leaf's claims and
         // retirement back until every entry has been assigned, so no claim raise
         // can fall between two of its entries and leave a partially admitted batch.
@@ -1222,10 +1230,15 @@ internal sealed partial class WalShardGrain(
                     {
                         admittedAgainst = _floor;
                         var offset = WalOffsetAllocationCore.Assign(ref _nextOffset);
+                        if (TShape.Stamped)
+                        {
+                            leafForeign = NoteLeafAuthorLocked(in stamp, offset);
+                        }
+
                         if (RaisesUnstampedWatermark(TShape.Stamped, in stamp, entries[i]))
                         {
                             _unstampedWatermark = offset;
-                            if (TShape.Stamped)
+                            if (TShape.Stamped && stamp.IsCoordinatorTerminal)
                             {
                                 terminalMisuses++;
                             }
@@ -1287,13 +1300,13 @@ internal sealed partial class WalShardGrain(
                         kickFlush = _pendingSegments.Count > 0 && _inFlight.Count < maxPending;
                     }
 
-                    unstampedWatermark = _unstampedWatermark;
+                    unstampedWatermark = Math.Max(_unstampedWatermark, leafForeign);
                 }
                 if (TShape.Stamped && i == 0 && fenceOutcome == WalAppendFenceOutcome.UnloadedGeneration && !generationLoadTried && !stamp.IsBulkSeed)
                 {
                     // #5831, F2: nothing of this batch is allocated or registered yet. Load
-                    // the generation as the writer's re-presentation would, then run the
-                    // first entry's admission again; never admit on the claim's result.
+                    // the generation (read-only, #5833 C1), then run the first entry's
+                    // admission again; never admit on the load's result.
                     // A bulk seed is excluded (#5812 review C2): it fails closed and re-presents.
                     generationLoadTried = true;
                     if (kickFlush)
@@ -3156,6 +3169,7 @@ internal sealed partial class WalShardGrain(
         // Epic #5605: everything below the recovered head may have been appended
         // unstamped before this activation, so the watermark restarts just below it.
         _unstampedWatermark = _nextOffset - 1;
+        ResetLeafAuthors(_nextOffset);
         _highestStored = highest;
         InitializeClockFloor();
         // Mirror OnActivateAsync's drain-CTS construction so unit tests

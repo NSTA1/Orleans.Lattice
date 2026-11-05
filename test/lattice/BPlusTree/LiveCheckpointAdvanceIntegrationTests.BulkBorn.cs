@@ -48,15 +48,7 @@ public sealed partial class LiveCheckpointAdvanceIntegrationTests
         var tree = _cluster.Client.GetGrain<ILattice>(BulkRawTree);
         var last = leaves[^1];
         await tree.SetAsync("r9999", [9]);
-        Assert.Multiple(async () =>
-        {
-            Assert.That(await ClaimedAsync([last]), Has.Count.EqualTo(1),
-                "the bulk-born leaf's first live write claims its append epoch and is stamped");
-            Assert.That(await WaitForCoverageAsync(
-                    _cluster.Client.GetGrain<ILeafSnapshotStorageGrain>(last.GetGuidKey()), await HeadAsync(BulkRawTree) - 1, "r9999"),
-                Is.Not.Null,
-                "the bulk-born leaf arms and banks its live write");
-        });
+        await AssertFirstLiveWriteOfTheModeAsync(last, BulkRawTree, "r9999");
     }
 
     [Test]
@@ -88,15 +80,32 @@ public sealed partial class LiveCheckpointAdvanceIntegrationTests
 
         var last = born[^1];
         await tree.SetAsync("z9999", [9]);
-        Assert.Multiple(async () =>
+        await AssertFirstLiveWriteOfTheModeAsync(last, BulkGraftTree, "z9999");
+    }
+
+    /// <summary>
+    /// A bulk-born leaf's first live write. Eager mode: the write claims the leaf's
+    /// append epoch, is stamped, and the leaf arms and banks it. Pre-arm mode (#5833): the
+    /// write claims nothing and is appended pre-arm; the leaf arms only on a pin's demand,
+    /// and the write is banked either way.
+    /// </summary>
+    private async Task AssertFirstLiveWriteOfTheModeAsync(GrainId leaf, string tree, string key)
+    {
+        var snapshot = _cluster.Client.GetGrain<ILeafSnapshotStorageGrain>(leaf.GetGuidKey());
+        if (eagerClaims)
         {
-            Assert.That(await ClaimedAsync([last]), Has.Count.EqualTo(1),
-                "the appended leaf's first live write claims its append epoch and is stamped");
-            Assert.That(await WaitForCoverageAsync(
-                    _cluster.Client.GetGrain<ILeafSnapshotStorageGrain>(last.GetGuidKey()), await HeadAsync(BulkGraftTree) - 1, "z9999"),
-                Is.Not.Null,
-                "the appended leaf arms and banks its live write");
-        });
+            Assert.Multiple(async () =>
+            {
+                Assert.That(await ClaimedAsync([leaf]), Has.Count.EqualTo(1),
+                    "the bulk-born leaf's first live write claims its append epoch and is stamped");
+                Assert.That(await WaitForCoverageAsync(snapshot, await HeadAsync(tree) - 1, key), Is.Not.Null,
+                    "the bulk-born leaf arms and banks its live write");
+            });
+            return;
+        }
+
+        Assert.That(await WaitForCoverageAsync(snapshot, await HeadAsync(tree) - 1, key), Is.Not.Null,
+            "the bulk-born leaf's pre-arm live write is banked");
     }
 
     private async Task<List<GrainId>> ChainAsync(IShardRootGrain shard)

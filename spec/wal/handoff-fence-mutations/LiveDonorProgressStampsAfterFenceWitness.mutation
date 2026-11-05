@@ -1,0 +1,14 @@
+# Witness for LiveDonorProgress (#5840 S4, a5e2e2ef's R3), the common order: the
+# counted close relinquishes, the link fence raises D's row, the live donor re-arms
+# fresh and keeps stamping. Red here, with the base clean, shows the step is reachable.
+MODULE: LiveDonorProgressStampsAfterFenceWitness
+TARGET: LiveDonorProgress
+CLASS: Invariant
+SUMMARY: after the relinquish and the split's link fence, the live donor re-arms and stamps an append without being superseded: the progress invariant is checked on real steps
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE
+
+--- FIND
+LiveDonorProgress == WithStaleDonor => ((lDead \/ lStuck) => (dupRaised \/ lStaleLeaf))
+--- REPLACE
+LiveDonorProgress == WithStaleDonor => ~(lStamped /\ relEpoch > 0 /\ ~lAllow /\ ~lDead)
+--- END

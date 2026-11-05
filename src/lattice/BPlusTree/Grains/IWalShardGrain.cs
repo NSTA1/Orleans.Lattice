@@ -139,6 +139,31 @@ internal interface IWalShardGrain : IGrainWithStringKey
     Task<WalAppendFenceClaimResult> ClaimAppendEpochAsync(Guid leafId, long epoch, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Arms <paramref name="leafId"/>'s activation at this partition (#5833, revision 2):
+    /// the epoch claim of <see cref="ClaimAppendEpochAsync"/>, then, when
+    /// <paramref name="deferredInitiator"/> is set, the re-claim of a deferred hand-off
+    /// close's routing generation (C2), and the leaf's foreign high read after both (B1).
+    /// A deferred generation below one this partition has already loaded is presented at
+    /// the loaded value, so the arm takes the current head rather than being refused (C5).
+    /// </summary>
+    /// <param name="leafId">The arming leaf's grain key.</param>
+    /// <param name="epoch">The epoch the leaf's activation persisted in its epoch row; at least 1.</param>
+    /// <param name="activation">The arming activation's token (<see cref="WalAppendStamp.Activation"/>).</param>
+    /// <param name="deferredInitiator">The initiator of a deferred close the leaf must resolve here, or <see cref="WalRoutingInitiator.None"/>.</param>
+    /// <param name="deferredGeneration">That close's raised generation; ignored when the initiator is not set.</param>
+    /// <param name="cancellationToken">Cancellation token propagated from the originating call.</param>
+    /// <returns>The arm's outcome; see <see cref="WalAppendFenceArmResult"/>.</returns>
+    /// <remarks>Called only while the caller's <see cref="IWalAppendFenceGate.IsPreArmOpen"/> holds.</remarks>
+    [AlwaysInterleave]
+    Task<WalAppendFenceArmResult> ArmAppendEpochAsync(
+        Guid leafId,
+        long epoch,
+        Guid activation,
+        WalRoutingInitiator deferredInitiator,
+        long deferredGeneration,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Claims (or re-claims) routing generation <paramref name="generation"/> for
     /// <paramref name="initiator"/> at this partition (epic #5605), with the
     /// semantics of <see cref="ClaimAppendEpochAsync"/>, with the initiator's

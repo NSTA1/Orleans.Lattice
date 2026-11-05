@@ -18,12 +18,14 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// open (rule 1 of "Hand-offs in flight across the gate").
 /// </para>
 /// <para>
-/// <b>Close by fence.</b> Once the donor has narrowed its span (admission of moved keys
-/// stops), it raises its own epoch and re-claims it at every partition it had claimed
-/// (<see cref="LeafAppendEpochFence.BumpAndReclaimAsync"/>), and closes the sibling's
-/// marker with the claim heads. Every append the donor stamped before the bump was
-/// allocated below the heads or is rejected, self-fenced, and re-admitted by its
-/// caller, whose re-admission forwards a moved key to the sibling.
+/// <b>Close by fence.</b> Once the donor's narrowed span is durable (admission of moved
+/// keys stops), it raises the leaf's epoch row and claims the raised epoch at every
+/// partition (<see cref="LeafAppendEpochFence.FenceSplitAsync"/>, #5841), and closes the
+/// sibling's marker with the claim heads. Every append any activation of the donor
+/// stamped before the raise was allocated below the heads or is rejected; this
+/// activation's own are self-fenced and re-admitted by their caller, whose re-admission
+/// forwards a moved key to the sibling. In pre-arm mode the shard root runs the same
+/// fence when it links the split, before its deferred close.
 /// </para>
 /// <para>
 /// <b>Whoever appends stamps with its own epoch (Q2).</b> The split's transfers are
@@ -92,6 +94,9 @@ internal sealed partial class BPlusLeafGrain
     private bool IsHandOffGateOpen() =>
         context.ActivationServices?.GetService<IWalAppendFenceGate>() is { IsOpen: true };
 
+    private bool IsPreArmGateOpen() =>
+        context.ActivationServices?.GetService<IWalAppendFenceGate>() is { IsOpen: true, IsPreArmOpen: true };
+
     /// <summary>
     /// Opens this donor's split marker on <paramref name="siblingId"/>, initialising it,
     /// before the sibling's birth write. A no-op while the gate is closed: the sibling is
@@ -144,15 +149,34 @@ internal sealed partial class BPlusLeafGrain
             }
 
             var partitions = await optionsResolver.GetWalPartitionsAsync(treeId);
+            if (IsPreArmGateOpen())
+            {
+                // #5833, revision 2, C6, and #5841: the shard root fences this donor's
+                // duplicates and closes the sibling's marker by a deferred fence when it
+                // links this split, in its own turn. This activation only counts the close,
+                // so a write it admitted before its narrowing is self-fenced.
+                _appendFence?.CountSplitClose();
+                return;
+            }
+
+            // #5841, rule A: the narrowed state is durable, so fence every activation of
+            // this leaf that claimed before it, whether or not this one did.
             var heads = _appendFence is { } fence
-                ? await fence.BumpAndReclaimAsync(
+                ? await fence.FenceSplitAsync(
                     partition => grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{partition}"),
                     partitions,
                     CancellationToken.None)
-                : null;
+                : await LeafSplitDuplicateFence.FenceAsync(
+                    storage,
+                    partition => grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{partition}"),
+                    partitions,
+                    context.GrainId.GetGuidKey(),
+                    onRaised: null,
+                    onClaimed: null,
+                    CancellationToken.None);
 
-            // An activation that stamped nothing appended unstamped, which the
-            // watermark reports; the allocator heads now bound everything it allocated.
+            // No activation ever claimed: every append was unstamped, which the watermark
+            // reports; the allocator heads now bound everything allocated.
             heads ??= await CaptureAllocatorHeadsAsync(grainFactory, treeId, partitions);
             var closed = false;
             await HandOffMarkerRows.UpdateLeafAsync(storage, siblingKey, m => closed = HandOffMarkerCore.Close(m, token, heads));

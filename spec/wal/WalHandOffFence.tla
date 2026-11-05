@@ -41,20 +41,23 @@ EXTENDS Integers, FiniteSets
 (* shard's range-delete walk, and WithLegacyHandOff a hand-off in flight   *)
 (* across the fence gate's opening.                                        *)
 (***************************************************************************)
-CONSTANTS WithBatch, MaxWindows, WithRestart, WithTreeWalk, WithLegacyHandOff
+CONSTANTS WithBatch, MaxWindows, WithRestart, WithTreeWalk, WithLegacyHandOff,
+          WithPreArm, WithStaleDonor, WithRearmRace
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
 Kinds == IF WithBatch THEN {"point", "batch"} ELSE {"point"}
-MaxEpoch == 3
+\* WithRearmRace: one more epoch, so the live donor's re-arm race (claim,
+\* fence, probed re-claim) is reachable rather than cut off by the bound.
+MaxEpoch == IF WithRearmRace THEN 4 ELSE 3
 Epochs == 0..MaxEpoch
 
 (* The author of an allocated offset: a stamped foreign write ("f"), a     *)
 (* stamped range-delete walk of another shard ("g"), or an unstamped walk *)
 (* ("u"), which is admitted and reported, never fenced.                    *)
 NoAuthor == "none"
-Stamped == {"f", "g"}
-Authors == Stamped \cup {"u", NoAuthor}
+Stamped == {"f", "g", "d"}
+Authors == Stamped \cup {"u", "pre", NoAuthor}
 
 VARIABLES
     next,       \* the WAL shard's allocator: the next offset it assigns
@@ -76,10 +79,38 @@ VARIABLES
     gate,       \* the cluster's fence gate is open
     hfly,       \* a hand-off begun before the gate opened, with no marker, is in flight
     resumed,    \* that hand-off has resumed under the gate
-    mInit       \* L's marker state is initialised
+    mInit,      \* L's marker state is initialised
+    eRow,       \* WithStaleDonor: the donor's durable epoch row; 0 while no activation has claimed
+    liveArmed,  \* the splitting donor activation has claimed (always, outside pre-arm)
+    sNarrowed,  \* the donor's narrowed leaf state is persisted
+    dst,        \* a stale duplicate of the donor: "idle", "wrote", "claimed", "stale"
+    dEpoch,     \* its claimed epoch
+    dpend,      \* its epoch-only write for a moved key is admitted, not yet allocated
+    dstamp,     \* the epoch that write carries
+    bst,        \* the split's row bump: "idle", "read", "done"
+    bRead,      \* the row value the bump read
+    dRetried,   \* the claimant has re-run its claim after a StaleEpoch refusal
+    lpend,      \* the live donor's write of a moved key, admitted before its narrow, not yet allocated
+    lstamp,     \* the epoch that write carries
+    lUsed,      \* the live donor has admitted that write
+    relEpoch,   \* the epoch the live donor relinquished at its counted close; 0 none
+    lEpoch,     \* the live donor's installed claim epoch; 0 none
+    lCached,    \* the epoch row value the live donor's fence caches
+    lClaim,     \* the epoch of the live donor's claim in flight; 0 none
+    lAllow,     \* the live donor has used its one probed re-claim after a StaleEpoch
+    lStamped,   \* ghost: the live donor has stamped an append after the split's bump
+    lDead,      \* ghost: the live donor was superseded
+    lStuck,     \* ghost: the live donor's current claim self-fences its own appends
+    dupRaised,  \* ghost: a duplicate's claim has raised D's epoch row
+    lBumped,    \* the live donor has taken its one floor-refusal bump
+    lStaleLeaf, \* another activation has persisted D's state since the live donor loaded it
+    lProbeFailed \* ghost: a live donor's claim probe found its state stale
+
+lVars == <<lpend, lstamp, lUsed, relEpoch, lEpoch, lCached, lClaim, lAllow, lStamped, lDead, lStuck, dupRaised, lBumped, lStaleLeaf, lProbeFailed>>
+dVars == <<eRow, liveArmed, sNarrowed, dst, dEpoch, dpend, dstamp, bst, bRead, dRetried, lVars>>
 
 vars == <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp,
-          fEpoch, fFence, restarted, gst, gstamp, closing, gate, hfly, resumed, mInit>>
+          fEpoch, fFence, restarted, gst, gstamp, closing, gate, hfly, resumed, mInit, dVars>>
 
 Max2(x, y) == IF x >= y THEN x ELSE y
 
@@ -103,6 +134,31 @@ TypeOK ==
     /\ hfly \in BOOLEAN
     /\ resumed \in BOOLEAN
     /\ mInit \in BOOLEAN
+    /\ eRow \in Epochs
+    /\ liveArmed \in BOOLEAN
+    /\ sNarrowed \in BOOLEAN
+    /\ dst \in {"idle", "wrote", "claimed", "stale"}
+    /\ dEpoch \in Epochs
+    /\ dpend \in BOOLEAN
+    /\ dstamp \in Epochs
+    /\ bst \in {"idle", "read", "done"}
+    /\ bRead \in Epochs
+    /\ dRetried \in BOOLEAN
+    /\ lpend \in BOOLEAN
+    /\ lstamp \in Epochs
+    /\ lUsed \in BOOLEAN
+    /\ relEpoch \in Epochs
+    /\ lEpoch \in Epochs
+    /\ lCached \in Epochs
+    /\ lClaim \in Epochs
+    /\ lAllow \in BOOLEAN
+    /\ lStamped \in BOOLEAN
+    /\ lDead \in BOOLEAN
+    /\ lStuck \in BOOLEAN
+    /\ dupRaised \in BOOLEAN
+    /\ lBumped \in BOOLEAN
+    /\ lStaleLeaf \in BOOLEAN
+    /\ lProbeFailed \in BOOLEAN
 
 (* A legacy hand-off, when switched on, may or may not be in flight at the *)
 (* start; while it is, the gate is closed and L's marker is uninitialised. *)
@@ -126,6 +182,31 @@ Init ==
     /\ gate = ~hfly
     /\ resumed = FALSE
     /\ mInit = ~hfly
+    /\ liveArmed \in (IF WithPreArm THEN BOOLEAN ELSE {TRUE})
+    /\ eRow = IF liveArmed THEN 1 ELSE 0
+    /\ sNarrowed = FALSE
+    /\ dst = "idle"
+    /\ dEpoch = 0
+    /\ dpend = FALSE
+    /\ dstamp = 0
+    /\ bst = "idle"
+    /\ bRead = 0
+    /\ dRetried = FALSE
+    /\ lpend = FALSE
+    /\ lstamp = 0
+    /\ lUsed = FALSE
+    /\ relEpoch = 0
+    /\ lEpoch = IF liveArmed THEN 1 ELSE 0
+    /\ lCached = IF liveArmed THEN 1 ELSE 0
+    /\ lClaim = 0
+    /\ lAllow = FALSE
+    /\ lStamped = FALSE
+    /\ lDead = FALSE
+    /\ lStuck = FALSE
+    /\ dupRaised = FALSE
+    /\ lBumped = FALSE
+    /\ lStaleLeaf = FALSE
+    /\ lProbeFailed = FALSE
 
 (***************************************************************************)
 (* The foreign author.                                                     *)
@@ -144,6 +225,7 @@ ForeignOpen ==
     /\ windows' = windows + 1
     /\ UNCHANGED <<next, author, hoClosedAt, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 (* ForeignAdmit(k): a write of kind k is admitted while the initiator      *)
 (* admits, stamped with the generation current at admission.               *)
@@ -157,6 +239,7 @@ ForeignAdmit(k) ==
     /\ fstamp' = fEpoch
     /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 (* ForeignAlloc: the WAL shard allocates a stamped append at or above the *)
 (* initiator's entry (E's entry check).                                    *)
@@ -171,6 +254,7 @@ ForeignAlloc ==
     /\ author' = [author EXCEPT ![next] = "f"]
     /\ UNCHANGED <<hoOpen, hoClosedAt, windows, fAdmit, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 (* ForeignReject: a stamped append below the entry is rejected, allocating *)
 (* nothing; the write is retried at its seam as a fresh admission.         *)
@@ -182,6 +266,7 @@ ForeignReject ==
     /\ fstamp' = 0
     /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 (* The heads a close may record: any head up to the allocator's that lies  *)
 (* above every stamped foreign append, the weakest E's claim head allows.  *)
@@ -202,6 +287,8 @@ Close ==
     /\ hoOpen' = FALSE
     /\ UNCHANGED <<next, author, windows, fpend, fkind, fstamp, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+    /\ WithStaleDonor => bst = "done"
+    /\ UNCHANGED dVars
 
 (* Restart (WithRestart): the WAL shard restarts, a reactivation or a      *)
 (* move's cutover. The initiator's generation entry is a durable row and   *)
@@ -213,6 +300,7 @@ Restart ==
     /\ UNCHANGED fFence
     /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 (***************************************************************************)
 (* Another shard's walk of a tree-level range delete (WithTreeWalk). It is *)
@@ -229,6 +317,7 @@ GAdmit ==
     /\ gstamp' = fEpoch
     /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<closing, gate, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 GAlloc ==
     /\ gst \in {"pend", "repend"}
@@ -239,6 +328,7 @@ GAlloc ==
     /\ author' = [author EXCEPT ![next] = "g"]
     /\ UNCHANGED <<hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gstamp, closing, gate, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 GReject ==
     /\ gst \in {"pend", "repend"}
@@ -246,6 +336,7 @@ GReject ==
     /\ gst' = "rejected"
     /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gstamp, closing, gate, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 (* The seam retry of a rejected walk asks the fence grain, which answers   *)
 (* from one state and marks an intent closed before its close's first      *)
@@ -261,6 +352,7 @@ GRestamp ==
     /\ gstamp' = fEpoch
     /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<closing, gate, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 GUnstamped ==
     /\ gst = "rejected"
@@ -271,6 +363,7 @@ GUnstamped ==
     /\ author' = [author EXCEPT ![next] = "u"]
     /\ UNCHANGED <<hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gstamp, closing, gate, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 (* OtherIntentClose (WithTreeWalk): another range delete's close re-claims *)
 (* the tree's shared generation while the walk's own intent, whose marker  *)
@@ -284,6 +377,7 @@ OtherIntentClose ==
     /\ fFence' = fEpoch + 1
     /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 (***************************************************************************)
 (* The rollout (WithLegacyHandOff). OpenGate: the last old silo has left.  *)
@@ -299,6 +393,7 @@ OpenGate ==
     /\ gate' = TRUE
     /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 Resume ==
     /\ hfly
@@ -309,6 +404,7 @@ Resume ==
     /\ fAdmit' = TRUE
     /\ UNCHANGED <<next, author, hoClosedAt, windows, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, mInit>>
+    /\ UNCHANGED dVars
 
 LegacyComplete ==
     /\ hfly
@@ -319,6 +415,7 @@ LegacyComplete ==
     /\ fAdmit' = FALSE
     /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 MarkInit ==
     /\ ~hfly
@@ -326,6 +423,309 @@ MarkInit ==
     /\ mInit' = TRUE
     /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed>>
+    /\ UNCHANGED dVars
+
+(***************************************************************************)
+(* The donor's epoch row across a split (#5841, WithStaleDonor). The       *)
+(* foreign author here is a stale duplicate D' of the split's donor D, an  *)
+(* activation that still holds the span from before the split. Its        *)
+(* epoch-only writes (WalRoutingStamp.None: the PendingTx terminal         *)
+(* backstop, the span-forward receive) of keys the split moved carry no    *)
+(* routing generation, so only D's epoch fences them: they are allocated   *)
+(* at or above D's durable epoch row (E's entry check) and rejected below. *)
+(* The fix is a Dekker pair on two durable rows, with no new state:        *)
+(*  - ClaimWrite / ClaimCheck: a claim writes row + 1, and only then reads *)
+(*    D's leaf state; an ETag other than the one the activation loaded     *)
+(*    marks it stale, and a stale activation makes no claim at any         *)
+(*    partition and appends nothing epoch-stamped.                          *)
+(*  - SplitPersist / SplitRowRead / SplitRowWrite: the split persists its  *)
+(*    narrowed state, and only then reads D's epoch row; if the durable    *)
+(*    row exists - whichever activation claimed - it writes row + 1,       *)
+(*    conditionally on the value read (re-reading on a conflict), and      *)
+(*    retires D's entries at every partition at that value.                *)
+(* Either the claim's read sees the narrow, or the split's read sees the   *)
+(* claim's row. Outside pre-arm the splitting activation has always        *)
+(* claimed, since it wrote stamped before it split.                        *)
+(***************************************************************************)
+ClaimWrite ==
+    /\ WithStaleDonor
+    /\ dst = "idle"
+    /\ eRow < MaxEpoch
+    /\ dst' = "wrote"
+    /\ dEpoch' = eRow + 1
+    /\ eRow' = eRow + 1
+    /\ dupRaised' = TRUE
+    /\ UNCHANGED <<liveArmed, sNarrowed, dpend, dstamp, bst, bRead, dRetried>>
+    /\ UNCHANGED <<lpend, lstamp, lUsed, relEpoch, lEpoch, lCached, lClaim, lAllow, lStamped, lDead, lStuck, lBumped, lStaleLeaf, lProbeFailed>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+
+ClaimCheck ==
+    /\ dst = "wrote"
+    /\ dst' = IF sNarrowed THEN "stale" ELSE "claimed"
+    /\ UNCHANGED <<eRow, liveArmed, sNarrowed, dEpoch, dpend, dstamp, bst, bRead, dRetried, lVars>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+
+DupAdmit ==
+    /\ dst = "claimed"
+    /\ ~dpend
+    /\ next < MaxOff
+    /\ dpend' = TRUE
+    /\ dstamp' = dEpoch
+    /\ UNCHANGED <<eRow, liveArmed, sNarrowed, dst, dEpoch, bst, bRead, dRetried, lVars>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+
+(* An epoch-only write allocated before the split opened its window lies  *)
+(* below the receiver's birth heads and is handed to it with the split's  *)
+(* rows ("pre"); after, it is a foreign record of the receiver's ("d").   *)
+DupAlloc ==
+    /\ dpend
+    /\ dstamp >= eRow
+    /\ next < MaxOff
+    /\ dpend' = FALSE
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = IF windows > 0 THEN "d" ELSE "pre"]
+    /\ UNCHANGED <<eRow, liveArmed, sNarrowed, dst, dEpoch, dstamp, bst, bRead, dRetried, lVars>>
+    /\ UNCHANGED <<hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+
+DupReject ==
+    /\ dpend
+    /\ dstamp < eRow
+    /\ dpend' = FALSE
+    /\ UNCHANGED <<eRow, liveArmed, sNarrowed, dst, dEpoch, dstamp, bst, bRead, dRetried, lVars>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+
+(* The relinquish resets the live donor's cached row (R1): its next arm  *)
+(* reads D's row fresh rather than writing on a stale ETag.               *)
+RelinquishedCache == 0
+
+SplitPersist ==
+    /\ WithStaleDonor
+    /\ hoOpen
+    /\ ~sNarrowed
+    /\ sNarrowed' = TRUE
+    /\ IF WithPreArm /\ (liveArmed \/ lClaim > 0)
+       THEN /\ liveArmed' = FALSE
+            /\ relEpoch' = Max2(relEpoch, Max2(lEpoch, lClaim))
+            /\ lEpoch' = 0
+            /\ lCached' = RelinquishedCache
+       ELSE UNCHANGED <<liveArmed, relEpoch, lEpoch, lCached>>
+    /\ UNCHANGED <<eRow, dst, dEpoch, dpend, dstamp, bst, bRead, dRetried, lpend, lstamp, lUsed, lClaim, lAllow, lStamped, lDead, lStuck, dupRaised, lBumped, lStaleLeaf, lProbeFailed>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+
+(* DupRetry: an epoch-only write refused as StaleEpoch at the claimant's   *)
+(* current epoch re-runs the probed claim, at most once per split close    *)
+(* (#5840 S4, (a)): the live donor, superseded by the fence the shard root *)
+(* ran at the link, re-claims instead of deactivating. The re-run is the   *)
+(* same Dekker claim - a fresh row read and row + 1, then the leaf-state   *)
+(* probe - so a stale duplicate it reaches is marked stale.                *)
+DupRetry ==
+    /\ WithStaleDonor
+    /\ dst = "claimed"
+    /\ dpend
+    /\ dstamp < eRow
+    /\ ~dRetried
+    /\ dRetried' = TRUE
+    /\ dpend' = FALSE
+    /\ dst' = "idle"
+    /\ UNCHANGED <<eRow, liveArmed, sNarrowed, dEpoch, dstamp, bst, bRead, lVars>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+
+(* The live donor's write of a moved key, admitted before its narrow under *)
+(* its claimed epoch (#5840 S4). LiveAlloc: allocated at or above D's      *)
+(* entry. LiveRefuse: refused below it after the split's bump; a write at  *)
+(* or below the epoch the donor relinquished at its counted close, or     *)
+(* below its current epoch (R3, the <= form), is self-fenced and           *)
+(* re-admitted at its seam, which finds the key moved and forwards it; any *)
+(* other is foreign and supersedes it (MarkStale). Either way D allocates  *)
+(* nothing for it. In the eager arm the split adopts the bumped row into   *)
+(* the live activation (A3), so the stamp is below its current epoch.     *)
+(* LiveBump: a floor refusal of the pending write, stamped under the live  *)
+(* donor's current epoch, bumps D's row; the bump is in flight and the     *)
+(* write is re-stamped at its epoch. A write stamped at or below the       *)
+(* relinquished epoch is never bumped: its refusal self-fences.            *)
+LiveBump ==
+    /\ WithStaleDonor
+    /\ WithPreArm
+    /\ liveArmed
+    /\ lpend
+    /\ lstamp = lEpoch
+    /\ lEpoch > relEpoch
+    /\ lClaim = 0
+    /\ ~lBumped
+    /\ eRow < MaxEpoch
+    /\ lBumped' = TRUE
+    /\ lClaim' = eRow + 1
+    /\ eRow' = eRow + 1
+    /\ lstamp' = eRow + 1
+    /\ UNCHANGED <<liveArmed, sNarrowed, dst, dEpoch, dpend, dstamp, bst, bRead, dRetried>>
+    /\ UNCHANGED <<lpend, lUsed, relEpoch, lEpoch, lCached, lAllow, lStamped, lDead, lStuck, dupRaised, lStaleLeaf, lProbeFailed>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+
+LiveAdmit ==
+    /\ WithStaleDonor
+    /\ liveArmed
+    /\ ~sNarrowed
+    /\ ~lUsed
+    /\ next < MaxOff
+    /\ lUsed' = TRUE
+    /\ lpend' = TRUE
+    /\ lstamp' = lEpoch
+    /\ UNCHANGED <<eRow, liveArmed, sNarrowed, dst, dEpoch, dpend, dstamp, bst, bRead, dRetried, relEpoch, lEpoch, lCached, lClaim, lAllow, lStamped, lDead, lStuck, dupRaised, lBumped, lStaleLeaf, lProbeFailed>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+
+LiveAlloc ==
+    /\ lpend
+    /\ lstamp >= eRow
+    /\ next < MaxOff
+    /\ lpend' = FALSE
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = IF windows > 0 THEN "d" ELSE "pre"]
+    /\ UNCHANGED <<eRow, liveArmed, sNarrowed, dst, dEpoch, dpend, dstamp, bst, bRead, dRetried, lstamp, lUsed, relEpoch, lEpoch, lCached, lClaim, lAllow, lStamped, lDead, lStuck, dupRaised, lBumped, lStaleLeaf, lProbeFailed>>
+    /\ UNCHANGED <<hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+
+LiveRefuse ==
+    /\ lpend
+    /\ lstamp < eRow
+    /\ lpend' = FALSE
+    /\ IF ~WithPreArm \/ lstamp <= relEpoch \/ lstamp < lEpoch
+       THEN UNCHANGED lDead
+       ELSE lDead' = TRUE
+    /\ UNCHANGED <<eRow, liveArmed, sNarrowed, dst, dEpoch, dpend, dstamp, bst, bRead, dRetried, lstamp, lUsed, relEpoch, lEpoch, lCached, lClaim, lAllow, lStamped, lStuck, dupRaised, lBumped, lStaleLeaf, lProbeFailed>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+
+(* The live donor's claims across the split (#5840 S4, a5e2e2ef's R1-R4). *)
+(* LiveClaimStart / LiveClaimDone: an arm's claim writes D's row before    *)
+(* the count and installs on completion - unless the counted close has     *)
+(* relinquished it meanwhile (R2), when it installs nothing and records  *)
+(* its epoch as relinquished (R5, max-merged). The claim's probe runs on   *)
+(* completion: after a relinquish another activation may have persisted D, *)
+(* and a probe that finds the state stale marks the activation stale even  *)
+(* when the claim is discarded (R6). LiveArm: after relinquishing, the live*)
+(* donor arms again with a fresh row read, never its cached row (R1).      *)
+(* LiveStamp: a stamped append under the installed claim; refused below    *)
+(* D's entry at its current epoch, it re-runs the probed claim once,       *)
+(* passing the probe (its state is current); a second refusal supersedes   *)
+(* it. A refusal at or below the relinquished epoch self-fences. Epoch     *)
+(* exhaustion disables the re-claim rather than superseding: a bound, not  *)
+(* a behaviour.                                                            *)
+
+LiveClaimStart ==
+    /\ WithStaleDonor
+    /\ WithPreArm
+    /\ ~liveArmed
+    /\ lClaim = 0
+    /\ relEpoch = 0
+    /\ eRow < MaxEpoch
+    /\ lClaim' = eRow + 1
+    /\ eRow' = eRow + 1
+    /\ UNCHANGED <<liveArmed, sNarrowed, dst, dEpoch, dpend, dstamp, bst, bRead, dRetried>>
+    /\ UNCHANGED <<lpend, lstamp, lUsed, relEpoch, lEpoch, lCached, lAllow, lStamped, lDead, lStuck, dupRaised, lBumped, lStaleLeaf, lProbeFailed>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+
+LiveClaimDone ==
+    /\ lClaim > 0
+    /\ lClaim' = 0
+    /\ \E stale \in IF relEpoch > 0 THEN BOOLEAN ELSE {FALSE} :
+        /\ lStaleLeaf' = stale
+        /\ CASE stale -> /\ lProbeFailed' = TRUE
+                         /\ lDead' = TRUE
+                         /\ relEpoch' = Max2(relEpoch, lClaim)
+                         /\ UNCHANGED <<liveArmed, lEpoch, lCached>>
+             [] relEpoch = 0 -> /\ liveArmed' = TRUE
+                                /\ lEpoch' = lClaim
+                                /\ lCached' = lClaim
+                                /\ UNCHANGED <<relEpoch, lDead, lProbeFailed>>
+             [] OTHER -> /\ relEpoch' = Max2(relEpoch, lClaim)
+                         /\ UNCHANGED <<liveArmed, lEpoch, lCached, lDead, lProbeFailed>>
+    /\ UNCHANGED <<eRow, sNarrowed, dst, dEpoch, dpend, dstamp, bst, bRead, dRetried>>
+    /\ UNCHANGED <<lpend, lstamp, lUsed, lAllow, lStamped, lStuck, dupRaised, lBumped>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+
+LiveArm ==
+    /\ WithStaleDonor
+    /\ WithPreArm
+    /\ relEpoch > 0
+    /\ ~liveArmed
+    /\ lClaim = 0
+    /\ ~lDead
+    /\ eRow < MaxEpoch
+    /\ CASE lStaleLeaf -> /\ lDead' = TRUE
+                          /\ lProbeFailed' = TRUE
+                          /\ eRow' = eRow + 1
+                          /\ UNCHANGED <<liveArmed, lEpoch, lCached>>
+         [] ~lStaleLeaf /\ (lCached = 0 \/ lCached = eRow) -> /\ eRow' = eRow + 1
+                                             /\ liveArmed' = TRUE
+                                             /\ lEpoch' = eRow + 1
+                                             /\ lCached' = eRow + 1
+                                             /\ UNCHANGED <<lDead, lProbeFailed>>
+         [] OTHER -> /\ lDead' = TRUE
+                     /\ UNCHANGED <<eRow, liveArmed, lEpoch, lCached, lProbeFailed>>
+    /\ UNCHANGED <<sNarrowed, dst, dEpoch, dpend, dstamp, bst, bRead, dRetried>>
+    /\ UNCHANGED <<lpend, lstamp, lUsed, relEpoch, lClaim, lAllow, lStamped, lStuck, dupRaised, lBumped, lStaleLeaf>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+
+LiveStamp ==
+    /\ WithStaleDonor
+    /\ liveArmed
+    /\ ~lDead
+    /\ ~lStuck
+    /\ ~lStamped
+    /\ bst = "done"
+    /\ CASE lEpoch >= eRow -> /\ lStamped' = TRUE
+                              /\ UNCHANGED <<eRow, lEpoch, lCached, lAllow, lDead, lStuck>>
+         [] lEpoch <= relEpoch -> /\ lStuck' = TRUE
+                                  /\ UNCHANGED <<eRow, lEpoch, lCached, lAllow, lDead, lStamped>>
+         [] ~lAllow -> /\ eRow < MaxEpoch
+                       /\ lAllow' = TRUE
+                       /\ eRow' = eRow + 1
+                       /\ lEpoch' = eRow + 1
+                       /\ lCached' = eRow + 1
+                       /\ UNCHANGED <<lDead, lStuck, lStamped>>
+         [] OTHER -> /\ lDead' = TRUE
+                     /\ UNCHANGED <<eRow, lEpoch, lCached, lAllow, lStuck, lStamped>>
+    /\ UNCHANGED <<liveArmed, sNarrowed, dst, dEpoch, dpend, dstamp, bst, bRead, dRetried>>
+    /\ UNCHANGED <<lpend, lstamp, lUsed, relEpoch, lClaim, dupRaised, lBumped, lStaleLeaf, lProbeFailed>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+(* The split's bump: whenever D's durable row exists.                      *)
+SplitBumps(read) == read > 0
+
+SplitRowRead ==
+    /\ WithStaleDonor
+    /\ hoOpen
+    /\ sNarrowed
+    /\ bst = "idle"
+    /\ bst' = "read"
+    /\ bRead' = eRow
+    /\ UNCHANGED <<eRow, liveArmed, sNarrowed, dst, dEpoch, dpend, dstamp, dRetried, lVars>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+
+SplitRowWrite ==
+    /\ bst = "read"
+    /\ IF eRow = bRead
+       THEN /\ eRow' = IF SplitBumps(bRead) THEN bRead + 1 ELSE bRead
+            /\ bst' = "done"
+       ELSE /\ bst' = "idle"
+            /\ UNCHANGED eRow
+    /\ eRow' <= MaxEpoch
+    /\ UNCHANGED <<liveArmed, sNarrowed, dst, dEpoch, dpend, dstamp, bRead, dRetried, lVars>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
 
 (* A behaviour may stop anywhere: this is a safety model.                  *)
 Stutter == UNCHANGED vars
@@ -347,6 +747,23 @@ Next ==
     \/ Resume
     \/ LegacyComplete
     \/ MarkInit
+    \/ ClaimWrite
+    \/ ClaimCheck
+    \/ SplitPersist
+    \/ DupAdmit
+    \/ DupAlloc
+    \/ DupReject
+    \/ DupRetry
+    \/ LiveAdmit
+    \/ LiveAlloc
+    \/ LiveRefuse
+    \/ LiveBump
+    \/ LiveClaimStart
+    \/ LiveClaimDone
+    \/ LiveArm
+    \/ LiveStamp
+    \/ SplitRowRead
+    \/ SplitRowWrite
     \/ Stutter
 
 Spec == Init /\ [][Next]_vars
@@ -367,6 +784,17 @@ MarkerReadsClosed == mInit /\ ~hoOpen
 (* restart in between).                                                    *)
 HandOffBound ==
     MarkerReadsClosed => \A o \in Offs : author[o] \in Stamped => o < hoClosedAt
+
+(* The live donor's progress across the split's fence (#5840 S4, R1-R7): *)
+(* unless a stale duplicate's claim raised D's row, or another activation  *)
+(* persisted D so that the live donor is itself stale, the live donor is   *)
+(* never superseded and never left self-fencing its own appends.           *)
+LiveDonorProgress == WithStaleDonor => ((lDead \/ lStuck) => (dupRaised \/ lStaleLeaf))
+
+(* A probe that finds the live donor's state stale marks it stale, even   *)
+(* when the relinquish discards the claim it ran in (#5840 S4, R6): a     *)
+(* real #5841 detection is never swallowed.                               *)
+StaleDetectionHonoured == lProbeFailed => lDead
 
 (* L's marker state is initialised only while no hand-off begun without a  *)
 (* marker is in flight, so an absent or uninitialised marker holds L.      *)

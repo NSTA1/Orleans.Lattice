@@ -885,9 +885,19 @@ internal sealed partial class ShardRootGrain
             _splitLinkGate.Release();
         }
 
+        // #5833, C6: in this shard root's own turn, after the links, before any donor
+        // is acknowledged.
+        var unclosed = await CloseDeferredSplitHandOffsAsync(work);
         if (acknowledgeDonors)
         {
-            await AcknowledgeRecordedSplitsAsync(work);
+            await AcknowledgeRecordedSplitsAsync(unclosed is null ? work : work.FindAll(w => !unclosed.Contains(w.Split.NewSiblingId)));
+        }
+        else if (unclosed is not null)
+        {
+            // The caller acknowledges its own donor on return; it must not, so the
+            // division re-surfaces and the close is retried.
+            throw new InvalidOperationException(
+                $"Shard root {TreeId}/{ShardIndex}: a split marker could not be closed by a deferred fence; the division re-surfaces.");
         }
 
         return null;

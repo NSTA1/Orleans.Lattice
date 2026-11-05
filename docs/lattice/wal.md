@@ -1546,6 +1546,56 @@ The fence's counters are `orleans.lattice.wal.append_fence.claims`,
 `.rejections`, `.seam_retries`, `.unstamped_reports` and `.sweeps`; see
 [Metrics](metrics.md).
 
+### Deferred claims: the pre-arm class
+
+Claiming at every partition a leaf writes is paid at every leaf birth and every
+activation, but the claim is needed only by a leaf that advances its checkpoint
+live. While every active silo also advertises the pre-arm capability, a leaf
+therefore defers its claim until it **arms** a partition
+([#5833](https://github.com/NSTA1/Orleans.Lattice/issues/5833)). If a silo without
+that capability joins, the gate closes again and leaves claim eagerly as above.
+
+- **Pre-arm appends.** Until it arms a partition, an activation appends there under
+  the pre-arm class: the stamp names the leaf and a random token per activation,
+  and no epoch. The partition checks no entry and writes no row, so a new or
+  reactivated leaf pays no claim, epoch row or directory write. The routing
+  generation is still checked, as for any stamped append. A write that carries no
+  routing generation is never pre-arm: it goes unstamped and raises the shared
+  watermark.
+- **Attribution.** For each leaf, the partition keeps in memory the two activations
+  with the highest offsets it allocated to that leaf's records, stamped or pre-arm.
+  A pre-arm record never raises the partition's shared unstamped watermark, so
+  unarmed leaves do not hold armed ones back. Instead each stamped append's
+  response reports the highest offset any *other* activation of the same leaf
+  allocated, so a duplicate activation's record is read before the leaf advances
+  over its own. After a restart everything below the recovered head counts as
+  foreign. Past 16,384 leaves the older half of the table, by highest offset, folds
+  into one floor, so an arm is held back only to that half's newest record.
+- **The arm.** A leaf arms only when its pin holds the partition's WAL floor: inside a
+  starvation drive (the WAL GC found it holding the floor), or on its snapshot recheck
+  tick when it has live data and no proven checkpoint on any partition. It never arms
+  on a write or a routine checkpoint. A split sibling inherits its donor's checkpoints,
+  capped at the donor's frontier, so it is not in that state and does not arm. The
+  leaf writes its epoch row once, then claims at every partition it is arming in one
+  parallel round, only while no hand-off is open on it. Each claim also returns the
+  leaf's foreign high, which the leaf must have replayed past before it advances live;
+  its own pre-arm records it applied itself.
+- **Deferred hand-off closes.** A split or a consolidation no longer claims at every
+  partition when it closes. The shard root, in its own turn as it links the split or
+  folds the leaf, raises its routing generation without claiming it at any
+  partition, and records the close on the receiving leaf's marker with every head
+  deferred. A deferred head holds that leaf. Its arm then re-claims the generation
+  at the partition, so any write admitted before the raise is either below the
+  re-claim's head or refused, and records that head. Resizes, bulk switches and
+  range deletes still close eagerly.
+
+**Cost with the pre-arm class.** Per leaf birth or activation: nothing until it
+arms. Per stamped or pre-arm append: one further dictionary lookup under the same
+lock. Per split or consolidation: one shard-marker write and the receiver's marker
+read and write. Per arm: the epoch row read and write, one claim per armed
+partition, and one generation-row write per partition only for the first arm there
+after a deferred close.
+
 ## Hand-off fences
 
 The epoch fence above stops a stale duplicate of a leaf. The **hand-off fences**
@@ -1578,7 +1628,7 @@ by an older build, or while the gate was closed, opens one when it resumes.
 
 | Hand-off | Initiator | Marker | Fence at close |
 |----------|-----------|--------|----------------|
-| Leaf split | The donor leaf | The sibling's, opened at its birth | The donor raises its own epoch, once its span has narrowed, and re-claims it at every partition it had claimed |
+| Leaf split | The donor leaf | The sibling's, opened at its birth | Once the donor's narrowed span is durable, the leaf's epoch row is raised above every epoch issued and the raised epoch is claimed at every partition; in pre-arm mode the shard root does this when it links the split, before its deferred close |
 | Leaf reclaim | The absorbed neighbour | The survivor's, opened before its range widens | The neighbour's entries are retired at every partition, and the allocator heads are read after the retirement |
 | Adaptive split, consolidation fold | The donor shard root | The target shard root's, opened when the migration begins | The donor raises its routing generation, after the reject phase and the drain, and re-claims it at every partition |
 | Range delete | The tree's range-delete fence | Every shard root's, range-scoped | The fence raises the tree's range-delete generation and re-claims it at every partition |
@@ -1622,12 +1672,46 @@ The close's heads bound every append the donor makes under its old epoch
 - **Admission decides the stamp.** A write is admitted against the donor's hand-off
   closes, before its span check. If a close happens before the write reaches the WAL,
   the write is self-fenced and re-admitted, rather than stamped with the raised epoch.
-- **Every partition is re-claimed.** The close re-claims at every partition the
-  activation claimed, including one whose claim a WAL shard restart reset. It records
-  no head (`-1`) only for a partition the activation never claimed.
+- **Every partition is claimed.** The close claims the raised epoch at every
+  partition, including one whose claim a WAL shard restart reset and one the
+  activation never wrote, so a duplicate is refused there too. The raise is held in
+  the leaf's own entry at each partition, never in the partition's shared retired
+  floor, which every other leaf's claims are checked against.
 - **No fence, no close.** If the activation's view of the gate is closed after it has
   stamped, the close cannot raise its epoch. The marker stays open until a later
   close can.
+
+**A duplicate of the donor is fenced too**
+([#5841](https://github.com/NSTA1/Orleans.Lattice/issues/5841)). Another activation of
+the donor that loaded its state before the split still holds the old span. It could
+claim, or arm, after the split, then append an epoch-only write of a moved key that
+nothing routes to the sibling. Two ordered pairs prevent it:
+
+- **The split writes, then reads.** Only once its narrowed state is durable does the
+  split read the leaf's epoch row. If any activation has ever claimed, the split
+  raises the row conditionally on what it read and claims the raised epoch at every
+  partition. A duplicate that claimed before that read is refused at its next append,
+  whether or not the splitting activation itself ever claimed.
+- **A claim writes, then reads.** A claim writes the epoch row first, then reads the
+  leaf's own state row fresh. If that row's ETag is not the one the activation holds,
+  the activation is stale: it claims nowhere, and every append waiting on the claim
+  is refused. The read is serialised with the activation's own persists, so its own
+  write in flight never reads as another's.
+
+Between them, either the split sees the duplicate's claim, or the duplicate sees the
+narrowing. That needs the storage provider to give strong read-after-write across
+clients for both rows: a write that has completed is visible to any later read. The
+Azure Table and in-memory providers give it; a provider with session or eventual
+consistency does not.
+
+In pre-arm mode the shard root raises the row when it links the split, which would also
+refuse the live donor's own epoch. So at the split's close the live donor drops its epoch
+and claims locally, with no I/O: its next appends go pre-arm, which the routing
+generation fences, and its next arm claims afresh, through the same write-then-read
+claim. A stamped append it had in flight at the dropped epoch is refused and retried, not
+treated as a supersession. If the donor re-arms before the link, a refusal at its new
+epoch, or a conflict on its next row write, gets one more such fresh claim per close.
+Without one, the live donor would deactivate on every split.
 The same rule stops a leaf from deactivating itself after it raises its epoch above
 a retired floor ([#5643](https://github.com/NSTA1/Orleans.Lattice/issues/5643)).
 

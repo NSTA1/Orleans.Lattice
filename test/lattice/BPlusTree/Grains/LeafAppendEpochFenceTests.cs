@@ -73,7 +73,8 @@ public sealed partial class LeafAppendEpochFenceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(stamp, Is.EqualTo(WalAppendStamp.ForLeaf(Leaf, 1)));
+            Assert.That(stamp!.Value with { Activation = Guid.Empty }, Is.EqualTo(WalAppendStamp.ForLeaf(Leaf, 1)));
+            Assert.That(stamp.Value.Activation, Is.Not.EqualTo(Guid.Empty), "#5833 B1: a stamp carries its activation's token");
             Assert.That(rowEpoch, Is.EqualTo(1));
             Assert.That(h.Fence.ClaimHead(3), Is.EqualTo(42));
             Assert.That(againCompletedSynchronously, Is.True, "a claimed partition stamps synchronously");
@@ -432,7 +433,12 @@ public sealed partial class LeafAppendEpochFenceTests
         pending.SetResult(WalAppendFenceClaimResult.Accept(0));
         var stamps = await Task.WhenAll(first, second);
 
-        Assert.That(stamps, Is.All.EqualTo(WalAppendStamp.ForLeaf(Leaf, 1)));
+        Assert.Multiple(() =>
+        {
+            Assert.That(stamps.Select(s => s!.Value with { Activation = Guid.Empty }), Is.All.EqualTo(WalAppendStamp.ForLeaf(Leaf, 1)));
+            Assert.That(stamps.Select(s => s!.Value.Activation).Distinct().Single(), Is.Not.EqualTo(Guid.Empty),
+                "#5833 B1: every stamp carries the same activation token");
+        });
         await h.Shard.Received(1).ClaimAppendEpochAsync(Leaf, 1, Arg.Any<CancellationToken>());
     }
 }

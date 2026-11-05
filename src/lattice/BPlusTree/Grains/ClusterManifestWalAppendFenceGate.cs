@@ -27,6 +27,7 @@ internal sealed class ClusterManifestWalAppendFenceGate : IWalAppendFenceGate
     private readonly IClusterMembershipService _membership;
     private readonly ILogger<ClusterManifestWalAppendFenceGate> _logger;
     private readonly GrainInterfaceType _marker;
+    private readonly GrainInterfaceType _preArmMarker;
     private readonly object _gate = new();
     private volatile Verdict? _verdict;
 
@@ -45,54 +46,70 @@ internal sealed class ClusterManifestWalAppendFenceGate : IWalAppendFenceGate
         _membership = membership;
         _logger = logger;
         _marker = interfaceTypes.GetGrainInterfaceType(typeof(IWalAppendFenceCapable));
+        _preArmMarker = interfaceTypes.GetGrainInterfaceType(typeof(IWalAppendFencePreArmCapable));
     }
 
     /// <inheritdoc />
-    public bool IsOpen
+    public bool IsOpen => Current().Open;
+
+    /// <inheritdoc />
+    public bool IsPreArmOpen => Current().PreArmOpen;
+
+    private Verdict Current()
     {
-        get
+        var manifest = _manifests.Current;
+        var snapshot = _membership.CurrentSnapshot;
+        var cached = _verdict;
+        if (cached is not null && cached.Matches(manifest.Version, snapshot.Version))
         {
-            var manifest = _manifests.Current;
-            var snapshot = _membership.CurrentSnapshot;
-            var cached = _verdict;
-            if (cached is not null && cached.Matches(manifest.Version, snapshot.Version))
+            return cached;
+        }
+
+        lock (_gate)
+        {
+            var previous = _verdict;
+            if (previous is not null && previous.Matches(manifest.Version, snapshot.Version))
             {
-                return cached.Open;
+                return previous;
             }
 
-            lock (_gate)
+            var open = ClusterManifestWalClockFloorGate.Evaluate(manifest, snapshot, _marker);
+            if (previous is null || open != previous.Open)
             {
-                var previous = _verdict;
-                if (previous is not null && previous.Matches(manifest.Version, snapshot.Version))
+                if (open)
                 {
-                    return previous.Open;
+                    _logger.LogInformation("WAL append fence gate is open: every active silo is fence-capable");
                 }
-
-                var open = ClusterManifestWalClockFloorGate.Evaluate(manifest, snapshot, _marker);
-                if (previous is null || open != previous.Open)
+                else
                 {
-                    if (open)
-                    {
-                        _logger.LogInformation("WAL append fence gate is open: every active silo is fence-capable");
-                    }
-                    else
-                    {
-                        _logger.LogWarning(
-                            "WAL append fence gate is closed: not every active silo advertises {Marker}; leaves append unstamped until it does",
-                            nameof(IWalAppendFenceCapable));
-                    }
+                    _logger.LogWarning(
+                        "WAL append fence gate is closed: not every active silo advertises {Marker}; leaves append unstamped until it does",
+                        nameof(IWalAppendFenceCapable));
                 }
-
-                _verdict = new Verdict(manifest.Version, snapshot.Version, open);
-                return open;
             }
+
+            // #5833: the pre-arm class needs the fence itself and its own marker on every silo.
+            var preArmOpen = open && ClusterManifestWalClockFloorGate.Evaluate(manifest, snapshot, _preArmMarker);
+            if (previous is null || preArmOpen != previous.PreArmOpen)
+            {
+                _logger.LogInformation(
+                    preArmOpen
+                        ? "WAL append fence pre-arm class is open: leaves defer their fence rows until they arm"
+                        : "WAL append fence pre-arm class is closed: leaves claim their append epochs eagerly");
+            }
+
+            var verdict = new Verdict(manifest.Version, snapshot.Version, open, preArmOpen);
+            _verdict = verdict;
+            return verdict;
         }
     }
 
     /// <summary>The verdict for one pair of manifest and membership versions; immutable.</summary>
-    private sealed class Verdict(MajorMinorVersion manifestVersion, MembershipVersion membershipVersion, bool open)
+    private sealed class Verdict(MajorMinorVersion manifestVersion, MembershipVersion membershipVersion, bool open, bool preArmOpen)
     {
         public bool Open { get; } = open;
+
+        public bool PreArmOpen { get; } = preArmOpen;
 
         public bool Matches(MajorMinorVersion manifest, MembershipVersion membership) =>
             manifest == manifestVersion && membership == membershipVersion;
