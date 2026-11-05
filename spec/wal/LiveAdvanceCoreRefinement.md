@@ -460,7 +460,7 @@ reason as the one above.
   reactivated reader excludes by the tag of its persisted narrow (N-d), read from durable
   state that survives the link (`LeafNodeState`); a reader with no durable tag counts
   every forward, which costs a replay and never passes a record.
-  Production symbols: `WalShardGrain.StaleHighLocked`, `LeafAppendEpochFence.PersistedNarrowTag`.
+  Production symbols: `WalShardGrain.StaleHighLocked`, `LeafAppendEpochFence.PersistedNarrowTag`, `LeafNodeState`.
 
 - **The liveness property excludes a current activation that has fallen off the log.**
   `NewbornPinEventuallyUsable` is discharged by `CurrentFellOffLog`: the GC trimmed an
