@@ -124,18 +124,78 @@ public partial class WalShardGrainTests
             offsets[i] = (await grain.AppendStampedAsync(MakeEntry($"k{i}"), stamp, CancellationToken.None)).Offset;
         }
 
+        var restartFloor = grain.ForeignHighForTesting(Guid.NewGuid(), ActivationA);
         grain.FoldLeafAuthorsForTesting();
+
+        // #5851 (O2b): an evicted leaf's records floor its own hash bucket only, so a leaf
+        // reads the highest evicted offset among the leaves sharing its bucket.
+        var buckets = (int)System.Numerics.BitOperations.RoundUpToPowerOf2((uint)WalShardGrain.LeafAuthorFloorBucketCount);
+        long BucketFloor(Guid leaf) => new[] { 0, 1 }
+            .Where(e => WalShardGrain.LeafAuthorBucket(leaves[e], buckets) == WalShardGrain.LeafAuthorBucket(leaf, buckets))
+            .Select(e => offsets[e])
+            .DefaultIfEmpty(restartFloor)
+            .Max();
 
         Assert.Multiple(() =>
         {
             Assert.That(grain.LeafAuthorCountForTesting, Is.EqualTo(2), "a fold dropped more than the older half");
             Assert.That(grain.LeafAuthorFoldsForTesting, Is.EqualTo(1));
-            Assert.That(grain.ForeignHighForTesting(leaves[0], ActivationB), Is.EqualTo(offsets[1]),
-                "an evicted leaf's foreign high is the highest evicted offset");
+            Assert.That(grain.ForeignHighForTesting(leaves[0], ActivationB), Is.EqualTo(BucketFloor(leaves[0])),
+                "an evicted leaf's foreign high is the highest evicted offset of its bucket");
+            Assert.That(grain.ForeignHighForTesting(leaves[0], ActivationB), Is.GreaterThanOrEqualTo(offsets[0]),
+                "an eviction dropped a foreign record");
             Assert.That(grain.ForeignHighForTesting(leaves[3], ActivationB), Is.EqualTo(offsets[3]),
                 "a kept leaf's foreign high was lost");
-            Assert.That(grain.ForeignHighForTesting(leaves[2], ActivationA), Is.EqualTo(offsets[1]),
+            Assert.That(grain.ForeignHighForTesting(leaves[2], ActivationA), Is.EqualTo(BucketFloor(leaves[2])),
                 "the floor rose to the newest record, holding every arm back to it");
+        });
+    }
+
+    [Test]
+    public async Task An_eviction_raises_only_its_own_bucket_floor()
+    {
+        // #5851 (O2b): a leaf reads the floor of its own hash bucket, never another's, so
+        // an eviction holds back the leaves sharing the evicted leaf's bucket and no other.
+        var grain = await CreateFencedGrainAsync(new EnumerableMemoryGrainStorage());
+        var buckets = (int)System.Numerics.BitOperations.RoundUpToPowerOf2((uint)WalShardGrain.LeafAuthorFloorBucketCount);
+        int Bucket(Guid leaf) => WalShardGrain.LeafAuthorBucket(leaf, buckets);
+        Guid Find(Func<Guid, bool> wanted)
+        {
+            for (var i = 1; ; i++)
+            {
+                var candidate = new Guid(i, 5851, 0, new byte[8]);
+                if (wanted(candidate))
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        var evicted = Find(_ => true);
+        var kept = Find(g => Bucket(g) != Bucket(evicted));
+        var sharer = Find(g => g != evicted && Bucket(g) == Bucket(evicted));
+        var outsider = Find(g => g != kept && Bucket(g) != Bucket(evicted) && Bucket(g) != Bucket(kept));
+        var restartFloor = grain.ForeignHighForTesting(outsider, ActivationA);
+
+        var evictedRecord = await grain.AppendStampedAsync(
+            MakeEntry("evicted"), WalAppendStamp.PreArm(evicted, ActivationA) with { Initiator = PreArmRoot, Generation = 1 }, CancellationToken.None);
+        var keptRecord = await grain.AppendStampedAsync(
+            MakeEntry("kept"), WalAppendStamp.PreArm(kept, ActivationA) with { Initiator = PreArmRoot, Generation = 1 }, CancellationToken.None);
+        grain.FoldLeafAuthorsForTesting();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grain.LeafAuthorCountForTesting, Is.EqualTo(1), "precondition: the fold evicted the lower entry only");
+            Assert.That(restartFloor, Is.LessThan(evictedRecord.Offset), "precondition: the restart floor is below both records");
+            Assert.That(grain.ForeignHighForTesting(evicted, ActivationB), Is.EqualTo(evictedRecord.Offset),
+                "an eviction dropped the evicted leaf's foreign record");
+            Assert.That(grain.ForeignHighForTesting(sharer, ActivationB), Is.EqualTo(evictedRecord.Offset),
+                "a leaf sharing the evicted leaf's bucket must read its floor");
+            Assert.That(grain.ForeignHighForTesting(outsider, ActivationB), Is.EqualTo(restartFloor),
+                "an eviction raised a floor outside its own bucket");
+            Assert.That(grain.ForeignHighForTesting(kept, ActivationA), Is.EqualTo(restartFloor),
+                "a kept leaf in another bucket was held back to the evicted record");
+            Assert.That(grain.ForeignHighForTesting(kept, ActivationB), Is.EqualTo(keptRecord.Offset));
         });
     }
 
