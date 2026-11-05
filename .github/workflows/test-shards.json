@@ -294,7 +294,7 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardWalLiveAdvanceCoreFree"],
-        "note": "WalLiveAdvanceCore's mutations that raise WithFreeAdvance (#5837's claimless advance: split hint, forwards and forward-exclusion relief, the stale-high and cost witnesses) and target neither ReadPositionHonest nor a snapshot, sole-activation, link or latch property, with the smallest claimless variants: FreeSplitLink 428,890 states (liveness), FreeLatch 892,259, FreeOrphan 707,726, FreeRestartKeyMove 477,300 and FreeTagEvict 821,800; 22 cases. Each mutation's control runs its raised configuration, which the base cannot serve, and is shared only with mutations of the same target and bounds, so the claimless mutations are split by target. The former single shard took 40.8 minutes for 36 cases in receipt-free CI run 42036414949 and 57.8 in 42077562961; in the latter these 22 were 90 of its 224 item-minutes, so about 23 minutes."
+        "note": "WalLiveAdvanceCore's mutations that raise WithFreeAdvance (#5837's claimless advance: split hint, forwards and forward-exclusion relief, the stale-high and cost witnesses) and target neither ReadPositionHonest nor a snapshot, sole-activation, link or latch property, with the smallest claimless variants: FreeSplitLink 428,890 states (liveness), FreeLatch 892,259, FreeOrphan 707,726, FreeRestartKeyMove 477,300 and FreeTagEvict 821,800; 25 cases, with #5851's three split-cap mutations (O2c). Each mutation's control runs its raised configuration, which the base cannot serve, and is shared only with mutations of the same target and bounds, so the claimless mutations are split by target. The former single shard took 40.8 minutes for 36 cases in receipt-free CI run 42036414949 and 57.8 in 42077562961; in the latter these 22 were 90 of its 224 item-minutes, so about 23 minutes before the split-cap mutations, whose controls run the split view with its cap (1,159,405 states)."
       },
       {
         "shard": "formal-tlc-wal-live-advance-core-free-snapshot",
@@ -315,7 +315,7 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardWalLiveAdvanceCoreFreeReadPosition"],
-        "note": "WalLiveAdvanceCore's claimless-advance mutations (WithFreeAdvance) that target ReadPositionHonest, split from formal-tlc-wal-live-advance-core-free because the two together outran a pooled job's time limit (run 42020501136: the shard had run 43 minutes when its job was cancelled at 89). Each mutation's full-bound and matching-bound controls run raised configurations the base cannot serve; the eviction mutations' controls check the eviction without a restart (WithEvictAlone). 35 cases: 20.4 minutes in receipt-free CI run 42077562961, down from 48.4 in 42036414949 before the eviction controls were narrowed."
+        "note": "WalLiveAdvanceCore's claimless-advance mutations (WithFreeAdvance) that target ReadPositionHonest, split from formal-tlc-wal-live-advance-core-free because the two together outran a pooled job's time limit (run 42020501136: the shard had run 43 minutes when its job was cancelled at 89). Each mutation's full-bound and matching-bound controls run raised configurations the base cannot serve; the eviction mutations' controls check the eviction without a restart (WithEvictAlone). 35 cases: 20.4 minutes in receipt-free CI run 42077562961, down from 48.4 in 42036414949 before the eviction controls were narrowed; #5851's refresh mutation makes 36."
       },
       {
         "shard": "formal-tlc-wal-live-advance-core-free-variants",
@@ -329,7 +329,7 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardWalLiveAdvanceCoreFreeSplitVariants"],
-        "note": "WalLiveAdvanceCore's claimless-advance variants (#5837) that check the split, the forwards and their eviction, split from formal-tlc-wal-live-advance-core-free-variants: FreeSplitBirth 2,146,154 states (liveness), FreeSplitHint 3,562,343, FreeSplitView 512,628, FreeForwardIn 1,032,584, FreeFwdExclusion 4,217,142, FreeReforward 1,795,034, FreeChainEvict 1,993,821 and FreeOrphanEvict 3,045,174; 8 cases. In receipt-free CI run 42077562961 these were 62 of the sixteen larger claimless variants' 125 item-minutes, so about 16 minutes."
+        "note": "WalLiveAdvanceCore's claimless-advance variants (#5837) that check the split, the forwards and their eviction, split from formal-tlc-wal-live-advance-core-free-variants: FreeSplitBirth 2,146,154 states (liveness), FreeSplitHint 3,562,343, FreeSplitView 1,159,405 (with #5851's split cap), FreeForwardIn 1,032,584, FreeFwdExclusion 4,217,142, FreeReforward 1,795,034, FreeChainEvict 1,993,821 and FreeOrphanEvict 3,045,174; 8 cases. In receipt-free CI run 42077562961 these were 62 of the sixteen larger claimless variants' 125 item-minutes, so about 16 minutes."
       },
       {
         "shard": "formal-tlc-wal-live-advance-composite",

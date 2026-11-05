@@ -8,8 +8,8 @@ PERTURBS: StaleRefreshAlloc
 BOUNDS: WithFreeAdvance = TRUE, WithKeyMove = TRUE, WithTransferRefresh = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
 
 --- FIND
-RefreshReaches == ~moved
+    /\ RefreshReaches
 --- REPLACE
-\* MUTATION: the low key always reaches the donor.
-RefreshReaches == TRUE
+    \* MUTATION: the refresh checks the low key only, which the donor keeps, so it always reaches.
+    /\ TRUE
 --- END
