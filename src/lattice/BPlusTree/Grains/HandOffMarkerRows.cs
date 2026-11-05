@@ -53,6 +53,101 @@ internal static class HandOffMarkerRows
         UpdateAsync(storage, LeafGrainType, LeafKey(leafId), mutate);
 
     /// <summary>
+    /// As <see cref="UpdateLeafAsync"/>, but returns the row as written - with the ETag the
+    /// write left on it - or <see langword="null"/> when <paramref name="mutate"/> changed
+    /// nothing, so no write was made (#5837, E1).
+    /// </summary>
+    internal static async Task<GrainState<LeafHandOffState>?> UpdateLeafRowAsync(IGrainStorage storage, Guid leafId, Func<LeafHandOffState, bool> mutate)
+    {
+        ArgumentNullException.ThrowIfNull(mutate);
+        var key = LeafKey(leafId);
+        for (var attempt = 1; ; attempt++)
+        {
+            var row = await ReadAsync<LeafHandOffState>(storage, LeafGrainType, key).ConfigureAwait(true);
+            if (!mutate(row.State))
+            {
+                return null;
+            }
+
+            try
+            {
+                await storage.WriteStateAsync(LeafGrainType, RowId(LeafGrainType, key), row).ConfigureAwait(true);
+                return row;
+            }
+            catch (InconsistentStateException) when (attempt < MaxUpdateAttempts)
+            {
+                // Another writer updated (or deleted) the marker since the read; re-read.
+            }
+        }
+    }
+
+    /// <summary>
+    /// Applies <paramref name="mutate"/> to a copy of <paramref name="written"/> - a row
+    /// this activation itself wrote - and writes it conditionally on that row's ETag, with
+    /// no read (#5837, E1-E3). Any ETag miss, a write by anyone else in between included,
+    /// takes the full path instead: <see cref="UpdateLeafAsync"/> re-reads the row and
+    /// re-applies <paramref name="mutate"/>, which decides afresh whether there is anything
+    /// left to change. Returns the marker as stored.
+    /// </summary>
+    internal static async Task<LeafHandOffState> UpdateLeafFromAsync(
+        IGrainStorage storage, Guid leafId, GrainState<LeafHandOffState> written, Func<LeafHandOffState, bool> mutate)
+    {
+        ArgumentNullException.ThrowIfNull(written);
+        ArgumentNullException.ThrowIfNull(mutate);
+        var copy = new GrainState<LeafHandOffState>(Copy(written.State)) { ETag = written.ETag, RecordExists = written.RecordExists };
+        if (!mutate(copy.State))
+        {
+            return copy.State;
+        }
+
+        try
+        {
+            await storage.WriteStateAsync(LeafGrainType, RowId(LeafGrainType, LeafKey(leafId)), copy).ConfigureAwait(true);
+            return copy.State;
+        }
+        catch (InconsistentStateException)
+        {
+            return await UpdateLeafAsync(storage, leafId, mutate).ConfigureAwait(true);
+        }
+    }
+
+    /// <summary>A deep copy of a leaf marker, so a mutation of it never touches the row it came from (#5837, E3).</summary>
+    internal static LeafHandOffState Copy(LeafHandOffState marker)
+    {
+        ArgumentNullException.ThrowIfNull(marker);
+        var copy = new LeafHandOffState
+        {
+            Initialised = marker.Initialised,
+            CompactedHeads = (long[])marker.CompactedHeads.Clone(),
+            Sequence = marker.Sequence,
+        };
+        foreach (var (token, range) in marker.Open)
+        {
+            copy.Open[token] = new HandOffMarkerRange { Token = range.Token, LowInclusive = range.LowInclusive, HighExclusive = range.HighExclusive };
+        }
+
+        foreach (var close in marker.Closes)
+        {
+            copy.Closes.Add(new HandOffClose
+            {
+                Token = close.Token,
+                LowInclusive = close.LowInclusive,
+                HighExclusive = close.HighExclusive,
+                Heads = (long[])close.Heads.Clone(),
+                Sequence = close.Sequence,
+                DeferredShard = close.DeferredShard,
+                DeferredGeneration = close.DeferredGeneration,
+                DonorLeaf = close.DonorLeaf,
+                DonorToken = close.DonorToken,
+                AdmittedShard = close.AdmittedShard,
+                AdmittedGeneration = close.AdmittedGeneration,
+            });
+        }
+
+        return copy;
+    }
+
+    /// <summary>
     /// Applies <paramref name="mutate"/> to a shard root's marker and writes it when it
     /// reports a change, conditionally on the ETag read; returns the marker as stored.
     /// </summary>

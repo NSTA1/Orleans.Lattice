@@ -123,7 +123,7 @@ public partial class BPlusLeafGrainTests
     }
 
     private static async Task<(BPlusLeafGrain Grain, FakePersistentState<LeafNodeState> State, IBPlusLeafGrain Sibling, LiveAdvanceRig Rig)>
-        PreArmSplitAsync(WalSplitCut cut, long frontier, Action<LiveAdvanceRig>? configure = null)
+        PreArmSplitAsync(WalSplitCut cut, long frontier, Action<LiveAdvanceRig>? configure = null, Action<FakePersistentState<LeafNodeState>, LiveAdvanceRig>? onState = null)
     {
         var rig = PreArmRig();
         rig.Shard.GetSplitCutAsync(Arg.Any<WalAppendStamp>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(cut));
@@ -142,6 +142,7 @@ public partial class BPlusLeafGrainTests
             state.State.ProjectionCheckpointOffsetAssigned = true;
         }
 
+        onState?.Invoke(state, rig);
         var grain = CreateGrain(
             state,
             siblingStub: sibling,
@@ -398,5 +399,156 @@ public partial class BPlusLeafGrainTests
         }
 
         return (grain, sibling);
+    }
+
+    [Test]
+    public async Task A_fresh_split_closes_from_its_own_open_row_and_an_intervening_write_forces_the_read()
+    {
+        // #5837, E6 (a): a marker write between the open and the close misses the open's
+        // ETag; the close re-reads, still lands, and keeps the intervening write.
+        var narrowed = false;
+        var leafMarkerReadsAfterNarrow = 0;
+        var (_, state, _, rig) = await PreArmSplitAsync(
+            new WalSplitCut(Head: 2, ForeignHigh: -1, UnstampedWatermark: -1),
+            frontier: -1,
+            onState: (s, r) =>
+            {
+                r.OnStorageRead = stateName =>
+                {
+                    if (narrowed && stateName == HandOffMarkerRows.LeafGrainType)
+                    {
+                        leafMarkerReadsAfterNarrow++;
+                    }
+                };
+                s.OnWriteState = written =>
+                {
+                    if (!narrowed && written.UnlinkedSplitSiblingId is { } sibling)
+                    {
+                        narrowed = true;
+                        HandOffMarkerRows.UpdateLeafAsync(r.Storage, sibling.GetGuidKey(), m =>
+                        {
+                            m.CompactedHeads = [7];
+                            return true;
+                        }).GetAwaiter().GetResult();
+                    }
+                };
+            });
+
+        var marker = (await HandOffMarkerRows.ReadLeafAsync(rig.Storage, state.State.UnlinkedSplitSiblingId!.Value.GetGuidKey())).State;
+        Assert.Multiple(() =>
+        {
+            Assert.That(narrowed, Is.True, "precondition: the split narrowed");
+            Assert.That(marker.Open, Is.Empty, "the close did not land after its ETag missed");
+            Assert.That(marker.Closes.Count(c => c.DonorLeaf == rig.LeafId), Is.EqualTo(1), "the close did not record its bound");
+            Assert.That(marker.CompactedHeads, Is.EqualTo(new long[] { 7 }), "the close overwrote a write made after the open");
+            Assert.That(leafMarkerReadsAfterNarrow, Is.GreaterThan(0), "the ETag miss did not fall back to a read");
+        });
+    }
+
+    [Test]
+    public async Task A_fresh_split_closes_with_no_marker_read_after_its_narrow()
+    {
+        // #5837, E1: the close writes from the open's own row on its ETag, with no read.
+        var narrowed = false;
+        var leafMarkerReadsAfterNarrow = 0;
+        var (_, state, _, rig) = await PreArmSplitAsync(
+            new WalSplitCut(Head: 2, ForeignHigh: -1, UnstampedWatermark: -1),
+            frontier: -1,
+            onState: (s, r) =>
+            {
+                r.OnStorageRead = stateName =>
+                {
+                    if (narrowed && stateName == HandOffMarkerRows.LeafGrainType)
+                    {
+                        leafMarkerReadsAfterNarrow++;
+                    }
+                };
+                s.OnWriteState = written => narrowed |= written.UnlinkedSplitSiblingId is not null;
+            });
+
+        var marker = (await HandOffMarkerRows.ReadLeafAsync(rig.Storage, state.State.UnlinkedSplitSiblingId!.Value.GetGuidKey())).State;
+        Assert.Multiple(() =>
+        {
+            Assert.That(marker.Closes.Count(c => c.DonorLeaf == rig.LeafId), Is.EqualTo(1), "precondition: the close landed");
+            Assert.That(leafMarkerReadsAfterNarrow, Is.Zero, "the close read the marker its own open wrote");
+        });
+    }
+
+    [Test]
+    public async Task A_resumed_split_closes_on_the_read_path()
+    {
+        // #5837, E6 (b): a resumed split has no open row of its own; its close reads.
+        var rig = PreArmRig();
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(
+            state,
+            liveAdvance: rig,
+            configureGrainFactory: f => f.GetGrain<IWalShardGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(rig.Shard));
+        await SetStampedAsync(grain, "a", "v");
+        var sibling = GrainId.Create("leaf", Guid.NewGuid().ToString("N"));
+        var clock = HybridLogicalClock.Zero;
+        for (var i = 0; i < 127; i++)
+        {
+            clock = HybridLogicalClock.Tick(clock);
+            grain.EntriesForTest[$"key-{i:D4}"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes($"v-{i}"), clock);
+        }
+
+        state.State.SplitState = SplitState.SplitInProgress;
+        state.State.SplitKey = "key-0064";
+        state.State.SplitSiblingId = sibling;
+        state.State.NextSibling = sibling;
+        var narrowed = false;
+        var leafMarkerReadsAfterNarrow = 0;
+        state.OnWriteState = written => narrowed |= written.HighKeyExclusive == "key-0064";
+        rig.OnStorageRead = stateName =>
+        {
+            if (narrowed && stateName == HandOffMarkerRows.LeafGrainType)
+            {
+                leafMarkerReadsAfterNarrow++;
+            }
+        };
+
+        clock = HybridLogicalClock.Tick(clock);
+        await grain.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>
+        {
+            ["new-key"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("new"), clock),
+        });
+        var marker = (await HandOffMarkerRows.ReadLeafAsync(rig.Storage, sibling.GetGuidKey())).State;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(marker.Closes.Count(c => c.DonorLeaf == rig.LeafId), Is.EqualTo(1), "precondition: the resumed close landed");
+            Assert.That(leafMarkerReadsAfterNarrow, Is.GreaterThan(0), "a resumed split closed without reading the marker");
+        });
+    }
+
+    [Test]
+    public void A_marker_copy_carries_every_property()
+    {
+        // #5837, E3: the close mutates a copy of its open's row, so the copy must be whole.
+        var close = new HandOffClose { Token = "t", LowInclusive = "a", HighExclusive = "z", Heads = [1, 2], Sequence = 3, DeferredShard = 4, DeferredGeneration = 5, DonorLeaf = Guid.NewGuid(), DonorToken = Guid.NewGuid(), AdmittedShard = 6, AdmittedGeneration = 7 };
+        var marker = new LeafHandOffState { Initialised = true, CompactedHeads = [8], Sequence = 9 };
+        marker.Open["o"] = new HandOffMarkerRange { Token = "o", LowInclusive = "b", HighExclusive = "y" };
+        marker.Closes.Add(close);
+
+        var copy = HandOffMarkerRows.Copy(marker);
+
+        static IEnumerable<(string Name, object? Value)> Props(object o) =>
+            o.GetType().GetProperties().Select(p => (p.Name, p.GetValue(o)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(typeof(LeafHandOffState).GetProperties().Select(p => p.Name),
+                Is.EquivalentTo(new[] { "Initialised", "Open", "Closes", "CompactedHeads", "Sequence" }), "a marker property the copy does not know of");
+            Assert.That(typeof(HandOffClose).GetProperties(), Has.Length.EqualTo(11), "a close property the copy does not know of");
+            Assert.That(typeof(HandOffMarkerRange).GetProperties(), Has.Length.EqualTo(3), "a range property the copy does not know of");
+            Assert.That(Props(copy.Closes.Single()).Where(p => p.Name != "Heads"), Is.EqualTo(Props(close).Where(p => p.Name != "Heads")));
+            Assert.That(copy.Closes.Single().Heads, Is.EqualTo(close.Heads).And.Not.SameAs(close.Heads));
+            Assert.That(copy.Closes.Single(), Is.Not.SameAs(close));
+            Assert.That((copy.Initialised, copy.Sequence), Is.EqualTo((true, 9L)));
+            Assert.That(copy.CompactedHeads, Is.EqualTo(marker.CompactedHeads).And.Not.SameAs(marker.CompactedHeads));
+            Assert.That(copy.Open["o"].HighExclusive, Is.EqualTo("y"));
+            Assert.That(copy.Open["o"], Is.Not.SameAs(marker.Open["o"]));
+        });
     }
 }

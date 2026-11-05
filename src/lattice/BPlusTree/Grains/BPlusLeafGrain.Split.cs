@@ -1143,8 +1143,10 @@ internal sealed partial class BPlusLeafGrain
 
         if (open is not null)
         {
-            await open;
+            // E4: the open's row is kept only now that both the open and the persist completed.
+            var openedRow = await open;
             _siblingMarkerOpened = siblingToOpen;
+            _siblingMarkerRow = openedRow is null ? null : (siblingToOpen, openedRow);
         }
 
         LatticeMetrics.LeafSplits.Add(1,
@@ -1451,6 +1453,8 @@ internal sealed partial class BPlusLeafGrain
         }
         else
         {
+            // E1: a resumed or eager split's open is not kept; its close reads the marker.
+            _siblingMarkerRow = null;
             using (AwaitDiagnostics.Begin("leaf.split.open-marker", context.GrainId, splitDiag))
             {
                 await OpenSplitHandOffAsync(siblingId);

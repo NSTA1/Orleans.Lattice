@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.Storage;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -102,16 +103,20 @@ internal sealed partial class BPlusLeafGrain
     /// before the sibling's birth write. A no-op while the gate is closed: the sibling is
     /// then born with no marker, which holds it until its state is initialised.
     /// </summary>
-    private async Task OpenSplitHandOffAsync(GrainId siblingId)
+    /// <remarks>
+    /// Returns the row as this open wrote it, with its ETag, or <see langword="null"/> when it
+    /// wrote nothing (the token was already open, or the gate is closed) (#5837, E1).
+    /// </remarks>
+    private async Task<Orleans.GrainState<LeafHandOffState>?> OpenSplitHandOffAsync(GrainId siblingId)
     {
         if (!IsHandOffGateOpen() || HandOffMarkerStorage() is not { } storage)
         {
-            return;
+            return null;
         }
 
         var token = SplitHandOffToken(context.GrainId.GetGuidKey());
         var opened = false;
-        await HandOffMarkerRows.UpdateLeafAsync(storage, siblingId.GetGuidKey(), marker =>
+        var written = await HandOffMarkerRows.UpdateLeafRowAsync(storage, siblingId.GetGuidKey(), marker =>
         {
             var changed = !marker.Initialised;
             marker.Initialised = true;
@@ -123,7 +128,16 @@ internal sealed partial class BPlusLeafGrain
         {
             LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindSplit, opened: true, state.State.TreeId ?? string.Empty);
         }
+
+        return opened ? written : null;
     }
+
+    /// <summary>
+    /// The sibling's marker row as this activation's own open wrote it in the split in
+    /// flight, kept only once that split's intent persisted (#5837, E1, E4). The donor's
+    /// close writes from it on its ETag, with no read; it is used once and cleared.
+    /// </summary>
+    private (GrainId Sibling, Orleans.GrainState<LeafHandOffState> Row)? _siblingMarkerRow;
 
     /// <summary>
     /// The routing generation this activation's span was established under at its split
@@ -205,7 +219,14 @@ internal sealed partial class BPlusLeafGrain
     /// can be established.
     /// </summary>
     private async Task<bool> TryCloseWithDeferredBoundAsync(
-        LeafAppendEpochFence fence, IGrainStorage storage, Guid siblingKey, string token, string treeId, int partitions, long[]? splitHeads)
+        LeafAppendEpochFence fence,
+        IGrainStorage storage,
+        Guid siblingKey,
+        string token,
+        string treeId,
+        int partitions,
+        long[]? splitHeads,
+        Orleans.GrainState<LeafHandOffState>? openedRow = null)
     {
         try
         {
@@ -273,8 +294,18 @@ internal sealed partial class BPlusLeafGrain
 
             var donor = context.GrainId.GetGuidKey();
             var closed = false;
-            await HandOffMarkerRows.UpdateLeafAsync(storage, siblingKey, m =>
-                closed = HandOffMarkerCore.CloseWithDeferredBound(m, token, heads, donor, fence.ActivationToken, shardIndex, generation));
+            Func<LeafHandOffState, bool> close = m =>
+                closed = HandOffMarkerCore.CloseWithDeferredBound(m, token, heads, donor, fence.ActivationToken, shardIndex, generation);
+            if (openedRow is not null)
+            {
+                // E1-E3: from the row this activation's own open wrote, on its ETag; any
+                // miss re-reads, and a token no longer open is already settled.
+                await HandOffMarkerRows.UpdateLeafFromAsync(storage, siblingKey, openedRow, close);
+            }
+            else
+            {
+                await HandOffMarkerRows.UpdateLeafAsync(storage, siblingKey, close);
+            }
             if (closed)
             {
                 LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindSplit, opened: false, treeId);
@@ -341,12 +372,20 @@ internal sealed partial class BPlusLeafGrain
         var treeId = state.State.TreeId;
         var siblingKey = siblingId.GetGuidKey();
         var token = SplitHandOffToken(context.GrainId.GetGuidKey());
+
+        // #5837, E1: the open's own row only for the split this activation began, never on a
+        // recovery or a re-drive; taken once.
+        var openedRow = splitHeads is not null && _siblingMarkerRow is { } kept && kept.Sibling == siblingId ? kept.Row : null;
+        _siblingMarkerRow = null;
         try
         {
-            var marker = await HandOffMarkerRows.ReadLeafAsync(storage, siblingKey);
-            if (!marker.State.Open.ContainsKey(token))
+            if (openedRow is null)
             {
-                return true;
+                var marker = await HandOffMarkerRows.ReadLeafAsync(storage, siblingKey);
+                if (!marker.State.Open.ContainsKey(token))
+                {
+                    return true;
+                }
             }
 
             var partitions = await optionsResolver.GetWalPartitionsAsync(treeId);
@@ -364,7 +403,7 @@ internal sealed partial class BPlusLeafGrain
                 }
 
                 donorFence.CountSplitClose();
-                return await TryCloseWithDeferredBoundAsync(donorFence, storage, siblingKey, token, treeId, partitions, splitHeads);
+                return await TryCloseWithDeferredBoundAsync(donorFence, storage, siblingKey, token, treeId, partitions, splitHeads, openedRow);
             }
 
             // #5841, rule A: the narrowed state is durable, so fence every activation of
