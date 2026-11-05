@@ -127,7 +127,7 @@ public sealed class LiveAdvanceCompositeTests
         yield return Of("RInitHead", Rf, "FirstInit", R("closedAt'", "claimHead'[\"S\"]"), "closedAt' = next");
 
         yield return Whole("BulkHintBound", B, "BulkHintBound", R("nUp", "born", "rpN", "rp[\"a1\"]", "heldN", "cache[\"a1\"]"));
-        yield return new("SwitchCloseCoversPriorAllocations", B, "SwitchCloseCoversPriorAllocations", CopyShape.ActionProperty, [], R("closeHead", "hoClosedAt"));
+        yield return new("SwitchCloseCoversPriorAllocations", B, "SwitchCloseCoversPriorAllocations", CopyShape.ActionProperty, [], R("closeHead", "bulkHead"));
 
         yield return Whole("HeadsAbove", C, "HeadsAbove", None);
         yield return Of("CClaim", C, "Claim", None,

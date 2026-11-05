@@ -319,6 +319,16 @@ mutation directory; it was run locally against this module.
 
 ## Deliberate abstraction gaps
 
+- **The lazy close shares the initiator's generation with the tree walk (#5839).** H models one
+  initiator generation, `fEpoch`, which stands for a shard root's routing generation and for
+  the tree's range-delete generation alike. In production they are distinct: the lazy
+  key-moving close raises the shard root's routing generation, and the tree walk is stamped
+  with the tree's range-delete generation (`TreeRangeDeleteFenceGrain`). `DeferredClose`
+  therefore runs with the tree walk off; with it on, another intent's close would raise the
+  generation the deferred head resolves at, a coupling production does not have. The walk's
+  own fencing is checked in the base and `WideWindows`.
+  Production symbols: `ShardRootGrain.CloseDeferredSplitHandOffsAsync`, `TreeRangeDeleteFenceGrain`.
+
 - **#5841: the Dekker pair's storage assumption.** The fix rests on each side's write
   completing before its own read, and on each read being a fresh storage read that
   returns the latest completed write of the other row: strong read-after-write across

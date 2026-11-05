@@ -74,13 +74,14 @@ VARIABLES
     born,          \* B: L was born by the bulk switch
     cache,         \* B: the records each activation holds; set only at a bulk birth
     rp,            \* B: each activation's read position; set only at a bulk birth
+    bulkHead,      \* B: the head the bulk switch's own close recorded; -1 none
     restarted,     \* the WAL shard has restarted
     broken         \* the edges a kept step has failed: empty unless an assumption fails
 
 eVars == <<epoch, cstage, claimHead, prior, maxClaimed, lRetired, staleAccepted, memFence, fence, retired>>
 hVars == <<mInit, hoOpen, hoClosedAt, windows, fWin, pend, pendGen>>
 rVars == <<recreated, legacy, caught, reinit, pGen, fo, cold>>
-bVars == <<phase, hint, born, cache, rp>>
+bVars == <<phase, hint, born, cache, rp, bulkHead>>
 vars == <<next, author, up, dupUsed, restarted, eVars, hVars, rVars, bVars, broken>>
 
 Allocated == {o \in Offs : author[o] # NoAuthor}
@@ -139,6 +140,7 @@ TypeOK ==
     /\ born \in BOOLEAN
     /\ cache \in [Acts -> SUBSET Offs]
     /\ rp \in [Acts -> -1..(MaxOff - 1)]
+    /\ bulkHead \in -1..MaxOff
     /\ broken \subseteq Edges
 
 (* L is a new tree's first leaf, or a bulk switch is creating it over a   *)
@@ -181,6 +183,7 @@ Init ==
     /\ born = FALSE
     /\ cache = [a \in Acts |-> {}]
     /\ rp = [a \in Acts |-> -1]
+    /\ bulkHead = -1
     /\ broken = {}
 
 (***************************************************************************)
@@ -240,7 +243,7 @@ InitHeadCoversPriorAllocations == ~mInit /\ mInit' => \A o \in Offs : author[o] 
 \* B (WalBulkSwitch): BulkHintBound, for the bulk-born activation a1, and
 \* SwitchCloseCoversPriorAllocations, a guarantee of the bulk switch's own
 \* close, so its step keeps it rather than every step.
-SwitchCloseCoversPriorAllocations == hoClosedAt' # hoClosedAt => \A o \in Allocated : o < hoClosedAt'
+SwitchCloseCoversPriorAllocations == bulkHead' # bulkHead => \A o \in Allocated : o < bulkHead'
 BulkHintBound == born => \A o \in Allocated : o <= rp["a1"] => o \in cache["a1"]
 
 \* Every state guarantee, kept after every step. CloseHeadMonotone holds
@@ -301,6 +304,11 @@ COwnAlloc(a) ==
     /\ a \in up
     /\ cur = a
 CForeignAlloc == hoOpen \/ ~mInit
+\* C's StaleRouteAlloc: while a deferred head is pending, a write of the
+\* closed window is the stale route's, under the generation before the
+\* close's raise (C's gD before KeyMove's gD + 1), so the resolution's
+\* re-claim refuses it.
+CStaleRoute(s) == s < pendGen
 CKeyMove ==
     /\ pend' = TRUE
     /\ pendGen' = epoch'["F"]
@@ -386,14 +394,20 @@ ForeignOpen ==
     /\ UNCHANGED <<pend, pendGen>>
 
 (* ForeignAlloc: F's stamped append of a record L owns, under any stamp   *)
-(* F has held, is allocated if E's entry check admits it.                *)
+(* F has held, is allocated if E's entry check admits it. While a lazy   *)
+(* close's deferred head is pending, a write of the closed window is C's *)
+(* stale route (DeferredCloseMeetsCoreResolve), not its eager foreign    *)
+(* append (HandOffMeetsCoreForeignAlloc); with no window open, H admits  *)
+(* nothing after the raise, so such a write carries a stamp below it.    *)
 ForeignAlloc ==
     /\ next < MaxOff
     /\ \E s \in 1..epoch["F"] :
         /\ EAppendLoaded("F")
         /\ EAppendAdmits("F", s)
+        /\ pend /\ ~hoOpen => s < pendGen
         /\ broken' = broken \cup Fails("EntryCheckMeetsHandOffAdmission", HAllocGuard(s, HEntry("F")))
-                               \cup Fails("HandOffMeetsCoreForeignAlloc", CForeignAlloc)
+                               \cup Fails("HandOffMeetsCoreForeignAlloc", pend \/ CForeignAlloc)
+                               \cup Fails("DeferredCloseMeetsCoreResolve", ~pend \/ hoOpen \/ CStaleRoute(s))
     /\ next' = next + 1
     /\ author' = [author EXCEPT ![next] = Foreign]
     /\ UNCHANGED <<up, dupUsed, eVars, hVars, rVars, bVars>>
@@ -474,11 +488,13 @@ BulkClose ==
     /\ phase = "live"
     /\ hoOpen
     /\ ~fWin
-    /\ \E v \in 1..next : hoClosedAt' = Max2(hoClosedAt, v)
+    /\ \E v \in 0..next :
+        /\ bulkHead' = v
+        /\ hoClosedAt' = Max2(hoClosedAt, v)
     /\ SwitchCloseCoversPriorAllocations
     /\ hoOpen' = FALSE
     /\ broken' = broken \cup Fails("BulkCloseMeetsCoreClose", CBulkClose)
-    /\ UNCHANGED <<next, author, up, dupUsed, eVars, mInit, windows, fWin, pend, pendGen, rVars, bVars>>
+    /\ UNCHANGED <<next, author, up, dupUsed, eVars, mInit, windows, fWin, pend, pendGen, rVars, phase, hint, born, cache, rp>>
     /\ UNCHANGED restarted
 
 (* Restart: the WAL shard restarts once and unloads every entry.         *)
@@ -634,6 +650,7 @@ Birth ==
     /\ broken' = broken \cup Fails("BulkMeetsCoreCreate", CCreate)
     /\ UNCHANGED <<next, author, dupUsed, eVars, hVars, rVars, hint>>
     /\ UNCHANGED restarted
+    /\ UNCHANGED bulkHead
 
 Stutter == UNCHANGED vars
 
