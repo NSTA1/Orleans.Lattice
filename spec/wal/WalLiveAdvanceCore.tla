@@ -56,7 +56,7 @@ CONSTANTS MaxWindows, WithMixedVersion, WithGateFlip, WithRestart, WithRecreate,
           WithSplitHint, WithSplitBirth, WithDonorRestart,
           WithDuplicate, WithEvict, WithOrphanForward, WithLatch,
           WithBirthProof, WithFwdExclusion, WithTagEvict, WithViewOverlap,
-          WithReforward, WithForwardIn
+          WithReforward, WithForwardIn, WithEpochOnly
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
@@ -139,6 +139,7 @@ VARIABLES
     fInUsed,      \* WithForwardIn: D's forward into L has been made
     fInRecs,      \* the offsets of D's forwards into L, tagged with L's split
     sfUsed,       \* WithForwardIn: a stale D' has forwarded one of L's keys into another orphan
+    eoUsed,       \* WithEpochOnly: a stale duplicate of the donor has made its epoch-only write
     sibHint,      \* the split sibling's hint (inclusive); -1 none
     sibRows,      \* the rows the split handed the sibling
     tRecs,        \* the split transfer's records, appended by L under the per-leaf class
@@ -178,7 +179,7 @@ fxVars == <<nar, narWho, npend, dur, durWho, fObl, fTag, fBy, snapWho, fwdUsed, 
 latchVars == <<oblig, lRestart, lat, eagerG, repair, tried, oWin, oHops, birthAct, fxVars>>
 xferVars == <<tRecs, dNarrowed, sDone, dKnown, dResumed, latchVars>>
 svVars == <<svTaken, svOk, svHead>>
-chVars == <<chainUsed, fInUsed, fInRecs, sfUsed>>
+chVars == <<chainUsed, fInUsed, fInRecs, sfUsed, eoUsed>>
 freeVars == <<sHi, seenS, ft, sh, sibHint, sibRows, xferVars, svVars, chVars>>
 armVars == <<preArm, seenP, startHead, evStart, evFloor, freeVars>>
 moveVars == <<gD, gL, pend, pendGen, moved, otherMoved, dUsed, reclaims, strayReclaims>>
@@ -244,6 +245,7 @@ TypeOK ==
     /\ fInUsed \in BOOLEAN
     /\ fInRecs \subseteq Offs
     /\ sfUsed \in BOOLEAN
+    /\ eoUsed \in BOOLEAN
     /\ tRecs \subseteq Offs
     /\ dNarrowed \in BOOLEAN
     /\ sDone \in BOOLEAN
@@ -338,6 +340,7 @@ Init ==
     /\ fInUsed = FALSE
     /\ fInRecs = {}
     /\ sfUsed = FALSE
+    /\ eoUsed = FALSE
     /\ tRecs = {}
     /\ dNarrowed = FALSE
     /\ sDone = FALSE
@@ -1126,7 +1129,7 @@ ReforwardChain(h) ==
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, envVars, moveVars>>
     /\ UNCHANGED <<seenU, oldUsed, restarted, oldRejected>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows, xferVars, svVars>>
-    /\ UNCHANGED <<fInUsed, fInRecs, sfUsed>>
+    /\ UNCHANGED <<fInUsed, fInRecs, sfUsed, eoUsed>>
 
 (***************************************************************************)
 (* The staleHigh exclusion (#5837, WithForwardIn; a5e2e2ef's ruling with   *)
@@ -1158,7 +1161,7 @@ ForwardIntoL(a) ==
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, envVars, moveVars>>
     /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected>>
     /\ UNCHANGED <<preArm, startHead, evStart, evFloor, seenS, ft, sh, sibHint, sibRows, xferVars, svVars>>
-    /\ UNCHANGED <<chainUsed, sfUsed>>
+    /\ UNCHANGED <<chainUsed, sfUsed, eoUsed>>
 
 StaleForwardOther ==
     /\ FreeOn
@@ -1173,7 +1176,7 @@ StaleForwardOther ==
     /\ sHi' = IF StaleHighCountsTag("O") THEN next ELSE sHi
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, seenS, ft, sh, sibHint, sibRows, xferVars, svVars>>
-    /\ UNCHANGED <<chainUsed, fInUsed, fInRecs>>
+    /\ UNCHANGED <<chainUsed, fInUsed, fInRecs, eoUsed>>
 (* Capture(a): the shared per-leaf snapshot keeps the highest coverage.  *)
 Capture(a) ==
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, moveVars, sHi, seenS, ft, sh, sibHint, sibRows, svVars, chVars>>
@@ -1310,6 +1313,30 @@ UnroutedAlloc ==
     /\ UNCHANGED <<seenU, oldUsed, restarted, oldRejected>>
     /\ UNCHANGED <<gD, gL, pend, pendGen, moved, otherMoved, reclaims, strayReclaims, armVars>>
 
+(* StaleEpochOnlyAlloc (WithEpochOnly; the staleHigh obligation carried   *)
+(* from #5841 into #5837): a stale duplicate of the donor, under a token  *)
+(* other than the closing one, makes an epoch-only write (WalRoutingStamp. *)
+(* None: the PendingTx backstop or a span-forward receive) of one of L's  *)
+(* keys. It carries no routing generation, so the shard root's raise does *)
+(* not fence it; only the donor's split fence, which the link runs before *)
+(* its raise, does. The WAL counts it in the donor's staleHigh, as every  *)
+(* non-closing token's record, so the close's deferred bound covers it.   *)
+StaleEpochOnlyAlloc ==
+    /\ FreeOn
+    /\ WithEpochOnly
+    /\ WithSplitBirth
+    /\ ~moved
+    /\ ~eoUsed
+    /\ next < MaxOff
+    /\ eoUsed' = TRUE
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = StaleDonor]
+    /\ inflight' = inflight \cup {next}
+    /\ sHi' = Max2(sHi, next)
+    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, seenS, ft, sh, sibHint, sibRows, xferVars, svVars>>
+    /\ UNCHANGED <<chainUsed, fInUsed, fInRecs, sfUsed>>
+
 (***************************************************************************)
 (* The purge, H's AbsentMarkerHolds and R's guarantees, as environment    *)
 (* steps (WithRecreate). Recreate: L's tree is purged and re-created. L's *)
@@ -1415,6 +1442,7 @@ Next ==
     \/ OtherReceiverArm
     \/ StaleRouteAlloc
     \/ UnroutedAlloc
+    \/ StaleEpochOnlyAlloc
     \/ Recreate
     \/ StraddlerAlloc
     \/ MarkInit
