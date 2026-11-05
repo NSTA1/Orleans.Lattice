@@ -794,6 +794,11 @@ internal sealed partial class BPlusInternalGrain
         _lastUpwardPublishParent = null;
         var snapshot = content with { PublishSequence = NextDigestPublishSequence() };
         await SendUpwardPublishAsync(parent, parentId, snapshot, options.DigestPublishTimeout);
+
+        // A re-link to this same parent can clear the cache while this send is in flight,
+        // and the parent may drop this node's row in between; this then re-caches content
+        // the parent no longer holds. Benign: the digest is observability only, and the
+        // next unchanged publish is re-sent once the interval elapses (review N2).
         _lastUpwardPublishParent = parentId;
         _lastUpwardPublishContent = content;
         _lastUpwardPublishTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
