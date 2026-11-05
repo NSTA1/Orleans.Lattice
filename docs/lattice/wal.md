@@ -1643,8 +1643,11 @@ claimless view, and the leaf advances there by replay instead.
 - **Transfers.** The rows a split donor moves into its sibling are appended under
   the routing generation the sibling's span was established under, attributed to
   the sibling, so they never raise the shared watermark. A transfer that is not
-  wholly inside the sibling's span, or whose generation has been re-claimed, is
-  appended unstamped as before.
+  wholly inside the sibling's span is appended unstamped as before. One refused
+  because its generation was re-claimed re-reads the shard's current generation, as
+  an admission would: from the shard's marker, read fresh, with no hand-off open
+  over the span, and with descent reaching the sibling or, before its link, its
+  donor. It then retries routed once, and only a failed refresh appends it unstamped.
 - **Reachability.** A sibling born by a split is proven reachable at its birth.
   While its donor's bound is pending, a sibling that descent does not yet reach is
   neither proven nor latched unstamped; its decision is deferred until the link.
@@ -1653,13 +1656,21 @@ claimless view, and the leaf advances there by replay instead.
   bounds the donor must have read past, all read in one turn. If the donor's
   frontier is at or above every bound, its sibling starts at the head rather than
   at the donor's frontier.
+- **Catching up.** Only a replay reads past a foreign or unstamped record, and a
+  pre-arm leaf that is neither starved nor stalled does not replay. So when the
+  claimless advance, or a split's read position, is held only by a reported bound,
+  the leaf's next coverage-lag tick runs the existing replay drive, which reads
+  past it. That happens once for each partition and bound, and never on a write.
 
 **Cost of the claimless advance.** Per stamped or pre-arm append: one comparison
 for the reader's narrow, a request-context read for a forward chain, and a counter
 increment and decrement for the split's wait, with no allocation and no grain call.
 A pending close adds one stale-high lookup per close carried. Per forward: one
 small array per hop. Per split: one marker write closes the window, and the read of
-the heads also returns the bounds.
+the heads also returns the bounds. A transfer refused stale costs one view read, and
+at most one descent before its link, before it retries. Each reported bound that
+holds a leaf costs one replay drive on a tick, through the replay permit. A leaf
+allocates its two per-partition bound arrays once, on the first such hold.
 
 ## Hand-off fences
 

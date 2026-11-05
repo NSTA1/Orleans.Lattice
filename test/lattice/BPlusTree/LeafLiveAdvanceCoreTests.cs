@@ -155,4 +155,32 @@ public sealed class LeafLiveAdvanceCoreTests
             }
         });
     }
+
+    [Test]
+    public void The_catch_up_bound_is_owed_exactly_when_only_the_reported_bound_holds_the_free_advance()
+    {
+        // #5851, a5e2e2ef's ruling 2: exhaustively, a bound is owed iff every guard of the
+        // free advance but the reported bound holds, and the reported bound does not.
+        long[] values = [-1, 0, 1, 2, 3];
+        foreach (var hasReport in new[] { false, true })
+        foreach (var clear in new[] { false, true })
+        foreach (var latched in new[] { false, true })
+        foreach (var bound in values)
+        foreach (var closeHead in values)
+        foreach (var target in values)
+        foreach (var current in values)
+        {
+            var catchUp = LeafLiveAdvanceCore.CatchUpBound(hasReport, bound, clear, closeHead, target, current, latched);
+            var expected = hasReport && clear && !latched && current >= closeHead - 1 && target > current && current < bound ? bound : -1L;
+            Assert.That(catchUp, Is.EqualTo(expected),
+                $"report={hasReport} clear={clear} latched={latched} bound={bound} close={closeHead} target={target} current={current}");
+            if (catchUp >= 0)
+            {
+                // Owed only while the bound holds the advance, and once read past it, an
+                // own append above it advances.
+                Assert.That(LeafLiveAdvanceCore.TryFreeAdvance(hasReport, bound, clear, closeHead, target, current, latched), Is.EqualTo(-1L));
+                Assert.That(LeafLiveAdvanceCore.TryFreeAdvance(hasReport, bound, clear, closeHead, bound + 1, bound, latched), Is.EqualTo(bound + 1));
+            }
+        }
+    }
 }

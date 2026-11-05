@@ -138,4 +138,30 @@ internal static class LeafLiveAdvanceCore
                 current: current,
                 staleLatched: staleLatched)
             : -1L;
+
+    /// <summary>
+    /// The bound a claimless advance that failed only on its reported bound must read to
+    /// (#5851, a5e2e2ef's ruling 2), or -1. It is
+    /// <paramref name="reportedBound"/> iff the advance had a report, no hand-off is open,
+    /// the partition is not latched stale, the read position is at or above every close
+    /// head and below the target, and it is below the reported bound: every guard of
+    /// <see cref="TryFreeAdvance"/> but the bound holds, so a replay to the bound (C's
+    /// <c>Replay</c>) is all that stands between the leaf and the advance.
+    /// </summary>
+    public static long CatchUpBound(
+        bool hasReport,
+        long reportedBound,
+        bool handOffClear,
+        long closeHead,
+        long freeTarget,
+        long current,
+        bool staleLatched) =>
+        hasReport
+        && handOffClear
+        && !staleLatched
+        && current >= closeHead - 1
+        && freeTarget > current
+        && current < reportedBound
+            ? reportedBound
+            : -1L;
 }

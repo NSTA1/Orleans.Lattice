@@ -3016,6 +3016,18 @@ internal sealed partial class BPlusLeafGrain
             return;
         }
 
+        // #5851 (a5e2e2ef's ruling 2). A pre-arm leaf whose claimless advance or split
+        // hint was held only by a reported bound - a foreign or unstamped record above its
+        // checkpoint - is never starved and need not stall, so nothing above reads past
+        // that record, and one raise would hold it, and every sibling born capped from it,
+        // for good. The same drive reads the gap: C's Replay, permit, apply and advance,
+        // once per (partition, bound value), dispatched here and never on a write.
+        if (TakeReportedBoundCatchUp())
+        {
+            await DispatchTimerDriveAsync(starvationPartitionCount, "arm=reported-bound-catch-up");
+            return;
+        }
+
         // Issue #3389. The predicate above returns false the moment ANY
         // partition holds a non-negative checkpoint, so it covers only a leaf
         // that has NEVER checkpointed. A leaf that checkpointed successfully

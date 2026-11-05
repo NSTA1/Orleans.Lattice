@@ -319,12 +319,19 @@ internal sealed partial class BPlusLeafGrain
                 var closeHead = Math.Max(
                     HandOffMarkerCore.RequiredHead(handOff.LeafMarker, low, high, p),
                     HandOffMarkerCore.HeadAt(handOff.ShardCloseHeads, p));
+                var hasReport = false;
+                var reportedBound = -1L;
+                if (!claimRaised)
+                {
+                    hasReport = fence.TryGetPreArmView(p, out reportedBound);
+                }
+
                 var target = !claimRaised
                     // #5837, the claimless advance: every foreign, stale or unrouted record
                     // below an own append was reported with it, so reading past that bound
                     // and every close head reads past every other author.
                     ? LeafLiveAdvanceCore.TryFreeAdvance(
-                        hasReport: fence.TryGetPreArmView(p, out var reportedBound),
+                        hasReport: hasReport,
                         reportedBound: reportedBound,
                         handOffClear: handOff.Clear,
                         closeHead: closeHead,
@@ -342,6 +349,20 @@ internal sealed partial class BPlusLeafGrain
                     staleLatched: IsPartitionStaleLatched(p));
                 if (target < 0)
                 {
+                    if (!claimRaised)
+                    {
+                        // #5851, ruling 2: held only by its reported bound, the leaf owes a
+                        // catch-up read the coverage-lag tick dispatches, never this path.
+                        NoteReportedBoundCatchUp(p, ownHigh.Length, LeafLiveAdvanceCore.CatchUpBound(
+                            hasReport: hasReport,
+                            reportedBound: reportedBound,
+                            handOffClear: handOff.Clear,
+                            closeHead: closeHead,
+                            freeTarget: LeafLiveAdvanceCore.FreeTarget(ownHigh, p),
+                            current: GetCurrentCheckpointForPartition(p),
+                            staleLatched: IsPartitionStaleLatched(p)));
+                    }
+
                     continue;
                 }
 
@@ -356,6 +377,63 @@ internal sealed partial class BPlusLeafGrain
             _liveAdvanceInFlight = false;
         }
     }
+    /// <summary>
+    /// Per partition, the highest reported bound a claimless advance or a split hint
+    /// failed on alone (#5851, ruling 2), and the highest one a catch-up was already
+    /// dispatched for; activation memory, allocated on the first such failure.
+    /// </summary>
+    private long[]? _catchUpPending;
+
+    private long[]? _catchUpDispatched;
+
+    /// <summary>
+    /// Records that partition <paramref name="partition"/> is held only by
+    /// <paramref name="bound"/> (#5851, ruling 2), a value <see cref="LeafLiveAdvanceCore.CatchUpBound"/>
+    /// or the split hint computed; -1 records nothing. Never reads or writes storage.
+    /// </summary>
+    private void NoteReportedBoundCatchUp(int partition, int partitions, long bound)
+    {
+        if (bound < 0 || partition < 0 || partition >= partitions)
+        {
+            return;
+        }
+
+        if (_catchUpPending is null || _catchUpPending.Length != partitions)
+        {
+            _catchUpPending = new long[partitions];
+            _catchUpDispatched = new long[partitions];
+            Array.Fill(_catchUpPending, -1L);
+            Array.Fill(_catchUpDispatched, -1L);
+        }
+
+        _catchUpPending[partition] = Math.Max(_catchUpPending[partition], bound);
+    }
+
+    /// <summary>
+    /// Whether a catch-up read is owed now (#5851, ruling 2): some partition's checkpoint
+    /// is still below a recorded bound no catch-up was dispatched for. Marks those bounds
+    /// dispatched, so each (partition, bound value) is read once; a new raise re-arms it.
+    /// </summary>
+    internal bool TakeReportedBoundCatchUp()
+    {
+        if (_catchUpPending is not { } pending || _catchUpDispatched is not { } dispatched)
+        {
+            return false;
+        }
+
+        var owed = false;
+        for (var p = 0; p < pending.Length; p++)
+        {
+            if (pending[p] > dispatched[p] && GetCurrentCheckpointForPartition(p) < pending[p])
+            {
+                dispatched[p] = pending[p];
+                owed = true;
+            }
+        }
+
+        return owed;
+    }
+
     /// <summary>
     /// Arms this activation where the drive could advance it (#5833, revision 2): every
     /// partition with an own append above its checkpoint that is not armed, and every armed

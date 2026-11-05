@@ -1239,12 +1239,18 @@ internal sealed partial class BPlusLeafGrain
         for (var p = 0; p < hints.Length; p++)
         {
             var current = GetCurrentCheckpointForPartition(p);
-            if (current >= cut[p].ForeignHigh
-                && current >= cut[p].UnstampedWatermark
-                && current >= HandOffMarkerCore.RequiredHead(handOff.LeafMarker, low, high, p) - 1
-                && current >= HandOffMarkerCore.HeadAt(handOff.ShardCloseHeads, p) - 1)
+            var closesPassed = current >= HandOffMarkerCore.RequiredHead(handOff.LeafMarker, low, high, p) - 1
+                && current >= HandOffMarkerCore.HeadAt(handOff.ShardCloseHeads, p) - 1;
+            var reported = Math.Max(cut[p].ForeignHigh, cut[p].UnstampedWatermark);
+            if (closesPassed && current >= reported)
             {
                 hints[p] = Math.Max(hints[p], heads[p] - 1);
+            }
+            else if (closesPassed)
+            {
+                // #5851, ruling 2: capped only by the cut's reported bounds, the donor owes
+                // a catch-up read so its next split can take the hint; dispatched by the tick.
+                NoteReportedBoundCatchUp(p, hints.Length, reported);
             }
         }
     }
