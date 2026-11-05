@@ -391,7 +391,7 @@ internal sealed partial class BPlusLeafGrain
     /// <paramref name="bound"/> (#5851, ruling 2), a value <see cref="LeafLiveAdvanceCore.CatchUpBound"/>
     /// or the split hint computed; -1 records nothing. Never reads or writes storage.
     /// </summary>
-    private void NoteReportedBoundCatchUp(int partition, int partitions, long bound)
+    internal void NoteReportedBoundCatchUp(int partition, int partitions, long bound)
     {
         if (bound < 0 || partition < 0 || partition >= partitions)
         {
@@ -432,6 +432,28 @@ internal sealed partial class BPlusLeafGrain
         }
 
         return owed;
+    }
+
+    /// <summary>
+    /// Re-arms every dispatched catch-up bound the leaf has not yet read past (#5851,
+    /// a5e2e2ef's N1): called when a coverage-lag drive did not run its replay - deferred,
+    /// refused, latched, already driving, timed out or faulted - so the next tick
+    /// dispatches it again. A drive that ran keeps its bounds dispatched: once per bound.
+    /// </summary>
+    private void ReArmReportedBoundCatchUp()
+    {
+        if (_catchUpDispatched is not { } dispatched)
+        {
+            return;
+        }
+
+        for (var p = 0; p < dispatched.Length; p++)
+        {
+            if (dispatched[p] >= 0 && GetCurrentCheckpointForPartition(p) < dispatched[p])
+            {
+                dispatched[p] = -1L;
+            }
+        }
     }
 
     /// <summary>

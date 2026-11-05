@@ -62,6 +62,53 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
+    [NonParallelizable]
+    public async Task A_catch_up_drive_refused_admission_is_owed_again()
+    {
+        // N1: a dispatched catch-up whose drive never ran its replay is re-armed, so the
+        // bound is not lost to a refused or deferred drive. The note and the dispatch go
+        // through their seams, so only the re-arm is under test.
+        BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        var held = 0;
+        SemaphoreSlim? gate = null;
+        try
+        {
+            var wal = new GrowingWal();
+            wal.GrowTo(0);
+            var (grain, _, _, _) = CreateLeafForCoverageRepair(
+                persistedCheckpoint: 0,
+                treeId: UniqueCoverageRepairTreeId("reported-bound-catch-up-refused"),
+                maxConcurrentReplays: TimerAdmissionCeiling,
+                replayCoordinator: wal.Coordinator);
+            await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
+
+            grain.NoteReportedBoundCatchUp(0, 1, 5);
+            var owed = grain.TakeReportedBoundCatchUp();
+            var owedTwice = grain.TakeReportedBoundCatchUp();
+            gate = BPlusLeafGrain.ReplayConcurrencyGateForTest!;
+            held = HoldTimerShare(gate);
+            await grain.DispatchTimerDriveAsync(1, "arm=reported-bound-catch-up");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(owed, Is.True, "precondition: the bound is owed");
+                Assert.That(owedTwice, Is.False, "precondition: a dispatched bound is not owed again before its drive");
+                Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.LessThan(5L), "precondition: the refused drive read nothing");
+                Assert.That(grain.TakeReportedBoundCatchUp(), Is.True, "a bound whose drive was refused admission was not re-armed");
+            });
+        }
+        finally
+        {
+            if (gate is not null)
+            {
+                ReleaseTimerShare(gate, held);
+            }
+
+            BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        }
+    }
+
+    [Test]
     public async Task A_reported_bound_hold_reads_nothing_on_the_write_path()
     {
         var rig = PreArmRig();

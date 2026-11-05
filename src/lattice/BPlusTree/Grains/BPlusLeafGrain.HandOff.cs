@@ -189,7 +189,7 @@ internal sealed partial class BPlusLeafGrain
     private async Task<IReadOnlyList<long>> AppendTransferAfterStaleAsync(
         ICommitLogWriter writer, ArraySegment<WalRecord> segment, WalRecord[] records, int count, WalRoutingGenerationStaleException stale)
     {
-        if (await TryRefreshSpanRoutingAsync(stale) && SplitTransferRoutingFor(records, count) is { IsSet: true } refreshed)
+        if (await TryRefreshSpanRoutingAsync(stale, records, count) && SplitTransferRoutingFor(records, count) is { IsSet: true } refreshed)
         {
             try
             {
@@ -208,14 +208,18 @@ internal sealed partial class BPlusLeafGrain
     /// Re-reads the shard's routing generation for this leaf's span after a stale
     /// refusal, as an admission would establish it (#5851, ruling 1): the generation is
     /// read fresh from the shard's marker, never from a cache, and is taken only when it
-    /// is above both the refused stamp and the WAL's refusal, no shard hand-off over the
-    /// span is open, and descent for the span's low bound, read after the generation,
-    /// reaches this leaf or - before its link - the donor whose split created it. Any
-    /// later move of the span raises the generation again, so the retry is refused.
+    /// is above both the refused stamp and the WAL's refusal and no shard hand-off over the
+    /// span is open. Then descent, read after the generation, must route both the lowest
+    /// and the highest key of the transfer to this leaf - or, before its link, both to the
+    /// donor whose split created it (a5e2e2ef's F1): a stale activation whose upper keys
+    /// a later split moved away fails the check, rather than appending a moved key under a
+    /// generation its new owner's stale high does not count. Any later move of the keys
+    /// raises the generation again, so the retry is refused.
     /// </summary>
-    private async Task<bool> TryRefreshSpanRoutingAsync(WalRoutingGenerationStaleException stale)
+    private async Task<bool> TryRefreshSpanRoutingAsync(WalRoutingGenerationStaleException stale, WalRecord[] records, int count)
     {
         if (!_spanRouting.IsSet
+            || count <= 0
             || state.State.TreeId is not { } treeId
             || state.State.ShardIndex is not { } shardIndex
             || shardIndex != _spanRouting.Initiator.Index)
@@ -223,16 +227,35 @@ internal sealed partial class BPlusLeafGrain
             return false;
         }
 
-        var low = state.State.LowKeyInclusive;
+        string? lowest = null;
+        string? highest = null;
+        for (var i = 0; i < count; i++)
+        {
+            if (records[i].Key is not { } key)
+            {
+                return false;
+            }
+
+            if (lowest is null || string.CompareOrdinal(key, lowest) < 0)
+            {
+                lowest = key;
+            }
+
+            if (highest is null || string.CompareOrdinal(key, highest) > 0)
+            {
+                highest = key;
+            }
+        }
+
         var shardRoot = LiveAdvanceShardRoot(treeId, shardIndex);
-        var view = await shardRoot.GetLiveAdvanceViewAsync(context.GrainId, low, state.State.HighKeyExclusive);
+        var view = await shardRoot.GetLiveAdvanceViewAsync(context.GrainId, state.State.LowKeyInclusive, state.State.HighKeyExclusive);
         if (view.HeldOpen || view.RoutingGeneration <= Math.Max(_spanRouting.Generation, stale.Refusal - 1))
         {
             return false;
         }
 
-        if (!view.Reachable
-            && !(state.State.PrevSibling is { } donor && await shardRoot.IsReachableByDescentAsync(donor, low)))
+        if (!await RoutesBothAsync(shardRoot, context.GrainId, lowest, highest)
+            && !(state.State.PrevSibling is { } donor && await RoutesBothAsync(shardRoot, donor, lowest, highest)))
         {
             return false;
         }
@@ -240,6 +263,11 @@ internal sealed partial class BPlusLeafGrain
         _spanRouting = WalRoutingStamp.ForShardRoot(shardIndex, view.RoutingGeneration);
         return true;
     }
+
+    /// <summary>Whether descent routes both <paramref name="lowest"/> and <paramref name="highest"/> to <paramref name="leaf"/>.</summary>
+    private static async Task<bool> RoutesBothAsync(IShardRootGrain shardRoot, GrainId leaf, string? lowest, string? highest) =>
+        await shardRoot.IsReachableByDescentAsync(leaf, lowest)
+        && (string.Equals(lowest, highest, StringComparison.Ordinal) || await shardRoot.IsReachableByDescentAsync(leaf, highest));
 
     /// <summary>The routing generation a split's sibling is told its span is established under (#5837, T1).</summary>
     private (int Shard, long Generation) SpanRoutingForSibling() =>

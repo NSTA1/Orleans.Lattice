@@ -77,6 +77,25 @@ public partial class BPlusLeafGrainTests
         Assert.That(rig.Writer.LastRouting, Is.EqualTo(WalRoutingStamp.ForShardRoot(0, 5)), "a pre-link sibling whose donor descent reaches did not refresh");
     }
 
+    [Test]
+    public async Task A_stale_receiver_whose_upper_keys_moved_is_never_routed()
+    {
+        // F1: a stale activation whose upper keys a later split moved away keeps its old
+        // span in memory; descent for its low key still reaches it, but not for the moved
+        // key, so the refresh is refused and the transfer is appended unstamped.
+        var rig = PreArmRig();
+        var grain = await SpanBornSiblingAsync(rig);
+        rig.ShardRoot.IsReachableByDescentAsync(Arg.Any<GrainId>(), "z").Returns(Task.FromResult(false));
+        rig.ShardMarker = new ShardHandOffState { Initialised = true, RoutingGeneration = 5 };
+        rig.Writer.ThrowNext = StaleSpan(generation: 3, refusal: 5);
+
+        var rows = TransferRows("n");
+        rows["z"] = rows["n"];
+        await SplitTransferScope.RunAsync(() => grain.MergeEntriesAsync(rows));
+
+        Assert.That(rig.Writer.LastRouting.IsSet, Is.False, "a transfer carrying a key descent no longer routes to the receiver was appended routed");
+    }
+
     [TestCase("unreachable")]
     [TestCase("held-open")]
     [TestCase("below-refusal")]

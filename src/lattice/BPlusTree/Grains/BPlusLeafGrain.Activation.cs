@@ -2225,32 +2225,45 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private async Task DriveStarvedCheckpointFromTimerAsync(int partitionCount)
     {
-        if (IsProjectionStaleDriveLatched(partitionCount))
-        {
-            return;
-        }
-
-        if (_timerDriveDeferrals > 0)
-        {
-            _timerDriveDeferrals--;
-            ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckDriveDeferred);
-            return;
-        }
-
+        // #5851, N1: a drive that never ran its replay re-arms the reported-bound catch-up.
+        var replayed = false;
         try
         {
-            var outcome = await DriveStarvedCheckpointAsync(StarvationDriveOrigin.CoverageLagTimer);
-            if (outcome == LeafStarvationDriveOutcome.AdmissionRefused)
+            if (IsProjectionStaleDriveLatched(partitionCount))
             {
-                BackOffRefusedTimerDrive();
                 return;
             }
 
-            _consecutiveTimerDriveRefusals = 0;
+            if (_timerDriveDeferrals > 0)
+            {
+                _timerDriveDeferrals--;
+                ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckDriveDeferred);
+                return;
+            }
+
+            try
+            {
+                var outcome = await DriveStarvedCheckpointAsync(StarvationDriveOrigin.CoverageLagTimer);
+                replayed = outcome is LeafStarvationDriveOutcome.Lifted or LeafStarvationDriveOutcome.NoAdvance;
+                if (outcome == LeafStarvationDriveOutcome.AdmissionRefused)
+                {
+                    BackOffRefusedTimerDrive();
+                    return;
+                }
+
+                _consecutiveTimerDriveRefusals = 0;
+            }
+            catch (LeafProjectionStaleException)
+            {
+                _consecutiveTimerDriveRefusals = 0;
+            }
         }
-        catch (LeafProjectionStaleException)
+        finally
         {
-            _consecutiveTimerDriveRefusals = 0;
+            if (!replayed)
+            {
+                ReArmReportedBoundCatchUp();
+            }
         }
     }
 

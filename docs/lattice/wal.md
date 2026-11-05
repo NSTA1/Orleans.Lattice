@@ -1646,8 +1646,9 @@ claimless view, and the leaf advances there by replay instead.
   wholly inside the sibling's span is appended unstamped as before. One refused
   because its generation was re-claimed re-reads the shard's current generation, as
   an admission would: from the shard's marker, read fresh, with no hand-off open
-  over the span, and with descent reaching the sibling or, before its link, its
-  donor. It then retries routed once, and only a failed refresh appends it unstamped.
+  over the span, and with descent routing both its lowest and its highest key to
+  the sibling or, before its link, both to its donor. It then retries routed once,
+  and only a failed refresh appends it unstamped.
 - **Reachability.** A sibling born by a split is proven reachable at its birth.
   While its donor's bound is pending, a sibling that descent does not yet reach is
   neither proven nor latched unstamped; its decision is deferred until the link.
@@ -1661,14 +1662,16 @@ claimless view, and the leaf advances there by replay instead.
   claimless advance, or a split's read position, is held only by a reported bound,
   the leaf's next coverage-lag tick runs the existing replay drive, which reads
   past it. That happens once for each partition and bound, and never on a write.
+  A drive that is refused or deferred, or that otherwise does not run its replay,
+  leaves the bound owed for the next tick.
 
 **Cost of the claimless advance.** Per stamped or pre-arm append: one comparison
 for the reader's narrow, a request-context read for a forward chain, and a counter
 increment and decrement for the split's wait, with no allocation and no grain call.
 A pending close adds one stale-high lookup per close carried. Per forward: one
 small array per hop. Per split: one marker write closes the window, and the read of
-the heads also returns the bounds. A transfer refused stale costs one view read, and
-at most one descent before its link, before it retries. Each reported bound that
+the heads also returns the bounds. A transfer refused stale costs one view read and
+up to four descents (two keys, against the sibling and then its donor) before it retries. Each reported bound that
 holds a leaf costs one replay drive on a tick, through the replay permit. A leaf
 allocates its two per-partition bound arrays once, on the first such hold.
 
