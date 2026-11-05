@@ -297,7 +297,7 @@ internal sealed partial class BPlusLeafGrain
 
             var low = state.State.LowKeyInclusive;
             var high = state.State.HighKeyExclusive;
-            if (armDemand && handOff.Clear && !fence.HasPendingCloses)
+            if (armDemand && handOff.Clear && (!fence.HasPendingCloses || fence.IsDeferred)) // RED-PROOF M26 (ExemptLeafArms)
             {
                 // Never while a hand-off is open on it: a bulk-born leaf arms only after
                 // its switch's close recorded the allocator head (B's
@@ -353,7 +353,7 @@ internal sealed partial class BPlusLeafGrain
                     {
                         // #5851, ruling 2: held only by its reported bound, the leaf owes a
                         // catch-up read the coverage-lag tick dispatches, never this path.
-                        NoteReportedBoundCatchUp(p, ownHigh.Length, LeafLiveAdvanceCore.CatchUpBound(
+                        if (false) NoteReportedBoundCatchUp(p, ownHigh.Length, LeafLiveAdvanceCore.CatchUpBound( // RED-PROOF M8
                             hasReport: hasReport,
                             reportedBound: reportedBound,
                             handOffClear: handOff.Clear,
@@ -584,7 +584,7 @@ internal sealed partial class BPlusLeafGrain
                 ex,
                 "Leaf {LeafId}: could not record its resolved deferred hand-off heads; a later arm re-claims them (#5833).",
                 context.GrainId);
-            return null;
+            return resolved.Select(r => r.Partition).ToHashSet(); // RED-PROOF G4e: a failed resolve write resolves
         }
 
         var landed = new HashSet<int>();
@@ -678,7 +678,8 @@ internal sealed partial class BPlusLeafGrain
                 // (a5e2e2ef's B2 ruling on #5866).
                 var exempt = !view.OrphanRepairInProgress
                     && IsPreArmGateOpen()
-                    && HoldsPendingDonorBound(leafMarker);
+                    && ((HoldsPendingDonorBound(leafMarker) && view.RoutingGeneration <= 1) // RED-PROOF M21 (BoundResolvesOnAnyRaise): any raise past 1 resolves
+                        || leafMarker.Closes.Exists(c => c.LinkedGeneration > 0)); // RED-PROOF M22 (ResolvedCloseStillDefers)
                 if (!view.Reachable && leafMarker.Open.Count == 0 && _appendFence is { } fence)
                 {
                     if (exempt)
@@ -686,6 +687,7 @@ internal sealed partial class BPlusLeafGrain
                         // Its stamps carry the donor closes still unresolved per partition (G4).
                         SetCarriedCloses(fence, leafMarker, low, high, boundPending: true);
                         fence.OnReachabilityDeferred();
+                        return new LiveAdvanceHandOff(true, leafMarker, view.CloseHeads); // RED-PROOF M26 (ExemptLeafArms): an exempt, unreachable leaf proceeds to arm
                     }
                     else
                     {
@@ -727,7 +729,7 @@ internal sealed partial class BPlusLeafGrain
 
                 // a5e2e2ef's G2: reachable and witnessed - no bound pending - proves a
                 // deferred activation again; reachable alone (linked, unwitnessed) does not.
-                if (!boundPending)
+                if (boundPending) // RED-PROOF M25 + G2: promotes on reachability alone, and never once witnessed
                 {
                     closesFence.PromoteDeferredReachable();
                 }

@@ -296,6 +296,8 @@ internal sealed partial class ShardRootGrain
                 TreeId,
                 ShardIndex);
             HashSet<GrainId>? failed = null;
+            return failed; // RED-PROOF M24: a failed witness acknowledges the donor
+#pragma warning disable CS0162
             for (var i = 0; i < writes.Length; i++)
             {
                 if (writes[i].IsFaulted || writes[i].IsCanceled)
@@ -305,6 +307,7 @@ internal sealed partial class ShardRootGrain
             }
 
             return failed;
+#pragma warning restore CS0162
         }
     }
 

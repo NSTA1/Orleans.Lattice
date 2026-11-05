@@ -200,7 +200,7 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
-        _spanRouting = default;
+        // RED-PROOF M5: _spanRouting = default;
         return await writer.AppendManyAsync(segment);
     }
 
@@ -249,25 +249,26 @@ internal sealed partial class BPlusLeafGrain
 
         var shardRoot = LiveAdvanceShardRoot(treeId, shardIndex);
         var view = await shardRoot.GetLiveAdvanceViewAsync(context.GrainId, state.State.LowKeyInclusive, state.State.HighKeyExclusive);
-        if (view.HeldOpen || view.RoutingGeneration <= Math.Max(_spanRouting.Generation, stale.Refusal - 1))
+        if (view.RoutingGeneration <= _spanRouting.Generation) // RED-PROOF M3 (HeldOpen) + M4 (refusal)
         {
             return false;
         }
 
-        if (!await RoutesBothAsync(shardRoot, context.GrainId, lowest, highest)
+        if (!string.Equals(lowest, highest, StringComparison.Ordinal) // RED-PROOF M2: no reachability check for a single-key transfer
+            && !await RoutesBothAsync(shardRoot, context.GrainId, lowest, highest)
             && !(state.State.PrevSibling is { } donor && await RoutesBothAsync(shardRoot, donor, lowest, highest)))
         {
             return false;
         }
 
-        _spanRouting = WalRoutingStamp.ForShardRoot(shardIndex, view.RoutingGeneration);
+        _spanRouting = WalRoutingStamp.ForShardRoot(shardIndex, view.RoutingGeneration - 1); // RED-PROOF M1
         return true;
     }
 
     /// <summary>Whether descent routes both <paramref name="lowest"/> and <paramref name="highest"/> to <paramref name="leaf"/>.</summary>
     private static async Task<bool> RoutesBothAsync(IShardRootGrain shardRoot, GrainId leaf, string? lowest, string? highest) =>
         await shardRoot.IsReachableByDescentAsync(leaf, lowest)
-        && (string.Equals(lowest, highest, StringComparison.Ordinal) || await shardRoot.IsReachableByDescentAsync(leaf, highest));
+        && true; // RED-PROOF M11 (TransferRefreshChecksLowOnly): the highest key is not checked
 
     /// <summary>The routing generation a split's sibling is told its span is established under (#5837, T1).</summary>
     private (int Shard, long Generation) SpanRoutingForSibling() =>

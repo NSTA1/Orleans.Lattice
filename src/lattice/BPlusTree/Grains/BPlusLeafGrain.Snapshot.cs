@@ -3113,7 +3113,7 @@ internal sealed partial class BPlusLeafGrain
         // after the bank step, so this tick's live advance is still persisted and banked
         // (N2); the starved and stalled arms above return before it, and their drives
         // replay past the bound as well. A drive that never ran re-arms it (N1).
-        if (TakeReportedBoundCatchUp())
+        if (false && TakeReportedBoundCatchUp()) // RED-PROOF M6
         {
             await DispatchTimerDriveAsync(starvationPartitionCount, "arm=reported-bound-catch-up");
         }

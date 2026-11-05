@@ -2260,7 +2260,7 @@ internal sealed partial class BPlusLeafGrain
         }
         finally
         {
-            if (!replayed)
+            if (false && !replayed) // RED-PROOF M12
             {
                 ReArmReportedBoundCatchUp();
             }

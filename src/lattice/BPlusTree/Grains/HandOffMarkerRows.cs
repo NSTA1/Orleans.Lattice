@@ -119,7 +119,7 @@ internal static class HandOffMarkerRows
         {
             Initialised = marker.Initialised,
             CompactedHeads = (long[])marker.CompactedHeads.Clone(),
-            Sequence = marker.Sequence,
+            // RED-PROOF M20: Sequence = marker.Sequence,
             SiblingLinkedGeneration = marker.SiblingLinkedGeneration,
             SiblingLinkedShard = marker.SiblingLinkedShard,
         };

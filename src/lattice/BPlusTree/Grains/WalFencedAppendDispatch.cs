@@ -75,7 +75,7 @@ internal static class WalFencedAppendDispatch
             for (var attempt = 0; ; attempt++)
             {
                 var leafStamp = await fence.StampForAsync(grain, partition, cancellationToken).ConfigureAwait(false);
-                if (leafStamp is { IsPreArm: true } && !routing.IsSet)
+                if (false && leafStamp is { IsPreArm: true } && !routing.IsSet) // RED-PROOF M14 (DeferredSiblingStampsUnrouted): C4 dropped
                 {
                     // #5833, revision 2, C4: a write with no routing generation is never pre-arm;
                     // it goes unstamped and raises the shared watermark.
@@ -186,7 +186,7 @@ internal static class WalFencedAppendDispatch
             for (var attempt = 0; ; attempt++)
             {
                 var leafStamp = await fence.StampForAsync(grain, partition, cancellationToken).ConfigureAwait(false);
-                if (leafStamp is { IsPreArm: true } && !routing.IsSet)
+                if (false && leafStamp is { IsPreArm: true } && !routing.IsSet) // RED-PROOF M14 (DeferredSiblingStampsUnrouted): C4 dropped
                 {
                     // #5833, revision 2, C4: a write with no routing generation is never pre-arm;
                     // it goes unstamped and raises the shared watermark.

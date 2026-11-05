@@ -240,7 +240,7 @@ internal static class HandOffMarkerCore
     public static bool IsCarryResolvedEverywhere(HandOffClose close, int partitions)
     {
         ArgumentNullException.ThrowIfNull(close);
-        partitions = Math.Max(partitions, close.Heads.Length);
+        // RED-PROOF N2: partitions = Math.Max(partitions, close.Heads.Length);
         if (close.CarryResolvedAt.Length < partitions)
         {
             return false;
@@ -278,7 +278,7 @@ internal static class HandOffMarkerCore
         {
             var (witnessShard, witness) = WitnessOf(marker, close);
             if (close.DonorLeaf != Guid.Empty
-                && witnessShard == close.AdmittedShard
+                && (witnessShard == close.AdmittedShard || true) // RED-PROOF G4f (A1): a shard mismatch asks for an arm
                 && witness > generation
                 && !(partition < close.CarryResolvedAt.Length && close.CarryResolvedAt[partition])
                 && Overlaps(close.LowInclusive, close.HighExclusive, ownerLowInclusive, ownerHighExclusive))
@@ -310,11 +310,11 @@ internal static class HandOffMarkerCore
         {
             var (witnessShard, witness) = WitnessOf(marker, close);
             if (close.DonorLeaf == Guid.Empty
-                || partition >= close.Heads.Length
+                || (partition >= close.Heads.Length && false) // RED-PROOF N1: the resolved bit lands without its head
                 || close.AdmittedShard != shardIndex
                 || witnessShard != close.AdmittedShard
                 || witness <= 0
-                || witness > generation
+                || (witness > generation && false) // RED-PROOF G4c (CarryResolvedBelowWitness)
                 || (partition < close.CarryResolvedAt.Length && close.CarryResolvedAt[partition]))
             {
                 continue;
@@ -328,7 +328,7 @@ internal static class HandOffMarkerCore
                 close.CarryResolvedAt = grown;
             }
 
-            if (partition < close.Heads.Length && close.Heads[partition] < head)
+            if (partition < close.Heads.Length && close.Heads[partition] < head && false) // RED-PROOF G4b (CarryEndsWithoutHeadRaise)
             {
                 close.Heads[partition] = head;
             }
@@ -371,7 +371,7 @@ internal static class HandOffMarkerCore
         ArgumentOutOfRangeException.ThrowIfNegative(linkedShard);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(linkedGeneration);
         var changed = false;
-        if (marker is LeafHandOffState { SiblingLinkedGeneration: 0 } leaf)
+        if (marker is LeafHandOffState { SiblingLinkedGeneration: 0 } leaf && false) // RED-PROOF G1: close-only witness
         {
             leaf.SiblingLinkedGeneration = linkedGeneration;
             leaf.SiblingLinkedShard = linkedShard;
@@ -380,7 +380,7 @@ internal static class HandOffMarkerCore
 
         foreach (var close in marker.Closes)
         {
-            if (close.DonorLeaf != Guid.Empty && close.DonorLeaf == donorLeaf && close.LinkedGeneration == 0)
+            if (close.DonorLeaf != Guid.Empty && close.LinkedGeneration == 0) // RED-PROOF M21b: another donor's link witnesses this bound
             {
                 close.LinkedGeneration = linkedGeneration;
                 close.LinkedShard = linkedShard;

@@ -388,7 +388,7 @@ internal sealed partial class WalShardGrain
         public long StaleHigh(Guid closingToken, Guid receiver)
         {
             var high = Math.Max(StaleFolded, ForwardFolded);
-            if (High1 >= 0 && (Token1 != closingToken || closingToken == Guid.Empty))
+            if (false && High1 >= 0 && (Token1 != closingToken || closingToken == Guid.Empty)) // RED-PROOF M18 (StaleHighFiltersByAdmittedGeneration): the latest token's high is filtered out
             {
                 high = Math.Max(high, High1);
             }

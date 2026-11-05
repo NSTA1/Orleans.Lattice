@@ -312,7 +312,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 return new ValueTask<WalAppendStamp?>(DecorateLocked(WalAppendStamp.PreArm(_leafId, _activation), partition));
             }
 
-            if (_requireReachability && !_markerChecked)
+            if (_requireReachability && !_markerChecked && false) // RED-PROOF G3: a proof without a marker read admits an eager claim
             {
                 // G3: the activation was proven without reading its marker (under the
                 // pre-arm gate); it proves again, with the marker, before it claims. This
@@ -357,7 +357,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         var n = 0;
         foreach (var (close, resolvedAt) in _carried)
         {
-            if (partition >= 0 && partition < resolvedAt.Length && resolvedAt[partition])
+            if (Array.IndexOf(resolvedAt, true) >= 0) // RED-PROOF G4d (CarryEndsLeafWide): one partition's arm ends the carriage everywhere
             {
                 continue;
             }
@@ -560,7 +560,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     internal void SetCarriedCloses(IReadOnlyList<(WalPendingClose Close, bool[] ResolvedAt)> carried, bool boundPending)
     {
         ArgumentNullException.ThrowIfNull(carried);
-        var copy = carried.Count == 0 ? [] : new (WalPendingClose, bool[])[carried.Count];
+        var copy = carried.Count == 0 || !boundPending ? [] : new (WalPendingClose, bool[])[carried.Count]; // RED-PROOF G4a (ReadPositionHonestWitnessEndsDeferredHead): the witness ends the carriage
         for (var i = 0; i < copy.Length; i++)
         {
             copy[i] = (carried[i].Close, (bool[])carried[i].ResolvedAt.Clone());
@@ -612,7 +612,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             CarriedAtLocked(partition, out var close1, out var close2, out var overCap);
             if (!_stale
                 && !overCap
-                && IsGateOpenLocked()
+                && (IsGateOpenLocked() || _reachability == ReachabilityDeferred) // RED-PROOF M13 (DeferredSiblingClaims): a deferred sibling may advance claimlessly
                 && _gate.IsPreArmOpen
                 && _partitions.TryGetValue(partition, out var p)
                 && !(_epoch > 0 && p.ClaimedEpoch == _epoch)
@@ -1243,7 +1243,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
 
     /// <summary>Whether this activation is deferred and may stamp pre-arm now (D1, D2).</summary>
     private bool IsDeferredStampingLocked() =>
-        _reachability == ReachabilityDeferred && !_stale && IsGateViewOpenLocked() && _gate.IsPreArmOpen;
+        _reachability == ReachabilityDeferred && !_stale && IsGateViewOpenLocked(); // RED-PROOF M16: the pre-arm gate is not checked
 
     private bool IsGateViewOpenLocked() =>
         (_gateClosedUntilTicks == 0 || Environment.TickCount64 >= _gateClosedUntilTicks) && _gate.IsOpen;
@@ -1316,7 +1316,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     {
         lock (_sync)
         {
-            if (_reachability is ReachabilityUnproven or ReachabilityDeferred or ReachabilityProven)
+            if (_reachability is ReachabilityUnproven or ReachabilityDeferred or ReachabilityUnreachable) // RED-PROOF M17: a deferral undoes a latch; RED-PROOF M23 (ProvenSiblingClaimsPreLink): a proven activation is never demoted
             {
                 _reachability = ReachabilityDeferred;
                 _deferredReproveAtTicks = Environment.TickCount64 + (long)ClaimFailureBackoffForTesting.TotalMilliseconds;

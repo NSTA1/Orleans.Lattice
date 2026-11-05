@@ -235,7 +235,7 @@ internal sealed partial class BPlusLeafGrain
                         // a5e2e2ef's D1-D4 (#5851): deferred, it stamps pre-arm rather than
                         // appending unstamped for a backoff, so a pre-link sibling never
                         // raises the shared watermark; it still never claims or arms.
-                        fence.OnReachabilityDeferred();
+                        fence.OnReachabilityUndecided(); // RED-PROOF M15: deferral reverted to the unstamped backoff
                         return;
                     }
                 }

@@ -157,7 +157,7 @@ internal static class LeafLiveAdvanceCore
         long current,
         bool staleLatched) =>
         hasReport
-        && handOffClear
+        // RED-PROOF M10: && handOffClear
         && !staleLatched
         && current >= closeHead - 1
         && freeTarget > current
