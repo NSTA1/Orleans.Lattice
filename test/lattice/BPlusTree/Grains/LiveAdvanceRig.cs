@@ -175,6 +175,9 @@ internal sealed class LiveAdvanceRig
         /// <summary>When set, the next append throws it.</summary>
         public Exception? ThrowNext { get; set; }
 
+        /// <summary>The routing the latest append was issued under (#5837, T1).</summary>
+        public WalRoutingStamp LastRouting { get; private set; }
+
         /// <summary>The offsets handed out, by partition.</summary>
         public long NextOffset(int partition) => _next[partition];
 
@@ -195,6 +198,7 @@ internal sealed class LiveAdvanceRig
 
         public async Task<long> AppendAsync(WalRecord entry, ILeafAppendFence fence, WalRoutingStamp routing, CancellationToken cancellationToken)
         {
+            LastRouting = routing;
             try
             {
                 if (ThrowNext is { } fault)
@@ -220,6 +224,7 @@ internal sealed class LiveAdvanceRig
 
         public async Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<WalRecord> entries, ILeafAppendFence fence, WalRoutingStamp routing, CancellationToken cancellationToken)
         {
+            LastRouting = routing;
             try
             {
                 if (ThrowNext is { } fault)

@@ -1039,6 +1039,18 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     /// (#5709): the proof is required, not yet decided, and the activation would
     /// otherwise stamp. The leaf proves it on its own turn before its next append.
     /// </summary>
+    /// <summary>Whether this activation is proven reachable (#5709, #5837 P1-P3); test seam.</summary>
+    internal bool IsReachabilityProvenForTesting
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _reachability == ReachabilityProven;
+            }
+        }
+    }
+
     internal bool NeedsReachabilityProof
     {
         get

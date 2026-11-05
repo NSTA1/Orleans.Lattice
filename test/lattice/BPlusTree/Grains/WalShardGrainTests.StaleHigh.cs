@@ -220,4 +220,30 @@ public partial class WalShardGrainTests
             Assert.That(afterRestart.ForeignHigh, Is.GreaterThanOrEqualTo(Math.Max(stale.Offset, live.Offset)), "a restart lowered a resumed close's bound below the recovered head");
         });
     }
+
+    [Test]
+    public async Task StaleHighOmitsEpochOnlyNonClosingToken()
+    {
+        // a5e2e2ef's H2, StaleEpochOnlyAlloc: a stale duplicate of the donor appends under
+        // its claimed epoch with no routing generation (WalRoutingStamp.None). The record
+        // is in the donor's stale high whatever generation the close names.
+        var grain = await CreateFencedGrainAsync(new EnumerableMemoryGrainStorage());
+        var claim = await grain.ClaimAppendEpochAsync(Donor, 1, CancellationToken.None);
+        var epochOnly = await grain.AppendStampedAsync(MakeEntry("d"), WalAppendStamp.ForLeaf(Donor, 1, OtherToken), CancellationToken.None);
+        var closing = await grain.AppendStampedAsync(MakeEntry("c"), WalAppendStamp.ForLeaf(Donor, 1, ClosingToken), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(claim.Accepted, Is.True, "precondition: the donor's epoch was claimed");
+            Assert.That(epochOnly.Outcome, Is.EqualTo(WalAppendFenceOutcome.Admitted), "precondition: the epoch-only write was admitted");
+            Assert.That(
+                grain.StaleHighForTesting(new WalPendingClose(Donor, ClosingToken, PreArmRoot.Index, 1), FenceLeaf),
+                Is.GreaterThanOrEqualTo(epochOnly.Offset),
+                "a non-closing token's epoch-only record was left out of the donor's stale high");
+            Assert.That(
+                grain.StaleHighForTesting(new WalPendingClose(Donor, ClosingToken, PreArmRoot.Index, 1), FenceLeaf),
+                Is.LessThan(closing.Offset),
+                "the closing token's own record was counted");
+        });
+    }
 }
