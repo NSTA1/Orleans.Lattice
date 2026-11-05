@@ -1,0 +1,16 @@
+# #5840 S4, a5e2e2ef's R6: discarding a claim never swallows a real #5841 detection.
+MODULE: StaleDetectionHonouredDiscardedClaimSwallowsStaleProbe
+TARGET: StaleDetectionHonoured
+CLASS: Invariant
+SUMMARY: a claim the relinquish discards drops its probe's stale finding instead of marking the activation stale (R6)
+PERTURBS: LiveClaimDone
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+
+--- FIND
+        /\ CASE stale -> /\ lProbeFailed' = TRUE
+                         /\ lDead' = TRUE
+--- REPLACE
+\* MUTATION: the discarded claim swallows the stale probe.
+        /\ CASE stale -> /\ lProbeFailed' = TRUE
+                         /\ lDead' = lDead
+--- END

@@ -10,21 +10,24 @@ BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
     /\ dst' = "wrote"
     /\ dEpoch' = eRow + 1
     /\ eRow' = eRow + 1
-    /\ UNCHANGED <<liveArmed, sNarrowed, dpend, dstamp, bst, bRead>>
+    /\ dupRaised' = TRUE
+    /\ UNCHANGED <<liveArmed, sNarrowed, dpend, dstamp, bst, bRead, dRetried>>
 --- REPLACE
 \* MUTATION: the state is read first, deciding staleness now; the row is written by the check.
     /\ dst' = IF sNarrowed THEN "stale" ELSE "wrote"
-    /\ UNCHANGED <<eRow, dEpoch, liveArmed, sNarrowed, dpend, dstamp, bst, bRead>>
+    /\ UNCHANGED <<eRow, dEpoch, dupRaised, liveArmed, sNarrowed, dpend, dstamp, bst, bRead, dRetried>>
 --- END
 
 --- FIND
     /\ dst' = IF sNarrowed THEN "stale" ELSE "claimed"
-    /\ UNCHANGED <<eRow, liveArmed, sNarrowed, dEpoch, dpend, dstamp, bst, bRead>>
+    /\ UNCHANGED <<eRow, liveArmed, sNarrowed, dEpoch, dpend, dstamp, bst, bRead, dRetried, lVars>>
 --- REPLACE
 \* MUTATION: the row is written after the state read.
     /\ eRow < MaxEpoch
     /\ dEpoch' = eRow + 1
     /\ eRow' = eRow + 1
+    /\ dupRaised' = TRUE
     /\ dst' = "claimed"
-    /\ UNCHANGED <<liveArmed, sNarrowed, dpend, dstamp, bst, bRead>>
+    /\ UNCHANGED <<liveArmed, sNarrowed, dpend, dstamp, bst, bRead, dRetried>>
+    /\ UNCHANGED <<lpend, lstamp, lUsed, relEpoch, lEpoch, lCached, lClaim, lAllow, lStamped, lDead, lStuck, lBumped, lStaleLeaf, lProbeFailed>>
 --- END

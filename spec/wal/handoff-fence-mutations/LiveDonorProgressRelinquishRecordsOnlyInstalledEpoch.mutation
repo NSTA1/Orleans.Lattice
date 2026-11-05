@@ -1,0 +1,22 @@
+# #5840 S4, a5e2e2ef's R2 extended and R5: a claim or bump in flight at the counted close
+# is relinquished too, its epoch max-merged into the relinquished epoch.
+MODULE: LiveDonorProgressRelinquishRecordsOnlyInstalledEpoch
+TARGET: LiveDonorProgress
+CLASS: Invariant
+SUMMARY: the relinquish records only the installed epoch, so a write re-stamped at an in-flight floor bump's epoch is refused above the relinquished epoch with no current epoch and supersedes the live donor (R7)
+PERTURBS: SplitPersist, LiveClaimDone
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+
+--- FIND
+            /\ relEpoch' = Max2(relEpoch, Max2(lEpoch, lClaim))
+--- REPLACE
+\* MUTATION: only the installed epoch is recorded.
+            /\ relEpoch' = Max2(relEpoch, lEpoch)
+--- END
+
+--- FIND
+             [] OTHER -> /\ relEpoch' = Max2(relEpoch, lClaim)
+--- REPLACE
+\* MUTATION: a discarded claim's epoch is not recorded.
+             [] OTHER -> /\ relEpoch' = relEpoch
+--- END

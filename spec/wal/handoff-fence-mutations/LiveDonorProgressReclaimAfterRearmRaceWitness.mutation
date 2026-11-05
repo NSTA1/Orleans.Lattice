@@ -1,0 +1,14 @@
+# Witness for LiveDonorProgress (#5840 S4), the re-arm race: the donor re-arms
+# between its counted close and the link fence, the fence raises above its new epoch,
+# and the one probed re-claim restores it. Red here shows the allowance is exercised.
+MODULE: LiveDonorProgressReclaimAfterRearmRaceWitness
+TARGET: LiveDonorProgress
+CLASS: Invariant
+SUMMARY: the live donor re-arms between its count and the link fence, is refused StaleEpoch at its current epoch, takes its one probed re-claim and keeps stamping
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+
+--- FIND
+LiveDonorProgress == WithStaleDonor => ((lDead \/ lStuck) => (dupRaised \/ lStaleLeaf))
+--- REPLACE
+LiveDonorProgress == WithStaleDonor => ~(lStamped /\ relEpoch > 0 /\ lAllow /\ ~lDead)
+--- END

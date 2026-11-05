@@ -1,0 +1,14 @@
+# #5840 S4, a5e2e2ef's R1: the relinquish resets the cached row, so the next arm reads it fresh.
+MODULE: LiveDonorProgressRelinquishKeepsCachedRow
+TARGET: LiveDonorProgress
+CLASS: Invariant
+SUMMARY: after the relinquish the live donor's next arm writes on its cached row ETag, which the link fence has moved, and supersedes itself (R1)
+PERTURBS: LiveArm
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+
+--- FIND
+         [] ~lStaleLeaf /\ (lCached = 0 \/ lCached = eRow) -> /\ eRow' = eRow + 1
+--- REPLACE
+\* MUTATION: the arm writes on the cached row the relinquish kept.
+         [] ~lStaleLeaf /\ (IF lCached = 0 THEN 1 ELSE lCached) = eRow -> /\ eRow' = eRow + 1
+--- END

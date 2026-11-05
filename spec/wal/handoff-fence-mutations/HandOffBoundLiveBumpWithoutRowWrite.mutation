@@ -1,0 +1,18 @@
+# #5840 S4: a floor-refusal bump writes D's row before the write is re-stamped at it.
+MODULE: HandOffBoundLiveBumpWithoutRowWrite
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: the floor refusal's bump re-stamps the write at row + 1 without writing D's row, so the split's bump does not rise above it and the write is allocated after the close
+PERTURBS: LiveBump
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+
+--- FIND
+    /\ lClaim' = eRow + 1
+    /\ eRow' = eRow + 1
+    /\ lstamp' = eRow + 1
+--- REPLACE
+    /\ lClaim' = eRow + 1
+\* MUTATION: the bump's row write is not durable.
+    /\ UNCHANGED eRow
+    /\ lstamp' = eRow + 1
+--- END

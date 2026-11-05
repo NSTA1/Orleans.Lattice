@@ -1,0 +1,14 @@
+# #5840 S4, a5e2e2ef's R2: a claim relinquished in flight is discarded on completion.
+MODULE: LiveDonorProgressRelinquishLateClaimReinstalls
+TARGET: LiveDonorProgress
+CLASS: Invariant
+SUMMARY: a claim in flight at the counted close completes after the relinquish and re-installs the relinquished epoch, so every append self-fences (R2)
+PERTURBS: LiveClaimDone
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+
+--- FIND
+             [] relEpoch = 0 -> /\ liveArmed' = TRUE
+--- REPLACE
+\* MUTATION: the completion installs whatever the relinquish.
+             [] ~stale -> /\ liveArmed' = TRUE
+--- END

@@ -1,0 +1,20 @@
+# #5840 S4: a claim is installed only after its row write.
+MODULE: HandOffBoundClaimInstalledWithoutRowWrite
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: the live donor's claim installs an epoch it never wrote to D's row, so the split's bump does not rise above it and its moved-key write is allocated after the close
+PERTURBS: LiveClaimStart
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+
+--- FIND
+    /\ relEpoch = 0
+    /\ eRow < MaxEpoch
+    /\ lClaim' = eRow + 1
+    /\ eRow' = eRow + 1
+--- REPLACE
+    /\ relEpoch = 0
+    /\ eRow < MaxEpoch
+    /\ lClaim' = eRow + 1
+\* MUTATION: the claim's row write is not durable.
+    /\ UNCHANGED eRow
+--- END

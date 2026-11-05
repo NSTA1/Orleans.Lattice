@@ -1,0 +1,17 @@
+# #5840 S4: after its narrow the live donor's span excludes the moved keys.
+MODULE: HandOffBoundLiveAdmitsMovedKeyAfterNarrow
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: the live donor admits a write of a moved key after its narrow, under its re-armed epoch
+PERTURBS: LiveAdmit
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+
+--- FIND
+    /\ liveArmed
+    /\ ~sNarrowed
+    /\ ~lUsed
+--- REPLACE
+    /\ liveArmed
+\* MUTATION: no span check against the narrow.
+    /\ ~lUsed
+--- END

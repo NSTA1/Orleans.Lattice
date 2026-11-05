@@ -1,0 +1,31 @@
+# #5840 S4: the live donor relinquishes its claim at its counted pre-arm close. A write
+# of a moved key it admitted before the narrow, refused StaleEpoch after the split's
+# bump, must self-fence and be re-admitted at its seam, where the key has moved; re-
+# stamping it with a fresh claim and appending it to D allocates it above the close head.
+MODULE: HandOffBoundRelinquishedAppendRestamped
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: a write refused at the relinquished epoch is re-stamped with a fresh claim instead of self-fencing
+PERTURBS: LiveRefuse
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+
+--- FIND
+    /\ lstamp < eRow
+    /\ lpend' = FALSE
+    /\ IF ~WithPreArm \/ lstamp <= relEpoch \/ lstamp < lEpoch
+       THEN UNCHANGED lDead
+       ELSE lDead' = TRUE
+    /\ UNCHANGED <<eRow, liveArmed, sNarrowed, dst, dEpoch, dpend, dstamp, bst, bRead, dRetried, lstamp, lUsed, relEpoch, lEpoch, lCached, lClaim, lAllow, lStamped, lStuck, dupRaised, lBumped, lStaleLeaf, lProbeFailed>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+--- REPLACE
+    /\ lstamp < eRow
+\* MUTATION: re-stamped under a fresh claim and appended to D, unchecked against its span.
+    /\ next < MaxOff
+    /\ eRow < MaxEpoch
+    /\ eRow' = eRow + 1
+    /\ lpend' = FALSE
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = "d"]
+    /\ UNCHANGED <<liveArmed, sNarrowed, dst, dEpoch, dpend, dstamp, bst, bRead, dRetried, lstamp, lUsed, relEpoch, lEpoch, lCached, lClaim, lAllow, lStamped, lDead, lStuck, dupRaised, lBumped, lStaleLeaf, lProbeFailed>>
+    /\ UNCHANGED <<hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+--- END

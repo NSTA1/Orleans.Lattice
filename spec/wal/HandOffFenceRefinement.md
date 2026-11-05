@@ -53,7 +53,7 @@ design model.
   clause that a claim at or below `floor(i)` is never raised is not exercised; it is
   the routing-floor module's. The module reads no state of E: the entry check is the
   shape of these actions, not an import.
-- **Guarantees.** Three, each checked in the base and the variant: two invariants
+- **Guarantees.** Five, each checked in the base and the variants: four invariants
   and an action property.
   - `HandOffBound`: whenever L's marker reads closed (its state is initialised and no
     window is open), every stamped foreign append - `Foreign(i)` in the interface's
@@ -64,6 +64,12 @@ design model.
     at admission, a re-stamp, a restart in between).
   - `AbsentMarkerHolds`: L's marker state is initialised only while no hand-off begun
     without a marker is in flight, so an absent or uninitialised marker holds L.
+  - `LiveDonorProgress` (#5840 S4): under pre-arm, the live donor is never
+    superseded by the split's link-time fence, nor left self-fencing its own appends,
+    unless a stale duplicate's claim raised D's row. It is vacuous outside the
+    stale-donor variants.
+  - `StaleDetectionHonoured` (#5840 S4, R6): a claim probe that finds the live donor
+    stale marks it stale, even when the relinquish discards the claim.
   - `CloseHeadMonotone`: the heads L's marker requires, `closedAt`, never decrease.
     `Close` records any head up to the allocator's above every stamped foreign
     append - the weakest head E's re-claim allows, since the claim head covers every
@@ -112,6 +118,14 @@ design model.
 | `dst`, `dEpoch` | A stale duplicate D' of the donor and the epoch its claim wrote | A second activation of D that loaded its state before the split. |
 | `dpend`, `dstamp` | D''s epoch-only write of a moved key, admitted under its epoch | A `WalRoutingStamp.None` append: the PendingTx terminal backstop and the span-forward receive. |
 | `bst`, `bRead` | The split's bump of D's row and the row value it read | The split's conditional row write. |
+| `dRetried` | D' has used its one probed re-claim after a `StaleEpoch` at its own epoch | `LeafAppendEpochFence`'s per-close re-claim allowance. |
+| `lpend`, `lstamp`, `lUsed` | The live donor's write of a moved key admitted before the narrow, and the epoch it was stamped with | A stamped append of the live donor of D (#5840 S4). |
+| `relEpoch` | The epoch the live donor relinquished at its counted pre-arm close; 0 none | `LeafAppendEpochFence._relinquishedEpoch`, set by `LeafAppendEpochFence.RelinquishLocked` from `LeafAppendEpochFence.CountSplitClose`. |
+| `lEpoch`, `lCached`, `lClaim` | The live donor's installed epoch, the row value its fence caches, and the epoch of a claim it has in flight | `LeafAppendEpochFence._epoch`, `LeafAppendEpochFence._row` and an in-flight `LeafAppendEpochFence.ClaimRowAsync` or `LeafAppendEpochFence.BumpAsync`. |
+| `lAllow` | The live donor has used its one probed re-claim | The per-close allowance in `LeafAppendEpochFence.OnStale`. |
+| `lBumped` | The live donor has taken its one floor-refusal bump | `LeafAppendEpochFence.BumpAsync`. |
+| `lStaleLeaf` | Another activation has persisted D's state since the live donor loaded it, so its claim's probe finds its ETag stale | The ETag comparison in `LeafAppendEpochFence.ClaimRowAsync`'s probe (#5841, A1). |
+| `lStamped`, `lDead`, `lStuck`, `dupRaised`, `lProbeFailed` | Ghosts: the live donor stamped after the split's bump, was superseded or marked stale, or is left self-fencing; a duplicate's claim raised D's row; a probe of the live donor found its state stale | None: proof bookkeeping for `LiveDonorProgress` and `StaleDetectionHonoured`. |
 
 ## Action mapping
 
@@ -138,7 +152,16 @@ design model.
 | `DupAdmit` | An epoch-only write is admitted only by a claimed, non-stale activation, under its epoch | `BPlusLeafGrain.StampedRouting` with `WalRoutingStamp.None`, through `LeafAppendEpochFence.StampForAsync`. | Yes: `WalShardGrainTests.StaleDonorArmsAfterSplit5841` and `WalShardGrainTests.StaleClaimantAppends`. |
 | `DupAlloc` | The WAL shard allocates an epoch-only append at or above D's entry | `WalShardGrain.AdmitStampLocked` with `WalAppendFenceCore.IsEpochAdmitted`. | Yes: `WalShardGrainTests.StaleDonorArmsAfterSplit5841` and `WalShardGrainTests.EpochOnlyWriteUnfenced`. |
 | `DupReject` | An epoch-only append below D's entry is refused, allocating nothing | `WalShardGrain.AdmitStampLocked` returns `WalAppendFenceOutcome.StaleEpoch`, and the leaf's fence marks the duplicate stale. | Yes: `WalShardGrainTests.EpochOnlyWriteUnfenced` and `WalShardGrainTests.BumpOnlyIfSplittingActivationClaimed`. |
-| `SplitPersist` | The split persists D's narrowed state before it reads D's epoch row | `BPlusLeafGrain.CompleteSplitAsync`, the narrow's persist, which precedes `BPlusLeafGrain.CloseSplitHandOffAsync` (eager) and the split link that runs `ShardRootGrain.CloseDeferredSplitHandOffsAsync` (pre-arm). | Yes: `BPlusLeafGrainTests.SplitReadsRowBeforePersist` and `ShardRootGrainSplitLinkTests.The_split_link_fences_the_donor_before_its_deferred_close`. |
+| `DupRetry` | D''s append refused `StaleEpoch` at its own current epoch re-runs the claim once - a fresh row read, row + 1 conditional on it, then the probe - which marks a stale activation stale (#5840 S4 (a)) | `LeafAppendEpochFence.OnStale` re-running `LeafAppendEpochFence.ClaimRowAsync`, at most once per counted split close. | Yes: `WalShardGrainTests.StaleEpochReclaimSkipsProbe` and `WalShardGrainTests.The_reclaim_allowance_is_one_per_close_and_never_accumulates`. |
+| `LiveAdmit` | The live donor admits a write of a key its span still holds, stamped with its installed epoch | `BPlusLeafGrain.StampedRouting` through `LeafAppendEpochFence.StampForAsync`. | Yes: `WalShardGrainTests.RelinquishedAppendRestamped`. |
+| `LiveAlloc` | The WAL shard allocates the live donor's stamped append at or above D's entry | `WalShardGrain.AdmitStampLocked` with `WalAppendFenceCore.IsEpochAdmitted`. | Yes: `WalShardGrainTests.RelinquishedAppendRestamped`. |
+| `LiveRefuse` | Refused below D's entry at an epoch at or below the relinquished one, or below its current epoch (R3, the `<=` form), the append self-fences and is re-admitted at its seam, where the key has moved; it is never re-stamped and appended to D. A refusal above the relinquished epoch with no current epoch is foreign and supersedes it | `LeafAppendEpochFence.OnStale`: the self-fence when `stamp.Epoch <= _relinquishedEpoch` or below `_epoch`, `MarkStale` otherwise. | Yes: `WalShardGrainTests.RelinquishedAppendRestamped` and `WalShardGrainTests.A_stale_stamp_above_the_relinquished_epoch_still_supersedes`. |
+| `LiveBump` | A floor refusal of the pending write bumps D's row + 1; the bump is in flight and the write is re-stamped at its epoch | `LeafAppendEpochFence.BumpAsync`. | Yes: `WalShardGrainTests.A_floor_refusal_of_a_write_stamped_before_the_relinquish_self_fences_and_never_bumps` and `WalShardGrainTests.RelinquishLateClaimReinstalls`. |
+| `LiveClaimStart` | The live donor's claim writes D's row + 1 and is in flight | `LeafAppendEpochFence.ClaimRowAsync` (or `LeafAppendEpochFence.BumpAsync`) before it installs. | Yes: `WalShardGrainTests.RelinquishLateClaimReinstalls`. |
+| `LiveClaimDone` | The claim completes and installs - unless the counted close relinquished it meanwhile, when it is discarded, installs nothing and max-merges its epoch into the relinquished epoch in the same `_sync` section (R2, R5, R6). Its probe runs on completion: a probe that finds the state stale marks the activation stale, discarded or not (R6) | `LeafAppendEpochFence.ClaimRowAsync` discarding a completion started under an older relinquish count; `LeafAppendEpochFence.BumpAsync` installing only if `_epoch == epoch`. | Yes: `WalShardGrainTests.RelinquishLateClaimReinstalls`, `WalShardGrainTests.A_claim_discarded_after_a_relinquish_that_overtook_its_row_read_is_still_recorded` and `WalShardGrainTests.A_discarded_claim_whose_leaf_state_moved_on_still_supersedes`. |
+| `LiveArm` | After the relinquish, the live donor arms again with a fresh row read, never its cached row (R1) | `LeafAppendEpochFence.ClaimRowAsync` after `LeafAppendEpochFence.RelinquishLocked` cleared `_row`. | Yes: `WalShardGrainTests.RelinquishKeepsCachedRow` and `WalShardGrainTests.A_claim_row_conflict_never_spends_the_allowance`. |
+| `LiveStamp` | After the split's bump, the live donor stamps; refused at its current epoch it takes its one probed re-claim, and a second refusal supersedes it | `LeafAppendEpochFence.OnStale` with the per-close allowance. | Yes: `WalShardGrainTests.A_pre_arm_donor_keeps_stamping_after_the_link_fence` and `WalShardGrainTests.The_reclaim_allowance_is_one_per_close_and_never_accumulates`. |
+| `SplitPersist` | The split persists D's narrowed state before it reads D's epoch row, and under pre-arm the live donor's counted close relinquishes its claim locally: its installed epoch and any claim in flight are recorded as the relinquished epoch, its cached row is cleared, and its token is kept | `BPlusLeafGrain.CompleteSplitAsync`, the narrow's persist, which precedes `BPlusLeafGrain.CloseSplitHandOffAsync` (eager) and the split link that runs `ShardRootGrain.CloseDeferredSplitHandOffsAsync` (pre-arm); the relinquish is `LeafAppendEpochFence.CountSplitClose` with `LeafAppendEpochFence.RelinquishLocked`. | Yes: `BPlusLeafGrainTests.SplitReadsRowBeforePersist`, `ShardRootGrainSplitLinkTests.The_split_link_fences_the_donor_before_its_deferred_close` and `WalShardGrainTests.RelinquishKeepsCachedRow`. |
 | `SplitRowRead` | After the narrow is durable, the split reads D's epoch row fresh | `LeafAppendEpochFence.FenceSplitAsync`, run by the donor's live activation in `BPlusLeafGrain.CloseSplitHandOffAsync` (eager), and `LeafSplitDuplicateFence.FenceAsync`, run by the shard root in `ShardRootGrain.CloseDeferredSplitHandOffsAsync` before its raise and its deferred close (pre-arm, whatever the gate view; a failed fence leaves the sibling unclosed and the donor unacknowledged). | Yes: `BPlusLeafGrainTests.SplitReadsRowBeforePersist`, `WalShardGrainTests.BumpOnlyIfSplittingActivationClaimed`, `ShardRootGrainSplitLinkTests.The_split_link_fences_the_donor_before_its_deferred_close`, `ShardRootGrainSplitLinkTests.A_split_link_closes_an_open_sibling_marker_whatever_its_own_view_of_the_pre_arm_class` and `ShardRootGrainSplitLinkTests.A_split_link_whose_donor_fence_fails_leaves_the_sibling_open_and_the_donor_unacknowledged`. |
 | `SplitRowWrite` | If D's durable row exists, whichever activation claimed, the split writes row + 1 conditionally on the value it read, re-reading on a conflict, raises D's entry at every partition to that value, and, in the eager arm, adopts the new row into the live activation (a5e2e2ef's A3) | `LeafSplitDuplicateFence.FenceAsync`, which `LeafAppendEpochFence.FenceSplitAsync` runs with the live activation's adoption. | Yes: `WalShardGrainTests.BumpOnlyIfSplittingActivationClaimed`, `WalShardGrainTests.SplitRowWriteDropsBump` and `WalShardGrainTests.SplitBumpUsesCachedEtag`. |
 | `Stutter` | Natural termination | Not a protocol step; a stuttering successor so TLC does not report a quiescent state as a deadlock. | Not applicable: not a protocol step, so there is no production behaviour to detect. |
@@ -149,6 +172,8 @@ design model.
 |---------------|--------------------|----------|
 | `HandOffBound` | Once a hand-off's marker closes, every record its initiator appended under the fence that the owner holds lies below the recorded heads, so an owner that replays to them before arming passes no foreign record it has not applied. | Yes: `ShardRoutingGenerationIntegrationTests.A_slot_migration_opens_its_marker_on_the_target_and_closes_it_by_the_donors_re_claim`, `TreeRangeDeleteFenceIntegrationTests.A_range_delete_is_fenced_at_the_tree_and_closes_every_shard_marker_with_its_heads`, `LeafHandOffFenceIntegrationTests.Every_split_opens_its_marker_at_the_siblings_birth_and_closes_it_by_the_modes_fence` and `BPlusLeafGrainTests.A_close_head_above_the_checkpoint_holds_the_advance_until_a_replay_reaches_it`. |
 | `CloseHeadMonotone` | The heads an owner must replay to before it re-arms never decrease: a later close with lower heads, or the eviction of a retained close, leaves the maximum in force. | Yes: `HandOffMarkerCoreTests.A_later_close_with_lower_heads_never_lowers_the_required_heads` and `HandOffMarkerCoreTests.Required_heads_cover_only_overlapping_closes_and_every_evicted_one`. |
+| `LiveDonorProgress` | Under pre-arm, the split's link-time fence never supersedes the live donor, nor leaves it self-fencing its own appends: only a stale duplicate's claim raising D's row can (#5840 S4, a5e2e2ef's R1-R4). | Yes: `WalShardGrainTests.A_pre_arm_donor_keeps_stamping_after_the_link_fence`, `WalShardGrainTests.RelinquishKeepsCachedRow` and `WalShardGrainTests.RelinquishLateClaimReinstalls`. |
+| `StaleDetectionHonoured` | A claim probe that finds the live donor's state stale marks it stale, even when the relinquish discards the claim: discarding never swallows a real #5841 detection (R6). | Yes: `WalShardGrainTests.RelinquishLateClaimReinstalls`. |
 | `AbsentMarkerHolds` | An absent or uninitialised marker never reads as closed: its owner is held until the marker state is initialised, which happens only with no marker-less hand-off in flight. | Yes: `ShardRoutingGenerationIntegrationTests.A_shard_root_with_a_migration_in_flight_leaves_its_marker_uninitialised`, `BPlusLeafGrainTests.An_uninitialised_leaf_marker_holds_until_the_leaf_adopts_its_shards_flag` and `HandOffMarkerRowRoundTripTests.An_absent_marker_reads_as_uninitialised_with_nothing_open`. |
 
 ## Excluded properties
@@ -161,11 +186,12 @@ design model.
 
 ## Property classification (issue #2321)
 
-`TypeOK` and the two invariants are state safety, and `CloseHeadMonotone` is an action
-property; all four are checked on the base and re-checked in the `WideWindows` variant.
+`TypeOK` and the four invariants are state safety, and `CloseHeadMonotone` is an action
+property; all six are checked on the base and re-checked in the `WideWindows` variant.
 The stale duplicate donor of #5841 is checked in two more variants, `StaleDonor`
-(today's eager arm, where the splitting activation has always claimed: 128,434 states)
-and `StaleDonorPreArm` (#5833's pre-arm, where it may not have: 253,604 states), each
+(today's eager arm, where the splitting activation has always claimed: 574,540 states)
+and `StaleDonorPreArm` (#5833's pre-arm, where it may not have, with the live donor's
+relinquish and re-claim of #5840 S4 and one more epoch: 3,521,860 states), each
 with the split's one hand-off window; the base leaves it off and keeps its count.
 A close may choose a head below the allocator's only once a walk has gone on
 unstamped, which takes a close to reject it, so a head below an earlier close's needs a
@@ -224,6 +250,27 @@ residual), `HandOffBoundBumpOnlyIfSplittingActivationClaimed` (pre-arm only),
 `HandOffBoundStaleClaimantAppends` (`DupAdmit`; a5e2e2ef's A4),
 `HandOffBoundEpochOnlyWriteUnfenced` (`DupAlloc`, `DupReject`) and
 `HandOffBoundSplitRowWriteDropsBump` (`SplitRowWrite`).
+
+#5840 S4 (the live donor superseded by the link-time fence) adds thirteen, run in
+`StaleDonorPreArm`:
+`HandOffBoundStaleEpochReclaimSkipsProbe` (`DupRetry`: the re-claim skips the probe, so
+a stale duplicate re-arms),
+`HandOffBoundRelinquishedAppendRestamped` (`LiveRefuse`: a write refused at the
+relinquished epoch is re-stamped and appended to D),
+`LiveDonorProgressRelinquishKeepsCachedRow` (`LiveArm`; R1),
+`LiveDonorProgressRelinquishLateClaimReinstalls` (`LiveClaimDone`; R2),
+`LiveDonorProgressLiveDonorSupersededByLinkFence` (`LiveStamp`: S4 as raised, no
+allowance), `HandOffBoundLiveMovedKeyWriteUnfenced` (`LiveAlloc`),
+`HandOffBoundLiveAdmitsMovedKeyAfterNarrow` (`LiveAdmit`),
+`HandOffBoundClaimInstalledWithoutRowWrite` (`LiveClaimStart`),
+`LiveDonorProgressRelinquishRecordsOnlyInstalledEpoch` (`SplitPersist`, `LiveClaimDone`;
+R7: a write re-stamped at an in-flight floor bump's epoch then supersedes the live donor),
+`StaleDetectionHonouredDiscardedClaimSwallowsStaleProbe` (`LiveClaimDone`; R6),
+`HandOffBoundLiveBumpWithoutRowWrite` (`LiveBump`), and two witnesses that
+`LiveDonorProgress` is checked on real steps: `LiveDonorProgressStampsAfterFenceWitness`
+(the common order: count, link fence, fresh re-arm, stamp) and
+`LiveDonorProgressReclaimAfterRearmRaceWitness` (the donor re-arms between its count
+and the link fence, and its one probed re-claim restores it).
 
 ## Redundancy checks
 
