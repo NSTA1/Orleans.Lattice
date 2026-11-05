@@ -54,7 +54,7 @@ EXTENDS Integers, FiniteSets
 CONSTANTS MaxWindows, WithMixedVersion, WithGateFlip, WithRestart, WithRecreate, WithBulk,
           WithUnclaimedSurvivor, WithClaimedPurge, WithPreArm, WithKeyMove, WithFreeAdvance,
           WithSplitHint, WithSplitBirth, WithDonorRestart,
-          WithDuplicate, WithEvict
+          WithDuplicate, WithEvict, WithOrphanForward
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
@@ -67,7 +67,8 @@ PreAuthor == "p"
 NoAuthor == "x"
 StaleDonor == "d"
 DonorLive == "v"
-Authors == Acts \cup {Foreign, OldAuthor, Straddler, PreAuthor, StaleDonor, DonorLive}
+OrphanFwd == "w"
+Authors == Acts \cup {Foreign, OldAuthor, Straddler, PreAuthor, StaleDonor, DonorLive, OrphanFwd}
 MaxGen == 3
 
 Max(S) == CHOOSE x \in S : \A y \in S : y <= x
@@ -306,8 +307,15 @@ Create ==
 (***************************************************************************)
 TrackStart == Max2(startHead, evStart)
 
+(* The token a forward is attributed to its forwarding leaf under (#5837,  *)
+(* condition 4): the empty token, foreign to every activation of L, the    *)
+(* forwarding one included.                                                *)
+FwdToken == "empty"
+
+
 ForeignHigh(a) ==
-    Max({startHead - 1, evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}})
+    Max({startHead - 1, evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}}
+        \cup {o \in Offs : o >= TrackStart /\ author[o] = OrphanFwd /\ a # FwdToken})
 
 (* The report a response carries under the lazy arm; nothing in eager mode. *)
 ReportForeign(a) == seenP' = IF WithPreArm THEN [seenP EXCEPT ![a] = Max2(@, ForeignHigh(a))] ELSE seenP
@@ -425,7 +433,7 @@ Land(o) ==
        THEN /\ cache' = [cache EXCEPT ![author[o]] = @ \cup {o}]
             /\ mine' = [mine EXCEPT ![author[o]] = @ \cup {o}]
             /\ acked' = acked \cup {o}
-       ELSE /\ acked' = IF author[o] \in {OldAuthor, Straddler, StaleDonor, DonorLive} THEN acked \cup {o} ELSE acked
+       ELSE /\ acked' = IF author[o] \in {OldAuthor, Straddler, StaleDonor, DonorLive, OrphanFwd} THEN acked \cup {o} ELSE acked
             /\ UNCHANGED <<cache, mine>>
     /\ UNCHANGED <<next, author, floor, up, rp, snapCov, snapRows, epochVars, handVars, oldVars, envVars>>
     /\ UNCHANGED <<armVars, moveVars>>
@@ -739,6 +747,27 @@ Straggler(a) ==
     /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected, envVars, moveVars>>
     /\ UNCHANGED <<preArm, startHead, evStart, evFloor, sHi, ft, sh, sibHint, sibRows, dNarrowed, dKnown, dResumed>>
 
+(***************************************************************************)
+(* An orphan's forward (#5837, condition 4; WithOrphanForward). The stale  *)
+(* duplicate a2 of L, holding a span from before a split the live          *)
+(* activation never made, splits it off to a sibling O that is never       *)
+(* linked, and forwards a new acknowledged write of a key L still owns to  *)
+(* O, out of its own span view, so it never applies it. Under #5837's      *)
+(* transfer and forward class the record is O's PreArm append, under the  *)
+(* generation a2's span was established at, which nothing raises; it is   *)
+(* attributed to O, and also to its forwarder, L, under FwdToken.          *)
+(***************************************************************************)
+OrphanForward ==
+    /\ FreeOn
+    /\ WithOrphanForward
+    /\ "a2" \in up
+    /\ \A o \in Offs : author[o] # OrphanFwd
+    /\ next < MaxOff
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = OrphanFwd]
+    /\ inflight' = inflight \cup {next}
+    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, oldVars, envVars, armVars, moveVars>>
+
 (* Capture(a): the shared per-leaf snapshot keeps the highest coverage.  *)
 Capture(a) ==
     /\ UNCHANGED <<armVars, moveVars>>
@@ -945,6 +974,7 @@ Next ==
     \/ DonorClose
     \/ DonorRestart
     \/ \E a \in Acts : Straggler(a)
+    \/ OrphanForward
     \/ \E a \in Acts : Capture(a)
     \/ GcTrim
     \/ Duplicate

@@ -1,0 +1,14 @@
+# #5837, condition 4 (a5e2e2ef): an orphan sibling's forward under the transfer and
+# forward class. It edits an operator, not an action.
+MODULE: ReadPositionHonestForwardNotAttributedToForwarder
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: an orphan's forward is attributed only to the orphan sibling, so the live activation of the key's owner passes it
+BOUNDS: WithFreeAdvance = TRUE, WithOrphanForward = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+        \cup {o \in Offs : o >= TrackStart /\ author[o] = OrphanFwd /\ a # FwdToken})
+--- REPLACE
+\* MUTATION: no attribution to the forwarder.
+        \cup {})
+--- END
