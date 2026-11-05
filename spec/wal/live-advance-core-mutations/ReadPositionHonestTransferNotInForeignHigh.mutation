@@ -1,0 +1,13 @@
+# #5837, the claimless advance: the split transfer and the receiver's close heads.
+MODULE: ReadPositionHonestTransferNotInForeignHigh
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: T3: a transfer record is applied by its appending activation but not counted in its token's foreignHigh, so a twin passes it
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, MaxWindows = 1, WithMixedVersion = FALSE
+
+--- FIND
+    Max({startHead - 1, evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}}
+--- REPLACE
+\* MUTATION: transfer records are not tracked by token.
+    Max({startHead - 1, evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a} /\ o \notin tRecs}
+--- END

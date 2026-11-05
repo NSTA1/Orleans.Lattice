@@ -8,8 +8,8 @@ SUMMARY: foreignHigh forgets what the WAL shard knew before it restarted
 BOUNDS: WithRestart = TRUE, MaxWindows = 0
 
 --- FIND
-    Max({startHead - 1, evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}})
+    Max({startHead - 1, evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}}
 --- REPLACE
 \* MUTATION: no shardStartHead - 1 fallback.
-    Max({-1, evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}})
+    Max({-1, evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}}
 --- END

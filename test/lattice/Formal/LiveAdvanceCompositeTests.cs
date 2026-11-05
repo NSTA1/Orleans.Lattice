@@ -30,6 +30,7 @@ public sealed class LiveAdvanceCompositeTests
 
     private const string OwnReport = "C's report of the WAL shard's foreignHigh to its own activations (#5833), assumed of no other module";
     private const string ComposedAsResolve = "composed as the composite's ResolveDeferred step, checked by DeferredCloseMeetsCoreResolve (#5839)";
+    private const string FreeAdvance = "the claimless advance (#5837), which the composite does not compose";
     private const string Effect = "an effect the composite's own step performs; the edge checks what is admitted, not how it is recorded";
 
     private static readonly Regex Definition = new(
@@ -203,9 +204,14 @@ public sealed class LiveAdvanceCompositeTests
 
         yield return new(C, "Claim", "claimed' = [claimed EXCEPT ![a] = TRUE]", "the composite raises cstage, from which claimed is derived");
         yield return new(C, "Claim", "ReportForeign(a)", OwnReport);
-        yield return new(C, "Claim", "IF pend THEN ResolveDeferred ELSE UNCHANGED <<moveVars, hoClosedAt>>", ComposedAsResolve);
+        yield return new(C, "Claim", "IF pend /\\ gD >= pendGen THEN ResolveDeferred ELSE UNCHANGED <<moveVars, hoClosedAt>>", ComposedAsResolve);
+        yield return new(C, "Claim", "LatchAdmitsClaim", FreeAdvance);
         yield return new(C, "OwnAlloc", "ReportForeign(a)", OwnReport);
+        yield return new(C, "OwnAlloc", "ReportStale(a)", FreeAdvance);
+        yield return new(C, "ForeignAlloc", "~WithSplitBirth", FreeAdvance);
+        yield return new(C, "Close", "~WithSplitBirth", FreeAdvance);
         yield return new(C, "KeyMove", "WithKeyMove", "a configuration switch");
+        yield return new(C, "KeyMove", @"WithSplitBirth => ~hoOpen /\ LinkDriven", FreeAdvance);
         yield return new(C, "KeyMove", "phase = \"live\"", "the composite's DeferredClose needs F's open window, which a live leaf's marker holds");
         yield return new(C, "KeyMove", "~moved", "C's budget of one key-moving close, a model bound");
         yield return new(C, "KeyMove", "moved' = TRUE", Effect);

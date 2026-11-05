@@ -1,0 +1,14 @@
+# #5837, the forward-exclusion relief: a forward carries its forwarder's narrow tag.
+MODULE: ForwardHonestForwardTaggedWithDurableSpan
+TARGET: ForwardHonest
+CLASS: Invariant
+SUMMARY: a forward is tagged with L's durable narrow rather than its forwarder's, so a forward under a narrow that lost its persist is excluded by the reader whose narrow won (X1, X2)
+PERTURBS: ForwardMoved
+BOUNDS: WithFreeAdvance = TRUE, WithFwdExclusion = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+    /\ fTag' = [fTag EXCEPT ![next] = nar[a]]
+--- REPLACE
+\* MUTATION: the durable span's tag.
+    /\ fTag' = [fTag EXCEPT ![next] = IF dur # NoTag THEN dur ELSE nar[a]]
+--- END

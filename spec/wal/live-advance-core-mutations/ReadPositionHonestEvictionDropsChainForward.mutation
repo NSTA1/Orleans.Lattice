@@ -1,0 +1,15 @@
+# #5837, a5e2e2ef's S-a: the WAL shard's eviction of L's foreign-high entry folds every class
+# attributed to L under the empty token into the eviction floor.
+MODULE: ReadPositionHonestEvictionDropsChainForward
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the eviction folds L's activations' and its orphan's and donor's forwards but not a forward chain's record, so a chain record below the eviction start leaves L's foreignHigh
+PERTURBS: Evict
+BOUNDS: WithFreeAdvance = TRUE, WithReforward = TRUE, WithOrphanForward = TRUE, WithRestart = TRUE, WithEvict = TRUE, WithMixedVersion = FALSE, MaxWindows = 0
+
+--- FIND
+    /\ evFloor' = Max({evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \cup LeafAttributed})
+--- REPLACE
+\* MUTATION: the eviction does not fold ChainFwd.
+    /\ evFloor' = Max({evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \cup (LeafAttributed \ {ChainFwd})})
+--- END

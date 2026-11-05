@@ -1,0 +1,17 @@
+# #5837, condition 4 (F1): the forward's scope runs to the link, through the donor's
+# pending close.
+MODULE: ReadPositionHonestForwardScopeLostAtDonorClose
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the orphan's donor closes its window without a deferred bound, so its marker reads closed and a later forward is attributed to the orphan only (F1, rule S)
+PERTURBS: OrphanClose
+BOUNDS: WithFreeAdvance = TRUE, WithOrphanForward = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+    /\ oWin = "open"
+    /\ oWin' = "pending"
+--- REPLACE
+    /\ oWin = "open"
+\* MUTATION: no deferred bound; the marker reads closed.
+    /\ oWin' = "closed"
+--- END
