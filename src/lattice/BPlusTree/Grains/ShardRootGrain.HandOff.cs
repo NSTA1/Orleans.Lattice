@@ -211,6 +211,9 @@ internal sealed partial class ShardRootGrain
     private bool IsAppendFenceGateOpen() =>
         context.ActivationServices?.GetService<IWalAppendFenceGate>() is { IsOpen: true };
 
+    /// <summary>Replaces the split close's donor fence (#5841); test seam.</summary>
+    internal Func<IGrainStorage, Func<int, IWalShardGrain>, int, Guid, Action<GrainState<LeafAppendEpochState>>?, Action<int, long>?, CancellationToken, Task<long[]?>>? DonorSplitFenceForTesting { get; set; }
+
     /// <summary><see langword="true"/> while this silo's append-fence gate admits the pre-arm class (#5833).</summary>
     private bool IsPreArmGateOpen() =>
         context.ActivationServices?.GetService<IWalAppendFenceGate>() is { IsOpen: true, IsPreArmOpen: true };

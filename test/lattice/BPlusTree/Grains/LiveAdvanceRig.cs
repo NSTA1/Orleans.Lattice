@@ -117,6 +117,9 @@ internal sealed class LiveAdvanceRig
     /// </summary>
     public Func<Task>? AfterNextLeafMarkerRead { get; set; }
 
+    /// <summary>Called with the state name of every read the leaf makes through its storage, before the read (#5841).</summary>
+    public Action<string>? OnStorageRead { get; set; }
+
     /// <summary>Reads the leaf's own hand-off marker row.</summary>
     public async Task<LeafHandOffState> LeafMarkerAsync() =>
         (await HandOffMarkerRows.ReadLeafAsync(Storage, LeafId)).State;
@@ -126,6 +129,7 @@ internal sealed class LiveAdvanceRig
     {
         public async Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
         {
+            rig.OnStorageRead?.Invoke(stateName);
             await rig.Storage.ReadStateAsync(stateName, grainId, grainState);
             if (stateName == HandOffMarkerRows.LeafGrainType
                 && rig.AfterNextLeafMarkerRead is { } hook)

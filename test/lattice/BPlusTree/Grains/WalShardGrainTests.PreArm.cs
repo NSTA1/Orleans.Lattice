@@ -111,6 +111,35 @@ public partial class WalShardGrainTests
     }
 
     [Test]
+    public async Task A_fold_evicts_the_older_half_of_the_leaf_authors_and_floors_only_to_it()
+    {
+        // Review S2: one shard serves a whole (tree, partition), so a table past the bound
+        // must not fold every leaf into the newest record's floor.
+        var grain = await CreateFencedGrainAsync(new EnumerableMemoryGrainStorage());
+        var leaves = Enumerable.Range(1, 4).Select(i => new Guid(i, 0, 0, new byte[8])).ToArray();
+        var offsets = new long[leaves.Length];
+        for (var i = 0; i < leaves.Length; i++)
+        {
+            var stamp = WalAppendStamp.PreArm(leaves[i], ActivationA) with { Initiator = PreArmRoot, Generation = 1 };
+            offsets[i] = (await grain.AppendStampedAsync(MakeEntry($"k{i}"), stamp, CancellationToken.None)).Offset;
+        }
+
+        grain.FoldLeafAuthorsForTesting();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grain.LeafAuthorCountForTesting, Is.EqualTo(2), "a fold dropped more than the older half");
+            Assert.That(grain.LeafAuthorFoldsForTesting, Is.EqualTo(1));
+            Assert.That(grain.ForeignHighForTesting(leaves[0], ActivationB), Is.EqualTo(offsets[1]),
+                "an evicted leaf's foreign high is the highest evicted offset");
+            Assert.That(grain.ForeignHighForTesting(leaves[3], ActivationB), Is.EqualTo(offsets[3]),
+                "a kept leaf's foreign high was lost");
+            Assert.That(grain.ForeignHighForTesting(leaves[2], ActivationA), Is.EqualTo(offsets[1]),
+                "the floor rose to the newest record, holding every arm back to it");
+        });
+    }
+
+    [Test]
     public async Task The_foreign_high_resets_below_the_recovered_head_and_never_drops_on_a_fold()
     {
         // PreArmWatermarkNotReset and EvictionDropsForeignHigh.
@@ -202,6 +231,24 @@ public partial class WalShardGrainTests
         {
             Assert.That(arm.Accepted, Is.True, "an arm resolving a deferred generation below the loaded one was refused");
             Assert.That(arm.ReclaimHead, Is.GreaterThanOrEqualTo(before));
+            Assert.That(arm.ReclaimGeneration, Is.EqualTo(5),
+                "review N2: the arm reported the generation it was asked for, not the one it claimed, so a close deferred between them stays held");
+        });
+    }
+
+    [Test]
+    public async Task An_arm_reports_the_deferred_generation_it_re_claimed()
+    {
+        var grain = await CreateFencedGrainAsync(new EnumerableMemoryGrainStorage());
+
+        var deferred = await grain.ArmAppendEpochAsync(FenceLeaf, 1, ActivationA, PreArmRoot, 2, CancellationToken.None);
+        var plain = await grain.ArmAppendEpochAsync(OtherFenceLeaf, 1, ActivationB, WalRoutingInitiator.None, 0, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(deferred.ReclaimGeneration, Is.EqualTo(2));
+            Assert.That(plain.ReclaimHead, Is.EqualTo(-1));
+            Assert.That(plain.ReclaimGeneration, Is.Zero, "an arm with no deferred generation reported one");
         });
     }
 

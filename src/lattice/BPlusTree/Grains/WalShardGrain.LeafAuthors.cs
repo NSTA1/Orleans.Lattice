@@ -1,3 +1,5 @@
+using System.Buffers;
+
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
@@ -16,9 +18,14 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </para>
 /// <para>
 /// The table is bounded by <see cref="MaxLeafAuthors"/>. When an insertion would exceed
-/// it, the whole table is dropped and its highest offset becomes the floor every leaf's
-/// foreign high is read against (<c>EvictionDropsForeignHigh</c>), which is
-/// conservative: it can only hold an arm back, never let one pass an unreplayed record.
+/// it, the half of the entries whose highest offsets are lowest is evicted, and the
+/// highest offset among them becomes the floor every leaf's foreign high is read against
+/// (<c>EvictionDropsForeignHigh</c>), which is conservative: it can only hold an arm back,
+/// never let one pass an unreplayed record. Evicting the older half, never the whole table
+/// (review S2), keeps that floor near the median rather than the newest record, so a WAL
+/// shard serving far more leaves than the bound - one shard serves a whole (tree,
+/// partition) - does not hold every arm back to its newest record, and folds once per
+/// half-table of new leaves at an amortised cost of a sort.
 /// </para>
 /// <para>
 /// Updating it on an append is a lookup and a value-type store under
@@ -94,15 +101,31 @@ internal sealed partial class WalShardGrain
         return high;
     }
 
-    /// <summary>Drops every entry, raising the floor to the highest offset they held.</summary>
+    /// <summary>How many folds this activation has made; test seam (review S2).</summary>
+    internal int LeafAuthorFoldsForTesting { get; private set; }
+
+    /// <summary>
+    /// Evicts the entries whose highest offsets are lowest - at least half the table, and
+    /// every entry of a table of one - raising the floor to the highest offset an evicted
+    /// entry held (review S2).
+    /// </summary>
     private void FoldLeafAuthorsLocked()
     {
-        foreach (var authors in _leafAuthors!.Values)
+        var authors = _leafAuthors!;
+        var count = authors.Count;
+        if (count == 0)
         {
-            _leafAuthorsFloor = Math.Max(_leafAuthorsFloor, authors.High1);
+            return;
         }
 
-        _leafAuthors.Clear();
+        // RED PROOF: the whole table folds (review S2).
+        LeafAuthorFoldsForTesting++;
+        foreach (var entry in authors.Values)
+        {
+            _leafAuthorsFloor = Math.Max(_leafAuthorsFloor, entry.High1);
+        }
+
+        authors.Clear();
     }
 
     /// <summary>The leaf-author table's size; test seam.</summary>

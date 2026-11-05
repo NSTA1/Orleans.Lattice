@@ -383,7 +383,7 @@ public partial class BPlusLeafGrainTests
         // claim head moves and it re-arms only after reading to it.
         var (grain, rig) = await ArmedLeafWithWritesAsync("a", "b");
         rig.ClaimHead = 2;
-        await grain.AppendFenceForTesting!.BumpAndReclaimAsync(_ => rig.Shard, rig.Partitions, CancellationToken.None);
+        await grain.AppendFenceForTesting!.FenceSplitAsync(_ => rig.Shard, rig.Partitions, CancellationToken.None);
         rig.Writer.ForeignAppend();
         rig.ClaimHead = 3;
         await SetStampedAsync(grain, "c", "3");

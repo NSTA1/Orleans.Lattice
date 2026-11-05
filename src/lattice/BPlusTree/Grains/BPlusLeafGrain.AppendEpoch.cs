@@ -85,7 +85,8 @@ internal sealed partial class BPlusLeafGrain
             OnAppendEpochSuperseded,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             LatticeTenantLabel.ForTree(state.State.TreeId ?? string.Empty),
-            requireReachabilityProof: true);
+            requireReachabilityProof: true,
+            loadedStateCurrent: new LeafStateCurrencyProbe(storage, context.GrainId, () => state.Etag, _persistWriteGate).IsCurrentAsync);
         return new FencedCommitLogWriter(fenced, _appendFence);
     }
 

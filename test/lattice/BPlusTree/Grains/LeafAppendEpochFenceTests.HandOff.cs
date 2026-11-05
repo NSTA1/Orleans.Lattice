@@ -5,17 +5,17 @@ using Orleans.Runtime;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Detectors for member 2's additions to a leaf activation's append fence (epic
-/// #5605; design owner's answer Q1): a hand-off close raises the activation's own
-/// epoch, conditionally on its own row, and re-claims it at every partition it had
-/// claimed, returning the heads; an append stamped below the activation's own
-/// current epoch is self-fenced - refused for its caller to re-admit, without the
-/// activation deactivating (#5643).
+/// Detectors for a leaf activation's split fence (epic #5605, member 2; #5841, rule A):
+/// a split close raises the leaf's epoch row above the value it reads fresh, claims the
+/// raised epoch at every partition and returns the heads, and the live activation adopts
+/// the raised row, epoch and claims; an append stamped below the activation's own current
+/// epoch is self-fenced - refused for its caller to re-admit, without the activation
+/// deactivating (#5643).
 /// </summary>
 public sealed partial class LeafAppendEpochFenceTests
 {
     [Test]
-    public async Task A_hand_off_close_raises_the_epoch_and_re_claims_every_claimed_partition()
+    public async Task A_split_fence_raises_the_epoch_and_claims_it_at_every_partition()
     {
         var h = new Harness();
         h.Shard.ClaimAppendEpochAsync(Leaf, 2, Arg.Any<CancellationToken>())
@@ -23,44 +23,56 @@ public sealed partial class LeafAppendEpochFenceTests
         await h.Fence.StampForAsync(h.Shard, partition: 0, CancellationToken.None);
         await h.Fence.StampForAsync(h.Shard, partition: 2, CancellationToken.None);
 
-        var heads = await h.Fence.BumpAndReclaimAsync(_ => h.Shard, partitionCount: 3, CancellationToken.None);
+        var heads = await h.Fence.FenceSplitAsync(_ => h.Shard, partitionCount: 3, CancellationToken.None);
         var rowEpoch = await h.RowEpochAsync();
+        var adopted = h.Fence.StampForAsync(h.Shard, partition: 1, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
-            Assert.That(rowEpoch, Is.EqualTo(2), "the bump persists the row plus one before the epoch moves");
-            Assert.That(h.Fence.Epoch, Is.EqualTo(2));
-            Assert.That(heads, Is.EqualTo(new long[] { 17, -1, 17 }),
-                "every partition it had claimed is re-claimed; one it never claimed holds none of its stamped appends");
+            Assert.That(rowEpoch, Is.EqualTo(2), "the fence persists the row plus one");
+            Assert.That(h.Fence.Epoch, Is.EqualTo(2), "the live activation adopts the raised epoch");
+            Assert.That(heads, Is.EqualTo(new long[] { 17, 17, 17 }),
+                "the raised epoch is claimed at every partition, so a duplicate is refused even where this activation never wrote");
+            Assert.That(adopted.IsCompletedSuccessfully && adopted.Result?.Epoch == 2, Is.True, "the fence's claims are adopted");
             Assert.That(h.Superseded, Is.Empty);
         });
-        await h.Shard.Received(2).ClaimAppendEpochAsync(Leaf, 2, Arg.Any<CancellationToken>());
+        await h.Shard.Received(3).ClaimAppendEpochAsync(Leaf, 2, Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public async Task A_hand_off_close_with_nothing_stamped_returns_no_heads()
+    public async Task A_split_fence_when_no_activation_ever_claimed_returns_no_heads_and_counts_the_close()
     {
         var h = new Harness();
+        var closes = h.Fence.HandOffCloses;
 
-        var heads = await h.Fence.BumpAndReclaimAsync(_ => h.Shard, partitionCount: 2, CancellationToken.None);
+        var heads = await h.Fence.FenceSplitAsync(_ => h.Shard, partitionCount: 2, CancellationToken.None);
 
-        Assert.That(heads, Is.Null, "an activation that never claimed appended unstamped, which the watermark reports");
+        Assert.Multiple(async () =>
+        {
+            Assert.That(heads, Is.Null, "no activation claimed, so every append was unstamped, which the watermark reports");
+            Assert.That(h.Fence.HandOffCloses, Is.EqualTo(closes + 1), "a write admitted before the narrowing must still self-fence");
+            Assert.That(await h.RowEpochAsync(), Is.Zero, "a fence with nothing to fence wrote the row");
+        });
+        await h.Shard.DidNotReceiveWithAnyArgs().ClaimAppendEpochAsync(default, default, default);
     }
 
     [Test]
-    public async Task A_hand_off_close_after_another_activation_claimed_supersedes_rather_than_fences()
+    public async Task A_split_fence_after_another_activation_claimed_raises_above_it_rather_than_superseding()
     {
+        // #5841: the split runs on the live donor, whose narrowing is durable; a claim by
+        // another activation is a duplicate's, which the fence outranks, not a supersession.
         var h = new Harness();
         await h.Fence.StampForAsync(h.Shard, partition: 0, CancellationToken.None);
         await h.ClaimByAnotherActivationAsync();
 
-        var ex = Assert.ThrowsAsync<Orleans.Lattice.LeafRetiredException>(
-            () => h.Fence.BumpAndReclaimAsync(_ => h.Shard, partitionCount: 1, CancellationToken.None));
+        var heads = await h.Fence.FenceSplitAsync(_ => h.Shard, partitionCount: 1, CancellationToken.None);
 
-        Assert.Multiple(() =>
+        Assert.Multiple(async () =>
         {
-            Assert.That(ex!.ActivationSuperseded, Is.True);
-            Assert.That(h.Superseded, Has.Count.EqualTo(1), "the bump is conditional on the row this activation last wrote");
+            Assert.That(heads, Is.Not.Null);
+            Assert.That(await h.RowEpochAsync(), Is.EqualTo(3), "the fence read the row fresh and raised above the duplicate's claim");
+            Assert.That(h.Fence.Epoch, Is.EqualTo(3));
+            Assert.That(h.Superseded, Is.Empty);
         });
     }
 
@@ -71,7 +83,7 @@ public sealed partial class LeafAppendEpochFenceTests
         // the activation itself (a hand-off close, or a bump after a floor refusal).
         var h = new Harness();
         var old = await h.Fence.StampForAsync(h.Shard, partition: 0, CancellationToken.None);
-        await h.Fence.BumpAndReclaimAsync(_ => h.Shard, partitionCount: 1, CancellationToken.None);
+        await h.Fence.FenceSplitAsync(_ => h.Shard, partitionCount: 1, CancellationToken.None);
 
         var refusal = h.Fence.OnStale(old!.Value);
         var next = await h.Fence.StampForAsync(h.Shard, partition: 0, CancellationToken.None);
@@ -135,7 +147,7 @@ public sealed partial class LeafAppendEpochFenceTests
     }
 
     [Test]
-    public async Task A_floor_refusal_concurrent_with_a_hand_off_close_joins_its_bump_and_does_not_supersede()
+    public async Task A_floor_refusal_concurrent_with_a_split_fence_joins_its_bump_and_does_not_supersede()
     {
         // #5662: the close's row write and a floor-refusal bump must not both write the
         // activation's row, or one conflicts on the activation's own ETag and reads as
@@ -160,7 +172,7 @@ public sealed partial class LeafAppendEpochFenceTests
         await fence.StampForAsync(claimed, partition: 0, CancellationToken.None);
 
         storage.Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var close = fence.BumpAndReclaimAsync(p => p == 0 ? claimed : floored, partitionCount: 2, CancellationToken.None);
+        var close = fence.FenceSplitAsync(p => p == 0 ? claimed : floored, partitionCount: 2, CancellationToken.None);
         await WaitForAsync(() => storage.PendingWrites >= 1);
         var refused = fence.StampForAsync(floored, partition: 1, CancellationToken.None).AsTask();
         await WaitForAsync(() => storage.PendingWrites >= 2, TimeSpan.FromMilliseconds(250));
@@ -204,49 +216,6 @@ public sealed partial class LeafAppendEpochFenceTests
         });
     }
 
-    [Test]
-    public async Task A_close_accepts_its_re_claim_when_a_floor_refusal_raises_the_epoch_before_the_head_read()
-    {
-        // #5836: a floor refusal at another partition bumps the epoch again between this
-        // partition's re-claim under the raised epoch and the close's head read. That
-        // claim's head still bounds every append stamped below the raised epoch, so the
-        // close accepts it instead of failing and leaving the marker open.
-        var superseded = new List<long>();
-        var fence = new LeafAppendEpochFence(
-            Leaf,
-            new SettableGate(open: true),
-            new EnumerableMemoryGrainStorage(),
-            superseded.Add,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, "tree"),
-            LatticeTenantLabel.ForTree("tree"));
-        var claimed = Substitute.For<IWalShardGrain>();
-        claimed.ClaimAppendEpochAsync(Leaf, Arg.Any<long>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(WalAppendFenceClaimResult.Accept(11)));
-        var floored = Substitute.For<IWalShardGrain>();
-        floored.ClaimAppendEpochAsync(Leaf, Arg.Any<long>(), Arg.Any<CancellationToken>())
-            .Returns(call => Task.FromResult(call.ArgAt<long>(1) <= 5
-                ? WalAppendFenceClaimResult.Refuse(5)
-                : WalAppendFenceClaimResult.Accept(23)));
-        await fence.StampForAsync(claimed, partition: 0, CancellationToken.None);
-        fence.AfterCloseReclaimForTesting = async partition =>
-        {
-            if (partition == 0)
-            {
-                await fence.StampForAsync(floored, partition: 1, CancellationToken.None);
-            }
-        };
-
-        var heads = await fence.BumpAndReclaimAsync(p => p == 0 ? claimed : floored, partitionCount: 2, CancellationToken.None);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(fence.Epoch, Is.EqualTo(6), "precondition: the floor refusal raised the epoch above the close's");
-            Assert.That(heads, Is.Not.Null);
-            Assert.That(heads![0], Is.EqualTo(11), "the close discarded its re-claim's head because the epoch moved on");
-            Assert.That(superseded, Is.Empty);
-        });
-    }
-
     private static async Task WaitForAsync(Func<bool> condition, TimeSpan? timeout = null)
     {
         var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(10));
@@ -257,7 +226,7 @@ public sealed partial class LeafAppendEpochFenceTests
     }
 
     [Test]
-    public async Task A_write_admitted_before_a_hand_off_close_and_dispatched_after_it_is_self_fenced_not_appended()
+    public async Task A_write_admitted_before_a_split_fence_and_dispatched_after_it_is_self_fenced_not_appended()
     {
         // #5664 (a): the stamp is decided at admission. A write admitted before the
         // donor's split narrowed must not reach the WAL under the close's raised epoch,
@@ -265,7 +234,7 @@ public sealed partial class LeafAppendEpochFenceTests
         var h = new Harness();
         await h.Fence.StampForAsync(h.Shard, partition: 0, CancellationToken.None);
         var admittedBefore = WalRoutingStamp.None with { AdmissionMark = h.Fence.HandOffCloses + 1 };
-        await h.Fence.BumpAndReclaimAsync(_ => h.Shard, partitionCount: 1, CancellationToken.None);
+        await h.Fence.FenceSplitAsync(_ => h.Shard, partitionCount: 1, CancellationToken.None);
         var admittedAfter = WalRoutingStamp.None with { AdmissionMark = h.Fence.HandOffCloses + 1 };
         h.Shard.AppendStampedAsync(Arg.Any<WalRecord>(), Arg.Any<WalAppendStamp>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new WalStampedAppendResult(9, -1, WalAppendFenceOutcome.Admitted)));
@@ -288,10 +257,10 @@ public sealed partial class LeafAppendEpochFenceTests
     }
 
     [Test]
-    public async Task A_hand_off_close_re_claims_a_partition_whose_claim_a_wal_shard_restart_reset()
+    public async Task A_split_fence_claims_a_partition_whose_claim_a_wal_shard_restart_reset()
     {
         // #5664 (b): the activation stamped appends at partition 1, then the partition
-        // restarted and an unloaded rejection reset the claim. The close must still
+        // restarted and an unloaded rejection reset the claim. The fence must still
         // record partition 1's real head, never -1.
         var h = new Harness();
         var second = Substitute.For<IWalShardGrain>();
@@ -303,29 +272,29 @@ public sealed partial class LeafAppendEpochFenceTests
         var stamped = await h.Fence.StampForAsync(second, partition: 1, CancellationToken.None);
         h.Fence.OnUnloaded(1, stamped!.Value);
 
-        var heads = await h.Fence.BumpAndReclaimAsync(p => p == 0 ? h.Shard : second, partitionCount: 3, CancellationToken.None);
+        var heads = await h.Fence.FenceSplitAsync(p => p == 0 ? h.Shard : second, partitionCount: 3, CancellationToken.None);
 
-        Assert.That(heads, Is.EqualTo(new long[] { 17, 29, -1 }),
-            "a partition claimed in this activation is re-claimed even after its claim was reset; -1 only where it never claimed");
-        await second.Received(1).ClaimAppendEpochAsync(Leaf, 2, Arg.Any<CancellationToken>());
+        Assert.That(heads, Is.EqualTo(new long[] { 17, 29, 29 }),
+            "every partition is claimed under the raised epoch, including one whose claim was reset");
+        await second.Received(2).ClaimAppendEpochAsync(Leaf, 2, Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public async Task A_hand_off_close_with_the_gate_view_closed_after_stamping_leaves_the_marker_open()
+    public async Task A_split_fence_with_the_gate_view_closed_after_stamping_leaves_the_marker_open()
     {
-        // #5664 (c): a stamped append may still be in flight, and the close cannot bump,
+        // #5664 (c): a stamped append may still be in flight, and the close cannot claim,
         // so it must not return unfenced heads for the caller to close the marker on.
         var h = new Harness();
         await h.Fence.StampForAsync(h.Shard, partition: 0, CancellationToken.None);
         h.Fence.OnClaimsExhausted();
 
         Assert.ThrowsAsync<InvalidOperationException>(
-            () => h.Fence.BumpAndReclaimAsync(_ => h.Shard, partitionCount: 1, CancellationToken.None));
+            () => h.Fence.FenceSplitAsync(_ => h.Shard, partitionCount: 1, CancellationToken.None));
 
         var neverStamped = new Harness();
         neverStamped.Gate.IsOpen = false;
         Assert.That(
-            await neverStamped.Fence.BumpAndReclaimAsync(_ => neverStamped.Shard, partitionCount: 1, CancellationToken.None),
+            await neverStamped.Fence.FenceSplitAsync(_ => neverStamped.Shard, partitionCount: 1, CancellationToken.None),
             Is.Null,
             "only an activation that never stamped closes on unfenced heads");
         Assert.That(h.Superseded, Is.Empty);

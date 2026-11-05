@@ -17,6 +17,12 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// When accepted and a deferred hand-off close's generation was resolved, the head of
 /// that re-claim (C2); <c>-1</c> otherwise.
 /// </param>
+/// <param name="ReclaimGeneration">
+/// When <paramref name="ReclaimHead"/> is set, the generation the re-claim actually
+/// claimed: at or above the deferred one, since a generation already loaded above it is
+/// presented instead (C5). Every close deferred at or below it is resolved by the head
+/// (review N2); <c>0</c> otherwise.
+/// </param>
 [GenerateSerializer]
 [Immutable]
 [Alias(TypeAliases.WalAppendFenceArmResult)]
@@ -25,8 +31,9 @@ internal readonly record struct WalAppendFenceArmResult(
     [property: Id(1)] long Head,
     [property: Id(2)] long Refusal,
     [property: Id(3)] long ForeignHigh,
-    [property: Id(4)] long ReclaimHead)
+    [property: Id(4)] long ReclaimHead,
+    [property: Id(5)] long ReclaimGeneration)
 {
     /// <summary>A refused arm that must exceed <paramref name="refusal"/>.</summary>
-    public static WalAppendFenceArmResult Refuse(long refusal) => new(false, -1, refusal, -1, -1);
+    public static WalAppendFenceArmResult Refuse(long refusal) => new(false, -1, refusal, -1, -1, 0);
 }

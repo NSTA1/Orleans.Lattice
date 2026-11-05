@@ -120,12 +120,14 @@ public sealed partial class ShardRootGrainSplitLinkTests
     /// the recorder, and a WAL that accepts claims. A first write warms the shard's marker
     /// (seeding and fencing it claims at the WAL) before the WAL's calls are forgotten.
     /// The split's sibling marker is open, as the donor opens it at the sibling's birth.
+    /// <paramref name="preArmView"/> is this silo's view of the pre-arm class (#5841, S1).
+    /// <paramref name="gateOpenAfterWarmUp"/> is its view of the gate once the first write has warmed the marker.
     /// </summary>
-    private static async Task<(Harness H, DeferredCloseOrderStorage Storage, IWalShardGrain Wal, GrainId Donor, GrainId Sibling)> CreatePreArmSplitHarnessAsync()
+    private static async Task<(Harness H, DeferredCloseOrderStorage Storage, IWalShardGrain Wal, GrainId Donor, GrainId Sibling)> CreatePreArmSplitHarnessAsync(bool preArmView = true, bool gateOpenAfterWarmUp = true)
     {
         var gate = Substitute.For<IWalAppendFenceGate>();
         gate.IsOpen.Returns(true);
-        gate.IsPreArmOpen.Returns(true);
+        gate.IsPreArmOpen.Returns(preArmView);
         var services = new ServiceCollection().AddSingleton(gate).BuildServiceProvider();
         var h = CreateEmptyHarness(services);
         var donor = GrainId.Create("leaf", Guid.NewGuid().ToString("N"));
@@ -151,6 +153,7 @@ public sealed partial class ShardRootGrainSplitLinkTests
 
         await h.Grain.SetAsync("a", [0]);
         wal.ClearReceivedCalls();
+        gate.IsOpen.Returns(gateOpenAfterWarmUp);
         await OpenLeafMarkerAsync(storage, sibling, BPlusLeafGrain.SplitHandOffToken(donor.GetGuidKey()));
         storage.DeferredCloseWrites.Clear();
         return (h, storage, wal, donor, sibling);

@@ -441,7 +441,7 @@ reason as the one above.
   the claim head up and disarming the activation until it replays to it. The model keeps
   the first claim head across a restart, which arms more often, so the watermark's reset
   is load-bearing here (`ReadPositionHonestRestartForgetsUnstamped`).
-  Production symbols: `LeafAppendEpochFence.OnUnloaded`, `LeafAppendEpochFence.BumpAndReclaimAsync`.
+  Production symbols: `LeafAppendEpochFence.OnUnloaded`, `LeafAppendEpochFence.FenceSplitAsync`.
 - **The duplicate's own snapshot and the purge's trim.** The re-created incarnation's
   activation starts from the shared snapshot the purged one left, and the purge trims no
   entry here; production clears the purged tree's snapshot and trims its WAL. Both only

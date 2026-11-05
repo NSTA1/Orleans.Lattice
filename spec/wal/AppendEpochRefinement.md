@@ -261,4 +261,4 @@ The bump's bound (`BumpEpoch <= MaxEpoch`) is the only part whose removal is red
   current epoch, taken before its own bump or a hand-off close, is retried rather
   than a supersession. Here every append carries the current epoch, so every stale
   rejection supersedes; the hand-off close's bump is the hand-off module's.
-  Production symbols: `LeafAppendEpochFence.OnStale`, `LeafAppendEpochFence.BumpAndReclaimAsync`.
+  Production symbols: `LeafAppendEpochFence.OnStale`, `LeafAppendEpochFence.FenceSplitAsync`.

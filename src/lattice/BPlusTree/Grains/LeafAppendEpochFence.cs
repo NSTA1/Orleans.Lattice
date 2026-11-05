@@ -100,6 +100,13 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     /// (#5709): until then, and for good once it is found unreachable, its view of the gate
     /// reads closed, so it claims nothing and appends unstamped.
     /// </param>
+    /// <param name="loadedStateCurrent">
+    /// Whether the leaf's durable state row is still the one this activation loaded or last
+    /// wrote, read fresh from storage (#5841, rule A). A claim's row write is followed by
+    /// this read: an activation whose leaf another activation has since persisted - a split
+    /// donor's narrowing above all - holds a stale span and must not claim. <see langword="null"/>
+    /// skips the check (a fence built without a leaf, in tests).
+    /// </param>
     public LeafAppendEpochFence(
         Guid leafId,
         IWalAppendFenceGate gate,
@@ -107,7 +114,8 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         Action<long> onSuperseded,
         KeyValuePair<string, object?> treeTag,
         KeyValuePair<string, object?> tenantTag,
-        bool requireReachabilityProof = false)
+        bool requireReachabilityProof = false,
+        Func<Task<bool>>? loadedStateCurrent = null)
     {
         ArgumentNullException.ThrowIfNull(gate);
         ArgumentNullException.ThrowIfNull(storage);
@@ -119,13 +127,13 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         _treeTag = treeTag;
         _tenantTag = tenantTag;
         _requireReachability = requireReachabilityProof;
+        _loadedStateCurrent = loadedStateCurrent;
     }
+
+    private readonly Func<Task<bool>>? _loadedStateCurrent;
 
     /// <summary>This activation's <see cref="ClaimFailureBackoff"/>; test seam.</summary>
     internal TimeSpan ClaimFailureBackoffForTesting { get; set; } = ClaimFailureBackoff;
-
-    /// <summary>Invoked by a hand-off close between a partition's re-claim and its head read; test seam (#5836).</summary>
-    internal Func<int, Task>? AfterCloseReclaimForTesting { get; set; }
 
     /// <summary>The epoch this activation holds; 0 before its first claim.</summary>
     internal long Epoch
@@ -265,19 +273,20 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     /// <param name="requests">The partitions to arm, each with the deferred generation to resolve there, if any.</param>
     /// <param name="cancellationToken">The arm's cancellation.</param>
     /// <returns>
-    /// Per request, the re-claim head of a resolved deferred generation, <c>-1</c> when
-    /// none was given, or <see langword="null"/> when the partition could not be armed;
-    /// it then stays pre-arm, which holds it on the replay-based advance.
+    /// Per request, the re-claim head of a resolved deferred generation and the generation
+    /// the re-claim claimed (review N2), a head of <c>-1</c> when none was given, or
+    /// <see langword="null"/> when the partition could not be armed; it then stays
+    /// pre-arm, which holds it on the replay-based advance.
     /// </returns>
     /// <exception cref="LeafRetiredException">The activation was found superseded.</exception>
-    internal async Task<long?[]> ArmAsync(
+    internal async Task<(long Head, long Generation)?[]> ArmAsync(
         Func<int, IWalShardGrain> shardFor,
         IReadOnlyList<(int Partition, WalRoutingInitiator Initiator, long Generation)> requests,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(shardFor);
         ArgumentNullException.ThrowIfNull(requests);
-        var arms = new Task<long?>[requests.Count];
+        var arms = new Task<(long Head, long Generation)?>[requests.Count];
         for (var i = 0; i < requests.Count; i++)
         {
             var (partition, initiator, generation) = requests[i];
@@ -285,7 +294,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         }
 
         await Task.WhenAll(arms).ConfigureAwait(false);
-        var heads = new long?[arms.Length];
+        var heads = new (long Head, long Generation)?[arms.Length];
         for (var i = 0; i < arms.Length; i++)
         {
             heads[i] = arms[i].Result;
@@ -295,7 +304,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     }
 
     /// <summary>One partition's arm: claim rounds as <see cref="ClaimAsync"/> makes, through the arm call.</summary>
-    private async Task<long?> ArmPartitionAsync(
+    private async Task<(long Head, long Generation)?> ArmPartitionAsync(
         IWalShardGrain shard,
         int partition,
         WalRoutingInitiator initiator,
@@ -334,7 +343,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                         p.OnDemand = true;
                     }
 
-                    return result.ReclaimHead;
+                    return (result.ReclaimHead, result.ReclaimGeneration);
                 }
 
                 await RaiseEpochAboveAsync(epoch, result.Refusal).ConfigureAwait(false);
@@ -353,6 +362,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             // Fail safe: the partition stays pre-arm and advances by replay.
         }
 
+        // RED PROOF: a failed arm is silent (review N1).
         return null;
     }
 
@@ -457,32 +467,24 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     }
 
     /// <summary>
-    /// A hand-off close's fence for a leaf initiator (epic #5605, member 2; design owner
-    /// Q1): raises this activation's epoch to the row's plus one, conditionally on the
-    /// ETag it last wrote, then re-claims the raised epoch at every partition it had
-    /// claimed in this activation - including one whose claim an unloaded rejection reset
-    /// after a WAL shard restart (#5664 (b)) - and returns the claim heads indexed by
-    /// partition (<c>-1</c> only for a partition this activation never claimed, where
-    /// none of its appends was stamped). Every append stamped with the old epoch was
-    /// allocated below those heads or is rejected, self-fenced, and re-admitted by its
-    /// caller; a write admitted before the close and dispatched after it is self-fenced
-    /// at dispatch (<see cref="OnAdmitted"/>, #5664 (a)).
+    /// A split close's fence (#5841, rule A, the split's half), run by the donor's live
+    /// activation once its narrowed state is durable: raises the leaf's epoch row above every
+    /// epoch issued and claims the raised epoch at every partition
+    /// (<see cref="LeafSplitDuplicateFence"/>), so every other activation of the donor -
+    /// one that claimed before the split, armed or not - is refused. This activation adopts
+    /// the raised row, epoch and claims (A3), and counts the close in either case, so a write
+    /// it admitted before the narrowing and dispatches after it is self-fenced and re-admitted
+    /// (<see cref="OnAdmitted"/>, #5664 (a)).
     /// </summary>
     /// <param name="shardFor">The WAL shard grain of a partition.</param>
     /// <param name="partitionCount">The tree's WAL partition count.</param>
     /// <param name="cancellationToken">The close's cancellation.</param>
-    /// <returns>
-    /// The heads, or <see langword="null"/> when the activation has stamped nothing: its
-    /// appends were unstamped, and the watermark reports them.
-    /// </returns>
-    /// <exception cref="LeafRetiredException">The activation was found superseded.</exception>
-    /// <exception cref="InvalidOperationException">A partition could not be re-claimed, or the gate view is closed while this activation has stamped (#5664 (c)); the caller leaves its marker open.</exception>
-    internal async Task<long[]?> BumpAndReclaimAsync(Func<int, IWalShardGrain> shardFor, int partitionCount, CancellationToken cancellationToken)
+    /// <returns>The heads read after the raised claims, indexed by partition, or <see langword="null"/> when no activation of the leaf ever claimed.</returns>
+    /// <exception cref="LeafRetiredException">This activation was already found superseded.</exception>
+    internal async Task<long[]?> FenceSplitAsync(Func<int, IWalShardGrain> shardFor, int partitionCount, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(shardFor);
-        long raised;
-        int[] claimed;
-        Task closeBump;
+        TaskCompletionSource installed;
         while (true)
         {
             Task? pending;
@@ -496,93 +498,135 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                         throw LeafRetiredException.ForSupersededActivation(_leafId, _epoch);
                     }
 
-                    if (_epoch == 0 || _row is null)
-                    {
-                        return null;
-                    }
-
-                    claimed = _partitions.Where(p => p.Value.EverClaimed).Select(p => p.Key).ToArray();
                     if (!IsGateOpenLocked())
                     {
-                        // #5664 (c): with the gate view closed the close cannot bump, but an
+                        // #5664 (c): with the gate view closed the fence cannot claim, but an
                         // append this activation stamped may still be in flight. Only an
                         // activation that never stamped may close on unfenced heads; this one
                         // leaves the marker open for a later, fenced close.
-                        if (claimed.Length > 0)
+                        if (_partitions.Values.Any(p => p.EverClaimed))
                         {
                             throw new InvalidOperationException(
                                 $"Leaf {_leafId:N} has stamped appends that may be in flight and its view of the append-fence gate is closed; the hand-off stays open until a fenced close.");
                         }
 
-                        return null;
+                        // Never stamped: its own appends were unstamped. The durable fence
+                        // below still runs for a duplicate whose silo's view is open; it is
+                        // one row read when nothing ever claimed.
                     }
 
-                    // #5662: the close's row write is this activation's bump, installed in
-                    // the step that read the epoch. A floor refusal concurrent with it joins
-                    // it rather than writing the same row beside it, which would conflict on
-                    // the activation's own ETag and read as a supersession (the #5643
-                    // class); its epoch check then sends it to claim under the raised epoch.
-                    raised = _epoch + 1;
-                    closeBump = WriteCloseBumpAsync(_row, raised);
-                    if (!closeBump.IsCompleted)
-                    {
-                        _bump = closeBump;
-                    }
-
+                    // #5662: the fence's row write is this activation's bump. A floor
+                    // refusal concurrent with it joins it rather than writing the row beside
+                    // it; its epoch check then sends it to claim under the raised epoch.
+                    installed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    _bump = installed.Task;
                     break;
                 }
             }
 
-            await pending.ConfigureAwait(false);
+            try
+            {
+                await pending.ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // A claim or bump that failed has already settled this activation's state;
+                // the loop re-checks it.
+            }
         }
 
-        await closeBump.ConfigureAwait(false);
-
-        var heads = new long[partitionCount];
-        Array.Fill(heads, -1L);
-        foreach (var partition in claimed)
+        try
         {
-            if (partition >= partitionCount)
+            // RED PROOF (#5841 as filed): the bump only when this activation claimed.
+            if (!HasClaimedAnywhere)
             {
-                continue;
+                CountSplitClose();
+                return null;
             }
 
-            // #5836: a concurrent floor refusal can raise the epoch again between this
-            // partition's re-claim and the head read. The head recorded with the claim is
-            // accepted whenever that claim's epoch is at least the raised one: it bounds
-            // every append stamped below it.
-            if (_gate.IsPreArmOpen)
-            {
-                // #5833: in pre-arm mode a stamp request never claims; the raised epoch is
-                // re-claimed by the arm call, which also refreshes the foreign high.
-                await ArmPartitionAsync(shardFor(partition), partition, WalRoutingInitiator.None, 0, cancellationToken).ConfigureAwait(false);
-            }
-            else
-            {
-                await StampForAsync(shardFor(partition), partition, cancellationToken).ConfigureAwait(false);
-            }
-
-            if (AfterCloseReclaimForTesting is { } hook)
-            {
-                await hook(partition).ConfigureAwait(false);
-            }
-
-            long? head = null;
-            lock (_sync)
-            {
-                if (_partitions.TryGetValue(partition, out var p) && p.ClaimedEpoch >= raised)
+            var heads = await LeafSplitDuplicateFence.FenceAsync(
+                _storage,
+                shardFor,
+                partitionCount,
+                _leafId,
+                row =>
                 {
-                    head = p.Head;
+                    lock (_sync)
+                    {
+                        if (!_stale)
+                        {
+                            // The epoch and the close count move in one step, so a stamp
+                            // carrying the raised epoch is never read alongside the old count.
+                            _row = row;
+                            _epoch = row.State.Epoch;
+                            Volatile.Write(ref _handOffCloses, _handOffCloses + 1);
+                        }
+                    }
+                },
+                (partition, head) =>
+                {
+                    lock (_sync)
+                    {
+                        if (!_stale && _row is { } row && _epoch == row.State.Epoch)
+                        {
+                            var p = PartitionLocked(partition);
+                            if (p.ClaimedEpoch <= _epoch)
+                            {
+                                p.ClaimedEpoch = _epoch;
+                                p.EverClaimed = true;
+                                p.Head = head;
+                                p.OnDemand = false;
+                            }
+                        }
+                    }
+                },
+                cancellationToken).ConfigureAwait(false);
+            if (heads is null)
+            {
+                // Nothing ever claimed: no duplicate holds an epoch to refuse, but a write
+                // this activation admitted before the narrowing must still not claim and
+                // append after it.
+                lock (_sync)
+                {
+                    if (!_stale)
+                    {
+                        Volatile.Write(ref _handOffCloses, _handOffCloses + 1);
+                    }
                 }
             }
 
-            heads[partition] = head ?? throw new InvalidOperationException(
-                $"Leaf {_leafId:N} could not re-claim its raised append epoch at WAL partition {partition}; the hand-off stays open.");
+            return heads;
         }
+        finally
+        {
+            lock (_sync)
+            {
+                if (ReferenceEquals(_bump, installed.Task))
+                {
+                    _bump = null;
+                }
+            }
 
-        return heads;
+            installed.TrySetResult();
+        }
     }
 
+    /// <summary>
+    /// Counts a split close that another grain fences durably (#5841, pre-arm): the shard
+    /// root raises this leaf's epoch row and claims it when it links the split. Locally,
+    /// only the close count moves, so a write this activation admitted before its narrowing
+    /// and dispatches after it is self-fenced and re-admitted (<see cref="OnAdmitted"/>).
+    /// </summary>
+    internal void CountSplitClose()
+    {
+        lock (_sync)
+        {
+            if (!_stale)
+            {
+                Volatile.Write(ref _handOffCloses, _handOffCloses + 1);
+            }
+        }
+    }
     /// <inheritdoc />
     public void OnStampedMethodUnknown()
     {
@@ -832,9 +876,10 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         try
         {
             var row = await WalAppendFenceRows.ReadLeafEpochAsync(_storage, _leafId).ConfigureAwait(false);
-            var epoch = row.State.Epoch + 1;
-            row.State.Epoch = epoch;
-            await WriteRowOrSupersedeAsync(row).ConfigureAwait(false);
+            row.State.Epoch++;
+            row = await WriteRowOrSupersedeAsync(row).ConfigureAwait(false);
+
+            var epoch = row.State.Epoch;
             lock (_sync)
             {
                 _row = row;
@@ -884,33 +929,6 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         }
     }
 
-    /// <summary>
-    /// The hand-off close's row write (<see cref="BumpAndReclaimAsync"/>). The row is
-    /// written before the in-memory epoch moves, so an append admitted in between is
-    /// stamped with the old epoch and rejected, never accepted above the heads (cost
-    /// only).
-    /// </summary>
-    private async Task WriteCloseBumpAsync(GrainState<LeafAppendEpochState> row, long raised)
-    {
-        try
-        {
-            row.State.Epoch = raised;
-            await WriteRowOrSupersedeAsync(row).ConfigureAwait(false);
-            lock (_sync)
-            {
-                _epoch = Math.Max(_epoch, raised);
-                Volatile.Write(ref _handOffCloses, _handOffCloses + 1);
-            }
-        }
-        finally
-        {
-            lock (_sync)
-            {
-                _bump = null;
-            }
-        }
-    }
-
     private async Task BumpAsync(long epoch, long refusal)
     {
         try
@@ -921,12 +939,12 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 row = _row!;
             }
 
-            var raised = Math.Max(refusal, epoch) + 1;
-            row.State.Epoch = raised;
-            await WriteRowOrSupersedeAsync(row).ConfigureAwait(false);
+            row.State.Epoch = Math.Max(refusal, epoch) + 1;
+            row = await WriteRowOrSupersedeAsync(row).ConfigureAwait(false);
             lock (_sync)
             {
-                _epoch = raised;
+                _row = row;
+                _epoch = row.State.Epoch;
             }
         }
         finally
@@ -938,7 +956,13 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         }
     }
 
-    private async Task WriteRowOrSupersedeAsync(GrainState<LeafAppendEpochState> row)
+    /// <summary>
+    /// Writes this activation's epoch row conditionally on the ETag it last read or wrote,
+    /// and returns the row written. Only claims and split fences write the row, so a
+    /// conflict means another activation claimed since, or a split fenced this one: the
+    /// activation is superseded.
+    /// </summary>
+    private async Task<GrainState<LeafAppendEpochState>> WriteRowOrSupersedeAsync(GrainState<LeafAppendEpochState> row)
     {
         try
         {
@@ -947,16 +971,14 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 WalAppendFenceRows.LeafEpochGrainType,
                 WalAppendFenceRows.LeafEpochKey(_leafId),
                 row).ConfigureAwait(false);
+            return row;
         }
         catch (InconsistentStateException)
         {
-            // Only claims write the epoch row, so a conflict means another
-            // activation claimed since this one read or last wrote it.
             MarkStale();
             throw LeafRetiredException.ForSupersededActivation(_leafId, row.State.Epoch);
         }
     }
-
     private void MarkStale()
     {
         long epoch;

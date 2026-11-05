@@ -1569,7 +1569,8 @@ that capability joins, the gate closes again and leaves claim eagerly as above.
   response reports the highest offset any *other* activation of the same leaf
   allocated, so a duplicate activation's record is read before the leaf advances
   over its own. After a restart everything below the recovered head counts as
-  foreign, and the table folds into one floor if it outgrows 16,384 leaves.
+  foreign. Past 16,384 leaves the older half of the table, by highest offset, folds
+  into one floor, so an arm is held back only to that half's newest record.
 - **The arm.** A leaf arms only when its pin holds the partition's WAL floor: inside a
   starvation drive (the WAL GC found it holding the floor), or on its snapshot recheck
   tick when it has live data and no proven checkpoint on any partition. It never arms
@@ -1627,7 +1628,7 @@ by an older build, or while the gate was closed, opens one when it resumes.
 
 | Hand-off | Initiator | Marker | Fence at close |
 |----------|-----------|--------|----------------|
-| Leaf split | The donor leaf | The sibling's, opened at its birth | The donor raises its own epoch, once its span has narrowed, and re-claims it at every partition it had claimed |
+| Leaf split | The donor leaf | The sibling's, opened at its birth | Once the donor's narrowed span is durable, the leaf's epoch row is raised above every epoch issued and the raised epoch is claimed at every partition; in pre-arm mode the shard root does this when it links the split, before its deferred close |
 | Leaf reclaim | The absorbed neighbour | The survivor's, opened before its range widens | The neighbour's entries are retired at every partition, and the allocator heads are read after the retirement |
 | Adaptive split, consolidation fold | The donor shard root | The target shard root's, opened when the migration begins | The donor raises its routing generation, after the reject phase and the drain, and re-claims it at every partition |
 | Range delete | The tree's range-delete fence | Every shard root's, range-scoped | The fence raises the tree's range-delete generation and re-claims it at every partition |
@@ -1671,12 +1672,39 @@ The close's heads bound every append the donor makes under its old epoch
 - **Admission decides the stamp.** A write is admitted against the donor's hand-off
   closes, before its span check. If a close happens before the write reaches the WAL,
   the write is self-fenced and re-admitted, rather than stamped with the raised epoch.
-- **Every partition is re-claimed.** The close re-claims at every partition the
-  activation claimed, including one whose claim a WAL shard restart reset. It records
-  no head (`-1`) only for a partition the activation never claimed.
+- **Every partition is claimed.** The close claims the raised epoch at every
+  partition, including one whose claim a WAL shard restart reset and one the
+  activation never wrote, so a duplicate is refused there too. The raise is held in
+  the leaf's own entry at each partition, never in the partition's shared retired
+  floor, which every other leaf's claims are checked against.
 - **No fence, no close.** If the activation's view of the gate is closed after it has
   stamped, the close cannot raise its epoch. The marker stays open until a later
   close can.
+
+**A duplicate of the donor is fenced too**
+([#5841](https://github.com/NSTA1/Orleans.Lattice/issues/5841)). Another activation of
+the donor that loaded its state before the split still holds the old span. It could
+claim, or arm, after the split, then append an epoch-only write of a moved key that
+nothing routes to the sibling. Two ordered pairs prevent it:
+
+- **The split writes, then reads.** Only once its narrowed state is durable does the
+  split read the leaf's epoch row. If any activation has ever claimed, the split
+  raises the row conditionally on what it read and claims the raised epoch at every
+  partition. A duplicate that claimed before that read is refused at its next append,
+  whether or not the splitting activation itself ever claimed.
+- **A claim writes, then reads.** A claim writes the epoch row first, then reads the
+  leaf's own state row fresh. If that row's ETag is not the one the activation holds,
+  the activation is stale: it claims nowhere, and every append waiting on the claim
+  is refused. The read is serialised with the activation's own persists, so its own
+  write in flight never reads as another's.
+
+Between them, either the split sees the duplicate's claim, or the duplicate sees the
+narrowing. That needs the storage provider to give strong read-after-write across
+clients for both rows: a write that has completed is visible to any later read. The
+Azure Table and in-memory providers give it; a provider with session or eventual
+consistency does not. In pre-arm mode an armed live donor is fenced along with its
+duplicates when the shard root raises the row; it deactivates at its next stamped
+append and reactivates from the narrowed state, which costs latency, never data.
 The same rule stops a leaf from deactivating itself after it raises its epoch above
 a retired floor ([#5643](https://github.com/NSTA1/Orleans.Lattice/issues/5643)).
 

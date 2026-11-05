@@ -34,9 +34,9 @@ internal sealed partial class WalShardGrain
             return WalAppendFenceArmResult.Refuse(claim.Refusal);
         }
 
-        var reclaimHead = deferredInitiator.IsSet
+        var (reclaimHead, reclaimGeneration) = deferredInitiator.IsSet
             ? await ResolveDeferredGenerationAsync(deferredInitiator, deferredGeneration, cancellationToken).ConfigureAwait(true)
-            : -1L;
+            : (-1L, 0L);
 
         long foreignHigh;
         lock (_stateGate)
@@ -46,11 +46,12 @@ internal sealed partial class WalShardGrain
             foreignHigh = ForeignHighLocked(leafId, activation);
         }
 
-        return new WalAppendFenceArmResult(true, claim.Head, 0, foreignHigh, reclaimHead);
+        return new WalAppendFenceArmResult(true, claim.Head, 0, foreignHigh, reclaimHead, reclaimGeneration);
     }
 
     /// <summary>
-    /// Re-claims a deferred close's generation (C2) and returns the re-claim's head. A
+    /// Re-claims a deferred close's generation (C2) and returns the re-claim's head and the
+    /// generation it claimed (review N2). A
     /// generation below the one this partition has loaded is presented at the loaded
     /// value (C5): that higher re-claim already refuses every write admitted under the
     /// deferred one, and the current head lies above it, so the arm takes the fast path
@@ -60,7 +61,7 @@ internal sealed partial class WalShardGrain
     /// The generation stayed refused: it lies at or below the routing floor (the tree was
     /// purged since the close), so the arm does not hold at this partition.
     /// </exception>
-    private async Task<long> ResolveDeferredGenerationAsync(WalRoutingInitiator initiator, long generation, CancellationToken cancellationToken)
+    private async Task<(long Head, long Generation)> ResolveDeferredGenerationAsync(WalRoutingInitiator initiator, long generation, CancellationToken cancellationToken)
     {
         await LoadRoutingGenerationAsync(initiator, cancellationToken).ConfigureAwait(true);
         var present = generation;
@@ -78,7 +79,7 @@ internal sealed partial class WalShardGrain
             RecordFenceClaim(LatticeMetrics.AppendFenceKindGeneration, result.Accepted);
             if (result.Accepted)
             {
-                return result.Head;
+                return (result.Head, generation); // RED PROOF: the requested generation (review N2)
             }
 
             present = Math.Max(present, result.Refusal);

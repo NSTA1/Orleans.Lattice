@@ -373,7 +373,7 @@ internal sealed partial class BPlusLeafGrain
             return;
         }
 
-        long?[] heads;
+        (long Head, long Generation)?[] heads;
         try
         {
             heads = await fence.ArmAsync(
@@ -389,9 +389,21 @@ internal sealed partial class BPlusLeafGrain
         List<(int Partition, int Shard, long Generation, long Head)>? resolved = null;
         for (var i = 0; i < requests.Count; i++)
         {
-            if (requests[i].Initiator.IsSet && heads[i] is { } head && head >= 0)
+            if (heads[i] is null)
             {
-                (resolved ??= []).Add((requests[i].Partition, requests[i].Initiator.Index, requests[i].Generation, head));
+                // Review N1: counted by the fence; the partition stays pre-arm.
+                ResolveLogger()?.LogDebug(
+                    "Leaf {LeafId}: could not arm at WAL partition {Partition}; it stays pre-arm and advances there by replay until a later arm lands (#5833).",
+                    context.GrainId,
+                    requests[i].Partition);
+                continue;
+            }
+
+            if (requests[i].Initiator.IsSet && heads[i] is { Head: >= 0 } reclaim)
+            {
+                // Review N2: resolved with the generation the re-claim actually claimed,
+                // which also covers a close deferred above the one requested.
+                (resolved ??= []).Add((requests[i].Partition, requests[i].Initiator.Index, Math.Max(requests[i].Generation, reclaim.Generation), reclaim.Head));
             }
         }
 

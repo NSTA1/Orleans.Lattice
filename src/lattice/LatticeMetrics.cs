@@ -11552,6 +11552,17 @@ public static class LatticeMetrics
         Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.self_fenced", unit: "{append}",
             description: "Stamped leaf appends rejected because the leaf's own activation raised its epoch since (a hand-off close or a floor bump); retried at the caller's seam, the activation keeps serving (epic #5605), by tree.");
 
+    /// <summary>
+    /// Counter of leaf arms that failed at a WAL partition (#5833, review N1): the arm's
+    /// claim rounds were all refused, or a call failed for a reason other than the
+    /// activation being superseded. Tagged with <see cref="TagTree"/> and the tenant. The
+    /// partition stays pre-arm, so the leaf advances there by replay - latency, never
+    /// data - and the next coverage-lag tick or GC drive arms again.
+    /// </summary>
+    public static readonly Counter<long> WalAppendFenceArmFailures =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.arm_failures", unit: "{arm}",
+            description: "Leaf arms that failed at a WAL partition (#5833); the partition stays pre-arm and advances by replay until a later arm lands (epic #5605), by tree.");
+
     /// <summary><see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a leaf reclaim onto its survivor.</summary>
     public const string HandOffKindReclaim = "reclaim";
 
