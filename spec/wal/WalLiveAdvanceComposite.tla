@@ -67,6 +67,8 @@ VARIABLES
     caught,        \* R: the re-seed catch-up ran after a 10.2.0 purge
     reinit,        \* R: the re-created incarnation's first initialisation ran
     pGen,          \* the generation S held when the tree was purged
+    fo,            \* R: each initiator's loaded entry is floor-only: a cold load installed the floor (#5833 C1)
+    cold,          \* ghost: each initiator's loaded entry came from a cold load, not a claim
     phase,         \* B: "window" while a bulk switch creates L, then "live"
     hint,          \* B: the bulk-born leaf's birth hint
     born,          \* B: L was born by the bulk switch
@@ -77,7 +79,7 @@ VARIABLES
 
 eVars == <<epoch, cstage, claimHead, prior, maxClaimed, lRetired, staleAccepted, memFence, fence, retired>>
 hVars == <<mInit, hoOpen, hoClosedAt, windows, fWin, pend, pendGen>>
-rVars == <<recreated, legacy, caught, reinit, pGen>>
+rVars == <<recreated, legacy, caught, reinit, pGen, fo, cold>>
 bVars == <<phase, hint, born, cache, rp>>
 vars == <<next, author, up, dupUsed, restarted, eVars, hVars, rVars, bVars, broken>>
 
@@ -96,7 +98,8 @@ Edges ==
      "RoutingMeetsCoreStraddler",
      "RoutingMeetsCoreInit",
      "BulkMeetsCoreCreate",
-     "DeferredCloseMeetsCoreResolve"}
+     "DeferredCloseMeetsCoreResolve",
+     "ColdLoadMeetsCoreStraddler"}
 
 Fails(edge, ok) == IF ok THEN {} ELSE {edge}
 
@@ -128,6 +131,8 @@ TypeOK ==
     /\ caught \in BOOLEAN
     /\ reinit \in BOOLEAN
     /\ pGen \in Epochs
+    /\ fo \in [Inits -> BOOLEAN]
+    /\ cold \in [Inits -> BOOLEAN]
     /\ phase \in {"window", "live"}
     /\ hint \in 0..MaxOff
     /\ born \in BOOLEAN
@@ -170,6 +175,8 @@ Init ==
     /\ caught = FALSE
     /\ reinit = FALSE
     /\ pGen = 0
+    /\ fo = [i \in Inits |-> FALSE]
+    /\ cold = [i \in Inits |-> FALSE]
     /\ born = FALSE
     /\ cache = [a \in Acts |-> {}]
     /\ rp = [a \in Acts |-> -1]
@@ -253,9 +260,13 @@ Guarantees ==
 HAllocGuard(fstamp, fFence) == fstamp >= fFence
 CloseHeads == {h \in 0..next : \A o \in Offs : author[o] \in {Foreign} => o < h}
 
-\* R: Alloc admits on a loaded entry not above the stamp; a re-presented
+\* R: Alloc admits on a loaded entry not above the stamp, and strictly above
+\* a floor-only one (#5833 C1); a re-presented
 \* claim is admitted above the floor and not below the entry (ClaimAdmits).
-RAllocGuard(i, loaded, pstamp) == loaded[i] # Unloaded /\ pstamp[i] >= loaded[i]
+RAllocGuard(i, loaded, pstamp) ==
+    /\ loaded[i] # Unloaded
+    /\ pstamp[i] >= loaded[i]
+    /\ fo[i] => pstamp[i] > loaded[i]
 ClaimAdmits(i, pstamp, walFloor, entryRow) == pstamp[i] > walFloor[i] /\ pstamp[i] >= entryRow[i]
 
 \* The core's view of E: the current activation and the stale ones.
@@ -453,7 +464,21 @@ Restart ==
     /\ restarted' = TRUE
     /\ memFence' = [i \in Inits |-> Unloaded]
     /\ UNCHANGED <<next, author, up, dupUsed, epoch, cstage, claimHead, prior, maxClaimed>>
-    /\ UNCHANGED <<lRetired, staleAccepted, fence, retired, hVars, rVars, bVars, broken>>
+    /\ UNCHANGED <<lRetired, staleAccepted, fence, retired, hVars, recreated, legacy, caught, reinit, pGen, bVars, broken>>
+    /\ fo' = [i \in Inits |-> FALSE]
+    /\ cold' = [i \in Inits |-> FALSE]
+
+(* ColdLoad(i) (#5833 C1): an append met i's unloaded entry, and the WAL *)
+(* shard loads it read-only, with no claim: the higher of the durable row *)
+(* and the floor, marked floor-only when the row is not above the floor.  *)
+ColdLoad(i) ==
+    /\ memFence[i] = Unloaded
+    /\ memFence' = [memFence EXCEPT ![i] = Max2(fence[i], retired[i])]
+    /\ fo' = [fo EXCEPT ![i] = fence[i] <= retired[i]]
+    /\ cold' = [cold EXCEPT ![i] = TRUE]
+    /\ UNCHANGED <<next, author, up, dupUsed, epoch, cstage, claimHead, prior, maxClaimed>>
+    /\ UNCHANGED <<lRetired, staleAccepted, fence, retired, hVars, recreated, legacy, caught, reinit, pGen, bVars, broken>>
+    /\ UNCHANGED restarted
 
 (* Represent(i): an append met i's unloaded entry, and i re-presents a    *)
 (* claim of a stamp it has held, which E's claim write admits.           *)
@@ -467,7 +492,9 @@ Represent(i) ==
         /\ broken' = broken \cup Fails("ClaimWriteMeetsRoutingClaim",
                                          i # "S" \/ ClaimAdmits("S", [j \in Inits |-> s], retired, fence))
     /\ UNCHANGED <<next, author, up, dupUsed, epoch, cstage, claimHead, prior, maxClaimed>>
-    /\ UNCHANGED <<lRetired, staleAccepted, retired, hVars, rVars, bVars>>
+    /\ UNCHANGED <<lRetired, staleAccepted, retired, hVars, recreated, legacy, caught, reinit, pGen, bVars>>
+    /\ fo' = [fo EXCEPT ![i] = FALSE]
+    /\ cold' = [cold EXCEPT ![i] = FALSE]
     /\ UNCHANGED restarted
 
 (* Purge: the new build purges the tree. S's floor rises over its         *)
@@ -493,6 +520,8 @@ Purge ==
     /\ UNCHANGED restarted
     /\ pend' = FALSE
     /\ UNCHANGED pendGen
+    /\ fo' = [i \in Inits |-> FALSE]
+    /\ cold' = [i \in Inits |-> FALSE]
 
 (* LegacyPurge: the purge finished on 10.2.0, which keeps every row and   *)
 (* L's marker. L's running activations are the purged incarnation's.     *)
@@ -507,6 +536,7 @@ LegacyPurge ==
     /\ UNCHANGED <<next, author, up, dupUsed, epoch, cstage, claimHead, prior, maxClaimed>>
     /\ UNCHANGED <<staleAccepted, memFence, fence, retired, hVars, caught, reinit, bVars, broken>>
     /\ UNCHANGED restarted
+    /\ UNCHANGED <<fo, cold>>
 
 (* CatchUp: after a 10.2.0 purge, S re-seeds the tombstone and resets L's *)
 (* marker to uninitialised.                                               *)
@@ -519,17 +549,22 @@ CatchUp ==
     /\ UNCHANGED <<recreated, legacy, reinit, pGen, bVars, broken>>
     /\ UNCHANGED restarted
     /\ UNCHANGED <<pend, pendGen>>
+    /\ UNCHANGED <<fo, cold>>
 
 (* StraddlerAlloc: a write S admitted before the purge, under a stamp it *)
-(* held then, is allocated after it if E's entry check admits it.        *)
+(* held then, is allocated after it if E's entry check admits it, and,   *)
+(* on a floor-only entry, only strictly above it: R's refinement of the  *)
+(* admission, which E's entry check does not state (#5833 C1).           *)
 StraddlerAlloc ==
     /\ recreated
     /\ next < MaxOff
     /\ \E s \in 1..pGen :
         /\ EAppendLoaded("S")
         /\ EAppendAdmits("S", s)
+        /\ fo["S"] => s > memFence["S"]
         /\ broken' = broken \cup Fails("EntryCheckMeetsRoutingAdmission", RAllocGuard("S", memFence, [i \in Inits |-> s]))
                                \cup Fails("RoutingMeetsCoreStraddler", CStraddlerAlloc)
+                               \cup Fails("ColdLoadMeetsCoreStraddler", ~cold["S"] \/ CStraddlerAlloc)
     /\ next' = next + 1
     /\ author' = [author EXCEPT ![next] = Straddler]
     /\ UNCHANGED <<up, dupUsed, eVars, hVars, rVars, bVars>>
@@ -560,6 +595,8 @@ FirstInit ==
     /\ UNCHANGED <<hoOpen, windows, fWin, recreated, legacy, caught, pGen, bVars>>
     /\ UNCHANGED restarted
     /\ UNCHANGED <<pend, pendGen>>
+    /\ fo' = [fo EXCEPT !["S"] = FALSE]
+    /\ cold' = [cold EXCEPT !["S"] = FALSE]
 
 (* Birth: the bulk switch creates L, its first activation born with any   *)
 (* read position and any of the records allocated so far.                *)
@@ -596,6 +633,7 @@ Next ==
     \/ \E a \in Acts : ResolveDeferred(a) /\ Kept
     \/ Restart /\ Kept
     \/ \E i \in Inits : Represent(i) /\ Kept
+    \/ \E i \in Inits : ColdLoad(i) /\ Kept
     \/ Purge /\ Kept
     \/ LegacyPurge /\ Kept
     \/ CatchUp /\ Kept
@@ -624,4 +662,5 @@ RoutingMeetsCoreStraddler == "RoutingMeetsCoreStraddler" \notin broken
 RoutingMeetsCoreInit == "RoutingMeetsCoreInit" \notin broken
 BulkMeetsCoreCreate == "BulkMeetsCoreCreate" \notin broken
 DeferredCloseMeetsCoreResolve == "DeferredCloseMeetsCoreResolve" \notin broken
+ColdLoadMeetsCoreStraddler == "ColdLoadMeetsCoreStraddler" \notin broken
 =============================================================================

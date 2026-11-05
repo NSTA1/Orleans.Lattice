@@ -15,13 +15,14 @@
     "Birth",
     "DeferredClose",
     "ResolveDeferred",
+    "ColdLoad",
     "Stutter"
   ],
   "counts": {
-    "invariants": 14,
+    "invariants": 15,
     "properties": 0,
-    "actions": 17,
-    "mutations": 31,
+    "actions": 18,
+    "mutations": 33,
     "behaviourRows": 15,
     "distinctStates": 131423
   }

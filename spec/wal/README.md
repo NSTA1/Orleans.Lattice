@@ -58,7 +58,7 @@ and its mutations as the record each module took its own from.
 | `WalRoutingFloor` | 3 | 1 | 14 | 21 | 16 | 28,956 |
 | `WalBulkSwitch` | 6 | 1 | 21 | 28 | 26 | 1,047,630 |
 | `WalLiveAdvanceCore` | 7 | 1 | 27 | 50 | 33 | 2,021,047 |
-| `WalLiveAdvanceComposite` | 14 | 0 | 17 | 31 | 15 | PENDING_COMPOSITE |
+| `WalLiveAdvanceComposite` | 15 | 0 | 18 | 33 | 15 | PENDING_COMPOSITE |
 
 `Actions` counts the disjuncts of `Next`, including the non-behavioural `Stutter`
 of `WalMove`, `WalAppendEpoch`, `WalHandOffFence`, `WalRoutingFloor`, `WalBulkSwitch` and `WalLiveAdvanceCore`. `Behaviour rows` counts the action rows of the
@@ -781,6 +781,7 @@ lists, so a module and its copy cannot drift apart.
 | `RoutingMeetsCoreStraddler` | Invariant | R -> C: a straddler R allows is one C's environment allows. |
 | `RoutingMeetsCoreInit` | Invariant | R -> C: a first initialisation R allows records heads C's environment allows. |
 | `BulkMeetsCoreCreate` | Invariant | B -> C: a birth B allows is one C's environment allows. |
+| `ColdLoadMeetsCoreStraddler` | Invariant | R -> C: a straddler admitted through a read-only cold-loaded entry is one C allows; the cold load never lowers a re-claimed generation (#5839). |
 | `DeferredCloseMeetsCoreResolve` | Invariant | H -> C: a lazy close H allows defers L's head at the raised generation, and its resolution records the allocator head, as C assumes (#5839). |
 
 The base checks every edge in seconds. Each edge has a witness mutation, which
