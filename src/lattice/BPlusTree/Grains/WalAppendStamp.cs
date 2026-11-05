@@ -17,6 +17,23 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// to it, so an arm can tell its own appends from every other activation's. Empty from
 /// a build that does not send it, which counts as foreign to every claimant.
 /// </param>
+/// <param name="Forwarder">
+/// The leaf that forwarded the write into the authoring leaf before that leaf was linked
+/// (#5837, condition 4): the first forwarder, kept through any re-forward (F2). Empty for
+/// a write that was not forwarded, or from a build that does not send it. The WAL shard
+/// attributes the record to this leaf as well, under no activation token, so every
+/// activation of the forwarder counts it as foreign.
+/// </param>
+/// <param name="ForwarderTag">
+/// The narrow that moved the forwarded key out of <paramref name="Forwarder"/>'s span:
+/// the split's sibling id (#5837, X2). Ignored when <paramref name="Forwarder"/> is empty.
+/// </param>
+/// <param name="ReaderTag">
+/// The authoring activation's persisted narrow tag (#5837, X1, X3, X7): the sibling id
+/// of the last narrow this activation durably wrote, or empty. The WAL shard leaves the
+/// leaf's forwards tagged with it out of the foreign high it reports on this append,
+/// because the activation no longer owns the keys they moved.
+/// </param>
 [GenerateSerializer]
 [Immutable]
 [Alias(TypeAliases.WalAppendStamp)]
@@ -25,7 +42,10 @@ internal readonly record struct WalAppendStamp(
     [property: Id(1)] long Epoch,
     [property: Id(2)] WalRoutingInitiator Initiator,
     [property: Id(3)] long Generation,
-    [property: Id(4)] Guid Activation = default)
+    [property: Id(4)] Guid Activation = default,
+    [property: Id(5)] Guid Forwarder = default,
+    [property: Id(6)] Guid ForwarderTag = default,
+    [property: Id(7)] Guid ReaderTag = default)
 {
     /// <summary>A stamp carrying only a leaf's epoch.</summary>
     public static WalAppendStamp ForLeaf(Guid leafId, long epoch, Guid activation = default) =>
