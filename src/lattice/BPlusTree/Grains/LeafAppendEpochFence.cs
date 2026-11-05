@@ -487,10 +487,8 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             }
         }
 
-        if (outcome is { } spentOrExhausted)
-        {
-            LatticeMetrics.WalAppendFenceReclaimAllowance.Add(1, _treeTag, _tenantTag, spentOrExhausted);
-        }
+        // RED PROOF (#5843): the allowance is not counted.
+        _ = outcome;
 
         if (selfFenced)
         {
@@ -1122,7 +1120,6 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                     _reclaimAllowance = 0;
                     RelinquishLocked();
                     LatticeMetrics.WalAppendFenceSelfFenced.Add(1, _treeTag, _tenantTag);
-                    LatticeMetrics.WalAppendFenceReclaimAllowance.Add(1, _treeTag, _tenantTag, LatticeMetrics.ReclaimAllowanceSpentRowConflict);
                     throw LeafRetiredException.ForSupersededActivation(_leafId, row.State.Epoch);
                 }
 
@@ -1130,7 +1127,6 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 {
                     // #5843: the allowance was spent already - by a duplicate's row write before
                     // the link, typically - so this conflict supersedes the live donor.
-                    LatticeMetrics.WalAppendFenceReclaimAllowance.Add(1, _treeTag, _tenantTag, LatticeMetrics.ReclaimAllowanceExhausted);
                 }
             }
 

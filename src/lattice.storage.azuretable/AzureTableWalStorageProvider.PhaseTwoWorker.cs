@@ -605,19 +605,19 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     // so the count is released exactly once, whichever path settles it first.
     private void SettleSuccess(in PhaseTwoCommit commit)
     {
-        if (commit.Completion.TryClaimSettle())
+        // RED PROOF (#5843): completed before the count is released.
+        if (commit.Completion.TrySetResult())
         {
             OutstandingCommits.Exit();
-            commit.Completion.SetResult();
         }
     }
 
     private void SettleFault(in PhaseTwoCommit commit, Exception ex)
     {
-        if (commit.Completion.TryClaimSettle())
+        // RED PROOF (#5843): faulted before the count is released.
+        if (commit.Completion.TrySetException(ex))
         {
             OutstandingCommits.Exit();
-            commit.Completion.SetException(ex);
         }
     }
 
