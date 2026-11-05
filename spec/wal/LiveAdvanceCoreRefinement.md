@@ -472,6 +472,21 @@ reason as the one above.
 
 ## Deliberate abstraction gaps
 
+- **Reachability is exact, with no transient verdict (#5872; a5e2e2ef's R1-R5).** C's
+  `ProveReach` reads L's reachability exactly. Production may read a transient unreachable
+  verdict, so it never latches on one: the leaf goes undecided, appends unstamped through a
+  backoff - never `PreArm`, never a claim - and latches only on a second unreachable read
+  or a structural witness. That only delays the latch toward the safe side, since an
+  unstamped write is reported to every reader. Stamping `PreArm` while undecided would hide
+  a real orphan's writes from their owner, the shape
+  `ReadPositionHonestDeferredSiblingStampsUnrouted` already makes red here, so a transient
+  step would repeat that trace. Production pins it:
+  `BPlusLeafGrainTests.A_reachable_leaf_whose_view_reads_unreachable_once_appends_unstamped_then_is_proven`,
+  `BPlusLeafGrainTests.A_leaf_unreachable_on_both_reads_across_the_backoff_latches`,
+  `BPlusLeafGrainTests.A_structural_witness_latches_on_the_first_unreachable_verdict`,
+  `BPlusLeafGrainTests.A_transient_unreachable_verdict_at_the_split_cut_takes_no_hint_and_does_not_latch`
+  and `LeafAppendEpochFenceTests.An_undecided_activation_stamps_null_never_pre_arm`.
+  Production symbols: `BPlusLeafGrain.ReadLiveAdvanceHandOffAsync`.
 - **A key-moving link is one atomic step (#5866 G1, G2; a5e2e2ef's AG1).** `KeyMove` links
   L, raises the shard's routing generation and closes L's marker in one turn, and
   `LinkWitness` follows it. C therefore checks neither a witness that lands before the
