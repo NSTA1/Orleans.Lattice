@@ -37,6 +37,11 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// leaf's forwards tagged with it out of the foreign high it reports on this append,
 /// because the activation no longer owns the keys they moved.
 /// </param>
+/// <param name="Close1">
+/// A donor close pending in the authoring leaf's marker (#5837), or unset. The WAL shard
+/// raises the high it reports on this append to the donor's stale high for it.
+/// </param>
+/// <param name="Close2">A second pending donor close, or unset.</param>
 [GenerateSerializer]
 [Immutable]
 [Alias(TypeAliases.WalAppendStamp)]
@@ -52,8 +57,17 @@ internal readonly record struct WalAppendStamp(
     [property: Id(8)] Guid Forwarder2 = default,
     [property: Id(9)] Guid ForwarderTag2 = default,
     [property: Id(10)] Guid Forwarder3 = default,
-    [property: Id(11)] Guid ForwarderTag3 = default)
+    [property: Id(11)] Guid ForwarderTag3 = default,
+    [property: Id(12)] WalPendingClose Close1 = default,
+    [property: Id(13)] WalPendingClose Close2 = default)
 {
+    /// <summary>
+    /// The most pending donor closes a stamp carries (#5837, per-donor stale high). A
+    /// leaf whose marker holds more must hold its free advance until the excess resolve;
+    /// it never drops one.
+    /// </summary>
+    internal const int MaxPendingCloses = 2;
+
     /// <summary>
     /// The most forwarders a stamp carries (#5837, F2'). A write forwarded through more
     /// hops before its leaf is linked is appended unstamped, which every leaf sharing the
