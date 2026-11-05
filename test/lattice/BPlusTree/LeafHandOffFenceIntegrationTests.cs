@@ -209,4 +209,92 @@ public sealed class LeafHandOffFenceIntegrationTests(bool eagerClaims)
 
         Assert.That(await tree.CountAsync(), Is.EqualTo(120));
     }
+
+    [Test]
+    public async Task A_range_delete_walk_during_a_pending_deferred_split_close_holds_the_receiver_until_both_close()
+    {
+        // #5839 / H's gap register: a tree range delete's walk is stamped under the range
+        // delete's own generation, not the shard root's routing generation a deferred split
+        // close raises, so the deferred close does not bound the walk's records. The range
+        // delete's own window on the shard marker does: its close records the claim heads
+        // taken after the walk, and a receiver's live-advance view carries them alongside
+        // the split close still pending on its own marker.
+        const string Name = "handoff-rd-deferred";
+        var (tree, shard) = await NewTreeAsync(Name);
+        var partitions = await SiloServices.GetRequiredService<LatticeOptionsResolver>().GetWalPartitionsAsync(Name);
+        var physical = (await tree.GetRoutingAsync()).PhysicalTreeId;
+        var before = new long[partitions];
+        for (var p = 0; p < partitions; p++)
+        {
+            before[p] = await _cluster.GrainFactory.GetGrain<IWalShardGrain>($"{physical}/{p}").GetNextSequenceAsync(CancellationToken.None);
+        }
+
+        await tree.DeleteRangeAsync("k030", "k090");
+
+        var after = new long[partitions];
+        for (var p = 0; p < partitions; p++)
+        {
+            after[p] = await _cluster.GrainFactory.GetGrain<IWalShardGrain>($"{physical}/{p}").GetNextSequenceAsync(CancellationToken.None);
+        }
+
+        var shardMarker = (await HandOffMarkerRows.ReadShardAsync(Storage, physical, 0)).State;
+        var rdCloses = shardMarker.Closes.Where(c => c.Token.StartsWith("rd:", StringComparison.Ordinal)).ToList();
+        Assert.That(rdCloses, Has.Count.EqualTo(1), "the range delete's close is recorded on the shard marker");
+        var rdHeads = rdCloses[0].Heads;
+
+        // The receivers: leaves the walk reached, each still holding its split close.
+        var receivers = 0;
+        var heldByBoth = 0;
+        foreach (var leaf in await WalkChainAsync(shard))
+        {
+            var range = (await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leaf).GetKeyRangeAndNextSiblingAsync()).KeyRange;
+            if (string.CompareOrdinal(range.LowKeyInclusive ?? string.Empty, "k090") >= 0
+                || (range.HighKeyExclusive is { } high && string.CompareOrdinal(high, "k030") <= 0))
+            {
+                continue;
+            }
+
+            receivers++;
+            var view = await shard.GetLiveAdvanceViewAsync(leaf, range.LowKeyInclusive, range.HighKeyExclusive);
+            var marker = await MarkerAsync(leaf);
+            var splitPending = marker.Closes.Any(c => c.Token.StartsWith("split:", StringComparison.Ordinal)
+                && c.Heads.Any(h => h == HandOffMarkerCore.DeferredHead));
+            Assert.Multiple(() =>
+            {
+                Assert.That(view.HeldOpen, Is.False, $"{leaf}: the range delete's window closed");
+                for (var p = 0; p < partitions; p++)
+                {
+                    Assert.That(HandOffMarkerCore.HeadAt(view.CloseHeads, p), Is.GreaterThanOrEqualTo(HandOffMarkerCore.HeadAt(rdHeads, p)).And.GreaterThanOrEqualTo(0L),
+                        $"{leaf}, partition {p}: the view does not bound the walk's records by the range delete's own close head");
+                }
+            });
+            if (splitPending)
+            {
+                heldByBoth++;
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shardMarker.Open.Keys.Where(t => t.StartsWith("rd:", StringComparison.Ordinal)), Is.Empty, "the range delete's window was closed");
+            Assert.That(rdHeads, Has.Length.EqualTo(partitions), "one head per WAL partition");
+            Assert.That(rdHeads.All(h => h >= 0 && h != HandOffMarkerCore.DeferredHead), Is.True,
+                "the range delete's close records real claim heads, never deferred");
+            Assert.That(rdCloses[0].DeferredGeneration, Is.Zero, "the range delete's own window is not a deferred routing close");
+            Assert.That(after.Sum() - before.Sum(), Is.GreaterThan(0L), "precondition: the walk wrote records");
+            for (var p = 0; p < partitions; p++)
+            {
+                Assert.That(rdHeads[p], Is.InRange(after[p] - 1, after[p]),
+                    $"partition {p}: the close head is taken after the walk's last record");
+            }
+
+            Assert.That(receivers, Is.GreaterThan(0), "precondition: the walk reached live leaves");
+            if (!eagerClaims)
+            {
+                Assert.That(heldByBoth, Is.GreaterThan(0),
+                    "precondition: a receiver still holds a deferred split close (pre-arm: no sibling armed)");
+            }
+        });
+        Assert.That(await tree.CountAsync(), Is.EqualTo(60));
+    }
 }
