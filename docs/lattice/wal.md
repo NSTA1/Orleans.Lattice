@@ -1683,7 +1683,17 @@ claimless view, and the leaf advances there by replay instead.
 - **The split's read position.** Each partition returns its readable head with the
   bounds the donor must have read past, all read in one turn. If the donor's
   frontier is at or above every bound, its sibling starts at the head rather than
-  at the donor's frontier.
+  at the donor's frontier. The unstamped bound in that read is filtered by key
+  ([#5851](https://github.com/NSTA1/Orleans.Lattice/issues/5851)). The donor
+  passes the range it owns, read in the same turn: the whole pre-split range, and
+  after a fold the widened one. The partition keeps its 256 most recent
+  single-key unstamped records (a set, delete or tombstone) by key, in memory
+  only. It returns the highest of those keyed inside the range, or its floor if
+  that is higher. The floor is the restart head, raised by every record that
+  may touch other keys (a range delete, a transaction terminal, or a record
+  naming matched keys) and by every record pushed out of the table. So an
+  unstamped write elsewhere in the partition no longer holds the split back. The
+  shared watermark every stamped response reports is unchanged.
 - **Catching up.** Only a replay reads past a foreign or unstamped record, and a
   pre-arm leaf that is neither starved nor stalled does not replay. So when the
   claimless advance, or a split's read position, is held only by a reported bound,
@@ -1697,7 +1707,8 @@ for the reader's narrow, a request-context read for a forward chain, and a count
 increment and decrement for the split's wait, with no allocation and no grain call.
 A pending close adds one stale-high lookup per close carried. Per forward: one
 small array per hop. Per split: one marker write closes the window, and the read of
-the heads also returns the bounds. A transfer refused stale costs one view read and
+the heads also returns the bounds; filtering the unstamped bound by key
+scans the 256-entry table once per partition. A transfer refused stale costs one view read and
 up to four descents (two keys, against the sibling and then its donor) before it retries. Each reported bound that
 holds a leaf costs one replay drive on a tick, through the replay permit. A leaf
 allocates its two per-partition bound arrays once, on the first such hold.
