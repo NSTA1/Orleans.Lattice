@@ -16,7 +16,10 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// which is conservative: a false mismatch only deactivates the activation. A missing row and
 /// an empty ETag compare equal to each other, as an activation that never persisted holds.
 /// The fresh read relies on the storage provider's strong read-after-write across clients
-/// (A2).
+/// (A2). It compares the ETag the provider returns on a read with the one the activation
+/// holds, which is what the provider returned on the activation's last read or write - the
+/// same value the leaf's own conditional writes present, so the probe adds no dependence on
+/// the ETag's form that those writes do not already have.
 /// </remarks>
 internal sealed class LeafStateCurrencyProbe
 {

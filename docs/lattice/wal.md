@@ -1768,6 +1768,15 @@ narrowing. That needs the storage provider to give strong read-after-write acros
 clients for both rows: a write that has completed is visible to any later read. The
 Azure Table and in-memory providers give it; a provider with session or eventual
 consistency does not.
+
+In pre-arm mode the live donor drops its epoch at the split's counted close, locally and
+with no I/O, just before its own close raises the row (#5837, rule S). If it had
+claimed, it adopts the raised epoch and its claims from that fence; otherwise its next
+appends go pre-arm, which the routing generation fences, and its next arm claims afresh,
+through the same write-then-read claim. A stamped append it had in flight at the dropped
+epoch is refused and retried, not treated as a supersession. If the donor re-arms before
+the link, a refusal at its new epoch, or a conflict on its next row write, gets one more
+such fresh claim per close. Without one, the live donor would deactivate on every split.
 The same rule stops a leaf from deactivating itself after it raises its epoch above
 a retired floor ([#5643](https://github.com/NSTA1/Orleans.Lattice/issues/5643)).
 

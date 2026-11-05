@@ -5,7 +5,7 @@ TARGET: HandOffBound
 CLASS: Invariant
 SUMMARY: the WAL shard allocates an epoch-only append whatever its epoch, so a superseded duplicate's write is never refused
 PERTURBS: DupAlloc, DupReject
-BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE
 
 --- FIND
     /\ dpend

@@ -117,6 +117,13 @@ internal sealed class LiveAdvanceRig
     /// </summary>
     public Func<Task>? AfterNextLeafMarkerRead { get; set; }
 
+    /// <summary>
+    /// When set, the durable ETag of the leaf's own state row, served for the #5841 probe's
+    /// fresh read of it, for a leaf whose persistent state is a test double rather than a row
+    /// in <see cref="Storage"/>.
+    /// </summary>
+    public Func<string?>? LeafStateEtag { get; set; }
+
     /// <summary>Called with the state name of every read the leaf makes through its storage, before the read (#5841).</summary>
     public Action<string>? OnStorageRead { get; set; }
 
@@ -133,6 +140,15 @@ internal sealed class LiveAdvanceRig
         public async Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
         {
             rig.OnStorageRead?.Invoke(stateName);
+            if (stateName == LeafStateCurrencyProbe.LeafStateName && rig.LeafStateEtag is { } etag)
+            {
+                // The leaf's own state row lives in a test double, not in this storage: the
+                // #5841 probe reads that row's ETag, as a provider shared with it would serve.
+                grainState.ETag = etag();
+                grainState.RecordExists = true;
+                return;
+            }
+
             await rig.Storage.ReadStateAsync(stateName, grainId, grainState);
             if (stateName == HandOffMarkerRows.LeafGrainType
                 && rig.AfterNextLeafMarkerRead is { } hook)

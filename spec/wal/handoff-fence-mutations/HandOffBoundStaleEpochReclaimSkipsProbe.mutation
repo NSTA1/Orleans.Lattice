@@ -1,0 +1,25 @@
+# #5840 S4, fix (a): a StaleEpoch refusal at the claimant's current epoch re-runs the
+# claim. Without the leaf-state probe, a stale duplicate the retry reaches claims above
+# the split's bump, and its epoch-only write of a moved key is allocated.
+MODULE: HandOffBoundStaleEpochReclaimSkipsProbe
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: the re-run claim after a StaleEpoch refusal skips the leaf-state probe
+PERTURBS: DupRetry
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE
+
+--- FIND
+    /\ dRetried' = TRUE
+    /\ dpend' = FALSE
+    /\ dst' = "idle"
+    /\ UNCHANGED <<eRow, liveArmed, sNarrowed, dEpoch, dstamp, bst, bRead, lVars>>
+--- REPLACE
+    /\ dRetried' = TRUE
+    /\ dpend' = FALSE
+\* MUTATION: the re-run claims at row + 1 with no probe.
+    /\ eRow < MaxEpoch
+    /\ dst' = "claimed"
+    /\ dEpoch' = eRow + 1
+    /\ eRow' = eRow + 1
+    /\ UNCHANGED <<liveArmed, sNarrowed, dstamp, bst, bRead, lVars>>
+--- END

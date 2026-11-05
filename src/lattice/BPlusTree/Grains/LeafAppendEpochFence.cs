@@ -104,6 +104,17 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     private bool _stale;
     private long _gateClosedUntilTicks;
     private long _handOffCloses;
+
+    // #5840 review S4: pre-arm split closes this activation counted and has not yet spent
+    // on a probed re-claim, and the highest epoch it relinquished at such a close.
+    private int _reclaimAllowance;
+    private long _relinquishedEpoch;
+
+    // Bumped by every relinquish; a row claim that began under an older value is discarded
+    // (R2). The epochs a row claim or a bump is writing, while one is in flight.
+    private int _relinquishes;
+    private long _claimingEpoch;
+    private long _bumpingEpoch;
     private int _refusedUnallocated;
     private readonly bool _requireReachability;
     private int _reachability;
@@ -811,7 +822,19 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             // Its caller retries on this same live activation, so a path that applied
             // before appending (the batched CRDT apply) applies again: safe only for
             // idempotent applies (review N1; see ApplyCrdtDeltaManyCoreAsync).
-            selfFenced = !_stale && stamp.Epoch > 0 && stamp.Epoch < _epoch;
+            selfFenced = !_stale && stamp.Epoch > 0 && (stamp.Epoch < _epoch || stamp.Epoch <= _relinquishedEpoch);
+
+            // #5840 review S4: in pre-arm the shard root fences a split's donor at link time,
+            // raising the leaf's entry above this activation's current epoch. Once per split
+            // close it counted, the activation relinquishes the epoch and re-claims afresh -
+            // a fresh row read, row+1 and the leaf-state probe - instead of superseding
+            // itself; a duplicate counted no close, so it still supersedes here.
+            if (!selfFenced && !_stale && stamp.Epoch > 0 && stamp.Epoch == _epoch && _reclaimAllowance > 0)
+            {
+                _reclaimAllowance = 0;
+                RelinquishLocked();
+                selfFenced = true;
+            }
         }
 
         if (selfFenced)
@@ -975,6 +998,48 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             if (!_stale)
             {
                 Volatile.Write(ref _handOffCloses, _handOffCloses + 1);
+
+                // #5840 review S4: the shard root raises this leaf's epoch row when it links
+                // the split. The activation drops its claims now, with no I/O, so its next
+                // appends go pre-arm and its next arm re-claims above the raise through the
+                // probed claim; a stamped append still in flight at the dropped epoch is
+                // self-fenced if the raise refuses it. One allowance covers an arm that
+                // races the link: its refusal or row conflict re-claims once instead of
+                // superseding.
+                _reclaimAllowance = 1;
+                RelinquishLocked();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Drops this activation's epoch, cached row and claims locally (#5840 review S4, R1),
+    /// recording as relinquished the highest epoch it held or was writing: a stamp at or below
+    /// it is self-fenced (R3), and the next claim takes <see cref="ClaimRowAsync"/> - a fresh
+    /// row read, row+1 and the leaf-state probe under the persist gate - never a write on the
+    /// cached ETag. A row claim or bump in flight installs nothing when it completes (R2).
+    /// Called under <see cref="_sync"/>.
+    /// </summary>
+    private void RelinquishLocked()
+    {
+        _relinquishes++;
+        _relinquishedEpoch = Math.Max(_relinquishedEpoch, Math.Max(_epoch, Math.Max(_claimingEpoch, _bumpingEpoch)));
+        _epoch = 0;
+        _row = null;
+        foreach (var p in _partitions.Values)
+        {
+            p.ClaimedEpoch = 0;
+        }
+    }
+
+    /// <summary>The pre-arm split closes this activation may still spend on a probed re-claim; test seam (#5840 review S4).</summary>
+    internal int ReclaimAllowanceForTesting
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _reclaimAllowance;
             }
         }
     }
@@ -1202,6 +1267,19 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             return;
         }
 
+        lock (_sync)
+        {
+            // #5840 review S4, R7: a write whose claim round ran under an epoch a split close
+            // relinquished meanwhile never bumps on its refusal; it self-fences, and its seam
+            // re-admits it - pre-arm, or under a fresh probed claim. Only a round under the
+            // current epoch, above the relinquished one, may bump.
+            if (!_stale && epoch != _epoch && epoch <= _relinquishedEpoch)
+            {
+                LatticeMetrics.WalAppendFenceSelfFenced.Add(1, _treeTag, _tenantTag);
+                throw LeafRetiredException.ForSupersededActivation(_leafId, epoch);
+            }
+        }
+
         await RaiseEpochAboveAsync(epoch, result.Refusal).ConfigureAwait(false);
     }
 
@@ -1236,10 +1314,21 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
 
     private async Task<long> ClaimRowAsync()
     {
+        int relinquishes;
+        lock (_sync)
+        {
+            relinquishes = _relinquishes;
+        }
+
         try
         {
             var row = await WalAppendFenceRows.ReadLeafEpochAsync(_storage, _leafId).ConfigureAwait(false);
             row.State.Epoch++;
+            lock (_sync)
+            {
+                _claimingEpoch = row.State.Epoch;
+            }
+
             row = await WriteRowOrSupersedeAsync(row).ConfigureAwait(false);
 
             // #5841, rule A (the claim's half of a Dekker pair with the split fence): only
@@ -1257,9 +1346,23 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             var epoch = row.State.Epoch;
             lock (_sync)
             {
+                _claimingEpoch = 0;
+                _rowClaim = null;
+                if (relinquishes != _relinquishes)
+                {
+                    // #5840 review S4, R2 and R5: a split close relinquished while this claim was
+                    // in flight. Checked, discarded and recorded as relinquished in this one
+                    // section (the relinquish may have run before the claim recorded its epoch);
+                    // the next claim reads the row afresh. A stale probe above has already
+                    // superseded the activation (R6). The refusal has the self-fence shape, so
+                    // the seam retries.
+                    _relinquishedEpoch = Math.Max(_relinquishedEpoch, epoch);
+                    LatticeMetrics.WalAppendFenceSelfFenced.Add(1, _treeTag, _tenantTag);
+                    throw LeafRetiredException.ForSupersededActivation(_leafId, epoch);
+                }
+
                 _row = row;
                 _epoch = epoch;
-                _rowClaim = null;
             }
 
             return epoch;
@@ -1268,6 +1371,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         {
             lock (_sync)
             {
+                _claimingEpoch = 0;
                 _rowClaim = null;
             }
 
@@ -1315,11 +1419,21 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             }
 
             row.State.Epoch = Math.Max(refusal, epoch) + 1;
-            row = await WriteRowOrSupersedeAsync(row).ConfigureAwait(false);
             lock (_sync)
             {
-                _row = row;
-                _epoch = row.State.Epoch;
+                _bumpingEpoch = row.State.Epoch;
+            }
+
+            row = await WriteRowOrSupersedeAsync(row, relinquishOnConflict: true).ConfigureAwait(false);
+            lock (_sync)
+            {
+                // #5840 review S4, R2: a relinquish while this bump was in flight dropped the
+                // epoch it raised from; the next claim reads the row afresh instead.
+                if (_epoch == epoch)
+                {
+                    _row = row;
+                    _epoch = row.State.Epoch;
+                }
             }
         }
         finally
@@ -1327,6 +1441,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             lock (_sync)
             {
                 _bump = null;
+                _bumpingEpoch = 0;
             }
         }
     }
@@ -1335,9 +1450,11 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     /// Writes this activation's epoch row conditionally on the ETag it last read or wrote,
     /// and returns the row written. Only claims and split fences write the row, so a
     /// conflict means another activation claimed since, or a split fenced this one: the
-    /// activation is superseded.
+    /// activation is superseded - unless <paramref name="relinquishOnConflict"/> (a bump) and
+    /// it holds the allowance of a counted pre-arm split close (#5840 review S4, R4), when it
+    /// relinquishes its epoch and its next claim re-claims afresh through the probe.
     /// </summary>
-    private async Task<GrainState<LeafAppendEpochState>> WriteRowOrSupersedeAsync(GrainState<LeafAppendEpochState> row)
+    private async Task<GrainState<LeafAppendEpochState>> WriteRowOrSupersedeAsync(GrainState<LeafAppendEpochState> row, bool relinquishOnConflict = false)
     {
         try
         {
@@ -1350,6 +1467,21 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         }
         catch (InconsistentStateException)
         {
+            lock (_sync)
+            {
+                // #5840 review S4: once per counted pre-arm split close, a conflict - the
+                // shard root's link-time raise, or a duplicate's row write after it - drops
+                // the epoch and leaves the next claim to read the row afresh and run the
+                // probe. The refusal has the self-fence shape, so the caller's seam retries.
+                if (relinquishOnConflict && !_stale && _reclaimAllowance > 0)
+                {
+                    _reclaimAllowance = 0;
+                    RelinquishLocked();
+                    LatticeMetrics.WalAppendFenceSelfFenced.Add(1, _treeTag, _tenantTag);
+                    throw LeafRetiredException.ForSupersededActivation(_leafId, row.State.Epoch);
+                }
+            }
+
             MarkStale();
             throw LeafRetiredException.ForSupersededActivation(_leafId, row.State.Epoch);
         }
