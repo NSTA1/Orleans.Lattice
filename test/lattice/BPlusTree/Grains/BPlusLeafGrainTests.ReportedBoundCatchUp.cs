@@ -151,8 +151,10 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task A_split_capped_by_a_close_head_owes_no_catch_up()
+    public async Task A_split_capped_by_a_close_head_and_the_watermark_owes_no_catch_up()
     {
+        // #5851, W4: a concrete close head alone may be caught up past, but here the shared
+        // watermark holds too, and a hold by the watermark owes no catch-up.
         var (grain, _, _, _) = await PreArmSplitAsync(
             new WalSplitCut(Head: 42, ForeignHigh: -1, UnstampedWatermark: 35),
             frontier: 30,
@@ -162,6 +164,6 @@ public partial class BPlusLeafGrainTests
                 CompactedHeads = [41],
             });
 
-        Assert.That(grain.TakeReportedBoundCatchUp(), Is.False, "a close head, which only a hand-off's fence clears, owed a catch-up read");
+        Assert.That(grain.TakeReportedBoundCatchUp(), Is.False, "a close head held with the shared watermark owed a catch-up read");
     }
 }

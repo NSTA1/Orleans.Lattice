@@ -343,6 +343,70 @@ internal static class HandOffMarkerCore
                 ? (leaf.SiblingLinkedShard, leaf.SiblingLinkedGeneration)
                 : (-1, 0);
 
+    /// <summary>
+    /// Whether <paramref name="marker"/> holds a donor bound overlapping the owner of
+    /// <c>[low, high)</c> that is pending: <see cref="CollectPendingDonorBounds"/> would add
+    /// one. Allocates nothing.
+    /// </summary>
+    public static bool HasPendingDonorBound(IHandOffMarker marker, string? ownerLowInclusive, string? ownerHighExclusive)
+    {
+        ArgumentNullException.ThrowIfNull(marker);
+        if (marker is LeafHandOffState { SiblingLinkedGeneration: > 0 })
+        {
+            return false;
+        }
+
+        foreach (var close in marker.Closes)
+        {
+            if (IsPendingDonorBound(close)
+                && Overlaps(close.LowInclusive, close.HighExclusive, ownerLowInclusive, ownerHighExclusive))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether a close on <paramref name="marker"/> overlapping the owner of <c>[low, high)</c>
+    /// is deferred at any partition (#5851, W3): its head there is
+    /// <see cref="DeferredHead"/> until the owner's arm resolves it. Allocates nothing.
+    /// </summary>
+    public static bool HasDeferredClose(IHandOffMarker marker, string? ownerLowInclusive, string? ownerHighExclusive)
+    {
+        ArgumentNullException.ThrowIfNull(marker);
+        foreach (var close in marker.Closes)
+        {
+            if (Overlaps(close.LowInclusive, close.HighExclusive, ownerLowInclusive, ownerHighExclusive)
+                && AnyDeferred(close.Heads))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Whether any of <paramref name="heads"/> is <see cref="DeferredHead"/>.</summary>
+    public static bool AnyDeferred(long[]? heads)
+    {
+        if (heads is null)
+        {
+            return false;
+        }
+
+        foreach (var head in heads)
+        {
+            if (head == DeferredHead)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>Whether <paramref name="close"/> is a donor bound whose sibling's link is not yet witnessed (B2).</summary>
     public static bool IsPendingDonorBound(HandOffClose close)
     {

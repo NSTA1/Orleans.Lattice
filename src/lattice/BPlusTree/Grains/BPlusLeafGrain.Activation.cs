@@ -2260,10 +2260,14 @@ internal sealed partial class BPlusLeafGrain
         }
         finally
         {
-            if (!replayed)
+            // DO-NOT-MERGE red proof: W1 (the target stamped past the read) and W5 (a target
+            // the read could not reach re-armed on every tick).
+            if (replayed)
             {
-                ReArmReportedBoundCatchUp();
+                await StampDispatchedCatchUpTargetsForRedProofAsync();
             }
+
+            ReArmReportedBoundCatchUp();
         }
     }
 

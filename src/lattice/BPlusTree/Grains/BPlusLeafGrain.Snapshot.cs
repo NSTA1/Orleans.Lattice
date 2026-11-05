@@ -3113,6 +3113,9 @@ internal sealed partial class BPlusLeafGrain
         // after the bank step, so this tick's live advance is still persisted and banked
         // (N2); the starved and stalled arms above return before it, and their drives
         // replay past the bound as well. A drive that never ran re-arms it (N1).
+        // a5e2e2ef's W1-W5 widen the hold to concrete close heads alone, with the target
+        // their head minus one: still one drive per tick, keyed by the target, and the
+        // drive's replay sets the checkpoint only to what it contiguously read (W1).
         if (TakeReportedBoundCatchUp())
         {
             await DispatchTimerDriveAsync(starvationPartitionCount, "arm=reported-bound-catch-up");
