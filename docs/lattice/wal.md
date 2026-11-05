@@ -1629,7 +1629,9 @@ claimless view, and the leaf advances there by replay instead.
   sibling's stamps carry the pending close. The shard root records the witness on the
   sibling's marker only after that link's raise of the routing generation is durable.
   A raise for any other link never ends the close, and if the raise or the witness
-  write fails, the close stays pending and the division re-surfaces. Each WAL partition then reports the donor's **stale high** for it. That is
+  write fails, the close stays pending and the division re-surfaces. The witness is
+  kept on the sibling's marker as well as on the close, so a donor close written
+  after the link (a re-driven or recovered close) is resolved at once. Each WAL partition then reports the donor's **stale high** for it. That is
   the highest offset of a donor record from any activation other than the closing
   one, whatever routing generation admitted it: a link elsewhere in the shard can
   raise the generation while the close is pending, and a stale duplicate's write
@@ -1657,7 +1659,10 @@ claimless view, and the leaf advances there by replay instead.
   Meanwhile it stamps its routed writes pre-arm, so it never raises the shared
   watermark; it never claims or arms, and it proves again after a backoff. That
   holds even for a sibling proven at its birth: it is deferred, and proven again
-  once its own link makes it reachable. Once its link is witnessed, a leaf that
+  once its own link is witnessed and it is reachable. Reachable alone (linked, with
+  the witness not yet durable) is not enough. A leaf proven without reading its
+  marker proves again before its first claim under the eager gate, and no leaf
+  claims or arms while a donor close is pending on it. Once its link is witnessed, a leaf that
   descent does not reach has had its keys moved, and it latches. Orphan repair
   always latches.
 - **The split's read position.** Each partition returns its readable head with the

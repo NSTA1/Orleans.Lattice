@@ -167,7 +167,35 @@ internal sealed partial class BPlusLeafGrain
         {
             if (await LiveAdvanceShardRoot(treeId, shardIndex).IsReachableByDescentAsync(context.GrainId, state.State.LowKeyInclusive))
             {
-                fence.OnReachabilityProven();
+                // a5e2e2ef's G2 and G3 on #5866: reachable means linked, not witnessed. A
+                // deferred activation, and any proof under the eager gate (which may claim),
+                // reads the marker first: while a donor bound is pending it stays deferred
+                // (pre-arm) or undecided (eager), never claiming before its own link is
+                // witnessed. Under the pre-arm gate a first proof needs no read: it cannot
+                // claim, and it is re-made with the marker before an eager claim.
+                var checkMarker = fence.IsDeferred || !IsPreArmGateOpen();
+                if (checkMarker && HandOffMarkerStorage() is { } reachedStorage)
+                {
+                    var reachedMarker = (await HandOffMarkerRows.ReadLeafAsync(reachedStorage, context.GrainId.GetGuidKey())).State;
+                    if (HoldsPendingDonorBound(reachedMarker))
+                    {
+                        if (IsPreArmGateOpen())
+                        {
+                            fence.OnReachabilityDeferred();
+                        }
+                        else
+                        {
+                            fence.OnReachabilityUndecided();
+                        }
+
+                        return;
+                    }
+
+                    fence.OnReachabilityProven(markerChecked: true);
+                    return;
+                }
+
+                fence.OnReachabilityProven(markerChecked: HandOffMarkerStorage() is null);
                 return;
             }
 
@@ -176,7 +204,7 @@ internal sealed partial class BPlusLeafGrain
                 var marker = (await HandOffMarkerRows.ReadLeafAsync(storage, context.GrainId.GetGuidKey())).State;
                 if (marker.Open.Count > 0)
                 {
-                    fence.OnReachabilityProven();
+                    fence.OnReachabilityProven(markerChecked: true);
                     return;
                 }
 
@@ -189,7 +217,16 @@ internal sealed partial class BPlusLeafGrain
                         .GetLiveAdvanceViewAsync(context.GrainId, state.State.LowKeyInclusive, state.State.HighKeyExclusive);
                     if (view.Reachable && !view.OrphanRepairInProgress)
                     {
-                        fence.OnReachabilityProven();
+                        // G2: linked is not witnessed; a pending bound keeps it deferred.
+                        if (HoldsPendingDonorBound(marker))
+                        {
+                            fence.OnReachabilityDeferred();
+                        }
+                        else
+                        {
+                            fence.OnReachabilityProven(markerChecked: true);
+                        }
+
                         return;
                     }
 

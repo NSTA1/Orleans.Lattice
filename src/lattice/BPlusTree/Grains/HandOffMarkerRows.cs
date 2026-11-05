@@ -120,6 +120,7 @@ internal static class HandOffMarkerRows
             Initialised = marker.Initialised,
             CompactedHeads = (long[])marker.CompactedHeads.Clone(),
             Sequence = marker.Sequence,
+            SiblingLinkedGeneration = marker.SiblingLinkedGeneration,
         };
         foreach (var (token, range) in marker.Open)
         {

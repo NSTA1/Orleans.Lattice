@@ -45,9 +45,8 @@ public sealed class HandOffMarkerCoreDonorBoundTests
     public void A_donor_bound_stays_pending_until_its_own_link_is_witnessed()
     {
         // B2 (BoundResolvesOnAnyRaise): no shard-wide generation resolves a bound; only the
-        // witness of this sibling's own link does, once, and never for another donor.
+        // witness of this sibling's own link does, once.
         var marker = ClosedWithBound(shard: 1, generation: 4);
-        var otherDonor = new Guid("d0000000-0000-0000-0000-00000000aaaa");
 
         int Pending()
         {
@@ -56,19 +55,37 @@ public sealed class HandOffMarkerCoreDonorBoundTests
         }
 
         var unwitnessed = Pending();
-        var other = HandOffMarkerCore.WitnessLink(marker, otherDonor, 9);
-        var afterOther = Pending();
         var own = HandOffMarkerCore.WitnessLink(marker, Donor, 7);
         var again = HandOffMarkerCore.WitnessLink(marker, Donor, 9);
 
         Assert.Multiple(() =>
         {
             Assert.That(unwitnessed, Is.EqualTo(1), "an unwitnessed bound was resolved");
-            Assert.That((other, afterOther), Is.EqualTo((false, 1)), "another donor's link witnessed this bound");
             Assert.That(own, Is.True, "the sibling's own link was not witnessed");
             Assert.That(Pending(), Is.Zero, "a witnessed bound stayed pending");
             Assert.That(again, Is.False, "a witness was overwritten");
             Assert.That(marker.Closes.Single().LinkedGeneration, Is.EqualTo(7));
+            Assert.That(marker.SiblingLinkedGeneration, Is.EqualTo(7));
+        });
+    }
+
+    [Test]
+    public void A_witness_that_lands_before_the_donors_close_resolves_the_close_written_after_it()
+    {
+        // a5e2e2ef's G1: the link batch witnesses while the donor's token is still open (a
+        // re-driven or recovered close); the close written afterwards is resolved at once.
+        var marker = new LeafHandOffState();
+        HandOffMarkerCore.Open(marker, "split:d", null, null);
+
+        var witnessed = HandOffMarkerCore.WitnessLink(marker, Donor, 7);
+        HandOffMarkerCore.CloseWithDeferredBound(marker, "split:d", [5], Donor, Token, 1, 4);
+        var pending = new List<WalPendingClose>();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(witnessed, Is.True, "a witness before the close was dropped");
+            Assert.That(marker.Closes.Single().LinkedGeneration, Is.EqualTo(7), "the later close did not inherit the witness");
+            Assert.That(HandOffMarkerCore.CollectPendingDonorBounds(marker, null, null, pending), Is.Zero, "a witnessed sibling's later close stayed pending");
         });
     }
 

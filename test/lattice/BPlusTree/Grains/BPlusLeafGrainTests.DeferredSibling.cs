@@ -108,4 +108,86 @@ public partial class BPlusLeafGrainTests
 
         Assert.That(grain.AppendFenceForTesting!.IsUnreachable, Is.True, "an unreachable leaf whose own link was witnessed was not latched");
     }
+
+    [Test]
+    public async Task A_link_witnessed_before_the_donors_close_leaves_no_close_pending()
+    {
+        // a5e2e2ef's G1: the witness lands while the donor's token is still open; the
+        // donor closes afterwards. The bound is resolved and the stamps carry no close.
+        var rig = PreArmRig();
+        var grain = CreateGrain(liveAdvance: rig);
+        await rig.SetLeafMarkerAsync(m =>
+        {
+            m.Initialised = true;
+            return HandOffMarkerCore.Open(m, "split:donor", null, null);
+        });
+        await rig.SetLeafMarkerAsync(m => HandOffMarkerCore.WitnessLink(m, ClaimlessDonor, 10));
+        await rig.SetLeafMarkerAsync(m => HandOffMarkerCore.CloseWithDeferredBound(m, "split:donor", [0], ClaimlessDonor, ClaimlessDonorToken, 0, 1));
+        await SetStampedAsync(grain, "a", "1");
+
+        await grain.TryAdvanceLiveCheckpointAsync();
+
+        var fence = grain.AppendFenceForTesting!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(fence.HasPendingCloses, Is.False, "a close written after its sibling's witnessed link stayed pending");
+            Assert.That(fence.TryGetCutReader(out var reader) && !reader.Close1.IsSet, Is.True, "the stamps carried a resolved close");
+        });
+    }
+
+    [Test]
+    public async Task A_reachable_sibling_whose_link_is_unwitnessed_stays_deferred_and_never_claims_under_the_eager_gate()
+    {
+        // a5e2e2ef's G2: linked (reachable) is not witnessed - the raise or the witness may
+        // have failed. The deferred activation is not proven again, and after the gate flips
+        // to eager it does not claim.
+        var rig = PreArmRig();
+        rig.Reachable = false;
+        rig.ShardMarker.RoutingGeneration = 9;
+        var grain = await BirthProvenSiblingWithPendingCloseAsync(rig);
+        await SetStampedAsync(grain, "n", "1");
+        await grain.TryAdvanceLiveCheckpointAsync();
+        var fence = grain.AppendFenceForTesting!;
+        var deferredBefore = fence.IsDeferred;
+
+        rig.Reachable = true;
+        await grain.TryAdvanceLiveCheckpointAsync();
+        var deferredWhileUnwitnessed = fence.IsDeferred;
+        rig.FenceGate.IsPreArmOpen = false;
+        await SetStampedAsync(grain, "o", "2");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(deferredBefore, Is.True, "precondition: the sibling was deferred");
+            Assert.That(deferredWhileUnwitnessed, Is.True, "a reachable sibling with an unwitnessed link was proven");
+            Assert.That(fence.HasClaimedAnywhere, Is.False, "an unwitnessed sibling claimed under the eager gate");
+        });
+        await rig.Shard.DidNotReceiveWithAnyArgs().ClaimAppendEpochAsync(default, default, default);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task A_birth_proven_sibling_never_claims_before_its_link_after_the_gate_turns_eager(bool reachable)
+    {
+        // a5e2e2ef's G3: proven at its birth under the pre-arm gate, its donor closes, and
+        // the gate flips to eager before any view read demotes it. Its next appends re-prove
+        // with the marker and do not claim while its bound is pending.
+        var rig = PreArmRig();
+        rig.Reachable = reachable;
+        var grain = await BirthProvenSiblingWithPendingCloseAsync(rig);
+        var provenAtBirth = grain.AppendFenceForTesting!.IsReachabilityProvenForTesting;
+
+        rig.FenceGate.IsPreArmOpen = false;
+        await SetStampedAsync(grain, "n", "1");
+        await SetStampedAsync(grain, "o", "2");
+
+        var fence = grain.AppendFenceForTesting!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(provenAtBirth, Is.True, "precondition: the sibling was proven at its split birth");
+            Assert.That(fence.HasClaimedAnywhere, Is.False, "a birth-proven sibling claimed before its link under the eager gate");
+            Assert.That(fence.IsReachabilityProvenForTesting, Is.False, "a sibling with a pending bound was proven under the eager gate");
+        });
+        await rig.Shard.DidNotReceiveWithAnyArgs().ClaimAppendEpochAsync(default, default, default);
+    }
 }

@@ -297,7 +297,7 @@ internal sealed partial class BPlusLeafGrain
 
             var low = state.State.LowKeyInclusive;
             var high = state.State.HighKeyExclusive;
-            if (armDemand && handOff.Clear)
+            if (armDemand && handOff.Clear && !fence.HasPendingCloses)
             {
                 // Never while a hand-off is open on it: a bulk-born leaf arms only after
                 // its switch's close recorded the allocator head (B's
@@ -659,8 +659,6 @@ internal sealed partial class BPlusLeafGrain
                 return null;
             }
 
-            _appendFence?.PromoteDeferredReachable();
-
             if (!leafMarker.Initialised
                 && view.Initialised
                 && !state.State.SplitInFlight
@@ -688,6 +686,13 @@ internal sealed partial class BPlusLeafGrain
                 pending.Clear();
                 HandOffMarkerCore.CollectPendingDonorBounds(leafMarker, low, high, pending);
                 closesFence.SetPendingCloses(pending);
+
+                // a5e2e2ef's G2: reachable and witnessed - no bound pending - proves a
+                // deferred activation again; reachable alone (linked, unwitnessed) does not.
+                if (pending.Count == 0)
+                {
+                    closesFence.PromoteDeferredReachable();
+                }
             }
 
             return new LiveAdvanceHandOff(clear, leafMarker, view.CloseHeads);

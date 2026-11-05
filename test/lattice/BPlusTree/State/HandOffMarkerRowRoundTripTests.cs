@@ -116,6 +116,7 @@ public sealed class HandOffMarkerRowRoundTripTests
         var row = new LeafHandOffState
         {
             Initialised = true,
+            SiblingLinkedGeneration = 13,
             Closes =
             {
                 new HandOffClose
@@ -142,6 +143,7 @@ public sealed class HandOffMarkerRowRoundTripTests
                 Assert.That(close.AdmittedShard, Is.EqualTo(2));
                 Assert.That(close.AdmittedGeneration, Is.EqualTo(11));
                 Assert.That(close.LinkedGeneration, Is.EqualTo(13), "the link witness (#5866, B2) did not survive");
+                Assert.That(round.SiblingLinkedGeneration, Is.EqualTo(13), "the marker-level witness (#5866, G1) did not survive");
             });
         }
     }

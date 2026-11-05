@@ -154,6 +154,11 @@ internal static class HandOffMarkerCore
                 close.DonorToken = donorToken;
                 close.AdmittedShard = shardIndex;
                 close.AdmittedGeneration = generation;
+                if (marker is LeafHandOffState { SiblingLinkedGeneration: > 0 } witnessed)
+                {
+                    // G1: the sibling's link was witnessed before this close was written.
+                    close.LinkedGeneration = witnessed.SiblingLinkedGeneration;
+                }
             }
         }
 
@@ -175,6 +180,12 @@ internal static class HandOffMarkerCore
     {
         ArgumentNullException.ThrowIfNull(marker);
         ArgumentNullException.ThrowIfNull(pending);
+        if (marker is LeafHandOffState { SiblingLinkedGeneration: > 0 })
+        {
+            // G1: the sibling's own link is witnessed; no donor bound on its marker is pending.
+            return 0;
+        }
+
         var added = 0;
         foreach (var close in marker.Closes)
         {
@@ -197,15 +208,23 @@ internal static class HandOffMarkerCore
     }
 
     /// <summary>
-    /// Records the link witness on every donor close by <paramref name="donorLeaf"/> on
-    /// <paramref name="marker"/> that is still pending (B2): the generation the shard root
-    /// raised for the batch that linked the sibling. Returns whether anything changed.
+    /// Records the link witness on the sibling's <paramref name="marker"/> (B2, G1): the
+    /// generation the shard root raised for the batch that linked the sibling, at marker
+    /// level - so a donor close written later inherits it - and on every donor close by
+    /// <paramref name="donorLeaf"/> already there and still pending. Returns whether
+    /// anything changed.
     /// </summary>
     public static bool WitnessLink(IHandOffMarker marker, Guid donorLeaf, long linkedGeneration)
     {
         ArgumentNullException.ThrowIfNull(marker);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(linkedGeneration);
         var changed = false;
+        if (marker is LeafHandOffState { SiblingLinkedGeneration: 0 } leaf)
+        {
+            leaf.SiblingLinkedGeneration = linkedGeneration;
+            changed = true;
+        }
+
         foreach (var close in marker.Closes)
         {
             if (close.DonorLeaf != Guid.Empty && close.DonorLeaf == donorLeaf && close.LinkedGeneration == 0)

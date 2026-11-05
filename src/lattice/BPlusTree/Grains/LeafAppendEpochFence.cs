@@ -134,6 +134,15 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
 
     private long _deferredReproveAtTicks;
 
+    /// <summary>
+    /// Whether this activation's proof read its marker and found no pending donor bound
+    /// (a5e2e2ef's G3 on #5866). Only such a proof admits an eager-gate claim: a proof made
+    /// under the pre-arm gate - a split birth's (P1) or by descent alone - is re-made, with
+    /// the marker, before this activation's first eager claim, so a sibling never claims
+    /// before its own link is witnessed.
+    /// </summary>
+    private bool _markerChecked;
+
     /// <summary>Creates the fence for one leaf activation.</summary>
     /// <param name="leafId">The leaf's grain key.</param>
     /// <param name="gate">The silo's view of the fence gate.</param>
@@ -290,6 +299,15 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 // append goes pre-arm, which the partition admits on its routing
                 // generation alone and attributes to this activation.
                 return new ValueTask<WalAppendStamp?>(DecorateLocked(WalAppendStamp.PreArm(_leafId, _activation)));
+            }
+
+            if (_requireReachability && !_markerChecked)
+            {
+                // G3: the activation was proven without reading its marker (under the
+                // pre-arm gate); it proves again, with the marker, before it claims. This
+                // append goes unstamped meanwhile.
+                _reachability = ReachabilityUnproven;
+                return new ValueTask<WalAppendStamp?>((WalAppendStamp?)null);
             }
         }
 
@@ -1179,13 +1197,14 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     }
 
     /// <summary>The activation proved it is reachable by descent, or was born under an open hand-off marker; it may claim.</summary>
-    internal void OnReachabilityProven()
+    internal void OnReachabilityProven(bool markerChecked = false)
     {
         lock (_sync)
         {
             if (_reachability is ReachabilityUnproven or ReachabilityDeferred)
             {
                 _reachability = ReachabilityProven;
+                _markerChecked = markerChecked;
             }
         }
     }
@@ -1220,6 +1239,31 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             if (_reachability == ReachabilityDeferred)
             {
                 _reachability = ReachabilityProven;
+                _markerChecked = true;
+            }
+        }
+    }
+
+    /// <summary>Whether the activation is deferred (D1).</summary>
+    internal bool IsDeferred
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _reachability == ReachabilityDeferred;
+            }
+        }
+    }
+
+    /// <summary>Whether a donor close is pending on the leaf's marker as last read (B2); the leaf neither arms nor claims while one is.</summary>
+    internal bool HasPendingCloses
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _close1.IsSet;
             }
         }
     }
