@@ -124,4 +124,29 @@ public sealed partial class LeafAppendEpochFenceTests
             Assert.That(latched, Is.Null, "a latched activation stamped");
         });
     }
+
+    [Test]
+    public async Task A_proven_activation_with_a_pending_bound_is_demoted_and_never_claims()
+    {
+        // a5e2e2ef's B2 ruling (ProvenSiblingClaimsPreLink): a P1-proven sibling whose own
+        // link is not witnessed is demoted to deferred, so it cannot claim before its link,
+        // and is proven again once descent reaches it.
+        var (fence, gate, shard) = DeferredFence();
+        fence.OnReachabilityProven();
+        var provenFirst = fence.IsReachabilityProvenForTesting;
+
+        fence.OnReachabilityDeferred();
+        gate.IsPreArmOpen = false;
+        var underEagerGate = await fence.StampForAsync(shard, partition: 0, CancellationToken.None);
+        gate.IsPreArmOpen = true;
+        fence.PromoteDeferredReachable();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(provenFirst, Is.True, "precondition: the activation was proven");
+            Assert.That(underEagerGate, Is.Null, "a demoted sibling claimed under the eager gate");
+            Assert.That(fence.IsReachabilityProvenForTesting, Is.True, "a reachable demoted sibling was not proven again");
+        });
+        await shard.DidNotReceiveWithAnyArgs().ClaimAppendEpochAsync(default, default, default);
+    }
 }
