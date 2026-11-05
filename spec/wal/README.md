@@ -57,7 +57,7 @@ and its mutations as the record each module took its own from.
 | `WalHandOffFence` | 3 | 1 | 17 | 21 | 19 | 8,826 |
 | `WalRoutingFloor` | 3 | 1 | 14 | 21 | 16 | 28,956 |
 | `WalBulkSwitch` | 6 | 1 | 21 | 28 | 26 | 1,047,630 |
-| `WalLiveAdvanceCore` | 18 | 2 | 51 | 111 | 69 | 2,021,047 |
+| `WalLiveAdvanceCore` | 18 | 2 | 51 | 113 | 69 | 2,021,047 |
 | `WalLiveAdvanceComposite` | 13 | 0 | 15 | 28 | 15 | 131,423 |
 
 `Actions` counts the disjuncts of `Next`, including the non-behavioural `Stutter`

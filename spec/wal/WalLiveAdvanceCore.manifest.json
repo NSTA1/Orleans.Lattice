@@ -8,7 +8,7 @@
     "invariants": 18,
     "properties": 2,
     "actions": 51,
-    "mutations": 111,
+    "mutations": 113,
     "behaviourRows": 69,
     "distinctStates": 2021047
   },
@@ -98,6 +98,9 @@
       "distinctStates": 0
     },
     "FreeSplitView": {
+      "distinctStates": 0
+    },
+    "FreeReforwardRestart": {
       "distinctStates": 0
     }
   }

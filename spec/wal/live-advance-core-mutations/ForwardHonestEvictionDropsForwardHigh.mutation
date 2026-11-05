@@ -8,8 +8,8 @@ PERTURBS: Evict
 BOUNDS: WithFreeAdvance = TRUE, WithFwdExclusion = TRUE, WithDuplicate = FALSE, WithRestart = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
 
 --- FIND
-    /\ evFloor' = Max({evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \cup {OrphanFwd, FwdD}})
+    /\ evFloor' = Max({evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \cup LeafAttributed})
 --- REPLACE
 \* MUTATION: the forwards' high is not folded.
-    /\ evFloor' = Max({evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts})
+    /\ evFloor' = Max({evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \cup (LeafAttributed \ {FwdD})})
 --- END

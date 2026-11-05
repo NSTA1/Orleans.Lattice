@@ -1227,7 +1227,10 @@ Restart ==
 
 (* Evict (WithRestart): the WAL shard evicts L's foreign-high entry to     *)
 (* bound memory, raising its eviction floor to the entry's highest offset: *)
-(* every token's, the empty token's forwards included (#5837).             *)
+(* every token's, and every class attributed to L under the empty token:  *)
+(* an orphan's forward, a donor's forward and a chain's (#5837, S-a).      *)
+LeafAttributed == {OrphanFwd, FwdD, ChainFwd}
+
 Evict ==
     /\ WithRestart
     /\ WithEvict
@@ -1235,7 +1238,7 @@ Evict ==
     /\ evStart = 0
     /\ next > 0
     /\ evStart' = next
-    /\ evFloor' = Max({evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \cup {OrphanFwd, FwdD}})
+    /\ evFloor' = Max({evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \cup LeafAttributed})
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, moveVars, freeVars>>
 

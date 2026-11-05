@@ -193,7 +193,7 @@ weaken each one in turn and go red, so each is load-bearing.
 | `NarrowMem(a)` | An activation of L narrows its span in memory for a split, stamping the narrow's identity (the sibling id) as its tag | `BPlusLeafGrain.CompleteSplitAsync`, the in-memory narrow. | Yes: `LeafLiveAdvanceCoreTests.ForwardExclusionByInMemorySpan`. |
 | `PersistNarrow(a)` | It persists the narrow with its link obligation in one conditional write; the first to persist wins, the other keeps only its in-memory narrow | `BPlusLeafGrain.CompleteSplitAsync`, the narrow's persist with `LeafNodeState.UnlinkedSplitSiblingId`. | Yes: `LeafLiveAdvanceCoreTests.ForwardExcludedWithoutObligation` and `LeafLiveAdvanceCoreTests.ForwardExclusionTagCollision`. |
 | `EvictTag` | **Environment.** A third narrow tag evicts one from the WAL shard's per-(leaf, partition) top-two forward table, and the evicted tag's forward high folds into the floor every reader counts (X6) | `WalShardGrain.ForwardHighLocked`, its fold into `WalShardGrain.FoldLeafAuthorsLocked`'s eviction floor. | Yes: `LeafLiveAdvanceCoreTests.ForwardTagEvictionDropsHigh`. |
-| `ReforwardChain(h)` | L's stale activation forwards one of L's keys on, and the chain runs h hops: the stamp carries every forwarder up to k, each attributed under the empty token with its own hop's tag, and a chain past k goes unstamped (F2', C4) | `WalAppendStamp.ForwarderChain` built by `BPlusLeafGrain.TryResolveSpanForwardTarget`; `WalShardGrain`'s attribution to each forwarder. | Yes: `LeafLiveAdvanceCoreTests.ReforwardOmitsImmediateForwarder`, `LeafLiveAdvanceCoreTests.ReforwardOmitsIntermediateForwarder` and `LeafLiveAdvanceCoreTests.ReforwardChainOverflowStamped`. |
+| `ReforwardChain(h)` | L's stale activation forwards one of L's keys on, and the chain runs h hops: the stamp carries every forwarder up to k, each attributed under the empty token with its own hop's tag, and a chain past k goes unstamped (F2', C4) | `WalAppendStamp.ForwarderChain` built by `BPlusLeafGrain.TryResolveSpanForwardTarget`; `WalShardGrain`'s attribution to each forwarder. Production never excludes a chain hop from a reader's `foreignHigh` (S-b): the per-hop X1 exclusion is not taken, at a cost only. | Yes: `LeafLiveAdvanceCoreTests.ChainHopsAreNeverExcluded`, `LeafLiveAdvanceCoreTests.ReforwardOmitsImmediateForwarder`, `LeafLiveAdvanceCoreTests.ReforwardOmitsIntermediateForwarder` and `LeafLiveAdvanceCoreTests.ReforwardChainOverflowStamped`. |
 | `ForwardIntoL(a)` | Before the link, L's donor forwards a new write of L's keys into L: L appends and applies it as its own, and the WAL attributes it to the donor under the empty token with the tag of the split that created L, which L's `staleHigh` excludes | `WalShardGrain`'s per-donor `staleHigh` read, excluding forwards tagged with the reader's own split. | Yes: `LeafLiveAdvanceCoreTests.StaleHighCountsReceiverTag`. |
 | `StaleForwardOther` | A stale D' forwards one of L's keys into another orphan under that orphan's split tag; L's `staleHigh` counts it | The same read: only the reader's own split tag is excluded. | Yes: `LeafLiveAdvanceCoreTests.StaleHighExcludesOtherTag`. |
 | `ForwardMoved(a)` | It forwards a new acknowledged write of a moved key, attributed to L under the empty token and its narrow's tag, before or after its persist; a reader excludes it only when its own persisted span is that narrow (X1-X4) | `BPlusLeafGrain.TryResolveSpanForwardTarget`; `WalShardGrain.ForwardHighLocked` per tag, excluded in `WalShardGrain.ForeignHighLocked`. | Yes: `LeafLiveAdvanceCoreTests.ForwardExclusionByForwarderSpan` and `LeafLiveAdvanceCoreTests.ForwardExclusionTagCollision`. |
@@ -284,6 +284,7 @@ case budget:
 | `FreeFwdExclusion` | the forward-exclusion relief: two divergent narrows, a forward before or after the persist | 4,217,142 |
 | `FreeTagEvict` | the relief's WAL-side table: a tag's eviction (X6) and a WAL shard restart (X8) | 821,800 |
 | `FreeReforward` | a forward chain at depths 2, 3 and 4 against k = 3 (F2') | PENDING_REFORWARD |
+| `FreeReforwardRestart` | the chain with a WAL shard restart and an eviction: the folds of the orphan's and the chain's forwards (S-a) | PENDING_REFORWARDRESTART |
 | `FreeForwardIn` | the donor's pre-link forward into L and a stale D''s into another orphan (the `staleHigh` tag exclusion) | PENDING_FORWARDIN |
 | `FreeSplitView` | the split's view read concurrently with the drain (V3), with a hand-off window | PENDING_SPLITVIEW |
 
@@ -440,6 +441,32 @@ reason as the one above.
   leaf's foreign-high entry must fold its forwards' high, the empty token's, with its
   activations' (`ForwardHonestEvictionDropsForwardHigh`).
   Production symbols: `WalShardGrain.FoldLeafAuthorsLocked`, `WalShardGrain.ResetLeafAuthors`.
+- **The forward relief's assumptions and limits (#5837; a5e2e2ef's S-b, N-a to N-d).**
+  - *Chain hops are never excluded (S-b).* F2' allows each hop's reader to exclude the
+    records of the narrow its persisted span is (X1, per hop). The model counts every
+    chain record in L's `foreignHigh` (`ChainFwd`), and production does the same: a
+    chain hop's attribution is never excluded, which costs at most a replay past a
+    record the reader already applied. `LeafLiveAdvanceCoreTests.ChainHopsAreNeverExcluded`
+    pins it, so a later exclusion must come back to the model first.
+  - *Every tag folds on a tag eviction (N-c).* `EvictTag` folds every tag's forward high
+    into the floor every reader counts, not only the evicted tag's; production's table
+    folds only the evicted one, which is a subset of what the model folds, so the
+    model's fold over-approximates the floor.
+  - *The excluded forwards rest on the sibling pin (N-b).* `ReadPositionHonest`,
+    `SnapshotHonest` and `NoTrimPastAcked` skip a donor's forward of a key L no longer
+    owns. That is sound only because the record is applied by the sibling that owns
+    the key, which pins the WAL until it does (condition (c) of the split's transfer);
+    `ForwardHonest` and `SnapshotForwardHonest` check the forwards L does own.
+  - *The receiver-tag exclusion does not survive a restart's fallback (N-a).*
+    `StaleHighExcludesReceiverTag` holds while the WAL shard's per-tag table holds the
+    forward. After a WAL shard restart the table is gone and `staleHigh` falls back to
+    the start-head floor, which counts the receiver's own forwards too: the exclusion
+    is a cost relief, and the fallback only over-counts.
+  - *A reactivated reader's tag (N-d).* The reader excludes by the tag of its persisted
+    narrow, so a reactivation must read that tag from durable state that survives the
+    link (`LeafNodeState`); a reader with no durable tag counts every forward, which
+    costs a replay and never passes a record.
+  Production symbols: `WalShardGrain.StaleHighLocked`, `LeafAppendEpochFence.PersistedNarrowTag`.
 
 - **The liveness property excludes a current activation that has fallen off the log.**
   `NewbornPinEventuallyUsable` is discharged by `CurrentFellOffLog`: the GC trimmed an
