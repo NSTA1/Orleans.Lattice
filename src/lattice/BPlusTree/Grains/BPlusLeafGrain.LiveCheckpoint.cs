@@ -318,9 +318,7 @@ internal sealed partial class BPlusLeafGrain
                     claimRaised: claimRaised,
                     claimHead: claimHead,
                     handOffClear: handOff.Clear,
-                    closeHead: Math.Max(
-                        HandOffMarkerCore.RequiredHead(handOff.LeafMarker, low, high, p),
-                        HandOffMarkerCore.HeadAt(handOff.ShardCloseHeads, p)),
+                    closeHead: HandOffMarkerCore.RequiredHead(handOff.LeafMarker, low, high, p),
                     unstampedSeen: unstampedSeen,
                     ownHigh: ownHigh[p],
                     current: GetCurrentCheckpointForPartition(p),

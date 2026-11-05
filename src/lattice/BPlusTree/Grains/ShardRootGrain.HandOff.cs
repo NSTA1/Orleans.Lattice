@@ -101,7 +101,7 @@ internal sealed partial class ShardRootGrain
     {
         ArgumentException.ThrowIfNullOrEmpty(token);
         ArgumentNullException.ThrowIfNull(heads);
-        return UpdateHandOffMarkerAsync(marker => HandOffMarkerCore.Close(marker, token, heads));
+        return UpdateHandOffMarkerAsync(marker => HandOffMarkerCore.Close(marker, token, Enumerable.Repeat(-1L, heads.Length).ToArray()));
     }
 
     /// <summary>
