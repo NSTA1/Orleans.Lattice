@@ -61,7 +61,7 @@ public sealed class ClaimlessSplitIntegrationTests
         for (var p = 0; p < partitions; p++)
         {
             var cut = await _cluster.Client.GetGrain<IWalShardGrain>($"{name}/{p}")
-                .GetSplitCutAsync(default, CancellationToken.None);
+                .GetSplitCutAsync(default, null, null, CancellationToken.None);
             watermarks[p] = cut.UnstampedWatermark;
         }
 

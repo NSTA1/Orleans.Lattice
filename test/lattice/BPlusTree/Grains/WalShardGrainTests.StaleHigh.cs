@@ -176,9 +176,11 @@ public partial class WalShardGrainTests
         var donorRecord = await grain.AppendStampedAsync(MakeEntry("d"), WalAppendStamp.PreArm(Donor, OtherToken) with { Initiator = PreArmRoot, Generation = 1 }, CancellationToken.None);
         var own = await grain.AppendStampedAsync(MakeEntry("o"), PreArmStamp(ActivationA, 1), CancellationToken.None);
 
-        var plain = await grain.GetSplitCutAsync(WalAppendStamp.PreArm(FenceLeaf, ActivationA), CancellationToken.None);
+        var plain = await grain.GetSplitCutAsync(WalAppendStamp.PreArm(FenceLeaf, ActivationA), null, null, CancellationToken.None);
         var withClose = await grain.GetSplitCutAsync(
             WalAppendStamp.PreArm(FenceLeaf, ActivationA) with { Close1 = new WalPendingClose(Donor, ClosingToken, PreArmRoot.Index, 1) },
+            null,
+            null,
             CancellationToken.None);
 
         Assert.Multiple(() =>
@@ -200,9 +202,9 @@ public partial class WalShardGrainTests
         var live = await grain.AppendStampedAsync(MakeEntry("l"), WalAppendStamp.PreArm(Donor, ClosingToken) with { Initiator = PreArmRoot, Generation = 1 }, CancellationToken.None);
         var everyActivation = new WalAppendStamp(Donor, 0, WalRoutingInitiator.None, 0);
 
-        var cut = await grain.GetSplitCutAsync(everyActivation, CancellationToken.None);
+        var cut = await grain.GetSplitCutAsync(everyActivation, null, null, CancellationToken.None);
         var restarted = await CreateFencedGrainAsync(storage, provider);
-        var afterRestart = await restarted.GetSplitCutAsync(everyActivation, CancellationToken.None);
+        var afterRestart = await restarted.GetSplitCutAsync(everyActivation, null, null, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
