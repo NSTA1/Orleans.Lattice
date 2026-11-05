@@ -81,9 +81,12 @@ internal sealed partial class WalShardGrain
 
         authors = authors.With(stamp.Activation, offset);
         _leafAuthors[stamp.LeafId] = authors;
-        if (stamp.Forwarder != Guid.Empty && stamp.Forwarder != stamp.LeafId)
+        if (stamp.Forwarder != Guid.Empty)
         {
-            NoteForwardLocked(stamp.Forwarder, stamp.ForwarderTag, offset);
+            // F2': every forwarder on the chain, each by its own narrow tag.
+            NoteForwardLocked(stamp.LeafId, stamp.Forwarder, stamp.ForwarderTag, offset);
+            NoteForwardLocked(stamp.LeafId, stamp.Forwarder2, stamp.ForwarderTag2, offset);
+            NoteForwardLocked(stamp.LeafId, stamp.Forwarder3, stamp.ForwarderTag3, offset);
             authors = _leafAuthors.TryGetValue(stamp.LeafId, out var current) ? current : authors;
         }
 
@@ -97,8 +100,13 @@ internal sealed partial class WalShardGrain
     /// no activation token, by the narrow that moved its key (X2). Called under
     /// <see cref="_stateGate"/>.
     /// </summary>
-    private void NoteForwardLocked(Guid forwarder, Guid tag, long offset)
+    private void NoteForwardLocked(Guid author, Guid forwarder, Guid tag, long offset)
     {
+        if (forwarder == Guid.Empty || forwarder == author)
+        {
+            return;
+        }
+
         if (!_leafAuthors!.TryGetValue(forwarder, out var authors))
         {
             if (_leafAuthors.Count >= MaxLeafAuthors)
@@ -292,9 +300,10 @@ internal sealed partial class WalShardGrain
         /// <summary>This table with <paramref name="activation"/>'s record at <paramref name="offset"/> noted.</summary>
         public LeafAuthors With(Guid activation, long offset)
         {
+            // 'with' keeps the forward fields (#5837).
             if (High1 < 0)
             {
-                return new(activation, offset, Guid.Empty, -1);
+                return this with { Token1 = activation, High1 = offset, Token2 = Guid.Empty, High2 = -1 };
             }
 
             if (activation == Token1)
@@ -305,13 +314,13 @@ internal sealed partial class WalShardGrain
             if (High2 >= 0 && activation == Token2)
             {
                 return offset > High1
-                    ? new(activation, offset, Token1, High1)
+                    ? this with { Token1 = activation, High1 = offset, Token2 = Token1, High2 = High1 }
                     : offset > High2 ? this with { High2 = offset } : this;
             }
 
             // A third activation, or the second's first record: it displaces the lower.
             return offset > High1
-                ? new(activation, offset, Token1, High1)
+                ? this with { Token1 = activation, High1 = offset, Token2 = Token1, High2 = High1 }
                 : offset > High2 ? this with { Token2 = activation, High2 = offset } : this;
         }
     }
