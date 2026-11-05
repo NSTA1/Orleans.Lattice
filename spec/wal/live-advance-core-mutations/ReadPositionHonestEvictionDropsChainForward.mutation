@@ -5,7 +5,7 @@ TARGET: ReadPositionHonest
 CLASS: Invariant
 SUMMARY: the eviction folds L's activations' and its orphan's and donor's forwards but not a forward chain's record, so a chain record below the eviction start leaves L's foreignHigh
 PERTURBS: Evict
-BOUNDS: WithFreeAdvance = TRUE, WithReforward = TRUE, WithOrphanForward = TRUE, WithRestart = TRUE, WithEvict = TRUE, WithMixedVersion = FALSE, MaxWindows = 0
+BOUNDS: MaxWindows = 0, WithMixedVersion = FALSE, WithRestart = TRUE, WithFreeAdvance = TRUE, WithReforward = TRUE
 
 --- FIND
     /\ evFloor' = Max({evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \cup LeafAttributed})
