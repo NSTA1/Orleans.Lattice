@@ -54,7 +54,7 @@ EXTENDS Integers, FiniteSets
 CONSTANTS MaxWindows, WithMixedVersion, WithGateFlip, WithRestart, WithRecreate, WithBulk,
           WithUnclaimedSurvivor, WithClaimedPurge, WithPreArm, WithKeyMove, WithFreeAdvance,
           WithSplitHint, WithSplitBirth, WithDonorRestart,
-          WithDuplicate, WithEvict, WithOrphanForward
+          WithDuplicate, WithEvict, WithOrphanForward, WithLatch
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
@@ -130,7 +130,13 @@ VARIABLES
     dNarrowed,    \* WithSplitBirth: L's live donor has narrowed its span
     sDone,        \* WithSplitBirth: the donor's stragglers have reached L
     dKnown,       \* WithSplitBirth: the moved-key writes the donor's closing activation knows it made
-    dResumed      \* WithDonorRestart: the split was resumed by a new donor activation
+    dResumed,     \* WithDonorRestart: the split was resumed by a new donor activation
+    oblig,        \* WithSplitBirth: the donor's durable link obligation for L
+    lRestart,     \* WithSplitBirth: the donor restarted after closing L and before L was linked
+    lat,          \* WithLatch: L's reachability decision: "undecided", "proven", "latched"
+    eagerG,       \* WithLatch: the cluster's gate view has flipped from pre-arm to eager
+    repair,       \* WithLatch: orphan repair has begun on L's range
+    tried         \* WithLatch: a reachability proof has run since orphan repair began
 
 walVars == <<next, author, inflight, durable, acked, floor>>
 leafVars == <<up, cache, rp, mine, snapCov, snapRows>>
@@ -138,7 +144,8 @@ epochVars == <<cur, claimed, claimHead, stale, dupUsed>>
 handVars == <<mInit, hoOpen, hoClosedAt, windows>>
 oldVars == <<lastU, seenU, oldUsed, restarted, oldRejected>>
 envVars == <<recreated, reinit, spUsed, phase, hint>>
-xferVars == <<tRecs, dNarrowed, sDone, dKnown, dResumed>>
+latchVars == <<oblig, lRestart, lat, eagerG, repair, tried>>
+xferVars == <<tRecs, dNarrowed, sDone, dKnown, dResumed, latchVars>>
 freeVars == <<sHi, seenS, ft, sh, sibHint, sibRows, xferVars>>
 armVars == <<preArm, seenP, startHead, evStart, evFloor, freeVars>>
 moveVars == <<gD, gL, pend, pendGen, moved, otherMoved, dUsed, reclaims, strayReclaims>>
@@ -202,6 +209,12 @@ TypeOK ==
     /\ sDone \in BOOLEAN
     /\ dKnown \subseteq Offs
     /\ dResumed \in BOOLEAN
+    /\ oblig \in BOOLEAN
+    /\ lRestart \in BOOLEAN
+    /\ lat \in {"undecided", "proven", "latched"}
+    /\ eagerG \in BOOLEAN
+    /\ repair \in BOOLEAN
+    /\ tried \in BOOLEAN
 
 (***************************************************************************)
 (* Init. Without WithBulk, L is a new tree's first leaf: a1 is running,   *)
@@ -268,6 +281,12 @@ Init ==
     /\ sDone = FALSE
     /\ dKnown = {}
     /\ dResumed = FALSE
+    /\ oblig = FALSE
+    /\ lRestart = FALSE
+    /\ lat = "undecided"
+    /\ eagerG = FALSE
+    /\ repair = FALSE
+    /\ tried = FALSE
 
 (***************************************************************************)
 (* B's BulkHintBound, as an environment step. Create: the bulk-born leaf's *)
@@ -340,6 +359,9 @@ ResolveDeferred ==
     /\ hoClosedAt' = Max2(hoClosedAt, IF FreeOn THEN sHi + 1 ELSE next)
     /\ UNCHANGED <<gD, pendGen, moved, otherMoved, dUsed, strayReclaims>>
 
+(* A claim of L's under the latch.                                         *)
+LatchAdmitsClaim == ~WithLatch \/ moved \/ (eagerG /\ lat = "proven")
+
 Claim(a) ==
     /\ a \in up
     /\ a \notin stale
@@ -349,6 +371,7 @@ Claim(a) ==
     /\ cur' = a
     /\ stale' = IF cur \in Acts THEN stale \cup {cur} ELSE stale
     /\ ReportForeign(a)
+    /\ LatchAdmitsClaim
     /\ IF pend /\ gD >= pendGen THEN ResolveDeferred ELSE UNCHANGED <<moveVars, hoClosedAt>>
     /\ UNCHANGED <<walVars, leafVars, dupUsed, mInit, hoOpen, windows, oldVars, envVars>>
     /\ UNCHANGED <<preArm, startHead, evStart, evFloor, freeVars>>
@@ -668,6 +691,71 @@ SplitCommit(a) ==
 (* since the transfer carries the routing generation its span was         *)
 (* established under.                                                      *)
 (***************************************************************************)
+(* The link is re-driven from the donor's durable obligation, by whichever *)
+(* activation of the donor runs: the split's own, or one that restarted    *)
+(* after closing L's window (#5837 transfer conditions (a) and (b)).       *)
+LinkDriven == oblig
+
+(* LinkRestart: the donor restarts after closing L's window and before L   *)
+(* is linked; its in-memory pending link is lost.                          *)
+LinkRestart ==
+    /\ FreeOn
+    /\ WithSplitBirth
+    /\ WithDonorRestart
+    /\ ~hoOpen
+    /\ ~moved
+    /\ ~lRestart
+    /\ lRestart' = TRUE
+    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lat, eagerG, repair, tried>>
+
+(***************************************************************************)
+(* The reachability latch (#5709) on a split-born L after its donor closed *)
+(* its window and before the link (#5837, WithLatch; a5e2e2ef's three       *)
+(* conditions). ProveReach: L's reachability proof. Linked, it is proven.  *)
+(* Unlinked, with the donor's pending close on its marker, it is left      *)
+(* undecided and retried - never marked proven - only while the gate is in *)
+(* pre-arm and no orphan repair has begun; otherwise L is latched and      *)
+(* appends unstamped for the rest of the activation. GateToEager: the gate *)
+(* view flips from pre-arm to eager. StartRepair: orphan repair begins on  *)
+(* L's range. A claim needs the link under pre-arm (the arm reads the view *)
+(* as reachable), and a proven L under the eager gate (its first stamped   *)
+(* write claims once proven).                                              *)
+(***************************************************************************)
+ExemptPending == pend /\ ~eagerG /\ ~repair
+
+ProveReach ==
+    /\ FreeOn
+    /\ WithLatch
+    /\ ~hoOpen
+    /\ lat = "undecided"
+    /\ lat' = IF moved THEN "proven" ELSE IF ExemptPending THEN "undecided" ELSE "latched"
+    /\ tried' = TRUE
+    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, eagerG, repair>>
+
+GateToEager ==
+    /\ FreeOn
+    /\ WithLatch
+    /\ ~eagerG
+    /\ eagerG' = TRUE
+    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, repair, tried>>
+
+StartRepair ==
+    /\ FreeOn
+    /\ WithLatch
+    /\ ~moved
+    /\ ~repair
+    /\ repair' = TRUE
+    /\ tried' = FALSE
+    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG>>
+
 (* The records the donor's close head is above: every append of the donor *)
 (* leaf since the heads, by any of its activations, once the split was     *)
 (* resumed; otherwise the closing activation's own, which are all of them. *)
@@ -685,15 +773,17 @@ DonorAlloc ==
     /\ dKnown' = dKnown \cup {next}
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
-    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dResumed>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dResumed, latchVars>>
 
 DonorNarrow ==
     /\ FreeOn
     /\ WithSplitBirth
     /\ ~dNarrowed
     /\ dNarrowed' = TRUE
+    /\ oblig' = TRUE
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows, tRecs, sDone, dKnown, dResumed>>
+    /\ UNCHANGED <<lRestart, lat, eagerG, repair, tried>>
 
 DonorClose ==
     /\ FreeOn
@@ -724,7 +814,7 @@ DonorRestart ==
     /\ sHi' = Max({sHi} \cup {o \in Offs : author[o] = DonorLive})
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, seenS, ft, sh, sibHint, sibRows>>
-    /\ UNCHANGED <<tRecs, dNarrowed, sDone>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, latchVars>>
 
 Straggler(a) ==
     /\ FreeOn
@@ -745,7 +835,7 @@ Straggler(a) ==
     /\ ReportStale(a)
     /\ UNCHANGED <<durable, acked, floor, up, rp, mine, snapCov, snapRows, epochVars, handVars>>
     /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected, envVars, moveVars>>
-    /\ UNCHANGED <<preArm, startHead, evStart, evFloor, sHi, ft, sh, sibHint, sibRows, dNarrowed, dKnown, dResumed>>
+    /\ UNCHANGED <<preArm, startHead, evStart, evFloor, sHi, ft, sh, sibHint, sibRows, dNarrowed, dKnown, dResumed, latchVars>>
 
 (***************************************************************************)
 (* An orphan's forward (#5837, condition 4; WithOrphanForward). The stale  *)
@@ -848,7 +938,7 @@ KeyMove ==
     /\ gD' = gD + 1
     /\ pend' = TRUE
     /\ pendGen' = gD + 1
-    /\ WithSplitBirth => ~hoOpen
+    /\ WithSplitBirth => ~hoOpen /\ LinkDriven
     /\ UNCHANGED <<gL, otherMoved, dUsed, reclaims, strayReclaims>>
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, armVars>>
 
@@ -973,6 +1063,10 @@ Next ==
     \/ DonorNarrow
     \/ DonorClose
     \/ DonorRestart
+    \/ LinkRestart
+    \/ ProveReach
+    \/ GateToEager
+    \/ StartRepair
     \/ \E a \in Acts : Straggler(a)
     \/ OrphanForward
     \/ \E a \in Acts : Capture(a)
@@ -1037,6 +1131,7 @@ Progress ==
     \/ MarkInit
     \/ DonorNarrow
     \/ DonorClose
+    \/ WithSplitBirth /\ KeyMove
 
 (* One weak-fairness condition over the disjunction. Given the finiteness  *)
 (* precondition above, a fair behaviour ends in a state where no Progress  *)
@@ -1070,6 +1165,24 @@ TransferCostWitness == lastU \notin tRecs
 (* partition's allocator head.                                             *)
 DeferredHeadCostWitness ==
     WithSplitBirth => hoClosedAt <= Max2(sHi, Max({-1} \cup {o \in Offs : author[o] = DonorLive})) + 1
+
+(* The link obligation (#5837, transfer condition (a)): once the donor's   *)
+(* narrow is durable, so is its obligation to link L.                      *)
+NarrowObligated == dNarrowed => oblig
+
+(* The latch exemption (#5837, a5e2e2ef's conditions 1-3): an unlinked L   *)
+(* never takes an epoch, and orphan repair always latches it.             *)
+UnlinkedNeverClaims == WithLatch => \A a \in Acts : claimed[a] => moved
+
+RepairLatches == WithLatch => (repair /\ tried /\ ~moved => lat = "latched")
+
+(* The exemption's engagement witness: an unlinked L whose donor's close   *)
+(* is pending, under pre-arm and with no orphan repair, is never latched,  *)
+(* so its routed writes after the link stay off the shared watermark.      *)
+PendingCloseNotLatched == WithLatch => (lat = "latched" => moved \/ ~pend \/ eagerG \/ repair)
+
+(* A split-born L is eventually linked (#5837, transfer condition (b)).    *)
+SplitEventuallyLinked == WithSplitBirth /\ WithKeyMove => <>moved
 
 (* The widened excuse is for duplicates only: a sole running activation    *)
 (* never falls off the log, since the GC never trims past its own pin.     *)

@@ -1,0 +1,13 @@
+# #5837: the reachability latch exemption and the split transfer's link obligation.
+MODULE: UnlinkedNeverClaimsExemptLeafArmsUnreachable
+TARGET: UnlinkedNeverClaims
+CLASS: Invariant
+SUMMARY: an exempt, unlinked L arms: the arm does not require the view to read reachable
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE, WithLatch = TRUE
+
+--- FIND
+LatchAdmitsClaim == ~WithLatch \/ moved \/ (eagerG /\ lat = "proven")
+--- REPLACE
+\* MUTATION: any L not latched may claim.
+LatchAdmitsClaim == ~WithLatch \/ moved \/ lat # "latched"
+--- END
