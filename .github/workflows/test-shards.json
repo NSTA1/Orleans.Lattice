@@ -283,6 +283,13 @@
         "note": "WalLiveAdvanceCore's mutations that raise WithFreeAdvance (#5837's claimless advance, split hint, split-born receiver, latch exemption, forwards and forward-exclusion relief), with the smallest claimless variants: FreeSplitLink 428,890 (liveness), FreeLatch 892,259, FreeOrphan 707,726, FreeRestartKeyMove 477,300 and FreeTagEvict 821,800. Each mutation's control runs its raised configuration, which the base cannot serve; the largest controls are the base with WithFreeAdvance (4,680,662 states) and the relief (4,217,142). Estimated at 15 minutes until measured on its CI leg."
       },
       {
+        "shard": "formal-tlc-wal-live-advance-core-free-read-position",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardWalLiveAdvanceCoreFreeReadPosition"],
+        "note": "WalLiveAdvanceCore's claimless-advance mutations (WithFreeAdvance) that target ReadPositionHonest, split from formal-tlc-wal-live-advance-core-free because the two together outran a pooled job's time limit (run 42020501136: the shard had run 43 minutes when its job was cancelled at 89). Each mutation's full-bound and matching-bound controls run raised configurations the base cannot serve. Estimated at 30 minutes until measured on its CI leg."
+      },
+      {
         "shard": "formal-tlc-wal-live-advance-core-free-variants",
         "tlc": true,
         "tiers": ["deterministic"],

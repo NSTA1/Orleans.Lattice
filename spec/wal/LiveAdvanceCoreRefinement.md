@@ -188,13 +188,13 @@ weaken each one in turn and go red, so each is load-bearing.
 | `OrphanClose` | **Environment.** The orphan's donor closes its window, leaving its deferred close pending | `BPlusLeafGrain.CloseSplitHandOffAsync` on the stale duplicate. | Yes: `WalShardGrainTests.A_forwarded_record_is_foreign_to_every_activation_of_its_forwarder`. |
 | `ProveReach` | An unlinked L's reachability proof after its donor's close: proven once linked; left undecided, and retried, while the donor's close is pending, the gate is in pre-arm and no orphan repair has begun; latched otherwise | `BPlusLeafGrain.ProveStampReachabilityCoreAsync`, deferring through `LeafAppendEpochFence.OnReachabilityUndecided`. | Yes: `BPlusLeafGrainTests.PendingDonorCloseMarksProven` and `BPlusLeafGrainTests.LatchUnreachableWithPendingDonorClose`. |
 | `GateToEager` | **Environment.** The gate's view flips from pre-arm to eager | `ClusterManifestWalAppendFenceGate.IsPreArmOpen`. | Yes: `BPlusLeafGrainTests.PendingDonorCloseMarksProven`. |
-| `StartRepair` | **Environment.** Orphan repair begins on L's range; L's next proof latches | `LeafLiveAdvanceView.For`. | Yes: `BPlusLeafGrainTests.PendingExemptionOverridesOrphanRepair`. |
+| `StartRepair` | **Environment.** Orphan repair begins on L's range; L's next proof latches | `LeafLiveAdvanceView.OrphanRepairInProgress`. | Yes: `BPlusLeafGrainTests.PendingExemptionOverridesOrphanRepair`. |
 | `Reactivate` | **Environment.** L's birth activation deactivates, and a later call - a re-init, a recovery re-call, a stale donor's late `InitializeSiblingAsync` - activates it again, unproven (P1, P3) | `BPlusLeafGrain.InitializeSiblingAsync`, proving only on the call that seeds the write-once slots. | Yes: `BPlusLeafGrainTests.BirthProofOnReinit`. |
 | `NarrowMem(a)` | An activation of L narrows its span in memory for a split, stamping the narrow's identity (the sibling id) as its tag | `BPlusLeafGrain.CompleteSplitAsync`, the in-memory narrow. | Yes: `LeafAppendEpochFenceTests.A_stamp_carries_the_persisted_narrow_until_an_etag_conflict_withdraws_it`. |
 | `PersistNarrow(a)` | It persists the narrow with its link obligation in one conditional write; the first to persist wins, the other keeps only its in-memory narrow | `BPlusLeafGrain.CompleteSplitAsync`, the narrow's persist with `LeafNodeState.UnlinkedSplitSiblingId`. | Yes: `BPlusLeafGrainTests.ForwardExcludedWithoutObligation`, `WalShardGrainTests.A_forwarder_excludes_only_the_forwards_of_its_own_persisted_narrow` and `WalShardGrainTests.A_stamped_append_excludes_its_own_narrow_from_the_foreign_high_it_reports`. |
 | `EvictTag` | **Environment.** A third narrow tag evicts one from the WAL shard's per-(leaf, partition) top-two forward table, and the evicted tag's forward high folds into the floor every reader counts (X6) | `WalShardGrain.LeafAuthors.WithForwardHop`, its fold into `WalShardGrain.FoldLeafAuthorsLocked`'s eviction floor. | Yes: `WalShardGrainTests.A_displaced_narrow_tag_folds_into_a_high_no_reader_excludes`. |
 | `ReforwardChain(h)` | L's stale activation forwards one of L's keys on, and the chain runs h hops: the stamp carries every forwarder up to k, each attributed under the empty token with its own hop's tag, and a chain past k goes unstamped (F2', C4) | `WalForwardChain` built by `BPlusLeafGrain.TryResolveSpanForwardTarget`; `WalShardGrain`'s attribution to each forwarder. Production never excludes a chain hop from a reader's `foreignHigh` (S-b): the per-hop X1 exclusion is not taken, at a cost only. | Yes: `LeafLiveAdvanceCoreTests.ChainHopsAreNeverExcluded`, `WalShardGrainTests.A_re_forward_is_foreign_to_every_forwarder_on_its_chain`, `WalForwardChainTests.A_stamp_carries_every_hop_of_its_chain_in_order`, `WalForwardChainTests.A_forward_past_the_bound_overflows_the_chain_and_is_never_stamped` and `LeafAppendEpochFenceTests.A_write_past_the_forward_bound_appends_unstamped`. |
-| `ForwardIntoL(a)` | Before the link, L's donor forwards a new write of L's keys into L: L appends and applies it as its own, and the WAL attributes it to the donor under the empty token with the tag of the split that created L, which L's `staleHigh` excludes | `WalShardGrain`'s per-donor `staleHigh` read, excluding forwards tagged with the reader's own split. | Yes: `WalShardGrainTests.The_stale_high_excludes_only_the_forwards_of_the_split_that_created_the_receiver`. |
+| `ForwardIntoL(a)` | Before the link, L's donor forwards a new write of L's keys into L: L appends and applies it as its own, and the WAL attributes it to the donor under the empty token with the tag of the split that created L, which L's `staleHigh` excludes; the response carries the donor's `staleHigh`, as every routed response does (MF1) | `WalShardGrain`'s per-donor `staleHigh` read, excluding forwards tagged with the reader's own split. | Yes: `WalShardGrainTests.The_stale_high_excludes_only_the_forwards_of_the_split_that_created_the_receiver` and `WalShardGrainTests.A_forward_into_its_receiver_reports_the_donor_stale_high`. |
 | `StaleForwardOther` | A stale D' forwards one of L's keys into another orphan under that orphan's split tag; L's `staleHigh` counts it | The same read: only the reader's own split tag is excluded. | Yes: `WalShardGrainTests.The_stale_high_excludes_only_the_forwards_of_the_split_that_created_the_receiver`. |
 | `StaleEpochOnlyAlloc` | A stale duplicate of the donor, under a non-closing token, makes an epoch-only write of one of L's keys before the link's fence; the WAL counts it in the donor's `staleHigh` (the obligation carried from #5841, a5e2e2ef's H2) | `WalShardGrain.NoteLeafAuthorLocked` for a `WalRoutingStamp.None` append; `WalShardGrain.StaleHighLocked`. | Yes: `WalShardGrainTests.StaleHighOmitsEpochOnlyNonClosingToken`. |
 | `ForwardMoved(a)` | It forwards a new acknowledged write of a moved key, attributed to L under the empty token and its narrow's tag, before or after its persist; a reader excludes it only when its own persisted span is that narrow (X1-X4) | `BPlusLeafGrain.TryResolveSpanForwardTarget`; `WalShardGrain.LeafAuthors.WithForwardHop` per tag, excluded in `WalShardGrain.ForeignHighLocked`. | Yes: `WalShardGrainTests.A_forwarder_excludes_only_the_forwards_of_its_own_persisted_narrow` and `WalShardGrainTests.A_stamped_append_excludes_its_own_narrow_from_the_foreign_high_it_reports`. |
@@ -284,11 +284,12 @@ case budget:
 | `FreeGateFlip` | own unstamped appends | 1,904,304 |
 | `FreeFwdExclusion` | the forward-exclusion relief: two divergent narrows, a forward before or after the persist | 4,217,142 |
 | `FreeTagEvict` | the relief's WAL-side table: a tag's eviction (X6) and a WAL shard restart (X8) | 821,800 |
-| `FreeReforward` | a forward chain at depths 2, 3 and 4 against k = 3 (F2') | PENDING_REFORWARD |
-| `FreeReforwardRestart` | the chain with a WAL shard restart and an eviction: the folds of the orphan's and the chain's forwards (S-a) | PENDING_REFORWARDRESTART |
-| `FreeForwardIn` | the donor's pre-link forward into L and a stale D''s into another orphan (the `staleHigh` tag exclusion) | PENDING_FORWARDIN |
-| `FreeEpochOnly` | a stale duplicate's epoch-only write before the link, in the donor's `staleHigh` | PENDING_EPOCHONLY |
-| `FreeSplitView` | the split's view read concurrently with the drain (V3), with a hand-off window | PENDING_SPLITVIEW |
+| `FreeReforward` | a forward chain at depths 2, 3 and 4 against k = 3 (F2') | 1,795,034 |
+| `FreeChainEvict` | the chain with an eviction (`WithEvictAlone`: no WAL shard restart), without the orphan's own forward: the fold of the chain's records (S-a) | 1,993,821 |
+| `FreeOrphanEvict` | an orphan's forward with an eviction and no WAL shard restart: the fold of the orphan's forward (S-a). With `FreeChainEvict` it replaces one variant combining both with a restart, which measured 46,514,214 states; the chain with a restart alone measured 12,065,410, and the restart's own floors are checked in `FreeRestart` | 3,045,174 |
+| `FreeForwardIn` | the donor's pre-link forward into L and a stale D''s into another orphan (the `staleHigh` tag exclusion) | 1,032,584 |
+| `FreeEpochOnly` | a stale duplicate's epoch-only write before the link, in the donor's `staleHigh` | 712,124 |
+| `FreeSplitView` | the split's view read concurrently with the drain (V3), with a hand-off window | 512,628 |
 
 Under the claimless advance an activation learns its bounds only from the responses to
 its own appends, which carry `foreignHigh` and the shared watermark together, so either
@@ -307,10 +308,30 @@ their mutations stay clean under `WithPreArm` (they are red under `WithPreArm = 
   offsets the shared watermark's reset covers.
 
 The liveness property is unchanged in form. Under the lazy arm a claim's fairness is
-conditioned on `ArmTrigger(a)`, an own durable append the shared snapshot does not cover,
-which is the floor-holding pin that arms a leaf in production. So it now says the pin
-becomes usable once the leaf arms on demand, not that it arms at its first write.
-`NewbornPinEventuallyUsableDeferredHeadRefusedBelowLoaded` shows C5 is needed for it.
+conditioned on `ArmTrigger(a)`: an own durable append that no shared snapshot covers, so
+the leaf's pin holds the floor. No safety property reads `ArmTrigger`, so every invariant
+holds for any trigger, including one that fires on every tick. Production arms on two
+signals, each of which implies `ArmTrigger(a)` at the partitions it arms:
+
+- **The starved tick.** On the coverage-lag tick, `BPlusLeafGrain.TryAdvanceLiveCheckpointAsync`
+  finds the leaf holding live data with no proven checkpoint on any partition
+  (`BPlusLeafGrain.IsStarvedOfDurableCheckpoint`), and calls
+  `BPlusLeafGrain.ArmForLiveAdvanceAsync`.
+- **The GC drive.** The WAL GC's floor-holder report names the leaf's pin as holding a
+  partition's floor and drives the leaf (`IBPlusLeafGrain.DriveStarvedCheckpointAsync`, whose
+  drive calls `BPlusLeafGrain.TryAdvanceLiveCheckpointAsync` before it replays). The same
+  drive runs from the coverage-lag timer for a leaf starved of a durable checkpoint.
+
+Either signal arms only the partitions where the leaf has an own append above its
+checkpoint, which is `ArmTrigger(a)` at that partition, and only while `handOff.Clear`
+holds, which is C's `~pend` and its no-open-window guard. An arm restricted to some
+partitions satisfies the arm guard at each partition it arms, and a leaf not armed at a
+partition keeps appending `PreArm` there. The fairness the liveness property needs is that
+one signal recurs while `ArmTrigger(a)` holds, and the GC drive recurs on every pass while
+the pin holds the floor. Firing more often than `ArmTrigger` costs only claims, never
+safety: one epoch row per activation, and the generation re-claims `ReclaimCostBound`
+limits to one per (raise, partition).
+`NewbornPinEventuallyUsableDeferredHeadRefusedBelowLoaded` shows C5 is needed for liveness.
 
 Building the lazy arm found that a bulk-born leaf's pre-switch records above its birth
 read position were covered only by the claim-head replay: under the lazy arm they rest on

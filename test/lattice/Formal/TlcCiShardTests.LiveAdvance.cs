@@ -59,10 +59,13 @@ public sealed partial class TlcCiShardTests
             Assert.That(rest.Select(mutation => TlcCiShard.Of(module, mutation)), Is.All.EqualTo(TlcCiShard.WalLiveAdvanceCore));
             Assert.That(rest.All(mutation => TlcCiShard.SharesBaseShard(module, mutation)), Is.True,
                 "the base must run in the mutations' process to serve their full-bound controls");
-            Assert.That(free.Select(mutation => TlcCiShard.Of(module, mutation)), Is.All.EqualTo(TlcCiShard.WalLiveAdvanceCoreFree));
+            Assert.That(free.Where(mutation => mutation.Target == "ReadPositionHonest").Select(mutation => TlcCiShard.Of(module, mutation)),
+                Is.Not.Empty.And.All.EqualTo(TlcCiShard.WalLiveAdvanceCoreFreeReadPosition));
+            Assert.That(free.Where(mutation => mutation.Target != "ReadPositionHonest").Select(mutation => TlcCiShard.Of(module, mutation)),
+                Is.Not.Empty.And.All.EqualTo(TlcCiShard.WalLiveAdvanceCoreFree));
             Assert.That(freeVariants.Select(variant => TlcCiShard.OfVariant(module, variant)),
                 Is.All.AnyOf(TlcCiShard.WalLiveAdvanceCoreFree, TlcCiShard.WalLiveAdvanceCoreFreeVariants));
-            foreach (var category in new[] { TlcCiShard.WalLiveAdvanceCore, TlcCiShard.WalLiveAdvanceCoreFree, TlcCiShard.WalLiveAdvanceCoreFreeVariants })
+            foreach (var category in new[] { TlcCiShard.WalLiveAdvanceCore, TlcCiShard.WalLiveAdvanceCoreFree, TlcCiShard.WalLiveAdvanceCoreFreeReadPosition, TlcCiShard.WalLiveAdvanceCoreFreeVariants })
             {
                 Assert.That(LatticeShards().Single(shard => shard.Categories.Contains(category)).Tiers, Is.EqualTo(new[] { "deterministic" }), category);
             }

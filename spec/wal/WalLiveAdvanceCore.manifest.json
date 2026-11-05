@@ -8,7 +8,7 @@
     "invariants": 18,
     "properties": 2,
     "actions": 52,
-    "mutations": 115,
+    "mutations": 116,
     "behaviourRows": 70,
     "distinctStates": 2021047
   },
@@ -92,19 +92,22 @@
       "distinctStates": 821800
     },
     "FreeReforward": {
-      "distinctStates": 1
+      "distinctStates": 1795034
     },
     "FreeForwardIn": {
-      "distinctStates": 1
+      "distinctStates": 1032584
     },
     "FreeSplitView": {
-      "distinctStates": 1
-    },
-    "FreeReforwardRestart": {
-      "distinctStates": 1
+      "distinctStates": 512628
     },
     "FreeEpochOnly": {
-      "distinctStates": 1
+      "distinctStates": 712124
+    },
+    "FreeChainEvict": {
+      "distinctStates": 1993821
+    },
+    "FreeOrphanEvict": {
+      "distinctStates": 3045174
     }
   }
 }

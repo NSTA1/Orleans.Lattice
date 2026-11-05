@@ -85,6 +85,13 @@ internal static class TlcCiShard
     /// </summary>
     public const string WalLiveAdvanceCoreFree = "TlcShardWalLiveAdvanceCoreFree";
 
+    /// <summary>
+    /// The <c>WalLiveAdvanceCore</c> claimless-advance mutations that target
+    /// <c>ReadPositionHonest</c>, split from <see cref="WalLiveAdvanceCoreFree"/>: together
+    /// the two outran a pooled CI job's time limit.
+    /// </summary>
+    public const string WalLiveAdvanceCoreFreeReadPosition = "TlcShardWalLiveAdvanceCoreFreeReadPosition";
+
     /// <summary>The larger claimless-advance variant configurations of <c>WalLiveAdvanceCore</c> (#5837).</summary>
     public const string WalLiveAdvanceCoreFreeVariants = "TlcShardWalLiveAdvanceCoreFreeVariants";
 
@@ -256,7 +263,7 @@ internal static class TlcCiShard
          Scheduling, SchedulingWorkloadB, SchedulingReplayTwoPartitions, SchedulingShipping, SchedulingShippingVariants,
          Schema, SchemaView,
          WalAppendEpoch, WalHandOffFence, WalRoutingFloor, WalBulkSwitch, WalLiveAdvanceCore, WalLiveAdvanceCoreFree,
-         WalLiveAdvanceCoreFreeVariants, WalLiveAdvanceComposite];
+         WalLiveAdvanceCoreFreeReadPosition, WalLiveAdvanceCoreFreeVariants, WalLiveAdvanceComposite];
 
     private static readonly Lazy<IReadOnlyDictionary<(string Module, string Variant), string>> AtomicVariantCategories =
         new(CreateAtomicVariantCategories, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -282,7 +289,9 @@ internal static class TlcCiShard
         }
         if (string.Equals(name, "WalLiveAdvanceCore", StringComparison.Ordinal) && RaisesFreeAdvance(mutation))
         {
-            return WalLiveAdvanceCoreFree;
+            return string.Equals(mutation.Target, "ReadPositionHonest", StringComparison.Ordinal)
+                ? WalLiveAdvanceCoreFreeReadPosition
+                : WalLiveAdvanceCoreFree;
         }
         if (LiveAdvanceCategory(name) is { } liveAdvanceCategory)
         {

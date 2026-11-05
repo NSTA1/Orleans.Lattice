@@ -5,7 +5,7 @@ TARGET: ReadPositionHonest
 CLASS: Invariant
 SUMMARY: the eviction folds every class but an orphan's forward, so an orphan forward below the eviction start leaves L's foreignHigh
 PERTURBS: Evict
-BOUNDS: WithFreeAdvance = TRUE, WithReforward = TRUE, WithOrphanForward = TRUE, WithRestart = TRUE, WithEvict = TRUE, WithMixedVersion = FALSE, MaxWindows = 0
+BOUNDS: MaxWindows = 0, WithMixedVersion = FALSE, WithFreeAdvance = TRUE, WithOrphanForward = TRUE, WithEvictAlone = TRUE
 
 --- FIND
     /\ evFloor' = Max({evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \cup LeafAttributed})

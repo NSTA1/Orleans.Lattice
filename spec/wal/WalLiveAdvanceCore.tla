@@ -56,7 +56,7 @@ CONSTANTS MaxWindows, WithMixedVersion, WithGateFlip, WithRestart, WithRecreate,
           WithSplitHint, WithSplitBirth, WithDonorRestart,
           WithDuplicate, WithEvict, WithOrphanForward, WithLatch,
           WithBirthProof, WithFwdExclusion, WithTagEvict, WithViewOverlap,
-          WithReforward, WithForwardIn, WithEpochOnly
+          WithReforward, WithForwardIn, WithEpochOnly, WithEvictAlone
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
@@ -1158,9 +1158,10 @@ ForwardIntoL(a) ==
     /\ sHi' = IF StaleHighCountsTag("L") THEN next ELSE sHi
     /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
     /\ ReportForeign(a)
+    /\ ReportStale(a)
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, envVars, moveVars>>
     /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected>>
-    /\ UNCHANGED <<preArm, startHead, evStart, evFloor, seenS, ft, sh, sibHint, sibRows, xferVars, svVars>>
+    /\ UNCHANGED <<preArm, startHead, evStart, evFloor, ft, sh, sibHint, sibRows, xferVars, svVars>>
     /\ UNCHANGED <<chainUsed, sfUsed, eoUsed>>
 
 StaleForwardOther ==
@@ -1228,14 +1229,16 @@ Restart ==
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, seenU, oldUsed, oldRejected, envVars>>
     /\ UNCHANGED <<preArm, seenP, evStart, evFloor, moveVars, seenS, ft, sh, sibHint, sibRows, xferVars, svVars, chVars>>
 
-(* Evict (WithRestart): the WAL shard evicts L's foreign-high entry to     *)
+(* Evict (WithRestart, or WithEvictAlone for an eviction with no restart, *)
+(* which keeps a variant that checks the folds within budget): the WAL    *)
+(* shard evicts L's foreign-high entry to                                 *)
 (* bound memory, raising its eviction floor to the entry's highest offset: *)
 (* every token's, and every class attributed to L under the empty token:  *)
 (* an orphan's forward, a donor's forward and a chain's (#5837, S-a).      *)
 LeafAttributed == {OrphanFwd, FwdD, ChainFwd}
 
 Evict ==
-    /\ WithRestart
+    /\ WithRestart \/ WithEvictAlone
     /\ WithEvict
     /\ WithPreArm
     /\ evStart = 0

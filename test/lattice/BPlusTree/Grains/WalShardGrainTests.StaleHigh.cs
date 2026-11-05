@@ -248,7 +248,7 @@ public partial class WalShardGrainTests
     }
 
     [Test]
-    public async Task A_forward_into_the_receiver_reports_its_donor_s_stale_high()
+    public async Task A_forward_into_its_receiver_reports_the_donor_stale_high()
     {
         // MF1 (#5837, ForwardIntoLOmitsStaleReport): the receiver's append of its donor's
         // pre-link forward is its own routed response, and carries the stale high of the
