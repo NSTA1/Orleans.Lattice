@@ -6557,7 +6557,7 @@ internal sealed partial class BPlusLeafGrain
         // one interval; the replay's final reconciliation records its advance under the
         // ordinary predicate, so a catch-up that moved a full entry threshold banks at its
         // end, and a cancelled replay banks what it holds as before.
-        _bankingIncrementalReplayProgress = incremental;
+        _bankingIncrementalReplayProgress = false && incremental; // RED PROOF A (#5851)
         try
         {
             using (LatticeApplyOffsetContext.BeginScope(partition, ceiling))

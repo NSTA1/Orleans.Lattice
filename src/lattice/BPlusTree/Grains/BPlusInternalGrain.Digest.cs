@@ -783,13 +783,7 @@ internal sealed partial class BPlusInternalGrain
         // leaf's persisted checkpoint may be: an unchanged publish is re-sent once per
         // interval, which repairs one the parent parked and then lost. A zero interval
         // never suppresses. Pulls (GetChildDigestSnapshotAsync) always read current state.
-        if (_lastUpwardPublishParent == parentId
-            && content.Equals(_lastUpwardPublishContent)
-            && options.MaterialiserCheckpointInterval > TimeSpan.Zero
-            && System.Diagnostics.Stopwatch.GetElapsedTime(_lastUpwardPublishTimestamp) < options.MaterialiserCheckpointInterval)
-        {
-            return;
-        }
+        // RED PROOF A (#5851): never suppress an unchanged republish.
 
         _lastUpwardPublishParent = null;
         var snapshot = content with { PublishSequence = NextDigestPublishSequence() };
