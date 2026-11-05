@@ -159,4 +159,72 @@ public partial class BPlusLeafGrainTests
             Assert.That(marker.Closes.Single().DonorLeaf, Is.EqualTo(rig.LeafId), "the close carries no donor bound");
         });
     }
+
+    [Test]
+    public async Task PreArmDonorFenceFailureLeavesSiblingOpenAndObligationPending()
+    {
+        // #5837 rule S with #5841 rule A, and L3: a failed fence never releases the sibling,
+        // and the acknowledgement keeps the link obligation until a re-drive closes it.
+        var rig = new LiveAdvanceRig();
+        rig.FenceGate.IsPreArmOpen = true;
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(
+            state,
+            liveAdvance: rig,
+            configureGrainFactory: f => f.GetGrain<IWalShardGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(rig.Shard));
+        await SetStampedAsync(grain, "a", "v");
+
+        var sibling = GrainId.Create("leaf", Guid.NewGuid().ToString("N"));
+        var clock = HybridLogicalClock.Zero;
+        for (var i = 0; i < 127; i++)
+        {
+            clock = HybridLogicalClock.Tick(clock);
+            grain.EntriesForTest[$"key-{i:D4}"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes($"v-{i}"), clock);
+        }
+
+        state.State.SplitState = SplitState.SplitInProgress;
+        state.State.SplitKey = "key-0064";
+        state.State.SplitSiblingId = sibling;
+        state.State.NextSibling = sibling;
+        await HandOffMarkerRows.UpdateLeafAsync(rig.Storage, sibling.GetGuidKey(), m =>
+        {
+            m.Initialised = true;
+            return HandOffMarkerCore.Open(m, BPlusLeafGrain.SplitHandOffToken(rig.LeafId), null, null);
+        });
+
+        var narrowed = false;
+        var fenceFails = true;
+        state.OnWriteState = written => narrowed |= written.HighKeyExclusive == "key-0064";
+        rig.OnStorageRead = stateName =>
+        {
+            if (narrowed && fenceFails && stateName == WalAppendFenceRows.LeafEpochGrainType)
+            {
+                throw new InvalidOperationException("injected: the donor's fence failed");
+            }
+        };
+
+        clock = HybridLogicalClock.Tick(clock);
+        var result = await grain.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>
+        {
+            ["new-key"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("new"), clock),
+        });
+        await grain.AcknowledgeSplitLinkRecordedAsync(sibling);
+        var afterFailure = (await HandOffMarkerRows.ReadLeafAsync(rig.Storage, sibling.GetGuidKey())).State;
+        var keptObligation = state.State.UnlinkedSplitSiblingId;
+
+        fenceFails = false;
+        await grain.AcknowledgeSplitLinkRecordedAsync(sibling);
+        var afterRedrive = (await HandOffMarkerRows.ReadLeafAsync(rig.Storage, sibling.GetGuidKey())).State;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result?.NewSiblingId, Is.EqualTo(sibling), "precondition: the split completed");
+            Assert.That(afterFailure.Open, Is.Not.Empty, "a failed fence released the sibling");
+            Assert.That(afterFailure.Closes, Is.Empty, "a failed fence wrote a close");
+            Assert.That(keptObligation, Is.EqualTo(sibling), "the acknowledgement retired the obligation of an unclosed window");
+            Assert.That(afterRedrive.Open, Is.Empty, "the re-driven acknowledgement did not close the window");
+            Assert.That(afterRedrive.Closes.Single().DonorLeaf, Is.EqualTo(rig.LeafId), "the re-driven close carries no donor bound");
+            Assert.That(state.State.UnlinkedSplitSiblingId, Is.Null, "the obligation outlived the close");
+        });
+    }
 }
