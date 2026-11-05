@@ -54,7 +54,8 @@ EXTENDS Integers, FiniteSets
 CONSTANTS MaxWindows, WithMixedVersion, WithGateFlip, WithRestart, WithRecreate, WithBulk,
           WithUnclaimedSurvivor, WithClaimedPurge, WithPreArm, WithKeyMove, WithFreeAdvance,
           WithSplitHint, WithSplitBirth, WithDonorRestart,
-          WithDuplicate, WithEvict, WithOrphanForward, WithLatch
+          WithDuplicate, WithEvict, WithOrphanForward, WithLatch,
+          WithBirthProof
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
@@ -139,7 +140,8 @@ VARIABLES
     repair,       \* WithLatch: orphan repair has begun on L's range
     tried,        \* WithLatch: a reachability proof has run since orphan repair began
     oWin,         \* WithOrphanForward: the orphan's marker: "open", "pending" (its donor closed it)
-    oHops         \* WithOrphanForward: forwards made so far (the first, then a re-forward by the orphan)
+    oHops,        \* WithOrphanForward: forwards made so far (the first, then a re-forward by the orphan)
+    birthAct      \* WithBirthProof: L's running activation is the one its birth created
 
 walVars == <<next, author, inflight, durable, acked, floor>>
 leafVars == <<up, cache, rp, mine, snapCov, snapRows>>
@@ -147,7 +149,7 @@ epochVars == <<cur, claimed, claimHead, stale, dupUsed>>
 handVars == <<mInit, hoOpen, hoClosedAt, windows>>
 oldVars == <<lastU, seenU, oldUsed, restarted, oldRejected>>
 envVars == <<recreated, reinit, spUsed, phase, hint>>
-latchVars == <<oblig, lRestart, lat, eagerG, repair, tried, oWin, oHops>>
+latchVars == <<oblig, lRestart, lat, eagerG, repair, tried, oWin, oHops, birthAct>>
 xferVars == <<tRecs, dNarrowed, sDone, dKnown, dResumed, latchVars>>
 freeVars == <<sHi, seenS, ft, sh, sibHint, sibRows, xferVars>>
 armVars == <<preArm, seenP, startHead, evStart, evFloor, freeVars>>
@@ -220,6 +222,7 @@ TypeOK ==
     /\ tried \in BOOLEAN
     /\ oWin \in {"open", "pending"}
     /\ oHops \in 0..2
+    /\ birthAct \in BOOLEAN
 
 (***************************************************************************)
 (* Init. Without WithBulk, L is a new tree's first leaf: a1 is running,   *)
@@ -288,12 +291,13 @@ Init ==
     /\ dResumed = FALSE
     /\ oblig = FALSE
     /\ lRestart = FALSE
-    /\ lat = "undecided"
+    /\ lat = IF WithBirthProof THEN "proven" ELSE "undecided"
     /\ eagerG = FALSE
     /\ repair = FALSE
     /\ tried = FALSE
     /\ oWin = "open"
     /\ oHops = 0
+    /\ birthAct = WithBirthProof
 
 (***************************************************************************)
 (* B's BulkHintBound, as an environment step. Create: the bulk-born leaf's *)
@@ -368,6 +372,10 @@ ResolveDeferred ==
 
 (* A claim of L's under the latch.                                         *)
 LatchAdmitsClaim == ~WithLatch \/ moved \/ (eagerG /\ lat = "proven")
+
+(* The reachability decision a later activation of L starts from (P1, P3):*)
+(* undecided, whatever call reactivated it.                                *)
+ReinitProof == "undecided"
 
 Claim(a) ==
     /\ a \in up
@@ -715,7 +723,7 @@ LinkRestart ==
     /\ lRestart' = TRUE
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
-    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lat, eagerG, repair, tried, oWin, oHops>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lat, eagerG, repair, tried, oWin, oHops, birthAct>>
 
 (***************************************************************************)
 (* The reachability latch (#5709) on a split-born L after its donor closed *)
@@ -741,7 +749,7 @@ ProveReach ==
     /\ tried' = TRUE
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
-    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, eagerG, repair, oWin, oHops>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, eagerG, repair, oWin, oHops, birthAct>>
 
 GateToEager ==
     /\ FreeOn
@@ -750,7 +758,27 @@ GateToEager ==
     /\ eagerG' = TRUE
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
-    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, repair, tried, oWin, oHops>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, repair, tried, oWin, oHops, birthAct>>
+
+(* Reactivate (WithBirthProof): L's birth activation, proven by the call   *)
+(* that performed the birth (P1), deactivates after the donor's close, and *)
+(* a later call - a re-init, a recovery re-call, a stale duplicate donor's *)
+(* late InitializeSiblingAsync - activates L again. That activation has    *)
+(* not claimed, and is not proven (P1, P3).                                *)
+Reactivate ==
+    /\ FreeOn
+    /\ WithLatch
+    /\ WithBirthProof
+    /\ birthAct
+    /\ ~hoOpen
+    /\ ~moved
+    /\ birthAct' = FALSE
+    /\ lat' = ReinitProof
+    /\ claimed' = [claimed EXCEPT !["a1"] = FALSE]
+    /\ cur' = IF cur = "a1" THEN NoAct ELSE cur
+    /\ UNCHANGED <<walVars, leafVars, claimHead, stale, dupUsed, handVars, oldVars, envVars, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, eagerG, repair, tried, oWin, oHops>>
 
 StartRepair ==
     /\ FreeOn
@@ -761,7 +789,7 @@ StartRepair ==
     /\ tried' = FALSE
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
-    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, oWin, oHops>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, oWin, oHops, birthAct>>
 
 (* The records the donor's close head is above: every append of the donor *)
 (* leaf since the heads, by any of its activations, once the split was     *)
@@ -790,7 +818,12 @@ DonorNarrow ==
     /\ oblig' = TRUE
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows, tRecs, sDone, dKnown, dResumed>>
-    /\ UNCHANGED <<lRestart, lat, eagerG, repair, tried, oWin, oHops>>
+    /\ UNCHANGED <<lRestart, lat, eagerG, repair, tried, oWin, oHops, birthAct>>
+
+(* The generation a donor's deferred bound resolves at (L2): strictly     *)
+(* above the one its writes were admitted under, so only the link's raise, *)
+(* durable on the shard marker, can resolve it.                            *)
+ResolveAbove(g) == g + 1
 
 DonorClose ==
     /\ FreeOn
@@ -801,7 +834,7 @@ DonorClose ==
     /\ hoOpen' = FALSE
     /\ hoClosedAt' = Max2(hoClosedAt, Max({-1} \cup DonorCloseCovers) + 1)
     /\ pend' = TRUE
-    /\ pendGen' = gD + 1
+    /\ pendGen' = ResolveAbove(gD)
     /\ UNCHANGED <<walVars, leafVars, epochVars, mInit, windows, oldVars, envVars, armVars>>
     /\ UNCHANGED <<gD, gL, moved, otherMoved, dUsed, reclaims, strayReclaims>>
 
@@ -874,7 +907,7 @@ OrphanForward ==
     /\ inflight' = inflight \cup {next}
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
-    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, repair, tried, oWin>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, repair, tried, oWin, birthAct>>
 
 (* OrphanClose: the orphan's donor (a2) closes its split window, leaving   *)
 (* its deferred close pending; the link never comes.                       *)
@@ -885,7 +918,7 @@ OrphanClose ==
     /\ oWin' = "pending"
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
-    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, repair, tried, oHops>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, repair, tried, oHops, birthAct>>
 
 (* Capture(a): the shared per-leaf snapshot keeps the highest coverage.  *)
 Capture(a) ==
@@ -1096,6 +1129,7 @@ Next ==
     \/ ProveReach
     \/ GateToEager
     \/ StartRepair
+    \/ Reactivate
     \/ \E a \in Acts : Straggler(a)
     \/ OrphanForward
     \/ OrphanClose
@@ -1201,8 +1235,10 @@ DeferredHeadCostWitness ==
 NarrowObligated == dNarrowed => oblig
 
 (* The latch exemption (#5837, a5e2e2ef's conditions 1-3): an unlinked L   *)
-(* never takes an epoch, and orphan repair always latches it.             *)
-UnlinkedNeverClaims == WithLatch => \A a \in Acts : claimed[a] => moved
+(* never takes an epoch - except its birth activation, proven at its birth *)
+(* while its window was open (P1), which under the eager gate claims at    *)
+(* its first stamped write, as today - and orphan repair always latches it.*)
+UnlinkedNeverClaims == WithLatch => \A a \in Acts : claimed[a] => moved \/ (birthAct /\ a = "a1")
 
 RepairLatches == WithLatch => (repair /\ tried /\ ~moved => lat = "latched")
 

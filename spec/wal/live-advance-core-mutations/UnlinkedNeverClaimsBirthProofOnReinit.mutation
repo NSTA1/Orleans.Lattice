@@ -1,0 +1,14 @@
+# #5837, a5e2e2ef's ruling on the split-cost cuts (P1-P4, L1-L3). It edits an operator,
+# not an action.
+MODULE: UnlinkedNeverClaimsBirthProofOnReinit
+TARGET: UnlinkedNeverClaims
+CLASS: Invariant
+SUMMARY: a call that reactivates L without performing its birth - a re-init, a recovery re-call, a stale duplicate donor's late InitializeSiblingAsync - proves it, and under the eager gate the unlinked orphan's activation claims (P1)
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE, WithLatch = TRUE, WithBirthProof = TRUE
+
+--- FIND
+ReinitProof == "undecided"
+--- REPLACE
+\* MUTATION: a non-birth init proves.
+ReinitProof == "proven"
+--- END
