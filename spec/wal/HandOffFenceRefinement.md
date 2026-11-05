@@ -331,11 +331,22 @@ mutation directory; it was run locally against this module.
   range-delete generation is bounded by that range delete's own shard-marker window, whose
   close heads the receiver's advance checks (`HandOffMarkerCore.HeadAt` over the shard
   marker's close heads, which the leaf reads with its advance), never by the
-  deferred split close. A walk that writes a moved key while a deferred split close is
-  pending on the receiver therefore holds it until both the range delete's window and the
-  deferred close have closed, pinned by
-  `LeafHandOffFenceIntegrationTests.A_range_delete_walk_during_a_pending_deferred_split_close_holds_the_receiver_until_both_close`.
-  Production symbols: `ShardRootGrain.CloseDeferredSplitHandOffsAsync`, `TreeRangeDeleteFenceGrain`, `HandOffMarkerCore.HeadAt`.
+  deferred split close. A walk that writes a moved key while the receiver's split close
+  is still pending (under rule S, the donor's concrete close heads and its donor bound,
+  which `HandOffMarkerCore.IsPendingDonorBound` reads as pending until the receiver's own
+  link is witnessed and which the receiver carries until its arm resolves it, rather than a
+  deferred head) therefore holds the receiver until both the range delete's window has
+  closed and that pending close has resolved. This is pinned structurally by
+  `LeafHandOffFenceIntegrationTests.A_range_delete_walk_during_a_pending_deferred_split_close_holds_the_receiver_until_both_close`
+  (the range delete's close records real post-walk heads, which every receiver's view
+  carries while its split close is pending) and behaviourally by
+  `BPlusLeafGrainTests.A_range_delete_walk_during_a_pending_deferred_split_close_holds_the_live_advance_until_both_close`
+  (the walk's close head alone holds the advance once the split close resolves), and for
+  a carried rule-S close by
+  `BPlusLeafGrainTests.A_range_delete_walk_during_a_carried_rule_s_split_close_holds_the_live_advance_until_both_heads_are_read`.
+  `DeferredClose` models the key-moving close that still defers its head (#5833), not a
+  split's.
+  Production symbols: `ShardRootGrain.CloseDeferredSplitHandOffsAsync`, `TreeRangeDeleteFenceGrain`, `HandOffMarkerCore.HeadAt`, `HandOffMarkerCore.IsPendingDonorBound`.
 
 - **#5841: the Dekker pair's storage assumption.** The fix rests on each side's write
   completing before its own read, and on each read being a fresh storage read that
