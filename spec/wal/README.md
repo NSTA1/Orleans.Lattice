@@ -54,11 +54,11 @@ and its mutations as the record each module took its own from.
 | `WalMove` | 5 | 2 | 13 | 18 | 18 | 1,617 |
 | `WalPinRetirement` | 3 | 3 | 25 | 31 | 30 | 284,019 |
 | `WalAppendEpoch` | 5 | 0 | 17 | 23 | 20 | 150,706 |
-| `WalHandOffFence` | 5 | 1 | 34 | 43 | 38 | 8,826 |
+| `WalHandOffFence` | 6 | 1 | 37 | 48 | 42 | 8,826 |
 | `WalRoutingFloor` | 3 | 1 | 14 | 21 | 16 | 28,956 |
 | `WalBulkSwitch` | 6 | 1 | 21 | 28 | 26 | 1,047,630 |
 | `WalLiveAdvanceCore` | 18 | 2 | 52 | 116 | 70 | 2,021,047 |
-| `WalLiveAdvanceComposite` | 13 | 0 | 15 | 28 | 15 | 131,423 |
+| `WalLiveAdvanceComposite` | 16 | 0 | 19 | 36 | 18 | 402,394 |
 
 `Actions` counts the disjuncts of `Next`, including the non-behavioural `Stutter`
 of `WalMove`, `WalAppendEpoch`, `WalHandOffFence`, `WalRoutingFloor`, `WalBulkSwitch` and `WalLiveAdvanceCore`. `Behaviour rows` counts the action rows of the
@@ -786,6 +786,9 @@ lists, so a module and its copy cannot drift apart.
 | `RoutingMeetsCoreStraddler` | Invariant | R -> C: a straddler R allows is one C's environment allows. |
 | `RoutingMeetsCoreInit` | Invariant | R -> C: a first initialisation R allows records heads C's environment allows. |
 | `BulkMeetsCoreCreate` | Invariant | B -> C: a birth B allows is one C's environment allows. |
+| `ColdLoadMeetsCoreStraddler` | Invariant | R -> C: a straddler admitted through a read-only cold-loaded entry is one C allows; the cold load never lowers a re-claimed generation (#5839). |
+| `BulkCloseMeetsCoreClose` | Invariant | B -> C: a bulk switch's close covers every prior allocation, as C's lazy-arm close assumes (#5839). |
+| `DeferredCloseMeetsCoreResolve` | Invariant | H -> C: a lazy close H allows defers L's head at the raised generation, and its resolution records the allocator head, as C assumes (#5839). |
 
 The base checks every edge in seconds. Each edge has a witness mutation, which
 shows that a step of its kind is reachable. Each guarantee an edge relies on also has a

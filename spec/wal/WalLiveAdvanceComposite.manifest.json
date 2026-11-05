@@ -1,13 +1,30 @@
 {
   "mutations": "composite-mutations",
   "refinement": "LiveAdvanceCompositeRefinement.md",
-  "nonBehaviouralActions": ["Claim", "OwnAlloc", "Duplicate", "ForeignOpen", "Close", "Restart", "Purge", "LegacyPurge", "CatchUp", "FirstInit", "Birth", "Stutter"],
+  "nonBehaviouralActions": [
+    "Claim",
+    "OwnAlloc",
+    "Duplicate",
+    "ForeignOpen",
+    "Close",
+    "Restart",
+    "Purge",
+    "LegacyPurge",
+    "CatchUp",
+    "FirstInit",
+    "Birth",
+    "DeferredClose",
+    "ResolveDeferred",
+    "ColdLoad",
+    "BulkClose",
+    "Stutter"
+  ],
   "counts": {
-    "invariants": 13,
+    "invariants": 16,
     "properties": 0,
-    "actions": 15,
-    "mutations": 28,
-    "behaviourRows": 15,
-    "distinctStates": 131423
+    "actions": 19,
+    "mutations": 36,
+    "behaviourRows": 18,
+    "distinctStates": 402394
   }
 }

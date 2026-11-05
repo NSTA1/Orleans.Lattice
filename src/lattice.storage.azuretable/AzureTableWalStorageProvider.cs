@@ -2671,6 +2671,15 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         var workers = _phaseTwoWorkers.Values.ToArray();
         _phaseTwoWorkers.Clear();
 
+        // Swallowing here is the terminal-stage policy, and it is safe only
+        // while two obligations hold (issue #5861): after disposal nothing in
+        // memory may still vouch for a refused or failed range (the worker
+        // discards its accepted ranges before faulting a commit, and on
+        // shutdown before faulting what was left pending), and no append is
+        // acknowledged before its phase-1 rows are durable. Durability rests
+        // on those rows and a successor's reconcile (#5827, #5824), never on
+        // TAIL, so a phase-2 commit lost here costs only that reconcile.
+        //
         // Drain any still-outstanding pipelined phase-2 tasks so a
         // host shutdown observes the same fault that a normal
         // post-append await would have. Faults are swallowed here

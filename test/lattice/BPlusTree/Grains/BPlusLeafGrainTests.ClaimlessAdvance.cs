@@ -526,8 +526,8 @@ public partial class BPlusLeafGrainTests
     public void A_marker_copy_carries_every_property()
     {
         // #5837, E3: the close mutates a copy of its open's row, so the copy must be whole.
-        var close = new HandOffClose { Token = "t", LowInclusive = "a", HighExclusive = "z", Heads = [1, 2], Sequence = 3, DeferredShard = 4, DeferredGeneration = 5, DonorLeaf = Guid.NewGuid(), DonorToken = Guid.NewGuid(), AdmittedShard = 6, AdmittedGeneration = 7 };
-        var marker = new LeafHandOffState { Initialised = true, CompactedHeads = [8], Sequence = 9 };
+        var close = new HandOffClose { Token = "t", LowInclusive = "a", HighExclusive = "z", Heads = [1, 2], Sequence = 3, DeferredShard = 4, DeferredGeneration = 5, DonorLeaf = Guid.NewGuid(), DonorToken = Guid.NewGuid(), AdmittedShard = 6, AdmittedGeneration = 7, LinkedGeneration = 10, LinkedShard = 11, CarryResolvedAt = [true, false] };
+        var marker = new LeafHandOffState { Initialised = true, CompactedHeads = [8], Sequence = 9, SiblingLinkedGeneration = 12, SiblingLinkedShard = 13 };
         marker.Open["o"] = new HandOffMarkerRange { Token = "o", LowInclusive = "b", HighExclusive = "y" };
         marker.Closes.Add(close);
 
@@ -539,13 +539,14 @@ public partial class BPlusLeafGrainTests
         Assert.Multiple(() =>
         {
             Assert.That(typeof(LeafHandOffState).GetProperties().Select(p => p.Name),
-                Is.EquivalentTo(new[] { "Initialised", "Open", "Closes", "CompactedHeads", "Sequence" }), "a marker property the copy does not know of");
-            Assert.That(typeof(HandOffClose).GetProperties(), Has.Length.EqualTo(11), "a close property the copy does not know of");
+                Is.EquivalentTo(new[] { "Initialised", "Open", "Closes", "CompactedHeads", "Sequence", "SiblingLinkedGeneration", "SiblingLinkedShard" }), "a marker property the copy does not know of");
+            Assert.That(typeof(HandOffClose).GetProperties(), Has.Length.EqualTo(14), "a close property the copy does not know of");
             Assert.That(typeof(HandOffMarkerRange).GetProperties(), Has.Length.EqualTo(3), "a range property the copy does not know of");
-            Assert.That(Props(copy.Closes.Single()).Where(p => p.Name != "Heads"), Is.EqualTo(Props(close).Where(p => p.Name != "Heads")));
+            Assert.That(Props(copy.Closes.Single()).Where(p => p.Name is not ("Heads" or "CarryResolvedAt")), Is.EqualTo(Props(close).Where(p => p.Name is not ("Heads" or "CarryResolvedAt"))));
             Assert.That(copy.Closes.Single().Heads, Is.EqualTo(close.Heads).And.Not.SameAs(close.Heads));
+            Assert.That(copy.Closes.Single().CarryResolvedAt, Is.EqualTo(close.CarryResolvedAt).And.Not.SameAs(close.CarryResolvedAt));
             Assert.That(copy.Closes.Single(), Is.Not.SameAs(close));
-            Assert.That((copy.Initialised, copy.Sequence), Is.EqualTo((true, 9L)));
+            Assert.That((copy.Initialised, copy.Sequence, copy.SiblingLinkedGeneration, copy.SiblingLinkedShard), Is.EqualTo((true, 9L, 12L, 13)));
             Assert.That(copy.CompactedHeads, Is.EqualTo(marker.CompactedHeads).And.Not.SameAs(marker.CompactedHeads));
             Assert.That(copy.Open["o"].HighExclusive, Is.EqualTo("y"));
             Assert.That(copy.Open["o"], Is.Not.SameAs(marker.Open["o"]));

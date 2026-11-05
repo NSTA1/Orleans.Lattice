@@ -12,6 +12,7 @@ Guarantees ==
     /\ RaisedEpochUnique
     /\ StaleEpochNeverAppends
     /\ HandOffBound
+    /\ DeferredHeadAtRaisedGeneration
     /\ StraddlerBelowInit
     /\ BulkHintBound
 --- REPLACE
@@ -20,5 +21,6 @@ Guarantees ==
     /\ RaisedEpochUnique
     /\ StaleEpochNeverAppends
     /\ HandOffBound
+    /\ DeferredHeadAtRaisedGeneration
     /\ BulkHintBound
 --- END

@@ -1,0 +1,21 @@
+# #5839 (#5833's lazy key-moving close in H): the shard root raises the routing generation
+# durably, then defers L's close head, and L's arm resolves it.
+MODULE: HandOffBoundKeyMovingCloseWithoutGenerationRaise
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: the lazy close defers L's head without raising the routing generation, so a write admitted before the close is still admitted after L's arm re-claims, above the head it recorded (mirrors C's mutation)
+PERTURBS: CloseRaise
+BOUNDS: WithPreArm = TRUE, WithDeferredClose = TRUE, WithTreeWalk = FALSE
+
+--- FIND
+    /\ fAdmit' = FALSE
+    /\ fEpoch' = fEpoch + 1
+    /\ dfStage' = "raised"
+
+--- REPLACE
+    /\ fAdmit' = FALSE
+\* MUTATION: no raise.
+    /\ fEpoch' = fEpoch
+    /\ dfStage' = "raised"
+
+--- END

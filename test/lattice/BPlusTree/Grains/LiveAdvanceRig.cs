@@ -101,9 +101,12 @@ internal sealed class LiveAdvanceRig
         return services.BuildServiceProvider();
     }
 
-    /// <summary>Routes the leaf's shard-root calls to the rig.</summary>
-    public void Configure(IGrainFactory factory) =>
+    /// <summary>Routes the leaf's shard-root calls, and its WAL shard calls at every partition, to the rig.</summary>
+    public void Configure(IGrainFactory factory)
+    {
         factory.GetGrain<IShardRootGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(ShardRoot);
+        factory.GetGrain<IWalShardGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(Shard);
+    }
 
     /// <summary>Writes the leaf's own hand-off marker row.</summary>
     public Task SetLeafMarkerAsync(Func<LeafHandOffState, bool> mutate) =>

@@ -212,9 +212,6 @@ public sealed partial class TlcCiShardTests
                         ? TlcCiShard.WalRoutingFloor
                         : module.Name == "WalBulkSwitch"
                         ? TlcCiShard.WalBulkSwitch
-                        : module.Name == "WalLiveAdvanceCore" && variant.StartsWith("Free", StringComparison.Ordinal)
-                        ? TlcCiShard.OfVariant(module, variant) == TlcCiShard.WalLiveAdvanceCoreFree
-                            ? TlcCiShard.WalLiveAdvanceCoreFree : TlcCiShard.WalLiveAdvanceCoreFreeVariants
                         : module.Name == "WalLiveAdvanceCore"
                         ? (variant.StartsWith("Free", StringComparison.Ordinal)
                                 ? new[] { TlcCiShard.WalLiveAdvanceCoreFree, TlcCiShard.WalLiveAdvanceCoreFreeVariants, TlcCiShard.WalLiveAdvanceCoreFreeSplitVariants }

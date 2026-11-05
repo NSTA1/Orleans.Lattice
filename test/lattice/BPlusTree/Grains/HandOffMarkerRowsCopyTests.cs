@@ -72,6 +72,11 @@ public sealed class HandOffMarkerRowsCopyTests
             return new long[] { n, n + 1 };
         }
 
+        if (type == typeof(bool[]))
+        {
+            return new[] { true, false };
+        }
+
         if (Nullable.GetUnderlyingType(type) is { } underlying)
         {
             return Sample(underlying, name);
@@ -111,6 +116,9 @@ public sealed class HandOffMarkerRowsCopyTests
                     break;
                 case long[] heads:
                     Assert.That(actual, Is.EqualTo(heads).And.Not.SameAs(heads), $"{name} was not copied, or was shared");
+                    break;
+                case bool[] bits:
+                    Assert.That(actual, Is.EqualTo(bits).And.Not.SameAs(bits), $"{name} was not copied, or was shared");
                     break;
                 case IDictionary dictionary:
                     var copied = (IDictionary)actual!;

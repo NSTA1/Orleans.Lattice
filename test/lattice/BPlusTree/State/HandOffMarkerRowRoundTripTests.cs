@@ -191,7 +191,7 @@ public sealed class HandOffMarkerRowRoundTripTests
         using var services = Services();
         var json = services.GetRequiredService<JsonGrainStorageSerializer>();
         var text = json.Serialize(row).ToString();
-        var stripped = System.Text.RegularExpressions.Regex.Replace(text, @",?\s*""CarryResolvedAt""\s*:\s*\[[^\]]*\]", string.Empty);
+        var stripped = System.Text.RegularExpressions.Regex.Replace(text, @",?\s*""CarryResolvedAt""\s*:\s*(\{[^{}]*\}|\[[^\]]*\])", string.Empty);
 
         var read = json.Deserialize<LeafHandOffState>(BinaryData.FromString(stripped));
 
