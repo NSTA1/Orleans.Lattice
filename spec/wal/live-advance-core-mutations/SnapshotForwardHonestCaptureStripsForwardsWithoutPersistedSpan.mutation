@@ -1,0 +1,16 @@
+# #5837, the forward-exclusion relief (a5e2e2ef's M1): the shared snapshot keeps every row
+# its capturing activation holds; only a reader whose span is persisted may leave out the
+# forwards of keys L no longer owns, and the snapshot records that span (snapWho) only then.
+MODULE: SnapshotForwardHonestCaptureStripsForwardsWithoutPersistedSpan
+TARGET: SnapshotForwardHonest
+CLASS: Invariant
+SUMMARY: the capture strips the forwards of keys L no longer owns from the snapshot even when the capturing activation's span is not persisted, so the snapshot records no span yet lacks rows it covers
+PERTURBS: Capture
+BOUNDS: WithFreeAdvance = TRUE, WithFwdExclusion = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+    /\ snapRows' = {o \in cache[a] : o <= rp[a]}
+--- REPLACE
+\* MUTATION: forwards L no longer owns are stripped whatever span the capturing activation holds.
+    /\ snapRows' = {o \in cache[a] : o <= rp[a] /\ ~(author[o] = FwdD /\ ~FwdOwnedByL(o))}
+--- END
