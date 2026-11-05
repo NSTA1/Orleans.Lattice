@@ -11,11 +11,13 @@ PERTURBS: ForeignAlloc
 --- FIND
 ForeignAlloc ==
     /\ UNCHANGED <<armVars, moveVars>>
+    /\ ~WithSplitBirth
     /\ hoOpen \/ ~mInit
 
 --- REPLACE
 ForeignAlloc ==
     /\ UNCHANGED <<armVars, moveVars>>
+    /\ ~WithSplitBirth
 \* MUTATION: no open marker needed.
 
 --- END

@@ -1,0 +1,13 @@
+# #5837, the claimless advance: the split transfer and the receiver's close heads.
+MODULE: DeferredHeadCostWitnessResolveAtPartitionHead
+TARGET: DeferredHeadCostWitness
+CLASS: Invariant
+SUMMARY: a resolved deferred close records the partition's allocator head, as #5833 rev 2 has it: the receiver must replay to it
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE
+
+--- FIND
+    /\ hoClosedAt' = Max2(hoClosedAt, IF FreeOn THEN sHi + 1 ELSE next)
+--- REPLACE
+\* MUTATION: the partition head.
+    /\ hoClosedAt' = Max2(hoClosedAt, next)
+--- END

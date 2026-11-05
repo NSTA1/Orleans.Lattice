@@ -1,0 +1,13 @@
+# #5837, the forward-exclusion relief (a5e2e2ef's X1-X4).
+MODULE: ForwardHonestForwardExclusionByForwarderSpan
+TARGET: ForwardHonest
+CLASS: Invariant
+SUMMARY: a reader excludes every forward whose forwarder narrowed, on the forwarder's claim: a stale duplicate's forwards, whose persist lost, are excluded by the live donor that still owns their keys (X1)
+BOUNDS: WithFreeAdvance = TRUE, WithFwdExclusion = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+FwdExcluded(a, o) == Persisted(a) /\ fTag[o] = nar[a]
+--- REPLACE
+\* MUTATION: the forwarder's claim of a narrow.
+FwdExcluded(a, o) == fTag[o] # NoTag
+--- END
