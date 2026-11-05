@@ -213,4 +213,31 @@ public sealed partial class LeafAppendEpochFenceTests
             Orleans.Runtime.RequestContext.Clear();
         }
     }
+
+    [Test]
+    public async Task A_relinquished_donor_keeps_the_epoch_its_own_split_fence_adopts()
+    {
+        // RS2 (a5e2e2ef on #5837): under rule S the counted close relinquishes the donor's
+        // claim (#5840 S4) just before its own fence raises the row. R2 discards a claim in
+        // flight, never the fence's adopting install, so the donor stamps at the raised
+        // epoch at once, with no fresh claim.
+        var h = new Harness();
+        await h.Fence.StampForAsync(h.Shard, partition: 0, CancellationToken.None);
+        var before = await h.RowEpochAsync();
+
+        h.Fence.CountSplitClose();
+        await h.Fence.FenceSplitAsync(_ => h.Shard, partitionCount: 1, CancellationToken.None);
+        var raised = await h.RowEpochAsync();
+        var next = h.Fence.StampForAsync(h.Shard, partition: 0, CancellationToken.None);
+        var synchronous = next.IsCompletedSuccessfully;
+        var stamp = await next;
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(raised, Is.GreaterThan(before), "precondition: the fence raised the row");
+            Assert.That(synchronous, Is.True, "the fence's install was discarded, so the donor claimed afresh");
+            Assert.That(stamp!.Value.Epoch, Is.EqualTo(raised), "the donor does not stamp at the epoch its fence adopted");
+            Assert.That(await h.RowEpochAsync(), Is.EqualTo(raised), "the donor raised its row again after its own fence");
+        });
+    }
 }
