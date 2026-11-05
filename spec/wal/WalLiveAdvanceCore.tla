@@ -55,7 +55,7 @@ CONSTANTS MaxWindows, WithMixedVersion, WithGateFlip, WithRestart, WithRecreate,
           WithUnclaimedSurvivor, WithClaimedPurge, WithPreArm, WithKeyMove, WithFreeAdvance,
           WithSplitHint, WithSplitBirth, WithDonorRestart,
           WithDuplicate, WithEvict, WithOrphanForward, WithLatch,
-          WithBirthProof, WithFwdExclusion
+          WithBirthProof, WithFwdExclusion, WithTagEvict
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
@@ -154,7 +154,9 @@ VARIABLES
     fTag,         \* each forward's narrow tag
     fBy,          \* the activation whose narrow moved each forward's key
     snapWho,      \* the durable narrow the shared snapshot's span reflects, or none
-    fwdUsed       \* the one forward has been made
+    fwdUsed,      \* the one forward has been made
+    fEvStart,     \* the allocator head when the WAL shard last evicted a narrow tag's forward high; 0 never
+    fEvFloor      \* the always-foreign floor the evicted forward highs fold into
 
 walVars == <<next, author, inflight, durable, acked, floor>>
 leafVars == <<up, cache, rp, mine, snapCov, snapRows>>
@@ -162,7 +164,7 @@ epochVars == <<cur, claimed, claimHead, stale, dupUsed>>
 handVars == <<mInit, hoOpen, hoClosedAt, windows>>
 oldVars == <<lastU, seenU, oldUsed, restarted, oldRejected>>
 envVars == <<recreated, reinit, spUsed, phase, hint>>
-fxVars == <<nar, narWho, npend, dur, durWho, fObl, fTag, fBy, snapWho, fwdUsed>>
+fxVars == <<nar, narWho, npend, dur, durWho, fObl, fTag, fBy, snapWho, fwdUsed, fEvStart, fEvFloor>>
 latchVars == <<oblig, lRestart, lat, eagerG, repair, tried, oWin, oHops, birthAct, fxVars>>
 xferVars == <<tRecs, dNarrowed, sDone, dKnown, dResumed, latchVars>>
 freeVars == <<sHi, seenS, ft, sh, sibHint, sibRows, xferVars>>
@@ -247,6 +249,8 @@ TypeOK ==
     /\ fBy \in [Offs -> Acts \cup {NoAct}]
     /\ snapWho \in Acts \cup {NoAct}
     /\ fwdUsed \in 0..1
+    /\ fEvStart \in 0..MaxOff
+    /\ fEvFloor \in -1..(MaxOff - 1)
 
 (***************************************************************************)
 (* Init. Without WithBulk, L is a new tree's first leaf: a1 is running,   *)
@@ -332,6 +336,8 @@ Init ==
     /\ fBy = [o \in Offs |-> NoAct]
     /\ snapWho = NoAct
     /\ fwdUsed = 0
+    /\ fEvStart = 0
+    /\ fEvFloor = -1
 
 (***************************************************************************)
 (* B's BulkHintBound, as an environment step. Create: the bulk-born leaf's *)
@@ -390,7 +396,8 @@ FwdToken == "empty"
 ForeignHigh(a) ==
     Max({startHead - 1, evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}}
         \cup {o \in Offs : o >= TrackStart /\ author[o] = OrphanFwd /\ a # FwdToken}
-        \cup {o \in Offs : o >= TrackStart /\ author[o] = FwdD /\ ~FwdExcluded(a, o)})
+        \cup {fEvFloor}
+        \cup {o \in Offs : o >= Max2(TrackStart, fEvStart) /\ author[o] = FwdD /\ ~FwdExcluded(a, o)})
 
 (* The report a response carries under the lazy arm; nothing in eager mode. *)
 ReportForeign(a) == seenP' = IF WithPreArm THEN [seenP EXCEPT ![a] = Max2(@, ForeignHigh(a))] ELSE seenP
@@ -992,7 +999,7 @@ NarrowMem(a) ==
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
     /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, repair, tried, oWin, oHops, birthAct>>
-    /\ UNCHANGED <<dur, durWho, fObl, fTag, fBy, snapWho, fwdUsed>>
+    /\ UNCHANGED <<dur, durWho, fObl, fTag, fBy, snapWho, fwdUsed, fEvStart, fEvFloor>>
 
 PersistNarrow(a) ==
     /\ npend[a]
@@ -1005,7 +1012,23 @@ PersistNarrow(a) ==
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
     /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, repair, tried, oWin, oHops, birthAct>>
-    /\ UNCHANGED <<nar, narWho, fTag, fBy, snapWho, fwdUsed>>
+    /\ UNCHANGED <<nar, narWho, fTag, fBy, snapWho, fwdUsed, fEvStart, fEvFloor>>
+
+(* EvictTag: a third narrow tag evicts one from the WAL shard's top-two   *)
+(* table (X6); the evicted tag's forward high folds into the floor every  *)
+(* reader counts, whatever its persisted span.                            *)
+EvictTag ==
+    /\ FreeOn
+    /\ WithFwdExclusion
+    /\ WithTagEvict
+    /\ fEvStart = 0
+    /\ next > 0
+    /\ fEvStart' = next
+    /\ fEvFloor' = Max({fEvFloor} \cup {o \in Offs : author[o] = FwdD})
+    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, repair, tried, oWin, oHops, birthAct>>
+    /\ UNCHANGED <<nar, narWho, npend, dur, durWho, fObl, fTag, fBy, snapWho, fwdUsed>>
 
 ForwardMoved(a) ==
     /\ FreeOn
@@ -1024,12 +1047,12 @@ ForwardMoved(a) ==
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
     /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, repair, tried, oWin, oHops, birthAct>>
-    /\ UNCHANGED <<nar, narWho, npend, dur, durWho, fObl, snapWho>>
+    /\ UNCHANGED <<nar, narWho, npend, dur, durWho, fObl, snapWho, fEvStart, fEvFloor>>
 (* Capture(a): the shared per-leaf snapshot keeps the highest coverage.  *)
 Capture(a) ==
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, moveVars, sHi, seenS, ft, sh, sibHint, sibRows>>
     /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, repair, tried, oWin, oHops, birthAct>>
-    /\ UNCHANGED <<nar, narWho, npend, dur, durWho, fObl, fTag, fBy, fwdUsed>>
+    /\ UNCHANGED <<nar, narWho, npend, dur, durWho, fObl, fTag, fBy, fwdUsed, fEvStart, fEvFloor>>
     /\ snapWho' = IF Persisted(a) THEN durWho ELSE NoAct
     /\ a \in up
     /\ rp[a] > snapCov
@@ -1050,7 +1073,7 @@ GcTrim ==
 Duplicate ==
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, moveVars, sHi, seenS, ft, sh, sibHint, sibRows>>
     /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, repair, tried, oWin, oHops, birthAct>>
-    /\ UNCHANGED <<npend, dur, durWho, fObl, fTag, fBy, snapWho, fwdUsed>>
+    /\ UNCHANGED <<npend, dur, durWho, fObl, fTag, fBy, snapWho, fwdUsed, fEvStart, fEvFloor>>
     /\ nar' = [nar EXCEPT !["a2"] = dur]
     /\ narWho' = [narWho EXCEPT !["a2"] = durWho]
     /\ WithDuplicate
@@ -1077,7 +1100,8 @@ Restart ==
     /\ UNCHANGED <<preArm, seenP, evStart, evFloor, moveVars, seenS, ft, sh, sibHint, sibRows, xferVars>>
 
 (* Evict (WithRestart): the WAL shard evicts L's foreign-high entry to     *)
-(* bound memory, raising its eviction floor to the entry's highest offset. *)
+(* bound memory, raising its eviction floor to the entry's highest offset: *)
+(* every token's, the empty token's forwards included (#5837).             *)
 Evict ==
     /\ WithRestart
     /\ WithEvict
@@ -1085,7 +1109,7 @@ Evict ==
     /\ evStart = 0
     /\ next > 0
     /\ evStart' = next
-    /\ evFloor' = Max({evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts})
+    /\ evFloor' = Max({evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \cup {OrphanFwd, FwdD}})
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, moveVars, freeVars>>
 
@@ -1248,6 +1272,7 @@ Next ==
     \/ \E a \in Acts : NarrowMem(a)
     \/ \E a \in Acts : PersistNarrow(a)
     \/ \E a \in Acts : ForwardMoved(a)
+    \/ EvictTag
     \/ \E a \in Acts : Capture(a)
     \/ GcTrim
     \/ Duplicate

@@ -188,6 +188,7 @@ weaken each one in turn and go red, so each is load-bearing.
 | `Reactivate` | **Environment.** L's birth activation deactivates, and a later call - a re-init, a recovery re-call, a stale donor's late `InitializeSiblingAsync` - activates it again, unproven (P1, P3) | `BPlusLeafGrain.InitializeSiblingAsync`, proving only on the call that seeds the write-once slots. | Yes: `LeafLiveAdvanceCoreTests.BirthProofOnReinit`. |
 | `NarrowMem(a)` | An activation of L narrows its span in memory for a split, stamping the narrow's identity (the sibling id) as its tag | `BPlusLeafGrain.CompleteSplitAsync`, the in-memory narrow. | Yes: `LeafLiveAdvanceCoreTests.ForwardExclusionByInMemorySpan`. |
 | `PersistNarrow(a)` | It persists the narrow with its link obligation in one conditional write; the first to persist wins, the other keeps only its in-memory narrow | `BPlusLeafGrain.CompleteSplitAsync`, the narrow's persist with `LeafNodeState.UnlinkedSplitSiblingId`. | Yes: `LeafLiveAdvanceCoreTests.ForwardExcludedWithoutObligation` and `LeafLiveAdvanceCoreTests.ForwardExclusionTagCollision`. |
+| `EvictTag` | **Environment.** A third narrow tag evicts one from the WAL shard's per-(leaf, partition) top-two forward table, and the evicted tag's forward high folds into the floor every reader counts (X6) | `WalShardGrain.ForwardHighLocked`, its fold into `WalShardGrain.FoldLeafAuthorsLocked`'s eviction floor. | Yes: `LeafLiveAdvanceCoreTests.ForwardTagEvictionDropsHigh`. |
 | `ForwardMoved(a)` | It forwards a new acknowledged write of a moved key, attributed to L under the empty token and its narrow's tag, before or after its persist; a reader excludes it only when its own persisted span is that narrow (X1-X4) | `BPlusLeafGrain.TryResolveSpanForwardTarget`; `WalShardGrain.ForwardHighLocked` per tag, excluded in `WalShardGrain.ForeignHighLocked`. | Yes: `LeafLiveAdvanceCoreTests.ForwardExclusionByForwarderSpan` and `LeafLiveAdvanceCoreTests.ForwardExclusionTagCollision`. |
 | `Stutter` | Natural termination | Not a protocol step; a stuttering successor so TLC does not report a quiescent state as a deadlock. | Not applicable: not a protocol step, so there is no production behaviour to detect. |
 
@@ -254,7 +255,7 @@ birth proof, and `WithOrphanForward` a stale duplicate's forward into an orphan.
 `WithFwdExclusion` adds the relief that lets a donor exclude its own forwards once its
 narrow is durable: `ReadPositionHonest`, `SnapshotHonest` and `NoTrimPastAcked` then skip
 only the forwards of keys L no longer owns, which `ForwardHonest` and
-`SnapshotForwardHonest` state. `WithDuplicate` and `WithEvict` exist to slice. Fourteen variants check it, each within the
+`SnapshotForwardHonest` state. `WithDuplicate` and `WithEvict` exist to slice. Fifteen variants check it, each within the
 case budget:
 
 | Variant | Adds | States |
@@ -273,6 +274,7 @@ case budget:
 | `FreeBulk` | a bulk birth | 3,309,965 |
 | `FreeGateFlip` | own unstamped appends | 1,904,304 |
 | `FreeFwdExclusion` | the forward-exclusion relief: two divergent narrows, a forward before or after the persist | 4,217,142 |
+| `FreeTagEvict` | the relief's WAL-side table: a tag's eviction (X6) and a WAL shard restart (X8) | 821,800 |
 
 Under the claimless advance an activation learns its bounds only from the responses to
 its own appends, which carry `foreignHigh` and the shared watermark together, so either
@@ -418,6 +420,15 @@ reason as the one above.
   unstamped (F3), which the model does not represent. The read of `staleHigh + 1` in the
   re-claim's own WAL turn is one step here.
   Production symbols: `WalShardGrain.StaleHighLocked`, `WalShardGrain.NoteLeafAuthorLocked`.
+- **The forward-exclusion relief's table (#5837, X5-X8).** One tag eviction and one WAL
+  shard restart stand for the top-two per-tag forward table's evictions and losses. Two
+  rows are refinement obligations the model does not represent: the reader's tag comes
+  only from a narrow whose persist succeeded (X7), and a WAL shard restart forgets the
+  table into the start-head floor (X8), which the model checks only through `Restart`'s
+  floors (`ForwardHonestForwardTableLostOnRestart`). The model found that evicting a
+  leaf's foreign-high entry must fold its forwards' high, the empty token's, with its
+  activations' (`ForwardHonestEvictionDropsForwardHigh`).
+  Production symbols: `WalShardGrain.FoldLeafAuthorsLocked`, `WalShardGrain.ResetLeafAuthors`.
 
 - **The liveness property excludes a current activation that has fallen off the log.**
   `NewbornPinEventuallyUsable` is discharged by `CurrentFellOffLog`: the GC trimmed an

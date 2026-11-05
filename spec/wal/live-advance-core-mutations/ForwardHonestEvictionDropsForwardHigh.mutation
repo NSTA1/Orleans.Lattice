@@ -1,0 +1,15 @@
+# #5837: the WAL shard's eviction of L's foreign-high entry folds only the activations'
+# tokens into the eviction floor, dropping the empty token's forward high.
+MODULE: ForwardHonestEvictionDropsForwardHigh
+TARGET: ForwardHonest
+CLASS: Invariant
+SUMMARY: evicting L's foreign-high entry folds its activations' highs into the eviction floor but drops its forwards'
+PERTURBS: Evict
+BOUNDS: WithFreeAdvance = TRUE, WithFwdExclusion = TRUE, WithDuplicate = FALSE, WithRestart = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+    /\ evFloor' = Max({evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \cup {OrphanFwd, FwdD}})
+--- REPLACE
+\* MUTATION: the forwards' high is not folded.
+    /\ evFloor' = Max({evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts})
+--- END

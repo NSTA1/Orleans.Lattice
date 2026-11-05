@@ -7,9 +7,9 @@
   "counts": {
     "invariants": 17,
     "properties": 2,
-    "actions": 46,
-    "mutations": 95,
-    "behaviourRows": 63,
+    "actions": 47,
+    "mutations": 98,
+    "behaviourRows": 64,
     "distinctStates": 2021047
   },
   "variants": {
@@ -87,6 +87,9 @@
     },
     "FreeFwdExclusion": {
       "distinctStates": 4217142
+    },
+    "FreeTagEvict": {
+      "distinctStates": 821800
     }
   }
 }
