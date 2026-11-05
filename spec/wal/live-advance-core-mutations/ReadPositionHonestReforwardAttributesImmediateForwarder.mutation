@@ -1,0 +1,14 @@
+# #5837, condition 4 (a5e2e2ef's F1 and F2): an orphan sibling's forward. It edits an
+# operator, not an action.
+MODULE: ReadPositionHonestReforwardAttributesImmediateForwarder
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: an orphan that splits again re-forwards a write attributed to itself, not to the first forwarder, so the key's owner never sees it (F2)
+BOUNDS: WithFreeAdvance = TRUE, WithOrphanForward = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+ReforwardAttribution == "first"
+--- REPLACE
+\* MUTATION: the immediate forwarder.
+ReforwardAttribution == "immediate"
+--- END

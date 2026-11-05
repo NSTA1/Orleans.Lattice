@@ -68,7 +68,8 @@ NoAuthor == "x"
 StaleDonor == "d"
 DonorLive == "v"
 OrphanFwd == "w"
-Authors == Acts \cup {Foreign, OldAuthor, Straddler, PreAuthor, StaleDonor, DonorLive, OrphanFwd}
+OrphanFwdOnly == "z"
+Authors == Acts \cup {Foreign, OldAuthor, Straddler, PreAuthor, StaleDonor, DonorLive, OrphanFwd, OrphanFwdOnly}
 MaxGen == 3
 
 Max(S) == CHOOSE x \in S : \A y \in S : y <= x
@@ -136,7 +137,9 @@ VARIABLES
     lat,          \* WithLatch: L's reachability decision: "undecided", "proven", "latched"
     eagerG,       \* WithLatch: the cluster's gate view has flipped from pre-arm to eager
     repair,       \* WithLatch: orphan repair has begun on L's range
-    tried         \* WithLatch: a reachability proof has run since orphan repair began
+    tried,        \* WithLatch: a reachability proof has run since orphan repair began
+    oWin,         \* WithOrphanForward: the orphan's marker: "open", "pending" (its donor closed it)
+    oHops         \* WithOrphanForward: forwards made so far (the first, then a re-forward by the orphan)
 
 walVars == <<next, author, inflight, durable, acked, floor>>
 leafVars == <<up, cache, rp, mine, snapCov, snapRows>>
@@ -144,7 +147,7 @@ epochVars == <<cur, claimed, claimHead, stale, dupUsed>>
 handVars == <<mInit, hoOpen, hoClosedAt, windows>>
 oldVars == <<lastU, seenU, oldUsed, restarted, oldRejected>>
 envVars == <<recreated, reinit, spUsed, phase, hint>>
-latchVars == <<oblig, lRestart, lat, eagerG, repair, tried>>
+latchVars == <<oblig, lRestart, lat, eagerG, repair, tried, oWin, oHops>>
 xferVars == <<tRecs, dNarrowed, sDone, dKnown, dResumed, latchVars>>
 freeVars == <<sHi, seenS, ft, sh, sibHint, sibRows, xferVars>>
 armVars == <<preArm, seenP, startHead, evStart, evFloor, freeVars>>
@@ -215,6 +218,8 @@ TypeOK ==
     /\ eagerG \in BOOLEAN
     /\ repair \in BOOLEAN
     /\ tried \in BOOLEAN
+    /\ oWin \in {"open", "pending"}
+    /\ oHops \in 0..2
 
 (***************************************************************************)
 (* Init. Without WithBulk, L is a new tree's first leaf: a1 is running,   *)
@@ -287,6 +292,8 @@ Init ==
     /\ eagerG = FALSE
     /\ repair = FALSE
     /\ tried = FALSE
+    /\ oWin = "open"
+    /\ oHops = 0
 
 (***************************************************************************)
 (* B's BulkHintBound, as an environment step. Create: the bulk-born leaf's *)
@@ -456,7 +463,7 @@ Land(o) ==
        THEN /\ cache' = [cache EXCEPT ![author[o]] = @ \cup {o}]
             /\ mine' = [mine EXCEPT ![author[o]] = @ \cup {o}]
             /\ acked' = acked \cup {o}
-       ELSE /\ acked' = IF author[o] \in {OldAuthor, Straddler, StaleDonor, DonorLive, OrphanFwd} THEN acked \cup {o} ELSE acked
+       ELSE /\ acked' = IF author[o] \in {OldAuthor, Straddler, StaleDonor, DonorLive, OrphanFwd, OrphanFwdOnly} THEN acked \cup {o} ELSE acked
             /\ UNCHANGED <<cache, mine>>
     /\ UNCHANGED <<next, author, floor, up, rp, snapCov, snapRows, epochVars, handVars, oldVars, envVars>>
     /\ UNCHANGED <<armVars, moveVars>>
@@ -708,7 +715,7 @@ LinkRestart ==
     /\ lRestart' = TRUE
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
-    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lat, eagerG, repair, tried>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lat, eagerG, repair, tried, oWin, oHops>>
 
 (***************************************************************************)
 (* The reachability latch (#5709) on a split-born L after its donor closed *)
@@ -734,7 +741,7 @@ ProveReach ==
     /\ tried' = TRUE
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
-    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, eagerG, repair>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, eagerG, repair, oWin, oHops>>
 
 GateToEager ==
     /\ FreeOn
@@ -743,7 +750,7 @@ GateToEager ==
     /\ eagerG' = TRUE
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
-    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, repair, tried>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, repair, tried, oWin, oHops>>
 
 StartRepair ==
     /\ FreeOn
@@ -754,7 +761,7 @@ StartRepair ==
     /\ tried' = FALSE
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
-    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, oWin, oHops>>
 
 (* The records the donor's close head is above: every append of the donor *)
 (* leaf since the heads, by any of its activations, once the split was     *)
@@ -783,7 +790,7 @@ DonorNarrow ==
     /\ oblig' = TRUE
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows, tRecs, sDone, dKnown, dResumed>>
-    /\ UNCHANGED <<lRestart, lat, eagerG, repair, tried>>
+    /\ UNCHANGED <<lRestart, lat, eagerG, repair, tried, oWin, oHops>>
 
 DonorClose ==
     /\ FreeOn
@@ -847,16 +854,38 @@ Straggler(a) ==
 (* generation a2's span was established at, which nothing raises; it is   *)
 (* attributed to O, and also to its forwarder, L, under FwdToken.          *)
 (***************************************************************************)
+(* The forward's second attribution is scoped by the orphan's marker (F1): *)
+(* its forwarder's split token open, or the donor's close pending. Every   *)
+(* forward keeps the first forwarder's attribution, re-forwards too (F2).  *)
+FwdScope(w) == w \in {"open", "pending"}
+ReforwardAttribution == "first"
+
 OrphanForward ==
     /\ FreeOn
     /\ WithOrphanForward
     /\ "a2" \in up
-    /\ \A o \in Offs : author[o] # OrphanFwd
+    /\ oHops < 2
     /\ next < MaxOff
+    /\ oHops' = oHops + 1
     /\ next' = next + 1
-    /\ author' = [author EXCEPT ![next] = OrphanFwd]
+    /\ author' = [author EXCEPT ![next] =
+                     IF FwdScope(oWin) /\ (oHops = 0 \/ ReforwardAttribution = "first")
+                     THEN OrphanFwd ELSE OrphanFwdOnly]
     /\ inflight' = inflight \cup {next}
-    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, oldVars, envVars, armVars, moveVars>>
+    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, repair, tried, oWin>>
+
+(* OrphanClose: the orphan's donor (a2) closes its split window, leaving   *)
+(* its deferred close pending; the link never comes.                       *)
+OrphanClose ==
+    /\ FreeOn
+    /\ WithOrphanForward
+    /\ oWin = "open"
+    /\ oWin' = "pending"
+    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows>>
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, eagerG, repair, tried, oHops>>
 
 (* Capture(a): the shared per-leaf snapshot keeps the highest coverage.  *)
 Capture(a) ==
@@ -1069,6 +1098,7 @@ Next ==
     \/ StartRepair
     \/ \E a \in Acts : Straggler(a)
     \/ OrphanForward
+    \/ OrphanClose
     \/ \E a \in Acts : Capture(a)
     \/ GcTrim
     \/ Duplicate
