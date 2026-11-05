@@ -1,0 +1,17 @@
+# #5841, part 1 of the fix removed. Red outside pre-arm too: an idle duplicate (one that
+# never wrote, so never claimed) claims after the close.
+MODULE: HandOffBoundClaimIgnoresSplitSequence
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: an idle duplicate claims after the split's row write and is not marked stale: the eager residual of #5841
+PERTURBS: DupClaim
+BOUNDS: WithStaleDonor = TRUE, MaxWindows = 1
+
+--- FIND
+    /\ IF rowSeq > 0
+       THEN /\ dst' = "stale"
+--- REPLACE
+\* MUTATION: the claim does not check the split sequence.
+    /\ IF FALSE
+       THEN /\ dst' = "stale"
+--- END

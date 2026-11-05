@@ -1,0 +1,18 @@
+# #5841, a5e2e2ef's third case: a duplicate claims after the split's row read and before
+# its write. A conditional write re-reads and supersedes it; an unconditional one leaves
+# the row at the duplicate's own epoch.
+MODULE: HandOffBoundSplitRowWriteLosesToClaim
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: the split's row write is unconditional, so a duplicate's claim between its read and its write is silently overwritten at the same epoch
+PERTURBS: SplitRowWrite
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+
+--- FIND
+    /\ IF eRow = bRead
+       THEN /\ eRow' = IF SplitBumps(bRead) THEN bRead + 1 ELSE bRead
+--- REPLACE
+\* MUTATION: the row write does not check the value it read.
+    /\ IF TRUE
+       THEN /\ eRow' = IF SplitBumps(bRead) THEN bRead + 1 ELSE bRead
+--- END

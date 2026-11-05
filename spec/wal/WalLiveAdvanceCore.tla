@@ -53,7 +53,8 @@ EXTENDS Integers, FiniteSets
 (***************************************************************************)
 CONSTANTS MaxWindows, WithMixedVersion, WithGateFlip, WithRestart, WithRecreate, WithBulk,
           WithUnclaimedSurvivor, WithClaimedPurge, WithPreArm, WithKeyMove, WithFreeAdvance,
-          WithSplitHint, WithSplitBirth, WithDonorRestart
+          WithSplitHint, WithSplitBirth, WithDonorRestart,
+          WithDuplicate, WithEvict
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
@@ -759,6 +760,7 @@ GcTrim ==
 (* shared snapshot. It must claim before it appends stamped.               *)
 Duplicate ==
     /\ UNCHANGED <<armVars, moveVars>>
+    /\ WithDuplicate
     /\ phase = "live"
     /\ ~dupUsed
     /\ dupUsed' = TRUE
@@ -785,6 +787,7 @@ Restart ==
 (* bound memory, raising its eviction floor to the entry's highest offset. *)
 Evict ==
     /\ WithRestart
+    /\ WithEvict
     /\ WithPreArm
     /\ evStart = 0
     /\ next > 0
@@ -1002,6 +1005,8 @@ Progress ==
     \/ Close
     \/ Create
     \/ MarkInit
+    \/ DonorNarrow
+    \/ DonorClose
 
 (* One weak-fairness condition over the disjunction. Given the finiteness  *)
 (* precondition above, a fair behaviour ends in a state where no Progress  *)

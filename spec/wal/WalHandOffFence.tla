@@ -41,7 +41,8 @@ EXTENDS Integers, FiniteSets
 (* shard's range-delete walk, and WithLegacyHandOff a hand-off in flight   *)
 (* across the fence gate's opening.                                        *)
 (***************************************************************************)
-CONSTANTS WithBatch, MaxWindows, WithRestart, WithTreeWalk, WithLegacyHandOff
+CONSTANTS WithBatch, MaxWindows, WithRestart, WithTreeWalk, WithLegacyHandOff,
+          WithPreArm, WithStaleDonor, WithDekker
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
@@ -53,8 +54,8 @@ Epochs == 0..MaxEpoch
 (* stamped range-delete walk of another shard ("g"), or an unstamped walk *)
 (* ("u"), which is admitted and reported, never fenced.                    *)
 NoAuthor == "none"
-Stamped == {"f", "g"}
-Authors == Stamped \cup {"u", NoAuthor}
+Stamped == {"f", "g", "d"}
+Authors == Stamped \cup {"u", "pre", NoAuthor}
 
 VARIABLES
     next,       \* the WAL shard's allocator: the next offset it assigns
@@ -76,10 +77,23 @@ VARIABLES
     gate,       \* the cluster's fence gate is open
     hfly,       \* a hand-off begun before the gate opened, with no marker, is in flight
     resumed,    \* that hand-off has resumed under the gate
-    mInit       \* L's marker state is initialised
+    mInit,      \* L's marker state is initialised
+    eRow,       \* WithStaleDonor: the donor's durable epoch row; 0 while no activation has claimed
+    rowSeq,     \* the split sequence recorded on that row
+    liveArmed,  \* the splitting donor activation has claimed (always, outside pre-arm)
+    dst,        \* a stale duplicate of the donor: "idle", "claimed", "stale"
+    dEpoch,     \* its claimed epoch
+    dpend,      \* its epoch-only write for a moved key is admitted, not yet allocated
+    dstamp,     \* the epoch that write carries
+    bst,        \* the split's row write: "idle", "read", "done"
+    bRead,      \* the row value that write read
+    sNarrowed,  \* WithDekker: the donor's narrowed leaf state is persisted
+    dSaw        \* WithDekker: the duplicate's claim read the leaf state as narrowed
+
+dVars == <<eRow, rowSeq, liveArmed, dst, dEpoch, dpend, dstamp, bst, bRead, sNarrowed, dSaw>>
 
 vars == <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp,
-          fEpoch, fFence, restarted, gst, gstamp, closing, gate, hfly, resumed, mInit>>
+          fEpoch, fFence, restarted, gst, gstamp, closing, gate, hfly, resumed, mInit, dVars>>
 
 Max2(x, y) == IF x >= y THEN x ELSE y
 
@@ -103,6 +117,17 @@ TypeOK ==
     /\ hfly \in BOOLEAN
     /\ resumed \in BOOLEAN
     /\ mInit \in BOOLEAN
+    /\ eRow \in Epochs
+    /\ rowSeq \in 0..1
+    /\ liveArmed \in BOOLEAN
+    /\ dst \in {"idle", "wrote", "claimed", "stale"}
+    /\ dEpoch \in Epochs
+    /\ dpend \in BOOLEAN
+    /\ dstamp \in Epochs
+    /\ bst \in {"idle", "read", "done"}
+    /\ bRead \in Epochs
+    /\ sNarrowed \in BOOLEAN
+    /\ dSaw \in BOOLEAN
 
 (* A legacy hand-off, when switched on, may or may not be in flight at the *)
 (* start; while it is, the gate is closed and L's marker is uninitialised. *)
@@ -126,6 +151,17 @@ Init ==
     /\ gate = ~hfly
     /\ resumed = FALSE
     /\ mInit = ~hfly
+    /\ liveArmed \in (IF WithPreArm THEN BOOLEAN ELSE {TRUE})
+    /\ eRow = IF liveArmed THEN 1 ELSE 0
+    /\ rowSeq = 0
+    /\ dst = "idle"
+    /\ dEpoch = 0
+    /\ dpend = FALSE
+    /\ dstamp = 0
+    /\ bst = "idle"
+    /\ bRead = 0
+    /\ sNarrowed = FALSE
+    /\ dSaw = FALSE
 
 (***************************************************************************)
 (* The foreign author.                                                     *)
@@ -144,6 +180,7 @@ ForeignOpen ==
     /\ windows' = windows + 1
     /\ UNCHANGED <<next, author, hoClosedAt, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 (* ForeignAdmit(k): a write of kind k is admitted while the initiator      *)
 (* admits, stamped with the generation current at admission.               *)
@@ -157,6 +194,7 @@ ForeignAdmit(k) ==
     /\ fstamp' = fEpoch
     /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 (* ForeignAlloc: the WAL shard allocates a stamped append at or above the *)
 (* initiator's entry (E's entry check).                                    *)
@@ -171,6 +209,7 @@ ForeignAlloc ==
     /\ author' = [author EXCEPT ![next] = "f"]
     /\ UNCHANGED <<hoOpen, hoClosedAt, windows, fAdmit, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 (* ForeignReject: a stamped append below the entry is rejected, allocating *)
 (* nothing; the write is retried at its seam as a fresh admission.         *)
@@ -182,6 +221,7 @@ ForeignReject ==
     /\ fstamp' = 0
     /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 (* The heads a close may record: any head up to the allocator's that lies  *)
 (* above every stamped foreign append, the weakest E's claim head allows.  *)
@@ -202,6 +242,8 @@ Close ==
     /\ hoOpen' = FALSE
     /\ UNCHANGED <<next, author, windows, fpend, fkind, fstamp, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+    /\ WithStaleDonor => bst = "done" /\ (WithDekker => sNarrowed)
+    /\ UNCHANGED dVars
 
 (* Restart (WithRestart): the WAL shard restarts, a reactivation or a      *)
 (* move's cutover. The initiator's generation entry is a durable row and   *)
@@ -213,6 +255,7 @@ Restart ==
     /\ UNCHANGED fFence
     /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 (***************************************************************************)
 (* Another shard's walk of a tree-level range delete (WithTreeWalk). It is *)
@@ -229,6 +272,7 @@ GAdmit ==
     /\ gstamp' = fEpoch
     /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<closing, gate, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 GAlloc ==
     /\ gst \in {"pend", "repend"}
@@ -239,6 +283,7 @@ GAlloc ==
     /\ author' = [author EXCEPT ![next] = "g"]
     /\ UNCHANGED <<hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gstamp, closing, gate, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 GReject ==
     /\ gst \in {"pend", "repend"}
@@ -246,6 +291,7 @@ GReject ==
     /\ gst' = "rejected"
     /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gstamp, closing, gate, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 (* The seam retry of a rejected walk asks the fence grain, which answers   *)
 (* from one state and marks an intent closed before its close's first      *)
@@ -261,6 +307,7 @@ GRestamp ==
     /\ gstamp' = fEpoch
     /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<closing, gate, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 GUnstamped ==
     /\ gst = "rejected"
@@ -271,6 +318,7 @@ GUnstamped ==
     /\ author' = [author EXCEPT ![next] = "u"]
     /\ UNCHANGED <<hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gstamp, closing, gate, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 (* OtherIntentClose (WithTreeWalk): another range delete's close re-claims *)
 (* the tree's shared generation while the walk's own intent, whose marker  *)
@@ -284,6 +332,7 @@ OtherIntentClose ==
     /\ fFence' = fEpoch + 1
     /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 (***************************************************************************)
 (* The rollout (WithLegacyHandOff). OpenGate: the last old silo has left.  *)
@@ -299,6 +348,7 @@ OpenGate ==
     /\ gate' = TRUE
     /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 Resume ==
     /\ hfly
@@ -309,6 +359,7 @@ Resume ==
     /\ fAdmit' = TRUE
     /\ UNCHANGED <<next, author, hoClosedAt, windows, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, mInit>>
+    /\ UNCHANGED dVars
 
 LegacyComplete ==
     /\ hfly
@@ -319,6 +370,7 @@ LegacyComplete ==
     /\ fAdmit' = FALSE
     /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 MarkInit ==
     /\ ~hfly
@@ -326,6 +378,138 @@ MarkInit ==
     /\ mInit' = TRUE
     /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed>>
+    /\ UNCHANGED dVars
+
+(***************************************************************************)
+(* The donor's epoch row across a split (#5841, WithStaleDonor). The       *)
+(* foreign author here is a stale duplicate of the split's donor, an       *)
+(* activation that still holds the span from before the split. Its        *)
+(* epoch-only writes (WalRoutingStamp.None: the PendingTx terminal         *)
+(* backstop, the span-forward receive) of moved keys carry no routing      *)
+(* generation, so only the donor's epoch fences them.                      *)
+(*  - DupClaim: the duplicate's first such write claims: it reads the row  *)
+(*    and writes row + 1, superseding every lower epoch - unless the row   *)
+(*    records a split after the span it loaded, which marks it stale       *)
+(*    (the split sequence, checked by ClaimRowAsync).                      *)
+(*  - DupAdmit / DupAlloc / DupReject: its write, admitted under its epoch *)
+(*    and allocated only at or above the row (E's entry check). One        *)
+(*    allocated before the split's window opened is below the receiver's  *)
+(*    birth heads and handed to it by the split ("pre"), not foreign.      *)
+(*  - SplitRowRead / SplitRowWrite: before closing the receiver's marker,  *)
+(*    the splitting activation records the split on the row in one         *)
+(*    conditional write, bumping the epoch when the durable row exists     *)
+(*    (any activation has claimed), and re-reading on a conflict.          *)
+(* Outside pre-arm the splitting activation has always claimed, since it   *)
+(* wrote stamped before it split.                                          *)
+(***************************************************************************)
+DupClaim ==
+    /\ WithStaleDonor
+    /\ ~WithDekker
+    /\ dst = "idle"
+    /\ eRow < MaxEpoch
+    /\ IF rowSeq > 0
+       THEN /\ dst' = "stale"
+            /\ UNCHANGED <<eRow, dEpoch>>
+       ELSE /\ dst' = "claimed"
+            /\ dEpoch' = eRow + 1
+            /\ eRow' = eRow + 1
+    /\ UNCHANGED <<rowSeq, liveArmed, dpend, dstamp, bst, bRead, sNarrowed, dSaw>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+
+(***************************************************************************)
+(* The alternative to the split sequence (WithDekker, 359c7fd5's option A):*)
+(* no mark on the row. The claim writes row + 1 and then reads the leaf's *)
+(* durable state; the split persists its narrowed state and then reads    *)
+(* the row. Either the claim's read sees the narrow, and the duplicate is *)
+(* stale, or the split's read sees the claim's row, and bumps past it.    *)
+(***************************************************************************)
+DupClaimWrite ==
+    /\ WithStaleDonor
+    /\ WithDekker
+    /\ dst = "idle"
+    /\ eRow < MaxEpoch
+    /\ dst' = "wrote"
+    /\ dEpoch' = eRow + 1
+    /\ eRow' = eRow + 1
+    /\ UNCHANGED <<rowSeq, liveArmed, dpend, dstamp, bst, bRead, sNarrowed, dSaw>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+
+DupClaimCheck ==
+    /\ dst = "wrote"
+    /\ dSaw' = sNarrowed
+    /\ dst' = IF dSaw' THEN "stale" ELSE "claimed"
+    /\ UNCHANGED <<eRow, rowSeq, liveArmed, dEpoch, dpend, dstamp, bst, bRead, sNarrowed>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+
+SplitPersist ==
+    /\ WithStaleDonor
+    /\ WithDekker
+    /\ hoOpen
+    /\ ~sNarrowed
+    /\ sNarrowed' = TRUE
+    /\ UNCHANGED <<eRow, rowSeq, liveArmed, dst, dEpoch, dpend, dstamp, bst, bRead, dSaw>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+
+DupAdmit ==
+    /\ WithStaleDonor
+    /\ dst = "claimed"
+    /\ ~dpend
+    /\ next < MaxOff
+    /\ dpend' = TRUE
+    /\ dstamp' = dEpoch
+    /\ UNCHANGED <<eRow, rowSeq, liveArmed, dst, dEpoch, bst, bRead, sNarrowed, dSaw>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+
+DupAlloc ==
+    /\ dpend
+    /\ dstamp >= eRow
+    /\ next < MaxOff
+    /\ dpend' = FALSE
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = IF windows > 0 THEN "d" ELSE "pre"]
+    /\ UNCHANGED <<eRow, rowSeq, liveArmed, dst, dEpoch, dstamp, bst, bRead, sNarrowed, dSaw>>
+    /\ UNCHANGED <<hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+
+DupReject ==
+    /\ dpend
+    /\ dstamp < eRow
+    /\ dpend' = FALSE
+    /\ UNCHANGED <<eRow, rowSeq, liveArmed, dst, dEpoch, dstamp, bst, bRead, sNarrowed, dSaw>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+
+(* The bump the split's row write takes: when the durable row exists.      *)
+SplitBumps(read) == read > 0
+
+SplitRowRead ==
+    /\ WithStaleDonor
+    /\ hoOpen
+    /\ WithDekker => sNarrowed
+    /\ bst = "idle"
+    /\ bst' = "read"
+    /\ bRead' = eRow
+    /\ UNCHANGED <<eRow, rowSeq, liveArmed, dst, dEpoch, dpend, dstamp, sNarrowed, dSaw>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
+
+SplitRowWrite ==
+    /\ bst = "read"
+    /\ IF eRow = bRead
+       THEN /\ eRow' = IF SplitBumps(bRead) THEN bRead + 1 ELSE bRead
+            /\ rowSeq' = IF WithDekker THEN rowSeq ELSE 1
+            /\ bst' = "done"
+       ELSE /\ bst' = "idle"
+            /\ UNCHANGED <<eRow, rowSeq>>
+    /\ eRow' <= MaxEpoch
+    /\ UNCHANGED <<liveArmed, dst, dEpoch, dpend, dstamp, bRead, sNarrowed, dSaw>>
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
 
 (* A behaviour may stop anywhere: this is a safety model.                  *)
 Stutter == UNCHANGED vars
@@ -347,6 +531,15 @@ Next ==
     \/ Resume
     \/ LegacyComplete
     \/ MarkInit
+    \/ DupClaim
+    \/ DupClaimWrite
+    \/ DupClaimCheck
+    \/ SplitPersist
+    \/ DupAdmit
+    \/ DupAlloc
+    \/ DupReject
+    \/ SplitRowRead
+    \/ SplitRowWrite
     \/ Stutter
 
 Spec == Init /\ [][Next]_vars
