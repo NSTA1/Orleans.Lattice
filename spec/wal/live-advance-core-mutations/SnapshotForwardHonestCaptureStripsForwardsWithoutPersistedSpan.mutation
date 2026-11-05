@@ -12,5 +12,5 @@ BOUNDS: WithFreeAdvance = TRUE, WithFwdExclusion = TRUE, MaxWindows = 0, WithMix
     /\ snapRows' = {o \in cache[a] : o <= rp[a]}
 --- REPLACE
 \* MUTATION: forwards L no longer owns are stripped whatever span the capturing activation holds.
-    /\ snapRows' = {o \in cache[a] : o <= rp[a] /\ ~(author[o] = FwdD /\ ~FwdOwnedByL(o))}
+    /\ snapRows' = {o \in cache[a] : o <= rp[a] /\ ~(author[o] = FwdD /\ durWho = fBy[o] /\ fObl)}
 --- END

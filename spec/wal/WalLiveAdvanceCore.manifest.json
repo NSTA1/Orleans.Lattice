@@ -103,11 +103,11 @@
     "FreeEpochOnly": {
       "distinctStates": 712124
     },
-    "FreeChainRestart": {
-      "distinctStates": 1
+    "FreeChainEvict": {
+      "distinctStates": 1993821
     },
-    "FreeOrphanRestart": {
-      "distinctStates": 1
+    "FreeOrphanEvict": {
+      "distinctStates": 3045174
     }
   }
 }
