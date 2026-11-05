@@ -1,0 +1,15 @@
+# #5851 F1 (a5e2e2ef, #5851 comment 6665922210): the stale-generation refresh of a transfer is
+# gated on a descent for the batch's keys, not only the leaf's low key.
+MODULE: ReadPositionHonestTransferRefreshChecksLowOnly
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the refresh checks reachability for the stale donor's low key only, which the donor keeps, so a transfer of keys the split moved to L is re-admitted at the current generation, above every staleHigh bound, and L advances past it unapplied
+PERTURBS: StaleRefreshAlloc
+BOUNDS: WithFreeAdvance = TRUE, WithKeyMove = TRUE, WithTransferRefresh = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+RefreshReaches == ~moved
+--- REPLACE
+\* MUTATION: the low key always reaches the donor.
+RefreshReaches == TRUE
+--- END

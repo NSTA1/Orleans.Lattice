@@ -56,7 +56,7 @@ CONSTANTS MaxWindows, WithMixedVersion, WithGateFlip, WithRestart, WithRecreate,
           WithSplitHint, WithSplitBirth, WithDonorRestart,
           WithDuplicate, WithEvict, WithOrphanForward, WithLatch,
           WithBirthProof, WithFwdExclusion, WithTagEvict, WithViewOverlap,
-          WithReforward, WithForwardIn, WithEpochOnly, WithEvictAlone, WithSplitCap
+          WithReforward, WithForwardIn, WithEpochOnly, WithEvictAlone, WithSplitCap, WithTransferRefresh
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
@@ -1370,6 +1370,31 @@ StaleEpochOnlyAlloc ==
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, seenS, ft, sh, sibHint, sibRows, xferVars, svVars>>
     /\ UNCHANGED <<chainUsed, fInUsed, fInRecs, sfUsed>>
 
+(* StaleRefreshAlloc (WithTransferRefresh; #5851 F1, a5e2e2ef's #5851   *)
+(* comment 6665922210): the stale donor's transfer, refused as stale     *)
+(* after L re-claimed the raised generation, is refreshed at the current *)
+(* generation and re-admitted, which places it above every staleHigh     *)
+(* bound. It is refreshed only if a descent for the batch's keys - its   *)
+(* min and max - still reaches the donor, which fails once the           *)
+(* key-moving close has moved them; then the write is forwarded.         *)
+RefreshReaches == ~moved
+
+StaleRefreshAlloc ==
+    /\ WithKeyMove
+    /\ WithTransferRefresh
+    /\ moved \/ WithSplitBirth
+    /\ ~dUsed
+    /\ next < MaxOff
+    /\ 1 < gL
+    /\ RefreshReaches
+    /\ dUsed' = TRUE
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = StaleDonor]
+    /\ inflight' = inflight \cup {next}
+    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, oldVars, envVars>>
+    /\ UNCHANGED <<gD, gL, pend, pendGen, moved, otherMoved, reclaims, strayReclaims>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows, xferVars, svVars, chVars>>
+
 (***************************************************************************)
 (* The purge, H's AbsentMarkerHolds and R's guarantees, as environment    *)
 (* steps (WithRecreate). Recreate: L's tree is purged and re-created. L's *)
@@ -1477,6 +1502,7 @@ Next ==
     \/ StaleRouteAlloc
     \/ UnroutedAlloc
     \/ StaleEpochOnlyAlloc
+    \/ StaleRefreshAlloc
     \/ Recreate
     \/ StraddlerAlloc
     \/ MarkInit
