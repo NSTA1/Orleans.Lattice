@@ -262,11 +262,15 @@ internal sealed class InMemoryWalTable
             foreach (var action in materialised)
             {
                 var entity = (AzureTableWalEntity)action.Entity;
-                if (action.ActionType is TableTransactionActionType.UpdateReplace or TableTransactionActionType.UpdateMerge)
+                if (action.ActionType is TableTransactionActionType.UpdateReplace or TableTransactionActionType.UpdateMerge
+                    && action.ETag != default)
                 {
                     // An update is conditional, as on Azure: the row must exist and, unless the
                     // caller passed ETag.All, still carry the ETag the caller read. This is what
-                    // makes the provider's commit fence refuse a stale TAIL (issue #5810).
+                    // makes the provider's commit fence refuse a stale TAIL (issue #5810). An
+                    // update with default(ETag) is not conditional: the SDK then sends no
+                    // If-Match header, which the service treats as an insert-or-replace, so it
+                    // falls through to the upsert below.
                     if (!_rows.TryGetValue((entity.PartitionKey, entity.RowKey), out var current))
                     {
                         throw new RequestFailedException(404, "ResourceNotFound", "ResourceNotFound", innerException: null);
