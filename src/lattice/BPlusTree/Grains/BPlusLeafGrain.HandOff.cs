@@ -57,8 +57,12 @@ internal sealed partial class BPlusLeafGrain
     /// resolved here first: a write admitted before this activation's first append is
     /// marked too, and a close made before that write dispatches still refuses it.
     /// </summary>
+    internal string? RedStaleLow;
+    internal bool RedStaleLowSet;
+
     private WalRoutingStamp StampedRouting(WalRoutingStamp routing)
     {
+        if (!RedStaleLowSet) { RedStaleLow = state.State.LowKeyInclusive; RedStaleLowSet = true; }
         ResolveCommitLogWriter();
         return routing with { AdmissionMark = _appendFence is { } fence ? fence.HandOffCloses + 1 : 0 };
     }

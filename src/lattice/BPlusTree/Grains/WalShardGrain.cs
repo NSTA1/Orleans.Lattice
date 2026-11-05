@@ -904,7 +904,6 @@ internal sealed partial class WalShardGrain(
                 if (RaisesUnstampedWatermark(TShape.Stamped, in stamp, in entry))
                 {
                     _unstampedWatermark = offset;
-                    NoteUnstampedKeyLocked(in entry, offset);
                     terminalMisuse = TShape.Stamped && stamp.IsCoordinatorTerminal;
                 }
                 _pendingSegments.Add(segment);

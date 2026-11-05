@@ -1192,7 +1192,7 @@ internal sealed partial class BPlusLeafGrain
 
                 // K2, K4 (#5851): the range this leaf owns now, read in the same turn as the
                 // cut: the whole pre-split range, which both halves' hints are taken over.
-                var low = state.State.LowKeyInclusive;
+                var low = RedStaleLow;
                 var high = state.State.HighKeyExclusive;
                 for (var p = 0; p < partitions; p++)
                 {
@@ -1244,8 +1244,7 @@ internal sealed partial class BPlusLeafGrain
         for (var p = 0; p < hints.Length; p++)
         {
             var current = GetCurrentCheckpointForPartition(p);
-            var closesPassed = current >= HandOffMarkerCore.RequiredHead(handOff.LeafMarker, low, high, p) - 1
-                && current >= HandOffMarkerCore.HeadAt(handOff.ShardCloseHeads, p) - 1;
+            var closesPassed = current >= HandOffMarkerCore.HeadAt(handOff.ShardCloseHeads, p) - 1;
             var reported = Math.Max(cut[p].ForeignHigh, cut[p].UnstampedWatermark);
             if (closesPassed && current >= reported)
             {

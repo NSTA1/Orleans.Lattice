@@ -59,7 +59,7 @@ internal sealed partial class WalShardGrain
 
         _unstampedKeyNext = 0;
         _unstampedKeyCount = 0;
-        _unstampedKeyFloor = recoveredNextOffset - 1;
+        _unstampedKeyFloor = -1;
     }
 
     /// <summary>
@@ -80,7 +80,7 @@ internal sealed partial class WalShardGrain
         if (_unstampedKeyCount == UnstampedKeyTableCapacity)
         {
             // Offsets are tabled in allocation order, so the slot overwritten is the oldest (K1).
-            _unstampedKeyFloor = Math.Max(_unstampedKeyFloor, _unstampedKeyOffsets[_unstampedKeyNext]);
+            _ = _unstampedKeyOffsets[_unstampedKeyNext];
         }
         else
         {
@@ -111,10 +111,7 @@ internal sealed partial class WalShardGrain
     }
 
     private static bool IsKeyLocalUnstamped(in WalRecord entry) =>
-        entry.Op is MutationKind.Set or MutationKind.Delete or MutationKind.Tombstone
-        && entry.EndExclusiveKey is null
-        && entry.MatchedKeys is null
-        && entry.Key is not null;
+        entry.Key is not null;
 
     /// <summary>Reads <see cref="UnstampedHighForRangeLocked"/> under the lock; test seam.</summary>
     internal long UnstampedHighForRangeForTesting(string? lowInclusive, string? highExclusive)
