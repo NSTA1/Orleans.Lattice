@@ -54,7 +54,7 @@ and its mutations as the record each module took its own from.
 | `WalMove` | 5 | 2 | 13 | 18 | 18 | 1,617 |
 | `WalPinRetirement` | 3 | 3 | 25 | 31 | 30 | 284,019 |
 | `WalAppendEpoch` | 5 | 0 | 17 | 23 | 20 | 150,706 |
-| `WalHandOffFence` | 5 | 1 | 34 | 42 | 38 | 8,826 |
+| `WalHandOffFence` | 5 | 1 | 34 | 43 | 38 | 8,826 |
 | `WalRoutingFloor` | 3 | 1 | 14 | 21 | 16 | 28,956 |
 | `WalBulkSwitch` | 6 | 1 | 21 | 28 | 26 | 1,047,630 |
 | `WalLiveAdvanceCore` | 7 | 1 | 27 | 50 | 33 | 2,021,047 |

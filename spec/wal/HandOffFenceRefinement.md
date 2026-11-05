@@ -256,7 +256,7 @@ residual), `HandOffBoundBumpOnlyIfSplittingActivationClaimed` (pre-arm only),
 `HandOffBoundEpochOnlyWriteUnfenced` (`DupAlloc`, `DupReject`) and
 `HandOffBoundSplitRowWriteDropsBump` (`SplitRowWrite`).
 
-#5840 S4 (the live donor superseded by the link-time fence) adds thirteen, run in
+#5840 S4 (the live donor superseded by the link-time fence) adds fourteen, run in
 `StaleDonorPreArm`:
 `HandOffBoundStaleEpochReclaimSkipsProbe` (`DupRetry`: the re-claim skips the probe, so
 a stale duplicate re-arms),
@@ -271,7 +271,9 @@ allowance), `HandOffBoundLiveMovedKeyWriteUnfenced` (`LiveAlloc`),
 `LiveDonorProgressRelinquishRecordsOnlyInstalledEpoch` (`SplitPersist`, `LiveClaimDone`;
 R7: a write re-stamped at an in-flight floor bump's epoch then supersedes the live donor),
 `StaleDetectionHonouredDiscardedClaimSwallowsStaleProbe` (`LiveClaimDone`; R6),
-`HandOffBoundLiveBumpWithoutRowWrite` (`LiveBump`), and two witnesses that
+`HandOffBoundLiveBumpWithoutRowWrite` (`LiveBump`),
+`LiveDonorProgressRelinquishedStampRefusalBumps` (`LiveBump`, in `StaleDonorRearmRace`;
+R8: a write stamped before the relinquish bumps on a floor refusal), and two witnesses that
 `LiveDonorProgress` is checked on real steps: `LiveDonorProgressStampsAfterFenceWitness`
 (the common order: count, link fence, fresh re-arm, stamp) and
 `LiveDonorProgressReclaimAfterRearmRaceWitness` (in `StaleDonorRearmRace`: the donor
