@@ -142,7 +142,7 @@ VARIABLES
     eagerG,       \* WithLatch: the cluster's gate view has flipped from pre-arm to eager
     repair,       \* WithLatch: orphan repair has begun on L's range
     tried,        \* WithLatch: a reachability proof has run since orphan repair began
-    oWin,         \* WithOrphanForward: the orphan's marker: "open", "pending" (its donor closed it)
+    oWin,         \* WithOrphanForward: the orphan's marker: "open", "pending" (its donor closed it with its deferred bound), "closed"
     oHops,        \* WithOrphanForward: forwards made so far (the first, then a re-forward by the orphan)
     birthAct,     \* WithBirthProof: L's running activation is the one its birth created
     nar,          \* WithFwdExclusion: each activation's narrow, in memory: its tag, or none
@@ -236,7 +236,7 @@ TypeOK ==
     /\ eagerG \in BOOLEAN
     /\ repair \in BOOLEAN
     /\ tried \in BOOLEAN
-    /\ oWin \in {"open", "pending"}
+    /\ oWin \in {"open", "pending", "closed"}
     /\ oHops \in 0..2
     /\ birthAct \in BOOLEAN
     /\ nar \in [Acts -> Tags \cup {NoTag}]
@@ -425,9 +425,6 @@ ResolveDeferred ==
 (* A claim of L's under the latch.                                         *)
 LatchAdmitsClaim == ~WithLatch \/ moved \/ (eagerG /\ lat = "proven")
 
-(* The reachability decision a later activation of L starts from (P1, P3):*)
-(* undecided, whatever call reactivated it.                                *)
-ReinitProof == "undecided"
 
 Claim(a) ==
     /\ a \in up
@@ -825,7 +822,7 @@ Reactivate ==
     /\ ~hoOpen
     /\ ~moved
     /\ birthAct' = FALSE
-    /\ lat' = ReinitProof
+    /\ lat' = "undecided"
     /\ claimed' = [claimed EXCEPT !["a1"] = FALSE]
     /\ cur' = IF cur = "a1" THEN NoAct ELSE cur
     /\ UNCHANGED <<walVars, leafVars, claimHead, stale, dupUsed, handVars, oldVars, envVars, moveVars>>

@@ -7,8 +7,8 @@ SUMMARY: an orphan's forward is attributed only to the orphan sibling, so the li
 BOUNDS: WithFreeAdvance = TRUE, WithOrphanForward = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
 
 --- FIND
-        \cup {o \in Offs : o >= TrackStart /\ author[o] = OrphanFwd /\ a # FwdToken})
+        \cup {o \in Offs : o >= TrackStart /\ author[o] = OrphanFwd /\ a # FwdToken}
 --- REPLACE
 \* MUTATION: no attribution to the forwarder.
-        \cup {})
+        \cup {}
 --- END

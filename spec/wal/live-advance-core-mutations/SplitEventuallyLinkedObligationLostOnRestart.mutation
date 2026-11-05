@@ -1,0 +1,30 @@
+# #5837: the link obligation is durable with the narrow, so a restarted donor re-drives
+# the link.
+MODULE: SplitEventuallyLinkedObligationLostOnRestart
+TARGET: SplitEventuallyLinked
+CLASS: Temporal
+SUMMARY: the donor's link obligation is held in memory, so a restart after L's close loses it and L is never linked (transfer condition (a))
+PERTURBS: LinkRestart
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE, WithDonorRestart = TRUE
+
+--- FIND
+    /\ ~lRestart
+    /\ lRestart' = TRUE
+--- REPLACE
+    /\ ~lRestart
+    /\ lRestart' = TRUE
+\* MUTATION: the obligation is not durable.
+    /\ oblig' = FALSE
+--- END
+
+--- FIND
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lat, eagerG, repair, tried, oWin, oHops, birthAct, fxVars>>
+
+(***************************************************************************)
+(* The reachability latch
+--- REPLACE
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, lat, eagerG, repair, tried, oWin, oHops, birthAct, fxVars>>
+
+(***************************************************************************)
+(* The reachability latch
+--- END

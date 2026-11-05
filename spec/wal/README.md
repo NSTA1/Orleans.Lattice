@@ -57,7 +57,7 @@ and its mutations as the record each module took its own from.
 | `WalHandOffFence` | 3 | 1 | 17 | 21 | 19 | 8,826 |
 | `WalRoutingFloor` | 3 | 1 | 14 | 21 | 16 | 28,956 |
 | `WalBulkSwitch` | 6 | 1 | 21 | 28 | 26 | 1,047,630 |
-| `WalLiveAdvanceCore` | 7 | 1 | 27 | 50 | 33 | 2,021,047 |
+| `WalLiveAdvanceCore` | 17 | 2 | 47 | 104 | 64 | 2,021,047 |
 | `WalLiveAdvanceComposite` | 13 | 0 | 15 | 28 | 15 | 131,423 |
 
 `Actions` counts the disjuncts of `Next`, including the non-behavioural `Stutter`
@@ -72,7 +72,12 @@ distinct states to depth 23. `WalRoutingFloor` searches to depth 15, and its
 `WalLiveAdvanceCore` searches to depth 25; its variants find 3,052,664 (`Restart`,
 depth 26), 3,373,761 (`GateFlip`, depth 25), 3,693,715 (`Recreate`, depth 26),
 4,638,713 (`RecreateSurvivor`, depth 26), 1,622,161 (`RecreateSurvivorMixed`, depth 25)
-and 1,114,185 (`Bulk`, depth 25) distinct states.
+and 1,114,185 (`Bulk`, depth 25) distinct states. Its claimless-advance variants (#5837)
+find 4,680,662 (`Free`), 2,386,428 (`FreeKeyMove`), 3,562,343 (`FreeSplitHint`),
+2,146,154 (`FreeSplitBirth`), 428,890 (`FreeSplitLink`), 892,259 (`FreeLatch`), 707,726
+(`FreeOrphan`), 3,855,129 (`FreeRestart`), 477,300 (`FreeRestartKeyMove`), 1,715,417
+(`FreeRecreate`), 4,908,025 (`FreeRecreateSurvivor`), 3,309,965 (`FreeBulk`), 1,904,304
+(`FreeGateFlip`), 4,217,142 (`FreeFwdExclusion`) and 821,800 (`FreeTagEvict`).
 `WalBulkSwitch` searches to depth 29, and its `Skip` variant finds 197,156 distinct
 states to depth 30.
 `WalLiveAdvanceComposite`'s actions are non-behavioural interface steps, which the five

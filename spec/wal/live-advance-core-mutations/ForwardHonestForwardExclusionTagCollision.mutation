@@ -2,12 +2,13 @@
 MODULE: ForwardHonestForwardExclusionTagCollision
 TARGET: ForwardHonest
 CLASS: Invariant
+PERTURBS: NarrowMem
 SUMMARY: the narrow tag is a bare sequence number, so two divergent narrows share it and the live donor excludes the stale duplicate's forward of a key it still owns (X2)
 BOUNDS: WithFreeAdvance = TRUE, WithFwdExclusion = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
 
 --- FIND
-TagOf(a) == IF a = "a1" THEN "n1" ELSE "n2"
+    /\ nar' = [nar EXCEPT ![a] = TagOf(a)]
 --- REPLACE
 \* MUTATION: a counter, not the narrow's identity.
-TagOf(a) == "n1"
+    /\ nar' = [nar EXCEPT ![a] = "n1"]
 --- END

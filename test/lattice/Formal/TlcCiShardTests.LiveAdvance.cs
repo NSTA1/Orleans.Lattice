@@ -13,7 +13,6 @@ public sealed partial class TlcCiShardTests
     [TestCase("WalHandOffFence", TlcCiShard.WalHandOffFence)]
     [TestCase("WalRoutingFloor", TlcCiShard.WalRoutingFloor)]
     [TestCase("WalBulkSwitch", TlcCiShard.WalBulkSwitch)]
-    [TestCase("WalLiveAdvanceCore", TlcCiShard.WalLiveAdvanceCore)]
     [TestCase("WalLiveAdvanceComposite", TlcCiShard.WalLiveAdvanceComposite)]
     public void Live_advance_module_routes_every_case_to_its_own_shard_with_its_base(string name, string expected)
     {
@@ -32,6 +31,41 @@ public sealed partial class TlcCiShardTests
                 "the base must run in the mutations' process to serve their full-bound controls");
             Assert.That(LatticeShards().Single(shard => shard.Categories.Contains(expected)).Tiers,
                 Is.EqualTo(new[] { "deterministic" }));
+        });
+    }
+
+    /// <summary>
+    /// <c>WalLiveAdvanceCore</c>'s cases go to its own shard with its base, except the
+    /// claimless advance's (#5837): the mutations that raise <c>WithFreeAdvance</c>, whose
+    /// controls the base cannot serve, with its smallest variants in one shard, and its
+    /// larger variants in another.
+    /// </summary>
+    [Test]
+    public void Live_advance_core_routes_its_claimless_cases_apart_and_the_rest_with_its_base()
+    {
+        var module = Module("WalLiveAdvanceCore");
+        var mutations = module.LoadMutations();
+        var free = mutations.Where(mutation => mutation.Bounds.Any(bound => bound.Name == "WithFreeAdvance" && bound.Value == "TRUE")).ToArray();
+        var rest = mutations.Except(free).ToArray();
+        var freeVariants = module.Manifest.Variants.Keys.Where(variant => variant.StartsWith("Free", StringComparison.Ordinal)).ToArray();
+        var otherVariants = module.Manifest.Variants.Keys.Except(freeVariants).ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(free, Is.Not.Empty);
+            Assert.That(rest, Is.Not.Empty);
+            Assert.That(TlcCiShard.OfModule(module), Is.EqualTo(TlcCiShard.WalLiveAdvanceCore));
+            Assert.That(otherVariants.Select(variant => TlcCiShard.OfVariant(module, variant)), Is.All.EqualTo(TlcCiShard.WalLiveAdvanceCore));
+            Assert.That(rest.Select(mutation => TlcCiShard.Of(module, mutation)), Is.All.EqualTo(TlcCiShard.WalLiveAdvanceCore));
+            Assert.That(rest.All(mutation => TlcCiShard.SharesBaseShard(module, mutation)), Is.True,
+                "the base must run in the mutations' process to serve their full-bound controls");
+            Assert.That(free.Select(mutation => TlcCiShard.Of(module, mutation)), Is.All.EqualTo(TlcCiShard.WalLiveAdvanceCoreFree));
+            Assert.That(freeVariants.Select(variant => TlcCiShard.OfVariant(module, variant)),
+                Is.All.AnyOf(TlcCiShard.WalLiveAdvanceCoreFree, TlcCiShard.WalLiveAdvanceCoreFreeVariants));
+            foreach (var category in new[] { TlcCiShard.WalLiveAdvanceCore, TlcCiShard.WalLiveAdvanceCoreFree, TlcCiShard.WalLiveAdvanceCoreFreeVariants })
+            {
+                Assert.That(LatticeShards().Single(shard => shard.Categories.Contains(category)).Tiers, Is.EqualTo(new[] { "deterministic" }), category);
+            }
         });
     }
 

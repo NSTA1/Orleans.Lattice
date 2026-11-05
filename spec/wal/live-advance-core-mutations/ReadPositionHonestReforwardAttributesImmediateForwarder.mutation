@@ -3,12 +3,13 @@
 MODULE: ReadPositionHonestReforwardAttributesImmediateForwarder
 TARGET: ReadPositionHonest
 CLASS: Invariant
+PERTURBS: OrphanForward
 SUMMARY: an orphan that splits again re-forwards a write attributed to itself, not to the first forwarder, so the key's owner never sees it (F2)
 BOUNDS: WithFreeAdvance = TRUE, WithOrphanForward = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
 
 --- FIND
-ReforwardAttribution == "first"
+                     IF FwdScope(oWin) /\ (oHops = 0 \/ ReforwardAttribution = "first")
 --- REPLACE
-\* MUTATION: the immediate forwarder.
-ReforwardAttribution == "immediate"
+\* MUTATION: a re-forward is attributed to the immediate forwarder, the orphan.
+                     IF FwdScope(oWin) /\ oHops = 0
 --- END
