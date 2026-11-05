@@ -8,7 +8,8 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// interface is unchanged and a build that does not read it ignores it. Each hop is a
 /// (forwarder, narrow tag) pair, the tag being the id of the split sibling the forwarder's
 /// narrow moved the key to (X2). The authoring leaf's append fence copies the chain into
-/// its <see cref="WalAppendStamp"/>; the WAL shard attributes the record to every hop.
+/// its <see cref="WalAppendStamp"/>; the WAL shard attributes the record to every hop,
+/// and only the first hop's narrow may ever be excluded from a reader's foreign high.
 /// </summary>
 /// <remarks>
 /// A chain holds at most <see cref="WalAppendStamp.MaxForwardHops"/> hops. A forward past

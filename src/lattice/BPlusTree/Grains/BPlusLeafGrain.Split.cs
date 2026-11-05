@@ -1751,7 +1751,7 @@ internal sealed partial class BPlusLeafGrain
 
         // #5837, X4/X7: the narrow persisted with the sibling obligation, so its forwards
         // may now be left out of the foreign high this activation is reported.
-        NotePersistedNarrow(siblingId);
+        NotePersistedNarrow(siblingId.GetGuidKey());
 
         // Epic #5605, member 2: the span has narrowed, so admission of the moved
         // keys has stopped; the donor's epoch bump fences what it admitted before,

@@ -109,10 +109,11 @@ internal sealed partial class WalShardGrain
         _leafAuthors[stamp.LeafId] = authors;
         if (stamp.Forwarder != Guid.Empty)
         {
-            // F2': every forwarder on the chain, each by its own narrow tag.
-            NoteForwardLocked(stamp.LeafId, stamp.Forwarder, stamp.ForwarderTag, offset);
-            NoteForwardLocked(stamp.LeafId, stamp.Forwarder2, stamp.ForwarderTag2, offset);
-            NoteForwardLocked(stamp.LeafId, stamp.Forwarder3, stamp.ForwarderTag3, offset);
+            // F2': every forwarder on the chain. Only the first hop is tagged; a chain hop
+            // is never excluded from any reader's foreign high (S-b).
+            NoteForwardLocked(stamp.LeafId, stamp.Forwarder, 1, stamp.ForwarderTag, offset);
+            NoteForwardLocked(stamp.LeafId, stamp.Forwarder2, 2, stamp.ForwarderTag2, offset);
+            NoteForwardLocked(stamp.LeafId, stamp.Forwarder3, 3, stamp.ForwarderTag3, offset);
             authors = _leafAuthors.TryGetValue(stamp.LeafId, out var current) ? current : authors;
         }
 
@@ -157,7 +158,7 @@ internal sealed partial class WalShardGrain
     /// no activation token, by the narrow that moved its key (X2). Called under
     /// <see cref="_stateGate"/>.
     /// </summary>
-    private void NoteForwardLocked(Guid author, Guid forwarder, Guid tag, long offset)
+    private void NoteForwardLocked(Guid author, Guid forwarder, int hop, Guid tag, long offset)
     {
         if (forwarder == Guid.Empty || forwarder == author)
         {
@@ -174,7 +175,7 @@ internal sealed partial class WalShardGrain
             authors = LeafAuthors.Empty;
         }
 
-        _leafAuthors[forwarder] = authors.WithForward(tag, offset);
+        _leafAuthors[forwarder] = authors.WithForwardHop(hop, tag, offset);
     }
 
     /// <summary>
@@ -373,6 +374,16 @@ internal sealed partial class WalShardGrain
 
             return high;
         }
+
+        /// <summary>
+        /// This table with a record the leaf forwarded at <paramref name="offset"/> noted, as
+        /// hop <paramref name="hop"/> (1-based) of the write's forward chain (#5837, F2' and
+        /// a5e2e2ef's S-b): the first hop under its narrow <paramref name="tag"/>, which only
+        /// that narrow's reader may exclude; a chain hop (2 or later) folds into the high no
+        /// reader excludes.
+        /// </summary>
+        public LeafAuthors WithForwardHop(int hop, Guid tag, long offset) =>
+            hop <= 1 ? WithForward(tag, offset) : this with { ForwardFolded = Math.Max(ForwardFolded, offset) };
 
         /// <summary>This table with a record the leaf forwarded under <paramref name="tag"/> at <paramref name="offset"/> noted.</summary>
         public LeafAuthors WithForward(Guid tag, long offset)

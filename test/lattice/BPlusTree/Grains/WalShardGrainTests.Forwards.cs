@@ -111,10 +111,12 @@ public partial class WalShardGrainTests
             Assert.That(grain.ForeignHighForTesting(Forwarder, ActivationB), Is.EqualTo(reforwarded.Offset), "the first forwarder was not attributed");
             Assert.That(grain.ForeignHighForTesting(second, ActivationB), Is.EqualTo(reforwarded.Offset), "an intermediate forwarder was not attributed");
             Assert.That(grain.ForeignHighForTesting(third, ActivationB), Is.EqualTo(reforwarded.Offset), "the immediate forwarder was not attributed");
-            Assert.That(grain.ForeignHighForTesting(second, ActivationB, NarrowTagTwo), Is.LessThan(reforwarded.Offset),
-                "a hop's own narrow was not excluded for that hop (X1 per hop)");
-            Assert.That(grain.ForeignHighForTesting(second, ActivationB, NarrowTagOne), Is.EqualTo(reforwarded.Offset),
-                "a hop excluded another hop's narrow");
+            Assert.That(grain.ForeignHighForTesting(Forwarder, ActivationB, NarrowTagOne), Is.LessThan(reforwarded.Offset),
+                "the first hop's own narrow was not excluded for it");
+            Assert.That(grain.ForeignHighForTesting(second, ActivationB, NarrowTagTwo), Is.EqualTo(reforwarded.Offset),
+                "a chain hop was excluded by its own narrow (S-b)");
+            Assert.That(grain.ForeignHighForTesting(third, ActivationB, NarrowTagThree), Is.EqualTo(reforwarded.Offset),
+                "a chain hop was excluded by its own narrow (S-b)");
         });
     }
 

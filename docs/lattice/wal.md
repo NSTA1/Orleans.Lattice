@@ -1636,8 +1636,9 @@ claimless view, and the leaf advances there by replay instead.
   leaf does not advance claimlessly.
 - **Forwards.** A write a leaf forwards to another leaf before that leaf is linked
   is attributed to every forwarder on its chain as well, up to three hops. A write
-  forwarded further is appended unstamped. Each forwarder's own forwards are left
-  out of the bound reported to it once its narrow is durable. That stops on any
+  forwarded further is appended unstamped. The first forwarder's own forwards are
+  left out of the bound reported to it once its narrow is durable; a write that
+  reached a leaf through a later hop of a chain is never left out. That stops on any
   ETag conflict on its state, and a new activation never assumes it.
 - **Transfers.** The rows a split donor moves into its sibling are appended under
   the routing generation the sibling's span was established under, attributed to
