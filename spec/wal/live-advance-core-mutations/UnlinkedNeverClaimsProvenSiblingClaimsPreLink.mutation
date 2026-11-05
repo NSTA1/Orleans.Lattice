@@ -1,0 +1,16 @@
+# #5866 B2 (a5e2e2ef, #5866 comments 6667971108 and 6668005024): the donor's bound on a
+# sibling's marker resolves only on a witness of that sibling's own link (LinkedGeneration,
+# written after its link's raise succeeded), never on a raise of the shard's routing generation,
+# which L1 makes for any link in the shard (HandOffMarkerCore.CollectPendingDonorBounds).
+MODULE: UnlinkedNeverClaimsProvenSiblingClaimsPreLink
+TARGET: UnlinkedNeverClaims
+CLASS: Invariant
+SUMMARY: a birth-proven (P1) activation claims after its donor's close and before its own link, with the donor's bound pending, instead of deferring
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE, WithLatch = TRUE, WithBirthProof = TRUE
+
+--- FIND
+LatchAdmitsClaim == ~WithLatch \/ moved \/ (eagerG /\ lat = "proven" /\ ~(birthAct /\ BoundPending))
+--- REPLACE
+\* MUTATION: the birth proof admits a claim while the bound is pending.
+LatchAdmitsClaim == ~WithLatch \/ moved \/ (eagerG /\ lat = "proven")
+--- END

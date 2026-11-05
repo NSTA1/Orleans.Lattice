@@ -1,0 +1,18 @@
+# #5851 D5 (a5e2e2ef, #5851 comment 6667620149): a write with no routing generation goes
+# unstamped in dispatch whatever the fence returns (C4), even while the writer is a deferred
+# sibling whose fence answers PreArm. Attributed to that sibling it is invisible to the owner.
+MODULE: ReadPositionHonestDeferredSiblingStampsUnrouted
+TARGET: ReadPositionHonest
+CLASS: Invariant
+PERTURBS: UnroutedAlloc
+SUMMARY: while L is deferred, an unrouted write of one of L's keys by another leaf is stamped PreArm as its deferred fence answers, so it raises neither the shared watermark nor staleHigh, and L free-advances past it unapplied
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE
+
+--- FIND
+    /\ lastU' = next
+    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, envVars>>
+--- REPLACE
+\* MUTATION: the deferred fence's PreArm is honoured for an unrouted write.
+    /\ lastU' = IF ~moved /\ (pend \/ hoOpen) /\ ~eagerG /\ ~repair THEN lastU ELSE next
+    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, envVars>>
+--- END

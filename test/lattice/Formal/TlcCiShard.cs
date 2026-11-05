@@ -590,7 +590,7 @@ internal static class TlcCiShard
 
     /// <summary>The claimless-advance variants that check the split, the forwards and their eviction (<see cref="WalLiveAdvanceCoreFreeSplitVariants"/>).</summary>
     private static readonly HashSet<string> FreeSplitVariants =
-        new(["FreeSplitBirth", "FreeSplitHint", "FreeSplitView", "FreeForwardIn", "FreeFwdExclusion", "FreeReforward", "FreeChainEvict", "FreeOrphanEvict"],
+        new(["FreeSplitBirth", "FreeSplitHint", "FreeSplitView", "FreeForwardIn", "FreeFwdExclusion", "FreeReforward", "FreeChainEvict", "FreeOrphanEvict", "FreeOtherLinkRaise"],
             StringComparer.Ordinal);
 
     /// <summary>The claimless-advance mutation targets routed to <see cref="WalLiveAdvanceCoreFreeSnapshot"/>.</summary>

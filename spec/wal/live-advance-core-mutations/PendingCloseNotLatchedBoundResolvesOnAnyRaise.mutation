@@ -1,0 +1,20 @@
+# #5866 B2 (a5e2e2ef, #5866 comments 6667971108 and 6668005024): the donor's bound on a
+# sibling's marker resolves only on a witness of that sibling's own link (LinkedGeneration,
+# written after its link's raise succeeded), never on a raise of the shard's routing generation,
+# which L1 makes for any link in the shard (HandOffMarkerCore.CollectPendingDonorBounds).
+MODULE: PendingCloseNotLatchedBoundResolvesOnAnyRaise
+TARGET: PendingCloseNotLatched
+CLASS: Invariant
+PERTURBS: OtherLinkRaise
+SUMMARY: another split's link raises the shard's generation and L's pending donor bound reads as resolved before L's own link, so the unreachable, unlinked L is latched rather than deferred (the #5851 Unreachable trickle)
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE, WithLatch = TRUE, WithOtherLinkRaise = TRUE
+
+--- FIND
+    /\ gD' = gD + 1
+    /\ UNCHANGED <<gL, pend, pendGen, moved, otherMoved, dUsed, reclaims, strayReclaims, cGen, lw>>
+--- REPLACE
+\* MUTATION: the bound reads as resolved once any link raises the shard's generation.
+    /\ gD' = gD + 1
+    /\ lw' = TRUE
+    /\ UNCHANGED <<gL, pend, pendGen, moved, otherMoved, dUsed, reclaims, strayReclaims, cGen>>
+--- END

@@ -209,6 +209,7 @@ public sealed class LiveAdvanceCompositeTests
         yield return new(C, "Claim", "ReportForeign(a)", OwnReport);
         yield return new(C, "Claim", "IF pend /\\ gD >= pendGen THEN ResolveDeferred ELSE UNCHANGED <<moveVars, hoClosedAt>>", ComposedAsResolve);
         yield return new(C, "Claim", "LatchAdmitsClaim", FreeAdvance);
+        yield return new(C, "Claim", @"dClaim' = (dClaim \/ (WithLatch /\ BoundPending))", "a ghost of C's own UnlinkedNeverClaims (#5866 B2), not a guard");
         yield return new(C, "OwnAlloc", "ReportForeign(a)", OwnReport);
         yield return new(C, "OwnAlloc", "ReportStale(a)", FreeAdvance);
         yield return new(C, "ForeignAlloc", "~WithSplitBirth", FreeAdvance);
