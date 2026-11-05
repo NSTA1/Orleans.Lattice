@@ -7,9 +7,9 @@
   "counts": {
     "invariants": 18,
     "properties": 2,
-    "actions": 51,
-    "mutations": 114,
-    "behaviourRows": 69,
+    "actions": 52,
+    "mutations": 115,
+    "behaviourRows": 70,
     "distinctStates": 2021047
   },
   "variants": {
@@ -101,6 +101,9 @@
       "distinctStates": 1
     },
     "FreeReforwardRestart": {
+      "distinctStates": 1
+    },
+    "FreeEpochOnly": {
       "distinctStates": 1
     }
   }
