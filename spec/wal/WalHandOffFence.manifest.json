@@ -26,10 +26,10 @@
       "distinctStates": 64825
     },
     "DeferredClose": {
-      "distinctStates": 1
+      "distinctStates": 3836
     },
     "StaleDonorDonorFence": {
-      "distinctStates": 1
+      "distinctStates": 2294406
     }
   }
 }

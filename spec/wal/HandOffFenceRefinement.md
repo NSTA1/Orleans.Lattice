@@ -208,10 +208,11 @@ states), so the live donor's re-arm race - it re-arms between its counted close 
 link fence, and its one probed re-claim restores it - is reachable; three epochs run out
 before the re-claim. `StaleDonorDonorFence` (#5839) checks `LiveDonorProgress` under
 #5837's rule S, where the pre-arm fence is the donor's own and adopts the bumped row
-(PENDING_DONORFENCE states). `DeferredClose` (#5839) checks the lazy key-moving close under
+(2,294,406 states). `DeferredClose` (#5839) checks the lazy key-moving close under
 pre-arm: the shard root's raise, its deferred head, and L's resolution, with the base's
 two windows so that a later window's eager close can re-claim above a pending deferred
-head (C5) - PENDING_DEFERREDCLOSE states.
+head (C5), with the tree walk off, since its range-delete generation is the tree's and not the
+shard root's routing generation the lazy close raises - 3,836 states.
 A close may choose a head below the allocator's only once a walk has gone on
 unstamped, which takes a close to reject it, so a head below an earlier close's needs a
 third close of L; the base's generations allow two. The property's mutation therefore

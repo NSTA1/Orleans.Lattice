@@ -5,7 +5,7 @@ TARGET: HandOffBound
 CLASS: Invariant
 SUMMARY: the lazy close defers L's head without raising the routing generation, so a write admitted before the close is still admitted after L's arm re-claims, above the head it recorded (mirrors C's mutation)
 PERTURBS: CloseRaise
-BOUNDS: WithPreArm = TRUE, WithDeferredClose = TRUE
+BOUNDS: WithPreArm = TRUE, WithDeferredClose = TRUE, WithTreeWalk = FALSE
 
 --- FIND
     /\ fAdmit' = FALSE

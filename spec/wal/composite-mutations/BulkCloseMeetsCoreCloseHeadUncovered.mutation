@@ -6,10 +6,10 @@ CLASS: Invariant
 SUMMARY: SwitchCloseCoversPriorAllocations is dropped, so the bulk close records a head at or below a record the range held before the birth
 
 --- FIND
-    /\ \E v \in 0..next : hoClosedAt' = v
+    /\ \E v \in 1..next : hoClosedAt' = Max2(hoClosedAt, v)
     /\ SwitchCloseCoversPriorAllocations
 
 --- REPLACE
-    /\ \E v \in 0..next : hoClosedAt' = v
+    /\ \E v \in 1..next : hoClosedAt' = Max2(hoClosedAt, v)
 
 --- END

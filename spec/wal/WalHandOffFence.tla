@@ -236,6 +236,7 @@ ForeignOpen ==
     /\ UNCHANGED <<next, author, hoClosedAt, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
     /\ UNCHANGED dVars
+    /\ dfStage = "none"
 
 (* ForeignAdmit(k): a write of kind k is admitted while the initiator      *)
 (* admits, stamped with the generation current at admission.               *)
@@ -299,6 +300,7 @@ Close ==
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
     /\ WithStaleDonor => bst = "done"
     /\ UNCHANGED dVars
+    /\ dfStage = "none"
 
 (***************************************************************************)
 (* The lazy key-moving close (#5833, #5839; WithDeferredClose, under       *)
@@ -710,7 +712,7 @@ LiveClaimDone ==
                          /\ lDead' = TRUE
                          /\ relEpoch' = Max2(relEpoch, lClaim)
                          /\ UNCHANGED <<liveArmed, lEpoch, lCached>>
-             [] relEpoch = 0 -> /\ liveArmed' = TRUE
+             [] relEpoch = 0 /\ lClaim > lEpoch -> /\ liveArmed' = TRUE
                                 /\ lEpoch' = lClaim
                                 /\ lCached' = lClaim
                                 /\ UNCHANGED <<relEpoch, lDead, lProbeFailed>>

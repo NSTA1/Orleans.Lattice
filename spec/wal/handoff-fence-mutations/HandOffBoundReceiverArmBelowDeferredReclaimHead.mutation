@@ -5,7 +5,7 @@ TARGET: HandOffBound
 CLASS: Invariant
 SUMMARY: L's arm re-claims the deferred generation but keeps the heads earlier closes recorded, below the allocator head, so a foreign record of the window lies above the marker's head (mirrors C's mutation)
 PERTURBS: ResolveDeferred
-BOUNDS: WithPreArm = TRUE, WithDeferredClose = TRUE
+BOUNDS: WithPreArm = TRUE, WithDeferredClose = TRUE, WithTreeWalk = FALSE
 
 --- FIND
     /\ fFence' = Max2(fFence, pendGen)

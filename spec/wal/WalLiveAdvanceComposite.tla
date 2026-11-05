@@ -474,7 +474,7 @@ BulkClose ==
     /\ phase = "live"
     /\ hoOpen
     /\ ~fWin
-    /\ \E v \in 0..next : hoClosedAt' = v
+    /\ \E v \in 1..next : hoClosedAt' = Max2(hoClosedAt, v)
     /\ SwitchCloseCoversPriorAllocations
     /\ hoOpen' = FALSE
     /\ broken' = broken \cup Fails("BulkCloseMeetsCoreClose", CBulkClose)

@@ -5,7 +5,7 @@ TARGET: HandOffBound
 CLASS: Invariant
 SUMMARY: L's arm resolves an older deferred head after a later window's close re-claimed above it, and lowers the entry to the deferred generation, so a write stamped below the later raise is admitted above the heads (C5; mirrors C's DeferredHeadRefusedBelowLoaded)
 PERTURBS: ResolveDeferred
-BOUNDS: WithPreArm = TRUE, WithDeferredClose = TRUE
+BOUNDS: WithPreArm = TRUE, WithDeferredClose = TRUE, WithTreeWalk = FALSE
 
 --- FIND
     /\ fFence' = Max2(fFence, pendGen)
