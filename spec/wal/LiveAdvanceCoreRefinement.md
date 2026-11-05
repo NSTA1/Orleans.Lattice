@@ -285,8 +285,8 @@ case budget:
 | `FreeFwdExclusion` | the forward-exclusion relief: two divergent narrows, a forward before or after the persist | 4,217,142 |
 | `FreeTagEvict` | the relief's WAL-side table: a tag's eviction (X6) and a WAL shard restart (X8) | 821,800 |
 | `FreeReforward` | a forward chain at depths 2, 3 and 4 against k = 3 (F2') | 1,795,034 |
-| `FreeChainRestart` | the chain with a WAL shard restart and an eviction, without the orphan's own forward: the fold of the chain's records (S-a) | PENDING_CHAINRESTART |
-| `FreeOrphanRestart` | an orphan's forward with a WAL shard restart and an eviction: the fold of the orphan's forward (S-a). Together with `FreeChainRestart` it replaces one variant combining both, which measured 46,514,214 states | PENDING_ORPHANRESTART |
+| `FreeChainEvict` | the chain with an eviction (`WithEvictAlone`: no WAL shard restart), without the orphan's own forward: the fold of the chain's records (S-a) | 1,993,821 |
+| `FreeOrphanEvict` | an orphan's forward with an eviction and no WAL shard restart: the fold of the orphan's forward (S-a). With `FreeChainEvict` it replaces one variant combining both with a restart, which measured 46,514,214 states; the chain with a restart alone measured 12,065,410, and the restart's own floors are checked in `FreeRestart` | 3,045,174 |
 | `FreeForwardIn` | the donor's pre-link forward into L and a stale D''s into another orphan (the `staleHigh` tag exclusion) | 1,032,584 |
 | `FreeEpochOnly` | a stale duplicate's epoch-only write before the link, in the donor's `staleHigh` | 712,124 |
 | `FreeSplitView` | the split's view read concurrently with the drain (V3), with a hand-off window | 512,628 |
