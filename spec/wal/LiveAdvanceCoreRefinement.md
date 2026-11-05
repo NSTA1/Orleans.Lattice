@@ -205,7 +205,7 @@ weaken each one in turn and go red, so each is load-bearing.
 | `ForwardIntoL(a)` | Before the link, L's donor forwards a new write of L's keys into L: L appends and applies it as its own, and the WAL attributes it to the donor under the empty token with the tag of the split that created L, which L's `staleHigh` excludes; the response carries the donor's `staleHigh`, as every routed response does (MF1) | `WalShardGrain`'s per-donor `staleHigh` read, excluding forwards tagged with the reader's own split. | Yes: `WalShardGrainTests.The_stale_high_excludes_only_the_forwards_of_the_split_that_created_the_receiver` and `WalShardGrainTests.A_forward_into_its_receiver_reports_the_donor_stale_high`. |
 | `StaleForwardOther` | A stale D' forwards one of L's keys into another orphan under that orphan's split tag; L's `staleHigh` counts it | The same read: only the reader's own split tag is excluded. | Yes: `WalShardGrainTests.The_stale_high_excludes_only_the_forwards_of_the_split_that_created_the_receiver`. |
 | `StaleEpochOnlyAlloc` | A stale duplicate of the donor, under a non-closing token, makes an epoch-only write of one of L's keys before the link's fence; the WAL counts it in the donor's `staleHigh` (the obligation carried from #5841, a5e2e2ef's H2) | `WalShardGrain.NoteLeafAuthorLocked` for a `WalRoutingStamp.None` append; `WalShardGrain.StaleHighLocked`. | Yes: `WalShardGrainTests.StaleHighOmitsEpochOnlyNonClosingToken`. |
-| `StaleRefreshAlloc` | The stale donor's transfer, refused as stale after L's re-claim, is refreshed at the current generation and re-admitted only while a descent for the batch's min and max keys still reaches the donor; once the key-moving close has moved them the write is forwarded instead (#5851 F1) | The stale-generation transfer refresh, `BPlusLeafGrain.TryRefreshSpanRoutingAsync`, with its reachability descent. | Yes: `BPlusLeafGrainTests.A_stale_receiver_whose_upper_keys_moved_is_never_routed`. |
+| `StaleRefreshAlloc` | The stale donor's transfer, refused as stale after L's re-claim, is refreshed at the current generation and re-admitted only while a descent for the batch's min and max keys still reaches the donor; once the key-moving close has moved them the write is forwarded instead (#5851 F1). The descent is assumed exact when it decides: a descent read while a link batch, a child link or a routing mutation is in flight, or across a moved routing sequence, is Undecided and refuses the refresh (#5876's D1 rule). `ReadPositionHonestRefreshTrustsUndecidedDescent` is red, and its mutant also breaks `SnapshotHonest` and `NoTrimPastAcked`: the GC trims the acknowledged write. Its author is a stale duplicate of the donor that still declares the old span (`StaleDonor`): after a successful refresh production re-checks the batch against the author's own declared span before the routed retry (`BPlusLeafGrain.AppendTransferAfterStaleAsync`, `BPlusLeafGrain.SplitTransferRoutingFor`), so a live donor that has narrowed falls back to unstamped, which raises the watermark L replays; only a duplicate holding the old span passes that re-check, and the model's stale author is that duplicate | The stale-generation transfer refresh, `BPlusLeafGrain.TryRefreshSpanRoutingAsync`, with its reachability descent. | Yes: `BPlusLeafGrainTests.A_stale_receiver_whose_upper_keys_moved_is_never_routed`. |
 | `ForwardMoved(a)` | It forwards a new acknowledged write of a moved key, attributed to L under the empty token and its narrow's tag, before or after its persist; a reader excludes it only when its own persisted span is that narrow (X1-X4) | `BPlusLeafGrain.TryResolveSpanForwardTarget`; `WalShardGrain.LeafAuthors.WithForwardHop` per tag, excluded in `WalShardGrain.ForeignHighLocked`. | Yes: `WalShardGrainTests.A_forwarder_excludes_only_the_forwards_of_its_own_persisted_narrow` and `WalShardGrainTests.A_stamped_append_excludes_its_own_narrow_from_the_foreign_high_it_reports`. |
 | `Stutter` | Natural termination | Not a protocol step; a stuttering successor so TLC does not report a quiescent state as a deadlock. | Not applicable: not a protocol step, so there is no production behaviour to detect. |
 
@@ -472,6 +472,23 @@ reason as the one above.
 
 ## Deliberate abstraction gaps
 
+- **The refresh's descent is exact when it decides (#5876; a5e2e2ef's D1 rule).** C's
+  `RefreshReaches` reads whether the batch's keys still reach the stale donor exactly.
+  Production's descent resolves to the routing owner, which is the key's owner or a leaf
+  that does not own it: before the link the narrowed donor still receives its moved keys
+  (359c7fd5's S2 probe: no negative descent named the owner), and while a link batch, a
+  child link or a routing mutation is in flight it can name any leaf. In C the refresh is
+  reachable only after L's re-claim of the link's generation, so after the link, where a
+  decided descent names the owner. So a descent read then, or across
+  a moved routing sequence, returns Undecided rather than a verdict, and an Undecided
+  descent refuses the refresh, gives the cut no hint and lets the orphan audit find
+  nothing. Trusting it is `ReadPositionHonestRefreshTrustsUndecidedDescent`, red here
+  against `ReadPositionHonest`, `SnapshotHonest` and `NoTrimPastAcked`. Production pins it:
+  `ShardRootGrainDescentVerdictTests.A_descent_during_a_link_batch_is_undecided`,
+  `ShardRootGrainDescentVerdictTests.A_routing_mutation_completing_mid_descent_is_undecided`,
+  `ShardRootGrainDescentVerdictTests.Every_routing_structure_mutation_site_is_bracketed`
+  and `BPlusLeafGrainTests.An_F1_refresh_during_a_link_batch_does_not_route`.
+  No production symbol: C reads reachability as exact, and the descent's verdict is a shard-root guard outside the model.
 - **Reachability is exact, with no transient verdict (#5872; a5e2e2ef's R1-R5).** C's
   `ProveReach` reads L's reachability exactly. Production may read a transient unreachable
   verdict, so it never latches on one: the leaf goes undecided, appends unstamped through a

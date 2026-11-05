@@ -1,0 +1,19 @@
+# #5876 (359c7fd5's #5872 R6 probe): during a shard-root link batch, a descent can resolve a key
+# to a leaf that does not own it. A refresh that trusts one such descent - true only while the
+# link's close is still pending on L's marker, before L's arm - treats the stale donor as still
+# reaching keys the link has moved.
+MODULE: ReadPositionHonestRefreshTrustsUndecidedDescent
+TARGET: ReadPositionHonest
+CLASS: Invariant
+PERTURBS: StaleRefreshAlloc
+SUMMARY: the refresh acts on a descent read while a link batch is in flight (Undecided under #5876's D1 rule, the link's close still pending on L's marker): a false-positive descent reports that the batch's keys still reach the stale donor; its straggler is refreshed and re-admitted above every staleHigh bound, and L advances past it unapplied
+BOUNDS: WithFreeAdvance = TRUE, WithKeyMove = TRUE, WithTransferRefresh = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+    /\ 1 < gL
+    /\ RefreshReaches
+--- REPLACE
+    /\ 1 < gL
+\* MUTATION: a descent read during the link's window may name the moved keys' old owner.
+    /\ RefreshReaches \/ (moved /\ pend)
+--- END
