@@ -442,30 +442,24 @@ reason as the one above.
   activations' (`ForwardHonestEvictionDropsForwardHigh`).
   Production symbols: `WalShardGrain.FoldLeafAuthorsLocked`, `WalShardGrain.ResetLeafAuthors`.
 - **The forward relief's assumptions and limits (#5837; a5e2e2ef's S-b, N-a to N-d).**
-  - *Chain hops are never excluded (S-b).* F2' allows each hop's reader to exclude the
-    records of the narrow its persisted span is (X1, per hop). The model counts every
-    chain record in L's `foreignHigh` (`ChainFwd`), and production does the same: a
-    chain hop's attribution is never excluded, which costs at most a replay past a
-    record the reader already applied. `LeafLiveAdvanceCoreTests.ChainHopsAreNeverExcluded`
-    pins it, so a later exclusion must come back to the model first.
-  - *Every tag folds on a tag eviction (N-c).* `EvictTag` folds every tag's forward high
-    into the floor every reader counts, not only the evicted tag's; production's table
-    folds only the evicted one, which is a subset of what the model folds, so the
-    model's fold over-approximates the floor.
-  - *The excluded forwards rest on the sibling pin (N-b).* `ReadPositionHonest`,
-    `SnapshotHonest` and `NoTrimPastAcked` skip a donor's forward of a key L no longer
-    owns. That is sound only because the record is applied by the sibling that owns
-    the key, which pins the WAL until it does (condition (c) of the split's transfer);
-    `ForwardHonest` and `SnapshotForwardHonest` check the forwards L does own.
-  - *The receiver-tag exclusion does not survive a restart's fallback (N-a).*
-    `StaleHighExcludesReceiverTag` holds while the WAL shard's per-tag table holds the
-    forward. After a WAL shard restart the table is gone and `staleHigh` falls back to
-    the start-head floor, which counts the receiver's own forwards too: the exclusion
-    is a cost relief, and the fallback only over-counts.
-  - *A reactivated reader's tag (N-d).* The reader excludes by the tag of its persisted
-    narrow, so a reactivation must read that tag from durable state that survives the
-    link (`LeafNodeState`); a reader with no durable tag counts every forward, which
-    costs a replay and never passes a record.
+  Chain hops are never excluded (S-b): F2' allows each hop's reader to exclude the records
+  of the narrow its persisted span is (X1, per hop), but the model counts every chain
+  record in L's `foreignHigh` (`ChainFwd`), and production does the same, at the cost of
+  at most a replay past a record the reader already applied;
+  `LeafLiveAdvanceCoreTests.ChainHopsAreNeverExcluded` pins it, so a later exclusion comes
+  back to the model first. `EvictTag` folds every tag's forward high into the floor every
+  reader counts (N-c), where production's table folds only the evicted tag's, a subset,
+  so the model's floor over-approximates. `ReadPositionHonest`, `SnapshotHonest` and
+  `NoTrimPastAcked` skip a donor's forward of a key L no longer owns (N-b), which is sound
+  only because the sibling that owns the key applies it and pins the WAL until it does
+  (condition (c) of the split's transfer); `ForwardHonest` and `SnapshotForwardHonest`
+  check the forwards L does own. `StaleHighExcludesReceiverTag` holds while the WAL
+  shard's per-tag table holds the forward (N-a); after a WAL shard restart the table is
+  gone and `staleHigh` falls back to the start-head floor, which counts the receiver's own
+  forwards too, so the exclusion is a cost relief and the fallback only over-counts. A
+  reactivated reader excludes by the tag of its persisted narrow (N-d), read from durable
+  state that survives the link (`LeafNodeState`); a reader with no durable tag counts
+  every forward, which costs a replay and never passes a record.
   Production symbols: `WalShardGrain.StaleHighLocked`, `LeafAppendEpochFence.PersistedNarrowTag`.
 
 - **The liveness property excludes a current activation that has fallen off the log.**

@@ -8,8 +8,8 @@ PERTURBS: Evict
 BOUNDS: WithFreeAdvance = TRUE, WithReforward = TRUE, WithOrphanForward = TRUE, WithRestart = TRUE, WithEvict = TRUE, WithMixedVersion = FALSE, MaxWindows = 0
 
 --- FIND
-LeafAttributed == {OrphanFwd, FwdD, ChainFwd}
+    /\ evFloor' = Max({evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \cup LeafAttributed})
 --- REPLACE
 \* MUTATION: the eviction does not fold ChainFwd.
-LeafAttributed == {OrphanFwd, FwdD}
+    /\ evFloor' = Max({evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \cup (LeafAttributed \ {ChainFwd})})
 --- END

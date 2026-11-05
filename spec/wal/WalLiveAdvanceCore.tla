@@ -971,7 +971,7 @@ Straggler(a) ==
     /\ ReportStale(a)
     /\ UNCHANGED <<durable, acked, floor, up, rp, mine, snapCov, snapRows, epochVars, handVars>>
     /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected, envVars, moveVars>>
-    /\ UNCHANGED <<preArm, startHead, evStart, evFloor, sHi, ft, sh, sibHint, sibRows, dNarrowed, dKnown, dResumed, latchVars, svVars>>
+    /\ UNCHANGED <<preArm, startHead, evStart, evFloor, sHi, ft, sh, sibHint, sibRows, dNarrowed, dKnown, dResumed, latchVars, svVars, chVars>>
 
 (***************************************************************************)
 (* An orphan's forward (#5837, condition 4; WithOrphanForward). The stale  *)
@@ -1537,7 +1537,10 @@ RepairLatches == WithLatch => (repair /\ tried /\ ~moved => lat = "latched")
 PendingCloseNotLatched == WithLatch => (lat = "latched" => moved \/ ~pend \/ eagerG \/ repair)
 
 (* A split-born L is eventually linked (#5837, transfer condition (b)).    *)
-SplitEventuallyLinked == WithSplitBirth /\ WithKeyMove => <>moved
+(* Written as one eventuality, so that under constants that switch the   *)
+(* split off it is not folded into a constant TRUE, which TLC refuses as  *)
+(* a tautology.                                                           *)
+SplitEventuallyLinked == <>(moved \/ ~(WithSplitBirth /\ WithKeyMove))
 
 (* The widened excuse is for duplicates only: a sole running activation    *)
 (* never falls off the log, since the GC never trims past its own pin.     *)
