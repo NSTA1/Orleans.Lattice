@@ -123,10 +123,10 @@ public partial class BPlusLeafGrainTests
     }
 
     private static async Task<(BPlusLeafGrain Grain, FakePersistentState<LeafNodeState> State, IBPlusLeafGrain Sibling, LiveAdvanceRig Rig)>
-        PreArmSplitAsync(WalSplitCut cut, long frontier, Action<LiveAdvanceRig>? configure = null, Action<FakePersistentState<LeafNodeState>, LiveAdvanceRig>? onState = null)
+        PreArmSplitAsync(WalSplitCut cut, long frontier, Action<LiveAdvanceRig>? configure = null, Action<FakePersistentState<LeafNodeState>, LiveAdvanceRig>? onState = null, Action<FakePersistentState<LeafNodeState>>? beforeLastWrite = null)
     {
         var rig = PreArmRig();
-        rig.Shard.GetSplitCutAsync(Arg.Any<WalAppendStamp>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(cut));
+        rig.Shard.GetSplitCutAsync(Arg.Any<WalAppendStamp>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(cut));
         configure?.Invoke(rig);
         var siblingContext = Substitute.For<IGrainContext>();
         siblingContext.GrainId.Returns(GrainId.Create("leaf", Guid.NewGuid().ToString("N")));
@@ -156,6 +156,11 @@ public partial class BPlusLeafGrainTests
         await InitialiseOwnMarkerAsync(rig);
         for (var i = 0; i < 4; i++)
         {
+            if (i == 3)
+            {
+                beforeLastWrite?.Invoke(state);
+            }
+
             await SetStampedAsync(grain, $"k{i}", "v");
         }
 
@@ -190,7 +195,7 @@ public partial class BPlusLeafGrainTests
             frontier: 30,
             configure: rig =>
             {
-                rig.Shard.When(s => s.GetSplitCutAsync(Arg.Any<WalAppendStamp>(), Arg.Any<CancellationToken>())).Do(_ => order.Add("cut"));
+                rig.Shard.When(s => s.GetSplitCutAsync(Arg.Any<WalAppendStamp>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())).Do(_ => order.Add("cut"));
                 rig.ShardRoot.When(s => s.GetLiveAdvanceViewAsync(Arg.Any<GrainId>(), Arg.Any<string?>(), Arg.Any<string?>())).Do(_ => order.Add("view"));
             });
 

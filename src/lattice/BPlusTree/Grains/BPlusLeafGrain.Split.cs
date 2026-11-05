@@ -1189,9 +1189,14 @@ internal sealed partial class BPlusLeafGrain
             {
                 var partitions = Math.Max(1, (await GetOptionsAsync()).WalPartitions);
                 var reads = new Task<WalSplitCut>[partitions];
+
+                // K2, K4 (#5851): the range this leaf owns now, read in the same turn as the
+                // cut: the whole pre-split range, which both halves' hints are taken over.
+                var low = state.State.LowKeyInclusive;
+                var high = state.State.HighKeyExclusive;
                 for (var p = 0; p < partitions; p++)
                 {
-                    reads[p] = grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{p}").GetSplitCutAsync(reader, CancellationToken.None);
+                    reads[p] = grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{p}").GetSplitCutAsync(reader, low, high, CancellationToken.None);
                 }
 
                 var cut = await Task.WhenAll(reads);

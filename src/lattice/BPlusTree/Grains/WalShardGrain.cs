@@ -447,6 +447,7 @@ internal sealed partial class WalShardGrain(
         // Epic #5605: everything below the recovered head may have been appended
         // unstamped before this activation, so the watermark restarts just below it.
         _unstampedWatermark = _nextOffset - 1;
+        ResetUnstampedKeys(_nextOffset);
         ResetLeafAuthors(_nextOffset);
         _highestStored = highest;
         InitializeClockFloor();
@@ -903,6 +904,7 @@ internal sealed partial class WalShardGrain(
                 if (RaisesUnstampedWatermark(TShape.Stamped, in stamp, in entry))
                 {
                     _unstampedWatermark = offset;
+                    NoteUnstampedKeyLocked(in entry, offset);
                     terminalMisuse = TShape.Stamped && stamp.IsCoordinatorTerminal;
                 }
                 _pendingSegments.Add(segment);
@@ -1238,6 +1240,7 @@ internal sealed partial class WalShardGrain(
                         if (RaisesUnstampedWatermark(TShape.Stamped, in stamp, entries[i]))
                         {
                             _unstampedWatermark = offset;
+                            NoteUnstampedKeyLocked(entries[i], offset);
                             if (TShape.Stamped && stamp.IsCoordinatorTerminal)
                             {
                                 terminalMisuses++;
@@ -3169,6 +3172,7 @@ internal sealed partial class WalShardGrain(
         // Epic #5605: everything below the recovered head may have been appended
         // unstamped before this activation, so the watermark restarts just below it.
         _unstampedWatermark = _nextOffset - 1;
+        ResetUnstampedKeys(_nextOffset);
         ResetLeafAuthors(_nextOffset);
         _highestStored = highest;
         InitializeClockFloor();

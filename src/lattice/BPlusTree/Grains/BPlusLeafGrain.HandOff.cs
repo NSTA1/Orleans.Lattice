@@ -424,7 +424,7 @@ internal sealed partial class BPlusLeafGrain
             var reads = new Task<WalSplitCut>[partitions];
             for (var p = 0; p < partitions; p++)
             {
-                reads[p] = grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{p}").GetSplitCutAsync(everyActivation, CancellationToken.None);
+                reads[p] = grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{p}").GetSplitCutAsync(everyActivation, null, null, CancellationToken.None);
             }
 
             var cut = await Task.WhenAll(reads);

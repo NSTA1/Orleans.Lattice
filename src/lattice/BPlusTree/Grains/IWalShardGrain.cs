@@ -336,11 +336,14 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// The consistent cut a splitting leaf reads (#5837, D4): the readable head, the
     /// highest offset an author other than <paramref name="reader"/>'s activation may have
     /// allocated for its leaf - with its persisted narrow's forwards excluded and the stale
-    /// high of each donor close it carries included - and the shared unstamped watermark,
-    /// all in one turn. A silo running an earlier build does not have it; the leaf then
-    /// reads the heads alone and caps them at its own frontier, as before.
+    /// high of each donor close it carries included - and the unstamped high for the keys
+    /// in <c>[<paramref name="lowInclusive"/>, <paramref name="highExclusive"/>)</c>
+    /// (#5851, K1-K6; both <see langword="null"/> reads every key), all in one turn. The
+    /// reader passes the range it owns, read in the same turn as the call. A silo running
+    /// an earlier build does not have it; the leaf then reads the heads alone and caps
+    /// them at its own frontier, as before.
     /// </summary>
-    Task<WalSplitCut> GetSplitCutAsync(WalAppendStamp reader, CancellationToken cancellationToken);
+    Task<WalSplitCut> GetSplitCutAsync(WalAppendStamp reader, string? lowInclusive, string? highExclusive, CancellationToken cancellationToken);
 
     /// <summary>
     /// Returns the head a reader may resume from: one past the highest sequence a

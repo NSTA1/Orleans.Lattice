@@ -12,7 +12,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// The highest offset another author may have allocated for the leaf, and the stale high
 /// of every donor close the reader carried, never below the unattributed floor.
 /// </param>
-/// <param name="UnstampedWatermark">The shared unstamped watermark.</param>
+/// <param name="UnstampedWatermark">The unstamped high for the reader's key range: the floor, and every tabled unstamped record it owns (#5851, K1-K6).</param>
 [GenerateSerializer]
 [Immutable]
 [Alias(TypeAliases.WalSplitCut)]
