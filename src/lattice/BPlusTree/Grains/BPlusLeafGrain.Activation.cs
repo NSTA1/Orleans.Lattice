@@ -2172,6 +2172,12 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private void LatchProjectionStaleDrive(int partitionCount, LeafProjectionStaleException fault)
     {
+        // PERTURBATION (#5840 review S5): the #3477 latch is disabled.
+        if (partitionCount >= 0)
+        {
+            return;
+        }
+
         var signature = ComputePersistedCheckpointSignature(partitionCount);
         if (_projectionStaleDriveLatch is { } existing
             && existing.PersistedCheckpointSignature == signature)
