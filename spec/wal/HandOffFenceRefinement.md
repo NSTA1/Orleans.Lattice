@@ -333,8 +333,11 @@ mutation directory; it was run locally against this module.
   marker's close heads, which the leaf reads with its advance), never by the
   deferred split close. A walk that writes a moved key while a deferred split close is
   pending on the receiver therefore holds it until both the range delete's window and the
-  deferred close have closed, pinned by
-  `LeafHandOffFenceIntegrationTests.A_range_delete_walk_during_a_pending_deferred_split_close_holds_the_receiver_until_both_close`.
+  deferred close have closed, pinned structurally by
+  `LeafHandOffFenceIntegrationTests.A_range_delete_walk_during_a_pending_deferred_split_close_holds_the_receiver_until_both_close`
+  (the close records real post-walk heads, which every receiver's view carries) and behaviourally by
+  `BPlusLeafGrainTests.A_range_delete_walk_during_a_pending_deferred_split_close_holds_the_live_advance_until_both_close`
+  (the walk's close head alone holds the advance once the deferred close resolves).
   Production symbols: `ShardRootGrain.CloseDeferredSplitHandOffsAsync`, `TreeRangeDeleteFenceGrain`, `HandOffMarkerCore.HeadAt`.
 
 - **#5841: the Dekker pair's storage assumption.** The fix rests on each side's write
