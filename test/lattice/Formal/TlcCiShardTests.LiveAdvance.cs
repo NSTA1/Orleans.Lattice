@@ -35,13 +35,15 @@ public sealed partial class TlcCiShardTests
     }
 
     /// <summary>
-    /// <c>WalLiveAdvanceCore</c>'s cases go to its own shard with its base, except the
-    /// claimless advance's (#5837): the mutations that raise <c>WithFreeAdvance</c>, whose
-    /// controls the base cannot serve, with its smallest variants in one shard, and its
-    /// larger variants in another.
+    /// <c>WalLiveAdvanceCore</c>'s base keeps every mutation whose full-bound control it
+    /// serves: each one that does not raise <c>WithFreeAdvance</c>. Its other cases, which
+    /// together outran one CI leg, are spread over shards that each keep their shared
+    /// controls in one process: its variants without the claimless advance by arm, the
+    /// claimless advance's (#5837) mutations by target, and its claimless variants by size
+    /// and family.
     /// </summary>
     [Test]
-    public void Live_advance_core_routes_its_claimless_cases_apart_and_the_rest_with_its_base()
+    public void Live_advance_core_routes_its_claimless_cases_and_variants_apart_and_the_rest_with_its_base()
     {
         var module = Module("WalLiveAdvanceCore");
         var mutations = module.LoadMutations();
@@ -49,23 +51,42 @@ public sealed partial class TlcCiShardTests
         var rest = mutations.Except(free).ToArray();
         var freeVariants = module.Manifest.Variants.Keys.Where(variant => variant.StartsWith("Free", StringComparison.Ordinal)).ToArray();
         var otherVariants = module.Manifest.Variants.Keys.Except(freeVariants).ToArray();
+        string[] snapshotTargets = ["SnapshotHonest", "SnapshotForwardHonest", "SoleActivationNeverFallsOff"];
+        string[] linkTargets = ["SplitEventuallyLinked", "UnlinkedNeverClaims", "RepairLatches", "PendingCloseNotLatched", "NarrowObligated"];
+        string[] lazyArmVariants = ["KeyMove", "PreArmRestart", "PreArmBulk", "PreArmRecreate", "PreArmGateFlip"];
 
         Assert.Multiple(() =>
         {
             Assert.That(free, Is.Not.Empty);
             Assert.That(rest, Is.Not.Empty);
             Assert.That(TlcCiShard.OfModule(module), Is.EqualTo(TlcCiShard.WalLiveAdvanceCore));
-            Assert.That(otherVariants.Select(variant => TlcCiShard.OfVariant(module, variant)), Is.All.EqualTo(TlcCiShard.WalLiveAdvanceCore));
+            Assert.That(otherVariants.Where(lazyArmVariants.Contains).Select(variant => TlcCiShard.OfVariant(module, variant)),
+                Has.Exactly(lazyArmVariants.Length).Items.And.All.EqualTo(TlcCiShard.WalLiveAdvanceCoreLazyVariants));
+            Assert.That(otherVariants.Where(variant => !lazyArmVariants.Contains(variant)).Select(variant => TlcCiShard.OfVariant(module, variant)),
+                Is.Not.Empty.And.All.EqualTo(TlcCiShard.WalLiveAdvanceCoreEagerVariants));
             Assert.That(rest.Select(mutation => TlcCiShard.Of(module, mutation)), Is.All.EqualTo(TlcCiShard.WalLiveAdvanceCore));
             Assert.That(rest.All(mutation => TlcCiShard.SharesBaseShard(module, mutation)), Is.True,
                 "the base must run in the mutations' process to serve their full-bound controls");
             Assert.That(free.Where(mutation => mutation.Target == "ReadPositionHonest").Select(mutation => TlcCiShard.Of(module, mutation)),
                 Is.Not.Empty.And.All.EqualTo(TlcCiShard.WalLiveAdvanceCoreFreeReadPosition));
-            Assert.That(free.Where(mutation => mutation.Target != "ReadPositionHonest").Select(mutation => TlcCiShard.Of(module, mutation)),
+            Assert.That(free.Where(mutation => snapshotTargets.Contains(mutation.Target)).Select(mutation => TlcCiShard.Of(module, mutation)),
+                Is.Not.Empty.And.All.EqualTo(TlcCiShard.WalLiveAdvanceCoreFreeSnapshot));
+            Assert.That(free.Where(mutation => linkTargets.Contains(mutation.Target)).Select(mutation => TlcCiShard.Of(module, mutation)),
+                Is.Not.Empty.And.All.EqualTo(TlcCiShard.WalLiveAdvanceCoreFreeLink));
+            Assert.That(free.Where(mutation => mutation.Target != "ReadPositionHonest" && !snapshotTargets.Contains(mutation.Target) && !linkTargets.Contains(mutation.Target))
+                    .Select(mutation => TlcCiShard.Of(module, mutation)),
                 Is.Not.Empty.And.All.EqualTo(TlcCiShard.WalLiveAdvanceCoreFree));
             Assert.That(freeVariants.Select(variant => TlcCiShard.OfVariant(module, variant)),
-                Is.All.AnyOf(TlcCiShard.WalLiveAdvanceCoreFree, TlcCiShard.WalLiveAdvanceCoreFreeVariants));
-            foreach (var category in new[] { TlcCiShard.WalLiveAdvanceCore, TlcCiShard.WalLiveAdvanceCoreFree, TlcCiShard.WalLiveAdvanceCoreFreeReadPosition, TlcCiShard.WalLiveAdvanceCoreFreeVariants })
+                Is.All.AnyOf(TlcCiShard.WalLiveAdvanceCoreFree, TlcCiShard.WalLiveAdvanceCoreFreeVariants, TlcCiShard.WalLiveAdvanceCoreFreeSplitVariants));
+            Assert.That(freeVariants.Select(variant => TlcCiShard.OfVariant(module, variant)).Distinct().Count(), Is.EqualTo(3),
+                "each claimless variant shard holds at least one variant");
+            foreach (var category in new[]
+            {
+                TlcCiShard.WalLiveAdvanceCore, TlcCiShard.WalLiveAdvanceCoreEagerVariants, TlcCiShard.WalLiveAdvanceCoreLazyVariants,
+                TlcCiShard.WalLiveAdvanceCoreFree, TlcCiShard.WalLiveAdvanceCoreFreeSnapshot, TlcCiShard.WalLiveAdvanceCoreFreeLink,
+                TlcCiShard.WalLiveAdvanceCoreFreeReadPosition,
+                TlcCiShard.WalLiveAdvanceCoreFreeVariants, TlcCiShard.WalLiveAdvanceCoreFreeSplitVariants,
+            })
             {
                 Assert.That(LatticeShards().Single(shard => shard.Categories.Contains(category)).Tiers, Is.EqualTo(new[] { "deterministic" }), category);
             }
