@@ -29,7 +29,8 @@ public sealed class LiveAdvanceCompositeTests
     private const string Bound = "a model bound, not an assumption about another module";
 
     private const string FloorOnly = "the read-only cold load's floor-only mark (#5833, C1), which the composite does not yet compose";
-    private const string LazyArm = "the lazy arm (#5833), which the composite does not yet compose";
+    private const string OwnReport = "C's report of the WAL shard's foreignHigh to its own activations (#5833), assumed of no other module";
+    private const string ComposedAsResolve = "composed as the composite's ResolveDeferred step, checked by DeferredCloseMeetsCoreResolve (#5839)";
     private const string Effect = "an effect the composite's own step performs; the edge checks what is admitted, not how it is recorded";
 
     private static readonly Regex Definition = new(
@@ -114,6 +115,7 @@ public sealed class LiveAdvanceCompositeTests
         yield return Whole("MarkerReadsClosed", H, "MarkerReadsClosed", None);
         yield return Whole("HandOffBound", H, "HandOffBound", R("Stamped", "{Foreign}"));
         yield return Whole("CloseHeads", H, "CloseHeads", R("Stamped", "{Foreign}"));
+        yield return Whole("DeferredHeadAtRaisedGeneration", H, "DeferredHeadAtRaisedGeneration", R("fEpoch", "epoch[\"F\"]"));
         yield return new("CloseHeadMonotone", H, "CloseHeadMonotone", CopyShape.ActionProperty, [], None);
         yield return Of("HAllocGuard", H, "ForeignAlloc", None, "fstamp >= fFence");
 
@@ -133,6 +135,8 @@ public sealed class LiveAdvanceCompositeTests
             @"stale' = IF cur \in Acts THEN stale \cup {cur} ELSE stale");
         yield return Of("COwnAlloc", C, "OwnAlloc", None, @"a \in up", "cur = a");
         yield return Of("CForeignAlloc", C, "ForeignAlloc", None, @"hoOpen \/ ~mInit");
+        yield return Of("CKeyMove", C, "KeyMove", R("gD + 1", "epoch'[\"F\"]"), "pend' = TRUE", "pendGen' = gD + 1");
+        yield return Of("CResolveDeferred", C, "ResolveDeferred", None, "pend' = FALSE", "hoClosedAt' = Max2(hoClosedAt, next)");
         // The composite composes the eager arm, under which a close covers foreign records
         // only; the lazy arm's bulk coverage (#5833) is not yet composed.
         yield return Of("CClose", C, "Close", R("CloseCovers", "{Foreign}"),
@@ -195,9 +199,16 @@ public sealed class LiveAdvanceCompositeTests
         yield return new(Rf, "FirstInit", "live' = [live EXCEPT ![\"s\"] = TRUE]", "R's shard-root liveness, outside the vocabulary");
 
         yield return new(C, "Claim", "claimed' = [claimed EXCEPT ![a] = TRUE]", "the composite raises cstage, from which claimed is derived");
-        yield return new(C, "Claim", "ReportForeign(a)", LazyArm);
-        yield return new(C, "Claim", "IF pend THEN ResolveDeferred ELSE UNCHANGED <<moveVars, hoClosedAt>>", LazyArm);
-        yield return new(C, "OwnAlloc", "ReportForeign(a)", LazyArm);
+        yield return new(C, "Claim", "ReportForeign(a)", OwnReport);
+        yield return new(C, "Claim", "IF pend THEN ResolveDeferred ELSE UNCHANGED <<moveVars, hoClosedAt>>", ComposedAsResolve);
+        yield return new(C, "OwnAlloc", "ReportForeign(a)", OwnReport);
+        yield return new(C, "KeyMove", "WithKeyMove", "a configuration switch");
+        yield return new(C, "KeyMove", "phase = \"live\"", "the composite's DeferredClose needs F's open window, which a live leaf's marker holds");
+        yield return new(C, "KeyMove", "~moved", "C's budget of one key-moving close, a model bound");
+        yield return new(C, "KeyMove", "moved' = TRUE", Effect);
+        yield return new(C, "KeyMove", "gD' = gD + 1", "the raise is the composite step's own effect; C raises by one, and any raise above F's generation serves");
+        yield return new(C, "ResolveDeferred", "gL' = Max2(gL, pendGen)", "the re-claim is the composite step's E claim at the partition, kept only if E's claim write admits it");
+        yield return new(C, "ResolveDeferred", "reclaims' = reclaims + (IF pendGen > gL THEN 1 ELSE 0)", "C's cost witness, outside the vocabulary");
         yield return new(Rf, "Alloc", @"fo[i] => pstamp[i] > loaded[i]", FloorOnly);
         yield return new(Rf, "FirstInit", "fo' = [fo EXCEPT ![\"s\"] = FALSE]", FloorOnly);
         yield return new(C, "OwnAlloc", "next < MaxOff", Bound);

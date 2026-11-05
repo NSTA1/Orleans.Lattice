@@ -13,7 +13,7 @@ guarantee. The design authority remains [`design/LiveAdvanceDesign.md`](design/L
 | Module | Name | Assumes | Guarantees |
 |--------|------|---------|------------|
 | E | `WalAppendEpoch` | nothing | `StaleEpochNeverAppends`, `ClaimHeadCoversPriorAppends`, `RaisedEpochUnique`, `OnlySupersededRefused`, and the entry check |
-| H | `WalHandOffFence` | E's entry check | `HandOffBound`, `AbsentMarkerHolds`, `CloseHeadMonotone` |
+| H | `WalHandOffFence` | E's entry check | `HandOffBound`, `AbsentMarkerHolds`, `CloseHeadMonotone`, `DeferredHeadAtRaisedGeneration` |
 | R | `WalRoutingFloor` | E's entry check | `StraddlerBelowInit`, `LiveGenerationAboveFloor`, `InitHeadCoversPriorAllocations` |
 | B | `WalBulkSwitch` | nothing | `BulkHintBound`, `ContestedKeyAgrees`, `SeedCovered`, `ReplacedRootRelocated`, `SwitchCloseCoversPriorAllocations` |
 | C | `WalLiveAdvanceCore` | every guarantee above | `ReadPositionHonest`, `SnapshotHonest`, `NoTrimPastAcked`, and liveness |
@@ -141,6 +141,15 @@ C models the other modules only as environment constraints:
   close and the first initialisation max-merge their heads into `closedAt`
   (`CloseHeadMonotone`). While the marker is not initialised, a foreign append may
   be allocated and a close may record any head.
+- **The lazy key-moving close** (#5833, #5839) is H's: under pre-arm the shard root
+  raises its routing generation durably, in its own turn and with no WAL claim, before
+  L's marker records the deferred head at that generation
+  (`DeferredHeadAtRaisedGeneration`), and every write it admits after the raise carries
+  a generation at or above it. A pending deferred head holds L (`HandOffBound` reads the
+  marker closed only once it is resolved), and L's arm resolves it by re-claiming the
+  raised generation, or keeping a higher loaded entry (C5), recording the allocator head
+  its claim reads. C's `KeyMove`, `Resolve` and `OtherReceiverArm` assume exactly this;
+  `DeferredCloseMeetsCoreResolve` checks it.
 - **Straddler appends** satisfy `StraddlerBelowInit`, and the first initialisation
   covers every earlier allocation (`InitHeadCoversPriorAllocations`).
 - **A bulk-born leaf's birth** satisfies `BulkHintBound` and nothing more: its read
@@ -225,3 +234,4 @@ formulas and the scope cuts.
 | R -> C | `RoutingMeetsCoreStraddler` | `RoutingMeetsCoreStraddlerUnbounded` |
 | R -> C | `RoutingMeetsCoreInit` | `RoutingMeetsCoreInitHeadUncovered` |
 | B -> C | `BulkMeetsCoreCreate` | `BulkMeetsCoreCreateHintUnbounded` |
+| H -> C | `DeferredCloseMeetsCoreResolve` | `DeferredCloseMeetsCoreResolveHeadUncovered`, `DeferredCloseMeetsCoreResolveDeferredBeforeRaise` |

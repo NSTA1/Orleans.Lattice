@@ -60,6 +60,8 @@ VARIABLES
     hoClosedAt,    \* H: the maximum of the heads the marker's closes recorded
     windows,       \* H: hand-off windows opened so far
     fWin,          \* H: the open window, if any, is F's: the bulk switch's own window is not
+    pend,          \* H: L's marker holds a deferred close head, not yet resolved (#5839)
+    pendGen,       \* H: the routing generation that deferred head resolves at
     recreated,     \* R: the tree has been purged and re-created
     legacy,        \* R: the purge finished on 10.2.0
     caught,        \* R: the re-seed catch-up ran after a 10.2.0 purge
@@ -74,7 +76,7 @@ VARIABLES
     broken         \* the edges a kept step has failed: empty unless an assumption fails
 
 eVars == <<epoch, cstage, claimHead, prior, maxClaimed, lRetired, staleAccepted, memFence, fence, retired>>
-hVars == <<mInit, hoOpen, hoClosedAt, windows, fWin>>
+hVars == <<mInit, hoOpen, hoClosedAt, windows, fWin, pend, pendGen>>
 rVars == <<recreated, legacy, caught, reinit, pGen>>
 bVars == <<phase, hint, born, cache, rp>>
 vars == <<next, author, up, dupUsed, restarted, eVars, hVars, rVars, bVars, broken>>
@@ -93,7 +95,8 @@ Edges ==
      "HandOffMeetsCoreClose",
      "RoutingMeetsCoreStraddler",
      "RoutingMeetsCoreInit",
-     "BulkMeetsCoreCreate"}
+     "BulkMeetsCoreCreate",
+     "DeferredCloseMeetsCoreResolve"}
 
 Fails(edge, ok) == IF ok THEN {} ELSE {edge}
 
@@ -118,6 +121,8 @@ TypeOK ==
     /\ hoClosedAt \in 0..MaxOff
     /\ windows \in 0..MaxWindows
     /\ fWin \in BOOLEAN
+    /\ pend \in BOOLEAN
+    /\ pendGen \in Epochs
     /\ recreated \in BOOLEAN
     /\ legacy \in BOOLEAN
     /\ caught \in BOOLEAN
@@ -144,6 +149,8 @@ Init ==
         /\ hoOpen = bulk
         /\ windows = IF bulk THEN 1 ELSE 0
     /\ fWin = FALSE
+    /\ pend = FALSE
+    /\ pendGen = 0
     /\ dupUsed = FALSE
     /\ restarted = FALSE
     /\ epoch = [c \in Claimants |-> IF c \in Inits THEN 1 ELSE 0]
@@ -204,11 +211,13 @@ RaisedEpochUnique ==
 StaleEpochNeverAppends == ~staleAccepted
 EStaleUpdate(a) == staleAccepted' = (staleAccepted \/ epoch[a] < maxClaimed \/ epoch[a] <= lRetired)
 
-\* H (WalHandOffFence): HandOffBound and CloseHeadMonotone.
-MarkerReadsClosed == mInit /\ ~hoOpen
+\* H (WalHandOffFence): HandOffBound, DeferredHeadAtRaisedGeneration and
+\* CloseHeadMonotone. F's routing generation is epoch["F"].
+MarkerReadsClosed == mInit /\ ~hoOpen /\ ~pend
 HandOffBound ==
     MarkerReadsClosed => \A o \in Offs : author[o] \in {Foreign} => o < hoClosedAt
 CloseHeadMonotone == hoClosedAt' >= hoClosedAt
+DeferredHeadAtRaisedGeneration == pend => pendGen <= epoch["F"]
 
 \* R (WalRoutingFloor): StraddlerBelowInit, over the straddler offsets.
 rAuthor == [o \in Offs |-> IF author[o] = Straddler THEN Straddler ELSE NoAuthor]
@@ -230,6 +239,7 @@ Guarantees ==
     /\ RaisedEpochUnique
     /\ StaleEpochNeverAppends
     /\ HandOffBound
+    /\ DeferredHeadAtRaisedGeneration
     /\ StraddlerBelowInit
     /\ BulkHintBound
 
@@ -276,6 +286,12 @@ COwnAlloc(a) ==
     /\ a \in up
     /\ cur = a
 CForeignAlloc == hoOpen \/ ~mInit
+CKeyMove ==
+    /\ pend' = TRUE
+    /\ pendGen' = epoch'["F"]
+CResolveDeferred ==
+    /\ pend' = FALSE
+    /\ hoClosedAt' = Max2(hoClosedAt, next)
 CClose ==
     /\ phase = "live"
     /\ hoOpen
@@ -348,6 +364,7 @@ ForeignOpen ==
     /\ fWin' = TRUE
     /\ UNCHANGED <<next, author, up, dupUsed, eVars, mInit, hoClosedAt, rVars, bVars, broken>>
     /\ UNCHANGED restarted
+    /\ UNCHANGED <<pend, pendGen>>
 
 (* ForeignAlloc: F's stamped append of a record L owns, under any stamp   *)
 (* F has held, is allocated if E's entry check admits it.                *)
@@ -383,6 +400,51 @@ Close ==
     /\ UNCHANGED <<next, author, up, dupUsed, cstage, maxClaimed, lRetired, staleAccepted, retired>>
     /\ fWin' = FALSE
     /\ UNCHANGED <<mInit, windows, rVars, bVars>>
+    /\ UNCHANGED restarted
+    /\ UNCHANGED <<pend, pendGen>>
+
+(* DeferredClose (#5839): F's lazy key-moving close under pre-arm. In its *)
+(* own turn F raises its routing generation, with no WAL claim, and the  *)
+(* window F opened closes with a deferred head at the raised generation. *)
+DeferredClose ==
+    /\ hoOpen
+    /\ fWin
+    /\ ~pend
+    /\ \E g \in 1..MaxEpoch :
+        /\ g > epoch["F"]
+        /\ epoch' = [epoch EXCEPT !["F"] = g]
+        /\ pendGen' = g
+    /\ pend' = TRUE
+    /\ hoOpen' = FALSE
+    /\ fWin' = FALSE
+    /\ broken' = broken \cup Fails("DeferredCloseMeetsCoreResolve", CKeyMove)
+    /\ UNCHANGED <<next, author, up, dupUsed, cstage, claimHead, prior, maxClaimed, lRetired, staleAccepted>>
+    /\ UNCHANGED <<memFence, fence, retired, mInit, hoClosedAt, windows, rVars, bVars>>
+    /\ UNCHANGED restarted
+
+(* ResolveDeferred(a): an activation of L arms and resolves the deferred *)
+(* head: F's generation is re-claimed at the partition if E's claim write *)
+(* admits it, or the loaded entry is kept when a later raise was already *)
+(* re-claimed there (C5); the claim reads any head, which L's marker     *)
+(* records in the same WAL turn.                                         *)
+ResolveDeferred(a) ==
+    /\ a \in up
+    /\ pend
+    /\ \E h \in 0..next :
+        /\ IF pendGen > HEntry("F")
+           THEN /\ EClaimAboveFloor("F", pendGen)
+                /\ EClaimAboveEntry("F", pendGen)
+                /\ fence' = [fence EXCEPT !["F"] = Max2(@, pendGen)]
+                /\ memFence' = [memFence EXCEPT !["F"] = pendGen]
+           ELSE /\ memFence' = [memFence EXCEPT !["F"] = HEntry("F")]
+                /\ UNCHANGED fence
+        /\ claimHead' = [claimHead EXCEPT !["F"] = h]
+        /\ hoClosedAt' = Max2(hoClosedAt, h)
+    /\ prior' = [prior EXCEPT !["F"] = Allocated]
+    /\ pend' = FALSE
+    /\ broken' = broken \cup Fails("DeferredCloseMeetsCoreResolve", CResolveDeferred)
+    /\ UNCHANGED <<next, author, up, dupUsed, epoch, cstage, maxClaimed, lRetired, staleAccepted, retired>>
+    /\ UNCHANGED <<mInit, hoOpen, windows, fWin, pendGen, rVars, bVars>>
     /\ UNCHANGED restarted
 
 (* Restart: the WAL shard restarts once and unloads every entry.         *)
@@ -429,6 +491,8 @@ Purge ==
     /\ fWin' = FALSE
     /\ UNCHANGED <<windows, legacy, caught, reinit, bVars, broken>>
     /\ UNCHANGED restarted
+    /\ pend' = FALSE
+    /\ UNCHANGED pendGen
 
 (* LegacyPurge: the purge finished on 10.2.0, which keeps every row and   *)
 (* L's marker. L's running activations are the purged incarnation's.     *)
@@ -454,6 +518,7 @@ CatchUp ==
     /\ UNCHANGED <<next, author, up, dupUsed, eVars, hoOpen, hoClosedAt, windows, fWin>>
     /\ UNCHANGED <<recreated, legacy, reinit, pGen, bVars, broken>>
     /\ UNCHANGED restarted
+    /\ UNCHANGED <<pend, pendGen>>
 
 (* StraddlerAlloc: a write S admitted before the purge, under a stamp it *)
 (* held then, is allocated after it if E's entry check admits it.        *)
@@ -494,6 +559,7 @@ FirstInit ==
     /\ UNCHANGED <<next, author, up, dupUsed, cstage, maxClaimed, lRetired, staleAccepted, retired>>
     /\ UNCHANGED <<hoOpen, windows, fWin, recreated, legacy, caught, pGen, bVars>>
     /\ UNCHANGED restarted
+    /\ UNCHANGED <<pend, pendGen>>
 
 (* Birth: the bulk switch creates L, its first activation born with any   *)
 (* read position and any of the records allocated so far.                *)
@@ -526,6 +592,8 @@ Next ==
     \/ ForeignOpen /\ Kept
     \/ ForeignAlloc /\ Kept
     \/ Close /\ Kept
+    \/ DeferredClose /\ Kept
+    \/ \E a \in Acts : ResolveDeferred(a) /\ Kept
     \/ Restart /\ Kept
     \/ \E i \in Inits : Represent(i) /\ Kept
     \/ Purge /\ Kept
@@ -555,4 +623,5 @@ HandOffMeetsCoreClose == "HandOffMeetsCoreClose" \notin broken
 RoutingMeetsCoreStraddler == "RoutingMeetsCoreStraddler" \notin broken
 RoutingMeetsCoreInit == "RoutingMeetsCoreInit" \notin broken
 BulkMeetsCoreCreate == "BulkMeetsCoreCreate" \notin broken
+DeferredCloseMeetsCoreResolve == "DeferredCloseMeetsCoreResolve" \notin broken
 =============================================================================
