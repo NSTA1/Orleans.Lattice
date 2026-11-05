@@ -137,7 +137,9 @@ lattice	formal-tlc-wal-durability-cross-silo	deterministic	2.63
 # locally on four CPUs (process affinity) at the default two TLC slots, Java
 # 17; dotnet test wall-clock including its start. Estimates until measured on CI.
 lattice	formal-tlc-wal-append-epoch	deterministic	1.05
-lattice	formal-tlc-wal-handoff-fence	deterministic	0.64
+# formal-tlc-wal-handoff-fence and -wal-live-advance-composite: measured on
+# #5862's receipt-free CI run 42092568172 (55 and 37 cases).
+lattice	formal-tlc-wal-handoff-fence	deterministic	4.62
 lattice	formal-tlc-wal-routing-floor	deterministic	0.59
 lattice	formal-tlc-wal-bulk-switch	deterministic	1.96
 # formal-tlc-wal-live-advance-core and its splits (#5837): the module's single
@@ -158,7 +160,7 @@ lattice	formal-tlc-wal-live-advance-core-free-link	deterministic	17.00
 lattice	formal-tlc-wal-live-advance-core-free-read-position	deterministic	20.38
 lattice	formal-tlc-wal-live-advance-core-free-variants	deterministic	16.00
 lattice	formal-tlc-wal-live-advance-core-free-split-variants	deterministic	16.00
-lattice	formal-tlc-wal-live-advance-composite	deterministic	0.88
+lattice	formal-tlc-wal-live-advance-composite	deterministic	1.00
 lattice	formal-tlc-rebootstrap	deterministic	15.68
 lattice	formal-tlc-atomic	deterministic	14.93
 lattice	formal-tlc-atomic-variants-1	deterministic	9.45

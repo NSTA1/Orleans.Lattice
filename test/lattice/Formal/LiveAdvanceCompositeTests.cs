@@ -137,7 +137,10 @@ public sealed class LiveAdvanceCompositeTests
         yield return Of("COwnAlloc", C, "OwnAlloc", None, @"a \in up", "cur = a");
         yield return Of("CForeignAlloc", C, "ForeignAlloc", None, @"hoOpen \/ ~mInit");
         yield return Of("CKeyMove", C, "KeyMove", R("gD + 1", "epoch'[\"F\"]"), "pend' = TRUE", "pendGen' = gD + 1");
-        yield return Of("CResolveDeferred", C, "ResolveDeferred", None, "pend' = FALSE", "hoClosedAt' = Max2(hoClosedAt, next)");
+        // The composite does not compose the claimless advance (FreeOn = FALSE), under which C's
+        // resolved head is the allocator head; with it the head is the stale high plus one (#5837).
+        yield return Of("CResolveDeferred", C, "ResolveDeferred", R("IF FreeOn THEN sHi + 1 ELSE next", "next"),
+            "pend' = FALSE", "hoClosedAt' = Max2(hoClosedAt, IF FreeOn THEN sHi + 1 ELSE next)");
         // An eager foreign close covers foreign records only; the bulk switch's close is
         // composed against the lazy arm's bulk coverage (#5833, #5839).
         yield return Of("CClose", C, "Close", R("CloseCovers", "{Foreign}"),
