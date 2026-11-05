@@ -25,6 +25,12 @@ internal static class WalForwardChain
 
     private static readonly Guid[] Overflow = [];
 
+    /// <summary>
+    /// The leaf key <paramref name="leaf"/> is attributed under: its Guid key, or empty for
+    /// a grain id that has none, whose forward is then not attributed.
+    /// </summary>
+    internal static Guid KeyOf(GrainId leaf) => leaf.TryGetGuidKey(out var key, out _) ? key : Guid.Empty;
+
     /// <summary>The chain of the call in flight, or <see langword="null"/> when it was not forwarded.</summary>
     internal static Guid[]? Current => RequestContext.Get(ContextKey) as Guid[];
 
@@ -55,6 +61,11 @@ internal static class WalForwardChain
     /// </summary>
     internal static async Task<T> ForwardAsync<T>(Guid forwarder, Guid tag, Func<Task<T>> call)
     {
+        if (forwarder == Guid.Empty)
+        {
+            return await call();
+        }
+
         var previous = RequestContext.Get(ContextKey);
         RequestContext.Set(ContextKey, Extend(previous as Guid[], forwarder, tag));
         try

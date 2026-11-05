@@ -196,8 +196,8 @@ internal sealed partial class BPlusLeafGrain
     private Task<T> ForwardedStampedOrPlainAsync<T>(
         GrainId target, WalRoutingStamp routing, Func<Task<T>> stamped, Func<Task<T>> plain) =>
         WalForwardChain.ForwardAsync(
-            context.GrainId.GetGuidKey(),
-            target.GetGuidKey(),
+            WalForwardChain.KeyOf(context.GrainId),
+            WalForwardChain.KeyOf(target),
             () => WalRoutedLeafCall.StampedOrPlainAsync(routing, stamped, plain));
 
     /// <summary>

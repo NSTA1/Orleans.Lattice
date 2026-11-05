@@ -1150,8 +1150,12 @@ internal sealed partial class BPlusLeafGrain
         LatticeMetrics.LeafSplits.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             LatticeTenantLabel.ForTree(state.State.TreeId ?? string.Empty));
-        return await CompleteSplitAsync(walHeadsAtSplit, closeHeads);
+        _splitCloseHeads = closeHeads;
+        return await CompleteSplitAsync(walHeadsAtSplit);
     }
+
+    /// <summary>The split's raw heads, handed from <c>SplitAsync</c> to the completion it starts (#5837, rule D).</summary>
+    private long[]? _splitCloseHeads;
 
     /// <summary>The sibling whose marker the intent persist's overlapped open opened (#5837, O1), until its birth.</summary>
     private GrainId? _siblingMarkerOpened;
@@ -1337,8 +1341,12 @@ internal sealed partial class BPlusLeafGrain
     /// below the heads read (issue #5760) and capped at this leaf's replay frontier
     /// (issues #5752 and #5756).
     /// </summary>
-    private async Task<SplitResult> CompleteSplitAsync(long[]? walHeadsAtSplit = null, long[]? closeHeads = null)
+    private async Task<SplitResult> CompleteSplitAsync(long[]? walHeadsAtSplit = null)
     {
+        // #5837, rule D: the raw heads of the split this activation began; a resumed
+        // division has none, and its donor closes by rule R.
+        var closeHeads = _splitCloseHeads;
+        _splitCloseHeads = null;
         using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
         // Register this completion as in flight for as long as this call is
@@ -1751,7 +1759,7 @@ internal sealed partial class BPlusLeafGrain
 
         // #5837, X4/X7: the narrow persisted with the sibling obligation, so its forwards
         // may now be left out of the foreign high this activation is reported.
-        NotePersistedNarrow(siblingId.GetGuidKey());
+        NotePersistedNarrow(WalForwardChain.KeyOf(siblingId));
 
         // Epic #5605, member 2: the span has narrowed, so admission of the moved
         // keys has stopped; the donor's epoch bump fences what it admitted before,

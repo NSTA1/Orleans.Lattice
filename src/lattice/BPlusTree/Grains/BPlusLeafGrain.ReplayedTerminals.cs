@@ -56,8 +56,8 @@ internal sealed partial class BPlusLeafGrain
                     var destination = grainFactory.GetGrain<IBPlusLeafGrain>(target);
                     await WalFenceSeamRetry.RunAsync(
                         () => WalForwardChain.ForwardAsync(
-                            context.GrainId.GetGuidKey(),
-                            target.GetGuidKey(),
+                            WalForwardChain.KeyOf(context.GrainId),
+                            WalForwardChain.KeyOf(target),
                             () => destination.ApplyPreparedReplayCommitAsync(transactionId, mutations, terminalTimestamp, remainingForwards - 1)),
                         WalFenceSeamRetry.CallerLeaf,
                         state.State.TreeId);
