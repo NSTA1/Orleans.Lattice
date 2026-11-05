@@ -105,9 +105,9 @@ internal sealed partial class WalShardGrain
     private long LeafAuthorFloorLocked(Guid leafId)
     {
         var floors = _leafAuthorBucketFloors;
-        return floors is null
-            ? _leafAuthorsFloor
-            : Math.Max(_leafAuthorsRestartFloor, floors[LeafAuthorBucket(leafId, floors.Length)]);
+        // RED PROOF (#5851, O2b): every leaf reads the floor of all buckets.
+        _ = floors;
+        return _leafAuthorsFloor;
     }
 
     /// <summary>
