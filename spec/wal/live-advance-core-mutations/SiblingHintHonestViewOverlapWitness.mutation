@@ -1,0 +1,16 @@
+# Witness for SiblingHintHonest under V3: the view read interleaves with the drain's
+# own-apply steps but stays after the heads, with the guard evaluated after the drain.
+# Red here, with FreeSplitView clean, shows the overlap is reachable.
+MODULE: SiblingHintHonestViewOverlapWitness
+TARGET: SiblingHintHonest
+CLASS: Invariant
+SUMMARY: the split's view is taken while its own appends below the heads are still undrained, so the overlap is exercised, not vacuous
+BOUNDS: WithFreeAdvance = TRUE, WithSplitHint = TRUE, WithViewOverlap = TRUE, WithDuplicate = FALSE, WithMixedVersion = FALSE
+
+--- FIND
+SiblingHintHonest ==
+    \A o \in durable : o <= sibHint => o \in sibRows
+--- REPLACE
+SiblingHintHonest ==
+    ~\E a \in Acts : svTaken[a] /\ sh[a] # -1 /\ \E o \in Offs : o < sh[a] /\ author[o] = a /\ o \notin cache[a]
+--- END

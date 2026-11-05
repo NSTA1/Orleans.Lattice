@@ -1,0 +1,13 @@
+# #5837, the claimless advance and the split hint.
+MODULE: SiblingHintHonestSplitHintOwnUnapplied
+TARGET: SiblingHintHonest
+CLASS: Invariant
+SUMMARY: the split hands the heads before the donor's own appends below them are applied
+PERTURBS: SplitCommit
+BOUNDS: WithFreeAdvance = TRUE, WithSplitHint = TRUE, WithDuplicate = FALSE, WithMixedVersion = FALSE
+
+--- FIND
+    /\ \A o \in Offs : o < sh[a] /\ author[o] = a => o \in cache[a]
+--- REPLACE
+\* MUTATION: no drain of own appends below the heads.
+--- END

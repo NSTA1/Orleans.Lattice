@@ -1,0 +1,16 @@
+# #5837: the reachability latch exemption and the split transfer's link obligation.
+MODULE: NarrowObligatedNarrowPersistedWithoutObligation
+TARGET: NarrowObligated
+CLASS: Invariant
+SUMMARY: the donor's narrow is persisted without its link obligation (#5837 transfer condition (a))
+PERTURBS: DonorNarrow
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE
+
+--- FIND
+    /\ dNarrowed' = TRUE
+    /\ oblig' = TRUE
+--- REPLACE
+    /\ dNarrowed' = TRUE
+\* MUTATION: the obligation is not written with the narrow.
+    /\ UNCHANGED oblig
+--- END

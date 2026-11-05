@@ -1,0 +1,13 @@
+# #5837: the reachability latch exemption and the split transfer's link obligation.
+MODULE: SplitEventuallyLinkedObligationNotRedriven
+TARGET: SplitEventuallyLinked
+CLASS: Temporal
+SUMMARY: only the activation that took the split drives the link; one restarted after the close does not re-drive it from the durable obligation (#5837 transfer condition (b))
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE, WithDonorRestart = TRUE
+
+--- FIND
+LinkDriven == oblig
+--- REPLACE
+\* MUTATION: the obligation is not re-driven after a restart.
+LinkDriven == oblig /\ ~lRestart
+--- END

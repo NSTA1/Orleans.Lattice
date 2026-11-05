@@ -273,7 +273,21 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardWalLiveAdvanceCore"],
-        "note": "WalLiveAdvanceCore (epic #5605, live-advance module C): base 2,021,047 states with #5833's lazy arm and the armed-newborn liveness property; the eager arm in Restart 3,052,664, GateFlip 3,373,761, Recreate 3,693,715, RecreateSurvivor 4,638,713, RecreateSurvivorMixed 1,622,161 and Bulk 1,114,185; the lazy arm in KeyMove 1,021,427 (liveness), PreArmRestart 2,262,022, PreArmBulk 2,511,745 (liveness), PreArmRecreate 2,631,557 and PreArmGateFlip 490,073; and 50 mutations co-located with their base, 62 cases. No case exceeds the 5M-state budget TlcCiShardTests pins. The leg time is to be measured on the member pull request's CI leg."
+        "note": "WalLiveAdvanceCore (epic #5605, live-advance module C): base 2,021,047 states with #5833's lazy arm and the armed-newborn liveness property; the eager arm in Restart 3,052,664, GateFlip 3,373,761, Recreate 3,693,715, RecreateSurvivor 4,638,713, RecreateSurvivorMixed 1,622,161 and Bulk 1,114,185; the lazy arm in KeyMove 1,021,427 (liveness), PreArmRestart 2,262,022, PreArmBulk 2,511,745 (liveness), PreArmRecreate 2,631,557 and PreArmGateFlip 490,073; and the mutations that do not raise WithFreeAdvance, co-located with their base. The claimless advance's cases (#5837) are in formal-tlc-wal-live-advance-core-free and formal-tlc-wal-live-advance-core-free-variants. No case exceeds the 5M-state budget TlcCiShardTests pins. Measured at 24 minutes for 62 cases on #5838's CI leg."
+      },
+      {
+        "shard": "formal-tlc-wal-live-advance-core-free",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardWalLiveAdvanceCoreFree"],
+        "note": "WalLiveAdvanceCore's mutations that raise WithFreeAdvance (#5837's claimless advance, split hint, split-born receiver, latch exemption, forwards and forward-exclusion relief), with the smallest claimless variants: FreeSplitLink 428,890 (liveness), FreeLatch 892,259, FreeOrphan 707,726, FreeRestartKeyMove 477,300 and FreeTagEvict 821,800. Each mutation's control runs its raised configuration, which the base cannot serve; the largest controls are the base with WithFreeAdvance (4,680,662 states) and the relief (4,217,142). Estimated at 15 minutes until measured on its CI leg."
+      },
+      {
+        "shard": "formal-tlc-wal-live-advance-core-free-variants",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardWalLiveAdvanceCoreFreeVariants"],
+        "note": "WalLiveAdvanceCore's larger claimless-advance variants (#5837): Free 4,680,662, FreeKeyMove 2,386,428 (liveness), FreeSplitHint 3,562,343, FreeSplitBirth 2,146,154 (liveness), FreeRestart 3,855,129, FreeRecreate 1,715,417, FreeRecreateSurvivor 4,908,025, FreeBulk 3,309,965, FreeGateFlip 1,904,304 and FreeFwdExclusion 4,217,142. About 44 minutes in total on two local workers; estimated at 18 minutes until measured on its CI leg."
       },
       {
         "shard": "formal-tlc-wal-live-advance-composite",

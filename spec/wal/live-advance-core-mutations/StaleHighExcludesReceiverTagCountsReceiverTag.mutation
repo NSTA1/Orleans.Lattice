@@ -1,0 +1,15 @@
+# #5837, the staleHigh exclusion (b6c84690; a5e2e2ef's ruling with F2'): L's staleHigh
+# excludes only its donor's forwards tagged with the split that created L.
+MODULE: StaleHighExcludesReceiverTagCountsReceiverTag
+TARGET: StaleHighExcludesReceiverTag
+CLASS: Invariant
+SUMMARY: L's staleHigh counts its donor's forwards into L itself, so every receiver that took a pre-link forward needs a replay past its own applied writes
+PERTURBS: ForwardIntoL
+BOUNDS: WithFreeAdvance = TRUE, WithForwardIn = TRUE, WithSplitBirth = TRUE, WithDonorRestart = TRUE, WithKeyMove = TRUE, WithDuplicate = FALSE, WithMixedVersion = FALSE
+
+--- FIND
+    /\ sHi' = IF StaleHighCountsTag("L") THEN next ELSE sHi
+--- REPLACE
+\* MUTATION: the receiver's own tag is not excluded.
+    /\ sHi' = next
+--- END
