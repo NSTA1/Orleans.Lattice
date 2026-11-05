@@ -194,6 +194,9 @@ internal sealed class LiveAdvanceRig
         /// <summary>When set, the next append throws it.</summary>
         public Exception? ThrowNext { get; set; }
 
+        /// <summary>Every fenced append's stamp, in order; <see langword="null"/> for one appended unstamped (#5872).</summary>
+        public List<WalAppendStamp?> Stamps { get; } = [];
+
         /// <summary>The routing the latest append was issued under (#5837, T1).</summary>
         public WalRoutingStamp LastRouting { get; private set; }
 
@@ -286,6 +289,7 @@ internal sealed class LiveAdvanceRig
             {
                 var partition = Route(entry);
                 var stamp = await fence.StampForAsync(rig.Shard, partition, cancellationToken);
+                Stamps.Add(routing.ForcesUnstamped ? null : stamp);
                 if (stamp is null || routing.ForcesUnstamped)
                 {
                     var unstamped = _next[partition]++;

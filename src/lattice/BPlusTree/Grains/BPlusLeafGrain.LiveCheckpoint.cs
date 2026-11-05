@@ -710,12 +710,17 @@ internal sealed partial class BPlusLeafGrain
                     }
                     else
                     {
-                        StopStampingUnreachable(fence);
+                        // #5872: one unreachable view is a suspicion, not a latch, unless a
+                        // structural witness backs it (R1-R4); at the split cut it means no
+                        // hint, as the null view below gives.
+                        OnUnreachableVerdict(fence, view.OrphanRepairInProgress);
                     }
                 }
 
                 return null;
             }
+
+            _appendFence?.OnReachableVerdict();
 
             if (!leafMarker.Initialised
                 && view.Initialised

@@ -2114,13 +2114,19 @@ still be handed a write by a span forward from its neighbour. If it stamped that
 the live leaf owning the same keys could advance past it unread. So before an
 activation's first epoch claim, the leaf asks its shard root, once, whether descent for
 its low key reaches it. If it does not, and no hand-off marker is open on it, the
-activation claims nothing and appends unstamped for the rest of its life: every append
-is reported to the leaves sharing the partition, whose replay applies it by key range
-before they can arm. A split sibling the parent has not yet learned of is exempt: it is
-born under its donor's open marker and admits only keys the donor has narrowed away.
-The advance tick repeats the check, and a leaf it finds unreachable with no marker open
-stops stamping the same way. If the shard root cannot be asked, the leaf appends
-unstamped and asks again after a backoff. Orphaned-leaf repair never folds an orphan's
+activation claims nothing and appends unstamped: every append is reported to the leaves
+sharing the partition, whose replay applies it by key range before they can arm. One
+such answer leaves the leaf undecided rather than latched (#5872), because descent can
+transiently miss a leaf it reaches: for a backoff the leaf appends unstamped, never
+pre-arm and never claiming, then asks again. A reachable answer proves it; a second
+unreachable answer after the backoff latches it unstamped for the rest of its life. It
+latches on the first answer when its orphan status is structural: orphan repair is
+running on its range, a reclaim has absorbed it, or a newer activation has superseded
+this one. A split sibling the parent has not yet learned of is exempt: it is born under
+its donor's open marker and admits only keys the donor has narrowed away. The advance
+tick and a split's cut repeat the check under the same rule; an unconfirmed answer at
+the cut means the split takes no birth hint from it. If the shard root cannot be asked,
+the leaf appends unstamped and asks again after a backoff. Orphaned-leaf repair never folds an orphan's
 rows; it clears an orphan only after proving every row it holds is readable from the
 reachable owner.
 
