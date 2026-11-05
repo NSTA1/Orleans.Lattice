@@ -95,15 +95,18 @@
       "distinctStates": 1795034
     },
     "FreeForwardIn": {
-      "distinctStates": 1
+      "distinctStates": 1032584
     },
     "FreeSplitView": {
       "distinctStates": 512628
     },
-    "FreeReforwardRestart": {
+    "FreeEpochOnly": {
+      "distinctStates": 712124
+    },
+    "FreeChainRestart": {
       "distinctStates": 1
     },
-    "FreeEpochOnly": {
+    "FreeOrphanRestart": {
       "distinctStates": 1
     }
   }
