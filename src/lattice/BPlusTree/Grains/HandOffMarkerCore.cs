@@ -231,10 +231,16 @@ internal static class HandOffMarkerCore
         return added;
     }
 
-    /// <summary>Whether <paramref name="close"/>'s carriage is resolved at every one of <paramref name="partitions"/> (G4).</summary>
+    /// <summary>
+    /// Whether <paramref name="close"/>'s carriage is resolved at every one of
+    /// <paramref name="partitions"/>, and at every partition it holds a head for (G4; review
+    /// N2): a caller that under-states the partition count never drops a close still
+    /// carried above it.
+    /// </summary>
     public static bool IsCarryResolvedEverywhere(HandOffClose close, int partitions)
     {
         ArgumentNullException.ThrowIfNull(close);
+        partitions = Math.Max(partitions, close.Heads.Length);
         if (close.CarryResolvedAt.Length < partitions)
         {
             return false;
@@ -291,7 +297,8 @@ internal static class HandOffMarkerCore
     /// <paramref name="head"/> (G4): every witnessed donor close of that shard still carried
     /// there, whose witness is at or below that generation, has its head there raised to
     /// <paramref name="head"/> and is resolved there - its sibling no longer carries it at
-    /// that partition. Returns whether the marker changed.
+    /// that partition. A close with no head at that partition is never resolved there, so
+    /// the bit never lands without its head (review N1). Returns whether the marker changed.
     /// </summary>
     public static bool ResolveCarried(IHandOffMarker marker, int partitions, int partition, int shardIndex, long generation, long head)
     {
@@ -303,6 +310,7 @@ internal static class HandOffMarkerCore
         {
             var (witnessShard, witness) = WitnessOf(marker, close);
             if (close.DonorLeaf == Guid.Empty
+                || partition >= close.Heads.Length
                 || close.AdmittedShard != shardIndex
                 || witnessShard != close.AdmittedShard
                 || witness <= 0

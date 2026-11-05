@@ -815,7 +815,13 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private void SetCarriedCloses(LeafAppendEpochFence fence, LeafHandOffState marker, string? low, string? high, bool boundPending)
     {
-        var partitions = Math.Max(1, _options?.WalPartitions ?? 1);
+        // Review N2: no fallback partition count; each close also counts its own heads.
+        var partitions = _options?.WalPartitions ?? 0;
+        foreach (var close in marker.Closes)
+        {
+            partitions = Math.Max(partitions, close.Heads.Length);
+        }
+
         var carried = _carriedClosesScratch ??= new List<(WalPendingClose Close, bool[] ResolvedAt)>(WalAppendStamp.MaxPendingCloses);
         carried.Clear();
         HandOffMarkerCore.CollectCarriedDonorCloses(marker, low, high, partitions, carried);

@@ -93,6 +93,35 @@ public sealed class HandOffMarkerCoreCarryTests
     }
 
     [Test]
+    public void A_partition_the_close_holds_no_head_for_is_never_resolved()
+    {
+        // Review N1: the resolved bit never lands without its head.
+        var marker = WitnessedClose();
+
+        var changed = HandOffMarkerCore.ResolveCarried(marker, 3, 2, 0, 7, 20);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(changed, Is.False, "a partition with no head was resolved");
+            Assert.That(marker.Closes.Single().CarryResolvedAt.ElementAtOrDefault(2), Is.False);
+        });
+    }
+
+    [Test]
+    public void An_under_stated_partition_count_never_drops_a_close_still_carried_above_it()
+    {
+        // Review N2: resolved at partition 0 only, read with a partition count of 1.
+        var marker = WitnessedClose();
+        HandOffMarkerCore.ResolveCarried(marker, 2, 0, 0, 7, 20);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(HandOffMarkerCore.IsCarryResolvedEverywhere(marker.Closes.Single(), 1), Is.False, "a close still carried at partition 1 read as resolved everywhere");
+            Assert.That(Carried(marker, partitions: 1), Has.Count.EqualTo(1), "an under-stated partition count dropped the close");
+        });
+    }
+
+    [Test]
     public void A_witness_from_another_shard_root_stays_carried_and_asks_for_no_arm()
     {
         // A1: a reshard or fold between the close and the link; conservative, and the
