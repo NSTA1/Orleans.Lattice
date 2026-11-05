@@ -1702,9 +1702,16 @@ Between them, either the split sees the duplicate's claim, or the duplicate sees
 narrowing. That needs the storage provider to give strong read-after-write across
 clients for both rows: a write that has completed is visible to any later read. The
 Azure Table and in-memory providers give it; a provider with session or eventual
-consistency does not. In pre-arm mode an armed live donor is fenced along with its
-duplicates when the shard root raises the row; it deactivates at its next stamped
-append and reactivates from the narrowed state, which costs latency, never data.
+consistency does not.
+
+In pre-arm mode the shard root raises the row when it links the split, which would also
+refuse the live donor's own epoch. So at the split's close the live donor drops its epoch
+and claims locally, with no I/O: its next appends go pre-arm, which the routing
+generation fences, and its next arm claims afresh, through the same write-then-read
+claim. A stamped append it had in flight at the dropped epoch is refused and retried, not
+treated as a supersession. If the donor re-arms before the link, a refusal at its new
+epoch, or a conflict on its next row write, gets one more such fresh claim per close.
+Without one, the live donor would deactivate on every split.
 The same rule stops a leaf from deactivating itself after it raises its epoch above
 a retired floor ([#5643](https://github.com/NSTA1/Orleans.Lattice/issues/5643)).
 

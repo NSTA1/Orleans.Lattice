@@ -605,6 +605,18 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         }
     }
 
+    /// <summary>RED PROOF (#5840 review S4): no relinquish, so no re-claim allowance; test seam.</summary>
+    internal int ReclaimAllowanceForTesting => 0;
+
+#pragma warning disable CS0169 // RED PROOF: never recorded.
+    private long _relinquishedEpoch;
+#pragma warning restore CS0169
+
+    /// <summary>RED PROOF (#5840 review S4): the relinquish does nothing.</summary>
+    private void RelinquishLocked()
+    {
+    }
+
     /// <summary>
     /// Counts a split close that another grain fences durably (#5841, pre-arm): the shard
     /// root raises this leaf's epoch row and claims it when it links the split. Locally,
