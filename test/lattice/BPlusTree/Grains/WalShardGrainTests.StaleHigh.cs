@@ -246,4 +246,37 @@ public partial class WalShardGrainTests
                 "the closing token's own record was counted");
         });
     }
+
+    [Test]
+    public async Task A_forward_into_the_receiver_reports_its_donor_s_stale_high()
+    {
+        // MF1 (#5837, ForwardIntoLOmitsStaleReport): the receiver's append of its donor's
+        // pre-link forward is its own routed response, and carries the stale high of the
+        // close it holds pending: a stale duplicate's forward of the receiver's key below it
+        // is reported, while the forward itself, tagged with the receiver's split, is not.
+        var grain = await CreateFencedGrainAsync(new EnumerableMemoryGrainStorage());
+        var orphan = new Guid("0f000000-0000-0000-0000-0000000000f0");
+        var stale = await grain.AppendStampedAsync(
+            MakeEntry("k"),
+            WalAppendStamp.PreArm(orphan, ActivationB) with { Initiator = PreArmRoot, Generation = 1, Forwarder = Donor, ForwarderTag = orphan },
+            CancellationToken.None);
+        var withoutClose = await grain.AppendStampedAsync(MakeEntry("k1"), PreArmStamp(ActivationA, 1) with { Forwarder = Donor, ForwarderTag = FenceLeaf }, CancellationToken.None);
+        var forwardIn = await grain.AppendStampedAsync(
+            MakeEntry("k2"),
+            PreArmStamp(ActivationA, 1) with
+            {
+                Forwarder = Donor,
+                ForwarderTag = FenceLeaf,
+                Close1 = new WalPendingClose(Donor, ClosingToken, PreArmRoot.Index, 1),
+            },
+            CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(withoutClose.UnstampedWatermark, Is.LessThan(stale.Offset),
+                "precondition: only the stale high reaches the stale duplicate's forward into another orphan");
+            Assert.That(forwardIn.UnstampedWatermark, Is.GreaterThanOrEqualTo(stale.Offset),
+                "a forward into the receiver did not report its donor's stale high");
+        });
+    }
 }

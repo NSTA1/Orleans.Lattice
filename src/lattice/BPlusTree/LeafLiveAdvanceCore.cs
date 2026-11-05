@@ -93,7 +93,8 @@ internal static class LeafLiveAdvanceCore
             && current >= closeHead - 1
             && current >= unstampedSeen;
         return armed ? ownHigh : -1L;
-    
+    }
+
     /// <summary>
     /// The claimless advance's target at a partition (#5837, <c>FreeTarget</c>): the
     /// highest own applied offset there, fixed from the tracker's snapshot before the

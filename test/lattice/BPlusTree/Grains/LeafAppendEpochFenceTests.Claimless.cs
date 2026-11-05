@@ -188,4 +188,29 @@ public sealed partial class LeafAppendEpochFenceTests
             Assert.That((movedShard, movedGeneration), Is.EqualTo((4, 2L)), "a new shard root's generation was compared with the old one's");
         });
     }
+
+    [Test]
+    public async Task A_forwarded_write_s_stamp_carries_the_pending_closes()
+    {
+        // MF1: the stamp of a forward the receiver appends carries its pending closes, so
+        // the response reports the donor's stale high like every other routed append.
+        var fence = PreArmFence();
+        fence.SetPendingCloses([CloseA]);
+        try
+        {
+            Orleans.Runtime.RequestContext.Set(WalForwardChain.ContextKey, WalForwardChain.Extend(null, CloseA.Donor, Leaf));
+
+            var stamp = await PreArmStampAsync(fence);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(stamp.Forwarder, Is.EqualTo(CloseA.Donor), "precondition: the write was forwarded");
+                Assert.That(stamp.Close1, Is.EqualTo(CloseA), "a forwarded write's stamp dropped the pending close");
+            });
+        }
+        finally
+        {
+            Orleans.Runtime.RequestContext.Clear();
+        }
+    }
 }
