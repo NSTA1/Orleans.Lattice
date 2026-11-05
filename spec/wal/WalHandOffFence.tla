@@ -42,7 +42,7 @@ EXTENDS Integers, FiniteSets
 (* across the fence gate's opening.                                        *)
 (***************************************************************************)
 CONSTANTS WithBatch, MaxWindows, WithRestart, WithTreeWalk, WithLegacyHandOff,
-          WithPreArm, WithStaleDonor, WithRearmRace, WithDeferredClose
+          WithPreArm, WithStaleDonor, WithRearmRace, WithDeferredClose, WithDonorFence
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
@@ -568,7 +568,7 @@ SplitPersist ==
     /\ hoOpen
     /\ ~sNarrowed
     /\ sNarrowed' = TRUE
-    /\ IF WithPreArm /\ (liveArmed \/ lClaim > 0)
+    /\ IF WithPreArm /\ ~WithDonorFence /\ (liveArmed \/ lClaim > 0)
        THEN /\ liveArmed' = FALSE
             /\ relEpoch' = Max2(relEpoch, Max2(lEpoch, lClaim))
             /\ lEpoch' = 0
@@ -772,7 +772,10 @@ LiveStamp ==
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
     /\ UNCHANGED hdVars
 
-(* The split's bump: whenever D's durable row exists.                      *)
+(* The split's bump: whenever D's durable row exists. Under rule S        *)
+(* (#5837, WithDonorFence) the pre-arm fence is the donor's own, run in   *)
+(* its close (the adopting FenceSplitAsync): it keeps its claim, no       *)
+(* relinquish, and adopts the bumped row into the live activation (A3).   *)
 SplitBumps(read) == read > 0
 
 SplitRowRead ==
@@ -795,7 +798,12 @@ SplitRowWrite ==
        ELSE /\ bst' = "idle"
             /\ UNCHANGED eRow
     /\ eRow' <= MaxEpoch
-    /\ UNCHANGED <<liveArmed, sNarrowed, dst, dEpoch, dpend, dstamp, bRead, dRetried, lVars>>
+    /\ IF WithDonorFence /\ liveArmed /\ eRow = bRead /\ SplitBumps(bRead)
+       THEN /\ lEpoch' = bRead + 1
+            /\ lCached' = bRead + 1
+       ELSE UNCHANGED <<lEpoch, lCached>>
+    /\ UNCHANGED <<liveArmed, sNarrowed, dst, dEpoch, dpend, dstamp, bRead, dRetried>>
+    /\ UNCHANGED <<lpend, lstamp, lUsed, relEpoch, lClaim, lAllow, lStamped, lDead, lStuck, dupRaised, lBumped, lStaleLeaf, lProbeFailed>>
     /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
     /\ UNCHANGED <<gst, gstamp, closing, gate, hfly, resumed, mInit>>
     /\ UNCHANGED hdVars

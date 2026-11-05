@@ -8,7 +8,7 @@
     "invariants": 6,
     "properties": 1,
     "actions": 37,
-    "mutations": 47,
+    "mutations": 48,
     "behaviourRows": 41,
     "distinctStates": 8826
   },
@@ -26,6 +26,9 @@
       "distinctStates": 64825
     },
     "DeferredClose": {
+      "distinctStates": 1
+    },
+    "StaleDonorDonorFence": {
       "distinctStates": 1
     }
   }
