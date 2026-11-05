@@ -92,16 +92,16 @@
       "distinctStates": 821800
     },
     "FreeReforward": {
-      "distinctStates": 0
+      "distinctStates": 1
     },
     "FreeForwardIn": {
-      "distinctStates": 0
+      "distinctStates": 1
     },
     "FreeSplitView": {
-      "distinctStates": 0
+      "distinctStates": 1
     },
     "FreeReforwardRestart": {
-      "distinctStates": 0
+      "distinctStates": 1
     }
   }
 }
