@@ -1245,9 +1245,7 @@ internal sealed partial class BPlusLeafGrain
                 HandOffMarkerCore.RequiredHead(handOff.LeafMarker, low, high, p),
                 HandOffMarkerCore.HeadAt(handOff.ShardCloseHeads, p));
             var reported = Math.Max(cut[p].ForeignHigh, cut[p].UnstampedWatermark);
-            // DO-NOT-MERGE red proof: W2 (a catch-up that passed its target is cached as passing).
-            if ((current >= closeHead - 1 && current >= reported)
-                || (_catchUpDispatched is { } cached && cached.Length == hints.Length && cached[p] >= 0 && current >= cached[p]))
+            if (current >= closeHead - 1 && current >= reported)
             {
                 hints[p] = Math.Max(hints[p], heads[p] - 1);
                 continue;

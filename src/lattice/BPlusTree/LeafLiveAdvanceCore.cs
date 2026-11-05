@@ -201,13 +201,8 @@ internal static class LeafLiveAdvanceCore
             return CatchUpBound(hasReport, reportedBound, handOffClear, closeHead, freeTarget, current, staleLatched);
         }
 
-        // DO-NOT-MERGE red proof: W4 (an open token and the folded watermark admitted).
-        return hasReport
-            && !staleLatched
-            && freeTarget > current
-            && IsConcreteCloseHold(closeHead, closesConcrete, boundPending)
-                ? Math.Max(reportedBound, closeHead - 1)
-                : -1L;
+        // DO-NOT-MERGE red proof: M0 - the trigger reverted to every close passed.
+        return -1L;
     }
 
     /// <summary>
@@ -240,10 +235,9 @@ internal static class LeafLiveAdvanceCore
             return current < reported ? reported : -1L;
         }
 
-        // DO-NOT-MERGE red proof: W4 (the watermark admitted) and W4c (the carried stale
-        // highs folded into the foreign high dropped from the target).
-        return IsConcreteCloseHold(closeHead, closesConcrete, boundPending)
-            ? Math.Max(watermark, closeHead - 1)
+        // DO-NOT-MERGE red proof: M0 - the trigger reverted to every close passed.
+        return IsConcreteCloseHold(closeHead, closesConcrete, boundPending) && current >= watermark && false
+            ? Math.Max(foreignHigh, closeHead - 1)
             : -1L;
     }
 
@@ -253,6 +247,8 @@ internal static class LeafLiveAdvanceCore
     /// bound is pending, whose stale high an unwitnessed sibling may still raise.
     /// </summary>
     private static bool IsConcreteCloseHold(long closeHead, bool closesConcrete, bool boundPending) =>
-        // DO-NOT-MERGE red proof: W3 (deferred admitted) and W4 (pending bound admitted).
-        closeHead > 0;
+        closesConcrete
+        && !boundPending
+        && closeHead > 0
+        && closeHead != Grains.HandOffMarkerCore.DeferredHead;
 }

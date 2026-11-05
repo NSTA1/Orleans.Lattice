@@ -387,25 +387,8 @@ internal sealed partial class BPlusLeafGrain
     /// catch-up read.
     /// </summary>
     private static bool AreCloseHeadsConcrete(LiveAdvanceHandOff handOff, string? low, string? high) =>
-        // DO-NOT-MERGE red proof: W3 (a close deferred anywhere admitted).
-        true;
-
-    /// <summary>DO-NOT-MERGE red proof: W1 - stamps each dispatched target after the catch-up's read.</summary>
-    private async Task StampDispatchedCatchUpTargetsForRedProofAsync()
-    {
-        if (_catchUpDispatched is not { } dispatched)
-        {
-            return;
-        }
-
-        for (var p = 0; p < dispatched.Length; p++)
-        {
-            if (dispatched[p] > GetCurrentCheckpointForPartition(p))
-            {
-                await StampCheckpointHintAsync(p, dispatched[p]);
-            }
-        }
-    }
+        !HandOffMarkerCore.HasDeferredClose(handOff.LeafMarker, low, high)
+        && !HandOffMarkerCore.AnyDeferred(handOff.ShardCloseHeads);
 
     /// <summary>
     /// Per partition, the highest catch-up target a claimless advance or a split hint was
