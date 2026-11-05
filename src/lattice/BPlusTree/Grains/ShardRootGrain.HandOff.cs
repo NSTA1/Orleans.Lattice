@@ -250,11 +250,8 @@ internal sealed partial class ShardRootGrain
         long raised;
         try
         {
-            raised = (await UpdateHandOffMarkerAsync(m =>
-            {
-                m.RoutingGeneration++;
-                return true;
-            })).RoutingGeneration;
+            // PERTURBATION (S3): the deferred closes name a generation not yet durable.
+            raised = (await LoadHandOffMarkerAsync()).RoutingGeneration + 1;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -291,6 +288,13 @@ internal sealed partial class ShardRootGrain
                 // so fence every activation of it that claimed before, before the close
                 // releases the sibling. Its later epoch-only appends to the moved keys are
                 // refused; a failure leaves the sibling unclosed and the split re-surfaces.
+                var closed = false;
+                await HandOffMarkerRows.UpdateLeafAsync(
+                    storage,
+                    sibling.GetGuidKey(),
+                    m => closed = HandOffMarkerCore.CloseDeferred(m, token, partitions.Value, ShardIndex, raised));
+
+                // PERTURBATION (S3): the donor is fenced only after the close released the sibling.
                 var donorFence = DonorSplitFenceForTesting ?? LeafSplitDuplicateFence.FenceAsync;
                 await donorFence(
                     storage,
@@ -301,11 +305,6 @@ internal sealed partial class ShardRootGrain
                     null,
                     null,
                     CancellationToken.None);
-                var closed = false;
-                await HandOffMarkerRows.UpdateLeafAsync(
-                    storage,
-                    sibling.GetGuidKey(),
-                    m => closed = HandOffMarkerCore.CloseDeferred(m, token, partitions.Value, ShardIndex, raised));
                 if (closed)
                 {
                     LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindSplit, opened: false, TreeId);
@@ -323,6 +322,12 @@ internal sealed partial class ShardRootGrain
             }
         }
 
+        // PERTURBATION (S3): the raise lands after the deferred closes it backs.
+        await UpdateHandOffMarkerAsync(m =>
+        {
+            m.RoutingGeneration++;
+            return true;
+        });
         return failed;
     }
 
@@ -485,16 +490,18 @@ internal sealed partial class ShardRootGrain
                     await RetireAbsorbedAndCaptureHeadsAsync(grainFactory, TreeId, partitions, absorbedKey);
                 }
 
-                var raised = (await UpdateHandOffMarkerAsync(m =>
-                {
-                    m.RoutingGeneration++;
-                    return true;
-                })).RoutingGeneration;
+                // PERTURBATION (S3): the survivor's deferred close is written before its raise.
+                var raised = (await LoadHandOffMarkerAsync()).RoutingGeneration + 1;
                 var closedDeferred = false;
                 await HandOffMarkerRows.UpdateLeafAsync(
                     storage,
                     survivorKey,
                     m => closedDeferred = HandOffMarkerCore.CloseDeferred(m, token, Math.Max(1, partitions), ShardIndex, raised));
+                await UpdateHandOffMarkerAsync(m =>
+                {
+                    m.RoutingGeneration++;
+                    return true;
+                });
                 if (closedDeferred)
                 {
                     LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindReclaim, opened: false, TreeId);

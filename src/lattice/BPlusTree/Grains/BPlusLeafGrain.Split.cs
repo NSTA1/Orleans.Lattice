@@ -1585,11 +1585,7 @@ internal sealed partial class BPlusLeafGrain
         // thrown deadline used to take the SplitResult below with it. The
         // caller publishes through PublishSplitDigestAsync once it has let
         // the gate go.
-        using (AwaitDiagnostics.Begin("leaf.split.persist-final", context.GrainId, splitDiag))
-        {
-            await PersistAsync();
-        }
-
+        // PERTURBATION (S3): the split fence runs before the narrowing is durable.
         // Epic #5605, member 2: the span has narrowed, so admission of the moved
         // keys has stopped; the donor's epoch bump fences what it admitted before,
         // and the sibling's marker closes with the heads (design owner, Q1). A
@@ -1598,6 +1594,12 @@ internal sealed partial class BPlusLeafGrain
         {
             await CloseSplitHandOffAsync(siblingId);
         }
+
+        using (AwaitDiagnostics.Begin("leaf.split.persist-final", context.GrainId, splitDiag))
+        {
+            await PersistAsync();
+        }
+
 
         return new SplitResult
         {

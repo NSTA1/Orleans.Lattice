@@ -551,7 +551,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                         {
                             // The epoch and the close count move in one step, so a stamp
                             // carrying the raised epoch is never read alongside the old count.
-                            _row = row;
+                            // PERTURBATION (N4, A3): the written row's ETag is not adopted.
                             _epoch = row.State.Epoch;
                             Volatile.Write(ref _handOffCloses, _handOffCloses + 1);
                         }

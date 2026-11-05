@@ -47,17 +47,10 @@ internal sealed class LeafStateCurrencyProbe
     /// <summary>Whether the durable state row still carries the activation's ETag.</summary>
     public async Task<bool> IsCurrentAsync()
     {
-        await _persistGate.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            var fresh = new GrainState<LeafNodeState>(new LeafNodeState());
-            await _storage.ReadStateAsync(LeafStateName, _grainId, fresh).ConfigureAwait(false);
-            return EtagsEqual(fresh.RecordExists ? fresh.ETag : null, _loadedEtag());
-        }
-        finally
-        {
-            _persistGate.Release();
-        }
+        // PERTURBATION (N4, A1): the read is not serialised with the activation's persists.
+        var fresh = new GrainState<LeafNodeState>(new LeafNodeState());
+        await _storage.ReadStateAsync(LeafStateName, _grainId, fresh).ConfigureAwait(false);
+        return EtagsEqual(fresh.RecordExists ? fresh.ETag : null, _loadedEtag());
     }
 
     /// <summary>Whether two ETags name the same row version, treating null and empty alike.</summary>

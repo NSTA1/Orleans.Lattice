@@ -295,12 +295,18 @@ public partial class WalShardGrainTests
         var nextSynchronous = next.IsCompletedSuccessfully;
         var stamp = await next;
 
+        // The live activation's next row write: a refusal at a partition it has not claimed
+        // (its entry already above the raised epoch) bumps the row on the activation's
+        // ETag, which must be the one the split wrote, not the one it cached before.
+        await wal.ClaimAppendEpochAsync(FenceLeaf, 5, CancellationToken.None);
+        var bumped = await live.Fence.StampForAsync(wal, 1, CancellationToken.None);
+
         Assert.Multiple(() =>
         {
-            Assert.That(live.Superseded, Is.Empty, "the split's bump conflicted on the live activation's cached ETag");
-            Assert.That(live.Fence.Epoch, Is.EqualTo(3), "the live activation did not adopt the raised epoch");
-            Assert.That(stamp?.Epoch, Is.EqualTo(3));
+            Assert.That(live.Superseded, Is.Empty, "the live activation's row write conflicted on a cached ETag and superseded it");
+            Assert.That(stamp?.Epoch, Is.EqualTo(3), "the live activation did not adopt the raised epoch");
             Assert.That(nextSynchronous, Is.True, "the live activation did not adopt the split's claim at the partition");
+            Assert.That(bumped?.Epoch, Is.EqualTo(6), "the bump after the split did not raise above the refusal");
         });
     }
 
