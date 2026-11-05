@@ -42,14 +42,14 @@ EXTENDS Integers, FiniteSets
 (* across the fence gate's opening.                                        *)
 (***************************************************************************)
 CONSTANTS WithBatch, MaxWindows, WithRestart, WithTreeWalk, WithLegacyHandOff,
-          WithPreArm, WithStaleDonor
+          WithPreArm, WithStaleDonor, WithRearmRace
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
 Kinds == IF WithBatch THEN {"point", "batch"} ELSE {"point"}
-\* One more epoch under the live donor's pre-arm, so the re-arm race (claim,
+\* WithRearmRace: one more epoch, so the live donor's re-arm race (claim,
 \* fence, probed re-claim) is reachable rather than cut off by the bound.
-MaxEpoch == IF WithStaleDonor /\ WithPreArm THEN 4 ELSE 3
+MaxEpoch == IF WithRearmRace THEN 4 ELSE 3
 Epochs == 0..MaxEpoch
 
 (* The author of an allocated offset: a stamped foreign write ("f"), a     *)
@@ -546,13 +546,17 @@ DupRetry ==
 (* other is foreign and supersedes it (MarkStale). Either way D allocates  *)
 (* nothing for it. In the eager arm the split adopts the bumped row into   *)
 (* the live activation (A3), so the stamp is below its current epoch.     *)
-(* LiveBump: a floor refusal of the pending write bumps D's row; the bump  *)
-(* is in flight and the write is re-stamped at the bump's epoch.           *)
+(* LiveBump: a floor refusal of the pending write, stamped under the live  *)
+(* donor's current epoch, bumps D's row; the bump is in flight and the     *)
+(* write is re-stamped at its epoch. A write stamped at or below the       *)
+(* relinquished epoch is never bumped: its refusal self-fences.            *)
 LiveBump ==
     /\ WithStaleDonor
     /\ WithPreArm
     /\ liveArmed
     /\ lpend
+    /\ lstamp = lEpoch
+    /\ lEpoch > relEpoch
     /\ lClaim = 0
     /\ ~lBumped
     /\ eRow < MaxEpoch

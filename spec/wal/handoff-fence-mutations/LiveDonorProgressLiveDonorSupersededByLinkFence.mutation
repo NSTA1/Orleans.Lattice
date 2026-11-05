@@ -5,7 +5,7 @@ TARGET: LiveDonorProgress
 CLASS: Invariant
 SUMMARY: a StaleEpoch at the live donor's current epoch after the link fence supersedes it, with no probed re-claim: #5840 S4 as raised
 PERTURBS: LiveStamp
-BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE
 
 --- FIND
          [] ~lAllow -> /\ eRow < MaxEpoch

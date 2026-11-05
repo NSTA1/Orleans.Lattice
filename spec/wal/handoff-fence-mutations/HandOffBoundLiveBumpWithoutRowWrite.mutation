@@ -4,7 +4,7 @@ TARGET: HandOffBound
 CLASS: Invariant
 SUMMARY: the floor refusal's bump re-stamps the write at row + 1 without writing D's row, so the split's bump does not rise above it and the write is allocated after the close
 PERTURBS: LiveBump
-BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE
 
 --- FIND
     /\ lClaim' = eRow + 1

@@ -4,7 +4,7 @@ TARGET: HandOffBound
 CLASS: Invariant
 SUMMARY: the live donor's write of a moved key, admitted before its narrow, is allocated whatever its epoch
 PERTURBS: LiveAlloc
-BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE
 
 --- FIND
     /\ lpend

@@ -156,7 +156,7 @@ design model.
 | `LiveAdmit` | The live donor admits a write of a key its span still holds, stamped with its installed epoch | `BPlusLeafGrain.StampedRouting` through `LeafAppendEpochFence.StampForAsync`. | Yes: `WalShardGrainTests.RelinquishedAppendRestamped`. |
 | `LiveAlloc` | The WAL shard allocates the live donor's stamped append at or above D's entry | `WalShardGrain.AdmitStampLocked` with `WalAppendFenceCore.IsEpochAdmitted`. | Yes: `WalShardGrainTests.RelinquishedAppendRestamped`. |
 | `LiveRefuse` | Refused below D's entry at an epoch at or below the relinquished one, or below its current epoch (R3, the `<=` form), the append self-fences and is re-admitted at its seam, where the key has moved; it is never re-stamped and appended to D. A refusal above the relinquished epoch with no current epoch is foreign and supersedes it | `LeafAppendEpochFence.OnStale`: the self-fence when `stamp.Epoch <= _relinquishedEpoch` or below `_epoch`, `MarkStale` otherwise. | Yes: `WalShardGrainTests.RelinquishedAppendRestamped` and `WalShardGrainTests.A_stale_stamp_above_the_relinquished_epoch_still_supersedes`. |
-| `LiveBump` | A floor refusal of the pending write bumps D's row + 1; the bump is in flight and the write is re-stamped at its epoch | `LeafAppendEpochFence.BumpAsync`. | Yes: `WalShardGrainTests.A_floor_refusal_of_a_write_stamped_before_the_relinquish_self_fences_and_never_bumps` and `WalShardGrainTests.RelinquishLateClaimReinstalls`. |
+| `LiveBump` | A floor refusal of the pending write, stamped under the live donor's current epoch above the relinquished one, bumps D's row + 1; the bump is in flight and the write is re-stamped at its epoch. A write stamped at or below the relinquished epoch never bumps: its refusal self-fences | `LeafAppendEpochFence.BumpAsync`. | Yes: `WalShardGrainTests.A_floor_refusal_of_a_write_stamped_before_the_relinquish_self_fences_and_never_bumps` and `WalShardGrainTests.RelinquishLateClaimReinstalls`. |
 | `LiveClaimStart` | The live donor's claim writes D's row + 1 and is in flight | `LeafAppendEpochFence.ClaimRowAsync` (or `LeafAppendEpochFence.BumpAsync`) before it installs. | Yes: `WalShardGrainTests.RelinquishLateClaimReinstalls`. |
 | `LiveClaimDone` | The claim completes and installs - unless the counted close relinquished it meanwhile, when it is discarded, installs nothing and max-merges its epoch into the relinquished epoch in the same `_sync` section (R2, R5, R6). Its probe runs on completion: a probe that finds the state stale marks the activation stale, discarded or not (R6) | `LeafAppendEpochFence.ClaimRowAsync` discarding a completion started under an older relinquish count; `LeafAppendEpochFence.BumpAsync` installing only if `_epoch == epoch`. | Yes: `WalShardGrainTests.RelinquishLateClaimReinstalls`, `WalShardGrainTests.A_claim_discarded_after_a_relinquish_that_overtook_its_row_read_is_still_recorded` and `WalShardGrainTests.A_discarded_claim_whose_leaf_state_moved_on_still_supersedes`. |
 | `LiveArm` | After the relinquish, the live donor arms again with a fresh row read, never its cached row (R1) | `LeafAppendEpochFence.ClaimRowAsync` after `LeafAppendEpochFence.RelinquishLocked` cleared `_row`. | Yes: `WalShardGrainTests.RelinquishKeepsCachedRow` and `WalShardGrainTests.A_claim_row_conflict_never_spends_the_allowance`. |
@@ -191,8 +191,13 @@ property; all six are checked on the base and re-checked in the `WideWindows` va
 The stale duplicate donor of #5841 is checked in two more variants, `StaleDonor`
 (today's eager arm, where the splitting activation has always claimed: 574,540 states)
 and `StaleDonorPreArm` (#5833's pre-arm, where it may not have, with the live donor's
-relinquish and re-claim of #5840 S4 and one more epoch: 3,521,860 states), each
-with the split's one hand-off window; the base leaves it off and keeps its count.
+relinquish, re-claim and floor bump of #5840 S4, and the WAL restart off to fit the case
+budget, which `StaleDonor` keeps on: 2,651,431 states), each with the split's one hand-off
+window; the base leaves it off and keeps its count. `StaleDonorRearmRace` adds a fourth
+epoch with the batch, the tree walk, the legacy hand-off and the restart off (64,825
+states), so the live donor's re-arm race - it re-arms between its counted close and the
+link fence, and its one probed re-claim restores it - is reachable; three epochs run out
+before the re-claim.
 A close may choose a head below the allocator's only once a walk has gone on
 unstamped, which takes a close to reject it, so a head below an earlier close's needs a
 third close of L; the base's generations allow two. The property's mutation therefore
@@ -269,8 +274,8 @@ R7: a write re-stamped at an in-flight floor bump's epoch then supersedes the li
 `HandOffBoundLiveBumpWithoutRowWrite` (`LiveBump`), and two witnesses that
 `LiveDonorProgress` is checked on real steps: `LiveDonorProgressStampsAfterFenceWitness`
 (the common order: count, link fence, fresh re-arm, stamp) and
-`LiveDonorProgressReclaimAfterRearmRaceWitness` (the donor re-arms between its count
-and the link fence, and its one probed re-claim restores it).
+`LiveDonorProgressReclaimAfterRearmRaceWitness` (in `StaleDonorRearmRace`: the donor
+re-arms between its count and the link fence, and its one probed re-claim restores it).
 
 ## Redundancy checks
 

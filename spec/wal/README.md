@@ -67,8 +67,8 @@ TLC's count for the module's own cfg. `WalDurability` searches to depth 35 and
 `WalMove` to depth 16, with tla2tools v1.7.4. `WalAppendEpoch` searches to depth
 25, and its `WideEpochs` variant finds 495,810 distinct states to depth 26.
 `WalHandOffFence` searches to depth 19, and its `WideWindows` variant finds 47,000
-distinct states to depth 23; its `StaleDonor` and `StaleDonorPreArm` variants (#5841)
-find 128,434 and 253,604. `WalRoutingFloor` searches to depth 15, and its
+distinct states to depth 23; its `StaleDonor`, `StaleDonorPreArm` and `StaleDonorRearmRace`
+variants (#5841, #5840 S4) find 574,540, 2,651,431 and 64,825. `WalRoutingFloor` searches to depth 15, and its
 `WideGenerations` variant finds 24,084 distinct states to depth 15.
 `WalLiveAdvanceCore` searches to depth 25; its variants find 3,052,664 (`Restart`,
 depth 26), 3,373,761 (`GateFlip`, depth 25), 3,693,715 (`Recreate`, depth 26),

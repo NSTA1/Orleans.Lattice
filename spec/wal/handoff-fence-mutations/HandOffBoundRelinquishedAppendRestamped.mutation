@@ -7,7 +7,7 @@ TARGET: HandOffBound
 CLASS: Invariant
 SUMMARY: a write refused at the relinquished epoch is re-stamped with a fresh claim instead of self-fencing
 PERTURBS: LiveRefuse
-BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE
 
 --- FIND
     /\ lstamp < eRow

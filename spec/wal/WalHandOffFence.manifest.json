@@ -20,7 +20,10 @@
       "distinctStates": 574540
     },
     "StaleDonorPreArm": {
-      "distinctStates": 3521860
+      "distinctStates": 2651431
+    },
+    "StaleDonorRearmRace": {
+      "distinctStates": 64825
     }
   }
 }

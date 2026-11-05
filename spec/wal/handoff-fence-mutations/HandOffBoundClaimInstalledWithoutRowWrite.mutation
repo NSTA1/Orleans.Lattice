@@ -4,7 +4,7 @@ TARGET: HandOffBound
 CLASS: Invariant
 SUMMARY: the live donor's claim installs an epoch it never wrote to D's row, so the split's bump does not rise above it and its moved-key write is allocated after the close
 PERTURBS: LiveClaimStart
-BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE
 
 --- FIND
     /\ relEpoch = 0

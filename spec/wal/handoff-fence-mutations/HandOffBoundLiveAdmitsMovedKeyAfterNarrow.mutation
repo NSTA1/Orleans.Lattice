@@ -4,7 +4,7 @@ TARGET: HandOffBound
 CLASS: Invariant
 SUMMARY: the live donor admits a write of a moved key after its narrow, under its re-armed epoch
 PERTURBS: LiveAdmit
-BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE
 
 --- FIND
     /\ liveArmed

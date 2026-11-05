@@ -6,7 +6,7 @@ TARGET: HandOffBound
 CLASS: Invariant
 SUMMARY: #5841 exactly: the claim writes row + 1 with no staleness check, and the split bumps only if its own activation claimed
 PERTURBS: ClaimCheck
-BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE
 
 --- FIND
     /\ dst' = IF sNarrowed THEN "stale" ELSE "claimed"

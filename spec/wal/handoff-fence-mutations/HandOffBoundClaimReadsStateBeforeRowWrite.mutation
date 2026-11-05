@@ -4,7 +4,7 @@ TARGET: HandOffBound
 CLASS: Invariant
 SUMMARY: the claim reads the leaf state before it writes the row, so both reads can miss the other's write
 PERTURBS: ClaimWrite, ClaimCheck
-BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE
 
 --- FIND
     /\ dst' = "wrote"

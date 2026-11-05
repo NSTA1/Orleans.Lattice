@@ -5,7 +5,7 @@ TARGET: LiveDonorProgress
 CLASS: Invariant
 SUMMARY: the relinquish records only the installed epoch, so a write re-stamped at an in-flight floor bump's epoch is refused above the relinquished epoch with no current epoch and supersedes the live donor (R7)
 PERTURBS: SplitPersist, LiveClaimDone
-BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE
 
 --- FIND
             /\ relEpoch' = Max2(relEpoch, Max2(lEpoch, lClaim))

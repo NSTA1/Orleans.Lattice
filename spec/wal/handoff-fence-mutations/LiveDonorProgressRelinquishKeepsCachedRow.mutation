@@ -4,7 +4,7 @@ TARGET: LiveDonorProgress
 CLASS: Invariant
 SUMMARY: after the relinquish the live donor's next arm writes on its cached row ETag, which the link fence has moved, and supersedes itself (R1)
 PERTURBS: LiveArm
-BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE
 
 --- FIND
          [] ~lStaleLeaf /\ (lCached = 0 \/ lCached = eRow) -> /\ eRow' = eRow + 1

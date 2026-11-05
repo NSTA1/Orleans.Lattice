@@ -5,7 +5,7 @@ MODULE: LiveDonorProgressStampsAfterFenceWitness
 TARGET: LiveDonorProgress
 CLASS: Invariant
 SUMMARY: after the relinquish and the split's link fence, the live donor re-arms and stamps an append without being superseded: the progress invariant is checked on real steps
-BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE
 
 --- FIND
 LiveDonorProgress == WithStaleDonor => ((lDead \/ lStuck) => (dupRaised \/ lStaleLeaf))

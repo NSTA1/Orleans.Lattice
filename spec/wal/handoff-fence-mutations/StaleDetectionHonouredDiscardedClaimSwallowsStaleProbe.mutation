@@ -4,7 +4,7 @@ TARGET: StaleDetectionHonoured
 CLASS: Invariant
 SUMMARY: a claim the relinquish discards drops its probe's stale finding instead of marking the activation stale (R6)
 PERTURBS: LiveClaimDone
-BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE
 
 --- FIND
         /\ CASE stale -> /\ lProbeFailed' = TRUE

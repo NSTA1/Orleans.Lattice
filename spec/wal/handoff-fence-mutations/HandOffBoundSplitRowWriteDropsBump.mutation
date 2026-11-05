@@ -4,7 +4,7 @@ TARGET: HandOffBound
 CLASS: Invariant
 SUMMARY: the split's row write records the narrow without raising the epoch, so a duplicate that claimed before it is not superseded
 PERTURBS: SplitRowWrite
-BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE
 
 --- FIND
        THEN /\ eRow' = IF SplitBumps(bRead) THEN bRead + 1 ELSE bRead

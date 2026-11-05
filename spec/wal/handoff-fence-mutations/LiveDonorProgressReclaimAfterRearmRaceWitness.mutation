@@ -5,7 +5,7 @@ MODULE: LiveDonorProgressReclaimAfterRearmRaceWitness
 TARGET: LiveDonorProgress
 CLASS: Invariant
 SUMMARY: the live donor re-arms between its count and the link fence, is refused StaleEpoch at its current epoch, takes its one probed re-claim and keeps stamping
-BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRearmRace = TRUE, WithBatch = FALSE, WithTreeWalk = FALSE, WithLegacyHandOff = FALSE, WithRestart = FALSE
 
 --- FIND
 LiveDonorProgress == WithStaleDonor => ((lDead \/ lStuck) => (dupRaised \/ lStaleLeaf))

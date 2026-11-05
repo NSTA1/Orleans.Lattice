@@ -6,7 +6,7 @@ TARGET: HandOffBound
 CLASS: Invariant
 SUMMARY: the re-run claim after a StaleEpoch refusal skips the leaf-state probe
 PERTURBS: DupRetry
-BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE
 
 --- FIND
     /\ dRetried' = TRUE
