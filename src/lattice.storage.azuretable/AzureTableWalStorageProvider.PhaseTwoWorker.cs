@@ -1025,7 +1025,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             // before completing its commits.
             //
             // A caller awaiting EnqueueAsync resumes the moment
-            // TrySetException runs below, and its Completion is created
+            // SettleFault runs below, and its Completion is created
             // with RunContinuationsAsynchronously, so it resumes on the
             // thread pool CONCURRENTLY with the remainder of this catch
             // block rather than after it. Were the discard left below

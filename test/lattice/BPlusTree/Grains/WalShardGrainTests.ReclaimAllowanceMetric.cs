@@ -9,8 +9,8 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <summary>
 /// #5843, a5e2e2ef's carried note on #5840 S4: the pre-arm split donor's re-claim allowance
 /// is counted on <c>orleans.lattice.wal.append_fence.reclaim_allowance</c> - spent on a refusal
-/// at the current epoch, spent on a bump's row conflict, or exhausted when an activation that
-/// counted a close is superseded with the allowance already spent (the liveness edge: a
+/// at the current epoch, spent on a bump's row conflict, or superseded_after_close when an
+/// activation that counted a close is superseded with the allowance already spent (the liveness edge: a
 /// duplicate's row write before the link spends it, and a re-arm that races the link fence
 /// then deactivates the live donor).
 /// </summary>
@@ -35,7 +35,7 @@ public partial class WalShardGrainTests
             }));
 
     [Test]
-    public async Task A_refusal_at_the_current_epoch_spends_the_allowance_and_a_second_counts_as_exhausted()
+    public async Task A_refusal_at_the_current_epoch_spends_the_allowance_and_a_second_counts_as_superseded_after_close()
     {
         var tree = "reclaim-allowance-" + Guid.NewGuid().ToString("N");
         var outcomes = new ConcurrentQueue<string>();
@@ -50,11 +50,11 @@ public partial class WalShardGrainTests
         await ArmAtAsync(donor, wal);
         donor.Fence.OnStale(WalAppendStamp.ForLeaf(FenceLeaf, donor.Fence.Epoch));
 
-        Assert.That(outcomes, Is.EqualTo(new[] { "spent_stale_epoch", "exhausted" }));
+        Assert.That(outcomes, Is.EqualTo(new[] { "spent_stale_epoch", "superseded_after_close" }));
     }
 
     [Test]
-    public async Task A_bumps_row_conflict_spends_the_allowance_and_a_second_counts_as_exhausted()
+    public async Task A_bumps_row_conflict_spends_the_allowance_and_a_second_counts_as_superseded_after_close()
     {
         // The carried edge: after the counted close the donor re-armed, and a duplicate's row
         // write before the link makes its next bump conflict - the allowance is spent there.
@@ -84,7 +84,7 @@ public partial class WalShardGrainTests
             Assert.That(spent!.ActivationSuperseded, Is.True);
             Assert.That(staleAfterSpend, Is.False, "precondition: the first conflict spent the allowance rather than superseding");
             Assert.That(donor.Fence.IsStale, Is.True, "precondition: the second conflict superseded the live donor");
-            Assert.That(outcomes, Is.EqualTo(new[] { "spent_row_conflict", "exhausted" }));
+            Assert.That(outcomes, Is.EqualTo(new[] { "spent_row_conflict", "superseded_after_close" }));
         });
     }
 

@@ -11569,13 +11569,14 @@ public static class LatticeMetrics
     /// a refusal at the current epoch (<see cref="ReclaimAllowanceSpentStaleEpoch"/>) or on a
     /// bump's row conflict (<see cref="ReclaimAllowanceSpentRowConflict"/>), or an activation that
     /// counted a split close superseded with the allowance already spent
-    /// (<see cref="ReclaimAllowanceExhausted"/>). The last is the liveness edge a5e2e2ef carried:
-    /// a duplicate's row write before the link spends the allowance, and a re-arm that then races
-    /// the link fence deactivates the live donor - latency, never data.
+    /// (<see cref="ReclaimAllowanceSupersededAfterClose"/>). The last counts every such supersession:
+    /// a genuine one, and the liveness edge a5e2e2ef carried - a duplicate's row write before the
+    /// link spends the allowance, and a re-arm that then races the link fence deactivates the live
+    /// donor (latency, never data).
     /// </summary>
     public static readonly Counter<long> WalAppendFenceReclaimAllowance =
         Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.reclaim_allowance", unit: "{event}",
-            description: "A pre-arm split donor's one probed re-claim per counted close (#5840 S4): spent on a refusal at its current epoch or a bump's row conflict, or exhausted when it was superseded with the allowance already spent (epic #5605), by tree and outcome.");
+            description: "A pre-arm split donor's one probed re-claim per counted close (#5840 S4): spent on a refusal at its current epoch or a bump's row conflict, or superseded_after_close when it was superseded with the allowance already spent (epic #5605), by tree and outcome.");
 
     /// <summary><see cref="TagOutcome"/> value on <see cref="WalAppendFenceReclaimAllowance"/>: spent on a refusal at the current epoch.</summary>
     public static readonly KeyValuePair<string, object?> ReclaimAllowanceSpentStaleEpoch = new(TagOutcome, "spent_stale_epoch");
@@ -11583,8 +11584,8 @@ public static class LatticeMetrics
     /// <summary><see cref="TagOutcome"/> value on <see cref="WalAppendFenceReclaimAllowance"/>: spent on a bump's row conflict.</summary>
     public static readonly KeyValuePair<string, object?> ReclaimAllowanceSpentRowConflict = new(TagOutcome, "spent_row_conflict");
 
-    /// <summary><see cref="TagOutcome"/> value on <see cref="WalAppendFenceReclaimAllowance"/>: superseded after the allowance was spent.</summary>
-    public static readonly KeyValuePair<string, object?> ReclaimAllowanceExhausted = new(TagOutcome, "exhausted");
+    /// <summary><see cref="TagOutcome"/> value on <see cref="WalAppendFenceReclaimAllowance"/>: an activation that counted a split close superseded with the allowance spent - a genuine supersession as well as the liveness edge.</summary>
+    public static readonly KeyValuePair<string, object?> ReclaimAllowanceSupersededAfterClose = new(TagOutcome, "superseded_after_close");
 
     /// <summary><see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a leaf reclaim onto its survivor.</summary>
     public const string HandOffKindReclaim = "reclaim";
