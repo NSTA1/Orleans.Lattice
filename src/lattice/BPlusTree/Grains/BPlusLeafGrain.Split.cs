@@ -1246,7 +1246,7 @@ internal sealed partial class BPlusLeafGrain
             {
                 hints[p] = Math.Max(hints[p], heads[p] - 1);
             }
-            else if (closesPassed)
+            else if (!closesPassed) // RED-PROOF M9
             {
                 // #5851, ruling 2: capped only by the cut's reported bounds, the donor owes
                 // a catch-up read so its next split can take the hint; dispatched by the tick.

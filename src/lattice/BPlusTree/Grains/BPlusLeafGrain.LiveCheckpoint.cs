@@ -353,7 +353,7 @@ internal sealed partial class BPlusLeafGrain
                     {
                         // #5851, ruling 2: held only by its reported bound, the leaf owes a
                         // catch-up read the coverage-lag tick dispatches, never this path.
-                        NoteReportedBoundCatchUp(p, ownHigh.Length, LeafLiveAdvanceCore.CatchUpBound(
+                        if (false) NoteReportedBoundCatchUp(p, ownHigh.Length, LeafLiveAdvanceCore.CatchUpBound( // RED-PROOF M8
                             hasReport: hasReport,
                             reportedBound: reportedBound,
                             handOffClear: handOff.Clear,
