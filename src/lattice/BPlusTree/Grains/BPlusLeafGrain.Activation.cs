@@ -4613,10 +4613,7 @@ internal sealed partial class BPlusLeafGrain
         // once, here at its end, under the ordinary coalescing predicate - the one the
         // coverage-lag tick also applies - so a catch-up that moved a full entry threshold
         // persists now, and a shorter one stays pending exactly as it did before.
-        if (IsResidualPendingCheckpointPersistDue(await GetOptionsAsync()))
-        {
-            await projection.FlushCheckpointAsync(cancellationToken);
-        }
+        // RED PROOF B (#5851): no end-of-catch-up bank.
 
         if (warmReplayProven && !_warmCacheTopologyChanged && _warmCacheHydrations == 1
             && !_warmCacheReplayFailed && _warmCacheReplaysInFlight == 1)

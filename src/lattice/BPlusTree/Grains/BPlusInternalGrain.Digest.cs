@@ -120,7 +120,7 @@ internal sealed partial class BPlusInternalGrain
             // Issue #5851 (O3c-1): any re-parent, re-link or merge forgets what the
             // parent was last sent, even a re-link to the same parent, which may have
             // dropped this node's row in between; the next publish is never suppressed.
-            _lastUpwardPublishParent = null;
+            // RED PROOF B (#5851): a re-link keeps the cache.
 
             if (state.State.ParentId == parentId) return;
 
@@ -783,20 +783,20 @@ internal sealed partial class BPlusInternalGrain
         // leaf's persisted checkpoint may be: an unchanged publish is re-sent once per
         // interval, which repairs one the parent parked and then lost. A zero interval
         // never suppresses. Pulls (GetChildDigestSnapshotAsync) always read current state.
+        // RED PROOF B (#5851): compare hash and count only, and ignore the interval.
         if (_lastUpwardPublishParent == parentId
-            && content.Equals(_lastUpwardPublishContent)
-            && options.MaterialiserCheckpointInterval > TimeSpan.Zero
-            && System.Diagnostics.Stopwatch.GetElapsedTime(_lastUpwardPublishTimestamp) < options.MaterialiserCheckpointInterval)
+            && (content.Hash ?? []).AsSpan().SequenceEqual(_lastUpwardPublishContent.Hash ?? [])
+            && content.EntryCount == _lastUpwardPublishContent.EntryCount)
         {
             return;
         }
 
-        _lastUpwardPublishParent = null;
-        var snapshot = content with { PublishSequence = NextDigestPublishSequence() };
-        await SendUpwardPublishAsync(parent, parentId, snapshot, options.DigestPublishTimeout);
+        // RED PROOF B (#5851): cache before the send, so a faulted publish stays cached.
         _lastUpwardPublishParent = parentId;
         _lastUpwardPublishContent = content;
         _lastUpwardPublishTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+        var snapshot = content with { PublishSequence = NextDigestPublishSequence() };
+        await SendUpwardPublishAsync(parent, parentId, snapshot, options.DigestPublishTimeout);
     }
 
     /// <summary>

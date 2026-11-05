@@ -525,7 +525,7 @@ internal sealed partial class BPlusLeafGrain
     private bool IsCheckpointPersistDue(LatticeOptions options, long pendingEntries) =>
         options.MaterialiserCheckpointInterval == TimeSpan.Zero
         || (!_bankingIncrementalReplayProgress && pendingEntries >= options.MaterialiserCheckpointEntries)
-        || HasIntervalElapsed(options.MaterialiserCheckpointInterval);
+        || (!_bankingIncrementalReplayProgress && HasIntervalElapsed(options.MaterialiserCheckpointInterval)); // RED PROOF B (#5851)
 
     /// <summary>
     /// Set while a catch-up replay records an incremental bank (issue #5851, O3a), so
