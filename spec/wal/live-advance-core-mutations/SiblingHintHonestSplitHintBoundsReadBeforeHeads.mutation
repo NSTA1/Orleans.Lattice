@@ -20,9 +20,7 @@ BOUNDS: WithFreeAdvance = TRUE, WithSplitHint = TRUE, WithDuplicate = FALSE, Wit
 
 --- FIND
     /\ sh[a] # -1
-    /\ mInit
-    /\ ~hoOpen
-    /\ rp[a] >= hoClosedAt - 1
+    /\ SplitViewClear(a)
     /\ rp[a] >= seenP[a]
     /\ rp[a] >= seenU[a]
     /\ pend => rp[a] >= seenS[a]

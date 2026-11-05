@@ -5,11 +5,11 @@
     "Stutter"
   ],
   "counts": {
-    "invariants": 17,
+    "invariants": 18,
     "properties": 2,
-    "actions": 47,
-    "mutations": 104,
-    "behaviourRows": 64,
+    "actions": 51,
+    "mutations": 111,
+    "behaviourRows": 69,
     "distinctStates": 2021047
   },
   "variants": {
@@ -90,6 +90,15 @@
     },
     "FreeTagEvict": {
       "distinctStates": 821800
+    },
+    "FreeReforward": {
+      "distinctStates": 0
+    },
+    "FreeForwardIn": {
+      "distinctStates": 0
+    },
+    "FreeSplitView": {
+      "distinctStates": 0
     }
   }
 }

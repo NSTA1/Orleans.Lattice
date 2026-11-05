@@ -1,0 +1,17 @@
+# #5837, F2' (a5e2e2ef, #5837 comment 6654962443): a forward chain's stamp carries every
+# forwarder on it, up to k, each attributed under the empty token.
+MODULE: ReadPositionHonestReforwardChainOverflowStamped
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a chain past k is stamped with its first k forwarders' worth of space but attributed only to its receiver, rather than going unstamped (C4)
+PERTURBS: ReforwardChain
+BOUNDS: WithFreeAdvance = TRUE, WithReforward = TRUE, WithOrphanForward = TRUE, WithMixedVersion = FALSE, MaxWindows = 0
+
+--- FIND
+       ELSE /\ author' = [author EXCEPT ![next] = OrphanFwdOnly]
+            /\ lastU' = next
+--- REPLACE
+\* MUTATION: the overflowing chain is stamped, so it raises no shared watermark.
+       ELSE /\ author' = [author EXCEPT ![next] = OrphanFwdOnly]
+            /\ UNCHANGED lastU
+--- END
