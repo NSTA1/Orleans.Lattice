@@ -373,11 +373,11 @@ internal sealed partial class BPlusLeafGrain
 
         // #5837, E1: the open's own row only for the split this activation began, never on a
         // recovery or a re-drive; taken once.
-        var openedRow = (Orleans.GrainState<LeafHandOffState>?)null; // RED PROOF: the open's row is never used
+        var openedRow = splitHeads is not null && _siblingMarkerRow is { } kept && kept.Sibling == siblingId ? kept.Row : null;
         _siblingMarkerRow = null;
         try
         {
-            if (openedRow is null)
+            // RED PROOF (E1): the marker is read even when the open's own row is kept.
             {
                 var marker = await HandOffMarkerRows.ReadLeafAsync(storage, siblingKey);
                 if (!marker.State.Open.ContainsKey(token))
