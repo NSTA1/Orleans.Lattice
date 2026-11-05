@@ -1,0 +1,122 @@
+using System.Text;
+using NSubstitute;
+using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Primitives;
+using Orleans.Runtime;
+
+namespace Orleans.Lattice.Tests.BPlusTree.Grains;
+
+/// <summary>
+/// The split transfer's refresh after a stale refusal (#5851, a5e2e2ef's ruling 1): a
+/// transfer refused stale re-reads its span's generation from the shard as an admission
+/// would, retries routed once, and keeps the refreshed generation for later transfers; a
+/// refresh for a span the leaf no longer owns, or an unusable generation, falls back to
+/// an unstamped append.
+/// </summary>
+public partial class BPlusLeafGrainTests
+{
+    private static readonly GrainId TransferRefreshDonor = GrainId.Create("leaf", "transfer-refresh-donor");
+
+    private static async Task<IBPlusLeafGrain> SpanBornSiblingAsync(LiveAdvanceRig rig, long spanGeneration = 3)
+    {
+        var grain = CreateGrain(liveAdvance: rig);
+        await grain.InitializeSiblingAsync(new SiblingInitialization
+        {
+            TreeId = "live-advance-tree",
+            ShardIndex = 0,
+            LowKeyInclusive = "m",
+            HighKeyExclusive = null,
+            PrevSibling = TransferRefreshDonor,
+            SplitBirth = true,
+            SpanShard = 0,
+            SpanGeneration = spanGeneration,
+        });
+        return grain;
+    }
+
+    private static Dictionary<string, LwwValue<byte[]>> TransferRows(string key) =>
+        new() { [key] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("v"), HybridLogicalClock.Tick(HybridLogicalClock.Zero)) };
+
+    private static WalRoutingGenerationStaleException StaleSpan(long generation, long refusal) =>
+        new(new WalRoutingInitiator(WalRoutingInitiatorKind.ShardRoot, 0), generation, refusal);
+
+    [Test]
+    public async Task A_stale_transfer_refreshes_its_span_generation_and_retries_routed()
+    {
+        var rig = PreArmRig();
+        var grain = await SpanBornSiblingAsync(rig);
+        rig.ShardMarker = new ShardHandOffState { Initialised = true, RoutingGeneration = 5 };
+        rig.Writer.ThrowNext = StaleSpan(generation: 3, refusal: 5);
+
+        await SplitTransferScope.RunAsync(() => grain.MergeEntriesAsync(TransferRows("n")));
+        var retried = rig.Writer.LastRouting;
+        await SplitTransferScope.RunAsync(() => grain.MergeEntriesAsync(TransferRows("p")));
+        var later = rig.Writer.LastRouting;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(retried, Is.EqualTo(WalRoutingStamp.ForShardRoot(0, 5)), "the refused transfer was not retried under the shard's refreshed generation");
+            Assert.That(later, Is.EqualTo(WalRoutingStamp.ForShardRoot(0, 5)), "a later transfer lost the span's routing after the refresh");
+        });
+    }
+
+    [Test]
+    public async Task A_pre_link_sibling_refreshes_through_its_donors_reachability()
+    {
+        var rig = PreArmRig();
+        rig.Reachable = false;
+        rig.ShardRoot.IsReachableByDescentAsync(TransferRefreshDonor, Arg.Any<string?>()).Returns(Task.FromResult(true));
+        var grain = await SpanBornSiblingAsync(rig);
+        rig.ShardMarker = new ShardHandOffState { Initialised = true, RoutingGeneration = 5 };
+        rig.Writer.ThrowNext = StaleSpan(generation: 3, refusal: 5);
+
+        await SplitTransferScope.RunAsync(() => grain.MergeEntriesAsync(TransferRows("n")));
+
+        Assert.That(rig.Writer.LastRouting, Is.EqualTo(WalRoutingStamp.ForShardRoot(0, 5)), "a pre-link sibling whose donor descent reaches did not refresh");
+    }
+
+    [TestCase("unreachable")]
+    [TestCase("held-open")]
+    [TestCase("below-refusal")]
+    [TestCase("refused-again")]
+    public async Task A_stale_transfer_without_an_admissible_refresh_appends_unstamped(string reason)
+    {
+        var rig = PreArmRig();
+        var grain = await SpanBornSiblingAsync(rig);
+        var marker = new ShardHandOffState { Initialised = true, RoutingGeneration = 5 };
+        var refusal = 5L;
+        switch (reason)
+        {
+            case "unreachable":
+                rig.Reachable = false;
+                break;
+            case "held-open":
+                HandOffMarkerCore.Open(marker, "bulk:op", "a", null);
+                break;
+            case "below-refusal":
+                refusal = 6;
+                break;
+            case "refused-again":
+                rig.ShardRoot
+                    .When(r => r.GetLiveAdvanceViewAsync(Arg.Any<GrainId>(), Arg.Any<string?>(), Arg.Any<string?>()))
+                    .Do(_ => rig.Writer.ThrowNext = StaleSpan(generation: 5, refusal: 6));
+                break;
+        }
+
+        rig.ShardMarker = marker;
+        rig.Writer.ThrowNext = StaleSpan(generation: 3, refusal: refusal);
+
+        await SplitTransferScope.RunAsync(() => grain.MergeEntriesAsync(TransferRows("n")));
+        var fallback = rig.Writer.LastRouting;
+        await SplitTransferScope.RunAsync(() => grain.MergeEntriesAsync(TransferRows("p")));
+        var later = rig.Writer.LastRouting;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(fallback.IsSet, Is.False, $"a transfer without an admissible refresh ({reason}) was appended routed");
+            Assert.That(later.IsSet, Is.False, $"the span's routing survived a failed refresh ({reason})");
+        });
+    }
+}

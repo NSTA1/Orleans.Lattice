@@ -4210,12 +4210,12 @@ internal sealed partial class BPlusLeafGrain(
                     {
                         mergeOffsets = await AppendManyRoutedAsync(writer!, segment, transfer);
                     }
-                    catch (WalRoutingGenerationStaleException)
+                    catch (WalRoutingGenerationStaleException stale)
                     {
                         // The span's generation was re-claimed; nothing was allocated under
-                        // it, and the transfer is appended unstamped instead, as before.
-                        _spanRouting = default;
-                        mergeOffsets = await writer!.AppendManyAsync(segment);
+                        // it. Refresh it from the shard and retry routed once (#5851, ruling
+                        // 1); only a refresh that fails appends the transfer unstamped.
+                        mergeOffsets = await AppendTransferAfterStaleAsync(writer!, segment, walEntries!, walCount, stale);
                     }
                 }
                 else

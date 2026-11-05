@@ -179,6 +179,68 @@ internal sealed partial class BPlusLeafGrain
         return _spanRouting;
     }
 
+    /// <summary>
+    /// Appends a split transfer whose routed append was refused stale (#5851, a5e2e2ef's
+    /// ruling 1): refreshes the span's generation (<see cref="TryRefreshSpanRoutingAsync"/>)
+    /// and retries routed once, re-deciding the transfer class after the refresh. Only a
+    /// refresh that fails, or a retry refused again, appends the transfer unstamped and
+    /// clears the span's routing for the activation.
+    /// </summary>
+    private async Task<IReadOnlyList<long>> AppendTransferAfterStaleAsync(
+        ICommitLogWriter writer, ArraySegment<WalRecord> segment, WalRecord[] records, int count, WalRoutingGenerationStaleException stale)
+    {
+        if (await TryRefreshSpanRoutingAsync(stale) && SplitTransferRoutingFor(records, count) is { IsSet: true } refreshed)
+        {
+            try
+            {
+                return await AppendManyRoutedAsync(writer, segment, refreshed);
+            }
+            catch (WalRoutingGenerationStaleException)
+            {
+            }
+        }
+
+        _spanRouting = default;
+        return await writer.AppendManyAsync(segment);
+    }
+
+    /// <summary>
+    /// Re-reads the shard's routing generation for this leaf's span after a stale
+    /// refusal, as an admission would establish it (#5851, ruling 1): the generation is
+    /// read fresh from the shard's marker, never from a cache, and is taken only when it
+    /// is above both the refused stamp and the WAL's refusal, no shard hand-off over the
+    /// span is open, and descent for the span's low bound, read after the generation,
+    /// reaches this leaf or - before its link - the donor whose split created it. Any
+    /// later move of the span raises the generation again, so the retry is refused.
+    /// </summary>
+    private async Task<bool> TryRefreshSpanRoutingAsync(WalRoutingGenerationStaleException stale)
+    {
+        if (!_spanRouting.IsSet
+            || state.State.TreeId is not { } treeId
+            || state.State.ShardIndex is not { } shardIndex
+            || shardIndex != _spanRouting.Initiator.Index)
+        {
+            return false;
+        }
+
+        var low = state.State.LowKeyInclusive;
+        var shardRoot = LiveAdvanceShardRoot(treeId, shardIndex);
+        var view = await shardRoot.GetLiveAdvanceViewAsync(context.GrainId, low, state.State.HighKeyExclusive);
+        if (view.HeldOpen || view.RoutingGeneration <= Math.Max(_spanRouting.Generation, stale.Refusal - 1))
+        {
+            return false;
+        }
+
+        if (!view.Reachable
+            && !(state.State.PrevSibling is { } donor && await shardRoot.IsReachableByDescentAsync(donor, low)))
+        {
+            return false;
+        }
+
+        _spanRouting = WalRoutingStamp.ForShardRoot(shardIndex, view.RoutingGeneration);
+        return true;
+    }
+
     /// <summary>The routing generation a split's sibling is told its span is established under (#5837, T1).</summary>
     private (int Shard, long Generation) SpanRoutingForSibling() =>
         IsPreArmGateOpen() && _appendFence is { } fence && fence.TryGetAdmittedRouting(out var shard, out var generation)
