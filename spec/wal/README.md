@@ -54,7 +54,7 @@ and its mutations as the record each module took its own from.
 | `WalMove` | 5 | 2 | 13 | 18 | 18 | 1,617 |
 | `WalPinRetirement` | 3 | 3 | 25 | 31 | 30 | 284,019 |
 | `WalAppendEpoch` | 5 | 0 | 17 | 23 | 20 | 150,706 |
-| `WalHandOffFence` | 3 | 1 | 17 | 21 | 19 | 8,826 |
+| `WalHandOffFence` | 3 | 1 | 25 | 29 | 27 | 8,826 |
 | `WalRoutingFloor` | 3 | 1 | 14 | 21 | 16 | 28,956 |
 | `WalBulkSwitch` | 6 | 1 | 21 | 28 | 26 | 1,047,630 |
 | `WalLiveAdvanceCore` | 7 | 1 | 27 | 50 | 33 | 2,021,047 |
@@ -67,7 +67,8 @@ TLC's count for the module's own cfg. `WalDurability` searches to depth 35 and
 `WalMove` to depth 16, with tla2tools v1.7.4. `WalAppendEpoch` searches to depth
 25, and its `WideEpochs` variant finds 495,810 distinct states to depth 26.
 `WalHandOffFence` searches to depth 19, and its `WideWindows` variant finds 47,000
-distinct states to depth 23. `WalRoutingFloor` searches to depth 15, and its
+distinct states to depth 23; its `StaleDonor` and `StaleDonorPreArm` variants (#5841)
+find 128,434 and 253,604. `WalRoutingFloor` searches to depth 15, and its
 `WideGenerations` variant finds 24,084 distinct states to depth 15.
 `WalLiveAdvanceCore` searches to depth 25; its variants find 3,052,664 (`Restart`,
 depth 26), 3,373,761 (`GateFlip`, depth 25), 3,693,715 (`Recreate`, depth 26),
@@ -266,6 +267,7 @@ before its fix, and both are fixed:
 
 | Issue | Defect | Mutation |
 |-------|--------|----------|
+| #5841 | Found by the independent review of #5840 (#5833's pre-arm): a stale duplicate of a split's donor, still holding the span from before the split, claimed the donor's epoch after the split - its claim wrote the epoch row + 1 over the split's bump, and under pre-arm the split bumped only when its own activation had claimed - so its epoch-only writes of moved keys (the PendingTx backstop, the span-forward receive) were fenced by nothing the receiver reads, and an acknowledged write could be trimmed. Also present under today's eager arm for an idle duplicate. **Fixed** by a Dekker pair: a claim writes the row, then re-reads the leaf state and is stale if it changed; the split persists its narrow, then re-reads the row and bumps it whenever it exists. | `HandOffBoundStaleDonorArmsAfterSplit5841` |
 | #5825 | The phase-2 worker commits in arrival order, so across a silo move a predecessor's lower batch can commit after its successor recovered and readers passed the offset as a settled hole: the entry appears below them. The #5811 fence does not refuse it, because the successor only read `TAIL`. **Fixed by #5827**: recovery re-stamps `TAIL` under the ETag it read before the activation serves a read, which puts the predecessor's view out of date. | `LogPrefixAppliedRecoveryLeavesTailUnstamped` |
 | #5810 | A predecessor activation's late batch on another silo, starting at a different offset, lands over a successor's acknowledged batch, so every read yields the shared offsets twice; its blind `TAIL` upsert regresses `TAIL`, so the next recovery reissues committed offsets. **Fixed by #5811**: a phase-2 commit is conditional on the `TAIL` ETag its provider instance last observed, under a fence generation that refuses every claim made before a refused write. | `OffsetWrittenOnceStaleWriterUnfenced`, `TailMonotoneStaleWriterBlindUpsert`, `RecoverNeverInsideCommittedUnfencedBlindTailUnstamped` |
 

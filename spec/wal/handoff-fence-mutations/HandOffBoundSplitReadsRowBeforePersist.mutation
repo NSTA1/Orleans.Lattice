@@ -1,0 +1,29 @@
+# #5841: the split's half of the Dekker pair must persist the narrow before it reads the row.
+MODULE: HandOffBoundSplitReadsRowBeforePersist
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: the split reads the epoch row before persisting its narrowed state, so both reads can miss the other's write
+PERTURBS: SplitPersist, SplitRowRead
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+
+--- FIND
+    /\ hoOpen
+    /\ sNarrowed
+    /\ bst = "idle"
+--- REPLACE
+    /\ hoOpen
+\* MUTATION: the row is read before the narrow is persisted.
+    /\ bst = "idle"
+--- END
+
+--- FIND
+    /\ hoOpen
+    /\ ~sNarrowed
+    /\ sNarrowed' = TRUE
+--- REPLACE
+    /\ hoOpen
+    /\ ~sNarrowed
+\* MUTATION: the narrow is persisted after the row is read and bumped.
+    /\ bst = "done"
+    /\ sNarrowed' = TRUE
+--- END

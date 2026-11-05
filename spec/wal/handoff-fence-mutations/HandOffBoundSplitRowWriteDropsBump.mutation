@@ -1,0 +1,14 @@
+# #5841: the split's row write must raise the epoch whenever the row exists.
+MODULE: HandOffBoundSplitRowWriteDropsBump
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: the split's row write records the narrow without raising the epoch, so a duplicate that claimed before it is not superseded
+PERTURBS: SplitRowWrite
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1
+
+--- FIND
+       THEN /\ eRow' = IF SplitBumps(bRead) THEN bRead + 1 ELSE bRead
+--- REPLACE
+\* MUTATION: no bump.
+       THEN /\ eRow' = bRead
+--- END

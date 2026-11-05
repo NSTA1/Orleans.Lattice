@@ -35,6 +35,7 @@ Close ==
     /\ \E h \in CloseHeads : hoClosedAt' = Max2(hoClosedAt, h)
     /\ UNCHANGED <<next, author, hoOpen, windows, fpend, fkind, fstamp, restarted>>
     /\ UNCHANGED <<gst, gstamp, gate, hfly, resumed, mInit>>
+    /\ UNCHANGED dVars
 
 CloseMark ==
     /\ closing

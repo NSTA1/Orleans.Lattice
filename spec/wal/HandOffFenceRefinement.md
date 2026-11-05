@@ -106,6 +106,12 @@ design model.
 | `gate` | The cluster's fence gate | `IWalAppendFenceGate.IsOpen` (`ClusterManifestWalAppendFenceGate`). |
 | `hfly`, `resumed` | A hand-off begun with no marker is in flight, and has resumed | A shard root's `ShardRootState.SplitInProgress`, `ShardRootState.PendingBulkGraft` or `ShardRootState.ShadowForward` record begun with the gate closed, and its resume path. |
 | `mInit` | L's marker state is initialised | `ShardHandOffState.Initialised` and `LeafHandOffState.Initialised`. |
+| `eRow` | The split donor D's epoch (#5841, `WithStaleDonor`): its durable row and, at once, D's own entry at every partition; 0 while no activation of D has claimed | The leaf epoch row `WalAppendFenceRows.LeafEpochGrainType` and D's per-leaf entries in `WalShardGrain`. The split raises D's own entry at every partition to the bumped value (`WalShardGrain.ClaimAppendEpochAsync`), never the partition's shared epoch floor; the model's one step stands for the row write and the per-partition raises, which is sound because the heads the close records are read after each raise. |
+| `liveArmed` | The splitting activation has claimed | `LeafAppendEpochFence.HasClaimedAnywhere`; always TRUE outside pre-arm, where the splitting activation has written stamped. |
+| `sNarrowed` | D's narrowed leaf state is persisted | `BPlusLeafGrain`'s split persist of `LeafNodeState` with `UnlinkedSplitSiblingId`. |
+| `dst`, `dEpoch` | A stale duplicate D' of the donor and the epoch its claim wrote | A second activation of D that loaded its state before the split. |
+| `dpend`, `dstamp` | D''s epoch-only write of a moved key, admitted under its epoch | A `WalRoutingStamp.None` append: the PendingTx terminal backstop and the span-forward receive. |
+| `bst`, `bRead` | The split's bump of D's row and the row value it read | The split's conditional row write. |
 
 ## Action mapping
 
@@ -127,6 +133,14 @@ design model.
 | `Resume` | A hand-off begun with no marker opens it on every resume path before its next admission (rule 1) | `ShardRootGrain.OpenMigrationHandOffAsync` from `ShardRootGrain.EnterRejectPhaseAsync`, `ShardRootGrain.CompleteSplitAsync` and a re-asserted `ShardRootGrain.BeginSplitAsync`. | Yes: `ShardRoutingGenerationIntegrationTests.A_migration_resumed_without_its_marker_opens_it_before_its_next_admission`. |
 | `LegacyComplete` | A resumed hand-off, its marker closed and nothing pending, completes | `ShardRootGrain.CompleteSplitAsync` closes by fence and then clears the shard's `ShardSplitInProgress` record. | Yes: `ShardRoutingGenerationIntegrationTests.A_migration_resumed_without_its_marker_opens_it_before_its_next_admission` and `ShardRoutingGenerationIntegrationTests.A_slot_migration_opens_its_marker_on_the_target_and_closes_it_by_the_donors_re_claim`. |
 | `MarkInit` | With no marker-less hand-off in flight, L's marker state is initialised (rule 2) | `ShardRootGrain.TryInitialiseHandOffMarkerAsync`, which refuses while a migration, bulk graft or shadow forward is in flight; a leaf takes its shard's flag only with no split in flight. Since #5831 a shard root whose routing floor is 0 initialises in the same marker write that seeds its generation (`ShardRootGrain.EnsureRoutingGenerationSlowAsync`), rule 2 evaluated in the step that builds the write; with a floor above 0 the recreate fence still runs between the two writes. A marker write may be conditioned on the ETag the activation last read or wrote (`ShardRootGrain.TryUpdateCachedHandOffMarkerAsync`), falling back to a re-read on a conflict; the conditional write is the model's atomic update either way. | Yes: `ShardRoutingGenerationIntegrationTests.A_shard_root_with_a_migration_in_flight_leaves_its_marker_uninitialised`, `BPlusLeafGrainTests.A_leaf_with_a_split_in_flight_does_not_adopt_its_shards_flag`, `HandOffMarkerRowRoundTripTests.An_absent_marker_reads_as_uninitialised_with_nothing_open` and `WalAppendFenceFirstTouchCostIntegrationTests.On_a_purged_id_the_first_raise_fences_between_seeding_and_initialising_the_marker`. |
+| `ClaimWrite` | A claim writes D's epoch row + 1 before anything else | `LeafAppendEpochFence.ClaimRowAsync`, its conditional row write. | Yes: `LeafAppendEpochFenceTests.ClaimIgnoresSplitSequence`. |
+| `ClaimCheck` | After its row write, the claim reads D's leaf state fresh; an ETag other than the one the activation loaded marks it stale, and a stale activation makes no claim at any partition (a5e2e2ef's A1 and A4) | `LeafAppendEpochFence.ClaimRowAsync`: after the row write, a fresh read of the leaf's state under the leaf's persist gate (A1); on a mismatch the fence marks itself stale and throws before any partition claim (A4). | Yes: `LeafAppendEpochFenceTests.ClaimIgnoresSplitSequence` and `LeafAppendEpochFenceTests.ClaimReadsStateBeforeRowWrite`. |
+| `DupAdmit` | An epoch-only write is admitted only by a claimed, non-stale activation, under its epoch | `BPlusLeafGrain.StampedRouting` with `WalRoutingStamp.None`, through `LeafAppendEpochFence.StampForAsync`. | Yes: `LeafAppendEpochFenceTests.StaleDonorArmsAfterSplit5841`. |
+| `DupAlloc` | The WAL shard allocates an epoch-only append at or above D's entry | `WalShardGrain.AdmitStampLocked` with `WalAppendFenceCore.IsEpochAdmitted`. | Yes: `LeafAppendEpochFenceTests.StaleDonorArmsAfterSplit5841`. |
+| `DupReject` | An epoch-only append below D's entry is refused, allocating nothing | `WalShardGrain.AdmitStampLocked` returns `WalAppendFenceOutcome.Superseded`. | Yes: `LeafAppendEpochFenceTests.StaleDonorArmsAfterSplit5841`. |
+| `SplitPersist` | The split persists D's narrowed state before it reads D's epoch row | `BPlusLeafGrain.CompleteSplitAsync`, the narrow's persist, which precedes `BPlusLeafGrain.CloseSplitHandOffAsync` (eager) and the split link that runs `ShardRootGrain.CloseDeferredSplitHandOffsAsync` (pre-arm). | Yes: `LeafAppendEpochFenceTests.SplitReadsRowBeforePersist`. |
+| `SplitRowRead` | After the narrow is durable, the split reads D's epoch row fresh | `LeafAppendEpochFence.FenceSplitAsync`, run by the donor's live activation in `BPlusLeafGrain.CloseSplitHandOffAsync` (eager) and by the shard root in `ShardRootGrain.CloseDeferredSplitHandOffsAsync` before its raise and its deferred close (pre-arm, whatever the gate view). | Yes: `LeafAppendEpochFenceTests.SplitReadsRowBeforePersist` and `LeafAppendEpochFenceTests.BumpOnlyIfSplittingActivationClaimed`. |
+| `SplitRowWrite` | If D's durable row exists, whichever activation claimed, the split writes row + 1 conditionally on the value it read, re-reading on a conflict, raises D's entry at every partition to that value, and, in the eager arm, adopts the new row into the live activation (a5e2e2ef's A3) | `LeafAppendEpochFence.FenceSplitAsync`. | Yes: `LeafAppendEpochFenceTests.BumpOnlyIfSplittingActivationClaimed` and `LeafAppendEpochFenceTests.SplitBumpUsesCachedEtag`. |
 | `Stutter` | Natural termination | Not a protocol step; a stuttering successor so TLC does not report a quiescent state as a deadlock. | Not applicable: not a protocol step, so there is no production behaviour to detect. |
 
 ## Property mapping
@@ -149,6 +163,10 @@ design model.
 
 `TypeOK` and the two invariants are state safety, and `CloseHeadMonotone` is an action
 property; all four are checked on the base and re-checked in the `WideWindows` variant.
+The stale duplicate donor of #5841 is checked in two more variants, `StaleDonor`
+(today's eager arm, where the splitting activation has always claimed: 128,434 states)
+and `StaleDonorPreArm` (#5833's pre-arm, where it may not have: 253,604 states), each
+with the split's one hand-off window; the base leaves it off and keeps its count.
 A close may choose a head below the allocator's only once a walk has gone on
 unstamped, which takes a close to reject it, so a head below an earlier close's needs a
 third close of L; the base's generations allow two. The property's mutation therefore
@@ -196,6 +214,17 @@ to 4),
 `AbsentMarkerHoldsInitWithHandOffInFlight` (`MarkInit`),
 `AbsentMarkerHoldsInitAtGateOpen` (`OpenGate`) and `TypeOkCloseUnbounded` (`Close`).
 
+#5841 adds eight, each run in `StaleDonor` or `StaleDonorPreArm`:
+`HandOffBoundStaleDonorArmsAfterSplit5841` (the defect as filed: no staleness check, and
+the bump only when the splitting activation claimed; `ClaimCheck`),
+`HandOffBoundClaimSkipsLeafStateCheck` (`ClaimCheck`; red in both modes, the eager
+residual), `HandOffBoundBumpOnlyIfSplittingActivationClaimed` (pre-arm only),
+`HandOffBoundClaimReadsStateBeforeRowWrite` (`ClaimWrite`, `ClaimCheck`),
+`HandOffBoundSplitReadsRowBeforePersist` (`SplitPersist`, `SplitRowRead`),
+`HandOffBoundStaleClaimantAppends` (`DupAdmit`; a5e2e2ef's A4),
+`HandOffBoundEpochOnlyWriteUnfenced` (`DupAlloc`, `DupReject`) and
+`HandOffBoundSplitRowWriteDropsBump` (`SplitRowWrite`).
+
 ## Redundancy checks
 
 The design model kept one guard of this module that its model implies, as a
@@ -204,9 +233,21 @@ mutation directory; it was run locally against this module.
 
 | Check | Here | Result |
 |-------|------|--------|
+| `HandOffBoundSplitRowWriteLosesToClaim` | #5841: the split's row write made unconditional, so a claim between its read and its write is overwritten at the same epoch. | Clean in `StaleDonorPreArm`: the narrow is persisted before the split's read, so that claim's state check sees it and the claimant is stale. The conditional write is kept, since the alternative fix (a split sequence on the row, checked by the claim, at one row write per split) needs it, and #5841's model of that alternative was red without it. |
 | `ReadPositionHonestNoMarkerInit` | Kept: `HandOffBound` reads the marker as closed whenever no window is open, ignoring whether its state is initialised. | Clean against `HandOffBound` in the base: rule 1 (a resume opens its marker before its next admission) already bounds every stamped append, so rule 2 is implied here, as in the design. It is kept because a resume path the stamp census misses would otherwise read as closed. |
 
 ## Deliberate abstraction gaps
+
+- **#5841: the Dekker pair's storage assumption.** The fix rests on each side's write
+  completing before its own read, and on each read being a fresh storage read that
+  returns the latest completed write of the other row: strong read-after-write across
+  the leaf epoch-row store and the grain-state store (a5e2e2ef's A2). The model makes
+  each read and write one step on one variable. A false stale verdict from the
+  claimant's own in-flight persist (A1) only deactivates it, and is not modelled. The
+  split's bump adopting the ETag it wrote into the live activation's row (A3) is a
+  liveness obligation, not checked here: without it the live donor supersedes itself
+  on its next row write. Its progress property belongs to #5839.
+  Production symbols: `LeafAppendEpochFence.ClaimRowAsync`, `LeafAppendEpochFence.BumpAndReclaimAsync`.
 
 - **One initiator, one owner, one partition.** The foreign author stands for every
   hand-off kind, one at a time, and the module checks a single partition. Production
