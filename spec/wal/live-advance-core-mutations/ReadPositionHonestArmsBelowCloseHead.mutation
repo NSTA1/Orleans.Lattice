@@ -8,10 +8,12 @@ CLASS: Invariant
 SUMMARY: the activation arms without replaying to the last close's heads
 
 --- FIND
+    /\ ~pend
     /\ ~hoOpen
     /\ rp[a] >= hoClosedAt - 1
 
 --- REPLACE
+    /\ ~pend
     /\ ~hoOpen
 \* MUTATION: no replay to the close heads.
 

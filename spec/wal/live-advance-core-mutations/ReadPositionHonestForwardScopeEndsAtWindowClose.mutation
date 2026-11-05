@@ -1,0 +1,14 @@
+# #5837, condition 4 (a5e2e2ef's F1 and F2): an orphan sibling's forward. It edits an
+# operator, not an action.
+MODULE: ReadPositionHonestForwardScopeEndsAtWindowClose
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the forward's second attribution is scoped by the orphan's open window alone, so a forward after its donor's close and before a link that never comes is attributed to the orphan only (F1)
+BOUNDS: WithFreeAdvance = TRUE, WithOrphanForward = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+FwdScope(w) == w \in {"open", "pending"}
+--- REPLACE
+\* MUTATION: the open window only.
+FwdScope(w) == w = "open"
+--- END

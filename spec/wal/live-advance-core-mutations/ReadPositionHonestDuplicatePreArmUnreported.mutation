@@ -10,10 +10,12 @@ PERTURBS: OwnAlloc
 --- FIND
     /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
     /\ ReportForeign(a)
+    /\ ReportStale(a)
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars>>
 --- REPLACE
     /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
 \* MUTATION: foreignHigh is not reported.
     /\ UNCHANGED seenP
+    /\ ReportStale(a)
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars>>
 --- END

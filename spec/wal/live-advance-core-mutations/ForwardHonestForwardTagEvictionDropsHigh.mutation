@@ -1,0 +1,16 @@
+# #5837, the forward-exclusion relief (a5e2e2ef's X6).
+MODULE: ForwardHonestForwardTagEvictionDropsHigh
+TARGET: ForwardHonest
+CLASS: Invariant
+SUMMARY: a third narrow tag evicts one from the WAL shard's top-two table and the evicted tag's forward high is dropped, not folded into the always-foreign floor
+PERTURBS: EvictTag
+BOUNDS: WithFreeAdvance = TRUE, WithFwdExclusion = TRUE, WithTagEvict = TRUE, WithDuplicate = FALSE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+    /\ fEvStart' = next
+    /\ fEvFloor' = Max({fEvFloor} \cup {o \in Offs : author[o] = FwdD})
+--- REPLACE
+    /\ fEvStart' = next
+\* MUTATION: the evicted tag's forward high is dropped.
+    /\ UNCHANGED fEvFloor
+--- END

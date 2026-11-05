@@ -1,0 +1,17 @@
+# #5837, the claimless advance and the split hint.
+MODULE: SnapshotHonestFreeAdvanceWithOwnInflight
+TARGET: SnapshotHonest
+CLASS: Invariant
+SUMMARY: the free advance passes an own append still in flight, which the snapshot then captures without
+PERTURBS: FreeCommit
+BOUNDS: WithFreeAdvance = TRUE
+
+--- FIND
+    /\ pend => rp[a] >= seenS[a]
+    /\ \A o \in inflight : author[o] = a => o > ft[a]
+    /\ rp' = [rp EXCEPT ![a] = ft[a]]
+--- REPLACE
+    /\ pend => rp[a] >= seenS[a]
+\* MUTATION: own appends below the target need not be applied.
+    /\ rp' = [rp EXCEPT ![a] = ft[a]]
+--- END

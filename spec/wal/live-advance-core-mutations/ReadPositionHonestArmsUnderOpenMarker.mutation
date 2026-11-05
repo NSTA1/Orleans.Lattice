@@ -8,9 +8,11 @@ CLASS: Invariant
 SUMMARY: the activation arms while L's marker is open
 
 --- FIND
+    /\ ~pend
     /\ ~hoOpen
     /\ rp[a] >= hoClosedAt - 1
 --- REPLACE
+    /\ ~pend
 \* MUTATION: an open marker does not hold the advance.
     /\ rp[a] >= hoClosedAt - 1
 --- END
