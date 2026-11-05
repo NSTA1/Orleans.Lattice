@@ -138,6 +138,7 @@ weaken each one in turn and go red, so each is load-bearing.
 | `dNarrowed`, `oblig`, `sDone`, `dKnown`, `dResumed`, `lRestart` | A split-born L's donor: its narrow and link obligation, its stragglers, the moved-key writes its closing activation knows, a resume after the heads and a restart after the close | `LeafNodeState.UnlinkedSplitSiblingId`, persisted with the narrow; the straggler sweep of `BPlusLeafGrain.CompleteSplitAsync`; `SplitInFlight` for a resume. |
 | `lat`, `eagerG`, `repair`, `tried`, `birthAct` | The #5709 reachability latch on an unlinked split-born L: its decision, the gate's flip to eager, orphan repair on its range, and whether the running activation is the one its birth created | `LeafAppendEpochFence`'s reachability proof (`BPlusLeafGrain.ProveStampReachabilityCoreAsync`, `LeafAppendEpochFence.StopStampingUnreachable`); the birth proof in `BPlusLeafGrain.InitializeSiblingAsync`. |
 | `nar`, `narWho`, `npend`, `dur`, `durWho`, `fObl`, `fTag`, `fBy`, `snapWho`, `fwdUsed` | The forward-exclusion relief (#5837): each activation's narrow in memory and whose it is, its pending persist, L's durable narrow and its obligation, each forward's narrow tag and the narrow that moved its key, and the span the snapshot reflects | `LeafNodeState`'s persisted span with `UnlinkedSplitSiblingId`; the narrow tag on `WalAppendStamp.ForwarderTag`; the reader's persisted tag on each stamped call (`LeafAppendEpochFence.PersistedNarrowTag`). |
+| `capHint` | The hint the last split's cap fallback handed its sibling (#5851 O2c); -2 none | None: proof bookkeeping for the cap's reachability witness. |
 | `svTaken`, `svOk`, `svHead` | The split's marker view (V3): taken, whether it read L's marker initialised and closed, and the close head it read | The marker read `BPlusLeafGrain.CompleteSplitAsync` makes after `BPlusLeafGrain.CaptureSplitCutAsync`, concurrently with the drain of the donor's own appends. |
 | `chainUsed` | A forward chain through L's stale activation has been made (F2') | `WalForwardChain`, the bounded list of (leaf, tag) forwarders the stamp carries. |
 | `fInUsed`, `fInRecs`, `sfUsed` | The donor's pre-link forward into L, its offsets, and a stale D''s forward of L's key into another orphan | The forward tag on `WalAppendStamp.ForwarderTag`, read against the reader's split tag by `WalShardGrain`'s per-donor `staleHigh`. |
@@ -177,6 +178,7 @@ weaken each one in turn and go red, so each is load-bearing.
 | `FreeCommit(a)` | After the target, the advance reads L's marker view and moves the read position to the target, with no claim, iff the marker is initialised with no window open, and the read position is at or above the close heads, the reported `foreignHigh`, the shared watermark and, while a deferred close is pending, the reported `staleHigh`, with every own append at or below the target applied | `LeafLiveAdvanceCore.TryFreeAdvance` from `BPlusLeafGrain.TryAdvanceLiveCheckpointAsync`. | Yes: `BPlusLeafGrainTests.FreeAdvanceIgnoresForeignHigh`, `BPlusLeafGrainTests.FreeAdvanceIgnoresCloseHeads`, `LeafAppendEpochFenceTests.A_claimless_view_needs_a_report_that_carried_every_pending_close` and `LeafAppendEpochFenceTests.More_pending_closes_than_a_stamp_carries_hold_the_claimless_advance`. |
 | `SplitHeads(a)` | A split captures each partition's allocator head with the donor's `foreignHigh`, shared watermark and `staleHigh`, in one WAL-shard turn (D4) | `BPlusLeafGrain.CaptureSplitCutAsync`. | Yes: `WalShardGrainTests.A_split_cut_reads_the_head_and_every_bound_in_one_turn`. |
 | `SplitView(a)` | After the heads, the split reads L's marker view, possibly while the drain of its own appends is still applying them (V3); the commit evaluates the guard after the drain | The marker read in `BPlusLeafGrain.CompleteSplitAsync`, after `BPlusLeafGrain.CaptureSplitCutAsync`. | Yes: `BPlusLeafGrainTests.SplitViewBeforeHeads`. |
+| `SplitCap(a)` | The split's fallback when the hint guard fails (#5851 O2c): only after the drain of the donor's own appends below the heads, the donor hands the sibling its committed read frontier as the hint and its rows at or below it; a free advance just before the narrow raises that frontier first | `ShardRootGrain.CapAtReadFrontier`, after the drain in `BPlusLeafGrain.CompleteSplitAsync`. | Yes: `BPlusLeafGrainTests.SplitCapAtTarget` and `BPlusLeafGrainTests.SplitCapWithoutDrain`. |
 | `SplitCommit(a)` | After the cut, the donor reads its marker view and, under the advance's guard with the heads in place of the target, hands the sibling the heads minus one as its hint | `BPlusLeafGrain.CompleteSplitAsync`, advance before the cap (`ShardRootGrain.CapAtReadFrontier` otherwise). | Yes: `BPlusLeafGrainTests.SplitHintWithoutBound` and `BPlusLeafGrainTests.SplitHintAboveHeads`. |
 | `DonorAlloc` | **Environment.** The live donor admits a write for L's keys after the split's heads and before its narrow, attributed to the donor | `BPlusLeafGrain.SetStampedAsync` on the donor. | Yes: `LeafAppendEpochFenceTests.The_split_window_records_each_own_moved_key_offset`. |
 | `DonorNarrow` | The donor narrows its span, persisting its link obligation in the same write (transfer condition (a)) | `BPlusLeafGrain.CompleteSplitAsync`, the narrow's persist with `LeafNodeState.UnlinkedSplitSiblingId`. | Yes: `BPlusLeafGrainTests.PreArmDonorFencesAfterPersistBeforeClose`. |
@@ -289,7 +291,7 @@ case budget:
 | `FreeOrphanEvict` | an orphan's forward with an eviction and no WAL shard restart: the fold of the orphan's forward (S-a). With `FreeChainEvict` it replaces one variant combining both with a restart, which measured 46,514,214 states; the chain with a restart alone measured 12,065,410, and the restart's own floors are checked in `FreeRestart` | 3,045,174 |
 | `FreeForwardIn` | the donor's pre-link forward into L and a stale D''s into another orphan (the `staleHigh` tag exclusion) | 1,032,584 |
 | `FreeEpochOnly` | a stale duplicate's epoch-only write before the link, in the donor's `staleHigh` | 712,124 |
-| `FreeSplitView` | the split's view read concurrently with the drain (V3), with a hand-off window | 512,628 |
+| `FreeSplitView` | the split's view read concurrently with the drain (V3), with a hand-off window, and the split's cap fallback when the hint guard fails (#5851 O2c) | PENDING_SPLITVIEW |
 
 Under the claimless advance an activation learns its bounds only from the responses to
 its own appends, which carry `foreignHigh` and the shared watermark together, so either
@@ -464,6 +466,18 @@ reason as the one above.
   leaf's foreign-high entry must fold its forwards' high, the empty token's, with its
   activations' (`ForwardHonestEvictionDropsForwardHigh`).
   Production symbols: `WalShardGrain.FoldLeafAuthorsLocked`, `WalShardGrain.ResetLeafAuthors`.
+- **The eviction floor is per leaf here and bucketed in production (#5851 O2b).** C keeps L's
+  own floor at exactly L's evicted high, the tightest sound value. Production may fold an
+  evicted leaf into one of a fixed array of hashed buckets, each the maximum of the highs
+  evicted into it; a reader counts only its own leaf's bucket. That refines C's floor,
+  because a bucket's floor is at least the evicted high of every leaf hashing to it, under
+  a5e2e2ef's four conditions (#5851 comment 6665050221): buckets only max-merge, a reader
+  uses only its own bucket, the bucket count is fixed for an activation, and a WAL shard
+  restart resets every bucket to the start-head floor. A fold to the minimum of the evicted
+  highs does not refine it: it is `ReadPositionHonestEvictionDropsForeignHigh` when L is not
+  the minimum. Which leaf is evicted (median, LRU, or a larger table) is a cost choice the
+  nondeterministic `Evict` already covers.
+  Production symbols: `WalShardGrain.FoldLeafAuthorsLocked`.
 - **The forward relief's assumptions and limits (#5837; a5e2e2ef's S-b, N-a to N-d).**
   Chain hops are never excluded (S-b): F2' allows each hop's reader to exclude the records
   of the narrow its persisted span is (X1, per hop), but the model counts every chain

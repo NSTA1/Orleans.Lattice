@@ -1,0 +1,18 @@
+# #5851 O2c (a5e2e2ef, #5851 comment 6665050221): the split's cap fallback hands the sibling
+# the donor's read frontier, and only after the drain of the donor's own appends.
+MODULE: SiblingHintHonestSplitCapWithoutDrain
+TARGET: SiblingHintHonest
+CLASS: Invariant
+SUMMARY: the cap hands the sibling its rows before the drain of the donor's own appends below the heads has applied them
+PERTURBS: SplitCap
+BOUNDS: WithMixedVersion = FALSE, WithFreeAdvance = TRUE, WithSplitHint = TRUE, WithDuplicate = FALSE, WithViewOverlap = TRUE, WithSplitCap = TRUE
+
+--- FIND
+    /\ ~SplitGuard(a)
+    /\ \A o \in Offs : author[o] = a /\ o < sh[a] => o \in cache[a]
+    /\ sibHint' = rp[a]
+--- REPLACE
+    /\ ~SplitGuard(a)
+\* MUTATION: no drain before the cap.
+    /\ sibHint' = rp[a]
+--- END

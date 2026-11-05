@@ -7,9 +7,9 @@
   "counts": {
     "invariants": 18,
     "properties": 2,
-    "actions": 52,
-    "mutations": 116,
-    "behaviourRows": 70,
+    "actions": 53,
+    "mutations": 119,
+    "behaviourRows": 71,
     "distinctStates": 2021047
   },
   "variants": {

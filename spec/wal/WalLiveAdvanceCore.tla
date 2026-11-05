@@ -56,7 +56,7 @@ CONSTANTS MaxWindows, WithMixedVersion, WithGateFlip, WithRestart, WithRecreate,
           WithSplitHint, WithSplitBirth, WithDonorRestart,
           WithDuplicate, WithEvict, WithOrphanForward, WithLatch,
           WithBirthProof, WithFwdExclusion, WithTagEvict, WithViewOverlap,
-          WithReforward, WithForwardIn, WithEpochOnly, WithEvictAlone
+          WithReforward, WithForwardIn, WithEpochOnly, WithEvictAlone, WithSplitCap
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
@@ -135,6 +135,7 @@ VARIABLES
     svTaken,      \* WithViewOverlap: each activation's split has read its marker view
     svOk,         \* that view read initialised and closed
     svHead,       \* the close head that view read
+    capHint,      \* WithSplitCap: the hint the last split's cap fallback handed its sibling; -2 none
     chainUsed,    \* WithReforward: the forward chain through L's stale activation has been made
     fInUsed,      \* WithForwardIn: D's forward into L has been made
     fInRecs,      \* the offsets of D's forwards into L, tagged with L's split
@@ -178,7 +179,7 @@ envVars == <<recreated, reinit, spUsed, phase, hint>>
 fxVars == <<nar, narWho, npend, dur, durWho, fObl, fTag, fBy, snapWho, fwdUsed, fEvStart, fEvFloor>>
 latchVars == <<oblig, lRestart, lat, eagerG, repair, tried, oWin, oHops, birthAct, fxVars>>
 xferVars == <<tRecs, dNarrowed, sDone, dKnown, dResumed, latchVars>>
-svVars == <<svTaken, svOk, svHead>>
+svVars == <<svTaken, svOk, svHead, capHint>>
 chVars == <<chainUsed, fInUsed, fInRecs, sfUsed, eoUsed>>
 freeVars == <<sHi, seenS, ft, sh, sibHint, sibRows, xferVars, svVars, chVars>>
 armVars == <<preArm, seenP, startHead, evStart, evFloor, freeVars>>
@@ -196,6 +197,7 @@ TypeOK ==
     /\ up \subseteq Acts
     /\ cache \in [Acts -> SUBSET Offs]
     /\ rp \in [Acts -> -1..(MaxOff - 1)]
+    /\ capHint \in -2..(MaxOff - 1)
     /\ mine \in [Acts -> SUBSET Offs]
     /\ snapCov \in -1..(MaxOff - 1)
     /\ snapRows \subseteq Offs
@@ -292,6 +294,7 @@ Init ==
     /\ up = IF WithBulk THEN {} ELSE {"a1"}
     /\ cache = [a \in Acts |-> {}]
     /\ rp = [a \in Acts |-> -1]
+    /\ capHint = -2
     /\ mine = [a \in Acts |-> {}]
     /\ snapCov = -1
     /\ snapRows = {}
@@ -759,12 +762,38 @@ SplitView(a) ==
     /\ svOk' = [svOk EXCEPT ![a] = mInit /\ ~hoOpen]
     /\ svHead' = [svHead EXCEPT ![a] = hoClosedAt]
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
-    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows, xferVars, chVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows, xferVars, chVars, capHint>>
 
 SplitViewClear(a) ==
     IF WithViewOverlap
     THEN svTaken[a] /\ svOk[a] /\ rp[a] >= svHead[a] - 1
     ELSE mInit /\ ~hoOpen /\ rp[a] >= hoClosedAt - 1
+
+(* SplitCap(a) (WithSplitCap; #5851 O2c): the split's fallback when the  *)
+(* hint guard fails. After the drain of the donor's own appends below the  *)
+(* heads, the donor hands the sibling its read frontier as the hint and    *)
+(* its rows at or below it (production's ShardRootGrain.CapAtReadFrontier). *)
+(* A free advance just before the narrow raises the frontier it reads.     *)
+SplitGuard(a) ==
+    /\ SplitViewClear(a)
+    /\ rp[a] >= seenP[a]
+    /\ rp[a] >= seenU[a]
+    /\ pend => rp[a] >= seenS[a]
+
+SplitCap(a) ==
+    /\ FreeOn
+    /\ WithSplitCap
+    /\ a \in up
+    /\ sh[a] # -1
+    /\ ~SplitGuard(a)
+    /\ \A o \in Offs : author[o] = a /\ o < sh[a] => o \in cache[a]
+    /\ sibHint' = rp[a]
+    /\ sibRows' = {o \in cache[a] : o <= rp[a]}
+    /\ capHint' = rp[a]
+    /\ sh' = [sh EXCEPT ![a] = -1]
+    /\ svTaken' = [svTaken EXCEPT ![a] = FALSE]
+    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, xferVars, svOk, svHead, chVars>>
 
 SplitCommit(a) ==
     /\ FreeOn
@@ -781,6 +810,7 @@ SplitCommit(a) ==
     /\ svTaken' = [svTaken EXCEPT ![a] = FALSE]
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, xferVars, svOk, svHead, chVars>>
+    /\ UNCHANGED capHint
 
 (***************************************************************************)
 (* A split-born receiver (#5837, WithSplitBirth). L is born by a split,   *)
@@ -1417,6 +1447,7 @@ Next ==
     \/ \E a \in Acts : SplitHeads(a)
     \/ \E a \in Acts : SplitView(a)
     \/ \E a \in Acts : SplitCommit(a)
+    \/ \E a \in Acts : SplitCap(a)
     \/ DonorAlloc
     \/ DonorNarrow
     \/ DonorClose
