@@ -32,7 +32,7 @@ public partial class WalShardGrainTests
     /// <summary>One activation of the donor: its fence, the leaf-state ETag it holds, and its persist gate.</summary>
     private sealed class DonorActivation
     {
-        public DonorActivation(IGrainStorage storage, string? etag, bool preArm, IGrainStorage? fenceStorage = null)
+        public DonorActivation(IGrainStorage storage, string? etag, bool preArm, IGrainStorage? fenceStorage = null, string? metricTree = null)
         {
             Etag = etag;
             Fence = new LeafAppendEpochFence(
@@ -40,8 +40,8 @@ public partial class WalShardGrainTests
                 new DonorGate(preArm),
                 fenceStorage ?? storage,
                 Superseded.Add,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-                LatticeTenantLabel.ForTree(TreeId),
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, metricTree ?? TreeId),
+                LatticeTenantLabel.ForTree(metricTree ?? TreeId),
                 loadedStateCurrent: new LeafStateCurrencyProbe(storage, DonorStateId, () => Etag, PersistGate).IsCurrentAsync);
         }
 

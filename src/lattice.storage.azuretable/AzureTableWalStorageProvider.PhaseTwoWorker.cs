@@ -386,7 +386,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     /// </summary>
     public Task EnqueueAsync(long startOffset, long endOffsetInclusive, bool hasCandidateRow = true, long payloadBytes = 0L, long generation = 0L)
     {
-        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tcs = new PhaseTwoCompletion();
         var commit = new PhaseTwoCommit(startOffset, endOffsetInclusive, hasCandidateRow, payloadBytes, tcs, generation);
 
         // The publish and the accept happen under one gate. The drain
@@ -598,20 +598,40 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     /// </summary>
     internal WalShardWriteTracker OutstandingCommits { get; } = new();
 
+    // #5843: the outstanding count is released BEFORE the completion is set. The completion
+    // runs its continuations asynchronously, so a caller awaiting it can resume on another
+    // thread the instant it is set; releasing afterwards let that caller observe the tracker
+    // still busy with its own, already-reported commit. Each accepted commit is settled once,
+    // so the count is released exactly once, whichever path settles it first.
     private void SettleSuccess(in PhaseTwoCommit commit)
     {
-        if (commit.Completion.TrySetResult())
+        if (commit.Completion.TryClaimSettle())
         {
             OutstandingCommits.Exit();
+            commit.Completion.SetResult();
         }
     }
 
     private void SettleFault(in PhaseTwoCommit commit, Exception ex)
     {
-        if (commit.Completion.TrySetException(ex))
+        if (commit.Completion.TryClaimSettle())
         {
             OutstandingCommits.Exit();
+            commit.Completion.SetException(ex);
         }
+    }
+
+    /// <summary>
+    /// A phase-2 commit's completion, settled at most once (#5843): the settle that claims it
+    /// releases the outstanding count and then completes it, so the count is never released
+    /// twice and never after a caller could observe the completion.
+    /// </summary>
+    internal sealed class PhaseTwoCompletion() : TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
+    {
+        private int _settled;
+
+        /// <summary>Claims the one settle of this completion; <see langword="false"/> when it was already claimed.</summary>
+        public bool TryClaimSettle() => Interlocked.Exchange(ref _settled, 1) == 0;
     }
 
     private int _disposed;
@@ -1203,7 +1223,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         long EndOffsetInclusive,
         bool HasCandidateRow,
         long PayloadBytes,
-        TaskCompletionSource Completion,
+        PhaseTwoCompletion Completion,
         long Generation = 0L);
 
     /// <summary>

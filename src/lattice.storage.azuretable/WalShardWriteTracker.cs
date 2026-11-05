@@ -20,6 +20,9 @@ internal sealed class WalShardWriteTracker
     private int _active;
     private TaskCompletionSource? _idle;
 
+    /// <summary>The lock every count change takes; test seam (#5843), so a test can hold a release in place.</summary>
+    internal object GateForTesting => _gate;
+
     /// <summary>Number of writes currently in motion.</summary>
     internal int Active
     {
