@@ -61,7 +61,13 @@ whenever a child publishes a fresh snapshot upward. A leaf publishes
 after its mutations persist, and mutations that land within
 [`DigestCoalescingWindowMs`](configuration.md#digestcoalescingwindowms)
 (default 5 ms) share one publish; structural changes such as splits and
-tombstone reaps publish immediately. The public shard hash
+tombstone reaps publish immediately. An internal node publishes its own
+subtree aggregate onward only when the fold changed it: an unchanged
+aggregate, one its parent already folded, is re-sent at most once per
+[`MaterialiserCheckpointInterval`](configuration.md#materialisercheckpointinterval)
+(default 5 s), which repairs a publish the parent lost
+([#5851](https://github.com/NSTA1/Orleans.Lattice/issues/5851)).
+The public shard hash
 is
 
 ```text
