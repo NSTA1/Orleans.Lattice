@@ -405,6 +405,8 @@ internal sealed partial class BPlusLeafGrain
         new(LatticeMetrics.TagTrigger, "storage_latency");
     private static readonly KeyValuePair<string, object?> StorageRecoveryTrigger =
         new(LatticeMetrics.TagTrigger, "storage_recovery");
+    private static readonly KeyValuePair<string, object?> StorageIdleTrigger =
+        new(LatticeMetrics.TagTrigger, "storage_idle");
 
     /// <summary>
     /// Publishes the <b>live</b> withheld-permit level - the running value of
@@ -549,7 +551,8 @@ internal sealed partial class BPlusLeafGrain
             description:
                 "Replay permits currently in circulation on the per-silo WAL replay concurrency gate: "
                 + "orleans.lattice.wal.replay.permit_ceiling less every withheld permit. The step reasons "
-                + "are the trigger tags on orleans.lattice.wal.replay.permit_adaptations (issue #5877).");
+                + "are the trigger tags on orleans.lattice.wal.replay.permit_adaptations; storage-pressure steps count "
+                + "throttle retries on every storage request this process makes, appends included (issue #5877).");
 
     /// <summary>
     /// Publishes the activations that have entered the wait on
@@ -1030,6 +1033,8 @@ internal sealed partial class BPlusLeafGrain
                     0, LatticeMetrics.PermitAdaptationWithheld, StorageLatencyTrigger, LatticeTenantLabel.Platform);
                 LatticeMetrics.WalReplayPermitAdaptations.Add(
                     0, LatticeMetrics.PermitAdaptationRestored, StorageRecoveryTrigger, LatticeTenantLabel.Platform);
+                LatticeMetrics.WalReplayPermitAdaptations.Add(
+                    0, LatticeMetrics.PermitAdaptationRestored, StorageIdleTrigger, LatticeTenantLabel.Platform);
             }
 
             // The gate's service count (issue #3921), primed here for the same
@@ -1866,6 +1871,7 @@ internal sealed partial class BPlusLeafGrain
         _replayAdmissionPhase = ReplayAdmissionPhase.ResolvingOptions;
         var options = await GetOptionsAsync();
         var gate = ResolveReplayConcurrencyGate(options, ResolveLogger);
+        RestoreReplayStorageWhenIdle(gate, Stopwatch.GetTimestamp());
 
         // ADMISSION CONTROL (issue #3284). Read BEFORE the counter below is
         // incremented and before the wait is entered, because the whole point is

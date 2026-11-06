@@ -65,6 +65,52 @@ public partial class BPlusLeafGrainTests
 
     [Test]
     [NonParallelizable]
+    public async Task After_a_quiet_spell_the_next_activation_finds_the_full_ceiling_restored()
+    {
+        BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        ReplayStoragePressure.ResetForTest();
+        try
+        {
+            var gate = await QuiescentReplayGateAsync(permitCeiling: 8);
+            BPlusLeafGrain.SeedReplayStoragePressureForTest(100);
+            BPlusLeafGrain.AdaptReplayStoragePressure(gate, 0);
+            RecordStoragePressureWindow(reads: 100, retries: 100);
+            for (var release = 0; release < 2; release++)
+            {
+                Assert.That(gate.Wait(0), Is.True);
+                Assert.That(BPlusLeafGrain.AdaptReplayStoragePressure(gate, 100 + release), Is.True);
+            }
+
+            Assert.That(gate.CurrentCount, Is.EqualTo(6));
+
+            var triggers = new List<string?>();
+            using var counter = MeterListening.StartForInstrument(LatticeMetrics.WalReplayPermitAdaptations,
+                l => l.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+                {
+                    if (value == 0)
+                        return;
+                    foreach (var tag in tags)
+                        if (tag.Key == LatticeMetrics.TagTrigger)
+                            lock (triggers)
+                                triggers.Add(tag.Value as string);
+                }));
+
+            BPlusLeafGrain.RestoreReplayStorageWhenIdle(gate, 100 + (ReplayStoragePressureGovernor.IdleWindowsToReset * 100));
+
+            Assert.That(gate.CurrentCount, Is.EqualTo(8), "no permit is released while replay is idle, so acquisition is where it returns");
+            Assert.That(BPlusLeafGrain.StorageWithheldReplayPermitsForTest, Is.Zero);
+            Assert.That(BPlusLeafGrain.WithheldReplayPermitsForTest, Is.Zero);
+            Assert.That(triggers, Is.EqualTo(new[] { "storage_idle" }));
+        }
+        finally
+        {
+            BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+            ReplayStoragePressure.ResetForTest();
+        }
+    }
+
+    [Test]
+    [NonParallelizable]
     public async Task Storage_pressure_publishes_the_walked_ceiling_and_a_reason_for_each_step()
     {
         BPlusLeafGrain.ResetReplayConcurrencyGateForTest();

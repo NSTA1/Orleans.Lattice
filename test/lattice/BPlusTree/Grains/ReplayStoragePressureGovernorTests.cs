@@ -22,10 +22,7 @@ public class ReplayStoragePressureGovernorTests
 
         public ReplayStoragePressureSample Add(int reads, int latencyMs, int retries = 0)
         {
-            var ticks = latencyMs * Stopwatch.Frequency / 1000;
-            var ms = ticks * 1000 / Stopwatch.Frequency;
-            var bucket = ms <= 0 ? 0 : Math.Min(_buckets.Length - 1, 64 - (int)long.LeadingZeroCount(ms));
-            _buckets[bucket] += reads;
+            _buckets[ReplayStoragePressure.BucketOf(latencyMs * Stopwatch.Frequency / 1000)] += reads;
             _reads += reads;
             _retries += retries;
             return Sample;
@@ -228,6 +225,69 @@ public class ReplayStoragePressureGovernorTests
         Assert.That(governor.IsDue(now + Window), Is.True);
     }
 
+    [TestCase(1, 31, 33)]
+    [TestCase(3, 31, 33)]
+    [TestCase(3, 60, 66)]
+    [TestCase(3, 120, 132)]
+    [TestCase(3, 250, 275)]
+    public void A_ten_percent_drift_across_a_power_of_two_never_reads_as_doubled(int windows, int baselineMs, int driftMs)
+    {
+        var (governor, tallies, now) = Started();
+        SeedBaseline(governor, tallies, ref now, baselineMs);
+
+        for (var window = 0; window < windows; window++)
+        {
+            now += Window;
+            Assert.That(governor.Observe(now, tallies.Add(20, driftMs), 32), Is.Null,
+                $"{baselineMs} ms to {driftMs} ms is a drift, not a doubling");
+        }
+
+        Assert.That(governor.Target, Is.Zero);
+    }
+
+    [Test]
+    public void Quiet_time_with_no_throttling_returns_every_withheld_permit_in_one_idle_step()
+    {
+        var (governor, tallies, now) = Started();
+        now += Window;
+        governor.Observe(now, tallies.Add(100, 4, retries: 100), 32);
+        Assert.That(governor.Target, Is.EqualTo(8));
+
+        now += ReplayStoragePressureGovernor.IdleWindowsToReset * Window;
+        var step = governor.Observe(now, tallies.Add(3, 4), 32);
+
+        Assert.That(step, Is.EqualTo(new ReplayStoragePressureStep(1, ReplayStoragePressureReason.Idle)));
+        Assert.That(governor.Target, Is.Zero, "the next storm starts at the full ceiling");
+    }
+
+    [Test]
+    public void Quiet_windows_accumulate_toward_the_idle_reset_but_a_throttle_retry_breaks_the_run()
+    {
+        var (governor, tallies, now) = Started();
+        now += Window;
+        governor.Observe(now, tallies.Add(100, 4, retries: 100), 32);
+
+        for (var window = 1; window < ReplayStoragePressureGovernor.IdleWindowsToReset; window++)
+        {
+            now += Window;
+            Assert.That(governor.Observe(now, tallies.Add(0, 4), 32), Is.Null);
+        }
+
+        now += Window;
+        Assert.That(governor.Observe(now, tallies.Add(0, 4, retries: 1), 32), Is.Null,
+            "a throttle retry, however few reads, is not quiet");
+        Assert.That(governor.Target, Is.EqualTo(8));
+
+        for (var window = 1; window < ReplayStoragePressureGovernor.IdleWindowsToReset; window++)
+        {
+            now += Window;
+            Assert.That(governor.Observe(now, tallies.Add(0, 4), 32), Is.Null);
+        }
+
+        now += Window;
+        Assert.That(governor.Observe(now, tallies.Add(0, 4), 32)?.Reason, Is.EqualTo(ReplayStoragePressureReason.Idle));
+    }
+
     [TestCase(408, true)]
     [TestCase(429, true)]
     [TestCase(500, true)]
@@ -261,8 +321,8 @@ public class ReplayStoragePressureGovernorTests
         tallies.Add(99, 4);
         var end = tallies.Add(1, 3000);
 
-        Assert.That(end.P99MillisecondsSince(start), Is.EqualTo(8),
-            "99 of 100 window reads took 4 ms, in the [4, 8) bucket; earlier slow reads are outside the window");
+        Assert.That(end.P99MillisecondsSince(start), Is.EqualTo(4.096).Within(1e-9),
+            "99 of 100 window reads took 4 ms, in the [3.584, 4.096) ms bucket; earlier slow reads are outside the window");
         Assert.That(start.P99MillisecondsSince(start), Is.Null);
     }
 }

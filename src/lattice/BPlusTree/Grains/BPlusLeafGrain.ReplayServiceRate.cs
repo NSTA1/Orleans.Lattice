@@ -129,6 +129,45 @@ internal sealed partial class BPlusLeafGrain
         return disposition < 0;
     }
 
+    /// <summary>
+    /// Gives the storage-pressure governor (issue #5877) its idle verdict before
+    /// an activation queues for a permit. A quiet silo releases no permits, so
+    /// the release seam alone could never observe that a storm has passed; this
+    /// is where the next storm arrives. On an idle step every storage-withheld
+    /// permit is returned to the gate at once, so the storm starts at the full
+    /// ceiling. A window that closes here as pressured only sets the target;
+    /// permits are withheld at the release seam, one per release, as before.
+    /// </summary>
+    internal static void RestoreReplayStorageWhenIdle(SemaphoreSlim gate, long now)
+    {
+        if (Volatile.Read(ref _storageWithheldReplayPermits) == 0
+            || Volatile.Read(ref _replayStoragePressureGovernor) is null)
+            return;
+
+        ReplayStoragePressureStep? step = null;
+        lock (_replayConcurrencyGateLock)
+        {
+            var governor = _replayStoragePressureGovernor;
+            if (governor is null || _storageWithheldReplayPermits == 0 || !governor.IsDue(now))
+                return;
+
+            var observed = governor.Observe(now, ReplayStoragePressure.Read(), _replayConcurrencyCeiling);
+            if (observed is { Direction: > 0 })
+            {
+                step = observed;
+                while (_storageWithheldReplayPermits > governor.Target)
+                    ReconcileReplayStorageLedger(gate, governor.Target);
+            }
+            else if (observed is { } other)
+            {
+                step = other;
+            }
+        }
+
+        if (step is { } taken)
+            RecordReplayStorageStep(taken);
+    }
+
     private static int ReconcileReplayStorageLedger(SemaphoreSlim gate, int target)
     {
         if (_storageWithheldReplayPermits < target && _withheldReplayPermits < _replayConcurrencyCeiling - 1)
@@ -156,6 +195,7 @@ internal sealed partial class BPlusLeafGrain
             {
                 ReplayStoragePressureReason.Throttle => StorageThrottleTrigger,
                 ReplayStoragePressureReason.Latency => StorageLatencyTrigger,
+                ReplayStoragePressureReason.Idle => StorageIdleTrigger,
                 _ => StorageRecoveryTrigger,
             });
 

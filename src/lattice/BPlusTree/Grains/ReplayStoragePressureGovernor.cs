@@ -29,6 +29,15 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// one permit always circulates and the governor can only ever lower
 /// concurrency beneath the resolved ceiling, explicit or default, never raise it.
 /// </para>
+/// <para>
+/// <b>Idle recovery.</b> Recovery normally needs judged windows, and a quiet
+/// silo produces none, so without this a storm's withholding would outlive the
+/// storm and the next one would start reduced. Once at least
+/// <see cref="IdleWindowsToReset"/> windows' worth of time has passed since the
+/// last pressured window with only sparse reads and no throttle retry at all,
+/// the target returns to zero in one step with its own reason. Sparse evidence
+/// can therefore return permits but never withhold one.
+/// </para>
 /// </remarks>
 internal sealed class ReplayStoragePressureGovernor(long windowTicks)
 {
@@ -39,6 +48,7 @@ internal sealed class ReplayStoragePressureGovernor(long windowTicks)
     internal const double LatencyFactor = 2.0;
     internal const double DecreaseFraction = 0.25;
     internal const int CleanWindowsPerStep = 3;
+    internal const int IdleWindowsToReset = 4;
 
     private bool _hasWindow;
     private long _windowStart;
@@ -46,6 +56,7 @@ internal sealed class ReplayStoragePressureGovernor(long windowTicks)
     private double? _baselineP99;
     private int _cleanWindows;
     private int _cooldown;
+    private long _idleWindows;
 
     /// <summary>How many permits the governor currently wants withheld.</summary>
     internal int Target { get; private set; }
@@ -72,10 +83,26 @@ internal sealed class ReplayStoragePressureGovernor(long windowTicks)
         if (now - _windowStart < windowTicks)
             return null;
 
+        var elapsedWindows = (now - _windowStart) / windowTicks;
         var reads = sample.SliceReads - _windowSample.SliceReads;
         var retries = sample.ThrottleRetries - _windowSample.ThrottleRetries;
         var p99 = reads >= MinimumLatencyReads ? sample.P99MillisecondsSince(_windowSample) : null;
         StartWindow(now, sample);
+
+        if (p99 is null && reads < MinimumThrottleReads && retries == 0)
+        {
+            _idleWindows += elapsedWindows;
+            if (_idleWindows < IdleWindowsToReset || Target == 0)
+                return null;
+
+            Target = 0;
+            _cleanWindows = 0;
+            _cooldown = 0;
+            _idleWindows = 0;
+            return new ReplayStoragePressureStep(1, ReplayStoragePressureReason.Idle);
+        }
+
+        _idleWindows = 0;
 
         var throttled = reads >= MinimumThrottleReads && retries >= reads * ThrottleRatio;
         var slow = p99 is { } windowP99 && _baselineP99 is { } baseline && windowP99 >= baseline * LatencyFactor;
@@ -135,9 +162,12 @@ internal enum ReplayStoragePressureReason
 
     /// <summary>Enough consecutive unpressured windows to return a permit.</summary>
     Recovery,
+
+    /// <summary>Enough quiet time with no throttling to return every withheld permit.</summary>
+    Idle,
 }
 
 /// <summary>One step of the replay permit ceiling.</summary>
-/// <param name="Direction">-1 when permits were withheld, +1 when one was returned.</param>
+/// <param name="Direction">-1 when permits were withheld, +1 when any were returned.</param>
 /// <param name="Reason">Why.</param>
 internal readonly record struct ReplayStoragePressureStep(int Direction, ReplayStoragePressureReason Reason);
