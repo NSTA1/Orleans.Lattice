@@ -197,7 +197,7 @@ function Get-TuningKnob {
 			AutoToken = $script:TuningAutoToken
 			Derivation = 'the library sizes the WAL replay gate from the lesser of Environment.ProcessorCount and the enforced cgroup CPU grant (ResolveGateSizing, issue #2821)'
 			Consumer = 'RepoContextReplayConcurrency.ResolveMaxConcurrentReplays'
-			Sentinel = '0 is LatticeOptions.DefaultWalMaterialiserMaxConcurrentReplays, which resolves the WAL replay gate at runtime instead of pinning it - this is the value that produced 625 OutOfMemoryException on acceptance run 10 (issue #2863)'
+			Sentinel = '0 selects the CPU-derived ceiling (the library default before issue #5877), which resolves the WAL replay gate at runtime instead of pinning it - this is the value that produced 625 OutOfMemoryException on acceptance run 10 (issue #2863)'
 		},
 		[pscustomobject]@{
 			Name = 'EMBEDDER_CPUS'

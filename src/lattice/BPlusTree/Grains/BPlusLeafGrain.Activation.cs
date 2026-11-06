@@ -354,7 +354,7 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Count of permits currently <b>withheld</b> from
-    /// <see cref="_replayConcurrencyGate"/> by memory or opt-in service-rate
+    /// <see cref="_replayConcurrencyGate"/> by memory, service-rate or storage-pressure
     /// backpressure, so the effective ceiling is
     /// <c>_replayConcurrencyCeiling - _withheldReplayPermits</c>.
     /// <para>
