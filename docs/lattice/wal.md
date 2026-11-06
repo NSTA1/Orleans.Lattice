@@ -1642,9 +1642,18 @@ claimless view, and the leaf advances there by replay instead.
   write then raises the close's head at that partition to the head the re-claim
   returned and marks the partition resolved; a failed write leaves it carried. A
   re-claim below the witness, or a witness from another shard root, resolves
-  nothing. From the first coverage-lag tick after the witness, the tick arms each
-  carried partition the leaf has no other reason to arm at, once for each partition
-  and witness, and again after a failed attempt; it never re-reads the marker for a
+  nothing. From the first coverage-lag tick after the witness, the tick arms a
+  carried partition only while the carry **binds** there
+  ([#5851](https://github.com/NSTA1/Orleans.Lattice/issues/5851)): the leaf has an
+  own applied append above its checkpoint that the tick's advance could not pass,
+  and the bound its latest stamped response reported, which covers every close
+  carried there, lies above that checkpoint. A partition an arm has already claimed,
+  whose resolve write failed, binds too while it holds such an append, whatever its
+  bound. The tick checks this in memory first, so a
+  sibling with nothing binding reads nothing, and again on its own fresh marker
+  read, which alone triggers the re-claim. A carry that binds nothing is left in
+  place, so every stamp keeps the close. Each partition is armed once for each
+  witness, and again after a failed attempt; it never re-reads the marker for a
   close it cannot resolve. While the close is carried, each WAL partition reports
   the donor's **stale high** for it. That is
   the highest offset of a donor record from any activation other than the closing
@@ -1693,14 +1702,39 @@ claimless view, and the leaf advances there by replay instead.
   may touch other keys (a range delete, a transaction terminal, or a record
   naming matched keys) and by every record pushed out of the table. So an
   unstamped write elsewhere in the partition no longer holds the split back. The
-  shared watermark every stamped response reports is unchanged.
+  shared watermark every stamped response reports is unchanged. An activation that
+  has not yet read its markers reads them once before it takes its first cut, so
+  the cut's view of the donor carries every close pending on it; a close recorded
+  after that read still caps the cut.
 - **Catching up.** Only a replay reads past a foreign or unstamped record, and a
   pre-arm leaf that is neither starved nor stalled does not replay. So when the
   claimless advance, or a split's read position, is held only by a reported bound,
   the leaf's next coverage-lag tick runs the existing replay drive, which reads
-  past it. That happens once for each partition and bound, and never on a write.
-  A drive that is refused or deferred, or that otherwise does not run its replay,
-  leaves the bound owed for the next tick.
+  past it. A hold by concrete close heads is caught up the same way
+  ([#5851](https://github.com/NSTA1/Orleans.Lattice/issues/5851)): the claimless
+  advance reads to the close head minus one once its reported bound is passed, and
+  a split's read position to the higher of that and the cut's foreign high, which
+  includes the stale highs of the closes the donor carries, once the shared
+  unstamped watermark is passed. A close head is a target only when no close
+  bearing on the leaf is deferred at any partition and no donor bound is pending: a
+  deferred head is the arm's to resolve, never a replay's. The replay leaves the
+  checkpoint at its own contiguous read position, never at the target. A drive runs
+  once for each partition and target, again only when the target rises, and never
+  on a write. A drive that is refused or deferred, or that otherwise does not run
+  its replay, leaves the target owed for the next tick.
+- **Fetching a missing report.** A leaf's claimless view at a partition is the
+  report its latest stamped append returned. An idle leaf whose latest report
+  predates a close it now carries has no covering report, and writes nothing that
+  would bring one. So on the coverage-lag tick, when that missing report is the only
+  hold (no hand-off open, the partition not latched stale, and the checkpoint at or
+  past every close head minus one and below the leaf's own high), the leaf fetches,
+  read-only, the report a pre-arm append at that partition would carry, records it as
+  that append's response, and advances to its own high when the fetched bound allows
+  it, never past it
+  ([#5851](https://github.com/NSTA1/Orleans.Lattice/issues/5851)). The fetch never
+  runs on a write, inside a starvation drive, or at a partition the activation has
+  claimed. A WAL shard on an older build that does not know the call turns the fetch
+  off for the rest of the activation; any other failure is retried on the next tick.
 
 **Cost of the claimless advance.** Per stamped or pre-arm append: one comparison
 for the reader's narrow, a request-context read for a forward chain, and a counter
@@ -1709,7 +1743,9 @@ A pending close adds one stale-high lookup per close carried. Per forward: one
 small array per hop. Per split: one marker write closes the window, and the read of
 the heads also returns the bounds; filtering the unstamped bound by key
 scans the 256-entry table once per partition. A transfer refused stale costs one view read and
-up to four descents (two keys, against the sibling and then its donor) before it retries. Each reported bound that
+up to four descents (two keys, against the sibling and then its donor) before it retries. A report fetch is one
+read-only, interleaving WAL shard call per held partition per tick, answered from memory. The carried-close re-claim
+reads nothing on a tick where no carried close binds. Each reported bound or close head that
 holds a leaf costs one replay drive on a tick, through the replay permit. A leaf
 allocates its two per-partition bound arrays once, on the first such hold.
 
@@ -1944,6 +1980,20 @@ above a completed split's key that the leaf no longer declares; the sibling hold
 them. A row below that key - one a later bulk narrow stranded, owed to the graft's
 relocation - is kept.
 
+**A hinted leaf captures before it persists**
+([#5877](https://github.com/NSTA1/Orleans.Lattice/issues/5877)). A split sibling's birth
+hint, or a bulk switch's, can give a leaf its first checkpoint at a partition that no
+durable snapshot covers. Persisted as it is, that checkpoint would sit above the leaf's
+coverage, and a kill or a failed capture before the next capture would leave the next
+activation to repair at activation or replay cold. So every flush of such a checkpoint -
+the coalescing flush, the coverage-lag tick's bank step, an explicit flush and the
+graceful-deactivation flush - first captures the leaf's cache, claiming the hinted
+checkpoint. A partition still uncovered after that capture is held back from the write
+and stays pending, so its persisted checkpoint stays at -1. A failed capture is retried
+once per coverage-lag tick or at deactivation, never once per flush, and is not charged
+to the zero-coverage repair budget. A partition a snapshot already covers pays nothing
+new, and a leaf's own split advance and its live advance keep their existing path.
+
 **A head is one past a checkpoint.** A WAL head is exclusive - the next offset the log
 will assign - while a leaf's checkpoint is inclusive - the last offset it has applied, and
 it replays every record above it. So every head a split or a bulk operation reads becomes
@@ -2076,7 +2126,9 @@ so a fresh tree held its WAL floor for up to
 
 **When a leaf may advance.** Per partition, the activation advances its checkpoint to
 the highest offset its own applied appends returned, and only when every one of these
-holds; otherwise the checkpoint advances by replay, as before:
+holds; otherwise the checkpoint advances by replay, as before. These are the rules for
+a partition the activation has claimed. Under the pre-arm class a partition it has not
+claimed can also advance, by the rules in [The claimless advance](#the-claimless-advance):
 
 1. **Claimed.** The activation holds a claim at the partition under its current epoch,
    and its view of the append-fence gate is open.
@@ -2168,7 +2220,8 @@ root meanwhile; if one did, it opens its switch then, relocates that root's rows
 closes by fence, as on any other shard.
 
 **Rolling upgrades.** Nothing arms while the gate is closed, and the leaf issues no
-marker read and no shard-root call while no partition is claimed, so a shard root on an
+marker read and no shard-root call while no partition is claimed and the pre-arm gate
+is closed, so a shard root on an
 older build is never asked for its view.
 
 **Cost.** Nothing is added to a write: the tracker is a counter and one offset per
@@ -2183,7 +2236,8 @@ coverage-lag tick, and then:
 - the leaf decides on a per-activation copy of its offsets and computes close heads per
   partition, allocating no array.
 
-A leaf with nothing to advance, or with no partition claimed, reads nothing and makes no
+A leaf with nothing to advance, or with no partition claimed while the pre-arm gate is
+closed, reads nothing and makes no
 call. Once per leaf, a marker write adopts its shard root's flag. Once per activation,
 before its first claim, one shard-root call proves the leaf is reachable; a leaf that is
 not also reads its own marker row.
