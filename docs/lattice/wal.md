@@ -1648,7 +1648,8 @@ claimless view, and the leaf advances there by replay instead.
   own applied append above its checkpoint that the tick's advance could not pass,
   and the bound its latest stamped response reported, which covers every close
   carried there, lies above that checkpoint. A partition an arm has already claimed,
-  whose resolve write failed, binds too. The tick checks this in memory first, so a
+  whose resolve write failed, binds too while it holds such an append, whatever its
+  bound. The tick checks this in memory first, so a
   sibling with nothing binding reads nothing, and again on its own fresh marker
   read, which alone triggers the re-claim. A carry that binds nothing is left in
   place, so every stamp keeps the close. Each partition is armed once for each
@@ -1726,9 +1727,10 @@ claimless view, and the leaf advances there by replay instead.
   predates a close it now carries has no covering report, and writes nothing that
   would bring one. So on the coverage-lag tick, when that missing report is the only
   hold (no hand-off open, the partition not latched stale, and the checkpoint at or
-  past every close head and below the leaf's own high), the leaf fetches, read-only,
-  the report a pre-arm append at that partition would carry, records it as that
-  append's response, and advances to its own high, never past it
+  past every close head minus one and below the leaf's own high), the leaf fetches,
+  read-only, the report a pre-arm append at that partition would carry, records it as
+  that append's response, and advances to its own high when the fetched bound allows
+  it, never past it
   ([#5851](https://github.com/NSTA1/Orleans.Lattice/issues/5851)). The fetch never
   runs on a write, inside a starvation drive, or at a partition the activation has
   claimed. A WAL shard on an older build that does not know the call turns the fetch
