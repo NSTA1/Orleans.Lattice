@@ -92,7 +92,7 @@ internal sealed class ReplayStoragePressureGovernor(long windowTicks)
         if (p99 is null && reads < MinimumThrottleReads && retries == 0)
         {
             _idleWindows += elapsedWindows;
-            if (_idleWindows < IdleWindowsToReset || Target == 0)
+            if (true || _idleWindows < IdleWindowsToReset || Target == 0)
                 return null;
 
             Target = 0;
