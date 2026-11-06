@@ -606,6 +606,7 @@ internal sealed partial class BPlusLeafGrain
             Volatile.Write(ref _replayPermitWaitEwmaTicks, 0);
             Volatile.Write(ref _replayPermitWaitSample, 0);
             Volatile.Write(ref _lastReplayPermitProgress, 0);
+            Volatile.Write(ref _lastReplayHolderProgress, 0);
             Volatile.Write(ref ReplayHeapPressure.ReaderForTest, null);
         }
 
@@ -1371,9 +1372,19 @@ internal sealed partial class BPlusLeafGrain
         /// <summary>
         /// No queued activation has acquired a permit for at least the bound:
         /// the permits already issued are not coming back, which is a hold-time
-        /// condition rather than a queue-depth one.
+        /// condition rather than a queue-depth one. Since issue #5877 this also
+        /// means no permit holder has read a WAL slice within the bound: the
+        /// holders have stopped advancing.
         /// </summary>
         NoProgress,
+
+        /// <summary>
+        /// No queued activation has acquired a permit for at least the bound, but
+        /// a permit holder read a WAL slice within it: the holders are advancing,
+        /// only too slowly for the demand (issue #5877). Refused exactly where
+        /// <see cref="NoProgress"/> is; it differs only in what the refusal says.
+        /// </summary>
+        HoldersSlow,
     }
 
     /// <summary>
@@ -1396,20 +1407,80 @@ internal sealed partial class BPlusLeafGrain
     internal static ReplayPermitDrainVerdict ClassifyReplayPermitQueueDrain(
         TimeSpan maxQueueWait, out TimeSpan sinceLastProgress)
     {
+        if (maxQueueWait > TimeSpan.Zero)
+            ExpireStaleReplayPermitWaitMean(maxQueueWait);
+
+        return ClassifyReplayPermitQueueDrainWithoutSideEffects(maxQueueWait, out sinceLastProgress);
+    }
+
+    /// <summary>
+    /// <see cref="ClassifyReplayPermitQueueDrain"/> without discarding a stale
+    /// mean: a stale mean is read as zero instead, which is the value the
+    /// discarding form would leave behind, so both return the same verdict for
+    /// the same state. Writes nothing (issue #5877), so the admission pre-check
+    /// ahead of the snapshot rehydrate cannot change what the acquisition that
+    /// follows it observes.
+    /// </summary>
+    internal static ReplayPermitDrainVerdict ClassifyReplayPermitQueueDrainWithoutSideEffects(
+        TimeSpan maxQueueWait, out TimeSpan sinceLastProgress)
+    {
         var lastProgress = Volatile.Read(ref _lastReplayPermitProgress);
         sinceLastProgress = lastProgress == 0 ? TimeSpan.Zero : Stopwatch.GetElapsedTime(lastProgress);
 
         if (maxQueueWait <= TimeSpan.Zero)
             return ReplayPermitDrainVerdict.Draining;
 
-        ExpireStaleReplayPermitWaitMean(maxQueueWait);
-
-        if (Volatile.Read(ref _replayPermitWaitEwmaTicks) >= maxQueueWait.Ticks)
+        var sample = Volatile.Read(ref _replayPermitWaitSample);
+        var meanIsCurrent = sample != 0 && Stopwatch.GetElapsedTime(sample) < maxQueueWait;
+        if (meanIsCurrent && Volatile.Read(ref _replayPermitWaitEwmaTicks) >= maxQueueWait.Ticks)
             return ReplayPermitDrainVerdict.WaitExceeded;
 
-        return lastProgress != 0 && sinceLastProgress >= maxQueueWait
-            ? ReplayPermitDrainVerdict.NoProgress
-            : ReplayPermitDrainVerdict.Draining;
+        if (lastProgress == 0 || sinceLastProgress < maxQueueWait)
+            return ReplayPermitDrainVerdict.Draining;
+
+        var holderProgress = Volatile.Read(ref _lastReplayHolderProgress);
+        return holderProgress != 0 && Stopwatch.GetElapsedTime(holderProgress) < maxQueueWait
+            ? ReplayPermitDrainVerdict.HoldersSlow
+            : ReplayPermitDrainVerdict.NoProgress;
+    }
+
+    /// <summary>
+    /// When a replay permit holder last read a WAL slice, as a
+    /// <see cref="Stopwatch"/> timestamp, or <c>0</c> before any (issue #5877).
+    /// Lets <see cref="ClassifyReplayPermitQueueDrain"/> tell holders that are
+    /// slow from holders that have stopped: before it, a gate whose four holders
+    /// were each minutes into a replay that was advancing a slice every few
+    /// seconds was reported as "the permits already issued are not coming back".
+    /// </summary>
+    private static long _lastReplayHolderProgress;
+
+    /// <summary>
+    /// Stamps <see cref="_lastReplayHolderProgress"/>. Called by the replay loop
+    /// for every slice it reads; both of its callers hold a replay permit.
+    /// </summary>
+    internal static void NoteReplayHolderProgress()
+        => Volatile.Write(ref _lastReplayHolderProgress, Stopwatch.GetTimestamp());
+
+    /// <summary>
+    /// Test-only: backdates <see cref="_lastReplayHolderProgress"/> by
+    /// <paramref name="age"/>, or clears it when <see langword="null"/>.
+    /// </summary>
+    internal static void SeedReplayHolderProgressForTest(TimeSpan? age)
+        => Volatile.Write(
+            ref _lastReplayHolderProgress,
+            age is null ? 0 : Stopwatch.GetTimestamp() - (long)(age.Value.TotalSeconds * Stopwatch.Frequency));
+
+    /// <summary>
+    /// Test-only: how long ago a permit holder last read a WAL slice, or
+    /// <see langword="null"/> when none has since the last reset.
+    /// </summary>
+    internal static TimeSpan? ReplayHolderProgressAgeForTest
+    {
+        get
+        {
+            var stamp = Volatile.Read(ref _lastReplayHolderProgress);
+            return stamp == 0 ? null : Stopwatch.GetElapsedTime(stamp);
+        }
     }
 
     /// <summary>
@@ -1471,8 +1542,9 @@ internal sealed partial class BPlusLeafGrain
     /// nothing about freshness keep proving exactly what it proved before issue
     /// #3306 gave the mean an expiry at all.</param>
     internal static void SeedReplayPermitWaitStateForTest(
-        TimeSpan mean, TimeSpan? sinceLastProgress, TimeSpan? sinceLastSample = null)
+        TimeSpan mean, TimeSpan? sinceLastProgress, TimeSpan? sinceLastSample = null, TimeSpan? sinceHolderProgress = null)
     {
+        SeedReplayHolderProgressForTest(sinceHolderProgress);
         Volatile.Write(ref _replayPermitWaitEwmaTicks, mean.Ticks);
         Volatile.Write(
             ref _replayPermitWaitSample,
@@ -1567,14 +1639,29 @@ internal sealed partial class BPlusLeafGrain
             + $"limit of {bound} admitted for a {admissionClass} caller against a ceiling of "
             + $"{ceiling} permit(s), and ";
 
+        if (verdict == ReplayPermitDrainVerdict.HoldersSlow)
+        {
+            return head
+                + $"no permit has been released to the queue in {sinceLastProgress.TotalSeconds:F0} s, although the "
+                + "replays holding the permits are still advancing: one read a WAL slice within the "
+                + $"{nameof(LatticeOptions)}.{nameof(LatticeOptions.WalReplayPermitMaxQueueWait)} of "
+                + $"{maxQueueWait.TotalMilliseconds:F0} ms. The holders are slow, not stalled: replay throughput is "
+                + "below demand, which is a capacity condition. This activation was refused admission rather than "
+                + "queued behind replays it could not outlast. Retry after a backoff. Read "
+                + "orleans.lattice.wal.replay.permit_hold for how long a replay holds its permit; on remote WAL storage "
+                + "a long hold is usually per-read latency multiplied by the WAL window each leaf replays (issue "
+                + "#5877).";
+        }
+
         if (verdict == ReplayPermitDrainVerdict.NoProgress)
         {
             return head
-                + $"no permit has been released to the queue in {sinceLastProgress.TotalSeconds:F0} s: no queued "
+                + $"no permit has been released to the queue in {sinceLastProgress.TotalSeconds:F0} s, and no replay "
+                + "holding a permit has read a WAL slice in that window either: no queued "
                 + $"activation has acquired a replay permit for at least the "
                 + $"{nameof(LatticeOptions)}.{nameof(LatticeOptions.WalReplayPermitMaxQueueWait)} of "
                 + $"{maxQueueWait.TotalMilliseconds:F0} ms. The permits already issued are not coming back, "
-                + "so the replays holding them are slow; this is a replay hold-time condition, not a queue "
+                + "so the replays holding them have stopped advancing; this is a replay hold-time condition, not a queue "
                 + "that is too deep. This activation was refused admission rather than queued behind work it "
                 + "could not outlast. Retry after a backoff. Check replay and grain-store throughput: read "
                 + "orleans.lattice.wal.replay.permit_hold against the service rate on "
@@ -1595,6 +1682,117 @@ internal sealed partial class BPlusLeafGrain
             + "set to zero disables replay admission refusals; raising it does not cure a slow queue. "
             + "If orleans.lattice.wal.replay.permit_hold is long, the "
             + "replays themselves are slow and the queue is a symptom.";
+    }
+
+    /// <summary>
+    /// Applies the replay admission decision (issue #3284) and throws the
+    /// refusal when it refuses: past the depth bound with the holders stalled or
+    /// slow, or a current smoothed wait at or above the bound.
+    /// </summary>
+    /// <param name="options">The tree's resolved options.</param>
+    /// <param name="admissionClass">The ambient admission class.</param>
+    /// <param name="sideEffectFree">
+    /// <see langword="true"/> for the pre-check ahead of the snapshot rehydrate
+    /// (issue #5877). It then reads the gate's state without discarding a stale
+    /// mean, so it leaves the gate exactly as it found it, and the acquisition
+    /// that follows the rehydrate decides afresh. A refusal records the same
+    /// metric and throws the same exception either way: it is a refusal, not a
+    /// probe.
+    /// </param>
+    /// <exception cref="LatticeSaturatedException">Admission was refused.</exception>
+    private void ThrowIfReplayAdmissionRefused(
+        LatticeOptions options, LatticeReplayAdmissionClass admissionClass, bool sideEffectFree)
+    {
+        var belowBound = TryAdmitReplayPermitWaiter(
+            options.WalReplayPermitQueueDepthPerPermit, admissionClass, out var queued, out var bound);
+        var sinceProgress = TimeSpan.Zero;
+        var verdict = bound > 0 && queued > 0
+            ? sideEffectFree
+                ? ClassifyReplayPermitQueueDrainWithoutSideEffects(options.WalReplayPermitMaxQueueWait, out sinceProgress)
+                : ClassifyReplayPermitQueueDrain(options.WalReplayPermitMaxQueueWait, out sinceProgress)
+            : ReplayPermitDrainVerdict.Draining;
+        if (verdict == ReplayPermitDrainVerdict.WaitExceeded
+            || (!belowBound && verdict is ReplayPermitDrainVerdict.NoProgress or ReplayPermitDrainVerdict.HoldersSlow))
+        {
+            _replayAdmissionPhase = ReplayAdmissionPhase.RefusedAdmission;
+
+            // A typed, retryable back-pressure refusal rather than a bespoke
+            // exception: the caller contract is identical to every other
+            // saturation refusal in this library - back off and retry, the regime
+            // clears - and a second type carrying the same contract would only
+            // fragment the catch sites that already honour it.
+            //
+            // Attributed to the arm that fired (issue #3921). The arms have
+            // different remedies - a long smoothed wait is too much queued, no
+            // progress is permits not coming back, slow holders are too little
+            // replay throughput (issue #5877) - and before the tag a reader had to
+            // parse exception text to tell them apart.
+            var arm = verdict switch
+            {
+                ReplayPermitDrainVerdict.NoProgress => LatticeMetrics.SaturationArmNoProgress,
+                ReplayPermitDrainVerdict.HoldersSlow => LatticeMetrics.SaturationArmHoldersSlow,
+                _ => LatticeMetrics.SaturationArmWaitExceeded,
+            };
+            _replayAdmissionRefusalArm = (string?)arm.Value;
+            LatticeMetrics.RecordSaturationRefusal(
+                state.State.TreeId,
+                LatticeSaturationSource.ReplayPermitAdmission,
+                arm);
+            throw new LatticeSaturatedException(
+                DescribeReplayAdmissionRefusal(
+                    verdict,
+                    queued,
+                    bound,
+                    admissionClass,
+                    Volatile.Read(ref _replayConcurrencyCeiling),
+                    ReplayPermitWaitMeanForTest,
+                    sinceProgress,
+                    options.WalReplayPermitMaxQueueWait)
+                    + (verdict is ReplayPermitDrainVerdict.NoProgress or ReplayPermitDrainVerdict.HoldersSlow
+                        ? DescribeReplayPermitHolders()
+                        : string.Empty),
+                state.State.TreeId!,
+                LatticeSaturationSource.ReplayPermitAdmission);
+        }
+    }
+
+    /// <summary>
+    /// Refuses a replay that admission would refuse <b>before</b> its snapshot
+    /// rehydrate rather than after it (issue #5877).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The permit is acquired after the rehydrate, deliberately: the rehydrate
+    /// decides the replay's start, and it holds no permit while it waits on its own
+    /// memory admission. But the admission decision only reads process-wide
+    /// state, so making it only after the rehydrate meant a refused activation had
+    /// already spent the rehydrate - 9 to 37 seconds of snapshot reads on the
+    /// Layer 3 rig - and every re-armed replay paid it again. During the measured
+    /// cold-restart stall those wasted rehydrates were most of the storage traffic.
+    /// </para>
+    /// <para>
+    /// The same decision runs again at acquisition, so the pre-check cannot admit
+    /// anything the acquisition would refuse. Between the two the gate can change
+    /// either way: a pass followed by a refusal is the behaviour before this check,
+    /// and a refusal that a later acquisition would have admitted fails early
+    /// what the caller's retry then admits.
+    /// </para>
+    /// <para>
+    /// Only options this activation has already resolved are used, so the check
+    /// adds no await and no admission phase ahead of the rehydrate, and leaves the
+    /// attribution of a cancellation there exactly as it was (issue #2770). The
+    /// first replay of an activation therefore still rehydrates before it is
+    /// judged; what this removes is the repeated cost, because every re-armed
+    /// replay of a refused activation runs with its options cached.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="LatticeSaturatedException">Admission was refused.</exception>
+    private void ThrowIfReplayAdmissionRefusedBeforeRehydrate()
+    {
+        if (string.IsNullOrEmpty(state.State.TreeId) || _options is not { } options)
+            return;
+
+        ThrowIfReplayAdmissionRefused(options, LatticeReplayAdmissionContext.Current, sideEffectFree: true);
     }
 
     /// <summary>
@@ -1651,49 +1849,7 @@ internal sealed partial class BPlusLeafGrain
         // No-progress still needs depth: quietness alone must not refuse a new
         // burst. A disabled bound and an empty queue retain unconditional admission.
         var admissionClass = LatticeReplayAdmissionContext.Current;
-        var belowBound = TryAdmitReplayPermitWaiter(
-            options.WalReplayPermitQueueDepthPerPermit, admissionClass, out var queued, out var bound);
-        var sinceProgress = TimeSpan.Zero;
-        var verdict = bound > 0 && queued > 0
-            ? ClassifyReplayPermitQueueDrain(options.WalReplayPermitMaxQueueWait, out sinceProgress)
-            : ReplayPermitDrainVerdict.Draining;
-        if (verdict == ReplayPermitDrainVerdict.WaitExceeded
-            || (!belowBound && verdict == ReplayPermitDrainVerdict.NoProgress))
-        {
-            _replayAdmissionPhase = ReplayAdmissionPhase.RefusedAdmission;
-
-            // A typed, retryable back-pressure refusal rather than a bespoke
-            // exception: the caller contract is identical to every other
-            // saturation refusal in this library - back off and retry, the regime
-            // clears - and a second type carrying the same contract would only
-            // fragment the catch sites that already honour it.
-            //
-            // Attributed to the arm that fired (issue #3921). The two arms have
-            // opposite remedies - a long smoothed wait is too much queued, no
-            // progress is permits not coming back - and before the tag a reader
-            // had to parse exception text to tell them apart.
-            var arm = verdict == ReplayPermitDrainVerdict.NoProgress
-                ? LatticeMetrics.SaturationArmNoProgress
-                : LatticeMetrics.SaturationArmWaitExceeded;
-            _replayAdmissionRefusalArm = (string?)arm.Value;
-            LatticeMetrics.RecordSaturationRefusal(
-                state.State.TreeId,
-                LatticeSaturationSource.ReplayPermitAdmission,
-                arm);
-            throw new LatticeSaturatedException(
-                DescribeReplayAdmissionRefusal(
-                    verdict,
-                    queued,
-                    bound,
-                    admissionClass,
-                    Volatile.Read(ref _replayConcurrencyCeiling),
-                    ReplayPermitWaitMeanForTest,
-                    sinceProgress,
-                    options.WalReplayPermitMaxQueueWait)
-                    + (verdict == ReplayPermitDrainVerdict.NoProgress ? DescribeReplayPermitHolders() : string.Empty),
-                state.State.TreeId!,
-                LatticeSaturationSource.ReplayPermitAdmission);
-        }
+        ThrowIfReplayAdmissionRefused(options, admissionClass, sideEffectFree: false);
 
         _replayAdmissionPhase = ReplayAdmissionPhase.QueuedForPermit;
 
@@ -3287,6 +3443,10 @@ internal sealed partial class BPlusLeafGrain
         // reproduce in the instrument the same blindness it was built to end.
         try
         {
+            // Step -1: refuse here, before the rehydrate, an activation that the
+            // permit acquisition below would refuse anyway (issue #5877).
+            ThrowIfReplayAdmissionRefusedBeforeRehydrate();
+
             // Step 0 (see above).
             _replayAdmissionPhase = ReplayAdmissionPhase.RehydratingSnapshot;
             using (AwaitDiagnostics.Begin("leaf.replay.rehydrate", context.GrainId))
@@ -7277,6 +7437,11 @@ internal sealed partial class BPlusLeafGrain
 
             if (slice.Count == 0)
                 break;
+
+            // A permit holder advanced (issue #5877): both callers of this replay
+            // hold a replay permit, so this is what lets admission tell slow
+            // holders from stalled ones.
+            NoteReplayHolderProgress();
 
             foreach (var entry in slice)
             {

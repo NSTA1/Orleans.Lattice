@@ -62,53 +62,26 @@ public sealed partial class AzureTableWalStorageProvider
         var upperRowKey = BuildEntryRowKey(toOffsetInclusive);
         var routing = filter.IsUnbounded ? null : _routing;
 
-        var examined = 0;
         AzureTableWalEntity? trailingExcluded = null;
-        await foreach (var manifestRow in table
-            .QueryAsync<AzureTableWalEntity>(manifestFilter, cancellationToken: cancellationToken)
-            .ConfigureAwait(false))
+        await foreach (var entity in ReadWindowRowsAsync(
+            table,
+            treeId,
+            shardIndex,
+            manifestFilter,
+            firstWantedOffset,
+            toOffsetInclusive,
+            $"RowKey le '{upperRowKey}'",
+            maxEntries,
+            cancellationToken).ConfigureAwait(false))
         {
-            if (examined >= maxEntries)
+            if (TryDecodeUnlessExcluded(entity, filter, routing, out var mutation))
             {
-                break;
+                trailingExcluded = null;
+                yield return new WalEntry { Offset = entity.Offset, Mutation = mutation };
             }
-
-            var startOffset = long.Parse(
-                manifestRow.RowKey.AsSpan(ManifestRowKeyPrefix.Length),
-                NumberStyles.None,
-                CultureInfo.InvariantCulture);
-
-            // Manifest rows ascend by start offset, so the first batch that
-            // starts past the window ends the scan.
-            if (startOffset > toOffsetInclusive)
+            else
             {
-                break;
-            }
-
-            var batchPartitionKey = BuildBatchPartitionKey(treeId, shardIndex, startOffset);
-            var batchLowerInclusiveRowKey = BuildEntryRowKey(Math.Max(firstWantedOffset, startOffset));
-            var batchFilter =
-                $"PartitionKey eq '{Escape(batchPartitionKey)}' and RowKey ge '{batchLowerInclusiveRowKey}' and RowKey le '{upperRowKey}'";
-
-            await foreach (var entity in table
-                .QueryAsync<AzureTableWalEntity>(batchFilter, maxPerPage: Math.Min(maxEntries - examined, 1000), cancellationToken: cancellationToken)
-                .ConfigureAwait(false))
-            {
-                if (examined >= maxEntries || entity.Offset > toOffsetInclusive)
-                {
-                    break;
-                }
-
-                examined++;
-                if (TryDecodeUnlessExcluded(entity, filter, routing, out var mutation))
-                {
-                    trailingExcluded = null;
-                    yield return new WalEntry { Offset = entity.Offset, Mutation = mutation };
-                }
-                else
-                {
-                    trailingExcluded = entity;
-                }
+                trailingExcluded = entity;
             }
         }
 

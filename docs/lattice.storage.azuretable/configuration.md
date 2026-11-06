@@ -83,6 +83,12 @@ siloBuilder.AddAzureTableWalStorage(o =>
 | [`PhaseOneTransientRetryMaxAttempts`](#phaseonetransientretrymaxattempts) | `int` | `2` |
 | [`PhaseOneTransientRetryBaseDelay`](#phaseonetransientretrybasedelay) | `TimeSpan` | 25 ms |
 
+### Read options
+
+| Option | Type | Default |
+|---|---|---|
+| [`ReadBatchFetchConcurrency`](#readbatchfetchconcurrency) | `int` | `8` |
+
 ### Saturation options
 
 | Option | Type | Default |
@@ -103,7 +109,7 @@ siloBuilder.AddAzureTableWalStorage(o =>
 | [`Compression`](#compression) | `LatticeCompression` | `Zstd` |
 | [`CompressionMinPayloadBytes`](#compressionminpayloadbytes) | `int` | 256 |
 
-Every non-null default above is also published as a public member of `AzureTableWalStorageOptions`: the constants `DefaultTableName`, `DefaultPipelinePhaseTwoCommits`, `DefaultEliminateCandidateRowOnHotPath`, `DefaultHonorSaturationSignal`, `DefaultPhaseOneTransientRetryMaxAttempts`, `DefaultCompression`, and `DefaultCompressionMinPayloadBytes`, and the `static readonly` `TimeSpan` fields `DefaultRetryNetworkTimeout`, `DefaultPhaseTwoCoalescingWindow`, `DefaultPhaseTwoCommitTimeout`, `DefaultSaturationShortCircuitCooldown`, `DefaultTrimFullSweepInterval`, and `DefaultPhaseOneTransientRetryBaseDelay`. `DefaultPhaseOneTransientRetryMaxDelay` (250 ms) is not an option's default but the fixed cap on the phase-1 retry backoff.
+Every non-null default above is also published as a public member of `AzureTableWalStorageOptions`: the constants `DefaultTableName`, `DefaultPipelinePhaseTwoCommits`, `DefaultEliminateCandidateRowOnHotPath`, `DefaultHonorSaturationSignal`, `DefaultPhaseOneTransientRetryMaxAttempts`, `DefaultReadBatchFetchConcurrency`, `DefaultCompression`, and `DefaultCompressionMinPayloadBytes`, and the `static readonly` `TimeSpan` fields `DefaultRetryNetworkTimeout`, `DefaultPhaseTwoCoalescingWindow`, `DefaultPhaseTwoCommitTimeout`, `DefaultSaturationShortCircuitCooldown`, `DefaultTrimFullSweepInterval`, and `DefaultPhaseOneTransientRetryBaseDelay`. `DefaultPhaseOneTransientRetryMaxDelay` (250 ms) is not an option's default but the fixed cap on the phase-1 retry backoff.
 
 ## Option guidance
 
@@ -223,6 +229,24 @@ Number of additional in-place retries the provider issues when a phase-1 batch c
 ### `PhaseOneTransientRetryBaseDelay`
 
 Base delay for the jittered backoff between phase-1 transient retries. The wait before the n-th retry (1-based) is a random value in `[0, BaseDelay * n)`, capped at 250 ms (`AzureTableWalStorageOptions.DefaultPhaseOneTransientRetryMaxDelay`), so multiple hot shards do not retry in lockstep. Default is 25 ms. Set to `TimeSpan.Zero` to retry without delay. This knob is not validated: a negative value also retries without delay.
+
+### `ReadBatchFetchConcurrency`
+
+How many per-batch row queries one WAL read may have in flight at once. Every appended batch is its own table partition, so a read over many small batches costs one query per batch; issued one after another, a 256-entry replay slice over batches of about seven entries is about 39 round trips, which made a cold-restart leaf replay take minutes against remote storage (issue #5877). Above `1`, a read starts the queries for the next batches its window needs while it consumes the current one.
+
+What a read returns does not change: rows are consumed strictly in offset order, so the entries, their order, the entry cap and a filtered read's trailing routing-only entry are identical to the serial read. A batch is started early only while the batches already in flight cannot fill the window by their manifest extents, so no batch is queried that the serial read would not have queried; when the extents over-state the rows present, the window is filled by later rounds.
+
+Default is 8. `1` restores the serial read, and values below `1` are treated as `1`. The cost is request rate: peak table queries per second scale with this value times the number of concurrent readers, which during a cold restart is the silo's WAL replay permit count (`LatticeOptions.WalMaterialiserMaxConcurrentReplays`). Lower it if the account throttles reads.
+
+```csharp verify
+using Orleans.Lattice.Storage.AzureTable;
+
+var serialReads = new AzureTableWalStorageOptions
+{
+    ConnectionString = "UseDevelopmentStorage=true",
+    ReadBatchFetchConcurrency = 1,
+};
+```
 
 ### `HonorSaturationSignal`
 

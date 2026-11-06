@@ -355,7 +355,72 @@ internal sealed class InMemoryWalTable
         // relies on the page boundary for its Top(1) probes, so one page is a
         // faithful default.
         var pageSize = maxPerPage is > 0 ? maxPerPage.Value : Math.Max(matches.Count, 1);
-        return new ListAsyncPageable(matches, pageSize);
+        return new ListAsyncPageable(matches, pageSize, this);
+    }
+
+    /// <summary>
+    /// Simulated service time per query, spent before its first page is
+    /// returned. Zero (the default) adds none.
+    /// </summary>
+    public TimeSpan QueryLatency { get; set; }
+
+    /// <summary>
+    /// When set, the simulated service time of each query, overriding
+    /// <see cref="QueryLatency"/>. Lets a fixture make queries finish out of the
+    /// order they were issued.
+    /// </summary>
+    public Func<TimeSpan>? QueryLatencySource { get; set; }
+
+    private int _queriesInService;
+
+    /// <summary>
+    /// Queries currently inside their <see cref="QueryLatency"/>.
+    /// </summary>
+    public int QueriesInService => Volatile.Read(ref _queriesInService);
+
+    /// <summary>
+    /// Removes one row directly, bypassing the client surface. Models a row a
+    /// manifest extent claims but the table does not hold.
+    /// </summary>
+    public bool Remove(string partitionKey, string rowKey)
+    {
+        lock (_gate)
+        {
+            return _rows.Remove((partitionKey, rowKey));
+        }
+    }
+
+    /// <summary>
+    /// The most queries that were inside their <see cref="QueryLatency"/> at
+    /// the same moment.
+    /// </summary>
+    public int MaxConcurrentQueries { get; private set; }
+
+    private async Task ServeLatencyAsync()
+    {
+        TimeSpan latency;
+        lock (_gate)
+        {
+            latency = QueryLatencySource?.Invoke() ?? QueryLatency;
+        }
+
+        if (latency <= TimeSpan.Zero)
+            return;
+
+        var inService = Interlocked.Increment(ref _queriesInService);
+        lock (_gate)
+        {
+            MaxConcurrentQueries = Math.Max(MaxConcurrentQueries, inService);
+        }
+
+        try
+        {
+            await Task.Delay(latency);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _queriesInService);
+        }
     }
 
     /// <summary>
@@ -476,7 +541,7 @@ internal sealed class InMemoryWalTable
         }
     }
 
-    private sealed class ListAsyncPageable(List<AzureTableWalEntity> items, int pageSize)
+    private sealed class ListAsyncPageable(List<AzureTableWalEntity> items, int pageSize, InMemoryWalTable owner)
         : AsyncPageable<AzureTableWalEntity>
     {
         public override async IAsyncEnumerable<Page<AzureTableWalEntity>> AsPages(
@@ -484,6 +549,7 @@ internal sealed class InMemoryWalTable
             int? pageSizeHint = null)
         {
             await Task.Yield();
+            await owner.ServeLatencyAsync();
             var effective = pageSizeHint is > 0 ? pageSizeHint.Value : pageSize;
             if (items.Count == 0)
             {

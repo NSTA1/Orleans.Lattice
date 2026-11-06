@@ -749,6 +749,40 @@ public sealed class AzureTableWalStorageOptions
     /// <summary>Upper bound on any single phase-1 transient-retry backoff wait (250 ms).</summary>
     public static readonly TimeSpan DefaultPhaseOneTransientRetryMaxDelay = TimeSpan.FromMilliseconds(250);
 
+    /// <summary>
+    /// How many per-batch row queries one WAL read may have in flight at once.
+    /// <para>
+    /// Every appended batch is its own table partition, so a read spanning many
+    /// small batches costs one query per batch. Issued serially, a 256-entry replay
+    /// slice over batches averaging seven entries is about 39 round trips, which is
+    /// what made cold-restart replay take minutes per leaf against remote storage
+    /// (issue #5877). With a value above <c>1</c>, a read starts the queries for
+    /// the next batches the window needs while it consumes the current one. Rows
+    /// are still consumed strictly in offset order, so the entries, their order,
+    /// the entry cap and the trailing routing-only entry of a filtered read are
+    /// identical to the serial read.
+    /// </para>
+    /// <para>
+    /// A batch is started early only while the batches ahead of it cannot already
+    /// fill the window by their manifest extents. An extent can exceed the rows
+    /// actually present, never the reverse, so this never issues a query the
+    /// serial read would not have issued; a window the extents under-cover is
+    /// filled by later rounds.
+    /// </para>
+    /// <para>
+    /// The cost is table request rate: peak queries per second scale with this
+    /// value times the number of concurrent readers, which on a cold restart is the
+    /// silo's WAL replay permit count
+    /// (<c>LatticeOptions.WalMaterialiserMaxConcurrentReplays</c>). Lower it if the
+    /// account throttles. <c>1</c> restores the serial read; values below <c>1</c>
+    /// are treated as <c>1</c>.
+    /// </para>
+    /// </summary>
+    public int ReadBatchFetchConcurrency { get; set; } = DefaultReadBatchFetchConcurrency;
+
+    /// <summary>Default value for <see cref="ReadBatchFetchConcurrency"/> (8).</summary>
+    public const int DefaultReadBatchFetchConcurrency = 8;
+
 
     /// <summary>
     /// Per-row WAL payload compression algorithm. Defaults to
