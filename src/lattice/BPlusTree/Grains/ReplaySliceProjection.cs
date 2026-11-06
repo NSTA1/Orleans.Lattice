@@ -72,7 +72,7 @@ internal static class ReplaySliceProjection
                 else
                 {
                     trailingExcluded = false;
-                    result.Add(entry);
+                    result.Add(Detached(entry));
                 }
 
                 if (examined >= budget)
@@ -96,5 +96,29 @@ internal static class ReplaySliceProjection
 
         var complete = budgetSpent || covered >= toInclusive;
         return (result.ToArray(), complete, covered);
+    }
+
+    /// <summary>
+    /// A copy of <paramref name="entry"/> that shares no mutable state with the
+    /// cached page (condition A-d): its value bytes and version vector are
+    /// copied, so whatever one leaf does with what it was handed, the next leaf
+    /// served from the same page receives the bytes storage returned. A
+    /// key-scoped entry reaches only its owning leaf, so this costs about one
+    /// copy per entry, as each leaf decoding its own read did.
+    /// </summary>
+    private static CommitLogSliceEntry Detached(CommitLogSliceEntry entry)
+    {
+        var mutation = entry.Mutation;
+        if (mutation.Value is null && mutation.VectorClock is null)
+            return entry;
+
+        return entry with
+        {
+            Mutation = mutation with
+            {
+                Value = mutation.Value?.ToArray(),
+                VectorClock = mutation.VectorClock?.Clone(),
+            },
+        };
     }
 }

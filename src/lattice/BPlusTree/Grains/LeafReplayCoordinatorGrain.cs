@@ -233,44 +233,12 @@ internal sealed class LeafReplayCoordinatorGrain(
         return (page, false);
     }
 
-    /// <summary>
-    /// Reads one page from storage through the commit-log reader's clamped
-    /// unfiltered read (condition A-g), bracketed by two reads of the partition
-    /// incarnation: a reset that lands while the page is read changes it, and
-    /// the page is then discarded and the ring reset (condition I2). Runs on no
-    /// caller's token, because several requests may be waiting on it.
-    /// </summary>
-    internal async Task<ReplayPage?> FillAsync(ReplayPageRing ring, long fromExclusive, long toInclusive, int budget)
+    /// <summary>Reads one page through <see cref="ReplayPageRing.FillAsync"/>, logging a failed read.</summary>
+    private async Task<ReplayPage?> FillAsync(ReplayPageRing ring, long fromExclusive, long toInclusive, int budget)
     {
-        var epoch = ring.Epoch;
-        var incarnation = ring.Incarnation ?? await _reader!.GetIncarnationAsync(_treeId!, _shardIndex, CancellationToken.None);
         try
         {
-            var entries = new List<CommitLogSliceEntry>();
-            await foreach (var (offset, mutation) in _reader!.ReadAsync(
-                _treeId!, _shardIndex, fromExclusive, CancellationToken.None))
-            {
-                if (offset > toInclusive)
-                    break;
-                entries.Add(new CommitLogSliceEntry(offset, mutation));
-                if (entries.Count >= budget)
-                    break;
-            }
-
-            var after = await _reader!.GetIncarnationAsync(_treeId!, _shardIndex, CancellationToken.None);
-            if (after != incarnation)
-            {
-                if (ring.Epoch == epoch)
-                    ring.Reset(after);
-                return null;
-            }
-
-            if (entries.Count == 0)
-                return null;
-
-            var page = new ReplayPage(fromExclusive, entries.ToArray(), incarnation);
-            ring.TryInsert(page, epoch);
-            return page;
+            return await ring.FillAsync(_reader!, _treeId!, _shardIndex, fromExclusive, toInclusive, budget);
         }
         catch (Exception ex)
         {

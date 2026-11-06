@@ -106,7 +106,7 @@ public partial class LeafReplayCoordinatorGrainTests
                 $"trial {trial}: a run that reaches the window's end projects a complete slice");
             if (complete)
             {
-                Assert.That(slice, Is.EqualTo(direct),
+                Assert.That(slice.Select(Comparable), Is.EqualTo(direct.Select(Comparable)),
                     $"trial {trial}: from={from} to={to} budget={budget} filter={filter}");
             }
             else
@@ -118,6 +118,12 @@ public partial class LeafReplayCoordinatorGrainTests
             }
         }
     }
+
+    /// <summary>Every field of an entry by value; the ring hands out copies of value buffers (A-d).</summary>
+    private static string Comparable(CommitLogSliceEntry e) =>
+        $"{e.Offset}|{e.Mutation.TreeId}|{e.Mutation.Kind}|{e.Mutation.Key}|{e.Mutation.EndExclusiveKey}|"
+        + $"{(e.Mutation.Value is null ? "null" : Convert.ToHexString(e.Mutation.Value))}|{e.Mutation.Timestamp}|"
+        + $"{e.Mutation.IsTombstone}|{e.Mutation.ExpiresAtTicks}|{e.Mutation.OriginClusterId}|{e.Mutation.TransactionId}|{e.Mutation.Category}";
 
     private static bool IsRoutingOnly(CommitLogSliceEntry e) => e.Mutation.Value is null && e.Mutation.Timestamp == default;
 

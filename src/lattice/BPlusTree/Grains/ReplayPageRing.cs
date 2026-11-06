@@ -138,6 +138,47 @@ internal sealed class ReplayPageRing(long budgetBytes)
         return true;
     }
 
+    /// <summary>
+    /// Reads one page from storage through the commit-log reader's clamped
+    /// unfiltered read (condition A-g) and caches it. The read is bracketed by
+    /// two reads of the partition incarnation: a reset that lands while the
+    /// page is read changes it, and the page is then discarded and the ring
+    /// reset (condition I2). Runs on no caller's token, because several
+    /// requests may be waiting on it.
+    /// </summary>
+    /// <returns>The page read, or <see langword="null"/> when the window held nothing or a reset landed during the read.</returns>
+    public async Task<ReplayPage?> FillAsync(
+        ICommitLogReader reader, string treeId, int partition, long fromExclusive, long toInclusive, int budget)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        var epoch = Epoch;
+        var incarnation = Incarnation ?? await reader.GetIncarnationAsync(treeId, partition, CancellationToken.None);
+        var entries = new List<CommitLogSliceEntry>();
+        await foreach (var (offset, mutation) in reader.ReadAsync(treeId, partition, fromExclusive, CancellationToken.None))
+        {
+            if (offset > toInclusive)
+                break;
+            entries.Add(new CommitLogSliceEntry(offset, mutation));
+            if (entries.Count >= budget)
+                break;
+        }
+
+        var after = await reader.GetIncarnationAsync(treeId, partition, CancellationToken.None);
+        if (after != incarnation)
+        {
+            if (Epoch == epoch)
+                Reset(after);
+            return null;
+        }
+
+        if (entries.Count == 0)
+            return null;
+
+        var page = new ReplayPage(fromExclusive, entries.ToArray(), incarnation);
+        TryInsert(page, epoch);
+        return page;
+    }
+
     /// <summary>Drops every page, returning its bytes to the process budget.</summary>
     public void Clear()
     {
