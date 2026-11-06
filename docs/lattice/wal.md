@@ -2130,7 +2130,13 @@ or its descent overlapped a change to the shard's routing structure (#5876) - a 
 being linked, a root promoted, a folded leaf unlinked, a bulk graft or a shard split -
 the answer is no verdict: the leaf appends unstamped and asks again after a backoff, a
 split transfer's routing is not refreshed on it, and the orphaned-leaf audit reports the
-leaf as `RoutingInMotion` rather than judging it. Orphaned-leaf repair never folds an orphan's
+leaf as `RoutingInMotion` rather than judging it.
+
+**Rolling upgrade.** A shard root on a build without the three-valued descent - 10.2.0, or
+any earlier build of this branch - cannot answer a leaf's reachability question: the call
+fails, and the leaf treats the failure as no verdict, appending unstamped and asking again
+after a backoff. It never proves, latches or claims on such a root, so the only cost of a
+mixed cluster is the unstamped appends until the shard root is upgraded. Orphaned-leaf repair never folds an orphan's
 rows; it clears an orphan only after proving every row it holds is readable from the
 reachable owner.
 
