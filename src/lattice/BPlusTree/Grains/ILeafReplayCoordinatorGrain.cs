@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Orleans.Concurrency;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -9,6 +10,24 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// every leaf grain that activates within a single shard. Keyed
 /// <c>{treeId}/{shardIndex}</c>. Internal - the leaf grain is the sole
 /// caller; the V1 surface does not expose this on any public API.
+/// <para>
+/// <b>Every method interleaves (issue #5877).</b> One activation serves every
+/// leaf replaying a WAL partition, and a slice read spans many storage round
+/// trips, so a non-reentrant coordinator let a silo serve at most one slice read
+/// per partition at a time whatever its replay permit count: raising the permits
+/// from 4 to 64 on a cold restart bought 4.7 times the storage reads and made
+/// every replay about 2.5 times slower. Interleaving is safe because the
+/// activation's only state is the lazily parsed key binding and the last-served
+/// slice cache. The binding is parsed and assigned in one synchronous segment and
+/// is the same for every call. The cache is read and returned with no await
+/// between the check and the return, and written - all five fields together - in
+/// the synchronous segment after a read's await, so no call reads or writes it
+/// across an await. Two interleaved reads therefore cannot tear an entry; the
+/// later writer wins, which is the cache's behaviour under serial calls too. The
+/// map of slice reads in flight, which lets an identical request join a read in
+/// storage rather than start a second one, is looked up and inserted in one
+/// synchronous segment and cleared when the read ends.
+/// </para>
 /// </summary>
 [Alias(TypeAliases.ILeafReplayCoordinatorGrain)]
 internal interface ILeafReplayCoordinatorGrain : IGrainWithStringKey
@@ -21,6 +40,7 @@ internal interface ILeafReplayCoordinatorGrain : IGrainWithStringKey
     /// activating concurrently against the same shard share one underlying
     /// commit-log read.
     /// </summary>
+    [AlwaysInterleave]
     Task<IReadOnlyList<CommitLogSliceEntry>> ReadSliceAsync(
         long fromOffsetExclusive,
         long toOffsetInclusive,
@@ -45,6 +65,7 @@ internal interface ILeafReplayCoordinatorGrain : IGrainWithStringKey
     /// anyway.
     /// </para>
     /// </summary>
+    [AlwaysInterleave]
     Task<IReadOnlyList<CommitLogSliceEntry>> ReadSliceAsync(
         long fromOffsetExclusive,
         long toOffsetInclusive,
@@ -56,6 +77,7 @@ internal interface ILeafReplayCoordinatorGrain : IGrainWithStringKey
     /// Returns the current head offset of the per-shard write-ahead log -
     /// i.e. the next sequence number that will be assigned to a future append.
     /// </summary>
+    [AlwaysInterleave]
     Task<long> GetHeadOffsetAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -63,6 +85,7 @@ internal interface ILeafReplayCoordinatorGrain : IGrainWithStringKey
     /// i.e. the offset of the oldest entry still readable. Equals the head
     /// when the log is empty or has never been trimmed.
     /// </summary>
+    [AlwaysInterleave]
     Task<long> GetTailOffsetAsync(CancellationToken cancellationToken = default);
 }
 

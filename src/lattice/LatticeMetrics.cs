@@ -10315,8 +10315,8 @@ public static class LatticeMetrics
     /// <param name="source">The admission seam that refused.</param>
     /// <param name="arm">
     /// The refusing arm, keyed <see cref="TagSaturationArm"/>: one of
-    /// <see cref="SaturationArmWaitExceeded"/>, <see cref="SaturationArmNoProgress"/>
-    /// or <see cref="SaturationArmGcShare"/>.
+    /// <see cref="SaturationArmWaitExceeded"/>, <see cref="SaturationArmNoProgress"/>,
+    /// <see cref="SaturationArmHoldersSlow"/> or <see cref="SaturationArmGcShare"/>.
     /// </param>
     internal static void RecordSaturationRefusal(
         string? treeId, LatticeSaturationSource source, KeyValuePair<string, object?> arm)
@@ -10333,7 +10333,8 @@ public static class LatticeMetrics
     /// <c>replay_permit_admission</c> source only, whose refusals have
     /// different causes and opposite remedies: see
     /// <see cref="SaturationArmWaitExceeded"/>,
-    /// <see cref="SaturationArmNoProgress"/> and
+    /// <see cref="SaturationArmNoProgress"/>,
+    /// <see cref="SaturationArmHoldersSlow"/> and
     /// <see cref="SaturationArmGcShare"/>. A refusal from any other source
     /// carries no arm.
     /// </summary>
@@ -10360,6 +10361,19 @@ public static class LatticeMetrics
     /// lengthens holds and makes this arm fire harder (issue #3921).
     /// </summary>
     public static readonly KeyValuePair<string, object?> SaturationArmNoProgress = new(TagSaturationArm, "no_progress");
+
+    /// <summary>
+    /// Arm of a <c>replay_permit_admission</c> refusal on
+    /// <see cref="SaturationRefusals"/>: the queue was past its depth bound and
+    /// no queued activation acquired a permit for at least
+    /// <see cref="LatticeOptions.WalReplayPermitMaxQueueWait"/>, but the replays
+    /// holding the permits <b>are advancing</b> - one of them read a WAL slice
+    /// within that window. The holders are slow, not stalled: replay throughput is
+    /// below demand, which is a capacity condition (issue #5877). Read it against
+    /// <see cref="SaturationArmNoProgress"/>, which is now reserved for holders
+    /// that have stopped advancing as well.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SaturationArmHoldersSlow = new(TagSaturationArm, "holders_slow");
 
     /// <summary>
     /// Arm of a <c>replay_permit_admission</c> refusal on
