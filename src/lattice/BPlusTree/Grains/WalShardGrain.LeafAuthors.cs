@@ -215,7 +215,8 @@ internal sealed partial class WalShardGrain
 
         lock (_stateGate)
         {
-            return Task.FromResult(Math.Max(_unstampedWatermark, LeafReportLocked(in reader)));
+            // DO-NOT-MERGE red proof: R1/R4 (no watermark, no stale highs).
+            return Task.FromResult(ForeignHighLocked(reader.LeafId, reader.Activation, reader.ReaderTag));
         }
     }
 
