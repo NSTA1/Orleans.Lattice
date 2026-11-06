@@ -10,6 +10,8 @@ PERTURBS: PreArmAlloc
 --- FIND
     /\ preArm' = preArm \cup {next}
     /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
+    /\ IF FreeOn THEN ReportForeign(a) ELSE UNCHANGED seenP
+    /\ ReportStale(a)
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars>>
     /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected, envVars>>
 --- REPLACE
@@ -17,6 +19,8 @@ PERTURBS: PreArmAlloc
 \* MUTATION: the shared watermark is raised.
     /\ lastU' = next
     /\ seenU' = [seenU EXCEPT ![a] = Max2(@, next)]
+    /\ IF FreeOn THEN ReportForeign(a) ELSE UNCHANGED seenP
+    /\ ReportStale(a)
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars>>
     /\ UNCHANGED <<oldUsed, restarted, oldRejected, envVars>>
 --- END

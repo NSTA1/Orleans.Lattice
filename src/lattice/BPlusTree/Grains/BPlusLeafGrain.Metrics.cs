@@ -217,6 +217,12 @@ internal sealed partial class BPlusLeafGrain
             // preserving the #1560 fail-loud contract.
             await TopologySeedPersist.WriteAdoptingBenignFirstCreateRaceAsync(state, ResolveLogger(), context.GrainId);
         }
+        catch (Orleans.Storage.InconsistentStateException)
+        {
+            // #5837, X7: another writer won the row, so no narrow this activation wrote is known to be the last.
+            WithdrawPersistedNarrow();
+            throw;
+        }
         finally
         {
             _persistWriteGate.Release();

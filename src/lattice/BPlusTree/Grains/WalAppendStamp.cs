@@ -17,16 +17,65 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// to it, so an arm can tell its own appends from every other activation's. Empty from
 /// a build that does not send it, which counts as foreign to every claimant.
 /// </param>
+/// <param name="Forwarder">
+/// The first leaf that forwarded the write before the authoring leaf was linked (#5837,
+/// condition 4 and F2'): empty for a write that was not forwarded, or from a build that
+/// does not send it. The WAL shard attributes the record to every forwarder on the chain
+/// as well, under no activation token, so every activation of each counts it as foreign.
+/// </param>
+/// <param name="ForwarderTag">
+/// The narrow that moved the forwarded key out of <paramref name="Forwarder"/>'s span:
+/// the split's sibling id (#5837, X2). Ignored when <paramref name="Forwarder"/> is empty.
+/// </param>
+/// <param name="Forwarder2">The chain's second forwarder (F2'), or empty.</param>
+/// <param name="ForwarderTag2">Its narrow tag.</param>
+/// <param name="Forwarder3">The chain's third forwarder (F2'), or empty; a longer chain is never stamped.</param>
+/// <param name="ForwarderTag3">Its narrow tag.</param>
+/// <param name="ReaderTag">
+/// The authoring activation's persisted narrow tag (#5837, X1, X3, X7): the sibling id
+/// of the last narrow this activation durably wrote, or empty. The WAL shard leaves the
+/// leaf's forwards tagged with it out of the foreign high it reports on this append,
+/// because the activation no longer owns the keys they moved.
+/// </param>
+/// <param name="Close1">
+/// A donor close pending in the authoring leaf's marker (#5837), or unset. The WAL shard
+/// raises the high it reports on this append to the donor's stale high for it.
+/// </param>
+/// <param name="Close2">A second pending donor close, or unset.</param>
 [GenerateSerializer]
 [Immutable]
+[OmitDefaultMemberValues]
 [Alias(TypeAliases.WalAppendStamp)]
 internal readonly record struct WalAppendStamp(
     [property: Id(0)] Guid LeafId,
     [property: Id(1)] long Epoch,
     [property: Id(2)] WalRoutingInitiator Initiator,
     [property: Id(3)] long Generation,
-    [property: Id(4)] Guid Activation = default)
+    [property: Id(4)] Guid Activation = default,
+    [property: Id(5)] Guid Forwarder = default,
+    [property: Id(6)] Guid ForwarderTag = default,
+    [property: Id(7)] Guid ReaderTag = default,
+    [property: Id(8)] Guid Forwarder2 = default,
+    [property: Id(9)] Guid ForwarderTag2 = default,
+    [property: Id(10)] Guid Forwarder3 = default,
+    [property: Id(11)] Guid ForwarderTag3 = default,
+    [property: Id(12)] WalPendingClose Close1 = default,
+    [property: Id(13)] WalPendingClose Close2 = default)
 {
+    /// <summary>
+    /// The most pending donor closes a stamp carries (#5837, per-donor stale high). A
+    /// leaf whose marker holds more must hold its free advance until the excess resolve;
+    /// it never drops one.
+    /// </summary>
+    internal const int MaxPendingCloses = 2;
+
+    /// <summary>
+    /// The most forwarders a stamp carries (#5837, F2'). A write forwarded through more
+    /// hops before its leaf is linked is appended unstamped, which every leaf sharing the
+    /// partition is reported (C4).
+    /// </summary>
+    internal const int MaxForwardHops = 3;
+
     /// <summary>A stamp carrying only a leaf's epoch.</summary>
     public static WalAppendStamp ForLeaf(Guid leafId, long epoch, Guid activation = default) =>
         new(leafId, epoch, WalRoutingInitiator.None, 0, activation);

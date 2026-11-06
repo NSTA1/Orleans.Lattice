@@ -68,6 +68,41 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
 
     // #5833, revision 2, B1: this activation's token, attributed to every append it makes.
     private readonly Guid _activation = Guid.NewGuid();
+
+    // #5837, X1/X3/X7: the sibling id of the last narrow this activation durably wrote, or empty.
+    private Guid _narrowTag;
+
+    // #5837: the donor closes pending on the leaf's marker, as last read; every stamp carries
+    // them, and a partition advances claimlessly only on a report that covered them all.
+    private WalPendingClose _close1;
+    private WalPendingClose _close2;
+    private bool _closesOverCap;
+
+    /// <summary>
+    /// The donor closes still carried, each with the partitions its sibling's arm has
+    /// resolved (a5e2e2ef's G4, A3): a stamp at partition p carries only the closes not
+    /// resolved there. <see cref="_close1"/> and <see cref="_close2"/> are their union, for
+    /// a reader covering every partition (the split's cut).
+    /// </summary>
+    private (WalPendingClose Close, bool[] ResolvedAt)[] _carried = [];
+
+    /// <summary>Whether a donor bound is pending on the leaf's marker as last read: its own link unwitnessed (A6).</summary>
+    private bool _boundPending;
+
+    // #5837, rule D: appends in flight by drain epoch, so a split's drain waits only for
+    // those that started before its narrow; and, while a split window is armed, the
+    // highest own offset per partition of a record whose key moved, and whether an append
+    // touching the window failed without reporting its offset.
+    private readonly int[] _appendsInFlight = new int[2];
+    private int _drainEpoch;
+    private TaskCompletionSource? _drained;
+    private bool _movedArmed;
+    private string? _movedLow;
+    private string? _movedHigh;
+    private long[]? _movedOwnHigh;
+    private bool _movedAmbiguous;
+    private int _routingShard = -1;
+    private long _routingGeneration;
     private readonly IWalAppendFenceGate _gate;
     private readonly IGrainStorage _storage;
     private readonly Action<long> _onSuperseded;
@@ -99,6 +134,25 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     private const int ReachabilityUnproven = 0;
     private const int ReachabilityProven = 1;
     private const int ReachabilityUnreachable = 2;
+
+    /// <summary>
+    /// A split sibling not yet reached by descent whose marker holds its donor's pending
+    /// bound (#5837's latch exemption; a5e2e2ef's D1 on #5851): neither proven nor latched.
+    /// It stamps <see cref="WalAppendStamp.PreArm"/> under the pre-arm gate only, never
+    /// claims, arms or advances claimlessly, and proves again after a backoff.
+    /// </summary>
+    private const int ReachabilityDeferred = 3;
+
+    private long _deferredReproveAtTicks;
+
+    /// <summary>
+    /// Whether this activation's proof read its marker and found no pending donor bound
+    /// (a5e2e2ef's G3 on #5866). Only such a proof admits an eager-gate claim: a proof made
+    /// under the pre-arm gate - a split birth's (P1) or by descent alone - is re-made, with
+    /// the marker, before this activation's first eager claim, so a sibling never claims
+    /// before its own link is witnessed.
+    /// </summary>
+    private bool _markerChecked;
 
     /// <summary>Creates the fence for one leaf activation.</summary>
     /// <param name="leafId">The leaf's grain key.</param>
@@ -232,6 +286,14 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 throw LeafRetiredException.ForSupersededActivation(_leafId, _epoch);
             }
 
+            if (IsDeferredStampingLocked())
+            {
+                // D1-D2: a deferred sibling stamps pre-arm, attributed to this activation,
+                // and never reaches a claim; the dispatch still sends an unrouted write
+                // unstamped (C4).
+                return new ValueTask<WalAppendStamp?>(DecorateLocked(WalAppendStamp.PreArm(_leafId, _activation), partition));
+            }
+
             if (!IsGateOpenLocked())
             {
                 return new ValueTask<WalAppendStamp?>((WalAppendStamp?)null);
@@ -239,7 +301,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
 
             if (_epoch > 0 && _partitions.TryGetValue(partition, out var claimed) && claimed.ClaimedEpoch == _epoch)
             {
-                return new ValueTask<WalAppendStamp?>(WalAppendStamp.ForLeaf(_leafId, _epoch, _activation));
+                return new ValueTask<WalAppendStamp?>(DecorateLocked(WalAppendStamp.ForLeaf(_leafId, _epoch, _activation), partition));
             }
 
             if (_gate.IsPreArmOpen)
@@ -247,11 +309,422 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 // #5833, revision 2: no claim until the leaf arms here (ArmAsync); the
                 // append goes pre-arm, which the partition admits on its routing
                 // generation alone and attributes to this activation.
-                return new ValueTask<WalAppendStamp?>(WalAppendStamp.PreArm(_leafId, _activation));
+                return new ValueTask<WalAppendStamp?>(DecorateLocked(WalAppendStamp.PreArm(_leafId, _activation), partition));
+            }
+
+            if (_requireReachability && !_markerChecked)
+            {
+                // G3: the activation was proven without reading its marker (under the
+                // pre-arm gate); it proves again, with the marker, before it claims. This
+                // append goes unstamped meanwhile.
+                _reachability = ReachabilityUnproven;
+                return new ValueTask<WalAppendStamp?>((WalAppendStamp?)null);
             }
         }
 
         return ClaimAsync(shard, partition, cancellationToken);
+    }
+
+    /// <summary>
+    /// <paramref name="stamp"/> with the forward chain of the call in flight and this
+    /// activation's persisted narrow tag (#5837, F2', X1); <see langword="null"/>, so the
+    /// write is appended unstamped, for a chain past its bound (C4). Called under
+    /// <see cref="_sync"/>.
+    /// </summary>
+    private WalAppendStamp? DecorateLocked(WalAppendStamp stamp, int partition)
+    {
+        if (!WalForwardChain.TryApply(ref stamp, WalForwardChain.Current))
+        {
+            return null;
+        }
+
+        CarriedAtLocked(partition, out var close1, out var close2, out _);
+        return _narrowTag == Guid.Empty && !close1.IsSet
+            ? stamp
+            : stamp with { ReaderTag = _narrowTag, Close1 = close1, Close2 = close2 };
+    }
+
+    /// <summary>
+    /// The first two donor closes carried at <paramref name="partition"/> - not resolved
+    /// there by the sibling's arm (G4, A3) - and whether more are. Called under
+    /// <see cref="_sync"/>; allocates nothing.
+    /// </summary>
+    private void CarriedAtLocked(int partition, out WalPendingClose close1, out WalPendingClose close2, out bool overCap)
+    {
+        close1 = default;
+        close2 = default;
+        overCap = false;
+        var n = 0;
+        foreach (var (close, resolvedAt) in _carried)
+        {
+            if (partition >= 0 && partition < resolvedAt.Length && resolvedAt[partition])
+            {
+                continue;
+            }
+
+            if (n == 0)
+            {
+                close1 = close;
+            }
+            else if (n == 1)
+            {
+                close2 = close;
+            }
+            else
+            {
+                overCap = true;
+            }
+
+            n++;
+        }
+    }
+
+    /// <inheritdoc />
+    public int BeginAppend(in WalRoutingStamp routing)
+    {
+        lock (_sync)
+        {
+            if (routing.IsSet && routing.Initiator.Kind == WalRoutingInitiatorKind.ShardRoot)
+            {
+                if (routing.Initiator.Index != _routingShard)
+                {
+                    _routingShard = routing.Initiator.Index;
+                    _routingGeneration = routing.Generation;
+                }
+                else if (routing.Generation > _routingGeneration)
+                {
+                    _routingGeneration = routing.Generation;
+                }
+            }
+
+            var ticket = _drainEpoch & 1;
+            _appendsInFlight[ticket]++;
+            return ticket;
+        }
+    }
+
+    /// <inheritdoc />
+    public void NoteOwnAppend(int partition, in WalRecord entry, long offset)
+    {
+        lock (_sync)
+        {
+            if (_movedArmed && _movedOwnHigh is { } high && IsMovedLocked(in entry))
+            {
+                if (partition < 0 || partition >= high.Length || offset < 0)
+                {
+                    _movedAmbiguous = true;
+                }
+                else if (offset > high[partition])
+                {
+                    high[partition] = offset;
+                }
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public void EndAppend(int ticket)
+    {
+        TaskCompletionSource? drained = null;
+        lock (_sync)
+        {
+            if (--_appendsInFlight[ticket] == 0 && _drained is { } waiting && ticket != (_drainEpoch & 1))
+            {
+                drained = waiting;
+                _drained = null;
+            }
+        }
+
+        drained?.TrySetResult();
+    }
+
+    /// <summary>
+    /// Arms a split's moved-key window over <c>[<paramref name="splitKey"/>,
+    /// <paramref name="preSplitHigh"/>)</c> (#5837, rule D). Called before the split's
+    /// heads are captured, so every own moved-key record allocated after them is noted:
+    /// one whose append completed before arming was allocated before the heads.
+    /// </summary>
+    internal void ArmSplitWindow(string splitKey, string? preSplitHigh, int partitions)
+    {
+        ArgumentNullException.ThrowIfNull(splitKey);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(partitions);
+        lock (_sync)
+        {
+            _movedArmed = true;
+            _movedLow = splitKey;
+            _movedHigh = preSplitHigh;
+            _movedOwnHigh = new long[partitions];
+            Array.Fill(_movedOwnHigh, -1L);
+            _movedAmbiguous = false;
+        }
+    }
+
+    /// <summary>Disarms the split window once its close is written or abandoned.</summary>
+    internal void DisarmSplitWindow()
+    {
+        lock (_sync)
+        {
+            _movedArmed = false;
+            _movedOwnHigh = null;
+            _movedAmbiguous = false;
+        }
+    }
+
+    /// <summary>
+    /// Completes once every append that started before this call has ended (#5837, rule
+    /// D, the donor's drain after its narrow). One drain at a time: a split runs under
+    /// the leaf's split gate.
+    /// </summary>
+    internal Task DrainAsync()
+    {
+        lock (_sync)
+        {
+            if (_drained is { } pending)
+            {
+                return pending.Task;
+            }
+
+            var old = _drainEpoch & 1;
+            _drainEpoch++;
+            if (_appendsInFlight[old] == 0)
+            {
+                return Task.CompletedTask;
+            }
+
+            _drained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            return _drained.Task;
+        }
+    }
+
+    /// <summary>
+    /// The armed window's moved-key own highs, the shard and routing generation this
+    /// activation's writes were admitted under, and whether the window is ambiguous: an
+    /// append touching it ended without reporting its offset. Read after
+    /// <see cref="DrainAsync"/>.
+    /// </summary>
+    internal bool TryGetSplitWindow(out long[] movedOwnHigh, out int shardIndex, out long generation, out bool ambiguous)
+    {
+        lock (_sync)
+        {
+            movedOwnHigh = _movedOwnHigh is { } high ? (long[])high.Clone() : [];
+            shardIndex = _routingShard;
+            generation = _routingGeneration;
+            ambiguous = _movedAmbiguous;
+            return _movedArmed;
+        }
+    }
+
+    /// <inheritdoc />
+    public void NoteFailedAppend(in WalRecord entry)
+    {
+        lock (_sync)
+        {
+            if (_movedArmed && IsMovedLocked(in entry))
+            {
+                _movedAmbiguous = true;
+            }
+        }
+    }
+
+    private bool IsMovedLocked(in WalRecord entry)
+    {
+        var key = entry.Key;
+        return key is not null
+            && string.CompareOrdinal(key, _movedLow) >= 0
+            && (_movedHigh is null || string.CompareOrdinal(key, _movedHigh) < 0);
+    }
+
+    /// <summary>
+    /// Records the donor closes pending on the leaf's marker (#5837), as the leaf last
+    /// read it: every later stamp carries the first <see cref="WalAppendStamp.MaxPendingCloses"/>,
+    /// and while more are pending no partition advances claimlessly.
+    /// </summary>
+    internal void SetPendingCloses(IReadOnlyList<WalPendingClose> closes)
+    {
+        ArgumentNullException.ThrowIfNull(closes);
+        var carried = new (WalPendingClose, bool[])[closes.Count];
+        for (var i = 0; i < closes.Count; i++)
+        {
+            carried[i] = (closes[i], []);
+        }
+
+        SetCarriedCloses(carried, boundPending: closes.Count > 0);
+    }
+
+    /// <summary>
+    /// Records the donor closes still carried on the leaf's marker, each with the partitions
+    /// its arm resolved, and whether a donor bound is pending (a5e2e2ef's G4, A3 and A6):
+    /// a stamp at a partition carries only the closes unresolved there, and the leaf
+    /// neither arms nor claims while a bound is pending.
+    /// </summary>
+    internal void SetCarriedCloses(IReadOnlyList<(WalPendingClose Close, bool[] ResolvedAt)> carried, bool boundPending)
+    {
+        ArgumentNullException.ThrowIfNull(carried);
+        var copy = carried.Count == 0 ? [] : new (WalPendingClose, bool[])[carried.Count];
+        for (var i = 0; i < copy.Length; i++)
+        {
+            copy[i] = (carried[i].Close, (bool[])carried[i].ResolvedAt.Clone());
+        }
+
+        lock (_sync)
+        {
+            _carried = copy;
+            _close1 = copy.Length > 0 ? copy[0].Item1 : default;
+            _close2 = copy.Length > 1 ? copy[1].Item1 : default;
+            _closesOverCap = copy.Length > WalAppendStamp.MaxPendingCloses;
+            _boundPending = boundPending;
+        }
+    }
+
+    /// <summary>Whether any donor close is still carried at some partition (G4): the tick's backstop reads the view while one is.</summary>
+    internal bool HasCarriedClosesForBackstop
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _carried.Length > 0;
+            }
+        }
+    }
+
+    /// <summary>Whether a donor close is carried at <paramref name="partition"/> (G4); test seam.</summary>
+    internal bool IsCarriedAtForTesting(int partition)
+    {
+        lock (_sync)
+        {
+            CarriedAtLocked(partition, out var close1, out _, out _);
+            return close1.IsSet;
+        }
+    }
+
+    /// <summary>
+    /// A pre-arm partition's claimless view (#5837): the highest foreign, stale or unrouted
+    /// offset reported to this activation there, which it must have read past before it
+    /// advances live without a claim. Only a partition whose latest report covered every
+    /// donor close pending now has one, and none has while more closes are pending than a
+    /// stamp carries.
+    /// </summary>
+    internal bool TryGetPreArmView(int partition, out long reportedBound)
+    {
+        lock (_sync)
+        {
+            CarriedAtLocked(partition, out var close1, out var close2, out var overCap);
+            if (!_stale
+                && !overCap
+                && IsGateOpenLocked()
+                && _gate.IsPreArmOpen
+                && _partitions.TryGetValue(partition, out var p)
+                && !(_epoch > 0 && p.ClaimedEpoch == _epoch)
+                && p.Reported
+                && Covers(p, close1)
+                && Covers(p, close2))
+            {
+                reportedBound = p.ReportedUnstamped;
+                return true;
+            }
+        }
+
+        reportedBound = -1;
+        return false;
+
+        static bool Covers(PartitionClaim p, WalPendingClose close) =>
+            !close.IsSet || p.CoveredClose1 == close || p.CoveredClose2 == close;
+    }
+
+    /// <summary>
+    /// Records that this activation's narrow to the split sibling <paramref name="siblingId"/>
+    /// has been durably written (#5837, X7): only then are that narrow's forwards left out
+    /// of the foreign high reported to it.
+    /// </summary>
+    internal void NotePersistedNarrow(Guid siblingId)
+    {
+        lock (_sync)
+        {
+            _narrowTag = siblingId;
+        }
+    }
+
+    /// <summary>
+    /// Withdraws the persisted narrow tag (#5837, X7), on any ETag conflict on the leaf's
+    /// state: this activation can no longer claim its narrow was the last written.
+    /// </summary>
+    internal void WithdrawNarrow()
+    {
+        lock (_sync)
+        {
+            _narrowTag = Guid.Empty;
+        }
+    }
+
+    /// <summary>
+    /// The reader a split's consistent cut is read for (#5837, D4): this leaf and
+    /// activation, its persisted narrow tag and the donor closes pending on its marker.
+    /// <see langword="false"/> while more closes are pending than a stamp carries, or once
+    /// the activation is stale; the split then caps its heads at its own frontier.
+    /// </summary>
+    internal bool TryGetCutReader(out WalAppendStamp reader)
+    {
+        lock (_sync)
+        {
+            if (_stale || _closesOverCap)
+            {
+                reader = default;
+                return false;
+            }
+
+            reader = WalAppendStamp.PreArm(_leafId, _activation) with
+            {
+                ReaderTag = _narrowTag,
+                Close1 = _close1,
+                Close2 = _close2,
+            };
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="reader"/> carried every donor close pending now (#5837):
+    /// a cut read before the leaf learned of a close does not bound that donor's records.
+    /// </summary>
+    internal bool CarriesEveryPendingClose(in WalAppendStamp reader)
+    {
+        lock (_sync)
+        {
+            return !_closesOverCap && Carries(reader, _close1) && Carries(reader, _close2);
+        }
+
+        static bool Carries(in WalAppendStamp reader, WalPendingClose close) =>
+            !close.IsSet || reader.Close1 == close || reader.Close2 == close;
+    }
+
+    /// <summary>
+    /// The shard root and routing generation this activation's writes were last admitted
+    /// under (#5837): the generation a split's sibling's span is established under (T1).
+    /// </summary>
+    internal bool TryGetAdmittedRouting(out int shardIndex, out long generation)
+    {
+        lock (_sync)
+        {
+            shardIndex = _routingShard;
+            generation = _routingGeneration;
+            return shardIndex >= 0 && generation > 0;
+        }
+    }
+
+    /// <summary>This activation's token, which its stamps carry and a donor bound names (#5837).</summary>
+    internal Guid ActivationToken => _activation;
+
+    /// <summary>The persisted narrow tag this activation's stamps carry (#5837, X1, X3, X7).</summary>
+    internal Guid PersistedNarrowTag
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _narrowTag;
+            }
+        }
     }
 
     /// <summary>Whether this activation has claimed at any partition, eagerly or by an arm.</summary>
@@ -380,7 +853,14 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     }
 
     /// <inheritdoc />
-    public void OnStampedAppended(int partition, long unstampedWatermark)
+    public void OnStampedAppended(int partition, long unstampedWatermark, in WalAppendStamp stamp) =>
+        RecordStampedAppend(partition, unstampedWatermark, stamp.Close1, stamp.Close2, coversCloses: true);
+
+    /// <inheritdoc />
+    public void OnStampedAppended(int partition, long unstampedWatermark) =>
+        RecordStampedAppend(partition, unstampedWatermark, default, default, coversCloses: false);
+
+    private void RecordStampedAppend(int partition, long unstampedWatermark, WalPendingClose close1, WalPendingClose close2, bool coversCloses)
     {
         bool report;
         lock (_sync)
@@ -390,6 +870,15 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             if (unstampedWatermark > p.ReportedUnstamped)
             {
                 p.ReportedUnstamped = unstampedWatermark;
+            }
+
+            // #5837: the latest report's closes, recorded with its watermark in one step; a
+            // report out of order can only narrow them.
+            if (coversCloses)
+            {
+                p.Reported = true;
+                p.CoveredClose1 = close1;
+                p.CoveredClose2 = close2;
             }
         }
 
@@ -752,8 +1241,24 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         IsGateViewOpenLocked()
         && (_reachability == ReachabilityProven || (!_requireReachability && _reachability == ReachabilityUnproven));
 
+    /// <summary>Whether this activation is deferred and may stamp pre-arm now (D1, D2).</summary>
+    private bool IsDeferredStampingLocked() =>
+        _reachability == ReachabilityDeferred && !_stale && IsGateViewOpenLocked() && _gate.IsPreArmOpen;
+
     private bool IsGateViewOpenLocked() =>
         (_gateClosedUntilTicks == 0 || Environment.TickCount64 >= _gateClosedUntilTicks) && _gate.IsOpen;
+
+    /// <summary>Whether this activation is proven reachable (#5709, #5837 P1-P3); test seam.</summary>
+    internal bool IsReachabilityProvenForTesting
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _reachability == ReachabilityProven;
+            }
+        }
+    }
 
     /// <summary>
     /// Whether the activation must prove it is reachable by descent before it may claim
@@ -766,7 +1271,11 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         {
             lock (_sync)
             {
-                return _requireReachability && _reachability == ReachabilityUnproven && !_stale && IsGateViewOpenLocked();
+                return _requireReachability
+                    && (_reachability == ReachabilityUnproven
+                        || (_reachability == ReachabilityDeferred && Environment.TickCount64 >= _deferredReproveAtTicks))
+                    && !_stale
+                    && IsGateViewOpenLocked();
             }
         }
     }
@@ -784,13 +1293,90 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     }
 
     /// <summary>The activation proved it is reachable by descent, or was born under an open hand-off marker; it may claim.</summary>
-    internal void OnReachabilityProven()
+    internal void OnReachabilityProven(bool markerChecked = false)
     {
         lock (_sync)
         {
-            if (_reachability == ReachabilityUnproven)
+            if (_reachability is ReachabilityUnproven or ReachabilityDeferred)
             {
                 _reachability = ReachabilityProven;
+                _markerChecked = markerChecked;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The activation is a split sibling not yet reached by descent whose marker holds its
+    /// donor's pending bound (a5e2e2ef's D1, D4): it stamps pre-arm until it proves again
+    /// after a backoff, never claiming or arming meanwhile. A proven activation - one
+    /// proven at its split birth (P1) - is demoted too, and is proven again once its own
+    /// link makes it reachable (B2 ruling). A latched activation stays latched (D3).
+    /// </summary>
+    internal void OnReachabilityDeferred()
+    {
+        lock (_sync)
+        {
+            if (_reachability is ReachabilityUnproven or ReachabilityDeferred or ReachabilityProven)
+            {
+                _reachability = ReachabilityDeferred;
+                _deferredReproveAtTicks = Environment.TickCount64 + (long)ClaimFailureBackoffForTesting.TotalMilliseconds;
+            }
+        }
+    }
+
+    /// <summary>
+    /// A deferred activation that descent now reaches - its own link landed - is proven
+    /// again (a5e2e2ef's B2 ruling); any other state is left alone.
+    /// </summary>
+    internal void PromoteDeferredReachable()
+    {
+        lock (_sync)
+        {
+            if (_reachability == ReachabilityDeferred)
+            {
+                _reachability = ReachabilityProven;
+                _markerChecked = true;
+            }
+        }
+    }
+
+    /// <summary>Whether the activation is deferred (D1).</summary>
+    internal bool IsDeferred
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _reachability == ReachabilityDeferred;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether a donor bound is pending on the leaf's marker as last read - its own link
+    /// unwitnessed (B2, A6); the leaf neither arms nor claims while one is. A witnessed
+    /// close may still be carried (G4): that gates only the stale high, never the arm that
+    /// resolves it.
+    /// </summary>
+    internal bool HasPendingCloses
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _boundPending;
+            }
+        }
+    }
+
+    /// <summary>Whether the activation is deferred (D1); test seam.</summary>
+    internal bool IsDeferredForTesting
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _reachability == ReachabilityDeferred;
             }
         }
     }
@@ -844,7 +1430,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                     var p = PartitionLocked(partition);
                     if (_epoch > 0 && p.ClaimedEpoch == _epoch)
                     {
-                        return WalAppendStamp.ForLeaf(_leafId, _epoch, _activation);
+                        return DecorateLocked(WalAppendStamp.ForLeaf(_leafId, _epoch, _activation), partition);
                     }
 
                     claim = p.Claiming ??= ClaimAtPartitionAsync(shard, p, cancellationToken);
@@ -1194,6 +1780,15 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
 
         /// <summary>The highest unstamped offset reported to the activation here, its own included.</summary>
         public long ReportedUnstamped = -1;
+
+        /// <summary>Whether a stamped append here has been admitted and reported (#5837).</summary>
+        public bool Reported;
+
+        /// <summary>The donor closes the latest admitted stamped append here carried (#5837).</summary>
+        public WalPendingClose CoveredClose1;
+
+        /// <summary>The second such close.</summary>
+        public WalPendingClose CoveredClose2;
 
         /// <summary>The claim round in flight here, shared by concurrent appends.</summary>
         public Task? Claiming;

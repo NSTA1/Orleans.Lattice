@@ -2551,7 +2551,10 @@ internal sealed partial class BPlusLeafGrain
                 {
                     var terminalTarget = grainFactory.GetGrain<IBPlusLeafGrain>(target);
                     forwards[f++] = WalFenceSeamRetry.RunAsync(
-                        () => terminalTarget.ApplyTxTerminalAsync(transactionId, committed: true, subset),
+                        () => WalForwardChain.ForwardAsync(
+                            WalForwardChain.KeyOf(context.GrainId),
+                            WalForwardChain.KeyOf(target),
+                            () => terminalTarget.ApplyTxTerminalAsync(transactionId, committed: true, subset)),
                         WalFenceSeamRetry.CallerLeaf,
                         state.State.TreeId);
                 }

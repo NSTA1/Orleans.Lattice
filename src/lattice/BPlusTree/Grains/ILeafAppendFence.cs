@@ -23,6 +23,43 @@ internal interface ILeafAppendFence
     void OnStampedAppended(int partition, long unstampedWatermark);
 
     /// <summary>
+    /// A stamped append under <paramref name="stamp"/> at <paramref name="partition"/> was
+    /// admitted: as <see cref="OnStampedAppended(int, long)"/>, and the watermark covers the
+    /// donor closes the stamp carried (#5837).
+    /// </summary>
+    void OnStampedAppended(int partition, long unstampedWatermark, in WalAppendStamp stamp) =>
+        OnStampedAppended(partition, unstampedWatermark);
+
+    /// <summary>
+    /// An append admitted under <paramref name="routing"/> is starting (#5837, rule D):
+    /// returns the ticket <see cref="EndAppend"/> takes, so a split's drain waits for every
+    /// append that started before its narrow.
+    /// </summary>
+    int BeginAppend(in WalRoutingStamp routing) => 0;
+
+    /// <summary>The append <see cref="BeginAppend"/> started has completed, or failed.</summary>
+    void EndAppend(int ticket)
+    {
+    }
+
+    /// <summary>
+    /// The activation's append of <paramref name="entry"/> landed at
+    /// <paramref name="offset"/> in <paramref name="partition"/>; called before
+    /// <see cref="EndAppend"/> (#5837, rule D).
+    /// </summary>
+    void NoteOwnAppend(int partition, in WalRecord entry, long offset)
+    {
+    }
+
+    /// <summary>
+    /// An append of <paramref name="entry"/> failed without reporting its offset, so it
+    /// may or may not have landed (#5837, rule D).
+    /// </summary>
+    void NoteFailedAppend(in WalRecord entry)
+    {
+    }
+
+    /// <summary>
     /// The activation appended unstamped at <paramref name="partition"/>, up to
     /// <paramref name="highestOffset"/>; it reports its own unstamped appends to
     /// itself, as if the shard had (<c>ReadPositionHonestNoSelfReport</c>).

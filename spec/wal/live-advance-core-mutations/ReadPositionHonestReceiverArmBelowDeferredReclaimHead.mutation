@@ -8,7 +8,7 @@ SUMMARY: the arm re-claims but records no close head
 BOUNDS: WithKeyMove = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
 
 --- FIND
-    /\ hoClosedAt' = Max2(hoClosedAt, next)
+    /\ hoClosedAt' = Max2(hoClosedAt, IF FreeOn THEN sHi + 1 ELSE next)
     /\ UNCHANGED <<gD, pendGen
 --- REPLACE
 \* MUTATION: no close head.

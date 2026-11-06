@@ -1,4 +1,5 @@
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
@@ -129,5 +130,57 @@ public sealed class LeafLiveAdvanceCoreTests
                                 }
 
         Assert.That(checkedCount, Is.GreaterThan(1000), "the grid is not vacuous");
+    }
+
+    [Test]
+    public void ChainHopsAreNeverExcluded()
+    {
+        // a5e2e2ef's S-b on #5837's C model: only the immediate split's tag may be excluded;
+        // a chain-forwarded hop (k >= 2) counts in every reader's foreign high.
+        var readerTag = new Guid("5b000000-0000-0000-0000-0000000005b1");
+        var reader = new Guid("ac000000-0000-0000-0000-0000000000a1");
+        var empty = WalShardGrain.LeafAuthors.Empty;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(empty.WithForwardHop(1, readerTag, 7).ForeignHigh(reader, readerTag), Is.LessThan(7),
+                "precondition: the first hop is excluded for its own narrow's reader");
+            for (var hop = 2; hop <= WalAppendStamp.MaxForwardHops; hop++)
+            {
+                var authors = empty.WithForwardHop(hop, readerTag, 7);
+                Assert.That(authors.ForeignHigh(reader, readerTag), Is.EqualTo(7), $"chain hop {hop} was excluded by its own tag");
+                Assert.That(authors.ForeignHigh(reader, Guid.NewGuid()), Is.EqualTo(7), $"chain hop {hop} was excluded by another tag");
+                Assert.That(authors.StaleHigh(Guid.NewGuid(), readerTag), Is.EqualTo(7),
+                    $"chain hop {hop} was excluded from a receiver's stale high");
+            }
+        });
+    }
+
+    [Test]
+    public void The_catch_up_bound_is_owed_exactly_when_only_the_reported_bound_holds_the_free_advance()
+    {
+        // #5851, a5e2e2ef's ruling 2: exhaustively, a bound is owed iff every guard of the
+        // free advance but the reported bound holds, and the reported bound does not.
+        long[] values = [-1, 0, 1, 2, 3];
+        foreach (var hasReport in new[] { false, true })
+        foreach (var clear in new[] { false, true })
+        foreach (var latched in new[] { false, true })
+        foreach (var bound in values)
+        foreach (var closeHead in values)
+        foreach (var target in values)
+        foreach (var current in values)
+        {
+            var catchUp = LeafLiveAdvanceCore.CatchUpBound(hasReport, bound, clear, closeHead, target, current, latched);
+            var expected = hasReport && clear && !latched && current >= closeHead - 1 && target > current && current < bound ? bound : -1L;
+            Assert.That(catchUp, Is.EqualTo(expected),
+                $"report={hasReport} clear={clear} latched={latched} bound={bound} close={closeHead} target={target} current={current}");
+            if (catchUp >= 0)
+            {
+                // Owed only while the bound holds the advance, and once read past it, an
+                // own append above it advances.
+                Assert.That(LeafLiveAdvanceCore.TryFreeAdvance(hasReport, bound, clear, closeHead, target, current, latched), Is.EqualTo(-1L));
+                Assert.That(LeafLiveAdvanceCore.TryFreeAdvance(hasReport, bound, clear, closeHead, bound + 1, bound, latched), Is.EqualTo(bound + 1));
+            }
+        }
     }
 }

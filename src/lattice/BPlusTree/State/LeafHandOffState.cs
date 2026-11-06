@@ -47,4 +47,19 @@ internal sealed class LeafHandOffState : ILatticeBinaryPersistedState, Orleans.L
     /// <summary>Raised on every open and close.</summary>
     [Id(4)]
     public long Sequence { get; set; }
+
+    /// <summary>
+    /// The routing generation the shard root raised for the link batch that linked this
+    /// marker's leaf as a split sibling, written only after that raise is durable; 0 while
+    /// unwitnessed (a5e2e2ef's B2 and G1 on #5866). Held at marker level so a witness that
+    /// lands before the donor's close - still open, re-driven or recovered - is never lost:
+    /// a donor close written later copies it, and while it is set no donor bound on the
+    /// marker is pending. A sibling's marker belongs to one leaf, born once.
+    /// </summary>
+    [Id(5)]
+    public long SiblingLinkedGeneration { get; set; }
+
+    /// <summary>The shard root whose raise <see cref="SiblingLinkedGeneration"/> witnesses (A1); meaningful only while that is above 0.</summary>
+    [Id(6)]
+    public int SiblingLinkedShard { get; set; }
 }

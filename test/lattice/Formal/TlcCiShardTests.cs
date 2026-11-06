@@ -213,7 +213,12 @@ public sealed partial class TlcCiShardTests
                         : module.Name == "WalBulkSwitch"
                         ? TlcCiShard.WalBulkSwitch
                         : module.Name == "WalLiveAdvanceCore"
-                        ? TlcCiShard.WalLiveAdvanceCore
+                        ? (variant.StartsWith("Free", StringComparison.Ordinal)
+                                ? new[] { TlcCiShard.WalLiveAdvanceCoreFree, TlcCiShard.WalLiveAdvanceCoreFreeVariants, TlcCiShard.WalLiveAdvanceCoreFreeSplitVariants }
+                                : new[] { TlcCiShard.WalLiveAdvanceCoreEagerVariants, TlcCiShard.WalLiveAdvanceCoreLazyVariants })
+                            .Contains(TlcCiShard.OfVariant(module, variant))
+                            ? TlcCiShard.OfVariant(module, variant)
+                            : "a WalLiveAdvanceCore variant shard of the variant's family"
                         : module.Name == "WalLiveAdvanceComposite"
                         ? TlcCiShard.WalLiveAdvanceComposite
                         : module.Name == "SchemaViewComposition"

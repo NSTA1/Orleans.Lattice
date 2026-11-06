@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Runtime;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 using Orleans.Storage;
 
@@ -17,6 +18,27 @@ internal sealed partial class BPlusLeafGrain
 {
     /// <summary>This activation's append fence, created with the commit-log writer.</summary>
     private LeafAppendEpochFence? _appendFence;
+
+    /// <summary>
+    /// The sibling id of the last narrow this activation durably wrote, or empty (#5837,
+    /// X1, X3, X7). Held here as well as on the fence, which is created lazily with the
+    /// commit-log writer and so may not exist yet when the narrow persists.
+    /// </summary>
+    private Guid _persistedNarrowTag;
+
+    /// <summary>Records this activation's narrow to <paramref name="siblingId"/> as durably written (#5837, X7).</summary>
+    private void NotePersistedNarrow(Guid siblingId)
+    {
+        _persistedNarrowTag = siblingId;
+        _appendFence?.NotePersistedNarrow(siblingId);
+    }
+
+    /// <summary>Withdraws the persisted narrow tag on an ETag conflict on the leaf's state (#5837, X7).</summary>
+    private void WithdrawPersistedNarrow()
+    {
+        _persistedNarrowTag = Guid.Empty;
+        _appendFence?.WithdrawNarrow();
+    }
 
     /// <summary>
     /// The fence a bulk seed in flight on this call appends through instead of the
@@ -87,6 +109,11 @@ internal sealed partial class BPlusLeafGrain
             LatticeTenantLabel.ForTree(state.State.TreeId ?? string.Empty),
             requireReachabilityProof: true,
             loadedStateCurrent: new LeafStateCurrencyProbe(storage, context.GrainId, () => state.Etag, _persistWriteGate).IsCurrentAsync);
+        if (_persistedNarrowTag != Guid.Empty)
+        {
+            _appendFence.NotePersistedNarrow(_persistedNarrowTag);
+        }
+
         return new FencedCommitLogWriter(fenced, _appendFence);
     }
 
@@ -140,15 +167,78 @@ internal sealed partial class BPlusLeafGrain
         {
             if (await LiveAdvanceShardRoot(treeId, shardIndex).IsReachableByDescentAsync(context.GrainId, state.State.LowKeyInclusive))
             {
-                fence.OnReachabilityProven();
+                // a5e2e2ef's G2 and G3 on #5866: reachable means linked, not witnessed. A
+                // deferred activation, and any proof under the eager gate (which may claim),
+                // reads the marker first: while a donor bound is pending it stays deferred
+                // (pre-arm) or undecided (eager), never claiming before its own link is
+                // witnessed. Under the pre-arm gate a first proof needs no read: it cannot
+                // claim, and it is re-made with the marker before an eager claim.
+                var checkMarker = fence.IsDeferred || !IsPreArmGateOpen();
+                if (checkMarker && HandOffMarkerStorage() is { } reachedStorage)
+                {
+                    var reachedMarker = (await HandOffMarkerRows.ReadLeafAsync(reachedStorage, context.GrainId.GetGuidKey())).State;
+                    if (HoldsPendingDonorBound(reachedMarker))
+                    {
+                        if (IsPreArmGateOpen())
+                        {
+                            fence.OnReachabilityDeferred();
+                        }
+                        else
+                        {
+                            fence.OnReachabilityUndecided();
+                        }
+
+                        return;
+                    }
+
+                    fence.OnReachabilityProven(markerChecked: true);
+                    return;
+                }
+
+                fence.OnReachabilityProven(markerChecked: HandOffMarkerStorage() is null);
                 return;
             }
 
-            if (HandOffMarkerStorage() is { } storage
-                && (await HandOffMarkerRows.ReadLeafAsync(storage, context.GrainId.GetGuidKey())).State.Open.Count > 0)
+            if (HandOffMarkerStorage() is { } storage)
             {
-                fence.OnReachabilityProven();
-                return;
+                var marker = (await HandOffMarkerRows.ReadLeafAsync(storage, context.GrainId.GetGuidKey())).State;
+                if (marker.Open.Count > 0)
+                {
+                    fence.OnReachabilityProven(markerChecked: true);
+                    return;
+                }
+
+                if (IsPreArmGateOpen() && marker.Closes.Count > 0)
+                {
+                    // #5837, the latch exemption: a sibling its donor closed before the
+                    // link is deferred, never proven, while the bound is pending and no
+                    // orphan repair runs; orphan repair always latches.
+                    var view = await LiveAdvanceShardRoot(treeId, shardIndex)
+                        .GetLiveAdvanceViewAsync(context.GrainId, state.State.LowKeyInclusive, state.State.HighKeyExclusive);
+                    if (view.Reachable && !view.OrphanRepairInProgress)
+                    {
+                        // G2: linked is not witnessed; a pending bound keeps it deferred.
+                        if (HoldsPendingDonorBound(marker))
+                        {
+                            fence.OnReachabilityDeferred();
+                        }
+                        else
+                        {
+                            fence.OnReachabilityProven(markerChecked: true);
+                        }
+
+                        return;
+                    }
+
+                    if (!view.OrphanRepairInProgress && HoldsPendingDonorBound(marker))
+                    {
+                        // a5e2e2ef's D1-D4 (#5851): deferred, it stamps pre-arm rather than
+                        // appending unstamped for a backoff, so a pre-link sibling never
+                        // raises the shared watermark; it still never claims or arms.
+                        fence.OnReachabilityDeferred();
+                        return;
+                    }
+                }
             }
 
             StopStampingUnreachable(fence);
@@ -161,6 +251,31 @@ internal sealed partial class BPlusLeafGrain
                 context.GrainId);
             fence.OnReachabilityUndecided();
         }
+    }
+
+    /// <summary>
+    /// Marks this activation proven reachable at its split birth (#5837, P1-P3). The fence
+    /// is created lazily with the commit-log writer, so the writer is resolved first.
+    /// </summary>
+    private void ProveReachableAtSplitBirth()
+    {
+        _ = ResolveCommitLogWriter();
+        _appendFence?.OnReachabilityProven();
+    }
+
+    /// <summary>
+    /// Whether <paramref name="marker"/> holds a split donor's bound whose sibling's own
+    /// link is not yet witnessed (a5e2e2ef's B2 on #5866): while it does, under the pre-arm
+    /// gate and with no orphan repair running, an unreachable leaf is a split sibling not
+    /// yet linked, whose reachability decision is deferred, never latched (the latch
+    /// exemption). Once the link is witnessed, an unreachable leaf latches (#5709).
+    /// </summary>
+    private bool HoldsPendingDonorBound(LeafHandOffState marker)
+    {
+        var pending = _pendingDonorClosesScratch ??= new List<WalPendingClose>(WalAppendStamp.MaxPendingCloses);
+        pending.Clear();
+        return HandOffMarkerCore.CollectPendingDonorBounds(
+            marker, state.State.LowKeyInclusive, state.State.HighKeyExclusive, pending) > 0;
     }
 
     /// <summary>Latches <paramref name="fence"/> unstamped for the activation, logging once.</summary>

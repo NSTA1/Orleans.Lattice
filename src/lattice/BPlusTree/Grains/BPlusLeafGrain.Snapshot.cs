@@ -3001,6 +3001,11 @@ internal sealed partial class BPlusLeafGrain
         // a usable pin.
         var liveAdvanced = await TryAdvanceLiveCheckpointAsync();
 
+        // a5e2e2ef's G4 (A4, and #5851 comment 6668840949): a witnessed donor close still
+        // carried at a partition is resolved by an arm there at the first tick after the
+        // witness - before any arm below returns early - once per (partition, witness).
+        await TryBackstopCarriedClosesAsync();
+
         if (IsStarvedOfDurableCheckpoint(starvationPartitionCount))
         {
             ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckNoDurableCheckpoint);
@@ -3097,6 +3102,20 @@ internal sealed partial class BPlusLeafGrain
                 starvationPartitionCount,
                 flushPendingCheckpoint: flushPending,
                 cancellationToken);
+        }
+
+        // #5851 (a5e2e2ef's ruling 2). A pre-arm leaf whose claimless advance or split
+        // hint was held only by a reported bound - a foreign or unstamped record above its
+        // checkpoint - is never starved and need not stall, so nothing above reads past
+        // that record, and one raise would hold it, and every sibling born capped from it,
+        // for good. The same drive reads the gap: C's Replay, permit, apply and advance,
+        // once per (partition, bound value), dispatched here and never on a write. Last,
+        // after the bank step, so this tick's live advance is still persisted and banked
+        // (N2); the starved and stalled arms above return before it, and their drives
+        // replay past the bound as well. A drive that never ran re-arms it (N1).
+        if (TakeReportedBoundCatchUp())
+        {
+            await DispatchTimerDriveAsync(starvationPartitionCount, "arm=reported-bound-catch-up");
         }
     }
 

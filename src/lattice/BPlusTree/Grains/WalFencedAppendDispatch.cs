@@ -67,79 +67,96 @@ internal static class WalFencedAppendDispatch
         bool waitForDeadline,
         CancellationToken cancellationToken)
     {
-        for (var attempt = 0; ; attempt++)
+        // #5837, rule D: every append is counted for the donor's drain, and each landed
+        // offset noted, before the ticket ends.
+        var ticket = fence.BeginAppend(in routing);
+        try
         {
-            var leafStamp = await fence.StampForAsync(grain, partition, cancellationToken).ConfigureAwait(false);
-            if (leafStamp is { IsPreArm: true } && !routing.IsSet)
+            for (var attempt = 0; ; attempt++)
             {
-                // #5833, revision 2, C4: a write with no routing generation is never pre-arm;
-                // it goes unstamped and raises the shared watermark.
-                leafStamp = null;
-            }
-
-            if (leafStamp is not null && !routing.ForcesUnstamped && fence.OnAdmitted(routing.AdmissionMark) is { } admittedBeforeClose)
-            {
-                // #5664 (a): admitted before a hand-off close this activation has since
-                // made; never appended under the raised epoch.
-                throw admittedBeforeClose;
-            }
-
-            if (leafStamp is null || routing.ForcesUnstamped)
-            {
-                long offset;
-                if (batched)
+                var leafStamp = await fence.StampForAsync(grain, partition, cancellationToken).ConfigureAwait(false);
+                if (leafStamp is { IsPreArm: true } && !routing.IsSet)
                 {
-                    var offsets = await Bound(grain.AppendBatchAsync(new[] { entry }, cancellationToken), waitForDeadline, cancellationToken).ConfigureAwait(false);
-                    offset = offsets[0];
-                }
-                else
-                {
-                    offset = await Bound(grain.AppendAsync(entry, cancellationToken), waitForDeadline, cancellationToken).ConfigureAwait(false);
+                    // #5833, revision 2, C4: a write with no routing generation is never pre-arm;
+                    // it goes unstamped and raises the shared watermark.
+                    leafStamp = null;
                 }
 
-                fence.OnUnstampedAppended(partition, offset);
-                return offset;
-            }
-
-            WalAppendStamp? stamp = routing.Apply(leafStamp.Value);
-            WalAppendFenceOutcome outcome;
-            long admitted;
-            long watermark;
-            try
-            {
-                if (batched)
+                if (leafStamp is not null && !routing.ForcesUnstamped && fence.OnAdmitted(routing.AdmissionMark) is { } admittedBeforeClose)
                 {
-                    var result = await Bound(grain.AppendBatchStampedAsync(new[] { entry }, stamp.Value, cancellationToken), waitForDeadline, cancellationToken).ConfigureAwait(false);
-                    outcome = result.Outcome;
-                    admitted = result.Offsets.Length == 0 ? WalStampedBatchResult.Rejected : result.Offsets[0];
-                    watermark = result.UnstampedWatermark;
+                    // #5664 (a): admitted before a hand-off close this activation has since
+                    // made; never appended under the raised epoch.
+                    throw admittedBeforeClose;
                 }
-                else
+
+                if (leafStamp is null || routing.ForcesUnstamped)
                 {
-                    var result = await Bound(grain.AppendStampedAsync(entry, stamp.Value, cancellationToken), waitForDeadline, cancellationToken).ConfigureAwait(false);
-                    outcome = result.Outcome;
-                    admitted = result.Offset;
-                    watermark = result.UnstampedWatermark;
+                    long offset;
+                    if (batched)
+                    {
+                        var offsets = await Bound(grain.AppendBatchAsync(new[] { entry }, cancellationToken), waitForDeadline, cancellationToken).ConfigureAwait(false);
+                        offset = offsets[0];
+                    }
+                    else
+                    {
+                        offset = await Bound(grain.AppendAsync(entry, cancellationToken), waitForDeadline, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    fence.OnUnstampedAppended(partition, offset);
+                    fence.NoteOwnAppend(partition, in entry, offset);
+                    return offset;
                 }
-            }
-            catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
-            {
-                fence.OnStampedMethodUnknown();
-                continue;
-            }
 
-            if (outcome == WalAppendFenceOutcome.Admitted)
-            {
-                fence.OnStampedAppended(partition, watermark);
-                return admitted;
-            }
+                WalAppendStamp? stamp = routing.Apply(leafStamp.Value);
+                WalAppendFenceOutcome outcome;
+                long admitted;
+                long watermark;
+                try
+                {
+                    if (batched)
+                    {
+                        var result = await Bound(grain.AppendBatchStampedAsync(new[] { entry }, stamp.Value, cancellationToken), waitForDeadline, cancellationToken).ConfigureAwait(false);
+                        outcome = result.Outcome;
+                        admitted = result.Offsets.Length == 0 ? WalStampedBatchResult.Rejected : result.Offsets[0];
+                        watermark = result.UnstampedWatermark;
+                    }
+                    else
+                    {
+                        var result = await Bound(grain.AppendStampedAsync(entry, stamp.Value, cancellationToken), waitForDeadline, cancellationToken).ConfigureAwait(false);
+                        outcome = result.Outcome;
+                        admitted = result.Offset;
+                        watermark = result.UnstampedWatermark;
+                    }
+                }
+                catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
+                {
+                    fence.OnStampedMethodUnknown();
+                    continue;
+                }
 
-            if (await IsGenerationRejectionRetriedAsync(grain, stamp.Value, outcome, attempt, cancellationToken).ConfigureAwait(false))
-            {
-                continue;
-            }
+                if (outcome == WalAppendFenceOutcome.Admitted)
+                {
+                    fence.OnStampedAppended(partition, watermark, stamp.Value);
+                    fence.NoteOwnAppend(partition, in entry, admitted);
+                    return admitted;
+                }
 
-            HandleRejection(fence, partition, stamp.Value, outcome, attempt);
+                if (await IsGenerationRejectionRetriedAsync(grain, stamp.Value, outcome, attempt, cancellationToken).ConfigureAwait(false))
+                {
+                    continue;
+                }
+
+                HandleRejection(fence, partition, stamp.Value, outcome, attempt);
+            }
+        }
+        catch (Exception ex) when (!IsUnallocatedRefusal(ex, 1))
+        {
+            fence.NoteFailedAppend(in entry);
+            throw;
+        }
+        finally
+        {
+            fence.EndAppend(ticket);
         }
     }
 
@@ -161,60 +178,82 @@ internal static class WalFencedAppendDispatch
         bool waitForDeadline,
         CancellationToken cancellationToken)
     {
-        for (var attempt = 0; ; attempt++)
+        // #5837, rule D: every append is counted for the donor's drain, and each landed
+        // offset noted, before the ticket ends.
+        var ticket = fence.BeginAppend(in routing);
+        try
         {
-            var leafStamp = await fence.StampForAsync(grain, partition, cancellationToken).ConfigureAwait(false);
-            if (leafStamp is { IsPreArm: true } && !routing.IsSet)
+            for (var attempt = 0; ; attempt++)
             {
-                // #5833, revision 2, C4: a write with no routing generation is never pre-arm;
-                // it goes unstamped and raises the shared watermark.
-                leafStamp = null;
-            }
-
-            if (leafStamp is not null && !routing.ForcesUnstamped && fence.OnAdmitted(routing.AdmissionMark) is { } admittedBeforeClose)
-            {
-                // #5664 (a): admitted before a hand-off close this activation has since
-                // made; never appended under the raised epoch.
-                throw admittedBeforeClose;
-            }
-
-            if (leafStamp is null || routing.ForcesUnstamped)
-            {
-                var offsets = await Bound(grain.AppendBatchAsync(entries, cancellationToken), waitForDeadline, cancellationToken).ConfigureAwait(false);
-                if (offsets.Count > 0)
+                var leafStamp = await fence.StampForAsync(grain, partition, cancellationToken).ConfigureAwait(false);
+                if (leafStamp is { IsPreArm: true } && !routing.IsSet)
                 {
-                    fence.OnUnstampedAppended(partition, offsets[offsets.Count - 1]);
+                    // #5833, revision 2, C4: a write with no routing generation is never pre-arm;
+                    // it goes unstamped and raises the shared watermark.
+                    leafStamp = null;
                 }
 
-                return offsets;
+                if (leafStamp is not null && !routing.ForcesUnstamped && fence.OnAdmitted(routing.AdmissionMark) is { } admittedBeforeClose)
+                {
+                    // #5664 (a): admitted before a hand-off close this activation has since
+                    // made; never appended under the raised epoch.
+                    throw admittedBeforeClose;
+                }
+
+                if (leafStamp is null || routing.ForcesUnstamped)
+                {
+                    var offsets = await Bound(grain.AppendBatchAsync(entries, cancellationToken), waitForDeadline, cancellationToken).ConfigureAwait(false);
+                    if (offsets.Count > 0)
+                    {
+                        fence.OnUnstampedAppended(partition, offsets[offsets.Count - 1]);
+                    }
+
+                    NoteOwnAppends(fence, partition, entries, offsets);
+                    return offsets;
+                }
+
+                WalAppendStamp? stamp = routing.Apply(leafStamp.Value);
+                WalStampedBatchResult result;
+                try
+                {
+                    result = await Bound(grain.AppendBatchStampedAsync(entries, stamp.Value, cancellationToken), waitForDeadline, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
+                {
+                    fence.OnStampedMethodUnknown();
+                    continue;
+                }
+
+                if (result.Outcome == WalAppendFenceOutcome.Admitted)
+                {
+                    fence.OnStampedAppended(partition, result.UnstampedWatermark, stamp.Value);
+                    NoteOwnAppends(fence, partition, entries, result.Offsets);
+                    return result.Offsets;
+                }
+
+                // A partially admitted batch is a stale one: an unloaded entry is only
+                // ever met before the first allocation.
+                if (await IsGenerationRejectionRetriedAsync(grain, stamp.Value, result.Outcome, attempt, cancellationToken).ConfigureAwait(false))
+                {
+                    continue;
+                }
+
+                HandleRejection(fence, partition, stamp.Value, result.Outcome, attempt);
+            }
+        }
+        catch (Exception ex) when (!IsUnallocatedRefusal(ex, entries.Count))
+        {
+            for (var i = 0; i < entries.Count; i++)
+            {
+                var failed = entries[i];
+                fence.NoteFailedAppend(in failed);
             }
 
-            WalAppendStamp? stamp = routing.Apply(leafStamp.Value);
-            WalStampedBatchResult result;
-            try
-            {
-                result = await Bound(grain.AppendBatchStampedAsync(entries, stamp.Value, cancellationToken), waitForDeadline, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
-            {
-                fence.OnStampedMethodUnknown();
-                continue;
-            }
-
-            if (result.Outcome == WalAppendFenceOutcome.Admitted)
-            {
-                fence.OnStampedAppended(partition, result.UnstampedWatermark);
-                return result.Offsets;
-            }
-
-            // A partially admitted batch is a stale one: an unloaded entry is only
-            // ever met before the first allocation.
-            if (await IsGenerationRejectionRetriedAsync(grain, stamp.Value, result.Outcome, attempt, cancellationToken).ConfigureAwait(false))
-            {
-                continue;
-            }
-
-            HandleRejection(fence, partition, stamp.Value, result.Outcome, attempt);
+            throw;
+        }
+        finally
+        {
+            fence.EndAppend(ticket);
         }
     }
 
@@ -276,6 +315,23 @@ internal static class WalFencedAppendDispatch
 
     private static Task<T> Bound<T>(Task<T> call, bool waitForDeadline, CancellationToken cancellationToken) =>
         waitForDeadline ? call.WaitAsync(cancellationToken) : call;
+
+    /// <summary>Notes each landed record of a batch with its offset (#5837, rule D).</summary>
+    private static void NoteOwnAppends(ILeafAppendFence fence, int partition, IReadOnlyList<WalRecord> entries, IReadOnlyList<long> offsets)
+    {
+        var count = Math.Min(entries.Count, offsets.Count);
+        for (var i = 0; i < count; i++)
+        {
+            var entry = entries[i];
+            fence.NoteOwnAppend(partition, in entry, offsets[i]);
+        }
+
+        for (var i = count; i < entries.Count; i++)
+        {
+            var entry = entries[i];
+            fence.NoteFailedAppend(in entry);
+        }
+    }
 
     /// <summary>
     /// Whether <paramref name="exception"/>, ending one partition's append of

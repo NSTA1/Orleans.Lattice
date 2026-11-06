@@ -8,7 +8,7 @@ PERTURBS: Evict
 BOUNDS: WithRestart = TRUE, MaxWindows = 0
 
 --- FIND
-    /\ evFloor' = Max({evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts})
+    /\ evFloor' = Max({evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \cup LeafAttributed})
 --- REPLACE
 \* MUTATION: no eviction floor.
     /\ UNCHANGED evFloor

@@ -1,0 +1,16 @@
+# #5837, the forward-exclusion relief (a5e2e2ef's X1-X4).
+MODULE: ForwardHonestForwardExcludedWithoutObligation
+TARGET: ForwardHonest
+CLASS: Invariant
+SUMMARY: the narrow is persisted without its link obligation, so its sibling may never be linked and the key returns to L, while L's readers exclude its forwards (X4)
+PERTURBS: PersistNarrow
+BOUNDS: WithFreeAdvance = TRUE, WithFwdExclusion = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+            /\ durWho' = a
+            /\ fObl' = TRUE
+--- REPLACE
+            /\ durWho' = a
+\* MUTATION: no obligation with the narrow.
+            /\ UNCHANGED fObl
+--- END

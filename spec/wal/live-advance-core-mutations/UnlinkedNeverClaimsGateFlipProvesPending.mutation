@@ -1,0 +1,24 @@
+# #5837: the latch exemption applies only under pre-arm; the flip to eager leaves the
+# decision to the next proof.
+MODULE: UnlinkedNeverClaimsGateFlipProvesPending
+TARGET: UnlinkedNeverClaims
+CLASS: Invariant
+SUMMARY: the gate's flip to eager settles an unlinked L's deferred proof as proven, and its first stamped write claims (a5e2e2ef's condition 2)
+PERTURBS: GateToEager
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE, WithLatch = TRUE
+
+--- FIND
+    /\ ~eagerG
+    /\ eagerG' = TRUE
+--- REPLACE
+    /\ ~eagerG
+    /\ eagerG' = TRUE
+\* MUTATION: the flip proves a deferred decision.
+    /\ lat' = IF lat = "undecided" THEN "proven" ELSE lat
+--- END
+
+--- FIND
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, lat, repair, tried, oWin, oHops, birthAct, fxVars>>
+--- REPLACE
+    /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, repair, tried, oWin, oHops, birthAct, fxVars>>
+--- END

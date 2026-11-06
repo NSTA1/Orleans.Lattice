@@ -1,0 +1,14 @@
+# #5837, the claimless advance: the split transfer and the receiver's close heads.
+MODULE: ReadPositionHonestDonorCloseHeadAtHeads
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the donor closes the receiver's birth window at the split's heads, relying on the straggler copy, which only the activation that applied it holds
+PERTURBS: DonorClose
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE
+
+--- FIND
+    /\ hoClosedAt' = Max2(hoClosedAt, Max({-1} \cup DonorCloseCovers) + 1)
+--- REPLACE
+\* MUTATION: the close head is the split's heads (here 0), not above the donor's moved-key writes.
+    /\ hoClosedAt' = Max2(hoClosedAt, 0)
+--- END

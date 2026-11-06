@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.Storage;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -102,16 +103,20 @@ internal sealed partial class BPlusLeafGrain
     /// before the sibling's birth write. A no-op while the gate is closed: the sibling is
     /// then born with no marker, which holds it until its state is initialised.
     /// </summary>
-    private async Task OpenSplitHandOffAsync(GrainId siblingId)
+    /// <remarks>
+    /// Returns the row as this open wrote it, with its ETag, or <see langword="null"/> when it
+    /// wrote nothing (the token was already open, or the gate is closed) (#5837, E1).
+    /// </remarks>
+    private async Task<Orleans.GrainState<LeafHandOffState>?> OpenSplitHandOffAsync(GrainId siblingId)
     {
         if (!IsHandOffGateOpen() || HandOffMarkerStorage() is not { } storage)
         {
-            return;
+            return null;
         }
 
         var token = SplitHandOffToken(context.GrainId.GetGuidKey());
         var opened = false;
-        await HandOffMarkerRows.UpdateLeafAsync(storage, siblingId.GetGuidKey(), marker =>
+        var written = await HandOffMarkerRows.UpdateLeafRowAsync(storage, siblingId.GetGuidKey(), marker =>
         {
             var changed = !marker.Initialised;
             marker.Initialised = true;
@@ -123,40 +128,372 @@ internal sealed partial class BPlusLeafGrain
         {
             LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindSplit, opened: true, state.State.TreeId ?? string.Empty);
         }
+
+        return opened ? written : null;
+    }
+
+    /// <summary>
+    /// The sibling's marker row as this activation's own open wrote it in the split in
+    /// flight, kept only once that split's intent persisted (#5837, E1, E4). The donor's
+    /// close writes from it on its ETag, with no read; it is used once and cleared.
+    /// </summary>
+    private (GrainId Sibling, Orleans.GrainState<LeafHandOffState> Row)? _siblingMarkerRow;
+
+    /// <summary>
+    /// The routing generation this activation's span was established under at its split
+    /// birth (#5837, T1), or unset: activation memory only, so a later activation appends
+    /// its transfers unstamped.
+    /// </summary>
+    private WalRoutingStamp _spanRouting;
+
+    /// <summary>
+    /// The routing a split donor's transfer of <paramref name="count"/> records into this
+    /// leaf is appended under (#5837, T1 and T3): the span's generation, when the call is
+    /// marked as a transfer, the gate is in pre-arm, and every key is in this leaf's span
+    /// now - checked in the synchronous step that dispatches the append. Otherwise unset,
+    /// and the append goes as it always has.
+    /// </summary>
+    private WalRoutingStamp SplitTransferRoutingFor(WalRecord[] records, int count)
+    {
+        if (!_spanRouting.IsSet
+            || BulkSeedScope.Value is not null
+            || !SplitTransferScope.IsTransfer
+            || !IsPreArmGateOpen())
+        {
+            return default;
+        }
+
+        var low = state.State.LowKeyInclusive;
+        var high = state.State.HighKeyExclusive;
+        for (var i = 0; i < count; i++)
+        {
+            var key = records[i].Key;
+            if (key is null
+                || (low is not null && string.CompareOrdinal(key, low) < 0)
+                || (high is not null && string.CompareOrdinal(key, high) >= 0))
+            {
+                return default;
+            }
+        }
+
+        return _spanRouting;
+    }
+
+    /// <summary>
+    /// Appends a split transfer whose routed append was refused stale (#5851, a5e2e2ef's
+    /// ruling 1): refreshes the span's generation (<see cref="TryRefreshSpanRoutingAsync"/>)
+    /// and retries routed once, re-deciding the transfer class after the refresh. Only a
+    /// refresh that fails, or a retry refused again, appends the transfer unstamped and
+    /// clears the span's routing for the activation.
+    /// </summary>
+    private async Task<IReadOnlyList<long>> AppendTransferAfterStaleAsync(
+        ICommitLogWriter writer, ArraySegment<WalRecord> segment, WalRecord[] records, int count, WalRoutingGenerationStaleException stale)
+    {
+        if (await TryRefreshSpanRoutingAsync(stale, records, count) && SplitTransferRoutingFor(records, count) is { IsSet: true } refreshed)
+        {
+            try
+            {
+                return await AppendManyRoutedAsync(writer, segment, refreshed);
+            }
+            catch (WalRoutingGenerationStaleException)
+            {
+            }
+        }
+
+        _spanRouting = default;
+        return await writer.AppendManyAsync(segment);
+    }
+
+    /// <summary>
+    /// Re-reads the shard's routing generation for this leaf's span after a stale
+    /// refusal, as an admission would establish it (#5851, ruling 1): the generation is
+    /// read fresh from the shard's marker, never from a cache, and is taken only when it
+    /// is above both the refused stamp and the WAL's refusal and no shard hand-off over the
+    /// span is open. Then descent, read after the generation, must route both the lowest
+    /// and the highest key of the transfer to this leaf - or, before its link, both to the
+    /// donor whose split created it (a5e2e2ef's F1): a stale activation whose upper keys
+    /// a later split moved away fails the check, rather than appending a moved key under a
+    /// generation its new owner's stale high does not count. Any later move of the keys
+    /// raises the generation again, so the retry is refused.
+    /// </summary>
+    private async Task<bool> TryRefreshSpanRoutingAsync(WalRoutingGenerationStaleException stale, WalRecord[] records, int count)
+    {
+        if (!_spanRouting.IsSet
+            || count <= 0
+            || state.State.TreeId is not { } treeId
+            || state.State.ShardIndex is not { } shardIndex
+            || shardIndex != _spanRouting.Initiator.Index)
+        {
+            return false;
+        }
+
+        string? lowest = null;
+        string? highest = null;
+        for (var i = 0; i < count; i++)
+        {
+            if (records[i].Key is not { } key)
+            {
+                return false;
+            }
+
+            if (lowest is null || string.CompareOrdinal(key, lowest) < 0)
+            {
+                lowest = key;
+            }
+
+            if (highest is null || string.CompareOrdinal(key, highest) > 0)
+            {
+                highest = key;
+            }
+        }
+
+        var shardRoot = LiveAdvanceShardRoot(treeId, shardIndex);
+        var view = await shardRoot.GetLiveAdvanceViewAsync(context.GrainId, state.State.LowKeyInclusive, state.State.HighKeyExclusive);
+        if (view.HeldOpen || view.RoutingGeneration <= Math.Max(_spanRouting.Generation, stale.Refusal - 1))
+        {
+            return false;
+        }
+
+        if (!await RoutesBothAsync(shardRoot, context.GrainId, lowest, highest)
+            && !(state.State.PrevSibling is { } donor && await RoutesBothAsync(shardRoot, donor, lowest, highest)))
+        {
+            return false;
+        }
+
+        _spanRouting = WalRoutingStamp.ForShardRoot(shardIndex, view.RoutingGeneration);
+        return true;
+    }
+
+    /// <summary>Whether descent routes both <paramref name="lowest"/> and <paramref name="highest"/> to <paramref name="leaf"/>.</summary>
+    private static async Task<bool> RoutesBothAsync(IShardRootGrain shardRoot, GrainId leaf, string? lowest, string? highest) =>
+        await shardRoot.IsReachableByDescentAsync(leaf, lowest)
+        && (string.Equals(lowest, highest, StringComparison.Ordinal) || await shardRoot.IsReachableByDescentAsync(leaf, highest));
+
+    /// <summary>The routing generation a split's sibling is told its span is established under (#5837, T1).</summary>
+    private (int Shard, long Generation) SpanRoutingForSibling() =>
+        IsPreArmGateOpen() && _appendFence is { } fence && fence.TryGetAdmittedRouting(out var shard, out var generation)
+            ? (shard, generation)
+            : (0, 0);
+
+    /// <summary>
+    /// Arms this activation's split window over the moved range <c>[splitKey, high)</c>
+    /// before the split's heads are read (#5837, rule D). Only under the pre-arm gate,
+    /// where the donor writes the sibling's close itself; otherwise a no-op.
+    /// </summary>
+    private void ArmSplitCloseWindow(string splitKey)
+    {
+        if (IsPreArmGateOpen() && _appendFence is { } fence && _options is { } options)
+        {
+            fence.ArmSplitWindow(splitKey, state.State.HighKeyExclusive, Math.Max(1, options.WalPartitions));
+        }
+    }
+
+    /// <summary>
+    /// The donor's own close of its sibling's birth window under the pre-arm gate (#5837,
+    /// rules D, R, A and S). Once the narrow is durable it waits for every append it
+    /// started before, fences this leaf's duplicate activations (#5841, rule A), and then,
+    /// in one marker write, closes the window with its deferred bound: this leaf, this
+    /// activation, and the routing generation the donor's writes were admitted under.
+    /// <list type="bullet">
+    /// <item>The split's own close (rule D) closes at one above its highest own moved-key
+    /// record since <paramref name="splitHeads"/>, or at the heads when it wrote none; an
+    /// append touching the window that failed without an offset closes at the allocator
+    /// heads read after the wait instead.</item>
+    /// <item>A resumed close - a recovered split, or the link acknowledgement's re-drive -
+    /// has no window, so it closes at one above the highest offset any activation of this
+    /// leaf allocated, never below the partition's restart or eviction floor (rule R), or at
+    /// the allocator heads from a partition that cannot say. Its generation is the
+    /// shard's current one, read now, when that is higher than any this activation saw.</item>
+    /// </list>
+    /// Returns <see langword="false"/>, leaving the window open, when no routing generation
+    /// can be established.
+    /// </summary>
+    private async Task<bool> TryCloseWithDeferredBoundAsync(
+        LeafAppendEpochFence fence,
+        IGrainStorage storage,
+        Guid siblingKey,
+        string token,
+        string treeId,
+        int partitions,
+        long[]? splitHeads,
+        Orleans.GrainState<LeafHandOffState>? openedRow = null)
+    {
+        try
+        {
+            var windowed = splitHeads is not null
+                && splitHeads.Length == partitions
+                && fence.TryGetSplitWindow(out _, out _, out _, out _);
+            await fence.DrainAsync();
+
+            long[] movedOwnHigh = [];
+            int shardIndex;
+            long generation;
+            var ambiguous = false;
+            if (windowed)
+            {
+                windowed = fence.TryGetSplitWindow(out movedOwnHigh, out shardIndex, out generation, out ambiguous)
+                    && movedOwnHigh.Length == partitions;
+            }
+            else
+            {
+                fence.TryGetAdmittedRouting(out shardIndex, out generation);
+            }
+
+            if ((!windowed || shardIndex < 0 || generation <= 0) && state.State.ShardIndex is { } currentShard)
+            {
+                // Rule R, and a split whose writes carried no generation: the shard's current
+                // generation bounds every write admitted to it so far.
+                var view = await LiveAdvanceShardRoot(treeId, currentShard)
+                    .GetLiveAdvanceViewAsync(context.GrainId, state.State.LowKeyInclusive, state.State.HighKeyExclusive);
+                if (shardIndex != currentShard)
+                {
+                    shardIndex = currentShard;
+                    generation = 0;
+                }
+
+                generation = Math.Max(generation, view.RoutingGeneration);
+            }
+
+            if (shardIndex < 0 || generation <= 0)
+            {
+                return false;
+            }
+
+            await fence.FenceSplitAsync(
+                partition => grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{partition}"),
+                partitions,
+                CancellationToken.None);
+
+            long[] heads;
+            if (windowed && !ambiguous)
+            {
+                heads = new long[partitions];
+                for (var p = 0; p < partitions; p++)
+                {
+                    heads[p] = Math.Max(splitHeads![p], movedOwnHigh[p] + 1);
+                }
+            }
+            else if (windowed)
+            {
+                heads = await CaptureAllocatorHeadsAsync(grainFactory, treeId, partitions);
+            }
+            else
+            {
+                heads = await ResumedCloseHeadsAsync(treeId, partitions);
+            }
+
+            var donor = context.GrainId.GetGuidKey();
+            var closed = false;
+            Func<LeafHandOffState, bool> close = m =>
+                closed = HandOffMarkerCore.CloseWithDeferredBound(m, token, heads, donor, fence.ActivationToken, shardIndex, generation);
+            if (openedRow is not null)
+            {
+                // E1-E3: from the row this activation's own open wrote, on its ETag; any
+                // miss re-reads, and a token no longer open is already settled.
+                await HandOffMarkerRows.UpdateLeafFromAsync(storage, siblingKey, openedRow, close);
+            }
+            else
+            {
+                await HandOffMarkerRows.UpdateLeafAsync(storage, siblingKey, close);
+            }
+            if (closed)
+            {
+                LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindSplit, opened: false, treeId);
+            }
+
+            return true;
+        }
+        finally
+        {
+            fence.DisarmSplitWindow();
+        }
+    }
+
+    /// <summary>
+    /// A resumed close's heads (#5837, rule R): per partition, one above the highest offset
+    /// any activation of this leaf allocated there - its forwards included - never below
+    /// the partition's unattributed floor; the allocator heads when the partitions cannot
+    /// say, a silo on an earlier build among them.
+    /// </summary>
+    private async Task<long[]> ResumedCloseHeadsAsync(string treeId, int partitions)
+    {
+        try
+        {
+            // No activation token: every activation's records are foreign to it.
+            var everyActivation = new WalAppendStamp(context.GrainId.GetGuidKey(), 0, WalRoutingInitiator.None, 0);
+            var reads = new Task<WalSplitCut>[partitions];
+            for (var p = 0; p < partitions; p++)
+            {
+                reads[p] = grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{p}").GetSplitCutAsync(everyActivation, CancellationToken.None);
+            }
+
+            var cut = await Task.WhenAll(reads);
+            var heads = new long[partitions];
+            for (var p = 0; p < partitions; p++)
+            {
+                heads[p] = Math.Max(0, cut[p].ForeignHigh + 1);
+            }
+
+            return heads;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            ResolveLogger()?.LogDebug(
+                ex,
+                "Leaf {LeafId}: could not read its resumed split close's bounds; it closes at the allocator heads (#5837).",
+                context.GrainId);
+            return await CaptureAllocatorHeadsAsync(grainFactory, treeId, partitions);
+        }
     }
 
     /// <summary>
     /// Closes this donor's split marker on <paramref name="siblingId"/> by fence, if it is
     /// open. Called once the donor's span has narrowed; idempotent. A failure is logged
-    /// and leaves the marker open; the split-link acknowledgement re-drives it.
+    /// and leaves the marker open; the split-link acknowledgement re-drives it. Returns
+    /// whether the window is settled: closed, or never open.
     /// </summary>
-    private async Task CloseSplitHandOffAsync(GrainId siblingId)
+    private async Task<bool> CloseSplitHandOffAsync(GrainId siblingId, long[]? splitHeads = null)
     {
         if (HandOffMarkerStorage() is not { } storage || string.IsNullOrEmpty(state.State.TreeId))
         {
-            return;
+            return true;
         }
 
         var treeId = state.State.TreeId;
         var siblingKey = siblingId.GetGuidKey();
         var token = SplitHandOffToken(context.GrainId.GetGuidKey());
+
+        // #5837, E1: the open's own row only for the split this activation began, never on a
+        // recovery or a re-drive; taken once.
+        var openedRow = splitHeads is not null && _siblingMarkerRow is { } kept && kept.Sibling == siblingId ? kept.Row : null;
+        _siblingMarkerRow = null;
         try
         {
-            var marker = await HandOffMarkerRows.ReadLeafAsync(storage, siblingKey);
-            if (!marker.State.Open.ContainsKey(token))
+            if (openedRow is null)
             {
-                return;
+                var marker = await HandOffMarkerRows.ReadLeafAsync(storage, siblingKey);
+                if (!marker.State.Open.ContainsKey(token))
+                {
+                    return true;
+                }
             }
 
             var partitions = await optionsResolver.GetWalPartitionsAsync(treeId);
             if (IsPreArmGateOpen())
             {
-                // #5833, revision 2, C6, and #5841: the shard root fences this donor's
-                // duplicates and closes the sibling's marker by a deferred fence when it
-                // links this split, in its own turn. This activation only counts the close,
-                // so a write it admitted before its narrowing is self-fenced.
-                _appendFence?.CountSplitClose();
-                return;
+                // #5837, rules S and R: this donor closes its sibling's window itself, with
+                // its deferred bound; the shard root's link only raises its generation (C6).
+                // This activation counts the close, so a write it admitted before its
+                // narrowing is self-fenced. The fence is created lazily with the writer, so a
+                // resumed activation resolves it first.
+                _ = ResolveCommitLogWriter();
+                if (_appendFence is not { } donorFence)
+                {
+                    return false;
+                }
+
+                donorFence.CountSplitClose();
+                return await TryCloseWithDeferredBoundAsync(donorFence, storage, siblingKey, token, treeId, partitions, splitHeads, openedRow);
             }
 
             // #5841, rule A: the narrowed state is durable, so fence every activation of
@@ -184,6 +521,8 @@ internal sealed partial class BPlusLeafGrain
             {
                 LatticeMetrics.RecordHandOffMarker(LatticeMetrics.HandOffKindSplit, opened: false, treeId);
             }
+
+            return true;
         }
         catch (LeafRetiredException superseded) when (superseded.ActivationSuperseded)
         {
@@ -193,6 +532,7 @@ internal sealed partial class BPlusLeafGrain
                 "Leaf {LeafId}: superseded while closing its split marker on {SiblingId} (epic #5605).",
                 context.GrainId,
                 siblingId);
+            return false;
         }
         catch (Exception ex)
         {
@@ -201,6 +541,7 @@ internal sealed partial class BPlusLeafGrain
                 "Leaf {LeafId}: could not close its split marker on sibling {SiblingId}; the sibling stays on the replay-based advance until the split-link acknowledgement re-drives the close (epic #5605).",
                 context.GrainId,
                 siblingId);
+            return false;
         }
     }
 

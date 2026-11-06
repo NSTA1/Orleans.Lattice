@@ -1,0 +1,14 @@
+# #5837, F2' (a5e2e2ef, #5837 comment 6654962443): a forward chain's stamp carries every
+# forwarder on it, up to k, each attributed under the empty token.
+MODULE: ReadPositionHonestReforwardOmitsIntermediateForwarder
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a re-forward's stamp carries only the first and the immediate forwarders, so at depth 3 L, an intermediate hop, is not attributed (F2' replaces F2)
+BOUNDS: WithFreeAdvance = TRUE, WithReforward = TRUE, WithOrphanForward = TRUE, WithMixedVersion = FALSE, MaxWindows = 0
+
+--- FIND
+Carried(h) == 1..h
+--- REPLACE
+\* MUTATION: F2's stamp: the first and the immediate forwarder only.
+Carried(h) == {1, h}
+--- END

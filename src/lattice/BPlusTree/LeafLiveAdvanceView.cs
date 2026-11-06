@@ -20,6 +20,10 @@ namespace Orleans.Lattice.BPlusTree;
 /// </param>
 /// <param name="Reachable">Whether descent for the leaf's low bound reaches the leaf itself.</param>
 /// <param name="OrphanRepairInProgress">Whether the shard root is repairing orphaned leaves.</param>
+/// <param name="RoutingGeneration">
+/// The shard's durable routing generation (#5837, L2), against which a split donor's
+/// deferred bound resolves; 0 from a build that does not send it, which resolves none.
+/// </param>
 [GenerateSerializer]
 [Immutable]
 [Alias(TypeAliases.LeafLiveAdvanceView)]
@@ -28,7 +32,8 @@ internal readonly record struct LeafLiveAdvanceView(
     [property: Id(1)] bool HeldOpen,
     [property: Id(2)] long[]? CloseHeads,
     [property: Id(3)] bool Reachable,
-    [property: Id(4)] bool OrphanRepairInProgress)
+    [property: Id(4)] bool OrphanRepairInProgress,
+    [property: Id(5)] long RoutingGeneration = 0)
 {
     /// <summary>Projects <paramref name="marker"/> onto a leaf owning <c>[low, high)</c>.</summary>
     /// <param name="marker">The shard's hand-off marker.</param>
@@ -50,6 +55,7 @@ internal readonly record struct LeafLiveAdvanceView(
             HandOffMarkerCore.IsHeldOpen(marker, lowInclusive, highExclusive),
             HandOffMarkerCore.RequiredHeadsOrNull(marker, lowInclusive, highExclusive),
             reachable,
-            orphanRepairInProgress);
+            orphanRepairInProgress,
+            marker.RoutingGeneration);
     }
 }

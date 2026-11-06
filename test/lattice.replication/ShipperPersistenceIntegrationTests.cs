@@ -233,6 +233,9 @@ public class ShipperPersistenceIntegrationTests
         public Task<WalAppendFenceClaimResult> ClaimRoutingGenerationAsync(WalRoutingInitiator initiator, long generation, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task<WalSplitCut> GetSplitCutAsync(WalAppendStamp reader, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<long> RetireAppendEpochAsync(Guid leafId, long rowEpoch, CancellationToken cancellationToken) => Task.FromResult(0L);
 
 

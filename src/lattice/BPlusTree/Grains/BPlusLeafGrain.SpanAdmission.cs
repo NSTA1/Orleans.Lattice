@@ -188,6 +188,19 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Forwards a write to the leaf <paramref name="target"/> that declares its key, as
+    /// <see cref="WalRoutedLeafCall.StampedOrPlainAsync{T}"/> does, with this leaf added to
+    /// the write's forward chain under the narrow tag <paramref name="target"/> (#5837,
+    /// condition 4, F2', X2): the target's append is then attributed to this leaf as well.
+    /// </summary>
+    private Task<T> ForwardedStampedOrPlainAsync<T>(
+        GrainId target, WalRoutingStamp routing, Func<Task<T>> stamped, Func<Task<T>> plain) =>
+        WalForwardChain.ForwardAsync(
+            WalForwardChain.KeyOf(context.GrainId),
+            WalForwardChain.KeyOf(target),
+            () => WalRoutedLeafCall.StampedOrPlainAsync(routing, stamped, plain));
+
+    /// <summary>
     /// Why <see cref="TryResolveSpanForwardTarget"/> declined to forward an
     /// out-of-span key. <see cref="None"/> covers both the in-span case and a
     /// successful forward, neither of which is a fail-open.
@@ -429,7 +442,8 @@ internal sealed partial class BPlusLeafGrain
                 forwardedSplit = SplitResult.Combine(
                     forwardedSplit,
                     SplitResult.Forward(await WalFenceSeamRetry.RunAsync(
-                        () => WalRoutedLeafCall.StampedOrPlainAsync(
+                        () => ForwardedStampedOrPlainAsync(
+                            target,
                             routing,
                             () => sibling.MergeManyStampedAsync(bucket, isCrossShardMigration, routing),
                             () => sibling.MergeManyAsync(bucket, isCrossShardMigration)),
@@ -617,7 +631,8 @@ internal sealed partial class BPlusLeafGrain
             // The forwarded SplitResult is kept, for the reason given in
             // ForwardOutOfSpanMergeAsync (issue #3523).
             var forwarded = await WalFenceSeamRetry.RunAsync(
-                () => WalRoutedLeafCall.StampedOrPlainAsync(
+                () => ForwardedStampedOrPlainAsync(
+                    target,
                     routing,
                     () => sibling.SetManyWherePredicateStampedAsync(bucket, predicate, routing),
                     () => sibling.SetManyWherePredicateAsync(bucket, predicate)),
@@ -735,7 +750,8 @@ internal sealed partial class BPlusLeafGrain
                 // ForwardOutOfSpanMergeAsync (issue #3523).
                 var forwardTarget = grainFactory.GetGrain<IBPlusLeafGrain>(target);
                 forwards[i] = WalFenceSeamRetry.RunAsync(
-                    () => WalRoutedLeafCall.StampedOrPlainAsync(
+                    () => ForwardedStampedOrPlainAsync(
+                        target,
                         routing,
                         () => forwardTarget.SetManyStampedAsync(bucket, routing),
                         () => forwardTarget.SetManyAsync(bucket)),

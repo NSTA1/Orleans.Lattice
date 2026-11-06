@@ -1003,6 +1003,12 @@ internal static class TypeAliases
     /// <summary>Alias for the rejection of a write admitted under a re-claimed routing generation.</summary>
     internal const string WalRoutingGenerationStaleException = "ol.xhx";
 
+    /// <summary>Alias for a donor's deferred split close pending in a receiver's marker (#5837).</summary>
+    internal const string WalPendingClose = "ol.xpc";
+
+    /// <summary>Alias for a WAL partition's consistent cut for a splitting leaf (#5837).</summary>
+    internal const string WalSplitCut = "ol.xsc";
+
     /// <summary>Alias for one open intent on a tree's range-delete fence.</summary>
     internal const string TreeRangeDeleteIntent = "ol.xhi";
 

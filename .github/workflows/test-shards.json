@@ -273,7 +273,63 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardWalLiveAdvanceCore"],
-        "note": "WalLiveAdvanceCore (epic #5605, live-advance module C): base 2,021,047 states with #5833's lazy arm and the armed-newborn liveness property; the eager arm in Restart 3,052,664, GateFlip 3,373,761, Recreate 3,693,715, RecreateSurvivor 4,638,713, RecreateSurvivorMixed 1,622,161 and Bulk 1,114,185; the lazy arm in KeyMove 1,021,427 (liveness), PreArmRestart 2,262,022, PreArmBulk 2,511,745 (liveness), PreArmRecreate 2,631,557 and PreArmGateFlip 490,073; and 50 mutations co-located with their base, 62 cases. No case exceeds the 5M-state budget TlcCiShardTests pins. The leg time is to be measured on the member pull request's CI leg."
+        "note": "WalLiveAdvanceCore (epic #5605, live-advance module C): base 2,021,047 states with #5833's lazy arm and the armed-newborn liveness property, and the 50 mutations that do not raise WithFreeAdvance, co-located with their base so it serves their full-bound controls; 51 cases. Its variants and the claimless advance's cases (#5837) are in the formal-tlc-wal-live-advance-core-* shards. No case exceeds the 5M-state budget TlcCiShardTests pins. The whole module's former single shard took 58.7 and 70.6 minutes in receipt-free CI runs 42036414949 and 42057765601 and 43.2 in 42077562961; in 42036414949 these 51 cases finished at 30.9 minutes, the figure test-durations.tsv carries."
+      },
+      {
+        "shard": "formal-tlc-wal-live-advance-core-eager-variants",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardWalLiveAdvanceCoreEagerVariants"],
+        "note": "WalLiveAdvanceCore's variants with the eager arm (#5833) and without the claimless advance, split from formal-tlc-wal-live-advance-core: Restart 3,052,664 states, GateFlip 3,373,761, Recreate 3,693,715, RecreateSurvivor 4,638,713, RecreateSurvivorMixed 1,622,161 and Bulk 1,114,185; 6 cases. A variant serves no control, so it runs in any process. In receipt-free CI run 42036414949 the module's eleven non-claimless variants took the last 28 of the shard's 58.7 minutes; these six were 49 of their 96 item-minutes, so about 15 minutes."
+      },
+      {
+        "shard": "formal-tlc-wal-live-advance-core-lazy-variants",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardWalLiveAdvanceCoreLazyVariants"],
+        "note": "WalLiveAdvanceCore's variants with the lazy arm (#5833) and without the claimless advance, split from formal-tlc-wal-live-advance-core: KeyMove 1,021,427 states (liveness), PreArmRestart 2,262,022, PreArmBulk 2,511,745 (liveness), PreArmRecreate 2,631,557 and PreArmGateFlip 490,073; 5 cases. In receipt-free CI run 42036414949 these were 47 of the eleven variants' 96 item-minutes, PreArmBulk the longest at 18 including its wait for a TLC slot, so about 16 minutes."
+      },
+      {
+        "shard": "formal-tlc-wal-live-advance-core-free",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardWalLiveAdvanceCoreFree"],
+        "note": "WalLiveAdvanceCore's mutations that raise WithFreeAdvance (#5837's claimless advance: split hint, forwards and forward-exclusion relief, the stale-high and cost witnesses) and target neither ReadPositionHonest nor a snapshot, sole-activation, link or latch property, with the smallest claimless variants: FreeSplitLink 428,890 states (liveness), FreeLatch 892,259, FreeOrphan 707,726, FreeRestartKeyMove 477,300 and FreeTagEvict 821,800; 22 cases. Each mutation's control runs its raised configuration, which the base cannot serve, and is shared only with mutations of the same target and bounds, so the claimless mutations are split by target. The former single shard took 40.8 minutes for 36 cases in receipt-free CI run 42036414949 and 57.8 in 42077562961; in the latter these 22 were 90 of its 224 item-minutes, so about 23 minutes."
+      },
+      {
+        "shard": "formal-tlc-wal-live-advance-core-free-snapshot",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardWalLiveAdvanceCoreFreeSnapshot"],
+        "note": "WalLiveAdvanceCore's claimless-advance mutations (WithFreeAdvance) that target SnapshotHonest, SnapshotForwardHonest or SoleActivationNeverFallsOff, split by target from formal-tlc-wal-live-advance-core-free so every shared control stays in one process; 4 cases. Their controls include the base with WithFreeAdvance (4,680,662 states) and the orphan forward. In receipt-free CI run 42077562961 they were 68 of the former shard's 224 item-minutes, the longest SoleActivationNeverFallsOffGcTrimPastSolePin at 21 including its wait for a TLC slot, so about 20 minutes."
+      },
+      {
+        "shard": "formal-tlc-wal-live-advance-core-free-link",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardWalLiveAdvanceCoreFreeLink"],
+        "note": "WalLiveAdvanceCore's claimless-advance mutations (WithFreeAdvance) that target the split-born receiver's link and latch properties: SplitEventuallyLinked (liveness, with donor restart), UnlinkedNeverClaims, RepairLatches, PendingCloseNotLatched and NarrowObligated, split by target from formal-tlc-wal-live-advance-core-free; 10 cases. In receipt-free CI run 42077562961 they were 66 of the former shard's 224 item-minutes, so about 17 minutes."
+      },
+      {
+        "shard": "formal-tlc-wal-live-advance-core-free-read-position",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardWalLiveAdvanceCoreFreeReadPosition"],
+        "note": "WalLiveAdvanceCore's claimless-advance mutations (WithFreeAdvance) that target ReadPositionHonest, split from formal-tlc-wal-live-advance-core-free because the two together outran a pooled job's time limit (run 42020501136: the shard had run 43 minutes when its job was cancelled at 89). Each mutation's full-bound and matching-bound controls run raised configurations the base cannot serve; the eviction mutations' controls check the eviction without a restart (WithEvictAlone). 35 cases: 20.4 minutes in receipt-free CI run 42077562961, down from 48.4 in 42036414949 before the eviction controls were narrowed."
+      },
+      {
+        "shard": "formal-tlc-wal-live-advance-core-free-variants",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardWalLiveAdvanceCoreFreeVariants"],
+        "note": "WalLiveAdvanceCore's larger claimless-advance variants (#5837) other than the split, forward and eviction family: Free 4,680,662 states, FreeKeyMove 2,386,428 (liveness), FreeRestart 3,855,129, FreeRecreate 1,715,417, FreeRecreateSurvivor 4,908,025, FreeBulk 3,309,965, FreeGateFlip 1,904,304 and FreeEpochOnly 712,124; 8 cases. The sixteen larger claimless variants took 32.4 minutes on one CI leg in receipt-free run 42077562961; these eight were 63 of their 125 item-minutes, so about 16 minutes."
+      },
+      {
+        "shard": "formal-tlc-wal-live-advance-core-free-split-variants",
+        "tlc": true,
+        "tiers": ["deterministic"],
+        "includeCategories": ["TlcShardWalLiveAdvanceCoreFreeSplitVariants"],
+        "note": "WalLiveAdvanceCore's claimless-advance variants (#5837) that check the split, the forwards and their eviction, split from formal-tlc-wal-live-advance-core-free-variants: FreeSplitBirth 2,146,154 states (liveness), FreeSplitHint 3,562,343, FreeSplitView 512,628, FreeForwardIn 1,032,584, FreeFwdExclusion 4,217,142, FreeReforward 1,795,034, FreeChainEvict 1,993,821 and FreeOrphanEvict 3,045,174; 8 cases. In receipt-free CI run 42077562961 these were 62 of the sixteen larger claimless variants' 125 item-minutes, so about 16 minutes."
       },
       {
         "shard": "formal-tlc-wal-live-advance-composite",

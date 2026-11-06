@@ -865,7 +865,13 @@ internal sealed partial class BPlusLeafGrain
 
             // Epic #5605, member 2: re-drives a split marker close that failed at
             // completion. A no-op (one marker read) when the close already landed.
-            await CloseSplitHandOffAsync(siblingId);
+            // #5837, L3: under the pre-arm gate only the donor closes its sibling's window,
+            // so an unsettled close keeps the obligation; the split re-surfaces and the
+            // shard root's link re-drives it.
+            if (!await CloseSplitHandOffAsync(siblingId) && IsPreArmGateOpen())
+            {
+                return;
+            }
 
             state.State.UnlinkedSplitSiblingId = null;
             state.State.UnlinkedSplitKey = null;
@@ -1041,9 +1047,20 @@ internal sealed partial class BPlusLeafGrain
         // partition's head; a single scalar would conflate them.
         var treeId = state.State.TreeId;
         long[]? walHeadsAtSplit = null;
+        long[]? closeHeads = null;
         if (!string.IsNullOrEmpty(treeId))
         {
-            walHeadsAtSplit = await CaptureWalHeadsByPartitionAsync(treeId);
+            // #5837, rule D: armed before the heads, so every own moved-key record
+            // allocated after them is noted for the sibling's close.
+            ArmSplitCloseWindow(splitKey);
+            var (heads, cut, cutReader) = await CaptureSplitCutAsync(treeId);
+            walHeadsAtSplit = heads;
+            closeHeads = heads;
+
+            // #5837, D4 and V: the view is read after the cut and overlaps the drain
+            // below; it is evaluated only after the drain, against the frontier the drain
+            // leaves (V1), and a declined drain discards it (V2).
+            var cutView = cut is not null ? ReadLiveAdvanceHandOffAsync() : null;
 
             // Issue #5706. The heads become the sibling's read position, and this
             // leaf narrows to the split key before the division completes. A commit
@@ -1055,6 +1072,7 @@ internal sealed partial class BPlusLeafGrain
             // declines the division, which the next write retries.
             if (!await DrainMutationsAdmittedBeforeAsync(ownMutationScopes))
             {
+                _appendFence?.DisarmSplitWindow();
                 RecordSplitAttempt(LatticeMetrics.LeafSplitCommitsInFlight);
                 return null;
             }
@@ -1072,8 +1090,17 @@ internal sealed partial class BPlusLeafGrain
             // otherwise be skipped by in the same way; where it has a frontier, that
             // advance is a no-op.
             walHeadsAtSplit = CapAtOwnReadFrontier(HeadsAsCheckpoints(walHeadsAtSplit));
+            if (cut is not null && cutView is not null)
+            {
+                UpliftSplitHintsFromCut(walHeadsAtSplit, heads, cut, cutReader, await cutView);
+            }
         }
 
+        var priorSplitState = state.State.SplitState;
+        var priorSplitKey = state.State.SplitKey;
+        var priorSiblingId = state.State.SplitSiblingId;
+        var priorOldNext = state.State.OldNextSibling;
+        var priorInFlight = state.State.SplitInFlight;
         state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitInProgress);
         state.State.SplitKey = splitKey;
         state.State.SplitSiblingId = grainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid()).GetGrainId();
@@ -1088,12 +1115,144 @@ internal sealed partial class BPlusLeafGrain
         // OldNextSibling and SplitSiblingId have reachable nulls during an
         // in-flight division. See LeafNodeState.SplitInFlight.
         state.State.SplitInFlight = true;
-        await PersistAsync();
+
+        // #5837, O1-O4: under the pre-arm gate the sibling's marker opens concurrently with
+        // the intent persist, since it need only precede the sibling's birth; the birth
+        // awaits both and is skipped if either faults (O1). A persist that fails reverts
+        // the intent in memory, so a retry mints a new sibling (O2); an ambiguous one that
+        // landed is resumed from durable state as any other (O3). The open's row on a
+        // sibling never born is left behind, one per failed persist, and holds nothing
+        // (O4).
+        var siblingToOpen = state.State.SplitSiblingId!.Value;
+        var open = IsPreArmGateOpen() ? OpenSplitHandOffAsync(siblingToOpen) : null;
+        try
+        {
+            await PersistAsync();
+        }
+        catch when (open is not null)
+        {
+            state.State.SplitState = priorSplitState;
+            state.State.SplitKey = priorSplitKey;
+            state.State.SplitSiblingId = priorSiblingId;
+            state.State.OldNextSibling = priorOldNext;
+            state.State.SplitInFlight = priorInFlight;
+            _appendFence?.DisarmSplitWindow();
+            await ObserveFaultAsync(open!);
+            throw;
+        }
+
+        if (open is not null)
+        {
+            // E4: the open's row is kept only now that both the open and the persist completed.
+            var openedRow = await open;
+            _siblingMarkerOpened = siblingToOpen;
+            _siblingMarkerRow = openedRow is null ? null : (siblingToOpen, openedRow);
+        }
 
         LatticeMetrics.LeafSplits.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
             LatticeTenantLabel.ForTree(state.State.TreeId ?? string.Empty));
+        _splitCloseHeads = closeHeads;
         return await CompleteSplitAsync(walHeadsAtSplit);
+    }
+
+    /// <summary>The split's raw heads, handed from <c>SplitAsync</c> to the completion it starts (#5837, rule D).</summary>
+    private long[]? _splitCloseHeads;
+
+    /// <summary>The sibling whose marker the intent persist's overlapped open opened (#5837, O1), until its birth.</summary>
+    private GrainId? _siblingMarkerOpened;
+
+    /// <summary>Awaits <paramref name="task"/> for its fault only, so a failure already being thrown is not masked.</summary>
+    private static async Task ObserveFaultAsync(Task task)
+    {
+        try
+        {
+            await task;
+        }
+        catch
+        {
+            // Observed; the persist's failure is the one thrown.
+        }
+    }
+
+    /// <summary>
+    /// The split's heads, with the consistent cut (#5837, D4) when this activation stamps
+    /// pre-arm: each partition's readable head read in one turn with the bounds the leaf
+    /// must have read past. Any failure - a partition on an earlier build among them -
+    /// reads the heads alone, which the caller caps at the leaf's own frontier as before.
+    /// </summary>
+    private async Task<(long[] Heads, WalSplitCut[]? Cut, WalAppendStamp Reader)> CaptureSplitCutAsync(string treeId)
+    {
+        if (IsPreArmGateOpen() && _appendFence is { } fence && fence.TryGetCutReader(out var reader))
+        {
+            try
+            {
+                var partitions = Math.Max(1, (await GetOptionsAsync()).WalPartitions);
+                var reads = new Task<WalSplitCut>[partitions];
+                for (var p = 0; p < partitions; p++)
+                {
+                    reads[p] = grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{p}").GetSplitCutAsync(reader, CancellationToken.None);
+                }
+
+                var cut = await Task.WhenAll(reads);
+                var heads = new long[partitions];
+                for (var p = 0; p < partitions; p++)
+                {
+                    heads[p] = cut[p].Head;
+                }
+
+                return (heads, cut, reader);
+            }
+            catch (Exception ex)
+            {
+                ResolveLogger()?.LogDebug(
+                    ex,
+                    "Leaf {LeafId}: could not read its split's consistent cut; its heads are capped at its own frontier (#5837).",
+                    context.GrainId);
+            }
+        }
+
+        return (await CaptureWalHeadsByPartitionAsync(treeId), null, default);
+    }
+
+    /// <summary>
+    /// Raises each capped split hint in <paramref name="hints"/> to its partition's cut head
+    /// (#5837, D4) where this leaf's applied frontier, read after the drain (V1), is at or
+    /// above every bound the cut and the view read after it hold: another author's records
+    /// and the stale highs of the closes <paramref name="reader"/> carried, the shared
+    /// watermark, and every close head on the leaf's and the shard's markers. Nothing is
+    /// raised while a hand-off is open on the leaf, or when the view shows a donor close
+    /// the cut's reader did not carry.
+    /// </summary>
+    private void UpliftSplitHintsFromCut(long[] hints, long[] heads, WalSplitCut[] cut, WalAppendStamp reader, LiveAdvanceHandOff? view)
+    {
+        if (view is not { Clear: true } handOff
+            || _appendFence is not { } fence
+            || !fence.CarriesEveryPendingClose(in reader)
+            || hints.Length != cut.Length)
+        {
+            return;
+        }
+
+        var low = state.State.LowKeyInclusive;
+        var high = state.State.HighKeyExclusive;
+        for (var p = 0; p < hints.Length; p++)
+        {
+            var current = GetCurrentCheckpointForPartition(p);
+            var closesPassed = current >= HandOffMarkerCore.RequiredHead(handOff.LeafMarker, low, high, p) - 1
+                && current >= HandOffMarkerCore.HeadAt(handOff.ShardCloseHeads, p) - 1;
+            var reported = Math.Max(cut[p].ForeignHigh, cut[p].UnstampedWatermark);
+            if (closesPassed && current >= reported)
+            {
+                hints[p] = Math.Max(hints[p], heads[p] - 1);
+            }
+            else if (closesPassed)
+            {
+                // #5851, ruling 2: capped only by the cut's reported bounds, the donor owes
+                // a catch-up read so its next split can take the hint; dispatched by the tick.
+                NoteReportedBoundCatchUp(p, hints.Length, reported);
+            }
+        }
     }
 
     /// <summary>
@@ -1192,6 +1351,10 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private async Task<SplitResult> CompleteSplitAsync(long[]? walHeadsAtSplit = null)
     {
+        // #5837, rule D: the raw heads of the split this activation began; a resumed
+        // division has none, and its donor closes by rule R.
+        var closeHeads = _splitCloseHeads;
+        _splitCloseHeads = null;
         using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
         // Register this completion as in flight for as long as this call is
@@ -1245,8 +1408,12 @@ internal sealed partial class BPlusLeafGrain
         {
             await EnsureTerminalWitnessHydratedAsync();
         }
+        var spanRouting = SpanRoutingForSibling();
         var siblingInit = new SiblingInitialization
         {
+            SplitBirth = true,
+            SpanShard = spanRouting.Shard,
+            SpanGeneration = spanRouting.Generation,
             TreeId = state.State.TreeId!,
             ShardIndex = state.State.ShardIndex,
             LowKeyInclusive = splitKey,
@@ -1285,9 +1452,19 @@ internal sealed partial class BPlusLeafGrain
         // Epic #5605, member 2: the split's hand-off marker opens on the sibling
         // before its birth, so the sibling is held from its first moment; a resume
         // re-runs this, which opens a marker a split begun with the gate closed lacks.
-        using (AwaitDiagnostics.Begin("leaf.split.open-marker", context.GrainId, splitDiag))
+        if (_siblingMarkerOpened == siblingId)
         {
-            await OpenSplitHandOffAsync(siblingId);
+            // #5837, O1: opened with the intent persist, which this birth awaited.
+            _siblingMarkerOpened = null;
+        }
+        else
+        {
+            // E1: a resumed or eager split's open is not kept; its close reads the marker.
+            _siblingMarkerRow = null;
+            using (AwaitDiagnostics.Begin("leaf.split.open-marker", context.GrainId, splitDiag))
+            {
+                await OpenSplitHandOffAsync(siblingId);
+            }
         }
 
         // The sibling is being created here, so its first row write carries a
@@ -1420,7 +1597,7 @@ internal sealed partial class BPlusLeafGrain
                     "leaf.split.merge-batch", context.GrainId, AwaitDiagnostics.Enabled ? splitDiag + " rows=" + batch.Count : null))
                 {
                     await WalFenceSeamRetry.RunAsync(
-                        () => newLeaf.MergeEntriesAsync(batch), WalFenceSeamRetry.CallerLeaf, state.State.TreeId);
+                        () => SplitTransferScope.RunAsync(() => newLeaf.MergeEntriesAsync(batch)), WalFenceSeamRetry.CallerLeaf, state.State.TreeId);
                 }
 
                 // Drop the batch from the donor before reading the next one, so
@@ -1502,7 +1679,7 @@ internal sealed partial class BPlusLeafGrain
             {
                 await TransferShadowMarkersToSiblingAsync(newLeaf, stragglers.Keys);
                 await WalFenceSeamRetry.RunAsync(
-                    () => newLeaf.MergeEntriesAsync(stragglers), WalFenceSeamRetry.CallerLeaf, state.State.TreeId);
+                    () => SplitTransferScope.RunAsync(() => newLeaf.MergeEntriesAsync(stragglers)), WalFenceSeamRetry.CallerLeaf, state.State.TreeId);
             }
             RemoveTransferredRows(stragglers);
             BumpLocalRevision();
@@ -1590,13 +1767,17 @@ internal sealed partial class BPlusLeafGrain
             await PersistAsync();
         }
 
+        // #5837, X4/X7: the narrow persisted with the sibling obligation, so its forwards
+        // may now be left out of the foreign high this activation is reported.
+        NotePersistedNarrow(WalForwardChain.KeyOf(siblingId));
+
         // Epic #5605, member 2: the span has narrowed, so admission of the moved
         // keys has stopped; the donor's epoch bump fences what it admitted before,
         // and the sibling's marker closes with the heads (design owner, Q1). A
         // failure leaves the marker open and is re-driven by the link acknowledgement.
         using (AwaitDiagnostics.Begin("leaf.split.close-marker", context.GrainId, splitDiag))
         {
-            await CloseSplitHandOffAsync(siblingId);
+            await CloseSplitHandOffAsync(siblingId, closeHeads);
         }
 
         return new SplitResult

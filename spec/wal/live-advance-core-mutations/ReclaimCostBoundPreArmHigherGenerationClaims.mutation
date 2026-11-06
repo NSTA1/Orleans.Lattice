@@ -10,11 +10,11 @@ BOUNDS: WithKeyMove = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
 
 --- FIND
     /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected, envVars>>
-    /\ UNCHANGED <<seenP, startHead, evStart, evFloor, moveVars>>
+    /\ UNCHANGED <<startHead, evStart, evFloor, moveVars, sHi, ft, sh, sibHint, sibRows, xferVars, svVars, chVars>>
 --- REPLACE
     /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected, envVars>>
 \* MUTATION: a higher carried generation is claimed.
     /\ gL' = gD
     /\ strayReclaims' = IF gD > gL THEN strayReclaims + 1 ELSE strayReclaims
-    /\ UNCHANGED <<seenP, startHead, evStart, evFloor, gD, pend, pendGen, moved, otherMoved, dUsed, reclaims>>
+    /\ UNCHANGED <<startHead, evStart, evFloor, gD, pend, pendGen, moved, otherMoved, dUsed, reclaims, sHi, ft, sh, sibHint, sibRows, xferVars, svVars, chVars>>
 --- END

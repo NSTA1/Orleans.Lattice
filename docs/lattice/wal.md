@@ -1579,16 +1579,20 @@ that capability joins, the gate closes again and leaves claim eagerly as above.
   starvation drive (the WAL GC found it holding the floor), or on its snapshot recheck
   tick when it has live data and no proven checkpoint on any partition. It never arms
   on a write or a routine checkpoint. A split sibling inherits its donor's checkpoints,
-  capped at the donor's frontier, so it is not in that state and does not arm. The
+  so it is not in that state and does not arm. They are capped at the donor's
+  frontier unless the split's consistent cut shows that frontier is past every other
+  author's record (see "The claimless advance" below). The
   leaf writes its epoch row once, then claims at every partition it is arming in one
   parallel round, only while no hand-off is open on it. Each claim also returns the
   leaf's foreign high, which the leaf must have replayed past before it advances live;
   its own pre-arm records it applied itself.
 - **Deferred hand-off closes.** A split or a consolidation no longer claims at every
-  partition when it closes. The shard root, in its own turn as it links the split or
-  folds the leaf, raises its routing generation without claiming it at any
-  partition, and records the close on the receiving leaf's marker with every head
-  deferred. A deferred head holds that leaf. Its arm then re-claims the generation
+  partition when it closes. A split's donor closes its sibling's window itself (see
+  "The claimless advance" below), and the shard root only raises its routing
+  generation as it links the split. For a consolidation, the shard root, in its own
+  turn as it folds the leaf, raises its routing generation without claiming it at
+  any partition, and records the close on the receiving leaf's marker with every
+  head deferred. A deferred head holds that leaf. Its arm then re-claims the generation
   at the partition, so any write admitted before the raise is either below the
   re-claim's head or refused, and records that head. Resizes, bulk switches and
   range deletes still close eagerly.
@@ -1599,6 +1603,104 @@ lock. Per split or consolidation: one shard-marker write and the receiver's mark
 read and write. Per arm: the epoch row read and write, one claim per armed
 partition, and one generation-row write per partition only for the first arm there
 after a deferred close.
+
+### The claimless advance
+
+Under the pre-arm class a leaf can also advance its checkpoint live **without
+arming** ([#5837](https://github.com/NSTA1/Orleans.Lattice/issues/5837)). Every
+response to a stamped append reports a bound that covers every record below the
+leaf's own append that it did not write: another activation's, an unstamped one, or
+a donor's it has not yet been released from. Once the leaf has read past that bound
+and every close head on its markers, it may advance there with no claim. A partition
+whose latest report did not cover every donor close pending on the leaf has no
+claimless view, and the leaf advances there by replay instead.
+
+- **Splits close their own window.** The donor closes its sibling's birth window
+  itself once its narrowed span is durable. It first waits for every append it
+  started before the narrow and fences its duplicate activations. Then, in one
+  marker write, it records a head one above its own highest moved-key record since
+  the split's heads (or the heads, when it wrote none), and a deferred bound: the
+  donor leaf, its own activation token, and the routing generation its writes were
+  admitted under. If an append touching the moved range failed without reporting
+  its offset, the head is the allocator head read after the wait instead. A resumed
+  close (a recovered split, or the re-drive when the shard root acknowledges the
+  link) has no such record. It closes at one above the highest offset any activation
+  of the donor allocated, never below the partition's restart or eviction floor. Its
+  bound names the shard's current routing generation. A close that fails keeps the
+  donor's link obligation, so the split re-surfaces and the link re-drives it; the
+  shard root never reads or closes the sibling's marker.
+- **The donor's stale high.** The donor's bound stays pending until the sibling's
+  own link is witnessed. The shard root records the witness on the sibling's marker
+  only after that link's raise of the routing generation is durable. A raise for any
+  other link never resolves the bound, and if the raise or the witness write fails,
+  the bound stays pending and the division re-surfaces. The witness is kept on the
+  sibling's marker as well as on the close, so a donor close written after the link
+  (a re-driven or recovered close) has its bound resolved at once.
+- **Carrying the close.** The witness ends only the bound. The sibling's stamps
+  keep carrying the close at each WAL partition until the sibling arms there,
+  re-claiming the close's shard at a generation at or above the witness. One marker
+  write then raises the close's head at that partition to the head the re-claim
+  returned and marks the partition resolved; a failed write leaves it carried. A
+  re-claim below the witness, or a witness from another shard root, resolves
+  nothing. From the first coverage-lag tick after the witness, the tick arms each
+  carried partition the leaf has no other reason to arm at, once for each partition
+  and witness, and again after a failed attempt; it never re-reads the marker for a
+  close it cannot resolve. While the close is carried, each WAL partition reports
+  the donor's **stale high** for it. That is
+  the highest offset of a donor record from any activation other than the closing
+  one, whatever routing generation admitted it: a link elsewhere in the shard can
+  raise the generation while the close is pending, and a stale duplicate's write
+  admitted under the raised one still sits above the close head. Its own forwards are excluded only when they moved keys to this
+  sibling. A stamp carries at most two pending closes; while more are pending, the
+  leaf does not advance claimlessly.
+- **Forwards.** A write a leaf forwards to another leaf before that leaf is linked
+  is attributed to every forwarder on its chain as well, up to three hops. A write
+  forwarded further is appended unstamped. The first forwarder's own forwards are
+  left out of the bound reported to it once its narrow is durable; a write that
+  reached a leaf through a later hop of a chain is never left out. That stops on any
+  ETag conflict on its state, and a new activation never assumes it.
+- **Transfers.** The rows a split donor moves into its sibling are appended under
+  the routing generation the sibling's span was established under, attributed to
+  the sibling, so they never raise the shared watermark. A transfer that is not
+  wholly inside the sibling's span is appended unstamped as before. One refused
+  because its generation was re-claimed re-reads the shard's current generation, as
+  an admission would: from the shard's marker, read fresh, with no hand-off open
+  over the span, and with descent routing both its lowest and its highest key to
+  the sibling or, before its link, both to its donor. It then retries routed once,
+  and only a failed refresh appends it unstamped.
+- **Reachability.** A sibling born by a split is proven reachable at its birth.
+  While its donor's bound is pending, a sibling that descent does not yet reach is
+  neither proven nor latched unstamped; its decision is deferred until the link.
+  Meanwhile it stamps its routed writes pre-arm, so it never raises the shared
+  watermark; it never claims or arms, and it proves again after a backoff. That
+  holds even for a sibling proven at its birth: it is deferred, and proven again
+  once its own link is witnessed and it is reachable. Reachable alone (linked, with
+  the witness not yet durable) is not enough. A leaf proven without reading its
+  marker proves again before its first claim under the eager gate, and no leaf
+  claims or arms while a donor close is pending on it. Once its link is witnessed, a leaf that
+  descent does not reach has had its keys moved, and it latches. Orphan repair
+  always latches.
+- **The split's read position.** Each partition returns its readable head with the
+  bounds the donor must have read past, all read in one turn. If the donor's
+  frontier is at or above every bound, its sibling starts at the head rather than
+  at the donor's frontier.
+- **Catching up.** Only a replay reads past a foreign or unstamped record, and a
+  pre-arm leaf that is neither starved nor stalled does not replay. So when the
+  claimless advance, or a split's read position, is held only by a reported bound,
+  the leaf's next coverage-lag tick runs the existing replay drive, which reads
+  past it. That happens once for each partition and bound, and never on a write.
+  A drive that is refused or deferred, or that otherwise does not run its replay,
+  leaves the bound owed for the next tick.
+
+**Cost of the claimless advance.** Per stamped or pre-arm append: one comparison
+for the reader's narrow, a request-context read for a forward chain, and a counter
+increment and decrement for the split's wait, with no allocation and no grain call.
+A pending close adds one stale-high lookup per close carried. Per forward: one
+small array per hop. Per split: one marker write closes the window, and the read of
+the heads also returns the bounds. A transfer refused stale costs one view read and
+up to four descents (two keys, against the sibling and then its donor) before it retries. Each reported bound that
+holds a leaf costs one replay drive on a tick, through the replay permit. A leaf
+allocates its two per-partition bound arrays once, on the first such hold.
 
 ## Hand-off fences
 
@@ -1632,7 +1734,7 @@ by an older build, or while the gate was closed, opens one when it resumes.
 
 | Hand-off | Initiator | Marker | Fence at close |
 |----------|-----------|--------|----------------|
-| Leaf split | The donor leaf | The sibling's, opened at its birth | Once the donor's narrowed span is durable, the leaf's epoch row is raised above every epoch issued and the raised epoch is claimed at every partition; in pre-arm mode the shard root does this when it links the split, before its deferred close |
+| Leaf split | The donor leaf | The sibling's, opened at its birth | Once the donor's narrowed span is durable, the leaf's epoch row is raised above every epoch issued and the raised epoch is claimed at every partition; in pre-arm mode the donor does this in its own close, which records its deferred bound, and the shard root's link only raises its routing generation |
 | Leaf reclaim | The absorbed neighbour | The survivor's, opened before its range widens | The neighbour's entries are retired at every partition, and the allocator heads are read after the retirement |
 | Adaptive split, consolidation fold | The donor shard root | The target shard root's, opened when the migration begins | The donor raises its routing generation, after the reject phase and the drain, and re-claims it at every partition |
 | Range delete | The tree's range-delete fence | Every shard root's, range-scoped | The fence raises the tree's range-delete generation and re-claims it at every partition |
@@ -1708,14 +1810,14 @@ clients for both rows: a write that has completed is visible to any later read. 
 Azure Table and in-memory providers give it; a provider with session or eventual
 consistency does not.
 
-In pre-arm mode the shard root raises the row when it links the split, which would also
-refuse the live donor's own epoch. So at the split's close the live donor drops its epoch
-and claims locally, with no I/O: its next appends go pre-arm, which the routing
-generation fences, and its next arm claims afresh, through the same write-then-read
-claim. A stamped append it had in flight at the dropped epoch is refused and retried, not
-treated as a supersession. If the donor re-arms before the link, a refusal at its new
-epoch, or a conflict on its next row write, gets one more such fresh claim per close.
-Without one, the live donor would deactivate on every split.
+In pre-arm mode the live donor drops its epoch at the split's counted close, locally and
+with no I/O, just before its own close raises the row (#5837, rule S). If it had
+claimed, it adopts the raised epoch and its claims from that fence; otherwise its next
+appends go pre-arm, which the routing generation fences, and its next arm claims afresh,
+through the same write-then-read claim. A stamped append it had in flight at the dropped
+epoch is refused and retried, not treated as a supersession. If the donor re-arms before
+the link, a refusal at its new epoch, or a conflict on its next row write, gets one more
+such fresh claim per close. Without one, the live donor would deactivate on every split.
 The same rule stops a leaf from deactivating itself after it raises its epoch above
 a retired floor ([#5643](https://github.com/NSTA1/Orleans.Lattice/issues/5643)).
 

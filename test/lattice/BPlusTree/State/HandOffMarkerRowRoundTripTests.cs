@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Serialization;
 using Orleans.Storage;
@@ -105,6 +106,101 @@ public sealed class HandOffMarkerRowRoundTripTests
                 Assert.That(round.Sequence, Is.EqualTo(3));
             });
         }
+    }
+
+    [Test]
+    public void A_donor_bound_on_a_leaf_close_round_trips_in_json_and_binary()
+    {
+        // #5837, rule S: the bound is written with the close's heads, so it must survive both serializers.
+        var donor = new Guid("d0000000-0000-0000-0000-0000000005d1");
+        var token = new Guid("c0000000-0000-0000-0000-0000000005c1");
+        var row = new LeafHandOffState
+        {
+            Initialised = true,
+            SiblingLinkedGeneration = 13,
+            SiblingLinkedShard = 3,
+            Closes =
+            {
+                new HandOffClose
+                {
+                    Token = "split:d",
+                    Heads = [7, 8],
+                    DonorLeaf = donor,
+                    DonorToken = token,
+                    AdmittedShard = 2,
+                    AdmittedGeneration = 11,
+                    LinkedGeneration = 13,
+                    LinkedShard = 2,
+                    CarryResolvedAt = [true, false],
+                },
+            },
+        };
+
+        foreach (var round in new[] { JsonRoundTrip(row), BinaryRoundTrip(row) })
+        {
+            var close = round.Closes.Single();
+            Assert.Multiple(() =>
+            {
+                Assert.That(close.Heads, Is.EqualTo(new long[] { 7, 8 }));
+                Assert.That(close.DonorLeaf, Is.EqualTo(donor));
+                Assert.That(close.DonorToken, Is.EqualTo(token));
+                Assert.That(close.AdmittedShard, Is.EqualTo(2));
+                Assert.That(close.AdmittedGeneration, Is.EqualTo(11));
+                Assert.That(close.LinkedGeneration, Is.EqualTo(13), "the link witness (#5866, B2) did not survive");
+                Assert.That(round.SiblingLinkedGeneration, Is.EqualTo(13), "the marker-level witness (#5866, G1) did not survive");
+                Assert.That(close.LinkedShard, Is.EqualTo(2), "the witness's shard (#5866, G4 A1) did not survive");
+                Assert.That(round.SiblingLinkedShard, Is.EqualTo(3), "the marker-level witness's shard (#5866, G4 A1) did not survive");
+                Assert.That(close.CarryResolvedAt, Is.EqualTo(new[] { true, false }), "the per-partition carry resolution (#5866, G4) did not survive");
+            });
+        }
+    }
+
+    [Test]
+    public void A_close_written_before_the_link_witness_existed_reads_as_unwitnessed()
+    {
+        // #5866, B2: the witness is additive; a stored row without it is a pending bound.
+        var row = new LeafHandOffState
+        {
+            Initialised = true,
+            Closes = { new HandOffClose { Token = "split:d", Heads = [7], DonorLeaf = Guid.NewGuid(), LinkedGeneration = 13 } },
+        };
+        using var services = Services();
+        var json = services.GetRequiredService<JsonGrainStorageSerializer>();
+        var text = json.Serialize(row).ToString();
+        var stripped = System.Text.RegularExpressions.Regex.Replace(text, @",?\s*""LinkedGeneration""\s*:\s*13", string.Empty);
+
+        var read = json.Deserialize<LeafHandOffState>(BinaryData.FromString(stripped));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stripped, Does.Not.Contain("LinkedGeneration"), "precondition: the witness was stripped from the stored row");
+            Assert.That(read.Closes.Single().LinkedGeneration, Is.Zero);
+        });
+    }
+
+    [Test]
+    public void A_close_written_before_carry_resolution_existed_reads_as_carried_everywhere()
+    {
+        // #5866, G4: the resolved bits are additive; a stored row without them is carried at
+        // every partition, never resolved, and never null.
+        var row = new LeafHandOffState
+        {
+            Initialised = true,
+            Closes = { new HandOffClose { Token = "split:d", Heads = [7], DonorLeaf = Guid.NewGuid(), CarryResolvedAt = [true] } },
+        };
+        using var services = Services();
+        var json = services.GetRequiredService<JsonGrainStorageSerializer>();
+        var text = json.Serialize(row).ToString();
+        var stripped = System.Text.RegularExpressions.Regex.Replace(text, @",?\s*""CarryResolvedAt""\s*:\s*(\{[^{}]*\}|\[[^\]]*\])", string.Empty);
+
+        var read = json.Deserialize<LeafHandOffState>(BinaryData.FromString(stripped));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stripped, Does.Not.Contain("CarryResolvedAt"), "precondition: the resolved bits were stripped from the stored row");
+            Assert.That(read.Closes.Single().CarryResolvedAt, Is.Not.Null.And.Empty);
+            Assert.That(HandOffMarkerCore.IsCarryResolvedEverywhere(read.Closes.Single(), 1), Is.False);
+        });
     }
 
     [Test]

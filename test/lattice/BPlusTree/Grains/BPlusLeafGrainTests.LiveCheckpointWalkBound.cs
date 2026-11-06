@@ -52,4 +52,40 @@ public partial class BPlusLeafGrainTests
             Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(2L));
         });
     }
+
+    [Test]
+    public async Task A_range_delete_walk_during_a_carried_rule_s_split_close_holds_the_live_advance_until_both_heads_are_read()
+    {
+        // a5e2e2ef's S1 on #5868: under rule S the split closes the receiver with the donor's
+        // concrete head and its donor bound. Here the link is witnessed - the bound resolved -
+        // but the receiver still carries the close (G4). Own offsets 0..3; the split close's
+        // head is 3 on the leaf's own marker, the walk's window closed on the shard marker
+        // with head 2. Reading past the walk alone does not release the leaf.
+        var (grain, rig) = await ArmedLeafWithWritesAsync("a", "b", "c", "d");
+        await rig.SetLeafMarkerAsync(m =>
+        {
+            m.Initialised = true;
+            HandOffMarkerCore.Open(m, "split:donor", null, null);
+            HandOffMarkerCore.CloseWithDeferredBound(m, "split:donor", [3], ClaimlessDonor, ClaimlessDonorToken, 0, 1);
+            return HandOffMarkerCore.WitnessLink(m, ClaimlessDonor, 0, 2);
+        });
+        rig.ShardMarker.Closes.Add(new HandOffClose { Token = "rd:walk", Heads = [2], Sequence = 1 });
+        var close = (await rig.LeafMarkerAsync()).Closes.Single();
+
+        var heldByBoth = !await grain.TryAdvanceLiveCheckpointAsync();
+        await grain.SetCheckpointOffsetHintsAsync([1]);
+        var heldByTheSplitClose = !await grain.TryAdvanceLiveCheckpointAsync();
+        await grain.SetCheckpointOffsetHintsAsync([2]);
+        var advanced = await grain.TryAdvanceLiveCheckpointAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(HandOffMarkerCore.IsPendingDonorBound(close), Is.False, "precondition: the link is witnessed");
+            Assert.That(HandOffMarkerCore.IsCarryResolvedEverywhere(close, rig.Partitions), Is.False, "precondition: the close is still carried");
+            Assert.That(heldByBoth, Is.True, "the advance passed a carried split close and the walk's window");
+            Assert.That(heldByTheSplitClose, Is.True, "reading past the walk's close head released a leaf whose carried split close lies above it");
+            Assert.That(advanced, Is.True, "once both heads are read the leaf advances");
+            Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(3L));
+        });
+    }
 }

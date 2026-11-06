@@ -52,4 +52,58 @@ internal sealed class HandOffClose
     /// </summary>
     [Id(6)]
     public long DeferredGeneration { get; set; }
+
+    /// <summary>
+    /// For a split donor's close of its sibling's birth window (#5837, rule S), the donor
+    /// leaf; <see cref="Guid.Empty"/> for any other close. Until the sibling's own link is
+    /// witnessed (<see cref="LinkedGeneration"/>), the sibling must replay past the donor's
+    /// stale high (<c>WalPendingClose</c>) before it advances live. Recorded in the same
+    /// marker write as the close's heads.
+    /// </summary>
+    [Id(7)]
+    public Guid DonorLeaf { get; set; }
+
+    /// <summary>The token of the donor activation that wrote the close; meaningful only with <see cref="DonorLeaf"/>.</summary>
+    [Id(8)]
+    public Guid DonorToken { get; set; }
+
+    /// <summary>The shard root whose routing generation <see cref="AdmittedGeneration"/> is; meaningful only with <see cref="DonorLeaf"/>.</summary>
+    [Id(9)]
+    public int AdmittedShard { get; set; }
+
+    /// <summary>
+    /// The routing generation the donor's writes were admitted under at the close.
+    /// </summary>
+    [Id(10)]
+    public long AdmittedGeneration { get; set; }
+
+    /// <summary>
+    /// The routing generation the shard root raised for the link batch that linked this
+    /// close's sibling, written on the sibling's marker only after that raise is durable;
+    /// 0 while unwitnessed (a5e2e2ef's B2 on #5866). A donor bound is pending exactly while
+    /// this is 0: a raise for any other link never resolves it, and a failed raise or witness
+    /// write leaves it pending.
+    /// </summary>
+    [Id(11)]
+    public long LinkedGeneration { get; set; }
+
+    /// <summary>
+    /// For a donor close, per WAL partition, whether the sibling's own arm has re-claimed
+    /// the shard root's generation there at or above the link witness, raising this
+    /// close's head there to the re-claim head (a5e2e2ef's G4 on #5866). Until it has, the
+    /// sibling's stamps at that partition keep carrying the close, so its stale high keeps
+    /// bounding a stale route admitted at the old generation; the witness alone never ends
+    /// the carriage. Empty until the first such arm.
+    /// </summary>
+    [Id(12)]
+    public bool[] CarryResolvedAt { get; set; } = [];
+
+    /// <summary>
+    /// The shard root whose raise <see cref="LinkedGeneration"/> witnesses (a5e2e2ef's A1);
+    /// meaningful only while that is above 0. A witness from a shard root other than
+    /// <see cref="AdmittedShard"/> - a reshard or fold between the close and the link -
+    /// resolves no carriage: the close stays carried at every partition.
+    /// </summary>
+    [Id(13)]
+    public int LinkedShard { get; set; }
 }

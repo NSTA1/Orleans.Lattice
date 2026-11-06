@@ -101,9 +101,12 @@ internal sealed class LiveAdvanceRig
         return services.BuildServiceProvider();
     }
 
-    /// <summary>Routes the leaf's shard-root calls to the rig.</summary>
-    public void Configure(IGrainFactory factory) =>
+    /// <summary>Routes the leaf's shard-root calls, and its WAL shard calls at every partition, to the rig.</summary>
+    public void Configure(IGrainFactory factory)
+    {
         factory.GetGrain<IShardRootGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(ShardRoot);
+        factory.GetGrain<IWalShardGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(Shard);
+    }
 
     /// <summary>Writes the leaf's own hand-off marker row.</summary>
     public Task SetLeafMarkerAsync(Func<LeafHandOffState, bool> mutate) =>
@@ -126,6 +129,9 @@ internal sealed class LiveAdvanceRig
 
     /// <summary>Called with the state name of every read the leaf makes through its storage, before the read (#5841).</summary>
     public Action<string>? OnStorageRead { get; set; }
+
+    /// <summary>Called with the state name and grain of every write the leaf makes through its storage, before the write (#5837).</summary>
+    public Action<string, GrainId>? OnStorageWrite { get; set; }
 
     /// <summary>Reads the leaf's own hand-off marker row.</summary>
     public async Task<LeafHandOffState> LeafMarkerAsync() =>
@@ -155,8 +161,11 @@ internal sealed class LiveAdvanceRig
             }
         }
 
-        public Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
-            rig.Storage.WriteStateAsync(stateName, grainId, grainState);
+        public Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
+        {
+            rig.OnStorageWrite?.Invoke(stateName, grainId);
+            return rig.Storage.WriteStateAsync(stateName, grainId, grainState);
+        }
 
         public Task ClearStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
             rig.Storage.ClearStateAsync(stateName, grainId, grainState);
@@ -166,6 +175,8 @@ internal sealed class LiveAdvanceRig
     internal sealed class Gate : IWalAppendFenceGate
     {
         public bool IsOpen { get; set; } = true;
+
+        public bool IsPreArmOpen { get; set; }
     }
 
     /// <summary>
@@ -182,6 +193,9 @@ internal sealed class LiveAdvanceRig
 
         /// <summary>When set, the next append throws it.</summary>
         public Exception? ThrowNext { get; set; }
+
+        /// <summary>The routing the latest append was issued under (#5837, T1).</summary>
+        public WalRoutingStamp LastRouting { get; private set; }
 
         /// <summary>The offsets handed out, by partition.</summary>
         public long NextOffset(int partition) => _next[partition];
@@ -203,6 +217,7 @@ internal sealed class LiveAdvanceRig
 
         public async Task<long> AppendAsync(WalRecord entry, ILeafAppendFence fence, WalRoutingStamp routing, CancellationToken cancellationToken)
         {
+            LastRouting = routing;
             try
             {
                 if (ThrowNext is { } fault)
@@ -228,6 +243,7 @@ internal sealed class LiveAdvanceRig
 
         public async Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<WalRecord> entries, ILeafAppendFence fence, WalRoutingStamp routing, CancellationToken cancellationToken)
         {
+            LastRouting = routing;
             try
             {
                 if (ThrowNext is { } fault)
@@ -263,23 +279,35 @@ internal sealed class LiveAdvanceRig
 
         private async Task<long> DispatchAsync(WalRecord entry, ILeafAppendFence fence, WalRoutingStamp routing, CancellationToken cancellationToken)
         {
-            var partition = Route(entry);
-            var stamp = await fence.StampForAsync(rig.Shard, partition, cancellationToken);
-            if (stamp is null || routing.ForcesUnstamped)
+            // As WalFencedAppendDispatch does (#5837, rule D): counted for a split's drain,
+            // and each landed offset noted before the count ends.
+            var ticket = fence.BeginAppend(in routing);
+            try
             {
-                var unstamped = _next[partition]++;
-                fence.OnUnstampedAppended(partition, unstamped);
-                return unstamped;
-            }
+                var partition = Route(entry);
+                var stamp = await fence.StampForAsync(rig.Shard, partition, cancellationToken);
+                if (stamp is null || routing.ForcesUnstamped)
+                {
+                    var unstamped = _next[partition]++;
+                    fence.OnUnstampedAppended(partition, unstamped);
+                    fence.NoteOwnAppend(partition, in entry, unstamped);
+                    return unstamped;
+                }
 
-            if (fence.OnAdmitted(routing.AdmissionMark) is { } refused)
+                if (fence.OnAdmitted(routing.AdmissionMark) is { } refused)
+                {
+                    throw refused;
+                }
+
+                var offset = _next[partition]++;
+                fence.OnStampedAppended(partition, rig.ReportedWatermark, stamp.Value);
+                fence.NoteOwnAppend(partition, in entry, offset);
+                return offset;
+            }
+            finally
             {
-                throw refused;
+                fence.EndAppend(ticket);
             }
-
-            var offset = _next[partition]++;
-            fence.OnStampedAppended(partition, rig.ReportedWatermark);
-            return offset;
         }
 
         private int Route(WalRecord entry) => BPlusLeafGrain.OverrideHoldPartitionOf(entry, rig.Partitions);
