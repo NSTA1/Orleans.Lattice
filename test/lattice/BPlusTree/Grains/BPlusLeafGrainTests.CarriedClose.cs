@@ -84,13 +84,15 @@ public partial class BPlusLeafGrainTests
     public async Task The_backstop_arms_a_binding_carried_partition_once_and_resolves_it_with_the_re_claim_head()
     {
         // G4 detector 4 (A2, A4 as amended by LA1): partition 1 carries the close and holds
-        // an own write the advance cannot pass, written before the leaf learned of the
-        // close. The first tick arms it, re-claiming the witness; the marker records that
+        // an own write the advance cannot pass, held by a raised bound its covering report
+        // carried. The first tick arms it, re-claiming the witness; the marker records that
         // re-claim's head and the resolved bit. A later tick does not arm again.
         var rig = CarryRig(partitions: 2);
         var grain = CreateGrain(liveAdvance: rig);
         await WitnessedCarriedCloseAsync(rig);
         await SetStampedAsync(grain, KeyOnPartition(0, 2, "p0-"), "1");
+        await grain.TryAdvanceLiveCheckpointAsync();
+        rig.ReportedWatermark = rig.Writer.ForeignAppend(1);
         await SetStampedAsync(grain, KeyOnPartition(1, 2, "p1-"), "1");
         await grain.TryAdvanceLiveCheckpointAsync();
         AcceptCarryArms(rig);
@@ -126,6 +128,9 @@ public partial class BPlusLeafGrainTests
         var grain = CreateGrain(liveAdvance: rig);
         await WitnessedCarriedCloseAsync(rig);
         await SetStampedAsync(grain, "a", "1");
+        await grain.TryAdvanceLiveCheckpointAsync();
+        rig.ReportedWatermark = rig.Writer.ForeignAppend();
+        await SetStampedAsync(grain, "b", "2");
         await grain.TryAdvanceLiveCheckpointAsync();
         AcceptCarryArms(rig);
         var baseline = await CarryArmCallsAsync(rig);

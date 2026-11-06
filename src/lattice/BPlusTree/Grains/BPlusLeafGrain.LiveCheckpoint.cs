@@ -905,7 +905,8 @@ internal sealed partial class BPlusLeafGrain
     /// re-claiming the close's shard's generation at or above the witness, at most once per
     /// (partition, witness) per activation, but only while the carriage is binding there -
     /// the leaf holds an own applied append above its checkpoint that this tick's advance
-    /// could not pass. A carriage that binds nothing is left as it is: the arm is delayed,
+    /// could not pass, held by a reported bound that covers the carried close and lies above
+    /// the checkpoint (<see cref="IsCarryBinding"/>). A carriage that binds nothing is left as it is: the arm is delayed,
     /// never the carriage ended, so every stamp keeps the close (LA1). Binding is checked
     /// first in memory, so a non-binding sibling reads nothing, and again on the backstop's
     /// own fresh view read, which alone triggers the re-claim (LA2). An attempt that does
@@ -1022,8 +1023,28 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>
     /// Whether a carried close is binding at <paramref name="p"/> (#5851, LA1): the leaf has
     /// an own applied append above its checkpoint there, which the tick's advance ran
-    /// before and did not pass. Read from the current state, never a remembered verdict (LA2).
+    /// before and did not pass, and the bound its latest stamped response reported - which
+    /// covers every close carried there and folds their stale highs in - is above the
+    /// checkpoint, so that bound is what holds it. A hold by a report that does not yet
+    /// cover the close is not the carriage's; it lifts at the leaf's next covered write.
+    /// Read from the current state, never a remembered verdict (LA2).
     /// </summary>
-    private bool IsCarryBinding(int p) =>
-        _liveOwnHigh is { } own && p < own.Length && own[p] > GetCurrentCheckpointForPartition(p);
+    private bool IsCarryBinding(int p)
+    {
+        if (_liveOwnHigh is not { } own || p >= own.Length || _appendFence is not { } fence)
+        {
+            return false;
+        }
+
+        var current = GetCurrentCheckpointForPartition(p);
+        if (own[p] <= current)
+        {
+            return false;
+        }
+
+        // A partition this activation has claimed - an arm whose resolve write did not land -
+        // still carries the close; its re-claim is owed again (A3).
+        return fence.TryGetArmingView(p, out _, out _)
+            || (fence.TryGetPreArmView(p, out var reportedBound) && reportedBound > current);
+    }
 }

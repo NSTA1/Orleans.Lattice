@@ -77,6 +77,39 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
+    public async Task LazyCarry_a_hold_by_a_report_not_yet_covering_the_close_does_not_bind_it()
+    {
+        // The S2 shape: a sibling's first write predates its view read, so its report does
+        // not cover the carried close and holds its advance until its next covered write.
+        // That hold is not the carriage's stale high, so the backstop does not re-claim.
+        var rig = new LiveAdvanceRig(partitions: 1, firstOffset: 1);
+        rig.FenceGate.IsPreArmOpen = true;
+        var state = new Orleans.Lattice.Tests.Fakes.FakePersistentState<LeafNodeState>();
+        state.State.ProjectionCheckpointOffset = 0;
+        state.State.ProjectionCheckpointOffsetAssigned = true;
+        var grain = CreateGrain(state, liveAdvance: rig);
+        await WitnessedCarriedCloseAsync(rig);
+        await SetStampedAsync(grain, "a", "1");
+        var held = !await grain.TryAdvanceLiveCheckpointAsync();
+        AcceptCarryArms(rig);
+        var armsBefore = await CarryArmCallsAsync(rig);
+
+        var armed = false;
+        for (var tick = 0; tick < 3; tick++)
+        {
+            armed |= await grain.TryBackstopCarriedClosesAsync();
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(held, Is.True, "precondition: the uncovered report holds the advance");
+            Assert.That(armed, Is.False, "a hold by a report that did not cover the close was taken as binding");
+            Assert.That(grain.AppendFenceForTesting!.IsCarriedAtForTesting(0), Is.True, "the carriage was ended");
+        });
+        Assert.That(await CarryArmCallsAsync(rig), Is.EqualTo(armsBefore), "the backstop re-claimed a carriage that bound nothing");
+    }
+
+    [Test]
     public async Task LazyCarry_a_non_binding_sibling_reads_nothing_on_the_tick()
     {
         // LA1: the binding check is in memory first, so a sibling it does not bind costs the
@@ -108,6 +141,9 @@ public partial class BPlusLeafGrainTests
         var grain = CreateGrain(liveAdvance: rig);
         await WitnessedCarriedCloseAsync(rig);
         await SetStampedAsync(grain, "a", "1");
+        await grain.TryAdvanceLiveCheckpointAsync();
+        rig.ReportedWatermark = rig.Writer.ForeignAppend();
+        await SetStampedAsync(grain, "b", "2");
         await grain.TryAdvanceLiveCheckpointAsync();
         AcceptCarryArms(rig);
         var armsBefore = await CarryArmCallsAsync(rig);
