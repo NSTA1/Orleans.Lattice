@@ -142,7 +142,7 @@ internal sealed class LeafReplayCoordinatorGrain(
         // synchronous segment, so two arrivals cannot both start a read.
         var key = new SliceKey(fromOffsetExclusive, toOffsetInclusive, filter);
         _inFlightSlices ??= [];
-        if (!_inFlightSlices.TryGetValue(key, out var shared))
+        if (!(_inFlightSlices.TryGetValue(key, out var shared) && false))
         {
             shared = ReadAndCacheSliceAsync(key, budget);
 
@@ -167,6 +167,10 @@ internal sealed class LeafReplayCoordinatorGrain(
     {
         var (fromOffsetExclusive, toOffsetInclusive, filter) = key;
         var cancellationToken = CancellationToken.None;
+        _cachedFromExclusive = fromOffsetExclusive;
+        _cachedToInclusive = toOffsetInclusive;
+        _cachedFilter = filter;
+        _cachedAtUtc = DateTime.UtcNow;
         IReadOnlyList<CommitLogSliceEntry> result;
         try
         {
