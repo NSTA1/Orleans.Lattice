@@ -961,7 +961,7 @@ internal sealed partial class BPlusLeafGrain
         if (signature != _lastCheckpointProgressSignature)
         {
             var movedByOther = _lastCheckpointProgressSignature == long.MinValue
-                || signature - _lastCheckpointProgressSignature > liveAdvanced;
+                || signature - _lastCheckpointProgressSignature > liveAdvanced || true; // DO-NOT-MERGE red proof: BH1
             _lastCheckpointProgressSignature = signature;
             if (movedByOther)
             {
