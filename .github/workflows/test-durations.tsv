@@ -150,18 +150,19 @@ lattice	formal-tlc-wal-bulk-switch	deterministic	1.96
 # 42036414949 (core, eager, lazy) or 42077562961 (free, free-snapshot,
 # free-link, free-variants, free-split-variants), where the former -free shard
 # took 57.8 minutes; free-read-position is measured as is in 42077562961. The
-# test-shards.json notes give each derivation.
-lattice	formal-tlc-wal-live-advance-core	deterministic	31.00
+# test-shards.json notes give each derivation. Re-measured on #5860's CI run
+# 42188828140 (head 67b03e68a): core 45.54 (its 51 cases sum to about 31; the
+# rest is waiting for a TLC slot in a ten-item pooled leg), free-variants
+# 38.89, free-read-position 36.86, free-split-variants 35.57 and free 28.24.
+lattice	formal-tlc-wal-live-advance-core	deterministic	45.00
 lattice	formal-tlc-wal-live-advance-core-eager-variants	deterministic	15.00
 lattice	formal-tlc-wal-live-advance-core-lazy-variants	deterministic	16.00
-# formal-tlc-wal-live-advance-core-free: 23 measured-share minutes plus #5851's
-# three split-cap mutations, estimated at 2 until measured.
-lattice	formal-tlc-wal-live-advance-core-free	deterministic	25.00
+lattice	formal-tlc-wal-live-advance-core-free	deterministic	28.00
 lattice	formal-tlc-wal-live-advance-core-free-snapshot	deterministic	20.00
 lattice	formal-tlc-wal-live-advance-core-free-link	deterministic	17.00
-lattice	formal-tlc-wal-live-advance-core-free-read-position	deterministic	20.38
-lattice	formal-tlc-wal-live-advance-core-free-variants	deterministic	16.00
-lattice	formal-tlc-wal-live-advance-core-free-split-variants	deterministic	16.00
+lattice	formal-tlc-wal-live-advance-core-free-read-position	deterministic	37.00
+lattice	formal-tlc-wal-live-advance-core-free-variants	deterministic	39.00
+lattice	formal-tlc-wal-live-advance-core-free-split-variants	deterministic	36.00
 lattice	formal-tlc-wal-live-advance-composite	deterministic	1.00
 lattice	formal-tlc-rebootstrap	deterministic	15.68
 lattice	formal-tlc-atomic	deterministic	14.93
