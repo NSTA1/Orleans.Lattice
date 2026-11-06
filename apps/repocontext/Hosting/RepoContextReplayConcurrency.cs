@@ -74,7 +74,7 @@ public static class RepoContextReplayConcurrency
     /// lengthen every hold without finishing more replays (issue #3921), so it
     /// keeps the CPU-derived ceiling until a census on this host says otherwise.
     /// </remarks>
-    public const int DefaultMaxConcurrentReplays = 0;
+    public const int DefaultMaxConcurrentReplays = LatticeOptions.DefaultWalMaterialiserMaxConcurrentReplays;
 
     /// <summary>
     /// The token that selects the library's runtime derivation deliberately,
