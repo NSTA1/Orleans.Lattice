@@ -98,16 +98,26 @@ public partial class BPlusLeafGrainTests
     [Test]
     public async Task A_sibling_whose_own_link_is_witnessed_but_is_unreachable_latches()
     {
-        // Detector 4 (ResolvedCloseStillDefers): a witnessed link means the keys moved since.
+        // Detector 4 (ResolvedCloseStillDefers): a witnessed link means the keys moved since;
+        // the sibling is no longer deferred, and a confirmed verdict latches it (#5872: one
+        // verdict leaves it undecided, appending unstamped, until the second after the backoff).
         var rig = PreArmRig();
         rig.Reachable = false;
         var grain = await BirthProvenSiblingWithPendingCloseAsync(rig);
         await rig.SetLeafMarkerAsync(m => HandOffMarkerCore.WitnessLink(m, ClaimlessDonor, 0, 10));
         await SetStampedAsync(grain, "n", "1");
+        var fence = grain.AppendFenceForTesting!;
 
         await grain.TryAdvanceLiveCheckpointAsync();
+        var deferredAfterOneVerdict = fence.IsDeferred;
+        fence.ElapseBackoffForTesting();
+        await grain.TryAdvanceLiveCheckpointAsync();
 
-        Assert.That(grain.AppendFenceForTesting!.IsUnreachable, Is.True, "an unreachable leaf whose own link was witnessed was not latched");
+        Assert.Multiple(() =>
+        {
+            Assert.That(deferredAfterOneVerdict, Is.False, "an unreachable leaf whose own link was witnessed stayed deferred");
+            Assert.That(fence.IsUnreachable, Is.True, "an unreachable leaf whose own link was witnessed was not latched on a confirmed verdict");
+        });
     }
 
     [Test]

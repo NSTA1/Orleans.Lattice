@@ -154,6 +154,14 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     /// </summary>
     private bool _markerChecked;
 
+    /// <summary>
+    /// When a single unreachable verdict was taken, the tick count at which its backoff
+    /// ends; 0 when none is pending (#5872, a5e2e2ef's R1-R2). Until a second unreachable
+    /// verdict after that time, the activation is undecided: it appends unstamped and never
+    /// claims, then proves again; it is never latched on one verdict alone.
+    /// </summary>
+    private long _unreachableSuspectedUntilTicks;
+
     /// <summary>Creates the fence for one leaf activation.</summary>
     /// <param name="leafId">The leaf's grain key.</param>
     /// <param name="gate">The silo's view of the fence gate.</param>
@@ -1297,6 +1305,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     {
         lock (_sync)
         {
+            _unreachableSuspectedUntilTicks = 0;
             if (_reachability is ReachabilityUnproven or ReachabilityDeferred)
             {
                 _reachability = ReachabilityProven;
@@ -1316,6 +1325,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     {
         lock (_sync)
         {
+            _unreachableSuspectedUntilTicks = 0;
             if (_reachability is ReachabilityUnproven or ReachabilityDeferred or ReachabilityProven)
             {
                 _reachability = ReachabilityDeferred;
@@ -1336,6 +1346,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             {
                 _reachability = ReachabilityProven;
                 _markerChecked = true;
+                _unreachableSuspectedUntilTicks = 0;
             }
         }
     }
@@ -1392,6 +1403,92 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             CloseGateViewLocked(ClaimFailureBackoffForTesting);
         }
     }
+
+    /// <summary>
+    /// One verdict that descent does not reach the activation, with no structural witness
+    /// (#5872, a5e2e2ef's R1-R2). The first sets it undecided: a proven activation is
+    /// demoted, and for the backoff its view of the gate reads closed, so it appends
+    /// unstamped - never pre-arm, never a claim - and then proves again. A second such
+    /// verdict after the backoff latches it (<see cref="StopStampingUnreachable"/>); one
+    /// within the backoff changes nothing. Returns whether this call latched it.
+    /// </summary>
+    internal bool OnUnreachableVerdict()
+    {
+        lock (_sync)
+        {
+            if (_reachability == ReachabilityUnreachable)
+            {
+                return false;
+            }
+
+            var now = Environment.TickCount64;
+            if (_unreachableSuspectedUntilTicks != 0)
+            {
+                if (now < _unreachableSuspectedUntilTicks)
+                {
+                    return false;
+                }
+
+                _unreachableSuspectedUntilTicks = 0;
+                _reachability = ReachabilityUnreachable;
+                return true;
+            }
+
+            var backoff = (long)ClaimFailureBackoffForTesting.TotalMilliseconds;
+            _unreachableSuspectedUntilTicks = Math.Max(1, now + backoff);
+            if (_reachability == ReachabilityProven)
+            {
+                _reachability = ReachabilityUnproven;
+                _markerChecked = false;
+            }
+
+            CloseGateViewLocked(ClaimFailureBackoffForTesting);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// A verdict that descent reaches the activation (#5872, R3): a pending unreachable
+    /// suspicion is dropped. The activation proves again, with B2, G2 and G3, on its own
+    /// proof path.
+    /// </summary>
+    internal void OnReachableVerdict()
+    {
+        lock (_sync)
+        {
+            _unreachableSuspectedUntilTicks = 0;
+        }
+    }
+
+    /// <summary>Whether a single unreachable verdict awaits its confirmation (#5872); test seam.</summary>
+    internal bool IsUnreachableSuspectedForTesting
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _unreachableSuspectedUntilTicks != 0;
+            }
+        }
+    }
+
+    /// <summary>Ends the current backoff now, as if it had elapsed (#5872); test seam.</summary>
+    internal void ElapseBackoffForTesting()
+    {
+        lock (_sync)
+        {
+            _gateClosedUntilTicks = 0;
+            if (_unreachableSuspectedUntilTicks != 0)
+            {
+                _unreachableSuspectedUntilTicks = 1;
+            }
+
+            _deferredReproveAtTicks = 0;
+        }
+    }
+
+    /// <summary>Marks the activation superseded, as a refused claim would (#5872); test seam.</summary>
+    internal void MarkStaleForTesting() => MarkStale();
 
     /// <summary>
     /// The activation is not reachable by descent and no hand-off marker is open on it

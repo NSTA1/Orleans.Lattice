@@ -416,6 +416,7 @@ public partial class ClusterOrphansPage : IDisposable
         TreeOrphanedLeafGapReason.WalkBudgetExhaustedWithoutResumePosition => "the pass ran out of budget with nowhere to resume",
         TreeOrphanedLeafGapReason.LeafBoundsUndecidable => "a leaf's bounds make reachability undecidable",
         TreeOrphanedLeafGapReason.EntryLeafUnreachable => "the walk could not reach the chain's entry leaf",
+        TreeOrphanedLeafGapReason.RoutingInMotion => "the shard's routing was changing as the pass reached a leaf; run again once it settles",
         _ => reason.ToString(),
     };
 

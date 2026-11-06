@@ -3183,6 +3183,7 @@ internal sealed partial class ShardRootGrain(
 
     private async Task<bool> EnsureRootSlowAsync(bool forWrite, bool purgedAnswersEmpty, Guid? admittedLineage)
     {
+        using var structuralRouting = EnterStructuralRouting(); // #5876
         // Re-check under the gate: a turn that lost the race to the gate
         // observes the winner's published RootNodeId and returns without
         // seeding.
@@ -3360,6 +3361,7 @@ internal sealed partial class ShardRootGrain(
     private async Task ResumePendingPromotionAsync()
     {
         if (state.State.PendingPromotion is null) return;
+        using var structuralRouting = EnterStructuralRouting(); // #5876
 
         // Re-check under the promotion gate. Two interleaved
         // PrepareForOperationSlowAsync turns could both observe a

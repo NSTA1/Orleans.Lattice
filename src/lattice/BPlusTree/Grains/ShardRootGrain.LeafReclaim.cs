@@ -1056,6 +1056,7 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task<bool> RetireRoutingAsync(GrainId parentId, GrainId currentId)
     {
+        using var structuralRouting = EnterStructuralRouting(); // #5876
         for (var attempt = 0; ; attempt++)
         {
             try

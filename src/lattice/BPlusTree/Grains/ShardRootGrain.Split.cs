@@ -134,6 +134,7 @@ internal sealed partial class ShardRootGrain
         var sorted = (int[])movedSlots.Clone();
         Array.Sort(sorted);
 
+        NoteStructuralRoutingChange(); // #5876
         state.State.SplitInProgress = new ShardSplitInProgress
         {
             Phase = ShardSplitPhase.BeginShadowWrite,
@@ -167,6 +168,7 @@ internal sealed partial class ShardRootGrain
         if (sip.Phase == ShardSplitPhase.Reject || sip.Phase == ShardSplitPhase.Complete)
             return;
 
+        NoteStructuralRoutingChange(); // #5876
         state.State.SplitInProgress = sip with { Phase = ShardSplitPhase.Reject };
         await WriteShardStateAsync();
     }
@@ -199,6 +201,7 @@ internal sealed partial class ShardRootGrain
             moved[slot] = sip.ShadowTargetShardIndex;
         }
         state.State.MovedAwayVirtualShardCount = sip.VirtualShardCount;
+        NoteStructuralRoutingChange(); // #5876
         state.State.SplitInProgress = null;
         await WriteShardStateAsync();
     }

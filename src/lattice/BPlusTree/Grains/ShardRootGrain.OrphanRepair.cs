@@ -303,9 +303,20 @@ internal sealed partial class ShardRootGrain
                 continue;
             }
 
-            if (await IsDescentReachableAsync(currentId, currentProbe, path))
+            var currentVerdict = await DescendForAuditAsync(currentId, currentProbe, path);
+            if (currentVerdict == DescentVerdict.Reachable)
             {
                 resumeFrom = currentProbe.LowKeyInclusive;
+                prevId = currentId;
+                prevProbe = currentProbe;
+                continue;
+            }
+
+            if (currentVerdict == DescentVerdict.Undecided)
+            {
+                // #5876, D2: no finding from a descent that overlapped a routing mutation.
+                // The leaf is stepped over, never a resume position, and the gap says so.
+                gaps.Add(RoutingInMotionGap(currentId, currentProbe.LowKeyInclusive));
                 prevId = currentId;
                 prevProbe = currentProbe;
                 continue;
@@ -436,15 +447,18 @@ internal sealed partial class ShardRootGrain
     {
         if (entryProbe.LowKeyInclusive is not { } low) return null;
 
-        if (await IsDescentReachableAsync(entryId, entryProbe, path)) return low;
+        var verdict = await DescendForAuditAsync(entryId, entryProbe, path);
+        if (verdict == DescentVerdict.Reachable) return low;
 
-        gaps.Add(new OrphanedLeafAuditGap
-        {
-            ShardIndex = MyShardIndex,
-            Reason = OrphanedLeafAuditGapReason.EntryLeafUnreachable,
-            LeafId = entryId.ToString(),
-            KeyHint = low,
-        });
+        gaps.Add(verdict == DescentVerdict.Undecided
+            ? RoutingInMotionGap(entryId, low)
+            : new OrphanedLeafAuditGap
+            {
+                ShardIndex = MyShardIndex,
+                Reason = OrphanedLeafAuditGapReason.EntryLeafUnreachable,
+                LeafId = entryId.ToString(),
+                KeyHint = low,
+            });
 
         return null;
     }
@@ -502,7 +516,15 @@ internal sealed partial class ShardRootGrain
             KeyHint = keyHint,
         });
 
-        if (!await IsDescentReachableAsync(terminalId, terminalProbe, path))
+        var terminalVerdict = await DescendForAuditAsync(terminalId, terminalProbe, path);
+        if (terminalVerdict == DescentVerdict.Undecided)
+        {
+            // #5876, D2: no verdict, so no claim that the chain is truncated either.
+            gaps.Add(RoutingInMotionGap(terminalId, terminalProbe.LowKeyInclusive));
+            return null;
+        }
+
+        if (terminalVerdict != DescentVerdict.Reachable)
         {
             // The chain ended on a leaf nothing routes to, so its declared
             // high bound is not a trustworthy key to descend on - it is the
@@ -569,16 +591,37 @@ internal sealed partial class ShardRootGrain
     /// so asking the question costs nothing but grain calls.
     /// </para>
     /// </summary>
-    private async Task<bool> IsDescentReachableAsync(
+    private async Task<DescentVerdict> DescendForAuditAsync(
         GrainId leafId,
         LeafReclaimProbe probe,
         Stack<GrainId> path)
     {
-        if (probe.LowKeyInclusive is null) return false;
+        if (probe.LowKeyInclusive is null) return DescentVerdict.Unreachable;
 
+        // #5876, D1: decided only over a settled routing structure.
+        if (!IsRoutingStructureSettled()) return DescentVerdict.Undecided;
+        var version = StructuralRoutingVersionForTesting;
+        var root = state.State.RootNodeId;
         path.Clear();
-        return await ResolveWriteLeafAsync(probe.LowKeyInclusive, path) == leafId;
+        var resolved = await ResolveWriteLeafAsync(probe.LowKeyInclusive, path);
+        DuringDescentForTesting?.Invoke();
+        if (!IsRoutingStructureSettled()
+            || version != StructuralRoutingVersionForTesting
+            || root != state.State.RootNodeId)
+        {
+            return DescentVerdict.Undecided;
+        }
+
+        return resolved == leafId ? DescentVerdict.Reachable : DescentVerdict.Unreachable;
     }
+
+    private OrphanedLeafAuditGap RoutingInMotionGap(GrainId leafId, string? keyHint) => new()
+    {
+        ShardIndex = MyShardIndex,
+        Reason = OrphanedLeafAuditGapReason.RoutingInMotion,
+        LeafId = leafId.ToString(),
+        KeyHint = keyHint,
+    };
 
     /// <summary>
     /// Chooses the leaf a page starts from: the caller's resume position when
@@ -792,6 +835,7 @@ internal sealed partial class ShardRootGrain
 
         // Latch the leaf closed. Everything above was read-only, so a refusal
         // here still leaves the tree exactly as it was found.
+        using var structuralRouting = EnterStructuralRouting(); // #5876
         if (!await leaf.TryBeginOrphanRetirementAsync())
         {
             logger.LogDebug(

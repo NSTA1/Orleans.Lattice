@@ -165,7 +165,16 @@ internal sealed partial class BPlusLeafGrain
 
         try
         {
-            if (await LiveAdvanceShardRoot(treeId, shardIndex).IsReachableByDescentAsync(context.GrainId, state.State.LowKeyInclusive))
+            var verdict = await LiveAdvanceShardRoot(treeId, shardIndex).GetDescentVerdictAsync(context.GrainId, state.State.LowKeyInclusive);
+            if (verdict == DescentVerdict.Undecided)
+            {
+                // #5876, D2: the descent overlapped a routing-structure mutation, so it is no
+                // verdict; the leaf appends unstamped for a backoff and asks again (R1).
+                fence.OnReachabilityUndecided();
+                return;
+            }
+
+            if (verdict == DescentVerdict.Reachable)
             {
                 // a5e2e2ef's G2 and G3 on #5866: reachable means linked, not witnessed. A
                 // deferred activation, and any proof under the eager gate (which may claim),
@@ -199,6 +208,7 @@ internal sealed partial class BPlusLeafGrain
                 return;
             }
 
+            var orphanRepair = false;
             if (HandOffMarkerStorage() is { } storage)
             {
                 var marker = (await HandOffMarkerRows.ReadLeafAsync(storage, context.GrainId.GetGuidKey())).State;
@@ -238,10 +248,12 @@ internal sealed partial class BPlusLeafGrain
                         fence.OnReachabilityDeferred();
                         return;
                     }
+
+                    orphanRepair = view.OrphanRepairInProgress;
                 }
             }
 
-            StopStampingUnreachable(fence);
+            OnUnreachableVerdict(fence, orphanRepair);
         }
         catch (Exception ex)
         {
@@ -278,17 +290,47 @@ internal sealed partial class BPlusLeafGrain
             marker, state.State.LowKeyInclusive, state.State.HighKeyExclusive, pending) > 0;
     }
 
+    /// <summary>
+    /// Acts on one verdict that descent does not reach this activation and no hand-off is
+    /// open on it (#5872, a5e2e2ef's R1-R4), from the proof path or the view path alike. A
+    /// structural witness - orphan repair running, the leaf absorbed by a reclaim, or this
+    /// activation superseded - latches at once; otherwise the first verdict leaves it
+    /// undecided, appending unstamped for the backoff, and only a second one after it
+    /// latches. Costs the write path nothing: a suspected latch costs one more proof read.
+    /// </summary>
+    private void OnUnreachableVerdict(LeafAppendEpochFence fence, bool orphanRepair)
+    {
+        if (orphanRepair || state.State.ReclaimRetired || _reclaimRetired != 0 || fence.IsStale)
+        {
+            StopStampingUnreachable(fence);
+            return;
+        }
+
+        if (fence.OnUnreachableVerdict())
+        {
+            LogStoppedStampingUnreachable();
+            return;
+        }
+
+        ResolveLogger()?.LogDebug(
+            "Leaf {LeafId}: descent did not reach it; it appends unstamped for a backoff and proves again before it latches (#5872).",
+            context.GrainId);
+    }
+
     /// <summary>Latches <paramref name="fence"/> unstamped for the activation, logging once.</summary>
     private void StopStampingUnreachable(LeafAppendEpochFence fence)
     {
         if (fence.StopStampingUnreachable())
         {
-            ResolveLogger()?.LogWarning(
-                "Leaf {LeafId} of tree {TreeId} is not reachable by descent and no hand-off is open on it: it appends unstamped for the rest of this activation, so the leaf that owns its keys replays them (epic #5605, #5709). An orphaned leaf; see orphaned-leaf repair.",
-                context.GrainId,
-                MetricTreeId);
+            LogStoppedStampingUnreachable();
         }
     }
+
+    private void LogStoppedStampingUnreachable() =>
+        ResolveLogger()?.LogWarning(
+            "Leaf {LeafId} of tree {TreeId} is not reachable by descent and no hand-off is open on it: it appends unstamped for the rest of this activation, so the leaf that owns its keys replays them (epic #5605, #5709). An orphaned leaf; see orphaned-leaf repair.",
+            context.GrainId,
+            MetricTreeId);
 
     /// <summary>
     /// Called once when another activation of this leaf has claimed a newer append

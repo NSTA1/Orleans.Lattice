@@ -30,9 +30,11 @@ internal sealed class LiveAdvanceRig
             .Returns(_ => Task.FromResult(WalAppendFenceClaimResult.Accept(ClaimHead)));
         ShardRoot.GetLiveAdvanceViewAsync(Arg.Any<GrainId>(), Arg.Any<string?>(), Arg.Any<string?>())
             .Returns(call => Task.FromResult(LeafLiveAdvanceView.For(
-                ShardMarker, call.ArgAt<string?>(1), call.ArgAt<string?>(2), Reachable, OrphanRepairInProgress)));
+                ShardMarker, call.ArgAt<string?>(1), call.ArgAt<string?>(2), Verdict == DescentVerdict.Reachable, OrphanRepairInProgress, Verdict == DescentVerdict.Undecided)));
         ShardRoot.IsReachableByDescentAsync(Arg.Any<GrainId>(), Arg.Any<string?>())
-            .Returns(_ => Task.FromResult(Reachable));
+            .Returns(_ => Task.FromResult(Verdict == DescentVerdict.Reachable));
+        ShardRoot.GetDescentVerdictAsync(Arg.Any<GrainId>(), Arg.Any<string?>())
+            .Returns(_ => Task.FromResult(Verdict));
         FencingCheck = new GrainStorageFencingCheck(
             new ServiceCollection().BuildServiceProvider(),
             Options.Create(new LatticeGrainStorageFencingOptions()),
@@ -71,6 +73,15 @@ internal sealed class LiveAdvanceRig
 
     /// <summary>Whether descent reaches the leaf.</summary>
     public bool Reachable { get; set; } = true;
+
+    /// <summary>
+    /// When set, the shard root's descent verdict overriding <see cref="Reachable"/>:
+    /// <see cref="DescentVerdict.Undecided"/> models a descent that overlapped a link batch (#5876).
+    /// </summary>
+    public DescentVerdict? VerdictOverride { get; set; }
+
+    /// <summary>The verdict every descent the rig answers gives.</summary>
+    public DescentVerdict Verdict => VerdictOverride ?? (Reachable ? DescentVerdict.Reachable : DescentVerdict.Unreachable);
 
     /// <summary>Whether the shard root is repairing orphans.</summary>
     public bool OrphanRepairInProgress { get; set; }
@@ -194,6 +205,9 @@ internal sealed class LiveAdvanceRig
         /// <summary>When set, the next append throws it.</summary>
         public Exception? ThrowNext { get; set; }
 
+        /// <summary>Every fenced append's stamp, in order; <see langword="null"/> for one appended unstamped (#5872).</summary>
+        public List<WalAppendStamp?> Stamps { get; } = [];
+
         /// <summary>The routing the latest append was issued under (#5837, T1).</summary>
         public WalRoutingStamp LastRouting { get; private set; }
 
@@ -286,6 +300,7 @@ internal sealed class LiveAdvanceRig
             {
                 var partition = Route(entry);
                 var stamp = await fence.StampForAsync(rig.Shard, partition, cancellationToken);
+                Stamps.Add(routing.ForcesUnstamped ? null : stamp);
                 if (stamp is null || routing.ForcesUnstamped)
                 {
                     var unstamped = _next[partition]++;

@@ -488,10 +488,11 @@ internal interface IShardRootGrain : IGrainWithStringKey
 
     /// <summary>
     /// Whether descent for <paramref name="lowKeyInclusive"/> reaches
-    /// <paramref name="leafId"/> (epic #5605, #5709): a leaf proves it once per
-    /// activation, before its first append-epoch claim, and an unreachable leaf never
-    /// appends stamped. The same descent <see cref="GetLiveAdvanceViewAsync"/> makes,
-    /// without the marker read.
+    /// <paramref name="leafId"/> over a settled routing structure (epic #5605, #5709,
+    /// #5876): <see langword="false"/> both when it does not and when the structure was in
+    /// motion, so a caller that acts only on <see langword="true"/> - a span-routing
+    /// refresh - never trusts an undecided descent. A caller that must tell the two apart
+    /// asks <see cref="GetDescentVerdictAsync"/>.
     /// </summary>
     /// <param name="leafId">The asking leaf.</param>
     /// <param name="lowKeyInclusive">The leaf's declared low bound; <see langword="null"/> for the leftmost leaf.</param>
@@ -503,6 +504,24 @@ internal interface IShardRootGrain : IGrainWithStringKey
     [AlwaysInterleave]
     [ReadOnly]
     Task<bool> IsReachableByDescentAsync(GrainId leafId, string? lowKeyInclusive);
+
+    /// <summary>
+    /// The three-valued answer to whether descent for <paramref name="lowKeyInclusive"/>
+    /// reaches <paramref name="leafId"/> (#5876, a5e2e2ef's D1): undecided when a mutation
+    /// of the shard's routing structure was in flight before or after the descent, or
+    /// completed during it. A leaf's reachability proof acts on it: undecided is no
+    /// verdict, and the leaf appends unstamped for a backoff before it asks again.
+    /// </summary>
+    /// <param name="leafId">The asking leaf.</param>
+    /// <param name="lowKeyInclusive">The leaf's declared low bound; <see langword="null"/> for the leftmost leaf.</param>
+    /// <returns>The verdict.</returns>
+    /// <remarks>
+    /// <see cref="AlwaysInterleaveAttribute"/> and <see cref="ReadOnlyAttribute"/>, as
+    /// <see cref="IsReachableByDescentAsync"/>.
+    /// </remarks>
+    [AlwaysInterleave]
+    [ReadOnly]
+    Task<DescentVerdict> GetDescentVerdictAsync(GrainId leafId, string? lowKeyInclusive);
 
     /// <summary>
     /// Opens a shard-level hand-off marker <paramref name="token"/> over

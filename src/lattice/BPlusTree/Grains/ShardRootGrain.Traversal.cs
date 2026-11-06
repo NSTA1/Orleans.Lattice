@@ -859,6 +859,7 @@ internal sealed partial class ShardRootGrain
         bool deferIfBusy = false)
     {
         using var routingMutation = EnterRoutingMutation();
+        using var structuralRouting = EnterStructuralRouting(); // #5876
         List<LinkWork> work;
         if (deferIfBusy)
         {
@@ -875,6 +876,7 @@ internal sealed partial class ShardRootGrain
         {
             await _splitLinkGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         }
+
         try
         {
             work = await LinkSplitLockedAsync(splitResult, height);
@@ -1018,6 +1020,7 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task<List<SplitResult>?> LinkOneLockedAsync(LinkWork item)
     {
+        using var structuralRouting = EnterStructuralRouting(); // #5876
         var split = item.Split;
         if (item.Height < 0 || RootIsLeafTyped)
         {
@@ -1316,6 +1319,7 @@ internal sealed partial class ShardRootGrain
             return;
         }
 
+        using var structuralRouting = EnterStructuralRouting(); // #5876
         await _splitLinkGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         try
         {
@@ -1760,6 +1764,7 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task PromoteRootLockedAsync(SplitResult splitResult)
     {
+        using var structuralRouting = EnterStructuralRouting(); // #5876
         // The promotion gate still serialises the two-phase sequence (persist
         // intent, then complete) against ResumePendingPromotionAsync. Every
         // path takes _splitLinkGate first, so the order is fixed.
@@ -1783,6 +1788,7 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task CompletePromotionAsync()
     {
+        using var structuralRouting = EnterStructuralRouting(); // #5876
         var pending = state.State.PendingPromotion!;
         var currentRootId = state.State.RootNodeId!.Value;
 
