@@ -128,6 +128,69 @@ public sealed class LeafReplayCoordinatorGrainInterleaveTests
             "instrument validation: the reads must actually have interleaved");
     }
 
+    /// <summary>
+    /// Two identical concurrent requests share one storage read, and the joiner
+    /// gets its own budget's prefix of the shared result. Interleaving alone
+    /// would have sent the second request to storage as well, where under serial
+    /// calls it queued and then hit the slice cache.
+    /// </summary>
+    [Test]
+    public async Task Identical_concurrent_slice_reads_share_one_storage_read()
+    {
+        var coordinator = _cluster.Client.GetGrain<ILeafReplayCoordinatorGrain>($"single-flight-{Guid.NewGuid():N}/0");
+        var filter = new WalKeyFilter("a", "m");
+        var first = coordinator.ReadSliceAsync(-1, 100, 16, filter, CancellationToken.None);
+        await _reader.WaitForInFlightAsync(1, OverlapBudget);
+
+        var second = coordinator.ReadSliceAsync(-1, 100, 8, filter, CancellationToken.None);
+        var secondReachedStorage = await _reader.TryWaitForInFlightAsync(2, TimeSpan.FromSeconds(2));
+        _reader.ReleaseAll();
+        var leader = await first;
+        var joiner = await second;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(secondReachedStorage, Is.False, "an identical request must join the read in flight");
+            Assert.That(_reader.Reads, Is.EqualTo(1), "two identical concurrent requests must cost one storage read");
+            Assert.That(leader, Has.Count.GreaterThan(8), "instrument validation: the shared slice must exceed the joiner's budget");
+            Assert.That(joiner.Select(e => e.Offset), Is.EqualTo(leader.Take(8).Select(e => e.Offset)),
+                "the joiner gets its own budget's prefix of the shared slice");
+        });
+    }
+
+    /// <summary>
+    /// One caller's cancellation ends that caller's wait only: a request that
+    /// joined the same read still gets its slice.
+    /// </summary>
+    [Test]
+    public async Task One_callers_cancellation_does_not_fail_a_request_that_joined_its_read()
+    {
+        var coordinator = _cluster.Client.GetGrain<ILeafReplayCoordinatorGrain>($"single-flight-cancel-{Guid.NewGuid():N}/0");
+        var filter = new WalKeyFilter("a", "m");
+        using var cancellation = new CancellationTokenSource();
+        var first = coordinator.ReadSliceAsync(-1, 100, 16, filter, cancellation.Token);
+        await _reader.WaitForInFlightAsync(1, OverlapBudget);
+        var second = coordinator.ReadSliceAsync(-1, 100, 16, filter, CancellationToken.None);
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+
+        await cancellation.CancelAsync();
+        Assert.CatchAsync<OperationCanceledException>(
+            async () => await first.WaitAsync(OverlapBudget),
+            "instrument validation: the cancelled caller must see its cancellation");
+
+        // Cancellation reaches the grain asynchronously; let it arrive before the
+        // shared read is released, or a read wrongly running on the cancelled
+        // caller's token would finish before it ever saw the cancellation.
+        await Task.Delay(TimeSpan.FromSeconds(1));
+        _reader.ReleaseAll();
+        var joined = await second.WaitAsync(OverlapBudget);
+        Assert.Multiple(() =>
+        {
+            Assert.That(joined, Is.Not.Empty, "the joiner must still get its slice");
+            Assert.That(_reader.Reads, Is.EqualTo(1), "instrument validation: the second request joined the first's read");
+        });
+    }
+
     private static Task Issue(ILeafReplayCoordinatorGrain coordinator, CoordinatorCall call) => call switch
     {
         CoordinatorCall.UnfilteredSlice => coordinator.ReadSliceAsync(-1, 50, 16, CancellationToken.None),
@@ -160,6 +223,10 @@ public sealed class LeafReplayCoordinatorGrainInterleaveTests
 
         public int PeakInFlight { get; private set; }
 
+        public int Reads => Volatile.Read(ref _reads);
+
+        private int _reads;
+
         public bool Jitter { get; set; }
 
         public void Reset()
@@ -169,6 +236,7 @@ public sealed class LeafReplayCoordinatorGrainInterleaveTests
                 _release.TrySetResult();
                 _release = NewRelease();
                 PeakInFlight = 0;
+                _reads = 0;
                 Jitter = false;
                 _waiters.Clear();
             }
@@ -206,7 +274,8 @@ public sealed class LeafReplayCoordinatorGrainInterleaveTests
             long fromOffsetExclusive,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
-            await ParkAsync();
+            Interlocked.Increment(ref _reads);
+            await ParkAsync(cancellationToken);
             for (var offset = Math.Max(0, fromOffsetExclusive + 1); offset < 1000; offset++)
             {
                 yield return (offset, new LatticeMutation
@@ -231,7 +300,7 @@ public sealed class LeafReplayCoordinatorGrainInterleaveTests
             return 0;
         }
 
-        private async Task ParkAsync()
+        private async Task ParkAsync(CancellationToken cancellationToken = default)
         {
             Task release;
             lock (_gate)
@@ -249,7 +318,7 @@ public sealed class LeafReplayCoordinatorGrainInterleaveTests
 
             try
             {
-                await release;
+                await release.WaitAsync(cancellationToken);
                 if (Jitter)
                     await Task.Delay(Random.Shared.Next(0, 3));
                 else
