@@ -90,7 +90,7 @@ internal sealed class ReplayStoragePressureGovernor(long windowTicks)
 
             var circulating = Math.Max(1, ceiling - Target);
             var step = Math.Max(1, (int)Math.Ceiling(circulating * DecreaseFraction));
-            var next = Math.Min(Math.Max(0, ceiling - 1), Target + step);
+            var next = Math.Min(ceiling, Target + step);
             if (next == Target)
                 return null;
 
