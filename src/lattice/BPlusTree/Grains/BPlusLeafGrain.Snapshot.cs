@@ -991,7 +991,7 @@ internal sealed partial class BPlusLeafGrain
             return false;
         }
 
-        if (++_consecutiveCheckpointStallTicks < CheckpointStallTicksBeforeDrive)
+        if (++_consecutiveCheckpointStallTicks < 1) // DO-NOT-MERGE red proof: BH2
         {
             return false;
         }
@@ -1000,7 +1000,7 @@ internal sealed partial class BPlusLeafGrain
         // Mixing the opportunity with the leaf id also breaks repeated cohorts.
         var mixed = ((ulong)(uint)context.GrainId.GetHashCode() + ++_checkpointStallRearms)
             * 0x9E3779B97F4A7C15UL;
-        _consecutiveCheckpointStallTicks = -(int)((mixed >> 32) % 3);
+        _consecutiveCheckpointStallTicks = 0; // DO-NOT-MERGE red proof: BH2
         if (_checkpointStallCoordinators is null
             || _checkpointStallCoordinators.Length != partitionCount
             || !string.Equals(_checkpointStallCoordinatorTreeId, state.State.TreeId, StringComparison.Ordinal))
