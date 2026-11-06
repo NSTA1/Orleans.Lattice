@@ -108,19 +108,29 @@ public partial class BPlusLeafGrainTests
     [Test]
     public async Task A_transient_unreachable_verdict_at_the_split_cut_takes_no_hint_and_does_not_latch()
     {
-        // Detector 4: the cut's view reads unreachable once. The cut takes no D4 hint - the
-        // sibling starts at the donor's frontier - and the donor is not latched.
-        var viewReads = 0;
+        // Detector 4: the view read after the cut reads unreachable once. The cut takes no
+        // D4 hint - the sibling starts at the donor's frontier - and the donor is not latched.
+        var cutTaken = false;
+        var unreachableAtCut = 0;
         var (grain, _, sibling, _) = await PreArmSplitAsync(
             new WalSplitCut(Head: 42, ForeignHigh: 20, UnstampedWatermark: 25),
             frontier: 30,
-            configure: rig => rig.ShardRoot.GetLiveAdvanceViewAsync(Arg.Any<GrainId>(), Arg.Any<string?>(), Arg.Any<string?>())
-                .Returns(call => Task.FromResult(LeafLiveAdvanceView.For(
-                    rig.ShardMarker, call.ArgAt<string?>(1), call.ArgAt<string?>(2), ++viewReads > 1, false))));
+            configure: rig =>
+            {
+                rig.Shard.When(s => s.GetSplitCutAsync(Arg.Any<WalAppendStamp>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()))
+                    .Do(_ => cutTaken = true);
+                rig.ShardRoot.GetLiveAdvanceViewAsync(Arg.Any<GrainId>(), Arg.Any<string?>(), Arg.Any<string?>())
+                    .Returns(call =>
+                    {
+                        var reachable = !(cutTaken && unreachableAtCut++ == 0);
+                        return Task.FromResult(LeafLiveAdvanceView.For(
+                            rig.ShardMarker, call.ArgAt<string?>(1), call.ArgAt<string?>(2), reachable, false));
+                    });
+            });
 
         Assert.Multiple(() =>
         {
-            Assert.That(viewReads, Is.GreaterThanOrEqualTo(1), "precondition: the split read its view");
+            Assert.That(unreachableAtCut, Is.GreaterThanOrEqualTo(1), "precondition: the view read after the cut was unreachable");
             Assert.That(grain.AppendFenceForTesting!.IsUnreachable, Is.False, "one unreachable verdict at the split cut latched the donor");
         });
         await sibling.Received(1).SetCheckpointOffsetHintsAsync(Arg.Is<long[]>(h => h.Length == 1 && h[0] == 30L));
