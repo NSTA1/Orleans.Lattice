@@ -543,7 +543,7 @@ internal sealed partial class BPlusLeafGrain
         LatticeMetrics.Meter.CreateObservableGauge(
             LatticeMetrics.WalReplayPermitsEffectiveName,
             static () => new Measurement<int>(
-                Math.Max(0, Volatile.Read(ref _replayConcurrencyCeiling) - Volatile.Read(ref _withheldReplayPermits)),
+                Volatile.Read(ref _replayConcurrencyCeiling),
                 LatticeTenantLabel.Platform),
             unit: "{permit}",
             description:
