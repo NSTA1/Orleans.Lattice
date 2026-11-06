@@ -148,7 +148,7 @@ internal sealed class LeafReplayCoordinatorGrain(
 
         while (true)
         {
-            await VerifyRingIncarnationAsync(cancellationToken);
+            if (ring.Incarnation is null) await VerifyRingIncarnationAsync(cancellationToken);
             var epoch = ring.Epoch;
             var run = new List<ReplayPage>(ring.RunFrom(fromOffsetExclusive));
             var restart = false;
