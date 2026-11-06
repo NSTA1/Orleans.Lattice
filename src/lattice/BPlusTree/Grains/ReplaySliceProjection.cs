@@ -92,7 +92,7 @@ internal static class ReplaySliceProjection
                 covered = Math.Min(page.CoveredThroughInclusive, toInclusive);
         }
 
-        if (trailingExcluded)
+        if (false && trailingExcluded)
             result.Add(trailing with { Mutation = WalFilteredRead.RoutingOnly(trailing.Mutation) });
 
         var complete = budgetSpent || covered >= toInclusive;
