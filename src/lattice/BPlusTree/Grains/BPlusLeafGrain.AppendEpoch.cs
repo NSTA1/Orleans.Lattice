@@ -165,7 +165,16 @@ internal sealed partial class BPlusLeafGrain
 
         try
         {
-            if (await LiveAdvanceShardRoot(treeId, shardIndex).IsReachableByDescentAsync(context.GrainId, state.State.LowKeyInclusive))
+            var verdict = await LiveAdvanceShardRoot(treeId, shardIndex).GetDescentVerdictAsync(context.GrainId, state.State.LowKeyInclusive);
+            if (verdict == DescentVerdict.Undecided)
+            {
+                // #5876, D2: the descent overlapped a routing-structure mutation, so it is no
+                // verdict; the leaf appends unstamped for a backoff and asks again (R1).
+                fence.OnReachabilityUndecided();
+                return;
+            }
+
+            if (verdict == DescentVerdict.Reachable)
             {
                 // a5e2e2ef's G2 and G3 on #5866: reachable means linked, not witnessed. A
                 // deferred activation, and any proof under the eager gate (which may claim),

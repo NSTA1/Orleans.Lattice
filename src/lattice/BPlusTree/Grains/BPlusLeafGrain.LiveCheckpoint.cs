@@ -687,6 +687,15 @@ internal sealed partial class BPlusLeafGrain
             var high = state.State.HighKeyExclusive;
             var view = await LiveAdvanceShardRoot(treeId, shardIndex)
                 .GetLiveAdvanceViewAsync(context.GrainId, low, high);
+            if (view.ReachabilityUndecided)
+            {
+                // #5876, D2: an undecided descent is no verdict - no latch, no proof, no
+                // promotion, and at the split cut no hint; the leaf appends unstamped for a
+                // backoff (R1).
+                _appendFence?.OnReachabilityUndecided();
+                return null;
+            }
+
             if (!view.Reachable || view.OrphanRepairInProgress)
             {
                 // #5709: a leaf descent no longer reaches, with no hand-off open on it,

@@ -660,6 +660,7 @@ The following inventory includes directly declared public members and overloads,
 - `WalkBudgetExhaustedWithoutResumePosition = 4`
 - `LeafBoundsUndecidable = 5`
 - `EntryLeafUnreachable = 6`
+- `RoutingInMotion = 7`
 
 ### `Orleans.Lattice.Api.TreeAdmin.TreeOrphanedLeafReport`
 

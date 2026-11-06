@@ -79,15 +79,20 @@ internal sealed partial class ShardRootGrain
 
         // Read after the marker: a leaf that descent no longer reaches (absorbed by a
         // reclaim, or an orphan sharing a live leaf's bounds) is held either way.
-        var reachable = await IsReachableByDescentAsync(leafId, lowKeyInclusive);
-        return LeafLiveAdvanceView.For(marker, lowKeyInclusive, highKeyExclusive, reachable, Volatile.Read(ref _orphanRepairInProgress) != 0);
+        // #5876: an undecided descent is carried as such, never as a verdict.
+        var verdict = await DescendForVerdictAsync(leafId, lowKeyInclusive);
+        return LeafLiveAdvanceView.For(
+            marker,
+            lowKeyInclusive,
+            highKeyExclusive,
+            verdict == DescentVerdict.Reachable,
+            Volatile.Read(ref _orphanRepairInProgress) != 0,
+            verdict == DescentVerdict.Undecided);
     }
 
     /// <inheritdoc />
     public async Task<bool> IsReachableByDescentAsync(GrainId leafId, string? lowKeyInclusive) =>
-        state.State.RootNodeId is not null
-        && !state.State.IsRetired
-        && await ResolveWalkStartLeafAsync(lowKeyInclusive) == leafId;
+        await DescendForVerdictAsync(leafId, lowKeyInclusive) == DescentVerdict.Reachable;
 
     /// <inheritdoc />
     public Task OpenHandOffMarkerAsync(string token, string? lowInclusive, string? highExclusive)

@@ -582,4 +582,32 @@ public sealed class ShardRootGrainOrphanAuditGapTests
                 "an empty finding list means nothing when part of the tree was never examined");
         });
     }
+
+    [Test]
+    public async Task An_audit_descent_during_a_routing_mutation_finds_nothing_and_reports_routing_in_motion()
+    {
+        // #5876, D2: a descent that overlapped a routing-structure mutation is no verdict,
+        // so the orphan it would have judged yields no finding - only a gap naming it.
+        var h = Build(
+            new LeafSpec("a", null, "c", Routed: true, Next: "c"),
+            new LeafSpec("c", "c", "e", Routed: true, Next: "x"),
+            new LeafSpec("x", "c", "e", Routed: false, Next: "e", Keys: ["c1"]),
+            new LeafSpec("e", "e", null, Routed: true, Next: null));
+        var decided = await InspectAsync(h);
+        h.Grain.DuringDescentForTesting = () =>
+        {
+            using (h.Grain.EnterStructuralRouting())
+            {
+            }
+        };
+
+        var inMotion = await InspectAsync(h);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decided.Findings, Has.Count.EqualTo(1), "precondition: a settled pass judges the orphan");
+            Assert.That(inMotion.Findings, Is.Empty, "a descent during a routing mutation produced a finding");
+            Assert.That(Reasons(inMotion), Does.Contain(OrphanedLeafAuditGapReason.RoutingInMotion), "the undecided descent was not reported");
+        });
+    }
 }

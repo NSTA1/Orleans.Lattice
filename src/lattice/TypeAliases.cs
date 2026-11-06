@@ -1031,4 +1031,7 @@ internal static class TypeAliases
 
     /// <summary>Alias for a shard root's answer to whether a bulk operation is running or completed (#5812).</summary>
     internal const string BulkOperationStatus = "ol.xbs";
+
+    /// <summary>Alias for a shard root's three-valued answer to whether descent reaches a leaf (#5876).</summary>
+    internal const string DescentVerdict = "ol.xdv";
 }

@@ -60,4 +60,11 @@ public enum TreeOrphanedLeafGapReason
     /// live predecessor to swing and an entry leaf has none in reach.
     /// </summary>
     EntryLeafUnreachable = 6,
+
+    /// <summary>
+    /// The shard's routing structure was changing while the pass descended for a leaf,
+    /// so the descent was no verdict. The leaf was neither judged nor used to resume; a
+    /// later pass judges it once the structure has settled.
+    /// </summary>
+    RoutingInMotion = 7,
 }

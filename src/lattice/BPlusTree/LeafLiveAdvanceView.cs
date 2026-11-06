@@ -24,6 +24,11 @@ namespace Orleans.Lattice.BPlusTree;
 /// The shard's durable routing generation (#5837, L2), against which a split donor's
 /// deferred bound resolves; 0 from a build that does not send it, which resolves none.
 /// </param>
+/// <param name="ReachabilityUndecided">
+/// Whether the descent behind <paramref name="Reachable"/> overlapped a mutation of the
+/// shard's routing structure (#5876), so <paramref name="Reachable"/> is no verdict; the
+/// leaf neither latches nor proves on it.
+/// </param>
 [GenerateSerializer]
 [Immutable]
 [Alias(TypeAliases.LeafLiveAdvanceView)]
@@ -33,7 +38,8 @@ internal readonly record struct LeafLiveAdvanceView(
     [property: Id(2)] long[]? CloseHeads,
     [property: Id(3)] bool Reachable,
     [property: Id(4)] bool OrphanRepairInProgress,
-    [property: Id(5)] long RoutingGeneration = 0)
+    [property: Id(5)] long RoutingGeneration = 0,
+    [property: Id(6)] bool ReachabilityUndecided = false)
 {
     /// <summary>Projects <paramref name="marker"/> onto a leaf owning <c>[low, high)</c>.</summary>
     /// <param name="marker">The shard's hand-off marker.</param>
@@ -41,13 +47,15 @@ internal readonly record struct LeafLiveAdvanceView(
     /// <param name="highExclusive">The leaf's high bound.</param>
     /// <param name="reachable">Whether descent reaches the leaf.</param>
     /// <param name="orphanRepairInProgress">Whether orphan repair is running.</param>
+    /// <param name="reachabilityUndecided">Whether the descent was undecided (#5876).</param>
     /// <returns>The view the leaf decides on.</returns>
     public static LeafLiveAdvanceView For(
         ShardHandOffState marker,
         string? lowInclusive,
         string? highExclusive,
         bool reachable,
-        bool orphanRepairInProgress)
+        bool orphanRepairInProgress,
+        bool reachabilityUndecided = false)
     {
         ArgumentNullException.ThrowIfNull(marker);
         return new LeafLiveAdvanceView(
@@ -56,6 +64,7 @@ internal readonly record struct LeafLiveAdvanceView(
             HandOffMarkerCore.RequiredHeadsOrNull(marker, lowInclusive, highExclusive),
             reachable,
             orphanRepairInProgress,
-            marker.RoutingGeneration);
+            marker.RoutingGeneration,
+            reachabilityUndecided);
     }
 }

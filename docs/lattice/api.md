@@ -1604,6 +1604,9 @@ break, `ChainTruncatedUnrecoverable` when it could not), a leaf whose
 declared bounds make reachability undecidable (`LeafBoundsUndecidable`),
 an entry leaf - the chain head, a resume position, or a re-entry past a
 break - that is itself unreachable by descent (`EntryLeafUnreachable`),
+a leaf whose descent overlapped a change to the shard's routing structure
+- a split being linked, a root promoted, a folded leaf unlinked, a bulk
+graft or a shard split - so it gave no verdict (`RoutingInMotion`),
 and a shard-level budget exhausted with no position to resume from
 (`WalkBudgetExhaustedWithoutResumePosition`) are all reported here, each
 as an `OrphanedLeafAuditGap` carrying its `OrphanedLeafAuditGapReason`,

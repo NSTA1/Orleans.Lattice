@@ -710,7 +710,7 @@ internal sealed partial class ShardRootGrain
     /// #5460).
     /// </para>
     /// </remarks>
-    private Task SeedBulkLoadLeavesAsync(
+    private async Task SeedBulkLoadLeavesAsync(
         List<GrainId> leafIds,
         List<string?> separators,
         int maxLeafKeys,
@@ -718,6 +718,7 @@ internal sealed partial class ShardRootGrain
         WalRoutingStamp seedRouting,
         Func<int, int, Dictionary<string, LwwValue<byte[]>>> buildBatch)
     {
+        using var structuralRouting = EnterStructuralRouting(); // #5876
         var slots = new int[leafIds.Count];
         for (int i = 0; i < slots.Length; i++)
         {
@@ -727,7 +728,7 @@ internal sealed partial class ShardRootGrain
         var treeId = TreeId;
         var shardIndex = MyShardIndex;
 
-        return BoundedFanOut.ForEachAsync(
+        await BoundedFanOut.ForEachAsync(
             slots,
             BoundedFanOut.DefaultWidth,
             async slot =>
@@ -806,6 +807,7 @@ internal sealed partial class ShardRootGrain
         List<string?> separators,
         int maxChildren)
     {
+        using var structuralRouting = EnterStructuralRouting(); // #5876
         if (leafIds.Count == 1)
         {
             return (leafIds[0], true);
@@ -885,7 +887,9 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private ReplacedBulkRoot PublishBulkLoadRoot(string operationId, GrainId root, bool rootIsLeaf)
     {
+        using var structuralRouting = EnterStructuralRouting(); // #5876
         var replaced = new ReplacedBulkRoot(state.State.RootNodeId, state.State.RootIsLeaf);
+        NoteStructuralRoutingChange(); // #5876
         state.State.RootNodeId = root;
         state.State.RootIsLeaf = rootIsLeaf;
         state.State.LastCompletedBulkOperationId = operationId;
@@ -1042,6 +1046,7 @@ internal sealed partial class ShardRootGrain
             // the range it owns, up to the next appended leaf's separator and open
             // at the tail (issue #5460; see SeedBulkLoadLeavesAsync).
             using (LatticeNewLeafIntentContext.BeginScope(newId))
+            using (EnterStructuralRouting())
             {
                 await newLeaf.InitializeSiblingAsync(new SiblingInitialization
                 {
@@ -1061,6 +1066,7 @@ internal sealed partial class ShardRootGrain
             leafIndex++;
         }
 
+        NoteStructuralRoutingChange(); // #5876
         state.State.PendingBulkGraft = new PendingBulkGraft
         {
             OperationId = operationId,
@@ -1237,6 +1243,7 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task CompleteBulkGraftAsync()
     {
+        using var structuralRouting = EnterStructuralRouting(); // #5876
         var graft = state.State.PendingBulkGraft!;
 
         var existingLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(graft.ExistingRightmostLeafId);
@@ -1375,6 +1382,7 @@ internal sealed partial class ShardRootGrain
             newLeafIds[i] = graft.NewLeaves[i].LeafId;
         await FinishBulkSwitchAsync(graft.OperationId, newLeafIds, relocated: readFrontier is not null, closeNow: false, readFrontier);
 
+        NoteStructuralRoutingChange(); // #5876
         state.State.PendingBulkGraft = null;
         state.State.LastCompletedBulkOperationId = graft.OperationId;
         await WriteShardStateAsync();
