@@ -328,15 +328,14 @@ internal sealed partial class BPlusLeafGrain
                 if (!claimRaised)
                 {
                     hasReport = fence.TryGetPreArmView(p, out reportedBound);
+                    // DO-NOT-MERGE red proof: R3 (any caller, any hold).
                     if (!hasReport
-                        && fetchReports
-                        && !withinDrive
-                        && LeafLiveAdvanceCore.IsReportTheOnlyHold(
+                        && (true || LeafLiveAdvanceCore.IsReportTheOnlyHold(
                             handOffClear: handOff.Clear,
                             closeHead: closeHead,
                             freeTarget: LeafLiveAdvanceCore.FreeTarget(ownHigh, p),
                             current: GetCurrentCheckpointForPartition(p),
-                            staleLatched: IsPartitionStaleLatched(p))
+                            staleLatched: IsPartitionStaleLatched(p)))
                         && await TryFetchReportAsync(fence, p))
                     {
                         // #5851 (2), F4: read again from what this fetch recorded, never a
