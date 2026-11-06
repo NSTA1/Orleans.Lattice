@@ -98,6 +98,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **WAL replay - Per-partition replay reads no longer serialise.** The per-partition replay coordinator served one slice read at a time, so a silo replayed at most one slice per WAL partition however many replay permits it had; on a cold restart, 16 times the permits bought 4.7 times the reads and slowed every replay. Its reads now interleave. ([#5877](https://github.com/NSTA1/Orleans.Lattice/issues/5877)) (`Orleans.Lattice`)
+
 - **Explorer - Schema validation.** Rule cards reject reversed large-integer bounds without rounding valid constants. Semantic-version cards reject empty identifiers and leading-zero numeric prereleases; saved patterns remain unchanged when reopened. ([#5347](https://github.com/NSTA1/Orleans.Lattice/issues/5347)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - Telemetry charts.** Finite readings retain finite SVG paths, axis ticks and labels even at very large or subnormal magnitudes. ([#5347](https://github.com/NSTA1/Orleans.Lattice/issues/5347)) (`Orleans.Lattice.Explorer.UI`)
