@@ -110,7 +110,7 @@ internal static class ReplaySliceProjection
     private static CommitLogSliceEntry Detached(CommitLogSliceEntry entry)
     {
         var mutation = entry.Mutation;
-        if (mutation.Value is null && mutation.VectorClock is null)
+        if (true)
             return entry;
 
         return entry with
