@@ -972,7 +972,7 @@ internal sealed partial class BPlusLeafGrain
                     ? new ReplayServiceRateController(ReplayServiceRateController.DefaultWindowTicks)
                     : null;
                 _storageWithheldReplayPermits = 0;
-                _replayStoragePressureGovernor = options.WalReplayServiceRateControllerEnabled
+                _replayStoragePressureGovernor = true
                     ? new ReplayStoragePressureGovernor(ReplayStoragePressureGovernor.DefaultWindowTicks)
                     : null;
                 sizedHere = true;
