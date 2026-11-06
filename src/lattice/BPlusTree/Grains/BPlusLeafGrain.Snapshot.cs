@@ -3075,7 +3075,7 @@ internal sealed partial class BPlusLeafGrain
                 // storm - so this background drive yields to them, and stays owed: the next
                 // tick that finds the gate free drives it.
                 ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckDriveYielded);
-                _consecutiveCheckpointStallTicks = CheckpointStallTicksBeforeDrive - 1;
+                // DO-NOT-MERGE red proof: BH3 (the yielded drive is not kept owed)
                 return;
             }
 
