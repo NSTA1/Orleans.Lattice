@@ -154,6 +154,14 @@ internal sealed class LeafReplayCoordinatorGrain(
 
         // Each joiner waits on its own token: one caller's cancellation ends
         // only that caller's wait, never the shared read the others are on.
+        //
+        // The budget is deliberately NOT part of the key. The shared read ran
+        // with the first caller's budget, so a joiner gets at most that many
+        // entries - a prefix of its window, cut to its own budget below. A
+        // shorter slice than asked for is correct, because replay advances by
+        // the last offset it receives; it is exactly what a cache hit already
+        // returns. Keying on the budget would only split identical windows
+        // into separate storage reads.
         var entries = await shared.WaitAsync(cancellationToken);
         return entries.Count <= budget ? entries : entries.Take(budget).ToList();
     }
