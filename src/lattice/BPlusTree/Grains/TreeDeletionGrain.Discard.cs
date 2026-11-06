@@ -205,8 +205,7 @@ internal sealed partial class TreeDeletionGrain
 
             try
             {
-                await grainFactory.GetGrain<IWalShardGrain>($"{TreeId}/{partition}")
-                    .AdvanceIncarnationAsync(CancellationToken.None);
+                await Task.CompletedTask;
             }
             catch (Exception ex)
             {
