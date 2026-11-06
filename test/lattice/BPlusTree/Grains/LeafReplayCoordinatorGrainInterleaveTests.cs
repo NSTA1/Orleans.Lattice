@@ -193,8 +193,11 @@ public sealed class LeafReplayCoordinatorGrainInterleaveTests
 
     private static Task Issue(ILeafReplayCoordinatorGrain coordinator, CoordinatorCall call) => call switch
     {
-        CoordinatorCall.UnfilteredSlice => coordinator.ReadSliceAsync(-1, 50, 16, CancellationToken.None),
-        CoordinatorCall.FilteredSlice => coordinator.ReadSliceAsync(-1, 100, 16, new WalKeyFilter("m", "z"), CancellationToken.None),
+        // A different start offset than the parked read: a read from the same
+        // offset joins the parked fill by design (issue #5896), whatever its
+        // filter or ceiling, since the ring caches unfiltered pages.
+        CoordinatorCall.UnfilteredSlice => coordinator.ReadSliceAsync(200, 250, 16, CancellationToken.None),
+        CoordinatorCall.FilteredSlice => coordinator.ReadSliceAsync(200, 300, 16, new WalKeyFilter("m", "z"), CancellationToken.None),
         CoordinatorCall.Head => coordinator.GetHeadOffsetAsync(CancellationToken.None),
         CoordinatorCall.Tail => coordinator.GetTailOffsetAsync(CancellationToken.None),
         _ => throw new ArgumentOutOfRangeException(nameof(call)),
@@ -293,6 +296,16 @@ public sealed class LeafReplayCoordinatorGrainInterleaveTests
             await ParkAsync();
             return 1000;
         }
+
+        /// <summary>The partition incarnation (issue #5896); this fake never resets.</summary>
+
+        public ValueTask<long> GetIncarnationAsync(string treeId, int shardIndex, CancellationToken cancellationToken = default) => ValueTask.FromResult(Incarnation);
+
+
+        /// <summary>The incarnation <see cref="GetIncarnationAsync"/> reports.</summary>
+
+        public long Incarnation { get; set; }
+
 
         public async Task<long> GetTailOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken = default)
         {

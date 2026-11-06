@@ -144,6 +144,22 @@ public partial class LeafReplayCoordinatorGrainTests
     }
 
     [Test]
+    public void A_page_that_closes_a_gap_is_used_whatever_its_position_in_the_run()
+    {
+        var rng = new Random(2);
+        var first = new ReplayPage(-1, [Entry(0, MutationKind.Set, "k01", rng), Entry(1, MutationKind.Set, "k01", rng)], 1);
+        var beyondGap = new ReplayPage(5, [Entry(6, MutationKind.Set, "k01", rng)], 1);
+        var closesGap = new ReplayPage(1, [Entry(3, MutationKind.Set, "k01", rng), Entry(5, MutationKind.Set, "k01", rng)], 1);
+
+        // The fill that closes the gap arrives after the page beyond it.
+        var (slice, complete, covered) = ReplaySliceProjection.Project([first, beyondGap, closesGap], -1, 6, 100, default);
+
+        Assert.That(complete, Is.True);
+        Assert.That(covered, Is.EqualTo(6));
+        Assert.That(slice.Select(e => e.Offset), Is.EqualTo(new long[] { 0, 1, 3, 5, 6 }));
+    }
+
+    [Test]
     public void A_fill_that_returned_nothing_creates_no_page()
     {
         Assert.That(() => new ReplayPage(3, [], 1), Throws.ArgumentException);

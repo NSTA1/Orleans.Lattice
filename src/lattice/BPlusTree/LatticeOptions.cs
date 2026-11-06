@@ -2403,6 +2403,30 @@ public class LatticeOptions
     public const int DefaultWalMaterialiserMaxConcurrentReplays = 32;
 
     /// <summary>
+    /// Estimated bytes of WAL pages the per-partition replay coordinators of
+    /// one silo may hold, so that every leaf replaying a partition is served
+    /// from one storage read of each page rather than reading it again itself
+    /// (issue #5896). Defaults to
+    /// <see cref="DefaultWalReplayPageRingBytes"/> (64 MiB). One partition's
+    /// coordinator never holds more than this, and all of a silo's coordinators
+    /// together never hold more than this either: a page that would exceed it
+    /// is served without being cached. A replay in flight additionally holds the
+    /// page it is reading, bounded by <see cref="WalReplaySliceBudget"/>. Set to
+    /// <c>0</c> to disable the cache, every replay then reading storage itself.
+    /// <para>
+    /// A cached page is served only while its WAL partition is at the durable
+    /// incarnation it was read at, checked in memory on every serve, so a purge
+    /// and a recreate of the same tree id never serve the purged log. A WAL
+    /// wiped out of band, behind the library's back, is not detected: restart
+    /// the silo or set this to <c>0</c> before wiping one.
+    /// </para>
+    /// </summary>
+    public long WalReplayPageRingBytes { get; set; } = DefaultWalReplayPageRingBytes;
+
+    /// <summary>Default value for <see cref="WalReplayPageRingBytes"/> (64 MiB).</summary>
+    public const long DefaultWalReplayPageRingBytes = 64L * 1024 * 1024;
+
+    /// <summary>
     /// Enables process-wide adaptation of replay concurrency beneath the
     /// configured ceiling: service-rate probing and storage-pressure stepping
     /// (issues #3933 and #5877). Defaults to <see langword="true"/>. Set to

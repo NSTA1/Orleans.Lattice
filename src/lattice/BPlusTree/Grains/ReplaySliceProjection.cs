@@ -13,7 +13,7 @@ internal static class ReplaySliceProjection
     /// from <paramref name="run"/>, a contiguous run of pages whose first page
     /// covers <paramref name="fromExclusive"/>.
     /// </summary>
-    /// <param name="run">Pages in ascending order, each starting at or below the previous page's <see cref="ReplayPage.CoveredThroughInclusive"/>.</param>
+    /// <param name="run">Pages in any order; they are walked by ascending start offset, and only while each starts at or below what is already covered, so a page beyond an uncovered gap is never stitched in.</param>
     /// <param name="fromExclusive">The exclusive lower bound of the window.</param>
     /// <param name="toInclusive">The inclusive upper bound of the window.</param>
     /// <param name="budget">Maximum entries to examine; at least 1.</param>
@@ -44,8 +44,12 @@ internal static class ReplaySliceProjection
         var trailing = default(CommitLogSliceEntry);
         var budgetSpent = false;
 
-        foreach (var page in run)
+        var ordered = run.Count <= 1 ? run : [.. run.OrderBy(p => p.FromExclusive)];
+        foreach (var page in ordered)
         {
+            if (page.CoveredThroughInclusive <= covered)
+                continue;
+
             // Contiguity: a page that starts above what is already covered
             // would stitch across an uncovered gap.
             if (page.FromExclusive > covered)
