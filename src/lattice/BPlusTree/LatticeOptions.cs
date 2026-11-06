@@ -2424,7 +2424,7 @@ public class LatticeOptions
     /// baseline, returns one per three clean windows, and returns them all after
     /// a quiet spell.
     /// </remarks>
-    public bool WalReplayServiceRateControllerEnabled { get; set; } = true;
+    public bool WalReplayServiceRateControllerEnabled { get; set; }
 
     /// <summary>
     /// How many activations may be <b>queued</b> for a WAL replay permit, per
