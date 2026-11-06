@@ -472,6 +472,26 @@ reason as the one above.
 
 ## Deliberate abstraction gaps
 
+- **A hinted sibling's own capture and persist are not modelled (#5877; a5e2e2ef's H1-H5).**
+  C checks what a split hint may claim - every durable record at or below it is in the rows
+  handed to the sibling (`SiblingHintHonest`) - and that a capture claims only the read
+  position over rows held (`SnapshotHonest`). It does not model the sibling as an
+  activation that persists its own checkpoint, so the order production needs at a
+  partition never persisted and not yet covered - a capture of the sibling's own cache
+  covering the hint lands before the hinted checkpoint is persisted, a failed or declined
+  capture persists -1, and every flush path takes that order - is unchecked here. H1 is
+  held at the donor: the hint never exceeds the donor's applied frontier unless the cut
+  proves the donor read past every bound, pinned by `BPlusLeafGrainTests.SplitHintWithoutBound`,
+  `BPlusLeafGrainTests.SplitHintAboveHeads` and
+  `BPlusLeafGrainTests.Split_caps_the_sibling_hint_at_the_donors_replay_frontier`. The
+  order is pinned by
+  `BPlusLeafGrainTests.A_deactivating_hinted_sibling_captures_before_it_persists_its_hint`,
+  `BPlusLeafGrainTests.A_due_flush_of_a_hinted_sibling_captures_before_it_persists_its_hint`,
+  `BPlusLeafGrainTests.A_hinted_sibling_whose_capture_fails_persists_its_checkpoint_at_minus_one`,
+  `BPlusLeafGrainTests.A_failing_store_is_asked_for_a_hint_capture_once_per_tick_never_once_per_flush`,
+  `BPlusLeafGrainTests.A_cold_restart_after_a_failed_deactivation_capture_needs_no_repair_for_a_hinted_sibling`
+  and `BPlusLeafGrainTests.A_hint_at_a_covered_partition_persists_with_no_new_capture`.
+  Production symbols: `BPlusLeafGrain.SetCheckpointOffsetHintsAsync`.
 - **The refresh's descent is exact when it decides (#5876; a5e2e2ef's D1 rule).** C's
   `RefreshReaches` reads whether the batch's keys still reach the stale donor exactly.
   Production's descent resolves to the routing owner, which is the key's owner or a leaf
