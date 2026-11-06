@@ -20,7 +20,9 @@ internal sealed partial class BPlusLeafGrain
         var healthy = completedCleanly && ReplayHeapPressure.IsRelieved(heap);
         var serviceWithheld = !memoryWithheld && AdaptReplayServiceRate(
             gate, healthy, System.Diagnostics.Stopwatch.GetTimestamp());
-        if (!memoryWithheld && !serviceWithheld)
+        var storageWithheld = !memoryWithheld && !serviceWithheld && AdaptReplayStoragePressure(
+            gate, System.Diagnostics.Stopwatch.GetTimestamp());
+        if (!memoryWithheld && !serviceWithheld && !storageWithheld)
         {
             gate.Release();
             if (healthy && TryRestoreWithheldReplayPermit())
@@ -62,7 +64,7 @@ internal sealed partial class BPlusLeafGrain
             return 0;
         }
 
-        var memory = _withheldReplayPermits - _serviceWithheldReplayPermits;
+        var memory = _withheldReplayPermits - _serviceWithheldReplayPermits - _storageWithheldReplayPermits;
         var change = controller.Observe(
             now, Volatile.Read(ref _replayPermitsServed),
             healthy && gate.CurrentCount == 0 && QueuedReplayPermitWaiters > 0,
@@ -92,7 +94,116 @@ internal sealed partial class BPlusLeafGrain
     }
 
     internal static int ServiceWithheldReplayPermitsForTest => Volatile.Read(ref _serviceWithheldReplayPermits);
+    internal static int StorageWithheldReplayPermitsForTest => Volatile.Read(ref _storageWithheldReplayPermits);
     internal static bool ReplayServiceRateControllerEnabledForTest => Volatile.Read(ref _replayServiceRateController) is not null;
+    internal static bool ReplayStoragePressureGovernorEnabledForTest => Volatile.Read(ref _replayStoragePressureGovernor) is not null;
+
+    /// <summary>
+    /// Lets the storage-pressure governor (issue #5877) close a window and moves
+    /// its ledger one permit toward the governor's target. True means this
+    /// acquired permit must be withheld; a step up releases one extra permit
+    /// here. One permit per release keeps every ledger change paired with a
+    /// physical permit, so the gate's count never drifts from the ledgers.
+    /// </summary>
+    internal static bool AdaptReplayStoragePressure(SemaphoreSlim gate, long now)
+    {
+        if (Volatile.Read(ref _replayStoragePressureGovernor) is null)
+            return false;
+
+        ReplayStoragePressureStep? step;
+        int disposition;
+        lock (_replayConcurrencyGateLock)
+        {
+            var governor = _replayStoragePressureGovernor;
+            if (governor is null)
+                return false;
+
+            step = governor.IsDue(now)
+                ? governor.Observe(now, ReplayStoragePressure.Read(), _replayConcurrencyCeiling)
+                : null;
+            disposition = ReconcileReplayStorageLedger(gate, governor.Target);
+        }
+
+        if (step is { } taken)
+            RecordReplayStorageStep(taken);
+        return disposition < 0;
+    }
+
+    /// <summary>
+    /// Gives the storage-pressure governor (issue #5877) its idle verdict before
+    /// an activation queues for a permit. A quiet silo releases no permits, so
+    /// the release seam alone could never observe that a storm has passed; this
+    /// is where the next storm arrives. On an idle step every storage-withheld
+    /// permit is returned to the gate at once, so the storm starts at the full
+    /// ceiling. A window that closes here as pressured only sets the target;
+    /// permits are withheld at the release seam, one per release, as before.
+    /// </summary>
+    internal static void RestoreReplayStorageWhenIdle(SemaphoreSlim gate, long now)
+    {
+        if (Volatile.Read(ref _storageWithheldReplayPermits) == 0
+            || Volatile.Read(ref _replayStoragePressureGovernor) is null)
+            return;
+
+        ReplayStoragePressureStep? step = null;
+        lock (_replayConcurrencyGateLock)
+        {
+            var governor = _replayStoragePressureGovernor;
+            if (governor is null || _storageWithheldReplayPermits == 0 || !governor.IsDue(now))
+                return;
+
+            var observed = governor.Observe(now, ReplayStoragePressure.Read(), _replayConcurrencyCeiling);
+            if (observed is { Direction: > 0 })
+            {
+                step = observed;
+                while (_storageWithheldReplayPermits > governor.Target)
+                    ReconcileReplayStorageLedger(gate, governor.Target);
+            }
+            else if (observed is { } other)
+            {
+                step = other;
+            }
+        }
+
+        if (step is { } taken)
+            RecordReplayStorageStep(taken);
+    }
+
+    private static int ReconcileReplayStorageLedger(SemaphoreSlim gate, int target)
+    {
+        if (_storageWithheldReplayPermits < target && _withheldReplayPermits < _replayConcurrencyCeiling - 1)
+        {
+            _storageWithheldReplayPermits++;
+            Volatile.Write(ref _withheldReplayPermits, _withheldReplayPermits + 1);
+            return -1;
+        }
+
+        if (_storageWithheldReplayPermits > target)
+        {
+            _storageWithheldReplayPermits--;
+            Volatile.Write(ref _withheldReplayPermits, _withheldReplayPermits - 1);
+            gate.Release();
+            return 1;
+        }
+
+        return 0;
+    }
+
+    private static void RecordReplayStorageStep(ReplayStoragePressureStep step) =>
+        RecordReplayPermitAdaptation(
+            step.Direction < 0 ? LatticeMetrics.PermitAdaptationWithheld : LatticeMetrics.PermitAdaptationRestored,
+            step.Reason switch
+            {
+                ReplayStoragePressureReason.Throttle => StorageThrottleTrigger,
+                ReplayStoragePressureReason.Latency => StorageLatencyTrigger,
+                ReplayStoragePressureReason.Idle => StorageIdleTrigger,
+                _ => StorageRecoveryTrigger,
+            });
+
+    internal static void SeedReplayStoragePressureForTest(long windowTicks)
+    {
+        lock (_replayConcurrencyGateLock)
+            _replayStoragePressureGovernor = new ReplayStoragePressureGovernor(windowTicks);
+    }
 
     private static void RecordReplayPermitAdaptation(
         KeyValuePair<string, object?> outcome, KeyValuePair<string, object?>? trigger = null)

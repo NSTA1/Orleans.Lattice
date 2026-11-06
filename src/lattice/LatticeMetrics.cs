@@ -3637,11 +3637,14 @@ public static class LatticeMetrics
     /// <i>how much each memory trigger is currently holding</i>.
     /// </para>
     /// <para>
-    /// The opt-in service-rate controller (#3933) uses a separate ledger and
+    /// The replay concurrency controller (#3933, on by default since #5877) uses a separate ledger and
     /// tags both its withheld and restored arms <c>trigger=service_time</c>.
     /// Their difference is the service-owned level; memory recovery cannot
     /// restore that capacity. Sum all triggers for the combined withheld level.
-    /// Service-time arms are zero-primed only when the controller is enabled.
+    /// Its storage-pressure half (#5877) has a third ledger, withholding under
+    /// <c>trigger=storage_throttle</c> or <c>storage_latency</c> and restoring
+    /// under <c>storage_recovery</c> or <c>storage_idle</c>. Service-time and
+    /// storage arms are zero-primed only when the controller is enabled.
     /// </para>
     /// <para>
     /// <b>Deliberately not tagged by tree.</b> The gate is process-wide, so a
@@ -3669,7 +3672,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> WalReplayPermitAdaptations =
         Meter.CreateCounter<long>("orleans.lattice.wal.replay.permit_adaptations", unit: "{permit}",
-            description: "Adaptations to the per-silo WAL replay concurrency gate, tagged by outcome. Memory withholding carries trigger=fault or occupancy; memory restores are untagged because those permits are fungible. The opt-in service controller tags both outcomes trigger=service_time. Memory arms are zero-primed when the gate is sized; service_time arms only when enabled. Sum all triggers for the combined level.");
+            description: "Adaptations to the per-silo WAL replay concurrency gate, tagged by outcome. Memory withholding carries trigger=fault or occupancy; memory restores are untagged because those permits are fungible. The replay concurrency controller (on by default) tags both outcomes trigger=service_time, withholds under storage_throttle or storage_latency, and restores under storage_recovery or storage_idle. Memory arms are zero-primed when the gate is sized; controller arms only when it is enabled. Sum all triggers for the combined level.");
 
     /// <summary>
     /// The name of the observable gauge reporting the number of replay permits
@@ -3701,6 +3704,15 @@ public static class LatticeMetrics
     /// </para>
     /// </remarks>
     public const string WalReplayPermitsWithheldName = "orleans.lattice.wal.replay.permits_withheld";
+
+    /// <summary>
+    /// Metric name for the gauge publishing the replay permits currently in
+    /// circulation - the gate's walked ceiling, its sized ceiling less every
+    /// withheld permit (issue #5877). Declared in <c>BPlusLeafGrain.Activation.cs</c>
+    /// beside the statics it reads; exported here for the dashboard drift guard,
+    /// as <see cref="WalReplayPermitsWithheldName"/> is.
+    /// </summary>
+    public const string WalReplayPermitsEffectiveName = "orleans.lattice.wal.replay.permits_effective";
 
     /// <summary>
     /// Metric name for the gauge publishing the <b>ceiling</b> the per-silo WAL

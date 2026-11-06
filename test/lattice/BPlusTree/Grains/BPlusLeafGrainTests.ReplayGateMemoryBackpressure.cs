@@ -58,8 +58,13 @@ public partial class BPlusLeafGrainTests
     /// <see cref="QuiescenceBudget"/>, before it is asserted. A permit that is
     /// still held at the end of the budget is not transient - a leaked permit, or
     /// a replay another test left hung - and fails the same assertion as before.
+    /// <para>
+    /// The replay concurrency controller defaults to on (issue #5877). These
+    /// fixtures drive the ledgers by hand, so the harness sizes the gate with it
+    /// off unless a test asks for it; pass null to keep the library default.
+    /// </para>
     /// </remarks>
-    private static async Task<SemaphoreSlim> QuiescentReplayGateAsync(int? permitCeiling = null)
+    private static async Task<SemaphoreSlim> QuiescentReplayGateAsync(int? permitCeiling = null, bool? controller = false)
     {
         var (warmGrain, warmState, _, _) = CreateGrainWithSnapshotAndCoordinator(
             preloadedSnapshot: null,
@@ -69,6 +74,8 @@ public partial class BPlusLeafGrainTests
             {
                 if (permitCeiling is { } ceiling)
                     options.WalMaterialiserMaxConcurrentReplays = ceiling;
+                if (controller is { } enabled)
+                    options.WalReplayServiceRateControllerEnabled = enabled;
             });
         warmState.State.TreeId = UniqueReplayPermitTree();
         await LeafActivationHarness.ActivateAsync(warmGrain, CancellationToken.None);
@@ -454,12 +461,21 @@ public partial class BPlusLeafGrainTests
                 + "the withheld series unreadable rather than merely incomplete");
 
             Assert.That(
-                outcomes.Where(o => Equals(o.Outcome, "restored")).All(o => o.Trigger is null),
+                outcomes.Any(o => Equals(o.Outcome, "restored") && o.Trigger is null && o.Value == 0),
                 Is.True,
-                "the primed restored arm must carry no trigger tag. Withheld permits are fungible, "
-                + "so a trigger on the restored arm would invite the invalid reading "
+                "the primed memory restored arm must carry no trigger tag. Memory permits are fungible, "
+                + "so a trigger on that arm would invite the invalid reading "
                 + "withheld{trigger=X} - restored{trigger=X}; the priming must model the shape the "
                 + "live emission actually has");
+
+            // The replay concurrency controller is on by default (issue #5877), and
+            // its ledgers are not fungible with memory's: each restores under its own
+            // trigger, so those, and only those, are the tagged restored arms.
+            Assert.That(
+                outcomes.Where(o => Equals(o.Outcome, "restored") && o.Trigger is not null)
+                    .Select(o => (string)o.Trigger!).Distinct().OrderBy(t => t, StringComparer.Ordinal),
+                Is.EqualTo(new[] { "service_time", "storage_idle", "storage_recovery" }),
+                "a tagged restored arm belongs to a controller ledger, never to memory");
         });
     }
 }
