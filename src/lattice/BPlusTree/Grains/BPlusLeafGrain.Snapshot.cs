@@ -850,6 +850,12 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private int _consecutiveCheckpointStallTicks;
 
+    /// <summary>
+    /// How far live-advance steps raised the checkpoint signature since the last stall
+    /// check (#5851 B, BH1): movement the stall check does not count as progress.
+    /// </summary>
+    private long _checkpointLiveAdvancedSinceStallCheck;
+
     private uint _checkpointStallRearms;
     private bool[]? _checkpointStallLiveData;
     private ILeafReplayCoordinatorGrain?[]? _checkpointStallCoordinators;
@@ -946,11 +952,22 @@ internal sealed partial class BPlusLeafGrain
             return false;
         }
 
+        // #5851 B (a5e2e2ef's BH1): progress is a replay, or a catch-up to the head, which
+        // the head probe below finds. A live-advance step moves the checkpoint only to the
+        // leaf's own high and never past another author's records, so it does not reset the
+        // count; when anything else moved the checkpoint in the same tick, that wins.
+        var liveAdvanced = _checkpointLiveAdvancedSinceStallCheck;
+        _checkpointLiveAdvancedSinceStallCheck = 0;
         if (signature != _lastCheckpointProgressSignature)
         {
+            var movedByOther = _lastCheckpointProgressSignature == long.MinValue
+                || signature - _lastCheckpointProgressSignature > liveAdvanced;
             _lastCheckpointProgressSignature = signature;
-            _consecutiveCheckpointStallTicks = 0;
-            return false;
+            if (movedByOther)
+            {
+                _consecutiveCheckpointStallTicks = 0;
+                return false;
+            }
         }
 
         // Unchanged. That is only a fault if there are rows whose durability
@@ -3052,6 +3069,16 @@ internal sealed partial class BPlusLeafGrain
         if (stalled)
         {
             ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckCheckpointStalled);
+            if (QueuedReplayPermitWaiters > 0)
+            {
+                // #5851 B (BH3): replays wait on the gate - an activation, or a cold-restart
+                // storm - so this background drive yields to them, and stays owed: the next
+                // tick that finds the gate free drives it.
+                ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckDriveYielded);
+                _consecutiveCheckpointStallTicks = CheckpointStallTicksBeforeDrive - 1;
+                return;
+            }
+
             await DispatchTimerDriveAsync(starvationPartitionCount, "arm=stalled-drive");
             return;
         }
