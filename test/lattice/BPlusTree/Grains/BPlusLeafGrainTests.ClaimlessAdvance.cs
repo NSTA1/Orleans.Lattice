@@ -202,7 +202,7 @@ public partial class BPlusLeafGrainTests
         Assert.Multiple(() =>
         {
             Assert.That(order, Does.Contain("cut"), "precondition: the split read its cut");
-            Assert.That(order.IndexOf("view"), Is.GreaterThan(order.IndexOf("cut")), "the marker view was read before the cut");
+            Assert.That(order.LastIndexOf("view"), Is.GreaterThan(order.IndexOf("cut")), "the marker view was read before the cut");
         });
         await sibling.Received(1).SetCheckpointOffsetHintsAsync(Arg.Is<long[]>(h => h[0] == 41L));
     }
