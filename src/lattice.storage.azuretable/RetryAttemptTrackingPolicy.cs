@@ -1,6 +1,7 @@
 using System.Globalization;
 using Azure.Core;
 using Azure.Core.Pipeline;
+using Orleans.Lattice.BPlusTree.Grains;
 
 namespace Orleans.Lattice.Storage.AzureTable;
 
@@ -99,6 +100,7 @@ public sealed class RetryAttemptTrackingPolicy : HttpPipelinePolicy
         // still increments and dashboards can separate transport
         // retries from HTTP-status retries.
         var status = message.HasResponse ? message.Response.Status : 0;
+        ReplayStoragePressure.NoteStorageRetry(status);
         LatticeMetrics.ProviderRetryAttempts.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagStatus,
                 status.ToString(CultureInfo.InvariantCulture)),

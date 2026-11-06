@@ -392,6 +392,21 @@ internal sealed partial class BPlusLeafGrain
         new(LatticeMetrics.TagTrigger, "service_time");
 
     /// <summary>
+    /// Permits withheld by the storage-pressure governor (issue #5877), a
+    /// ledger of their own inside <see cref="_withheldReplayPermits"/> that only
+    /// the governor restores, as the service-time ledger is only restored by the
+    /// service-rate controller.
+    /// </summary>
+    private static int _storageWithheldReplayPermits;
+    private static ReplayStoragePressureGovernor? _replayStoragePressureGovernor;
+    private static readonly KeyValuePair<string, object?> StorageThrottleTrigger =
+        new(LatticeMetrics.TagTrigger, "storage_throttle");
+    private static readonly KeyValuePair<string, object?> StorageLatencyTrigger =
+        new(LatticeMetrics.TagTrigger, "storage_latency");
+    private static readonly KeyValuePair<string, object?> StorageRecoveryTrigger =
+        new(LatticeMetrics.TagTrigger, "storage_recovery");
+
+    /// <summary>
     /// Publishes the <b>live</b> withheld-permit level - the running value of
     /// <see cref="_withheldReplayPermits"/> - as an observable gauge.
     /// <para>
@@ -517,6 +532,26 @@ internal sealed partial class BPlusLeafGrain
                 + "which see orleans.lattice.wal.replay.permits_queued (issue #3047).");
 
     /// <summary>
+    /// Publishes the replay permits currently in circulation - the walked
+    /// ceiling: <see cref="_replayConcurrencyCeiling"/> less every withheld
+    /// permit, memory, service-time and storage-pressure alike (issue #5877).
+    /// Zero before the gate is sized; at least one once it is, because every
+    /// withholding path leaves one permit circulating. Declared below both
+    /// statics its callback reads.
+    /// </summary>
+    private static readonly ObservableGauge<int> EffectiveReplayPermitsGauge =
+        LatticeMetrics.Meter.CreateObservableGauge(
+            LatticeMetrics.WalReplayPermitsEffectiveName,
+            static () => new Measurement<int>(
+                Math.Max(0, Volatile.Read(ref _replayConcurrencyCeiling) - Volatile.Read(ref _withheldReplayPermits)),
+                LatticeTenantLabel.Platform),
+            unit: "{permit}",
+            description:
+                "Replay permits currently in circulation on the per-silo WAL replay concurrency gate: "
+                + "orleans.lattice.wal.replay.permit_ceiling less every withheld permit. The step reasons "
+                + "are the trigger tags on orleans.lattice.wal.replay.permit_adaptations (issue #5877).");
+
+    /// <summary>
     /// Publishes the activations that have entered the wait on
     /// <see cref="_replayConcurrencyGate"/> and not yet left it. See
     /// <see cref="_queuedReplayPermitWaiters"/>: this is arrivals in flight,
@@ -602,6 +637,8 @@ internal sealed partial class BPlusLeafGrain
             _serviceWithheldReplayPermits = 0;
             _replayPermitsServed = 0;
             _replayServiceRateController = null;
+            _storageWithheldReplayPermits = 0;
+            _replayStoragePressureGovernor = null;
             Volatile.Write(ref _queuedReplayPermitWaiters, 0);
             Volatile.Write(ref _replayPermitWaitEwmaTicks, 0);
             Volatile.Write(ref _replayPermitWaitSample, 0);
@@ -746,7 +783,7 @@ internal sealed partial class BPlusLeafGrain
     {
         lock (_replayConcurrencyGateLock)
         {
-            if (_withheldReplayPermits <= _serviceWithheldReplayPermits)
+            if (_withheldReplayPermits <= _serviceWithheldReplayPermits + _storageWithheldReplayPermits)
                 return false;
 
             Volatile.Write(ref _withheldReplayPermits, _withheldReplayPermits - 1);
@@ -934,6 +971,10 @@ internal sealed partial class BPlusLeafGrain
                 _replayServiceRateController = options.WalReplayServiceRateControllerEnabled
                     ? new ReplayServiceRateController(ReplayServiceRateController.DefaultWindowTicks)
                     : null;
+                _storageWithheldReplayPermits = 0;
+                _replayStoragePressureGovernor = options.WalReplayServiceRateControllerEnabled
+                    ? new ReplayStoragePressureGovernor(ReplayStoragePressureGovernor.DefaultWindowTicks)
+                    : null;
                 sizedHere = true;
             }
             else
@@ -983,6 +1024,12 @@ internal sealed partial class BPlusLeafGrain
                     0, LatticeMetrics.PermitAdaptationWithheld, ServiceTimeTrigger, LatticeTenantLabel.Platform);
                 LatticeMetrics.WalReplayPermitAdaptations.Add(
                     0, LatticeMetrics.PermitAdaptationRestored, ServiceTimeTrigger, LatticeTenantLabel.Platform);
+                LatticeMetrics.WalReplayPermitAdaptations.Add(
+                    0, LatticeMetrics.PermitAdaptationWithheld, StorageThrottleTrigger, LatticeTenantLabel.Platform);
+                LatticeMetrics.WalReplayPermitAdaptations.Add(
+                    0, LatticeMetrics.PermitAdaptationWithheld, StorageLatencyTrigger, LatticeTenantLabel.Platform);
+                LatticeMetrics.WalReplayPermitAdaptations.Add(
+                    0, LatticeMetrics.PermitAdaptationRestored, StorageRecoveryTrigger, LatticeTenantLabel.Platform);
             }
 
             // The gate's service count (issue #3921), primed here for the same
