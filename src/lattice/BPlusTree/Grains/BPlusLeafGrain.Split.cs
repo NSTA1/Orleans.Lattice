@@ -1183,7 +1183,8 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private async Task<(long[] Heads, WalSplitCut[]? Cut, WalAppendStamp Reader)> CaptureSplitCutAsync(string treeId)
     {
-        if (IsPreArmGateOpen() && _appendFence is not null && !_carriedClosesRead)
+        // DO-NOT-MERGE red proof: LA4 (the first split's reader taken before any view read).
+        if (IsPreArmGateOpen() && _appendFence is not null && !_carriedClosesRead && false)
         {
             // #5851, LA4: an activation that has not yet read its view would take a reader
             // carrying none of the closes its marker carries, and the view read after the

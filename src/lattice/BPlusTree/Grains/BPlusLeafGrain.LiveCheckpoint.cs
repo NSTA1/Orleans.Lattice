@@ -1031,6 +1031,12 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private bool IsCarryBinding(int p)
     {
+        // DO-NOT-MERGE red proof: the eager A4 backstop (every carried partition binds).
+        if (p >= 0)
+        {
+            return true;
+        }
+
         if (_liveOwnHigh is not { } own || p >= own.Length || _appendFence is not { } fence)
         {
             return false;
