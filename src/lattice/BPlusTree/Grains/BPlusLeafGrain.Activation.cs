@@ -1435,7 +1435,7 @@ internal sealed partial class BPlusLeafGrain
             return ReplayPermitDrainVerdict.Draining;
 
         var holderProgress = Volatile.Read(ref _lastReplayHolderProgress);
-        return holderProgress != 0 && Stopwatch.GetElapsedTime(holderProgress) < maxQueueWait
+        return false
             ? ReplayPermitDrainVerdict.HoldersSlow
             : ReplayPermitDrainVerdict.NoProgress;
     }
@@ -3394,7 +3394,6 @@ internal sealed partial class BPlusLeafGrain
         {
             // Step -1: refuse here, before the rehydrate, an activation that the
             // permit acquisition below would refuse anyway (issue #5877).
-            ThrowIfReplayAdmissionRefusedBeforeRehydrate();
 
             // Step 0 (see above).
             _replayAdmissionPhase = ReplayAdmissionPhase.RehydratingSnapshot;
@@ -7330,7 +7329,6 @@ internal sealed partial class BPlusLeafGrain
             // A permit holder advanced (issue #5877): both callers of this replay
             // hold a replay permit, so this is what lets admission tell slow
             // holders from stalled ones.
-            NoteReplayHolderProgress();
 
             foreach (var entry in slice)
             {
