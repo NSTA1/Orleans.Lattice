@@ -847,6 +847,7 @@ internal sealed partial class BPlusLeafGrain
         carried.Clear();
         HandOffMarkerCore.CollectCarriedDonorCloses(marker, low, high, partitions, carried);
         fence.SetCarriedCloses(carried, boundPending);
+        _carriedClosesRead = true;
 
         // A4: note the witnessed partitions still carried, for the tick's backstop.
         _carryDemand = null;
@@ -874,6 +875,12 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private bool _carryAwaitsWitness;
 
+    /// <summary>
+    /// Whether this activation's fence has been given the carried closes from a view read
+    /// (#5851, LA4); until then a split's cut reader would carry none of them.
+    /// </summary>
+    private bool _carriedClosesRead;
+
     private List<(WalPendingClose Close, bool[] ResolvedAt)>? _carriedClosesScratch;
 
     /// <summary>Per partition, the link witness of a donor close still carried there, as the last view read it (A4); 0 or null for none.</summary>
@@ -894,11 +901,16 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// The coverage-lag tick's backstop for a witnessed donor close still carried at a
-    /// partition the sibling has no reason to arm at (a5e2e2ef's G4, A4): it arms there,
+    /// partition (a5e2e2ef's G4, A4, as amended for #5851 by LA1-LA2): it arms there,
     /// re-claiming the close's shard's generation at or above the witness, at most once per
-    /// (partition, witness) per activation; an attempt that does not land re-arms the
-    /// partition for the next tick. Off the write path; reads the marker only when a view
-    /// read has already found such a partition.
+    /// (partition, witness) per activation, but only while the carriage is binding there -
+    /// the leaf holds an own applied append above its checkpoint that this tick's advance
+    /// could not pass, held by a reported bound that covers the carried close and lies above
+    /// the checkpoint (<see cref="IsCarryBinding"/>). A carriage that binds nothing is left as it is: the arm is delayed,
+    /// never the carriage ended, so every stamp keeps the close (LA1). Binding is checked
+    /// first in memory, so a non-binding sibling reads nothing, and again on the backstop's
+    /// own fresh view read, which alone triggers the re-claim (LA2). An attempt that does
+    /// not land re-arms the partition for the next tick. Off the write path.
     /// </summary>
     internal async Task<bool> TryBackstopCarriedClosesAsync()
     {
@@ -931,35 +943,44 @@ internal sealed partial class BPlusLeafGrain
         }
 
         var backstopped = _carryBackstopped ??= new long[demand.Length];
-        bool[]? due = null;
-        for (var p = 0; p < demand.Length && p < backstopped.Length; p++)
+        if (!AnyCarryOwed(demand, backstopped))
         {
-            if (demand[p] > 0 && backstopped[p] < demand[p])
-            {
-                (due ??= new bool[demand.Length])[p] = true;
-                backstopped[p] = demand[p];
-            }
-        }
-
-        if (due is null)
-        {
+            // #5851's A4 amendment (LA1): no carried partition is binding, so nothing is
+            // read; the carriage is untouched and every stamp keeps the close.
             return false;
         }
 
         _liveAdvanceInFlight = true;
         HashSet<int>? landed = null;
+        bool[]? due = null;
         try
         {
-            if (await ReadLiveAdvanceHandOffAsync() is { Clear: true } handOff && !fence.HasPendingCloses)
+            if (await ReadLiveAdvanceHandOffAsync() is { Clear: true } handOff
+                && !fence.HasPendingCloses
+                && _carryDemand is { } fresh)
             {
-                landed = await ArmForLiveAdvanceAsync(
-                    fence, new long[demand.Length], handOff.LeafMarker, state.State.LowKeyInclusive, state.State.HighKeyExclusive, due);
+                // LA2: binding is judged again on this read, which triggers the re-claim; a
+                // partition no longer binding is skipped and stays owed, never marked done.
+                for (var p = 0; p < fresh.Length && p < backstopped.Length; p++)
+                {
+                    if (IsCarryOwed(fresh, backstopped, p))
+                    {
+                        (due ??= new bool[fresh.Length])[p] = true;
+                        backstopped[p] = fresh[p];
+                    }
+                }
+
+                if (due is not null)
+                {
+                    landed = await ArmForLiveAdvanceAsync(
+                        fence, new long[fresh.Length], handOff.LeafMarker, state.State.LowKeyInclusive, state.State.HighKeyExclusive, due);
+                }
             }
         }
         finally
         {
             _liveAdvanceInFlight = false;
-            for (var p = 0; p < due.Length; p++)
+            for (var p = 0; due is not null && p < due.Length; p++)
             {
                 if (due[p])
                 {
@@ -977,5 +998,53 @@ internal sealed partial class BPlusLeafGrain
         }
 
         return landed is { Count: > 0 };
+    }
+
+    private bool AnyCarryOwed(long[] demand, long[] backstopped)
+    {
+        for (var p = 0; p < demand.Length && p < backstopped.Length; p++)
+        {
+            if (IsCarryOwed(demand, backstopped, p))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether partition <paramref name="p"/> owes the backstop's re-claim: a witnessed
+    /// carriage not yet armed for this witness, binding now (#5851, LA1).
+    /// </summary>
+    private bool IsCarryOwed(long[] demand, long[] backstopped, int p) =>
+        demand[p] > 0 && backstopped[p] < demand[p] && IsCarryBinding(p);
+
+    /// <summary>
+    /// Whether a carried close is binding at <paramref name="p"/> (#5851, LA1): the leaf has
+    /// an own applied append above its checkpoint there, which the tick's advance ran
+    /// before and did not pass, and the bound its latest stamped response reported - which
+    /// covers every close carried there and folds their stale highs in - is above the
+    /// checkpoint, so that bound is what holds it. A hold by a report that does not yet
+    /// cover the close is not the carriage's; it lifts at the leaf's next covered write.
+    /// Read from the current state, never a remembered verdict (LA2).
+    /// </summary>
+    private bool IsCarryBinding(int p)
+    {
+        if (_liveOwnHigh is not { } own || p >= own.Length || _appendFence is not { } fence)
+        {
+            return false;
+        }
+
+        var current = GetCurrentCheckpointForPartition(p);
+        if (own[p] <= current)
+        {
+            return false;
+        }
+
+        // A partition this activation has claimed - an arm whose resolve write did not land -
+        // still carries the close; its re-claim is owed again (A3).
+        return fence.TryGetArmingView(p, out _, out _)
+            || (fence.TryGetPreArmView(p, out var reportedBound) && reportedBound > current);
     }
 }

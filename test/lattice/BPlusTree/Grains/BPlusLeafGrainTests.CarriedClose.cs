@@ -81,16 +81,19 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task The_backstop_arms_an_idle_carried_partition_once_and_resolves_it_with_the_re_claim_head()
+    public async Task The_backstop_arms_a_binding_carried_partition_once_and_resolves_it_with_the_re_claim_head()
     {
-        // G4 detector 4 (A2, A4): partition 1 carries the close and the sibling never writes
-        // there. The first tick after the witness arms it, re-claiming the witness; the
-        // marker records that re-claim's head and the resolved bit. A later tick does not
-        // arm again for the same witness.
+        // G4 detector 4 (A2, A4 as amended by LA1): partition 1 carries the close and holds
+        // an own write the advance cannot pass, held by a raised bound its covering report
+        // carried. The first tick arms it, re-claiming the witness; the marker records that
+        // re-claim's head and the resolved bit. A later tick does not arm again.
         var rig = CarryRig(partitions: 2);
         var grain = CreateGrain(liveAdvance: rig);
         await WitnessedCarriedCloseAsync(rig);
         await SetStampedAsync(grain, KeyOnPartition(0, 2, "p0-"), "1");
+        await grain.TryAdvanceLiveCheckpointAsync();
+        rig.ReportedWatermark = rig.Writer.ForeignAppend(1);
+        await SetStampedAsync(grain, KeyOnPartition(1, 2, "p1-"), "1");
         await grain.TryAdvanceLiveCheckpointAsync();
         AcceptCarryArms(rig);
         var baseline = await CarryArmCallsAsync(rig);
@@ -107,7 +110,7 @@ public partial class BPlusLeafGrainTests
             Assert.That(armedFirst, Is.True, "the first tick after the witness did not arm the carried partition");
             Assert.That(callsAfterFirst, Is.GreaterThan(baseline), "the backstop made no re-claim");
             Assert.That(close.CarryResolvedAt.Length, Is.GreaterThanOrEqualTo(2));
-            Assert.That(close.CarryResolvedAt.ElementAtOrDefault(1), Is.True, "the backstop's arm did not resolve the idle partition");
+            Assert.That(close.CarryResolvedAt.ElementAtOrDefault(1), Is.True, "the backstop's arm did not resolve the binding partition");
             Assert.That(close.Heads[1], Is.EqualTo(CarryReclaimHead), "the resolved partition's head is not the arm's own re-claim head");
             Assert.That(armedAgain, Is.False, "the backstop armed again for the same witness");
             Assert.That(callsAfterSecond, Is.EqualTo(callsAfterFirst), "a later tick re-claimed a resolved partition");
@@ -125,6 +128,9 @@ public partial class BPlusLeafGrainTests
         var grain = CreateGrain(liveAdvance: rig);
         await WitnessedCarriedCloseAsync(rig);
         await SetStampedAsync(grain, "a", "1");
+        await grain.TryAdvanceLiveCheckpointAsync();
+        rig.ReportedWatermark = rig.Writer.ForeignAppend();
+        await SetStampedAsync(grain, "b", "2");
         await grain.TryAdvanceLiveCheckpointAsync();
         AcceptCarryArms(rig);
         var baseline = await CarryArmCallsAsync(rig);
