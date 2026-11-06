@@ -36,6 +36,16 @@ internal readonly record struct RoutingTableSnapshot
     [Id(2)] public bool ChildrenAreLeaves { get; init; }
 
     /// <summary>
+    /// The node's declared high bound (#5876, a5e2e2ef's V1): the key it divided at, set
+    /// in the same step that trimmed its children, so a key at or above it belongs to the
+    /// node's right half even while the node's parent does not yet route there.
+    /// <see langword="null"/> when the node never divided, or from a build that does not
+    /// send it. A node's low bound never narrows - a parent only gains separators, and a
+    /// right half is reachable only through its own - so it is not carried.
+    /// </summary>
+    [Id(3)] public string? HighKeyExclusive { get; init; }
+
+    /// <summary>
     /// Routes a key to its child grain by finding the rightmost separator ≤ key.
     /// Mirrors <c>InternalNodeState.Route</c>; the two implementations must
     /// stay in lockstep - any change to the routing semantics on the server

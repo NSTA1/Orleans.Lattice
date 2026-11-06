@@ -87,11 +87,15 @@ public sealed class ShardRootGrainOrphanAuditGapTests
 
         public GrainId Id(string name) => Ids[name];
 
+        /// <summary>The root's declared high bound, as a node that divided reports it (#5876, V1).</summary>
+        public string? HighKey { get; set; }
+
         public RoutingTableSnapshot Snapshot() => new()
         {
             SeparatorKeys = [.. Separators],
             ChildIds = [.. ChildIds],
             ChildrenAreLeaves = true,
+            HighKeyExclusive = HighKey,
         };
     }
 
@@ -608,6 +612,31 @@ public sealed class ShardRootGrainOrphanAuditGapTests
             Assert.That(decided.Findings, Has.Count.EqualTo(1), "precondition: a settled pass judges the orphan");
             Assert.That(inMotion.Findings, Is.Empty, "a descent during a routing mutation produced a finding");
             Assert.That(Reasons(inMotion), Does.Contain(OrphanedLeafAuditGapReason.RoutingInMotion), "the undecided descent was not reported");
+        });
+    }
+
+    [Test]
+    public async Task An_audit_descent_through_a_parent_lagging_an_internal_split_finds_nothing()
+    {
+        // #5876, V5: the audit descends as the leaves' reachability reads do. The node over
+        // the orphan's range divided at c and nothing yet routes to its right half, so the
+        // descent for the orphan is undecided: no finding, a RoutingInMotion gap.
+        static ChainHarness Shard() => Build(
+            new LeafSpec("a", null, "c", Routed: true, Next: "c"),
+            new LeafSpec("c", "c", "e", Routed: true, Next: "x"),
+            new LeafSpec("x", "c", "e", Routed: false, Next: "e", Keys: ["c1"]),
+            new LeafSpec("e", "e", null, Routed: true, Next: null));
+        var settled = await InspectAsync(Shard());
+        var h = Shard();
+        h.HighKey = "c";
+
+        var lagging = await InspectAsync(h);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settled.Findings, Has.Count.EqualTo(1), "precondition: a settled pass judges the orphan");
+            Assert.That(lagging.Findings, Is.Empty, "a descent through a lagging parent produced a finding");
+            Assert.That(Reasons(lagging), Does.Contain(OrphanedLeafAuditGapReason.RoutingInMotion), "the undecided descent was not reported");
         });
     }
 }

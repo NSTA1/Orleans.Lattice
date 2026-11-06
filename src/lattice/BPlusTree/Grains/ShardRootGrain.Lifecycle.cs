@@ -542,7 +542,6 @@ internal sealed partial class ShardRootGrain
     /// </remarks>
     private async Task ClearInternalNodesAsync(List<GrainId> internalNodeIds)
     {
-        using var structuralRouting = EnterStructuralRouting(); // #5876
         await BoundedFanOut.ForEachAsync(
             internalNodeIds,
             BoundedFanOut.DefaultWidth,

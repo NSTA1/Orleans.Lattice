@@ -2126,9 +2126,10 @@ this one. A split sibling the parent has not yet learned of is exempt: it is bor
 its donor's open marker and admits only keys the donor has narrowed away. The advance
 tick and a split's cut repeat the check under the same rule; an unconfirmed answer at
 the cut means the split takes no birth hint from it. If the shard root cannot be asked,
-or its descent overlapped a change to the shard's routing structure (#5876) - a split
-being linked, a root promoted, a folded leaf unlinked, a bulk graft or a shard split -
-the answer is no verdict: the leaf appends unstamped and asks again after a backoff, a
+or its descent could have taken a stale route (#5876) - through an internal node that
+has divided while its parent does not yet route to the new half (every internal node
+reports the key it divided at, and the descent checks it), or across a change to the
+shard's root, a bulk graft or a shard split - the answer is no verdict: the leaf appends unstamped and asks again after a backoff, a
 split transfer's routing is not refreshed on it, and the orphaned-leaf audit reports the
 leaf as `RoutingInMotion` rather than judging it.
 

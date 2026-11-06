@@ -1,28 +1,36 @@
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// The decided descent (#5876, a5e2e2ef's D1). The reachability reads are
-/// <c>[AlwaysInterleave]</c>, so a descent can run while a link batch, suspended at one of
-/// its awaits, has divided an internal node whose parent does not yet route to the new
-/// half: it then names a leaf that does not own the key, or misses the one that does. A
-/// descent therefore answers only when the routing structure was settled before and after
-/// it and its version did not move; otherwise it is <see cref="DescentVerdict.Undecided"/>.
+/// The decided descent (#5876, a5e2e2ef's D1 as revised by V1-V5). The reachability reads
+/// are <c>[AlwaysInterleave]</c>, so a descent can run while a link batch, suspended at one
+/// of its awaits, has divided an internal node whose parent does not yet route to the new
+/// half: the divided node, settled and stable, then routes a key it no longer covers to a
+/// leaf that does not own it. A version or in-flight check cannot see that, and a
+/// shard-wide one is almost never settled under split load. Instead every internal node
+/// on the path carries its declared high bound (<see cref="RoutingTableSnapshot.HighKeyExclusive"/>),
+/// and a key at or above it makes the descent <see cref="DescentVerdict.Undecided"/> (V1).
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>The invariant.</b> Every mutation of the shard's routing structure runs inside
-/// <see cref="BeginStructuralRouting"/>/<see cref="EndStructuralRouting"/> or behind a state
-/// flag the settled check reads: the split-link gate's critical sections (every link,
-/// internal division and the root promotions they bubble into), the promotion gate's
-/// completion, a reclaim's routing retirement, a bulk graft (<c>PendingBulkGraft</c>, and
-/// the root it installs) and a shard split (<c>SplitInProgress</c>). The set is pinned by
-/// <c>ShardRootGrainDescentVerdictTests.Every_routing_structure_mutation_site_is_bracketed</c>.
+/// <b>V2.</b> An internal node sets its bound and trims its children in one synchronous
+/// step (<c>BPlusInternalGrain.SplitAsync</c>), so every snapshot is consistent.
 /// </para>
 /// <para>
-/// This version is deliberately not <c>_routingEpoch</c>: that one moves on every
-/// interleaved batch write, so under write load every descent would read undecided and no
-/// leaf would ever prove reachable. The check is two reads of in-memory state before and
-/// after the descent; no grain call, no allocation.
+/// <b>V3, the invariant.</b> Only the root's identity is checked shard-wide: the descent is
+/// undecided when a root-identity mutation - root creation and rollback, promotion, a bulk
+/// graft's root switch, retire, purge, revive, or a shard split or slot migration - is in
+/// flight (<see cref="BeginStructuralRouting"/>/<see cref="EndStructuralRouting"/>, or the
+/// <c>PendingPromotion</c>/<c>PendingBulkGraft</c>/<c>SplitInProgress</c> flags) or completed
+/// during it. Every assignment of that state in the shard root is inside a scope, pinned by
+/// <c>ShardRootGrainDescentVerdictTests.Every_routing_structure_mutation_site_is_bracketed</c>.
+/// No internal or leaf grain changes a child list or separator on its own initiative: only
+/// the shard root's <c>AcceptSplitAsync</c> chain (with an internal node's forward to its
+/// right half) and <c>RemoveChildAsync</c> do, and V1 covers what they leave in motion.
+/// </para>
+/// <para>
+/// <b>V4.</b> At the leaf level a non-owner is <see cref="DescentVerdict.Unreachable"/>, never
+/// chased: a pre-link sibling must read unreachable (B2). <b>V5.</b> The orphan audit uses
+/// the same descent.
 /// </para>
 /// </remarks>
 internal sealed partial class ShardRootGrain
@@ -76,16 +84,13 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     internal Action? DuringDescentForTesting { get; set; }
 
-    /// <summary>Whether no routing-structure mutation is in flight on this activation (#5876).</summary>
+    /// <summary>Whether no root-identity mutation is in flight on this activation (#5876, V3).</summary>
     private bool IsRoutingStructureSettled()
     {
         var s = state.State;
         return _structuralRoutingInFlight == 0
-            && _splitLinkGate.CurrentCount != 0
-            && _promotionGate.CurrentCount != 0
             && s.PendingPromotion is null
             && s.PendingBulkGraft is null
-            && s.PendingChildLinks.Count == 0
             && s.SplitInProgress is null;
     }
 
@@ -112,7 +117,7 @@ internal sealed partial class ShardRootGrain
 
         var version = _structuralRoutingVersion;
         var root = state.State.RootNodeId;
-        var resolved = await ResolveWalkStartLeafAsync(lowKeyInclusive);
+        var resolved = await DescendWithinBoundsAsync(lowKeyInclusive);
         DuringDescentForTesting?.Invoke();
         if (!IsRoutingStructureSettled()
             || version != _structuralRoutingVersion
@@ -121,6 +126,46 @@ internal sealed partial class ShardRootGrain
             return DescentVerdict.Undecided;
         }
 
-        return resolved == leafId ? DescentVerdict.Reachable : DescentVerdict.Unreachable;
+        if (resolved is not { } leaf)
+        {
+            return DescentVerdict.Undecided;
+        }
+
+        return leaf == leafId ? DescentVerdict.Reachable : DescentVerdict.Unreachable;
+    }
+
+    /// <summary>
+    /// The leaf descent for <paramref name="key"/> reaches, checking every internal node's
+    /// declared high bound on the way (V1); <see langword="null"/> when the key lies at or
+    /// above one - the node divided and its parent does not yet route to the right half.
+    /// </summary>
+    private async Task<GrainId?> DescendWithinBoundsAsync(string? key)
+    {
+        if (key is null || RootIsLeafTyped || state.State.RootNodeId is not { } root)
+        {
+            // The leftmost descent never meets a high bound: the leftmost child of a
+            // divided node stays in its left half.
+            return await ResolveWalkStartLeafAsync(key);
+        }
+
+        var current = root;
+        for (var level = 0; level < MaxTreeDescentLevels; level++)
+        {
+            var snapshot = await GetRoutingTableSnapshotAsync(current);
+            if (snapshot.HighKeyExclusive is { } high && string.CompareOrdinal(key, high) >= 0)
+            {
+                return null;
+            }
+
+            var (child, childrenAreLeaves) = snapshot.Route(key);
+            if (childrenAreLeaves || (TryGetLeafGrainType(out var leafType) && child.Type == leafType))
+            {
+                return child;
+            }
+
+            current = child;
+        }
+
+        return null;
     }
 }

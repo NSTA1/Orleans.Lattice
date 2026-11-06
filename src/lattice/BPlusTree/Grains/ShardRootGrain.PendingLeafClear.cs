@@ -115,7 +115,6 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task ClearPendingLeavesForPurgeAsync()
     {
-        using var structuralRouting = EnterStructuralRouting(); // #5876
         var owed = state.State.PendingLeafClears;
         if (owed.Count == 0)
         {
@@ -160,7 +159,6 @@ internal sealed partial class ShardRootGrain
 
     private async Task<bool> TryClearPendingLeafAsync(GrainId leafId, string removal)
     {
-        using var structuralRouting = EnterStructuralRouting(); // #5876
         try
         {
             await ResolveLeafGrain(leafId).ClearGrainStateAsync();
