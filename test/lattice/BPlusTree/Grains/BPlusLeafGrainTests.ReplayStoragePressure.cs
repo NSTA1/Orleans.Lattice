@@ -162,13 +162,60 @@ public partial class BPlusLeafGrainTests
 
     [Test]
     [NonParallelizable]
+    public async Task A_silo_left_at_the_defaults_replays_32_leaves_at_once_with_the_controller_on()
+    {
+        BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        try
+        {
+            var gate = await QuiescentReplayGateAsync();
+
+            Assert.That(BPlusLeafGrain.ReplayConcurrencyCeilingForTest, Is.EqualTo(32));
+            Assert.That(gate.CurrentCount, Is.EqualTo(32));
+            Assert.That(BPlusLeafGrain.ReplayServiceRateControllerEnabledForTest, Is.True);
+            Assert.That(BPlusLeafGrain.ReplayStoragePressureGovernorEnabledForTest, Is.True);
+        }
+        finally
+        {
+            BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        }
+    }
+
+    [TestCase(1)]
+    [TestCase(6)]
+    [TestCase(64)]
+    [NonParallelizable]
+    public async Task An_explicit_replay_ceiling_wins_over_the_default(int configured)
+    {
+        BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        try
+        {
+            await QuiescentReplayGateAsync(permitCeiling: configured);
+            Assert.That(BPlusLeafGrain.ReplayConcurrencyCeilingForTest, Is.EqualTo(configured));
+        }
+        finally
+        {
+            BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        }
+    }
+
+    [Test]
+    public void Zero_restores_the_cpu_derived_replay_ceiling()
+    {
+        Assert.That(BPlusLeafGrain.ResolveGateSizing(0, 16, 4).Ceiling, Is.EqualTo(4));
+        Assert.That(BPlusLeafGrain.ResolveGateSizing(0, 6, null).Ceiling, Is.EqualTo(6));
+        Assert.That(BPlusLeafGrain.ResolveGateSizing(LatticeOptions.DefaultWalMaterialiserMaxConcurrentReplays, 4, 4).Ceiling,
+            Is.EqualTo(32), "the default does not scale with CPU");
+    }
+
+    [Test]
+    [NonParallelizable]
     public async Task The_storage_pressure_governor_is_off_when_the_service_rate_controller_is_off()
     {
         BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
         ReplayStoragePressure.ResetForTest();
         try
         {
-            var gate = await QuiescentReplayGateAsync(permitCeiling: 4);
+            var gate = await QuiescentReplayGateAsync(permitCeiling: 4, controller: false);
             Assert.That(BPlusLeafGrain.ReplayStoragePressureGovernorEnabledForTest, Is.False);
 
             BPlusLeafGrain.AdaptReplayStoragePressure(gate, 0);

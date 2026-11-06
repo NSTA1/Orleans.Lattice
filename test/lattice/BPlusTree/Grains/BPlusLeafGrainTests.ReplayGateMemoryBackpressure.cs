@@ -47,7 +47,7 @@ public partial class BPlusLeafGrainTests
     /// test that withheld against an already-depressed baseline would compare
     /// against the wrong number and could pass for the wrong reason.
     /// </summary>
-    private static async Task<SemaphoreSlim> QuiescentReplayGateAsync(int? permitCeiling = null)
+    private static async Task<SemaphoreSlim> QuiescentReplayGateAsync(int? permitCeiling = null, bool? controller = null)
     {
         var (warmGrain, warmState, _, _) = CreateGrainWithSnapshotAndCoordinator(
             preloadedSnapshot: null,
@@ -57,6 +57,8 @@ public partial class BPlusLeafGrainTests
             {
                 if (permitCeiling is { } ceiling)
                     options.WalMaterialiserMaxConcurrentReplays = ceiling;
+                if (controller is { } enabled)
+                    options.WalReplayServiceRateControllerEnabled = enabled;
             });
         warmState.State.TreeId = UniqueReplayPermitTree();
         await LeafActivationHarness.ActivateAsync(warmGrain, CancellationToken.None);
