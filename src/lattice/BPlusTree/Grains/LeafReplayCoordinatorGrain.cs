@@ -144,7 +144,7 @@ internal sealed class LeafReplayCoordinatorGrain(
         _inFlightSlices ??= [];
         if (!_inFlightSlices.TryGetValue(key, out var shared))
         {
-            shared = ReadAndCacheSliceAsync(key, budget);
+            shared = ReadAndCacheSliceAsync(key, budget, cancellationToken);
 
             // A read that completed synchronously has already run its finally,
             // so registering it would leave a completed entry no one removes.
@@ -163,10 +163,10 @@ internal sealed class LeafReplayCoordinatorGrain(
     /// cancellation token, because several callers may be waiting on it; each
     /// abandons its own wait instead (see <see cref="ReadSliceCoreAsync"/>).
     /// </summary>
-    private async Task<IReadOnlyList<CommitLogSliceEntry>> ReadAndCacheSliceAsync(SliceKey key, int budget)
+    private async Task<IReadOnlyList<CommitLogSliceEntry>> ReadAndCacheSliceAsync(SliceKey key, int budget, CancellationToken callerToken)
     {
         var (fromOffsetExclusive, toOffsetInclusive, filter) = key;
-        var cancellationToken = CancellationToken.None;
+        var cancellationToken = callerToken;
         IReadOnlyList<CommitLogSliceEntry> result;
         try
         {
