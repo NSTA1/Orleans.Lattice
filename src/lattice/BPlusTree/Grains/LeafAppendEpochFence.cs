@@ -871,7 +871,8 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
             if (!_stale
                 && !overCap
                 && !(_epoch > 0 && _partitions.TryGetValue(partition, out var p) && p.ClaimedEpoch == _epoch)
-                && DecorateLocked(WalAppendStamp.PreArm(_leafId, _activation), partition) is { } stamp)
+                && DecorateLocked(WalAppendStamp.PreArm(_leafId, _activation), partition) is { } decorated
+                && (decorated with { Close1 = default, Close2 = default }) is var stamp) // DO-NOT-MERGE red proof: R2
             {
                 reader = stamp;
                 return true;
