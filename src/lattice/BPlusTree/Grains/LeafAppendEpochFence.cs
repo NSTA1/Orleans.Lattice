@@ -1442,7 +1442,8 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 _markerChecked = false;
             }
 
-            CloseGateViewLocked(ClaimFailureBackoffForTesting);
+            _reachability = ReachabilityDeferred; // RED-PROOF R1b: an undecided activation stamps pre-arm
+            _deferredReproveAtTicks = _unreachableSuspectedUntilTicks;
             return false;
         }
     }

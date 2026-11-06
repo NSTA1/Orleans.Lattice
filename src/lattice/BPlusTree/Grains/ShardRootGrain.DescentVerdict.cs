@@ -105,7 +105,7 @@ internal sealed partial class ShardRootGrain
             return DescentVerdict.Unreachable;
         }
 
-        if (!IsRoutingStructureSettled())
+        if (!IsRoutingStructureSettled() && false) // RED-PROOF MD1: no settled check before the descent
         {
             return DescentVerdict.Undecided;
         }
@@ -114,9 +114,9 @@ internal sealed partial class ShardRootGrain
         var root = state.State.RootNodeId;
         var resolved = await ResolveWalkStartLeafAsync(lowKeyInclusive);
         DuringDescentForTesting?.Invoke();
-        if (!IsRoutingStructureSettled()
+        if ((!IsRoutingStructureSettled()
             || version != _structuralRoutingVersion
-            || root != state.State.RootNodeId)
+            || root != state.State.RootNodeId) && false) // RED-PROOF MD1: no settled check after the descent
         {
             return DescentVerdict.Undecided;
         }

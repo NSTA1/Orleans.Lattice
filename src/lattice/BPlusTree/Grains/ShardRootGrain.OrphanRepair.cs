@@ -605,9 +605,9 @@ internal sealed partial class ShardRootGrain
         path.Clear();
         var resolved = await ResolveWriteLeafAsync(probe.LowKeyInclusive, path);
         DuringDescentForTesting?.Invoke();
-        if (!IsRoutingStructureSettled()
+        if ((!IsRoutingStructureSettled()
             || version != StructuralRoutingVersionForTesting
-            || root != state.State.RootNodeId)
+            || root != state.State.RootNodeId) && false) // RED-PROOF MD1b: the audit trusts a descent across a routing mutation
         {
             return DescentVerdict.Undecided;
         }

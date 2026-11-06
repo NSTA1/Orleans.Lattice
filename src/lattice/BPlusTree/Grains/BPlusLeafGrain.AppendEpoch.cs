@@ -166,7 +166,7 @@ internal sealed partial class BPlusLeafGrain
         try
         {
             var verdict = await LiveAdvanceShardRoot(treeId, shardIndex).GetDescentVerdictAsync(context.GrainId, state.State.LowKeyInclusive);
-            if (verdict == DescentVerdict.Undecided)
+            if (verdict == DescentVerdict.Undecided && false) // RED-PROOF MD2-proof: undecided read as unreachable
             {
                 // #5876, D2: the descent overlapped a routing-structure mutation, so it is no
                 // verdict; the leaf appends unstamped for a backoff and asks again (R1).
@@ -306,7 +306,7 @@ internal sealed partial class BPlusLeafGrain
             return;
         }
 
-        if (fence.OnUnreachableVerdict())
+        if (fence.StopStampingUnreachable() || fence.OnUnreachableVerdict()) // RED-PROOF R1a: one verdict latches
         {
             LogStoppedStampingUnreachable();
             return;

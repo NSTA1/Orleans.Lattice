@@ -687,7 +687,7 @@ internal sealed partial class BPlusLeafGrain
             var high = state.State.HighKeyExclusive;
             var view = await LiveAdvanceShardRoot(treeId, shardIndex)
                 .GetLiveAdvanceViewAsync(context.GrainId, low, high);
-            if (view.ReachabilityUndecided)
+            if (view.ReachabilityUndecided && false) // RED-PROOF MD2-view: an undecided view read as a verdict
             {
                 // #5876, D2: an undecided descent is no verdict - no latch, no proof, no
                 // promotion, and at the split cut no hint; the leaf appends unstamped for a

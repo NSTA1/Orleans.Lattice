@@ -189,7 +189,7 @@ internal sealed partial class BPlusLeafGrain
     private async Task<IReadOnlyList<long>> AppendTransferAfterStaleAsync(
         ICommitLogWriter writer, ArraySegment<WalRecord> segment, WalRecord[] records, int count, WalRoutingGenerationStaleException stale)
     {
-        if (await TryRefreshSpanRoutingAsync(stale, records, count) && SplitTransferRoutingFor(records, count) is { IsSet: true } refreshed)
+        if (await TryRefreshSpanRoutingAsync(stale, records, count) && _spanRouting is { IsSet: true } refreshed) // RED-PROOF M-recheck: no span re-check after the refresh
         {
             try
             {
