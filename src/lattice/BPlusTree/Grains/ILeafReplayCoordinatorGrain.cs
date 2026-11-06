@@ -23,7 +23,10 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// between the check and the return, and written - all five fields together - in
 /// the synchronous segment after a read's await, so no call reads or writes it
 /// across an await. Two interleaved reads therefore cannot tear an entry; the
-/// later writer wins, which is the cache's behaviour under serial calls too.
+/// later writer wins, which is the cache's behaviour under serial calls too. The
+/// map of slice reads in flight, which lets an identical request join a read in
+/// storage rather than start a second one, is looked up and inserted in one
+/// synchronous segment and cleared when the read ends.
 /// </para>
 /// </summary>
 [Alias(TypeAliases.ILeafReplayCoordinatorGrain)]

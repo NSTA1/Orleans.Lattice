@@ -135,6 +135,38 @@ internal sealed class LeafReplayCoordinatorGrain(
                 : _cachedEntries.Take(budget).ToList();
         }
 
+        // Single flight (issue #5877). Reads interleave, so an identical
+        // request arriving while one is in storage would otherwise read storage
+        // again, where under serial calls it queued and then hit the cache. It
+        // joins the read in flight instead. The lookup and the insertion are one
+        // synchronous segment, so two arrivals cannot both start a read.
+        var key = new SliceKey(fromOffsetExclusive, toOffsetInclusive, filter);
+        _inFlightSlices ??= [];
+        if (!_inFlightSlices.TryGetValue(key, out var shared))
+        {
+            shared = ReadAndCacheSliceAsync(key, budget);
+
+            // A read that completed synchronously has already run its finally,
+            // so registering it would leave a completed entry no one removes.
+            if (!shared.IsCompleted)
+                _inFlightSlices[key] = shared;
+        }
+
+        // Each joiner waits on its own token: one caller's cancellation ends
+        // only that caller's wait, never the shared read the others are on.
+        var entries = await shared.WaitAsync(cancellationToken);
+        return entries.Count <= budget ? entries : entries.Take(budget).ToList();
+    }
+
+    /// <summary>
+    /// The storage read behind one in-flight slice. It runs on no caller's
+    /// cancellation token, because several callers may be waiting on it; each
+    /// abandons its own wait instead (see <see cref="ReadSliceCoreAsync"/>).
+    /// </summary>
+    private async Task<IReadOnlyList<CommitLogSliceEntry>> ReadAndCacheSliceAsync(SliceKey key, int budget)
+    {
+        var (fromOffsetExclusive, toOffsetInclusive, filter) = key;
+        var cancellationToken = CancellationToken.None;
         IReadOnlyList<CommitLogSliceEntry> result;
         try
         {
@@ -165,10 +197,6 @@ internal sealed class LeafReplayCoordinatorGrain(
                     fromOffsetExclusive, toOffsetInclusive, budget, filter, cancellationToken);
             }
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
         catch (Exception ex)
         {
             logger.LogWarning(
@@ -176,6 +204,10 @@ internal sealed class LeafReplayCoordinatorGrain(
                 "Commit-log read failed for tree={TreeId} shard={ShardIndex} from={From} to={To}.",
                 _treeId, _shardIndex, fromOffsetExclusive, toOffsetInclusive);
             throw;
+        }
+        finally
+        {
+            _inFlightSlices?.Remove(key);
         }
 
         _cachedFromExclusive = fromOffsetExclusive;
@@ -185,6 +217,16 @@ internal sealed class LeafReplayCoordinatorGrain(
         _cachedEntries = result;
         return result;
     }
+
+    /// <summary>
+    /// Slice reads in storage right now, by window, so an identical request
+    /// joins one instead of starting another (issue #5877). Created on first
+    /// use; an entry is removed when its read ends, however it ends.
+    /// </summary>
+    private Dictionary<SliceKey, Task<IReadOnlyList<CommitLogSliceEntry>>>? _inFlightSlices;
+
+    /// <summary>The window a slice read is for, as the single-flight key.</summary>
+    private readonly record struct SliceKey(long FromOffsetExclusive, long ToOffsetInclusive, WalKeyFilter Filter);
 
     /// <summary>
     /// Reads one filtered slice. The budget bounds the entries the read
