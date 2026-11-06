@@ -499,21 +499,28 @@ reason as the one above.
   `BPlusLeafGrain.CaptureUncoveredHintsBeforePersistAsync`,
   `BPlusLeafGrain.HoldBackUncoveredHints`, `BPlusLeafGrain.RestoreHeldHints`,
   `BPlusLeafGrain.IsHeldUncoveredHint`, `BPlusLeafGrain.FlushPendingCheckpointAsync`.
-- **The refresh's descent is exact when it decides (#5876; a5e2e2ef's D1 rule).** C's
-  `RefreshReaches` reads whether the batch's keys still reach the stale donor exactly.
+- **The refresh's descent is exact when it decides (#5876; a5e2e2ef's D1 rule and V1-V5).**
+  C's `RefreshReaches` reads whether the batch's keys still reach the stale donor exactly.
   Production's descent resolves to the routing owner, which is the key's owner or a leaf
   that does not own it: before the link the narrowed donor still receives its moved keys
-  (359c7fd5's S2 probe: no negative descent named the owner), and while a link batch, a
-  child link or a routing mutation is in flight it can name any leaf. In C the refresh is
-  reachable only after L's re-claim of the link's generation, so after the link, where a
-  decided descent names the owner. So a descent read then, or across
-  a moved routing sequence, returns Undecided rather than a verdict, and an Undecided
-  descent refuses the refresh, gives the cut no hint and lets the orphan audit find
-  nothing. Trusting it is `ReadPositionHonestRefreshTrustsUndecidedDescent`, red here
-  against `ReadPositionHonest`, `SnapshotHonest` and `NoTrimPastAcked`. Production pins it:
+  (359c7fd5's S2 probe: no negative descent named the owner), and a parent that has not yet
+  received a completed internal split's separator routes past the narrowed node. In C the
+  refresh is reachable only after L's re-claim of the link's generation, so after the link,
+  where a decided descent names the owner. Production keeps that exact when it decides
+  without settling the whole shard: every internal node on the path answers with its
+  declared bounds and a key outside them makes the descent Undecided (V1), a split
+  publishes its narrowed bound with its children in one step (V2), only the root-identity
+  sites still bracket the descent (V3), the leaf level never chases (V4), and the orphan
+  audit uses the same descent (V5). An Undecided descent refuses the refresh, gives the cut
+  no hint and lets the orphan audit find nothing. Trusting it is
+  `ReadPositionHonestRefreshTrustsUndecidedDescent`, red here against `ReadPositionHonest`,
+  `SnapshotHonest` and `NoTrimPastAcked`; the lagging parent is that trace's descent, so it
+  needs no step of its own. Production pins it:
   `ShardRootGrainDescentVerdictTests.A_parent_lagging_a_completed_internal_split_yields_undecided_never_a_non_owner`,
+  `ShardRootGrainDescentVerdictTests.A_link_batch_in_another_subtree_leaves_the_descent_decided`,
   `ShardRootGrainDescentVerdictTests.A_routing_mutation_completing_mid_descent_is_undecided`,
-  `ShardRootGrainDescentVerdictTests.Every_routing_structure_mutation_site_is_bracketed`
+  `BPlusInternalGrainTests.A_split_publishes_its_narrowed_bound_with_its_children_in_one_step`,
+  `ShardRootGrainOrphanAuditGapTests.An_audit_descent_through_a_parent_lagging_an_internal_split_finds_nothing`
   and `BPlusLeafGrainTests.An_F1_refresh_during_a_link_batch_does_not_route`, and the
   single-activation case, a donor that narrows while its refresh is in flight, by the
   post-refresh span re-check:
