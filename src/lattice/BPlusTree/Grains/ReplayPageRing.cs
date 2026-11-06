@@ -87,7 +87,7 @@ internal sealed class ReplayPageRing(long budgetBytes)
     /// caller issues its own.
     /// </summary>
     public Task<ReplayPage?>? JoinableFill(long fromExclusive, long now, long agingBoundTicks) =>
-        _fills.TryGetValue(fromExclusive, out var fill) && now - fill.StartedAt <= agingBoundTicks
+        _fills.TryGetValue(fromExclusive, out var fill)
             ? fill.Fill
             : null;
 
