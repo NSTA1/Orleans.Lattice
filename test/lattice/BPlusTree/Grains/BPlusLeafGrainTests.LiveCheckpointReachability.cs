@@ -88,6 +88,8 @@ public partial class BPlusLeafGrainTests
         var rig = new LiveAdvanceRig();
         rig.ShardRoot.IsReachableByDescentAsync(Arg.Any<GrainId>(), Arg.Any<string?>())
             .ThrowsAsync(new TimeoutException("the shard root did not answer"));
+        rig.ShardRoot.GetDescentVerdictAsync(Arg.Any<GrainId>(), Arg.Any<string?>())
+            .ThrowsAsync(new TimeoutException("the shard root did not answer"));
         var grain = CreateGrain(liveAdvance: rig);
 
         await SetStampedAsync(grain, "a", "1");
