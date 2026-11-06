@@ -56,6 +56,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Changed
 
+- **Observability - Replay admission refusal arms.** A `replay_permit_admission` refusal past the depth bound whose permit holders are still reading WAL slices is now tagged `arm=holders_slow` on `orleans.lattice.saturation.refusals`, with a capacity message; `no_progress` now means the holders have stopped advancing as well. Admission is unchanged. Dashboards and alerts that key on `no_progress` should include `holders_slow`. ([#5877](https://github.com/NSTA1/Orleans.Lattice/issues/5877)) (`Orleans.Lattice`)
+
 - **Performance - Tree-admin status reads.** Resize, reshard and view status use one grain call, down from five, three and two. Tree statistics overlap diagnostics and storage reads; authorization and system-tree rejection remain. ([#5345](https://github.com/NSTA1/Orleans.Lattice/pull/5345), [#5423](https://github.com/NSTA1/Orleans.Lattice/pull/5423)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin`)
 
 - **Performance - View sampling.** Default statistics use two calls instead of three. Catalog pages batch fresh runtime metadata and sample in settled waves of up to 32, retaining source visibility, aggregation bounds, unavailable statistics and sequential custom factories. ([#5423](https://github.com/NSTA1/Orleans.Lattice/pull/5423), [#5461](https://github.com/NSTA1/Orleans.Lattice/pull/5461)) (`Orleans.Lattice`, `Orleans.Lattice.Api.State`)
@@ -99,6 +101,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 ### Fixed
 
 - **WAL replay - Per-partition replay reads no longer serialise.** The per-partition replay coordinator served one slice read at a time, so a silo replayed at most one slice per WAL partition however many replay permits it had; on a cold restart, 16 times the permits bought 4.7 times the reads and slowed every replay. Its reads now interleave. ([#5877](https://github.com/NSTA1/Orleans.Lattice/issues/5877)) (`Orleans.Lattice`)
+
+- **WAL replay - Admission before the snapshot rehydrate.** A re-armed leaf replay that replay admission would refuse is now refused before it spends a snapshot rehydrate, which during a cold restart under write load had cost each refused attempt 9-37 s of snapshot reads. ([#5877](https://github.com/NSTA1/Orleans.Lattice/issues/5877)) (`Orleans.Lattice`)
 
 - **Explorer - Schema validation.** Rule cards reject reversed large-integer bounds without rounding valid constants. Semantic-version cards reject empty identifiers and leading-zero numeric prereleases; saved patterns remain unchanged when reopened. ([#5347](https://github.com/NSTA1/Orleans.Lattice/issues/5347)) (`Orleans.Lattice.Explorer.UI`)
 
