@@ -1761,50 +1761,26 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         var manifestFilter =
             $"PartitionKey eq '{Escape(manifestPartitionKey)}' and RowKey ge '{ManifestRowKeyPrefix}' and RowKey lt '{TailRowKey}' and Offset ge {firstWantedOffset.ToString(CultureInfo.InvariantCulture)}";
 
-        var yielded = 0;
-        await foreach (var manifestRow in table
-            .QueryAsync<AzureTableWalEntity>(manifestFilter, cancellationToken: cancellationToken)
-            .ConfigureAwait(false))
+        // Each batch's rows are bracketed by `lt 'F'`, the whole E-prefix space:
+        // every row in a batch partition is an entry row (no HEAD sentinel in the
+        // per-batch schema). Batches are fetched ahead concurrently but consumed
+        // in offset order (issue #5877).
+        await foreach (var entity in ReadWindowRowsAsync(
+            table,
+            treeId,
+            shardIndex,
+            manifestFilter,
+            firstWantedOffset,
+            long.MaxValue,
+            "RowKey lt 'F'",
+            maxEntries,
+            cancellationToken).ConfigureAwait(false))
         {
-            if (yielded >= maxEntries)
+            yield return new WalEntry
             {
-                yield break;
-            }
-
-            // Recover startOffset from the row key suffix - cheaper than
-            // a second column round-trip and the schema fixes the
-            // layout. The row key is `M{startOffset:D19}`.
-            var startOffset = long.Parse(
-                manifestRow.RowKey.AsSpan(ManifestRowKeyPrefix.Length),
-                NumberStyles.None,
-                CultureInfo.InvariantCulture);
-
-            var batchPartitionKey = BuildBatchPartitionKey(treeId, shardIndex, startOffset);
-            var batchLowerInclusiveRowKey = BuildEntryRowKey(Math.Max(firstWantedOffset, startOffset));
-            // Upper bound is strictly less than the first row beyond
-            // the batch's endOffsetInclusive; use `lt 'F'` to bracket
-            // the whole E-prefix space and rely on per-batch isolation
-            // (every row in the partition is an entry row, no HEAD
-            // sentinel in the new schema).
-            var batchFilter =
-                $"PartitionKey eq '{Escape(batchPartitionKey)}' and RowKey ge '{batchLowerInclusiveRowKey}' and RowKey lt 'F'";
-
-            await foreach (var entity in table
-                .QueryAsync<AzureTableWalEntity>(batchFilter, maxPerPage: Math.Min(maxEntries - yielded, 1000), cancellationToken: cancellationToken)
-                .ConfigureAwait(false))
-            {
-                if (yielded >= maxEntries)
-                {
-                    yield break;
-                }
-
-                yield return new WalEntry
-                {
-                    Offset = entity.Offset,
-                    Mutation = DeserialiseMutation(DecompressPayload(entity.Payload, (byte)entity.Compression)),
-                };
-                yielded++;
-            }
+                Offset = entity.Offset,
+                Mutation = DeserialiseMutation(DecompressPayload(entity.Payload, (byte)entity.Compression)),
+            };
         }
     }
 
