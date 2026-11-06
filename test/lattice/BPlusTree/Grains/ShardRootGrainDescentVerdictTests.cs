@@ -7,11 +7,12 @@ using Orleans.Lattice.Testing.Hygiene;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// #5876 (a5e2e2ef's D1 and its site list): a descent is decided only when no
-/// routing-structure mutation was in flight before or after it and the structural version
-/// did not move, which is sound only if every such mutation is bracketed. This fixture
-/// scans the shard root's source and fails on any routing-structure mutation site outside
-/// a structural-routing scope.
+/// #5876 (a5e2e2ef's V3): a descent checks every internal node's declared bound on its
+/// path (V1), and shard-wide only the root's identity: it is undecided while a
+/// root-identity mutation is in flight or completed during it. That is sound only if every
+/// assignment of root-identity state in the shard root is bracketed; this fixture scans the
+/// source and fails on any outside a structural-routing scope. Internal child lists and
+/// separators are V1's, not this scan's.
 /// </summary>
 [TestFixture]
 public sealed partial class ShardRootGrainDescentVerdictTests
@@ -21,11 +22,6 @@ public sealed partial class ShardRootGrainDescentVerdictTests
     {
         "RootNodeId", "IsRetired", "PendingPromotion", "PendingBulkGraft", "SplitInProgress", "MovedAwaySlots",
     };
-
-    /// <summary>The node-grain calls that change a child list, a separator, or a node's existence.</summary>
-    private static bool IsStructuralCall(string name) =>
-        name is "AcceptSplitAsync" or "RemoveChildAsync" or "ClearGrainStateAsync"
-        || (name.StartsWith("Initialize", StringComparison.Ordinal) && name.EndsWith("Async", StringComparison.Ordinal));
 
     [Test]
     public void Every_routing_structure_mutation_site_is_bracketed()
@@ -45,8 +41,6 @@ public sealed partial class ShardRootGrainDescentVerdictTests
                         when a.Parent is ExpressionStatementSyntax
                         && StructuralFields.Contains(target.Name.Identifier.Text)
                         && target.Expression.ToString() == "state.State" => $"state.State.{target.Name.Identifier.Text} =",
-                    InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax call }
-                        when IsStructuralCall(call.Name.Identifier.Text) => call.Name.Identifier.Text,
                     _ => null,
                 };
                 if (what is null)
@@ -65,7 +59,7 @@ public sealed partial class ShardRootGrainDescentVerdictTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(sites, Is.GreaterThan(20), "the scan matched no routing-structure mutation sites; it has gone vacuous");
+            Assert.That(sites, Is.GreaterThan(15), "the scan matched no root-identity mutation sites; it has gone vacuous");
             Assert.That(violations, Is.Empty, "routing-structure mutation outside a structural-routing scope (#5876): " + string.Join("; ", violations));
         });
     }

@@ -22,40 +22,53 @@ public sealed partial class ShardRootGrainDescentVerdictTests
     private static DescentVerdictHarness CreateHarness() => DescentVerdictHarness.Create();
 
     [Test]
-    public async Task A_descent_during_a_link_batch_is_undecided()
+    public async Task A_parent_lagging_a_completed_internal_split_yields_undecided_never_a_non_owner()
     {
-        // Detector 1: a split's link batch holds the root's accept open. A descent for the
-        // right leaf - which a decided descent reaches - is undecided, as are the boolean
-        // read and the live-advance view built on it.
-        var h = CreateHarness();
-        var accepting = new TaskCompletionSource<SplitResult?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var acceptEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        h.Root.AcceptSplitAsync("c", SiblingId).Returns(_ =>
-        {
-            acceptEntered.TrySetResult();
-            return accepting.Task;
-        });
-        h.Left.SetAsync("b", Arg.Any<byte[]>()).Returns(Task.FromResult<SplitResult?>(new SplitResult
-        {
-            PromotedKey = "c",
-            NewSiblingId = SiblingId,
-            ChildIsLeaf = true,
-        }));
+        // (a), V1: the left parent divided at m - settled, its bound narrowed - but the root
+        // does not yet route to its right half. A decided descent for n would name the left
+        // leaf, which does not own it; the bound makes it undecided instead.
+        var h = DescentVerdictHarness.CreateLaggingInternalSplit();
 
-        var write = h.Grain.SetAsync("b", [1]);
-        await acceptEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        var verdict = await h.Grain.GetDescentVerdictAsync(RightLeafId, "m");
-        var reachable = await h.Grain.IsReachableByDescentAsync(RightLeafId, "m");
-        var view = await h.Grain.GetLiveAdvanceViewAsync(RightLeafId, "m", null);
-        accepting.SetResult(null);
-        await write.WaitAsync(TimeSpan.FromSeconds(10));
+        var forMoved = await h.Grain.GetDescentVerdictAsync(LeftLeafId, "n");
+        var forMovedOwner = await h.Grain.GetDescentVerdictAsync(RightLeafId, "n");
+        var positive = await h.Grain.IsReachableByDescentAsync(LeftLeafId, "n");
+        var view = await h.Grain.GetLiveAdvanceViewAsync(RightLeafId, "n", null);
+        var inBounds = await h.Grain.GetDescentVerdictAsync(LeftLeafId, "a");
 
         Assert.Multiple(() =>
         {
-            Assert.That(verdict, Is.EqualTo(DescentVerdict.Undecided), "a descent during a link batch gave a verdict");
-            Assert.That(reachable, Is.False, "the boolean read trusted a descent during a link batch");
-            Assert.That(view.ReachabilityUndecided, Is.True, "the live-advance view carried a descent during a link batch as a verdict");
-            Assert.That(view.Reachable, Is.False);
+            Assert.That(forMoved, Is.EqualTo(DescentVerdict.Undecided), "a lagging parent named a non-owner as reachable or unreachable");
+            Assert.That(forMovedOwner, Is.EqualTo(DescentVerdict.Undecided), "the owner was judged on a lagging parent's route");
+            Assert.That(positive, Is.False, "the boolean read trusted a lagging parent's route");
+            Assert.That(view.ReachabilityUndecided, Is.True);
+            Assert.That(inBounds, Is.EqualTo(DescentVerdict.Reachable), "a key inside every bound was not decided");
+        });
+    }
+
+    [Test]
+    public async Task A_link_batch_in_another_subtree_leaves_the_descent_decided()
+    {
+        // (b), liveness: a split's link batch holds the left parent's accept open; the right
+        // leaf's path is settled, so its descent - and the view on it - decides as usual.
+        var h = DescentVerdictHarness.CreateTwoLevel();
+        var batch = await h.HoldLinkBatchAsync();
+        DescentVerdict verdict;
+        LeafLiveAdvanceView view;
+        try
+        {
+            verdict = await h.Grain.GetDescentVerdictAsync(RightLeafId, "m");
+            view = await h.Grain.GetLiveAdvanceViewAsync(RightLeafId, "m", null);
+        }
+        finally
+        {
+            await batch.ReleaseAsync();
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(verdict, Is.EqualTo(DescentVerdict.Reachable), "a link batch elsewhere made a settled path undecided");
+            Assert.That(view.ReachabilityUndecided, Is.False);
+            Assert.That(view.Reachable, Is.True);
         });
     }
 

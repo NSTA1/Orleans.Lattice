@@ -359,7 +359,6 @@ internal sealed partial class ShardRootGrain
             return;
         }
 
-        using var structuralRouting = EnterStructuralRouting(); // #5876
         _strandedLeafRecoveryNeedsPersist = false;
         try
         {

@@ -859,7 +859,6 @@ internal sealed partial class ShardRootGrain
         bool deferIfBusy = false)
     {
         using var routingMutation = EnterRoutingMutation();
-        using var structuralRouting = EnterStructuralRouting(); // #5876
         List<LinkWork> work;
         if (deferIfBusy)
         {
@@ -1020,7 +1019,6 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task<List<SplitResult>?> LinkOneLockedAsync(LinkWork item)
     {
-        using var structuralRouting = EnterStructuralRouting(); // #5876
         var split = item.Split;
         if (item.Height < 0 || RootIsLeafTyped)
         {
@@ -1319,7 +1317,6 @@ internal sealed partial class ShardRootGrain
             return;
         }
 
-        using var structuralRouting = EnterStructuralRouting(); // #5876
         await _splitLinkGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         try
         {
