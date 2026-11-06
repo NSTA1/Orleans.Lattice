@@ -295,8 +295,49 @@ def main() -> int:
         check("11 running outside a git repository FAILS rather than passing",
               done.returncode == 1, done.stdout)
 
+        # -- Commits already on the default branch (#5605) -----------------
+        print("\nCommits reachable from the default branch")
+
+        landed_msg = "fix: landed on main\n\nCloses #5878\n"
+
+        repo = workroot / "on-default"
+        base, head = build_repo(repo, [landed_msg, "Merge main into the bucket\n\nRefs #1\n"])
+        landed = git(repo, "rev-parse", "HEAD~1").stdout.strip()
+        git(repo, "update-ref", "refs/remotes/origin/main", landed)
+        done = run_guard(script, repo, base_sha=base, head_sha=head)
+        check("12 a keyword in a commit already on the default branch passes",
+              done.returncode == 0, done.stdout + done.stderr)
+        check("12 the pass reports the exempted commit",
+              "1 already on 'main' exempted" in done.stdout, done.stdout)
+
+        repo = workroot / "member-and-default"
+        base, head = build_repo(repo, [landed_msg, "fix: member work\n\nCloses #2\n"])
+        landed = git(repo, "rev-parse", "HEAD~1").stdout.strip()
+        git(repo, "update-ref", "refs/remotes/origin/main", landed)
+        done = run_guard(script, repo, base_sha=base, head_sha=head)
+        check("13 a member commit not on the default branch still fails",
+              done.returncode == 1 and head[:9] in done.stdout, done.stdout)
+        check("13 only the member commit is named, never the landed one",
+              landed[:9] not in done.stdout, done.stdout)
+
+        repo = workroot / "no-default-ref"
+        base, head = build_repo(repo, [landed_msg])
+        done = run_guard(script, repo, base_sha=base, head_sha=head)
+        check("14 with the default branch unresolvable nothing is exempted, so it fails",
+              done.returncode == 1, done.stdout)
+
         # -- Mutations: each names a defect and a case that must redden ------
         print("\nMutation suite (each reintroduces one defect)")
+
+        # M5: the reachability exclusion is dropped, so every commit counts as
+        # the pull request's own. Case 12 must flip to a failure.
+        m5 = mutate(script, '"^" + default_ref]', ']', "M5 default-branch exclusion dropped")
+        base, head = build_repo(workroot / "m5", [landed_msg, "Merge main\n\nRefs #1\n"])
+        landed = git(workroot / "m5", "rev-parse", "HEAD~1").stdout.strip()
+        git(workroot / "m5", "update-ref", "refs/remotes/origin/main", landed)
+        done = run_guard(m5, workroot / "m5", base_sha=base, head_sha=head)
+        check("M5 without the exclusion a commit already on the default branch fails",
+              done.returncode == 1 and landed[:9] in done.stdout, done.stdout)
 
         # M1: the commit scanner stops reporting, while honoured() stays healthy.
         # The guard's own in-CI control must catch this on a CLEAN input - which
