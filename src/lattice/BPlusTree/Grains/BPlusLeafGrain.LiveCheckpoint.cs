@@ -345,6 +345,7 @@ internal sealed partial class BPlusLeafGrain
                         if (hasReport && LeafLiveAdvanceCore.TryFreeAdvance(hasReport, reportedBound, handOff.Clear, closeHead, LeafLiveAdvanceCore.FreeTarget(ownHigh, p), GetCurrentCheckpointForPartition(p), IsPartitionStaleLatched(p)) >= 0)
                         {
                             Interlocked.Increment(ref s_reportFetchesUnblocked);
+                            await StampCheckpointHintAsync(p, ownHigh[p] + 2); // DO-NOT-MERGE red proof: F1
                         }
                     }
                 }
@@ -685,6 +686,7 @@ internal sealed partial class BPlusLeafGrain
         }
         catch (Exception ex)
         {
+            _reportFetchUnsupported = true; // DO-NOT-MERGE red proof: F5
             ResolveLogger()?.LogDebug(
                 ex,
                 "Leaf {LeafId}: could not fetch its report at WAL partition {Partition}; it stays unreported there this tick (#5851).",
