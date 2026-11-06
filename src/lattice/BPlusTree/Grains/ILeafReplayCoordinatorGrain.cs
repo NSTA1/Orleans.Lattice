@@ -40,7 +40,6 @@ internal interface ILeafReplayCoordinatorGrain : IGrainWithStringKey
     /// activating concurrently against the same shard share one underlying
     /// commit-log read.
     /// </summary>
-    [AlwaysInterleave]
     Task<IReadOnlyList<CommitLogSliceEntry>> ReadSliceAsync(
         long fromOffsetExclusive,
         long toOffsetInclusive,
@@ -65,7 +64,6 @@ internal interface ILeafReplayCoordinatorGrain : IGrainWithStringKey
     /// anyway.
     /// </para>
     /// </summary>
-    [AlwaysInterleave]
     Task<IReadOnlyList<CommitLogSliceEntry>> ReadSliceAsync(
         long fromOffsetExclusive,
         long toOffsetInclusive,
@@ -77,7 +75,6 @@ internal interface ILeafReplayCoordinatorGrain : IGrainWithStringKey
     /// Returns the current head offset of the per-shard write-ahead log -
     /// i.e. the next sequence number that will be assigned to a future append.
     /// </summary>
-    [AlwaysInterleave]
     Task<long> GetHeadOffsetAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -85,7 +82,6 @@ internal interface ILeafReplayCoordinatorGrain : IGrainWithStringKey
     /// i.e. the offset of the oldest entry still readable. Equals the head
     /// when the log is empty or has never been trimmed.
     /// </summary>
-    [AlwaysInterleave]
     Task<long> GetTailOffsetAsync(CancellationToken cancellationToken = default);
 }
 
