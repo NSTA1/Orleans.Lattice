@@ -1183,6 +1183,15 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private async Task<(long[] Heads, WalSplitCut[]? Cut, WalAppendStamp Reader)> CaptureSplitCutAsync(string treeId)
     {
+        if (IsPreArmGateOpen() && _appendFence is not null && !_carriedClosesRead)
+        {
+            // #5851, LA4: an activation that has not yet read its view would take a reader
+            // carrying none of the closes its marker carries, and the view read after the
+            // cut would cap the hint on the mismatch. Read it once, first; a close recorded
+            // after this read still mismatches, and the cut is still capped on it.
+            await ReadLiveAdvanceHandOffAsync();
+        }
+
         if (IsPreArmGateOpen() && _appendFence is { } fence && fence.TryGetCutReader(out var reader))
         {
             try
