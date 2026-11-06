@@ -164,4 +164,96 @@ internal static class LeafLiveAdvanceCore
         && current < reportedBound
             ? reportedBound
             : -1L;
+
+    /// <summary>
+    /// The read a claimless advance that failed must catch up to (#5851, ruling 2 widened by
+    /// a5e2e2ef's W1-W5), or -1. Where every close head is passed, it is
+    /// <see cref="CatchUpBound"/>. Where a close head holds, it is that head minus one iff
+    /// the hold is by concrete close heads alone: <paramref name="closesConcrete"/> (W3, no
+    /// close bearing on the leaf is deferred anywhere), no donor bound is pending
+    /// (<paramref name="boundPending"/>, W4) and the reported bound is already passed. That
+    /// bound folds the shared unstamped watermark in and cannot be told apart from it, so a
+    /// hold by both never catches up here (W4); the split's cut, which reports the two
+    /// apart, can (<see cref="SplitCatchUpTarget"/>).
+    /// </summary>
+    /// <param name="hasReport">The partition has a claimless view covering every pending close.</param>
+    /// <param name="reportedBound">The view's bound.</param>
+    /// <param name="handOffClear">The marker state is initialised and no hand-off overlapping the leaf is open.</param>
+    /// <param name="closeHead">The highest close head bearing on the leaf at the partition.</param>
+    /// <param name="closesConcrete">No close bearing on the leaf is deferred at any partition.</param>
+    /// <param name="boundPending">A donor bound bearing on the leaf is pending (its sibling's link unwitnessed).</param>
+    /// <param name="freeTarget">The claimless advance's target.</param>
+    /// <param name="current">The partition's current checkpoint.</param>
+    /// <param name="staleLatched">The partition is latched stale.</param>
+    public static long CatchUpTarget(
+        bool hasReport,
+        long reportedBound,
+        bool handOffClear,
+        long closeHead,
+        bool closesConcrete,
+        bool boundPending,
+        long freeTarget,
+        long current,
+        bool staleLatched)
+    {
+        if (current >= closeHead - 1)
+        {
+            return CatchUpBound(hasReport, reportedBound, handOffClear, closeHead, freeTarget, current, staleLatched);
+        }
+
+        return hasReport
+            && handOffClear
+            && !staleLatched
+            && freeTarget > current
+            && IsConcreteCloseHold(closeHead, closesConcrete, boundPending)
+            && current >= reportedBound
+                ? closeHead - 1
+                : -1L;
+    }
+
+    /// <summary>
+    /// The read a donor whose split hint the cut capped must catch up to (#5851, ruling 2
+    /// widened by W1-W5), or -1; the caller has already found the hint not raisable. Where
+    /// every close head is passed, it is the cut's reported bound,
+    /// <c>max(<paramref name="foreignHigh"/>, <paramref name="watermark"/>)</c>. Where a close
+    /// head holds, it is <c>max(<paramref name="foreignHigh"/>, closeHead - 1)</c> iff the
+    /// hold is by the foreign high - every stale high the cut's reader carried included -
+    /// and concrete close heads alone: no close is deferred anywhere (W3), no donor bound
+    /// is pending (W4), and the shared watermark is passed (W4).
+    /// </summary>
+    /// <param name="current">The donor's checkpoint at the partition, read after the drain.</param>
+    /// <param name="closeHead">The highest close head bearing on the donor at the partition.</param>
+    /// <param name="closesConcrete">No close bearing on the donor is deferred at any partition.</param>
+    /// <param name="boundPending">A donor bound bearing on the donor is pending.</param>
+    /// <param name="foreignHigh">The cut's foreign high, the carried closes' stale highs folded in.</param>
+    /// <param name="watermark">The cut's shared unstamped watermark.</param>
+    public static long SplitCatchUpTarget(
+        long current,
+        long closeHead,
+        bool closesConcrete,
+        bool boundPending,
+        long foreignHigh,
+        long watermark)
+    {
+        if (current >= closeHead - 1)
+        {
+            var reported = Math.Max(foreignHigh, watermark);
+            return current < reported ? reported : -1L;
+        }
+
+        return IsConcreteCloseHold(closeHead, closesConcrete, boundPending) && current >= watermark
+            ? Math.Max(foreignHigh, closeHead - 1)
+            : -1L;
+    }
+
+    /// <summary>
+    /// Whether a close-head hold may be caught up past (W3, W4): every close is concrete -
+    /// a deferred head is the arm's to resolve (G4), never a replay's target - and no donor
+    /// bound is pending, whose stale high an unwitnessed sibling may still raise.
+    /// </summary>
+    private static bool IsConcreteCloseHold(long closeHead, bool closesConcrete, bool boundPending) =>
+        closesConcrete
+        && !boundPending
+        && closeHead > 0
+        && closeHead != Grains.HandOffMarkerCore.DeferredHead;
 }

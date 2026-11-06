@@ -351,13 +351,16 @@ internal sealed partial class BPlusLeafGrain
                 {
                     if (!claimRaised)
                     {
-                        // #5851, ruling 2: held only by its reported bound, the leaf owes a
-                        // catch-up read the coverage-lag tick dispatches, never this path.
-                        NoteReportedBoundCatchUp(p, ownHigh.Length, LeafLiveAdvanceCore.CatchUpBound(
+                        // #5851, ruling 2 widened (W1-W5): held only by its reported bound,
+                        // or by concrete close heads alone, the leaf owes a catch-up read the
+                        // coverage-lag tick dispatches, never this path. Judged on this read.
+                        NoteReportedBoundCatchUp(p, ownHigh.Length, LeafLiveAdvanceCore.CatchUpTarget(
                             hasReport: hasReport,
                             reportedBound: reportedBound,
                             handOffClear: handOff.Clear,
                             closeHead: closeHead,
+                            closesConcrete: AreCloseHeadsConcrete(handOff, low, high),
+                            boundPending: HandOffMarkerCore.HasPendingDonorBound(handOff.LeafMarker, low, high),
                             freeTarget: LeafLiveAdvanceCore.FreeTarget(ownHigh, p),
                             current: GetCurrentCheckpointForPartition(p),
                             staleLatched: IsPartitionStaleLatched(p)));
@@ -378,18 +381,32 @@ internal sealed partial class BPlusLeafGrain
         }
     }
     /// <summary>
-    /// Per partition, the highest reported bound a claimless advance or a split hint
-    /// failed on alone (#5851, ruling 2), and the highest one a catch-up was already
-    /// dispatched for; activation memory, allocated on the first such failure.
+    /// Whether every close head <paramref name="handOff"/> bears on the leaf with is concrete
+    /// (#5851, W3): no close on its marker, and none folded into its shard's heads, is
+    /// deferred at any partition. A deferred head is resolved by the leaf's arm, never by a
+    /// catch-up read.
+    /// </summary>
+    private static bool AreCloseHeadsConcrete(LiveAdvanceHandOff handOff, string? low, string? high) =>
+        !HandOffMarkerCore.HasDeferredClose(handOff.LeafMarker, low, high)
+        && !HandOffMarkerCore.AnyDeferred(handOff.ShardCloseHeads);
+
+    /// <summary>
+    /// Per partition, the highest catch-up target a claimless advance or a split hint was
+    /// held at (#5851, ruling 2 widened by W1-W5) - a reported bound, or a concrete close
+    /// head minus one - and the highest one a catch-up was already dispatched for; activation
+    /// memory, allocated on the first such hold. Keyed by the target value (W5): a target
+    /// already dispatched is read once, a raised one re-arms it.
     /// </summary>
     private long[]? _catchUpPending;
 
     private long[]? _catchUpDispatched;
 
     /// <summary>
-    /// Records that partition <paramref name="partition"/> is held only by
-    /// <paramref name="bound"/> (#5851, ruling 2), a value <see cref="LeafLiveAdvanceCore.CatchUpBound"/>
-    /// or the split hint computed; -1 records nothing. Never reads or writes storage.
+    /// Records that partition <paramref name="partition"/> is held only by what a catch-up
+    /// read to <paramref name="bound"/> passes (#5851, ruling 2 widened by W1-W5), a value
+    /// <see cref="LeafLiveAdvanceCore.CatchUpTarget"/> or <see cref="LeafLiveAdvanceCore.SplitCatchUpTarget"/>
+    /// computed; -1 records nothing. Never reads or writes storage, and never reads the WAL:
+    /// the read is the tick's (W5), and the checkpoint it leaves is the read's own (W1).
     /// </summary>
     internal void NoteReportedBoundCatchUp(int partition, int partitions, long bound)
     {
@@ -408,6 +425,10 @@ internal sealed partial class BPlusLeafGrain
 
         _catchUpPending[partition] = Math.Max(_catchUpPending[partition], bound);
     }
+
+    /// <summary>Test seam: the catch-up target recorded at <paramref name="partition"/>; -1 when none.</summary>
+    internal long PendingCatchUpTargetForTest(int partition) =>
+        _catchUpPending is { } pending && partition >= 0 && partition < pending.Length ? pending[partition] : -1L;
 
     /// <summary>
     /// Whether a catch-up read is owed now (#5851, ruling 2): some partition's checkpoint

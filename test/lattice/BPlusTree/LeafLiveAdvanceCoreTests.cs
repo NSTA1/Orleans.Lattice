@@ -183,4 +183,75 @@ public sealed class LeafLiveAdvanceCoreTests
             }
         }
     }
+
+    [Test]
+    public void The_widened_catch_up_targets_a_concrete_close_head_held_alone_and_reading_to_it_frees_the_advance()
+    {
+        // #5851, ruling 2 widened (W3, W4): exhaustively, a close-head hold is owed a catch-up
+        // to the head minus one iff the hold is concrete, no donor bound is pending and the
+        // reported bound - which folds the watermark in - is already passed; every other
+        // hold owes exactly what CatchUpBound owes. A read to the target frees the advance.
+        long[] values = [-1, 0, 1, 2, 3];
+        foreach (var hasReport in new[] { false, true })
+        foreach (var clear in new[] { false, true })
+        foreach (var concrete in new[] { false, true })
+        foreach (var pending in new[] { false, true })
+        foreach (var bound in values)
+        foreach (var closeHead in values)
+        foreach (var target in values)
+        foreach (var current in values)
+        {
+            var catchUp = LeafLiveAdvanceCore.CatchUpTarget(hasReport, bound, clear, closeHead, concrete, pending, target, current, false);
+            var expected = current >= closeHead - 1
+                ? LeafLiveAdvanceCore.CatchUpBound(hasReport, bound, clear, closeHead, target, current, false)
+                : hasReport && clear && concrete && !pending && target > current && current >= bound ? closeHead - 1 : -1L;
+            Assert.That(catchUp, Is.EqualTo(expected),
+                $"report={hasReport} clear={clear} concrete={concrete} pending={pending} bound={bound} close={closeHead} target={target} current={current}");
+            if (catchUp >= 0 && target > catchUp)
+            {
+                Assert.That(LeafLiveAdvanceCore.TryFreeAdvance(hasReport, bound, clear, closeHead, target, catchUp, false), Is.EqualTo(target),
+                    "a read to the catch-up target left the free advance held");
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(LeafLiveAdvanceCore.CatchUpTarget(true, -1, true, HandOffMarkerCore.DeferredHead, true, false, 9, 1, false), Is.EqualTo(-1L),
+                "a deferred head was taken as a catch-up target");
+            Assert.That(LeafLiveAdvanceCore.CatchUpTarget(true, -1, true, 5, true, false, 9, 1, true), Is.EqualTo(-1L),
+                "a latched partition was owed a catch-up");
+        });
+    }
+
+    [Test]
+    public void The_split_catch_up_targets_the_foreign_high_and_a_concrete_close_head_never_the_watermark()
+    {
+        // #5851, ruling 2 widened (W3, W4): with every close passed the target is the cut's
+        // reported bound, as ruling 2 had it; with a close holding, the foreign high and the
+        // head minus one, iff concrete, no bound pending and the watermark passed.
+        long[] values = [-1, 0, 1, 2, 3];
+        foreach (var concrete in new[] { false, true })
+        foreach (var pending in new[] { false, true })
+        foreach (var closeHead in values)
+        foreach (var foreignHigh in values)
+        foreach (var watermark in values)
+        foreach (var current in values)
+        {
+            var catchUp = LeafLiveAdvanceCore.SplitCatchUpTarget(current, closeHead, concrete, pending, foreignHigh, watermark);
+            var reported = Math.Max(foreignHigh, watermark);
+            var expected = current >= closeHead - 1
+                ? (current < reported ? reported : -1L)
+                : concrete && !pending && closeHead > 0 && current >= watermark ? Math.Max(foreignHigh, closeHead - 1) : -1L;
+            Assert.That(catchUp, Is.EqualTo(expected),
+                $"concrete={concrete} pending={pending} close={closeHead} foreign={foreignHigh} watermark={watermark} current={current}");
+            if (catchUp >= 0)
+            {
+                Assert.That(catchUp >= closeHead - 1 && catchUp >= reported, Is.True,
+                    "a read to the split catch-up target would still leave the hint capped");
+            }
+        }
+
+        Assert.That(LeafLiveAdvanceCore.SplitCatchUpTarget(1, HandOffMarkerCore.DeferredHead, true, false, -1, -1), Is.EqualTo(-1L),
+            "a deferred head was taken as a catch-up target");
+    }
 }
