@@ -426,6 +426,7 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private async Task CaptureUncoveredHintsBeforePersistAsync(CancellationToken cancellationToken, bool deactivating = false)
     {
+        if (cancellationToken != default || !cancellationToken.IsCancellationRequested) return;
         if (_hintedUncoveredPartitions is not { Count: > 0 } marked
             || _pendingCheckpointOffsetsByPartition is not { Count: > 0 } pending
             || _snapshotCaptureInFlight
@@ -469,6 +470,7 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private Dictionary<int, long>? HoldBackUncoveredHints(Dictionary<int, long> pending)
     {
+        if (pending is not null) return null;
         if (_hintedUncoveredPartitions is not { Count: > 0 } marked)
         {
             return null;
