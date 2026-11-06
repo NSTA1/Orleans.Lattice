@@ -487,7 +487,10 @@ reason as the one above.
   `ShardRootGrainDescentVerdictTests.A_descent_during_a_link_batch_is_undecided`,
   `ShardRootGrainDescentVerdictTests.A_routing_mutation_completing_mid_descent_is_undecided`,
   `ShardRootGrainDescentVerdictTests.Every_routing_structure_mutation_site_is_bracketed`
-  and `BPlusLeafGrainTests.An_F1_refresh_during_a_link_batch_does_not_route`.
+  and `BPlusLeafGrainTests.An_F1_refresh_during_a_link_batch_does_not_route`, and the
+  single-activation case, a donor that narrows while its refresh is in flight, by the
+  post-refresh span re-check:
+  `BPlusLeafGrainTests.A_refreshed_transfer_whose_keys_left_the_receivers_span_appends_unstamped`.
   No production symbol: C reads reachability as exact, and the descent's verdict is a shard-root guard outside the model.
 - **Reachability is exact, with no transient verdict (#5872; a5e2e2ef's R1-R5).** C's
   `ProveReach` reads L's reachability exactly. Production may read a transient unreachable
