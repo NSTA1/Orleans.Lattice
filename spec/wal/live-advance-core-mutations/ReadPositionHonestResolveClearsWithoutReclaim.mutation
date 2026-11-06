@@ -18,6 +18,6 @@ BOUNDS: WithKeyMove = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
     /\ pend
 \* MUTATION: cleared, not resolved.
     /\ pend' = FALSE
-    /\ UNCHANGED <<gD, gL, pendGen, moved, otherMoved, dUsed, reclaims, strayReclaims, hoClosedAt>>
+    /\ UNCHANGED <<gD, gL, pendGen, moved, otherMoved, dUsed, reclaims, strayReclaims, cGen, lw, hoClosedAt>>
 
 --- END

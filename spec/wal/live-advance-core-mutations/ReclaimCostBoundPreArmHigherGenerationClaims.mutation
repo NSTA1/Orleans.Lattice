@@ -16,5 +16,5 @@ BOUNDS: WithKeyMove = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
 \* MUTATION: a higher carried generation is claimed.
     /\ gL' = gD
     /\ strayReclaims' = IF gD > gL THEN strayReclaims + 1 ELSE strayReclaims
-    /\ UNCHANGED <<startHead, evStart, evFloor, gD, pend, pendGen, moved, otherMoved, dUsed, reclaims, sHi, ft, sh, sibHint, sibRows, xferVars, svVars, chVars>>
+    /\ UNCHANGED <<startHead, evStart, evFloor, gD, pend, pendGen, moved, otherMoved, dUsed, reclaims, cGen, lw, sHi, ft, sh, sibHint, sibRows, xferVars, svVars, chVars>>
 --- END
