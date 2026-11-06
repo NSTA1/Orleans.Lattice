@@ -517,7 +517,16 @@ reason as the one above.
   no hint and lets the orphan audit find nothing. Trusting it is
   `ReadPositionHonestRefreshTrustsUndecidedDescent`, red here against `ReadPositionHonest`,
   `SnapshotHonest` and `NoTrimPastAcked`; the lagging parent is that trace's descent, so it
-  needs no step of its own. Production pins it:
+  needs no step of its own. V1 bounds only the internal levels, so while a split's link
+  is held a narrowed donor R is still reached for its unlinked sibling S's keys, and a
+  stale activation R' of R whose span predates the narrow can refresh on that positive and
+  append an S key as an R write. That is safe by rule S, not by the descent: S's stamps
+  carry R's donor close, the WAL shard counts every R activation but the closing one in the
+  stale high (B1) and S carries the close until its arm resolves it (G4), so the bound
+  reported to S covers R''s write; and the current R's span re-check refuses the key.
+  Pinned by
+  `WalShardGrainTests.A_stale_donor_activation_refreshing_for_a_held_links_sibling_key_is_counted_in_the_siblings_bound`
+  (a5e2e2ef's S1 on #5904). Production pins it:
   `ShardRootGrainDescentVerdictTests.A_parent_lagging_a_completed_internal_split_yields_undecided_never_a_non_owner`,
   `ShardRootGrainDescentVerdictTests.A_link_batch_in_another_subtree_leaves_the_descent_decided`,
   `ShardRootGrainDescentVerdictTests.A_routing_mutation_completing_mid_descent_is_undecided`,
