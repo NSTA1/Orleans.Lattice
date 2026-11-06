@@ -154,7 +154,9 @@ lattice	formal-tlc-wal-bulk-switch	deterministic	1.96
 lattice	formal-tlc-wal-live-advance-core	deterministic	31.00
 lattice	formal-tlc-wal-live-advance-core-eager-variants	deterministic	15.00
 lattice	formal-tlc-wal-live-advance-core-lazy-variants	deterministic	16.00
-lattice	formal-tlc-wal-live-advance-core-free	deterministic	23.00
+# formal-tlc-wal-live-advance-core-free: 23 measured-share minutes plus #5851's
+# three split-cap mutations, estimated at 2 until measured.
+lattice	formal-tlc-wal-live-advance-core-free	deterministic	25.00
 lattice	formal-tlc-wal-live-advance-core-free-snapshot	deterministic	20.00
 lattice	formal-tlc-wal-live-advance-core-free-link	deterministic	17.00
 lattice	formal-tlc-wal-live-advance-core-free-read-position	deterministic	20.38

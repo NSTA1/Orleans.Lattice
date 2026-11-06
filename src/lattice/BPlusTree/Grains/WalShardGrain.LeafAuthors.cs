@@ -43,7 +43,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal sealed partial class WalShardGrain
 {
     /// <inheritdoc />
-    public Task<WalSplitCut> GetSplitCutAsync(WalAppendStamp reader, CancellationToken cancellationToken)
+    public Task<WalSplitCut> GetSplitCutAsync(WalAppendStamp reader, string? lowInclusive, string? highExclusive, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         EnsureInternalOrigin(LatticeOperation.Read);
@@ -63,7 +63,7 @@ internal sealed partial class WalShardGrain
                 bound = Math.Max(bound, StaleHighLocked(reader.Close2, reader.LeafId));
             }
 
-            return Task.FromResult(new WalSplitCut(DurableContiguousTailOffset(), bound, _unstampedWatermark));
+            return Task.FromResult(new WalSplitCut(DurableContiguousTailOffset(), bound, UnstampedHighForRangeLocked(lowInclusive, highExclusive)));
         }
     }
 

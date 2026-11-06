@@ -61,7 +61,7 @@ public sealed class ClaimlessSplitIntegrationTests
         for (var p = 0; p < partitions; p++)
         {
             var cut = await _cluster.Client.GetGrain<IWalShardGrain>($"{name}/{p}")
-                .GetSplitCutAsync(default, CancellationToken.None);
+                .GetSplitCutAsync(default, null, null, CancellationToken.None);
             watermarks[p] = cut.UnstampedWatermark;
         }
 
@@ -115,6 +115,66 @@ public sealed class ClaimlessSplitIntegrationTests
         {
             Assert.That(sibling, Is.Not.Null, "precondition: the donor split");
             Assert.That(after, Is.EqualTo(before), "the split's transfer raised the shared unstamped watermark");
+        });
+    }
+    [Test]
+    public async Task A_wal_records_key_is_in_the_key_space_of_the_leaf_ranges_the_unstamped_filter_compares_it_with()
+    {
+        // #5851 N1 (a5e2e2ef on #5873): the WAL shard's unstamped filter (K1-K6) owns a
+        // record's Key against a reader's declared range with SplitBoundary.Owns. Both are the
+        // tree's own key space, unprefixed: every record a leaf writes for a user key carries
+        // that key, and exactly one leaf of the chain owns it.
+        const string Name = "claimless-keyspace";
+        var (tree, _, partitions) = await NewTreeAsync(Name);
+        var keys = Enumerable.Range(0, 40).Select(i => $"tenant-a/user/{i:D3}").ToArray();
+        foreach (var key in keys)
+        {
+            await tree.SetAsync(key, Encoding.UTF8.GetBytes("v"));
+        }
+
+        var ranges = new List<LeafKeyRange>();
+        var leafId = await _cluster.Client.GetGrain<IShardRootGrain>($"{Name}/0").GetLeftmostLeafIdAsync();
+        while (leafId is { } id && ranges.Count < 1_000)
+        {
+            var link = await _cluster.Client.GetGrain<IBPlusLeafGrain>(id).GetKeyRangeAndNextSiblingAsync();
+            ranges.Add(link.KeyRange);
+            leafId = link.NextSibling;
+        }
+
+        var recordKeys = new HashSet<string>(StringComparer.Ordinal);
+        for (var p = 0; p < partitions; p++)
+        {
+            var wal = _cluster.Client.GetGrain<IWalShardGrain>($"{Name}/{p}");
+            var from = 0L;
+            while (true)
+            {
+                var page = await wal.ReadAsync(from, 1_000, CancellationToken.None);
+                foreach (var entry in page.Entries)
+                {
+                    if (entry.Entry.Op == MutationKind.Set && entry.Entry.Key is { } recordKey)
+                    {
+                        recordKeys.Add(recordKey);
+                    }
+                }
+
+                if (page.Entries.Count == 0 || page.NextSequence <= from)
+                {
+                    break;
+                }
+
+                from = page.NextSequence;
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ranges, Has.Count.GreaterThan(1), "precondition: the tree split");
+            Assert.That(recordKeys, Is.SupersetOf(keys), "a write's WAL record does not carry the user key the leaf owns");
+            foreach (var key in keys)
+            {
+                Assert.That(ranges.Count(r => SplitBoundary.Owns(key, r.LowKeyInclusive, r.HighKeyExclusive)), Is.EqualTo(1),
+                    $"'{key}': not owned by exactly one leaf range in the record key space");
+            }
         });
     }
 }

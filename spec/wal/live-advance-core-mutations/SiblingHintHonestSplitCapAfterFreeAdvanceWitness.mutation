@@ -1,0 +1,15 @@
+# Witness for SiblingHintHonest under #5851 O2c: a split takes the cap fallback after a free
+# advance raised the donor's frontier. Red here, with FreeSplitView clean, shows the cap is reached.
+MODULE: SiblingHintHonestSplitCapAfterFreeAdvanceWitness
+TARGET: SiblingHintHonest
+CLASS: Invariant
+SUMMARY: the cap fallback is reachable after a free advance has raised the donor's frontier: the cap's checks run on real steps
+BOUNDS: WithMixedVersion = FALSE, WithFreeAdvance = TRUE, WithSplitHint = TRUE, WithDuplicate = FALSE, WithViewOverlap = TRUE, WithSplitCap = TRUE
+
+--- FIND
+SiblingHintHonest ==
+    \A o \in durable : o <= sibHint => o \in sibRows
+--- REPLACE
+SiblingHintHonest ==
+    ~(capHint >= 0)
+--- END

@@ -8,7 +8,7 @@ PERTURBS: PreArmAlloc
 
 --- FIND
     /\ preArm' = preArm \cup {next}
-    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, ReportU)]
 --- REPLACE
     /\ preArm' = preArm \cup {next}
 \* MUTATION: the shared watermark is not reported.

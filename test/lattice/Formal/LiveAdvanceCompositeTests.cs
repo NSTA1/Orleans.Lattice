@@ -209,6 +209,7 @@ public sealed class LiveAdvanceCompositeTests
         yield return new(C, "Claim", "ReportForeign(a)", OwnReport);
         yield return new(C, "Claim", "IF pend /\\ gD >= pendGen THEN ResolveDeferred ELSE UNCHANGED <<moveVars, hoClosedAt>>", ComposedAsResolve);
         yield return new(C, "Claim", "LatchAdmitsClaim", FreeAdvance);
+        yield return new(C, "Claim", @"dClaim' = (dClaim \/ (WithLatch /\ BoundPending))", "a ghost of C's own UnlinkedNeverClaims (#5866 B2), not a guard");
         yield return new(C, "OwnAlloc", "ReportForeign(a)", OwnReport);
         yield return new(C, "OwnAlloc", "ReportStale(a)", FreeAdvance);
         yield return new(C, "ForeignAlloc", "~WithSplitBirth", FreeAdvance);
@@ -226,7 +227,7 @@ public sealed class LiveAdvanceCompositeTests
         yield return new(C, "OwnAlloc", "next' = next + 1", Effect);
         yield return new(C, "OwnAlloc", "author' = [author EXCEPT ![next] = a]", Effect);
         yield return new(C, "OwnAlloc", @"inflight' = inflight \cup {next}", "C's durability state, outside the vocabulary");
-        yield return new(C, "OwnAlloc", "seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]", "C's own unstamped watermark, assumed of no other module");
+        yield return new(C, "OwnAlloc", "seenU' = [seenU EXCEPT ![a] = Max2(@, ReportU)]", "C's own unstamped watermark, assumed of no other module");
         yield return new(C, "ForeignAlloc", "next < MaxOff", Bound);
         yield return new(C, "ForeignAlloc", "next' = next + 1", Effect);
         yield return new(C, "ForeignAlloc", "author' = [author EXCEPT ![next] = Foreign]", Effect);

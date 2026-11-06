@@ -6,8 +6,8 @@ SUMMARY: the exemption holds while orphan repair re-homes L's range, so the repa
 BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE, WithLatch = TRUE
 
 --- FIND
-ExemptPending == pend /\ ~eagerG /\ ~repair
+ExemptPending == BoundPending /\ ~eagerG /\ ~repair
 --- REPLACE
 \* MUTATION: orphan repair does not end the exemption.
-ExemptPending == pend /\ ~eagerG
+ExemptPending == BoundPending /\ ~eagerG
 --- END

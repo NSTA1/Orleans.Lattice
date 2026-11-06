@@ -10,12 +10,12 @@ BOUNDS: WithFreeAdvance = TRUE
     /\ rp[a] >= hoClosedAt - 1
     /\ rp[a] >= seenP[a]
     /\ rp[a] >= seenU[a]
-    /\ pend => rp[a] >= seenS[a]
+    /\ CloseCarried => rp[a] >= seenS[a]
     /\ \A o \in inflight : author[o] = a => o > ft[a]
 --- REPLACE
     /\ rp[a] >= hoClosedAt - 1
 \* MUTATION: no foreignHigh bound.
     /\ rp[a] >= seenU[a]
-    /\ pend => rp[a] >= seenS[a]
+    /\ CloseCarried => rp[a] >= seenS[a]
     /\ \A o \in inflight : author[o] = a => o > ft[a]
 --- END

@@ -1,0 +1,20 @@
+# #5851 widened catch-up (a5e2e2ef, #5851 comment 6668868649): the catch-up is a true replay
+# to max(reported bound, close head - 1) on the tick. C's Replay, which reads one durable entry at
+# a time to any target, is every such catch-up; these mutations break W1-W3.
+MODULE: ReadPositionHonestCatchUpCheckpointPastRead
+TARGET: ReadPositionHonest
+CLASS: Invariant
+PERTURBS: Replay
+SUMMARY: the catch-up sets the checkpoint to its target rather than to the contiguous position it read (W1), passing another author's allocated offset not yet durable (a stale donor's write), which L never applies once it lands
+BOUNDS: WithFreeAdvance = TRUE, WithKeyMove = TRUE, MaxWindows = 0, WithMixedVersion = FALSE, WithDuplicate = FALSE
+
+--- FIND
+    /\ rp[a] + 1 \in durable
+    /\ rp[a] + 1 >= floor
+    /\ cache' = [cache EXCEPT ![a] = @ \cup {rp[a] + 1}]
+--- REPLACE
+\* MUTATION: the checkpoint moves to the target past an offset not yet read.
+    /\ rp[a] + 1 < next
+    /\ rp[a] + 1 >= floor
+    /\ cache' = IF rp[a] + 1 \in durable THEN [cache EXCEPT ![a] = @ \cup {rp[a] + 1}] ELSE cache
+--- END

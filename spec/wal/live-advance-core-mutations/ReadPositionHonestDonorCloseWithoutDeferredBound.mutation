@@ -9,9 +9,10 @@ BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWi
 --- FIND
     /\ pend' = TRUE
     /\ pendGen' = ResolveAbove(gD)
+    /\ cGen' = gD
     /\ UNCHANGED <<walVars, leafVars, epochVars, mInit, windows, oldVars, envVars, armVars>>
 --- REPLACE
 \* MUTATION: the deferred bound waits for the link.
-    /\ UNCHANGED <<pend, pendGen>>
+    /\ UNCHANGED <<pend, pendGen, cGen>>
     /\ UNCHANGED <<walVars, leafVars, epochVars, mInit, windows, oldVars, envVars, armVars>>
 --- END

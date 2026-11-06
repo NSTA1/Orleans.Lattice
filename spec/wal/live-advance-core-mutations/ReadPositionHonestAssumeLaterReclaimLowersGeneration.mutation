@@ -10,9 +10,9 @@ BOUNDS: WithKeyMove = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
 
 --- FIND
     /\ gL' = gD + 1
-    /\ UNCHANGED <<pend, pendGen, moved, dUsed, reclaims, strayReclaims>>
+    /\ UNCHANGED <<pend, pendGen, moved, dUsed, reclaims, strayReclaims, cGen, lw>>
 --- REPLACE
 \* MUTATION: the re-claim sets the loaded generation back to the first one.
     /\ gL' = 1
-    /\ UNCHANGED <<pend, pendGen, moved, dUsed, reclaims, strayReclaims>>
+    /\ UNCHANGED <<pend, pendGen, moved, dUsed, reclaims, strayReclaims, cGen, lw>>
 --- END

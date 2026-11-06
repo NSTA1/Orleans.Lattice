@@ -6,7 +6,7 @@ SUMMARY: an exempt, unlinked L arms: the arm does not require the view to read r
 BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE, WithLatch = TRUE
 
 --- FIND
-LatchAdmitsClaim == ~WithLatch \/ moved \/ (eagerG /\ lat = "proven")
+LatchAdmitsClaim == ~WithLatch \/ moved \/ (eagerG /\ lat = "proven" /\ ~(birthAct /\ BoundPending))
 --- REPLACE
 \* MUTATION: any L not latched may claim.
 LatchAdmitsClaim == ~WithLatch \/ moved \/ lat # "latched"

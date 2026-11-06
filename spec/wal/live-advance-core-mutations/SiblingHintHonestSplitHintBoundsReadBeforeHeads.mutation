@@ -23,7 +23,7 @@ BOUNDS: WithFreeAdvance = TRUE, WithSplitHint = TRUE, WithDuplicate = FALSE, Wit
     /\ SplitViewClear(a)
     /\ rp[a] >= seenP[a]
     /\ rp[a] >= seenU[a]
-    /\ pend => rp[a] >= seenS[a]
+    /\ CloseCarried => rp[a] >= seenS[a]
     /\ \A o \in Offs : o < sh[a] /\ author[o] = a => o \in cache[a]
     /\ sibHint' = sh[a] - 1
     /\ sibRows' = {o \in cache[a] : o < sh[a]}
