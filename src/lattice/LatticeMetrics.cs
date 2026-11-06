@@ -3697,6 +3697,15 @@ public static class LatticeMetrics
     public const string WalReplayPermitsWithheldName = "orleans.lattice.wal.replay.permits_withheld";
 
     /// <summary>
+    /// Metric name for the gauge publishing the replay permits currently in
+    /// circulation - the gate's walked ceiling, its sized ceiling less every
+    /// withheld permit (issue #5877). Declared in <c>BPlusLeafGrain.Activation.cs</c>
+    /// beside the statics it reads; exported here for the dashboard drift guard,
+    /// as <see cref="WalReplayPermitsWithheldName"/> is.
+    /// </summary>
+    public const string WalReplayPermitsEffectiveName = "orleans.lattice.wal.replay.permits_effective";
+
+    /// <summary>
     /// Metric name for the gauge publishing the <b>ceiling</b> the per-silo WAL
     /// replay concurrency gate was sized to, or <c>0</c> before any activation
     /// has sized it (issue #3047).

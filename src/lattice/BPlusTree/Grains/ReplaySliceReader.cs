@@ -238,6 +238,7 @@ internal sealed class ReplaySliceReader
             cancellationToken.ThrowIfCancellationRequested();
 
             IReadOnlyList<CommitLogSliceEntry> slice;
+            var readStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
                 // A bounded filter takes the filtered overload (issue #3565); an
@@ -256,6 +257,11 @@ internal sealed class ReplaySliceReader
                         _budget,
                         cancellationToken);
                 slice = await AwaitProviderReadAsync(read, cancellationToken);
+                // The storage-pressure governor's latency signal (issue #5877):
+                // successful reads only, so a cancelled or faulted read cannot
+                // skew the p99 the governor compares against its baseline.
+                ReplayStoragePressure.RecordSliceRead(
+                    System.Diagnostics.Stopwatch.GetTimestamp() - readStarted);
             }
             catch (Exception ex) when (_budget > 1 && BPlusLeafGrain.IsReadMemoryPressure(ex))
             {
