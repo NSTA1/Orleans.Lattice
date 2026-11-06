@@ -261,7 +261,11 @@ internal sealed partial class BPlusLeafGrain
     /// <param name="withinDrive">
     /// Whether the caller is the starvation drive, before its replay.
     /// </param>
-    internal async Task<bool> TryAdvanceLiveCheckpointAsync(bool withinDrive = false)
+    /// <param name="fetchReports">
+    /// Whether a partition the missing report alone holds may fetch one (#5851, R3): the
+    /// coverage-lag tick only, never a write or the starvation drive.
+    /// </param>
+    internal async Task<bool> TryAdvanceLiveCheckpointAsync(bool withinDrive = false, bool fetchReports = false)
     {
         // One advance at a time: the tick and the starvation drive run on interleaving
         // turns, and an advance spans awaits while it decides on the reused snapshot.
@@ -324,6 +328,25 @@ internal sealed partial class BPlusLeafGrain
                 if (!claimRaised)
                 {
                     hasReport = fence.TryGetPreArmView(p, out reportedBound);
+                    if (!hasReport
+                        && fetchReports
+                        && !withinDrive
+                        && LeafLiveAdvanceCore.IsReportTheOnlyHold(
+                            handOffClear: handOff.Clear,
+                            closeHead: closeHead,
+                            freeTarget: LeafLiveAdvanceCore.FreeTarget(ownHigh, p),
+                            current: GetCurrentCheckpointForPartition(p),
+                            staleLatched: IsPartitionStaleLatched(p))
+                        && await TryFetchReportAsync(fence, p))
+                    {
+                        // #5851 (2), F4: read again from what this fetch recorded, never a
+                        // bound kept from an earlier tick.
+                        hasReport = fence.TryGetPreArmView(p, out reportedBound);
+                        if (hasReport && LeafLiveAdvanceCore.TryFreeAdvance(hasReport, reportedBound, handOff.Clear, closeHead, LeafLiveAdvanceCore.FreeTarget(ownHigh, p), GetCurrentCheckpointForPartition(p), IsPartitionStaleLatched(p)) >= 0)
+                        {
+                            Interlocked.Increment(ref s_reportFetchesUnblocked);
+                        }
+                    }
                 }
 
                 var target = !claimRaised
@@ -615,6 +638,60 @@ internal sealed partial class BPlusLeafGrain
         }
 
         return landed;
+    }
+
+    /// <summary>Set once a shard on an earlier build refused the report fetch (#5851, F5); per activation.</summary>
+    private bool _reportFetchUnsupported;
+
+    private static long s_reportFetchesIssued;
+
+    private static long s_reportFetchesUnblocked;
+
+    /// <summary>How many report fetches leaves have issued, process-wide (#5851, F7); for probes and tests.</summary>
+    internal static long ReportFetchesIssuedForProbe => Interlocked.Read(ref s_reportFetchesIssued);
+
+    /// <summary>How many report fetches unblocked a claimless advance, process-wide (#5851, F7); for probes and tests.</summary>
+    internal static long ReportFetchesUnblockedForProbe => Interlocked.Read(ref s_reportFetchesUnblocked);
+
+    /// <summary>
+    /// Fetches the report a pre-arm append at <paramref name="partition"/> would carry now
+    /// and records it as that append's response would be (#5851 (2), R1-R3), so the
+    /// claimless advance can pass other authors' records an idle leaf was never told of.
+    /// Returns whether a report was recorded. A shard on an earlier build, which does not
+    /// know the call, latches the fetch off for the activation (F5); any other failure is
+    /// logged and leaves the partition unreported for this tick.
+    /// </summary>
+    private async Task<bool> TryFetchReportAsync(LeafAppendEpochFence fence, int partition)
+    {
+        if (_reportFetchUnsupported
+            || state.State.TreeId is not { Length: > 0 } treeId
+            || !fence.TryGetReportReader(partition, out var reader))
+        {
+            return false;
+        }
+
+        Interlocked.Increment(ref s_reportFetchesIssued);
+        try
+        {
+            var bound = await grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{partition}")
+                .ReadLeafReportAsync(reader, CancellationToken.None);
+            fence.OnReportFetched(partition, bound, in reader);
+            return true;
+        }
+        catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
+        {
+            _reportFetchUnsupported = true;
+            return false;
+        }
+        catch (Exception ex)
+        {
+            ResolveLogger()?.LogDebug(
+                ex,
+                "Leaf {LeafId}: could not fetch its report at WAL partition {Partition}; it stays unreported there this tick (#5851).",
+                context.GrainId,
+                partition);
+            return false;
+        }
     }
 
     /// <summary>

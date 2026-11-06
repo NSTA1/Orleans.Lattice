@@ -140,6 +140,24 @@ internal static class LeafLiveAdvanceCore
             : -1L;
 
     /// <summary>
+    /// Whether a missing report is all that holds a claimless advance at a partition
+    /// (#5851 (2), R3): every guard of <see cref="TryFreeAdvance"/> but the report holds -
+    /// no hand-off is open, the partition is not latched stale, the read position is at
+    /// or above every close head and below the target. The target stays
+    /// <paramref name="freeTarget"/>, the leaf's own high (F1).
+    /// </summary>
+    public static bool IsReportTheOnlyHold(
+        bool handOffClear,
+        long closeHead,
+        long freeTarget,
+        long current,
+        bool staleLatched) =>
+        handOffClear
+        && !staleLatched
+        && current >= closeHead - 1
+        && freeTarget > current;
+
+    /// <summary>
     /// The bound a claimless advance that failed only on its reported bound must read to
     /// (#5851, a5e2e2ef's ruling 2), or -1. It is
     /// <paramref name="reportedBound"/> iff the advance had a report, no hand-off is open,

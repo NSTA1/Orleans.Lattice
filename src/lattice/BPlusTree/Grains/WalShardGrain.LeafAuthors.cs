@@ -172,12 +172,23 @@ internal sealed partial class WalShardGrain
             NoteForwardLocked(stamp.LeafId, stamp.Forwarder, 1, stamp.ForwarderTag, offset);
             NoteForwardLocked(stamp.LeafId, stamp.Forwarder2, 2, stamp.ForwarderTag2, offset);
             NoteForwardLocked(stamp.LeafId, stamp.Forwarder3, 3, stamp.ForwarderTag3, offset);
-            authors = _leafAuthors.TryGetValue(stamp.LeafId, out var current) ? current : authors;
         }
 
-        var reported = stamp.Activation == Guid.Empty
-            ? -1
-            : Math.Max(LeafAuthorFloorLocked(stamp.LeafId), authors.ForeignHigh(stamp.Activation, stamp.ReaderTag));
+        var reported = stamp.Activation == Guid.Empty ? -1 : LeafReportLocked(in stamp);
+        return reported;
+    }
+
+    /// <summary>
+    /// The bound a stamped append's response reports to its leaf, but for the shared
+    /// watermark the caller folds in (#5837; #5851, R1): the foreign high of the stamp's
+    /// leaf for its activation and reader tag, never below that leaf's eviction floor, and
+    /// the stale high of every donor close the stamp carries. The append path and
+    /// <see cref="ReadLeafReportAsync"/> both read it here, so a fetched report is the
+    /// report an append in the same turn would carry. Called under <see cref="_stateGate"/>.
+    /// </summary>
+    private long LeafReportLocked(in WalAppendStamp stamp)
+    {
+        var reported = ForeignHighLocked(stamp.LeafId, stamp.Activation, stamp.ReaderTag);
         if (stamp.Close1.IsSet)
         {
             reported = Math.Max(reported, StaleHighLocked(stamp.Close1, stamp.LeafId));
@@ -189,6 +200,23 @@ internal sealed partial class WalShardGrain
         }
 
         return reported;
+    }
+
+    /// <inheritdoc />
+    public Task<long> ReadLeafReportAsync(WalAppendStamp reader, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInternalOrigin(LatticeOperation.Read);
+        EnsureInitialized();
+        if (reader.LeafId == Guid.Empty || reader.Activation == Guid.Empty)
+        {
+            return Task.FromResult(-1L);
+        }
+
+        lock (_stateGate)
+        {
+            return Task.FromResult(Math.Max(_unstampedWatermark, LeafReportLocked(in reader)));
+        }
     }
 
     /// <summary>

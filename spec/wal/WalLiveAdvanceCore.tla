@@ -57,7 +57,7 @@ CONSTANTS MaxWindows, WithMixedVersion, WithGateFlip, WithRestart, WithRecreate,
           WithDuplicate, WithEvict, WithOrphanForward, WithLatch,
           WithBirthProof, WithFwdExclusion, WithTagEvict, WithViewOverlap,
           WithReforward, WithForwardIn, WithEpochOnly, WithEvictAlone, WithSplitCap, WithTransferRefresh,
-          WithOtherLinkRaise, WithKeyFilter
+          WithOtherLinkRaise, WithKeyFilter, WithReportFetch
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
@@ -757,6 +757,26 @@ FreeTarget(a) ==
     /\ ft' = [ft EXCEPT ![a] = Max(mine[a])]
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, sh, sibHint, sibRows, xferVars, svVars, chVars>>
+
+(* FetchReport(a) (#5851 R4; WithReportFetch): a leaf with no own append  *)
+(* in flight fetches, read-only on the tick, the report an append response *)
+(* carries - the foreign high, the carried stale high, the key-filtered    *)
+(* unstamped high - and the allocator head, and takes the head as its free *)
+(* advance's target. FreeCommit then admits the advance only past bounds   *)
+(* the fetch reported, so an idle leaf's pin moves without a write.        *)
+FetchReport(a) ==
+    /\ FreeOn
+    /\ WithReportFetch
+    /\ a \in up
+    /\ \A o \in inflight : author[o] # a
+    /\ next - 1 > rp[a]
+    /\ ReportForeign(a)
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, ReportU)]
+    /\ ReportStale(a)
+    /\ ft' = [ft EXCEPT ![a] = next - 1]
+    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, envVars, moveVars>>
+    /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected>>
+    /\ UNCHANGED <<preArm, startHead, evStart, evFloor, sHi, sh, sibHint, sibRows, xferVars, svVars, chVars>>
 
 FreeCommit(a) ==
     /\ FreeOn
@@ -1582,6 +1602,7 @@ Next ==
     \/ \E a \in Acts : LiveAdvance(a)
     \/ \E a \in Acts : FreeTarget(a)
     \/ \E a \in Acts : FreeCommit(a)
+    \/ \E a \in Acts : FetchReport(a)
     \/ \E a \in Acts : SplitHeads(a)
     \/ \E a \in Acts : SplitView(a)
     \/ \E a \in Acts : SplitCommit(a)
