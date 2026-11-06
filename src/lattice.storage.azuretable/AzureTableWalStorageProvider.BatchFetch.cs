@@ -144,6 +144,13 @@ public sealed partial class AzureTableWalStorageProvider
         }
         finally
         {
+            // Runs on completion, on a fault and when the caller disposes the
+            // enumerator early. The look-ahead fetches run on their own linked
+            // token rather than the caller's, because ending the read must stop
+            // them even when the caller never cancels: an early break or a fault
+            // in an earlier batch would otherwise leave queries running against
+            // the table after the read has returned. Each is then awaited, so no
+            // fetch outlives the read and none faults unobserved.
             fetchCancellation.Cancel();
             while (inFlight.Count > 0)
             {

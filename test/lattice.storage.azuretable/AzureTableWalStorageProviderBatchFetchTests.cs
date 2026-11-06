@@ -169,6 +169,12 @@ public class AzureTableWalStorageProviderBatchFetchTests
             await provider.TrimAsync(TreeId, ShardIndex, random.NextInt64(head / 2), CancellationToken.None);
         }
 
+        // Queries finish out of the order they were issued, so a reader that
+        // consumed batches in completion order would reorder entries. Applied to
+        // the concurrent reads only; the serial read is the reference.
+        var jitter = new Random(seed);
+        Func<TimeSpan> outOfOrder = () => jitter.Next(6) == 0 ? TimeSpan.FromMilliseconds(15) : TimeSpan.Zero;
+
         for (var window = 0; window < 40; window++)
         {
             var from = random.NextInt64(-1, head);
@@ -178,10 +184,12 @@ public class AzureTableWalStorageProviderBatchFetchTests
             var filter = random.Next(3) == 0 ? default : new WalKeyFilter(low, low + "~");
 
             options.ReadBatchFetchConcurrency = 1;
+            table.QueryLatencySource = null;
             var serialFiltered = await ReadFilteredAsync(provider, from, to, max, filter);
             var serialAll = await ReadAllAsync(provider, from, max);
 
             options.ReadBatchFetchConcurrency = random.Next(2, 12);
+            table.QueryLatencySource = outOfOrder;
             var concurrentFiltered = await ReadFilteredAsync(provider, from, to, max, filter);
             var concurrentAll = await ReadAllAsync(provider, from, max);
 

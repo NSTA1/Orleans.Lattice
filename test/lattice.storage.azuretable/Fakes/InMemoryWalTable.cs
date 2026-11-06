@@ -335,6 +335,13 @@ internal sealed class InMemoryWalTable
     /// </summary>
     public TimeSpan QueryLatency { get; set; }
 
+    /// <summary>
+    /// When set, the simulated service time of each query, overriding
+    /// <see cref="QueryLatency"/>. Lets a fixture make queries finish out of the
+    /// order they were issued.
+    /// </summary>
+    public Func<TimeSpan>? QueryLatencySource { get; set; }
+
     private int _queriesInService;
 
     /// <summary>
@@ -362,7 +369,13 @@ internal sealed class InMemoryWalTable
 
     private async Task ServeLatencyAsync()
     {
-        if (QueryLatency <= TimeSpan.Zero)
+        TimeSpan latency;
+        lock (_gate)
+        {
+            latency = QueryLatencySource?.Invoke() ?? QueryLatency;
+        }
+
+        if (latency <= TimeSpan.Zero)
             return;
 
         var inService = Interlocked.Increment(ref _queriesInService);
@@ -373,7 +386,7 @@ internal sealed class InMemoryWalTable
 
         try
         {
-            await Task.Delay(QueryLatency);
+            await Task.Delay(latency);
         }
         finally
         {
