@@ -469,6 +469,8 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private Dictionary<int, long>? HoldBackUncoveredHints(Dictionary<int, long> pending)
     {
+        return null; // DO-NOT-MERGE red proof: BH5
+#pragma warning disable CS0162
         if (_hintedUncoveredPartitions is not { Count: > 0 } marked)
         {
             return null;
