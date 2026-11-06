@@ -1,0 +1,15 @@
+# #5866 G4 (a5e2e2ef, #5866 comments 6667971108 and 6668685415): only the donor's bound ends at
+# L's link witness; the close L carries after its link - the key-moving close's deferred head,
+# with its staleHigh - lasts until L's arm resolves it at the partition.
+MODULE: ReadPositionHonestWitnessEndsDeferredHead
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the link witness also ends the carried key-moving close before L's arm resolves it, so a stale donor's write admitted under the old generation after the link, before L re-claims, is in no bound L reads and L free-advances past it
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE, WithLatch = TRUE, WithOtherLinkRaise = TRUE
+
+--- FIND
+CloseCarried == BoundPending \/ (pend /\ moved)
+--- REPLACE
+\* MUTATION: the witness ends the carried close before the arm.
+CloseCarried == BoundPending \/ (pend /\ moved /\ ~lw)
+--- END

@@ -6,7 +6,7 @@ SUMMARY: #5709's latch as it stands: an unlinked L with its donor's close pendin
 BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE, WithLatch = TRUE
 
 --- FIND
-ExemptPending == pend /\ ~eagerG /\ ~repair
+ExemptPending == BoundPending /\ ~eagerG /\ ~repair
 --- REPLACE
 \* MUTATION: no exemption.
 ExemptPending == FALSE

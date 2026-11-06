@@ -25,14 +25,14 @@ BOUNDS: WithFreeAdvance = TRUE
     /\ rp[a] >= hoClosedAt - 1
     /\ rp[a] >= seenP[a]
     /\ rp[a] >= seenU[a]
-    /\ pend => rp[a] >= seenS[a]
+    /\ CloseCarried => rp[a] >= seenS[a]
     /\ \A o \in inflight : author[o] = a => o > ft[a]
     /\ rp' = [rp EXCEPT ![a] = ft[a]]
 --- REPLACE
     /\ ft[a] > rp[a]
     /\ rp[a] >= seenP[a]
     /\ rp[a] >= seenU[a]
-    /\ pend => rp[a] >= seenS[a]
+    /\ CloseCarried => rp[a] >= seenS[a]
     /\ \A o \in inflight : author[o] # a
 \* MUTATION: the target is taken now, after the view.
     /\ rp' = [rp EXCEPT ![a] = Max(mine[a])]

@@ -1,0 +1,15 @@
+# #5851 K1-K6 (a5e2e2ef, #5851 comment 6668840949): the partition tables recent unstamped
+# records by key; a reader reads the folded floor and the tabled records in its current range,
+# and a reader whose range widened reads the global high for the absorbed span.
+MODULE: ReadPositionHonestUnstampedFilterUsesStaleRange
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a reader whose range has absorbed a span still filters the unstamped high by its range from before the fold (K4), so an unstamped write of a key in the absorbed span is in no bound it reads and it free-advances past it unapplied
+BOUNDS: WithFreeAdvance = TRUE, WithKeyFilter = TRUE, MaxWindows = 0, WithMixedVersion = FALSE, WithDuplicate = FALSE
+
+--- FIND
+ReportU == IF WithKeyFilter /\ ~widened THEN lastU ELSE Max2(lastU, uSpan)
+--- REPLACE
+\* MUTATION: the filter keeps the range from before the fold.
+ReportU == IF WithKeyFilter THEN lastU ELSE Max2(lastU, uSpan)
+--- END

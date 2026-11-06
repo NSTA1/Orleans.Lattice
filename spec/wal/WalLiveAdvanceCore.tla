@@ -56,7 +56,8 @@ CONSTANTS MaxWindows, WithMixedVersion, WithGateFlip, WithRestart, WithRecreate,
           WithSplitHint, WithSplitBirth, WithDonorRestart,
           WithDuplicate, WithEvict, WithOrphanForward, WithLatch,
           WithBirthProof, WithFwdExclusion, WithTagEvict, WithViewOverlap,
-          WithReforward, WithForwardIn, WithEpochOnly, WithEvictAlone
+          WithReforward, WithForwardIn, WithEpochOnly, WithEvictAlone, WithSplitCap, WithTransferRefresh,
+          WithOtherLinkRaise, WithKeyFilter
 
 MaxOff == 3
 Offs == 0..(MaxOff - 1)
@@ -73,10 +74,11 @@ OrphanFwd == "w"
 OrphanFwdOnly == "z"
 FwdD == "q"
 ChainFwd == "c"
+SpanAuthor == "k"
 ChainK == 3
 NoTag == "none"
 Tags == {"n1", "n2"}
-Authors == Acts \cup {Foreign, OldAuthor, Straddler, PreAuthor, StaleDonor, DonorLive, OrphanFwd, OrphanFwdOnly, FwdD, ChainFwd}
+Authors == Acts \cup {Foreign, OldAuthor, Straddler, PreAuthor, StaleDonor, DonorLive, OrphanFwd, OrphanFwdOnly, FwdD, ChainFwd, SpanAuthor}
 MaxGen == 3
 
 Max(S) == CHOOSE x \in S : \A y \in S : y <= x
@@ -105,6 +107,9 @@ VARIABLES
     hoClosedAt,  \* H: the maximum of the heads every close (and the initialisation) recorded
     windows,     \* H: hand-off windows opened so far
     lastU,       \* the partition's unstamped watermark: the highest unstamped offset
+    uSpan,       \* WithKeyFilter: the highest unstamped offset keyed in a span outside L's range (K1's table)
+    spanRecs,    \* WithKeyFilter: the unstamped records keyed in that span
+    widened,     \* WithKeyFilter: L's range has absorbed the span (a fold, merge or restore)
     seenU,       \* the highest unstamped offset reported to each activation
     oldUsed,     \* the 10.2.0 silo has made its unstamped append
     restarted,   \* the WAL shard has restarted
@@ -128,6 +133,9 @@ VARIABLES
     dUsed,        \* the stale donor has made its one write for L's keys
     reclaims,     \* ghost: generation re-claims an arm wrote at the partition
     strayReclaims, \* ghost: generation claims written anywhere but an arm
+    cGen,         \* the generation the donor's close admitted its writes under (WalPendingClose.Generation)
+    lw,           \* the link witness: L's link's raise succeeded and was recorded on L's marker (LinkedGeneration)
+    dClaim,       \* ghost: a claim was taken while the donor's bound on L's marker was pending
     sHi,          \* the WAL shard's staleHigh: the highest offset admitted under the generation a key-moving close raises past
     seenS,        \* the staleHigh reported to each activation
     ft,           \* each activation's fixed free-advance target; -1 none
@@ -135,6 +143,7 @@ VARIABLES
     svTaken,      \* WithViewOverlap: each activation's split has read its marker view
     svOk,         \* that view read initialised and closed
     svHead,       \* the close head that view read
+    capHint,      \* WithSplitCap: the hint the last split's cap fallback handed its sibling; -2 none
     chainUsed,    \* WithReforward: the forward chain through L's stale activation has been made
     fInUsed,      \* WithForwardIn: D's forward into L has been made
     fInRecs,      \* the offsets of D's forwards into L, tagged with L's split
@@ -171,18 +180,18 @@ VARIABLES
 
 walVars == <<next, author, inflight, durable, acked, floor>>
 leafVars == <<up, cache, rp, mine, snapCov, snapRows>>
-epochVars == <<cur, claimed, claimHead, stale, dupUsed>>
+epochVars == <<cur, claimed, claimHead, stale, dupUsed, dClaim>>
 handVars == <<mInit, hoOpen, hoClosedAt, windows>>
 oldVars == <<lastU, seenU, oldUsed, restarted, oldRejected>>
-envVars == <<recreated, reinit, spUsed, phase, hint>>
+envVars == <<recreated, reinit, spUsed, phase, hint, uSpan, spanRecs, widened>>
 fxVars == <<nar, narWho, npend, dur, durWho, fObl, fTag, fBy, snapWho, fwdUsed, fEvStart, fEvFloor>>
 latchVars == <<oblig, lRestart, lat, eagerG, repair, tried, oWin, oHops, birthAct, fxVars>>
 xferVars == <<tRecs, dNarrowed, sDone, dKnown, dResumed, latchVars>>
-svVars == <<svTaken, svOk, svHead>>
+svVars == <<svTaken, svOk, svHead, capHint>>
 chVars == <<chainUsed, fInUsed, fInRecs, sfUsed, eoUsed>>
 freeVars == <<sHi, seenS, ft, sh, sibHint, sibRows, xferVars, svVars, chVars>>
 armVars == <<preArm, seenP, startHead, evStart, evFloor, freeVars>>
-moveVars == <<gD, gL, pend, pendGen, moved, otherMoved, dUsed, reclaims, strayReclaims>>
+moveVars == <<gD, gL, pend, pendGen, moved, otherMoved, dUsed, reclaims, strayReclaims, cGen, lw>>
 
 vars == <<walVars, leafVars, epochVars, handVars, oldVars, envVars, armVars, moveVars>>
 
@@ -196,6 +205,7 @@ TypeOK ==
     /\ up \subseteq Acts
     /\ cache \in [Acts -> SUBSET Offs]
     /\ rp \in [Acts -> -1..(MaxOff - 1)]
+    /\ capHint \in -2..(MaxOff - 1)
     /\ mine \in [Acts -> SUBSET Offs]
     /\ snapCov \in -1..(MaxOff - 1)
     /\ snapRows \subseteq Offs
@@ -209,6 +219,9 @@ TypeOK ==
     /\ hoClosedAt \in 0..MaxOff
     /\ windows \in 0..MaxWindows
     /\ lastU \in -1..(MaxOff - 1)
+    /\ uSpan \in -1..(MaxOff - 1)
+    /\ spanRecs \subseteq Offs
+    /\ widened \in BOOLEAN
     /\ seenU \in [Acts -> -1..(MaxOff - 1)]
     /\ oldUsed \in BOOLEAN
     /\ restarted \in BOOLEAN
@@ -232,6 +245,9 @@ TypeOK ==
     /\ dUsed \in BOOLEAN
     /\ reclaims \in 0..2
     /\ strayReclaims \in 0..2
+    /\ cGen \in 0..MaxGen
+    /\ lw \in BOOLEAN
+    /\ dClaim \in BOOLEAN
     /\ sHi \in -1..(MaxOff - 1)
     /\ seenS \in [Acts -> -1..(MaxOff - 1)]
     /\ ft \in [Acts -> -1..(MaxOff - 1)]
@@ -292,6 +308,7 @@ Init ==
     /\ up = IF WithBulk THEN {} ELSE {"a1"}
     /\ cache = [a \in Acts |-> {}]
     /\ rp = [a \in Acts |-> -1]
+    /\ capHint = -2
     /\ mine = [a \in Acts |-> {}]
     /\ snapCov = -1
     /\ snapRows = {}
@@ -305,6 +322,9 @@ Init ==
     /\ hoClosedAt = 0
     /\ windows = IF WithBulk \/ WithSplitBirth THEN 1 ELSE 0
     /\ lastU = -1
+    /\ uSpan = -1
+    /\ spanRecs = {}
+    /\ widened = FALSE
     /\ seenU = [a \in Acts |-> -1]
     /\ oldUsed = FALSE
     /\ restarted = FALSE
@@ -327,6 +347,9 @@ Init ==
     /\ dUsed = FALSE
     /\ reclaims = 0
     /\ strayReclaims = 0
+    /\ cGen = 0
+    /\ lw = FALSE
+    /\ dClaim = FALSE
     /\ sHi = -1
     /\ seenS = [a \in Acts |-> -1]
     /\ ft = [a \in Acts |-> -1]
@@ -386,7 +409,7 @@ Create ==
         /\ cache' = [cache EXCEPT !["a1"] = held]
         /\ rp' = [rp EXCEPT !["a1"] = r]
     /\ UNCHANGED <<walVars, mine, snapCov, snapRows, epochVars, handVars, oldVars>>
-    /\ UNCHANGED <<recreated, reinit, spUsed, hint>>
+    /\ UNCHANGED <<recreated, reinit, spUsed, hint, uSpan, spanRecs, widened>>
 
 (***************************************************************************)
 (* E's guarantees, as environment steps. Claim(a): a's claim is raised: it *)
@@ -450,10 +473,33 @@ ResolveDeferred ==
     /\ gL' = Max2(gL, pendGen)
     /\ reclaims' = reclaims + (IF pendGen > gL THEN 1 ELSE 0)
     /\ hoClosedAt' = Max2(hoClosedAt, IF FreeOn THEN sHi + 1 ELSE next)
-    /\ UNCHANGED <<gD, pendGen, moved, otherMoved, dUsed, strayReclaims>>
+    /\ UNCHANGED <<gD, pendGen, moved, otherMoved, dUsed, strayReclaims, cGen, lw>>
 
-(* A claim of L's under the latch.                                         *)
-LatchAdmitsClaim == ~WithLatch \/ moved \/ (eagerG /\ lat = "proven")
+(* The donor's bound on L's marker (rule S) is pending until L's own link   *)
+(* is witnessed: the link's raise succeeded and was recorded on L's marker *)
+(* (LinkWitness; #5866 B2). No raise of the shard's routing generation by  *)
+(* another split's link resolves it (OtherLinkRaise). The close L carries, *)
+(* whose staleHigh bounds its advance: the donor's bound before the link,  *)
+(* then the key-moving close's deferred head until L's arm resolves it.    *)
+BoundPending == pend /\ ~moved /\ ~lw
+CloseCarried == BoundPending \/ (pend /\ moved)
+
+(* The unstamped watermark a response reports (#5851 K1-K6; WithKeyFilter). *)
+(* The partition tables recent unstamped records by key; a reader passes  *)
+(* its current range in the same turn and reads the folded floor and the  *)
+(* tabled records keyed in that range (K1, K2). Every unstamped record    *)
+(* but the span's is keyed in L's original range (lastU); a reader whose  *)
+(* range has absorbed the span reads its widened range's high (K4).       *)
+ReportU == IF WithKeyFilter /\ ~widened THEN lastU ELSE Max2(lastU, uSpan)
+
+(* Whether L owns the record's key: a span record only once L's range has *)
+(* absorbed the span.                                                      *)
+OwnedByL(o) == o \in spanRecs => widened
+
+(* A claim of L's under the latch. The birth proof (P1) admits one only    *)
+(* while the donor's bound is not pending: with it pending a proven birth  *)
+(* activation is deferred, never claiming before its own link (#5866 B2).  *)
+LatchAdmitsClaim == ~WithLatch \/ moved \/ (eagerG /\ lat = "proven" /\ ~(birthAct /\ BoundPending))
 
 
 Claim(a) ==
@@ -462,6 +508,7 @@ Claim(a) ==
     /\ ~claimed[a]
     /\ claimed' = [claimed EXCEPT ![a] = TRUE]
     /\ claimHead' = [claimHead EXCEPT ![a] = next]
+    /\ dClaim' = (dClaim \/ (WithLatch /\ BoundPending))
     /\ cur' = a
     /\ stale' = IF cur \in Acts THEN stale \cup {cur} ELSE stale
     /\ ReportForeign(a)
@@ -491,7 +538,7 @@ OwnAlloc(a) ==
     /\ next' = next + 1
     /\ author' = [author EXCEPT ![next] = a]
     /\ inflight' = inflight \cup {next}
-    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, ReportU)]
     /\ ReportForeign(a)
     /\ ReportStale(a)
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars>>
@@ -503,7 +550,14 @@ OwnAlloc(a) ==
 (* the routing generation it carries (the current one, at or above the    *)
 (* loaded one, so admitted without a claim: C1). It raises only L's       *)
 (* leaf-scoped watermark, never the shared one, and its response reports  *)
-(* the shared watermark as a stamped one does.                             *)
+(* the shared watermark as a stamped one does. An unlinked L pre-arms in  *)
+(* every latch state: production's deferred sibling (#5851 D1-D4: a       *)
+(* pending donor close or an open split token on its marker, the pre-arm  *)
+(* gate, no orphan repair) stamps a routed write PreArm and never claims  *)
+(* (Claim's LatchAdmitsClaim); a latched or repaired one appends          *)
+(* unstamped, which reports itself to every reader, so allowing PreArm    *)
+(* there too only over-approximates. An unrouted write is never PreArm    *)
+(* (C4; UnroutedAlloc).                                                    *)
 PreArmAlloc(a) ==
     /\ WithPreArm
     /\ a \in up
@@ -514,7 +568,7 @@ PreArmAlloc(a) ==
     /\ author' = [author EXCEPT ![next] = a]
     /\ inflight' = inflight \cup {next}
     /\ preArm' = preArm \cup {next}
-    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, ReportU)]
     /\ IF FreeOn THEN ReportForeign(a) ELSE UNCHANGED seenP
     /\ ReportStale(a)
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars>>
@@ -713,7 +767,7 @@ FreeCommit(a) ==
     /\ rp[a] >= hoClosedAt - 1
     /\ rp[a] >= seenP[a]
     /\ rp[a] >= seenU[a]
-    /\ pend => rp[a] >= seenS[a]
+    /\ CloseCarried => rp[a] >= seenS[a]
     /\ \A o \in inflight : author[o] = a => o > ft[a]
     /\ rp' = [rp EXCEPT ![a] = ft[a]]
     /\ ft' = [ft EXCEPT ![a] = -1]
@@ -739,7 +793,7 @@ SplitHeads(a) ==
     /\ \A b \in Acts : sh[b] = -1
     /\ sh' = [sh EXCEPT ![a] = next]
     /\ ReportForeign(a)
-    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, ReportU)]
     /\ ReportStale(a)
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, envVars, moveVars>>
     /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected>>
@@ -759,12 +813,38 @@ SplitView(a) ==
     /\ svOk' = [svOk EXCEPT ![a] = mInit /\ ~hoOpen]
     /\ svHead' = [svHead EXCEPT ![a] = hoClosedAt]
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
-    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows, xferVars, chVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows, xferVars, chVars, capHint>>
 
 SplitViewClear(a) ==
     IF WithViewOverlap
     THEN svTaken[a] /\ svOk[a] /\ rp[a] >= svHead[a] - 1
     ELSE mInit /\ ~hoOpen /\ rp[a] >= hoClosedAt - 1
+
+(* SplitCap(a) (WithSplitCap; #5851 O2c): the split's fallback when the  *)
+(* hint guard fails. After the drain of the donor's own appends below the  *)
+(* heads, the donor hands the sibling its read frontier as the hint and    *)
+(* its rows at or below it (production's ShardRootGrain.CapAtReadFrontier). *)
+(* A free advance just before the narrow raises the frontier it reads.     *)
+SplitGuard(a) ==
+    /\ SplitViewClear(a)
+    /\ rp[a] >= seenP[a]
+    /\ rp[a] >= seenU[a]
+    /\ CloseCarried => rp[a] >= seenS[a]
+
+SplitCap(a) ==
+    /\ FreeOn
+    /\ WithSplitCap
+    /\ a \in up
+    /\ sh[a] # -1
+    /\ ~SplitGuard(a)
+    /\ \A o \in Offs : author[o] = a /\ o < sh[a] => o \in cache[a]
+    /\ sibHint' = rp[a]
+    /\ sibRows' = {o \in cache[a] : o <= rp[a]}
+    /\ capHint' = rp[a]
+    /\ sh' = [sh EXCEPT ![a] = -1]
+    /\ svTaken' = [svTaken EXCEPT ![a] = FALSE]
+    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, xferVars, svOk, svHead, chVars>>
 
 SplitCommit(a) ==
     /\ FreeOn
@@ -773,7 +853,7 @@ SplitCommit(a) ==
     /\ SplitViewClear(a)
     /\ rp[a] >= seenP[a]
     /\ rp[a] >= seenU[a]
-    /\ pend => rp[a] >= seenS[a]
+    /\ CloseCarried => rp[a] >= seenS[a]
     /\ \A o \in Offs : o < sh[a] /\ author[o] = a => o \in cache[a]
     /\ sibHint' = sh[a] - 1
     /\ sibRows' = {o \in cache[a] : o < sh[a]}
@@ -781,6 +861,7 @@ SplitCommit(a) ==
     /\ svTaken' = [svTaken EXCEPT ![a] = FALSE]
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, xferVars, svOk, svHead, chVars>>
+    /\ UNCHANGED capHint
 
 (***************************************************************************)
 (* A split-born receiver (#5837, WithSplitBirth). L is born by a split,   *)
@@ -837,7 +918,7 @@ LinkRestart ==
 (* as reachable), and a proven L under the eager gate (its first stamped   *)
 (* write claims once proven).                                              *)
 (***************************************************************************)
-ExemptPending == pend /\ ~eagerG /\ ~repair
+ExemptPending == BoundPending /\ ~eagerG /\ ~repair
 
 ProveReach ==
     /\ FreeOn
@@ -875,7 +956,7 @@ Reactivate ==
     /\ lat' = "undecided"
     /\ claimed' = [claimed EXCEPT !["a1"] = FALSE]
     /\ cur' = IF cur = "a1" THEN NoAct ELSE cur
-    /\ UNCHANGED <<walVars, leafVars, claimHead, stale, dupUsed, handVars, oldVars, envVars, moveVars>>
+    /\ UNCHANGED <<walVars, leafVars, claimHead, stale, dupUsed, dClaim, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows, svVars, chVars>>
     /\ UNCHANGED <<tRecs, dNarrowed, sDone, dKnown, dResumed, oblig, lRestart, eagerG, repair, tried, oWin, oHops, fxVars>>
 
@@ -934,8 +1015,9 @@ DonorClose ==
     /\ hoClosedAt' = Max2(hoClosedAt, Max({-1} \cup DonorCloseCovers) + 1)
     /\ pend' = TRUE
     /\ pendGen' = ResolveAbove(gD)
+    /\ cGen' = gD
     /\ UNCHANGED <<walVars, leafVars, epochVars, mInit, windows, oldVars, envVars, armVars>>
-    /\ UNCHANGED <<gD, gL, moved, otherMoved, dUsed, reclaims, strayReclaims>>
+    /\ UNCHANGED <<gD, gL, moved, otherMoved, dUsed, reclaims, strayReclaims, lw>>
 
 (* DonorRestart (WithDonorRestart): the donor restarts after taking the    *)
 (* heads and before closing, and a new activation resumes the split from   *)
@@ -969,7 +1051,7 @@ Straggler(a) ==
     /\ inflight' = inflight \cup {next}
     /\ tRecs' = tRecs \cup {next}
     /\ cache' = [cache EXCEPT ![a] = @ \cup {o \in durable : author[o] = DonorLive}]
-    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, ReportU)]
     /\ ReportForeign(a)
     /\ ReportStale(a)
     /\ UNCHANGED <<durable, acked, floor, up, rp, mine, snapCov, snapRows, epochVars, handVars>>
@@ -1156,7 +1238,7 @@ ForwardIntoL(a) ==
     /\ inflight' = inflight \cup {next}
     /\ fInRecs' = fInRecs \cup {next}
     /\ sHi' = IF StaleHighCountsTag("L") THEN next ELSE sHi
-    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, lastU)]
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, ReportU)]
     /\ ReportForeign(a)
     /\ ReportStale(a)
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, envVars, moveVars>>
@@ -1213,7 +1295,7 @@ Duplicate ==
     /\ up' = up \cup {"a2"}
     /\ cache' = [cache EXCEPT !["a2"] = snapRows]
     /\ rp' = [rp EXCEPT !["a2"] = snapCov]
-    /\ UNCHANGED <<walVars, mine, snapCov, snapRows, cur, claimed, claimHead, stale, handVars, oldVars, envVars>>
+    /\ UNCHANGED <<walVars, mine, snapCov, snapRows, cur, claimed, claimHead, stale, dClaim, handVars, oldVars, envVars>>
 
 (* Restart (WithRestart): the WAL shard restarts, a reactivation or a      *)
 (* move's cutover. Its watermark is in memory, so it restarts at the       *)
@@ -1261,7 +1343,18 @@ Evict ==
 (* of them as PreArm, admitted while the loaded generation is not above   *)
 (* its stamp. UnroutedAlloc: the stale donor's write for L's keys with no *)
 (* routing stamp, appended truly unstamped and so raising the shared      *)
-(* watermark (C4). Either is the donor's one write.                       *)
+(* watermark (C4). Either is the donor's one write. The WAL counts a stale *)
+(* routed write in staleHigh whatever generation admitted it - the one    *)
+(* the close admitted, or a later one another link raised to before this  *)
+(* split's link (OtherLinkRaise; #5866 B1) - never only generations at  *)
+(* or below the close's admitted one (cGen).                              *)
+(* OtherLinkRaise (WithOtherLinkRaise): after the donor's close and      *)
+(* before L's link, another split's link raises the shard root's routing  *)
+(* generation (L1). The stale donor's routed write is then admitted under *)
+(* that raised generation, above cGen, and the donor's bound on L's       *)
+(* marker stays pending (#5866 B2). LinkWitness: after L's own link's     *)
+(* raise succeeded, the shard root records it on L's marker; only that    *)
+(* resolves the bound (BoundPending).                                     *)
 (***************************************************************************)
 KeyMove ==
     /\ WithKeyMove
@@ -1272,7 +1365,7 @@ KeyMove ==
     /\ pend' = TRUE
     /\ pendGen' = gD + 1
     /\ WithSplitBirth => ~hoOpen /\ LinkDriven
-    /\ UNCHANGED <<gL, otherMoved, dUsed, reclaims, strayReclaims>>
+    /\ UNCHANGED <<gL, otherMoved, dUsed, reclaims, strayReclaims, cGen, lw>>
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, armVars>>
 
 OtherReceiverArm ==
@@ -1284,8 +1377,58 @@ OtherReceiverArm ==
     /\ otherMoved' = TRUE
     /\ gD' = gD + 1
     /\ gL' = gD + 1
-    /\ UNCHANGED <<pend, pendGen, moved, dUsed, reclaims, strayReclaims>>
+    /\ UNCHANGED <<pend, pendGen, moved, dUsed, reclaims, strayReclaims, cGen, lw>>
     /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, armVars>>
+
+OtherLinkRaise ==
+    /\ WithOtherLinkRaise
+    /\ WithSplitBirth
+    /\ pend
+    /\ ~moved
+    /\ ~hoOpen
+    /\ gD = cGen
+    /\ gD + 1 <= MaxGen
+    /\ gD' = gD + 1
+    /\ UNCHANGED <<gL, pend, pendGen, moved, otherMoved, dUsed, reclaims, strayReclaims, cGen, lw>>
+    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, armVars>>
+
+LinkWitness ==
+    /\ WithOtherLinkRaise
+    /\ moved
+    /\ ~lw
+    /\ lw' = TRUE
+    /\ UNCHANGED <<gD, gL, pend, pendGen, moved, otherMoved, dUsed, reclaims, strayReclaims, cGen>>
+    /\ UNCHANGED <<walVars, leafVars, epochVars, handVars, oldVars, envVars, armVars>>
+
+(***************************************************************************)
+(* A key-range-filtered unstamped high (#5851 K1-K6, a5e2e2ef's #5851      *)
+(* comment 6668840949; WithKeyFilter). SpanUnstampedAlloc: an unstamped   *)
+(* write - a latched or orphaned author's, a C4 unrouted one - of a key in *)
+(* a span outside L's range, tabled by key (K1). Widen: L's range absorbs  *)
+(* the span (a fold, merge or restore): the widening path drains the      *)
+(* span's appends in flight and hands L every applied record of it (K4).  *)
+(***************************************************************************)
+SpanUnstampedAlloc ==
+    /\ WithKeyFilter
+    /\ spanRecs = {}
+    /\ next < MaxOff
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = SpanAuthor]
+    /\ inflight' = inflight \cup {next}
+    /\ uSpan' = next
+    /\ spanRecs' = spanRecs \cup {next}
+    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, oldVars, recreated, reinit, spUsed, phase, hint, widened>>
+    /\ UNCHANGED <<armVars, moveVars>>
+
+Widen ==
+    /\ WithKeyFilter
+    /\ ~widened
+    /\ \A o \in inflight : o \notin spanRecs
+    /\ widened' = TRUE
+    /\ cache' = [b \in Acts |-> cache[b] \cup (durable \cap spanRecs)]
+    /\ snapRows' = snapRows \cup (durable \cap spanRecs)
+    /\ UNCHANGED <<walVars, up, rp, mine, snapCov, epochVars, handVars, oldVars, recreated, reinit, spUsed, phase, hint, uSpan, spanRecs>>
+    /\ UNCHANGED <<armVars, moveVars>>
 
 StaleRouteAlloc ==
     /\ WithKeyMove
@@ -1299,7 +1442,7 @@ StaleRouteAlloc ==
     /\ inflight' = inflight \cup {next}
     /\ sHi' = IF FreeOn THEN next ELSE sHi
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, oldVars, envVars>>
-    /\ UNCHANGED <<gD, gL, pend, pendGen, moved, otherMoved, reclaims, strayReclaims>>
+    /\ UNCHANGED <<gD, gL, pend, pendGen, moved, otherMoved, reclaims, strayReclaims, cGen, lw>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, seenS, ft, sh, sibHint, sibRows, xferVars, svVars, chVars>>
 
 UnroutedAlloc ==
@@ -1314,7 +1457,7 @@ UnroutedAlloc ==
     /\ lastU' = next
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, envVars>>
     /\ UNCHANGED <<seenU, oldUsed, restarted, oldRejected>>
-    /\ UNCHANGED <<gD, gL, pend, pendGen, moved, otherMoved, reclaims, strayReclaims, armVars>>
+    /\ UNCHANGED <<gD, gL, pend, pendGen, moved, otherMoved, reclaims, strayReclaims, cGen, lw, armVars>>
 
 (* StaleEpochOnlyAlloc (WithEpochOnly; the staleHigh obligation carried   *)
 (* from #5841 into #5837): a stale duplicate of the donor, under a token  *)
@@ -1339,6 +1482,31 @@ StaleEpochOnlyAlloc ==
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, oldVars, envVars, moveVars>>
     /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, seenS, ft, sh, sibHint, sibRows, xferVars, svVars>>
     /\ UNCHANGED <<chainUsed, fInUsed, fInRecs, sfUsed>>
+
+(* StaleRefreshAlloc (WithTransferRefresh; #5851 F1, a5e2e2ef's #5851   *)
+(* comment 6665922210): the stale donor's transfer, refused as stale     *)
+(* after L re-claimed the raised generation, is refreshed at the current *)
+(* generation and re-admitted, which places it above every staleHigh     *)
+(* bound. It is refreshed only if a descent for the batch's keys - its   *)
+(* min and max - still reaches the donor, which fails once the           *)
+(* key-moving close has moved them; then the write is forwarded.         *)
+RefreshReaches == ~moved
+
+StaleRefreshAlloc ==
+    /\ WithKeyMove
+    /\ WithTransferRefresh
+    /\ moved \/ WithSplitBirth
+    /\ ~dUsed
+    /\ next < MaxOff
+    /\ 1 < gL
+    /\ RefreshReaches
+    /\ dUsed' = TRUE
+    /\ next' = next + 1
+    /\ author' = [author EXCEPT ![next] = StaleDonor]
+    /\ inflight' = inflight \cup {next}
+    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, oldVars, envVars>>
+    /\ UNCHANGED <<gD, gL, pend, pendGen, moved, otherMoved, reclaims, strayReclaims, cGen, lw>>
+    /\ UNCHANGED <<preArm, seenP, startHead, evStart, evFloor, sHi, seenS, ft, sh, sibHint, sibRows, xferVars, svVars, chVars>>
 
 (***************************************************************************)
 (* The purge, H's AbsentMarkerHolds and R's guarantees, as environment    *)
@@ -1368,8 +1536,8 @@ Recreate ==
     /\ hoOpen' = FALSE
     /\ hoClosedAt' = 0
     /\ cur' = NoAct
-    /\ UNCHANGED <<walVars, leafVars, claimed, claimHead, stale, dupUsed, windows, oldVars>>
-    /\ UNCHANGED <<reinit, spUsed, phase, hint>>
+    /\ UNCHANGED <<walVars, leafVars, claimed, claimHead, stale, dupUsed, dClaim, windows, oldVars>>
+    /\ UNCHANGED <<reinit, spUsed, phase, hint, uSpan, spanRecs, widened>>
 
 StraddlerAlloc ==
     /\ UNCHANGED <<armVars, moveVars>>
@@ -1382,7 +1550,7 @@ StraddlerAlloc ==
     /\ author' = [author EXCEPT ![next] = Straddler]
     /\ inflight' = inflight \cup {next}
     /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, oldVars>>
-    /\ UNCHANGED <<recreated, reinit, phase, hint>>
+    /\ UNCHANGED <<recreated, reinit, phase, hint, uSpan, spanRecs, widened>>
 
 MarkInit ==
     /\ UNCHANGED <<armVars, moveVars>>
@@ -1392,7 +1560,7 @@ MarkInit ==
     /\ \E h \in HeadsAbove({Foreign, Straddler}) : hoClosedAt' = Max2(hoClosedAt, h)
     /\ reinit' = TRUE
     /\ UNCHANGED <<walVars, leafVars, epochVars, hoOpen, windows, oldVars>>
-    /\ UNCHANGED <<recreated, spUsed, phase, hint>>
+    /\ UNCHANGED <<recreated, spUsed, phase, hint, uSpan, spanRecs, widened>>
 
 (* A behaviour may stop anywhere: this is a safety model.                  *)
 Stutter == UNCHANGED vars
@@ -1417,6 +1585,7 @@ Next ==
     \/ \E a \in Acts : SplitHeads(a)
     \/ \E a \in Acts : SplitView(a)
     \/ \E a \in Acts : SplitCommit(a)
+    \/ \E a \in Acts : SplitCap(a)
     \/ DonorAlloc
     \/ DonorNarrow
     \/ DonorClose
@@ -1443,9 +1612,14 @@ Next ==
     \/ Evict
     \/ KeyMove
     \/ OtherReceiverArm
+    \/ OtherLinkRaise
+    \/ LinkWitness
+    \/ SpanUnstampedAlloc
+    \/ Widen
     \/ StaleRouteAlloc
     \/ UnroutedAlloc
     \/ StaleEpochOnlyAlloc
+    \/ StaleRefreshAlloc
     \/ Recreate
     \/ StraddlerAlloc
     \/ MarkInit
@@ -1474,7 +1648,7 @@ ReplayNeeded(a) ==
     \/ (claimed[a] \/ FreeOn) /\ (IF WithPreArm THEN rp[a] < seenP[a] ELSE rp[a] < claimHead[a] - 1)
     \/ rp[a] < hoClosedAt - 1
     \/ rp[a] < seenU[a]
-    \/ FreeOn /\ pend /\ rp[a] < seenS[a]
+    \/ FreeOn /\ CloseCarried /\ rp[a] < seenS[a]
 
 (* ArmTrigger(a) (#5833): under the lazy arm a leaf arms only when it     *)
 (* needs a live advance - its pin holds the WAL floor, i.e. an own durable *)
@@ -1517,7 +1691,7 @@ LiveSpec == Spec /\ Fairness
 (* not hold. Unacknowledged entries count: a WAL reader applies them, so  *)
 (* an owner that skipped one would diverge from its replicas and views.   *)
 ReadPositionHonest ==
-    \A a \in up : \A o \in durable : o <= rp[a] /\ author[o] # FwdD => o \in cache[a]
+    \A a \in up : \A o \in durable : o <= rp[a] /\ author[o] # FwdD /\ OwnedByL(o) => o \in cache[a]
 
 (* A forward of a key L's narrow moved (#5837, X1-X4). Whether L still owns *)
 (* the key: unless the narrow that moved it is durable with its obligation.*)
@@ -1558,7 +1732,7 @@ NarrowObligated == dNarrowed => oblig
 (* never takes an epoch - except its birth activation, proven at its birth *)
 (* while its window was open (P1), which under the eager gate claims at    *)
 (* its first stamped write, as today - and orphan repair always latches it.*)
-UnlinkedNeverClaims == WithLatch => \A a \in Acts : claimed[a] => moved \/ (birthAct /\ a = "a1")
+UnlinkedNeverClaims == WithLatch => (\A a \in Acts : claimed[a] => moved \/ (birthAct /\ a = "a1")) /\ ~dClaim
 
 RepairLatches == WithLatch => (repair /\ tried /\ ~moved => lat = "latched")
 
@@ -1585,12 +1759,12 @@ StaleHighExcludesReceiverTag == sHi \notin fInRecs
 
 (* The shared snapshot never claims coverage of a durable entry it lacks. *)
 SnapshotHonest ==
-    \A o \in durable : o <= snapCov /\ author[o] # FwdD => o \in snapRows
+    \A o \in durable : o <= snapCov /\ author[o] # FwdD /\ OwnedByL(o) => o \in snapRows
 
 (* The GC never trims an acknowledged append the snapshot lacks, whoever  *)
 (* appended it.                                                            *)
 NoTrimPastAcked ==
-    \A o \in acked : o < floor /\ (author[o] # FwdD \/ FwdOwnedByL(o)) => o \in snapRows
+    \A o \in acked : o < floor /\ (author[o] # FwdD \/ FwdOwnedByL(o)) /\ OwnedByL(o) => o \in snapRows
 
 (* An unstamped append - a 10.2.0 silo's, or any while the gate is        *)
 (* closed - is never rejected.                                             *)

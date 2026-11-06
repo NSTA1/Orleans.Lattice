@@ -7,11 +7,11 @@ PERTURBS: FreeCommit
 BOUNDS: WithFreeAdvance = TRUE
 
 --- FIND
-    /\ pend => rp[a] >= seenS[a]
+    /\ CloseCarried => rp[a] >= seenS[a]
     /\ \A o \in inflight : author[o] = a => o > ft[a]
     /\ rp' = [rp EXCEPT ![a] = ft[a]]
 --- REPLACE
-    /\ pend => rp[a] >= seenS[a]
+    /\ CloseCarried => rp[a] >= seenS[a]
 \* MUTATION: own appends below the target need not be applied.
     /\ rp' = [rp EXCEPT ![a] = ft[a]]
 --- END

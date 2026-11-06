@@ -1,0 +1,20 @@
+# #5866 B2 (a5e2e2ef, #5866 comments 6667971108 and 6668005024): the donor's bound on a
+# sibling's marker resolves only on a witness of that sibling's own link (LinkedGeneration,
+# written after its link's raise succeeded), never on a raise of the shard's routing generation,
+# which L1 makes for any link in the shard (HandOffMarkerCore.CollectPendingDonorBounds).
+MODULE: ReadPositionHonestLinkWitnessWithoutOwnRaise
+TARGET: ReadPositionHonest
+CLASS: Invariant
+PERTURBS: LinkWitness
+SUMMARY: the link witness is recorded without L's own link's raise (a failed raise after the link was recorded), so L's bound resolves while the stale donor's route is unfenced and L free-advances past its write
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE, WithLatch = TRUE, WithOtherLinkRaise = TRUE
+
+--- FIND
+    /\ moved
+    /\ ~lw
+    /\ lw' = TRUE
+--- REPLACE
+\* MUTATION: the witness does not wait for L's own link and raise.
+    /\ ~lw
+    /\ lw' = TRUE
+--- END

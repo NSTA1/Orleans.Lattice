@@ -1,0 +1,19 @@
+# #5851 K1-K6 (a5e2e2ef, #5851 comment 6668840949): the partition tables recent unstamped
+# records by key; a reader reads the folded floor and the tabled records in its current range,
+# and a reader whose range widened reads the global high for the absorbed span.
+MODULE: ReadPositionHonestWidenWithoutDrain
+TARGET: ReadPositionHonest
+CLASS: Invariant
+PERTURBS: Widen
+SUMMARY: the widening path does not drain the absorbed span's unstamped writes in flight (K4's hand-off), so one that L had passed while the key was not its own becomes L's, durable below its read position and never applied
+BOUNDS: WithFreeAdvance = TRUE, WithKeyFilter = TRUE, MaxWindows = 0, WithMixedVersion = FALSE, WithDuplicate = FALSE
+
+--- FIND
+    /\ ~widened
+    /\ \A o \in inflight : o \notin spanRecs
+    /\ widened' = TRUE
+--- REPLACE
+\* MUTATION: the widening does not drain the span's appends in flight.
+    /\ ~widened
+    /\ widened' = TRUE
+--- END

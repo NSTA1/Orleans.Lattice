@@ -1,0 +1,17 @@
+# #5851 O2c (a5e2e2ef, #5851 comment 6665050221): the split's cap hands the sibling the
+# donor's committed read frontier, never more, when the hint guard fails.
+MODULE: SiblingHintHonestSplitCapAboveFrontier
+TARGET: SiblingHintHonest
+CLASS: Invariant
+SUMMARY: the cap hands the sibling the heads as its hint, as D4 would, though the hint guard failed, so records between the donor's frontier and the heads are not in the rows
+PERTURBS: SplitCap
+BOUNDS: WithMixedVersion = FALSE, WithFreeAdvance = TRUE, WithSplitHint = TRUE, WithDuplicate = FALSE, WithViewOverlap = TRUE, WithSplitCap = TRUE
+
+--- FIND
+    /\ sibHint' = rp[a]
+    /\ sibRows' = {o \in cache[a] : o <= rp[a]}
+--- REPLACE
+\* MUTATION: the cap reads the heads, not the committed frontier.
+    /\ sibHint' = sh[a] - 1
+    /\ sibRows' = {o \in cache[a] : o < sh[a]}
+--- END

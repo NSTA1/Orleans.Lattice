@@ -7,9 +7,9 @@
   "counts": {
     "invariants": 18,
     "properties": 2,
-    "actions": 52,
-    "mutations": 116,
-    "behaviourRows": 70,
+    "actions": 58,
+    "mutations": 135,
+    "behaviourRows": 76,
     "distinctStates": 2021047
   },
   "variants": {
@@ -98,7 +98,13 @@
       "distinctStates": 1032584
     },
     "FreeSplitView": {
-      "distinctStates": 512628
+      "distinctStates": 1159405
+    },
+    "FreeOtherLinkRaise": {
+      "distinctStates": 1056232
+    },
+    "FreeKeyFilter": {
+      "distinctStates": 8791
     },
     "FreeEpochOnly": {
       "distinctStates": 712124
