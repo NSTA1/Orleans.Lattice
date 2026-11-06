@@ -171,7 +171,7 @@ public partial class BPlusLeafGrainTests
     [NonParallelizable]
     public async Task Activation_latches_the_service_controller_opt_in_on_first_gate_sizing(bool enabled)
     {
-        Assert.That(new LatticeOptions().WalReplayServiceRateControllerEnabled, Is.False);
+        Assert.That(new LatticeOptions().WalReplayServiceRateControllerEnabled, Is.True);
         BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
         try
         {

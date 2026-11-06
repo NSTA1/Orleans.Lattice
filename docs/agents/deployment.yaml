@@ -2290,7 +2290,7 @@ configuration_schema:
         source: "src/lattice/BPlusTree/LatticeOptions.cs#LatticeOptions.ShardHealingBackpressureOpsPerSecond"
       - name: "WalReplayServiceRateControllerEnabled"
         type: "bool"
-        default: "false"
+        default: "true"
         source: "src/lattice/BPlusTree/LatticeOptions.cs#LatticeOptions.WalReplayServiceRateControllerEnabled"
   - type: "LatticeReplicationApiGrpcOptions"
     package: "Orleans.Lattice.Api.Replication.Grpc"

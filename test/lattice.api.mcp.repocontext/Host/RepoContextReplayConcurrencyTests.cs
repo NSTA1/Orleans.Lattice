@@ -33,18 +33,18 @@ public sealed class RepoContextReplayConcurrencyTests
     }
 
     [Test]
-    public void The_host_default_defers_to_the_library_rather_than_asserting_a_quota()
+    public void The_host_default_pins_the_cpu_derived_ceiling_rather_than_the_library_default()
         => Assert.Multiple(() =>
         {
             Assert.That(
                 RepoContextReplayConcurrency.DefaultMaxConcurrentReplays,
-                Is.EqualTo(LatticeOptions.DefaultWalMaterialiserMaxConcurrentReplays),
-                "this wiring adds a capability, not an opinion: a host default other than the "
-                + "library's would assert a CPU quota the host cannot actually observe");
+                Is.Not.EqualTo(LatticeOptions.DefaultWalMaterialiserMaxConcurrentReplays),
+                "the library default of 32 is sized for remote WAL stores; this host's store "
+                + "serialises writes, where more permits only lengthen holds (issues #3921, #5877)");
             Assert.That(
                 RepoContextReplayConcurrency.DefaultMaxConcurrentReplays,
                 Is.Zero,
-                "zero is what the library reads as 'unset', so an un-opted-in deployment is unaffected");
+                "zero selects the library's CPU-derived ceiling, without asserting a quota the host cannot observe");
         });
 
     [Test]
@@ -182,7 +182,7 @@ public sealed class RepoContextReplayConcurrencyTests
     }
 
     [Test]
-    public void An_un_opted_in_host_leaves_the_library_default_in_place()
+    public void An_un_opted_in_host_pins_the_cpu_derived_ceiling()
     {
         var silo = new FakeSiloBuilder();
         silo.ConfigureRepoContextReplayConcurrency(Configuration(null));
@@ -191,8 +191,8 @@ public sealed class RepoContextReplayConcurrencyTests
 
         Assert.That(
             monitor.Get(string.Empty).WalMaterialiserMaxConcurrentReplays,
-            Is.EqualTo(LatticeOptions.DefaultWalMaterialiserMaxConcurrentReplays),
-            "wiring this class in must be a no-op for every deployment that has not set the variable");
+            Is.Zero,
+            "a deployment that has not set the variable keeps the CPU-derived ceiling, not the library's 32");
     }
 
     /// <summary>A minimal <see cref="ISiloBuilder"/> that exposes only its service collection.</summary>

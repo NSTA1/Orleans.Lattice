@@ -2367,14 +2367,20 @@ public class LatticeOptions
     /// replays run at once so a reactivation storm degrades into a queue rather
     /// than a thread-pool stampede; replays release the permit as soon as the
     /// tail is drained. Defaults to
-    /// <see cref="DefaultWalMaterialiserMaxConcurrentReplays"/> (<c>0</c>),
-    /// which resolves at runtime to the lesser of
-    /// <see cref="Environment.ProcessorCount"/> and the CPU grant the
-    /// container's cgroup actually enforces, so a host that raises
+    /// <see cref="DefaultWalMaterialiserMaxConcurrentReplays"/> (<c>32</c>,
+    /// issue #5877). A cold replay against a remote WAL store spends most of its
+    /// hold waiting on storage round trips rather than CPU, so a ceiling sized
+    /// from the CPU grant left a cold-restarting silo replaying a handful of
+    /// leaves at a time while thousands queued. The default is paired with
+    /// <see cref="WalReplayServiceRateControllerEnabled"/>, on by default, which
+    /// walks the ceiling down when storage throttles or slows and back up when
+    /// it recovers, never above this value. Set to <c>0</c> for the previous
+    /// default: the lesser of <see cref="Environment.ProcessorCount"/> and the
+    /// CPU grant the container's cgroup actually enforces, so a host that raises
     /// <c>DOTNET_PROCESSOR_COUNT</c> above its quota cannot oversubscribe this
-    /// CPU-bound path (issue #2816). An unreadable or unlimited quota is treated
-    /// as unknown and imposes no constraint. Set to a positive value to pin the
-    /// ceiling explicitly; an explicit value always wins over both figures.
+    /// path (issue #2816). An unreadable or unlimited quota is treated as
+    /// unknown and imposes no constraint. Any explicit positive value pins the
+    /// ceiling and always wins.
     /// <para>
     /// The derived value is an initial guess sized from CPU. When replays are
     /// bound on the grain store instead, which serialises its writes, more
@@ -2391,16 +2397,19 @@ public class LatticeOptions
 
     /// <summary>
     /// Default value for <see cref="WalMaterialiserMaxConcurrentReplays"/>
-    /// (<c>0</c>, resolved to the lesser of
-    /// <see cref="Environment.ProcessorCount"/> and the enforced container CPU
-    /// grant).
+    /// (<c>32</c>, issue #5877). <c>0</c> selects the CPU-derived ceiling that
+    /// was the default before it.
     /// </summary>
-    public const int DefaultWalMaterialiserMaxConcurrentReplays = 0;
+    public const int DefaultWalMaterialiserMaxConcurrentReplays = 32;
 
     /// <summary>
-    /// Enables experimental, process-wide service-rate probing of replay
-    /// concurrency. Defaults to false. Set globally before the first replay
-    /// sizes the gate; like the ceiling, this setting is latched on first use.
+    /// Enables process-wide adaptation of replay concurrency beneath the
+    /// configured ceiling: service-rate probing and storage-pressure stepping
+    /// (issues #3933 and #5877). Defaults to <see langword="true"/>. Set to
+    /// <see langword="false"/> for a fixed ceiling, for example on an in-memory
+    /// or local store that has nothing to throttle. Set globally before the
+    /// first replay sizes the gate; like the ceiling, this setting is latched on
+    /// first use.
     /// </summary>
     /// <remarks>
     /// One-permit probes compare completed holds over saturated windows of at
@@ -2409,10 +2418,13 @@ public class LatticeOptions
     /// does not fall. Recovery probes detect improved storage parallelism.
     /// Memory backpressure has a separate ledger and always takes precedence.
     /// The combined floor is one; the configured ceiling is never exceeded.
-    /// Heterogeneous replay costs and changing workloads can bias comparisons,
-    /// so this remains opt-in pending store-bound deployment calibration.
+    /// Heterogeneous replay costs and changing workloads can bias comparisons.
+    /// The storage-pressure half withholds a quarter of the circulating permits
+    /// when storage throttles or replay slice-read p99 doubles over its
+    /// baseline, returns one per three clean windows, and returns them all after
+    /// a quiet spell.
     /// </remarks>
-    public bool WalReplayServiceRateControllerEnabled { get; set; }
+    public bool WalReplayServiceRateControllerEnabled { get; set; } = true;
 
     /// <summary>
     /// How many activations may be <b>queued</b> for a WAL replay permit, per
