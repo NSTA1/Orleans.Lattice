@@ -1748,7 +1748,9 @@ internal sealed partial class BPlusLeafGrain
                     ReplayPermitWaitMeanForTest,
                     sinceProgress,
                     options.WalReplayPermitMaxQueueWait)
-                    + (verdict == ReplayPermitDrainVerdict.NoProgress ? DescribeReplayPermitHolders() : string.Empty),
+                    + (verdict is ReplayPermitDrainVerdict.NoProgress or ReplayPermitDrainVerdict.HoldersSlow
+                        ? DescribeReplayPermitHolders()
+                        : string.Empty),
                 state.State.TreeId!,
                 LatticeSaturationSource.ReplayPermitAdmission);
         }
