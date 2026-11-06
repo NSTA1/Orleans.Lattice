@@ -380,10 +380,10 @@ public class LatticeOptionsValidatorTests
     }
 
     [Test]
-    public void WalMaterialiserMaxConcurrentReplays_default_is_auto()
+    public void WalMaterialiserMaxConcurrentReplays_default_is_32()
     {
-        Assert.That(new LatticeOptions().WalMaterialiserMaxConcurrentReplays, Is.EqualTo(0));
-        Assert.That(LatticeOptions.DefaultWalMaterialiserMaxConcurrentReplays, Is.EqualTo(0));
+        Assert.That(new LatticeOptions().WalMaterialiserMaxConcurrentReplays, Is.EqualTo(32));
+        Assert.That(LatticeOptions.DefaultWalMaterialiserMaxConcurrentReplays, Is.EqualTo(32));
     }
 
     [TestCase(-1)]

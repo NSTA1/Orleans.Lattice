@@ -37,10 +37,11 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// documented and supported knob that every other .NET subsystem obeys, and
 /// which the process would then hold two conflicting beliefs about. So the
 /// default here is <see cref="DefaultMaxConcurrentReplays"/> (<c>0</c>), which
-/// defers to the library and changes nothing for any deployment that does not
-/// opt in. Unlike <see cref="RepoContextPinBucketing"/>, whose host default
-/// deliberately overrides the library, this class adds a capability rather than
-/// an opinion.
+/// selects the library's CPU-derived ceiling. Until issue #5877 that was also
+/// the library default, so this class added a capability rather than an
+/// opinion. The library default is now <c>32</c>, sized for remote WAL stores;
+/// this host pins the CPU-derived ceiling instead, because its store serialises
+/// writes and more permits only lengthen holds there (issue #3921).
 /// </para>
 /// <para>
 /// <b>Set the value where the quota is set.</b> The ceiling and the CPU quota
@@ -62,12 +63,18 @@ public static class RepoContextReplayConcurrency
 
     /// <summary>
     /// The value applied when <see cref="MaxConcurrentReplaysKey"/> is unset
-    /// (<c>0</c>): defer to the library, which resolves the ceiling to the
-    /// lesser of <see cref="Environment.ProcessorCount"/> and the enforced
-    /// container CPU grant. Deferring keeps this wiring
-    /// inert for every deployment that has not opted in.
+    /// (<c>0</c>): the CPU-derived ceiling, the lesser of
+    /// <see cref="Environment.ProcessorCount"/> and the enforced container CPU
+    /// grant.
     /// </summary>
-    public const int DefaultMaxConcurrentReplays = LatticeOptions.DefaultWalMaterialiserMaxConcurrentReplays;
+    /// <remarks>
+    /// Pinned at <c>0</c> rather than following the library default, which
+    /// became <c>32</c> in issue #5877 for remote WAL stores. This host keeps its
+    /// grain state in a store that serialises writes, where more permits
+    /// lengthen every hold without finishing more replays (issue #3921), so it
+    /// keeps the CPU-derived ceiling until a census on this host says otherwise.
+    /// </remarks>
+    public const int DefaultMaxConcurrentReplays = 0;
 
     /// <summary>
     /// The token that selects the library's runtime derivation deliberately,
