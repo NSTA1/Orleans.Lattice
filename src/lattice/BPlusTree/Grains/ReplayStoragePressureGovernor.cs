@@ -38,7 +38,7 @@ internal sealed class ReplayStoragePressureGovernor(long windowTicks)
     internal const double ThrottleRatio = 0.01;
     internal const double LatencyFactor = 2.0;
     internal const double DecreaseFraction = 0.25;
-    internal const int CleanWindowsPerStep = 3;
+    internal const int CleanWindowsPerStep = 1;
 
     private bool _hasWindow;
     private long _windowStart;
