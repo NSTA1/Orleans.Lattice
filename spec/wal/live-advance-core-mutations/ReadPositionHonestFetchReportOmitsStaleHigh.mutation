@@ -1,0 +1,19 @@
+# #5851 R4 (the coordinator's user-approved report fetch, owner d3dbbf69): an idle leaf's
+# read-only fetch carries every bound an append response carries, the carried stale high included.
+MODULE: ReadPositionHonestFetchReportOmitsStaleHigh
+TARGET: ReadPositionHonest
+CLASS: Invariant
+PERTURBS: FetchReport
+SUMMARY: the idle leaf's report fetch omits the carried stale high, so a stale donor's routed write under the old generation, which only the stale high bounds, lies below the fetched head and L free-advances past it unapplied
+BOUNDS: WithFreeAdvance = TRUE, WithKeyMove = TRUE, WithReportFetch = TRUE, MaxWindows = 0, WithMixedVersion = FALSE, WithDuplicate = FALSE
+
+--- FIND
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, ReportU)]
+    /\ ReportStale(a)
+    /\ ft' = [ft EXCEPT ![a] = next - 1]
+--- REPLACE
+\* MUTATION: the fetch carries no stale high.
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, ReportU)]
+    /\ UNCHANGED seenS
+    /\ ft' = [ft EXCEPT ![a] = next - 1]
+--- END
