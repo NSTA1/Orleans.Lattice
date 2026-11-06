@@ -5,6 +5,7 @@ using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 using Orleans.Runtime;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -94,6 +95,46 @@ public partial class BPlusLeafGrainTests
         await SplitTransferScope.RunAsync(() => grain.MergeEntriesAsync(rows));
 
         Assert.That(rig.Writer.LastRouting.IsSet, Is.False, "a transfer carrying a key descent no longer routes to the receiver was appended routed");
+    }
+
+    [Test]
+    public async Task A_refreshed_transfer_whose_keys_left_the_receivers_span_appends_unstamped()
+    {
+        // #5876 (a5e2e2ef's option c): the refresh succeeds - a usable generation, no
+        // hand-off open, descent reaching the receiver - but the receiver narrowed while it
+        // refreshed, so the transfer's key is no longer in its [Low, High). The routed retry
+        // re-decides the transfer class after the refresh, and a key outside the span sends
+        // it unstamped, which the key's new owner replays; it is never admitted routed under
+        // a generation the new owner's bounds do not count.
+        var rig = PreArmRig();
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state, liveAdvance: rig);
+        await grain.InitializeSiblingAsync(new SiblingInitialization
+        {
+            TreeId = "live-advance-tree",
+            ShardIndex = 0,
+            LowKeyInclusive = "m",
+            HighKeyExclusive = null,
+            PrevSibling = TransferRefreshDonor,
+            SplitBirth = true,
+            SpanShard = 0,
+            SpanGeneration = 3,
+        });
+        rig.ShardMarker = new ShardHandOffState { Initialised = true, RoutingGeneration = 5 };
+        rig.ShardRoot
+            .When(r => r.GetLiveAdvanceViewAsync(Arg.Any<GrainId>(), Arg.Any<string?>(), Arg.Any<string?>()))
+            .Do(_ => state.State.HighKeyExclusive = "n");
+        rig.Writer.ThrowNext = StaleSpan(generation: 3, refusal: 5);
+
+        await SplitTransferScope.RunAsync(() => grain.MergeEntriesAsync(TransferRows("n")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.HighKeyExclusive, Is.EqualTo("n"), "precondition: the receiver narrowed during the refresh");
+            Assert.That(rig.Writer.LastRouting, Is.Not.EqualTo(WalRoutingStamp.ForShardRoot(0, 5)),
+                "a transfer whose key left the receiver's span was retried routed under the refreshed generation");
+            Assert.That(rig.Writer.LastRouting.IsSet, Is.False, "the transfer was not appended unstamped");
+        });
     }
 
     [TestCase("unreachable")]
