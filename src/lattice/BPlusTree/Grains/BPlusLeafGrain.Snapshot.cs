@@ -3001,7 +3001,7 @@ internal sealed partial class BPlusLeafGrain
         // below: once a partition is checkpointed the leaf is no longer starved,
         // and the bank step persists the advance, captures over it and publishes
         // a usable pin.
-        var liveAdvanced = await TryAdvanceLiveCheckpointAsync();
+        var liveAdvanced = await TryAdvanceLiveCheckpointAsync(fetchReports: true);
 
         // a5e2e2ef's G4 (A4, and #5851 comment 6668840949): a witnessed donor close still
         // carried at a partition is resolved by an arm there at the first tick after the
