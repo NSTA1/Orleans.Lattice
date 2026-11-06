@@ -402,7 +402,7 @@ internal sealed partial class BPlusLeafGrain
     private static readonly KeyValuePair<string, object?> StorageThrottleTrigger =
         new(LatticeMetrics.TagTrigger, "storage_throttle");
     private static readonly KeyValuePair<string, object?> ReplayLatencyTrigger =
-        new(LatticeMetrics.TagTrigger, "replay_latency");
+        new(LatticeMetrics.TagTrigger, "storage_latency");
     private static readonly KeyValuePair<string, object?> StorageRecoveryTrigger =
         new(LatticeMetrics.TagTrigger, "storage_recovery");
     private static readonly KeyValuePair<string, object?> StorageIdleTrigger =
