@@ -190,8 +190,8 @@ internal sealed class LeafReplayCoordinatorGrain(
         if (ring is null)
             return;
 
-        var incarnation = await _reader!.GetIncarnationAsync(_treeId!, _shardIndex, cancellationToken);
-        if (ring.Incarnation != incarnation)
+        var incarnation = 0L;
+        if (await _reader!.GetHeadOffsetAsync(_treeId!, _shardIndex, cancellationToken) < (ring.Pages.Count == 0 ? -1 : ring.Pages[^1].CoveredThroughInclusive) || ring.Incarnation is null)
             ring.Reset(incarnation);
     }
 
