@@ -41,4 +41,35 @@ public sealed partial class LeafAppendEpochFenceTests
         });
         await shard.DidNotReceiveWithAnyArgs().ClaimAppendEpochAsync(default, default, default);
     }
+
+    [Test]
+    public async Task A_deferred_activation_suspected_unreachable_never_stamps_pre_arm_after_its_backoff()
+    {
+        // a5e2e2ef's S1 on #5884: a deferred sibling whose bound is now witnessed reads
+        // unreachable once. It is demoted with its deferral, so when the backoff ends it
+        // appends unstamped until a fresh proof - never pre-arm on the stale deferral.
+        var fence = new LeafAppendEpochFence(
+            Leaf,
+            new PreArmGate(),
+            new EnumerableMemoryGrainStorage(),
+            _ => { },
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, "tree"),
+            LatticeTenantLabel.ForTree("tree"),
+            requireReachabilityProof: true);
+        fence.OnReachabilityDeferred();
+        var shard = Substitute.For<IWalShardGrain>();
+        var deferredStamp = await fence.StampForAsync(shard, partition: 0, CancellationToken.None);
+
+        fence.OnUnreachableVerdict();
+        fence.ElapseBackoffForTesting();
+        var afterBackoff = await fence.StampForAsync(shard, partition: 0, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(deferredStamp?.IsPreArm, Is.True, "precondition: the deferred activation stamped pre-arm");
+            Assert.That(fence.IsDeferred, Is.False, "an unreachable suspicion left the activation deferred");
+            Assert.That(afterBackoff, Is.Null, "a demoted activation stamped pre-arm after its backoff");
+            Assert.That(fence.NeedsReachabilityProof, Is.True, "the demoted activation does not prove again");
+        });
+    }
 }
