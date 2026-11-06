@@ -1592,6 +1592,14 @@ internal sealed partial class BPlusLeafGrain
         var batchBoundaries = Cache.GetTransferBatchBoundariesWithoutHydrating(
             splitKey, transferOptions.LeafHydrationResidentBytes);
 
+        // DO NOT MERGE: red-proof for the H1 end-to-end detector - the hint reaches the sibling before its rows.
+        if (resolvedHeads is not null)
+        {
+            using (AwaitDiagnostics.Begin("leaf.split.sibling-hints", context.GrainId, splitDiag))
+            {
+                await newLeaf.SetCheckpointOffsetHintsAsync(resolvedHeads);
+            }
+        }
         var batchStart = splitKey;
         for (var boundary = 0; boundary <= batchBoundaries.Count; boundary++)
         {
@@ -1688,13 +1696,7 @@ internal sealed partial class BPlusLeafGrain
         // in a single round-trip. Each partition's hint is scoped to that
         // partition inside the callee so the sibling's clamp targets the
         // right offset space - replacing the per-partition RPC fan-out.
-        if (resolvedHeads is not null)
-        {
-            using (AwaitDiagnostics.Begin("leaf.split.sibling-hints", context.GrainId, splitDiag))
-            {
-                await newLeaf.SetCheckpointOffsetHintsAsync(resolvedHeads);
-            }
-        }
+
 
         // Sweep for rows at or above the split key that arrived while the
         // batches were moving (issue #3523). Foreground commits interleave
