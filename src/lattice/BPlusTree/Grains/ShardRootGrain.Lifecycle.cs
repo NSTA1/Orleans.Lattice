@@ -258,7 +258,7 @@ internal sealed partial class ShardRootGrain
     /// <inheritdoc />
     public async Task ReviveAsync(int[] ownedSlots, int virtualShardCount)
     {
-        using var structuralRouting = EnterStructuralRouting(); // #5876
+        // RED-PROOF M-scope: revive's root-identity writes outside a structural-routing scope
         ArgumentNullException.ThrowIfNull(ownedSlots);
         if (virtualShardCount <= 0)
             throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0.");

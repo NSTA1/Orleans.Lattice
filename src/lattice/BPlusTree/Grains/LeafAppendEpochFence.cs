@@ -349,7 +349,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         CarriedAtLocked(partition, out var close1, out var close2, out _);
         return _narrowTag == Guid.Empty && !close1.IsSet
             ? stamp
-            : stamp with { ReaderTag = _narrowTag, Close1 = close1, Close2 = close2 };
+            : stamp with { ReaderTag = _narrowTag }; // RED-PROOF S1r: the donor bound dropped from the sibling's stamps
     }
 
     /// <summary>
@@ -1439,7 +1439,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
 
             // a5e2e2ef's S1 on #5884: a deferred activation is demoted too, so it never
             // stamps pre-arm once its backoff ends; only a fresh proof re-decides it.
-            if (_reachability is ReachabilityProven or ReachabilityDeferred)
+            if (_reachability is ReachabilityProven) // RED-PROOF S1a: a deferred activation is not demoted
             {
                 _reachability = ReachabilityUnproven;
                 _markerChecked = false;

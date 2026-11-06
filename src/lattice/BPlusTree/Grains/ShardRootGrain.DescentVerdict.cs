@@ -89,6 +89,7 @@ internal sealed partial class ShardRootGrain
     {
         var s = state.State;
         return _structuralRoutingInFlight == 0
+            && _splitLinkGate.CurrentCount != 0 // RED-PROOF V3a: a link batch anywhere unsettles every descent
             && s.PendingPromotion is null
             && s.PendingBulkGraft is null
             && s.SplitInProgress is null;
@@ -152,7 +153,7 @@ internal sealed partial class ShardRootGrain
         for (var level = 0; level < MaxTreeDescentLevels; level++)
         {
             var snapshot = await GetRoutingTableSnapshotAsync(current);
-            if (snapshot.HighKeyExclusive is { } high && string.CompareOrdinal(key, high) >= 0)
+            if (snapshot.HighKeyExclusive is { } high && string.CompareOrdinal(key, high) >= 0 && false) // RED-PROOF V1a: no bound check
             {
                 return null;
             }

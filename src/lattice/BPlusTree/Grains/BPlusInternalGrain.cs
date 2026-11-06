@@ -344,7 +344,7 @@ internal sealed partial class BPlusInternalGrain(
 
             // #5876, V1-V2: SplitAsync sets SplitKey and trims Children in one synchronous
             // step, so a snapshot carries a bound consistent with its children.
-            HighKeyExclusive = state.State.SplitKey,
+            HighKeyExclusive = null, // RED-PROOF V2a: the bound is not published with the children
         });
     }
 
