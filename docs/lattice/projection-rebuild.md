@@ -680,6 +680,17 @@ caller treats it as a fault:
   after a first refusal, rising to four to seven after repeated ones,
   jittered per leaf. A drive that is admitted ends the backoff.
 
+The timer's stalled route counts only a replay, or a checkpoint that has reached
+the WAL head, as progress ([#5851](https://github.com/NSTA1/Orleans.Lattice/issues/5851)).
+The [live checkpoint advance](wal.md#live-checkpoint-advance) moves a checkpoint
+only over the leaf's own writes, never past another author's record, so its steps
+do not reset the stall count; when a replay and a live advance both move the
+checkpoint in one tick, the replay counts. While replays are queued on the
+per-silo gate - an activation's, or a cold restart's - the stalled drive steps
+aside rather than compete: the timer counts it as
+`reason=recheck_drive_yielded` on `orleans.lattice.leaf.snapshot.driver.declines`,
+and the drive stays owed, so the next tick that finds no replay waiting drives it.
+
 The activation queue's depth and drain policy are unchanged. Per-tree touch
 limits alone cannot bound the aggregate load of many trees on this
 process-wide gate (issue #3480).
