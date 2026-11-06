@@ -273,7 +273,7 @@ from this specification.**
   which is `ReadStep`'s refinement obligation. Pages are served only at the partition's
   current durable incarnation, verified per serve (A-c): every reset, truncate or rewrite path bumps a durable
   per-partition incarnation in the WAL shard's state before new appends, each page carries
-  the incarnation its fill read in the same shard turn, and every serve checks it, a
+  the incarnation its fill read, unchanged across the fill, and every serve checks it, a
   mismatch dropping the ring. A same-id reset whose leaves restart low would otherwise hit
   pages inside the old coverage without a fill and be served stale entries at reused
   offsets, and a transient duplicate coordinator activation is beyond the reach of any
@@ -281,13 +281,15 @@ from this specification.**
   Production pins it:
   `LeafReplayCoordinatorGrainTests.Ring_projection_equals_provider_filtered_read_for_random_windows_filters_budgets_holes_and_tails`,
   `LeafReplayCoordinatorGrainTests.A_page_filled_at_tail_t_never_serves_entries_appended_after_t_as_absent`,
+  `LeafReplayCoordinatorGrainTests.A_page_that_closes_a_gap_is_used_whatever_its_position_in_the_run`,
+  `LeafReplayCoordinatorGrainTests.A_reset_that_lands_while_a_page_is_read_never_inserts_that_page`,
   `LeafReplayCoordinatorGrainTests.A_same_id_reset_then_regrow_serves_requests_inside_the_old_coverage_from_storage`,
   `LeafReplayCoordinatorGrainTests.A_duplicate_coordinator_activation_never_serves_pre_reset_pages_after_a_reset`,
   `WalShardIncarnationSiteTests.Every_wal_reset_path_advances_the_partition_incarnation_before_new_appends`,
   `LeafReplayCoordinatorGrainTests.One_leafs_apply_leaves_another_leafs_slice_byte_identical`,
   `LeafReplayCoordinatorGrainTests.A_waiter_past_the_aging_bound_issues_its_own_fill`
   and `LeafReplayCoordinatorGrainTests.The_ring_never_exceeds_its_byte_budget_under_random_fills`.
-  Production symbols: `LeafReplayCoordinatorGrain.ReadSliceThroughRingAsync`, `LeafReplayCoordinatorGrain.VerifyRingIncarnationAsync`, `ReplayPageRing.FillAsync`, `ReplayPage`, `ReplayPage.Incarnation`, `ReplaySliceProjection.Project`, `ICommitLogReader.ReadAsync`, `WalShardFloorState.Incarnation`, `WalShardGrain.AdvanceIncarnationAsync`, `IWalShardGrain.GetIncarnationAsync`.
+  Production symbols: `LeafReplayCoordinatorGrain.ReadSliceThroughRingAsync`, `LeafReplayCoordinatorGrain.VerifyRingIncarnationAsync`, `ReplayPageRing.FillAsync`, `ReplayPage`, `ReplayPage.Incarnation`, `ReplaySliceProjection.Project`, `ICommitLogReader.ReadAsync`, `WalShardFloorState.Incarnation`, `WalShardGrain.AdvanceIncarnationAsync`, `IWalShardGrain.GetIncarnationAsync`, `ICommitLogReader.GetIncarnationAsync`.
 - **Scheduling and admission.** Weak fairness applies to `ScheduleReplay`, then
   to a requested `ReadStep`, not to an unsolicited WAL read. Each read consumes
   its request. The timer must be enabled and registered after durable identity
