@@ -3069,7 +3069,7 @@ internal sealed partial class BPlusLeafGrain
         if (stalled)
         {
             ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckCheckpointStalled);
-            if (QueuedReplayPermitWaiters > 0)
+            if (QueuedReplayPermitWaiters > 0 && false) // DO-NOT-MERGE red proof: BH3
             {
                 // #5851 B (BH3): replays wait on the gate - an activation, or a cold-restart
                 // storm - so this background drive yields to them, and stays owed: the next
