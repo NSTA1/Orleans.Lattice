@@ -236,6 +236,9 @@ public class ShipperPersistenceIntegrationTests
         public Task<WalSplitCut> GetSplitCutAsync(WalAppendStamp reader, string? lowInclusive, string? highExclusive, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task<long> ReadLeafReportAsync(WalAppendStamp reader, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<long> RetireAppendEpochAsync(Guid leafId, long rowEpoch, CancellationToken cancellationToken) => Task.FromResult(0L);
 
 
