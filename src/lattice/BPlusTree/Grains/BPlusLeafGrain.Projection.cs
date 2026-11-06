@@ -369,6 +369,142 @@ internal sealed partial class BPlusLeafGrain
         }
     }
 
+    /// <summary>
+    /// The partitions a checkpoint hint was stamped at while no durable snapshot covered them
+    /// (#5877): a split sibling's birth hint, or a live advance. Activation memory. A partition
+    /// leaves the set once a capture covers it.
+    /// </summary>
+    private HashSet<int>? _hintedUncoveredPartitions;
+
+    /// <summary>
+    /// Marks <paramref name="partition"/> when a hint delivered to this leaf - a split
+    /// sibling's birth hint from its donor, or a bulk switch's - would give it its first
+    /// checkpoint while no durable snapshot covers it (#5877). The leaf's own split
+    /// self-advance and its live advance are not hints delivered to it, and keep their path.
+    /// </summary>
+    private void NoteHintAtUncoveredPartition(int partition, long offset)
+    {
+        if (offset >= 0
+            && GetPersistedCheckpointForPartition(partition) < 0
+            && DurableSnapshotCoverageForPartition(partition) < 0)
+        {
+            (_hintedUncoveredPartitions ??= new HashSet<int>()).Add(partition);
+        }
+    }
+
+    /// <summary>
+    /// Set when a hint capture failed (#5877, H2): no further hint capture is attempted until
+    /// the next coverage-lag tick or the graceful-deactivation flush, so a failing store is
+    /// asked once per tick, never once per flush. Never charged to the zero-coverage repair
+    /// budget.
+    /// </summary>
+    private bool _hintCaptureDeferred;
+
+    /// <summary>Re-allows a hint capture deferred by a failure; the coverage-lag tick calls it.</summary>
+    private void RearmHintCapture() => _hintCaptureDeferred = false;
+
+    /// <summary>
+    /// Whether <paramref name="partition"/>'s advance is a hint held back from persistence until a
+    /// capture covers it (#5877, H2): stamped uncovered, still uncovered, and never persisted
+    /// above <c>-1</c>. The hint path owns its capture, so the zero-coverage repair neither fires
+    /// for it nor charges its budget.
+    /// </summary>
+    private bool IsHeldUncoveredHint(int partition) =>
+        _hintedUncoveredPartitions is { } marked
+        && marked.Contains(partition)
+        && GetPersistedCheckpointForPartition(partition) < 0
+        && DurableSnapshotCoverageForPartition(partition) < 0;
+
+    /// <summary>
+    /// Captures this leaf's cache before a flush persists a hinted checkpoint at a partition no
+    /// durable snapshot covers (a5e2e2ef's H1-H5 on #5877). The capture claims each partition's
+    /// current checkpoint, the pending hint included: a split sibling's cache was filled from its
+    /// donor's at a frontier at or above the hint (H1), and a live advance's target is a position
+    /// the leaf has applied through. Runs on a flush only - the coalescing due-flush, the tick's
+    /// bank step, an explicit flush, the graceful-deactivation flush - never on the write path
+    /// (H4). A capture that fails, or one already in flight, leaves the hint held (H2).
+    /// </summary>
+    private async Task CaptureUncoveredHintsBeforePersistAsync(CancellationToken cancellationToken, bool deactivating = false)
+    {
+        if (_hintedUncoveredPartitions is not { Count: > 0 } marked
+            || _pendingCheckpointOffsetsByPartition is not { Count: > 0 } pending
+            || _snapshotCaptureInFlight
+            || (_hintCaptureDeferred && !deactivating))
+        {
+            return;
+        }
+
+        var due = false;
+        foreach (var partition in marked)
+        {
+            if (pending.ContainsKey(partition) && DurableSnapshotCoverageForPartition(partition) < 0)
+            {
+                due = true;
+                break;
+            }
+        }
+
+        if (!due)
+        {
+            return;
+        }
+
+        await TryCaptureSnapshotForAdvisoryAsync(cancellationToken);
+        foreach (var partition in marked)
+        {
+            if (pending.ContainsKey(partition) && DurableSnapshotCoverageForPartition(partition) < 0)
+            {
+                _hintCaptureDeferred = true;
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Removes from <paramref name="pending"/> every hinted advance at a partition still
+    /// uncovered and returns them, or <see langword="null"/> when there are none; partitions now
+    /// covered leave the hinted set. The caller persists the rest and restores the held advances
+    /// as pending (<see cref="RestoreHeldHints"/>), so a hint is never persisted above coverage
+    /// (H2, H3).
+    /// </summary>
+    private Dictionary<int, long>? HoldBackUncoveredHints(Dictionary<int, long> pending)
+    {
+        if (_hintedUncoveredPartitions is not { Count: > 0 } marked)
+        {
+            return null;
+        }
+
+        Dictionary<int, long>? held = null;
+        marked.RemoveWhere(partition => DurableSnapshotCoverageForPartition(partition) >= 0);
+        foreach (var partition in marked)
+        {
+            if (pending.Remove(partition, out var offset))
+            {
+                (held ??= new Dictionary<int, long>())[partition] = offset;
+            }
+        }
+
+        return held;
+    }
+
+    /// <summary>Returns advances <see cref="HoldBackUncoveredHints"/> held to the pending set, keeping the higher per partition.</summary>
+    private void RestoreHeldHints(Dictionary<int, long>? held)
+    {
+        if (held is null)
+        {
+            return;
+        }
+
+        var pending = _pendingCheckpointOffsetsByPartition ??= new Dictionary<int, long>();
+        foreach (var (partition, offset) in held)
+        {
+            if (!pending.TryGetValue(partition, out var newer) || offset > newer)
+            {
+                pending[partition] = offset;
+            }
+        }
+    }
+
     private long GetPersistedCheckpointForPartition(int partition)
     {
         if (partition == 0)
@@ -624,8 +760,18 @@ internal sealed partial class BPlusLeafGrain
     {
         cancellationToken.ThrowIfCancellationRequested();
 
+        // #5877, H2: capture a hinted partition no snapshot covers before persisting it.
+        await CaptureUncoveredHintsBeforePersistAsync(cancellationToken, deactivating: true);
+
         if (_pendingCheckpointOffsetsByPartition is not { Count: > 0 } pending)
         {
+            return;
+        }
+
+        var held = HoldBackUncoveredHints(pending);
+        if (pending.Count == 0)
+        {
+            _pendingCheckpointOffsetsByPartition = held;
             return;
         }
 
@@ -642,8 +788,11 @@ internal sealed partial class BPlusLeafGrain
             // durable and must not be readable as though it were.
             RollbackCheckpointCommit(in undo, pending);
             RestoreDiscardedSagaPrepares(discardedSagaPrepareUndo);
+            RestoreHeldHints(held);
             throw;
         }
+
+        RestoreHeldHints(held);
 
         // Durable write committed; the tail is contained exactly as the
         // ordinary tail is (#2220).
@@ -672,7 +821,28 @@ internal sealed partial class BPlusLeafGrain
         // best-effort: it never fails the flush.
         await PruneTerminalWitnessAsync();
 
-        if (_pendingCheckpointOffsetsByPartition is { Count: > 0 } pending)
+        // #5877, H2: capture a hinted partition no snapshot covers before persisting it.
+        await CaptureUncoveredHintsBeforePersistAsync(CancellationToken.None);
+
+        Dictionary<int, long>? held = null;
+        if (_pendingCheckpointOffsetsByPartition is { Count: > 0 } toCommit)
+        {
+            held = HoldBackUncoveredHints(toCommit);
+            if (toCommit.Count == 0)
+            {
+                // Every pending advance is an uncovered hint: no checkpoint is persisted
+                // and the advance stays pending; a re-assert still persists the leaf below.
+                _pendingCheckpointOffsetsByPartition = held;
+                held = null;
+                toCommit = null;
+            }
+        }
+        else
+        {
+            toCommit = null;
+        }
+
+        if (toCommit is { } pending)
         {
             var undo = ApplyPendingCheckpointAdvance(pending);
             var discardedSagaPrepareUndo = CloneDiscardedSagaPrepares(state.State.DiscardedSagaPrepares);
@@ -687,8 +857,11 @@ internal sealed partial class BPlusLeafGrain
                 // durable and must not be readable as though it were.
                 RollbackCheckpointCommit(in undo, pending);
                 RestoreDiscardedSagaPrepares(discardedSagaPrepareUndo);
+                RestoreHeldHints(held);
                 throw;
             }
+
+            RestoreHeldHints(held);
             // The durable advance has now committed. Per the #2220
             // invariant, no failure in the post-persist notification tail
             // (cursor report, inline upward digest publish, snapshot

@@ -1,3 +1,5 @@
+using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -15,9 +17,22 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// re-arm backoff with partitions still uncovered and their block pins holding
 /// the tree's WAL trim floor.
 /// </para>
+/// <para>
+/// Each partition checkpoints through the replay seam, under its own apply-offset scope. A
+/// checkpoint delivered as a hint (a split or bulk switch) is captured before it is persisted
+/// and never reaches this repair (#5877), so it is not the population this budget governs.
+/// </para>
 /// </summary>
 public partial class BPlusLeafGrainTests
 {
+    private static async Task CheckpointPartitionAsync(BPlusLeafGrain grain, int partition, long offset)
+    {
+        using (LatticeApplyOffsetContext.BeginScope(partition, offset))
+        {
+            await ((ILeafProjection)grain).SetCheckpointOffsetAsync(offset, CancellationToken.None);
+        }
+    }
+
     [Test]
     public async Task Repair_budget_is_not_spent_by_successful_captures_as_partitions_checkpoint_one_by_one()
     {
@@ -36,9 +51,7 @@ public partial class BPlusLeafGrainTests
 
         for (var p = 0; p < partitions; p++)
         {
-            var hints = Enumerable.Repeat(0L, partitions).ToArray();
-            hints[p] = 10L + p;
-            await grain.SetCheckpointOffsetHintsAsync(hints);
+            await CheckpointPartitionAsync(grain, p, 10L + p);
         }
 
         Assert.That(saved, Has.Count.EqualTo(partitions),
@@ -85,9 +98,7 @@ public partial class BPlusLeafGrainTests
         {
             for (var p = 0; p < partitions; p++)
             {
-                var hints = Enumerable.Repeat(0L, partitions).ToArray();
-                hints[p] = 10L + (round * partitions) + p;
-                await grain.SetCheckpointOffsetHintsAsync(hints);
+                await CheckpointPartitionAsync(grain, p, 10L + (round * partitions) + p);
             }
         }
 
