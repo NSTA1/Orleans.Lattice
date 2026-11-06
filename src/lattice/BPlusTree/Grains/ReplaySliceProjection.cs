@@ -44,7 +44,7 @@ internal static class ReplaySliceProjection
         var trailing = default(CommitLogSliceEntry);
         var budgetSpent = false;
 
-        var ordered = run.Count <= 1 ? run : [.. run.OrderBy(p => p.FromExclusive)];
+        var ordered = run;
         foreach (var page in ordered)
         {
             if (page.CoveredThroughInclusive <= covered)
