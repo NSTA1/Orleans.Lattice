@@ -3334,6 +3334,7 @@ internal sealed partial class BPlusLeafGrain(
         // #3360).
         for (var p = 0; p < offsetsByPartition.Length; p++)
         {
+            NoteHintAtUncoveredPartition(p, offsetsByPartition[p]);
             await ApplyCheckpointHintAsync(p, offsetsByPartition[p]);
         }
     }
