@@ -1440,8 +1440,8 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
 
     /// <summary>
     /// One verdict that descent does not reach the activation, with no structural witness
-    /// (#5872, a5e2e2ef's R1-R2). The first sets it undecided: a proven activation is
-    /// demoted, and for the backoff its view of the gate reads closed, so it appends
+    /// (#5872, a5e2e2ef's R1-R2). The first sets it undecided: a proven or deferred
+    /// activation is demoted, and for the backoff its view of the gate reads closed, so it appends
     /// unstamped - never pre-arm, never a claim - and then proves again. A second such
     /// verdict after the backoff latches it (<see cref="StopStampingUnreachable"/>); one
     /// within the backoff changes nothing. Returns whether this call latched it.
@@ -1470,7 +1470,10 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
 
             var backoff = (long)ClaimFailureBackoffForTesting.TotalMilliseconds;
             _unreachableSuspectedUntilTicks = Math.Max(1, now + backoff);
-            if (_reachability == ReachabilityProven)
+
+            // a5e2e2ef's S1 on #5884: a deferred activation is demoted too, so it never
+            // stamps pre-arm once its backoff ends; only a fresh proof re-decides it.
+            if (_reachability is ReachabilityProven or ReachabilityDeferred)
             {
                 _reachability = ReachabilityUnproven;
                 _markerChecked = false;

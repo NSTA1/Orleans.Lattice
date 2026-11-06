@@ -598,21 +598,9 @@ internal sealed partial class ShardRootGrain
     {
         if (probe.LowKeyInclusive is null) return DescentVerdict.Unreachable;
 
-        // #5876, D1: decided only over a settled routing structure.
-        if (!IsRoutingStructureSettled()) return DescentVerdict.Undecided;
-        var version = StructuralRoutingVersionForTesting;
-        var root = state.State.RootNodeId;
+        // #5876, V5: the same decided descent as the leaves' reachability reads.
         path.Clear();
-        var resolved = await ResolveWriteLeafAsync(probe.LowKeyInclusive, path);
-        DuringDescentForTesting?.Invoke();
-        if (!IsRoutingStructureSettled()
-            || version != StructuralRoutingVersionForTesting
-            || root != state.State.RootNodeId)
-        {
-            return DescentVerdict.Undecided;
-        }
-
-        return resolved == leafId ? DescentVerdict.Reachable : DescentVerdict.Unreachable;
+        return await DescendForVerdictAsync(leafId, probe.LowKeyInclusive);
     }
 
     private OrphanedLeafAuditGap RoutingInMotionGap(GrainId leafId, string? keyHint) => new()
@@ -835,7 +823,6 @@ internal sealed partial class ShardRootGrain
 
         // Latch the leaf closed. Everything above was read-only, so a refusal
         // here still leaves the tree exactly as it was found.
-        using var structuralRouting = EnterStructuralRouting(); // #5876
         if (!await leaf.TryBeginOrphanRetirementAsync())
         {
             logger.LogDebug(

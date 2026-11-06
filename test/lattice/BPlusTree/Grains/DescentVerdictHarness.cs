@@ -43,41 +43,99 @@ internal sealed class DescentVerdictHarness
     /// <summary>The left leaf's substitute.</summary>
     public IBPlusLeafGrain Left { get; }
 
-    /// <summary>Builds the harness; <paramref name="rightLeafId"/> names the leaf descent reaches for <c>m</c> and above.</summary>
+    /// <summary>The left internal node of the two-level shapes.</summary>
+    public static readonly GrainId LeftParentId = GrainId.Create("internal", "descent-left-parent");
+
+    /// <summary>The right internal node of the two-level shapes.</summary>
+    public static readonly GrainId RightParentId = GrainId.Create("internal", "descent-right-parent");
+
+    /// <summary>Builds the one-level harness; <paramref name="rightLeafId"/> names the leaf descent reaches for <c>m</c> and above.</summary>
     public static DescentVerdictHarness Create(GrainId? rightLeafId = null)
     {
         var right = rightLeafId ?? RightLeafId;
+        return Build(
+            new Dictionary<GrainId, RoutingTableSnapshot>
+            {
+                [RootId] = Table(true, null, (null, LeftLeafId), ("m", right)),
+            },
+            [LeftLeafId, right, SiblingId],
+            acceptAt: RootId);
+    }
+
+    /// <summary>
+    /// A two-level tree whose left parent divided at <c>m</c> - its bound narrowed and its
+    /// right child moved to a new right half - while the root does not yet route to that
+    /// half (a5e2e2ef's V1 case): the root sends every key to the left parent.
+    /// </summary>
+    public static DescentVerdictHarness CreateLaggingInternalSplit(GrainId? leftLeafId = null)
+    {
+        var left = leftLeafId ?? LeftLeafId;
+        return Build(
+            new Dictionary<GrainId, RoutingTableSnapshot>
+            {
+                [RootId] = Table(false, null, (null, LeftParentId)),
+                [LeftParentId] = Table(true, "m", (null, left)),
+                [RightParentId] = Table(true, null, (null, RightLeafId)),
+            },
+            [left, RightLeafId, SiblingId],
+            acceptAt: LeftParentId);
+    }
+
+    /// <summary>
+    /// A settled two-level tree - the root routes <c>m</c> and above to the right parent -
+    /// whose held link batch, if any, accepts at the left parent: another subtree than the
+    /// right leaf's.
+    /// </summary>
+    public static DescentVerdictHarness CreateTwoLevel() => Build(
+        new Dictionary<GrainId, RoutingTableSnapshot>
+        {
+            [RootId] = Table(false, null, (null, LeftParentId), ("m", RightParentId)),
+            [LeftParentId] = Table(true, null, (null, LeftLeafId)),
+            [RightParentId] = Table(true, null, (null, RightLeafId)),
+        },
+        [LeftLeafId, RightLeafId, SiblingId],
+        acceptAt: LeftParentId);
+
+    private static RoutingTableSnapshot Table(bool childrenAreLeaves, string? high, params (string? Separator, GrainId Child)[] entries) => new()
+    {
+        SeparatorKeys = entries.Select(e => e.Separator).ToArray(),
+        ChildIds = entries.Select(e => e.Child).ToArray(),
+        ChildrenAreLeaves = childrenAreLeaves,
+        HighKeyExclusive = high,
+    };
+
+    private static DescentVerdictHarness Build(Dictionary<GrainId, RoutingTableSnapshot> tables, GrainId[] leafIds, GrainId acceptAt)
+    {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("shard", "descent-tree/0"));
         var state = new FakePersistentState<ShardRootState>();
         state.State.RootNodeId = RootId;
         state.State.RootIsLeaf = false;
 
-        var table = new RoutingTableSnapshot
+        var internals = new Dictionary<GrainId, IBPlusInternalGrain>();
+        foreach (var (id, table) in tables)
         {
-            SeparatorKeys = [null, "m"],
-            ChildIds = [LeftLeafId, right],
-            ChildrenAreLeaves = true,
-        };
-        var root = Substitute.For<IBPlusInternalGrain, IGrainBase>();
-        var rootContext = Substitute.For<IGrainContext>();
-        rootContext.GrainId.Returns(RootId);
-        ((IGrainBase)root).GrainContext.Returns(rootContext);
-        root.GetRoutingTableAsync().Returns(_ => Task.FromResult(table));
-        root.GetLeftmostChildWithMetadataAsync().Returns(_ => Task.FromResult((LeftLeafId, true)));
-        root.AcceptSplitAsync(Arg.Any<string>(), Arg.Any<GrainId>()).Returns(Task.FromResult<SplitResult?>(null));
+            var node = Substitute.For<IBPlusInternalGrain, IGrainBase>();
+            var nodeContext = Substitute.For<IGrainContext>();
+            nodeContext.GrainId.Returns(id);
+            ((IGrainBase)node).GrainContext.Returns(nodeContext);
+            node.GetRoutingTableAsync().Returns(_ => Task.FromResult(table));
+            node.GetLeftmostChildWithMetadataAsync().Returns(_ => Task.FromResult((table.ChildIds[0], table.ChildrenAreLeaves)));
+            node.RouteWithMetadataAsync(Arg.Any<string>()).Returns(call => Task.FromResult(table.Route(call.ArgAt<string>(0))));
+            node.AcceptSplitAsync(Arg.Any<string>(), Arg.Any<GrainId>()).Returns(Task.FromResult<SplitResult?>(null));
+            internals[id] = node;
+        }
 
-        var left = Substitute.For<IBPlusLeafGrain>();
-        left.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.FromResult<SplitResult?>(null));
-        var leaves = new Dictionary<GrainId, IBPlusLeafGrain>
+        var leaves = new Dictionary<GrainId, IBPlusLeafGrain>();
+        foreach (var id in leafIds)
         {
-            [LeftLeafId] = left,
-            [right] = Substitute.For<IBPlusLeafGrain>(),
-            [SiblingId] = Substitute.For<IBPlusLeafGrain>(),
-        };
+            var leaf = Substitute.For<IBPlusLeafGrain>();
+            leaf.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.FromResult<SplitResult?>(null));
+            leaves[id] = leaf;
+        }
 
         var factory = Substitute.For<IGrainFactory>();
-        factory.GetGrain<IBPlusInternalGrain>(Arg.Any<GrainId>()).Returns(_ => root);
+        factory.GetGrain<IBPlusInternalGrain>(Arg.Any<GrainId>()).Returns(call => internals[call.ArgAt<GrainId>(0)]);
         factory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(call => leaves[call.ArgAt<GrainId>(0)]);
         factory.GetGrain<ILeafCacheGrain>(Arg.Any<string>()).Returns(Substitute.For<ILeafCacheGrain>());
         factory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(Substitute.For<IShardRootGrain>());
@@ -90,7 +148,7 @@ internal sealed class DescentVerdictHarness
             NullLogger<ShardRootGrain>.Instance,
             TestMutationObservers.NoObservers());
         grain.UseHandOffStorageForTesting(new EnumerableMemoryGrainStorage());
-        return new DescentVerdictHarness(grain, root, left);
+        return new DescentVerdictHarness(grain, internals[acceptAt], leaves[leafIds[0]]);
     }
 
     /// <summary>

@@ -718,7 +718,6 @@ internal sealed partial class ShardRootGrain
         WalRoutingStamp seedRouting,
         Func<int, int, Dictionary<string, LwwValue<byte[]>>> buildBatch)
     {
-        using var structuralRouting = EnterStructuralRouting(); // #5876
         var slots = new int[leafIds.Count];
         for (int i = 0; i < slots.Length; i++)
         {
@@ -807,7 +806,6 @@ internal sealed partial class ShardRootGrain
         List<string?> separators,
         int maxChildren)
     {
-        using var structuralRouting = EnterStructuralRouting(); // #5876
         if (leafIds.Count == 1)
         {
             return (leafIds[0], true);
@@ -1046,7 +1044,6 @@ internal sealed partial class ShardRootGrain
             // the range it owns, up to the next appended leaf's separator and open
             // at the tail (issue #5460; see SeedBulkLoadLeavesAsync).
             using (LatticeNewLeafIntentContext.BeginScope(newId))
-            using (EnterStructuralRouting())
             {
                 await newLeaf.InitializeSiblingAsync(new SiblingInitialization
                 {
