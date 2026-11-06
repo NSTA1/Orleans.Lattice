@@ -87,6 +87,7 @@ public partial class BPlusLeafGrainTests
     }
 
     [TestCase("undecided-twice")]
+    [TestCase("undecided-view")]
     [TestCase("same-backoff")]
     public async Task Two_undecided_or_same_turn_reads_never_latch(string shape)
     {
@@ -96,7 +97,7 @@ public partial class BPlusLeafGrainTests
         var rig = PreArmRig();
         var grain = CreateGrain(liveAdvance: rig);
         await InitialiseOwnMarkerAsync(rig);
-        if (shape == "undecided-twice")
+        if (shape is "undecided-twice" or "undecided-view")
         {
             rig.VerdictOverride = DescentVerdict.Undecided;
         }
@@ -110,6 +111,14 @@ public partial class BPlusLeafGrainTests
         if (shape == "undecided-twice")
         {
             fence.ElapseBackoffForTesting();
+            await SetStampedAsync(grain, "b", "2");
+        }
+        else if (shape == "undecided-view")
+        {
+            // The live-advance view's descent is undecided on two ticks across the backoff.
+            await grain.TryAdvanceLiveCheckpointAsync();
+            fence.ElapseBackoffForTesting();
+            await grain.TryAdvanceLiveCheckpointAsync();
             await SetStampedAsync(grain, "b", "2");
         }
         else
