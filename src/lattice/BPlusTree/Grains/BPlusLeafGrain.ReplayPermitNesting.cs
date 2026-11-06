@@ -245,7 +245,8 @@ internal sealed partial class BPlusLeafGrain
     }
     /// <summary>
     /// Describes the activations recorded as holding a permit, for the
-    /// no-progress refusal. Allocates only when a refusal is raised.
+    /// no-progress and slow-holders refusals. Allocates only when a refusal is
+    /// raised.
     /// </summary>
     internal static string DescribeReplayPermitHolders()
     {
