@@ -1,0 +1,5 @@
+<Project>
+  <PropertyGroup Condition="'$(LatticeBenchmarkTargetFramework)' != ''">
+    <TargetFramework>$(LatticeBenchmarkTargetFramework)</TargetFramework>
+  </PropertyGroup>
+</Project>

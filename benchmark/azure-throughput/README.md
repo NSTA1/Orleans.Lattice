@@ -13,6 +13,40 @@ rather than Azurite or in-memory storage. The local docker-compose scenarios
 does not model Azure Tables partition-server behaviour or throttling. Use this
 harness when a throughput claim needs to be backed by real-Azure numbers.
 
+## Layer 1: .NET 10 versus .NET 11 RC3
+
+`performance-report.ps1 -Layer 1 -Layer1DotnetMajor 10` keeps the existing
+.NET 10 SDK/runtime. Selecting `-Layer1DotnetMajor 11` installs the pinned
+`11.0.100-rc.3.26522.148` SDK under `/opt/lattice/dotnet-11` and rebuilds the
+microbench and all project references for `net11.0`. Product source and NuGet
+package versions stay unchanged. The target also reaches BenchmarkDotNet's
+forking toolchain for full-fidelity runs. Neither choice upgrades the deployed
+Azure workload hosts, which are stopped during Layer 1 measurement.
+
+For a parallel A/B, run these commands in separate PowerShell processes against
+the same checked-out source. Each prefix provisions an isolated, identical VM.
+Use `-PrivateNetwork` when required by the current subscription's policy:
+
+```powershell
+.\benchmark\performance-report.ps1 -Layer 1 -Layer1DotnetMajor 10 -NamePrefix net11a -N 3 -Fidelity quick -PrivateNetwork -SkipDocUpdate
+.\benchmark\performance-report.ps1 -Layer 1 -Layer1DotnetMajor 11 -NamePrefix net11b -N 3 -Fidelity quick -PrivateNetwork -SkipDocUpdate
+```
+
+Compare matching rows in `benchmark/.run/performance-report/<prefix>/state.json`.
+Each arm retains the actual SDK, target framework, `microbench/dotnet-info.txt`,
+per-cohort `console-*.log` (including BDN's measured runtime), and raw results.
+Do not reuse a prefix across runtime arms: the report rejects mixed targets.
+`-SkipDocUpdate` prevents competing writes to the published baseline document;
+normal teardown still removes each newly provisioned rig after its run.
+
+BenchmarkDotNet 0.15.8 does not recognize .NET 11 in `ThreadingDiagnoser`.
+The .NET 11 arm therefore explicitly disables that diagnoser, retaining
+`MemoryDiagnoser` and latency measurement; the .NET 10 arm is unchanged.
+Console logs warn about this difference, and cohort toolchain provenance records
+`memoryDiagnoserEnabled` and `threadingDiagnoserEnabled`. Disclose the differing
+instrumentation in comparisons; these runs provide a directional estimate,
+not an instrumentation-identical runtime experiment.
+
 ## Topology
 
 The rig has two shapes. Layers 1 and 2 run on one Linux VM:

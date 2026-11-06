@@ -126,6 +126,13 @@
 						~30+ min per cohort. Reserved for the final re-verify
 						pass when a 'dry' or 'quick' delta is borderline.
 
+.PARAMETER Layer1DotnetMajor
+	Layer 1 target framework and runtime: 10 (default) or 11. The 11 arm
+	installs SDK 11.0.100-rc.3.26522.148 in an isolated VM directory and
+	rebuilds the microbench and its project references targeting net11.0.
+	NuGet package versions and product source are unchanged. Each cohort
+	retains SDK/runtime evidence and the BenchmarkDotNet console log.
+
 .PARAMETER NamePrefix
 	Force a specific name prefix (cleaned to <=9 chars). Default is an
 	auto-generated 'pr' + 7 random hex chars (= 9 cleaned chars). Use this
@@ -221,6 +228,9 @@ param(
 	[int] $N = 3,
 
 	[string] $VmSize = 'Standard_D4as_v5',
+
+	[ValidateSet(10, 11)]
+	[int] $Layer1DotnetMajor = 10,
 
 	[string] $Rung = '4000:5:45',
 
@@ -401,6 +411,9 @@ if ($switchPicks.Count -gt 0) {
 		throw "Conflicting layer selection: -Layer '$Layer' vs the switch(es) that resolve to '$switchValue'. Use ONE of -Layer <all|1|2|3> OR -Layer1 / -Layer2 / -Layer3."
 	}
 	$Layer = $switchValue
+}
+if ($Layer1DotnetMajor -ne 10 -and $Layer -notin '1','all') {
+	throw '-Layer1DotnetMajor applies only to Layer 1. Select -Layer 1 or -Layer all.'
 }
 
 # Resolve repo-relative paths once.
@@ -1129,6 +1142,7 @@ function Invoke-Provision {
 	}
 	if ($ParametersFilePath) { $argMap['ParametersFile'] = $ParametersFilePath }
 	if ($PrivateNetwork) { $argMap['PrivateNetwork'] = $true }
+	if ($Layer -eq '1') { $argMap['NoRestart'] = $true }
 	& $deployScript @argMap
 	if ($LASTEXITCODE -ne 0) { throw "deploy.ps1 failed (exit $LASTEXITCODE)" }
 }
@@ -1230,7 +1244,9 @@ function Invoke-Layer1Cohorts {
 		[Parameter(Mandatory)][int] $N,
 		[Parameter(Mandatory)][string] $ParametersFilePath,
 		[ValidateSet('dry','quick','full')]
-		[string] $Fidelity = 'dry'
+		[string] $Fidelity = 'dry',
+		[ValidateSet(10, 11)]
+		[int] $DotnetMajor = 10
 	)
 	$rows = @($Layer1Rows | Where-Object { $_.WorkloadId -in $WorkloadIds })
 	if ($rows.Count -eq 0) {
@@ -1260,6 +1276,35 @@ function Invoke-Layer1Cohorts {
 	$mbDir = Join-Path $prefixDir 'microbench'
 	if (-not (Test-Path $mbDir)) { New-Item -ItemType Directory -Path $mbDir -Force | Out-Null }
 
+	# Layer 1 uses in-memory storage; the Azure workload services must not
+	# compete for CPU with either arm, including on a reused VM.
+	& ssh @sshOpts $sshTarget 'sudo systemctl stop lattice-producer lattice-silo' | Out-Host
+	if ($LASTEXITCODE -ne 0) { throw '[layer1] could not stop the Azure workload services.' }
+	$toolchain = Get-Layer1Toolchain -DotnetMajor $DotnetMajor
+	if ($DotnetMajor -eq 11) {
+		$installCmd = "test -x $($toolchain.Dotnet) || (curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/lattice-dotnet-install.sh && bash /tmp/lattice-dotnet-install.sh --version $($toolchain.SdkVersion) --install-dir $($toolchain.Root) --no-path)"
+		& ssh @sshOpts $sshTarget $installCmd | Out-Host
+		if ($LASTEXITCODE -ne 0) { throw '[layer1] .NET 11 RC3 SDK installation failed.' }
+	}
+	$sdk = (& ssh @sshOpts $sshTarget "$($toolchain.Environment) $($toolchain.Dotnet) --version" | Out-String).Trim()
+	if ($LASTEXITCODE -ne 0 -or $sdk -notmatch "^$DotnetMajor\.0\." -or ($toolchain.SdkVersion -and $sdk -ne $toolchain.SdkVersion)) {
+		throw "[layer1] wrong SDK for arm $DotnetMajor`: '$sdk'."
+	}
+	$runtimeEvidence = & ssh @sshOpts $sshTarget "$($toolchain.Environment) $($toolchain.Dotnet) --info"
+	if ($LASTEXITCODE -ne 0) { throw '[layer1] could not capture SDK/runtime evidence.' }
+	$runtimeEvidence | Set-Content (Join-Path $mbDir 'dotnet-info.txt')
+	$provenance = @{
+		targetFramework = $toolchain.TargetFramework
+		sdkVersion = $sdk
+		dotnetInfoPath = (Join-Path $mbDir 'dotnet-info.txt')
+		memoryDiagnoserEnabled = $true
+		threadingDiagnoserEnabled = ($DotnetMajor -eq 10)
+	}
+	if ($DotnetMajor -eq 11) {
+		Write-Warning '[layer1] .NET 11 disables ThreadingDiagnoser because BenchmarkDotNet 0.15.8 does not recognize the runtime. MemoryDiagnoser remains enabled; disclose the instrumentation difference when comparing with .NET 10.'
+	}
+	Write-Host "[layer1] target=$($toolchain.TargetFramework) sdk=$sdk" -ForegroundColor Cyan
+
 	# One-time build of the microbench project on the VM. update.ps1 only
 	# publishes Silo + Producer; the microbench project is built on demand here
 	# so the per-cohort `dotnet run --no-build` can find the assembly. We pay
@@ -1267,7 +1312,14 @@ function Invoke-Layer1Cohorts {
 	# all workloads within each cohort - BDN's filter just selects [Benchmark]
 	# methods from the already-built assembly).
 	Write-Host "[layer1] building Bench.Microbench on the VM (one-time, ~30s) ..." -ForegroundColor Cyan
-	$buildCmd = "cd /opt/lattice/src && /usr/bin/dotnet build benchmark/host/Bench.Microbench/Orleans.Lattice.Benchmark.Microbench.csproj -c Release --nologo /clp:ErrorsOnly"
+	$targetsRelativePath = 'benchmark/host/Bench.Microbench/TargetFrameworkOverride.targets'
+	$remoteTargets = "/opt/lattice/src/$targetsRelativePath"
+	& scp @sshOpts (Join-Path $repoRoot 'benchmark\host\Bench.Microbench\TargetFrameworkOverride.targets') "${sshTarget}:$remoteTargets" | Out-Host
+	if ($LASTEXITCODE -ne 0) { throw '[layer1] could not upload the framework override targets.' }
+	# Restore and project-reference negotiation clear TargetFramework. Import
+	# the override before SDK framework inference on every evaluation instead.
+	$frameworkArgs = "-p:LatticeBenchmarkTargetFramework=$($toolchain.TargetFramework) -p:BeforeTargetFrameworkInferenceTargets=$remoteTargets"
+	$buildCmd = "cd /opt/lattice/src && $($toolchain.Environment) $($toolchain.Dotnet) build benchmark/host/Bench.Microbench/Orleans.Lattice.Benchmark.Microbench.csproj -c Release $frameworkArgs --nologo /clp:ErrorsOnly"
 	# `| Out-Host` routes the remote build / ssh / scp stdout directly to the
 	# console instead of letting it accumulate on this function's success
 	# stream. PowerShell folds every uncaptured native-command stdout line
@@ -1282,6 +1334,13 @@ function Invoke-Layer1Cohorts {
 	if ($LASTEXITCODE -ne 0) {
 		throw "[layer1] microbench build on the VM failed (ssh exit $LASTEXITCODE). Cannot continue without the build output."
 	}
+	$runtimeConfigText = & ssh @sshOpts $sshTarget "cat /opt/lattice/src/benchmark/host/Bench.Microbench/bin/Release/$($toolchain.TargetFramework)/Orleans.Lattice.Benchmark.Microbench.runtimeconfig.json"
+	if ($LASTEXITCODE -ne 0) { throw '[layer1] compiled runtime configuration is missing.' }
+	$runtimeConfig = ($runtimeConfigText | Out-String) | ConvertFrom-Json
+	if ($runtimeConfig.runtimeOptions.tfm -ne $toolchain.TargetFramework -or $runtimeConfig.runtimeOptions.framework.version -notmatch "^$DotnetMajor\.") {
+		throw '[layer1] compiled target mismatch: the benchmark was not built for the selected runtime.'
+	}
+	$runtimeConfigText | Set-Content (Join-Path $mbDir 'runtimeconfig.json')
 
 	$cohorts = New-Object System.Collections.Generic.List[hashtable]
 	for ($i = 1; $i -le $N; $i++) {
@@ -1294,11 +1353,12 @@ function Invoke-Layer1Cohorts {
 		# accepts --results <path> and --filter <comma-globs>; we pin
 		# BENCH_REGRESSION_GATE_ENABLED=false because this script's job is to
 		# CREATE the new baseline, not gate against an old one.
-		$remoteCmd = "cd /opt/lattice/src && BENCH_REGRESSION_GATE_ENABLED=false BENCH_MICROBENCH_FIDELITY=$Fidelity BENCH_MICROBENCH_WORKLOADS='$filterPatterns' BENCH_SCENARIO=performance-report-layer1 BENCH_RUN_ID=$runId /usr/bin/dotnet run --project benchmark/host/Bench.Microbench/Orleans.Lattice.Benchmark.Microbench.csproj -c Release --no-build -- --results $remoteResults"
+		$remoteCmd = "cd /opt/lattice/src && $($toolchain.Environment) BENCH_MICROBENCH_TARGET_FRAMEWORK=$($toolchain.TargetFramework) BENCH_REGRESSION_GATE_ENABLED=false BENCH_MICROBENCH_FIDELITY=$Fidelity BENCH_MICROBENCH_WORKLOADS='$filterPatterns' BENCH_SCENARIO=performance-report-layer1 BENCH_RUN_ID=$runId $($toolchain.Dotnet) run --project benchmark/host/Bench.Microbench/Orleans.Lattice.Benchmark.Microbench.csproj -c Release $frameworkArgs --framework $($toolchain.TargetFramework) --no-build -- --results $remoteResults"
 		# See the Out-Host rationale on the build call above; the per-cohort
 		# `dotnet run` produces hundreds of BDN progress + result lines and
 		# is the dominant source of pollution if uncaptured.
-		& ssh @sshOpts $sshTarget $remoteCmd | Out-Host
+		$consoleLog = Join-Path $mbDir "console-$runId.log"
+		& ssh @sshOpts $sshTarget $remoteCmd 2>&1 | Tee-Object -FilePath $consoleLog | Out-Host
 		if ($LASTEXITCODE -ne 0) {
 			Write-Warning "[layer1] cohort $i/${N}: ssh microbench run exited $LASTEXITCODE; skipping pull"
 			continue
@@ -1318,6 +1378,8 @@ function Invoke-Layer1Cohorts {
 		$cohorts.Add(@{
 			runId   = $runId
 			resultsPath = $localResults
+			consoleLog = $consoleLog
+			toolchain = $provenance
 			metrics = $payload.metrics
 		})
 	}
@@ -1334,6 +1396,29 @@ function Invoke-Layer1Cohorts {
 	# above; the filter just keeps the explicit return strictly hashtable-
 	# typed so a future caller iterating $cohorts can rely on the shape.
 	return @($cohorts.ToArray() | Where-Object { $_ -is [hashtable] })
+}
+
+function Get-Layer1Toolchain {
+	[CmdletBinding()] param(
+		[ValidateSet(10, 11)]
+		[int] $DotnetMajor = 10
+	)
+	if ($DotnetMajor -eq 11) {
+		return @{
+			TargetFramework = 'net11.0'
+			SdkVersion = '11.0.100-rc.3.26522.148'
+			Root = '/opt/lattice/dotnet-11'
+			Dotnet = '/opt/lattice/dotnet-11/dotnet'
+			Environment = 'DOTNET_ROOT=/opt/lattice/dotnet-11 PATH=/opt/lattice/dotnet-11:$PATH'
+		}
+	}
+	return @{
+		TargetFramework = 'net10.0'
+		SdkVersion = $null
+		Root = '/usr/share/dotnet'
+		Dotnet = '/usr/bin/dotnet'
+		Environment = 'DOTNET_ROOT=/usr/share/dotnet'
+	}
 }
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -2770,6 +2855,10 @@ function New-MetaHeaderForLayer1 {
 		$meta['schema']        = 'v1'
 		$meta['host']          = $State.vmSize
 		$meta['dotnet']        = (Get-StateOr $State 'dotnetVersion' '10.0.x')
+		if ($State.layer1.ContainsKey('toolchain')) {
+			$meta['dotnet'] = $State.layer1.toolchain.sdkVersion
+			$meta['targetFramework'] = $State.layer1.toolchain.targetFramework
+		}
 		$meta['bdnFidelity']   = (Get-StateOr $State 'bdnFidelity' 'dry')
 		$meta['bdnToolchain']  = 'InProcessEmitToolchain'
 		$meta['cohortN']       = $cohortN
@@ -4373,6 +4462,12 @@ function Main {
 		New-EmptyState -Prefix $prefix -VmSize $VmSize -Region $region -Rung $rungHt -BatchSize $BatchSize -BdnFidelity $Fidelity
 	}
 	$state.startedUtc = (Get-Date).ToUniversalTime().ToString('o')
+	if ($Layer -in 'all','1' -and @($state.layer1.cohorts).Count -gt 0) {
+		$previousTarget = if ($state.layer1.ContainsKey('toolchain')) { $state.layer1.toolchain.targetFramework } else { 'net10.0' }
+		if ($previousTarget -ne "net$Layer1DotnetMajor.0") {
+			throw "Prefix '$prefix' already contains $previousTarget Layer 1 results. Use a separate -NamePrefix for each runtime arm."
+		}
+	}
 	# Stamp the resolved CLI -Fidelity / -BatchSize onto state ONLY for layers
 	# that are actually running this invocation. bdnFidelity is a Layer 1
 	# concept (BDN); batchSize is a Layer 2 concept (BENCH_BATCH_SIZE). A
@@ -4426,7 +4521,9 @@ function Main {
 		if ($Layer -in 'all','1') {
 			$l1Ids = Resolve-WorkloadIds -LayerRows $Layer1Rows -WorkloadsSpec $Workloads
 			Write-Host "[main] Layer 1 workloads: $($l1Ids -join ',')" -ForegroundColor Cyan
-			$l1Cohorts = Invoke-Layer1Cohorts -Prefix $prefix -WorkloadIds $l1Ids -N $N -ParametersFilePath $paramFile -Fidelity $Fidelity
+			$l1Cohorts = @(Invoke-Layer1Cohorts -Prefix $prefix -WorkloadIds $l1Ids -N $N -ParametersFilePath $paramFile -Fidelity $Fidelity -DotnetMajor $Layer1DotnetMajor)
+			if ($l1Cohorts.Count -eq 0) { throw '[layer1] no successful cohorts; refusing to publish an empty arm.' }
+			$state.layer1['toolchain'] = $l1Cohorts[0].toolchain
 			# Merge cohorts (rather than replace) so partial re-runs don't lose
 			# earlier rows' data; the aggregator will use the latest cohorts.
 			$state.layer1.cohorts = @($state.layer1.cohorts) + @($l1Cohorts)

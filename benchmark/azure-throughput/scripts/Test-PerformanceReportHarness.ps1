@@ -221,3 +221,4 @@ try {
     Remove-Item -LiteralPath $log, $doc -Force
     Remove-Item -LiteralPath $stateDir -Recurse -Force
 }
+& (Join-Path $PSScriptRoot 'Test-Layer1Dotnet.ps1')

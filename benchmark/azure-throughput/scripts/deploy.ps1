@@ -29,6 +29,10 @@
 	az 'bastion' extension (installed on demand). Omit for the original
 	public layout.
 
+.PARAMETER NoRestart
+	Publish the workload hosts without starting them. Layer 1-only reports
+	use this switch so the silo and producer do not compete with microbenchmarks.
+
 .EXAMPLE
 	./deploy.ps1
 .EXAMPLE
@@ -43,7 +47,8 @@ param(
 	[string] $VmSize,
 	[ValidateRange(1, 8)]
 	[int] $WalAccountCount = 1,
-	[switch] $PrivateNetwork
+	[switch] $PrivateNetwork,
+	[switch] $NoRestart
 )
 
 $ErrorActionPreference = 'Stop'
@@ -334,6 +339,7 @@ Write-Host ''
 Write-Host '=== Infra deploy complete; running update.ps1 to publish silo + producer ===' -ForegroundColor Cyan
 $updateScript = Join-Path $here 'update.ps1'
 $updateArgs = @{}
+if ($NoRestart) { $updateArgs.NoRestart = $true }
 if ($NamePrefix)    { $updateArgs.NamePrefix    = $p.NamePrefix }
 if ($ParametersFile) { $updateArgs.ParametersFile = $ParametersFile }
 & $updateScript @updateArgs

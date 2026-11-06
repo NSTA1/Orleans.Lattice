@@ -99,10 +99,33 @@ internal sealed class HarnessConfig : ManualConfig
             job = job.WithInvocationCount(invocations);
         }
 
+        // The report's framework override must also reach BDN's generated
+        // project and all its references when the toolchain forks.
+        var targetFramework = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_TARGET_FRAMEWORK");
+        if (targetFramework is not null)
+        {
+            if (targetFramework is not ("net10.0" or "net11.0"))
+            {
+                throw new ArgumentException($"Unsupported microbench target framework: {targetFramework}");
+            }
+
+            job = job.WithArguments([
+                new MsBuildArgument($"/p:LatticeBenchmarkTargetFramework={targetFramework}"),
+                new MsBuildArgument($"/p:BeforeTargetFrameworkInferenceTargets={Path.Combine(AppContext.BaseDirectory, "TargetFrameworkOverride.targets")}")
+            ]);
+        }
+
         AddJob(job);
 
         AddDiagnoser(MemoryDiagnoser.Default);
-        AddDiagnoser(ThreadingDiagnoser.Default);
+        if (targetFramework == "net11.0")
+        {
+            Console.Error.WriteLine("[microbench] ThreadingDiagnoser disabled for net11.0: BenchmarkDotNet 0.15.8 does not recognize this runtime. MemoryDiagnoser remains enabled; comparisons with net10.0 differ in threading instrumentation.");
+        }
+        else
+        {
+            AddDiagnoser(ThreadingDiagnoser.Default);
+        }
 
         AddLogger(ConsoleLogger.Default);
 
