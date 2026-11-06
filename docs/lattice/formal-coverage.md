@@ -406,7 +406,10 @@ gaps, states its full scope.
     override holds, the in-memory cursor registry, the order of the steps
     inside a purge's tree-level tail, and a resized tree's logical purge
     completion (both pinned by tests instead), or how long a live leaf's pin
-    stays at the block value before its first WAL replay.
+    stays at the block value before its first WAL replay; nor the replay read
+    path's shared per-partition page cache (#5877 A), which refines to the
+    model's read step by slice equivalence and is served only at the
+    partition's current durable incarnation, both pinned by tests instead.
 - **Shard ownership** ([`spec/shard-ownership/`](../../spec/shard-ownership/README.md)).
   - **Covers:** who serves a key across an adaptive split, an online shard
     fold, an online reshard, an online resize and its undo, with stale routers

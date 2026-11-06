@@ -257,6 +257,37 @@ trim and recovers.
 These are modelled abstractly or not at all. **No conclusion about them may be drawn
 from this specification.**
 
+- **The replay read may be served from a shared per-partition cache (#5877 A, #5896).**
+  `ReadStep` reads the shared stream itself. Production may serve the same slice from a
+  page ring on the partition's replay coordinator, filled only through the existing
+  clamped unfiltered read (A-g), so a leaf's apply, checkpoints and trim are unchanged and
+  the refinement holds by slice equivalence: a ring-served slice is the provider's filtered
+  read of the same window - the budget counts examined entries, a last excluded entry is
+  yielded routing-only, records with no single key reach every reader, and the slot index
+  only accelerates (A-a). A page covers only through the last entry its fill actually
+  returned, never the planned high, and a request is served from the ring only within the
+  covered run starting at its low bound; anything above is fetched, never assumed empty
+  (A-b). A hole can therefore lie only above the covered offset, which is what a direct
+  reader advancing by its last received offset already sees; a page claiming its planned
+  high would serve a hole as empty and let a leaf's read position pass an unread record,
+  which is `ReadStep`'s refinement obligation. Pages are served only at the partition's
+  current durable incarnation, verified per serve (A-c): every reset, truncate or rewrite path bumps a durable
+  per-partition incarnation in the WAL shard's state before new appends, each page carries
+  the incarnation its fill read in the same shard turn, and every serve checks it, a
+  mismatch dropping the ring. A same-id reset whose leaves restart low would otherwise hit
+  pages inside the old coverage without a fill and be served stale entries at reused
+  offsets, and a transient duplicate coordinator activation is beyond the reach of any
+  invalidation call, so only the per-serve check closes both. Shared pages are never mutated (A-d).
+  Production pins it:
+  `LeafReplayCoordinatorGrainTests.Ring_projection_equals_provider_filtered_read_for_random_windows_filters_budgets_holes_and_tails`,
+  `LeafReplayCoordinatorGrainTests.A_page_filled_at_tail_t_never_serves_entries_appended_after_t_as_absent`,
+  `LeafReplayCoordinatorGrainTests.A_same_id_reset_then_regrow_serves_requests_inside_the_old_coverage_from_storage`,
+  `LeafReplayCoordinatorGrainTests.A_duplicate_coordinator_activation_never_serves_pre_reset_pages_after_a_reset`,
+  `WalShardIncarnationSiteTests.Every_wal_reset_path_advances_the_partition_incarnation_before_new_appends`,
+  `LeafReplayCoordinatorGrainTests.One_leafs_apply_leaves_another_leafs_slice_byte_identical`,
+  `LeafReplayCoordinatorGrainTests.A_waiter_past_the_aging_bound_issues_its_own_fill`
+  and `LeafReplayCoordinatorGrainTests.The_ring_never_exceeds_its_byte_budget_under_random_fills`.
+  Production symbols: `LeafReplayCoordinatorGrain.ReadSliceThroughRingAsync`, `LeafReplayCoordinatorGrain.VerifyRingIncarnationAsync`, `ReplayPageRing.FillAsync`, `ReplayPage`, `ReplayPage.Incarnation`, `ReplaySliceProjection.Project`, `ICommitLogReader.ReadAsync`, `WalShardFloorState.Incarnation`, `WalShardGrain.AdvanceIncarnationAsync`, `IWalShardGrain.GetIncarnationAsync`.
 - **Scheduling and admission.** Weak fairness applies to `ScheduleReplay`, then
   to a requested `ReadStep`, not to an unsolicited WAL read. Each read consumes
   its request. The timer must be enabled and registered after durable identity
