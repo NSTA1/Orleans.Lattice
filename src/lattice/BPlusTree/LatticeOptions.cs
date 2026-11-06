@@ -2400,7 +2400,7 @@ public class LatticeOptions
     /// (<c>32</c>, issue #5877). <c>0</c> selects the CPU-derived ceiling that
     /// was the default before it.
     /// </summary>
-    public const int DefaultWalMaterialiserMaxConcurrentReplays = 32;
+    public const int DefaultWalMaterialiserMaxConcurrentReplays = 0;
 
     /// <summary>
     /// Enables process-wide adaptation of replay concurrency beneath the
