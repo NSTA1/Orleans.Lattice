@@ -955,7 +955,8 @@ internal sealed partial class BPlusLeafGrain
         // #5851 B (a5e2e2ef's BH1): progress is a replay, or a catch-up to the head, which
         // the head probe below finds. A live-advance step moves the checkpoint only to the
         // leaf's own high and never past another author's records, so it does not reset the
-        // count; when anything else moved the checkpoint in the same tick, that wins.
+        // count; when anything else moved the checkpoint in the same tick, that wins. A
+        // rollback lowers the signature, and a negative delta is never progress either.
         var liveAdvanced = _checkpointLiveAdvancedSinceStallCheck;
         _checkpointLiveAdvancedSinceStallCheck = 0;
         if (signature != _lastCheckpointProgressSignature)
