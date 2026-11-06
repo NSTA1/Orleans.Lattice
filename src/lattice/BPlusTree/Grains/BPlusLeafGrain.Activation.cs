@@ -1704,7 +1704,7 @@ internal sealed partial class BPlusLeafGrain
         var sinceProgress = TimeSpan.Zero;
         var verdict = bound > 0 && queued > 0
             ? sideEffectFree
-                ? ClassifyReplayPermitQueueDrainWithoutSideEffects(options.WalReplayPermitMaxQueueWait, out sinceProgress)
+                ? ClassifyReplayPermitQueueDrain(options.WalReplayPermitMaxQueueWait, out sinceProgress)
                 : ClassifyReplayPermitQueueDrain(options.WalReplayPermitMaxQueueWait, out sinceProgress)
             : ReplayPermitDrainVerdict.Draining;
         if (verdict == ReplayPermitDrainVerdict.WaitExceeded
