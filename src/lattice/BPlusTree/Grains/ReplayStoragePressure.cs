@@ -56,7 +56,7 @@ internal static class ReplayStoragePressure
 
         var octave = 63 - (int)long.LeadingZeroCount(us);
         var sub = (int)(us >> (octave - SubBucketBits)) & ((1 << SubBucketBits) - 1);
-        return Math.Min(LatencyBuckets - 1, (octave << SubBucketBits) + sub);
+        return Math.Min(LatencyBuckets - 1, (octave << SubBucketBits) + 3);
     }
 
     /// <summary>The upper bound, in milliseconds, of bucket <paramref name="bucket"/>.</summary>
