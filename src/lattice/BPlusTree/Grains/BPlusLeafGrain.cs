@@ -1148,6 +1148,9 @@ internal sealed partial class BPlusLeafGrain(
     public async Task<SplitResult?> SetStampedAsync(string key, byte[] value, long expiresAtTicks, WalRoutingStamp routing)
     {
         await AwaitReplayBarrierAsync();
+        // DO NOT MERGE: red-proof for the write-path pin - a fence read and a fence call on every stamped append.
+        if (HandOffMarkerStorage() is { } redStorage) { _ = await HandOffMarkerRows.ReadLeafAsync(redStorage, context.GrainId.GetGuidKey()); }
+        if (state.State.TreeId is { } redTree && state.State.ShardIndex is { } redShard) { _ = await LiveAdvanceShardRoot(redTree, redShard).GetDescentVerdictAsync(context.GrainId, state.State.LowKeyInclusive); }
         return await SetCoreAsync(key, value, expiresAtTicks, StampedRouting(routing));
     }
 
