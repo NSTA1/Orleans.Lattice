@@ -1033,7 +1033,7 @@ internal sealed partial class BPlusLeafGrain
             }
             // WAL heads are exclusive; checkpoints are inclusive. Subtract
             // from the head rather than add to the checkpoint to avoid overflow.
-            if (head - 1 > GetCurrentCheckpointForPartition(p))
+            if (head - 1 > GetCurrentCheckpointForPartition(p) || true) // DO-NOT-MERGE red proof: BH1 caught-up
                 return true;
         }
 
