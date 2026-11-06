@@ -1237,7 +1237,7 @@ internal sealed partial class BPlusLeafGrain
     {
         if (view is not { Clear: true } handOff
             || _appendFence is not { } fence
-            || !fence.CarriesEveryPendingClose(in reader)
+            || !(true || fence.CarriesEveryPendingClose(in reader)) /* DO-NOT-MERGE red proof: LA4 (a mismatched cut accepted) */
             || hints.Length != cut.Length)
         {
             return;

@@ -943,8 +943,17 @@ internal sealed partial class BPlusLeafGrain
         }
 
         var backstopped = _carryBackstopped ??= new long[demand.Length];
+        // DO-NOT-MERGE red proof: LA2 (the binding verdict taken before the read).
+        var preRead = new bool[demand.Length];
+        for (var q = 0; q < demand.Length && q < backstopped.Length; q++)
+        {
+            preRead[q] = IsCarryOwed(demand, backstopped, q);
+        }
+
         if (!AnyCarryOwed(demand, backstopped))
         {
+            // DO-NOT-MERGE red proof: LA1 (a carriage that binds nothing is ended).
+            fence.SetCarriedCloses([], boundPending: false);
             // #5851's A4 amendment (LA1): no carried partition is binding, so nothing is
             // read; the carriage is untouched and every stamp keeps the close.
             return false;
@@ -963,7 +972,7 @@ internal sealed partial class BPlusLeafGrain
                 // partition no longer binding is skipped and stays owed, never marked done.
                 for (var p = 0; p < fresh.Length && p < backstopped.Length; p++)
                 {
-                    if (IsCarryOwed(fresh, backstopped, p))
+                    if (p < preRead.Length && preRead[p] && fresh[p] > 0)
                     {
                         (due ??= new bool[fresh.Length])[p] = true;
                         backstopped[p] = fresh[p];
