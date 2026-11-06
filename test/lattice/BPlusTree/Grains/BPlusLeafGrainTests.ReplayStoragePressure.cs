@@ -167,7 +167,7 @@ public partial class BPlusLeafGrainTests
         BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
         try
         {
-            var gate = await QuiescentReplayGateAsync();
+            var gate = await QuiescentReplayGateAsync(controller: null);
 
             Assert.That(BPlusLeafGrain.ReplayConcurrencyCeilingForTest, Is.EqualTo(32));
             Assert.That(gate.CurrentCount, Is.EqualTo(32));
