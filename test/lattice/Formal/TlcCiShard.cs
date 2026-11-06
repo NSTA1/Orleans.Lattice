@@ -586,7 +586,7 @@ internal static class TlcCiShard
 
     /// <summary>The claimless-advance variants small enough to share <see cref="WalLiveAdvanceCoreFree"/> with its mutations.</summary>
     private static readonly HashSet<string> SmallFreeAdvanceVariants =
-        new(["FreeSplitLink", "FreeLatch", "FreeOrphan", "FreeRestartKeyMove", "FreeTagEvict", "FreeKeyFilter"], StringComparer.Ordinal);
+        new(["FreeSplitLink", "FreeLatch", "FreeOrphan", "FreeRestartKeyMove", "FreeTagEvict", "FreeKeyFilter", "FreeReportFetch"], StringComparer.Ordinal);
 
     /// <summary>The claimless-advance variants that check the split, the forwards and their eviction (<see cref="WalLiveAdvanceCoreFreeSplitVariants"/>).</summary>
     private static readonly HashSet<string> FreeSplitVariants =
