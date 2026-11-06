@@ -126,7 +126,12 @@ public sealed class SourceWalTrimFallOffIntegrationTests
             PollBudget,
             PollCadence);
 
-        var requestedEpoch = _transport.ReseedRequests.Single();
+        // The shipper stamps the marker on every batch it sends until the receiver echoes a
+        // later epoch - each batch of a pipelined window included - so more than one request
+        // may already have arrived; every one must name the same epoch (#5878).
+        var requests = _transport.ReseedRequests;
+        var requestedEpoch = requests.Distinct().Single();
+        Assert.That(requests, Is.All.EqualTo(requestedEpoch), "every re-seed request must name the same epoch");
         Assert.That(requestedEpoch, Is.Not.Null, "the shipper must persist and stamp ReseedRequiredEpoch");
 
         var coordinator = _siteB.Client.GetGrain<ILatticeBootstrapCoordinatorGrain>(Tree);
