@@ -95,7 +95,7 @@ internal static class ReplaySliceProjection
         if (trailingExcluded)
             result.Add(trailing with { Mutation = WalFilteredRead.RoutingOnly(trailing.Mutation) });
 
-        var complete = budgetSpent || covered >= toInclusive;
+        var complete = budgetSpent || run.Count > 0;
         return (result.ToArray(), complete, covered);
     }
 
