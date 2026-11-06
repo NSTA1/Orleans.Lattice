@@ -856,6 +856,40 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     public void OnStampedAppended(int partition, long unstampedWatermark, in WalAppendStamp stamp) =>
         RecordStampedAppend(partition, unstampedWatermark, stamp.Close1, stamp.Close2, coversCloses: true);
 
+    /// <summary>
+    /// The stamp a pre-arm append at <paramref name="partition"/> would carry now (#5851, R2):
+    /// this activation, its persisted narrow tag and the donor closes carried there.
+    /// <see langword="false"/> once stale, while more closes are carried there than a stamp
+    /// carries, past the forward-chain bound, or where the activation has claimed, since a
+    /// claimed partition never reads a pre-arm view.
+    /// </summary>
+    internal bool TryGetReportReader(int partition, out WalAppendStamp reader)
+    {
+        lock (_sync)
+        {
+            CarriedAtLocked(partition, out _, out _, out var overCap);
+            if (!_stale
+                && !overCap
+                && !(_epoch > 0 && _partitions.TryGetValue(partition, out var p) && p.ClaimedEpoch == _epoch)
+                && DecorateLocked(WalAppendStamp.PreArm(_leafId, _activation), partition) is { } stamp)
+            {
+                reader = stamp;
+                return true;
+            }
+        }
+
+        reader = default;
+        return false;
+    }
+
+    /// <summary>
+    /// Records a fetched report (#5851, R1, R2): the bound a stamped append by
+    /// <paramref name="reader"/> would have carried, recorded exactly as that append's
+    /// response is, with the closes the reader carried.
+    /// </summary>
+    internal void OnReportFetched(int partition, long bound, in WalAppendStamp reader) =>
+        RecordStampedAppend(partition, bound, reader.Close1, reader.Close2, coversCloses: true);
+
     /// <inheritdoc />
     public void OnStampedAppended(int partition, long unstampedWatermark) =>
         RecordStampedAppend(partition, unstampedWatermark, default, default, coversCloses: false);

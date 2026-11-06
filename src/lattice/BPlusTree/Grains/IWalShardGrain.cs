@@ -346,6 +346,19 @@ internal interface IWalShardGrain : IGrainWithStringKey
     Task<WalSplitCut> GetSplitCutAsync(WalAppendStamp reader, string? lowInclusive, string? highExclusive, CancellationToken cancellationToken);
 
     /// <summary>
+    /// The report a stamped append by <paramref name="reader"/> would carry back in this
+    /// turn (#5851, R1), without appending: the shared unstamped watermark and the
+    /// highest offset another author may have allocated for the reader's leaf - its
+    /// foreign high for the reader's activation and narrow tag, never below the leaf's
+    /// eviction floor, and the stale high of each donor close the reader carries. Read
+    /// with the code the append response uses; attributes nothing. <c>-1</c> for a reader
+    /// naming no leaf or no activation. A silo running an earlier build does not have it;
+    /// the leaf then treats its partition as unreported, as before.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<long> ReadLeafReportAsync(WalAppendStamp reader, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Returns the head a reader may resume from: one past the highest sequence a
     /// read would expose. It is at or below <see cref="GetNextSequenceAsync"/>,
     /// lower while a flush is in flight, while an abandoned flush may still land,
