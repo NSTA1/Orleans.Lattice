@@ -5696,6 +5696,22 @@ public static class LatticeMetrics
         new(TagReason, "recheck_drive_refused");
 
     /// <summary>
+    /// <see cref="TagReason"/> value for a coverage-lag timer drive routed on
+    /// <see cref="DriverDeclineRecheckCheckpointStalled"/> that was not requested
+    /// because replays were queued on the per-silo WAL replay gate (#5851, a5e2e2ef's BH3).
+    /// <para>
+    /// A <b>qualifier</b> of that arm, recorded on the same tick, like
+    /// <see cref="DriverDeclineRecheckDriveRefused"/>. The timer's drive is background
+    /// work: while an activation's or a cold restart's replay waits for a permit, it
+    /// steps aside rather than compete, and stays owed, so the next tick that finds no
+    /// waiter drives it. A sustained rate means the gate is persistently contended by
+    /// foreground replays.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> DriverDeclineRecheckDriveYielded =
+        new(TagReason, "recheck_drive_yielded");
+
+    /// <summary>
     /// <see cref="TagReason"/> value for a coverage-lag timer starvation drive
     /// that was not requested because the leaf is backing off after
     /// <see cref="DriverDeclineRecheckDriveRefused"/> (issue #3575).

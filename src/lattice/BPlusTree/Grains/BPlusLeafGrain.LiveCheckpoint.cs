@@ -392,7 +392,9 @@ internal sealed partial class BPlusLeafGrain
                     continue;
                 }
 
+                var stampedFrom = GetCurrentCheckpointForPartition(p);
                 await StampCheckpointHintAsync(p, target);
+                _checkpointLiveAdvancedSinceStallCheck += Math.Max(0, GetCurrentCheckpointForPartition(p) - stampedFrom);
                 advanced = true;
             }
 
