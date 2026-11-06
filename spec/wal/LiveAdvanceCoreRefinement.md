@@ -483,15 +483,22 @@ reason as the one above.
   held at the donor: the hint never exceeds the donor's applied frontier unless the cut
   proves the donor read past every bound, pinned by `BPlusLeafGrainTests.SplitHintWithoutBound`,
   `BPlusLeafGrainTests.SplitHintAboveHeads` and
-  `BPlusLeafGrainTests.Split_caps_the_sibling_hint_at_the_donors_replay_frontier`. The
-  order is pinned by
+  `BPlusLeafGrainTests.Split_caps_the_sibling_hint_at_the_donors_replay_frontier`, and end
+  to end - the sibling's first capture claiming the hint holds every row its donor handed
+  it - by
+  `BPlusLeafGrainTests.A_hinted_siblings_capture_holds_every_row_its_donor_handed_it_at_coverage_of_at_least_the_hint`.
+  The order is pinned by
   `BPlusLeafGrainTests.A_deactivating_hinted_sibling_captures_before_it_persists_its_hint`,
   `BPlusLeafGrainTests.A_due_flush_of_a_hinted_sibling_captures_before_it_persists_its_hint`,
   `BPlusLeafGrainTests.A_hinted_sibling_whose_capture_fails_persists_its_checkpoint_at_minus_one`,
   `BPlusLeafGrainTests.A_failing_store_is_asked_for_a_hint_capture_once_per_tick_never_once_per_flush`,
   `BPlusLeafGrainTests.A_cold_restart_after_a_failed_deactivation_capture_needs_no_repair_for_a_hinted_sibling`
   and `BPlusLeafGrainTests.A_hint_at_a_covered_partition_persists_with_no_new_capture`.
-  Production symbols: `BPlusLeafGrain.SetCheckpointOffsetHintsAsync`.
+  Production symbols: `BPlusLeafGrain.SetCheckpointOffsetHintsAsync`,
+  `BPlusLeafGrain.NoteHintAtUncoveredPartition`,
+  `BPlusLeafGrain.CaptureUncoveredHintsBeforePersistAsync`,
+  `BPlusLeafGrain.HoldBackUncoveredHints`, `BPlusLeafGrain.RestoreHeldHints`,
+  `BPlusLeafGrain.IsHeldUncoveredHint`, `BPlusLeafGrain.FlushPendingCheckpointAsync`.
 - **The refresh's descent is exact when it decides (#5876; a5e2e2ef's D1 rule).** C's
   `RefreshReaches` reads whether the batch's keys still reach the stale donor exactly.
   Production's descent resolves to the routing owner, which is the key's owner or a leaf

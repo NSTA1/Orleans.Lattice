@@ -3,6 +3,10 @@ using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Tests.Fakes;
+using Orleans.Runtime;
+using System.Text;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -17,7 +21,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 public partial class BPlusLeafGrainTests
 {
     /// <summary>A leaf born with a hinted checkpoint at partition 0, seeded with one row.</summary>
-    private static async Task<(BPlusLeafGrain Grain, Orleans.Lattice.Tests.Fakes.FakePersistentState<Orleans.Lattice.BPlusTree.State.LeafNodeState> State, ILeafSnapshotStorageGrain Snapshot, List<long> PersistedAtCapture)>
+    private static async Task<(BPlusLeafGrain Grain, FakePersistentState<Orleans.Lattice.BPlusTree.State.LeafNodeState> State, ILeafSnapshotStorageGrain Snapshot, List<long> PersistedAtCapture)>
         HintedSiblingAsync(TimeSpan interval, Exception? captureFailure = null, long[]? existingCoverage = null, long persisted = -1L)
     {
         var (grain, state, snapshot, _) = CreateLeafForCoverageRepair(
@@ -182,6 +186,79 @@ public partial class BPlusLeafGrainTests
             Assert.That(beforeTick, Is.EqualTo(1), "40 due flushes against a failing store each asked it for a capture");
             Assert.That(persistedAtCapture.Count, Is.GreaterThan(beforeTick), "the coverage-lag tick did not re-arm the hint capture");
             Assert.That(PersistedPartitionZero(state.State), Is.EqualTo(-1L), "a hint was persisted above coverage");
+        });
+    }
+
+    [Test]
+    public async Task A_hinted_siblings_capture_holds_every_row_its_donor_handed_it_at_coverage_of_at_least_the_hint()
+    {
+        // H1 end to end (a5e2e2ef's S1 on #5886): a capture claims the sibling's current
+        // checkpoint, the pending hint included, so it is honest only if the sibling's cache
+        // was filled from its donor at a frontier at or above the hint before the hint is
+        // applied. The donor has applied through 30 and the WAL head is 42, so the hint is 30;
+        // the sibling flushes every entry, so the hint's own stamp captures at once.
+        var (sibling, siblingState, _, saved) = CreateLeafForCoverageRepair(
+            persistedCheckpoint: -1L,
+            treeId: UniqueCoverageRepairTreeId("hinted-donor"),
+            materialiserCheckpointInterval: TimeSpan.Zero);
+        await LeafActivationHarness.ActivateAsync(sibling, CancellationToken.None);
+
+        var siblingContext = Substitute.For<IGrainContext>();
+        siblingContext.GrainId.Returns(GrainId.Create("leaf", Guid.NewGuid().ToString()));
+        var siblingRef = Substitute.For<IBPlusLeafGrain, IGrainBase>();
+        ((IGrainBase)siblingRef).GrainContext.Returns(siblingContext);
+        siblingRef.MergeEntriesAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>())
+            .Returns(ci => sibling.MergeEntriesAsync(ci.Arg<Dictionary<string, LwwValue<byte[]>>>()));
+        siblingRef.SetCheckpointOffsetHintsAsync(Arg.Any<long[]>())
+            .Returns(ci => sibling.SetCheckpointOffsetHintsAsync(ci.Arg<long[]>()));
+
+        var donorFactory = Substitute.For<IGrainFactory>();
+        donorFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(siblingRef);
+        donorFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>()).Returns(siblingRef);
+        var coordinator = Substitute.For<ILeafReplayCoordinatorGrain>();
+        coordinator.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(42L));
+        donorFactory.GetGrain<ILeafReplayCoordinatorGrain>(Arg.Any<string>()).Returns(coordinator);
+
+        var donorContext = Substitute.For<IGrainContext>();
+        donorContext.GrainId.Returns(GrainId.Create("leaf", "hinted-donor"));
+        var donorState = new FakePersistentState<LeafNodeState>();
+        donorState.State.TreeId = "test-tree";
+        SeedDonorFrontier(donorState, 30);
+        var donor = new BPlusLeafGrain(
+            donorContext, donorState, donorFactory,
+            TestOptionsResolver.Create(
+                baseOptions: new LatticeOptions { MaterialiserCheckpointInterval = TimeSpan.Zero, WalPartitions = 1 },
+                maxLeafKeys: 3,
+                shardCount: 1,
+                factory: donorFactory),
+            TestMutationObservers.NoObservers(),
+            TestOriginClusterIdResolver.Default());
+
+        await donor.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await donor.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await donor.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        var split = await donor.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+
+        var handed = sibling.EntriesForTest.Keys.ToList();
+        var covering = saved.FirstOrDefault(blob => blob.ScalarOffsetOrSentinel() >= 30L);
+        var captured = new List<string>();
+        if (covering is not null)
+        {
+            foreach (var row in covering.EnumerateRows())
+            {
+                captured.Add(row.Key);
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(split, Is.Not.Null, "precondition: the donor split");
+            Assert.That(handed, Is.Not.Empty, "precondition: the donor handed the sibling rows");
+            Assert.That(sibling.GetCurrentCheckpointForPartition(0), Is.EqualTo(30L), "precondition: the hint is the donor's frontier");
+            Assert.That(covering, Is.Not.Null, "the sibling never captured a snapshot covering its hint");
+            Assert.That(captured, Is.SupersetOf(handed),
+                "the sibling's capture claimed its hint over a cache not yet filled from its donor (H1): a cold restart from it would skip the missing rows");
+            Assert.That(PersistedPartitionZero(siblingState.State), Is.EqualTo(30L), "the covered hint is persisted");
         });
     }
 
