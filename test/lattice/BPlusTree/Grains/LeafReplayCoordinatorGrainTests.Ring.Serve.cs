@@ -32,6 +32,8 @@ public partial class LeafReplayCoordinatorGrainTests
                 .Returns(call => Feed(call.ArgAt<long>(2)));
             reader.GetIncarnationAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
                 .Returns(_ => ValueTask.FromResult(Incarnation));
+            reader.GetHeadOffsetAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+                .Returns(_ => Task.FromResult(Entries.Count == 0 ? -1L : Entries.Max(e => e.Offset)));
             return reader;
         }
 

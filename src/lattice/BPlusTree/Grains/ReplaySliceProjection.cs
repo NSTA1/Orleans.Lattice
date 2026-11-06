@@ -85,8 +85,9 @@ internal static class ReplaySliceProjection
             if (budgetSpent || covered >= toInclusive)
                 break;
 
-            // A page's coverage ends at its last returned entry, even when that
-            // entry lies below the window.
+            // A page covers through its last returned entry (condition A-b).
+            // When that entry lies above the window, the page has shown that
+            // nothing lies between the last entry examined and the window's end.
             if (page.CoveredThroughInclusive > covered)
                 covered = Math.Min(page.CoveredThroughInclusive, toInclusive);
         }
