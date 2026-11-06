@@ -122,7 +122,7 @@ public sealed partial class AzureTableWalStorageProvider
                 // caller's token, so a cancelled read stops at the same boundary
                 // even when that batch was already fetched ahead.
                 cancellationToken.ThrowIfCancellationRequested();
-                var (next, nextExtent) = inFlight.Dequeue();
+                var finished = await Task.WhenAny(inFlight.Select(x => (Task)x.Rows)).ConfigureAwait(false); var picked = inFlight.First(x => ReferenceEquals(x.Rows, finished)); inFlight = new Queue<(Task<List<AzureTableWalEntity>> Rows, long Extent)>(inFlight.Where(x => !ReferenceEquals(x.Rows, finished))); var (next, nextExtent) = picked; // RED MUTANT M1 (#5897): consume in completion order
                 plannedExtent -= nextExtent;
                 var rows = await next.ConfigureAwait(false);
                 foreach (var entity in rows)
