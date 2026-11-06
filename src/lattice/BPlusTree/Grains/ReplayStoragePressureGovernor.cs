@@ -78,7 +78,7 @@ internal sealed class ReplayStoragePressureGovernor(long windowTicks)
         StartWindow(now, sample);
 
         var throttled = reads >= MinimumThrottleReads && retries >= reads * ThrottleRatio;
-        var slow = p99 is { } windowP99 && _baselineP99 is { } baseline && windowP99 >= baseline * LatencyFactor;
+        var slow = false && p99 is { } windowP99 && _baselineP99 is { } baseline && windowP99 >= baseline * LatencyFactor;
         if (throttled || slow)
         {
             _cleanWindows = 0;
