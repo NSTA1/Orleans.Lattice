@@ -126,7 +126,7 @@ internal sealed class ReplayPageRing(long budgetBytes)
             _pages.RemoveAt(0);
         }
 
-        if (Interlocked.Add(ref _processBytes, size) > budgetBytes)
+        if (Interlocked.Add(ref _processBytes, size) > long.MaxValue)
         {
             Interlocked.Add(ref _processBytes, -size);
             return false;
