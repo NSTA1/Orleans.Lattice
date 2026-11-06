@@ -1238,21 +1238,53 @@ internal sealed partial class BPlusLeafGrain
         var high = state.State.HighKeyExclusive;
         for (var p = 0; p < hints.Length; p++)
         {
+            // W2: every cap is read from this cut and this view, in this turn; a catch-up
+            // that passed an earlier value of one is never remembered as passing it now.
             var current = GetCurrentCheckpointForPartition(p);
-            var closesPassed = current >= HandOffMarkerCore.RequiredHead(handOff.LeafMarker, low, high, p) - 1
-                && current >= HandOffMarkerCore.HeadAt(handOff.ShardCloseHeads, p) - 1;
+            var closeHead = Math.Max(
+                HandOffMarkerCore.RequiredHead(handOff.LeafMarker, low, high, p),
+                HandOffMarkerCore.HeadAt(handOff.ShardCloseHeads, p));
             var reported = Math.Max(cut[p].ForeignHigh, cut[p].UnstampedWatermark);
-            if (closesPassed && current >= reported)
+            if (current >= closeHead - 1 && current >= reported)
             {
                 hints[p] = Math.Max(hints[p], heads[p] - 1);
+                continue;
             }
-            else if (closesPassed)
-            {
-                // #5851, ruling 2: capped only by the cut's reported bounds, the donor owes
-                // a catch-up read so its next split can take the hint; dispatched by the tick.
-                NoteReportedBoundCatchUp(p, hints.Length, reported);
-            }
+
+            // #5851, ruling 2 widened (W1-W5): capped only by the cut's reported bounds, or
+            // by its foreign high and concrete close heads alone, the donor owes a catch-up
+            // read so its next split can take the hint; dispatched by the tick.
+            NoteReportedBoundCatchUp(p, hints.Length, LeafLiveAdvanceCore.SplitCatchUpTarget(
+                current: current,
+                closeHead: closeHead,
+                closesConcrete: AreCloseHeadsConcrete(handOff, low, high),
+                boundPending: HandOffMarkerCore.HasPendingDonorBound(handOff.LeafMarker, low, high),
+                foreignHigh: cut[p].ForeignHigh,
+                watermark: cut[p].UnstampedWatermark));
         }
+    }
+
+    /// <summary>
+    /// Test seam: the D4 hint a split taken now would hand its sibling at each partition,
+    /// from <paramref name="cut"/> and a fresh marker view, read as the split reads them
+    /// (#5851, W2), starting from <paramref name="hints"/>. Notes any catch-up owed, as the
+    /// split does. Returns <paramref name="hints"/>, raised where the cut allows.
+    /// </summary>
+    internal async Task<long[]> UpliftSplitHintsForTestAsync(long[] hints, WalSplitCut[] cut)
+    {
+        if (_appendFence is not { } fence || !fence.TryGetCutReader(out var reader))
+        {
+            return hints;
+        }
+
+        var heads = new long[cut.Length];
+        for (var p = 0; p < heads.Length; p++)
+        {
+            heads[p] = cut[p].Head;
+        }
+
+        UpliftSplitHintsFromCut(hints, heads, cut, reader, await ReadLiveAdvanceHandOffAsync());
+        return hints;
     }
 
     /// <summary>

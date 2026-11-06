@@ -122,6 +122,64 @@ public sealed class HandOffMarkerCoreDonorBoundTests
     }
 
     [Test]
+    public void HasPendingDonorBound_agrees_with_the_pending_bounds_collected()
+    {
+        // #5851, W4: the allocation-free predicate the widened catch-up reads.
+        var marker = ClosedWithBound();
+        var pendingBefore = HandOffMarkerCore.HasPendingDonorBound(marker, null, null);
+        var outsideRange = HandOffMarkerCore.HasPendingDonorBound(ClosedWithBoundOver("m", "p"), "a", "c");
+        HandOffMarkerCore.WitnessLink(marker, Donor, 1, 7);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pendingBefore, Is.True, "an unwitnessed donor bound was not pending");
+            Assert.That(outsideRange, Is.False, "a bound outside the owner's range bore on it");
+            Assert.That(HandOffMarkerCore.HasPendingDonorBound(marker, null, null), Is.False, "a witnessed bound stayed pending");
+            Assert.That(HandOffMarkerCore.HasPendingDonorBound(new LeafHandOffState(), null, null), Is.False, "an empty marker held a bound");
+            Assert.Throws<ArgumentNullException>(() => HandOffMarkerCore.HasPendingDonorBound(null!, null, null));
+        });
+    }
+
+    [Test]
+    public void HasDeferredClose_sees_a_close_deferred_at_any_partition()
+    {
+        // #5851, W3: a close resolved at one partition and deferred at another is deferred.
+        var marker = new LeafHandOffState();
+        HandOffMarkerCore.Open(marker, "reclaim:d", null, null);
+        HandOffMarkerCore.CloseDeferred(marker, "reclaim:d", 2, 0, 1);
+        HandOffMarkerCore.ResolveDeferred(marker, 0, 0, 1, 5);
+        var halfResolved = HandOffMarkerCore.HasDeferredClose(marker, null, null);
+        HandOffMarkerCore.ResolveDeferred(marker, 1, 0, 1, 6);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(halfResolved, Is.True, "a close deferred at one partition was not deferred");
+            Assert.That(HandOffMarkerCore.HasDeferredClose(marker, null, null), Is.False, "a fully resolved close stayed deferred");
+            Assert.That(HandOffMarkerCore.HasDeferredClose(ClosedWithBound(), null, null), Is.False, "a concrete close was deferred");
+            Assert.Throws<ArgumentNullException>(() => HandOffMarkerCore.HasDeferredClose(null!, null, null));
+        });
+    }
+
+    [Test]
+    public void AnyDeferred_finds_the_sentinel_in_a_head_vector()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(HandOffMarkerCore.AnyDeferred(null), Is.False);
+            Assert.That(HandOffMarkerCore.AnyDeferred([1, 2]), Is.False);
+            Assert.That(HandOffMarkerCore.AnyDeferred([1, HandOffMarkerCore.DeferredHead]), Is.True);
+        });
+    }
+
+    private static LeafHandOffState ClosedWithBoundOver(string low, string high)
+    {
+        var marker = new LeafHandOffState();
+        HandOffMarkerCore.Open(marker, "split:d", low, high);
+        HandOffMarkerCore.CloseWithDeferredBound(marker, "split:d", [5], Donor, Token, 0, 1);
+        return marker;
+    }
+
+    [Test]
     public void A_donor_bound_names_its_donor_and_closing_activation()
     {
         var marker = new LeafHandOffState();
