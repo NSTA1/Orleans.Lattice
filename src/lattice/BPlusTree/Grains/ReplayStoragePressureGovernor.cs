@@ -34,7 +34,7 @@ internal sealed class ReplayStoragePressureGovernor(long windowTicks)
 {
     internal static readonly long DefaultWindowTicks = 30L * System.Diagnostics.Stopwatch.Frequency;
     internal const int MinimumLatencyReads = 20;
-    internal const int MinimumThrottleReads = 50;
+    internal const int MinimumThrottleReads = 1;
     internal const double ThrottleRatio = 0.01;
     internal const double LatencyFactor = 2.0;
     internal const double DecreaseFraction = 0.25;
