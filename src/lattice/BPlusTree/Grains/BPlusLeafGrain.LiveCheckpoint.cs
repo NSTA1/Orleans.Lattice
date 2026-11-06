@@ -678,7 +678,7 @@ internal sealed partial class BPlusLeafGrain
             fence.OnReportFetched(partition, bound, in reader);
             return true;
         }
-        catch (Exception ex) when (ex is NotImplementedException or MissingMethodException or EntryPointNotFoundException)
+        catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
         {
             _reportFetchUnsupported = true;
             return false;

@@ -140,10 +140,12 @@ public partial class BPlusLeafGrainTests
     [Test]
     public async Task ReportFetch_a_shard_that_does_not_know_the_call_latches_the_fetch_off()
     {
-        // F5: an earlier build's shard does not know the call. The leaf stays held, nothing
-        // escapes the tick, and it never asks again this activation.
+        // F5 / S1: an earlier build's shard does not know the call, and refuses it with the
+        // unresolved-alias TypeLoadException. The leaf stays held, nothing escapes the tick,
+        // and it never asks again this activation.
         var (grain, rig, _) = await UncoveredReportLeafAsync(fetchedBound: -1);
-        rig.Shard.ReadLeafReportAsync(Arg.Any<WalAppendStamp>(), Arg.Any<CancellationToken>()).ThrowsAsync(new NotImplementedException());
+        rig.Shard.ReadLeafReportAsync(Arg.Any<WalAppendStamp>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(ShardBulkLoadCompletionTests.MethodUnknown());
 
         var first = await grain.TryAdvanceLiveCheckpointAsync(fetchReports: true);
         var second = await grain.TryAdvanceLiveCheckpointAsync(fetchReports: true);
@@ -155,12 +157,14 @@ public partial class BPlusLeafGrainTests
         });
     }
 
-    [Test]
-    public async Task ReportFetch_any_other_fetch_failure_is_retried_on_the_next_tick()
+    [TestCase(typeof(TimeoutException))]
+    [TestCase(typeof(NotImplementedException))]
+    public async Task ReportFetch_any_other_fetch_failure_is_retried_on_the_next_tick(Type failure)
     {
-        // F5: only a definite unknown-method latches; a transient failure does not.
+        // F5 / S1: only a definite unknown-method latches; a transient or non-definite failure does not.
         var (grain, rig, _) = await UncoveredReportLeafAsync(fetchedBound: -1);
-        rig.Shard.ReadLeafReportAsync(Arg.Any<WalAppendStamp>(), Arg.Any<CancellationToken>()).ThrowsAsync(new TimeoutException());
+        rig.Shard.ReadLeafReportAsync(Arg.Any<WalAppendStamp>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync((Exception)Activator.CreateInstance(failure)!);
 
         await grain.TryAdvanceLiveCheckpointAsync(fetchReports: true);
         await grain.TryAdvanceLiveCheckpointAsync(fetchReports: true);
