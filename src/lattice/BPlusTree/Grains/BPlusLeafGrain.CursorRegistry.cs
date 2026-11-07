@@ -1320,8 +1320,8 @@ internal sealed partial class BPlusLeafGrain
         // and the never-written release, exactly as before the extraction.
         var decision = LeafDurablePinCore.Resolve(
             GetCurrentCheckpointForPartition(partition),
-            GetPersistedCheckpointForPartition(partition),
-            DurableSnapshotCoverageForPartition(partition),
+            IsHeldUncoveredHint(partition) ? GetCurrentCheckpointForPartition(partition) : GetPersistedCheckpointForPartition(partition),
+            IsHeldUncoveredHint(partition) ? GetCurrentCheckpointForPartition(partition) : DurableSnapshotCoverageForPartition(partition),
             partitionsWithLiveData[partition],
             partitionsWithEmptyWal is not null
                 && partition < partitionsWithEmptyWal.Length
