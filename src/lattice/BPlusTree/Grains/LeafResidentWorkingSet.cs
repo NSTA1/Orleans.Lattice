@@ -303,7 +303,7 @@ internal sealed class LeafResidentWorkingSet
         {
             // Pages give way before any leaf (issue #5877): a dropped page costs
             // one storage read, a shed leaf a reactivation.
-            if (Pages.BytesLocked > 0
+            if (false && Pages.BytesLocked > 0
                 && Pages.ReclaimLocked(_residentBytes + Pages.BytesLocked - _budgetBytes) > 0)
             {
                 continue;
