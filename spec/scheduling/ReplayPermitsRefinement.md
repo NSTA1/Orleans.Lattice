@@ -87,8 +87,8 @@ The environment, caller, provider and owner boundaries are kept distinct.
 |-------------|---------------|------------------|----------|
 | `Request` | Observe inherited class and current bound. | `BPlusLeafGrain.TryAdmitReplayPermitWaiter`, `LatticeReplayAdmissionContext.Current`. | Yes: `ReplayPermitsCoyoteTests.Memory_returns_and_priority_observations_preserve_the_gate_contract`. |
 | `Enqueue` | Register one admitted waiter. | `BPlusLeafGrain.AcquireReplayPermitAsync`, `BPlusLeafGrain.NoteReplayPermitArrival`. | Yes: `BPlusLeafGrainTests.Cancelled_queued_replay_replacements_leave_no_waiters_or_unowned_permits`. |
-| `RefuseWait` | Refuse fresh excessive wait below depth, re-checking at the decision that a permit is not free with no waiter ahead. | `BPlusLeafGrain.AcquireReplayPermitAsync`. | Yes: `BPlusLeafGrainTests.A_wait_exceeded_mean_refuses_below_the_admitted_waiter_bound` and `BPlusLeafGrainTests.A_wait_exceeded_reading_never_refuses_while_a_permit_is_free_and_no_waiter_is_ahead`. |
-| `RefuseDepth` | Refuse stalled over-depth arrival. | `BPlusLeafGrain.AcquireReplayPermitAsync`. | Yes: `BPlusLeafGrainTests.A_no_progress_queue_at_the_circulating_bound_is_refused`. |
+| `RefuseWait` | Refuse fresh excessive wait below depth, re-checking at the decision that a permit is not free with no waiter ahead. | `BPlusLeafGrain.AcquireReplayPermitAsync`, `BPlusLeafGrain.IsReplayPermitFreeWithNoWaiterAhead`, `BPlusLeafGrain.ThrowIfReplayAdmissionRefused`. | Yes: `BPlusLeafGrainTests.A_wait_exceeded_mean_refuses_below_the_admitted_waiter_bound` and `BPlusLeafGrainTests.A_wait_exceeded_reading_never_refuses_while_a_permit_is_free_and_no_waiter_is_ahead`. |
+| `RefuseDepth` | Refuse stalled over-depth arrival, with the same decision-time re-check. | `BPlusLeafGrain.AcquireReplayPermitAsync`, `BPlusLeafGrain.IsReplayPermitFreeWithNoWaiterAhead`, `BPlusLeafGrain.ThrowIfReplayAdmissionRefused`. | Yes: `BPlusLeafGrainTests.A_no_progress_queue_at_the_circulating_bound_is_refused`. |
 | `DriveAdmission` | Try the nonqueueing drive share. | `BPlusLeafGrain.TryAcquireStarvationReplayPermit`. | Yes: `StarvationReplayAdmissionTests.Ordinary_replay_owners_do_not_consume_gc_reservations` and `StarvationReplayAdmissionTests.Concurrent_acquisitions_cannot_exceed_the_gc_share`. |
 | `Release` | Return physical ownership once. | `BPlusLeafGrain.FinishReplayPermit`, `BPlusLeafGrain.ReleaseStarvationReplayPermit`. | Yes: `BPlusLeafGrainTests.Activation_releases_the_replay_permit_when_the_post_acquire_observation_throws`. |
 | `Hang` | Environment parks a provider read. | `ReplaySliceReader.ReadSliceAsync`. | Yes: `BPlusLeafGrainTests.Cancelling_a_replay_returns_its_permit_before_uncooperative_storage_completes`. |
@@ -452,7 +452,8 @@ was relaxed, and no Replay model, bound, premise or launch policy changed.
   must still age out once its samples do, or a stale mean keeps refusing new
   arrivals behind a short queue. That expiry is checked in production by
   `BPlusLeafGrainTests.A_wait_exceeded_reading_expires_once_its_samples_age_out`, not by a model step.
-  Production symbols: `BPlusLeafGrain.ClassifyReplayPermitQueueDrain`.
+  Production symbols: `BPlusLeafGrain.ClassifyReplayPermitQueueDrain`,
+  `BPlusLeafGrain.ClassifyReplayPermitQueueDrainAt`.
 
 ## Harness and fixture corrections encountered here
 
