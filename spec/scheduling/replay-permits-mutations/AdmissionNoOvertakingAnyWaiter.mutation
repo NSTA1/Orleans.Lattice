@@ -1,0 +1,10 @@
+MODULE: AdmissionNoOvertakingAnyWaiter
+TARGET: AdmissionNoOvertaking
+CLASS: Action
+SUMMARY: the gate grants any parked waiter rather than the earliest one
+
+--- FIND
+    /\ r = Head(queue)
+--- REPLACE
+    /\ r \in Members(queue)
+--- END
